@@ -9826,65 +9826,2333 @@ reporting N lanes, since two would scan and resolve the same page twice.
 
 **New debt:** `SObject::getCapture` never schedules revalidation, which is *why*
 only an `SCut` can own an aspect page — the asymmetry that kept trap 26 latent.
+## 2026-08-15 — A render is as long as the arrangement (the 60 s constant is gone)
 
-## 2026-08-17 — The plugin scan stops hanging every `--test-case` run at exit
+`SProject::getDurationSeconds()` returned `60.0` behind a TODO, and it was the
+only thing deciding how long a whole-project render is. Every render was
+therefore exactly one minute: a three-minute arrangement was **truncated** at
+60 s without a word, and a ten-second one got fifty seconds of silence written
+after it. The qxa suite paid the same bill 153 times over — its fixtures hold
+about four seconds of content, so ~93% of every rendered sample was padding.
 
-Every headless run PASSED and then never exited, dying on CTest's 600 s timeout.
-Three commits, and the interesting part is that the reported cause was only half
-of it.
+### Where the duration comes from
 
-**The stack, from a live attach to a hung process** (the diagnosis was a report
-until this):
+`getRootComponent()->getDuration()` — `SObject::getChildrenExtent()` through
+`SStdMixer`, the walk the model already maintains and the arranger already
+draws (`SStdMixerView::contentDurationChanged`). Deliberately **not** a new
+traversal: a second notion of "how long is this project" that disagreed with
+the one on screen would be worse than the constant it replaced.
+
+Three decisions, now written into `main/model/CONTRACT.md` (inv. 10) and
+`tw303a/render/CONTRACT.md` (inv. 5-6):
+
+* **Empty is zero, and renders as a valid zero-frame file.** An empty container
+  reports 1 frame (`SStdMixer`/`STrack` floor their extent); that sentinel is
+  normalized to 0. `RenderSession::start()` used to reject `end <= start`, which
+  produced *no file and no error* — and `SRenderAction` reported SUCCESS, because
+  `SAppContext::startRender` cannot report failure. It now rejects only an
+  INVERTED range, so an empty project writes a header-only WAV that says exactly
+  what is true.
+* **The extent is the LAID-OUT one.** Mute, solo, the render gate and take
+  selection decide what is AUDIBLE, never how long the project is — otherwise
+  muting the last track would silently shorten the export.
+* **Round, do not truncate.** The extent is now a frame count over a sample
+  rate; a ratio that is not exactly representable would land one frame short.
+
+### The fallout, and why it was not papered over
+
+31 cases (36 assertions) asserted silence at a frame that WAS the arrangement
+end. They only ever passed because of the pad — and the analyser rejects a
+window that starts past EOF, so they failed loudly rather than silently. Each
+now asserts the thing it was reaching for: the render ENDS there
+(`assert-audio-length`, min == max). Where a clip had been deleted this is
+strictly stronger — a clip restored as *silent* used to pass and now cannot.
+
+What genuinely left with the pad: "does the LAST clip bleed past its window"
+is no longer observable, because the file stops there. Bleeding is still
+covered wherever a clip is followed by more arrangement.
+
+### The tail question, answered with measurements
+
+Only a plugin insert can put audio past the arrangement end —
+`twTrackMix::freezePage_nolock` hard-clips every clip's contribution at
+`startTime + duration`, so no stretch, loop or source tail outlives its clip.
+Measured, not assumed: the 90 padded 60 s renders from the pre-fix suite were
+scanned for their last non-silent frame, and **not one of them has audio at or
+past where the new render ends** (tightest margin: 1 frame — content runs right
+up to the boundary, as it should). That covers every `grain_*`, `exact_*`,
+`plugin_*` and `asset_*` case.
+
+The remaining exposure is real but uncovered: a reverb or delay plugin on a
+project SHORTER than 60 s used to have its tail captured by the padding, and
+now does not. The correct fix is a plugin-declared tail (CLAP `clap.tail`,
+VST3 `getTailSamples`), not a blanket pad; until then the render dialog's
+time-selection extent is the user-facing workaround. Recorded, not done.
+
+### What it cost the gate
+
+For the 52 cases both a pre-fix and a post-fix run covered: **1955.7 s ->
+292.7 s (6.7x)**. The full suite is **495.85 s, 110 run, 100% pass, 3 disabled
+(macOS-only `au_*`)**. Render-heavy cases moved 7-16x (`plugin_bypass_and_param`
+105.7 -> 7.1, `exact_stretch_roundtrip` 70.4 -> 4.4); cases with no render moved
+1.1-2.2x, which is the machine-load noise floor — both runs were taken with
+other agents' suites running on the same box, so read the per-case deltas rather
+than the totals.
+
+New verb `assert-audio-length` (frames, read from the file HEADER — the RMS
+analysers reject an empty region, which is exactly the interesting case), and
+three cases pinning the three lengths: `render_duration_short`,
+`render_duration_past_60s` (the truncation half — a clip at 64 s, and its
+64 s render is now the most expensive case in the suite), `render_duration_empty`.
+---
+
+## 2026-08-15 — Proposal 37 P0a: loader tolerance + `SClipWindow` + verbs
+
+Branch `feat/36-p0a-clipwindow-loader`, commits `d6c8982`, `5866a7d`, `224f97a`,
+`a0517c5`. Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` D8 and the
+P0a brief in `37_ORCHESTRATION.md` §3. Everything here is app-model work — no
+engine file was touched, and no audio behaviour was meant to change.
+
+### 1. The loader repairs per element kind, and iterates
+
+A missing sample under a PLACED clip cost the user the WHOLE project. The
+leftover sweep dropped every unresolvable element in one pass, so a dead
+`<SPlainWave>` took its `<SCut>`, the cut took the `<STrack>` that placed it,
+the track took the `<SStdMixer>`, and the load ended on "root component of
+project was not found". `sample_missing_survives.qxa` only ever covered the
+easy half — there the dead cut hangs off nothing.
+
+The sweep now repairs by KIND and retries the instantiation loop to a fixed
+point: a CONTAINER (`STrack`, `SStdMixer`, `STakeStack`) loses the dangling
+`<SLink>` and keeps the element; a WINDOW (`SCut`, later `SMidiCut`) whose
+content is gone is dropped itself, and its own placement then meets the
+container rule on the next pass; everything else, unknown element names
+included, is dropped as before. The kind is declared at registration, so
+persistence still names no concrete type, and an unregistered element is Plain —
+an element from a newer build costs itself and nothing more.
+
+Two things the fixtures caught, both of which would have made this useless:
+
+- **A link whose target is still IN THE DOCUMENT is not dangling.** Without
+  that test the pass cascaded exactly like the sweep it replaces, one level per
+  call: at prune time a track waiting for its clip is itself absent from the
+  dictionary, so the mixer's link to that track looked dead too, and dropping it
+  lost the track while the repair that would have saved it had not been retried.
+- **Termination is not left to the policy.** Each pass removes at least one node
+  or link, and a pass that repairs nothing falls back to dropping every
+  leftover (naming each) — the hang `legacy_project_recovery.qxa` guards cannot
+  come back through this door.
+
+The ROOT is the one thing with no recovery: `createObjects()` now returns -1
+when `rootId` does not resolve, instead of an empty shell that looks like an
+opened project and would overwrite the file on the next save.
+
+`<SProject formatVersion='2'>` is written unconditionally and read with a
+default of 1. A higher version WARNS and loads: refusing would strand a user's
+file on whichever build they happen to have, and an unknown element is already
+skipped by name.
+
+### 2. `SClipWindow` — the window layer as an interface
+
+split / resize / duplicate / unsplit / set-clip-name / add-, remove-,
+select-take / place-clip all did their window arithmetic through
+`dynamic_cast<SCut*>`, and `ssplitclipaction.cpp` compared the class NAME — a
+second window type could not exist without editing all of them, which is what
+P1's event clips need. `app/model/sclipwindow.h` is that arithmetic: reads in
+TIMELINE FRAMES, `timelineToSourceExact` for the one map split needs,
+`cloneWindowOver` for a faithful copy, and setters that take timeline frames and
+convert exactly ONCE inside the implementation (two callers converting
+independently is how a rounding difference becomes an off-by-one clip edge).
+The exact anchor forms exist because the slip anchor is content-authoritative
+and must not drift under a stretch edit (proposal 18 Phase 3).
+
+`SObject::contentKind()` (Audio | Event, default Audio) says what an object's
+material is; `SClipWindow::wrapContent()` mints the window type that fits it,
+registered by `SCut` from a static initializer, so app/model still names no
+concrete type. `STakeStack` is now a column of windows and is HOMOGENEOUS —
+`insertTake` refuses a different content kind (add-take rejects, the loader
+skips one take and keeps the column). The mixed-kind refusal has no gate yet:
+there is no Event-kind object to build one with, which is P1 AC2.
+
+`SCut` implements the interface by FORWARDING to what it already had; its body
+is otherwise untouched. Pitch, formants, warp anchors and the grain params stay
+audio-only, and every cast left in `objects/cut/src/` says which of those it is
+(8 sites: the class-registration literal, set-pitch, set-formant-preserve, the
+warp-marker actions, resize-clip ×2 for warp anchors, remove-take for pitch,
+remove-sample for the grain params).
+
+### 3. Two testkit verbs everything after this leans on
+
+`assert-file-identical` is the byte-`cmp` determinism gate, moved inside a case:
+run by hand from a shell it could not be committed, so "the goldens did not
+move" was a claim in a PR body rather than a test. Absolute paths are allowed
+(unlike `render`'s output name) so a case can compare against a file another
+process wrote; an optional frame range compares only that slice of the WAV's
+`data` chunk.
+
+`assert-log` is the only way to gate a RECOVERY: a repaired project renders
+exactly like a project that never needed repairing, so the warning is the whole
+evidence — and a `--test-case` run writes no log file. It reads the in-process
+`TwLog` ring over the records logged since the previous action started. A
+`--test-case` run raises the ring capacity (in ONE call — `setCapacity`
+discards what is buffered), and an assert-log does not move the window, so two
+in a row examine the same action.
+
+### 4. Gate
+
+- `./build.sh` clean; `check_layering.py` clean; `check_logging.py` clean.
+- `action_roundtrip_test`: 83/83 (81 before), with fixture rows for both new
+  verbs carrying every optional attribute.
+- AC1 `load_unknown_object_survives` and AC2 `load_missing_sample_placed_survives`
+  green. Neither was RUN against the pre-phase binary (it no longer existed by
+  then); what they assert is behaviour that did not exist there at all, since
+  the old sweep dropped every leftover at once. Both did fail mid-branch, on
+  the first version of the sweep, and that failure is what found the
+  still-in-the-document rule. AC6 rides on them rather than adding a
+  third case: AC1's fixture has NO formatVersion and is re-saved as 2
+  (`assert-file-contains`), AC2's declares `formatVersion='99'` and is loaded
+  with the warning (`assert-log`).
+- AC3, byte-identical renders: **62 of 62 WAVs byte-identical**, over the
+  36 corpus cases that produce one (`render_*`, `grain_*`, `exact_*`, `warp_*`,
+  `plugin_*`, `meter_*` — 39 cases registered, 39 green, three of them produce
+  no WAV). The pre-phase copies were rendered on the branch-tip binary BEFORE
+  any code changed and kept in the scratchpad, never in the repo; the compare is
+  plain `cmp`, whole file, headers included. The split/duplicate/take rewrites
+  were the risk here — every window value they now read through the interface is
+  the same value, computed in the same place, as the code they replace.
+- Full suite: the registered count is **111 = the base's 109 + the two new cases**
+  (`ctest -N` before and after). The RUN was **not completed in this branch, by
+  requester instruction** — another session is preparing suite parallelization
+  plus a `getDuration()` fix that merges first, and the suite is to be re-run
+  there. What had been observed when it was stopped: **36/111 started, 27
+  passed, 6 failed**, and every one of the six is
+  `SRenderAction: render timeout after 30000 ms` in a `grain_*` case
+  (`grain_multiple_stretch_factors`, `grain_pitch_octave_up`,
+  `grain_pitch_semitone_down`, `grain_pitch_with_stretch`,
+  `grain_split_delete_crash`, `grain_time_stretch_2x`). NOT ONE failed on an
+  assertion: `grain_multiple_stretch_factors` even logged
+  `RMS energy OK 0.260689 in range [0.2, 0.32]` before its render ran out of
+  time.
+
+### The six failures are the machine, not the branch
+
+The host was at 100% CPU for the whole run, with THREE other `ctest` processes
+(one of them `-j4`) and a `cmake`/`ninja` build belonging to a concurrent
+session on the main checkout — the workflow this repo explicitly supports
+(CLAUDE.md, "concurrent Claude sessions"). Under that load a 60-second
+vocoder render does not finish inside `SRenderAction`'s 30 s budget, and the
+case fails without ever reaching a wrong number.
+
+The same contention had already produced FOUR failures on the PRE-phase binary
+earlier in this session (`grain_minimal_stretch`,
+`grain_multiple_stretch_factors`, `render_after_edit_sibling_tracks`,
+`render_after_edit_stale_cache`), and all four then passed in isolation — so
+the failure family predates the branch and is not attributable to it. Five of
+the six then passed in the targeted corpus re-run above (39/39 green) once the
+competing load dropped, which is as close to a controlled disproof as this
+environment allowed. That is
+consistent with, but not the same as, the unexplained single-case flake the
+2026-08-09 entry records: this one has a named mechanism and a visible cause.
+
+What that costs, stated plainly: the qxa suite has NOT been run green
+end-to-end on this branch. The evidence that the branch is sound is the
+targeted corpus above, the two new cases, the round-trip audit and the 27
+cases that did pass — not a clean full suite.
+
+### 5. What was NOT gated
+
+- The take-stack HOMOGENEITY rule is implemented but unexercised — it needs an
+  Event-kind object (P1 AC2).
+- `setWindowFromTimeline` has no caller yet: every P0a call site had an exact
+  anchor to pass. Its rounding is therefore argued (it reads the offset through
+  the NEW stretch, like `SResizeClipAction::readXml`'s legacy migration) rather
+  than measured.
+- Nothing here touches threading, the scheduler or a class-1 processor, so no
+  `repeat_test.sh` sweep was run. The one concurrency-adjacent claim — that
+  `cloneWindowOver`'s blocking duration read is the same read the code it
+  replaces made — rests on reading the diff.
+- `SClipWindow::of()` is a cross-cast on every windowed verb's hot path for
+  edits; no measurement was taken, and none is likely to matter (these are
+  user-gesture paths).
+## 2026-08-15 — Proposal 37 P0b: tw/events leaf
+
+The engine leaf every later phase of proposal 37 leans on, landed on its own so
+nothing else has to wait for it: `smaragd/tw303a/events/`, **core-only**, with no
+place in the dataflow DAG and nothing linking it yet (P1 and P2 are its first
+consumers). Design: `plan/proposed/37_MIDI_INSTRUMENTS_AUTOMATION.md` §4.1, §4.2,
+§3.2.1, D1/D2/D4/D5; brief: `37_ORCHESTRATION.md` §3 "P0b". Invariants:
+`tw303a/events/CONTRACT.md` (18 of them).
+
+**What landed**
+
+- `twEvent` / `twEventKind` — **the one** event type, pinned exactly as §4.1
+  specifies, shared later by the sequence, the clip set, the plugin ABI and
+  MIDI-out. `time` has two documented uses and no third (a position in the
+  owner's domain, or chunk-relative in a `process()` call); payloads live in the
+  OWNER's arena, never in the struct.
+- `twEventSeq` — immutable, sorted, arena-owning, `slice`, `stateAt(P)` → the
+  chase set (held notes {key, channel, velocity, start, noteId, srcIndex},
+  sustain, last CC per (channel, cc), bend, channel pressure, program). Notes are
+  stored WITH their duration; the open-note representation (closed FIFO by a
+  later note-off) is honoured too, because a live capture produces it.
+- `twTempoMap` — the ONLY tick↔frame converter and the single tempo authority.
+  µs/quarter (SMF's own unit) stored, BPM derived; exact rational conversion;
+  constant tempo with the API already shaped for segments.
+- `TickPos` / `TickLen` in `tw/core/twdomains.h` (exact-rational, the one domain
+  that is not frames) and `twFrameRange` in core (twEditRange's shape, for the
+  modules that may not depend on `tw/mix`).
+- `twSmf` — type 0/1 read and write, running status expanded, velocity-0
+  note-offs, FIFO pairing of overlapping same-key notes, meta → kinds with the
+  RAW payload always preserved (unknown meta survives as `Unknown`), PPQ rescale,
+  SMPTE and type 2 refused rather than guessed at.
+- `twAutomationCurve` — step / linear / exp-with-tension, `valueAt`, `fillRamp`.
+- `twEventSource` + `twEventClipSet` + `twEventMerge` — the seam the instrument
+  slot and the MIDI-out pump will read through. `collect(startPos, len, out)`
+  returns the chase at `startPos` plus the window's events at page-relative
+  times, clamped to each clip window, with synthesised note-offs at a clip end
+  and at a loop wrap, note-ons before the window reachable ONLY through the
+  chase, loop and slip through the resolver's map, and note ids namespaced per
+  clip slot and per merge source.
+
+**Two implementation decisions worth knowing** (both in CONTRACT.md, neither a
+design change):
+
+1. The clip resolver's map returns `{seqPos, runFrames}`, not a bare position.
+   Audio never needed the run — `twTrackMix` asks a clip to render a page and the
+   clip loops internally — but events must be ENUMERATED, and an enumeration
+   needs the extent of the affine segment, not just a point.
+2. Note ids are composed from the note's own index (`twMakeNoteId(clipSlot,
+   eventIndex)`), not counted per call: the note-off of a note chased in one page
+   has to carry the id its note-on carried in the previous one.
+
+A third rule fell out of the half-open windows and is the subtlest thing here: a
+clip end or loop wrap landing exactly ON a window start belongs to THAT window at
+offset 0. Without it the previous window (which ended before the boundary) and
+the next one (which begins a new segment where the note is not open) both skip
+the release, and the note hangs forever. `collect` therefore accepts a clip whose
+end equals `startPos`. Asserted both ways.
+
+**Gate**
+
+- `./build.sh` clean (full configure + build in the fresh worktree; clap and vst3
+  submodules fetched, so the `plugin_*` cases are registered and did run).
+- `python tools/check_layering.py` → clean, with `events: ['core']` declared. The
+  rule was verified to BITE: a temporary `#include "tw/pages/…"` in the module
+  produced "events may not include tw/pages", and `events_test` links only
+  `tw_events`, so losing the core-only shape is also a link failure.
+- `python tools/check_logging.py` → clean.
+- `ctest`: registered 109 → **110**, the diff being exactly `events_test`.
+  The full-suite reconciliation was **NOT completed on this branch, by requester
+  instruction**: another session is preparing suite parallelization plus a
+  `getDuration()` fix that lands first, and this phase was told to stop waiting
+  rather than start a third run. What WAS observed, in two partial runs:
+  - Run A (sequential, machine moderately loaded): **43 passed, 0 failed**,
+    3 `au_*` `Not Run (Disabled)` (macOS-only), reaching case #46 of 110. It was
+    killed by this session's own foreground wait timing out and taking the
+    background job's process group with it — an operator error, not a test
+    result.
+  - Run B (restart): **12 passed, 5 failed**, same 3 disabled, reaching #20 of
+    110 before it was stopped deliberately. Every one of the five failures is
+    `SRenderAction: render timeout after 30000 ms` — a WALL-CLOCK timeout, with
+    every audio assertion inside them passing (`folder_track_sums_once` logged
+    four `RMS energy OK` lines before failing). At that moment SIX other ctest
+    suites from five other worktrees (one with `-j4`) were running on this
+    machine, and the qxa capture backend is real-time paced. **All five —
+    `exact_stretch_roundtrip`, `folder_track_sums_once`, `grain_asset_stretch`,
+    `grain_loop_stretch`, `grain_minimal_stretch` — had PASSED in run A**, which
+    is what identifies them as contention casualties rather than regressions.
+  - `events_test` is registered at #104 and neither partial run reached it; it
+    was run directly instead (below). No case in either run failed on an
+    assertion.
+- `events_test`: **96 assertions, 0 failures**, byte-identical output over three
+  runs (fixed RNG seed). It implements the brief's AC1 (a)–(f): a six-fixture SMF
+  corpus (two hand-crafted FOREIGN byte streams — a type 0 leaning on running
+  status, a type 1 with tempo/timesig/keysig/marker/lyric meta, a sysex and an
+  unmodelled meta — and four authored by our own writer, including a
+  30 000-event file), equal event tables through import→export→import for all six
+  and BYTE identity for the authored four, lossless 480↔960 PPQ rescale;
+  `stateAt` against a brute-force scan at 1000 random positions of a random
+  2000-event sequence; `ticksToFrames` exact at 44.1/48/96 kHz (960 ticks =
+  24000 frames @ 48 k) with `framesToTicks` round-tripping every tick multiple
+  and denominators asserted under `ppq·10⁶`; the curve's closed forms to 1e-12
+  and `fillRamp` == n `valueAt` calls; the clip set's clip-end synthesised off,
+  chase-only note-ons, loop repetition and slip; and the merge's two-notes-with-
+  distinct-ids, union chase and clean source removal.
+
+**NOT gated**
+
+- **The qxa suite reconciliation itself** (see above): stopped by requester
+  instruction with 43/110 the best single-run coverage. Whoever merges this
+  should run it once on the parallelized suite.
+- **Nothing links the module**, so there is no end-to-end coverage of any seam:
+  `twEventSource`, `twEventClipResolved` and the note-id namespacing are asserted
+  by unit tests only. The first real evidence arrives in P1/P3b.
+- **Renders are byte-identical by construction, not by measurement.** No engine
+  file was touched and no target the app links gained a dependency (`tw303a`'s
+  umbrella target is unchanged), so no render path can have moved; the qxa render
+  cases were run, but no pre-phase/post-phase WAV `cmp` corpus was produced,
+  because there is nothing for it to detect.
+- No concurrency gate: `twEventClipSet` and `twEventMerge` take their own mutexes
+  and copy their lists before walking, but no test drives them from two threads.
+- Constant tempo only; a `Tempo` meta read from a file lands in the sequence as
+  an event and nothing feeds it to the map yet.
+
+**Housekeeping.** `*.mid` is marked `binary` in `.gitattributes` — the corpus is
+compared byte for byte, so no eol conversion may touch it. The branch is based on
+`main` at 9db00ad (plus the four proposal-37 document commits); `main` has since
+advanced by three merges (ASIO spike, head wheel/name, multi-track selection),
+which this branch does not carry.
+## 2026-08-15 — Proposal 37 P2: plugin ABI events, fixtures, native 303
+
+Branch `feat/36-p2-plugin-events`, off P0b. The plugin layer learns about events
+at the `twPlugin` level ONLY: the ABI, the three format backends, the scanner,
+the in-repo fixtures and the in-house 303. **Nothing in `twPluginSlotProcessor`,
+`twPluginInsert` or `twPluginChain` was touched** — proposal 36-B4 rewrites those
+and P3b owns the generator modes — so nothing in the app calls the new path yet
+and no rendered byte moves.
+
+### What landed
+
+- **`tw/plugins/twpluginevents.h`** — `twEventList` (a view over host-owned
+  events plus a payload arena, valid for one call), `twEventOut` (a host-sized
+  sink; overflow COUNTED and dropped, never grown), `twProcessContext`
+  (position/transport with `validFlags`, because a host that does not know the
+  tempo must say so rather than send a default 120), `twPluginCapabilities`,
+  `twPluginBusInfo`, `twEventLimits`. No format type appears in it (CONTRACT
+  inv. 4) and it defines no event of its own: `twEvent`/`twEventKind` come from
+  `tw/events/twevent.h`, which is why `tw_plugins` now links `tw_events` and
+  `check_layering.py` grows a `plugins -> events` edge. `tw/events` is a
+  core-only leaf outside the dataflow DAG, so that adds no page dependency
+  (design F15 still forbids `plugins -> mix`).
+- **`twPlugin`** gains `capabilities()`, `audioOutBusCount()/audioOutBus(i)`,
+  `tailFrames()` and `process(in, outBuses, n, events, eventsOut, ctx)`. The new
+  overload's default forwards to the legacy one; every backend's legacy overload
+  forwards the other way with an empty list, an unreachable sink and an
+  all-invalid context — so the pre-36 render path is **the same instructions**,
+  not an equivalent computation. `acceptsNotes()` stays a forwarder to
+  `capabilities().acceptsNotes` for one release.
+- **CLAP**: notes (dialect-negotiated per port), note expressions, CC/bend/
+  pressure/PC/sysex, parameter values/mods/gestures in; the plugin's own events
+  out into `twEventOut`; `clap.tail`; aux ports reported; a transport built from
+  the context. Host extensions `clap.host-note-ports`, `clap.host-params`,
+  `clap.host-tail` — all record-only.
+- **VST3**: **the kEvent bus is now activated at `prepare()`**, which it never
+  was. That is a real bug this phase fixes, not a new feature: a plugin that
+  gates note handling on `activateBus` (as the spec entitles it to) received a
+  well-formed `IEventList` and ignored every note, with no error anywhere.
+  `twVst3EventList` both ways; `IMidiMapping` CC-to-parameter points at their
+  `sampleOffset` (VST3 has no CC event type at all, so this is the ONLY route,
+  and an unmapped CC is dropped rather than assigned an invented parameter);
+  `ProcessContext`; `INoteExpressionController` queried; the host support list
+  grown. A first cut gated the whole translation on the event-bus count, which
+  silently dropped every automation point for every EFFECT — caught by AC2 and
+  fixed to gate per event kind.
+- **AU (macOS)**: `MusicDeviceMIDIEvent` posted before `AudioUnitRender` with its
+  own `inOffsetSampleFrame`, `MusicDeviceSysEx`, `AudioUnitScheduleParameters`,
+  output ELEMENTS enumerated, `aumu`/`aumi` added to the scan.
+- **Fixtures**: `tw.test.clap.sine` (0 in, stereo main + mono aux out, CLAP|MIDI
+  note port preferring CLAP, 16 envelope-less voices, `NOTE_END` on off,
+  `CLAP_PROCESS_ERROR` on a wildcard note-on), `tw.test.clap.arp` (note in/out on
+  a 4096-frame grid with a 2048-frame gate, counted in ABSOLUTE frames from
+  reset), a third parameter on `tw.test.clap.gain`, and the VST3 `TestSine` as a
+  real SPLIT component/controller pair — which closes the "split VST3 pair
+  untested" debt `plugins/CONTRACT.md` has carried since M6, and had to, because
+  `IMidiMapping` lives on the controller.
+- **`twNativeInstrument`** (`format="tw"`, uid `tw.native.303`), registered like
+  `twPassThrough`: monophonic saw/square, portamento, `twMoog`'s ladder
+  arithmetic lifted into float buffer functions, a decay envelope on the cutoff,
+  accent at velocity >= 100/127, and a VCA that is a gate with a 6 ms release
+  (the Decay knob sweeps the FILTER, as on the instrument — so a released note
+  stops promptly however long the sweep is set). `reset()` is total, which is a
+  contract: it is what makes P3c's render-vs-render byte gates possible.
+- **Scanner v2**: descriptor gains `acceptsNotes`, `emitsNotes`,
+  `eventPortsIn/Out`, `nOutBuses`, `outBusChannels`; `kScannerVersion` 1 to 2.
+
+### Gate numbers
+
+`./build.sh` clean. `check_layering.py` clean. `check_logging.py` clean.
+
+`plugins_test` — all green, including:
+
+| AC | Measured |
+|---|---|
+| AC1 303 | silence before the note-on < 1e-6; fundamental **261.558 Hz** (want 261.626 +/- 1); held RMS **0.1729** (> 0.05); exact silence 512 frames after the off |
+| AC1 CLAP sine | fundamental **261.875 Hz**; RMS **0.556439** vs closed form **0.556777** (-0.06 %, band +/- 2 %); exact silence both sides |
+| AC1 VST3 TestSine | fundamental **261.875 Hz**; RMS **0.556439** vs **0.556777**; exact silence both sides |
+| AC1 AU | **SKIPPED** — macOS-only; the test says so out loud |
+| AC2 | CLAP and VST3: frame 1233 at unity, frame 1234 at 0.5, held to the end of the block |
+| AC3 | with `SMARAGD_VST3_NO_EVENT_BUS=1` the same fixture renders peak < 1e-6 — the teeth |
+| AC4 | 16 note-ons over 65536 frames = `ceil(65536/4096)`; 16 paired note-offs; 0 sink drops |
+| AC5 | reset + NoteOn at 0 + 8192 frames, twice, `memcmp` identical, all three instruments |
+
+The frequency estimator interpolates parabolically around the autocorrelation
+peak, and that is load-bearing rather than polish: at 48 kHz a 261.6 Hz period is
+183.5 samples, so integer lags alone resolve only to about +/- 0.8 Hz and the
+verdict would have depended on which side of a sample the period fell.
+
+`plugins_scan_test` — all green, including AC7: a cache claiming
+`scannerVersion` 1 is discarded (`probed=2 cached=0`), the next scan is a cache
+hit (`probed=0`), and the probe's JSON carries the new fields for all three test
+modules (sine: `nOutBuses=2` = stereo main + mono aux; arp: note ports in AND
+out, `nOutBuses=0`; gain: no event ports, one bus).
+
+AC6 — the golden corpus (`plugin_*` + `render_*`, 21 cases, 42 WAVs) rendered on
+the pre-phase binary and `cmp`'d against this one: **42/42 byte-identical**.
+`plugin_slot_roundtrip`'s exact-base64 assertion on the saved state chunk is
+among them and is untouched, because the gain fixture still writes a 16-byte blob
+when the clipper is off.
+
+ctest registered count **110 = 110** (88 qxa + 22 units), unchanged: this phase
+adds no case and no test target.
+
+### Deviations
+
+**`clipThreshold` is parameter id 2, not id 1.** The P2 brief says id 1; id 1 was
+already `Report Block Size`, which the host-chunking gate reads out of the
+plugin's own output. Renumbering a live gate's parameter would have bought
+nothing. **P3a's `fader_post_fx` ORDER case must quote id 2.**
+
+`plugin_ui_strip_and_editor` timed out once on the BASE binary (`SRenderAction:
+render timeout after 30000 ms`) while the machine was loaded by another suite; it
+passed on re-run and on the phase binary. Pre-existing, unrelated to this change,
+and named rather than waved through.
+
+### NOT gated
+
+- **The full `ctest` suite was not run on this branch**, by requester
+  instruction (another session is landing suite parallelisation and a
+  `getDuration()` fix first). What ran: `plugins_test`, `plugins_scan_test`, the
+  21 `plugin_*`/`render_*` qxa cases with a byte compare, and `ctest -N` for the
+  registered count.
+- **The AU event path is UNVERIFIED.** It was written on Windows, where the whole
+  backend is compiled out — never compiled, let alone run against an AudioUnit.
+  CONTRACT invariant 35 records it and `plugins_test` prints it on a non-Apple
+  build. AU MIDI-OUT is reported as a capability but not wired (the callback must
+  be installed before `AudioUnitInitialize`).
+- **Nothing is hosted in the app.** No processor, chain or tap change, so no qxa
+  case exercises the event path end to end and no instrument is audible in a
+  render yet. That is P3b — and it is why the goldens could be byte-identical.
+- **Aux output buses** are discovered and reported but not routed anywhere (P9).
+- **Note expressions, sysex and MIDI-out translation** compile and are covered by
+  the mapping code, but no fixture sends one — only notes, CCs and parameter
+  points are driven by a test.
+- No `repeat_test.sh` sweep: nothing here touches the scheduler, a class-1
+  processor, the barrier or the readahead.
+
+## 2026-08-15 — Proposal 37: P0a + P0b + P2 reconciled on the merged tree
+
+`docs/midi-instruments-automation` at `1e402a1` = P0a + P0b + P2 + PRs #34
+(render length = arrangement), #35 (offscreen plugin deploy), #37 (channel=
+fix, byte gate, page accounting) and #36 (parallel test gate). The two
+`assert-file-identical` verbs (PR #37's and P0a's) were unified: PR #37's class
+and attribute names (`actual`/`expected`/`maxReportedDiffs`) plus P0a's
+`startFrame`/`frameCount` WAV-range compare and absolute-path acceptance.
+
+Gate on the merged tree: `./build.sh` clean; layering + logging clean;
+`action_roundtrip_test`, `events_test`, `plugins_test`, `plugins_scan_test`
+green; **`ctest -j4`: 118/118 passed in 155.7 s** (121 registered; 3 `au_*`
+disabled off macOS). This is the full-suite reconciliation P0a/P0b/P2 had
+deferred by requester instruction.
+
+## 2026-08-15 — Proposal 37 P7a: MIDI device layer
+
+The ENGINE half of the P7 brief (`37_ORCHESTRATION.md` §3, P7), split out so it
+could run in parallel with P1. `tw/devices` only — no app code, no model, no
+render path, so **the goldens are byte-identical by construction**: nothing P7a
+adds is reachable from `freezePage`, `RenderSession` or `AudioEngine`. The app
+pump, the per-track port/channel/offset, the Options page and the testkit verbs
+are P7b, and the P7 tracker row stays unticked until they land.
+
+**What landed** (`tw303a/devices`, ~1 900 lines):
+
+- `tw/devices/midi_output.h` / `midi_input.h` — `MidiPortInfo{id,name,isVirtual}`;
+  `MidiOutput{ open/close/isOpen/listPorts/createVirtualPort/send(bytes,size,
+  hostTimeNs=0)/supportsTimestamps/latencyNs/backendName }`; `MidiInput{ … +
+  setCallback(bytes,size,hostTimeNs) }`; `createMidiOutput()`/`createMidiInput()`
+  selected by **`SMARAGD_MIDI_BACKEND`** with the `SMARAGD_AUDIO_BACKEND`
+  precedence (variable outranks platform, unknown warns and falls back, never a
+  null pointer), plus an explicit `createMidiOutput(backend)` overload — a
+  MidiOutput IS minted where a caller can pass a name, unlike the audio backend.
+- Backends: **WinMM** (`midiOut*`/`midiIn*`, `MIM_DATA`, no virtual ports, no
+  timestamps — send at due time), **CoreMIDI** and **ALSA sequencer** (both with
+  virtual ports and driver timestamps, both **UNVERIFIED** — written and reviewed
+  on Windows, compiled nowhere in this gate), **capture** (records
+  `{hostTimeNs, port, bytes}` and a static `active()` accessor), **null**.
+- `MidiOutScheduler` — one Qt-free `std::thread`, SPSC ring (4096 slots, 16-byte
+  messages, single producer = the app pump), sends AT the due time or hands off
+  early where the driver stamps, `flush()`/`panic(channelMask)`, `stop()`+join in
+  the destructor, `sent/dropped/late/maxLatenessNs` counters, `hostNowNs()` =
+  `steady_clock`.
+- `CaptureBackend` gained a `{hostTimeNs, firstFrame}` block log under the
+  EXISTING `captureMutex_` (cleared with the recording) plus `frameAtHostTime`,
+  piecewise linear, extrapolating past both ends. That is the independent clock
+  D6/review #12 asks for: `assert-midi-out` (P7b) will measure the pump against
+  the AUDIO timeline, not against itself. No RT-thread rule was touched.
+
+**Two things worth knowing next time:**
+
+1. **`timeBeginPeriod(1)` was not enough on Windows 11.** With it held, a
+   `std::condition_variable::wait_until` still rounded up to the 15.6 ms system
+   tick: the first measured run had max |sent − due| = **15.36 ms**, i.e. exactly
+   one tick, and the test failed. The fix is a **high-resolution waitable timer**
+   (`CreateWaitableTimerExW` + `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, falling
+   back to an ordinary timer) waited together with an auto-reset wake event;
+   `timeBeginPeriod(1)` stays for the 1 ms sleeps elsewhere. After the change the
+   same run measures **0.33–1.32 ms** over 40 consecutive runs.
+2. **A ring alone does not bound memory.** The sender drains eagerly, so a
+   runaway producer grows the sender's pending list without limit while the ring
+   never looks full — 8192 enqueues were all accepted and none refused. The
+   pending list is now capped at `kRingSlots`, dropping the FURTHEST-FUTURE
+   messages (what is about to be heard outranks what a runaway pump queued for
+   later) and counting them in `dropped()`.
+
+**Gate:** `./build.sh` clean; `check_layering.py` clean (devices deps unchanged
+— tw_core only); `check_logging.py` clean; **`devices_midi_test` 52 assertions,
+0 failures, 40/40 consecutive runs green**, max |sent − due| across those runs
+1.32 ms (asserted ≤ 5 ms; the box was otherwise idle); every other unit test
+green (24/24 non-qxa at `-j4`); `ctest -N` 121 → **122**; the **full suite
+`ctest -j4`: 118 of 119 run passed in 730 s** (122 registered, 3 `au_*`
+disabled off macOS), the single failure being the pre-existing teardown hang
+characterised below — the box was ALSO running two other sessions' suites at
+the time, which is why 730 s rather than the usual ~160 s.
+
+**One pre-existing failure, characterised and NOT ours:** `qxa.takes_screenshot`
+fails (CTest Timeout, 600 s) in the full `-j4` run and **reproduces alone** —
+and it reproduces identically on a build of this worktree with `tw303a/devices`
+checked out at the PRE-P7a commit (3/3 runs: PASS printed, then exit 1 or
+SIGSEGV). The case passes every assertion and then never exits. `gdb` on the
+hung process says exactly where:
 
 ```
-Thread 1 (main):  msvcrt!_initterm_e            <- static destruction
-                  ~twPluginRegistry             twpluginregistry.cc:173
-                  twPluginRegistry::waitForScan twpluginregistry.cc:292
-                  QThread::wait                 <- unbounded
-Thread 5 (scan):  __cxa_call_terminate / __verbose_terminate_handler
-                  abort()
-                  RtlEnterCriticalSection       <- blocked on the CRT lock
+Thread 1: twPluginRegistry::~twPluginRegistry → waitForScan() → QThread::wait()
+Thread 2: the scan thread, inside __verbose_terminate_handler → abort()
+          → stuck in msvcrt's abort (RtlEnterCriticalSection)
 ```
 
-`main.cpp`'s test mode ends in **`std::exit()`**, which runs static destructors on
-the calling thread while every other thread keeps running — and never destroys
-`SApplication`, so the join in *its* destructor never happens and the first thing
-to notice a live scan is the registry's own static destructor. The scan thread,
-executing against a runtime being torn down under it, throws; nothing catches it;
-`std::terminate` calls `abort()`; `abort()` wants the CRT lock the exiting thread
-is holding while it waits for this thread. **Neither side had a timeout in it.**
+So the STARTUP PLUGIN SCAN of this machine's installed third-party modules
+(Melodyne.vst3, MangrovePlugin.clap, CastelloReverb.clap are in the log)
+terminates the scan thread, `abort()` deadlocks, and the registry destructor
+waits for that thread forever. It is a teardown race between process exit and a
+still-running scan — a short case exits while the scan is mid-flight, which is
+why one screenshot case and not the other 117 hit it. Same family as the
+`split_plain_screenshot` teardown crash CLAUDE.md already records, and it needs
+its own investigation (`plugins/scanOnStartup`, the probe path, and whether the
+in-process fallback is being taken). Nothing in P7a is reachable from it.
 
-What the re-probe was NOT: slow. Probing all six installed modules
-out-of-process takes **2.7 s** total (160 ms each, 1.8 s for Melodyne, measured
-by driving `smaragd_pluginprobe` by hand). The hang was a deadlock, not a wait.
+**NOT gated:** WinMM send jitter against real hardware (±1 ms by design);
+CoreMIDI and ALSA-seq at all (no macOS/Linux box in this phase — they are
+written, reviewed, guarded, and unverified); virtual-port creation on Windows
+(needs loopMIDI); sysex OUT beyond compiling (it blocks the sender thread until
+the driver releases the header) and sysex IN (`MIM_LONGDATA`) which is not
+implemented; `MidiInput` has no consumer at all until P8. The timing assertion
+measures the MACHINE as much as the code — `devices_midi_test` is `RUN_SERIAL`
+for the same reason `twlog_test` is.
+## 2026-08-15 — Proposal 37 P1: event clips in the model
 
-**The trigger was cross-worktree state.** `kScannerVersion` is a source constant;
-`plugincache.json` was one file per USER. A worktree at version 2 had written it
-while this build is version 1, so every launch logged "written by scanner version
-2, this build is 1 — rescanning everything" and re-probed everything, which is
-what kept a scan in flight at exit. The file name now carries the version
-(`plugincache.v1.json`, `twPluginRegistry::cacheFileName()`). Foreign records were
-already refused wholesale on load, so nothing is lost — but **every existing user
-re-scans once**, and the old file is deliberately left alone because a build at
-another version may still be using it.
+Branch `feat/36-p1-event-clips` (off the merged P0a+P0b+P2 tree at `8943ef1`):
+`e2fb1df` model + slice + verbs, `d7cdbae` UI wiring, `402ef68` tests + SMF
+fixture, `cd89d24` contracts. MIDI is now in the document model — content,
+window, placement, the verbs to edit them, and a per-track event feed. Nothing
+SOUNDS yet: an event clip on a track with no instrument is inaudible, not
+rejected (D3), and the instrument slot is P3b.
 
-The fix proper: `cancelScan()` observed between modules and once per **100 ms
-slice** of the probe wait (was one `waitForFinished( 15000 )`), a **bounded**
-`waitForScan( ms )` that leaks rather than deletes or terminates a worker that
-will not stop, a **catch-all** around the thread body, and cancel-then-join at
-the two points that can still REPORT a failure — `~SApplication` and, new,
-`main.cpp` before `std::exit()`. `~twPluginRegistry` keeps a **silent** 5 s
-cancel-and-join as the last resort: `TwLog::instance()` is a function-local
-static built after it, hence destroyed before it, so logging there would trade
-the hang for a crash.
+### What landed
 
-A cancelled scan writes **no** cache and publishes **no** plugin list. Its table
-is partial and its one caller is a process on the way out; a module it never
-judged must not become a record, least of all a sticky failure. The cost is that
-a run too short to finish its scan never warms the cache — acceptable, since one
-longer case warms it for every later run (the suite did exactly that).
+**Tick-native, frames derived, converted once.** `SMidiSequence` stores a
+sorted `std::vector<SEvent>` in musical ticks at PPQ 960; `SMidiCut` stores
+`srcStartTicks` / `lengthTicks` / `loopTicks` as exact `Fraction` ticks plus an
+exact `rate`. Every frame-facing value — `getDuration()`, `loopLength()`,
+`startOffset()`, and the frame-domain `twEventSeq` the engine reads — is
+derived in ONE place, `SMidiCut::rebuild_nolock()`, by multiplying an exact
+tick value by the tempo map's exact frames-per-tick and flooring once. That is
+POSITION_DOMAINS' new rule 7 and the new **Ticks** domain row.
 
-Measured, `render_sawtooth_minimal.qxa`, foreign cache, six installed plugins:
-**> 600 s (killed) → 270-350 ms**. Full suite, `-j4`, **no** `[plugins]
-searchPaths` workaround: **131/131 in 93 s** (134 registered, 3 macOS-only
-`au_*` Not Run), against 87 s previously measurable only *with* the workaround.
+**`twTempoMap` is the tempo authority.** `SProject::bpmTempo_` is GONE;
+`getBPMTempo()` is `6e7/usPerQuarter`. `set-tempo` is the only write, and it is
+an action: it re-derives `startTime` for every `timebase=beats` `SLink` in the
+project (walking the project's own children, which reaches nested containers,
+take-stack lanes and unplaced assets alike, each link exactly once). The two
+direct `setBPMTempo()` writes — the ruler's "Set BPM" dialog and the transport
+spin box — now submit the verb. `SStdMixerView::setBPMTempo` was renamed
+`onProjectTempoChanged`: it was always a LISTENER, and the name made the write
+audit ambiguous.
+
+**`SLink::timebase`** (`time` | `beats`, default `beats` for Event content,
+`time` otherwise; serialized only when non-default so every pre-36 project
+re-serializes byte-identically). A beats link carries an exact `startTicks` as
+the authority and derives `startTime`; `setStartTime()` converts once and
+stores ticks, so repeated tempo edits cannot drift.
+
+**`main/objects/midi`**, a new slice at the RANK of `objects/cut` (a second
+window/content pair, not a layer above one) with app edges
+`{actions, model, persistence}` and engine `{core, graph, events}`. It carries
+`SMidiSequence`, `SMidiCut`, the inline renderers and thirteen verbs:
+`insert-midi-clip`, `import-midi-file`, `export-midi-file`, `add-note`,
+`remove-note`, `set-notes`, `add-event`, `remove-event`, `set-events`,
+`quantize-notes`, `set-midi-cut`, `set-tempo`, `set-link-timebase`.
+`set-track-midi-routing` lives in `objects/track` where the attribute does.
+
+**One mutator, therefore one inverse.** Every content verb goes through
+`SMidiSequence::setEvents` (an absolute new table) and hands back a
+`set-events` carrying the previous one, so "the inverse is the previous state"
+is true by construction. That is also what makes a piano-roll drag one undo
+step (`set-notes` coalesces by clip+take) and `quantize-notes` its own inverse.
+
+**`STrack` routes Event children into a `twEventClipSet`, never the bus
+mixers** — same slots, same `SLink*` key rule, but ONE set per track (events
+are not per bus). It owns `eventFeed()`, a `twEventMerge` over its own set plus
+every child track that bubbles events up (§3.2.1: no instrument slot and no
+MIDI-out, unless the serialized `midiRouting` says otherwise; muted and
+solo-excluded children contribute nothing, resolved with `ssolorules.h`). Every
+event edit invalidates `[a, INT64_MAX)` — the consumer is class-1, so a change
+is never bounded on the right (F9).
+
+**`objects/track` has NO edge to `objects/midi`.** Three seams on `SObject`
+make that work and are useful beyond MIDI: `resolveEventClip()` (the event twin
+of `resolveClip`), an `eventsChanged(from)` signal, and `windowTakeAt(i)` — a
+generic take accessor, so a verb can address a take without naming
+`STakeStack`. `STakeStack` forwards `resolveEventClip` to its active take, or a
+MIDI column would be routed into the clip set (its `contentKind()` says Event)
+and answer with an empty record.
+
+**UI**, all of it through existing polymorphic paths: an
+`SMidiCutRendererInline` thumbnail (note rects scaled to the present pitch
+range, controllers as ticks, metadata along the top edge); `SCutRendererInline`'s
+container heuristic now asks `contentKind()` BEFORE `getRandomSource()` (an
+event object also answers null and would have been drawn as an asset waveform);
+`drawTakeLane`'s `dynamic_cast<SCut*>` is gone (it drew an event take as
+nothing); a Clip Properties page for `SMidiCut`; `.mid` in the insert filter;
+and OS file drops (`text/uri-list`), normalised into the same `file:` payload
+the internal drag uses so there is one placement path and the extension
+dispatch lives in `SProject::linkToFile`.
+
+### Gate
+
+| Gate | Result |
+|---|---|
+| `./build.sh` (re-configure) | clean |
+| `python tools/check_layering.py` | clean |
+| `python tools/check_logging.py` | clean |
+| `ctest --test-dir smaragd/build -j4` | **124/124 passed** in 154.8 s; 127 registered, 3 `au_*` Not Run (Disabled). Reconciled: 104 `.qxa` on disk = 104 `qxa.*` registered |
+| golden byte-compare | **69/69 WAVs byte-identical** across 40 `render_*` / `grain_*` / `exact_*` / `warp_*` / `plugin_*` / `meter_*` case dirs, against renders taken from the branch tip BEFORE the first P1 commit |
+
+Counts before P1: 121 registered / 118 run. After: 127 / 124 — six new `.qxa`
+cases, no unit-test target added.
+
+**AC by AC.** AC1 `midi_clip_roundtrip`: import a 3-track SMF → save → load →
+export is BYTE-IDENTICAL to the source (142 bytes), plus `assert-midi-file`
+counts. AC2 `midi_clip_edit_verbs`: every verb with `<undo count="1"/>` and the
+prior assertion after it; the non-destructive split asserted three ways; rate,
+slip, loop; the take-homogeneity refusal. AC3 `midi_clip_tempo_remap`:
+`set-tempo` 120→60 doubles the beats link's `startTime` (96000→192000), its
+duration and its note's frame position, and moves the audio clip not at all;
+`set-link-timebase time` pins it; every step undone and re-asserted. AC4
+`midi_clip_render_silent`: silent render of exactly the arrangement's length
+and `twView::getComponent() returned nullptr` count 0. AC4b `midi_folder_feed`:
+two children under a folder, mute / solo / `midiRouting=none` each remove one
+contribution, each undone. AC6: `action_roundtrip_test` green with a fixture
+row per new verb (18 rows added), `docs/ACTIONS.md` re-sorted with 15 new rows,
+layering as specified, and `grep -rn "bpmTempo_ =\|setBPMTempo(" main/` hits
+only `set-tempo`'s apply and the loader. AC7: the golden compare above.
+
+**AC5 is the orchestrator's** (cross-binary: open a P1-saved `.qxp` in the P0a
+binary and expect the MIDI clip dropped and the audio intact). The fixture it
+needs is produced by the suite: `smaragd/build/midi_clip_roundtrip.qxp`.
+
+One process note worth keeping: `check_layering.py` must be run FROM THE REPO
+ROOT. Run from `smaragd/` it reported "layering clean" over a testkit file that
+was directly including `tw/plugins/twpluginslotproc.h` — a real violation the
+root-relative run caught. The fix was to drop the include: `app/objects/track/
+spluginslot.h` is the sanctioned route, because every question the verb asks is
+asked of the APP model, which quotes those engine types in its own public API.
+
+### Deviations, and what is NOT gated
+
+- **`objects/midi`'s engine deps are `{core, graph, events}`, not `{events,
+  core}`.** `tw/graph` is in `check_layering.py`'s `_ENG_BASE` (allowed
+  everywhere) and is needed for the private silence `twComponent`, exactly as
+  `objects/cut` needs it for `STakeSilence`.
+- **`events` was also granted to `testkit`** (on top of the model /
+  objects/track / timeline grants the brief names): `assert-midi-file` reads
+  `twSmf` and `assert-midi-events` drives a real `twEventSource::collect`.
+  `testkit → objects/midi` likewise.
+- **Two testkit verbs beyond the brief.** `assert-clip-window` (a clip's
+  placement and window in timeline frames, through `SClipWindow`) — AC3 demands
+  asserting a link's `startTime` and a clip's duration, and there was no way to
+  see clip geometry from a script without rendering it, which cannot separate
+  "the clip moved" from "the clip moved and its content moved back". And the
+  `noteoff*` kinds on `assert-midi-events`, which collect over the clip's window
+  PLUS ONE FRAME (a clip-end release lands on the half-open boundary, i.e. in
+  the window that STARTS there — events/CONTRACT inv. 8-9).
+- **`SEvent` uses the ENGINE's field names** (`kind`/`channel`/`key`/`value`/
+  `value2`/`paramId`/`duration`) rather than design §3.1's `a`/`b`/`f`. §3.1's
+  own comment spells out that a/b/f MEAN key/velocity, cc/value, … per kind; a
+  second vocabulary would need a translation table that could disagree with
+  itself, which is what events/CONTRACT inv. 1 rejects. The XML attribute names
+  stay generic (`k t d ch key p v v2 text blob m`) as the design specifies.
+- **The SMF fixture is authored by this build's own exporter**
+  (`midi_fixture_authoring.qxa` writes `tests/midi_multitrack.mid`), so AC1's
+  byte compare is a round-trip identity rather than an independent oracle. That
+  is what "authored by `twSmf`" means here, and the independent half of the
+  gate is `events_test`'s own foreign-file corpus (P0b) plus `assert-midi-file`.
+- **`import-midi-file mode="channels"` is not implemented** (only `tracks` and
+  `merged`); the design lists three.
+- **Loop tiling is not DRAWN** for an event clip — the thumbnail paints the
+  window once. Playback tiling is correct and gated (`midi_clip_edit_verbs`
+  asserts 4 note-ons over a 4× loop through the feed).
+- **`midiOutPort` / `midiOutChannel` / `midiOutOffsetMs` are NOT added** (P7);
+  `STrack::hasMidiOut()` returns false with a comment, so the `auto` routing
+  rule is expressible today and complete when P7 wires the port.
+- **No `repeat_test.sh` sweep**: nothing here touches the scheduler, a class-1
+  processor, the barrier or the readahead. The event clip set is read only by
+  `assert-midi-events` so far — there is no concurrent consumer to race.
+- **Nothing about MIDI is AUDIBLE**, by design, so no case asserts event→audio.
+  The `twEventClipSet`/`twEventMerge` seams are exercised end to end for the
+  first time here (P0b tested them as units), but only through a test verb.
+
+### Found on the way: a teardown hang in the plugin scan (NOT touched)
+
+Every case hangs at exit — PASS is printed, the process never leaves — when the
+plugin cache is COLD. `~twPluginRegistry` (a namespace-scope static) calls
+`waitForScan()` on the main thread; the still-running scan thread logs
+`[scan] '<module>': N plugin(s)` through `TwLog::instance()`, whose
+function-local static was constructed LATER and is therefore destroyed EARLIER.
+`std::mutex::lock` on the dead impl throws `std::system_error`, the QThread
+lambda has no catch, `std::terminate` → `abort()` blocks against the main
+thread, and the process deadlocks. Caught under gdb (`catch throw`), stack in
+`twlog.cc:349` ← `twpluginregistry.cc:440`.
+
+It is latent, not new: it needs a scan that is still running when the process
+exits, i.e. a cold cache. It bit here because two worktrees with different
+`kScannerVersion` (P0b at 1, this branch at 2 after P2) share
+`%APPDATA%/Smaragd/plugincache.json` and kept invalidating each other's. It did
+NOT fire in either full suite run — the first case warms the cache. Recorded,
+not chased: `tw/plugins` is outside P1's module set (ground rule 6), and the
+fix belongs where the registry is (drain or detach the scan before static
+destruction, or give the scan thread a catch-all).
+
+---
+
+## 2026-08-15 — Proposal 37 P4: event editor + virtual keyboard
+
+- **Status:** ✅ COMPLETE (AC1, AC2, AC3, AC5 green; **AC4 skipped — it needs
+  P3b**, see "Not gated" below)
+- **Branch:** `feat/36-p4-event-editor`
+- **Modules:** new `main/eventui/` (+ CONTRACT.md), `main/shell` (two docks,
+  the View menu, five test seams, the axis link), `main/timeline` (the head's
+  second button pair + `describeTrackHead`, `SSnapSpec` grid divisions,
+  `secondWidthChanged`), `main/testkit` (four verbs), `tools/check_layering.py`,
+  `docs/ACTIONS.md`, `docs/ARCHITECTURE.md`.
+
+### What landed
+
+A **selection-following event editor dock** — the fifth `QDockWidget`, bottom,
+tabified with the Log — and a **virtual keyboard dock** beside it. Both are
+created in `SMainWindow`'s constructor with stable objectNames
+(`dock_event_editor`, `dock_virtual_keyboard`), hidden on a first run, with
+View-menu toggles (Ctrl+Shift+E for the editor).
+
+Inside `main/eventui`:
+
+| Class | What it is |
+|---|---|
+| `SEventTimeAxis` | The ONE px<->frame conversion, deliberately the same arithmetic (integer truncation included) as `SMVActualView::getXPosOfOffset`/`getTimeOf`. `linked` says whether it follows the arranger. |
+| `SEventTimeRuler` | bars.beats.ticks off the **tempo map**, not off a BPM scalar; the arranger ruler's 480-PPQ display becomes the map's 960 here. |
+| `SEventEditorView` | The abstract face: `setClip(path)`, `setTimeAxis`, `setGrid`, `setTool`, `describe()`, plus the tick/frame/pixel helpers and `commitNotes()`. Holds the rules a subclass inherits. |
+| `SEventEditorRegistry` | Static-initializer KIND REGISTRY. `SPianoRollView` registers as `"pianoroll"`; a tracker grid or a score view is a new file plus one registration. |
+| `SPianoRollView` | Draw / erase / select / move / resize / marquee / keyboard-nudge, a velocity lane and a CC lane stack — **one widget, three bands, one set of mouse handlers dispatched on the band**. |
+| `SEventEditorDock` | Toolbar (select/draw/erase, grid 1/1..1/32 + triplets, Quantize, CC lane, Link, kind switch) + ruler + the view slot; the selection follower. |
+| `SVirtualKeyboardDock` | Two painted octaves, REAPER's key map, velocity, octave +/-; inserts at the locator through `add-note`. |
+
+**Every edit is one P1 verb per gesture.** A drag paints out of a preview and
+never touches the model; the release discards the preview and submits ONE
+`set-notes` (revert-then-action, timeline inv. 3). Draw submits `add-note`,
+erase `remove-note`, a CC point `set-events`, the toolbar's Quantize
+`quantize-notes`. Nothing here caches an `SLink*` — the dock re-resolves the
+selection PATH on every `arrangementChanged`.
+
+**Track head (design 6.1):** the second button pair, `I` (instrument) and `A`
+(automation), plus `SSMVMixerControl::describeHead()` — a `describeMeter()`
+sibling. `A` is Full-density only **and** only while a six-button column still
+fits (five 20 px buttons need 108 px, six need 130, and Full starts at 132 — an
+unconditional sixth clips exactly the shortest Full lanes); `I` additionally
+requires slot 0 to be an instrument, which nothing can create yet (P3b), so the
+gate asserts the negative. `I` opens the generic plugin parameter editor; `A`
+is the seam plus its density rule and says so in a tooltip.
+
+**Grid divisions in the snap spec (design 6.2):** `SSnapSpec::setGridDivision`
++ `setTempoMap`, parsed by `SQuantizeNotesAction::gridTicks()` — the ONE parser,
+shared with `quantize-notes` and the editor — and converted through
+`twTempoMap`, the single tempo authority. An empty division is the pre-36 beat
+snap byte for byte. Exposed on the ruler's context menu next to "Set BPM".
+
+**One FIXME resolved:** `SMVActualView::secondWidthChanged` was declared and
+never emitted. It now fires and carries a `double` (an `int` would quantise
+every zoom below 1 px/s), because the editor's axis mirrors that mapping.
+
+### Verbs (docs/ACTIONS.md rows + `action_roundtrip_test` fixtures)
+
+`virtual-key` (`key`, `velocity`="100", `durationTicks`="960"),
+`drag-note` (`clip`, `tick`/`key`/`channel`, `toTick`, `toKey`, `edge="end"`,
+`lane="velocity"` + `toValue`), `assert-event-editor` (`clip`, `kind`,
+`contains`, `absent`, `grabPng`), `assert-track-head` (`trackPath`,
+`headHeight`, `contains`, `absent`). All four go through `SMainWindow` —
+testkit may include neither `app/eventui` nor `app/timeline`. None is undoable
+itself: the NESTED action is what lands on the stack, so `<undo count="1"/>`
+after the verb reverses the gesture.
+
+### Gate results
+
+- `./build.sh` clean (the re-configure included: 128 -> **131** registered
+  tests, i.e. the three new qxa cases).
+- `python tools/check_layering.py` clean — `eventui` at the rank of `pluginui`,
+  engine deps `{core, graph, events}`, **no edge to `timeline`**: the arranger's
+  zoom and scroll arrive through the SHELL, which already sees both.
+- `python tools/check_logging.py` clean.
+- **AC1** `piano_roll_edits.qxa`: virtual-key C4 -> `count=1 key=60 at=0
+  velocity=100 dur=24000`; a two-bar move -> `at=96000`; a move+transpose ->
+  `key=64 at=48000`; an end-edge resize -> `dur=48000`; a velocity-lane drag ->
+  `63.5` (one pixel of a 48 px lane is 2.6 velocity units, which is the honest
+  resolution of the gesture). Each followed by `<undo count="1"/>` and the
+  prior assertion. `virtual-key` with no event clip `expectReject`s.
+- **AC2** `event_editor_dock.qxa`: `kind=pianoroll|notes=0|grid=1/16|linked=1|
+  empty=0` on an empty clip, `notes=1|grid=1/16|linked=1` after a note,
+  `empty=1` when the selection moves to an audio clip and back again, plus
+  `quantize-notes` from the toolbar with its undo. Two PNG grabs written.
+- **AC3** `track_head_density.qxa`: Full 160 -> `btns=M,S,R,T,G,A|I=0|A=1`;
+  the FIT boundary 132 -> `A=0` / 136 -> `A=1`; Compact 100 and 46; Tiny 40 ->
+  `btns=M,S` and 14 -> no buttons; the same on a NESTED lane. `fitW=1|fitH=1`
+  everywhere — no clipping.
+- **AC5** `action_roundtrip_test` green with a fixture row per new verb.
+- **Full suite**: `ctest --test-dir smaragd/build -j4 --output-on-failure` from
+  `smaragd/tests/cases/` — **100% of 128 run tests passed**, 0 failed, 165 s.
+  Reconciled: **131 registered**, 128 run, 3 Not Run (Disabled — the macOS-only
+  `au_*` trio). No flake, no retry, nothing re-run to get green.
+
+**Goldens are byte-identical BY CONSTRUCTION and were not re-frozen:** nothing
+in this phase is on an engine, render or freeze path. The only pre-existing
+files touched at all are UI widgets (`ssmvmixercontrol`, `sstdmixerview`'s
+snap/zoom seams, `smainwindow`), and the one behavioural change outside new
+code — `SSnapSpec`'s division — is inert until a division is SET, which nothing
+in the committed suite does.
+
+### Not gated / deviations
+
+- **AC4 (audible: `virtual-key` C4 -> render -> 261.6 +/- 1 Hz) is SKIPPED.**
+  It needs an instrument in the signal path, which is P3b; today an event clip
+  on a track without an instrument is silent by design (D3). The editor writes
+  notes and nothing sounds them, so there is nothing to measure. It belongs in
+  a P3b case rather than being re-cut here.
+- **CC lanes are draw-one-point**, not curve editing: a press sets one
+  controller value at the snapped tick through `set-events`. Curve drawing is
+  the automation UI's gesture set (P6). Recorded in `main/eventui/CONTRACT.md`.
+- **No zoom of the editor's own**: the vertical key height is fixed at 8 px and
+  the horizontal axis is the arranger's. Unlinking works; there is no UI to
+  zoom the unlinked axis.
+- **The `A` button does nothing yet** — automation lands in P5/P6.
+- **No `repeat_test.sh` sweep**: nothing here touches the scheduler, a class-1
+  processor, the barrier or the readahead. This is UI code on the main thread.
+- **PNG grabs are coverage, not oracles.** Nothing asserts their pixels; they
+  exist because a widget that throws in `paintEvent` passes every `describe()`
+  assertion ever written.
+- `SStepGridView` (tracker) and the score/tab kinds named in design 6.2 are not
+  built. The registry exists so they are additions rather than surgery.
+
+### One thing worth knowing before touching this again
+
+`grabEventEditor` **detaches** the dock's widget before sizing it. The dock's
+layout owns the geometry, so a `resize()` while parented is undone before
+`grab()` renders — the first version produced a 620x186 strip of whatever the
+hidden main window happened to allot, with the "No event clip selected"
+placeholder painted over a bound piano roll. That placeholder bug is why
+`SEventEditorDock::bindClip()` exists: the placeholder and the view are
+exclusive, and the explicit-path binding has to say so as much as the
+selection path does.
+
+A note dragged ONTO a clip's window end vanishes from the clip's snapshot —
+windows are half-open. That is the window's rule, not the gesture's, and it
+cost one debugging round: give a case a clip long enough that the destination
+is strictly inside.
+## 2026-08-15 — Proposal 37 P7b: MIDI-out pump, verbs, options
+
+- **Status:** ✅ COMPLETE (branch `feat/36-p7b-midi-out-app`; P7a landed the
+  `tw/devices` half separately, so the P7 row is now closed)
+- **Scope:** the APP half of proposal 37 P7 — `SMidiOutPump`, the per-track
+  MIDI-output attributes and their verb, the Options → MIDI page, the testkit
+  verbs, and the seven qxa cases that gate AC1–AC6.
+- **Modules:** `main/shell`, `main/objects/track`, `main/servicesui`,
+  `main/testkit`, `docs/ACTIONS.md`, `docs/contracts/THREADING.md`, four
+  CONTRACT.md files. No engine file was touched.
+
+### What landed
+
+**`SMidiOutPump` (`main/shell/{include/app/shell,src}/smidioutpump.{h,cpp}`).**
+A 20 ms main-thread `QTimer` with a 250 ms lookahead, started by
+`setPlaying(true)` and stopped by `setPlaying(false)`. Each tick it reads the
+playhead atomic, slices every MIDI-out track's `STrack::eventFeed()` — so a
+folder parent's port carries its children's patterns (design §3.2.1) — converts
+the events to bytes, and enqueues `{dueHostTimeNs, bytes}` into one
+`MidiOutScheduler` per resolved port. Nothing below the ring touches Qt.
+
+**MIDI out is emitted at PLAY time and only there.** This is the proposal-34
+metering lesson verbatim, and it is why the pump exists rather than a hook in
+the freeze path: pages are frozen ~1.4 s ahead of the playhead and by renders
+that have no playhead at all, so a freeze-time MIDI-out would spray a whole
+arrangement at the user's hardware with the transport stopped. `startRender`
+does not set `isPlaying_`, and `tick()` returns immediately while a render is
+active — "renders emit nothing" is true by construction, and gated.
+
+**Two device-side timing corrections, both measured rather than assumed.** The
+first cut anchored the clock on a position CHANGE and put the first note of a
+run **2833 frames (59 ms) early**; the fix anchors on a position PUBLICATION
+(`SApplication::locatorPublishSeq()`, a counter the RT thread bumps next to the
+position store). twSpeaker defers the device start until the readahead is
+primed, so before the first callback the playhead sits still at the locator and
+a due time hung on it fires before a single audio frame has been delivered. The
+second correction is the PUBLISH LAG: twSpeaker publishes
+`engine->currentPosition()` *after* the pull, so the frame just handed to the
+device is `published − bufferFrames`, not `published`. Without it every note is
+one device buffer (~21 ms at 1024 frames / 48 kHz) early. The output latency
+itself reuses `meterLatencyFrames()` verbatim, because it already converts
+DEVICE frames at the DEVICE rate into PROJECT frames.
+
+After both corrections the measured error, over the four playback cases, is
+**−244 … +902 frames (−5 … +19 ms)** against a 4096-frame (85 ms) budget.
+
+**De-dup is a monotone per-track frontier plus its loop iteration**, rather than
+the design's set of `(clip key, event ordinal, loop iteration)` keys. Windows
+are contiguous and never overlap, so the frontier gives the same guarantee with
+no bookkeeping, and it additionally survives an edit that renumbers ordinals
+mid-flight, which a key set would not. Recorded here as a deviation in
+mechanism, not in behaviour.
+
+**Chase / wrap / stop, exactly per D6.** Controllers, program and bend are
+chased on every start and locate; note-ons only when Options → MIDI says so,
+default OFF (re-attacking a hardware synth on every locate is a surprise, not a
+service). A loop wrap splits the window at the cycle end, releases every note
+the pump has sent and not released, and re-issues the chase at the cycle start.
+Stop and locate flush the queued future first — a queued note-on that escaped
+after the transport stopped is a stuck note — then send CC64=0 + CC123=0 on
+every channel the run used.
+
+**`STrack`** gains `midiOutPort` / `midiOutChannel` / `midiOutOffsetMs`, all
+serialized only when non-default so every pre-36 project re-serializes
+byte-identically. The port is a PORTABLE NAME; `SSettings` maps it to the
+machine-local device id (`midi/portId/<name>`), the same split the audio output
+device uses. The channel is 0-BASED, matching `twEvent::channel` and
+`add-note channel=`, so the whole scripting API speaks one convention.
+`hasMidiOut()` now returns something, which means gaining or losing a port
+changes the `auto` routing rule ("consumed here, or bubbled up") — hence the
+range-invalidation on that transition and only on it.
+
+**Verbs:** `set-track-midi-output` (absolute, undoable, inverse carries the
+whole previous state), plus testkit `assert-midi-out`, `dump-midi-capture`,
+`assert-midi-options`, `set-option` and `wait-ms`. Rows in
+`action_roundtrip_test` and `docs/ACTIONS.md` for all six.
+
+**Options → MIDI page** mirroring the Audio page's build/load/apply triple: the
+port lists come from the ACTIVE backend (an Options page showing the machine's
+real ports while the capture backend runs would be a lie), "Create virtual
+port" is gated on the capability the backend reports rather than on the
+platform, and the global offset + note-on-chase settings persist. Inputs are
+listed and persisted but read by nobody until P8.
+
+**`main.cpp`** defaults `SMARAGD_MIDI_BACKEND=capture` under `--test-case`,
+unless it is already set.
+
+### The measurement is independent of the thing measured
+
+Design review #12's requirement, and it is what makes these gates worth
+anything. Two recorders written by two threads that know nothing of each other:
+the capture MIDI port records `{hostTimeNs, port, bytes}` and deliberately NOT
+the due time it was asked for (the difference between the two IS the
+measurement), while the audio capture backend records `{hostTimeNs, firstFrame}`
+per delivered block. `assert-midi-out` maps every message through the AUDIO log
+(`CaptureBackend::frameAtHostTime`) and subtracts the device output latency, so
+`at` reads "the project frame whose audio was being HEARD when this message
+left". Asking the pump where it thought it was would have proved nothing.
+`SMARAGD_CAPTURE_SPEED` must be 1 for any of it.
+
+### Gate results
+
+- `./build.sh` clean (re-configured; the qxa glob is `CONFIGURE_DEPENDS`).
+- `python tools/check_layering.py` clean — new edges: `main/shell → tw/events`
+  (the pump slices a `twEventMerge`) and `testkit → servicesui`
+  (`assert-midi-options` builds the real `SOptionsDialog`).
+- `python tools/check_logging.py` clean.
+- `action_roundtrip_test` green with six new fixture rows.
+- **`ctest --test-dir smaragd/build -j4`: 131 / 132 run green**, 135 registered
+  (128 before this phase + 7 new qxa cases), 3 Not Run (the macOS-only `au_*`
+  trio), 222.94 s. The one failure is `plugin_missing_placeholder` — a
+  PRE-EXISTING teardown crash characterised below, in a case P7b does not
+  touch. All 7 new cases green, and all 6 of P1's `midi_*` cases green.
+
+Per-AC, with the measured lateness in frames (worst |sent − expected| over the
+matching messages, through the audio clock):
+
+| AC | Case | Result |
+|---|---|---|
+| AC1 | `midi_out_capture` | 3 note-ons + 3 note-offs at 0 / 48000 / 96000 and 24000 / 72000 / 120000; worst offsets **−176, +362, +149, −30, +93, +69** frames. Nothing before the play start (asserted). Stop panic on channel 2 only. |
+| AC2 | `midi_out_chase_and_stop` | Locate to 1.5 s, mid-note. Chase CC1=100 is message **#0**, chased NoteOn 60 is **#1** at **−244** frames. With the setting OFF the NoteOn is absent and the CC still chases. CC64=0 + CC123=0 at the stop. |
+| AC3 | `midi_out_loop_wrap` | Cycle 0–2 s, note 1.5–2.5 s. NoteOn **+902**, NoteOff at the CYCLE END (**+218** of 96000), pass 2 at **+596 / +319**. Exactly 2 note-ons and 2 note-offs over the run — no doubling. |
+| AC3b | `midi_out_offset_and_folder` | `offsetMs=200` → every event 9600 frames earlier (**+512, +165, +201**), and NOT at the un-offset positions. A folder's port carries both children's notes, remapped from channels 0 and 1 to the parent's 5 (**−232, +607**). |
+| AC4 | `midi_out_render_silent` | A render with a MIDI-out track produces **0** capture events; the render is the same 192000 frames of silence as P1's port-less case. Goldens byte-identical (nothing here touches a render path). The case also carries the UNDO gate for `set-track-midi-output`: giving a child a port removes it from its folder's feed, and one `<undo/>` puts it back — a state assertion through `assert-midi-events scope="feed"`, not the runner's verify-undo pass. |
+| AC5 | `midi_out_backend_reject` | Registered with `SMARAGD_MIDI_BACKEND=null`; `assert-midi-out` and `dump-midi-capture` `expectReject`. |
+| AC6 | `midi_options_page` | `describe()` lists exactly the capture backend's one output and one input, `backend=capture`, `virtual=yes`, `selected=0`; a written `midi/outOffsetMs` persists and reads back. |
+
+The four playback cases are `RUN_SERIAL` and pinned to
+`SMARAGD_CAPTURE_SPEED=1`: they assert wall-clock latency, which makes the box's
+load part of the answer, and two of them write a per-user setting the pump reads
+at every transport start.
+
+### The teardown crash family, characterised (NOT ours)
+
+The first two full-suite runs produced failures that are worth recording
+precisely, because the correlation is airtight and it is **not** a MIDI
+problem. Run 1: two failures. Run 2: six. Every single one printed **`PASS`**
+and then died — a crash at teardown, or a process that hung for 350+ s after
+its last assertion. And in both runs the set of failing cases is EXACTLY the
+set of processes whose log contains a live plugin PROBE
+(`[scan] '…/CastelloReverb.clap': 1 plugin(s)`), i.e. the ones that found
+`plugincache.json` cold or contended:
+
+| Run | Live probes | Teardown crashes / hangs | All inside a probing process? |
+|---|---|---|---|
+| 1 | 1 | 1 — `midi_out_backend_reject` (`0xc0000374`) | yes |
+| 2 | 6 | 6 — `midi_clip_edit_verbs` SEGFAULT, `midi_clip_tempo_remap` `0xc0000374`, `midi_fixture_authoring` SEGFAULT, `midi_out_backend_reject`, `midi_clip_roundtrip` (354 s), `meter_postfader` (359 s) | yes |
+| 3 | 5 | 1 — `render_sawtooth_clipped_section` SEGFAULT | yes |
+| 4 | 1 | 1 — `plugin_missing_placeholder` (`0xc0000374`) | yes |
+
+Thirteen live probes across four invocations, nine teardown failures, **every
+one of them inside a probing process** — and **zero** among the ~520
+warm-cache case runs in the same four invocations. The victims are spread
+across P0a's, P1's, proposal 34's and proposal 08's cases; the run-4 victim is
+a plugin case with no MIDI in it at all. This is the family
+`37_ORCHESTRATION.md` §4 names, and specifically the cold-plugin-cache
+`~twPluginRegistry` vs `TwLog` static-destruction hang that P1's own entry
+recorded — concurrent processes rewrite `plugincache.json` through `QSaveFile`,
+the lost updates leave records that no longer match, and the NEXT invocation's
+short cases re-probe and then race at static destruction. Recorded, not chased
+(ground rule 6: `tw/plugins` is outside this phase's module set).
+
+It also reproduces STANDALONE once the cache is thrashing, and it is
+INDISCRIMINATE. Measured while `plugincache.json` was being re-probed on almost
+every launch: `midi_options_page` (P7b) hung at teardown in 3 of 5 runs in one
+round and 0 of 5 in the next, and `midi_clip_edit_verbs` (P1's, no options
+dialog, no MIDI-out port, no playback) hung in 1 of 5 in that same next round.
+Every single one of those 15 runs printed `PASS` first. With a warm cache
+`midi_out_backend_reject` is 12/12 clean.
+
+The short cases are the exposed ones simply because they finish while the scan
+thread is still working: `midi_out_backend_reject` never plays at all, which is
+why it was the first to show it.
+
+**One genuinely new observation**, from a case whose `.qxa` I had temporarily
+broken: a malformed script makes `main.cpp` call `std::exit(1)`, which runs
+static destructors and hits that same hang — the process sat for 20 minutes
+until it was killed. Pre-existing, and another argument for draining the
+registry before static destruction.
+
+### Not gated
+
+- **WinMM send jitter against real hardware** (±1 ms by design). Everything here
+  is measured against the capture port; no MIDI device was involved.
+- **CoreMIDI and ALSA-sequencer** — unverified, as P7a already recorded. Windows
+  box.
+- **Virtual-port creation on Windows.** WinMM has no such concept; the offer is
+  gated on `supportsVirtualPorts()` and the loopMIDI route is documented, not
+  tested.
+- **`SMARAGD_CAPTURE_SPEED ≠ 1`.** Deliberately out of scope: the audio block
+  log stays empirically correct at other speeds, but a project frame then means
+  something different in wall-clock terms while the MIDI due times do not.
+- **Sysex.** Refused by the ring (`kMaxMessageBytes` = 16) and skipped by the
+  pump rather than truncated; a payload-carrying path is P9.
+- **The `midi/portId/<name>` mapping UI.** The Options page lists the machine's
+  ports but cannot re-point a project's port name at one — that needs editing
+  `smaragd.ini`. Recorded as known debt in `main/servicesui/CONTRACT.md`.
+- **A per-track MIDI-output UI.** The verb and the serialized attributes exist;
+  the arranger does not offer them yet.
+
+### Two things worth knowing next time
+
+`set-property`'s `value` is JSON wrapped in a ONE-ELEMENT ARRAY
+(`value="[true]"`). A bare `value="true"` parses as nothing and the write is
+silently skipped — which is how the loop-wrap case first "proved" that cycling
+did not work. Now documented in `docs/ACTIONS.md`.
+
+An event whose offset-shifted due time falls before the run start is CLAMPED —
+you cannot send a message before the transport started. So AC3b's notes start at
+1 s rather than 0: an assertion at −9600 would otherwise be a statement about
+the clamp rather than about the offset. Pre-roll for the lead-in is a later
+feature (D4 has it for instruments).
+
+---
+
+## 2026-08-16 - Plugin-scan vs TwLog teardown hang fixed
+
+Branch `fix/plugin-scan-teardown-hang`. The failure two earlier sessions
+characterised and deliberately did not chase (2026-08-15 "Proposal 37 P1",
+section "Found on the way", and "Proposal 37 P7a", section "One pre-existing
+failure"): a `--test-case` run prints `PASS` and then **never exits**, or dies
+with SIGSEGV after the PASS line. `qxa.takes_screenshot` is the case that hit it
+in the `-j4` suite (CTest Timeout, 600 s).
+
+### Root cause (gdb from the earlier sessions, reproduced and confirmed here)
+
+Two statics whose destruction order is the exact opposite of what their
+dependency needs:
+
+- `audio::gRegistry` (`twpluginregistry.cc`) is a **namespace-scope** static, so
+  it is constructed during dynamic initialisation, BEFORE main.
+- `TwLog::instance()` was a **function-local** static, so it was constructed at
+  the FIRST log call - inside main, i.e. later - and was therefore destroyed
+  EARLIER.
+
+`~twPluginRegistry` joined the startup plugin-scan thread. That thread logs
+(`[scan] '<module>': N plugin(s)`), so it locked an already-destroyed
+`std::mutex`; the `std::system_error` escaped the `QThread::create` lambda,
+which has no catch; `std::terminate` -> `__verbose_terminate_handler` ->
+`abort()` blocked inside the CRT against the main thread; the main thread stayed
+in `QThread::wait()` forever. The earlier session's gdb put the throw at
+`twlog.cc:349` and the waiter at `twpluginregistry.cc:440`.
+
+It needs a scan that is still running at process exit, i.e. a **COLD**
+`plugincache.json` - which is why a full suite usually hides it (the first case
+warms the cache) and why it surfaced after a `kScannerVersion` bump, when two
+worktrees at different scanner versions kept invalidating each other's cache.
+
+The other half of the setup: a `--test-case` run leaves main through
+**`std::exit()`** ("Exit immediately in test mode", `main.cpp`). No stack object
+is destroyed, so `~SApplication` - which has joined the scan since 08 M2 - never
+runs at all, and the registry's own destructor is left holding the problem.
+
+### The fix - both halves, order-independent (THREADING.md rule 4)
+
+1. **The log sink is IMMORTAL.** `TwLog::instance()` returns `*(new TwLog())`:
+   created once, never destroyed. A late record from any thread at any point in
+   teardown can no longer touch a destroyed mutex; at worst it does not reach
+   the file. `shutdown()` (flush + join the file writer) is now an EXPLICIT call
+   from the orderly teardown, never a destructor. `tw/core/CONTRACT.md`
+   invariant 6.
+2. **The scan is stopped from the orderly teardown.**
+   `twPluginRegistry::stopScan()` sets a flag the scan loop reads BETWEEN two
+   modules, then joins. `~SApplication` calls it instead of `waitForScan()`, and
+   `main.cpp`'s new `smaragdOrderlyShutdown()` calls it on EVERY way out of main
+   - both `std::exit` sites, `--list-actions`, and the interactive tail -
+   followed by `TwLog::shutdown()`. `tw/plugins/CONTRACT.md` invariant 36.
+
+Either half alone stops the hang. Both are in, because the thing to remove is
+the ordering ASSUMPTION, not one of its two consequences.
+
+An aborted scan still **saves the cache**: the records it probed, plus the
+records for modules it never reached carried over from the previous cache, so
+successive short runs converge instead of restarting cold forever (invariant 9's
+sticky failures are preserved either way). It does NOT replace `plugins_` - a
+partial result is not the plugin table. The abort point is between modules,
+never inside a probe, so the join is bounded by one `probeTimeoutMs_` at worst.
+**Nothing changes for a warm cache**: the flag is false, the loop is the same
+loop, and the scan ends exactly as it did.
+
+Files: `tw303a/core/src/twlog.cc` (+ `tw/core/twlog.h` comment),
+`tw303a/plugins/src/twpluginregistry.cc` (+ the declaration in
+`tw/plugins/twplugindescriptor.h`), `main/shell/src/main.cpp`,
+`main/shell/src/sapplication.cpp`, `tw303a/core/tests/test_twlog.cpp`.
+
+### Numbers: cold cache before EVERY iteration, `SMARAGD_REVAL_WORKERS=16`
+
+Judged by **exit code**, not by the PASS line: `repeat_test.sh` greps stdout and
+scores every one of these failures as a pass (CLAUDE.md says so under "Two known
+crash flakes"). Each iteration deletes `<configDir>/plugincache.json` first; a
+run that had not exited after 45 s was killed and counted as a hang. Same box,
+same cases, the only difference being the seven-file diff above.
+
+| Case | BEFORE (10 runs) | AFTER (30 runs) |
+|---|---|---|
+| `takes_screenshot` | **1 pass**, 3 fail (exit 127 / 139), 6 hangs | **30/30** |
+| `split_plain_screenshot` | **1 pass**, 2 fail, 7 hangs | **30/30** |
+| `exact_stretch_roundtrip` | 9 pass, 1 hang | **30/30** |
+| `warp_anchors_roundtrip` | 10 pass | **30/30** |
+| `lane_alignment` | **0 pass**, 4 fail, 6 hangs | **30/30** |
+
+150 cold runs after the fix, 0 failures, 0 hangs.
+
+### Gate
+
+| Gate | Result |
+|---|---|
+| `./build.sh` (re-configure) | clean |
+| `python tools/check_layering.py` | clean |
+| `python tools/check_logging.py` | clean |
+| `twlog_test` | 36 assertions, 0 failed (3 new) |
+| `ctest --test-dir smaragd/build -j4` | **128/128 passed** in 107.5 s; 131 registered, 3 `au_*` Not Run (Disabled). Reconciled: 107 `.qxa` on disk = 107 `qxa.*` registered |
+
+`twlog_test` gained `testShutdownIsSafe`: `shutdown()` is idempotent, a thread
+STARTED AFTER it can still log, and those records still reach the ring - plus an
+`atexit` handler registered as the first statement of `main()`, before anything
+in the process has touched `TwLog::instance()`. Destructor and atexit
+registrations share one LIFO order, so a handler registered FIRST runs LAST:
+under the old mortal sink that call landed after the sink's destructor, which is
+precisely the crash; under the immortal one it is just a log call.
+
+**Goldens are byte-identical by construction** - nothing here is reachable from
+`freezePage`, `RenderSession` or `AudioEngine`. The only thing that executes
+differently inside a rendering process is one relaxed flag read between two
+plugin-module probes.
+
+### What this is NOT, and what remains
+
+- **The teardown SEGFAULT family is a different bug and is not fixed here.**
+  The worker-count-sensitive dangling-`SLink` teardown race (PR #34's session)
+  and the `split_plain_screenshot` / `clip_properties_actions` crash flakes
+  CLAUDE.md records are a crash, not a hang; they need full-suite context, not a
+  cold plugin cache. What the numbers above DO show is that most of what looked
+  like that family in a cold-cache run was in fact this bug: `lane_alignment`
+  went 0/10 -> 30/30 and `exact_stretch_roundtrip` 9/10 -> 30/30 without a line
+  of model code changing. Neither reproduced at all in the 150 isolated runs
+  after the fix, which is consistent with CLAUDE.md's note that they do not
+  reproduce in isolation - so this is not evidence that they are gone.
+- **`stopScan()` cannot interrupt a probe that is already running.** It waits
+  for the module currently being probed, so a plugin that burns its full
+  `probeTimeoutMs_` (15 s) still adds that to process exit, once. Killing the
+  `QProcess` from the stopping thread would be the next step if that ever bites.
+- **A cold-cache `--test-case` run now never finishes its scan**, because the
+  process exits first and the scan is stopped at the next module boundary. That
+  was already true in effect (the process was exiting); the difference is that
+  the partial result is now written, so the cache warms up over a few runs
+  instead of never.
+- Reproducing this needs the SHARED `<configDir>/plugincache.json` to be cold,
+  and that file is shared by every worktree on the machine. Deleting it while
+  another session is running its suite gives that session a cold scan too - and
+  on a binary without this fix, a hang. Restore it (or let one full run rebuild
+  it) when the sweep is done.
+
+## 2026-08-16 — Proposal 37: integration tip verified
+
+`docs/midi-instruments-automation` at `3cf620f` (P0a, P0b, P1, P2, P4, P7a+P7b,
+the teardown fix, PRs #34–#37, renumbered 36 → 37): `./build.sh` clean; layering +
+logging clean; **`ctest -j4`: 135/135 passed in 117.7 s** (138 registered, 3 `au_*`
+disabled off macOS). Remaining phases P3a/P3b/P3c (then P5/P6) wait for the
+multichannel proposal (now 36, `feat/multichannel`) to land B4 on `main`.
+
+## 2026-08-16 — Proposal 37: merged main incl. PR #39 (multichannel M0/M1/B1/B2)
+
+`docs/midi-instruments-automation` at `212d926`: `origin/main` merged (PR #39
+brought the multichannel proposal — now numbered 36 — with M0, M1, B1a/b and B2
+executed; five keep-both conflicts: `sproject.h` members, `strack.cpp` nBusses
+clamp + MIDI attributes, `tw303a/CMakeLists.txt` test targets, ACTIONS.md rows,
+STATE.md). References to the multichannel proposal in the 37 docs repointed
+35 → 36. Gate on the merged tree: build clean, layering + logging clean,
+**`ctest -j4`: 143/143 passed in 132 s** (146 registered, 3 `au_*` disabled).
+P3a/P3b remain gated on 36-B4 (B3–B9 still open on main).
+
+## 2026-08-16 — Proposal 37: merged multichannel B3 (PR #40 via main) and B4 (PR #41, via `feat/multichannel-b3`)
+
+`docs/midi-instruments-automation` at `cd2d573`. B4 reached `origin/feat/multichannel-b3`,
+not `main` (PR #41's base was the b3 branch), so it was merged from there. Four
+conflicts: `strack.h` (B4's single wide `cpDspChain_` replaces the per-bus chains,
+alongside the event/MIDI members), `test_plugin_insert.cc` (both test entries),
+`plugins/CONTRACT.md` (P2 paragraph + B4's reshaped "Shape of a slot"), ACTIONS.md
+rows. Nothing in the proposal-37 code needed adapting. Gate: build clean, layering +
+logging clean; `ctest -j4` run 1: 147/148 (`clip_properties_actions` SEGFAULT after
+PASS — the known dangling-`SLink` teardown family; 5/5 in isolation), run 2:
+**148/148 in 211 s** (151 registered, 3 `au_*` disabled). P3a started.
+## 2026-08-16 — Proposal 37 P3a: fader post-FX (twGainStage)
+
+The track fader moved out of `twTrackMix` (pre-FX, design F6) into a new
+`twGainStage` between the plugin chain and the rewire (design D5 / §4.5). A
+track's chain is now
+
+    twTrackMix(N) -> twPluginChain(N) -> twGainStage(N) -> twRewire(N)
+
+so an insert sees the UNFADED signal — which is what an instrument's output
+needs in P3b, and what every reference DAW does.
+
+**What landed.** `tw/mix/twgainstage.{h,cc}`: one wide component per track,
+1 port in / 1 port out, scalar `gainDb` in `sfadercurve.h`'s dB, and a ramped
+audio mute. Both render paths are implemented — `renderPageWide()` (the
+authoritative wide render: one `fetchInputPage`, one pass, every channel scaled
+with §4.4's clamp) and `calcOutputTo()`, which is the legacy streaming pull AND,
+through the base `renderFrames()`, the width-1 render. Class ∞ and PURE: a
+frame's output is a function of that frame's input, the scalar and the frame's
+POSITION, so `reset()` is empty and range invalidation over it is exact.
+`teardown()` cascades upstream, because `twRewire::teardown()` reaching the
+chain is how a track's graph is torn down and the new component stands in that
+path. App side: `STrack::setChannels()` builds and wires it and follows the
+track's width, `onTrackVolumeChanged()` targets it, and it is in
+`bumpRenderChainEpoch()`, `bumpRenderChainEpochRange()` and `~STrack`.
+`twTrackMix::setTrackGain()` is now a NO-OP (kept, with a comment, until P5
+deletes it and `trackGainDb_` together), so the `factor != 1.0` guards it fed
+can never fire.
+
+**AT 0 dB THE STAGE DOES NO ARITHMETIC AT ALL** — the render is a copy. That is
+the byte-identity argument, and it is why the fader move is gated by a closed
+form rather than by a `cmp`.
+
+**AC1 — goldens byte-identical, verified rather than asserted.** The claim "no
+golden combines a non-unity fader with a plugin" was checked by reading the
+fixture projects: every `volume=` attribute in `tests/goldens/mc_mono.qxp` and
+`mc_stereo.qxp` is `'0'` (23 occurrences each, across `STrack`, `SCut`,
+`SPluginChain`, `SPluginSlot`, `SStdMixer`, `SPlainWave`), and neither
+`mc_golden_*.qxa` nor `tools/gen_mc_corpus.qxa` ever calls `set-track-volume`.
+`qxa.mc_golden_mono` and `qxa.mc_golden_stereo` (which `assert-file-identical`
+against the committed WAVs) pass. Widened beyond the brief: the 10 fader/mute/
+plugin-sensitive cases — `volume_nested_track`, `grain_with_volume_control`,
+`mute_silences_track`, `mute_nested_track`, `mute_invalidates_cache`,
+`mute_survives_reload`, `solo_nested_track`, `asset_over_muted_container`,
+`render_sawtooth_with_effects`, `plugin_stereo_chain` — were rendered on a
+binary built from the branch tip WITHOUT the change and again with it: **20/20
+rendered WAVs `cmp`-identical, 0 differing.** Two of those carry a NON-UNITY
+fader, which is the interesting case: pre-move the trackmix computed `sum × g`,
+post-move the gain stage computes `sum × g` one component later — the same IEEE
+operation on the same values. A fader AND a plugin together would NOT be
+byte-safe (`(a*g)*p` and `(a*p)*g` may differ in the last bit); no golden and no
+existing case has that combination.
+
+**AC2 — new `qxa.fader_post_fx`, both halves green.**
+- (a) VALUE, on `../test_sawtooth.wav`: `set-track-volume -6.0206` +
+  `tw.test.clap.gain` gain 2.0 → first-second RMS **0.0666501** against the
+  unprocessed 0.066650 (±1 % band [0.06598, 0.06732]); bypassed → **0.0333249**
+  against 0.033325 (band [0.03293, 0.03372]); undo restores it. `assert-meter`
+  at 0.5 s reads 0.0589-ish through a ±15 % band around the raw window RMS
+  0.058928, which passes only if BOTH the fader and the insert are in the metered
+  path (the insert alone would read 0.1179, the fader alone 0.0295).
+- (b) ORDER, on a NEW committed fixture `tests/test_clipsaw.wav` (2.0 s, 48 kHz,
+  16-bit, a 100 Hz sawtooth of amplitude 0.95 — 480 samples per period, so every
+  one-second window has the same RMS; generator committed as
+  `tests/tools/gen_clip_fixture.py`). Fader -6.0206 dB + `tw.test.clap.gain` at
+  gain 1.0 with **`Clip Threshold` param id 2 = 0.5**. Closed forms computed from
+  the fixture's own samples: unprocessed RMS 0.548468, peak 0.949982; pre-FX
+  order (fader first, threshold never reached at peak 0.475) **0.274234**;
+  post-FX order (clip then halve) **0.201419**. The case asserts ±1 % around
+  0.201419, i.e. [0.19940, 0.20344].
+  **PRE-MOVE VERIFICATION (done once, as required):** the branch-tip source was
+  stashed, `./build.sh` rebuilt the base binary, and `fader_post_fx.qxa` was run
+  on it. Result: assertion #13 (and #18) **FAILED with exactly 0.274234**, the
+  predicted pre-FX value, while both VALUE assertions passed (0.0666501 /
+  0.0333249) — the linear product commutes, the clipper does not. The stash was
+  then popped and the tree rebuilt.
+
+**AC3 — the `assert-meter` workaround is gone.** New `qxa.meter_gain_after_probe`
+probes position 168000, THEN sets the gain, then probes the SAME position again
+and requires the new level (bands 0.300–0.510 at unity, 0.150–0.255 at
+-6.02 dB, from `meter_postfader.qxa` so the two are comparable); it goes back up
+and asserts unity again, and asserts the undo. `meter_levels`, `meter_postfader`
+and every other `assert-meter`-driven case are green.
+**REPORTED HONESTLY:** the new case also PASSES on the pre-move binary at this
+integration tip. So the "the legacy pull does not observe a gain change made
+after a position was first frozen" caveat (CLAUDE.md, `smetertestactions.cpp`,
+`testkit/CONTRACT.md`) was already inert here — 36-B4's collapse to one wide
+chain, and `STrack::bumpRenderChainEpoch()` already bumping `cpDspChain_`, had
+removed the mechanism. P3a is what makes it structurally impossible rather than
+accidentally absent: the rewire's producer is now the component `set-track-volume`
+writes. All three documents were rewritten to say that, with the retired text
+quoted rather than deleted. No stale-epoch gating was found anywhere else; one
+thing that looked like it was not — `<undo count="1"/>` after two consecutive
+`set-track-volume` actions undoes BOTH, because they share a `mergeKey` and the
+action system coalesced them. Correct behaviour; written into the case.
+
+**AC4 — mute unchanged.** `set-track-mute` still nulls the plug: nothing in the
+app calls `twGainStage::setMuted()`. `mute_silences_track`, `mute_nested_track`,
+`mute_invalidates_cache`, `mute_survives_reload`, `solo_nested_track`,
+`asset_over_muted_container` and `group_nested_track` are green, and a four-render
+script that toggles mute between renders spanning page boundaries (two tracks,
+the second starting exactly at frame 65536, 5 s renders) is **`cmp`-identical
+pre- vs post-move on all four WAVs**.
+
+**Standing gate.** `./build.sh` clean; `tools/check_layering.py` and
+`tools/check_logging.py` clean; **`ctest -j4`: 150/150 run passed in 138 s, 153
+registered, 3 `au_*` disabled off macOS** — reconciled: 125 `.qxa` files on disk
+(123 at HEAD + the 2 added here), 151 registered before, 153 after. **No flakes
+at all in that run** — the known `clip_properties_actions` / `split_plain_screenshot`
+teardown-segfault family did not appear.
+
+**Flake sweep.** `repeat_test.sh` over `SMARAGD_REVAL_WORKERS` {1, 4, 8, 16}:
+`fader_post_fx` 10/10 and `meter_gain_after_probe` 20/20 at every worker count —
+**120/120, and `deterministic: PASS` on all eight sweeps** (the script also
+byte-compares the outputs across runs). The full suite was run twice at `-j4`
+(150/150 in 138 s and in 133 s) with no failure and no teardown crash in either.
+
+**`mix_test` gained a `twGainStage` block** (7 assertions), because the qxa
+cases cannot see any of it: 0 dB is BIT-EXACT on every channel; `setGainDb`
+produces the exact float product and stales the page rendered at the old gain;
+an unanchored mute is silence; a page entirely before the mute anchor is
+untouched EVEN WHEN RENDERED AFTER the page holding the ramp (the
+position-determinism that makes the component class ∞); the ramp starts exactly
+at its anchor, completes after `muteRampFrames()` and is monotone; and the
+width-1 (legacy pull) path applies the same gain as the wide one.
+
+**Docs.** `tw303a/mix/CONTRACT.md` invariant 8 (+ purpose, headers, threading,
+how-to-test, known debt); `tw303a/metering/CONTRACT.md` invariant 0;
+`main/testkit/CONTRACT.md` and `main/testkit/src/smetertestactions.cpp` (the
+caveat retired, quoted); `main/objects/track/CONTRACT.md` invariant 8b + inv. 9's
+chain spelling; CLAUDE.md's "Level meters" section (the hole is closed; the
+fader move recorded); `meter_postfader.qxa`'s header. `docs/ACTIONS.md` is
+UNTOUCHED — P3a adds no verb.
+
+**NOT gated, deliberately.** The mute ramp is implemented, unit-tested and
+UNWIRED: P5's `self:Muted` lane is its only intended caller, so there is no
+end-to-end coverage of a ramped mute and none is claimed. Nothing here asserts a
+concurrency or latency property of the live playback path — one extra component
+in every track's chain means one extra page copy per track per page, which was
+not measured. `twGainStage::calcOutputTo` carries the same MONO NARROWING every
+plug pull has (§4.4 rule 1): only channel 0 crosses a streaming seam, so the
+legacy pull of a wide track is channel 0 only — unchanged in kind from
+`twPluginInsert`, and no app path reaches it. The 20-WAV pre/post `cmp` corpus
+was chosen for fader/mute/plugin relevance, not exhaustively; the committed
+goldens are the standing gate.
+
+## 2026-08-16 — Proposal 37 P3b: instrument slot + event feed
+
+**Branch:** `feat/36-p3b-instrument-slot` (from the integration tip `aad5cb8`).
+**Status:** ✅ COMPLETE — a MIDI clip is audible.
+
+### What landed
+
+`twPluginSlotProcessor` grew the **generator half** of the channel-mismatch
+table. A 0-input plugin used to fall straight through to `Unsupported`, which is
+exactly why an instrument produced nothing; on a C-channel page it now maps
+
+| plugin | page | mode | what it does |
+|---|---|---|---|
+| `0 → C`  | C | `DirectGen`  | one instance, channel for channel, straight into the page |
+| `0 → 1`  | C>1 | `MonoSpread` | the one voice copied to every channel (centre-panned) |
+| `0 → 2`  | 1 | `GenFold`    | average the pair down |
+| `0 → M`  | C<M | `WideGen`    | outs 0..C-1 to the page; the surplus into the slot's own buffer for §5.4's aux taps (P9) |
+| `0 → M`  | 1<M<C | `Transparent`/Unsupported | no defined spread — refuse rather than guess |
+
+**The pass-through sum (D3).** The head insert keeps its audio input plug —
+`twPluginChain::rebuildWiring_nolock` never asked what slot 0 was, so nothing
+there changed — and for a generator the processor does not hand that input to
+the plugin at all: it **adds** it to the plugin's output. That is what keeps an
+audio clip on an instrument track audible with no track kind, no second graph
+shape and no change to any invalidation walk. `x + 0.0f == x`, so "instrument
+present, no notes" is byte-identical to the render with no instrument — gated,
+and green first try.
+
+**The feed.** `STrack::syncInstrumentSlot()` hands slot 0 the track's
+`twEventMerge` (its own event clip set + the feeds of every child that bubbles
+up, §3.2.1) and takes it away from every other slot. The processor holds a
+`shared_ptr<const twEventSource>` and never walks the model; the merge's SOURCE
+list is rebuilt on the main thread by `refreshInstrumentFeed()`, called from
+`bumpRenderChainEpoch()` / `bumpRenderChainEpochRange()` — the points every model
+change reaching the track already passes through — and guarded on there being an
+instrument at all, so a project without one pays two pointer hops.
+
+**Per page:** `collect(startPos, len)` once, then per 4096-frame chunk the slice
+with times in `[off, off+n)`, rebased to `0..n-1`, clamped (never dropped) at the
+end, into ONE sorted list with a `twProcessContext` built from the page position
+and the project's `twTempoMap`. The UI's `setParam` ring is **not** merged here:
+each backend already drains its own at offset 0 ahead of the host events, so
+there is exactly one ring and one non-decreasing stream.
+
+**Continuity (D4).** A page whose `startPos` is not `lastEnd_` is a REPOSITION:
+`reset()` → chase `stateAt(P−K)` as events at offset 0 → pre-roll K frames with
+the real events at their real offsets and the output discarded → then the page,
+which never re-issues its own chase (it has just been rebuilt into the DSP).
+
+    K = min( max(4096, tailFrames(), P − start(earliest note held at P)), 4 s ),  clamped to P
+
+`forgetContinuity()` is exposed through `SPluginSlot` for the P3c barrier: an
+epoch bump deliberately does NOT clear `lastEnd_`.
+
+**Bypass** is silence, not a short circuit: `process()` still gets every event
+and the audio is discarded, so a note-off inside a bypassed span is delivered and
+un-bypassing cannot resurrect a voice. **Instruments are freeze-path only**:
+`positional=false` (the legacy pull, `calcOutputTo`) renders silence and logs
+once, so `SMARAGD_REVAL_WORKERS=0` makes an instrument track silent BY DESIGN.
+
+**Project end** = last event clip end + `tailFrames()` (`STrack::eventEndTime()`,
+which excludes mute/solo — a project must not shorten because a lane is muted).
+
+**Slot rules (D3):** an instrument descriptor lands at slot 0 whatever
+`slotIndex` says; a second is refused; an effect asking for slot 0 is clamped to
+1; `reorder-plugin` across slot 0 is refused both ways.
+
+**UI minimum:** browser Kind filter (All / Instruments / Effects), "+ Add
+Instrument" on the FX strip (hidden once the track has one), an instrument-first
+tinted non-draggable row, `describeSlot kind=instrument|effect`, and P4's head
+"I" glyph — already derived, now non-empty and gated for the first time.
+
+### Two things that were NOT in the brief and had to be decided
+
+1. **The velocity domain.** `tw/events` is MODEL data in the MIDI domain
+   (`SMidiSequence` stores `velocity='100'` verbatim; `SMidiOutPump` sends
+   `clamp7(e.value)` onto the wire; the piano roll draws `value/127`), while the
+   plugin ABI is normalized (CLAP and VST3 both are, and the native 303's accent
+   threshold is `100/127`). The conversion had to exist somewhere and it landed
+   in the processor, at the one seam where a feed becomes an ABI list
+   (`twNormalizeForAbi`: /127 for velocity, CC, poly/channel pressure; /8192 for
+   bend; ProgramChange and ParamValue untouched). Normalizing in `tw/events`
+   instead would force the pump to multiply back up and round-trip a project
+   through a lossy scale. Written into plugins/CONTRACT.md as invariant 39.
+2. **`insert-plugin` did not carry `isInstrument`.** It reconstructs the
+   descriptor from format/uid/name/vendor/path/nIn/nOut, so the flag was lost and
+   every inserted instrument looked like an effect. It is now an attribute
+   written ONLY when true (every pre-P3b script re-serializes byte-identically);
+   omitted means "ask the registry", which is how `uid='tw.native.303'` works
+   with no ceremony, while a module that was never scanned has to say so.
+
+### Gates
+
+`./build.sh` clean; `python tools/check_layering.py` clean;
+`python tools/check_logging.py` clean.
+
+**`ctest --test-dir smaragd/build -j4`: 157/157 run passed, 160 registered**, 3
+`au_*` disabled (macOS only). 153 registered before, +7 new `instrument_*` cases.
+No flakes, no teardown crashes in the run.
+
+| AC | case | numbers |
+|---|---|---|
+| AC1 | `instrument_sine_render` | CLAP `tw.test.clap.sine`: 261.613 / 329.615 / 391.970 Hz (±1 Hz bands), rms 0.556689 / 0.556707 / 0.556780 against the closed form (100/127)/√2 = 0.556769, ±3 %; second 4 rms exactly 0. VST3 `TestSine`: identical numbers. `tw.native.303`: 261.556 / 329.534 / 391.891 Hz (±2 Hz), rms 0.178 / 0.185 / 0.190 (> 0.05). |
+| AC2 | `instrument_mixed_track` | audio second 0.0666501 (band [0.06598, 0.06732]); note second 0.556689; **`assert-file-identical` 576044 bytes**, instrument-present-no-notes vs no-instrument. |
+| AC3 | `instrument_edit_reaches_render` | A vs B identical over frames [0, 96000); B gains 0.556707 at 329.615 Hz in [96000,144000) where A has 0; `undo count="1"` → C byte-identical to A over all 768044 bytes. |
+| AC4 | `instrument_transpose_and_velocity` | `transpose="12"` → 523.251 Hz (from 261.613); `velocityScale="0.5"` → 0.278386 (from 0.556689); undo byte-identical. |
+| AC5 | `instrument_bypass_keeps_voices` + `plugins_test` | bypassed: note second rms 0, audio second byte-identical, undo byte-identical. **The resurrection discriminator is in `plugins_test::testGeneratorSlot`, not in the qxa** — see the deviation below. |
+| AC6 | `instrument_slot_rules` | `kind=instrument` on row 0; second instrument `expectReject`s (logged "already has an instrument in slot 0; refusing"); an effect asking for slot 0 lands at 1; `reorder-plugin` 1→0 and 0→1 both `expectReject`; `undo count="2"` empties the strip and `I=1` → `I=0`. |
+| AC7 | `instrument_slot_rules` | 303 with Decay = 0.5 s → `tailFrames()` exactly 24000; last MIDI clip ends at 3 s; render with no `durationSec` is **168000 frames = 3.5 s** exactly. |
+| AC7b | `instrument_folder_drums` | one instrument on the folder, two children with none: 261.613 Hz / 329.615 Hz in their seconds; `set-track-mute` on child 0 → second 0 rms 0 and second 1 **byte-identical**; both children on the same key at the same time → 0.445352 vs one voice 0.222676, i.e. 2.0000×; undo byte-identical. |
+| AC8 | sweeps | `repeat_test.sh` N=50 × workers {1,4,8,16} on `instrument_sine_render` and `instrument_mixed_track`: **8 × 50/50 = 400/400**, "deterministic: PASS" on every one. Worker count 0 excluded by design (invariant 42). |
+| AC9 | goldens | `tests/goldens/` untouched (`git status` clean there); `mc_golden_mono` / `mc_golden_stereo` green; all nine `plugin_*` cases green. |
+| AC10 | docs | plugins/CONTRACT.md (header, inv. 5/6/16 amended, new 37–42, three known-debt entries), FREEZE_PROTOCOL.md (a "class-1 consumers" section), objects/track/CONTRACT.md (inv. 11–13), testkit/CONTRACT.md (9b), pluginui/CONTRACT.md, docs/ACTIONS.md. |
+
+### Deviations, and what is NOT gated
+
+- **AC5's mid-render bypass is gated at unit level, not in a qxa, and that is
+  structural.** The correct implementation and the wrong one (short-circuit,
+  skip `process()`) differ only when the flag moves between two CONTIGUOUS page
+  renders of one run. A script cannot express that: a render always starts at
+  the range start, and every non-contiguous page is a reposition, which rebuilds
+  the voices from the feed whatever the bypass history was — so a render-based
+  assertion would pass on the buggy code. `plugins_test::testGeneratorSlot`
+  drives `twPluginSlotProcessor::render()` at three consecutive positions with
+  the flag flipped in the middle, which is the only place the difference exists.
+  There is no in-app automation of a bypass until P5. The qxa case gates what a
+  render CAN see (silence, the pass-through surviving, the undo).
+- **Stereo is not gated** — the sink is still mono until 36-B5. Every assertion
+  is on channel 0 and none is of the form `L != R`.
+- **Real third-party instruments** are not gated (in-repo fixtures only).
+- **Render-vs-playback identity** is not gated and is not claimed: they are
+  different runs, so different first pages.
+- **Arp → instrument in-app** is P9; `twEventOut` storage exists and is drained
+  by nobody.
+- **Concurrency of the feed swap** has no bespoke gate beyond the 400-run sweep.
+  `setEventSource` swaps under `mutex_` and the merge copies its source list
+  under its own, so a render in flight keeps a coherent view; a timing assertion
+  tight enough to separate the orderings would be flaky.
+
+### Known cost, recorded rather than hidden
+
+A generator pre-rolls on every reposition, and the scheduler currently renders
+each instrument page **twice** under a render (two demand paths converging), so a
+page at P with a note held since 0 pays 2 × P frames of discarded DSP. It is
+correct and deterministic — every generator page is a pure function of its
+position and the feed, which is what lets AC3 byte-compare — but it is O(P) per
+page. A 4 s render of three notes takes ~0.9 s. The double demand is the thing to
+de-duplicate first; it is in plugins/CONTRACT.md's known debt.
+
+## 2026-08-16 — Proposal 37 P3c: render barrier + determinism
+
+**Branch:** `feat/36-p3c-render-barrier` (from the integration tip `bb183b1`).
+**Status:** ✅ COMPLETE — every run starts from a known state, and it is gated.
+
+### What landed
+
+`SApplication::beginRun(pos)` (`main/shell`), the RUN BARRIER of design D4 /
+§4.4. A run is one contiguous traversal of the graph by a consumer: an offline
+render, or a playback start. For every track whose slot 0 is an INSTRUMENT it
+does two things, in this order:
+
+1. `slot->forgetContinuity()` — clears the processor's `lastEnd_/haveLastEnd_`,
+   so the next page is a REPOSITION (reset + chase + pre-roll K) instead of a
+   continuation of whatever the previous run was doing;
+2. `track->invalidateRenderPathRange(pos, INT64_MAX)` — the app-side path walk
+   up to the root, which per design F13 is the ONLY thing that carries a change
+   from a tap up to what the consumers actually observe.
+
+The ORDER is load-bearing: a page rendered after the epoch bump is then
+guaranteed to have seen the cleared continuity, and one rendered in between is
+staled by the bump. Effects are deliberately not barriered.
+
+The walk is `sinstruments::collectInstrumentTracks()`
+(`main/objects/track/sinstrumenttracks.{h,cpp}`) — depth-first over LANES only
+(`isPathContainer()`, the same rule `ssolo`'s walks use), so a folder's own
+instrument and a leaf's are both found. A WALK and not a maintained registry:
+a list would have to be kept in step with insert/remove/reorder-plugin, the undo
+of each, track add/remove/reparent and project load, and it runs once per
+transport start, never per page.
+
+**Call sites — four, all on the main thread, all before the run's first
+demand:**
+
+| site | position | ordering |
+|---|---|---|
+| `SApplication::startRender()` | `llround(startTimeSec × rate)`, computed exactly as `RenderSession` does | before the render session's thread exists — the ordering is structural, not a race |
+| `SMainWindow::startPlaying()` | the locator | immediately before `getSpeaker()->startOutput()` |
+| `SApplication::setPlaybackRunning()` | the locator | immediately before `t3Speaker_->startOutput()` |
+| `SApplication::startRecording()` (monitoring playback) | the locator | immediately before `t3Speaker_->startOutput()` |
+
+`twSpeaker::startOutput()` performs the engine's pre-readahead
+`seekTo(locator)` + `startReadahead()` on the calling thread, so a barrier
+immediately before it precedes the readahead's first demand. There are three
+play-start paths because the GUI Play button and `SApplication::setPlaybackRunning`
+(which is what the `toggle-playback` verb drives, via `SAppContext`) reach the
+speaker independently; a barrier on one only would make determinism depend on
+which was used.
+
+**Not called from `setGlobalLocatorPos()`**: a locate while stopped demands
+nothing (`requestSeek` is a no-op unless playing) and the next play start covers
+it; a locate while PLAYING keeps today's page-boundary splice on purpose (the RT
+thread adopts a fresh current-epoch page MID PAGE, design F14 / proposal 16, so
+re-staling what it is serving would be an audible switch at an arbitrary
+offset). Never from the readahead thread, a worker or the RT callback.
+
+### Docs
+
+`docs/contracts/FREEZE_PROTOCOL.md` gains a "The run barrier" section (the five
+properties, and where it is deliberately not issued); `docs/contracts/THREADING.md`
+gains rule 5 ("the run barrier is MAIN THREAD ONLY", with all four call sites);
+`tw303a/schedule/CONTRACT.md` gains invariant 9 ("the run barrier is NOT a
+scheduler feature", with the F13 and inv.-8 reasons it cannot be); `main/shell/CONTRACT.md`
+inv. 10 (every run start and nowhere else); `main/objects/track/CONTRACT.md`
+inv. 14 (walk, not registry).
+
+### Gates
+
+`./build.sh` clean; `python tools/check_layering.py` clean;
+`python tools/check_logging.py` clean.
+
+**`ctest --test-dir smaragd/build -j4`: 160/160 run passed, 163 registered**, 3
+`au_*` disabled (macOS only). 160 registered before, +3: the two new qxa cases
+and the cross-process CMake driver. 167 s wall. No flakes, no teardown crashes.
+
+| AC | case | numbers |
+|---|---|---|
+| AC1 | `instrument_render_determinism` | 303 fixture: key 48 held 0–6 s + four short notes; render A, playback from 262144 (a page boundary, 5.46 s into the held note, where the 4-second pre-roll CAP bites) for ~1.4 s on the capture backend, render B. **`assert-file-identical` A vs B: 1 728 044 bytes identical.** Audibility guard rms 0.02–1.0 over frames [0, 288000). |
+| AC1 (cross-process) | `instrument_render_determinism_xproc` | `tests/run_xproc_determinism.cmake` runs the AC1 case and then `tests/cases/xproc/instrument_render_determinism_xproc.qxa` into ONE `--test-output-dir`, so pass 2 can name pass 1's `det_a.wav` as its reference. det_c (fresh process, first run) == det_a, by the verb AND by `cmake -E compare_files`. 10.7 s. |
+| AC2 (a) | `instrument_locate_continuity` | sine, key 60 held 0–4 s, `set-locator` 96000 while STOPPED, play, `dump-playback-capture`: first 4096 captured frames read **261.687 Hz** (band 258.626–264.626) and rms **0.556769** (band 0.54007–0.57347, the closed form (100/127)/√2). The chase put the note there. |
+| AC2 (b) | `instrument_locate_continuity` | 303, key 84 held 0–4 s, cutoff 20 Hz / envMod 1.0 / decay 2.0 s, so the filter cutoff IS the envelope. Full render frames [96000, 98048) rms **0.388957**; capture frames [0, 2048) rms **0.388957** — identical to every digit, which also proves the capture is frame-aligned (recorded frame 0 IS timeline 96000, no leading silence). Band = ±10 % → [0.350061, 0.427853], asserted on BOTH windows. |
+| AC2 (b) falsification | one-off, by hand | A temporary `SMARAGD_PREROLL_MAX_FRAMES` cap in `twPluginSlotProcessor::preRoll_nolock` (NOT committed) forcing K = 4096: rms **0.215076** instead of 0.388957 — 45 % low, 39 % below the bottom of the band, ratio 1.81×. The reach-back to the note's own note-on is what sets the level at the locate. |
+| AC2c | `instrument_render_determinism_xproc` | det_d — a render in a FRESH process AFTER a play/stop cycle in that process — is byte-identical to det_a, by the verb and by `cmake -E compare_files`. |
+| AC3 | sweeps | `repeat_test.sh` N=50 × workers {1,4,8,16} on both new cases: **8 × 50/50 = 400/400**. Worker count 0 excluded by design (an instrument is silent on the legacy pull). |
+| AC4 | goldens | `tests/goldens/` untouched; `mc_golden_mono`, `mc_golden_stereo`, `fader_post_fx` and `midi_out_render_silent` green — no track without an instrument changes path, so the barrier cannot move a golden byte. |
+
+### The cost, measured
+
+On the AC1 project (one instrument track, playback starting at 262144 where the
+previous render had already frozen pages), counted with a temporary
+`[MEASURE]` log line in the generator branch of `twPluginSlotProcessor::render`:
+
+| phase | processor page renders, barrier ON | barrier OFF |
+|---|---|---|
+| render A | 12 (6 pages × 2) | 12 |
+| **playback start** | **8 (pages 262144, 327680, 393216, 458752)** | **4 (pages 393216, 458752 only)** |
+| render B | 12 | 12 |
+
+So the barrier costs **TWO re-rendered pages per play start** here — exactly the
+pages of the readahead window that the previous run had already frozen at or
+after the locator — about 20 ms of wall clock. The ×2 in every row is P3b's
+recorded double-render debt, not the barrier.
+
+### Deviations, and what is NOT gated
+
+- **The barrier is currently a GUARANTEE, not a fix, and the AC1 case cannot
+  fail today.** Verified rather than assumed: with both call sites disabled and
+  rebuilt, `instrument_render_determinism` still compares byte-identical. The
+  reason is P3b's double-render debt — the scheduler renders each instrument
+  page twice and the second call at a position is never contiguous with the
+  first, so EVERY instrument page in every consumer comes out of the reposition
+  path, which is a pure function of the page's own start position and the feed.
+  Position-pure pages are trivially run-independent, so there is nothing to
+  leak. The moment an instrument page is served from a CONTINUOUS chain (which
+  is what proposal 20's pipelining work is for), the run it chained from starts
+  to matter and these cases are what will say so. Both case headers say this in
+  full; neither pretends to reproduce a live bug.
+- **The same debt is why AC2's forced-K falsification moves the render and the
+  capture together** (both read 0.215076 with the knob on). It proves the
+  reach-back sets the absolute level; it does not prove capture and render can
+  drift apart.
+- **The debug knob was not committed.** A permanent `SMARAGD_PREROLL_MAX_FRAMES`
+  would be an engine change outside this phase's module set (`main/shell`,
+  `main/objects/track`, `main/testkit`, docs) and a lever for weakening the band
+  later. It was applied locally, measured once, reverted; the exact patch and
+  the number are in the case header.
+- **Seek during playback is not barriered**, and neither is a **loop wrap**.
+  Both keep today's page-boundary splices. NOT GATED — a timing assertion tight
+  enough to separate the behaviours would be flaky, and the alternative (a
+  mid-page re-stale that the RT thread adopts as soon as it lands) is audibly
+  worse than the splice.
+- **Effects are not barriered at all** — deliberate; their splice at a page
+  boundary is what they have always done.
+- **Render-vs-playback identity** is still not claimed: different runs, different
+  first pages.
+- **Stereo** is not gated (the sink is mono until 36-B5); channel 0 only.
+- **The cross-process gate is a CMake driver, not a qxa case.** The qxa
+  registration gives every case a private output directory, and the byte gate
+  this repo rests on is a FRESH-PROCESS compare — so the two cannot be expressed
+  in one `.qxa`. Pass 2 lives in `tests/cases/xproc/` precisely so the
+  `CONFIGURE_DEPENDS` glob cannot register it as a standalone case that would
+  fail looking for a reference nobody rendered.
+---
+
+## 2026-08-16 — Proposal 37 P5: automation model + engine
+
+Automation exists end to end: a lane on a track, a plugin slot or a clip window
+is edited by seven undoable verbs, persisted inline with its owner, snapshotted
+as an immutable `twAutomationCurve`, and consumed at freeze time by
+`twGainStage` (the post-FX fader) and by `twPluginSlotProcessor` (per-chunk,
+sample-offset `ParamValue` events). `twTrackMix`'s pre-FX gain — forced to 0 dB
+by P3a — is **deleted**, and the per-clip gain envelope that mix/CONTRACT.md has
+listed as debt since proposal 15 now exists in its place.
+
+Branch `feat/36-p5-automation`, on the P3b integration tip.
+
+### What landed
+
+**Model (`main/model`)** — `SAutomationLane` (`sautomationlane.{h,cpp}`): a
+plain owner-held `QObject`, NEVER an `SLink` child, holding a `SParamRef`
+target, a mode and a sorted point table, and rebuilding a
+`shared_ptr<const twAutomationCurve>` snapshot on every mutation. The lane
+vector lives on **`SObject`** rather than on the four owner types, for the same
+reason `contentKind()` and `resolveEventClip()` do: a verb, the serializer and
+the testkit must reach a lane without knowing which object slice owns it.
+`SObject::serialize()` emits `<automation><lane …><p …/></lane></automation>`
+and writes NOTHING when there are no lanes — which is what keeps every existing
+project file and every golden byte-unchanged.
+
+**Engine `tw/mix`** — `twGainStage::setVolumeCurve(curve, absolute)` /
+`setMuteCurve(curve)`, read once per page into a local (THREADING rule 2). Trim
+SUMS in dB (a dB sum is a gain product, which is exactly "static value ×
+curve"); Read replaces. A mute lane ramps ~1.5 ms at every transition and holds
+AUDIBLE before its first breakpoint. `twTrackMix::setTrackGain` and
+`trackGainDb_` removed; `ClipEntry::gainCurve` added and applied to the child's
+page before `mixFrom`, into a scratch buffer rather than through `childPage`
+(which is handed back as the child's DSP-state predecessor). `tw_mix` gained a
+dependency on `tw_events`, which is core-only and outside the dataflow DAG.
+
+**Engine `tw/plugins`** — `setParamCurves(map<paramId, curve>)` plus
+`automationEpoch_`, and `buildAutomationChunk_nolock()`: chase at offset 0, one
+event per breakpoint inside the chunk, a 64-frame grid on continuous segments,
+redundant repeats dropped. With no curves the call is the SAME legacy
+three-argument `process()` it always was — not an equivalent one — which is what
+makes AC6 true by construction.
+
+**Owners** — `STrack` (`self:Volume`, `self:Muted`, and the pull of every
+child's `cut:Gain` from `bumpRenderChainEpoch[Range]()`, the same main-thread
+funnel `refreshInstrumentFeed()` uses), `SPluginSlot` (`param:<id>`, invalidated
+through a new `audioInvalidatedRange` signal because the slot cannot walk to its
+own containers), `SCut` (`cut:Gain`, carried by `cloneWindowOver`), `SMidiCut`
+(`cut:VelocityScale` / `cut:Transpose`, applied when the snapshot is built).
+
+**Verbs** — `add-automation-lane`, `remove-automation-lane`,
+`set-automation-mode`, `add/move/remove-automation-point`,
+`set-automation-points` (batch, `mergeKey` = owner + target), all absolute and
+all undoable; plus the testkit's `assert-automation-value`. They live in
+`main/objects/track` rather than `main/actions`: only the `param:` owner needs a
+concrete type (`SPluginChain::getSlotAt`), everything else resolves through the
+model-level services, and putting them here keeps `main/actions` model-only.
+
+`set-track-volume` / `set-track-mute` on a track whose lane is in a Read-family
+mode now commit a one-point `set-automation-points` at the locator instead of
+writing the static value. `SAppContext` gained `getGlobalLocatorPos()` for it.
+
+### Gate results
+
+`./build.sh` clean; `check_layering.py` and `check_logging.py` clean;
+`action_roundtrip_test` **130 actions** (122 before, +8 fixture rows).
+
+**`ctest -j4`: 162 passed / 162 run, 0 failed, 165 registered, 3 Not Run (the
+macOS-only `au_*` trio) — 100 %, in 218 s.** 137 `.qxa` files on disk = 137
+`qxa.*` tests registered (132 + 5). `git status smaragd/tests/goldens/` clean
+throughout.
+
+**AC8, the race sweep**: `repeat_test.sh automation_plugin_param.qxa 50 <w>`
+over `SMARAGD_REVAL_WORKERS` {1, 4, 8, 16} — **50/50 at every worker count,
+200/200 overall, "deterministic: PASS" four times.** The case is the right
+subject: a curve swapped under `mutex_`, a per-chunk event list built on a
+freeze thread, and a byte-compare of two renders in the same process.
+
+An EARLIER full run came back 161/162 with `qxa.clip_properties_actions`
+(SEGFAULT) — the pre-existing crash flake CLAUDE.md already names ("1 of 2
+serial runs", never reproducible in isolation). Re-run 5× on its own: **5/5
+clean, exit 0**, and it passed in the final run. Not ours, not chased.
+
+New fixture `tests/test_autosaw.wav` + `tests/tools/gen_auto_fixture.py`: 4.0 s,
+48 kHz, 16-bit, two identical channels, a 480 Hz sawtooth of amplitude 0.4. The
+period is EXACTLY 100 frames, which is what every band in the five cases leans
+on — 100 divides 48000 (per-second windows), 69000/70000/71000 (the mid-chunk
+parameter step) and gives a whole cycle in the ~2 ms window at a mute edge. The
+existing fixtures could not serve: `test_sawtooth.wav` ramps in level, and
+`test_clipsaw.wav` is 2 s long with a 480-frame period.
+
+| AC | Case | Measured |
+|---|---|---|
+| AC1 | `automation_volume_ramp` | per-second RMS **0.000688109 / 0.00386725 / 0.0217461 / 0.122286** against the closed form 0.00068766 / 0.00386701 / 0.02174581 / 0.12228565 (±3 % bands; neighbours differ by 10^0.75 = 5.62×, so the bands are 46× narrower than the signal). Two renders byte-identical (768044 B). `assert-automation-value time=96000` = −30 dB exactly (tol 1e-9). Undo of the second point collapses the render to −60 dB, measured 0.000232194 |
+| AC2 | `automation_mute_step` | body [48096, 95904) RMS **0** (< 0.0001). Mute-on edge [48000, 48100) **0.13973** vs closed form 0.139723; mute-off edge [96000, 96100) **0.163803** vs 0.163802. Both bands (±25 %) exclude 0 and 0.230956, so a hard step fails both. Seconds 0 and 3 byte-identical to the no-lane render over their frame ranges; removing the lane restores the no-lane render byte for byte (768044 B); the removal's inverse carries the point list back and re-renders byte-identically |
+| AC3 | `automation_plugin_param` (also gates the slot lane's SAVE/LOAD, which found a real gap: the lanes are read before the processor exists, so `SPluginSlot::setChannelCount` re-pushes) | CLAP `tw.test.clap.gain` param 0, step 1.0→2.0 at frame 70000 (chunk starts 69632, so 368 frames in): [69000,70000) **0.230956**, [70000,71000) **0.461913** — both within ±1 %. VST3 `TW Test VST3 Gain` (normalized, clamped [0,1]) step 0.5→1.0: **0.115478** then **0.230956**. Two renders byte-identical for both (384044 B) |
+| AC4 | `automation_clip_gain` | linear 1.0→0.0 envelope: per-second **0.202775 / 0.145309 / 0.0881999 / 0.0333375** (±3 %). `move-clip` +1 s: silence before, then the same four numbers one second later. `duplicate-clip` copies the lane (asserted on the copy AND rendered). A take stack's new take renders byte-identical to the NO-LANE render and the original take byte-identical to the faded one — the inactive take keeps its own. Explicit `<undo count="1"/>` after each of the four steps, each re-asserted by a byte compare. Save → load → re-assert → byte-identical render |
+| AC5 | `automation_edit_invalidates` | `self:Volume` step lane 0 / −12 / 0 dB; render A, render A2 byte-identical; `move-automation-point` → second 2 **0.115754** (was 0.0580135), [0, 96000) and [144000, 192000) byte-identical to A, and the WHOLE file NOT identical (`expectReject`), so the ranged compares are not vacuous. `param:` half: identity asserted only BEFORE the edit; after it only the level (**0.346435** for 1.5×) |
+| AC6 | goldens | `git status smaragd/tests/goldens/` clean; every `meter_*`, `fader_post_fx` and `instrument_*` case green in the full run |
+| AC7 | docs | `action_roundtrip_test` rows for all 8 verbs; `docs/ACTIONS.md` rows (+ the Read-lane note on `set-track-volume` / `set-track-mute`); CONTRACT deltas in `tw303a/mix` (inv. 19–23), `tw303a/plugins` (inv. 15 amended, 41–44), `main/objects/track` (inv. 11–15), `main/objects/cut`, `main/objects/midi`, `main/model`, `main/testkit` |
+
+### Decisions taken, and why
+
+- **`self:Volume` interpolates linearly IN dB.** The design says "dB-linear in
+  fader space" (D5 / §4.5). `twAutomationCurve` is P0b ground truth and
+  interpolates the STORED value, and `tw/mix` may not include
+  `app/timeline/sfadercurve.h` (an app header). Read as "linear in dB, in the
+  fader's space" the sentence is implementable, consistent with the fader's own
+  domain and range, and it is the ONLY reading under which the brief's other
+  requirement — "Trim/Read = static fader value × curve (in dB: sum)" — is a
+  single number rather than two multiplies. Recorded here and in
+  `sautomationlane.h`; the P6 lane editor draws on the fader's curve, which is
+  where the other half of the phrase belongs.
+- **Point times are whole frames, not `Fraction`.** §3.3 says `Fraction t`, but
+  `twAutomationCurve`'s breakpoints are `int64` frames, so a fractional time
+  would be rounded at snapshot build and give false precision — and two points
+  0.4 frames apart could not both survive.
+- **`cut:Gain` is a LINEAR factor, not dB.** A fade-out has to reach exactly
+  zero. `self:Volume` stays dB because that is the fader's own unit and because
+  Trim's dB sum depends on it.
+- **A `self:Muted` lane holds AUDIBLE before its first point**, unlike every
+  other lane (which holds its first point's value there, the universal
+  convention). "Muted from frame 0" is what the structural mute says, and AC2's
+  "second 0 is byte-identical to the no-lane render" is only expressible this
+  way. Implemented as an explicit anchor point at frame 0 in the snapshot
+  builder, not as a special case in the consumer, so the model and the engine
+  cannot disagree about it.
+- **The automation verbs live in `main/objects/track`.** The brief's module list
+  names `main/actions` as well, but a lane owner is a track, a plugin SLOT or a
+  clip window, and only the slot needs a concrete type. Everything else resolves
+  through `splacements::laneAt` / `placementAt` / `SObject::windowTakeAt`, all
+  model-level, so this placement adds no coupling and keeps `main/actions`
+  model-only.
+- **`automationEpoch_` enters the STAMP by way of `bumpParamEpoch()`.** Post-36
+  B4 the processor caches nothing (`plugins/CONTRACT.md` inv. 15), so the
+  insert's content epoch IS the page stamp; `setParamCurves` bumps both the
+  counter and the epoch.
+
+### An environment collision worth naming (NOT a code bug)
+
+`automation_plugin_param` failed once, mid-session, reading **0.330928** where
+0.230956 was expected — a level consistent with the parameter step landing on
+the CHUNK boundary (69632) rather than on frame 70000. It was not the code. The
+per-user `%APPDATA%/Smaragd/smaragd.ini` had
+
+    [plugins]
+    searchPaths=…/.claude/worktrees/multichannel/smaragd/build/bin
+
+i.e. ANOTHER WORKTREE's build directory and nothing else, and a concurrent
+session there had just rewritten `plugincache.json` at scanner version 1, which
+this build discards and rescans. `SPluginSlot::resolveEffective()` prefers the
+REGISTRY's record for a (format, uid) over the stored descriptor's path, so
+`insert-plugin path='twtestclap.clap'` resolved to the *multichannel* branch's
+`twtestclap.clap` — a pre-P2 build that does not honour a `ParamValue`'s sample
+offset. Adding this worktree's `build/bin` to the FRONT of `searchPaths` made
+the case pass with the exact closed form again.
+
+**Both the plugin cache and the search-path setting are per-USER and shared
+across worktrees.** Any plugin case can therefore be silently answered by
+another branch's fixture, and the symptom is a plausible-looking wrong NUMBER
+rather than a load failure. If a `plugin_*` or `automation_plugin_param` case
+fails with a level that is nearly right, check which module the `[scan]` lines
+name before suspecting the code.
+
+### One bug found by the gate, worth naming
+
+The first full `-j4` run came back **160/162 with `instrument_edit_reaches_render`
+and `instrument_transpose_and_velocity` failing** — an event-clip edit no longer
+reached the render at all. Cause: adding the automation methods to `strack.h`
+*inside* its `public slots:` block. The `public:` / `private:` specifiers that
+scoped the new declarations ended the slots section, so
+`STrack::trackEventClipChanged` became a plain member — and it is connected by
+NAME through the `SIGNAL`/`SLOT` macros, which fail at RUNTIME with a warning
+nobody reads. Every `add-note` / `set-midi-cut` then silently stopped
+invalidating. Nothing about it is visible at compile time.
+
+**Rule, for the next person: never introduce an access specifier inside a
+`slots:` block.** Declare new members before it or after it, or close the
+insertion with the same `public slots:` it interrupted — which is what
+`strack.h` now does, with a comment saying why. It cost a stash-and-rebuild
+bisect back to the base commit to find, because the two failing cases are
+P3b's and the change is P5's.
+
+### A shared-environment collision, not a regression
+
+The first full run came back **166/168 with `automation_plugin_param` and
+`fader_post_fx` failing**, and neither has anything to do with P6. The
+per-user `smaragd.ini` had `plugins/searchPaths` pointing at ANOTHER
+worktree's `build/bin`, so both cases resolved `tw.test.clap.gain` by uid to
+that worktree's `twtestclap.clap` — a build without proposal 37 P2's
+`Clip Threshold` (param id 2) and without P2's four entry points. The plugin
+cache is likewise one shared file. Pointing the search path back at this
+worktree and clearing `plugincache.json` made both pass immediately, and the
+second full run was green.
+
+Worth recording because the failure looks exactly like a real regression and
+because the ini and the cache are the two pieces of state that concurrent
+sessions in different worktrees genuinely share. `plugins/searchPaths` is
+written by `set-option` in a case, which is why those cases carry
+`RUN_SERIAL` — but `RUN_SERIAL` bounds one ctest invocation, not two.
+
+### Repeat check
+
+`automation_write_pass`, `automation_lane_gestures` and
+`automation_head_mode`, 5 runs each, judged by EXIT CODE rather than by
+grepping for PASS (a teardown crash after a pass counts as a pass to the
+grep): **0 failures in 15**. Not a `repeat_test.sh` sweep over
+`SMARAGD_REVAL_WORKERS` — P6 touches no scheduler seam, no class-1 processor
+and no readahead — but `automation_write_pass` drives a real real-time
+transport twice, so it is the one that could have been timing-fragile.
+
+### What is NOT gated
+
+- **Mode UI and Touch/Latch/Write RECORDING** are P6. The four recorder modes
+  are stored, serialized and READ (they behave exactly like Read); nothing
+  writes points from a gesture yet, and there is no `automation-write-tick`.
+- **`self:Pan`** is deliberately unimplemented and unparsable until the sink is
+  stereo (36-B5) — a pan lane today would store a number nothing could hear.
+- **Placement-scope (per-`SLink`) envelopes** are deferred to proposal 32.
+- **The invalidation RANGE is not directly observable.** AC5 asserts byte
+  identity outside the edited span, but a render is deterministic, so a range
+  that is too WIDE also passes. What the case does have teeth against is the
+  failure that actually bites — an edit not observed at all, or observed at the
+  wrong position. There is no way to assert "page 1 was not re-frozen" from a
+  script.
+- **Concurrency of a curve swap racing a freeze** has no bespoke gate beyond the
+  AC8 sweep. The swap is a `shared_ptr` under the owner's mutex and the consumer
+  reads it once per page, so a page in flight keeps a coherent view; a timing
+  assertion tight enough to separate the orderings would be flaky.
+- **Playback** (as opposed to render) of an automated track is not separately
+  asserted; the gain stage is position-driven and both paths go through the
+  scheduler, but no case dumps a playback capture of a lane.
+- **`cut:VelocityScale` / `cut:Transpose`** are implemented and round-trip, but
+  have no dedicated qxa case — they are event transforms and their audible half
+  needs an instrument, which makes them a natural P6/P9 case.
+
+## 2026-08-16 — Proposal 37: P3a, P3b, P3c, P5 merged; tip verified
+
+`docs/midi-instruments-automation` at `c5be5a9` = everything above + P3a (fader
+post-FX), P3b (instrument slot + feed — MIDI audible), P3c (render barrier +
+determinism gates), P5 (automation model + engine). Gate on the merged tree:
+build clean, layering + logging clean, **`ctest -j4`: 165/165 passed in 156 s**
+(168 registered, 3 `au_*` disabled). P6 (automation UI) started; after it, only
+P8 (gated on proposal 21) and the P9 follow-ups remain.
+---
+
+## 2026-08-16 — Proposal 37 P6: automation UI
+
+Branch `feat/36-p6-automation-ui`, from the P5 merge tip `c5be5a9`. The lanes
+are on screen and editable: automation sub-lanes in the arranger, the "A" mode
+button on the track head, the Touch/Latch/Write recorder behind the fader and
+the plugin parameter slider, the clip-gain envelope as an overlay on the clip,
+and two testkit verbs to drive all of it headlessly.
+
+### What landed
+
+**The lane is a sub-lane, and the whole feature is ONE new file.**
+`STrackRow` gained `subKind {None, Take, Automation}` — `isSubLane()` now reads
+that instead of `takeRow >= 0` — plus `autoTarget` / `autoSlotIndex`, which is
+exactly the address every automation verb takes. Everything else lives in the
+new `main/timeline/src/sautomationlane.{h,cpp}` (875 lines): the painting, the
+per-target value scale, the hit test, the gesture state machine, the picker
+menu, the clip-envelope hit test, the testkit driver, AND the definitions of the
+five `SStdMixerView` members that are automation code. Defining a member
+function in a second translation unit of the same library is what kept
+`sstdmixerview.cpp` to the CALL SITES: **4458 → 4494 lines, +36 against a budget
+of 100** (AC4).
+
+**The curve is sampled per PIXEL through `SAutomationLane::valueAt`** — the same
+call `assert-automation-value` makes — so Step / Linear / Exp come out right by
+construction. A per-segment painter would be a second implementation of the
+interpolation and could disagree with the ear.
+
+**Each target draws its own domain** (`sAutoScaleFor`): `self:Volume` through
+THE fader curve (timeline inv. 13, so a given dB sits at the same fraction of
+the lane as of the fader), `self:Muted` 0/1 stepped, `param:<id>` over the
+plugin's DECLARED range, `cut:Gain` a linear factor over [0,1]. The plugin's
+range comes from a new `SPluginSlot::paramRows()` returning app types, because
+`app/timeline` may not include `tw/plugins` and should not have to.
+
+**Gestures are revert-then-act** (timeline inv. 3): the live drag mutates the
+point table directly for feedback and pushes nothing, and the release puts the
+pre-drag table back BEFORE submitting the verb — otherwise the action would find
+nothing to change, its undo step would be a no-op and a redo would double-apply.
+Click on empty lane = `add-automation-point`, drag = one
+`move-automation-point`, primary-click on a point = `remove-automation-point`,
+Alt-drag = tension via `set-automation-points` over that one frame, Shift-drag =
+marquee, Delete = one `set-automation-points` over the marquee's span. A press
+this code claims swallows the whole press/move/release triple (`consumed_`), or
+the move falls through to the clip gestures on a lane that has no clips.
+
+**One pruning walk for every per-track UI-state set** (`pruneUiState`, proposal
+30 §E.5): the fold set, the take-lane set, the height scales and the new
+shown-automation set, all keyed by `STrack*`, all pruned together from
+`rebuildRows()`. It walks the MODEL, not `rows_` — a collapsed folder's children
+are alive and have no row. There was no pruning at all before this.
+
+**The head "A" button governs EVERY lane the track owns**, its own `self:` lanes
+and its slots' `param:` lanes alike, as one undo macro of `set-automation-mode`
+actions. Documented in `main/timeline/CONTRACT.md` inv. 19 with the argument:
+it is the only reading under which a single button is not ambiguous the moment a
+track owns two lanes. A left click cycles Off → Trim → Read → Touch → Latch →
+Write, a right click picks, and a track that owns no lane gets a `self:Volume`
+lane created in the mode being cycled to, so the button is never a silent no-op.
+The button keeps the letter **A** at every density — three of the six modes
+start with a letter another 20 px square in the same column already uses — and
+the mode is carried by colour + tooltip on screen and by a new `Amode=` field in
+`describeHead()`, appended AFTER `name=` so every committed `contains=` string
+from P4 still matches.
+
+**The recorder** is `SAutomationRecorder`, one per app, in `main/shell` —
+because both the arranger's fader (`app/timeline`) and the plugin parameter
+slider (`app/pluginui`) feed the same pass and those two modules cannot see each
+other. Touch commits at the control release; Latch holds the last value to the
+transport stop as ONE extra point rather than a stream of identical ticks; Write
+additionally opens its window where the transport RUN started and writes the
+first value back to it, which is the only thing that distinguishes it from
+Latch. `SApplication::setPlaying()` is what starts and commits a pass. A control
+write during a pass does NOT submit its ordinary verb — `applyVolume_` and
+`onParamSliderChanged` hand the value over and return.
+
+**The fader and the parameter slider DISPLAY the read value** while a
+Read-family lane exists, pumped from `SApplication::meterTick` (the one
+main-thread tick that keeps running at a static position and for a tail after
+the transport stops — proposal 34). A control being RECORDED is exempt: it must
+show the hand, not the curve.
+
+**The clip envelope** (`cut:Gain`) is drawn by the cut renderer after
+`drawWarpMarkers`, never as a sub-lane, because the curve lives on the WINDOW
+and travels with it. Its gestures are ARMED (`setClipEnvelopeEdit`, OFF by
+default), which is what keeps every clip-body gesture — move, slip, duplicate,
+stretch — exactly as it was.
+
+**Testkit:** `drag-automation-point` (the `drag-clip-edge` twin, through
+`SMainWindow` because testkit may not include `app/timeline`) and
+`automation-write-tick` (the `slip-clip` shape: raw, no undo step). Plus
+`set-lane-view` gained the automation view knobs, and `assert-lane-alignment`
+and `assert-track-head` gained `grabPng`.
+
+### One PRE-EXISTING bug found by the gate, and fixed
+
+`SAutomationLane::setPoints()` did not do what it documents. Two independent
+faults, both P5's: `std::sort` is NOT stable, so the order of two points on one
+frame was unspecified to begin with; and `std::unique` keeps the FIRST of each
+equal run, so the OLD point survived. The consequence is that
+`add-automation-point` on a frame that already had a point **silently dropped
+the new value** — while its own code comment, the lane's, and `docs/ACTIONS.md`
+all say the point is REPLACED. Fixed with `std::stable_sort` plus a fold that
+overwrites rather than skips (own commit, `main/model/src/sautomationlane.cpp`).
+It is not hypothetical: a click that lands a point on top of another is the
+commonest automation gesture there is, and the P6 case found it on its first
+run. No P5 case wrote two points on one frame, which is why it survived.
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `./build.sh` | clean |
+| `python tools/check_layering.py` | clean |
+| `python tools/check_logging.py` | clean |
+| `ctest -j4` | **168/168 run passed, 0 failed, 171 registered** (139 -> 142 qxa files + the xproc driver = 143 `qxa.*` tests, plus 28 unit tests), 3 `au_*` Not Run (Disabled), in 158 s. No crashes, no flakes. |
+| `action_roundtrip_test` | **132 actions**, all green (130 at P5 + the two new verbs) |
+| `wc -l smaragd/main/timeline/src/sstdmixerview.cpp` | **4458 → 4494, +36** vs `c5be5a9` (AC4, budget 100) |
+
+**AC1 `automation_lane_gestures.qxa`** — add / move / delete / tension /
+marquee, all through the REAL mouse handlers, each followed by
+`<undo count="1"/>` and a state assertion; the clip-gain envelope armed and
+disarmed (disarmed is an `expectReject`, because there the CLIP owns the press);
+`assert-lane-alignment` under scroll and zoom with TWO automation lanes and a
+take lane on one track; and a PNG of the canvas.
+
+**AC2 `automation_write_pass.qxa`** — Touch mode, real transport over the
+capture backend at `SMARAGD_CAPTURE_SPEED=1`, `automation-write-tick` at 0.5 s /
+1.0 s / 1.5 s between `wait-playhead`s, transport stop, then a second real
+playback pass dumped and measured per second. **ONE `<undo count="1"/>` reverts
+all three values.** Measured on the first run: 0.00760879 / 0.18000646 /
+0.23095626 / 0.23091878 against the closed form 0.00760974 / 0.18001059 /
+0.23095600 / 0.23095600 — five significant digits, and a capture-alignment slop
+of effectively zero frames. The bands are much wider than that (they are sized
+for a machine that drops a block under `-j4`), and still separate everything:
+with no pass the lane holds −60 dB and second 1 reads 0.000231, a factor of 600
+below its floor.
+
+**AC3 `automation_head_mode.qxa`** — `Amode=` at Full (160 px), Compact (100 px)
+and Tiny (40 px), for off / trim / read / write / latch, on a track with no lane
+and on one with two disagreeing lanes; plus a PNG of the real off-screen head in
+Write mode (the only thing that paints the button's per-mode colour). The lane
+PNG is AC1's.
+
+**Goldens: byte-identical BY CONSTRUCTION, not by re-measurement.** P6 touches
+no engine file and no render path. The only non-UI edits are
+`SAutomationLane::setPoints()` (which changes the outcome only when two points
+share a frame — no golden project has that) and `SPluginSlot::paramRows()`, a
+pure reader. Stated rather than re-`cmp`-ed.
+
+### What is NOT gated
+
+- **Plugin-gesture punch-in.** `ParamGestureBegin/End` DO come out of the CLAP
+  and VST3 backends, but only into `twEventOut` inside `process()` — a worker
+  thread, at freeze time, and nothing in the app consumes that stream. There is
+  also no native plugin editor to raise one (proposal 33 M3). So the punch-in is
+  the app's own slider press/release, exactly as the brief permits, and the
+  plugin-side path has no coverage because it has no consumer.
+- **Delete over a marquee selection.** Delete is a QAction SHORTCUT
+  (`actRemoveSample_`), not an event a case can synthesise, so `deleteSelection`
+  is reached in production and not from a script. The marquee gesture itself is
+  gated; the deletion it enables is not.
+- **Pixel exactness.** Both PNGs are coverage: they prove the paths paint, and
+  nothing compares them to a reference image.
+- **Latch and Write passes** have no qxa of their own — the recorder's mode
+  arithmetic (the held point, Write's overwrite window) is exercised only
+  through Touch. Both are a few lines apart in `commit_()`, and a case for each
+  would need a second real-time transport pass per mode.
+- **The read-value display** (fader / slider following the curve during
+  playback) has no assertion: `describeHead()` does not report the fader
+  position, and adding one would have widened the P4 string that four committed
+  cases match against.
+- **Re-entrancy under a live drag** — a refresh arriving mid-gesture — is
+  handled by the same flags `SClipPropertiesPanel` uses (timeline inv. 9) but
+  has no bespoke gate; a timing assertion tight enough to separate the
+  behaviours would be flaky.
+
+## 2026-08-16 — Proposal 37: every executable phase landed; tip verified
+
+`docs/midi-instruments-automation` at `f3f603b`: P0a, P0b, P1, P2, P3a, P3b, P3c,
+P4, P5, P6, P7a+P7b, the teardown fix, on top of `main` + multichannel B3/B4.
+Only P8 (gated on proposal 21's live lane) and the P9 follow-ups remain. Gate:
+build clean, layering + logging clean, **`ctest -j4`: 168/168 passed in 152 s**
+(171 registered, 3 `au_*` disabled off macOS).
+
+## 2026-08-16 — clip_properties_actions teardown segfault: a reference-graph edge ~SProject could not see
+
+Branch `integration-check` (the proposal-37 integration tip merged with trunk).
+`qxa.clip_properties_actions` printed `PASS` and then SEGFAULTed at process
+teardown — roughly 2 of 3 full `ctest -j4` runs, ~1/15 in isolation at
+`SMARAGD_REVAL_WORKERS=16` and `=8`, 0/15 at `=4`.
+
+**It was never a race, and it was never intermittent.** Measured over 20
+isolated runs at 16 workers on the tip: 20 of 20 printed
+
+    SProject::~SProject(): 'Effects' outlived the refcount cascade with 1 reference(s) …
+    SObject::~SObject(): 'Effects' destroyed with 1 live reference(s) — a referencing SLink now dangles!
+
+and 2 of 20 then died on it. The use-after-free happens EVERY run; whether the
+freed block is still benignly readable is what the worker count moves. That is
+why the case looked worker-sensitive and why it "did not reproduce in
+isolation" — the warning always did.
+
+**Root cause.** `~SProject`'s survivor pass (`main/model/src/sproject.cpp`,
+the `remaining` loop) deletes referrers BEFORE referents, by in-degree over the
+reference graph — and it built that graph from `SObject::childLinks()` alone.
+`STrack::cpPluginChainRef_` (`strack.cpp:777`) is an SLink the track OWNS but
+deliberately does NOT parent — a chain in `childLinks()` would be read as a
+clip (objects/track/CONTRACT.md 7) — so the track → chain edge was invisible.
+Both objects therefore landed in the SAME batch with in-degree 0, the chain
+('Effects') was deleted first, and `~STrack`'s `delete cpPluginChainRef_`
+(`strack.cpp:838`) then ran `object_.removeRef()` on freed memory:
+
+    #0 SObject::removeRef (this=<freed SPluginChain>)  sobject.cpp:668
+    #1 SLink::~SLink                                   slink.cpp:195
+    #2 STrack::~STrack                                 strack.cpp:838
+    #3 SProject::~SProject                             sproject.cpp:611
+    #4 SActionRunner::run                              sactionrunner.cpp:140
+
+Main thread, single-threaded, no worker involved. `~SProject` and
+`cpPluginChainRef_` are byte-identical to `origin/main`, so this is the
+PRE-EXISTING dangling-`SLink` family, not a proposal-37 interaction: none of
+P1's event clip set, P5's lanes, P3a's `twGainStage`, P7b's pump or the scan
+stop is on the path. The case reaches the survivor pass at all because
+`verify-undo` leaves an undo-stack pin on the track (the "usual case" the code
+comment already names), which is what keeps the track out of the refcount
+cascade and hands it to the survivor ordering.
+
+**Fix — the missing edge, not an imposed order.** New virtual
+`SObject::ownedRefLinks()` (default empty) publishes SLinks an object owns but
+does not parent; `STrack` overrides it with `cpPluginChainRef_`; the survivor
+pass counts those edges alongside `childLinks()`. The existing algorithm is now
+correct rather than being told which object to delete first, so it stays right
+for any future owner-held link. Recorded as model/CONTRACT.md invariant 6b.
+
+**Gates.** `repeat_test.sh clip_properties_actions` 40/40 at
+`SMARAGD_REVAL_WORKERS=16` and 40/40 at `=8` (was 18/20 by exit code at 16
+before the change); `exact_stretch_roundtrip`, `lane_alignment`,
+`warp_anchors_roundtrip`, `split_plain_screenshot` 20/20 each at 16;
+**`ctest -j4`: 171/171 passed, twice** (174 registered,
+3 `au_*` disabled off macOS; 59.1 s and 58.3 s). Build, layering and logging clean. Goldens are unchanged BY
+CONSTRUCTION — nothing here is reachable from `freezePage`, `RenderSession` or
+`AudioEngine`; the only code that changed runs after the last render, inside
+`~SProject`.
+
+**What is NOT fixed.** The track itself still ends the run as
+`'…' destroyed with 1 live reference(s)` — an undo-stack pin held by an
+`SActionHistory` that outlives the project. Nothing destroys that referrer
+before the process exits, so it never dereferences the freed track; it is a
+latent hole in the same family, and closing it means giving the action history
+a project-scoped lifetime, which is not a local change.
+
+## 2026-08-16 — Proposal 37: merged trunk through PR #45 (multichannel B4–B8); teardown segfault fixed
+
+`docs/midi-instruments-automation` at the tip above: `origin/main` merged (PRs
+#40–#45: multichannel B3, B4, B5, B7, B8 + docs), two hunk-seam fixes in
+`smainwindow.cpp` (B8's meter grabs vs P4/P6's head grabs), and the
+`clip_properties_actions` teardown SEGFAULT root-caused and fixed (pre-existing
+family: `~SProject`'s survivor pass missed `STrack`'s owned-but-unparented
+`cpPluginChainRef_` link — see the entry above). Gate: build clean, layering +
+logging clean, `ctest -j4` 171/171 twice (174 registered, 3 `au_*` disabled),
+`clip_properties_actions` 40/40 at workers 16 and 8, siblings 20/20.
+## 2026-08-17 - Plugin scan teardown: the two follow-ups the 08-16 fix named, plus a bound
+
+The 2026-08-16 entry above fixed the `--test-case` exit hang (immortal log sink,
+`smaragdOrderlyShutdown`, `stopScan()` between modules) and then named two things
+it had NOT done. Both are done here, and a third that neither entry had spotted.
+
+**1. A stop can now interrupt a probe that is already running.** 08-16: "it waits
+for the module currently being probed, so a plugin that burns its full
+`probeTimeoutMs_` (15 s) still adds that to process exit... Killing the QProcess
+from the stopping thread would be the next step if that ever bites." The probe
+wait is now SLICED at 100 ms and reads the stop flag once per slice, killing the
+child on the way out; the in-process fallback, which cannot be interrupted once
+it is inside a DSO, is checked immediately before it starts. Three abort points
+instead of one, and a stop costs ~100 ms rather than up to 15 s per module.
+
+**2. The shared cache file is no longer shared.** 08-16: "Reproducing this needs
+the SHARED `<configDir>/plugincache.json` to be cold, and that file is shared by
+every worktree on the machine." It was worse than a testing inconvenience.
+`kScannerVersion` is a SOURCE constant and the cache was one file per USER, so a
+worktree at version 2 and a worktree at version 1 rejected each other's records
+on EVERY launch - each rewrote the file with its own version, the next refused
+the lot. Measured here before the change: the file on disk said `scannerVersion:
+2` with 6 ok records against a version-1 build, so every run logged "rescanning
+everything" and re-probed all six installed plugins. That is not a cold cache
+once; it is a cache that can never be warm. The name now carries the version
+(`plugincache.v2.json`, from `twPluginRegistry::cacheFileName()`). Foreign
+records were already refused wholesale on load, so nothing is lost - but every
+existing user re-scans ONCE, and the old file is deliberately left in place
+because a build at another version may still be using it.
+
+**3. The join is BOUNDED, and nothing may escape the scan thread.** 08-16 removed
+the KNOWN exception (a `TW_LOG` into a destroyed sink) and made the sink
+immortal. It did not remove the CLASS: any other exception out of the QThread
+lambda still reaches `std::terminate`, whose `abort()` blocks on the CRT lock the
+exiting thread holds while it waits for this thread - a deadlock with no timeout
+in it. So the body carries a catch-all (its own report wrapped, because if we got
+there reporting may be what fails), and `stopScan( ms )` joins with a TIMEOUT.
+An expired join LEAKS the worker rather than deleting it (undefined) or
+terminating it (worse - it may be inside a plugin), keeps the pointer so a later
+join retries, does not clear the stop request, and logs loudly. Leaking a thread
+in a process that is exiting beats blocking it forever.
+
+**The stack, from a live gdb attach on this machine**, which is what said the
+"slow re-probe" reading was wrong: main in `msvcrt!_initterm_e` ->
+`~twPluginRegistry` -> `QThread::wait` (unbounded), scan thread in
+`__verbose_terminate_handler` -> `abort()` -> `RtlEnterCriticalSection`. No probe
+child alive, 0 % CPU. And probing is not slow: driving `smaragd_pluginprobe` by
+hand over all six installed modules takes 2.7 s total (1.8 s of it Melodyne).
+
+`requestStopScan()` (set the flag, do not join) is split out of `stopScan()`
+because a scan-progress callback runs ON the worker, so a test that wants to
+cancel deterministically mid-scan cannot call the joining one without deadlocking
+itself. That is how `plugins_scan_test`'s new section lands its cancel.
+
+Measured: `render_sawtooth_minimal.qxa` with a foreign cache, > 600 s (killed by
+the CTest timeout) -> 270-350 ms.

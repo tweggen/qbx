@@ -28,6 +28,20 @@ Invariants:
    Qt (docs/contracts/THREADING.md).
 5. A thread that calls TwLog::markNonBlocking() (the RT audio callback) never
    waits: it truncates at TW_LOG_RT_MAX and try_locks, counting a drop.
+6. TwLog IS IMMORTAL. TwLog::instance() returns a heap instance that is created
+   once and NEVER destroyed, so a record emitted from any thread at any point
+   in process teardown can never lock a destroyed mutex. A function-local
+   `static TwLog inst` could not hold that property: it is constructed at the
+   FIRST log call (inside main) and is therefore destroyed EARLY -- before
+   namespace-scope statics that own threads, one of which is the plugin
+   registry, whose scan thread logs while it is being joined. That combination
+   hung the process after PASS (plan/STATE.md 2026-08-16). The consequence is
+   that shutdown() -- flush + join the file writer -- is an EXPLICIT call from
+   the app's orderly teardown (main.cpp's smaragdOrderlyShutdown, on every path
+   out of main including the --test-case std::exit), never a destructor.
+   Logging after shutdown() is safe and reaches the ring; it just does not
+   reach the file. Asserted by twlog_test (late records from a fresh thread,
+   plus an atexit handler registered before the sink exists).
 
 **Toolchain constraint — no `thread_local` with a non-trivial destructor.**
 On MinGW-w64 GCC 13.1.0 (x86_64-posix-seh, the Windows build compiler), a
@@ -41,7 +55,8 @@ codebase, not just this module.
 How to test: `ctest -R 'exact_arithmetic|serialization_roundtrip|twfraction|timemap|twlog'`
 (five executables under core/tests/, linking only tw_core). twlog_test covers
 ring wraparound accounting, 8-thread seq density, category interning against
-address reuse, and the bounded non-blocking path.
+address reuse, the bounded non-blocking path, and the immortality of the sink
+(invariant 6).
 
 Known debt: QtCore dependency (QString in twfraction.cpp tail); SAMPLE_NORM_*
 are macros; DTOR_DEL macro survives for legacy call sites.

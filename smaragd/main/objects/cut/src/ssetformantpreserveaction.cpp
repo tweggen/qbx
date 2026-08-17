@@ -24,7 +24,8 @@ SCut *formantTargetCut( SObject *root, const QList<int> &clipPath, int take,
 
     if( STakeStack *stack = dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
         resolvedTake = ( take >= 0 ) ? take : stack->activeTakeIndex();
-        return stack->takeCutAt( resolvedTake );
+        // Formant preservation is per-take and audio-only (see set-pitch).
+        return dynamic_cast<SCut*>( stack->takeObjectAt( resolvedTake ) );
     }
     return dynamic_cast<SCut*>( &link->getSObject() );
 }

@@ -10,12 +10,68 @@
 
 SAssertFileIdenticalAction::SAssertFileIdenticalAction( const QString &actual,
                                                         const QString &expected,
-                                                        int maxReportedDiffs )
-    : actual_( actual ), expected_( expected ), maxReportedDiffs_( maxReportedDiffs )
+                                                        int maxReportedDiffs,
+                                                        qint64 startFrame,
+                                                        qint64 frameCount )
+    : actual_( actual ), expected_( expected ), maxReportedDiffs_( maxReportedDiffs ),
+      startFrame_( startFrame ), frameCount_( frameCount )
 {
 }
 
 namespace {
+
+// Minimal RIFF/WAVE geometry (proposal 37 P0a): where the sample data starts,
+// how long it is, and how many bytes one frame takes. Deliberately hand-rolled
+// and read-only - pulling in a decoder would decode, and this verb must compare
+// the BYTES that were written, not a reinterpretation of them.
+struct WavGeom {
+    qint64  dataOffset = -1;
+    qint64  dataBytes  = 0;
+    quint16 channels   = 0;
+    quint16 bits       = 0;
+    quint32 rate       = 0;
+    quint16 blockAlign = 0;
+};
+
+quint32 le32( const QByteArray &b, int at )
+{
+    return (quint32)(quint8) b[at]         | ( (quint32)(quint8) b[at+1] << 8 )
+         | ( (quint32)(quint8) b[at+2] << 16 ) | ( (quint32)(quint8) b[at+3] << 24 );
+}
+
+quint16 le16( const QByteArray &b, int at )
+{
+    return (quint16)( (quint8) b[at] | ( (quint16)(quint8) b[at+1] << 8 ) );
+}
+
+bool parseWav( const QByteArray &buf, WavGeom &out, QString &error )
+{
+    if( buf.size() < 12 || buf.left( 4 ) != "RIFF" || buf.mid( 8, 4 ) != "WAVE" ) {
+        error = QStringLiteral("not a RIFF/WAVE file");
+        return false;
+    }
+    qint64 at = 12;
+    while( at + 8 <= buf.size() ) {
+        const QByteArray id = buf.mid( (int) at, 4 );
+        const qint64 size = (qint64) le32( buf, (int) at + 4 );
+        const qint64 body = at + 8;
+        if( id == "fmt " && size >= 16 && body + 16 <= buf.size() ) {
+            out.channels   = le16( buf, (int) body + 2 );
+            out.rate       = le32( buf, (int) body + 4 );
+            out.blockAlign = le16( buf, (int) body + 12 );
+            out.bits       = le16( buf, (int) body + 14 );
+        } else if( id == "data" ) {
+            out.dataOffset = body;
+            out.dataBytes  = qMin( size, (qint64) buf.size() - body );
+        }
+        at = body + size + ( size & 1 );   // chunks are word-aligned
+    }
+    if( out.dataOffset < 0 || out.blockAlign == 0 ) {
+        error = QStringLiteral("no usable fmt/data chunk");
+        return false;
+    }
+    return true;
+}
 
 // Read whole files. A rendered WAV in this suite is a few hundred KB to a few
 // MB; a streaming compare in fixed chunks buys nothing there and would make
@@ -67,6 +123,11 @@ SApplyResult SAssertFileIdenticalAction::apply( SProject *project )
         qWarning() << "SAssertFileIdenticalAction: expected (the reference):" << err
                    << "- tried" << triedE;
         return { false, nullptr };
+    }
+
+    // A frame range: compare the sample DATA of that range only (37 P0a).
+    if( frameCount_ >= 0 || startFrame_ != 0 ) {
+        return compareWavRange_( a, e );
     }
 
     const qint64 nA = a.size();
@@ -126,12 +187,75 @@ SApplyResult SAssertFileIdenticalAction::apply( SProject *project )
     return { false, nullptr };
 }
 
+SApplyResult SAssertFileIdenticalAction::compareWavRange_( const QByteArray &a,
+                                                           const QByteArray &e )
+{
+    WavGeom ga, ge;
+    QString err;
+    if( !parseWav( a, ga, err ) ) {
+        qWarning() << "SAssertFileIdenticalAction: actual:" << actual_ << err;
+        return { false, nullptr };
+    }
+    if( !parseWav( e, ge, err ) ) {
+        qWarning() << "SAssertFileIdenticalAction: expected:" << expected_ << err;
+        return { false, nullptr };
+    }
+    if( ga.channels != ge.channels || ga.bits != ge.bits || ga.rate != ge.rate
+        || ga.blockAlign != ge.blockAlign ) {
+        qWarning() << "SAssertFileIdenticalAction: formats differ -"
+                   << actual_ << QStringLiteral( "%1ch/%2bit/%3Hz" )
+                                    .arg( ga.channels ).arg( ga.bits ).arg( ga.rate )
+                   << "vs" << expected_
+                   << QStringLiteral( "%1ch/%2bit/%3Hz" )
+                          .arg( ge.channels ).arg( ge.bits ).arg( ge.rate );
+        return { false, nullptr };
+    }
+    const qint64 frameBytes = ga.blockAlign;
+    const qint64 framesA = ga.dataBytes / frameBytes;
+    const qint64 framesE = ge.dataBytes / frameBytes;
+    const qint64 first = startFrame_ < 0 ? 0 : startFrame_;
+    const qint64 want = frameCount_ < 0 ? qMin( framesA, framesE ) - first : frameCount_;
+    if( want < 0 || first + want > framesA || first + want > framesE ) {
+        qWarning() << "SAssertFileIdenticalAction: range" << first << "+" << want
+                   << "exceeds the data:" << actual_ << "has" << framesA
+                   << "frames," << expected_ << "has" << framesE;
+        return { false, nullptr };
+    }
+    const char *pa = a.constData() + ga.dataOffset + first * frameBytes;
+    const char *pe = e.constData() + ge.dataOffset + first * frameBytes;
+    const qint64 nBytes = want * frameBytes;
+    qint64 firstDiff = -1, nDiff = 0;
+    for( qint64 i = 0; i < nBytes; ++i ) {
+        if( pa[i] != pe[i] ) {
+            if( firstDiff < 0 ) firstDiff = i;
+            ++nDiff;
+        }
+    }
+    if( nDiff == 0 ) {
+        qDebug() << "SAssertFileIdenticalAction: OK -" << actual_ << "and" << expected_
+                 << "are identical over frames" << first << "+" << want;
+        return { true, nullptr };
+    }
+    qWarning() << "SAssertFileIdenticalAction:" << actual_ << "differs from" << expected_
+               << "in the sample data: first difference at frame"
+               << ( first + firstDiff / frameBytes )
+               << QStringLiteral( "(%1 of %2 bytes in the range differ)" )
+                      .arg( nDiff ).arg( nBytes );
+    return { false, nullptr };
+}
+
 void SAssertFileIdenticalAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "actual", actual_ );
     elem.setAttribute( "expected", expected_ );
     if( maxReportedDiffs_ != 8 ) {
         elem.setAttribute( "maxReportedDiffs", QString::number( maxReportedDiffs_ ) );
+    }
+    if( startFrame_ != 0 ) {
+        elem.setAttribute( "startFrame", QString::number( startFrame_ ) );
+    }
+    if( frameCount_ >= 0 ) {
+        elem.setAttribute( "frameCount", QString::number( frameCount_ ) );
     }
 }
 
@@ -149,6 +273,10 @@ bool SAssertFileIdenticalAction::readXml( const QDomElement &elem, int /*version
         qWarning() << "SAssertFileIdenticalAction::readXml: invalid maxReportedDiffs";
         return false;
     }
+    startFrame_ = elem.attribute( "startFrame", "0" ).toLongLong( &ok );
+    if( !ok ) return false;
+    frameCount_ = elem.attribute( "frameCount", "-1" ).toLongLong( &ok );
+    if( !ok ) return false;
     return true;
 }
 

@@ -23,6 +23,25 @@ struct twPluginDescriptor {
     std::string   name, vendor;
     twPluginIoLayout io;
     bool          isInstrument = false;
+
+    // --- proposal 37 P2: what the scanner learned about EVENTS ---------------
+    //
+    // Derived from a live instance's capabilities() at scan time, exactly like
+    // `io` is derived from its ioLayout(): none of it is a descriptor field in
+    // any format. They exist so the browser can offer a Kind filter and
+    // "Add Instrument" without instantiating every plugin in the list, and so a
+    // project that references a plugin this machine does not have still knows
+    // the SHAPE it will get (plugins/CONTRACT.md invariant 17).
+    bool          acceptsNotes  = false;
+    bool          emitsNotes    = false;
+    std::uint16_t eventPortsIn  = 0;
+    std::uint16_t eventPortsOut = 0;
+
+    // Audio OUTPUT buses. nOutBuses is >= 1 for anything that makes sound; bus
+    // 0 is the main bus and its channel count equals io.audioOutputs. The rest
+    // are aux outs (proposal 37 §5.4, built in P9).
+    std::uint16_t              nOutBuses = 0;
+    std::vector<std::uint16_t> outBusChannels;
 };
 
 // What the scanner learned about ONE module file (proposal 08 M2).
@@ -71,7 +90,11 @@ public:
     // (new descriptor field, changed I/O derivation, ...). It is part of the
     // cache key, so bumping it invalidates every record — including the
     // remembered failures.
-    static constexpr int kScannerVersion = 1;
+    // 1 -> 2 (proposal 37 P2): the descriptor gained acceptsNotes, emitsNotes,
+    // eventPortsIn/Out, nOutBuses and outBusChannels. A v1 record cannot supply
+    // them, so every record — including the remembered failures — is
+    // invalidated once and re-probed.
+    static constexpr int kScannerVersion = 2;
 
     twPluginRegistry() = default;
     ~twPluginRegistry();
@@ -123,41 +146,55 @@ public:
     // running. A QThread (not a raw std::thread) deliberately: the scan uses
     // QProcess and QJson, and a std::thread adopted by Qt deadlocks teardown.
     //
-    // It CLEARS any pending cancellation before starting: a cancel belongs to
-    // the scan that was running when it was asked for, never to the next one.
+    // It CLEARS any pending stop request before starting: a stop belongs to the
+    // scan that was running when it was asked for, never to the next one.
     bool rescanAsync( bool force = false );
 
-    // Ask a running scan to stop at the next module boundary (and to kill the
-    // probe process it is currently waiting on). Shutdown is the only caller
-    // that matters: without it, teardown could do nothing but wait out a full
-    // re-probe of every plugin installed on the machine.
+    // REQUEST a stop, without joining. Sets the flag the scan reads between
+    // modules AND once per 100 ms slice of the probe wait — a stop that lands
+    // mid-probe kills the probe child rather than waiting out probeTimeoutMs_,
+    // which is the difference between a teardown that costs 100 ms and one that
+    // costs 15 s per installed module.
     //
-    // Cheap and idempotent; safe from any thread. A scan that is already
-    // finished ignores it, and the flag is cleared by the next rescanAsync()
-    // or rescan().
-    //
-    // A cancelled scan does NOT write the cache file. The table it has is
-    // partial, and the one caller is a process on its way out — writing from
-    // there is the kind of teardown-time I/O this whole fix exists to avoid.
-    void cancelScan();
-    bool scanCancelled() const { return scanCancel_.load( std::memory_order_acquire ); }
+    // Cheap, idempotent and safe from ANY thread, INCLUDING the scan thread
+    // itself — which is why it is separate from stopScan(): a scan-progress
+    // callback runs on the worker, and calling stopScan() there would self-join
+    // and deadlock. Shutdown wants stopScan(); this is the primitive under it.
+    void requestStopScan();
+    bool stopRequested() const { return stopRequested_.load( std::memory_order_acquire ); }
 
     bool isScanning() const { return scanning_.load( std::memory_order_acquire ); }
 
     // Join the scan worker. timeoutMs < 0 waits forever (what the headless
     // tests want, where a scan that never ends IS the failure); a shutdown path
-    // must pass a bound, and must pair it with cancelScan() first or the bound
-    // is just a slower way to wait out a full re-probe.
+    // must pass a bound, and must pair it with requestStopScan() first — or the
+    // bound is just a slower way to wait out a full re-probe.
     //
     // Returns true when the thread was joined and disposed of. False means the
     // wait expired and the worker is STILL RUNNING: the QThread is deliberately
     // neither deleted nor forgotten (deleting a running QThread is undefined,
     // and dropping the pointer would let a later join silently succeed against
-    // nothing), so a subsequent waitForScan() gets another chance at the same
-    // thread. A false return is worth a LOUD log — from the caller, not from
-    // here, because the last-resort caller is ~twPluginRegistry running under
-    // static destruction, where the log sink may already be gone.
+    // nothing), so a subsequent join gets another chance at the same thread.
     bool waitForScan( int timeoutMs = -1 );
+
+    // Ask a running scan to stop, then join it — BOUNDED. This is what the
+    // app's ORDERLY TEARDOWN calls (SApplication's destructor and main.cpp's
+    // smaragdOrderlyShutdown) so the scan thread is gone BEFORE static
+    // destruction begins: a --test-case run leaves through std::exit(), where
+    // no stack object is destroyed, and a scan thread still alive at that point
+    // used to log into an already-destroyed sink (see plan/STATE.md
+    // 2026-08-16). Whatever the aborted scan had already probed is still
+    // written to the cache, so successive runs converge instead of restarting
+    // cold every time. Safe to call when no scan is running, and safe to call
+    // twice.
+    //
+    // The bound is what makes it a guarantee rather than a hope: an unbounded
+    // join here is a hang whenever the worker cannot return at all (it is
+    // inside a plugin DSO that never comes back, or it has already died on an
+    // exception and is wedged in abort()). Returns false, and LOGS loudly, if
+    // the bound expires — the sink is immortal (twlog.cc), so this is safe even
+    // from the last-resort call in ~twPluginRegistry.
+    bool stopScan( int timeoutMs = 5000 );
 
     twPluginScanStats scanStats() const;
 
@@ -177,12 +214,6 @@ public:
 private:
     void appendBuiltins_nolock();
 
-    // The scan body. clearCancel is false for the call rescanAsync() makes:
-    // it has ALREADY cleared the flag, before start(), so clearing it again
-    // from the worker would silently swallow a cancel that arrived in between
-    // — which is exactly the teardown race this exists to survive.
-    void rescanImpl( bool force, bool clearCancel );
-
     mutable std::mutex              mutex_;         // guards everything below
     std::vector<twPluginDescriptor> plugins_;
     std::vector<std::string>        searchPaths_;
@@ -195,7 +226,7 @@ private:
     twPluginScanProgressFn          progress_;
 
     std::atomic<bool>               scanning_{ false };
-    std::atomic<bool>               scanCancel_{ false };
+    std::atomic<bool>               stopRequested_{ false };  // set by requestStopScan()
     mutable std::mutex              threadMutex_;   // guards scanThread_ only
     QThread                        *scanThread_ = nullptr;
 };

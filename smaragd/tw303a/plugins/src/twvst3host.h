@@ -34,6 +34,7 @@
 
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivstattributes.h"
+#include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivsthostapplication.h"
@@ -305,6 +306,46 @@ private:
     };
     Steinberg::Vst::ParamID id_ = 0;
     std::vector<Point>      points_;
+};
+
+// --- IEventList (proposal 37 P2) ----------------------------------------------
+//
+// The note lane, in both directions. Borrowed and pre-sized in prepare(), for
+// the same reason twVst3ParamChanges is: process() must not allocate.
+//
+// VST3 events are a flat POD struct with a type tag and a union, so ONE vector
+// holds a mixed sequence with no slicing and no per-type storage.
+class twVst3EventList final : public twVst3Borrowed<Steinberg::Vst::IEventList> {
+public:
+    Steinberg::tresult PLUGIN_API queryInterface( const Steinberg::TUID _iid,
+                                                  void **obj ) override;
+
+    Steinberg::int32 PLUGIN_API getEventCount() override
+    {
+        return (Steinberg::int32)used_;
+    }
+    Steinberg::tresult PLUGIN_API getEvent( Steinberg::int32              index,
+                                            Steinberg::Vst::Event &e ) override;
+    // The plugin's own output lands here. Beyond the reserved capacity it is
+    // COUNTED AND DROPPED, never grown (no allocation on the render path) and
+    // never refused with an error — a chatty arpeggiator must not fail a render.
+    Steinberg::tresult PLUGIN_API addEvent( Steinberg::Vst::Event &e ) override;
+
+    void reserve( std::size_t n ) { events_.resize( n ); }
+    void clear()
+    {
+        used_    = 0;
+        dropped_ = 0;
+    }
+    bool        append( const Steinberg::Vst::Event &e );
+    std::size_t size() const { return used_; }
+    std::size_t dropped() const { return dropped_; }
+    const Steinberg::Vst::Event &at( std::size_t i ) const { return events_[i]; }
+
+private:
+    std::vector<Steinberg::Vst::Event> events_;
+    std::size_t                        used_    = 0;
+    std::size_t                        dropped_ = 0;
 };
 
 class twVst3ParamChanges final : public twVst3Borrowed<Steinberg::Vst::IParameterChanges> {

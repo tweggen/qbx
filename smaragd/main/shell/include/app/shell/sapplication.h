@@ -25,6 +25,8 @@ class SLink;
 class SProject;
 class SActionHistory;
 class SAction;
+class SMidiOutPump;
+class SAutomationRecorder;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -76,7 +78,7 @@ public:
     // added, busses inserted, etc.) so that playback uses the current
     // wiring rather than the snapshot taken at project-creation time.
     void rewireSpeaker() override;
-    offset_t getGlobalLocatorPos() const;
+    offset_t getGlobalLocatorPos() const override;   // SAppContext (proposal 37 P5)
     // Store the playback position from the REALTIME AUDIO THREAD. This only does
     // an atomic store — it must NOT emit any Qt signal or otherwise touch QObject
     // machinery, because doing so from the raw render std::thread makes Qt adopt
@@ -110,6 +112,41 @@ public:
     audio::RenderSession *renderSession() const;
     void startRender(const audio::RenderParams &params) override;
 
+    // THE RUN BARRIER (proposal 37 D4 / 4.4). A "run" is one contiguous
+    // traversal of the graph by a consumer: an offline render, or a playback
+    // start. Instruments are the only CLASS-1 components in the graph whose
+    // state is not position-addressed - a synth voice carries its envelope
+    // across pages - so a run that inherits the previous run's continuity
+    // renders different audio for the same position. Two renders of the same
+    // project would then not be byte-identical, which is F4.
+    //
+    // The barrier is: for every track whose slot 0 is an INSTRUMENT,
+    //   1. slot->forgetContinuity()            - the processor stops believing
+    //      the next page continues the last one, so it repositions (reset +
+    //      chase + pre-roll K, D4) instead of continuing stale voices; and
+    //   2. invalidateRenderPathRange(pos, INT64_MAX) - the app-side path walk
+    //      up to the root, which is the ONLY thing that carries a change from a
+    //      tap up to the components the consumers ask (F13).
+    // In that ORDER: a page rendered after the epoch bump is then guaranteed to
+    // have seen the cleared continuity, and one rendered in between is staled by
+    // the bump and re-rendered. Effects are deliberately NOT barriered - their
+    // splice at a page boundary is what they do today.
+    //
+    // MAIN THREAD ONLY, and always BEFORE the run's first demand: from
+    // startRender() before the session thread spawns, and from every play-start
+    // path immediately before twSpeaker::startOutput() (which performs the
+    // engine's pre-readahead seekTo + startReadahead on this thread). NOT from
+    // setGlobalLocatorPos - a stopped locate demands nothing, and requestSeek
+    // only runs while playing. NEVER from the readahead thread, and never on a
+    // seek during playback or a loop wrap: those keep today's page-boundary
+    // splices (a mid-page re-stale would be an audible switch at an arbitrary
+    // offset, F14).
+    //
+    // Idempotent under any ordering: a late barrier costs one re-render, never
+    // a wrong page served as current (verify-at-publish self-staleness,
+    // schedule inv. 8). A project with no instrument does nothing at all.
+    void beginRun( offset_t pos );
+
     audio::RecordingSession *recordingSession() const;
     void startRecording(const audio::RecordingParams &params);
 
@@ -126,6 +163,36 @@ public:
         setGlobalLocatorPosRealtime((offset_t) absPos);
     }
 
+    // How many times the RT thread has published a position in this process.
+    // The MIDI-out pump anchors its clock on a PUBLICATION rather than on a
+    // position CHANGE: twSpeaker defers the device start until the readahead is
+    // primed, so between "play" and the first callback the playhead sits still
+    // at the locator, and a due time hung on that static value would put the
+    // first bar on the wire before a single frame had been delivered. Written
+    // by the audio thread with a relaxed store (single writer, no signal, no
+    // Qt), read by the main thread.
+    std::uint64_t locatorPublishSeq() const {
+        return locatorPublishSeq_.load( std::memory_order_relaxed );
+    }
+
+    // Frames to subtract from the published locator so a consumer reads the
+    // audio that is being HEARD rather than the audio just handed to the
+    // device. 0 when the backend does not report a latency, or nothing is
+    // playing. Named for the meters (proposal 34) that first needed it; the
+    // MIDI-out pump reuses it verbatim, because the conversion from DEVICE
+    // frames at the DEVICE rate to PROJECT frames is the same conversion.
+    offset_t meterLatencyFrames() const;
+    // The device's buffer size, in PROJECT frames. twSpeaker publishes the
+    // position AFTER the pull, so the frame just handed to the device is
+    // `published - this`; the MIDI-out pump needs that correction and nothing
+    // else does. 0 when unknown.
+    offset_t outputBufferFramesProject() const;
+
+    // The MIDI-out pump (proposal 37 P7b). Never null after construction; the
+    // Options dialog asks it for the port lists rather than minting a
+    // MidiOutput of its own (see SMidiOutPump::outputPorts).
+    SMidiOutPump *midiOutPump() const { return midiOutPump_.get(); }
+
     // Test output directory for artifacts (screenshots, renders, etc.)
     void setTestOutputDir(const QString &path);
     QString testOutputDir() const override;
@@ -141,6 +208,13 @@ public:
     bool isPluginScanActive() const;
     // "N plugins, M modules scanned (K cached, S skipped)" for the options page.
     QString pluginScanStatusText() const;
+
+    // Proposal 37 P6: the Touch/Latch/Write recorder. One per app, because a
+    // pass is a transport-wide thing and only one control can be held at a
+    // time; it lives here rather than in a view because BOTH the arranger's
+    // fader (app/timeline) and the plugin parameter editor (app/pluginui) feed
+    // it, and the shell is the only module both may reach.
+    SAutomationRecorder &automationRecorder() const { return *automationRecorder_; }
 
     // App-wide status/mode line shown in the main window's status bar. Views
     // push the active (or hover-telegraphed) gesture here; the main window
@@ -205,10 +279,6 @@ private slots:
 private:
     void initPluginRegistry();
 
-    // Frames to subtract from the published locator so a meter reads the audio
-    // that is being HEARD rather than the audio just handed to the device.
-    // 0 when the backend does not report a latency, or nothing is playing.
-    offset_t meterLatencyFrames() const;
     // Start (or re-arm) the metering pump. No-op during an offline render.
     void startMetering();
 
@@ -232,6 +302,9 @@ private:
     // Written by the audio thread (atomic store, no signal) and by the UI thread
     // (setGlobalLocatorPos, which also emits). Read by both.
     std::atomic<offset_t> globalLocatorPos_;
+    // Incremented by the AUDIO thread on every publishPosition (see
+    // locatorPublishSeq). Atomic store only - no signal, no QObject.
+    std::atomic<std::uint64_t> locatorPublishSeq_{ 0 };
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
@@ -240,6 +313,8 @@ private:
     QElapsedTimer meterClock_;        // monotonic ms handed to the ballistics
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
+    std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
+    std::unique_ptr<SAutomationRecorder> automationRecorder_;  // proposal 37 P6
     bool isPlaying_;
     SProject *currentProject_;
     QString statusMode_;

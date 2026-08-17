@@ -39,14 +39,16 @@ std::string cfToStd( CFStringRef s )
     return out;
 }
 
-// The types we host as track inserts: an effect, and a music-effect (an effect
-// that also accepts MIDI). A pure instrument (kAudioUnitType_MusicDevice) has no
-// audio input and cannot be an insert, so it is deliberately NOT enumerated —
-// hosting instruments is gated on the MIDI/note model, exactly as CLAP
-// note-ports are (proposal 08 §Non-goals).
+// The types we host. Effects and music-effects are track inserts (proposal 08);
+// MUSIC DEVICES (aumu) and MIDI PROCESSORS (aumi) joined them in proposal 37 P2,
+// because the note model they were gated on now exists — a MusicDevice has no
+// audio input and is an instrument, which is exactly the shape the instrument
+// slot wants.
 const std::uint32_t kHostedTypes[] = {
     (std::uint32_t) kAudioUnitType_Effect,
     (std::uint32_t) kAudioUnitType_MusicEffect,
+    (std::uint32_t) kAudioUnitType_MusicDevice,
+    (std::uint32_t) kAudioUnitType_MIDIProcessor,
 };
 
 }  // namespace
@@ -161,7 +163,9 @@ std::vector<twPluginDescriptor> auModuleDescriptors( const std::string &moduleKe
     d.format       = "au";
     d.uid          = auUidFromCodes( t, s, mfr );
     d.path         = std::string();   // AU identity is the uid; path is cosmetic
-    d.isInstrument = false;           // only effects/music-effects are enumerated
+    // A MusicDevice IS the instrument type (proposal 37 P2); the capabilities
+    // read off the live instance below confirm it.
+    d.isInstrument = t == (std::uint32_t) kAudioUnitType_MusicDevice;
 
     CFStringRef cfName = nullptr;
     if( AudioComponentCopyName( comp, &cfName ) == noErr && cfName ) {
@@ -183,8 +187,22 @@ std::vector<twPluginDescriptor> auModuleDescriptors( const std::string &moduleKe
     // one the out-of-process probe isolates: a component that crashes on
     // creation kills the probe and becomes a cached failure, not a dead app.
     d.io = twPluginIoLayout{ 0, 0 };
-    if( std::unique_ptr<twPlugin> inst = createAuPlugin( d.path, d.uid ) )
+    if( std::unique_ptr<twPlugin> inst = createAuPlugin( d.path, d.uid ) ) {
         d.io = inst->ioLayout();
+
+        // Scanner version 2 (proposal 37 P2), off the same instance.
+        const twPluginCapabilities caps = inst->capabilities();
+        d.acceptsNotes  = caps.acceptsNotes;
+        d.emitsNotes    = caps.emitsNotes;
+        d.eventPortsIn  = caps.notePortsIn;
+        d.eventPortsOut = caps.notePortsOut;
+        d.isInstrument  = d.isInstrument || caps.isInstrument;
+
+        d.nOutBuses = (std::uint16_t) inst->audioOutBusCount();
+        d.outBusChannels.clear();
+        for( std::size_t b = 0; b < (std::size_t) d.nOutBuses; ++b )
+            d.outBusChannels.push_back( inst->audioOutBus( b ).channels );
+    }
 
     out.push_back( std::move( d ) );
     return out;

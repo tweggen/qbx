@@ -5,7 +5,8 @@
 #include "app/model/sobjectpath.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
+#include "app/objects/cut/scut.h"      // grain params only (audio-specific)
 #include "app/model/slink.h"
 #include "app/model/sexternfile.h"
 #include "tw/core/twfraction.h"
@@ -54,17 +55,21 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
     twGrainParams grain;
     QList<int> containerPath;      // set for a container-backed clip
 
-    if( SCut *cut = dynamic_cast<SCut *>( &clipLink->getSObject() ) ) {
-        SObject &content = cut->getContent();
+    if( SClipWindow *win = SClipWindow::of( &clipLink->getSObject() ) ) {
+        SObject &content = win->windowContent();
+        // Grain params (stretch, pitch, warp anchors, grain/crossfade sizes)
+        // are audio-specific — the interface deliberately does not carry them,
+        // and the inverse only restores them onto an audio clip.
+        SCut *cut = dynamic_cast<SCut *>( &win->asObject() );
         if( SExternFile *xf = dynamic_cast<SExternFile *>( &content ) ) {
             filePath = xf->getFileName();
             // The whole window, so undo restores the clip the user actually had
             // — not a default full-length one. Blocking duration read (P19):
             // the try-lock snapshot can hand back a stale pre-edit value.
-            srcStart    = cut->getSrcStart();
-            cutDuration = cut->getDurationBlocking();
-            loopLength  = cut->getLoopLength().frames();
-            grain       = cut->getGrainParams();
+            srcStart    = win->contentAnchorExact();
+            cutDuration = win->durationBlocking();
+            loopLength  = win->loopLength();
+            if( cut ) grain = cut->getGrainParams();
             haveWindow  = true;
         } else if( content.isPathContainer() ) {
             // An asset COPY: a cut windowing a track. Nothing in the registry
@@ -73,10 +78,10 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
             // this action — the view routes it to SRemoveAssetPlacementAction,
             // whose inverse re-places the body and so keeps asset identity.)
             containerPath = strackpath::pathOf( root, &content );
-            srcStart    = cut->getSrcStart();
-            cutDuration = cut->getDurationBlocking();
-            loopLength  = cut->getLoopLength().frames();
-            grain       = cut->getGrainParams();
+            srcStart    = win->contentAnchorExact();
+            cutDuration = win->durationBlocking();
+            loopLength  = win->loopLength();
+            if( cut ) grain = cut->getGrainParams();
             haveWindow  = true;
         }
     }

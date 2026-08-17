@@ -1,5 +1,5 @@
 #include "app/objects/cut/splaceclipaction.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
@@ -34,12 +34,18 @@ SApplyResult SPlaceClipAction::apply( SProject *project )
         return {false, nullptr};
     }
 
-    SCut *cut = new SCut( project, wavLink->getSObject() );
-    delete wavLink;   // temp link; the cut holds its own ref on the wave
-    if( startOffset_ != 0 ) cut->setStartOffset( startOffset_ );
-    if( duration_ > 0 ) cut->setDuration( duration_ );
+    // The window type follows the CONTENT's kind (the wrap factory), so this
+    // verb places an event clip the day one exists without changing here.
+    SClipWindow *win = SClipWindow::wrapContent( project,
+                                                 wavLink->getSObject() );
+    delete wavLink;   // temp link; the window holds its own ref on the content
+    if( !win ) {
+        return {false, nullptr};
+    }
+    if( startOffset_ != 0 ) win->setStartOffsetFromTimeline( startOffset_ );
+    if( duration_ > 0 ) win->setDurationFromTimeline( duration_ );
 
-    SLink *link = new SLink( *cut, nullptr );
+    SLink *link = new SLink( win->asObject(), nullptr );
     link->setStartTime( timePos_ );
     link->setParent( lane );
 

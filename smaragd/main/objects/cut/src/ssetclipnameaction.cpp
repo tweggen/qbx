@@ -1,5 +1,5 @@
 #include "app/objects/cut/ssetclipnameaction.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/model/seditgroups.h"
 #include "app/model/sobjectpath.h"
@@ -17,8 +17,8 @@ namespace {
 // placement itself, or the ONE take being edited on a stack (reported so the
 // inverse can name it instead of re-resolving against a possibly different
 // active take).
-SCut *clipNameTargetCut( SObject *root, const QList<int> &clipPath, int take,
-                         int &resolvedTake )
+SClipWindow *clipNameTargetWindow( SObject *root, const QList<int> &clipPath,
+                                   int take, int &resolvedTake )
 {
     resolvedTake = -1;
     SLink *link = splacements::placementAt( root, clipPath );
@@ -26,9 +26,9 @@ SCut *clipNameTargetCut( SObject *root, const QList<int> &clipPath, int take,
 
     if( STakeStack *stack = dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
         resolvedTake = ( take >= 0 ) ? take : stack->activeTakeIndex();
-        return stack->takeCutAt( resolvedTake );
+        return stack->takeAt( resolvedTake );
     }
-    return dynamic_cast<SCut*>( &link->getSObject() );
+    return SClipWindow::of( &link->getSObject() );
 }
 }
 
@@ -58,13 +58,13 @@ SApplyResult SSetClipNameAction::apply( SProject *project )
             int t = take_;
             if( t < 0 ) {
                 int resolved = -1;
-                clipNameTargetCut( mixer, clipPath_, -1, resolved );
+                clipNameTargetWindow( mixer, clipPath_, -1, resolved );
                 t = resolved;
             }
             SCompositeAction composite;
             for( const QList<int> &p : targets ) {
                 int resolved = -1;
-                if( !clipNameTargetCut( mixer, p, t, resolved ) ) continue;
+                if( !clipNameTargetWindow( mixer, p, t, resolved ) ) continue;
                 composite.append(
                     new SSetClipNameAction( p, name_, t, false ) );
             }
@@ -75,13 +75,15 @@ SApplyResult SSetClipNameAction::apply( SProject *project )
     }
 
     int resolvedTake = -1;
-    SCut *cut = clipNameTargetCut( mixer, clipPath_, take_, resolvedTake );
-    if( !cut ) {
+    SClipWindow *win = clipNameTargetWindow( mixer, clipPath_, take_,
+                                             resolvedTake );
+    if( !win ) {
         return {false, nullptr};
     }
 
-    const QString oldName = cut->getSName();
-    cut->setSName( name_ );
+    // The name is the SObject's — every window is one (SClipWindow::asObject).
+    const QString oldName = win->asObject().getSName();
+    win->asObject().setSName( name_ );
 
     // The inverse carries the OLD name and the RESOLVED take with broadcast
     // off: the group members each pushed their own inverse already, and the

@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <mutex>
 #include <set>
@@ -326,9 +327,68 @@ static void testNonBlockingPath(TestRunner& runner)
 }
 
 // ============================================================================
+// The sink is IMMORTAL, and shutdown() is not a destructor
+// ============================================================================
+//
+// A late record -- from a background thread that outlives main, or from an
+// atexit handler running after static destruction -- must never be able to
+// touch a destroyed mutex. It used to: the singleton was a function-local
+// `static TwLog inst`, constructed at the first log call (inside main) and
+// therefore destroyed BEFORE namespace-scope statics that own threads. The
+// plugin registry is one of those; its scan thread logged into the corpse, the
+// std::system_error escaped, and the process abort()ed after printing PASS
+// (plan/STATE.md 2026-08-16).
+//
+// Two halves are asserted here. The cheap half: shutdown() is idempotent and
+// logging after it still works, from this thread and from a fresh one. The
+// sharp half is the atexit handler registered at the very top of main(), BEFORE
+// anything in this process has called TwLog::instance() -- destructor and
+// atexit registrations run in one LIFO order, so a handler registered first
+// runs LAST, after the sink's destructor would have run. With an immortal sink
+// it is simply a log call; with the old one it was undefined behaviour that
+// reliably terminated this binary.
+static void testShutdownIsSafe(TestRunner& runner)
+{
+    std::cout << "\n-- shutdown() is safe, and late records do not crash --"
+              << std::endl;
+
+    TwLog& log = TwLog::instance();
+
+    // No file sink was ever started here, so this is the no-op path.
+    log.shutdown();
+    log.shutdown();   // idempotent
+
+    const uint64_t before = log.nextSeq();
+    TW_LOGI("shutdown", "logged after shutdown, from the main thread");
+
+    std::atomic<bool> threadOk{false};
+    std::thread late([&threadOk] {
+        TW_LOGI("shutdown", "logged after shutdown, from a thread started after it");
+        threadOk.store(true, std::memory_order_relaxed);
+    });
+    late.join();
+
+    runner.assertTrue("a thread started after shutdown() can still log",
+                      threadOk.load(std::memory_order_relaxed));
+    runner.assertTrue("records emitted after shutdown() still reach the ring",
+                      log.nextSeq() == before + 2);
+
+    // And the sink is still usable afterwards: shutting down does not poison it.
+    log.shutdown();
+    runner.assertTrue("shutdown() after a late record is still safe", true);
+}
+
+// ============================================================================
 
 int main()
 {
+    // Registered FIRST, before any TwLog::instance() call in this process, so
+    // it runs LAST -- after the point at which a mortal sink would already be
+    // destroyed. See testShutdownIsSafe above.
+    std::atexit([] {
+        TW_LOGI("atexit", "logged from an atexit handler, after static destruction");
+    });
+
     TestRunner runner;
 
     std::cout << "=== TwLog ===" << std::endl;
@@ -338,6 +398,7 @@ int main()
     testInterning(runner);
     testConcurrentProducers(runner);
     testNonBlockingPath(runner);
+    testShutdownIsSafe(runner);
 
     runner.printSummary();
 

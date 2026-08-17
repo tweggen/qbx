@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_lane_gestures">
+
+  <!-- Proposal 37 P6, AC1: AN AUTOMATION LANE IS EDITED BY A POINTER.
+
+       Every gesture below goes through `drag-automation-point`, which is the
+       `drag-clip-edge` twin: it works out where the addressed breakpoint IS on
+       screen and sends REAL press/move/release events into the arranger
+       canvas. So what runs is SAutomationLaneUi::press/move/release — the
+       production handlers — and not a re-spelling of them in this script. A
+       qxa that called the verbs directly would test P5, which already has five
+       cases of its own.
+
+       WHY THE TOLERANCES ARE WHAT THEY ARE. A lane maps a value to a PIXEL,
+       and a pixel is where the information stops:
+
+         * TIME is exact. The press snaps through SStdMixerView::alignTime, and
+           at the default 120 BPM the beat grid is 24000 frames — so a gesture
+           aimed at a multiple of 24000 lands on it exactly, whatever the zoom
+           did to the pixel. Every time below is such a multiple, and every
+           time assertion is therefore an equality.
+
+         * VALUE is quantised to one pixel of the lane. `self:Volume` is drawn
+           through THE fader curve (timeline inv. 13), value = -96 + 120*sqrt(n)
+           over the lane's height, so d(dB)/d(pixel) = 60/(sqrt(n)*span). The
+           lane is forced to 200 px here (span 197), which puts one pixel at
+           0.30 dB near -6 dB and 0.38 dB near 0 dB. The +/- 1.0 dB tolerances
+           below are three pixels — tight enough that a lane drawn on a linear
+           scale instead of the fader curve misses every one of them by 8 dB or
+           more, and loose enough not to be a measurement of the rounding.
+
+       UNDO IS ASSERTED EXPLICITLY, once per gesture, with a state assertion on
+       either side — the runner's own verify-undo pass compares track counts and
+       would notice none of this. Each gesture is ONE undo step, which is the
+       property most easily broken: an add that also submitted the move of the
+       drag it arms would be two.
+  -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- A clip and a second take on track 0, so the alignment assertion below
+         sees a TAKE sub-lane and two AUTOMATION sub-lanes hanging off one
+         track lane. That mixture is the point: one head has to span all four
+         rows, and laneGroupHeight walks forward from the track lane. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+
+    <!-- 200 px lanes: see the tolerance argument above. -->
+    <set-lane-view trackHeight="200"/>
+
+    <!-- What the "Show automation >" picker does. -->
+    <set-lane-view automationTrack="0" automationTarget="self:Volume"
+                   showAutomation="1"/>
+    <set-lane-view automationTrack="0" automationTarget="self:Muted"
+                   showAutomation="1"/>
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- ============ head/lane identity over the new sub-lanes ============
+         Two automation lanes AND a take lane on one track. An automation row
+         is a sub-lane by exactly the rule a take row is, so the head must span
+         the whole group and the row->pixel mapping must stay the running sum
+         it is for every other lane. This also runs the P6 addition to the
+         check: every automation row must still name a lane the model can
+         resolve. -->
+    <assert-lane-alignment/>
+    <set-lane-view topRow="1"/>
+    <assert-lane-alignment/>
+    <set-lane-view topRow="0" trackHeight="200"/>
+    <assert-lane-alignment/>
+
+    <!-- ===================== 1. CLICK = ADD A POINT =====================
+         No toTime/toValue: press and release at one place, which on empty lane
+         space adds a breakpoint. Exactly ONE undo step — the click arms a drag
+         so a user can keep dragging, and that drag must submit nothing when
+         the pointer never moved. -->
+    <drag-automation-point owner="0" target="self:Volume"
+                           time="48000" value="-6"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="-6" tolerance="1.0"
+                             pointCount="1"/>
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="0" tolerance="1e-9"
+                             pointCount="0"/>
+
+    <!-- ================== 2. DRAG = MOVE ONE POINT ======================
+         Two points written by the P5 verbs (so the starting state is exact),
+         then the SECOND one is dragged later and quieter with the pointer.
+         `move-automation-point` addresses by the OLD (time, value) pair, so a
+         gesture that mis-computed either would be REJECTED rather than
+         silently moving the wrong point. -->
+    <add-automation-point owner="0" target="self:Volume"
+                          time="0" value="0" curve="linear"/>
+    <add-automation-point owner="0" target="self:Volume"
+                          time="48000" value="0" curve="linear"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="0" tolerance="1e-9"
+                             pointCount="2"/>
+
+    <drag-automation-point owner="0" target="self:Volume"
+                           time="48000" value="0"
+                           toTime="96000" toValue="-12"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="96000" value="-12" tolerance="1.0"
+                             pointCount="2"/>
+    <!-- ...and the ramp it created is REAL: the midpoint of a linear segment
+         from 0 dB at frame 0 to about -12 dB at frame 96000 is about -6 dB.
+         A gesture that moved the point in TIME but not in VALUE (or the other
+         way round) passes the assertion above and fails this one. -->
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="-6" tolerance="1.0"/>
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="0" tolerance="1e-9"
+                             pointCount="2"/>
+
+    <!-- ==================== 3. CTRL-CLICK = DELETE ======================
+         Alt is the tension gesture and Shift is the marquee, so the delete
+         takes the remaining modifier. The point is addressed by its OLD
+         (time, value), which is what makes the undo exact. -->
+    <drag-automation-point owner="0" target="self:Volume"
+                           time="48000" value="0" modifiers="ctrl"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="0" tolerance="1e-9"
+                             pointCount="1"/>
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="0" tolerance="1e-9"
+                             pointCount="2"/>
+
+    <!-- ================= 4. ALT-DRAG = SEGMENT TENSION ==================
+         Bending [0, 48000) makes the value at its midpoint leave the straight
+         line. The lane still holds two points and both ENDS are unchanged —
+         a tension gesture that moved the point instead of bending its segment
+         would break all three assertions. -->
+    <add-automation-point owner="0" target="self:Volume"
+                          time="48000" value="-24" curve="linear"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="24000" value="-12" tolerance="1e-9"/>
+    <drag-automation-point owner="0" target="self:Volume"
+                           time="0" value="0"
+                           toTime="0" toValue="-48" modifiers="alt"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="0" value="0" tolerance="1e-9"
+                             pointCount="2"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="48000" value="-24" tolerance="1e-9"/>
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="24000" value="-12" tolerance="1e-9"
+                             pointCount="2"/>
+
+    <!-- ===================== 5. THE CLIP ENVELOPE =======================
+         `cut:Gain` lives on the WINDOW and is drawn as an OVERLAY on the clip
+         (design 6.1), not on a sub-lane. Its gestures are the same ones, and
+         they are ARMED — off by default, which is what keeps every clip-body
+         gesture (move, slip, duplicate, stretch) exactly as it was.
+
+         The owner path is the PLACEMENT "0,0" and the time is CLIP-RELATIVE.
+         The scale is a linear amplitude factor over [0, 1] with unity at the
+         top, so one pixel of a 200 px lane is 1/197 = 0.005. -->
+    <set-lane-view clipEnvelopes="1"/>
+    <drag-automation-point owner="0,0" target="cut:Gain"
+                           time="48000" value="0.5"/>
+    <assert-automation-value owner="0,0" target="cut:Gain"
+                             time="48000" value="0.5" tolerance="0.02"
+                             pointCount="1"/>
+    <undo count="1"/>
+    <assert-automation-value owner="0,0" target="cut:Gain"
+                             time="48000" value="1" tolerance="1e-9"
+                             pointCount="0"/>
+
+    <!-- A gesture aimed at an envelope while editing is DISARMED must not be
+         claimed by the automation UI at all - it belongs to the clip. The
+         verb reports that it could not aim, which is a reject. -->
+    <set-lane-view clipEnvelopes="0"/>
+    <drag-automation-point owner="0,0" target="cut:Gain"
+                           time="48000" value="0.5" expectReject="true"/>
+
+    <!-- ===================== 6. THE MARQUEE ============================
+         Shift-drag over empty lane space rubber-bands a selection. There is no
+         verb for pressing Delete (the key is a QAction shortcut, not an event
+         a script can synthesise), so what is gated here is that the gesture
+         RUNS and leaves the lane untouched — the deletion itself is not
+         gated, and is recorded as such in the PR body. -->
+    <drag-automation-point owner="0" target="self:Volume"
+                           time="72000" value="-40"
+                           toTime="120000" toValue="-70" modifiers="shift"/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="24000" value="-12" tolerance="1e-9"
+                             pointCount="2"/>
+
+    <!-- ================== 7. THE LANE ACTUALLY DRAWS ====================
+         A PNG of the arranger canvas: coverage of drawAutomationLane and of
+         the clip-gain overlay, never an oracle (design 6.4). Nothing else in
+         the suite paints either of them. -->
+    <set-lane-view clipEnvelopes="1"/>
+    <add-automation-point owner="0,0" target="cut:Gain"
+                          time="0" value="1" curve="linear"/>
+    <add-automation-point owner="0,0" target="cut:Gain"
+                          time="96000" value="0" curve="linear"/>
+    <assert-lane-alignment grabPng="automation_lanes.png"
+                           grabWidth="900" grabHeight="700"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -51,6 +51,11 @@ private:
     // the build layout.
     QString path_;
     uint16_t nIn_, nOut_;
+    // Tri-state, because a hand-written .qxa may legitimately omit it: 1/0 are
+    // an explicit claim, -1 means "ask the registry" (which is how the built-in
+    // `tw.native.303` works with no attribute at all). Written only when TRUE,
+    // so every pre-P3b script re-serializes byte-identically.
+    int isInstrument_ = -1;
     // Base64 of the opaque plugin state chunk; empty when the slot should come
     // up with plugin defaults. Written as the optional `state` attribute.
     QString state_;

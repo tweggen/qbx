@@ -37,6 +37,7 @@
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
+#include "sautomationlane.h"                   // proposal 37 P6: automation lanes
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
 #include "app/shell/ssettings.h"
@@ -62,6 +63,8 @@
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/sselecttakeaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
+#include "app/objects/midi/smidiclipactions.h"
+#include "app/objects/midi/smidieventactions.h"
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
@@ -102,7 +105,10 @@ void SMVActualView::setSecondWidth( double w )
     upperLeftX_ = (int)( ((double)upperLeftOffset_)/srate*secondWidth_ );
     smv_.viewResized();
     update();
-    // FIXME: Emit signal?
+    // The zoom is part of the px<->frame mapping, and since proposal 37 P4 the
+    // event editor's axis mirrors that mapping - so the signal that was a FIXME
+    // here is now load-bearing.
+    emit secondWidthChanged( secondWidth_ );
 }
 
 void SMVActualView::setTrackHeight( int h )
@@ -327,7 +333,10 @@ void SMVActualView::paintEvent( QPaintEvent * )
         p.drawLine( 0, top, myRect.bottomRight().x(), top );
         p.drawLine( 0, top+lh-1,
                     myRect.bottomRight().x(), top+lh-1 );
-        if( row->isSubLane() ) {
+        if( row->subKind == SubLaneKind::Automation ) {
+            smv_.automationUi().drawAutomationLane(
+                p, *this, *row, QRect( 0, top+1, myRect.width(), lh-2 ) );
+        } else if( row->isSubLane() ) {
             // A take lane: take k of every stack on the track (phase 3).
             drawTakeLane( p, *row, i,
                           QRect( 0, top+1, myRect.width(), lh-2 ) );
@@ -436,7 +445,10 @@ void SStdMixerView::ctInsertSample()
     // OK, we have the track. Insert the sample here.
     QFileDialog dialog(this, "Insert sample",
                        SSettings::instance().lastDir( "sample", QDir::currentPath() ),
+                       "Audio and MIDI (*.wav *.mp3 *.flac *.aiff *.aif *.ogg "
+                       "*.opus *.mid *.midi);;"
                        "Audio files (*.wav *.mp3 *.flac *.aiff *.aif *.ogg *.opus);;"
+                       "MIDI files (*.mid *.midi);;"
                        "WAV (*.wav);;MP3 (*.mp3);;All files (*)");
     dialog.setFileMode(QFileDialog::ExistingFile);
 #ifndef Q_OS_MACOS
@@ -491,6 +503,11 @@ void SStdMixerView::ctAddLink()
 
 void SStdMixerView::ctRemoveSample()
 {
+    // Delete/Backspace is this action's shortcut, and a shortcut outranks a
+    // keyPressEvent — so a marquee selection of automation points is deleted
+    // here, before the clip it would otherwise have removed (P6).
+    if( autoUi_ && autoUi_->deleteSelection() ) return;
+
     STrack *oldTrack = qContent_->getLastClickTrack();
     SLink *oldLink = qContent_->getLastClickSLink();
     if( !oldTrack || !oldLink ) {
@@ -624,7 +641,7 @@ void SStdMixerView::nudgeClipPitch( double cents )
         if( !cut ) {
             // A take stack transposes its ACTIVE take (pitch is per-take).
             if( STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() ) )
-                cut = stack->activeCut();
+                cut = dynamic_cast<SCut*>( stack->activeTakeObject() );
         }
         if( !cut ) continue;
         double target = SCut::clampPitchCents( cut->getPitchCents() + cents );
@@ -749,6 +766,9 @@ void SMVActualView::ctGlobalShow()
                 a->setChecked( qFuzzyCompare( cur, a->data().toDouble() ) );
         }
         qGlobalPopup_->addMenu( qLaneHeightMenu_ );
+        // The automation picker (proposal 37 P6). Rebuilt per right-click
+        // because a track's plugin parameters change under it.
+        smv_.automationUi().buildPickerMenu( qGlobalPopup_, lastClickTrack_ );
         qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction( "Indent track (nest under above)" + sfx,
                                   &smv_, SLOT( ctIndentTrack() ) );
@@ -1403,6 +1423,9 @@ void SMVActualView::syncDuplicateGroup()
 
 void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
+    // ...and finishes it: revert the live preview, then commit ONE action (P6).
+    if( smv_.automationUi().release( *this, ev->pos() ) ) return;
+
     if( rangeDrag_ != RangeNone ) {
         endRangeDrag( ev->pos().x() );
         return;
@@ -1568,8 +1591,12 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
     for( SLink *lk : row.track->childLinks() ) {
         STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() );
         if( !stack ) continue;
-        SCut *cut = stack->takeCutAt( row.takeRow );
-        if( !cut ) continue;                        // this stack has fewer takes
+        // Timeline invariant 2: the canvas does not know clip types. A take
+        // lane draws whatever window is on it through the polymorphic renderer
+        // path, so an event take paints like an audio one (proposal 37 P1) -
+        // the SCut cast this replaced silently drew nothing.
+        SObject *take = stack->takeObjectAt( row.takeRow );
+        if( !take ) continue;                       // this stack has fewer takes
         const offset_t start = lk->getStartTime();
         const length_t dur = stack->getDuration();
         int x0 = getXPosOfOffset( start );
@@ -1584,7 +1611,7 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         p.fillRect( vr, QColor( 160, 160, 160 ) );
         InlineRenderContext myctx( *this, p );
         myctx.setVisibRect( vr );
-        if( SObjectRenderer *rndr = cut->getInlineRenderer() )
+        if( SObjectRenderer *rndr = take->getInlineRenderer() )
             rndr->draw( *lk, myctx );   // outer link for timing, his own window
         if( active ) {
             p.setPen( QColor( 240, 220, 80 ) );
@@ -1862,7 +1889,11 @@ void SMVActualView::ctRangeSetBPM()
         &smv_, "Smaragd request", tr( "Please enter new BPM" ),
         oldTempo, 10., 4000., 1, &ok );
     if( ok && newTempo != oldTempo ) {
-        smv_.model_->getProject().setBPMTempo( newTempo );
+        // Through the verb, never the project: set-tempo is the ONLY tempo
+        // write (proposal 37 D2). It also re-derives every beats-timebase
+        // link, which a bare project write would silently skip, and it is
+        // what puts a tempo change on the undo stack at all.
+        SApplication::app().submitAction( new SSetTempoAction( newTempo ) );
     }
 }
 
@@ -1964,6 +1995,9 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
  */
 void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
 {
+    // An armed automation gesture (P6) consumes the move.
+    if( smv_.automationUi().move( *this, ev->pos() ) ) return;
+
     // Range selection drag takes precedence over clip editing.
     if( rangeDrag_ != RangeNone ) {
         updateRangeDrag( ev->pos().x() );
@@ -2579,6 +2613,16 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         }
     }
 
+    // Automation sub-lanes and (while armed) clip envelopes own the press
+    // before anything else does — proposal 37 P6. press() returns false for
+    // every row and modifier it does not claim, so the clip gestures below are
+    // untouched.
+    if( ( ev->buttons() & Qt::LeftButton )
+        && smv_.automationUi().press( *this, lastClickTrackIdx_, ev->pos(),
+                                      ev->modifiers(), false ) ) {
+        return;
+    }
+
     // Take-lane rows: a left click on a take ACTIVATES it — the comping
     // gesture (proposal 17 phase 3, undoable select-take). Take lanes host no
     // other gestures yet, so the click is consumed either way.
@@ -2588,7 +2632,7 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
             if( lastClickSLink_ ) {
                 STakeStack *stack = dynamic_cast<STakeStack*>(
                     &lastClickSLink_->getSObject() );
-                if( stack && stack->takeCutAt( clickRow->takeRow ) ) {
+                if( stack && stack->takeAt( clickRow->takeRow ) ) {
                     QList<int> path =
                         strackpath::pathOf( smv_.getModel(), clickRow->track );
                     path.append(
@@ -2814,9 +2858,12 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
             const int mt = maxTakesOf( tk );
             for( int k = 0; k < mt; ++k ) {
                 rows_.append( STrackRow{ tk, lk, container, depth,
-                                         false, false, k } );
+                                         false, false, k, SubLaneKind::Take } );
             }
         }
+        // ...then this track's automation lanes, under the same sub-lane rule
+        // (proposal 37 P6): no head of their own, covered by the track's.
+        appendAutomationRowsFor( tk, lk, container, depth );
         if( kids && !col ) appendRowsFor( tk, depth+1 );   // recurse if expanded
     }
 }
@@ -2851,6 +2898,7 @@ void SStdMixerView::onArrangementChangedRows()
 
 void SStdMixerView::rebuildRows()
 {
+    pruneUiState();          // one walk, every per-track UI-state set (P6)
     rows_.clear();
     if( model_ ) appendRowsFor( model_, 0 );
     rebuildRowGeometry();
@@ -3382,6 +3430,9 @@ QString SStdMixerView::tkCheckLaneAlignment() const
                        .arg( want.width() ).arg( want.height() );
         ++c;
     }
+    const QString autoProblem = checkAutomationRows();
+    if( !autoProblem.isEmpty() ) return autoProblem;
+
     if( c != controlArray_->size() )
         return QString( "%1 heads for %2 track lanes" )
                    .arg( controlArray_->size() ).arg( c );
@@ -3493,8 +3544,12 @@ void SStdMixerView::zoomOutVert()
     qContent_->setTrackHeight( (h*2)/3 );
 }
 
-void SStdMixerView::setBPMTempo( double bpmTempo )
+void SStdMixerView::onProjectTempoChanged( double bpmTempo )
 {
+    // The map moved with the tempo; the snap grid reads it (proposal 37 P4).
+    if( currentSnapSpec_ && model_ )
+        currentSnapSpec_->setTempoMap( model_->getProject().tempoMap() );
+
     STimeGridSpec tgs = getTimeGridSpec();
     double oldTempo = tgs.getBPM();
     if ( bpmTempo != oldTempo ) {
@@ -3551,8 +3606,47 @@ void SSnapSpec::setSnapMethod( int snapMethod )
     emit snapMethodChanged( snapMethod );
 }
 
+void SSnapSpec::setGridDivision( const QString &division )
+{
+    gridDivision_ = division;
+}
+
+void SSnapSpec::setTempoMap( const twTempoMap &map )
+{
+    tempoMap_ = map;
+    haveTempoMap_ = true;
+}
+
+// The snap step in frames for the current division, or 0 when there is none.
+// Exact rational through the tempo map (D2), floored once - the same shape
+// SMidiCut converts a window with.
+offset_t SSnapSpec::divisionFrames_() const
+{
+    if( gridDivision_.isEmpty() || !haveTempoMap_ ) return 0;
+    const qint64 ticks =
+        SQuantizeNotesAction::gridTicks( gridDivision_, tempoMap_.ppq() );
+    if( ticks <= 0 ) return 0;
+    const int64_t f =
+        tempoMap_.ticksToFrames( TickLen( (int64_t) ticks ), sampleRate_ )
+                 .floorToInt();
+    return f > 0 ? (offset_t) f : (offset_t) 0;
+}
+
 offset_t SSnapSpec::alignTime( offset_t o )
 {
+    // A named DIVISION wins when there is one (proposal 37 P4). With none, this
+    // is byte-for-byte the pre-36 beat snap, which is what keeps every
+    // committed case's snapped positions unchanged.
+    if( ( snapMethod_ & SnapToBeats ) ) {
+        const offset_t wo = divisionFrames_();
+        if( wo > 0 ) {
+            offset_t onew = ( ( o + ( wo >> 1 ) ) / wo ) * wo;
+            length_t diff = onew - o;
+            if( diff < 0 ) diff = -diff;
+            if( ( (offset_t) diff ) < wo / 2 ) o = onew;
+            return o;
+        }
+    }
     if( snapMethod_ & SnapToBeats ) {
         //int beatsPerBar = tgs_.getEmphasizeGrids( 0 );
         //if( beatsPerBar<=0 ) beatsPerBar = 1;
@@ -3632,6 +3726,35 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Context menu for the time-range bar (top ruler).
     qRangePopup_ = new QMenu( this );
     qRangePopup_->addAction( "Set &BPM...", this, SLOT( ctRangeSetBPM() ) );
+    // Grid division (proposal 37 P4) — the arranger's snap step, named the way
+    // `quantize-notes grid=` and the event editor's grid name one. "Beat" is
+    // the empty division, i.e. the pre-36 behaviour.
+    {
+        QMenu *divMenu = qRangePopup_->addMenu( "&Grid division" );
+        static const char *const kDivs[] = {
+            "", "1/1", "1/2", "1/4", "1/4t", "1/8", "1/8t", "1/16", "1/16t",
+            "1/32", "1/32t"
+        };
+        for( const char *d : kDivs ) {
+            const QString div = QLatin1String( d );
+            QAction *a = divMenu->addAction( div.isEmpty() ? QStringLiteral( "Beat" )
+                                                           : div );
+            a->setCheckable( true );
+            QObject::connect( a, &QAction::triggered, this, [this, div] {
+                if( smv_.snapSpec() ) smv_.snapSpec()->setGridDivision( div );
+                update();
+            } );
+        }
+        QObject::connect( divMenu, &QMenu::aboutToShow, this, [this, divMenu] {
+            const QString cur = smv_.snapSpec() ? smv_.snapSpec()->gridDivision()
+                                                : QString();
+            for( QAction *a : divMenu->actions() ) {
+                const QString name = a->text();
+                a->setChecked( cur.isEmpty() ? name == QStringLiteral( "Beat" )
+                                             : name == cur );
+            }
+        } );
+    }
     qRangePopup_->addSeparator();
     qRangeActClear_ = qRangePopup_->addAction( "&Clear range", this, SLOT( ctRangeClear() ) );
     qRangePopup_->addSeparator();
@@ -3867,7 +3990,10 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
 
 void SMVActualView::dragEnterEvent(QDragEnterEvent *e)
 {
-    if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
+    // Our own resource drags, plus OS file drops (proposal 37 6.1: a .mid
+    // dragged in from a file manager is the natural way to get one in).
+    if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))
+        || e->mimeData()->hasUrls()) {
         e->acceptProposedAction();
     }
 }
@@ -3882,11 +4008,21 @@ void SMVActualView::dragMoveEvent(QDragMoveEvent *e)
 void SMVActualView::dropEvent(QDropEvent *e)
 {
     const QMimeData *mimeData = e->mimeData();
-    if (!mimeData->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
-        return;
+    QString payload;
+    if (mimeData->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {
+        payload = QString::fromUtf8(
+            mimeData->data(QStringLiteral("application/x-smaragd-resource")));
+    } else if (mimeData->hasUrls()) {
+        // An OS file drop (proposal 37 6.1). Normalised into the same "file:"
+        // payload the internal drag uses, so there is one placement path and
+        // one extension dispatch below it - a .mid becomes an event clip
+        // because SProject::linkToFile says so, not because this branch knows.
+        for (const QUrl &url : mimeData->urls()) {
+            if (!url.isLocalFile()) continue;
+            payload = QStringLiteral("file:") + url.toLocalFile();
+            break;   // one clip per drop; multi-file drops are a later gesture
+        }
     }
-
-    QString payload = QString::fromUtf8(mimeData->data(QStringLiteral("application/x-smaragd-resource")));
     if (payload.isEmpty()) {
         return;
     }
@@ -4107,6 +4243,9 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     currentSnapSpec_ = new SSnapSpec( timeGridSpec_ );
     if( model_ ) {
         currentSnapSpec_->setSampleRate( model_->getProject().getSRate() );
+        // THE tempo authority (proposal 37 D2). The snap spec converts a named
+        // division through it, never through 60/bpm.
+        currentSnapSpec_->setTempoMap( model_->getProject().tempoMap() );
     }
 
     QObject::connect( model_, SIGNAL( durationChanged( length_t ) ), 
@@ -4133,7 +4272,7 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
                       this, SLOT( avLeftOffsetChanged( offset_t ) ) );
 
     QObject::connect( &(model_->getProject()), SIGNAL( bpmTempoChanged( double ) ),
-                      this, SLOT( setBPMTempo( double ) ) );
+                      this, SLOT( onProjectTempoChanged( double ) ) );
 
     // Take lanes: clip-level edits (add-take/remove-take/stack split) change
     // an expanded track's row count without a track-structure signal.
@@ -4341,6 +4480,7 @@ SStdMixerView::~SStdMixerView()
 {
     delete currentSnapSpec_;
     delete controlArray_;
+    delete autoUi_;
 }
 
 // Detail-editor registration (proposal 14, Phase 6): the model asks the

@@ -4,7 +4,8 @@
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
-#include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
+#include "app/objects/cut/scut.h"          // warp anchors only (audio-specific)
 #include "app/objects/cut/stakestack.h"
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
@@ -73,15 +74,19 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     // one level up (broadcast layer, phase 4) — this action stays single-clip.
     if( STakeStack *stack = dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
         int t = ( take_ >= 0 ) ? take_ : stack->activeTakeIndex();
-        SCut *takeCut = stack->takeCutAt( t );   // may be null (no active take)
+        SClipWindow *takeWin = stack->takeAt( t );  // may be null (no active take)
+        // Warp anchors are audio-only (cut/CONTRACT invariant 4), so this is
+        // the one place the take's concrete type still matters.
+        SCut *takeCut = takeWin ? dynamic_cast<SCut*>( &takeWin->asObject() )
+                                : nullptr;
 
         offset_t oldStart  = link->getStartTime();
-        Fraction oldAnchor = takeCut ? takeCut->getSrcStart() : Fraction(0);
+        Fraction oldAnchor = takeWin ? takeWin->contentAnchorExact() : Fraction(0);
         // Blocking (P19): a stale oldDur would bake a wrong window into the
         // inverse action (edit path, bounded block).
         length_t oldDur    = stack->getDurationBlocking();
-        length_t oldLoop   = takeCut ? takeCut->getLoopLength().frames() : 0;
-        Fraction oldStretch = takeCut ? takeCut->getStretchExact() : Fraction(1);
+        length_t oldLoop   = takeWin ? takeWin->loopLength() : 0;
+        Fraction oldStretch = takeWin ? takeWin->stretchOrRate() : Fraction(1);
 
         std::vector<twWarpAnchor> oldAnchors =
             takeCut ? takeCut->getGrainParams().warpAnchors
@@ -89,10 +94,10 @@ SApplyResult SResizeClipAction::apply( SProject *project )
 
         link->setStartTime( startTime_ );
         stack->applyWindowAll( duration_, loopLength_, stretch_ );
-        if( takeCut ) {
-            takeCut->setWindow( srcStart_, ClipLen( duration_ ),
-                                WarpedLen( loopLength_ ), stretch_ );
-            if( setAnchors_ ) takeCut->setWarpAnchors( anchors_ );
+        if( takeWin ) {
+            takeWin->setWindowExact( srcStart_, duration_, loopLength_,
+                                     stretch_ );
+            if( setAnchors_ && takeCut ) takeCut->setWarpAnchors( anchors_ );
         }
 
         SResizeClipAction *inverse = new SResizeClipAction(
@@ -102,24 +107,26 @@ SApplyResult SResizeClipAction::apply( SProject *project )
         return {true, inverse};
     }
 
-    SCut *cut = dynamic_cast<SCut*>( &link->getSObject() );
-    if( !cut ) {
-        return {false, nullptr};   // only SCut clips have a window to resize
+    SClipWindow *win = SClipWindow::of( &link->getSObject() );
+    if( !win ) {
+        return {false, nullptr};   // only a windowed clip has a window to resize
     }
+    // Warp anchors are audio-only (cut/CONTRACT invariant 4).
+    SCut *cut = dynamic_cast<SCut*>( &win->asObject() );
 
     // Capture the pre-mutation window for the inverse, then apply the new one.
     offset_t oldStart  = link->getStartTime();
-    Fraction oldAnchor = cut->getSrcStart();
-    length_t oldDur    = cut->getDurationBlocking();   // edit path — never stale (P19)
-    length_t oldLoop   = cut->getLoopLength().frames();
-    Fraction oldStretch = cut->getStretchExact();
+    Fraction oldAnchor = win->contentAnchorExact();
+    length_t oldDur    = win->durationBlocking();   // edit path — never stale (P19)
+    length_t oldLoop   = win->loopLength();
+    Fraction oldStretch = win->stretchOrRate();
 
-    std::vector<twWarpAnchor> oldAnchors = cut->getGrainParams().warpAnchors;
+    std::vector<twWarpAnchor> oldAnchors =
+        cut ? cut->getGrainParams().warpAnchors : std::vector<twWarpAnchor>();
 
     link->setStartTime( startTime_ );
-    cut->setWindow( srcStart_, ClipLen( duration_ ),
-                    WarpedLen( loopLength_ ), stretch_ );
-    if( setAnchors_ ) cut->setWarpAnchors( anchors_ );
+    win->setWindowExact( srcStart_, duration_, loopLength_, stretch_ );
+    if( setAnchors_ && cut ) cut->setWarpAnchors( anchors_ );
 
     SResizeClipAction *inverse = new SResizeClipAction(
         clipPath_, oldStart, oldAnchor, oldDur, oldLoop, oldStretch );

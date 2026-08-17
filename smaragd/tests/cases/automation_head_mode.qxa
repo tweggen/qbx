@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_head_mode">
+
+  <!-- Proposal 37 P6, AC3: THE TRACK HEAD SHOWS THE AUTOMATION MODE.
+
+       The head is built for the assertion and thrown away — parentless, never
+       shown, resized to the lane height under test, which runs the real
+       updateLayout()/applyDensity(). Same seam and same reason as
+       track_head_density.qxa (P4): Qt delivers no resizeEvent to a widget that
+       was never shown, so describeHead() re-applies the density rules first.
+
+       WHAT IS ASSERTED, and why it is `Amode=` rather than a letter on the
+       button. The "A" button keeps the letter A at every density: three of the
+       six modes start with a letter another button in the same column already
+       uses (Read/Touch vs Arm/Takes, Latch/Write vs neither but in the same
+       family of one-letter squares), and a 20x20 px button is not the place to
+       introduce that ambiguity. The MODE is carried by the button's colour and
+       its tooltip on screen, and by `Amode=` in describeHead() — which is what
+       a test can read, and which is reported at EVERY density BECAUSE the
+       button itself hides on a short lane while the mode does not stop
+       existing. A head that reported the mode only where the button is visible
+       would be untestable in exactly the two densities where a user has to
+       reach the menu instead.
+
+       WHICH LANE THE BUTTON GOVERNS: every automation lane the track owns, its
+       own `self:` lanes and its plugin slots' `param:` lanes alike, in one undo
+       macro. See SSMVMixerControl::automationClicked's declaration for the
+       argument. A track that owns NO lane reads `off`.
+
+       The three densities are the P4 boundaries: Full at 160 px, Compact at
+       100 px, Tiny at 40 px.
+  -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- ============ a track with NO automation lane at all ============ -->
+    <assert-track-head trackPath="1" headHeight="160" contains="Amode=off"/>
+    <assert-track-head trackPath="1" headHeight="100" contains="Amode=off"/>
+    <assert-track-head trackPath="1" headHeight="40"  contains="Amode=off"/>
+
+    <!-- ==================== trim, the DEFAULT ==================== -->
+    <add-automation-lane owner="0" target="self:Volume" mode="trim">
+      <p t="0" v="0" c="linear"/>
+    </add-automation-lane>
+    <assert-track-head trackPath="0" headHeight="160"
+                       contains="btns=M,S,R,T,G,A|I=0|A=1|fitW=1|fitH=1"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="Amode=trim"/>
+    <assert-track-head trackPath="0" headHeight="100" contains="Amode=trim"/>
+    <assert-track-head trackPath="0" headHeight="40"  contains="Amode=trim"/>
+    <!-- Compact and Tiny hide the button, and still report the mode. That is
+         the whole point of putting it in the string rather than on the glyph. -->
+    <assert-track-head trackPath="0" headHeight="100" contains="A=0"/>
+    <assert-track-head trackPath="0" headHeight="40"  contains="A=0"/>
+
+    <!-- ==================== read ==================== -->
+    <set-automation-mode owner="0" target="self:Volume" mode="read"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="Amode=read"/>
+    <assert-track-head trackPath="0" headHeight="100" contains="Amode=read"/>
+    <assert-track-head trackPath="0" headHeight="40"  contains="Amode=read"/>
+    <assert-track-head trackPath="0" headHeight="160" absent="Amode=trim"/>
+
+    <!-- ==================== write, and its colour ==================== -->
+    <set-automation-mode owner="0" target="self:Volume" mode="write"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="Amode=write"/>
+    <assert-track-head trackPath="0" headHeight="100" contains="Amode=write"/>
+    <assert-track-head trackPath="0" headHeight="40"  contains="Amode=write"/>
+
+    <!-- The head DRAWS: coverage of the strip's paint path including the "A"
+         button's per-mode colour, which nothing else in the suite paints.
+         Never an oracle (design 6.4). -->
+    <assert-track-head trackPath="0" headHeight="160" contains="Amode=write"
+                       grabPng="head_write.png" grabWidth="160" grabHeight="160"/>
+
+    <!-- ==================== off ==================== -->
+    <set-automation-mode owner="0" target="self:Volume" mode="off"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="Amode=off"/>
+
+    <!-- A second lane on the same track: the button reports ONE mode for the
+         whole track. With the two lanes disagreeing it reports the track's own
+         first lane, which is the one the head's own fader writes to. -->
+    <add-automation-lane owner="0" target="self:Muted" mode="latch">
+      <p t="0" v="0" c="step"/>
+    </add-automation-lane>
+    <assert-track-head trackPath="0" headHeight="160" contains="Amode=off"/>
+    <!-- ...and once they agree, that is what it reports. -->
+    <set-automation-mode owner="0" target="self:Volume" mode="latch"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="Amode=latch"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

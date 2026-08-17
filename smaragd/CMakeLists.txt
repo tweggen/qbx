@@ -137,6 +137,31 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
+# --- the cross-process determinism gate (proposal 37 P3c, AC1 + AC2c) --------
+#
+# The render-vs-render byte gate is a FRESH-PROCESS property (design F4), and a
+# .qxa case is one process with a private output directory, so no case can make
+# that compare on its own. This test drives two of them through one shared
+# output directory; the second case names the first's render as its reference
+# with the ordinary assert-file-identical verb, and the driver cmp's the files
+# again itself. Pass 2 lives in tests/cases/xproc/ so the CONFIGURE_DEPENDS glob
+# above cannot register it as a standalone case (it would fail looking for a
+# reference no one had rendered).
+add_test(NAME qxa.instrument_render_determinism_xproc
+    COMMAND ${CMAKE_COMMAND}
+            -DRUNNER=$<TARGET_FILE:smaragd>
+            -DCASE1=${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/instrument_render_determinism.qxa
+            -DCASE2=${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/xproc/instrument_render_determinism_xproc.qxa
+            -DOUTDIR=${CMAKE_BINARY_DIR}/test-output/instrument_render_determinism_xproc
+            -DWORKDIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/cases
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_xproc_determinism.cmake
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases
+)
+set_tests_properties(qxa.instrument_render_determinism_xproc PROPERTIES
+    ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000"
+    TIMEOUT 900
+)
+
 # mc_legacy_pull_wide is proposal 36 AC B4.6: the LEGACY PULL path, exercised
 # wide. SMARAGD_REVAL_WORKERS=0 disables the revalidator entirely, so there is no
 # scheduler, no plan and no bound input pages -- every page is materialised by
@@ -218,6 +243,45 @@ endif()
 # here) -- which is exactly how it was missed the first time.
 if(TEST qxa.log_dock_scale)
     set_tests_properties(qxa.log_dock_scale PROPERTIES RUN_SERIAL TRUE)
+endif()
+
+# --- MIDI out (proposal 37 P7b) ----------------------------------------------
+#
+# These four PLAY, in real time, and assert WHEN a MIDI message reached the wire
+# against the audio capture backend's own block log. That makes them
+# wall-clock-latency tests in exactly the sense the section above describes, so
+# they get the machine to themselves within the run. Two of them additionally
+# write a per-user setting (midi/chaseNoteOns, midi/outOffsetMs) that the pump
+# reads at every transport start, so a concurrent playback case would inherit
+# it -- another reason the set is serialized rather than merely paced.
+#
+# midi_out_render_silent and midi_out_backend_reject neither play nor mutate a
+# setting, so they stay parallel.
+foreach(_serial midi_out_capture midi_out_chase_and_stop midi_out_loop_wrap
+                midi_out_offset_and_folder midi_options_page)
+    if(TEST qxa.${_serial})
+        set_tests_properties(qxa.${_serial} PROPERTIES RUN_SERIAL TRUE)
+    endif()
+endforeach()
+
+# SMARAGD_CAPTURE_SPEED=1 is spelled out rather than left to the default: the
+# testkit maps a MIDI host time onto a project frame through the audio capture
+# backend's block log, and any other pacing changes what a project frame means
+# in wall-clock terms while the MIDI due times keep meaning wall-clock (D6).
+foreach(_paced midi_out_capture midi_out_chase_and_stop midi_out_loop_wrap
+               midi_out_offset_and_folder)
+    if(TEST qxa.${_paced})
+        set_tests_properties(qxa.${_paced} PROPERTIES
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
+
+# AC5: `assert-midi-out` must REJECT when there is no capture MIDI recorder,
+# instead of reporting "0 messages, all good". The only way to put the app in
+# that state is to choose another backend before it starts.
+if(TEST qxa.midi_out_backend_reject)
+    set_tests_properties(qxa.midi_out_backend_reject PROPERTIES
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_MIDI_BACKEND=null")
 endif()
 
 message(STATUS "smaragd: ALSA=${ENABLE_ALSA} PipeWire=${ENABLE_PIPEWIRE} "

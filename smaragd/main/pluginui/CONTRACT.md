@@ -69,6 +69,20 @@ Invariants:
    `trackPath=` and `assert-plugin-strip` takes a `trackPath` attribute;
    `qxa.plugin_strip_nested_track` is the gate.
 
+9. **A slider write during a Touch/Latch/Write pass goes to the RECORDER, not
+   to `set-plugin-param`** (proposal 37 P6). `onParamSliderChanged` offers the
+   value to `SApplication::automationRecorder()` first and returns if it was
+   taken; the whole pass then lands as ONE `set-automation-points` when the
+   control is released or the transport stops. Its release is also the PUNCH-IN
+   signal: a plugin's own `ParamGestureBegin/End` reaches the host only inside
+   `process()`, on a worker thread, at freeze time, and there is no native
+   editor to raise one (proposal 33 M3) — so the app's slider is the gesture.
+   While a Read-family `param:` lane exists the slider DISPLAYS the curve at
+   the position being heard (pumped from `SApplication::meterTick`), except on
+   a control that is being recorded, which must show the hand and not the
+   curve.
+
+
 How to test:
 - `qxa.plugin_bypass_and_param` — a bypass toggle and a parameter edit each
   change the rendered level, and each undoes (invariants 3 and 6).
@@ -98,6 +112,30 @@ returns empty. `valueLabelText(row)` (a headless seam) reads back what a row's
 label displays; `SPluginEffectStrip::editorValueText()` exposes it, and
 `plugin-editor-set-param`'s `expectValueText` asserts it in
 `qxa.plugin_ui_strip_and_editor`.
+
+Instruments in the UI (proposal 37 P3b, design 6.1). Everything the user sees
+about an instrument is DERIVED from `slot->getDescriptor().isInstrument` and
+`STrack::instrumentSlot()`; nothing about the role is stored twice.
+- The browser has a KIND filter (`SPluginBrowserDialog::Kind` All / Instruments
+  / Effects). It NARROWS the one list rather than being a second dialog — an
+  instrument and an effect are the same kind of object with a different role —
+  and the user can always widen it back to All, because refusing to SHOW a
+  plugin is not the same as refusing to insert it (the insert rules live in the
+  action, `objects/track/CONTRACT.md` inv. 11).
+- The FX strip has "+ Add Instrument" beside "+ Add Effect". It opens the
+  browser on Instruments and submits the SAME `insert-plugin` action, which is
+  what puts the slot at index 0 and refuses a second one; the button HIDES
+  itself once the track has an instrument, because an affordance that can only
+  fail is worse than none (`addInstrumentEnabled()`).
+- The instrument's row is row 0 because it IS slot 0. It is tinted, prefixed
+  with an eighth note, carries its own tooltip line, and is NOT draggable — a
+  reorder across slot 0 is refused, so offering the grab would only produce a
+  rejection. `describeSlot()` reports `kind=instrument|effect` between `mode=`
+  and `bypass=` (see ACTIONS.md for why not next to `name=`).
+- The arranger head's "I" button was already derived, by P4
+  (`SSMVMixerControl::hasInstrumentSlot`); P3b made it non-empty for the first
+  time and gated it (`assert-track-head contains="I=1"` in
+  `qxa.instrument_slot_rules`).
 
 Known debt: no per-plugin editor plugins — generic sliders only, on a fixed
 1000-tick normalization, and no native `clap_plugin_gui` / `IPlugView`

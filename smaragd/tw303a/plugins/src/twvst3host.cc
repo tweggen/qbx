@@ -3,6 +3,9 @@
 
 #include "twvst3host.h"
 
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
+#include "pluginterfaces/vst/ivstnoteexpression.h"
+
 #include "tw/core/twlog.h"
 
 #include <algorithm>
@@ -229,6 +232,14 @@ tresult PLUGIN_API twVst3PlugInterfaceSupport::isPlugInterfaceSupported( const T
         FUnknownPrivate::iidEqual( _iid, Vst::IMessage::iid ) ||
         FUnknownPrivate::iidEqual( _iid, Vst::IParameterChanges::iid ) ||
         FUnknownPrivate::iidEqual( _iid, Vst::IParamValueQueue::iid ) ||
+        // proposal 37 P2. IEventList is implemented (twVst3EventList, both
+        // directions); IMidiMapping and INoteExpressionController are QUERIED on
+        // the controller rather than implemented, and this list is about what a
+        // plugin may expect the HOST to understand — a plugin that sees them
+        // knows its CC map and its note expressions will be asked for and used.
+        FUnknownPrivate::iidEqual( _iid, Vst::IEventList::iid ) ||
+        FUnknownPrivate::iidEqual( _iid, Vst::IMidiMapping::iid ) ||
+        FUnknownPrivate::iidEqual( _iid, Vst::INoteExpressionController::iid ) ||
         FUnknownPrivate::iidEqual( _iid, IBStream::iid ) )
         return kResultTrue;
     return kResultFalse;
@@ -344,6 +355,39 @@ tresult PLUGIN_API twVst3ParamValueQueue::addPoint( int32 sampleOffset, Vst::Par
     points_.push_back( Point{ sampleOffset, value } );
     index = (int32)( points_.size() - 1 );
     return kResultOk;
+}
+
+// --- twVst3EventList (proposal 37 P2) -----------------------------------------
+
+tresult PLUGIN_API twVst3EventList::queryInterface( const TUID _iid, void **obj )
+{
+    return resolveOne( _iid, obj, Vst::IEventList::iid );
+}
+
+tresult PLUGIN_API twVst3EventList::getEvent( int32 index, Vst::Event &e )
+{
+    if( index < 0 || (std::size_t)index >= used_ ) return kInvalidArgument;
+    e = events_[(std::size_t)index];
+    return kResultOk;
+}
+
+tresult PLUGIN_API twVst3EventList::addEvent( Vst::Event &e )
+{
+    // Called by the PLUGIN, on the output list. Overflow is counted and
+    // dropped: growing here would allocate on the render path, and answering
+    // an error would make a well-behaved plugin log or retry every block.
+    append( e );
+    return kResultOk;
+}
+
+bool twVst3EventList::append( const Vst::Event &e )
+{
+    if( used_ >= events_.size() ) {
+        ++dropped_;
+        return false;
+    }
+    events_[used_++] = e;
+    return true;
 }
 
 // --- twVst3ParamChanges -------------------------------------------------------

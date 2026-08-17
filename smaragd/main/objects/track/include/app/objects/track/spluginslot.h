@@ -2,8 +2,12 @@
 #define _SPLUGINSLOT_H_
 
 #include "app/model/sobject.h"
+#include "tw/events/tweventsource.h"
+#include "tw/events/twtempomap.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twpluginslotproc.h"
+#include <QVector>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -79,6 +83,21 @@ public:
 
     const audio::twPluginDescriptor &getDescriptor() const { return descriptor_; }
 
+    // One row per parameter the LIVE plugin declares, in the plugin's own
+    // order, in APP types. It exists so a caller that may not include
+    // tw/plugins (app/timeline: the automation lane picker and the lane's value
+    // scale, tools/check_layering.py) can still ask what this slot's knobs are
+    // called and what range they span. Empty for a Missing/Unsupported slot.
+    struct ParamRow {
+        std::uint32_t id = 0;
+        QString       name;
+        double        minValue = 0.0;
+        double        maxValue = 1.0;
+        double        defaultValue = 0.0;
+        bool          isStepped = false;
+    };
+    QVector<ParamRow> paramRows() const;
+
     // The descriptor actually used to instantiate: the registry's own record for
     // (format, uid) when the scan knows it, otherwise the stored one.
     const audio::twPluginDescriptor &getEffectiveDescriptor() const { return effective_; }
@@ -114,6 +133,46 @@ public:
     // path above it, without which the edit is inaudible.
     void notifyPluginEdited();
 
+    // --- the instrument slot (proposal 37 P3b) ------------------------------
+    //
+    // A slot is an instrument because its DESCRIPTOR says so, which is what
+    // keeps a track looking like an instrument track on a machine where the
+    // plugin is not installed (the placeholder reports the declared event shape
+    // for the same reason it reports the declared I/O).
+    bool isInstrument() const { return descriptor_.isInstrument; }
+
+    // THE FEED. The track hands its twEventSource (its own event clip set
+    // merged with the feeds of the children that bubble up, design 3.2.1) to
+    // slot 0 when slot 0 is an instrument, and takes it away from every other
+    // slot. The processor cannot tell a merge from a plain clip set.
+    void setEventSource( std::shared_ptr<const twEventSource> source );
+    // The transport half of twProcessContext, from the project's tempo map.
+    void setTempoMap( const twTempoMap &map );
+
+    // How long the plugin keeps producing after its last event. 0 when the slot
+    // has no processor yet - this NEVER materializes one, because it is read
+    // from STrack::getDuration(), which a render thread may call and which must
+    // not be able to instantiate a plugin.
+    std::uint32_t tailFrames() const;
+
+    // Forget the processor's page continuity (design D4). The P3c run barrier
+    // calls this on every instrument slot before a render or a play start: an
+    // epoch bump does NOT clear lastEnd_, so a run whose first page starts
+    // exactly where the previous one stopped would continue its voices instead
+    // of chasing them.
+    void forgetContinuity();
+
+    // --- automation (proposal 37 P5, design D5 / §4.5) ----------------------
+    //
+    // A slot owns its `param:<id>` lanes. Their VALUE domain is the plugin's
+    // HOST-FACING one — native for CLAP/AU, normalized [0,1] for VST3 (plugins
+    // inv. 26) — i.e. exactly what set-plugin-param writes and getParam()
+    // returns, so a lane and a static edit are in the same units by
+    // construction.
+    virtual void onAutomationChanged( SAutomationLane &lane,
+                                      offset_t start, offset_t end ) override;
+    virtual void applyAutomationToEngine() override;
+
 signals:
     void bypassChanged( bool );
     // The slot was re-instantiated (reloadPlugin()): its state/mode may have
@@ -139,6 +198,15 @@ signals:
     // the twPluginChain / twTrackMix / mixer pages above them were not, and the
     // render served the audio it had already produced.
     void audioInvalidated();
+    // The RANGE-SCOPED twin (proposal 37 P5): an automation edit at `start`
+    // stales [start, end) rather than the whole chain. `end` is INT64_MAX for a
+    // parameter lane, because a plugin is CLASS 1 — its state at any position
+    // depends on everything before it, so an edit at `a` can change every page
+    // after it (design F9). The signal exists for the same reason
+    // audioInvalidated() does: SPluginChain is deliberately not an SLink child
+    // of its track, so SObject::invalidateRenderPathRange() from here is a
+    // NO-OP and the slot must ask its track to do the walk.
+    void audioInvalidatedRange( qint64 start, qint64 end );
 
 private:
     // Materialize the processor (once) and grow the tap vector to nBuses.
@@ -151,6 +219,8 @@ private:
     // its module path resolved.
     void resolveEffective();
     audio::twPluginSlotProcessor::Factory makeFactory() const;
+    // Collect every `param:` lane into the processor's curve map.
+    void pushParamCurves();
 
     audio::twPluginDescriptor descriptor_;   // as stored / as given (VERBATIM)
     audio::twPluginDescriptor effective_;    // as resolved against the registry

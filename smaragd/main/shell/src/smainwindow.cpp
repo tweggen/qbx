@@ -27,6 +27,7 @@
 #include "app/shell/smainwindow.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
+#include "app/objects/midi/smidiclipactions.h"
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
 #include "app/shell/ssettings.h"
@@ -57,6 +58,10 @@
 
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/eventui/seventeditordock.h"
+#include "app/eventui/seventtimeaxis.h"
+#include "app/eventui/spianorollview.h"
+#include "app/eventui/svirtualkeyboarddock.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
@@ -112,6 +117,7 @@ void SMainWindow::destroyDocksToolbars()
     // Drop the detail panel's view of the (about to die) project's tracks.
     detachTrackDetail();
     detachClipProperties();
+    detachEventEditor();
 }
 
 void SMainWindow::attachTrackDetail()
@@ -172,6 +178,72 @@ void SMainWindow::detachClipProperties()
     // panel caches no pointers between refreshes, so an empty refresh is all
     // that is needed — but it must happen while the graph is still alive.
     if( clipPropsPanel_ ) clipPropsPanel_->refresh();
+}
+
+// Same lifecycle as the clip properties dock, and for the same reason: the
+// event editor follows the SELECTION, and selection changes are actions, so
+// they already end in notifyArrangementChanged(). No new signal, no polling,
+// and undo / .qxa scripts are picked up for free (timeline invariant 8).
+void SMainWindow::attachEventEditor()
+{
+    if( !eventEditor_ ) return;
+
+    QObject::disconnect( eventEditorConn_ );
+
+    if( !currentProject_ ) {
+        eventEditor_->refresh();      // resolves to "no event clip selected"
+        return;
+    }
+    if( SEventTimeAxis *axis = eventEditor_->timeAxis() )
+        axis->setSampleRate( currentProject_->getSRate() );
+
+    eventEditorConn_ = connect( currentProject_, &SProject::arrangementChanged,
+                                eventEditor_, &SEventEditorDock::refresh );
+    eventEditor_->refresh();
+}
+
+void SMainWindow::detachEventEditor()
+{
+    QObject::disconnect( eventEditorConn_ );
+    eventEditorConn_ = QMetaObject::Connection();
+    // Drop every SLink the dock resolved BEFORE the project dies. It caches no
+    // pointers between refreshes, so an empty refresh is the whole cleanup -
+    // but it has to happen while the graph is still alive.
+    if( eventEditor_ ) eventEditor_->refresh();
+}
+
+// The arranger's zoom/scroll -> the editor's axis. Wired here because the shell
+// is the ONLY module that sees both app/timeline and app/eventui: the editor
+// must not depend on the 4000-line arranger just to share a time axis.
+void SMainWindow::linkEventEditorAxis()
+{
+    if( !eventEditor_ ) return;
+    SEventTimeAxis *axis = eventEditor_->timeAxis();
+    SStdMixerView *v = dynamic_cast<SStdMixerView *>( projectRootWidget_ );
+    if( !axis || !v ) return;
+
+    SMVActualView *content = v->contentView();
+    if( !content ) return;
+
+    QObject::disconnect( axisZoomConn_ );
+    QObject::disconnect( axisScrollConn_ );
+
+    // Seed once, then follow. Both signals matter: a zoom without a scroll and
+    // a scroll without a zoom each move the mapping on their own.
+    axis->setSecondWidth( content->getSecondWidth() );
+    axis->setLeftPixels( (int) content->getUpperLeftX() );
+
+    axisZoomConn_ = connect( content, &SMVActualView::secondWidthChanged, axis,
+             [axis, content]( double w ) {
+                 if( !axis->linked() ) return;
+                 axis->setSecondWidth( w );
+                 axis->setLeftPixels( (int) content->getUpperLeftX() );
+             } );
+    axisScrollConn_ = connect( content, &SMVActualView::leftOffsetChanged, axis,
+             [axis, content]( offset_t ) {
+                 if( !axis->linked() ) return;
+                 axis->setLeftPixels( (int) content->getUpperLeftX() );
+             } );
 }
 
 void SMainWindow::showClipProperties()
@@ -318,12 +390,14 @@ void SMainWindow::fileNew()
     // Find out the main widget.
     // We do have a root component here as we assigned it before.
     projectRootWidget_ = currentProject_->getRootComponent()->getDetailEditWidget( this );
+    linkEventEditorAxis();
 
     setCentralWidget( projectRootWidget_ );
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
     attachClipProperties();
+    attachEventEditor();
 
     currentFilePath_.clear();   // fresh project is untitled until saved
     updateWindowTitle();
@@ -391,12 +465,14 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     // Find out the main widget.
     // We do have a root component here as we assigned it before.
     projectRootWidget_ = currentProject_->getRootComponent()->getDetailEditWidget( this );
+    linkEventEditorAxis();
 
     setCentralWidget( projectRootWidget_ );
     projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
     attachClipProperties();
+    attachEventEditor();
 
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
@@ -503,6 +579,7 @@ void SMainWindow::newProject()
 #if 0
     currentProject_ = new SProject();
     projectRootWidget_ = currentProject_->getRootComponent()->getDetailEditWidget( this );
+    linkEventEditorAxis();
     setCentralWidget( projectRootWidget_ );
     SApplication::app().setCurrentProject( currentProject_ );
     qTBExternFileList = new QToolBar( "Extern file list", this, Left );
@@ -630,6 +707,16 @@ void SMainWindow::startPlaying()
         // Arm cycle (loop) playback from the current project state before output
         // starts, so the loop region is honoured from the first buffer.
         syncCyclePlayback();
+
+        // THE RUN BARRIER (proposal 37 D4 / 4.4), on the main thread and
+        // immediately before startOutput() - which is what performs the
+        // engine's pre-readahead seekTo(locator) + startReadahead(), so the
+        // barrier is ordered ahead of the readahead's first demand. The GUI's
+        // Play button reaches the speaker here rather than through
+        // SApplication::setPlaybackRunning(), so it needs its own call: a
+        // barrier issued on only ONE of the two play paths would make
+        // determinism depend on which button was pressed.
+        SApplication::app().beginRun( SApplication::app().getGlobalLocatorPos() );
 
         qWarning() << "startPlaying(): About to call getSpeaker()->startOutput()" << Qt::endl;
         SApplication::app().getSpeaker()->startOutput();
@@ -1052,6 +1139,30 @@ SMainWindow::SMainWindow()
     addDockWidget( Qt::RightDockWidgetArea, qDockClipProps_ );
     qDockClipProps_->hide();
 
+    // The event editor dock (proposal 37 P4) — the fifth dock, BOTTOM, tabified
+    // with the Log so the two share the strip under the arranger. Created here
+    // in the ctor for the same reason every other dock is (shell CONTRACT
+    // inv. 4: restoreWindowLayout() runs later and can only restore docks that
+    // already exist), and hidden on a first run.
+    qDockEventEditor_ = new QDockWidget( tr( "Event Editor" ), this );
+    qDockEventEditor_->setObjectName( "dock_event_editor" );
+    eventEditor_ = new SEventEditorDock( qDockEventEditor_ );
+    qDockEventEditor_->setWidget( eventEditor_ );
+    addDockWidget( Qt::BottomDockWidgetArea, qDockEventEditor_ );
+    tabifyDockWidget( qDockLog_, qDockEventEditor_ );
+    qDockEventEditor_->hide();
+
+    // The virtual keyboard (proposal 37 6.3). Bottom as well, beside the
+    // editor. It inserts notes at the locator through `add-note` and is the
+    // headless note source behind the `virtual-key` verb.
+    qDockVirtualKeys_ = new QDockWidget( tr( "Virtual Keyboard" ), this );
+    qDockVirtualKeys_->setObjectName( "dock_virtual_keyboard" );
+    virtualKeys_ = new SVirtualKeyboardDock( qDockVirtualKeys_ );
+    qDockVirtualKeys_->setWidget( virtualKeys_ );
+    addDockWidget( Qt::BottomDockWidgetArea, qDockVirtualKeys_ );
+    tabifyDockWidget( qDockEventEditor_, qDockVirtualKeys_ );
+    qDockVirtualKeys_->hide();
+
     // View menu — built here rather than in the menu block above because it
     // needs the docks to exist for their toggleViewAction()s.
     QMenu *viewMenu = new QMenu( tr( "&View" ), this );
@@ -1071,6 +1182,13 @@ SMainWindow::SMainWindow()
     QAction *actProps = qDockClipProps_->toggleViewAction();
     actProps->setText( tr( "Clip &properties" ) );
     viewMenu->addAction( actProps );
+    QAction *actEvents = qDockEventEditor_->toggleViewAction();
+    actEvents->setText( tr( "&Event editor" ) );
+    actEvents->setShortcut( Qt::CTRL | Qt::SHIFT | Qt::Key_E );
+    viewMenu->addAction( actEvents );
+    QAction *actKeys = qDockVirtualKeys_->toggleViewAction();
+    actKeys->setText( tr( "Virtual &keyboard" ) );
+    viewMenu->addAction( actKeys );
     menuBar()->insertMenu( qAudioMenu_->menuAction(), viewMenu );
 
     // F2 (default) opens the clip properties panel. There is no keybinding UI,
@@ -1824,6 +1942,7 @@ SStdMixerView *SMainWindow::ensureArranger_()
     if( !proj || !proj->getRootComponent() ) return NULL;
     projectRootWidget_ = proj->getRootComponent()->getDetailEditWidget( this );
     setCentralWidget( projectRootWidget_ );
+    linkEventEditorAxis();
     return dynamic_cast<SStdMixerView*>( projectRootWidget_ );
 }
 
@@ -1927,6 +2046,56 @@ QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeigh
     return head->describeMeter();
 }
 
+// --- proposal 37 P4 test seams -------------------------------------------
+
+QString SMainWindow::describeTrackHead( const QString &trackPath,
+                                        int headHeight )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return QString();
+
+    // The APP's project, not this window's: a headless --test-case run drives
+    // SApplication directly and leaves currentProject_ null (the same reason
+    // describeTrackMeter reads it here).
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return QString();
+
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return QString();
+
+    // A head built for the assertion and thrown away - parentless and never
+    // shown, so no native window appears. resize() runs the real
+    // updateLayout()/applyDensity(), which is the thing under test.
+    SSMVMixerControl head( nullptr, *v, *track );
+    head.resize( SMV_TRACK_CTRL_WIDTH, headHeight > 0 ? headHeight : 1 );
+    return head.describeHead();
+}
+
+
+// --- proposal 37 P6 test seams -------------------------------------------
+
+bool SMainWindow::grabTrackHead( const QString &path, const QString &trackPath,
+                                 int headHeight, int w, int h )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+
+    // Same off-screen head describeTrackHead builds - parentless, never shown -
+    // so what is painted is the widget under test at the size under test.
+    SSMVMixerControl head( nullptr, *v, *track );
+    head.resize( w > 0 ? w : SMV_TRACK_CTRL_WIDTH,
+                 h > 0 ? h : ( headHeight > 0 ? headHeight : 160 ) );
+    if( head.layout() ) head.layout()->activate();
+    head.describeHead();          // re-applies the density rules for this size
+    const QPixmap pm = head.grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
 bool SMainWindow::grabTrackHead( const QString &trackPath, const QString &path,
                                  int headHeight, int headWidth,
                                  const twLevelSampleSet &level )
@@ -1949,6 +2118,124 @@ bool SMainWindow::grabTrackHead( const QString &trackPath, const QString &path,
     const QPixmap pm = head->grab();
     if( pm.isNull() ) return false;
     return pm.save( path, "PNG" );
+}
+
+bool SMainWindow::dragAutomationPoint( const QString &owner, const QString &target,
+                                       int slotIndex, int take, offset_t time,
+                                       double value, offset_t toTime,
+                                       double toValue, Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    return v->dragAutomationPoint( owner, target, slotIndex, take, time, value,
+                                   toTime, toValue, mods );
+}
+
+bool SMainWindow::showAutomationLane( const QString &trackPath,
+                                      const QString &target, int slotIndex,
+                                      bool show )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->showAutomationLane( track, target, slotIndex, show );
+}
+
+bool SMainWindow::setClipEnvelopeEdit( bool on )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    v->setClipEnvelopeEdit( on );
+    return true;
+}
+
+bool SMainWindow::grabArrangerLanes( const QString &path, int w, int h )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return false;
+    SMVActualView *canvas = v->contentView();
+    // The canvas is inside a never-shown window, so it has whatever size the
+    // hidden layout gave it - 150x240 on this machine, which is not a picture
+    // of anything. Its PARENT owns its geometry (the same trap grabEventEditor
+    // hit with the dock), so the view has to be sized first and its layout
+    // activated; resizing only the child is undone before grab() renders.
+    if( w > 0 && h > 0 ) {
+        // The canvas is inside a never-shown window, so it has whatever size
+        // the hidden layout gave it - 150x240 on this machine, which is not a
+        // picture of anything. Its geometry belongs to its parents all the way
+        // up (the same trap grabEventEditor hit with the dock), so the WINDOW
+        // is what has to be resized; resizing the child alone is undone before
+        // grab() renders. The extra room is the scrollbars and the toolbars.
+        resize( w + v->getTrackControlWidth() + 48, h + 160 );
+        if( layout() ) layout()->activate();
+        if( v->layout() ) v->layout()->activate();
+    }
+    const QPixmap pm = canvas->grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
+QString SMainWindow::describeEventEditor( const QString &clipPath,
+                                          const QString &kind )
+{
+    if( !eventEditor_ ) return QString();
+    // The editor's axis mirrors the arranger's zoom/scroll, so the arranger has
+    // to exist before the description (and the PNG) mean anything.
+    ensureArranger_();
+    linkEventEditorAxis();
+    if( !kind.isEmpty() ) eventEditor_->setKind( kind );
+
+    // Empty clipPath = whatever the SELECTION resolves to, which is the
+    // production behaviour. A named path binds the dock explicitly, so a case
+    // can describe a clip it has not selected.
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    return eventEditor_->describe();
+}
+
+bool SMainWindow::grabEventEditor( const QString &path, int w, int h )
+{
+    if( !eventEditor_ || !qDockEventEditor_ ) return false;
+
+    // The dock's LAYOUT owns the widget's geometry, so a resize() while it is
+    // parented is undone before grab() renders - the first version of this grab
+    // produced a 620x186 strip of whatever the hidden main window happened to
+    // allot. Detach, size, grab, re-attach: the widget under test is still the
+    // real one, at a size a human can read.
+    const bool detach = ( w > 0 && h > 0 );
+    if( detach ) {
+        eventEditor_->setParent( nullptr );
+        eventEditor_->resize( w, h );
+        if( eventEditor_->layout() ) eventEditor_->layout()->activate();
+    }
+    const QPixmap pm = eventEditor_->grab();
+    if( detach ) qDockEventEditor_->setWidget( eventEditor_ );
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
+bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
+                            int channel, qint64 toTick, int toKey,
+                            const QString &edge, const QString &lane,
+                            double toValue )
+{
+    if( !eventEditor_ ) return false;
+    // The axis must exist before a gesture can be expressed in pixels; the
+    // arranger owns the zoom the editor mirrors.
+    ensureArranger_();
+    linkEventEditorAxis();
+
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    SPianoRollView *roll = eventEditor_->pianoRoll();
+    if( !roll ) return false;
+    return roll->tkDragNote( tick, key, channel, toTick, toKey, edge, lane,
+                             toValue );
+}
+
+bool SMainWindow::virtualKey( int key, double velocity, qint64 durationTicks )
+{
+    if( !virtualKeys_ ) return false;
+    return virtualKeys_->pressNote( key, velocity, durationTicks );
 }
 
 bool SMainWindow::grabLevelMeter( const QString &path, const twLevelSampleSet &s,
@@ -2017,10 +2304,12 @@ void SMainWindow::ungroupTrack()
 
 void SMainWindow::onTempoSpinChanged( double bpm )
 {
-    // Direct set (no undo action), matching the ruler "Set BPM" dialog. The
-    // resulting bpmTempoChanged updates the grid and echoes back to the box,
-    // but setValue to an unchanged value emits nothing, so there is no loop.
-    if( currentProject_ ) currentProject_->setBPMTempo( bpm );
+    // Through the set-tempo VERB (proposal 37 D2): it is the only tempo write,
+    // it re-derives every beats-timebase link so MIDI clips stay on their bar,
+    // and it coalesces a spin-box drag into one undo step. The resulting
+    // bpmTempoChanged updates the grid and echoes back to the box, but
+    // setValue to an unchanged value emits nothing, so there is no loop.
+    if( currentProject_ ) SApplication::app().submitAction( new SSetTempoAction( bpm ) );
 }
 
 void SMainWindow::undo()

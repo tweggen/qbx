@@ -7,10 +7,39 @@ of double-audio, silent-clip, and wrong-material bugs.
 
 1. **`SLink` (app/model)** — the PLACEMENT: parent container + `startTime`
    (timeline frames). One `SObject` can be placed many times via many links.
-2. **`SCut` (app/objects/cut)** — the WINDOW: `startOffset_` (slip into the
-   source), `cutDuration_`, `loopLength_`, grain params. Owns the playback
-   chain (reader, optional grain stage, optional loop reader) and, for
+   Since proposal 37 it also carries a **`timebase`**: `time` (frames are the
+   authority; audio's default) or `beats` (an exact `startTicks` is the
+   authority and `startTime` is derived through the project's tempo map; the
+   default for EVENT content). `set-tempo` re-derives every `beats` link, which
+   is how a MIDI clip stays at bar 5 while an audio clip does not move.
+2. **`SClipWindow` (app/model), implemented by `SCut` (app/objects/cut)** —
+   the WINDOW: slip into the content, timeline duration, loop length, time
+   scaling. `SCut` is the AUDIO window: it stores `srcStart_` /
+   `cutDuration_` / `loopLength_` / grain params, owns the playback chain
+   (reader, optional grain stage, optional loop reader) and, for
    container-backed or grained content, a rendered capture.
+   **The verbs address the INTERFACE, not the class** (proposal 37 D8b):
+   split / resize / duplicate / unsplit / set-clip-name / add-, remove-,
+   select-take / place-clip read `duration()`, `loopLength()`,
+   `startOffset()`, `stretchOrRate()` in TIMELINE FRAMES, map with
+   `timelineToSourceExact()`, copy with `cloneWindowOver()`, and create with
+   `SClipWindow::wrapContent(project, content)` — which picks the window type
+   from the content's `SObject::contentKind()` (Audio -> `SCut`). A setter
+   takes timeline frames and converts exactly once, inside the window; the
+   only values that cross in the CONTENT's own units are the exact anchor
+   forms, because the anchor is content-authoritative (POSITION_DOMAINS rule
+   3) and must not drift under a stretch edit. Pitch, formants, warp anchors
+   and the grain params are audio-only and stay on `SCut`.
+   `SMidiCut` (app/objects/midi) is the EVENT window: the same three layers,
+   but its window is stored in musical TICKS and every frame-facing value is
+   derived through `twTempoMap` exactly once inside the cut (POSITION_DOMAINS
+   rule 7). Its engine view is NOT a `ClipEntry`: a track routes a
+   `contentKind() == Event` child into its `twEventClipSet` instead of the bus
+   mixers, so an event clip costs no page freeze. Its SPLIT is
+   NON-DESTRUCTIVE — the window gates the notes and the shared sequence is
+   never edited, so a straddling note keeps its full duration in the head, the
+   head's window end SYNTHESISES the note-off, and the tail never re-attacks
+   it (events/CONTRACT inv. 8).
 3. **`ClipEntry` (tw/mix, inside `twTrackMix`)** — the ENGINE VIEW:
    `{startTime, duration, key, twView*, previousPage}`. The `twView` wraps
    "get me the current component" + the position mapper (MapPosFn).
@@ -90,7 +119,7 @@ with a warning — the header's claim is not trusted).
 ## Take stacks (proposal 17): a fourth, optional layer
 
 A multi-take clip inserts `STakeStack` between the placement and the
-window: `SLink → STakeStack → (SLink → SCut)*`. The stack is the COLUMN of
+window: `SLink → STakeStack → (SLink → SClipWindow)*`. The stack is the COLUMN of
 parallel takes; exactly one is audible (`activeTake_`, -1 = none). To
 `twTrackMix` a stack is ONE clip keyed by the OUTER link: the stack
 delegates `getRootComponent`/`mapTimelineToComponentPos`/preview to the
@@ -107,6 +136,9 @@ Rules:
 - A stack exists only with ≥2 takes: `stakes::wrapCutLinkIntoStack` /
   `collapseSingleTakeStack` convert in place, PRESERVING the child index
   (recorded action/inverse paths must stay valid).
-- Splitting a stack splits every take with the plain-cut arithmetic
+- Splitting a stack splits every take with the plain-window arithmetic
   (offsets/durations live in the stretched output domain, so the timeline
   split offset applies per take verbatim).
+- A stack is HOMOGENEOUS by `contentKind()`: every take is an alternative
+  for the same region, so `insertTake` refuses one of a different kind and
+  `STakeStack::contentKind()` is its takes'.

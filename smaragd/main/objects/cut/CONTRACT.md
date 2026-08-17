@@ -1,7 +1,7 @@
 # app/objects/cut — CONTRACT
 
-Purpose: the clip window object. SCut (startOffset/duration/loopLength/grain
-window over any content, reader-chain ownership, container capture,
+Purpose: the AUDIO clip window object. SCut (startOffset/duration/loopLength/
+grain window over any content, reader-chain ownership, container capture,
 snapshot-based audio access), its inline renderer, and the window actions:
 split-clip, unsplit-clip, resize-clip, duplicate-clip, set-pitch.
 
@@ -74,6 +74,21 @@ Invariants (normative detail: CLIP_MODEL.md, POSITION_DOMAINS.md):
    slip_invalidates_render_path.qxa, via the slip-clip testkit verb —
    resize-clip cannot cover this (it commits through setWindow, whose
    durationChanged stales the extent regardless).
+8. SCut IMPLEMENTS `SClipWindow` (app/model/sclipwindow.h, proposal 37 D8b)
+   and registers itself as the Audio wrap factory, so
+   `SClipWindow::wrapContent(project, content)` mints a cut for audio content
+   without anything in app/model naming SCut. THE RULE FOR THIS SLICE:
+   **a windowed verb never casts to SCut for arithmetic the interface
+   provides.** split / resize / duplicate / unsplit / set-clip-name / the
+   take verbs / place-clip all go through `SClipWindow` — reads in timeline
+   frames, `timelineToSourceExact` for the one map they need,
+   `cloneWindowOver` for a faithful copy, `setWindowExact` to narrow it.
+   A cast is legitimate ONLY for what is genuinely audio: pitch
+   (set-pitch, remove-take's inverse), formant preservation, warp anchors
+   (resize-clip, warp-marker actions), the grain params (remove-sample's
+   inverse) and slip's throttled invalidation (the slip-clip test verb).
+   Every one of those sites says so in a comment; a new one needs the same
+   justification. Gate: the AC5 grep in proposal 37 P0a.
 7. Pitch is stored in CENTS on twGrainParams, per clip and (on a stack)
    PER TAKE - only length ops write through to all lanes. It is realised
    in the grain stage (the read rate inside each grain) and is therefore
@@ -122,6 +137,20 @@ select-take; split-clip/resize-clip/unsplit are stack-aware (length ops
 write through to every take, slip and pitch target one take via `take`).
 
 Notes:
+- A stack of EVENT takes forwards `resolveEventClip()` to its active take,
+  exactly as the audio delegation forwards the component and the position map.
+  Without it a MIDI column would be routed into the track's event clip set
+  (its `contentKind()` says Event) and answer with an empty record — a
+  silently mute column.
+- A stack is a column of `SClipWindow`s, not of SCuts (proposal 37 D8b):
+  `takeAt(i)` returns the window, `takeObjectAt(i)` the model object it also
+  is, and `activeTakeObject()` is what the delegation (component, position
+  map, preview, renderer) goes through. It is HOMOGENEOUS: `insertTake`
+  refuses a window whose `contentKind()` differs from the takes already
+  there — a take is an ALTERNATIVE for one region, so a column that played
+  audio or notes depending on which lane is active would be a different
+  feature. add-take turns that refusal into a rejected action; the loader
+  turns it into one skipped take and keeps the column.
 - The stack serves a private silent component while no take is active
   (STakeSilence in stakestack.cpp) — objects/cut may not include tw/mix,
   so no twRewire here.
@@ -132,6 +161,17 @@ Notes:
   (container asset) is applied but NOT undoable (inverse = null); a
   collapse triggered with activeTake == -1 resurfaces the remaining take
   audible (plain cuts cannot be inaudible).
+
+9. **The clip GAIN envelope is drawn by the inline renderer, after
+   `drawWarpMarkers`** (proposal 37 P6, design 6.1). A `cut:Gain` lane lives on
+   the WINDOW and travels with it across placements and takes, so a lane of its
+   own on the track would be lying about what it belongs to. Nothing is drawn
+   when the cut has no envelope, which is what keeps every existing clip
+   looking exactly as it did. The curve is sampled per pixel through
+   `SAutomationLane::valueAt` — the same call the assertions make — over its
+   own [0, 1] linear-amplitude axis with unity at the top. The GESTURES for it
+   are not here: hit-testing is the arranger's business (app/timeline), and
+   objects/cut may not depend on it.
 
 How to test: takes_comping.qxa (audibility, comping per column, undo),
 takes_serialize_roundtrip.qxa (loader registration, per-column activeTake
@@ -152,3 +192,21 @@ SCompositeAction; fan-out children carry broadcast=0. select-take comps the
 same take INDEX; resize syncs the slip to the corresponding take (an
 active-take anchor resolves its index first). Test:
 takes_group_broadcast.qxa.
+
+## The clip gain envelope (proposal 37 P5, design D5 / §3.3)
+
+**`cut:Gain` is an automation lane on the WINDOW, and it therefore travels with
+the window.** A `cut:` lane is stored in CLIP-RELATIVE frames on the `SCut`, so
+moving the clip moves the fade, `cloneWindowOver()` copies it (which is what
+makes `duplicate-clip` and `add-take` carry it), and a take stack's INACTIVE
+take keeps its own — each take is its own window object and the mix reads the
+active one. `SObject::copyAutomationFrom()` is the one copier; call it from any
+future `cloneWindowOver()`.
+
+The VALUE IS A LINEAR AMPLITUDE FACTOR (1.0 = unity), not dB, so a fade can
+reach EXACTLY zero — which is what a fade-out is. The consumer is
+`twTrackMix::freezePage_nolock`, which applies it to the child's page before
+`mixFrom` (see `tw303a/mix/CONTRACT.md` inv. 23).
+
+PLACEMENT-SCOPE envelopes (per-`SLink`) are deliberately deferred until proposal
+32 gives links identity: an `SLink` has no id to hang one on today.

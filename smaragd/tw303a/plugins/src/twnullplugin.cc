@@ -14,7 +14,10 @@ namespace audio {
 // can derive from a symmetric layout, and silent-but-valid for one it cannot.
 class twNullPlugin : public twPlugin {
 public:
-    explicit twNullPlugin( const twPluginIoLayout &io ) : io_( io ) {}
+    twNullPlugin( const twPluginIoLayout &io, const twPluginCapabilities &caps )
+        : io_( io ), caps_( caps )
+    {
+    }
 
     const twPluginIoLayout &ioLayout() const override { return io_; }
 
@@ -41,6 +44,11 @@ public:
 
     void reset() override {}
 
+    // The DECLARED event shape, for the same reason ioLayout() reports the
+    // declared I/O: installing the real plugin later must change what process()
+    // computes and nothing about the shape around it (CONTRACT invariant 17).
+    twPluginCapabilities capabilities() const override { return caps_; }
+
     std::size_t paramCount() const override { return 0; }
     twPluginParamInfo paramInfo( std::size_t ) const override
     {
@@ -57,12 +65,14 @@ public:
     bool loadState( const std::vector<std::uint8_t> & ) override { return false; }
 
 private:
-    twPluginIoLayout io_;
+    twPluginIoLayout     io_;
+    twPluginCapabilities caps_;
 };
 
-std::unique_ptr<twPlugin> createNullPlugin( const twPluginIoLayout &io )
+std::unique_ptr<twPlugin> createNullPlugin( const twPluginIoLayout &io,
+                                            const twPluginCapabilities &caps )
 {
-    return std::make_unique<twNullPlugin>( io );
+    return std::unique_ptr<twPlugin>( new twNullPlugin( io, caps ) );
 }
 
 }  // namespace audio

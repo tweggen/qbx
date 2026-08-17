@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_render_determinism_xproc">
+
+  <!-- Proposal 37 P3c, the CROSS-PROCESS half of AC1 and all of AC2c.
+
+       PASS 2. This case is meaningless on its own and is deliberately NOT in
+       tests/cases/, so the CONFIGURE_DEPENDS glob in smaragd/CMakeLists.txt
+       cannot register it as an ordinary case that would run with a private
+       output directory and fail looking for det_a.wav. Its driver is
+       tests/run_xproc_determinism.cmake (ctest name
+       qxa.instrument_render_determinism_xproc), which runs
+       tests/cases/instrument_render_determinism.qxa first and then this one
+       INTO THE SAME test output dir (the runner's `-o`). That shared directory is the whole
+       mechanism: det_a.wav is pass 1's reference render, and this pass can name
+       it with a plain relative spelling that resolves through
+       SApplication::testOutputDir().
+
+       The project built below is IDENTICAL to pass 1's, action for action
+       (keep the two in step - a divergence here reads as a determinism failure
+       and is the first thing to check if this case ever goes red on its own).
+       What differs is only which process the renders happen in.
+
+           det_c  a render in a FRESH process, before anything has played.
+                  det_c == det_a is AC1's cross-process claim: the byte-exact
+                  render gate is render-vs-render across processes (F4), which
+                  is the property the goldens rest on.
+
+           det_d  a render in that same fresh process AFTER a play/stop cycle.
+                  det_d == det_a is AC2c: `forgetContinuity()` is what stops a
+                  run whose first page starts exactly where the previous run's
+                  lastEnd_ points from CONTINUING that run's voices. An epoch
+                  bump alone does not clear lastEnd_ (only rebuild_nolock, the
+                  rate check and forgetContinuity do), so the barrier has to say
+                  it explicitly.
+
+       The honest reading of what these compares can currently catch is written
+       out in pass 1's header and is the same here: P3b's double-render debt
+       makes every instrument page position-pure today, so both compares pass
+       with the barrier removed. They are the regression gate on the guarantee.
+
+       The driver ALSO compares det_a against det_c itself with
+       `cmake -E compare_files`, so a failure that somehow bypassed the verb
+       still stops the test. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="Smaragd 303" vendor="Smaragd"
+                   path="" nIn="0" nOut="1"/>
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.303" mode="MonoSpread"
+                            state="Active" hasFeed="1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="11520" name="Held"/>
+    <add-note clip="0,0" tick="0"    dur="11520" key="48" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="960"  dur="240"   key="60" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="2880" dur="240"   key="63" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="4800" dur="240"   key="67" velocity="90" channel="0"/>
+    <add-note clip="0,0" tick="9600" dur="240"   key="55" velocity="90" channel="0"/>
+
+    <!-- C: a fresh process, first run. -->
+    <render filename="det_c.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="det_c.wav" expected="det_a.wav"/>
+
+    <!-- ...and the same play/stop cycle pass 1 made. -->
+    <set-locator position="262144"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="327680" minAdvance="4096" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+
+    <!-- D: a render in a fresh process AFTER a play/stop cycle (AC2c). -->
+    <render filename="det_d.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="det_d.wav" expected="det_a.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

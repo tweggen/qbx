@@ -78,6 +78,9 @@ public:
     void prepare( std::uint32_t sampleRate, std::uint32_t maxBlock ) override;
     void process( const float *const *in, float *const *out,
                   std::uint32_t nframes ) override;
+    void process( const float *const *in, float *const *const *outBuses,
+                  std::uint32_t nframes, const twEventList &events,
+                  twEventOut &eventsOut, const twProcessContext &ctx ) override;
     void reset() override;
 
     std::size_t       paramCount() const override { return params_.size(); }
@@ -95,14 +98,27 @@ public:
     }
     bool supportsNativeEditor() const override { return hasGui_; }
 
+    twPluginCapabilities capabilities() const override { return caps_; }
+    std::size_t          audioOutBusCount() const override { return outElemChans_.size(); }
+    twPluginBusInfo      audioOutBus( std::size_t i ) const override;
+    std::uint32_t        tailFrames() const override;
+
 private:
     twAuPlugin() = default;
 
     bool init( const std::string &uid );
     void uninitialize();                 // hostMutex_ must be held
     void readIoLayout();
+    void readOutputElements();
+    void readCapabilities();
     void readParams();
     void readGui();
+
+    // Post MIDI 1.0 bytes and scheduled parameter changes to the unit BEFORE
+    // AudioUnitRender (proposal 37 §5.2) — AU has no event list in the render
+    // call, so an event is delivered by calling the unit ahead of it with the
+    // offset it should take effect at.
+    void postEvents( const twEventList &events, std::uint32_t nframes );
 
     // Fallback for AUs that implement no ParameterStringFromValue: synthesize
     // "<number><unit>" from the parameter's reported AudioUnitParameterUnit.
@@ -119,6 +135,16 @@ private:
     std::string      uid_;
     bool             hasGui_    = false;
     double           latencySec_ = 0.0;
+
+    twPluginCapabilities caps_{};
+    // Channel count per OUTPUT ELEMENT. Element 0 is the main out; 1..N are the
+    // aux outs a multi-output instrument declares (proposal 37 §5.4). Only
+    // element 0 is rendered today — an aux element needs its OWN
+    // AudioUnitRender at the same timestamp, which is P9's job.
+    std::vector<std::uint16_t> outElemChans_;
+    // The AU component type, so process() knows whether MusicDeviceMIDIEvent is
+    // even callable on this unit.
+    std::uint32_t componentType_ = 0;
 
     std::vector<twPluginParamInfo>       params_;
     std::vector<AudioUnitParameterID>    paramIds_;
@@ -186,7 +212,10 @@ bool twAuPlugin::init( const std::string &uid )
         return false;
     }
 
+    componentType_ = t;
     readIoLayout();
+    readOutputElements();
+    readCapabilities();
     readParams();
     readGui();
 
@@ -275,6 +304,101 @@ void twAuPlugin::readParams()
         paramIds_.push_back( id );
         paramUnits_.push_back( info.unit );
     }
+}
+
+// The OUTPUT ELEMENTS (proposal 37 §5.2/§5.4). AU spells a multi-output plugin
+// as several output elements on the output scope, each rendered by its OWN
+// AudioUnitRender at the same timestamp. Only element 0 is rendered today;
+// enumerating them is what lets the descriptor report nOutBuses honestly so P9
+// can route the rest to return tracks.
+void twAuPlugin::readOutputElements()
+{
+    outElemChans_.clear();
+    if( !unit_ )
+        return;
+
+    UInt32 count = 0;
+    UInt32 size  = sizeof( count );
+    if( AudioUnitGetProperty( unit_, kAudioUnitProperty_ElementCount,
+                              kAudioUnitScope_Output, 0, &count, &size ) != noErr )
+        count = io_.audioOutputs > 0 ? 1 : 0;
+
+    for( UInt32 e = 0; e < count; ++e ) {
+        AudioStreamBasicDescription asbd;
+        std::memset( &asbd, 0, sizeof( asbd ) );
+        UInt32 asbdSize = sizeof( asbd );
+        if( AudioUnitGetProperty( unit_, kAudioUnitProperty_StreamFormat,
+                                  kAudioUnitScope_Output, e, &asbd, &asbdSize ) != noErr )
+            continue;
+        outElemChans_.push_back( (std::uint16_t) asbd.mChannelsPerFrame );
+    }
+    if( outElemChans_.empty() && io_.audioOutputs > 0 )
+        outElemChans_.push_back( io_.audioOutputs );
+}
+
+// AU has no capability query: what a unit can do with events follows from its
+// COMPONENT TYPE. A MusicDevice (aumu) or MusicEffect (aumf) accepts MIDI; a
+// plain Effect (aufx) does not. A MIDI processor (aumi) both accepts and emits.
+void twAuPlugin::readCapabilities()
+{
+    caps_ = twPluginCapabilities{};
+
+    const bool isMusicDevice = componentType_ == (std::uint32_t) kAudioUnitType_MusicDevice;
+    const bool isMusicEffect = componentType_ == (std::uint32_t) kAudioUnitType_MusicEffect;
+    const bool isMidiProc    = componentType_ == (std::uint32_t) kAudioUnitType_MIDIProcessor;
+
+    caps_.acceptsNotes  = isMusicDevice || isMusicEffect || isMidiProc;
+    caps_.isInstrument  = isMusicDevice;
+    caps_.notePortsIn   = caps_.acceptsNotes ? 1 : 0;
+
+    // MIDI OUT is opt-in: a unit that offers kAudioUnitProperty_MIDIOutputCallbackInfo
+    // can emit. The callback itself must be installed BEFORE AudioUnitInitialize,
+    // which is a lifecycle change this phase does not make — so the capability is
+    // reported and the lane is not yet wired (recorded in CONTRACT known debt).
+    UInt32 size = 0;
+    Boolean writable = false;
+    if( unit_ && AudioUnitGetPropertyInfo( unit_, kAudioUnitProperty_MIDIOutputCallbackInfo,
+                                           kAudioUnitScope_Global, 0, &size, &writable )
+            == noErr && size > 0 ) {
+        caps_.emitsNotes   = true;
+        caps_.notePortsOut = 1;
+    }
+
+    // AU MIDI 1.0 has no note ids and no per-note expression (MIDI 2.0 via
+    // MusicDeviceMIDIEventList would, and is a later phase).
+    caps_.wantsMidi1Raw          = caps_.acceptsNotes;
+    caps_.supportsNoteIds        = false;
+    caps_.supportsNoteExpression = false;
+    caps_.emitsParamChanges      = false;
+}
+
+twPluginBusInfo twAuPlugin::audioOutBus( std::size_t i ) const
+{
+    twPluginBusInfo b;
+    if( i >= outElemChans_.size() )
+        return b;
+    b.channels = outElemChans_[i];
+    b.isMain   = ( i == 0 );
+    return b;
+}
+
+std::uint32_t twAuPlugin::tailFrames() const
+{
+    if( !unit_ )
+        return 0;
+    Float64 tailSec = 0.0;
+    UInt32  size    = sizeof( tailSec );
+    if( AudioUnitGetProperty( unit_, kAudioUnitProperty_TailTime,
+                              kAudioUnitScope_Global, 0, &tailSec, &size ) != noErr )
+        return 0;
+    if( tailSec <= 0.0 )
+        return 0;
+    const double rate = (double) preparedMax_.load( std::memory_order_acquire ) > 0.0
+                            ? (double) preparedRate_ : 48000.0;
+    double frames = tailSec * ( rate > 0.0 ? rate : 48000.0 );
+    if( frames > 480000.0 )
+        frames = 480000.0;   // 10 s cap, as the other backends
+    return (std::uint32_t) frames;
 }
 
 void twAuPlugin::readGui()
@@ -405,13 +529,128 @@ OSStatus twAuPlugin::renderInputCb( void *refCon, AudioUnitRenderActionFlags *,
 
 // --- processing -------------------------------------------------------------
 
+// Post the block's events to the unit BEFORE AudioUnitRender (proposal 37 §5.2).
+//
+// AU has no event list in the render call at all: MusicDeviceMIDIEvent takes an
+// inOffsetSampleFrame and must be called ahead of the render for the block the
+// offset belongs to. Parameter changes take the same shape through
+// AudioUnitScheduleParameters, which is the ONLY way to get a sample-accurate
+// parameter step out of an AU.
+//
+// NOT VERIFIED ON HARDWARE. This phase was implemented on Windows, where the
+// whole file is #ifdef'd out; it is written to the documented API and reviewed
+// against it, but no AU has ever seen it. Recorded in plugins/CONTRACT.md and in
+// plan/STATE.md rather than presented as gated.
+void twAuPlugin::postEvents( const twEventList &list, std::uint32_t nframes )
+{
+    if( !unit_ || list.count == 0 )
+        return;
+
+    std::vector<AudioUnitParameterEvent> paramEvents;
+
+    for( std::uint32_t i = 0; i < list.count; ++i ) {
+        const twEvent &ev = list.events[i];
+        if( twEventIsMetadata( ev.kind ) )
+            continue;
+
+        UInt32 offset = ev.time < 0 ? 0u : (UInt32) ev.time;
+        if( nframes > 0 && offset >= nframes )
+            offset = nframes - 1;
+
+        const UInt32 chan = (UInt32) ( ev.channel >= 0 ? ( ev.channel & 0x0F ) : 0 );
+        const UInt32 key  = (UInt32) ( ev.key >= 0 ? ev.key : 60 );
+
+        auto midi = [&]( UInt32 status, UInt32 d1, UInt32 d2 ) {
+            if( !caps_.acceptsNotes )
+                return;
+            MusicDeviceMIDIEvent( unit_, status | chan, d1, d2, offset );
+        };
+
+        switch( ev.kind ) {
+        case twEventKind::NoteOn:
+            midi( 0x90, key, (UInt32) ( ev.value * 127.0 + 0.5 ) );
+            break;
+        case twEventKind::NoteOff:
+            midi( 0x80, key, (UInt32) ( ev.value * 127.0 + 0.5 ) );
+            break;
+        case twEventKind::PolyPressure:
+            midi( 0xA0, key, (UInt32) ( ev.value * 127.0 + 0.5 ) );
+            break;
+        case twEventKind::ControlChange:
+            midi( 0xB0, (UInt32) ( ev.paramId & 0x7F ),
+                  (UInt32) ( ev.value * 127.0 + 0.5 ) );
+            break;
+        case twEventKind::ProgramChange:
+            midi( 0xC0, (UInt32) ev.value & 0x7F, 0 );
+            break;
+        case twEventKind::ChannelPressure:
+            midi( 0xD0, (UInt32) ( ev.value * 127.0 + 0.5 ), 0 );
+            break;
+        case twEventKind::PitchBend: {
+            double b = ev.value;
+            if( b < -1.0 ) b = -1.0;
+            if( b > 1.0 ) b = 1.0;
+            const int raw = (int) ( 8192.0 + b * 8191.0 + 0.5 );
+            midi( 0xE0, (UInt32) ( raw & 0x7F ), (UInt32) ( ( raw >> 7 ) & 0x7F ) );
+            break;
+        }
+        case twEventKind::Sysex: {
+            const std::uint8_t *bytes = list.payloadOf( ev );
+            if( bytes && caps_.acceptsNotes )
+                MusicDeviceSysEx( unit_, bytes, (UInt32) ev.payloadSize );
+            break;
+        }
+        case twEventKind::ParamValue: {
+            AudioUnitParameterEvent pe;
+            std::memset( &pe, 0, sizeof( pe ) );
+            pe.scope        = kAudioUnitScope_Global;
+            pe.element      = 0;
+            pe.parameter    = (AudioUnitParameterID) ev.paramId;
+            pe.eventType    = kParameterEvent_Immediate;
+            pe.eventValues.immediate.bufferOffset = offset;
+            pe.eventValues.immediate.value        = (AudioUnitParameterValue) ev.value;
+            paramEvents.push_back( pe );
+            break;
+        }
+        default:
+            break;   // note ids, choke, expression: no AU MIDI 1.0 equivalent
+        }
+    }
+
+    if( !paramEvents.empty() )
+        AudioUnitScheduleParameters( unit_, paramEvents.data(),
+                                     (UInt32) paramEvents.size() );
+}
+
+// The LEGACY overload — an empty list, an unreachable sink, an invalid context,
+// so it runs exactly the pre-36 instructions.
 void twAuPlugin::process( const float *const *in, float *const *out,
                           std::uint32_t nframes )
 {
+    const twEventList      noEvents{};
+    twEventOut             noSink;
+    const twProcessContext noCtx{};
+    float *const *const    outBuses[1] = { out };
+    process( in, outBuses, nframes, noEvents, noSink, noCtx );
+}
+
+void twAuPlugin::process( const float *const *in, float *const *const *outBuses,
+                          std::uint32_t nframes, const twEventList &hostEvents,
+                          twEventOut &eventsOut, const twProcessContext &ctx )
+{
+    (void) eventsOut;   // AU MIDI-out needs a callback installed before init
+    (void) ctx;         // kAudioUnitProperty_HostCallbacks is a later phase
+
+    // Only element 0 is rendered; the aux elements need their own render call
+    // (proposal 37 §5.4, P9).
+    float *const *out = ( outBuses && !outElemChans_.empty() ) ? outBuses[0] : nullptr;
+
     const std::uint32_t nIn  = io_.audioInputs;
     const std::uint32_t nOut = io_.audioOutputs;
 
     auto passThrough = [&]() {
+        if( !out )
+            return;
         for( std::uint32_t c = 0; c < nOut; ++c ) {
             if( !out[c] )
                 continue;
@@ -435,6 +674,9 @@ void twAuPlugin::process( const float *const *in, float *const *out,
         passThrough();
         return;
     }
+
+    // Events go in BEFORE the render, with their own sample offsets.
+    postEvents( hostEvents, nframes );
 
     curIn_      = in;
     curInChans_ = nIn;

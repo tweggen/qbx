@@ -26,7 +26,10 @@ core ── pages ── graph ─┬─ sources ─┐
 Not part of the dataflow above: `tw/analysis` and `tw/sidecar` (→ core) and
 `tw/metering` (→ core+pages+graph) are leaves consumed by the app and the tests.
 `tw/metering` READS frozen pages by position and never freezes or demands, so it
-hangs off the graph without joining the audio path.
+hangs off the graph without joining the audio path. `tw/events` (→ core ONLY,
+proposal 37) is the MIDI/event model leaf: events are model data, not pages, so
+it has no place in the dataflow DAG at all — and it must stay core-only because
+`tw/plugins` (which will consume its event clip set) may not include `tw/mix`.
 
 | Module | One-liner | Contract |
 |---|---|---|
@@ -37,7 +40,7 @@ hangs off the graph without joining the audio path.
 | tw/dsp | oscillators, filters, noise | tw303a/dsp/CONTRACT.md |
 | tw/mix | track mix (clip model), mixer, rewire | tw303a/mix/CONTRACT.md |
 | tw/plugins | plugin ABI, registry, hosting chain | tw303a/plugins/CONTRACT.md |
-| tw/devices | WASAPI/ALSA/CoreAudio backends + inputs | tw303a/devices/CONTRACT.md |
+| tw/devices | WASAPI/ALSA/CoreAudio backends + inputs; MIDI in/out (WinMM/CoreMIDI/ALSA-seq/capture/null) + `MidiOutScheduler` | tw303a/devices/CONTRACT.md |
 | tw/sinks | file writers (WAV/OGG/MP3), frame sinks | tw303a/sinks/CONTRACT.md |
 | tw/playback | speaker, audio engine, readahead | tw303a/playback/CONTRACT.md |
 | tw/render | **the rendering engine** (offline) | tw303a/render/CONTRACT.md |
@@ -46,18 +49,19 @@ hangs off the graph without joining the audio path.
 | tw/analysis | WAV metrics for tests | tw303a/analysis/CONTRACT.md |
 | tw/sidecar | derived-data QAF container + LRU store | tw303a/sidecar/CONTRACT.md |
 | tw/metering | level meters: page probe + ballistics | tw303a/metering/CONTRACT.md |
+| tw/events | events, tempo map, SMF, curves, clip set | tw303a/events/CONTRACT.md |
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 
-13 module directories with `app/<module>/…` includes, built as FOUR
+14 module directories with `app/<module>/…` includes, built as FOUR
 layered OBJECT libraries (OBJECT is load-bearing: actions and the loader/
 editor/extern-file registries self-register via static initializers, which
 a STATIC lib would drop):
 
     app_model < app_core < app_objects < app_ui
     (model)     (actions,     (objects/cut,   (timeline, pluginui,
-                persistence,   wave, track,    servicesui, shell,
-                selection)     mixer)          testkit)
+                persistence,   wave, midi,     eventui, servicesui,
+                selection)     track, mixer)   shell, testkit)
 
 The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
 only its own include dirs and links only the lower layers plus its declared
@@ -73,7 +77,9 @@ stderr/stdout directly — `python tools/check_logging.py` enforces that
 `python tools/check_layering.py` guards the finer grain the build cannot:
 per-MODULE engine deps and the declared intra-layer edge set. Since the
 placement service (`app/model/splacements.h`) the object slices form a DAG
-— wave < cut < track < mixer — leaving UI+shell as the only cyclic group. Do not
+— wave < cut < track < mixer, with midi at the RANK of cut (a second
+window/content pair, not a layer above one) — leaving UI+shell as the only
+cyclic group. Do not
 add SApplication::app() call sites below the UI layer, and keep SAppContext
 minimal.
 
@@ -81,6 +87,7 @@ minimal.
 |---|---|---|
 | app/model | SObject/SLink/SProject document tree | main/model/CONTRACT.md |
 | app/objects/cut | clip window (SCut) + renderer + window actions | main/objects/cut/CONTRACT.md |
+| app/objects/midi | event clip (SMidiSequence/SMidiCut) + renderer + event verbs | main/objects/midi/CONTRACT.md |
 | app/objects/wave | sample object + renderer + sample actions | main/objects/wave/CONTRACT.md |
 | app/objects/track | track + clip sync to engine + placement actions | main/objects/track/CONTRACT.md |
 | app/objects/mixer | root mixer, plugin chain model, asset actions | main/objects/mixer/CONTRACT.md |
@@ -89,6 +96,7 @@ minimal.
 | app/selection | selection state + actions | main/selection/CONTRACT.md |
 | app/timeline | the arrangement canvas + chrome | main/timeline/CONTRACT.md |
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |
+| app/eventui | event editor (piano roll) + virtual keyboard | main/eventui/CONTRACT.md |
 | app/servicesui | render/record/options dialogs | main/servicesui/CONTRACT.md |
 | app/shell | SApplication, SMainWindow, main() — composition root | main/shell/CONTRACT.md |
 | app/testkit | qxa runner, audio assertions | main/testkit/CONTRACT.md |

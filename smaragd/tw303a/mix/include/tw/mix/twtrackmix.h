@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "tw/graph/twcomponent.h"
+#include "tw/events/twautomationcurve.h"
 
 class tw303aEnvironment;
 
@@ -49,6 +50,13 @@ struct ClipEntry {
                                 // Mute is a property of the CHANNEL, i.e. of the
                                 // parent that sums a child — never of the child's
                                 // own output (see setClipMuted).
+    // THE PER-CLIP GAIN ENVELOPE (proposal 37 P5, design §4.5 — and the
+    // "per-clip gain not modeled" debt mix/CONTRACT.md has carried since
+    // proposal 15). A LINEAR amplitude factor in CLIP-RELATIVE frames, applied
+    // to the child's page BEFORE it is summed, so it trims, slips and loops
+    // with the clip and travels with the WINDOW across placements and takes.
+    // Null is the untouched path: no arithmetic, no copy.
+    std::shared_ptr<const twAutomationCurve> gainCurve;
 };
 
 // State snapshot for page boundary continuity
@@ -115,9 +123,18 @@ public:
     // lanes here as ordinary clip entries.
     twEditRange setClipMuted(const void *key, bool muted);
 
-    // Track intrinsic gain — applied to all output. Unlike mute this IS a
-    // property of the track's own output, so a capture of the track includes it.
-    void setTrackGain(double gainDb);
+    // Set (or clear) one clip entry's gain envelope, in CLIP-RELATIVE frames.
+    // Returns the timeline extent the change affects, exactly like the other
+    // mutators, so the caller can stale the downstream chain over it. Passing a
+    // null curve restores the untouched path.
+    void setClipGainCurve( const void *key,
+                           std::shared_ptr<const twAutomationCurve> curve );
+
+    // THE PRE-FX FADER IS GONE (proposal 37 P5, design D5). setTrackGain() and
+    // trackGainDb_ were forced to 0 dB by P3a and are DELETED here: the fader is
+    // twGainStage, between the plugin chain and the rewire. Nothing in this
+    // class scales its own output any more, which is what makes the frozen page
+    // a track's material rather than its mix level.
 
     // --- Page width (proposal 36 §4.2 / B4) -------------------------------
     //
@@ -201,8 +218,11 @@ private:
 
     std::vector<ClipEntry> clips_;            // Timeline entries (sorted by startTime)
     std::atomic<offset_t> playOffset_{ 0 };   // Atomic: protects race between UI seek and audio render
-    double trackGainDb_{ 0.0 };                // Track gain in dB
     std::atomic<int> channels_{ 1 };           // see setChannels()
+    // Scratch for the per-clip gain envelope. A MEMBER so the mix path
+    // allocates nothing once it is warm; guarded by mutex(), which
+    // freezePage_nolock's caller already holds.
+    std::vector<sample_t> clipGainScratch_;
 
 };
 

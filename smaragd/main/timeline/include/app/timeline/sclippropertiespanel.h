@@ -8,7 +8,10 @@
 
 class SCut;
 class SLink;
+class SMidiCut;
 class SCompositeAction;
+
+class QComboBox;
 
 class QCheckBox;
 class QDoubleSpinBox;
@@ -71,6 +74,11 @@ private slots:
     void onClearLoop();
     void onClearWarp();
     void onFormantClicked( bool checked );
+    void commitMidiName();
+    void commitMidiStartTime();
+    void commitMidiDuration();
+    void commitMidiCut();
+    void commitTimebase( int index );
 
 private:
     // One resolved selection entry. Built fresh on every use and never stored
@@ -83,6 +91,21 @@ private:
         int        nTakes    = 0;     // 0 = plain clip
     };
     QList<ClipRef> collectClips() const;
+
+    /**
+     * The EVENT selection (proposal 37 P1). A second resolution rather than a
+     * widened ClipRef: everything in the audio path above reads SCut-only
+     * getters (slip, stretch, pitch, formants, warp anchors), which are
+     * deliberately not on the window interface because they are audio verbs.
+     * An SMidiCut therefore gets its own page rather than blanks in that one.
+     */
+    struct MidiClipRef {
+        QList<int> path;
+        SLink     *link = nullptr;
+        SMidiCut  *cut  = nullptr;
+    };
+    QList<MidiClipRef> collectMidiClips() const;
+    void refreshMidi( const QList<MidiClipRef> &clips );
 
     void buildUi();
 
@@ -114,6 +137,14 @@ private:
     QLabel      *placeholder_    = nullptr;   // "No clip selected"
     QScrollArea *scroll_         = nullptr;   // holds the whole form
 
+    // The audio page's group boxes, so the MIDI page can take the panel over
+    // wholesale rather than showing an audio form full of blanks.
+    QGroupBox   *sourceGroup_    = nullptr;
+    QGroupBox   *clipGroup_      = nullptr;
+    QGroupBox   *windowGroup_    = nullptr;
+    QGroupBox   *playGroup_      = nullptr;
+    QGroupBox   *midiGroup_      = nullptr;
+
     // Source group (read-only, plus the two destructive one-shot buttons).
     QLabel      *sourceLabel_    = nullptr;
     QLabel      *takesLabel_     = nullptr;
@@ -131,6 +162,16 @@ private:
     QSpinBox       *loopSpin_    = nullptr;
     QPushButton    *clearLoopButton_ = nullptr;
     QCheckBox      *formantCheck_ = nullptr;
+
+    // The MIDI page (proposal 37 6.1): the per-clip modifiers plus the one
+    // placement property that is not shared with audio, the timebase.
+    QLineEdit      *midiNameEdit_     = nullptr;
+    QSpinBox       *midiStartSpin_    = nullptr;
+    QSpinBox       *midiDurationSpin_ = nullptr;
+    QSpinBox       *transposeSpin_    = nullptr;
+    QDoubleSpinBox *velScaleSpin_     = nullptr;
+    QSpinBox       *midiChannelSpin_  = nullptr;
+    QComboBox      *timebaseCombo_    = nullptr;
 };
 
 #endif // SCLIPPROPERTIESPANEL_H

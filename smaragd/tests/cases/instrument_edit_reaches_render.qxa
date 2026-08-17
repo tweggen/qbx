@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_edit_reaches_render">
+
+  <!-- Proposal 37 P3b, AC3: AN EVENT EDIT REACHES THE INSTRUMENT'S PAGES.
+
+       An SPluginChain is deliberately NOT an SLink child of its track, so
+       SObject::invalidateRenderPath()'s root-down walk cannot reach a slot on
+       its own - the pitfall plugins/CONTRACT.md records for a bypass and a
+       parameter edit. An event edit has exactly the same shape: the notes live
+       in the track's event clip set, the sound lives in the slot-0 insert's
+       frozen pages, and nothing connects them but STrack's own
+       bumpRenderChainEpochRange(), which forwards into the chain and its
+       inserts. If that forwarding is missing the second render below serves the
+       first render's audio and the RMS does not move at all.
+
+       The invalidation is OPEN-ENDED on the right (design F9, 3.2): the
+       consumer is class-1 - a synth voice carries state across pages - so an
+       edit at `a` can be heard at any later position and the range is
+       [a, INT64_MAX).
+
+       WHICH IS WHY THIS CASE IS ALSO THE PRE-ROLL'S GATE. Invalidating from 2 s
+       stales page 1 ([65536, 131072) = 1.365 - 2.73 s) but not page 0, so the
+       re-render of page 1 is a REPOSITION: reset + chase stateAt(P-K) +
+       pre-roll K frames. NOTHING is held across 1.365 s here (the notes are at
+       2 s and 3 s), so that whole dance must be INAUDIBLE - and the byte
+       compare of [0, 96000) against render A is what says it was.
+
+           render A   note at 3 s only
+           render B   + a note at 2 s        -> identical over [0, 96000)
+                                                energy appears in [96000, 144000)
+           undo       -> render C            -> byte-identical to A, whole file
+
+       (0 - 2 s is silent in every one of them: the first note is at 2 s. The
+       identity there is therefore about the reposition, not about the notes.) -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <!-- A 4 s window (7680 ticks at 120 BPM / ppq 960) whose only note is the
+         one at 3 s (tick 5760). -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Late"/>
+    <add-note clip="0,0" tick="5760" dur="1920" key="60" velocity="100" channel="0"/>
+
+    <render filename="ierr_a.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="ierr_a.wav" startFrame="0" frameCount="96000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+    <assert-audio-energy filename="ierr_a.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+    <assert-audio-energy filename="ierr_a.wav" startFrame="144000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+
+    <!-- THE EDIT: a second note, at 2 s (tick 3840). -->
+    <add-note clip="0,0" tick="3840" dur="1920" key="64" velocity="100" channel="0"/>
+
+    <render filename="ierr_b.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- Everything before the edit is untouched, BYTE for byte - which is the
+         reposition's inaudibility as much as the invalidation's scoping. -->
+    <assert-file-identical actual="ierr_b.wav" expected="ierr_a.wav"
+                           startFrame="0" frameCount="96000"/>
+    <!-- ...and the new note is there. -->
+    <assert-audio-energy filename="ierr_b.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-frequency filename="ierr_b.wav" startFrame="96000" frameCount="48000"
+                            channel="0" minHz="328.628" maxHz="330.628"/>
+    <!-- ...and the old one still is. -->
+    <assert-audio-energy filename="ierr_b.wav" startFrame="144000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+
+    <!-- UNDO. Not the runner's verify-undo pass (it compares track counts only):
+         an explicit undo plus a render that has to come back byte-identical. -->
+    <undo count="1"/>
+
+    <render filename="ierr_c.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ierr_c.wav" expected="ierr_a.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

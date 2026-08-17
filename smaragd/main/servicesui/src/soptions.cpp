@@ -41,6 +41,12 @@ QVariant SOpt::def( const QString &key )
         return dirs;
     }
     if( key == PluginScanOnStartup ) return true;
+
+    // MIDI (proposal 37 P7b). Note-on chase is OFF by default for MIDI OUT -
+    // see the key's comment; controller chase is not optional.
+    if( key == MidiOutOffsetMs )  return 0;
+    if( key == MidiChaseNoteOns ) return false;
+    if( key == MidiInputPortIds ) return QStringList();
     return QVariant();
 }
 

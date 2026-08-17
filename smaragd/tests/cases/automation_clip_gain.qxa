@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_clip_gain">
+
+  <!-- Proposal 37 P5 (design D5 / §3.3 / §4.5): A CLIP GAIN ENVELOPE LIVES ON
+       THE WINDOW, AND THEREFORE TRAVELS WITH IT.
+
+       `cut:Gain` is a LINEAR amplitude factor (1.0 = unity), not dB, so a fade
+       can reach EXACTLY zero - which is what a fade-out is. It is applied to
+       the child's page BEFORE it is summed, in twTrackMix::freezePage_nolock,
+       which is where mix/CONTRACT.md's "per-clip gain is not modeled" debt was.
+
+       WHY IT IS ON THE WINDOW AND NOT ON THE PLACEMENT. A `cut:` lane is stored
+       in CLIP-RELATIVE frames on the SCut, so:
+
+         * MOVING the clip moves the fade with it (the envelope is evaluated at
+           childPos, which the trackmix derives from the clip's start);
+         * DUPLICATING the clip copies it (SCut::cloneWindowOver);
+         * a TAKE STACK's inactive take keeps its OWN - each take is its own
+           window object, and the mix reads the ACTIVE one.
+
+       Placement-scope envelopes (per-SLink) are deliberately deferred until
+       proposal 32 gives links identity.
+
+       THE CLOSED FORM. ../test_autosaw.wav is 4.0 s of a 480 Hz sawtooth whose
+       rms over any 100-aligned window is 0.230956 (tests/tools/gen_auto_fixture.py).
+       With a linear 1.0 -> 0.0 envelope over the whole 192000-frame clip the
+       per-second rms is
+
+           second 0   0.202775      second 2   0.088200
+           second 1   0.145309      second 3   0.033337
+
+       - four different numbers in a monotone fall, so a fade that is present
+       but WRONGLY PLACED fails as surely as an absent one. The +/-3 % bands are
+       far narrower than the gap between neighbours.
+
+       Every step is undone explicitly and re-asserted - the runner's own
+       verify-undo pass compares track counts only. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <render filename="acg_nolane.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="acg_nolane.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+    <assert-audio-energy filename="acg_nolane.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+
+    <!-- ============ 1. the envelope ==================================== -->
+    <!-- `owner` names the PLACEMENT here, not the lane: the target's space
+         (`cut:`) is what decides how the path is resolved. -->
+    <add-automation-lane owner="0,0" target="cut:Gain" mode="read"/>
+    <add-automation-point owner="0,0" target="cut:Gain"
+                          time="0" value="1.0" curve="linear"/>
+    <add-automation-point owner="0,0" target="cut:Gain"
+                          time="192000" value="0.0" curve="linear"/>
+
+    <assert-automation-value owner="0,0" target="cut:Gain"
+                             time="96000" value="0.5" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+
+    <render filename="acg_fade.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="acg_fade.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.19669" maxRms="0.20886"/>
+    <assert-audio-energy filename="acg_fade.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.14095" maxRms="0.14967"/>
+    <assert-audio-energy filename="acg_fade.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.08555" maxRms="0.09085"/>
+    <assert-audio-energy filename="acg_fade.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.03234" maxRms="0.03434"/>
+
+    <!-- UNDO the second point: the curve then holds 1.0 everywhere and the
+         render is the untouched one, byte for byte. -->
+    <undo count="1"/>
+    <assert-automation-value owner="0,0" target="cut:Gain"
+                             time="96000" value="1.0" tolerance="1e-9"
+                             pointCount="1"/>
+    <render filename="acg_undone1.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="acg_undone1.wav" expected="acg_nolane.wav"/>
+
+    <add-automation-point owner="0,0" target="cut:Gain"
+                          time="192000" value="0.0" curve="linear"/>
+
+    <!-- ============ 2. it MOVES with the clip ========================== -->
+    <move-clip clip="0,0" destTrack="0" startTime="48000"/>
+    <render filename="acg_moved.wav" format="wav" quality="10" durationSec="5.0"/>
+    <!-- Nothing before the clip... -->
+    <assert-audio-energy filename="acg_moved.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0" maxRms="0.0001"/>
+    <!-- ...and the same four numbers, one second later. -->
+    <assert-audio-energy filename="acg_moved.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.19669" maxRms="0.20886"/>
+    <assert-audio-energy filename="acg_moved.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.14095" maxRms="0.14967"/>
+    <assert-audio-energy filename="acg_moved.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.08555" maxRms="0.09085"/>
+    <assert-audio-energy filename="acg_moved.wav" channel="0"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.03234" maxRms="0.03434"/>
+
+    <undo count="1"/>
+    <render filename="acg_unmoved.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="acg_unmoved.wav" expected="acg_fade.wav"/>
+
+    <!-- ============ 3. it is COPIED with the clip ====================== -->
+    <!-- Onto track 1, and the original is structurally muted so ONE render
+         answers for the copy alone. Structural mute is the parent nulling the
+         input plug - a different mechanism from the `self:Muted` lane, and
+         deliberately still available. -->
+    <duplicate-clip source="0,0" destTrack="1" startTime="0"/>
+    <assert-automation-value owner="1,0" target="cut:Gain"
+                             time="96000" value="0.5" tolerance="1e-9"
+                             pointCount="2"/>
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <render filename="acg_copy.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="acg_copy.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.19669" maxRms="0.20886"/>
+    <assert-audio-energy filename="acg_copy.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.03234" maxRms="0.03434"/>
+
+    <undo count="1"/>   <!-- the mute -->
+    <undo count="1"/>   <!-- the duplicate -->
+    <render filename="acg_uncopied.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="acg_uncopied.wav" expected="acg_fade.wav"/>
+
+    <!-- ============ 4. an INACTIVE take keeps its own ================== -->
+    <!-- add-take wraps the cut in a stack and activates the NEW take, which has
+         no envelope of its own - so the render goes flat. The original take is
+         still there with its fade, untouched. -->
+    <add-take clip="0,0" filePath="../test_autosaw.wav" activate="1"/>
+    <render filename="acg_take1.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="acg_take1.wav" expected="acg_nolane.wav"/>
+
+    <select-take clip="0,0" take="0"/>
+    <render filename="acg_take0.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="acg_take0.wav" expected="acg_fade.wav"/>
+    <assert-automation-value owner="0,0" target="cut:Gain" take="0"
+                             time="96000" value="0.5" tolerance="1e-9"/>
+
+    <undo count="1"/>   <!-- the take selection -->
+    <undo count="1"/>   <!-- the take -->
+    <render filename="acg_untaken.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="acg_untaken.wav" expected="acg_fade.wav"/>
+
+    <!-- ============ 5. it SURVIVES a save / load ======================= -->
+    <!-- Inline `<automation>` on the cut element. An older build would ignore
+         the child entirely, which is the whole reason it is not a top-level
+         object (design §3.3). -->
+    <save-project path="../../build/automation_clip_gain.qxp"/>
+    <load-project path="../../build/automation_clip_gain.qxp"/>
+    <assert-automation-value owner="0,0" target="cut:Gain"
+                             time="96000" value="0.5" tolerance="1e-9"
+                             mode="read" pointCount="2"/>
+    <render filename="acg_reloaded.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="acg_reloaded.wav" expected="acg_fade.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -48,6 +48,7 @@ namespace audio {
 
 // Forward declare the PassThrough plugin factory.
 std::unique_ptr<twPlugin> createPassThroughPlugin();
+std::unique_ptr<twPlugin> createNativeInstrument();
 
 // Static registry instance.
 static twPluginRegistry gRegistry;
@@ -198,31 +199,22 @@ struct ScanFlagGuard {
 
 }  // namespace
 
-// How long the LAST-RESORT join at static destruction is willing to wait. The
-// scan checks its cancel flag once per module and once per 100 ms probe slice,
-// so a healthy worker stops well inside this; anything that does not is a
-// worker we would rather leak than hang the process on.
-static constexpr int kTeardownJoinMs = 5000;
-
 twPluginRegistry::~twPluginRegistry()
 {
-    // The registry is a static, so this runs during static destruction — after
-    // main() has returned or, for a --test-case run, from inside std::exit().
-    // That is precisely the moment a still-running scan is lethal: the exiting
-    // thread holds the CRT's teardown lock, and a scan thread that trips over
-    // half-destructed runtime state throws, reaches std::terminate, and blocks
-    // forever inside abort() waiting for that same lock. The unbounded wait
-    // that used to be here then never returned, which is the observed hang.
+    // Belt and braces: by the time a namespace-scope static is destroyed the
+    // app's orderly teardown has already called stopScan(), and this is a
+    // no-op. It stays because the registry must also be correct in a unit-test
+    // binary that has no orderly teardown at all -- and because stopScan()
+    // (not waitForScan()) is what BOUNDS the wait.
     //
-    // So: ask it to stop, wait a bounded time, and give up rather than block.
-    // Deliberately SILENT even when the wait expires — TwLog::instance() is a
-    // function-local static constructed AFTER this one, hence destroyed BEFORE
-    // it, and logging into a destroyed sink at exit would trade a hang for a
-    // crash. The paths that can log (SApplication's destructor and main()'s
-    // test-mode exit) run first, while everything is still alive, and this is
-    // only reached when they did not.
-    cancelScan();
-    waitForScan( kTeardownJoinMs );
+    // The bound is the part that matters here. This runs during static
+    // destruction, after main() returned or from inside a --test-case run's
+    // std::exit(), and that is exactly where an unbounded join is lethal: the
+    // exiting thread holds the CRT teardown lock, and a scan thread that cannot
+    // return -- wedged in a plugin DSO, or already dead in abort() after an
+    // exception -- would hold the process open forever. Leaking that thread is
+    // the better trade; the OS reclaims it moments later.
+    stopScan();
 }
 
 // ---------------------------------------------------------------- config ----
@@ -293,8 +285,32 @@ void twPluginRegistry::appendBuiltins_nolock()
     passThrough.vendor = "Smaragd";
     passThrough.io     = { 2, 2 };
     passThrough.isInstrument = false;
+    passThrough.nOutBuses = 1;
+    passThrough.outBusChannels = { 2 };
 
     plugins_.push_back( passThrough );
+
+    // The in-house 303 (proposal 37 D7). Linked in exactly like the pass-through
+    // and for the same reason: the instrument path must be reachable in EVERY
+    // build and every worktree, with no SDK, no submodule and nothing installed.
+    // It appears in the browser like any other plugin, and it is the fallback
+    // instrument every instrument gate can rely on being present.
+    twPluginDescriptor native;
+    native.format = "tw";
+    native.uid    = "tw.native.303";
+    native.path   = "";   // linked-in, not a separate module
+    native.name   = "Smaragd 303";
+    native.vendor = "Smaragd";
+    native.io     = { 0, 1 };   // a generator: no audio in, one mono out
+    native.isInstrument   = true;
+    native.acceptsNotes   = true;
+    native.emitsNotes     = false;
+    native.eventPortsIn   = 1;
+    native.eventPortsOut  = 0;
+    native.nOutBuses      = 1;
+    native.outBusChannels = { 1 };
+
+    plugins_.push_back( native );
 }
 
 std::vector<twPluginDescriptor> twPluginRegistry::plugins() const
@@ -313,6 +329,22 @@ bool twPluginRegistry::findByUid( const std::string &format, const std::string &
                                   twPluginDescriptor &out ) const
 {
     std::lock_guard<std::mutex> g( mutex_ );
+    if( plugins_.empty() ) {
+        // Lazily seed the built-ins, exactly as plugins() does, and for a reason
+        // that only shows up on a COLD cache: a scan publishes plugins_ once, at
+        // the END, so until it finishes this vector is empty — and `tw.passthrough`
+        // and `tw.native.303` are LINKED IN. They have nothing to do with scanning
+        // and must resolve whether or not one has ever run.
+        //
+        // Without this, `insert-plugin format="tw" uid="tw.native.303"` fails for
+        // the first ~1.4 s of a cold-cache launch while the scanner walks the
+        // machine's installed modules, which is a real user-visible race and was
+        // caught as qxa.instrument_render_determinism_xproc failing under -j4 the
+        // first time the cache file was renamed out from under it. plugins()
+        // already had the seed; findByUid did not, so the bug was invisible to
+        // any caller that happened to list before it resolved.
+        const_cast<twPluginRegistry *>( this )->appendBuiltins_nolock();
+    }
     for( const twPluginDescriptor &d : plugins_ ) {
         if( d.uid == uid && ( format.empty() || d.format == format ) ) {
             out = d;
@@ -335,9 +367,10 @@ bool twPluginRegistry::rescanAsync( bool force )
     }
     // Both set BEFORE start(), so a caller that polls isScanning() immediately
     // after rescanAsync() cannot observe "already finished" before the thread
-    // runs — and so the worker never clears a cancel that arrived after it.
+    // runs — and so a stop requested for the PREVIOUS scan cannot abort this
+    // one on its first module.
+    stopRequested_.store( false, std::memory_order_release );
     scanning_.store( true, std::memory_order_release );
-    scanCancel_.store( false, std::memory_order_release );
     // NOTHING may leave this lambda. An exception escaping a QThread body goes
     // to std::terminate, and the verbose terminate handler's abort() then takes
     // the CRT lock — which, when the process is already exiting, the exiting
@@ -349,7 +382,7 @@ bool twPluginRegistry::rescanAsync( bool force )
     scanThread_ = QThread::create( [this, force]() {
         std::string what;
         try {
-            this->rescanImpl( force, false );
+            this->rescan( force );
             return;
         } catch( const std::exception &e ) {
             what = e.what();
@@ -392,21 +425,45 @@ bool twPluginRegistry::waitForScan( int timeoutMs )
     return true;
 }
 
-void twPluginRegistry::cancelScan()
+void twPluginRegistry::requestStopScan()
 {
-    scanCancel_.store( true, std::memory_order_release );
+    // Order-independent by construction (THREADING.md rule 4): the flag is only
+    // ever READ by the scan, so setting it is safe whether the scan has not
+    // started, is between modules, is mid-probe, or is already done — and it is
+    // safe from the scan thread itself, which is why this is separate from
+    // stopScan() (that one joins, and a self-join deadlocks).
+    stopRequested_.store( true, std::memory_order_release );
+}
+
+bool twPluginRegistry::stopScan( int timeoutMs )
+{
+    requestStopScan();
+
+    // BOUNDED. The loop breaks at the next module boundary and the probe wait
+    // breaks within one 100 ms slice, so a healthy worker is gone in well under
+    // the bound. One that is not — wedged inside a plugin DSO on the in-process
+    // fallback, or already dead in abort() — must not hold the process open:
+    // waitForScan() leaks it and says so, rather than waiting forever.
+    const bool joined = waitForScan( timeoutMs );
+    if( !joined ) {
+        // Safe to log even from ~twPluginRegistry: the sink is immortal
+        // (twlog.cc), precisely so that late teardown records cannot fault.
+        TW_LOGE( "plugins", "[scan] the scan thread did NOT stop within %d ms of being "
+                 "asked to; leaving it running and carrying on. If the process now "
+                 "hangs or crashes at exit, it is that thread — the module it was on "
+                 "is the last '[scan]' line above.", timeoutMs );
+        // Deliberately NOT cleared: the worker is still out there and must keep
+        // seeing the request. Clearing it here would tell it to carry on.
+        return false;
+    }
+    // Cleared once the thread is gone, so a later rescan() -- the headless
+    // tests drive the synchronous one directly -- is not aborted on entry.
+    stopRequested_.store( false, std::memory_order_release );
+    return true;
 }
 
 void twPluginRegistry::rescan( bool force )
 {
-    // A direct call is an explicit new scan, so it owns the cancel flag.
-    rescanImpl( force, true );
-}
-
-void twPluginRegistry::rescanImpl( bool force, bool clearCancel )
-{
-    if( clearCancel ) scanCancel_.store( false, std::memory_order_release );
-
     scanning_.store( true, std::memory_order_release );
     ScanFlagGuard flagGuard{ scanning_ };
 
@@ -470,22 +527,28 @@ void twPluginRegistry::rescanImpl( bool force, bool clearCancel )
     std::vector<twPluginDescriptor>            found;
     bool probeUsable = !probeExe.empty();
 
-    // Cancellation, checked here and once per probe slice. Nothing about a
-    // cancelled scan is published: the plugin list keeps whatever the last
-    // COMPLETE scan produced, and the cache file on disk is left exactly as it
-    // was. The registry stays usable, and the next rescan starts clean.
-    const auto cancelled = [this]() {
-        return scanCancel_.load( std::memory_order_acquire );
-    };
-    const auto bailOut = [&]( const char *where ) {
-        std::lock_guard<std::mutex> g( mutex_ );
-        stats_.running = false;
-        TW_LOGI( "plugins", "[scan] cancelled %s — the cache is left untouched and "
-                 "the registry keeps its previous plugin list", where );
-    };
+    // Indexed, not range-for, so an aborted scan knows where it stopped and can
+    // carry the modules it never reached over from the previous cache.
+    size_t mi      = 0;
+    bool   aborted = false;
+    for( ; mi < mods.size(); ++mi ) {
+        const twPluginModuleFile &m = mods[mi];
 
-    for( const twPluginModuleFile &m : mods ) {
-        if( cancelled() ) { bailOut( "between modules" ); return; }
+        // Abort point one of three: BETWEEN modules. The other two are inside
+        // the probe wait (once per 100 ms slice) and immediately before the
+        // in-process fallback, which cannot be interrupted once it has entered
+        // a plugin's DSO. Between-modules alone would make a stop cost up to
+        // probeTimeoutMs_ per installed module, which is a teardown budget the
+        // app does not have. The app's orderly teardown (SApplication's
+        // destructor / smaragdOrderlyShutdown) sets this and then joins, so the
+        // scan thread is gone before static destruction begins -- see
+        // plan/STATE.md 2026-08-16.
+        if( stopRequested_.load( std::memory_order_acquire ) ) {
+            aborted = true;
+            break;
+        }
+
+
         st.currentPath = m.path;
         {
             std::lock_guard<std::mutex> g( mutex_ );
@@ -523,8 +586,12 @@ void twPluginRegistry::rescanImpl( bool force, bool clearCancel )
 
         ProbeOutcome po = ProbeOutcome::Unavailable;
         if( probeUsable ) {
-            po = probeOutOfProcess( m, probeExe, timeoutMs, scanCancel_, rec.plugins );
-            if( po == ProbeOutcome::Cancelled ) { bailOut( "mid-probe" ); return; }
+            po = probeOutOfProcess( m, probeExe, timeoutMs, stopRequested_, rec.plugins );
+            // Abort point two: MID-PROBE. Nothing is recorded for this module —
+            // it was never judged, and a module that was merely interrupted must
+            // not become a sticky failure. The merge-forward below carries its
+            // previous record over instead.
+            if( po == ProbeOutcome::Cancelled ) { aborted = true; break; }
             if( po == ProbeOutcome::Unavailable ) {
                 // A probe that will not start will not start for the next
                 // module either; stop paying 5 s per module for it.
@@ -532,11 +599,16 @@ void twPluginRegistry::rescanImpl( bool force, bool clearCancel )
             }
         }
         if( po == ProbeOutcome::Unavailable ) {
-            // The in-process fallback loads foreign code on THIS thread and
-            // cannot be interrupted part-way, so the last chance to notice a
-            // cancel is before it starts. The bounded wait in waitForScan() is
-            // what covers a module that never returns from here.
-            if( cancelled() ) { bailOut( "before an in-process probe" ); return; }
+            // Abort point three: BEFORE the in-process fallback. It loads
+            // foreign code on THIS thread and cannot be interrupted once it has
+            // entered the DSO, so this is the last chance to notice. A module
+            // that never returns from here is what the bound in stopScan()
+            // covers — that one ends in a leaked thread and a loud log, not a
+            // hung process.
+            if( stopRequested_.load( std::memory_order_acquire ) ) {
+                aborted = true;
+                break;
+            }
             po = probeInProcess( m, rec.plugins );
         }
 
@@ -565,6 +637,28 @@ void twPluginRegistry::rescanImpl( bool force, bool clearCancel )
     st.currentPath.clear();
     st.running = false;
 
+    if( aborted ) {
+        // Everything already probed is still worth remembering, and so is every
+        // record for a module we never reached -- dropping those would restart
+        // the scan cold on the next run, forever. plugins_ is deliberately NOT
+        // replaced: a partial `found` is not the plugin table.
+        for( size_t j = mi; j < mods.size(); ++j ) {
+            const auto it = cache.find( mods[j].path );
+            if( it != cache.end() ) next[mods[j].path] = it->second;
+        }
+        savePluginScanCache( cachePath, kScannerVersion, next );
+        {
+            std::lock_guard<std::mutex> g( mutex_ );
+            cache_ = std::move( next );
+            stats_ = st;
+        }
+        TW_LOGI( "plugins", "[scan] stopped after %d of %d module(s) (%d probed, "
+                 "%d cached); the cache keeps what was learned",
+                 (int) mi, st.modulesFound, st.modulesProbed, st.modulesCached );
+        if( progress ) progress( st );
+        return;
+    }
+
     savePluginScanCache( cachePath, kScannerVersion, next );
 
     {
@@ -591,6 +685,9 @@ std::unique_ptr<twPlugin> twPluginRegistry::instantiate( const twPluginDescripto
 {
     if( desc.uid == "tw.passthrough" ) {
         return createPassThroughPlugin();
+    }
+    if( desc.uid == "tw.native.303" ) {
+        return createNativeInstrument();
     }
 
     if( desc.format == "clap" ) {

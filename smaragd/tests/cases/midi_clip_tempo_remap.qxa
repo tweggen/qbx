@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 37 P1, AC3. `set-tempo` moves MIDI and leaves audio where it is.
+
+  This is the whole point of D2's `SLink::timebase`. An event clip is placed on
+  the BEAT (`timebase=beats`, the default for event content, REAPER's default
+  too): its exact musical position is the authority and its frame position is
+  derived, so halving the tempo doubles where it sits and how long it lasts,
+  and the notes inside it move with it. An audio clip is pinned to TIME and
+  does not move at all.
+
+  Numbers, at PPQ 960 / 48 kHz:
+      120 BPM -> 25 frames per tick   (960 ticks = 24000 frames)
+       60 BPM -> 50 frames per tick   (960 ticks = 48000 frames)
+  The MIDI clip is placed at 96000 frames = 2 s = tick 3840; at 60 BPM that
+  same tick 3840 is 192000 frames. Nothing here is rounded: the conversion is
+  exact rational arithmetic through the ONE tempo map (events/CONTRACT inv. 4).
+
+  It also gates the LIFO undo argument: `set-tempo` is itself an action, so an
+  inverse captured in frames is always re-applied at the tempo it was captured
+  under - which is only true because nothing outside the action system writes
+  the map (AC6's grep).
+-->
+<SActionScript version="1" name="midi_clip_tempo_remap">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Track 0: AUDIO at 2 s. Pinned to time (SLink::Timebase::Time). -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+
+    <!-- Track 1: MIDI at 2 s, one note at tick 960 (= one beat in). -->
+    <insert-midi-clip trackPath="1" timePos="96000" duration="3840" name="Beat"/>
+    <add-note clip="1,0" tick="960" dur="480" key="60" velocity="100" channel="0"/>
+
+    <assert-clip-window clip="1,0" startTime="96000" duration="96000"/>
+    <assert-clip-window clip="0,0" startTime="96000" duration="192000"/>
+    <assert-midi-events clip="1,0" kind="note" count="1" key="60" at="24000"/>
+
+    <!-- =============== 120 -> 60 BPM: everything musical doubles ========= -->
+    <set-tempo bpm="60"/>
+    <assert-clip-window clip="1,0" startTime="192000" duration="192000"/>
+    <assert-midi-events clip="1,0" kind="note" count="1" key="60" at="48000"/>
+    <!-- ... and the AUDIO clip has not moved by one frame. -->
+    <assert-clip-window clip="0,0" startTime="96000" duration="192000"/>
+
+    <undo count="1"/>
+    <assert-clip-window clip="1,0" startTime="96000" duration="96000"/>
+    <assert-midi-events clip="1,0" kind="note" count="1" key="60" at="24000"/>
+    <assert-clip-window clip="0,0" startTime="96000" duration="192000"/>
+
+    <!-- ============ pinned to TIME: the placement stops following ======== -->
+    <set-link-timebase clip="1,0" timebase="time"/>
+    <set-tempo bpm="60"/>
+    <!-- The LINK stays at 2 s. The clip's CONTENT is still musical, so its own
+         length still doubles - the window is a musical window over musical
+         material (D2); only the placement was pinned. -->
+    <assert-clip-window clip="1,0" startTime="96000" duration="192000"/>
+    <assert-midi-events clip="1,0" kind="note" count="1" key="60" at="48000"/>
+
+    <undo count="1"/>
+    <assert-clip-window clip="1,0" startTime="96000" duration="96000"/>
+    <assert-midi-events clip="1,0" kind="note" count="1" key="60" at="24000"/>
+    <undo count="1"/>
+    <!-- Back on the beat, and back where it was. -->
+    <set-tempo bpm="60"/>
+    <assert-clip-window clip="1,0" startTime="192000" duration="192000"/>
+    <undo count="1"/>
+    <assert-clip-window clip="1,0" startTime="96000" duration="96000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

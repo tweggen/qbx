@@ -12,6 +12,16 @@ component is the right tap is the app's decision, not this module's.
 
 Invariants:
 
+0. **The tap is the track's ROOT (its twRewire), and since proposal 37 P3a its
+   producer is `twGainStage` — the fader.** The reading was post-fader before
+   the move too (the fader was a scalar inside twTrackMix, further upstream
+   still), so nothing here changed in KIND; what changed is that the component
+   whose content epoch guards the rewire's cached input page is now the one the
+   fader writes. That is what retired the "a gain change made after a position
+   was first frozen is not observed on the legacy pull" caveat this contract's
+   readers were pointed at. A PRE-fader meter is still not available without new
+   engine work.
+
 1. **Levels are read BY POSITION, never computed at freeze time.** Pages are
    frozen by readahead/revalidator workers far ahead of the playhead (a page is
    65536 frames ≈ 1.37 s at 48 kHz) and by renders with no playhead at all, so a

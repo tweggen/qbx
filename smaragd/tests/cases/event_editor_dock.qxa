@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 37 P4, AC2. The event editor DOCK: the real fifth QDockWidget built
+  in SMainWindow's constructor, never shown (a headless run does not show the
+  window at all), described through SEventEditorDock::describe().
+
+  What this pins:
+    (a) the dock BINDS to an event clip and reports what the piano roll holds -
+        `notes=1|grid=1/16|linked=1` is asserted as ONE contiguous substring,
+        which is what fixes the field order of describe(): a case matches a
+        run of fields, not a set;
+    (b) it is a SELECTION FOLLOWER (timeline invariant 8): selecting an AUDIO
+        clip clears it, `empty=1`. Not "keeps showing the last MIDI clip" -
+        an editor that lags the selection is how a user edits the wrong clip;
+    (c) the kind REGISTRY resolves "pianoroll" (`kind=pianoroll`); an unknown
+        kind leaves the current view standing rather than blanking the dock;
+    (d) the grid combo reaches the view AND the ruler, and the division is
+        parsed by the same parser `quantize-notes grid=` uses;
+    (e) `quantize-notes` from the toolbar is ONE undo step over the whole clip.
+
+  The PNG grabs are coverage of the paint paths - SPianoRollView::paintEvent,
+  SEventTimeRuler::paintEvent and the toolbar - not oracles. Nothing asserts
+  their pixels; they exist because a widget that throws in paintEvent passes
+  every describe() assertion ever written.
+-->
+<SActionScript version="1" name="event_editor_dock">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Notes"/>
+    <set-selection paths="0,0"/>
+    <set-locator position="0"/>
+
+    <!-- Empty clip, bound: the editor is not empty, it just has no notes. -->
+    <assert-event-editor clip="0,0" kind="pianoroll"
+                         contains="kind=pianoroll|notes=0|grid=1/16|linked=1|empty=0"/>
+
+    <virtual-key key="60" velocity="100" durationTicks="960"/>
+    <assert-event-editor clip="0,0" kind="pianoroll"
+                         contains="notes=1|grid=1/16|linked=1"
+                         absent="empty=1"
+                         grabPng="event_editor_pianoroll.png"/>
+
+    <!-- ===================== the selection follower ===================== -->
+    <!-- A second track with an AUDIO clip. Selecting it must CLEAR the editor:
+         a piano roll over a waveform is the wrong tool, and the dock says so
+         rather than showing the previous clip. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-selection paths="1,0"/>
+    <assert-event-editor kind="pianoroll" contains="empty=1"
+                         absent="notes=1"
+                         grabPng="event_editor_empty.png"/>
+
+    <!-- ...and back. The dock re-resolves the PATH; it caches no SLink*. -->
+    <set-selection paths="0,0"/>
+    <assert-event-editor kind="pianoroll" contains="notes=1|grid=1/16|linked=1"/>
+
+    <!-- ========================= quantize-notes ========================= -->
+    <!-- What the toolbar's Quantize button submits. The note sits at tick 10,
+         which 1/16 (240 ticks at PPQ 960) rounds to 0; ONE undo step restores
+         it. 10 ticks = 250 frames. -->
+    <add-note clip="0,0" tick="10" dur="240" key="72" velocity="90" channel="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="250"/>
+    <assert-event-editor clip="0,0" kind="pianoroll" contains="notes=2"/>
+    <quantize-notes clip="0,0" grid="1/16" strength="1.0" swing="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="250"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

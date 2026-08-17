@@ -1,3 +1,7 @@
 # Shell scripts must keep LF line endings on every platform — CRLF breaks the
 # shebang / commands when run under bash (macOS, Linux, and Git Bash on Windows).
 *.sh text eol=lf
+
+# Standard MIDI Files are binary: the corpus is compared BYTE for byte
+# (events_test authored-file identity), so no eol conversion may touch them.
+*.mid binary

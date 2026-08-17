@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_mute_step">
+
+  <!-- Proposal 37 P5 (design D5): A `self:Muted` LANE IS THE *AUDIO* MUTE, AND
+       IT IS RAMPED.
+
+       Two different things are called mute in this codebase and P5 is where the
+       second one arrives:
+
+         * the mute BUTTON (`set-track-mute`, solo) is STRUCTURAL - the parent
+           nulls the muted child's input plug or skips its clip entry, so the
+           track's OWN output still contains its material and an asset capture
+           of it is not silence;
+         * the `self:Muted` LANE is AUDIO - it drives twGainStage, post-FX, with
+           the ~1.5 ms ramp P3a built and left unwired.
+
+       WHAT IS ASSERTED, and why each half has teeth:
+
+       (a) THE BODY IS SILENT. rms over [1.002 s, 1.998 s) < 0.0001, i.e. the
+           lane really zeroes the signal rather than merely lowering it.
+
+       (b) THE EDGES ARE RAMPS, NOT STEPS. The window measured at each
+           transition is 100 frames - 2.083 ms, and EXACTLY one period of the
+           480 Hz fixture, which is what makes its rms a closed form instead of
+           a function of where in the cycle it happened to land. The gain stage
+           ramps over 72 frames (1.5 ms at 48 kHz), so:
+
+               mute ON  at 48000: rms over [48000, 48100) = 0.139723
+               mute OFF at 96000: rms over [96000, 96100) = 0.163802
+               the fixture's own level                    = 0.230956
+
+           Both bands below are +/-25 % of those, and BOTH EXCLUDE BOTH
+           ENDPOINTS. A hard step would give exactly 0 at the first and exactly
+           0.230956 at the second; no lane at all gives 0.230956 at both. So the
+           only thing that passes is a ramp of about the right length.
+
+       (c) EVERYTHING OUTSIDE IS UNTOUCHED, byte for byte, against a render made
+           before the lane existed. Not "about the same level" - the same bytes,
+           which is what says the lane costs nothing where it says nothing.
+
+       THE LANE HOLDS *AUDIBLE* BEFORE ITS FIRST POINT. Every other lane holds
+       its first point's value there (the universal automation convention), but
+       a mute lane whose first point is "on" at 1 s would then silence second 0
+       too - and "muted from frame 0" is what the structural mute is for. That
+       asymmetry is the reason (c) can be asserted at all; it is implemented as
+       an explicit anchor point at frame 0, not as a special case in the
+       consumer, so the model and the engine cannot disagree about it.
+
+       Fixture: ../test_autosaw.wav - see tests/tools/gen_auto_fixture.py. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <render filename="ams_nolane.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="ams_nolane.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+
+    <add-automation-lane owner="0" target="self:Muted" mode="read"/>
+    <add-automation-point owner="0" target="self:Muted" time="48000" value="1"/>
+    <add-automation-point owner="0" target="self:Muted" time="96000" value="0"/>
+
+    <!-- The model's own view: audible before the first point, muted between,
+         audible after. -->
+    <assert-automation-value owner="0" target="self:Muted"
+                             time="0" value="0" tolerance="1e-9" pointCount="2"/>
+    <assert-automation-value owner="0" target="self:Muted"
+                             time="47999" value="0" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Muted"
+                             time="70000" value="1" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Muted"
+                             time="150000" value="0" tolerance="1e-9"/>
+
+    <render filename="ams_muted.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- (a) -->
+    <assert-audio-energy filename="ams_muted.wav" channel="0"
+                         startFrame="48096" frameCount="47808"
+                         minRms="0" maxRms="0.0001"/>
+
+    <!-- (b) -->
+    <assert-audio-energy filename="ams_muted.wav" channel="0"
+                         startFrame="48000" frameCount="100"
+                         minRms="0.10479" maxRms="0.17466"/>
+    <assert-audio-energy filename="ams_muted.wav" channel="0"
+                         startFrame="96000" frameCount="100"
+                         minRms="0.12285" maxRms="0.20476"/>
+
+    <!-- (c) -->
+    <assert-file-identical actual="ams_muted.wav" expected="ams_nolane.wav"
+                           startFrame="0" frameCount="48000"/>
+    <assert-file-identical actual="ams_muted.wav" expected="ams_nolane.wav"
+                           startFrame="144000" frameCount="48000"/>
+
+    <!-- ...and repeatable. -->
+    <render filename="ams_muted2.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ams_muted2.wav" expected="ams_muted.wav"/>
+
+    <!-- Dropping the lane restores the untouched render EXACTLY - the scalar
+         path, not "a curve that happens to be 1". -->
+    <remove-automation-lane owner="0" target="self:Muted"/>
+    <render filename="ams_removed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ams_removed.wav" expected="ams_nolane.wav"/>
+
+    <!-- ...and the inverse of a removal carries the whole point list back. -->
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Muted"
+                             time="70000" value="1" tolerance="1e-9" pointCount="2"/>
+    <render filename="ams_readded.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ams_readded.wav" expected="ams_muted.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

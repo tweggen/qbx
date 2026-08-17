@@ -448,8 +448,23 @@ std::vector<twPluginDescriptor> vst3ModuleDescriptors( const std::string &path )
         // instance to ask. Creating one is the only honest answer, and it is
         // also what makes an out-of-process probe worth having (M2).
         d.io = twPluginIoLayout{ 0, 0 };
-        if( std::unique_ptr<twPlugin> inst = createVst3Plugin( path, d.uid ) )
+        if( std::unique_ptr<twPlugin> inst = createVst3Plugin( path, d.uid ) ) {
             d.io = inst->ioLayout();
+
+            // Scanner version 2 (proposal 37 P2): the event buses and the aux
+            // audio outs, read off the SAME instance the I/O came from.
+            const twPluginCapabilities caps = inst->capabilities();
+            d.acceptsNotes  = caps.acceptsNotes;
+            d.emitsNotes    = caps.emitsNotes;
+            d.eventPortsIn  = caps.notePortsIn;
+            d.eventPortsOut = caps.notePortsOut;
+            d.isInstrument  = d.isInstrument || caps.isInstrument;
+
+            d.nOutBuses = (std::uint16_t)inst->audioOutBusCount();
+            d.outBusChannels.clear();
+            for( std::size_t b = 0; b < (std::size_t)d.nOutBuses; ++b )
+                d.outBusChannels.push_back( inst->audioOutBus( b ).channels );
+        }
 
         out.push_back( std::move( d ) );
     }

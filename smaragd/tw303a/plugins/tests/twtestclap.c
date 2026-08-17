@@ -1,33 +1,60 @@
 /* twtestclap — an in-repo CLAP plugin used as a BUILD-TIME TEST FIXTURE.
  *
- * proposal 08 M1. Without this, the only way to exercise the real CLAP load
- * path (LoadLibrary/dlopen -> clap_entry -> factory -> activate -> process ->
- * params -> state) is to install a third-party plugin on the machine running
- * the tests, which no CI and no fresh checkout can be asked to do. This module
- * is built as a MODULE library named twtestclap.clap and its absolute path is
- * handed to plugins_test as a compile definition.
+ * proposal 08 M1, extended by proposal 37 P2. Without this, the only way to
+ * exercise the real CLAP load path (LoadLibrary/dlopen -> clap_entry -> factory
+ * -> activate -> process -> params -> events -> state) is to install a
+ * third-party plugin on the machine running the tests, which no CI and no fresh
+ * checkout can be asked to do. This module is built as a MODULE library named
+ * twtestclap.clap and its absolute path is handed to plugins_test as a compile
+ * definition.
  *
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * Behaviour — 2 in / 2 out, two parameters:
+ * FOUR entry points:
+ *
+ *   tw.test.clap.gain         2 in / 2 out effect     (M1)
+ *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
+ *   tw.test.clap.sine         0 in / stereo + aux out INSTRUMENT   (37 P2)
+ *   tw.test.clap.arp          note in / note out      (37 P2)
+ *
+ * --- tw.test.clap.gain -------------------------------------------------------
+ *
  *   id 0  "Gain"              0 .. 4, default 1      out = in * gain
  *   id 1  "Report Block Size" 0 .. 1, default 0, stepped
  *                             when >= 0.5, every output sample is set to
  *                             (float)frames_count instead of the gain result.
  *                             That is how the host-side chunking test observes
  *                             the block size the plugin actually saw.
+ *   id 2  "Clip Threshold"    0 .. 4, default 0 (off)
+ *                             when > 0, the gained sample is HARD CLIPPED to
+ *                             +/- threshold. Order-sensitive by construction:
+ *                             gain-then-clip and clip-then-gain give different
+ *                             audio, which is what proposal 37 P3a's fader-move
+ *                             ORDER case discriminates with.
  *
- * It also implements clap.state (the two parameter values, little-endian
- * doubles) and clap.latency (a fixed 0), so the host's state framing and
- * latency query have something real to talk to.
+ *   NOTE ON THE ID. The brief for P2 says "param id 1 clipThreshold". Id 1 was
+ *   already taken by "Report Block Size" (M1), which the host-chunking gate
+ *   reads, so the clipper is id 2. Renumbering the existing one would have moved
+ *   a live gate's parameter out from under it for no benefit. Recorded in
+ *   plan/STATE.md so P3a's case quotes the right id.
  *
- * Deliberate strictness: if process() is ever handed more frames than the
- * host promised at activate(), the plugin returns CLAP_PROCESS_ERROR instead of
+ * Parameter values are applied AT THEIR EVENT TIME, not at the top of the block
+ * (proposal 37 AC2): the plugin renders the block in segments split at each
+ * parameter event. With no mid-block event that is one segment and exactly the
+ * arithmetic M1 had, so the effect goldens do not move.
+ *
+ * clap.state stores the two M1 parameters as little-endian doubles, and appends
+ * the clip threshold ONLY when it is non-zero. That keeps a default instance's
+ * blob byte-identical to the M1 one — plugin_slot_roundtrip.qxa asserts the
+ * exact base64 of a saved chunk — while still persisting the clipper when a
+ * project uses it. The loader accepts either length.
+ *
+ * Deliberate strictness: if process() is ever handed more frames than the host
+ * promised at activate(), the plugin returns CLAP_PROCESS_ERROR instead of
  * overrunning. A host-side chunking regression therefore fails loudly.
  *
- * The module exports a SECOND plugin, added for proposal 08 M3:
- *   tw.test.clap.stereoskew  "Smaragd Test Stereo Skew"
+ * --- tw.test.clap.stereoskew (M3) --------------------------------------------
  *
  * Same params, same ports, but a DEFAULT behaviour that is deliberately both
  * channel-asymmetric AND cross-channel:
@@ -43,26 +70,79 @@
  *    track does) and channel 0 comes out at 1.5x. If input 1 were SILENT — the
  *    pre-M3 bug, where a chain built with nBusses == 1 wired only port 0 — it
  *    would come out at 0.5x, and with no plugin at all at 1.0x. Three bands far
- *    enough apart for an RMS assertion to tell them apart. This is what makes
- *    the silent-right-input bug visible even though the offline render still
- *    collapses the graph's buses to one mono page (RenderSession's
- *    "bufR[i] = sample; // proper multi-channel TBD").
+ *    enough apart for an RMS assertion to tell them apart.
  *  - out[1] != out[0], so once the sink really is multi-channel the same
  *    fixture proves the per-bus taps carry distinct audio.
+ *
+ * --- tw.test.clap.sine (proposal 37 P2, design §5.3) -------------------------
+ *
+ * The reference INSTRUMENT. Features INSTRUMENT|SYNTHESIZER; 0 audio in; a
+ * stereo MAIN out plus a mono AUX out (so the descriptor's nOutBuses / aux
+ * discovery has something real to report). One note input port declaring
+ * CLAP|MIDI with CLAP preferred, so the host's dialect negotiation is exercised.
+ *
+ * 16 sine voices, oldest-steals, amp = velocity, NO envelope and instant on/off
+ * — which is exactly what makes it gateable: the RMS of a held note is
+ * velocity/sqrt(2) * gain in closed form, the fundamental is exactly the key's
+ * frequency, and silence before the note-on and after the note-off is EXACT
+ * (peak < 1e-6), not "small". A voice's phase starts at 0 on note-on, so two
+ * runs of "reset, note-on, render N" are byte-identical (AC5).
+ *
+ * It pushes CLAP_EVENT_NOTE_END on every note-off, so the host's event-OUT path
+ * has a producer that is not the arpeggiator.
+ *
+ * CLAP_PROCESS_ERROR on an over-size block (as the gain fixture) and on a
+ * WILDCARD note-on (key < 0): a host that forwards a wildcard to an instrument
+ * has lost the note's identity, and failing loudly beats playing a wrong note.
+ *
+ * --- tw.test.clap.arp (proposal 37 P2, AC4) ----------------------------------
+ *
+ * A note-in / note-out plugin with NO audio ports. It holds the keys that are
+ * down and emits a NoteOn on a fixed 4096-frame grid with a NoteOff 2048 frames
+ * later, through out_events->try_push — the host's twEventOut plumbing under a
+ * producer whose output count has a closed form:
+ *
+ *     notes-on over N frames from a key held at frame 0 = ceil(N / 4096)
+ *     each is paired with exactly one note-off (2048 < 4096, so no overlap)
+ *
+ * The grid counts from reset(), in ABSOLUTE frames, so it is independent of how
+ * the host chunks the block.
  */
 
 #include <clap/clap.h>
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* M_PI is not in ISO C and MinGW hides it under _USE_MATH_DEFINES; spelling it
+ * out keeps the fixture free of feature-test macros. */
+#define TW_PI 3.14159265358979323846
+
 #define TW_TESTCLAP_ID      "tw.test.clap.gain"
 #define TW_TESTCLAP_SKEW_ID "tw.test.clap.stereoskew"
+#define TW_TESTCLAP_SINE_ID "tw.test.clap.sine"
+#define TW_TESTCLAP_ARP_ID  "tw.test.clap.arp"
+
+/* Which of the four this instance is. */
+enum tw_kind { TW_KIND_GAIN = 0, TW_KIND_SKEW = 1, TW_KIND_SINE = 2, TW_KIND_ARP = 3 };
+
+#define TW_SINE_VOICES 16
+#define TW_ARP_GRID    4096u
+#define TW_ARP_GATE    2048u
 
 static const char *const s_features[] = { CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
-                                         CLAP_PLUGIN_FEATURE_UTILITY,
-                                         CLAP_PLUGIN_FEATURE_STEREO,
-                                         NULL };
+                                          CLAP_PLUGIN_FEATURE_UTILITY,
+                                          CLAP_PLUGIN_FEATURE_STEREO,
+                                          NULL };
+
+static const char *const s_features_inst[] = { CLAP_PLUGIN_FEATURE_INSTRUMENT,
+                                               CLAP_PLUGIN_FEATURE_SYNTHESIZER,
+                                               CLAP_PLUGIN_FEATURE_STEREO,
+                                               NULL };
+
+static const char *const s_features_note[] = { CLAP_PLUGIN_FEATURE_NOTE_EFFECT,
+                                               NULL };
 
 static const clap_plugin_descriptor_t s_desc_skew = {
    .clap_version = CLAP_VERSION_INIT,
@@ -86,33 +166,93 @@ static const clap_plugin_descriptor_t s_desc = {
    .manual_url   = "",
    .support_url  = "",
    .version      = "1.0.0",
-   .description  = "Test fixture: stereo gain with a block-size reporter",
+   .description  = "Test fixture: stereo gain with a block-size reporter and a clipper",
    .features     = s_features,
 };
+
+static const clap_plugin_descriptor_t s_desc_sine = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_SINE_ID,
+   .name         = "Smaragd Test Sine",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: 16-voice envelope-less sine instrument",
+   .features     = s_features_inst,
+};
+
+static const clap_plugin_descriptor_t s_desc_arp = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_ARP_ID,
+   .name         = "Smaragd Test Arp",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: note in / note out on a fixed frame grid",
+   .features     = s_features_note,
+};
+
+typedef struct {
+   int      active;    /* 1 while sounding */
+   int      key;
+   int32_t  noteId;
+   int16_t  channel;
+   int16_t  port;
+   double   velocity;
+   double   phase;     /* 0 .. 1 */
+   double   phaseInc;
+   uint64_t age;       /* for oldest-steals */
+} tw_voice_t;
 
 typedef struct {
    clap_plugin_t      base;
    const clap_host_t *host;
 
+   int      kind;
    double   gain;
    double   report;
+   double   clip;      /* 0 = off; > 0 = hard clip at +/- clip AFTER the gain */
    uint32_t maxFrames;
+   double   sampleRate;
    int      active;
-   int      skew;      /* 1 = attenuate channels above the first by 0.5 */
+
+   /* sine */
+   tw_voice_t voices[TW_SINE_VOICES];
+   uint64_t   voiceAge;
+
+   /* arp */
+   int      heldKeys[TW_SINE_VOICES];
+   int16_t  heldChans[TW_SINE_VOICES];
+   int      nHeld;
+   uint64_t arpFrame;      /* absolute frames since reset */
+   int      arpOffPending; /* 1 when an off is scheduled */
+   uint64_t arpOffAt;      /* absolute frame of the pending off */
+   int      arpOffKey;
+   int16_t  arpOffChan;
+   int32_t  arpOffId;
+   int32_t  arpNextId;
 } tw_testclap_t;
 
 /* ---------------------------------------------------------------- params */
 
 static uint32_t tc_params_count( const clap_plugin_t *p )
 {
-   (void)p;
-   return 2;
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( self->kind == TW_KIND_ARP )
+      return 0;
+   if( self->kind == TW_KIND_SINE )
+      return 1;   /* Gain only */
+   return 3;      /* Gain, Report Block Size, Clip Threshold */
 }
 
 static bool tc_params_get_info( const clap_plugin_t *p, uint32_t index,
                                 clap_param_info_t *info )
 {
-   (void)p;
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
    memset( info, 0, sizeof( *info ) );
    if( index == 0 ) {
       info->id            = 0;
@@ -123,6 +263,8 @@ static bool tc_params_get_info( const clap_plugin_t *p, uint32_t index,
       strncpy( info->name, "Gain", CLAP_NAME_SIZE - 1 );
       return true;
    }
+   if( self->kind == TW_KIND_SINE || self->kind == TW_KIND_ARP )
+      return false;
    if( index == 1 ) {
       info->id            = 1;
       info->flags         = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
@@ -132,6 +274,15 @@ static bool tc_params_get_info( const clap_plugin_t *p, uint32_t index,
       strncpy( info->name, "Report Block Size", CLAP_NAME_SIZE - 1 );
       return true;
    }
+   if( index == 2 ) {
+      info->id            = 2;
+      info->flags         = CLAP_PARAM_IS_AUTOMATABLE;
+      info->min_value     = 0.0;
+      info->max_value     = 4.0;
+      info->default_value = 0.0;   /* off */
+      strncpy( info->name, "Clip Threshold", CLAP_NAME_SIZE - 1 );
+      return true;
+   }
    return false;
 }
 
@@ -139,7 +290,10 @@ static bool tc_params_get_value( const clap_plugin_t *p, clap_id id, double *out
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
    if( id == 0 ) { *out = self->gain;   return true; }
+   if( self->kind == TW_KIND_SINE || self->kind == TW_KIND_ARP )
+      return false;
    if( id == 1 ) { *out = self->report; return true; }
+   if( id == 2 ) { *out = self->clip;   return true; }
    return false;
 }
 
@@ -171,6 +325,13 @@ static bool tc_params_text_to_value( const clap_plugin_t *p, clap_id id,
    return false;
 }
 
+static void tc_apply_param( tw_testclap_t *self, clap_id id, double value )
+{
+   if( id == 0 ) self->gain   = value;
+   if( id == 1 ) self->report = value;
+   if( id == 2 ) self->clip   = value;
+}
+
 static void tc_apply_events( tw_testclap_t *self, const clap_input_events_t *in )
 {
    if( !in || !in->size || !in->get )
@@ -183,8 +344,7 @@ static void tc_apply_events( tw_testclap_t *self, const clap_input_events_t *in 
       if( h->type != CLAP_EVENT_PARAM_VALUE )
          continue;
       const clap_event_param_value_t *e = (const clap_event_param_value_t *)h;
-      if( e->param_id == 0 ) self->gain   = e->value;
-      if( e->param_id == 1 ) self->report = e->value;
+      tc_apply_param( self, e->param_id, e->value );
    }
 }
 
@@ -208,22 +368,56 @@ static const clap_plugin_params_t s_params = {
 
 static uint32_t tc_ports_count( const clap_plugin_t *p, bool is_input )
 {
-   (void)p; (void)is_input;
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( self->kind == TW_KIND_ARP )
+      return 0;                       /* a note effect makes no sound */
+   if( self->kind == TW_KIND_SINE )
+      return is_input ? 0u : 2u;      /* an instrument: main stereo + aux mono */
    return 1;
 }
 
 static bool tc_ports_get( const clap_plugin_t *p, uint32_t index, bool is_input,
                           clap_audio_port_info_t *info )
 {
-   (void)p;
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   memset( info, 0, sizeof( *info ) );
+   info->in_place_pair = CLAP_INVALID_ID;
+
+   if( self->kind == TW_KIND_ARP )
+      return false;
+
+   if( self->kind == TW_KIND_SINE ) {
+      if( is_input )
+         return false;
+      if( index == 0 ) {
+         info->id            = 1;
+         info->flags         = CLAP_AUDIO_PORT_IS_MAIN;
+         info->channel_count = 2;
+         info->port_type     = CLAP_PORT_STEREO;
+         strncpy( info->name, "Main Out", CLAP_NAME_SIZE - 1 );
+         return true;
+      }
+      if( index == 1 ) {
+         /* The AUX out. Nothing consumes it yet (proposal 37 §5.4 routes aux
+          * outs to return tracks in P9) — it exists so the descriptor's
+          * nOutBuses / outBusChannels have something other than 1 to report,
+          * and so a host that mis-sizes its per-port scratch is caught. */
+         info->id            = 2;
+         info->flags         = 0;
+         info->channel_count = 1;
+         info->port_type     = CLAP_PORT_MONO;
+         strncpy( info->name, "Aux Out", CLAP_NAME_SIZE - 1 );
+         return true;
+      }
+      return false;
+   }
+
    if( index != 0 )
       return false;
-   memset( info, 0, sizeof( *info ) );
    info->id            = is_input ? 0 : 1;
    info->flags         = CLAP_AUDIO_PORT_IS_MAIN;
    info->channel_count = 2;
    info->port_type     = CLAP_PORT_STEREO;
-   info->in_place_pair = CLAP_INVALID_ID;
    strncpy( info->name, is_input ? "Main In" : "Main Out", CLAP_NAME_SIZE - 1 );
    return true;
 }
@@ -233,6 +427,58 @@ static const clap_plugin_audio_ports_t s_ports = {
    .get   = tc_ports_get,
 };
 
+/* ------------------------------------------------------------ note ports */
+
+static uint32_t tc_note_ports_count( const clap_plugin_t *p, bool is_input )
+{
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( self->kind == TW_KIND_SINE )
+      return is_input ? 1u : 0u;
+   if( self->kind == TW_KIND_ARP )
+      return 1u;                      /* one in AND one out */
+   return 0u;
+}
+
+static bool tc_note_ports_get( const clap_plugin_t *p, uint32_t index, bool is_input,
+                               clap_note_port_info_t *info )
+{
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( index != 0 )
+      return false;
+   if( self->kind != TW_KIND_SINE && self->kind != TW_KIND_ARP )
+      return false;
+   if( self->kind == TW_KIND_SINE && !is_input )
+      return false;
+
+   memset( info, 0, sizeof( *info ) );
+   info->id = is_input ? 0 : 1;
+   /* Both dialects offered, CLAP preferred — so the host's negotiation has a
+    * real choice to make, and a host that picks MIDI when CLAP is preferred is
+    * visible (the fixture then never sees a note_id). */
+   info->supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
+   info->preferred_dialect  = CLAP_NOTE_DIALECT_CLAP;
+   strncpy( info->name, is_input ? "Note In" : "Note Out", CLAP_NAME_SIZE - 1 );
+   return true;
+}
+
+static const clap_plugin_note_ports_t s_note_ports = {
+   .count = tc_note_ports_count,
+   .get   = tc_note_ports_get,
+};
+
+/* ----------------------------------------------------------------- tail */
+
+static uint32_t tc_tail_get( const clap_plugin_t *p )
+{
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   /* The sine has no envelope, so it stops the instant its last note ends —
+    * a zero tail, honestly reported. The effects have none either. */
+   (void)self;
+   return 0;
+}
+
+static const clap_plugin_tail_t s_tail = { .get = tc_tail_get };
+
 /* ----------------------------------------------------------------- state */
 
 static void tc_put_double( uint8_t *p, double v )
@@ -241,26 +487,59 @@ static void tc_put_double( uint8_t *p, double v )
    memcpy( p, &v, sizeof( double ) );
 }
 
+static bool tc_write_all( const clap_ostream_t *os, const uint8_t *buf, size_t n )
+{
+   uint64_t written = 0;
+   while( written < n ) {
+      int64_t k = os->write( os, buf + written, n - written );
+      if( k <= 0 )
+         return false;
+      written += (uint64_t)k;
+   }
+   return true;
+}
+
 static bool tc_state_save( const clap_plugin_t *p, const clap_ostream_t *os )
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
-   uint8_t buf[16];
+
+   if( self->kind == TW_KIND_SINE ) {
+      uint8_t one[8];
+      tc_put_double( one, self->gain );
+      return tc_write_all( os, one, sizeof( one ) );
+   }
+
+   uint8_t buf[24];
    tc_put_double( buf,     self->gain );
    tc_put_double( buf + 8, self->report );
 
-   uint64_t written = 0;
-   while( written < sizeof( buf ) ) {
-      int64_t n = os->write( os, buf + written, sizeof( buf ) - written );
-      if( n <= 0 )
-         return false;
-      written += (uint64_t)n;
+   /* The clip threshold is appended ONLY when it is set. A default instance's
+    * blob is therefore byte-identical to the pre-36 one, which is what keeps
+    * plugin_slot_roundtrip.qxa's exact-base64 assertion true. */
+   size_t n = 16;
+   if( self->clip != 0.0 ) {
+      tc_put_double( buf + 16, self->clip );
+      n = 24;
    }
-   return true;
+   return tc_write_all( os, buf, n );
 }
 
 static bool tc_state_load( const clap_plugin_t *p, const clap_istream_t *is )
 {
    tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+
+   if( self->kind == TW_KIND_SINE ) {
+      uint8_t one[8];
+      uint64_t got = 0;
+      while( got < sizeof( one ) ) {
+         int64_t k = is->read( is, one + got, sizeof( one ) - got );
+         if( k <= 0 ) return false;
+         got += (uint64_t)k;
+      }
+      memcpy( &self->gain, one, sizeof( double ) );
+      return true;
+   }
+
    uint8_t  buf[16];
    uint64_t read = 0;
    while( read < sizeof( buf ) ) {
@@ -271,6 +550,20 @@ static bool tc_state_load( const clap_plugin_t *p, const clap_istream_t *is )
    }
    memcpy( &self->gain,   buf,     sizeof( double ) );
    memcpy( &self->report, buf + 8, sizeof( double ) );
+
+   /* The optional third value. A short blob (every project written before
+    * proposal 37) simply leaves the clipper off. */
+   uint8_t  extra[8];
+   uint64_t got = 0;
+   while( got < sizeof( extra ) ) {
+      int64_t n = is->read( is, extra + got, sizeof( extra ) - got );
+      if( n <= 0 )
+         break;
+      got += (uint64_t)n;
+   }
+   self->clip = 0.0;
+   if( got == sizeof( extra ) )
+      memcpy( &self->clip, extra, sizeof( double ) );
    return true;
 }
 
@@ -289,6 +582,81 @@ static uint32_t tc_latency_get( const clap_plugin_t *p )
 
 static const clap_plugin_latency_t s_latency = { .get = tc_latency_get };
 
+/* ------------------------------------------------------------ sine voices */
+
+static double tc_key_to_hz( int key )
+{
+   return 440.0 * pow( 2.0, ( (double)key - 69.0 ) / 12.0 );
+}
+
+static void tc_voices_reset( tw_testclap_t *self )
+{
+   memset( self->voices, 0, sizeof( self->voices ) );
+   self->voiceAge = 0;
+}
+
+/* Oldest-steals. Returns the slot a new voice should use. */
+static tw_voice_t *tc_voice_alloc( tw_testclap_t *self )
+{
+   tw_voice_t *oldest = &self->voices[0];
+   for( int i = 0; i < TW_SINE_VOICES; ++i ) {
+      if( !self->voices[i].active )
+         return &self->voices[i];
+      if( self->voices[i].age < oldest->age )
+         oldest = &self->voices[i];
+   }
+   return oldest;
+}
+
+static void tc_note_on( tw_testclap_t *self, const clap_event_note_t *n )
+{
+   tw_voice_t *v = tc_voice_alloc( self );
+   v->active   = 1;
+   v->key      = n->key;
+   v->noteId   = n->note_id;
+   v->channel  = n->channel;
+   v->port     = n->port_index;
+   v->velocity = n->velocity;
+   v->phase    = 0.0;   /* deterministic: AC5 compares two runs byte for byte */
+   v->phaseInc = tc_key_to_hz( n->key ) / self->sampleRate;
+   v->age      = ++self->voiceAge;
+}
+
+/* Ends every voice matching the event's (note_id, port, channel, key) with the
+ * CLAP wildcard rule (-1 matches anything), and reports each one back to the
+ * host as CLAP_EVENT_NOTE_END. */
+static void tc_note_off( tw_testclap_t *self, const clap_event_note_t *n,
+                         const clap_output_events_t *out, uint32_t time )
+{
+   for( int i = 0; i < TW_SINE_VOICES; ++i ) {
+      tw_voice_t *v = &self->voices[i];
+      if( !v->active )
+         continue;
+      if( n->note_id >= 0 && v->noteId != n->note_id ) continue;
+      if( n->note_id < 0 ) {
+         if( n->key >= 0 && v->key != n->key )             continue;
+         if( n->channel >= 0 && v->channel != n->channel ) continue;
+         if( n->port_index >= 0 && v->port != n->port_index ) continue;
+      }
+      v->active = 0;
+
+      if( out && out->try_push ) {
+         clap_event_note_t e;
+         memset( &e, 0, sizeof( e ) );
+         e.header.size     = sizeof( e );
+         e.header.time     = time;
+         e.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+         e.header.type     = CLAP_EVENT_NOTE_END;
+         e.note_id         = v->noteId;
+         e.port_index      = v->port;
+         e.channel         = v->channel;
+         e.key             = v->key;
+         e.velocity        = 0.0;
+         out->try_push( out, &e.header );
+      }
+   }
+}
+
 /* ---------------------------------------------------------------- plugin */
 
 static bool tc_init( const clap_plugin_t *p )
@@ -306,12 +674,12 @@ static bool tc_activate( const clap_plugin_t *p, double sample_rate,
                          uint32_t min_frames, uint32_t max_frames )
 {
    tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
-   (void)sample_rate;
    (void)min_frames;
    if( max_frames == 0 )
       return false;
-   self->maxFrames = max_frames;
-   self->active    = 1;
+   self->maxFrames  = max_frames;
+   self->sampleRate = sample_rate > 0.0 ? sample_rate : 48000.0;
+   self->active     = 1;
    return true;
 }
 
@@ -334,72 +702,335 @@ static void tc_stop_processing( const clap_plugin_t *p )
 
 static void tc_reset( const clap_plugin_t *p )
 {
-   (void)p;   /* stateless DSP */
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   /* The effects are stateless DSP; the instrument and the arp are not, and
+    * their reset must be TOTAL for the determinism gate to mean anything. */
+   tc_voices_reset( self );
+   self->nHeld         = 0;
+   self->arpFrame      = 0;
+   self->arpOffPending = 0;
+   self->arpOffAt      = 0;
+   self->arpNextId     = 0;
 }
 
-static clap_process_status tc_process( const clap_plugin_t *p, const clap_process_t *proc )
+/* --- the effects: render [from, to) with the current parameters ----------- */
+
+static void tc_render_effect( tw_testclap_t *self, const clap_audio_buffer_t *ib,
+                              clap_audio_buffer_t *ob, uint32_t from, uint32_t to,
+                              uint32_t framesCount )
 {
-   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
-
-   if( !proc || !proc->audio_inputs || !proc->audio_outputs )
-      return CLAP_PROCESS_ERROR;
-   if( proc->audio_inputs_count < 1 || proc->audio_outputs_count < 1 )
-      return CLAP_PROCESS_ERROR;
-   /* The whole point of the fixture: a host that forgets to chunk is caught. */
-   if( proc->frames_count > self->maxFrames )
-      return CLAP_PROCESS_ERROR;
-
-   tc_apply_events( self, proc->in_events );
-
-   const clap_audio_buffer_t *ib = &proc->audio_inputs[0];
-   clap_audio_buffer_t       *ob = &proc->audio_outputs[0];
-   if( !ib->data32 || !ob->data32 )
-      return CLAP_PROCESS_ERROR;
-
-   const uint32_t n     = proc->frames_count;
-   const int      report = self->report >= 0.5;
-   const float    g      = (float)self->gain;
+   const int   report = self->report >= 0.5;
+   const float g      = (float)self->gain;
+   const float th     = (float)self->clip;
 
    for( uint32_t c = 0; c < ob->channel_count; ++c ) {
       float *o = ob->data32[c];
       if( !o )
          continue;
       if( report ) {
-         for( uint32_t i = 0; i < n; ++i )
-            o[i] = (float)n;
+         for( uint32_t i = from; i < to; ++i )
+            o[i] = (float)framesCount;
          continue;
       }
       const float *in = ( c < ib->channel_count ) ? ib->data32[c] : NULL;
       if( !in ) {
-         memset( o, 0, (size_t)n * sizeof( float ) );
+         memset( o + from, 0, (size_t)( to - from ) * sizeof( float ) );
          continue;
       }
-      if( !self->skew ) {
-         for( uint32_t i = 0; i < n; ++i )
+      if( !self->kind || self->kind == TW_KIND_GAIN ) {
+         for( uint32_t i = from; i < to; ++i )
             o[i] = in[i] * g;
-         continue;
-      }
-      /* The cross-channel term (see the header comment): channel 0 mixes in
-       * HALF of itself plus ALL of channel 1, every other channel is halved. */
-      if( c == 0 && ib->channel_count > 1 && ib->data32[1] ) {
+      } else if( c == 0 && ib->channel_count > 1 && ib->data32[1] ) {
+         /* The cross-channel term (see the header comment): channel 0 mixes in
+          * HALF of itself plus ALL of channel 1, every other channel is halved. */
          const float *in1 = ib->data32[1];
-         for( uint32_t i = 0; i < n; ++i )
+         for( uint32_t i = from; i < to; ++i )
             o[i] = ( in[i] * 0.5f + in1[i] ) * g;
       } else {
-         for( uint32_t i = 0; i < n; ++i )
+         for( uint32_t i = from; i < to; ++i )
             o[i] = in[i] * 0.5f * g;
       }
+
+      /* The clipper runs AFTER the gain — which is the whole point of it. */
+      if( th > 0.0f ) {
+         for( uint32_t i = from; i < to; ++i ) {
+            if( o[i] > th )       o[i] = th;
+            else if( o[i] < -th ) o[i] = -th;
+         }
+      }
    }
+}
+
+static clap_process_status tc_process_effect( tw_testclap_t *self,
+                                              const clap_process_t *proc )
+{
+   if( !proc->audio_inputs || !proc->audio_outputs )
+      return CLAP_PROCESS_ERROR;
+   if( proc->audio_inputs_count < 1 || proc->audio_outputs_count < 1 )
+      return CLAP_PROCESS_ERROR;
+
+   const clap_audio_buffer_t *ib = &proc->audio_inputs[0];
+   clap_audio_buffer_t       *ob = &proc->audio_outputs[0];
+   if( !ib->data32 || !ob->data32 )
+      return CLAP_PROCESS_ERROR;
+
+   const uint32_t n  = proc->frames_count;
+   const clap_input_events_t *in = proc->in_events;
+   const uint32_t nev = ( in && in->size && in->get ) ? in->size( in ) : 0;
+
+   /* Render in SEGMENTS split at each parameter event, so a value applies from
+    * exactly its own frame (proposal 37 AC2). With no event, or with every event
+    * at time 0 (the pre-36 parameter ring), this is one segment and exactly the
+    * arithmetic M1 had — which is why the effect goldens do not move. */
+   uint32_t pos = 0;
+   for( uint32_t i = 0; i < nev; ++i ) {
+      const clap_event_header_t *h = in->get( in, i );
+      if( !h || h->space_id != CLAP_CORE_EVENT_SPACE_ID )
+         continue;
+      if( h->type != CLAP_EVENT_PARAM_VALUE )
+         continue;
+      uint32_t t = h->time < n ? h->time : n;
+      if( t > pos ) {
+         tc_render_effect( self, ib, ob, pos, t, n );
+         pos = t;
+      }
+      const clap_event_param_value_t *e = (const clap_event_param_value_t *)h;
+      tc_apply_param( self, e->param_id, e->value );
+   }
+   if( pos < n )
+      tc_render_effect( self, ib, ob, pos, n, n );
+
    return CLAP_PROCESS_CONTINUE;
+}
+
+/* --- the instrument ------------------------------------------------------- */
+
+static void tc_render_sine( tw_testclap_t *self, clap_audio_buffer_t *main,
+                            clap_audio_buffer_t *aux, uint32_t from, uint32_t to )
+{
+   const float g = (float)self->gain;
+   for( uint32_t i = from; i < to; ++i ) {
+      double sum = 0.0;
+      for( int vi = 0; vi < TW_SINE_VOICES; ++vi ) {
+         tw_voice_t *v = &self->voices[vi];
+         if( !v->active )
+            continue;
+         sum += v->velocity * sin( 2.0 * TW_PI * v->phase );
+         v->phase += v->phaseInc;
+         if( v->phase >= 1.0 )
+            v->phase -= floor( v->phase );
+      }
+      const float s = (float)sum * g;
+      if( main && main->data32 )
+         for( uint32_t c = 0; c < main->channel_count; ++c )
+            if( main->data32[c] ) main->data32[c][i] = s;
+      /* The aux carries the same signal at -6 dB, so a multi-out gate can tell
+       * the two buses apart without needing two different notes. */
+      if( aux && aux->data32 && aux->channel_count > 0 && aux->data32[0] )
+         aux->data32[0][i] = s * 0.5f;
+   }
+}
+
+static clap_process_status tc_process_sine( tw_testclap_t *self,
+                                            const clap_process_t *proc )
+{
+   if( !proc->audio_outputs || proc->audio_outputs_count < 1 )
+      return CLAP_PROCESS_ERROR;
+
+   clap_audio_buffer_t *main = &proc->audio_outputs[0];
+   clap_audio_buffer_t *aux  = proc->audio_outputs_count > 1
+                                   ? &proc->audio_outputs[1] : NULL;
+
+   const uint32_t n  = proc->frames_count;
+   const clap_input_events_t  *in  = proc->in_events;
+   const clap_output_events_t *out = proc->out_events;
+   const uint32_t nev = ( in && in->size && in->get ) ? in->size( in ) : 0;
+
+   uint32_t pos = 0;
+   for( uint32_t i = 0; i < nev; ++i ) {
+      const clap_event_header_t *h = in->get( in, i );
+      if( !h || h->space_id != CLAP_CORE_EVENT_SPACE_ID )
+         continue;
+      if( h->type != CLAP_EVENT_NOTE_ON && h->type != CLAP_EVENT_NOTE_OFF &&
+          h->type != CLAP_EVENT_NOTE_CHOKE && h->type != CLAP_EVENT_PARAM_VALUE )
+         continue;
+
+      uint32_t t = h->time < n ? h->time : n;
+      if( t > pos ) {
+         tc_render_sine( self, main, aux, pos, t );
+         pos = t;
+      }
+
+      if( h->type == CLAP_EVENT_PARAM_VALUE ) {
+         const clap_event_param_value_t *e = (const clap_event_param_value_t *)h;
+         tc_apply_param( self, e->param_id, e->value );
+         continue;
+      }
+
+      const clap_event_note_t *ne = (const clap_event_note_t *)h;
+      if( h->type == CLAP_EVENT_NOTE_ON ) {
+         /* A wildcard note-on has lost the note's identity; a host that
+          * forwards one to an instrument is broken, and failing loudly beats
+          * inventing a pitch. */
+         if( ne->key < 0 )
+            return CLAP_PROCESS_ERROR;
+         tc_note_on( self, ne );
+      } else {
+         tc_note_off( self, ne, out, t );
+      }
+   }
+   if( pos < n )
+      tc_render_sine( self, main, aux, pos, n );
+
+   return CLAP_PROCESS_CONTINUE;
+}
+
+/* --- the arpeggiator ------------------------------------------------------ */
+
+static void tc_arp_push( const clap_output_events_t *out, uint16_t type, uint32_t time,
+                         int key, int16_t chan, int32_t noteId )
+{
+   if( !out || !out->try_push )
+      return;
+   clap_event_note_t e;
+   memset( &e, 0, sizeof( e ) );
+   e.header.size     = sizeof( e );
+   e.header.time     = time;
+   e.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+   e.header.type     = type;
+   e.note_id         = noteId;
+   e.port_index      = 0;
+   e.channel         = chan;
+   e.key             = (int16_t)key;
+   e.velocity        = type == CLAP_EVENT_NOTE_ON ? 0.8 : 0.0;
+   out->try_push( out, &e.header );
+}
+
+static void tc_arp_hold( tw_testclap_t *self, int key, int16_t chan )
+{
+   for( int i = 0; i < self->nHeld; ++i )
+      if( self->heldKeys[i] == key )
+         return;
+   if( self->nHeld >= TW_SINE_VOICES )
+      return;
+   self->heldKeys[self->nHeld]  = key;
+   self->heldChans[self->nHeld] = chan;
+   ++self->nHeld;
+}
+
+static void tc_arp_release( tw_testclap_t *self, int key )
+{
+   for( int i = 0; i < self->nHeld; ++i ) {
+      if( self->heldKeys[i] != key && key >= 0 )
+         continue;
+      for( int j = i; j + 1 < self->nHeld; ++j ) {
+         self->heldKeys[j]  = self->heldKeys[j + 1];
+         self->heldChans[j] = self->heldChans[j + 1];
+      }
+      --self->nHeld;
+      return;
+   }
+}
+
+static clap_process_status tc_process_arp( tw_testclap_t *self,
+                                           const clap_process_t *proc )
+{
+   const uint32_t n = proc->frames_count;
+   const clap_input_events_t  *in  = proc->in_events;
+   const clap_output_events_t *out = proc->out_events;
+   const uint32_t nev = ( in && in->size && in->get ) ? in->size( in ) : 0;
+
+   uint32_t ev = 0;
+   for( uint32_t i = 0; i < n; ++i ) {
+      /* Apply every input event whose frame has arrived, BEFORE the grid check
+       * for that frame — so a key pressed at offset 0 of a block that starts on
+       * a grid boundary produces a note there, deterministically. */
+      while( ev < nev ) {
+         const clap_event_header_t *h = in->get( in, ev );
+         if( !h ) { ++ev; continue; }
+         if( h->time > i )
+            break;
+         ++ev;
+         if( h->space_id != CLAP_CORE_EVENT_SPACE_ID )
+            continue;
+         if( h->type == CLAP_EVENT_NOTE_ON ) {
+            const clap_event_note_t *ne = (const clap_event_note_t *)h;
+            tc_arp_hold( self, ne->key, ne->channel );
+         } else if( h->type == CLAP_EVENT_NOTE_OFF ) {
+            const clap_event_note_t *ne = (const clap_event_note_t *)h;
+            tc_arp_release( self, ne->key );
+         }
+      }
+
+      /* The scheduled gate close. */
+      if( self->arpOffPending && self->arpFrame == self->arpOffAt ) {
+         tc_arp_push( out, CLAP_EVENT_NOTE_OFF, i, self->arpOffKey,
+                      self->arpOffChan, self->arpOffId );
+         self->arpOffPending = 0;
+      }
+
+      /* The grid. Absolute frames since reset, so the emission pattern does not
+       * depend on how the host chunks the block. */
+      if( ( self->arpFrame % TW_ARP_GRID ) == 0 && self->nHeld > 0 &&
+          !self->arpOffPending ) {
+         const int     step = (int)( ( self->arpFrame / TW_ARP_GRID ) % (uint64_t)self->nHeld );
+         const int     key  = self->heldKeys[step];
+         const int16_t chan = self->heldChans[step];
+         const int32_t id   = self->arpNextId++;
+         tc_arp_push( out, CLAP_EVENT_NOTE_ON, i, key, chan, id );
+         self->arpOffPending = 1;
+         self->arpOffAt      = self->arpFrame + TW_ARP_GATE;
+         self->arpOffKey     = key;
+         self->arpOffChan    = chan;
+         self->arpOffId      = id;
+      }
+
+      ++self->arpFrame;
+   }
+
+   /* Anything the host placed past the end of the block still belongs here. */
+   for( ; ev < nev; ++ev ) {
+      const clap_event_header_t *h = in->get( in, ev );
+      if( !h || h->space_id != CLAP_CORE_EVENT_SPACE_ID )
+         continue;
+      if( h->type == CLAP_EVENT_NOTE_ON )
+         tc_arp_hold( self, ( (const clap_event_note_t *)h )->key,
+                      ( (const clap_event_note_t *)h )->channel );
+      else if( h->type == CLAP_EVENT_NOTE_OFF )
+         tc_arp_release( self, ( (const clap_event_note_t *)h )->key );
+   }
+
+   return CLAP_PROCESS_CONTINUE;
+}
+
+static clap_process_status tc_process( const clap_plugin_t *p, const clap_process_t *proc )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+
+   if( !proc )
+      return CLAP_PROCESS_ERROR;
+   /* The whole point of the fixture: a host that forgets to chunk is caught. */
+   if( proc->frames_count > self->maxFrames )
+      return CLAP_PROCESS_ERROR;
+
+   if( self->kind == TW_KIND_SINE )
+      return tc_process_sine( self, proc );
+   if( self->kind == TW_KIND_ARP )
+      return tc_process_arp( self, proc );
+   return tc_process_effect( self, proc );
 }
 
 static const void *tc_get_extension( const clap_plugin_t *p, const char *id )
 {
-   (void)p;
-   if( !strcmp( id, CLAP_EXT_AUDIO_PORTS ) ) return &s_ports;
-   if( !strcmp( id, CLAP_EXT_PARAMS ) )      return &s_params;
-   if( !strcmp( id, CLAP_EXT_STATE ) )       return &s_state;
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( !strcmp( id, CLAP_EXT_AUDIO_PORTS ) && self->kind != TW_KIND_ARP ) return &s_ports;
+   if( !strcmp( id, CLAP_EXT_PARAMS ) && self->kind != TW_KIND_ARP )      return &s_params;
+   if( !strcmp( id, CLAP_EXT_STATE ) && self->kind != TW_KIND_ARP )       return &s_state;
    if( !strcmp( id, CLAP_EXT_LATENCY ) )     return &s_latency;
+   if( !strcmp( id, CLAP_EXT_TAIL ) )        return &s_tail;
+   if( !strcmp( id, CLAP_EXT_NOTE_PORTS ) &&
+       ( self->kind == TW_KIND_SINE || self->kind == TW_KIND_ARP ) )
+      return &s_note_ports;
    return NULL;
 }
 
@@ -413,7 +1044,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 2;
+   return 4;
 }
 
 static const clap_plugin_descriptor_t *
@@ -422,6 +1053,8 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    (void)f;
    if( index == 0 ) return &s_desc;
    if( index == 1 ) return &s_desc_skew;
+   if( index == 2 ) return &s_desc_sine;
+   if( index == 3 ) return &s_desc_arp;
    return NULL;
 }
 
@@ -433,23 +1066,28 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    if( !id )
       return NULL;
 
-   int skew = 0;
-   if( !strcmp( id, TW_TESTCLAP_ID ) )           skew = 0;
-   else if( !strcmp( id, TW_TESTCLAP_SKEW_ID ) ) skew = 1;
-   else                                          return NULL;
+   int kind;
+   const clap_plugin_descriptor_t *desc;
+   if( !strcmp( id, TW_TESTCLAP_ID ) )           { kind = TW_KIND_GAIN; desc = &s_desc; }
+   else if( !strcmp( id, TW_TESTCLAP_SKEW_ID ) ) { kind = TW_KIND_SKEW; desc = &s_desc_skew; }
+   else if( !strcmp( id, TW_TESTCLAP_SINE_ID ) ) { kind = TW_KIND_SINE; desc = &s_desc_sine; }
+   else if( !strcmp( id, TW_TESTCLAP_ARP_ID ) )  { kind = TW_KIND_ARP;  desc = &s_desc_arp; }
+   else                                          { return NULL; }
 
    tw_testclap_t *self = (tw_testclap_t *)calloc( 1, sizeof( tw_testclap_t ) );
    if( !self )
       return NULL;
 
-   self->host      = host;
-   self->gain      = 1.0;
-   self->report    = 0.0;
-   self->maxFrames = 0;
-   self->active    = 0;
-   self->skew      = skew;
+   self->host       = host;
+   self->kind       = kind;
+   self->gain       = 1.0;
+   self->report     = 0.0;
+   self->clip       = 0.0;
+   self->maxFrames  = 0;
+   self->sampleRate = 48000.0;
+   self->active     = 0;
 
-   self->base.desc            = skew ? &s_desc_skew : &s_desc;
+   self->base.desc            = desc;
    self->base.plugin_data     = self;
    self->base.init            = tc_init;
    self->base.destroy         = tc_destroy;

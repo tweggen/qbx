@@ -1,4 +1,5 @@
 #include "app/objects/track/spluginslot.h"
+#include "app/model/sautomationlane.h"
 #include "app/model/sproject.h"
 #include "app/model/slink.h"
 #include "app/model/sappcontext.h"
@@ -152,6 +153,10 @@ void SPluginSlot::ensureChannels( int nChannels ) const
 void SPluginSlot::setChannelCount( int nChannels )
 {
     ensureChannels( nChannels );
+    // The lanes may have been READ before the processor existed - a load calls
+    // readPostChildrenAttributes() long before STrack declares the width - so
+    // this is where a project's stored automation actually reaches the DSP.
+    pushParamCurves();
 }
 
 std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsert() const
@@ -166,6 +171,41 @@ std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsert() const
 std::shared_ptr<audio::twPluginInsert> SPluginSlot::peekInsert() const
 {
     return insert_;
+}
+
+// --- the instrument slot (proposal 37 P3b) ---------------------------------
+
+void SPluginSlot::setEventSource( std::shared_ptr<const twEventSource> source )
+{
+    if( !source ) {
+        // TAKING the feed away must never INSTANTIATE a plugin: this is also the
+        // teardown path (STrack::onPluginSlotRemoved), which is the same reason
+        // that path uses peekInsert() rather than getInsert().
+        if( proc_ ) proc_->setEventSource( nullptr );
+        return;
+    }
+    // ensureChannels(), not proc_ directly: a slot may still be waiting for its
+    // width when the track wires the feed (project load orders the chain before
+    // setChannels), and the source must not be dropped on the floor.
+    ensureChannels( channels_ > 0 ? channels_ : 1 );
+    if( proc_ ) proc_->setEventSource( std::move( source ) );
+}
+
+void SPluginSlot::setTempoMap( const twTempoMap &map )
+{
+    if( proc_ ) proc_->setTempoMap( map );
+}
+
+std::uint32_t SPluginSlot::tailFrames() const
+{
+    // Deliberately does NOT ensureChannels(): see the header. An un-materialized
+    // slot reports no tail, and the first setChannelCount() makes it honest.
+    return proc_ ? proc_->tailFrames() : 0u;
+}
+
+void SPluginSlot::forgetContinuity()
+{
+    if( proc_ ) proc_->forgetContinuity();
 }
 
 audio::twPluginSlotState SPluginSlot::getSlotState() const
@@ -194,6 +234,10 @@ bool SPluginSlot::reloadPlugin()
 
     proc_->setFactory( makeFactory() );
     proc_->setBypass( bypass_ );
+    // setFactory() rebuilds the instances; the curves are the processor's own
+    // state and survive it, but re-pushing costs nothing and makes the two
+    // re-resolution paths (this and setChannelCount) say the same thing.
+    pushParamCurves();
     if( !savedState_.empty() ) {
         for( audio::twPlugin *p : proc_->plugins() )
             if( p ) p->loadState( savedState_ );
@@ -312,6 +356,11 @@ int SPluginSlot::serialize( QTextStream &o )
     if( res < 0 ) return res;
     o << ">\n";
 
+    // Inline `<automation>` next to `<state>` (design §3.3). SObject::serialize()
+    // emits it for every other owner; this override has to do it by hand for
+    // exactly the same reason it writes `<state>` by hand.
+    serializeAutomation( o );
+
     std::vector<std::uint8_t> state;
     saveState( state );
     if( !state.empty() ) {
@@ -365,6 +414,42 @@ static const bool s_registered_spluginslot =
           SPluginSlot::instantiateFromDomElement ), true );
 
 // --- runtime control ---------------------------------------------------------
+
+// --- automation (proposal 37 P5) --------------------------------------------
+
+void SPluginSlot::pushParamCurves()
+{
+    if( !proc_ ) return;
+    std::map<std::uint32_t, std::shared_ptr<const twAutomationCurve> > curves;
+    for( SAutomationLane *lane : automationLanes() ) {
+        if( !lane || lane->ref().space != SParamRef::Space::Param ) continue;
+        std::shared_ptr<const twAutomationCurve> snap = lane->snapshot();
+        if( !snap ) continue;      // absent / empty / Off == the scalar path
+        curves[lane->ref().paramId] = std::move( snap );
+    }
+    // setParamCurves() bumps automationEpoch_ AND stales our insert's pages;
+    // what it CANNOT do is reach the twPluginChain / twTrackMix / mixer pages
+    // above us. That half is onAutomationChanged()'s.
+    proc_->setParamCurves( std::move( curves ) );
+}
+
+void SPluginSlot::applyAutomationToEngine()
+{
+    pushParamCurves();
+}
+
+void SPluginSlot::onAutomationChanged( SAutomationLane &lane,
+                                       offset_t start, offset_t end )
+{
+    (void) lane;
+    pushParamCurves();
+    // NOT SObject::invalidateRenderPathRange(): that walks DOWN from the
+    // project root through childLinks() looking for `this`, and an SPluginChain
+    // is deliberately not an SLink child of its track, so the walk never
+    // arrives (proposal 08 M5's finding, pluginui inv. 6). The owning STrack
+    // does it for us.
+    emit audioInvalidatedRange( (qint64) start, (qint64) end );
+}
 
 void SPluginSlot::setBypass( bool bypass )
 {
@@ -429,4 +514,32 @@ void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
     // go with it.
     proc_->bumpParamEpoch();
     emit paramsChanged();
+}
+
+// --- proposal 37 P6: the knobs, in APP types ---------------------------------
+//
+// The automation lane picker (app/timeline) needs a parameter's name and its
+// declared range to label a lane and to scale it. It may not include
+// tw/plugins (tools/check_layering.py), and it should not have to: the slot
+// already owns the plugin, so the translation belongs here.
+QVector<SPluginSlot::ParamRow> SPluginSlot::paramRows() const
+{
+    QVector<ParamRow> out;
+    if( !proc_ ) return out;
+    audio::twPlugin *plugin = proc_->plugin();
+    if( !plugin ) return out;
+    const std::size_t n = plugin->paramCount();
+    out.reserve( (int) n );
+    for( std::size_t i = 0; i < n; ++i ) {
+        const audio::twPluginParamInfo info = plugin->paramInfo( i );
+        ParamRow r;
+        r.id           = info.id;
+        r.name         = QString::fromStdString( info.name );
+        r.minValue     = info.minValue;
+        r.maxValue     = info.maxValue;
+        r.defaultValue = info.defaultValue;
+        r.isStepped    = info.isStepped;
+        out.append( r );
+    }
+    return out;
 }

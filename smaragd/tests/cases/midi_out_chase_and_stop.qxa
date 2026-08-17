@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 37 P7b, AC2. CHASE at a locate, and PANIC at a stop (design D6).
+
+  Starting playback in the MIDDLE of a piece is the case a naive MIDI-out gets
+  wrong: the controller values that were set earlier never reach the device, so
+  the receiving synth plays the passage with the previous session's modulation,
+  and the note that is already sounding never starts at all. The chase is what
+  fixes both, and it is asymmetric ON PURPOSE:
+
+    - controllers / program / bend are chased ALWAYS. Without them the device
+      is simply in the wrong state, and there is no interpretation of "wrong
+      state" that a user wants.
+    - note-ons are chased only when Options -> MIDI says so, DEFAULT OFF.
+      Re-attacking a hardware synth's notes on every locate is a surprise
+      rather than a service - which is exactly why this case asserts BOTH
+      halves of the setting rather than only the interesting one.
+
+  And at the stop: sustain-off (CC64=0) then all-notes-off (CC123=0) on every
+  channel the run used, after DISCARDING the queued future - a queued note-on
+  that escaped after the transport stopped is a stuck note.
+
+  120 BPM / PPQ 960 / 48 kHz: 1920 ticks = 1 s = 48000 frames.
+    CC1 = 100 at tick 960  (0.5 s)
+    C4 held from tick 1920 to 5760  (1 s .. 3 s)
+  Playback starts at 1.5 s, i.e. after the CC and inside the note.
+
+  NOTE this case OWNS the midi/chaseNoteOns setting: `set-option` writes the
+  real per-user smaragd.ini, so no other case may touch that key, and this one
+  puts it back at the end.
+-->
+<SActionScript version="1" name="midi_out_chase_and_stop">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="chase"/>
+    <add-event clip="0,0" kind="cc" tick="960" channel="0" p="1" v="100"/>
+    <add-note  clip="0,0" tick="1920" dur="3840" key="60" velocity="100" channel="0"/>
+
+    <set-track-midi-output trackPath="0" port="capture" channel="2" offsetMs="0"/>
+
+    <!-- ================= pass 1: note-on chase ON ======================= -->
+    <set-option key="midi/chaseNoteOns" value="true"/>
+
+    <set-locator position="72000"/>
+    <toggle-playback play="1"/>
+    <wait-ms ms="900"/>
+    <toggle-playback play="0"/>
+
+    <dump-midi-capture filename="chase_on.txt" minCount="4"/>
+
+    <!-- The chase is the FIRST thing on the wire (index 0), and it is the CC:
+         MidiOutScheduler sorts its pending list stably, so messages sharing a
+         due time reach the wire in the order the pump produced them - a CC
+         before the note it sets up. -->
+    <assert-midi-out kind="cc" cc="1" value="100" channel="2" index="0" count="1"/>
+    <!-- ... then the sounding note, re-attacked because the setting says so.
+         It is message #1 and lands at the play position, frame 0 of the
+         recording. -->
+    <assert-midi-out kind="noteon" key="60" channel="2" index="1"
+                     at="0" tolerance="4096" count="1"/>
+
+    <!-- The note's own end is at 3 s = 1.5 s into this run. The transport was
+         stopped before then, so the only note-off is the pump's own release,
+         and the panic follows it. -->
+    <assert-midi-out kind="cc" cc="64"  value="0" channel="2" minCount="1"/>
+    <assert-midi-out kind="cc" cc="123" value="0" channel="2" minCount="1"/>
+    <!-- Nothing was ever sent on any other channel: the track forces channel 2,
+         and the panic mask is built from the channels this run actually used. -->
+    <assert-midi-out channel="0" count="0"/>
+
+    <!-- ================= pass 2: note-on chase OFF ====================== -->
+    <!-- The MIDI recording is cleared at every transport START, exactly as the
+         audio recording is, so this pass reads only its own messages. -->
+    <set-option key="midi/chaseNoteOns" value="false"/>
+
+    <set-locator position="72000"/>
+    <toggle-playback play="1"/>
+    <wait-ms ms="900"/>
+    <toggle-playback play="0"/>
+
+    <dump-midi-capture filename="chase_off.txt" minCount="3"/>
+
+    <!-- The controller is still chased ... -->
+    <assert-midi-out kind="cc" cc="1" value="100" channel="2" index="0" count="1"/>
+    <!-- ... and the sounding note is NOT re-attacked. -->
+    <assert-midi-out kind="noteon" count="0"/>
+    <!-- The stop still silences the channel the chase used. -->
+    <assert-midi-out kind="cc" cc="123" value="0" channel="2" minCount="1"/>
+
+    <!-- Leave the per-user setting as we found it (see the header note). -->
+    <set-option key="midi/chaseNoteOns" value="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

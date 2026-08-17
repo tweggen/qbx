@@ -79,7 +79,11 @@ public:
     // from the very first record, so nothing before this call is lost.
     void setFileSink( const std::string &dir, size_t maxBytes, int keep );
 
-    // Flush and join the writer thread. Call at the end of main().
+    // Flush and join the writer thread. Call from the app's ORDERLY TEARDOWN
+    // (main.cpp's smaragdOrderlyShutdown), not from a destructor: the sink
+    // itself is immortal (see instance() and tw/core/CONTRACT.md invariant 6),
+    // so nothing else will ever do it. Idempotent, and logging after it is
+    // safe from any thread -- such records simply do not reach the file.
     void shutdown();
 
     // ---- producer side: any thread ----------------------------------------

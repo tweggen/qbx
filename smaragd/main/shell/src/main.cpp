@@ -61,32 +61,6 @@ static void smaragdMessageHandler( QtMsgType type,
     }
 }
 
-// Stop the background plugin scan before a --test-case run calls std::exit().
-//
-// std::exit() runs static destructors on THIS thread while every other thread
-// keeps running, and SApplication is never destroyed on that path -- so its
-// destructor's join never happens, and the first thing to notice the scan is
-// the registry's own destructor, under static destruction. A scan still in
-// flight there trips over half-destructed runtime state, throws, reaches
-// std::terminate, and blocks forever in abort() on the CRT lock that this
-// thread is holding: a --test-case run that PASSES and then hangs until CTest
-// kills it at 600 s. Measured on a machine with six installed plugins and a
-// cache written by another build: > 600 s before, ~0.4 s after.
-//
-// Doing it here, while the process is fully alive, is the difference between
-// cancelling a scan and cancelling one during teardown.
-static void stopPluginScanBeforeExit()
-{
-    audio::twPluginRegistry &reg = audio::pluginRegistry();
-    if( !reg.isScanning() ) return;
-    reg.cancelScan();
-    if( !reg.waitForScan( 5000 ) ) {
-        TW_LOGE( "plugins", "[app] the plugin scan thread did NOT stop within 5 s of "
-                 "being cancelled; exiting anyway. A hang or crash after this line "
-                 "is that thread." );
-    }
-}
-
 // Parse a level name; returns false if `s` names no level.
 static bool parseLogLevel( const QString &s, tw::LogLevel &out )
 {
@@ -97,6 +71,29 @@ static bool parseLogLevel( const QString &s, tw::LogLevel &out )
     if( v == "debug" )                { out = tw::LogLevel::Debug; return true; }
     if( v == "trace" )                { out = tw::LogLevel::Trace; return true; }
     return false;
+}
+
+// Orderly process teardown, run on EVERY way out of main -- including the
+// std::exit() a --test-case run leaves through, where no stack object is
+// destroyed and no destructor of ours runs at all.
+//
+// Order matters in one direction only: every thread that can still LOG must be
+// gone before we stop reading records. It is no longer a CORRECTNESS
+// requirement (the sink is immortal now, see twlog.cc), which is the point --
+// this is the house "orderly runner teardown" pattern from the M2 sidecar-store
+// fix, not a latch that a different ordering could break.
+//
+// What used to happen without it: a --test-case run with a COLD plugin cache
+// exited while the startup plugin scan was still walking the machine's
+// installed modules. Static destruction destroyed the log sink first, the scan
+// thread's next TW_LOG locked a DESTROYED mutex, the resulting std::system_error
+// escaped the scan lambda, std::terminate -> abort() blocked against the main
+// thread waiting in ~twPluginRegistry, and the process hung forever after having
+// printed PASS (plan/STATE.md 2026-08-16).
+static void smaragdOrderlyShutdown()
+{
+    audio::pluginRegistry().stopScan();
+    tw::TwLog::instance().shutdown();
 }
 
 int main( int argc, char *argv[] )
@@ -137,6 +134,24 @@ int main( int argc, char *argv[] )
         // is how a case can still be run against the real device by hand.
         if (qEnvironmentVariableIsEmpty("SMARAGD_AUDIO_BACKEND"))
             qputenv("SMARAGD_AUDIO_BACKEND", "capture");
+
+        // ... and the CAPTURE MIDI ports, for the same three reasons plus one
+        // (proposal 37 D6, P7b): it records {hostTimeNs, port, bytes} in memory
+        // so assert-midi-out has something to read; it keeps a headless suite
+        // from opening - and sending notes at - whatever synth the developer
+        // has plugged in; and it reports supportsTimestamps() == false ON
+        // PURPOSE, so the recorded instant is when the message reached the
+        // wire rather than when it was handed to a driver. The measurement is
+        // then made against the AUDIO capture backend's independent block log,
+        // never against the pump under test.
+        //
+        // Unlike the audio variable this one is read at every
+        // createMidiOutput() call rather than once, so it does not have to be
+        // set before SApplication - but it is set here anyway, next to its
+        // sibling, so the two defaults are one paragraph rather than two.
+        // Only when unset: an explicit SMARAGD_MIDI_BACKEND always wins.
+        if (qEnvironmentVariableIsEmpty("SMARAGD_MIDI_BACKEND"))
+            qputenv("SMARAGD_MIDI_BACKEND", "capture");
 
 #ifdef Q_OS_LINUX
         // Same intent as the previous argv rewrite, minus the undefined
@@ -241,7 +256,18 @@ int main( int argc, char *argv[] )
 
         const int cap = settings.value( SOpt::LogCapacity,
                                         SOpt::def( SOpt::LogCapacity ) ).toInt();
-        log.setCapacity( cap > 0 ? (size_t)cap : 200000 );
+        size_t wantCapacity = cap > 0 ? (size_t)cap : 200000;
+        // A --test-case run gets a bigger ring, and gets it in ONE call
+        // (setCapacity discards whatever is already buffered). assert-log
+        // reads this ring, and a case that renders for a minute can emit far
+        // more records afterwards than the line it is asserting about — an
+        // eviction would turn a real assertion into a silent false failure.
+        // Nothing is pre-reserved per slot (twlog.cc), so the cost is
+        // proportional to what actually gets logged.
+        if( parser.isSet( "test-case" ) && wantCapacity < 1000000 ) {
+            wantCapacity = 1000000;
+        }
+        log.setCapacity( wantCapacity );
         log.setConsole( wantConsole );
         log.setMinLevel( level );
 
@@ -272,6 +298,7 @@ int main( int argc, char *argv[] )
         for (const QString &name : names) {
             std::cout << name.toStdString() << "\n";
         }
+        smaragdOrderlyShutdown();
         return 0;
     }
 
@@ -372,16 +399,19 @@ int main( int argc, char *argv[] )
             std::cout.flush();
             std::cerr.flush();
 
-            // Exit immediately in test mode
+            // Exit immediately in test mode -- but not before the orderly
+            // teardown: std::exit() destroys no stack object, so this call
+            // is the ONLY thing that stops the plugin scan thread and
+            // flushes the log before static destruction begins.
             if (testMode) {
-                stopPluginScanBeforeExit();
+                smaragdOrderlyShutdown();
                 std::exit(result.passed ? 0 : 1);
             }
         } else {
             std::cerr << "Failed to load script: " << script.error().toStdString() << "\n";
             std::cerr.flush();
             if (testMode) {
-                stopPluginScanBeforeExit();
+                smaragdOrderlyShutdown();
                 std::exit(1);
             }
         }
@@ -416,8 +446,9 @@ int main( int argc, char *argv[] )
 
     app.exec();
 
-    // Flush and join the log's file writer before the process tears down.
+    // Stop the plugin scan thread and flush the log's file writer before the
+    // process tears down.
     TW_LOGI( "ui.shell", "Smaragd exiting" );
-    tw::TwLog::instance().shutdown();
+    smaragdOrderlyShutdown();
     return 0;
 }

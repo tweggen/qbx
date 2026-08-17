@@ -32,8 +32,15 @@ DEPS = {
     # finished warp (warp.pcm) in the derived-data store.
     'sources':  ['core', 'pages', 'graph', 'sidecar'],
     'dsp':      ['core', 'graph'],
-    'mix':      ['core', 'pages', 'graph'],
-    'plugins':  ['core', 'graph'],
+    # mix -> events since proposal 37 P5: twGainStage consumes a
+    # twAutomationCurve (the Volume/Mute lanes) and twTrackMix a per-clip gain
+    # envelope. tw/events is core-only and outside the dataflow DAG, so this
+    # adds no page dependency (design D5 / F15).
+    'mix':      ['core', 'pages', 'graph', 'events'],
+    # plugins -> events since proposal 37 P2: the plugin ABI's event list quotes
+    # tw/events/twevent.h. tw/events is core-only and NOT in the dataflow DAG,
+    # so this adds no page dependency (design F15: plugins may not reach mix).
+    'plugins':  ['core', 'graph', 'events'],
     'devices':  ['core'],
     'sinks':    ['core'],
     # playback → schedule since proposal 19 stage 5: the readahead is a
@@ -46,6 +53,13 @@ DEPS = {
     'schedule': ['core', 'pages', 'graph'],
     'analysis': ['core'],
     'sidecar':  ['core'],
+    # events (proposal 37 P0b): the MIDI/event model leaf - one twEvent, the
+    # event sequence, the tempo map (the only tick<->frame converter), SMF I/O,
+    # the automation curve, the event clip set and the feed merge. CORE ONLY and
+    # deliberately outside the dataflow DAG: events are model data, not pages
+    # (D1), and the clip set has to be includable from tw/plugins, which may not
+    # include tw/mix (F15) - so it may never grow an edge to pages/graph/mix.
+    'events':   ['core'],
     # metering (proposal 34): reads levels out of frozen pages by position.
     # graph for twComponent::getPageIfExists, pages for twOutputPage. It must
     # NOT reach playback or mix — which component is the right tap is the app's
@@ -87,20 +101,43 @@ APP_DEPS = {
     #   wave < cut < track < mixer (only downward edges below).
     'objects/wave':   {'model', 'persistence'},
     'objects/cut':    {'actions', 'model', 'objects/wave', 'persistence'},
+    # objects/midi sits at the RANK of objects/cut (proposal 37 3.5): it is a
+    # second window/content pair, not a layer above one, and it must stay
+    # independent of the audio window. Deliberately absent from every other
+    # slice's deps except the ones that genuinely need a concrete MIDI type:
+    # objects/track must NOT depend on it - the track consults MIDI-ness only
+    # through SObject::contentKind() and SObject::resolveEventClip().
+    'objects/midi':   {'actions', 'model', 'persistence'},
     'objects/track':  {'actions', 'model', 'persistence'},
     'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
                        'persistence'},
     'actions':        {'model'},
     'persistence':    {'actions', 'model'},
     'selection':      {'actions', 'model'},
-    'timeline':       {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'pluginui',
-                       'servicesui', 'shell'},
+    # timeline + objects/midi since proposal 37 P1: the Clip Properties dock
+    # grows an SMidiCut page, and the ruler's Set BPM commits through set-tempo.
+    'timeline':       {'actions', 'model', 'objects/cut', 'objects/midi',
+                       'objects/mixer', 'objects/track', 'objects/wave',
+                       'pluginui', 'servicesui', 'shell'},
     'pluginui':       {'model', 'objects/mixer', 'objects/track', 'shell'},
+    # eventui (proposal 37 P4) sits at the RANK of pluginui: a UI slice that
+    # edits ONE object kind through the action system and is hosted by the
+    # shell. It deliberately does NOT reach `timeline`: the arranger's zoom and
+    # scroll arrive through the SHELL, which already depends on both, so the
+    # editor stays independent of the 4000-line arranger. objects/mixer +
+    # objects/track are the virtual keyboard's "first event clip on the
+    # SELECTED track" fallback.
+    'eventui':        {'actions', 'model', 'objects/midi', 'objects/mixer',
+                       'objects/track', 'shell'},
     'servicesui':     {'model', 'shell'},
-    'shell':          {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'persistence',
-                       'selection', 'servicesui', 'testkit', 'timeline'},
+    # shell + objects/midi since proposal 37 P1: the transport tempo box
+    # commits through the set-tempo verb instead of writing the project.
+    # shell + eventui since proposal 37 P4: the event editor and the virtual
+    # keyboard are docks, created in SMainWindow's ctor like every other one.
+    'shell':          {'actions', 'eventui', 'model', 'objects/cut',
+                       'objects/midi', 'objects/mixer', 'objects/track',
+                       'objects/wave', 'persistence', 'selection',
+                       'servicesui', 'testkit', 'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
     # testkit + pluginui since proposal 08 M5: assert-plugin-strip and
@@ -109,29 +146,55 @@ APP_DEPS = {
     # milestone made almost entirely of widgets can have. Same shape as the
     # existing testkit -> shell edge (drag-clip-edge, assert-lane-alignment):
     # a test verb reaching the widget it is testing.
-    'testkit':        {'actions', 'model', 'objects/cut', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'pluginui', 'shell'},
+    # testkit + objects/midi since proposal 37 P1: assert-midi-events reads a
+    # cut's frame-domain snapshot and a track's event feed, which is the only
+    # way to see mute / solo / midiRouting from a script.
+    # testkit + servicesui since proposal 37 P7b: assert-midi-options builds the
+    # REAL SOptionsDialog off screen and asserts on describeMidiPage(), the same
+    # shape as assert-plugin-strip reaching into pluginui.
+    'testkit':        {'actions', 'model', 'objects/cut', 'objects/midi',
+                       'objects/mixer', 'objects/track', 'objects/wave',
+                       'pluginui', 'servicesui', 'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).
 # core and graph are foundational and allowed everywhere.
 _ENG_BASE = {'core', 'graph'}
 APP_ENG = {
-    'model':          _ENG_BASE | {'pages', 'schedule', 'sources'},
-    'objects/cut':    _ENG_BASE | {'pages', 'schedule', 'sources'},
+    # model + events since proposal 37 P1: SProject owns the twTempoMap (the
+    # single tempo authority, D2) and SLink's beats timebase converts through
+    # it. No other app module may convert ticks to frames.
+    # model + events also covers proposal 37 P5's SAutomationLane, whose
+    # snapshot IS a twAutomationCurve.
+    'model':          _ENG_BASE | {'events', 'pages', 'schedule', 'sources'},
+    # objects/cut + events since proposal 37 P5: an SCut owns its `cut:Gain`
+    # envelope and hands the twAutomationCurve snapshot to the track's mix.
+    'objects/cut':    _ENG_BASE | {'events', 'pages', 'schedule', 'sources'},
     # objects/wave + sidecar since proposal 27 M0: SPlainWave persists its
     # straight preview through the derived-data sidecar store.
     'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources', 'sidecar'},
-    'objects/track':  _ENG_BASE | {'mix', 'plugins', 'schedule'},
+    # objects/midi: the tick-native window and the event content. `events`
+    # gives it twEventSeq / twEventClipResolved / twTempoMap / twSmf and
+    # nothing else - no pages, no mix, no plugins (proposal 37 3.5).
+    'objects/midi':   _ENG_BASE | {'events'},
+    # objects/track + events since proposal 37 P1: STrack owns the per-track
+    # twEventClipSet and the twEventMerge feed (3.2.1).
+    'objects/track':  _ENG_BASE | {'events', 'mix', 'plugins', 'schedule'},
     'objects/mixer':  _ENG_BASE | {'mix', 'schedule'},
     'actions':        _ENG_BASE | {'render'},
     'persistence':    _ENG_BASE,
     'selection':      _ENG_BASE,
     # timeline + metering since proposal 34: the track head owns an SLevelMeter
     # and a twLevelProbe reading the track's frozen pages by position.
-    'timeline':       _ENG_BASE | {'devices', 'metering', 'pages', 'playback',
-                                   'sources'},
+    # timeline + events since proposal 37 P1: the ruler and the snap grid read
+    # the project's tempo map, which is the single tempo authority (D2).
+    'timeline':       _ENG_BASE | {'devices', 'events', 'metering', 'pages',
+                                   'playback', 'sources'},
     'pluginui':       _ENG_BASE | {'plugins'},
+    # eventui + events since proposal 37 P4: the ruler and the piano roll grid
+    # read the project's twTempoMap, the single tempo authority (D2). No other
+    # engine module is in reach - the editor never touches a page.
+    'eventui':        _ENG_BASE | {'events'},
     # servicesui + plugins since proposal 08 M2: the Options dialog's Plugins
     # page edits the scanner's search paths, and SOpt::def() takes the
     # per-platform defaults from twPluginSearchPaths rather than restating them.
@@ -147,9 +210,12 @@ APP_ENG = {
     # the background scan from a main-thread timer.
     # shell + metering since proposal 34: SApplication owns the metering pump and
     # the master level probe.
-    'shell':          _ENG_BASE | {'devices', 'dsp', 'metering', 'playback',
-                                   'plugins', 'record', 'render', 'schedule',
-                                   'sidecar'},
+    # shell + events since proposal 37 P7b: the MIDI-out pump slices a track's
+    # event FEED (twEventMerge/twEventBlock) on the main thread and hands the
+    # bytes to tw/devices' MidiOutScheduler.
+    'shell':          _ENG_BASE | {'devices', 'dsp', 'events', 'metering',
+                                   'playback', 'plugins', 'record', 'render',
+                                   'schedule', 'sidecar'},
     # testkit + sidecar + schedule since proposal 27 M1 test verbs:
     # assert-sidecar reads twQafReader/twSidecarStore, wait-analysis polls the
     # revalidator's jobsQueued().
@@ -160,8 +226,11 @@ APP_ENG = {
     # checks it is the CaptureBackend (devices), and writes its recording out
     # through the SAME 16-bit WAV writer the render path uses (sinks), so a
     # captured playback and a render are comparable files.
-    'testkit':        _ENG_BASE | {'analysis', 'devices', 'metering', 'pages',
-                                   'playback', 'schedule', 'sidecar', 'sinks'},
+    # testkit + events since proposal 37 P1: assert-midi-file reads twSmf and
+    # assert-midi-events drives a twEventSource collect.
+    'testkit':        _ENG_BASE | {'analysis', 'devices', 'events', 'metering',
+                                   'pages', 'playback', 'schedule', 'sidecar',
+                                   'sinks'},
 }
 
 def main():

@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="instrument_folder_drums">
+
+  <!-- Proposal 37 P3b, AC7b: A DRUM MACHINE ON THE FOLDER (design 3.2.1).
+
+       Events bubble up the track hierarchy the way audio sums. A folder's FEED
+       is its own event clip set merged with the feed of every child that passes
+       events up - and a child passes up iff it neither consumes them locally
+       (an instrument slot, a MIDI-out port) nor says otherwise via
+       `midiRouting`. So: put ONE instrument on the parent, put the patterns on
+       the children, and the parent plays all of them. That is the requester's
+       use case, and REAPER's behaviour (MIDI passes through a child's empty FX
+       chain to the folder parent's input).
+
+       midi_folder_feed.qxa already gates the FEED itself, through
+       assert-midi-events. This case gates what the feed is FOR: the audio.
+
+           0 - 1 s   child 0   C4  261.626 Hz
+           1 - 2 s   child 1   E4  329.628 Hz
+           2 - 3 s   BOTH      C4 at velocity 40, at the same time
+
+       (a) both children are audible through the parent's one instrument;
+       (b) MUTE is an event rule as well as an audio one: muting child 0 takes
+           its notes OUT OF THE FEED (the same ssolorules.h resolution the
+           summing container applies to audio), so second 0 goes silent and
+           second 1 - which is the other child's - does not move at all;
+       (c) TWO CHILDREN PLAYING THE SAME KEY AT THE SAME TIME ARE TWO
+           OVERLAPPING NOTES, not one. Note ids are namespaced per merge source
+           (twNamespaceNoteId), and the sine allocates one voice per note-on, so
+           the third second is exactly twice the amplitude of one voice:
+
+               one voice   (40/127)/sqrt(2) = 0.222680
+               two voices  2 x that         = 0.445360
+
+           Velocity 40 rather than 100 on purpose: two voices at 100 would peak
+           at 1.575 and clip the 16-bit file, and a clipped sum is not 2 x
+           anything. At 40 the peak is 0.630.
+
+       STEREO IS NOT GATED (proposal 36 B5): channel 0 only, never `L != R`. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="5760" name="A"/>
+    <add-note clip="0,0" tick="0"    dur="1920" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="1920" key="60" velocity="40"  channel="0"/>
+
+    <insert-midi-clip trackPath="1" timePos="0" duration="5760" name="B"/>
+    <add-note clip="1,0" tick="1920" dur="1920" key="64" velocity="100" channel="0"/>
+    <add-note clip="1,0" tick="3840" dur="1920" key="60" velocity="40"  channel="0"/>
+
+    <!-- group-track runs the arranger's REAL Group macro: a folder appears and
+         both lanes are reparented under it. -->
+    <select-track trackPath="0"/>
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <group-track trackPath="0"/>
+
+    <!-- ONE instrument, on the PARENT. The children have none, so they bubble. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <assert-instrument-slot trackPath="0" present="1" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+    <!-- The children are not instrument tracks; they only supply events. -->
+    <assert-instrument-slot trackPath="0,0" present="0"/>
+    <assert-instrument-slot trackPath="0,1" present="0"/>
+
+    <render filename="ifd_both.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- (a) -->
+    <assert-audio-frequency filename="ifd_both.wav" startFrame="0" frameCount="48000"
+                            channel="0" minHz="260.626" maxHz="262.626"/>
+    <assert-audio-energy filename="ifd_both.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+    <assert-audio-frequency filename="ifd_both.wav" startFrame="48000" frameCount="48000"
+                            channel="0" minHz="328.628" maxHz="330.628"/>
+    <assert-audio-energy filename="ifd_both.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.54007" maxRms="0.57347"/>
+
+    <!-- (c) two voices: 0.445360, +/-3 % = [0.43200, 0.45872]. One voice would
+         read 0.222680, which is 48 % below the band. -->
+    <assert-audio-energy filename="ifd_both.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.43200" maxRms="0.45872"/>
+    <assert-audio-energy filename="ifd_both.wav" startFrame="144000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+
+    <!-- (b) MUTE child 0. -->
+    <set-track-mute trackPath="0,0" muted="1"/>
+    <render filename="ifd_muted.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <assert-audio-energy filename="ifd_muted.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+    <!-- the other child's second is untouched, BYTE for byte -->
+    <assert-file-identical actual="ifd_muted.wav" expected="ifd_both.wav"
+                           startFrame="48000" frameCount="48000"/>
+    <!-- ...and the doubled second is now a single voice -->
+    <assert-audio-energy filename="ifd_muted.wav" startFrame="96000" frameCount="48000"
+                         channel="0" minRms="0.21600" maxRms="0.22936"/>
+
+    <!-- ...and it undoes. -->
+    <undo count="1"/>
+    <render filename="ifd_undone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ifd_undone.wav" expected="ifd_both.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
