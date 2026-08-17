@@ -68,6 +68,7 @@
 #include "app/timeline/strackdetailpanel.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptionsdialog.h"
+#include "app/servicesui/scleanupdialog.h"
 
 #include "tw/playback/twspeaker.h"
 #include "tw/devices/audio_input.h"
@@ -1101,6 +1102,10 @@ SMainWindow::SMainWindow()
     externFileList_ = new SExternFileList( qDockExternFileList_, nullptr );
     qDockExternFileList_->setWidget( externFileList_ );
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
+    // The list only ANNOUNCES the cleanup request (app/model may not reach
+    // app/servicesui); the shell owns the dialog and the current project.
+    connect( externFileList_, &SExternFileList::cleanupRequested,
+             this, &SMainWindow::showCleanupDialog );
 
     // The track detail panel, docked directly BELOW the extern file list in the
     // same left area. It used to be a child of the arranger's track-control
@@ -2334,6 +2339,18 @@ void SMainWindow::showOptionsDialog()
 {
     SOptionsDialog dlg( this );
     dlg.exec();   // pages write to SSettings on OK/Apply; live UI reacts to changed()
+}
+
+void SMainWindow::showCleanupDialog()
+{
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) {
+        QMessageBox::warning( this, "No Project",
+            "Please open or create a project first." );
+        return;
+    }
+    SCleanupDialog dlg( this, project );
+    dlg.exec();   // the dialog does the scanning, confirming and deleting itself
 }
 
 void SMainWindow::measureAudioLatenciesIfNeeded()
