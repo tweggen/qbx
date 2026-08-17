@@ -58,6 +58,36 @@ enum class twPluginSlotMode {
                     // into the slot's own buffer for the aux taps of 5.4 (P9)
 };
 
+// THE LIVE TRANSPORT (proposal 21 L1a, design D2).
+//
+// The pump renders a live-owned slot BLOCK BY BLOCK at a position that depends
+// on the transport, and the two things the freeze path can hard-wire — "we are
+// playing" and "evaluate the automation where the block is" — stop being true
+// the moment the transport is STOPPED and the user is monitoring an input:
+//
+//   - `playing` is reported to the plugin as `twProcessContext.playing`. The
+//     freeze path hard-wires it true (a render IS a moving timeline as far as a
+//     plugin's transport is concerned); a stopped live lane is the first caller
+//     for which that is a lie.
+//   - `feedEnabled` false makes the render skip collecting the SEQUENCED feed
+//     (`events_`) and nothing else — the LIVE source is always collected. No
+//     reference DAW plays sequenced notes while the transport is stopped; the
+//     chase happens on PLAY.
+//   - `holdAutomationAt >= 0` freezes every automation lane at that position:
+//     the per-chunk build takes its chase there and emits nothing else, so an
+//     automated parameter reads the value under the stopped playhead instead of
+//     sweeping along the pump's virtual counter.
+//
+// EVERY FIELD IS INERT UNLESS THE SLOT IS `setLiveOwned(true)` (plugins inv.
+// 43). That is what keeps the frozen path — and therefore the golden corpus —
+// byte-identical: a processor nobody has handed to a pump never reads this.
+struct twLiveTransport {
+    bool     playing          = true;
+    bool     feedEnabled      = true;
+    // < 0 == no hold (evaluate each chunk where it is).
+    offset_t holdAutomationAt = -1;
+};
+
 // The stateful core of one plugin slot: it owns the twPlugin instance(s), the
 // bypass flag, the prepare() state, the block chunking and the channel-mismatch
 // mapping.
@@ -169,6 +199,62 @@ public:
     // run's voices instead of chasing them. Reached through SPluginSlot.
     void forgetContinuity();
 
+    // --- live ownership (proposal 21 L1a, design D2/D4) ---------------------
+    //
+    // THE OWNERSHIP GUARD. While a slot is live-owned its processor belongs to
+    // ONE thread — the LiveGraphPump, which renders it block by block. The
+    // exclusion wiring means no NEW freeze plan contains the chain at all, but
+    // an in-flight node, a preview or an asset capture (neither of which is a
+    // graph node, so `retireComponentNodes` cannot retire them) can still
+    // arrive. Such a call answers SILENCE and counts, rather than interleaving
+    // a second position stream into a stateful plugin and corrupting the voice
+    // the user is playing. It is deliberately not an assert: the design says
+    // the arrival is recoverable, so it must be a number a test can bound
+    // (`assert-render-policy`), never a process the user loses.
+    //
+    // "The pump" is identified by the per-thread render policy marker
+    // (`twRtThreadGuard::markLiveThread`, proposal 21 L0), so this needs no
+    // thread id of its own and cannot drift from the graph's own guard.
+    //
+    // Continuity state is NOT touched by a refusal: the refused caller is the
+    // foreign one, and clearing lastEnd_ would make the PUMP's next block a
+    // spurious reposition.
+    void setLiveOwned( bool owned );
+    bool liveOwned() const { return liveOwnedFlag_.load( std::memory_order_acquire ); }
+
+    // Process-wide, for the exit assertion and the log — the same discipline
+    // twRtThreadGuard's counters use, and for the same reason.
+    static std::uint64_t liveOwnedRefusals();
+    static void          resetLiveOwnedCounters();   // tests only
+
+    // THE SECOND EVENT SOURCE (design D2/D4). It is NOT a `setEventSource`
+    // swap and NOT a member of the track's `eventFeed()`:
+    //   - `STrack::syncInstrumentSlot()` re-applies the feed from adopt /
+    //     insert / remove, so a live source installed as the feed would be
+    //     silently overwritten; and `setEventSource` clears continuity and
+    //     bumps the param epoch, which a live arm must not do per call.
+    //   - the feed is ALSO read by `SMidiOutPump` and `assert-midi-events`,
+    //     and a ring-draining collect has exactly one legal reader.
+    // So the processor holds two sources and merges them per block, with the
+    // live source's note ids NAMESPACED (kLiveNoteIdSource) so a live note and
+    // a sequenced note on the same key and channel are two overlapping notes.
+    // Collected ONLY while live-owned.
+    void setLiveEventSource( std::shared_ptr<const twEventSource> source );
+    bool hasLiveEventSource() const;
+
+    // The note-id namespace the live source gets inside a merged block. It is
+    // the top index a twEventMerge can hand out, which is the one collision
+    // this scheme can have: a feed built from SIXTEEN merged children would
+    // reuse it. Recorded as known debt in the CONTRACT rather than papered
+    // over — ids only have to be distinct within one collect, and the failure
+    // mode is one truncated note, not a corrupted stream.
+    static constexpr std::int32_t kLiveNoteIdSource = 15;
+
+    // The transport the live blocks are rendered under (see twLiveTransport).
+    // A value copy under mutex_, consulted per chunk WHILE LIVE-OWNED ONLY.
+    void            setLiveTransport( const twLiveTransport &tx );
+    twLiveTransport liveTransport() const;
+
     // Host-side access for parameters and state chunks. plugins() returns every
     // instance, which is what the dual-mono mapping needs (a parameter edit has
     // to reach all N). Both return the live pointers; the caller must not
@@ -255,6 +341,21 @@ private:
     // a STEP lane cost two events per chunk instead of sixty-four.
     void  buildAutomationChunk_nolock( offset_t chunkStart, length_t n );
 
+    // The ONE call site the two render paths use. It is `buildAutomationChunk_
+    // nolock(chunkStart, n)` verbatim unless the live transport is holding, in
+    // which case it is `(holdAutomationAt, 1)` — the chase alone, i.e. one
+    // constant value for the whole chunk (design D2). Inert unless live-owned.
+    void  buildAutomationForChunk_nolock( offset_t chunkStart, length_t n );
+
+    // What `twProcessContext.playing` should say. True everywhere except a
+    // live-owned slot under a stopped transport.
+    bool  ctxPlaying_nolock() const
+    { return liveOwned_ ? liveTx_.playing : true; }
+
+    // Append `src`'s events and chase onto `dst`, note ids namespaced to
+    // kLiveNoteIdSource. `dst` is re-sorted by the caller.
+    void  mergeLiveBlock_nolock( twEventBlock &dst, const twEventBlock &src ) const;
+
     // --- the generator half (proposal 37 P3b) -------------------------------
     // All of these require mutex_.
 
@@ -321,6 +422,17 @@ private:
     bool     isGenerator_ = false;
 
     std::shared_ptr<const twEventSource> events_;
+    // The live half of the feed (proposal 21 L1a). Swapped under mutex_ like
+    // events_, collected only while liveOwned_.
+    std::shared_ptr<const twEventSource> liveEvents_;
+    twEventBlock                         liveBlock_;   // per-call scratch
+    bool                                 liveOwned_ = false;
+    twLiveTransport                      liveTx_;
+    // An atomic MIRROR of liveOwned_ so liveOwned() is a lock-free read from
+    // the app while the pump holds mutex_ for a block. mutex_ remains the
+    // authority; this is never read inside the render.
+    std::atomic<bool>                    liveOwnedFlag_{ false };
+    bool                                 loggedLiveRefusal_ = false;
     twTempoMap                           tempo_;
     bool                                 tempoValid_ = false;
 

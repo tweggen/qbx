@@ -2,9 +2,11 @@
 
 #include "tw/core/twlog.h"
 #include "tw/graph/tw303aenv.h"
+#include "tw/graph/tw_freeze_context.h"
 #include "tw/plugins/twplugininsert.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <limits>
 
@@ -243,6 +245,114 @@ void twPluginSlotProcessor::forgetContinuity()
     haveLastEnd_ = false;
 }
 
+// ------------------------------------------------------------ live ownership
+//
+// Proposal 21 L1a, design D2/D4. Everything below is flag-gated on liveOwned_
+// and therefore INERT for every caller that has not handed this processor to a
+// LiveGraphPump - which is what keeps the frozen path byte-identical.
+
+namespace {
+// Process-wide, exactly like twRtThreadGuard's: the counter is what
+// `assert-render-policy` bounds at exit, and a per-processor number would tell
+// a suite nothing about the run.
+std::atomic<std::uint64_t> g_liveOwnedRefusals{ 0 };
+}  // namespace
+
+std::uint64_t twPluginSlotProcessor::liveOwnedRefusals()
+{
+    return g_liveOwnedRefusals.load( std::memory_order_relaxed );
+}
+
+void twPluginSlotProcessor::resetLiveOwnedCounters()
+{
+    g_liveOwnedRefusals.store( 0, std::memory_order_relaxed );
+}
+
+void twPluginSlotProcessor::setLiveOwned( bool owned )
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    if( liveOwned_ == owned ) return;
+    liveOwned_ = owned;
+    liveOwnedFlag_.store( owned, std::memory_order_release );
+    // Handing the slot over (or back) is a discontinuity by definition: the two
+    // owners render different position streams. The FIRST block of the new
+    // owner is then one reposition, which is exactly what design D4 asks for.
+    haveLastEnd_ = false;
+    if( !owned ) {
+        // Ownership ends, the live source goes with it - never the feed, which
+        // the app owns and re-applies on its own schedule.
+        liveEvents_.reset();
+        liveTx_ = twLiveTransport{};
+    }
+}
+
+void twPluginSlotProcessor::setLiveEventSource( std::shared_ptr<const twEventSource> source )
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    liveEvents_ = std::move( source );
+}
+
+bool twPluginSlotProcessor::hasLiveEventSource() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return (bool) liveEvents_;
+}
+
+void twPluginSlotProcessor::setLiveTransport( const twLiveTransport &tx )
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    liveTx_ = tx;
+}
+
+twLiveTransport twPluginSlotProcessor::liveTransport() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return liveTx_;
+}
+
+void twPluginSlotProcessor::buildAutomationForChunk_nolock( offset_t chunkStart,
+                                                            length_t n )
+{
+    if( liveOwned_ && liveTx_.holdAutomationAt >= 0 ) {
+        // THE HOLD (design D2). A one-frame build emits the CHASE and nothing
+        // else - one ParamValue per lane, at offset 0, carrying the value under
+        // the stopped playhead. No breakpoint and no ramp point can land inside
+        // a one-frame window, so the chunk is constant by construction and no
+        // `setParamCurves` change is needed to express "held".
+        buildAutomationChunk_nolock( liveTx_.holdAutomationAt, 1 );
+        return;
+    }
+    buildAutomationChunk_nolock( chunkStart, n );
+}
+
+void twPluginSlotProcessor::mergeLiveBlock_nolock( twEventBlock &dst,
+                                                   const twEventBlock &src ) const
+{
+    // The chase FIRST, folded in live-source order through the SAME
+    // twEventState::mergeOver twEventMerge uses: a controller both sources
+    // wrote resolves to the live one (it is the thing the performer is holding
+    // right now), and the held notes concatenate. Only the appended notes are
+    // namespaced.
+    const std::size_t base = dst.chase.notes.size();
+    dst.chase.mergeOver( src.chase );
+    for( std::size_t i = base; i < dst.chase.notes.size(); ++i )
+        dst.chase.notes[i].noteId =
+            twNamespaceNoteId( dst.chase.notes[i].noteId, kLiveNoteIdSource );
+    dst.chase.sortNotes();
+
+    for( const twEvent &e : src.events ) {
+        twEvent ev = e;
+        ev.noteId  = twNamespaceNoteId( e.noteId, kLiveNoteIdSource );
+        if( e.payloadSize ) {
+            const std::uint8_t *pl = src.payload( e );
+            ev.payloadOffset = pl ? dst.addPayload( pl, e.payloadSize ) : 0;
+            ev.payloadSize   = pl ? e.payloadSize : 0;
+        }
+        dst.events.push_back( ev );
+    }
+    dst.sortEvents();
+}
+
 // Caller must hold mutex_. The insert's frozen pages bake in what process()
 // produced, so an edit that changes process() has to stale them or it is
 // inaudible. twComponent::bumpContentEpoch() is a lock-free atomic increment, so
@@ -478,11 +588,14 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
         twEventList      list;
         twProcessContext ctx;
         if( automate ) {
-            buildAutomationChunk_nolock( startPos + off, n );
+            buildAutomationForChunk_nolock( startPos + off, n );
             list.events = autoEvents_.empty() ? nullptr : autoEvents_.data();
             list.count  = (std::uint32_t) autoEvents_.size();
             ctx.position   = (std::int64_t)( startPos + off );
-            ctx.playing    = true;
+            // TRUTHFUL SINCE PROPOSAL 21 L1a: still `true` on every freeze path
+            // (an offline render IS a moving timeline to a plugin's transport),
+            // and the live transport's own answer while live-owned.
+            ctx.playing    = ctxPlaying_nolock();
             ctx.validFlags = twCtxPosition;
             autoSink_.setStorage( outEvents_.data(), (std::uint32_t) outEvents_.size(),
                                   outArena_.data(), (std::uint32_t) outArena_.size() );
@@ -774,7 +887,7 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
         // ahead of the notes at any given offset because a chased parameter has
         // to be in force before the note it shapes is attacked.
         if( !paramCurves_.empty() ) {
-            buildAutomationChunk_nolock( startPos + off, n );
+            buildAutomationForChunk_nolock( startPos + off, n );
             chunkEvents_.insert( chunkEvents_.end(), autoEvents_.begin(),
                                  autoEvents_.end() );
         }
@@ -834,8 +947,10 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
         ctx.position   = (std::int64_t)( startPos + off );
         // A freeze always represents a moving timeline - an offline render is
         // "playing" as far as a plugin's transport is concerned. What is NOT
-        // claimed is a steady sample clock: pages freeze out of order.
-        ctx.playing    = true;
+        // claimed is a steady sample clock: pages freeze out of order. Proposal
+        // 21 L1a adds the one caller for which "playing" can be FALSE: a
+        // live-owned slot under a stopped transport (design D2).
+        ctx.playing    = ctxPlaying_nolock();
         ctx.validFlags = twCtxPosition;
         if( tempoValid_ ) {
             ctx.tempoBpm = tempo_.bpm();
@@ -911,6 +1026,23 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
 
     std::lock_guard<std::mutex> lock( mutex_ );
 
+    // THE OWNERSHIP GUARD (design D4). While the slot is live-owned, the pump
+    // is its only legal renderer; anybody else gets silence and is counted.
+    // Continuity state is deliberately untouched - see the header.
+    if( liveOwned_ && !twRtThreadGuard::onLiveThread() ) {
+        g_liveOwnedRefusals.fetch_add( 1, std::memory_order_relaxed );
+        if( !loggedLiveRefusal_ ) {
+            loggedLiveRefusal_ = true;
+            TW_LOGW( "plugins", "[slot] render() at %lld on a LIVE-OWNED processor from a "
+                     "thread that is not the pump - answering silence and counting "
+                     "(proposal 21 design D4)", (long long)startPos );
+        }
+        if( out )
+            for( idx_t c = 0; c < nChannels_; ++c )
+                if( out[c] ) std::fill( out[c], out[c] + len, 0.0f );
+        return;
+    }
+
     ensureScratch_nolock();
 
     // The plugin was activated for a sample rate. A genuine project rate change
@@ -958,14 +1090,30 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
                      (long long)startPos,
                      haveLastEnd_ ? (long long)lastEnd_ : -1LL );
             resetInstances_nolock();
-            preRoll_nolock( startPos, sampleRate );
+            // THE PRE-ROLL IS PART OF THE FEED (proposal 21 L1a, design D2).
+            // It chases and re-plays `events_`, so running it with the feed
+            // MASKED would put the sequenced material into the DSP by the back
+            // door and a stopped live lane would sound the arrangement's held
+            // notes — the exact thing the mask exists to prevent. With no feed
+            // there is nothing behind this position to rebuild.
+            if( !liveOwned_ || liveTx_.feedEnabled )
+                preRoll_nolock( startPos, sampleRate );
         }
         lastEnd_     = startPos + (offset_t)len;
         haveLastEnd_ = true;
 
         pageBlock_.clear();
-        if( events_ )
+        // THE FEED GATE (proposal 21 L1a, design D2). `feedEnabled` false skips
+        // the SEQUENCED feed and nothing else - a stopped live lane must not
+        // sound the arrangement's notes, but it must still sound what the
+        // performer is playing right now.
+        if( events_ && ( !liveOwned_ || liveTx_.feedEnabled ) )
             events_->collect( (std::int64_t)startPos, (std::int64_t)len, pageBlock_ );
+        if( liveOwned_ && liveEvents_ ) {
+            liveBlock_.clear();
+            liveEvents_->collect( (std::int64_t)startPos, (std::int64_t)len, liveBlock_ );
+            mergeLiveBlock_nolock( pageBlock_, liveBlock_ );
+        }
         runGenerator_nolock( in, out, len, startPos, pageBlock_, false, sampleRate );
         return;
     }
