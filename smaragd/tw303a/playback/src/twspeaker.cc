@@ -170,6 +170,12 @@ void twSpeaker::startOutput()
             // ENFORCE "the RT path never renders" (thread-local flag; a
             // repeated store of `true` is free).
             twRtThreadGuard::markRtThread();
+            // DIAGNOSTIC (temporary): count what the DEVICE actually drains, so
+            // stopOutput can report an effective output rate. Every early
+            // return below still fills `frames`, so it is counted here, once,
+            // before any of them.
+            outFramesDelivered_.fetch_add( (std::uint64_t) frames,
+                                           std::memory_order_relaxed );
             auto engine = audioEngine_;  // Lock-free capture via shared_ptr
             if (!engine) {
                 std::fill_n(out, frames * channels, 0.0f);
@@ -238,6 +244,14 @@ void twSpeaker::startOutput()
             return static_cast<std::size_t>(outFrames);
         });
 
+    // DIAGNOSTIC (temporary): arm the effective-output-rate measurement. The
+    // wall clock starts HERE rather than at the first callback, so the priming
+    // wait is included and shows up as a rate BELOW the device rate; a device
+    // whose clock genuinely runs slow shows the same shortfall proportional to
+    // the whole run, so read the two apart by run length.
+    outFramesDelivered_.store( 0, std::memory_order_relaxed );
+    outputStartWall_ = std::chrono::steady_clock::now();
+
     // Phase 6: Transition to BUFFERING and spawn monitor task
     {
         std::lock_guard<std::mutex> lock(mutex());
@@ -272,6 +286,24 @@ void twSpeaker::stopOutput()
         isPlaying_ = false;
         outputState_.store(OutputState::STOPPING, std::memory_order_relaxed);
     } // Release stateMutex_
+
+    // DIAGNOSTIC (temporary) — the OUTPUT twin of RecordingSession's
+    // capture-rate check. A ratio well below 1 on a run of several seconds
+    // means the device drained fewer frames than the rate we opened it at, so
+    // the arrangement came out slow and flat; ~1.0 exonerates the device and
+    // points the finger back at the graph.
+    {
+        const double wall = std::chrono::duration_cast<std::chrono::duration<double>>(
+                                std::chrono::steady_clock::now() - outputStartWall_ ).count();
+        const std::uint64_t frames = outFramesDelivered_.load( std::memory_order_relaxed );
+        const unsigned assumed = backend_ ? backend_->getConfig().sampleRate : 0u;
+        const double eff = wall > 0.0 ? (double) frames / wall : 0.0;
+        TWSPK_LOG( "output-rate check — assumed device=%u Hz, MEASURED "
+                   "effective=%.1f Hz over %.3fs (%llu frames). "
+                   "ratio meas/assumed=%.4f",
+                   assumed, eff, wall, (unsigned long long) frames,
+                   assumed > 0 ? eff / assumed : 0.0 );
+    }
 
     // Phase 2: Stop buffering task (brief lock, may join)
     {

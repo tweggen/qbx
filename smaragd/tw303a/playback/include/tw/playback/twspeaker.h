@@ -8,6 +8,7 @@
 #include "tw/playback/playback_context.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -145,6 +146,18 @@ private:
     // the alternative is either a per-callback log or a decision the user
     // cannot discover.
     std::atomic<int> monitorWidthLogged_{0};
+
+    // DIAGNOSTIC (temporary, 2026-08-17): the OUTPUT twin of the recorder's
+    // effective-capture-rate check. The render callback counts the frames the
+    // device actually consumes; stopOutput divides by wall clock. If that comes
+    // out ~44100 while openDevice reported 48000, the device is draining slower
+    // than we assume and 48 k content plays ~8.8 % slow and 1.47 semitones flat
+    // -- which is the reported symptom, and which no existing log can see,
+    // because every rate diag is emitted BEFORE the other stream exists.
+    // Counter is bumped on the AUDIO thread (relaxed atomic, nothing else);
+    // both timestamps are taken on the control thread.
+    std::atomic<std::uint64_t> outFramesDelivered_{0};
+    std::chrono::steady_clock::time_point outputStartWall_{};
 
     // Helper: Background task that waits for readahead buffer, then starts backend output
     void monitorReadaheadBuffer();
