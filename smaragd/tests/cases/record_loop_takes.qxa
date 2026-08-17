@@ -16,7 +16,7 @@
   segment lands on an empty lane and becomes a plain cut; the second finds that
   cut covering the column and becomes a TAKE; the third likewise. So a lane
   ends with ONE COLUMN holding N takes, not N clips side by side, and that is
-  what `clips="1"` plus `takes="3"` says.
+  what `clips="1"` plus the take/pass identity below says.
 
   WHY THE ASSERTION IS A FLOOR AND NOT AN EXACT COUNT. How many passes a take
   produces is a WALL-CLOCK quantity ... captured material divided by the loop
@@ -54,8 +54,10 @@
     <wait-ms ms="7000"/>
     <record-stop/>
 
-    <!-- ONE column at the loop start, three takes, three committed passes,
-         and the column is exactly the loop long. -->
+    <!-- ONE column at the loop start, AT LEAST three takes and three
+         committed passes (the floor; see the header), and the column is
+         exactly the loop long. The verb additionally asserts, without being
+         asked, that the take count EQUALS the pass count. -->
     <assert-recorded-clip trackPath="0" clips="1" minTakes="3" minPasses="3"
                           startFrame="0" startTolerance="0"
                           durationFrames="96000" durationTolerance="0"
