@@ -11,13 +11,22 @@
 // no inverse, nothing mutated — rather than clamped, so a script that asks for
 // 3 channels fails loudly instead of quietly getting 2.
 //
-// M1 IS DATA ONLY, and this action is the load-bearing example of it: it moves
-// one integer on SProject and touches NOTHING else. In particular it must never
-// reach STrack::setNBusses, whose shrink path is still Q_ASSERT_X( false, ... )
-// — an undo of 6 -> 2 that propagated would abort the app. That is a property
-// of the whole milestone, so it is pinned by instrumentation rather than by
-// review: STrack counts its own setNBusses() calls and project_channels_test
-// asserts the count does not move across apply + undo.
+// THIS ACTION REACHES THE GRAPH (since proposal 36 B4). It moves one integer on
+// SProject and the whole signal path follows: every track's twTrackMix,
+// twPluginChain, twGainStage and twRewire, the master mixer, the width of every
+// page frozen afterwards, and the channel count of the next render. Undo
+// restores the old width the same way; 8 -> 2 is an assignment, not a shrink.
+// Gated by mc_width_change.qxa (2 -> 8 -> 2 under repeat_test).
+//
+// It was the opposite at M1, and the reversal is worth knowing about because
+// the reason was sharp: "M1 IS DATA ONLY... it must never reach
+// STrack::setNBusses, whose shrink path is still Q_ASSERT_X( false, ... ), so
+// an undo of 6 -> 2 that propagated would abort the app" — except that
+// Q_ASSERT_X is compiled OUT of this build (Qt defines QT_NO_DEBUG), so it
+// would not have aborted; it would have returned silently and left the graph
+// half-wired, which is worse (§7 trap 9). B4 deleted setNBusses and the
+// per-bus instantiation with it, which is what made this action safe to
+// propagate.
 //
 // Coalescing: consecutive changes merge (a spinbox drag is one undo step), like
 // set-track-volume. There is one channel count per project, so the merge key is

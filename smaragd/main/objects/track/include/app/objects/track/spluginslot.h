@@ -24,12 +24,19 @@ class SProjectLoader;
  * A model object wrapping one plugin insert in a track's effect chain.
  * Each slot stores the plugin descriptor, opaque state chunk, and bypass flag.
  *
- * Since proposal 08 M3 the DSP side of a slot is ONE shared
- * audio::twPluginSlotProcessor (it owns the twPlugin instance(s), the block
- * chunking and the channel-mismatch mapping) plus one audio::twPluginInsert
- * TAP per bus. The taps are 1-in/1-out components, which is what the engine's
- * one-mono-page-per-component model requires; channel coherence lives in the
- * processor, not in the components.
+ * The DSP side of a slot is ONE audio::twPluginInsert component, N channels
+ * wide, in front of ONE audio::twPluginSlotProcessor that owns the twPlugin
+ * instance(s), the block chunking and the channel-mismatch mapping. See the
+ * `pluginInsert`/`processor` members below, and proposal 36 B4.
+ *
+ * It used to be "one processor plus one twPluginInsert TAP PER BUS, because the
+ * engine's one-mono-page-per-component model requires 1-in/1-out components".
+ * That was true and load-bearing until proposal 36 B4 gave the frozen page a
+ * channel dimension; a plugin now sees all its channels in one process() call
+ * from one component, and the tap fan-out, the sideways sibling gather and the
+ * processor's all-bus cache retired together. The processor stayed, as the
+ * plugin's LIFETIME and STATE holder only (proposal 08 inv. 18 depends on a
+ * slot's graph identity being its processor).
  *
  * Since proposal 08 M4 a slot round-trips through the project file: see
  * serializeSelfAttributes() for the schema and instantiateFromDomElement() for

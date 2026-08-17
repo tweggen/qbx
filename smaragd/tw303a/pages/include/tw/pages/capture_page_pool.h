@@ -41,6 +41,13 @@
  *   count, no hop, no duration, no channel count). Written by exactly one
  *   place, CaptureRevalidator::dispatchRecomputation, from
  *   twComponent::freezePreviewPage.
+ *   NOTE (proposal 36 B9): "channel 0 only" is still literally true and is NOT
+ *   the same statement as main/model/CONTRACT.md inv. 9a, which says a preview
+ *   PROBE folds every channel (B8). They do not conflict because this payload
+ *   has ZERO READERS — B8 deleted the only one as dead code (trap 26). The
+ *   drawn waveform comes from SObject::straightCalcPreviewData /
+ *   SCut::ensureCapturePeaks, which do fold every channel; this page's
+ *   existence is used as a readiness signal and its bytes are never read.
  * - Playback: reader chain data (twSampleReader with grain params, etc.)
  * - Metadata: duration, peak levels, RMS
  * - Export: resampled/normalized buffer
@@ -97,8 +104,8 @@ struct CapturePageData : public PageBase {
     size_t getPageSize() const override { return PAGE_SIZE; }
     uint32_t getValidFrames() const override { return PAGE_SIZE / sizeof(float); }
     void setValidFrames(uint32_t /* frames */) override {}  // CapturePageData uses full buffer
-    void* getDataPtr() override { return data; }
-    const void* getDataPtr() const override { return data; }
+    // getDataPtr() is GONE (proposal 36 B9). `data` is a public member of a
+    // plain struct; the accessor added nothing but a polymorphic hole.
     std::any& getInternalState() override { return internalState; }
     const std::any& getInternalState() const override { return internalState; }
     std::chrono::steady_clock::time_point getCreatedAt() const override { return createdAt; }

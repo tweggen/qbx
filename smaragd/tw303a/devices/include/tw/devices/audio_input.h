@@ -25,6 +25,13 @@ struct AudioInputDeviceInfo {
     std::string id;           // backend-specific device handle
     std::string name;         // human-readable label
     std::uint32_t channels;   // number of input channels
+    // The endpoint's SHARED-MODE MIX RATE as Windows/the OS reports it, 0 when
+    // unknown. Surfaced because an input endpoint declared at one rate while
+    // the output endpoint is declared at another shares ONE hardware clock:
+    // the OS then resamples one side and MISREPORTS its clock, and no amount
+    // of arithmetic downstream can recover from being lied to about the rate.
+    // Showing it at the point of choice is what makes that visible.
+    std::uint32_t sampleRate = 0;
 };
 
 // What the capture thread and its ring have done since the device was opened

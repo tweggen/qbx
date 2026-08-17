@@ -269,8 +269,10 @@ public:
 
     // Adopt a plugin chain loaded from a project file (proposal 08 M4): drop the
     // empty one the constructor made, take over the loaded one, reconnect its
-    // signals and rebuild the per-bus DSP chains from its slots. Called from the
-    // loader's deferred-resolve pass, never during normal editing.
+    // signals and rebuild the track's DSP chain from its slots. (Said "the
+    // per-bus DSP chains"; a track has had ONE twPluginChain of the project's
+    // width since proposal 36 B4.) Called from the loader's deferred-resolve
+    // pass, never during normal editing.
     void adoptPluginChain( SPluginChain *chain );
     virtual int seekTo( offset_t ofs ) override;
 

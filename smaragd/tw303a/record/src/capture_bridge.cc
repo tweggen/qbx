@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 #define BRIDGE_LOG( fmt, ... ) \
     TW_LOGD( "record", "CaptureBridge::%s: " fmt, __func__, ##__VA_ARGS__ )
@@ -172,6 +173,7 @@ bool CaptureBridge::start( const CaptureBridgeParams &params )
         return false;
     }
 
+    startWall_ = std::chrono::steady_clock::now();
     running_.store( true, std::memory_order_release );
     bridgeThread_ = std::thread( [this] { bridgeThreadMain(); } );
     wavThread_    = std::thread( [this] { wavThreadMain(); } );
@@ -209,6 +211,33 @@ void CaptureBridge::stop()
     capturing_.store( false, std::memory_order_release );
 
     const CaptureBridgeStats s = stats();      // latches the input's counters
+
+    // THE CAPTURE-RATE CHECK (ported from RecordingSession, main PR #55). The
+    // frames the device actually handed us per real second, against the rate we
+    // opened it at. A shared-mode endpoint whose OS rate differs from its
+    // sibling's (one interface clock, two endpoint settings) is auto-converted
+    // by Windows and MISREPORTS its clock; nothing downstream can compute its
+    // way out of that, so past 1 % over a run of at least 2 s this WARNS and
+    // converts the ratio into semitones and names the likely cause.
+    {
+        const double wall = std::chrono::duration_cast<std::chrono::duration<double>>(
+                                std::chrono::steady_clock::now() - startWall_ ).count();
+        const double effRate = wall > 0.0 ? (double) s.framesIn / wall : 0.0;
+        const double ratio   = inputRate_ > 0 ? effRate / (double) inputRate_ : 0.0;
+        BRIDGE_LOG( "capture-rate check — assumed input=%u Hz, MEASURED effective=%.1f Hz "
+                    "over %.3fs (%llu input frames), ratio meas/assumed=%.4f",
+                    (unsigned) inputRate_, effRate, wall,
+                    (unsigned long long) s.framesIn, ratio );
+        if( wall >= 2.0 && ratio > 0.0 && std::fabs( ratio - 1.0 ) > 0.01 ) {
+            TW_LOGW( "record",
+                     "CaptureBridge: CAPTURE RATE IS WRONG by %.1f %% — this take is "
+                     "pitched %s by about %.2f semitones. The usual cause is the input "
+                     "and output ENDPOINTS being set to different rates in the OS while "
+                     "sharing one interface clock; check that both are set to %u Hz.",
+                     ( ratio - 1.0 ) * 100.0, ratio > 1.0 ? "DOWN" : "UP",
+                     std::fabs( 12.0 * std::log2( ratio ) ), (unsigned) targetRate_ );
+        }
+    }
 
     if( ownedInput_ ) {
         ownedInput_->closeDevice();

@@ -76,8 +76,11 @@ Invariants:
    comparison against what was last PAINTED (not last computed), sub-rect
    update(), and zero work at all when hidden. 30 heads x 30 Hz is otherwise a
    repaint storm, and a 20 dB/s decay moves a 48 px bar by well under a pixel
-   per tick. The sub-rect path is kept for the ONE-LANE case specifically (every
-   head on a mono or stereo project); a multi-lane meter still tests before
+   per tick. The sub-rect path is kept for the ONE-LANE case specifically —
+   which since proposal 36 B8 means a MONO project only, because a head shows
+   `min(width, MONITOR_LANES)` lanes and a stereo project therefore draws two
+   (inv. 11a). The clause read "every head on a mono or stereo project" until
+   B9. A multi-lane meter still tests before
    repainting, but repaints the widget, because the lanes move on both axes and
    a union of per-lane rects would buy nothing on the handful that exist.
 

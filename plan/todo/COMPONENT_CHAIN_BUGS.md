@@ -1,5 +1,29 @@
 # DSP Component Chain Bug Fixes (Track → Speaker)
 
+> ## ⚠ SUPERSEDED IN ITS PREMISE by proposal 36 (annotated 2026-08-17, B9)
+>
+> **This whole document is written in the pre-B4 world, where "N channels = N
+> parallel mono component instances" and a track therefore had one `twTrackMix`
+> and one `twPluginChain` PER BUS.** Proposal 36 B4 retired that: a track is now
+> ONE `twTrackMix` + ONE `twPluginChain` + ONE `twGainStage` + ONE `twRewire`,
+> each `SProject::channels()` wide, and the frozen page carries the channels.
+> `STrack::setNBusses` and `SStdMixer::setNBusses` no longer exist.
+>
+> It is kept rather than deleted because the FINDINGS are still the record of
+> what went wrong and why, and several of them were the evidence proposal 36 §3
+> used to choose the page rewrite over extending the parallel-wire model. Read
+> it as forensics, not as a description of the code. Specifically:
+>
+> - **BUG 1 (setNBusses grow path crashes)** and **BUG 6 (shrink is a stub)** are
+>   retired with the function. They are cited in proposal 36 §3 as two of the
+>   bugs the per-bus instantiation had already produced.
+> - **BUG 3 (right channel always silent; "Full stereo requires the mixer's bus
+>   count to match")** is CLOSED by B4 + B5. `twSpeaker` no longer copies left to
+>   right; the device rule is `L = ch0; R = (width >= 2) ? ch1 : ch0`, applied to
+>   a page that really carries both, and a render writes the project's full
+>   width.
+> - Every `for( i < nBusses_ )` loop below describes code that is gone.
+
 ## Context
 
 Review of the signal chain `twTrackMix → twPluginChain → cpRewire_ (STrack) → twMixer → cpRewire_ (SStdMixer) → twSpeaker` revealed several bugs ranging from crash-level to memory leaks to silent audio incorrectness.

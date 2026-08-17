@@ -130,6 +130,12 @@ int SObject::serializeSelfAttributes( QTextStream &o )
     o << (isSolo()?"true":"false") << "'";
     o << " armedForRecording='";
     o << (isArmedForRecording()?"true":"false") << "'";
+    // The input-channel selection was never written before, so every save
+    // silently reverted an armed track to the default. Written only when it
+    // differs from the default, which keeps every project file saved before
+    // this — and every committed golden — byte-unchanged.
+    if( recordingChannels_ != DEFAULT_RECORDING_CHANNELS )
+        o << " recordingChannels='" << recordingChannels_ << "'";
     o << " volume='" << getVolume() << "'";
     o << " pan='" << getPan() << "'";
     o << " delay='" << getDelay() << "'";
@@ -182,6 +188,11 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
     setSolo( data.startsWith( "true" ) );
     data = element.attribute( "armedForRecording", "false" );
     setArmedForRecording( data.startsWith( "true" ) );
+    // Absent on projects saved before the selection was serialized: those load
+    // at the default (first input only), which is the intended new behaviour.
+    setRecordingChannels( element.attribute(
+        "recordingChannels",
+        QString::number( DEFAULT_RECORDING_CHANNELS ) ).toUInt() );
     data = element.attribute( "volume", "1.0" );
     setVolume( data.toDouble() );
     data = element.attribute( "pan", "0.0" );

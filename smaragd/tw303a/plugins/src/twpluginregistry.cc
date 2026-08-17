@@ -11,10 +11,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QDeadlineTimer>
 #include <QProcess>
 #include <QString>
 #include <QStringList>
 #include <QThread>
+
+#include <exception>
+#include <string>
 
 #include <memory>
 #include <utility>
@@ -59,7 +63,9 @@ namespace {
 // Outcome of probing ONE module. Unavailable is not a plugin verdict: it says
 // the out-of-process probe could not be run at all, so the caller falls back
 // in-process rather than caching a bogus failure for every module on disk.
-enum class ProbeOutcome { Ok, Failed, Timeout, Unavailable };
+// Cancelled is not a verdict either — the module was never judged, so it must
+// not become a record of ANY kind, least of all a sticky failure.
+enum class ProbeOutcome { Ok, Failed, Timeout, Unavailable, Cancelled };
 
 // In-process probe. Safe against a corrupt or foreign file (the loader refuses
 // it and logs), NOT safe against a plugin that crashes while being created —
@@ -114,11 +120,18 @@ std::vector<twPluginDescriptor> parseProbeJson( const QByteArray &raw,
     return out;
 }
 
+// How long one slice of the probe wait is. The cancel flag is checked once per
+// slice, so this is the worst-case latency of a cancel that lands while a probe
+// is in flight — teardown must not have to wait out a 15 s probe timeout to
+// find out that it was asked to stop.
+constexpr int kProbeWaitSliceMs = 100;
+
 // Out-of-process probe. A plugin that segfaults or hangs while being
 // instantiated takes down the PROBE, and becomes a cached failed/timeout record
 // — the app never sees it. This is proposal 08 §Decisions 2.
 ProbeOutcome probeOutOfProcess( const twPluginModuleFile &m,
                                 const std::string &probeExe, int timeoutMs,
+                                const std::atomic<bool> &cancel,
                                 std::vector<twPluginDescriptor> &out )
 {
     out.clear();
@@ -138,12 +151,29 @@ ProbeOutcome probeOutOfProcess( const twPluginModuleFile &m,
         return ProbeOutcome::Unavailable;
     }
 
-    if( !p.waitForFinished( timeoutMs ) ) {
-        p.kill();
-        p.waitForFinished( 2000 );
-        TW_LOGW( "plugins", "[scan] probing '%s' timed out after %d ms; recording it "
-                 "as a skipped module", m.path.c_str(), timeoutMs );
-        return ProbeOutcome::Timeout;
+    // Sliced rather than one waitForFinished( timeoutMs ), so a cancel arriving
+    // mid-probe is honoured in ~kProbeWaitSliceMs instead of after the full
+    // probe budget. The child is killed on the way out: an orphaned probe
+    // process outliving the app is exactly what crash isolation must not cost.
+    int waited = 0;
+    while( !p.waitForFinished( kProbeWaitSliceMs ) ) {
+        // waitForFinished() also answers false for a process that has ALREADY
+        // finished, so the state — not the return value — is what says whether
+        // there is still something to wait for.
+        if( p.state() == QProcess::NotRunning ) break;
+        if( cancel.load( std::memory_order_acquire ) ) {
+            p.kill();
+            p.waitForFinished( 2000 );
+            return ProbeOutcome::Cancelled;
+        }
+        waited += kProbeWaitSliceMs;
+        if( waited >= timeoutMs ) {
+            p.kill();
+            p.waitForFinished( 2000 );
+            TW_LOGW( "plugins", "[scan] probing '%s' timed out after %d ms; recording it "
+                     "as a skipped module", m.path.c_str(), timeoutMs );
+            return ProbeOutcome::Timeout;
+        }
     }
 
     if( p.exitStatus() != QProcess::NormalExit ) {
@@ -175,13 +205,24 @@ twPluginRegistry::~twPluginRegistry()
     // app's orderly teardown has already called stopScan(), and this is a
     // no-op. It stays because the registry must also be correct in a unit-test
     // binary that has no orderly teardown at all -- and because stopScan()
-    // (not waitForScan()) is what bounds the wait: a scan that is still
-    // running here would otherwise be joined for however long the machine's
-    // remaining modules take to probe.
+    // (not waitForScan()) is what BOUNDS the wait.
+    //
+    // The bound is the part that matters here. This runs during static
+    // destruction, after main() returned or from inside a --test-case run's
+    // std::exit(), and that is exactly where an unbounded join is lethal: the
+    // exiting thread holds the CRT teardown lock, and a scan thread that cannot
+    // return -- wedged in a plugin DSO, or already dead in abort() after an
+    // exception -- would hold the process open forever. Leaking that thread is
+    // the better trade; the OS reclaims it moments later.
     stopScan();
 }
 
 // ---------------------------------------------------------------- config ----
+
+std::string twPluginRegistry::cacheFileName()
+{
+    return "plugincache.v" + std::to_string( kScannerVersion ) + ".json";
+}
 
 void twPluginRegistry::setSearchPaths( std::vector<std::string> dirs )
 {
@@ -288,6 +329,22 @@ bool twPluginRegistry::findByUid( const std::string &format, const std::string &
                                   twPluginDescriptor &out ) const
 {
     std::lock_guard<std::mutex> g( mutex_ );
+    if( plugins_.empty() ) {
+        // Lazily seed the built-ins, exactly as plugins() does, and for a reason
+        // that only shows up on a COLD cache: a scan publishes plugins_ once, at
+        // the END, so until it finishes this vector is empty — and `tw.passthrough`
+        // and `tw.native.303` are LINKED IN. They have nothing to do with scanning
+        // and must resolve whether or not one has ever run.
+        //
+        // Without this, `insert-plugin format="tw" uid="tw.native.303"` fails for
+        // the first ~1.4 s of a cold-cache launch while the scanner walks the
+        // machine's installed modules, which is a real user-visible race and was
+        // caught as qxa.instrument_render_determinism_xproc failing under -j4 the
+        // first time the cache file was renamed out from under it. plugins()
+        // already had the seed; findByUid did not, so the bug was invisible to
+        // any caller that happened to list before it resolved.
+        const_cast<twPluginRegistry *>( this )->appendBuiltins_nolock();
+    }
     for( const twPluginDescriptor &d : plugins_ ) {
         if( d.uid == uid && ( format.empty() || d.format == format ) ) {
             out = d;
@@ -308,45 +365,101 @@ bool twPluginRegistry::rescanAsync( bool force )
         delete scanThread_;
         scanThread_ = nullptr;
     }
-    // Set BEFORE start(), so a caller that polls isScanning() immediately after
-    // rescanAsync() cannot observe "already finished" before the thread runs.
+    // Both set BEFORE start(), so a caller that polls isScanning() immediately
+    // after rescanAsync() cannot observe "already finished" before the thread
+    // runs — and so a stop requested for the PREVIOUS scan cannot abort this
+    // one on its first module.
     stopRequested_.store( false, std::memory_order_release );
     scanning_.store( true, std::memory_order_release );
-    scanThread_ = QThread::create( [this, force]() { this->rescan( force ); } );
+    // NOTHING may leave this lambda. An exception escaping a QThread body goes
+    // to std::terminate, and the verbose terminate handler's abort() then takes
+    // the CRT lock — which, when the process is already exiting, the exiting
+    // thread is holding while it waits for THIS thread. That is a deadlock with
+    // no timeout in it, and it is what a foreign-versioned cache used to buy us
+    // on every single run: a scan still in flight when std::exit() started
+    // running static destructors, tripping over half-destructed runtime state.
+    // A caught exception loses a scan; an uncaught one loses the process.
+    scanThread_ = QThread::create( [this, force]() {
+        std::string what;
+        try {
+            this->rescan( force );
+            return;
+        } catch( const std::exception &e ) {
+            what = e.what();
+        } catch( ... ) {
+            what = "(non-std exception)";
+        }
+        scanning_.store( false, std::memory_order_release );
+        // Reporting it is best-effort and must not become a second way to die:
+        // if we got here during teardown, the log sink itself may be gone.
+        try {
+            TW_LOGE( "plugins", "[scan] the scan thread threw '%s' — the scan is "
+                     "abandoned; the registry keeps its previous plugin list",
+                     what.c_str() );
+        } catch( ... ) {}
+    } );
     scanThread_->setObjectName( "smaragd-plugin-scan" );
     scanThread_->start();
     return true;
 }
 
-void twPluginRegistry::waitForScan()
+bool twPluginRegistry::waitForScan( int timeoutMs )
 {
     std::lock_guard<std::mutex> g( threadMutex_ );
-    if( !scanThread_ ) return;
-    scanThread_->wait();
+    if( !scanThread_ ) return true;
+
+    const bool joined = timeoutMs < 0
+        ? scanThread_->wait()
+        : scanThread_->wait( QDeadlineTimer( timeoutMs ) );
+    if( !joined ) {
+        // Leak it, deliberately. deleting a QThread that is still running is
+        // undefined behaviour, and terminate()ing one that is inside a plugin's
+        // DSO or holding a CRT lock is worse than the leak: the process is on
+        // its way out and the OS reclaims the thread. Keep the pointer so a
+        // later waitForScan() can try again against the same thread rather than
+        // returning "joined" against a null one.
+        return false;
+    }
     delete scanThread_;
     scanThread_ = nullptr;
+    return true;
 }
 
-void twPluginRegistry::stopScan()
+void twPluginRegistry::requestStopScan()
 {
-    // Order-independent by construction (THREADING.md rule 4): the flag is
-    // only ever read by the scan loop between two modules, so setting it is
-    // safe whether the scan has not started, is mid-probe, or is already done.
+    // Order-independent by construction (THREADING.md rule 4): the flag is only
+    // ever READ by the scan, so setting it is safe whether the scan has not
+    // started, is between modules, is mid-probe, or is already done — and it is
+    // safe from the scan thread itself, which is why this is separate from
+    // stopScan() (that one joins, and a self-join deadlocks).
     stopRequested_.store( true, std::memory_order_release );
-    {
-        std::lock_guard<std::mutex> g( threadMutex_ );
-        if( scanThread_ ) {
-            // Bounded: the loop breaks at the next module boundary, so the
-            // worst case is the module currently being probed (probeTimeoutMs_,
-            // after which the probe process is killed).
-            scanThread_->wait();
-            delete scanThread_;
-            scanThread_ = nullptr;
-        }
+}
+
+bool twPluginRegistry::stopScan( int timeoutMs )
+{
+    requestStopScan();
+
+    // BOUNDED. The loop breaks at the next module boundary and the probe wait
+    // breaks within one 100 ms slice, so a healthy worker is gone in well under
+    // the bound. One that is not — wedged inside a plugin DSO on the in-process
+    // fallback, or already dead in abort() — must not hold the process open:
+    // waitForScan() leaks it and says so, rather than waiting forever.
+    const bool joined = waitForScan( timeoutMs );
+    if( !joined ) {
+        // Safe to log even from ~twPluginRegistry: the sink is immortal
+        // (twlog.cc), precisely so that late teardown records cannot fault.
+        TW_LOGE( "plugins", "[scan] the scan thread did NOT stop within %d ms of being "
+                 "asked to; leaving it running and carrying on. If the process now "
+                 "hangs or crashes at exit, it is that thread — the module it was on "
+                 "is the last '[scan]' line above.", timeoutMs );
+        // Deliberately NOT cleared: the worker is still out there and must keep
+        // seeing the request. Clearing it here would tell it to carry on.
+        return false;
     }
     // Cleared once the thread is gone, so a later rescan() -- the headless
     // tests drive the synchronous one directly -- is not aborted on entry.
     stopRequested_.store( false, std::memory_order_release );
+    return true;
 }
 
 void twPluginRegistry::rescan( bool force )
@@ -421,14 +534,20 @@ void twPluginRegistry::rescan( bool force )
     for( ; mi < mods.size(); ++mi ) {
         const twPluginModuleFile &m = mods[mi];
 
-        // The one abort point: BETWEEN modules, never inside a probe. The app's
-        // orderly teardown (SApplication's destructor / smaragdOrderlyShutdown)
-        // sets this and then joins, so the scan thread is gone before static
-        // destruction begins -- see plan/STATE.md 2026-08-16.
+        // Abort point one of three: BETWEEN modules. The other two are inside
+        // the probe wait (once per 100 ms slice) and immediately before the
+        // in-process fallback, which cannot be interrupted once it has entered
+        // a plugin's DSO. Between-modules alone would make a stop cost up to
+        // probeTimeoutMs_ per installed module, which is a teardown budget the
+        // app does not have. The app's orderly teardown (SApplication's
+        // destructor / smaragdOrderlyShutdown) sets this and then joins, so the
+        // scan thread is gone before static destruction begins -- see
+        // plan/STATE.md 2026-08-16.
         if( stopRequested_.load( std::memory_order_acquire ) ) {
             aborted = true;
             break;
         }
+
 
         st.currentPath = m.path;
         {
@@ -467,15 +586,31 @@ void twPluginRegistry::rescan( bool force )
 
         ProbeOutcome po = ProbeOutcome::Unavailable;
         if( probeUsable ) {
-            po = probeOutOfProcess( m, probeExe, timeoutMs, rec.plugins );
+            po = probeOutOfProcess( m, probeExe, timeoutMs, stopRequested_, rec.plugins );
+            // Abort point two: MID-PROBE. Nothing is recorded for this module —
+            // it was never judged, and a module that was merely interrupted must
+            // not become a sticky failure. The merge-forward below carries its
+            // previous record over instead.
+            if( po == ProbeOutcome::Cancelled ) { aborted = true; break; }
             if( po == ProbeOutcome::Unavailable ) {
                 // A probe that will not start will not start for the next
                 // module either; stop paying 5 s per module for it.
                 probeUsable = false;
             }
         }
-        if( po == ProbeOutcome::Unavailable )
+        if( po == ProbeOutcome::Unavailable ) {
+            // Abort point three: BEFORE the in-process fallback. It loads
+            // foreign code on THIS thread and cannot be interrupted once it has
+            // entered the DSO, so this is the last chance to notice. A module
+            // that never returns from here is what the bound in stopScan()
+            // covers — that one ends in a leaked thread and a loud log, not a
+            // hung process.
+            if( stopRequested_.load( std::memory_order_acquire ) ) {
+                aborted = true;
+                break;
+            }
             po = probeInProcess( m, rec.plugins );
+        }
 
         ++st.modulesProbed;
         switch( po ) {

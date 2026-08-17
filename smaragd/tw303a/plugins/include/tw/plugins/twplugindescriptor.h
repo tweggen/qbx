@@ -109,9 +109,22 @@ public:
     void setSearchPaths( std::vector<std::string> dirs );
     std::vector<std::string> searchPaths() const;
 
-    // <configDir>/plugincache.json. Empty disables persistence (the scan then
+    // <configDir>/<cacheFileName()>. Empty disables persistence (the scan then
     // still works, it is just cold on every start).
     void setCachePath( std::string path );
+
+    // The file name the app must give setCachePath(): SCOPED BY SCANNER
+    // VERSION, "plugincache.v<kScannerVersion>.json".
+    //
+    // kScannerVersion is a source constant while the cache is one file per
+    // USER, so two builds at different versions used to share it and reject
+    // each other's records on EVERY launch -- a permanently cold cache and a
+    // full re-probe of every installed plugin in every process, which is what
+    // left a scan running long enough to still be in flight at exit. Records
+    // from a foreign version were already discarded wholesale on load, so a
+    // per-version file loses exactly nothing: each build just keeps its own
+    // warm table instead of trampling the other's.
+    static std::string cacheFileName();
 
     // The out-of-process probe executable (smaragd_pluginprobe). Empty, or a
     // path that cannot be started, falls back to probing IN-PROCESS — which is
@@ -132,22 +145,56 @@ public:
     // Start a scan on a worker QThread. Returns false if one is already
     // running. A QThread (not a raw std::thread) deliberately: the scan uses
     // QProcess and QJson, and a std::thread adopted by Qt deadlocks teardown.
+    //
+    // It CLEARS any pending stop request before starting: a stop belongs to the
+    // scan that was running when it was asked for, never to the next one.
     bool rescanAsync( bool force = false );
 
-    bool isScanning() const { return scanning_.load( std::memory_order_acquire ); }
-    void waitForScan();
+    // REQUEST a stop, without joining. Sets the flag the scan reads between
+    // modules AND once per 100 ms slice of the probe wait — a stop that lands
+    // mid-probe kills the probe child rather than waiting out probeTimeoutMs_,
+    // which is the difference between a teardown that costs 100 ms and one that
+    // costs 15 s per installed module.
+    //
+    // Cheap, idempotent and safe from ANY thread, INCLUDING the scan thread
+    // itself — which is why it is separate from stopScan(): a scan-progress
+    // callback runs on the worker, and calling stopScan() there would self-join
+    // and deadlock. Shutdown wants stopScan(); this is the primitive under it.
+    void requestStopScan();
+    bool stopRequested() const { return stopRequested_.load( std::memory_order_acquire ); }
 
-    // Ask a running scan to stop at the next module boundary, then join it.
-    // This is what the app's ORDERLY TEARDOWN calls (SApplication's destructor
-    // and main.cpp's smaragdOrderlyShutdown) so the scan thread is gone BEFORE
-    // static destruction begins: a --test-case run leaves through std::exit(),
-    // where no stack object is destroyed, and a scan thread still alive at that
-    // point used to log into an already-destroyed sink (see plan/STATE.md
+    bool isScanning() const { return scanning_.load( std::memory_order_acquire ); }
+
+    // Join the scan worker. timeoutMs < 0 waits forever (what the headless
+    // tests want, where a scan that never ends IS the failure); a shutdown path
+    // must pass a bound, and must pair it with requestStopScan() first — or the
+    // bound is just a slower way to wait out a full re-probe.
+    //
+    // Returns true when the thread was joined and disposed of. False means the
+    // wait expired and the worker is STILL RUNNING: the QThread is deliberately
+    // neither deleted nor forgotten (deleting a running QThread is undefined,
+    // and dropping the pointer would let a later join silently succeed against
+    // nothing), so a subsequent join gets another chance at the same thread.
+    bool waitForScan( int timeoutMs = -1 );
+
+    // Ask a running scan to stop, then join it — BOUNDED. This is what the
+    // app's ORDERLY TEARDOWN calls (SApplication's destructor and main.cpp's
+    // smaragdOrderlyShutdown) so the scan thread is gone BEFORE static
+    // destruction begins: a --test-case run leaves through std::exit(), where
+    // no stack object is destroyed, and a scan thread still alive at that point
+    // used to log into an already-destroyed sink (see plan/STATE.md
     // 2026-08-16). Whatever the aborted scan had already probed is still
     // written to the cache, so successive runs converge instead of restarting
     // cold every time. Safe to call when no scan is running, and safe to call
     // twice.
-    void stopScan();
+    //
+    // The bound is what makes it a guarantee rather than a hope: an unbounded
+    // join here is a hang whenever the worker cannot return at all (it is
+    // inside a plugin DSO that never comes back, or it has already died on an
+    // exception and is wedged in abort()). Returns false, and LOGS loudly, if
+    // the bound expires — the sink is immortal (twlog.cc), so this is safe even
+    // from the last-resort call in ~twPluginRegistry.
+    bool stopScan( int timeoutMs = 5000 );
 
     twPluginScanStats scanStats() const;
 
@@ -179,7 +226,7 @@ private:
     twPluginScanProgressFn          progress_;
 
     std::atomic<bool>               scanning_{ false };
-    std::atomic<bool>               stopRequested_{ false };  // set by stopScan()
+    std::atomic<bool>               stopRequested_{ false };  // set by requestStopScan()
     mutable std::mutex              threadMutex_;   // guards scanThread_ only
     QThread                        *scanThread_ = nullptr;
 };

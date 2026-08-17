@@ -337,6 +337,7 @@ private:
     std::atomic<std::uint64_t> locatorPublishSeq_{ 0 };
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
+
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
     QTimer *meterTimer_ = nullptr;    // drives meterTick (proposal 34)

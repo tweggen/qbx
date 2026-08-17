@@ -200,6 +200,22 @@ boundaries, one reset for four pages, one reposition per page.
 Known debt: none of the former model→objects edges remain; the module is
 ready to become a real build target once its remaining consumers are.
 
+**`SObject::getCapture()` NEVER SCHEDULES REVALIDATION, so only an `SCut` can
+ever own an aspect page** (proposal 36 §7 trap 28; found at B8, recorded at B9,
+deliberately NOT fixed). The base implementation returns `currentPage()` and
+stops, with a TODO reading "Phase 5e.5 — unify CaptureRevalidator to work with
+`SObject*`"; `SCut` overrides it to call `scheduleRevalidation(this, …)`, and
+those two `SCut` call sites are the ONLY ones in the tree. Since `currentPage_`
+is written only by `CaptureRevalidator::processRevalidationJob`, i.e. only for
+an object that reached `scheduleRevalidation()`, a non-`SCut` object's page is
+permanently null. Two consequences worth knowing before anyone changes it: it is
+WHY trap 26 (the preview aspect page's disputed element type) stayed latent long
+enough to be discovered by reading rather than by a wrong waveform — the
+disagreeing reader lived on `SPlainWave`, which can never have a page — and
+**anyone wiring a second revalidatable object type makes that whole area live at
+once**, including a payload with no probe geometry attached. Give the page a
+geometry before giving it a second producer.
+
 ## Inline `<automation>` (proposal 37 P5, design §3.3)
 
 **`<automation>` is a sanctioned NON-`SLink` payload of a known element, and the

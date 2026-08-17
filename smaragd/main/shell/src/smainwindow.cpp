@@ -69,6 +69,7 @@
 #include "app/timeline/strackdetailpanel.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptionsdialog.h"
+#include "app/servicesui/scleanupdialog.h"
 
 #include "tw/playback/twspeaker.h"
 #include "tw/devices/audio_input.h"
@@ -759,6 +760,77 @@ void SMainWindow::gotoRangeStart()
     SApplication::app().setGlobalLocatorPos( pos );
 }
 
+// PRE-FLIGHT (main PR #55, kept across proposal 21 L3b): the two endpoints must
+// agree on a rate. They share ONE hardware clock, so if the OS has them declared
+// differently it resamples one side AND MISREPORTS THAT SIDE'S CLOCK — measured
+// on a US-16x08 with capture at 44100 and render at 48000, the capture came in
+// 8.6 % fast and the take was 1.47 semitones flat. Nothing in the engine can
+// correct for a false clock, so the only honest thing is to say so BEFORE the
+// take rather than after it. Warned once per session: a modal before every
+// recording would be intolerable, and the user may legitimately go ahead.
+void SMainWindow::warnOnEndpointRateMismatch()
+{
+    if( endpointRateWarningShown_ || !currentProject_ ) return;
+    const QString inputDevId = SSettings::instance().audioInputDeviceId();
+    uint32_t inRate = 0, outRate = 0;
+    QString inName, outName;
+    {
+        std::unique_ptr<audio::AudioInput> probe = audio::createAudioInput();
+        if( probe ) {
+            for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
+                if( QString::fromStdString( d.id ) == inputDevId ) {
+                    inRate = d.sampleRate;
+                    inName = QString::fromStdString( d.name );
+                    break;
+                }
+            }
+        }
+    }
+    if( auto spk = SApplication::app().getSpeaker() ) {
+        const std::string cur = spk->outputDevice();
+        for( const audio::AudioDeviceInfo &d : spk->outputDevices() ) {
+            if( d.id == cur ) {
+                outRate = d.sampleRate;
+                outName = QString::fromStdString( d.name );
+                break;
+            }
+        }
+    }
+    if( inRate != 0 && outRate != 0 && inRate != outRate ) {
+        endpointRateWarningShown_ = true;
+        TW_LOGW( "ui.shell",
+                 "endpoint rate mismatch: input '%s' = %u Hz, output '%s' = %u Hz",
+                 inName.toUtf8().constData(), (unsigned) inRate,
+                 outName.toUtf8().constData(), (unsigned) outRate );
+        QMessageBox::warning( this, "Input and output rates differ",
+            QString( "The recording input and the playback output are set to "
+                     "DIFFERENT sample rates in the operating system:
+
+"
+                     "    Input:  %1 — %2 Hz
+"
+                     "    Output: %3 — %4 Hz
+
+"
+                     "If these are the same interface they share one clock, so "
+                     "the OS must resample one side — and it then reports that "
+                     "side's rate incorrectly. Recordings can come out pitched "
+                     "by the ratio between them, and monitoring can play slow.
+
+"
+                     "Set both to the same rate (ideally the project's, %5 Hz) "
+                     "in the system sound settings.
+
+"
+                     "This warning is shown once per session." )
+                .arg( inName.isEmpty() ? QStringLiteral( "System default" ) : inName )
+                .arg( inRate )
+                .arg( outName.isEmpty() ? QStringLiteral( "System default" ) : outName )
+                .arg( outRate )
+                .arg( currentProject_->getSRate() ) );
+    }
+}
+
 void SMainWindow::onRecordTriggered()
 {
     if( !currentProject_ ) return;
@@ -775,6 +847,8 @@ void SMainWindow::onRecordTriggered()
 
     // Where the take begins, for the arranger's in-progress overlay.
     recordingStartPos_ = SApplication::app().getGlobalLocatorPos();
+
+    warnOnEndpointRateMismatch();
 
     if( !SApplication::app().startRecording() ) {
         QMessageBox::information(
@@ -981,6 +1055,10 @@ SMainWindow::SMainWindow()
     externFileList_ = new SExternFileList( qDockExternFileList_, nullptr );
     qDockExternFileList_->setWidget( externFileList_ );
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
+    // The list only ANNOUNCES the cleanup request (app/model may not reach
+    // app/servicesui); the shell owns the dialog and the current project.
+    connect( externFileList_, &SExternFileList::cleanupRequested,
+             this, &SMainWindow::showCleanupDialog );
 
     // The track detail panel, docked directly BELOW the extern file list in the
     // same left area. It used to be a child of the arranger's track-control
@@ -2214,6 +2292,18 @@ void SMainWindow::showOptionsDialog()
 {
     SOptionsDialog dlg( this );
     dlg.exec();   // pages write to SSettings on OK/Apply; live UI reacts to changed()
+}
+
+void SMainWindow::showCleanupDialog()
+{
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) {
+        QMessageBox::warning( this, "No Project",
+            "Please open or create a project first." );
+        return;
+    }
+    SCleanupDialog dlg( this, project );
+    dlg.exec();   // the dialog does the scanning, confirming and deleting itself
 }
 
 void SMainWindow::measureAudioLatenciesIfNeeded()

@@ -1,5 +1,7 @@
 #include "tw/core/twconvert.h"
+#include "tw/core/twlog.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 
@@ -51,9 +53,32 @@ length_t twConvertFrames( const twFormat &src, const void *srcBuf,
 {
     if( frames <= 0 || !srcBuf || !dstBuf ) return 0;
 
-    // Planar is reserved for future multi-channel work; no wire emits it yet.
-    if( src.layout != twLayout::Interleaved || dst.layout != twLayout::Interleaved )
+    // PLANAR IS STILL REFUSED, and after proposal 36 that is a decision rather
+    // than a gap (§7 trap 6, reviewed at B9). The engine IS planar now — a
+    // twOutputPage is `channels` planes at a constant stride — but that shape
+    // never crosses this function: every twFormat in the tree keeps the default
+    // twLayout::Interleaved, twLayout::Planar is assigned nowhere, and this
+    // function's three callers (the WAV writer, the WASAPI backend, the ALSA
+    // backend) are all device/file wires that are interleaved by definition. So
+    // there is no wire that needs planar support, and writing some on
+    // speculation would be untested conversion code on the audio path.
+    //
+    // What DID need fixing is that the refusal was silent. Returning 0 with no
+    // word is indistinguishable from "nothing to do", so the day somebody does
+    // set a planar layout here the symptom would be silence at the device with
+    // nothing in the log. It is a one-shot report because this is per-buffer
+    // code on the callback path.
+    if( src.layout != twLayout::Interleaved || dst.layout != twLayout::Interleaved ) {
+        static std::atomic<bool> reported{ false };
+        if( !reported.exchange( true ) ) {
+            TW_LOGW( "core", "[twConvertFrames] planar layout is not supported "
+                             "(src=%d dst=%d); converting nothing. The engine's "
+                             "planar shape is twOutputPage, which never reaches "
+                             "this wire -- see proposal 36 trap 6.",
+                     (int) src.layout, (int) dst.layout );
+        }
         return 0;
+    }
 
     // Same type, channels and layout → a straight copy (e.g. Float32->Float32).
     if( src.sameMemoryShape( dst ) ) {

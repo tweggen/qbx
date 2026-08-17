@@ -53,9 +53,18 @@ enum twRenderAspect : uint32_t {
 // only sound if a page's width cannot change under a reader. It is enforced by
 // the type — a const member, a private buffer and no setter — not by a comment.
 //
-// At B1b NOTHING in the tree allocates a page wider than 1. The width dimension
-// exists, every consumer reads through channelPtr(), and the byte-exactness gate
-// therefore says something: any golden that moves is a mis-converted call site.
+// PAGES ARE GENUINELY WIDE. A track's mix, gain stage, plugin insert and rewire
+// and the master mixer all allocate at SProject::channels() (proposal 36 B4),
+// and RenderSession interleaves a file straight out of one (B5).
+//
+// That sentence read "At B1b NOTHING in the tree allocates a page wider than 1"
+// for five milestones, and it was the load-bearing claim of its own: while it
+// held, the byte-exactness gate said something very strong — the width dimension
+// existed, every consumer already read through channelPtr(), so ANY golden that
+// moved was a mis-converted call site and nothing else. That is why the sweep
+// was ordered the way it was. It stopped being true at B4 and is corrected here
+// at B9 rather than deleted, because the reasoning is the reason the rewrite was
+// survivable.
 struct twOutputPage : public PageBase {
     // Phase 5 Gap 11: Unified page size
     static constexpr size_t PAGE_SIZE = FROZEN_PAGE_SIZE_BYTES;  // 256 kB per channel
@@ -206,10 +215,8 @@ struct twOutputPage : public PageBase {
     size_t getPageSize() const override { return PAGE_SIZE; }
     uint32_t getValidFrames() const override { return validFrames; }
     void setValidFrames(uint32_t frames) override { validFrames = frames; }
-    // Channel 0, so a width-1 call site stays correct (§4.1). This is the page's
-    // own class, so the raw buffer access below is where it belongs.
-    void* getDataPtr() override { return samples_.data(); }
-    const void* getDataPtr() const override { return samples_.data(); }
+    // getDataPtr() is GONE (proposal 36 B9): a width-blind pointer into a
+    // planar buffer, with zero callers. channelPtr(c) + channelFrames().
     std::any& getInternalState() override { return internalState; }
     const std::any& getInternalState() const override { return internalState; }
     std::chrono::steady_clock::time_point getCreatedAt() const override { return createdAt; }

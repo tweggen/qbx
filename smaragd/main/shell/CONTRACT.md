@@ -24,6 +24,10 @@ Invariants:
    thread; publishPosition() audio thread, atomics. `locatorHeldElsewhere()`
    is RETIRED (proposal 21 L3b): a recording is an ordinary transport run
    and the OUTPUT publication is the playhead authority in every mode.
+   (Main's interim `recordMonitorPrimingFrames` / "held while nothing is
+   audible yet" mechanism from PR #53 is superseded by the same rule: the
+   take is anchored on the engine clock and pre-roll is trimmed — see
+   `SRecordPlacement`.)
 3. Session wiring (render/record onPosition, startLocatorFrames, speaker
    context) happens HERE — engine modules never see the app.
 4. Window layout restore order: openMostRecent() → restoreWindowLayout() →

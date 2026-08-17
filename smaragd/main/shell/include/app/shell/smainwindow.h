@@ -221,6 +221,8 @@ protected slots:
     void undo();
     void redo();
     void showOptionsDialog();
+    // Opened from the resources dock's context menu (SExternFileList).
+    void showCleanupDialog();
 
     // Toolbar palette toggles (each submits the matching toggle action).
     void toggleSnapToGrid();
@@ -333,6 +335,11 @@ private:
     // Applied to the recorded clip placement to align with simultaneous playback.
     // Positive value means clip should be placed earlier (input is faster than output).
     int64_t recordingLatencySyncOffset_ = 0;
+    // The input/output endpoint-rate mismatch warning is shown at most ONCE per
+    // session: a modal before every take would be intolerable, and the user may
+    // legitimately decide to record anyway.
+    bool endpointRateWarningShown_ = false;
+    void warnOnEndpointRateMismatch();
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     QDockWidget *qDockExternFileList_;
     SExternFileList *externFileList_;

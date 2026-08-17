@@ -151,6 +151,11 @@ reasoning is the reusable part.
    `Qt::UniqueConnection`; `updateClip` walks every matching key and invalidates
    once over the union. Unreachable while the sink is mono, so this was a trap
    primed for the stereo-output work rather than a live bug.
+   **Postscript (proposal 36 B9):** the stereo-output work arrived (B4/B5) and
+   the trap did not fire — because B4 retired the per-bus mixers entirely, so
+   there are no longer several mixers to hold duplicate keys across. The fix
+   above ("invalidate over the union of matching keys") remains correct for the
+   one mixer a track now has.
 4. ~~**`twTrackMix` has no `invalidatePagesInRange` override**~~ — **FIXED.**
    It now bumps its own epoch, clears `previousPage` on every clip entry whose
    extent intersects the range (deferred destruction, outside the lock, as

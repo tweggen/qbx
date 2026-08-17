@@ -217,6 +217,15 @@ private:
     QString describeWheelActions() const;  // Human-readable hint for status bar
     int  wheelPlain_, wheelShift_, wheelCtrl_, wheelCtrlShift_;
     bool wheelZoomToCursor_, wheelInvertZoom_;
+    // SOpt::WheelSensitivityPct / 100, clamped, plus the three per-gesture
+    // constants loadWheelConfig() derives from it. They are cached rather than
+    // recomputed per event because a wheel event is a hot path, and derived in
+    // ONE place because "one notch" has to mean the same amount of gesture in
+    // all four. At 100 % each is bit-for-bit the value it was hard-coded to.
+    double wheelSensitivity_;
+    int    wheelVScrollStep_;   // angleDelta units per track lane
+    double wheelZoomHFactor_;   // px/second multiplier per notch
+    double wheelZoomVFactor_;   // track-height multiplier per notch
     // Accumulated vertical-scroll wheel delta (angleDelta units). A trackpad or a
     // Magic Mouse delivers many tiny sub-notch deltas; stepping a whole lane per
     // event made vertical scroll wildly over-sensitive. We accumulate and step one
@@ -617,6 +626,15 @@ public:
     // Sort `in` by lane position. Order decides insertion slots, so every
     // multi-track operation sequences by it rather than by click order.
     QList<STrack *> orderByLane( const QList<STrack *> &in ) const;
+    // The lane Ctrl+T's new track goes below: the LAST selected one by lane
+    // position, falling back to the last lane the user aimed at. NULL when
+    // there is nothing to be below. The CONTEXT MENU does not use this — it
+    // aims at the lane it was opened on (SMVActualView::ctGlobalShow).
+    STrack *newTrackReference_() const;
+    // Insert a new track immediately BELOW `ref`, as its next sibling in the
+    // same container. `ref == NULL` appends at the end of the arrangement,
+    // which is what this used to do unconditionally.
+    void addTrackBelow_( STrack *ref );
     // Pop the arranger's track context menu for `t` at a global position (the
     // track heads have no menu of their own — this is the same menu the
     // timeline canvas shows, aimed at a head).

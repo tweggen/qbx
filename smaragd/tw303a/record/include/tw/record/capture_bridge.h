@@ -2,6 +2,7 @@
 #define _TW_CAPTURE_BRIDGE_H_
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -273,6 +274,8 @@ private:
     std::condition_variable wavCv_;
 
     std::atomic<bool> running_{ false };
+    // Wall clock at start(), for the end-of-run capture-rate check (main PR #55).
+    std::chrono::steady_clock::time_point startWall_{};
     std::atomic<bool> bridgeStop_{ false };
     // Set by the bridge thread as it exits: from here on the frontier is
     // final and everything the WAV thread still writes comes out of the pages.

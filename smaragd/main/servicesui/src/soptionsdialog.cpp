@@ -112,6 +112,22 @@ QWidget *SOptionsDialog::buildMousePage()
     form->addRow( "Ctrl + Wheel:", wheelCtrl_ );
     form->addRow( "Ctrl + Shift + Wheel:", wheelCtrlShift_ );
 
+    wheelSensitivity_ = new QSpinBox;
+    // Percent, not a raw factor: "150 %" is self-explanatory where "1.5" needs a
+    // legend. The floor is 10 % rather than 0 because a zero would stall every
+    // gesture and read as a broken wheel; the arranger clamps to this same range
+    // in case the INI was hand-edited.
+    wheelSensitivity_->setRange( 10, 500 );
+    wheelSensitivity_->setSingleStep( 10 );
+    wheelSensitivity_->setSuffix( " %" );
+    wheelSensitivity_->setToolTip(
+        "How far one wheel notch travels, for all four gestures at once. "
+        "Lower = less sensitive (more wheel per step), higher = more sensitive. "
+        "100 % is the shipped feel." );
+    form->addRow( "Wheel sensitivity:", wheelSensitivity_ );
+    form->addRow( QString(), new QLabel( "Lower = less sensitive, higher = more "
+                                         "sensitive. 100 % = default." ) );
+
     zoomToCursor_   = new QCheckBox( "Zoom toward the mouse cursor" );
     invertZoom_     = new QCheckBox( "Invert zoom direction" );
     followPlayhead_ = new QCheckBox( "Follow the playhead during playback" );
@@ -313,6 +329,8 @@ void SOptionsDialog::loadMousePage()
     selectByData( wheelShift_,     s.value( SOpt::WheelShift,     SOpt::def( SOpt::WheelShift ) ) );
     selectByData( wheelCtrl_,      s.value( SOpt::WheelCtrl,      SOpt::def( SOpt::WheelCtrl ) ) );
     selectByData( wheelCtrlShift_, s.value( SOpt::WheelCtrlShift, SOpt::def( SOpt::WheelCtrlShift ) ) );
+    wheelSensitivity_->setValue( s.value( SOpt::WheelSensitivityPct,
+                                          SOpt::def( SOpt::WheelSensitivityPct ) ).toInt() );
     zoomToCursor_->setChecked( s.value( SOpt::ZoomToCursor, SOpt::def( SOpt::ZoomToCursor ) ).toBool() );
     invertZoom_->setChecked(  s.value( SOpt::InvertZoom,   SOpt::def( SOpt::InvertZoom ) ).toBool() );
     followPlayhead_->setChecked( s.value( SOpt::FollowPlayhead, SOpt::def( SOpt::FollowPlayhead ) ).toBool() );
@@ -325,9 +343,24 @@ void SOptionsDialog::applyMousePage()
     s.setValue( SOpt::WheelShift,     wheelShift_->currentData() );
     s.setValue( SOpt::WheelCtrl,      wheelCtrl_->currentData() );
     s.setValue( SOpt::WheelCtrlShift, wheelCtrlShift_->currentData() );
+    s.setValue( SOpt::WheelSensitivityPct, wheelSensitivity_->value() );
     s.setValue( SOpt::ZoomToCursor,   zoomToCursor_->isChecked() );
     s.setValue( SOpt::InvertZoom,     invertZoom_->isChecked() );
     s.setValue( SOpt::FollowPlayhead, followPlayhead_->isChecked() );
+}
+
+// "Lautsprecher (US-16x08) — 48000 Hz". The rate is a per-ENDPOINT Windows
+// setting, and an input endpoint at one rate with an output endpoint at another
+// on the SAME interface makes the OS resample one side and misreport its clock
+// — which no arithmetic downstream can undo. Putting the number in the label is
+// the cheapest way to make a mismatch visible AT THE POINT OF CHOICE, next to
+// the other one. Rate 0 = the backend could not read it; say nothing rather
+// than guess.
+static QString sDeviceLabel( const std::string &name, std::uint32_t rate )
+{
+    const QString n = QString::fromStdString( name );
+    if( rate == 0 ) return n;
+    return QStringLiteral( "%1 — %2 Hz" ).arg( n ).arg( rate );
 }
 
 void SOptionsDialog::loadAudioPage()
@@ -341,7 +374,7 @@ void SOptionsDialog::loadAudioPage()
         audioDevice_->addItem( "System default", "default" );
     } else {
         for( const audio::AudioDeviceInfo &d : devs ) {
-            audioDevice_->addItem( QString::fromStdString( d.name ),
+            audioDevice_->addItem( sDeviceLabel( d.name, d.sampleRate ),
                                    QString::fromStdString( d.id ) );
         }
     }
@@ -350,10 +383,12 @@ void SOptionsDialog::loadAudioPage()
     int i = audioDevice_->findData( cur );
     if( i >= 0 ) audioDevice_->setCurrentIndex( i );
 
-    // Load input devices. REAL since proposal 21 L1b: the same
-    // createAudioInput() the live lane uses, so the list is the backend the
-    // env selected (a headless run sees the file or null backend, a desktop
-    // one sees WASAPI / ALSA / CoreAudio) rather than a hard-coded default.
+    // Load input devices. REAL since proposal 21 L1b / main PR #54: the same
+    // createAudioInput() the live lane uses, so the list is the backend the env
+    // selected (a headless run sees the file or null backend, a desktop one
+    // sees WASAPI / ALSA / CoreAudio). The label carries the endpoint's
+    // shared-mode MIX RATE and channel count (main PR #55): a rate mismatch
+    // between the input and the output is then visible AT THE POINT OF CHOICE.
     // The probe device is opened and closed here and nowhere else; a failure
     // to enumerate leaves just "System default", which is what it did before.
     audioInputDevice_->clear();
@@ -363,13 +398,11 @@ void SOptionsDialog::loadAudioPage()
         if( probe ) {
             for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
                 const QString id   = QString::fromStdString( d.id );
-                const QString name = QString::fromStdString( d.name );
                 if( id.isEmpty() || id == QStringLiteral( "default" ) ) continue;
-                audioInputDevice_->addItem(
-                    name.isEmpty() ? id
-                                   : QStringLiteral( "%1 (%2 ch)" ).arg( name )
-                                         .arg( d.channels ),
-                    id );
+                QString label = sDeviceLabel( d.name, d.sampleRate );
+                if( d.channels > 0 )
+                    label = QStringLiteral( "%1 (%2 ch)" ).arg( label ).arg( d.channels );
+                audioInputDevice_->addItem( label, id );
             }
         }
     }
@@ -624,9 +657,10 @@ QWidget *SOptionsDialog::buildPluginsPage()
 
     pluginScanOnStartup_ = new QCheckBox( "Scan for plugins at startup" );
     pluginScanOnStartup_->setToolTip(
-        "The result is cached in plugincache.json next to smaragd.ini, keyed on "
-        "each module's path, size and modification time — so only plugins that "
-        "actually changed are loaded again." );
+        "The result is cached in plugincache.v<n>.json next to smaragd.ini, keyed "
+        "on each module's path, size and modification time — so only plugins that "
+        "actually changed are loaded again. The <n> is the scanner version, so "
+        "two Smaragd builds cannot invalidate each other's cache." );
     v->addWidget( pluginScanOnStartup_ );
 
     pluginRescanBtn_ = new QPushButton( "Rescan now" );

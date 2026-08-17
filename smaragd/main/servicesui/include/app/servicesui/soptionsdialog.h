@@ -72,6 +72,8 @@ private:
     QComboBox *wheelShift_;
     QComboBox *wheelCtrl_;
     QComboBox *wheelCtrlShift_;
+    // One percentage scaling all four wheel gestures (SOpt::WheelSensitivityPct).
+    QSpinBox  *wheelSensitivity_;
     QCheckBox *zoomToCursor_;
     QCheckBox *invertZoom_;
     QCheckBox *followPlayhead_;

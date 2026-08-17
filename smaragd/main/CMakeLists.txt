@@ -184,6 +184,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sliveinputactions.h
     objects/track/include/app/objects/track/ssettrackmidiroutingaction.h
     objects/track/include/app/objects/track/ssettrackmuteaction.h
+    objects/track/include/app/objects/track/ssettracknameaction.h
     objects/track/include/app/objects/track/ssettracksoloaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
     objects/track/include/app/objects/track/strack.h
@@ -207,6 +208,7 @@ set(APP_OBJECTS_FILES
     objects/track/src/ssettrackmidioutputaction.cpp
     objects/track/src/ssettrackmidiroutingaction.cpp
     objects/track/src/ssettrackmuteaction.cpp
+    objects/track/src/ssettracknameaction.cpp
     objects/track/src/ssettracksoloaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
     objects/track/src/strack.cpp
@@ -279,6 +281,7 @@ set(APP_UI_FILES
     pluginui/src/splugineffectstrip.cpp
     pluginui/src/spluginparamereditor.cpp
     # --- app/servicesui
+    servicesui/include/app/servicesui/scleanupdialog.h
     servicesui/include/app/servicesui/slogmodel.h
     servicesui/include/app/servicesui/slogview.h
     servicesui/include/app/servicesui/soptions.h
@@ -286,6 +289,7 @@ set(APP_UI_FILES
     servicesui/include/app/servicesui/srecordingprogress.h
     servicesui/include/app/servicesui/srenderdialog.h
     servicesui/include/app/servicesui/srenderprogress.h
+    servicesui/src/scleanupdialog.cpp
     servicesui/src/slogmodel.cpp
     servicesui/src/slogview.cpp
     servicesui/src/soptions.cpp

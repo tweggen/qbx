@@ -12100,6 +12100,62 @@ family: `~SProject`'s survivor pass missed `STrack`'s owned-but-unparented
 `cpPluginChainRef_` link — see the entry above). Gate: build clean, layering +
 logging clean, `ctest -j4` 171/171 twice (174 registered, 3 `au_*` disabled),
 `clip_properties_actions` 40/40 at workers 16 and 8, siblings 20/20.
+## 2026-08-17 - Plugin scan teardown: the two follow-ups the 08-16 fix named, plus a bound
+
+The 2026-08-16 entry above fixed the `--test-case` exit hang (immortal log sink,
+`smaragdOrderlyShutdown`, `stopScan()` between modules) and then named two things
+it had NOT done. Both are done here, and a third that neither entry had spotted.
+
+**1. A stop can now interrupt a probe that is already running.** 08-16: "it waits
+for the module currently being probed, so a plugin that burns its full
+`probeTimeoutMs_` (15 s) still adds that to process exit... Killing the QProcess
+from the stopping thread would be the next step if that ever bites." The probe
+wait is now SLICED at 100 ms and reads the stop flag once per slice, killing the
+child on the way out; the in-process fallback, which cannot be interrupted once
+it is inside a DSO, is checked immediately before it starts. Three abort points
+instead of one, and a stop costs ~100 ms rather than up to 15 s per module.
+
+**2. The shared cache file is no longer shared.** 08-16: "Reproducing this needs
+the SHARED `<configDir>/plugincache.json` to be cold, and that file is shared by
+every worktree on the machine." It was worse than a testing inconvenience.
+`kScannerVersion` is a SOURCE constant and the cache was one file per USER, so a
+worktree at version 2 and a worktree at version 1 rejected each other's records
+on EVERY launch - each rewrote the file with its own version, the next refused
+the lot. Measured here before the change: the file on disk said `scannerVersion:
+2` with 6 ok records against a version-1 build, so every run logged "rescanning
+everything" and re-probed all six installed plugins. That is not a cold cache
+once; it is a cache that can never be warm. The name now carries the version
+(`plugincache.v2.json`, from `twPluginRegistry::cacheFileName()`). Foreign
+records were already refused wholesale on load, so nothing is lost - but every
+existing user re-scans ONCE, and the old file is deliberately left in place
+because a build at another version may still be using it.
+
+**3. The join is BOUNDED, and nothing may escape the scan thread.** 08-16 removed
+the KNOWN exception (a `TW_LOG` into a destroyed sink) and made the sink
+immortal. It did not remove the CLASS: any other exception out of the QThread
+lambda still reaches `std::terminate`, whose `abort()` blocks on the CRT lock the
+exiting thread holds while it waits for this thread - a deadlock with no timeout
+in it. So the body carries a catch-all (its own report wrapped, because if we got
+there reporting may be what fails), and `stopScan( ms )` joins with a TIMEOUT.
+An expired join LEAKS the worker rather than deleting it (undefined) or
+terminating it (worse - it may be inside a plugin), keeps the pointer so a later
+join retries, does not clear the stop request, and logs loudly. Leaking a thread
+in a process that is exiting beats blocking it forever.
+
+**The stack, from a live gdb attach on this machine**, which is what said the
+"slow re-probe" reading was wrong: main in `msvcrt!_initterm_e` ->
+`~twPluginRegistry` -> `QThread::wait` (unbounded), scan thread in
+`__verbose_terminate_handler` -> `abort()` -> `RtlEnterCriticalSection`. No probe
+child alive, 0 % CPU. And probing is not slow: driving `smaragd_pluginprobe` by
+hand over all six installed modules takes 2.7 s total (1.8 s of it Melodyne).
+
+`requestStopScan()` (set the flag, do not join) is split out of `stopScan()`
+because a scan-progress callback runs ON the worker, so a test that wants to
+cancel deterministically mid-scan cannot call the joining one without deadlocking
+itself. That is how `plugins_scan_test`'s new section lands its cancel.
+
+Measured: `render_sawtooth_minimal.qxa` with a foreign cache, > 600 s (killed by
+the CTest timeout) -> 270-350 ms.
 
 
 ## 2026-08-17 — Proposal 37: stereo gates

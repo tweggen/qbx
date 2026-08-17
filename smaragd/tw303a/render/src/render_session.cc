@@ -211,6 +211,15 @@ void RenderSession::renderThreadMain() {
         // once node results are the cache for non-caching components too.
         uint64_t awaitedPage = (uint64_t)-1;
 
+        // Wall clock for the render loop only — not the writer open, not the
+        // flush, not the file close. It is the closest thing this process has to
+        // "how long did freezing this arrangement take", because the loop is a
+        // sequence of blocking waits on scheduler-frozen pages and nothing else.
+        // INFO rather than DEBUG deliberately: a debug-level run pays for its own
+        // logging, so a timing number that can only be read at debug level is a
+        // timing number of the logger. Proposal 36 B9.2 measures with it.
+        const auto renderLoopT0 = std::chrono::steady_clock::now();
+
         while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
             // Current position in component graph samples. The render range may
             // start mid-project (marked in/out range), so the graph position is
@@ -230,6 +239,27 @@ void RenderSession::renderThreadMain() {
                 scheduler_->requestGraphPages(synthOutput_, pageStartPos, 1,
                                               /*priority*/ 8)->wait();
                 awaitedPage = pageStartPos;
+
+                // PRUNE THE TRAIL (proposal 36 §7 trap 12, wired at B9). A
+                // render is the one consumer that is strictly sequential and
+                // never looks back, and it is also the one that grows the
+                // caches fastest: measured before this line existed, a single
+                // 60-second render of the corpus left 681 pages resident and
+                // released none of them — 357 MB at width 2 and 1.42 GB at
+                // width 8, rising linearly with the duration rendered.
+                //
+                // KEEP_PAGES_BEHIND is a margin, not a guess about liveness.
+                // Erasing an entry only drops one shared_ptr, so nothing in
+                // flight can be freed by it; the reason to keep any at all is
+                // the SAME-COMPONENT PREDECESSOR EDGE, which chains DSP state
+                // from page N-1. One page back would be the letter of the
+                // requirement; four is the margin, and it still bounds a render
+                // of any length at five page positions' worth of cache.
+                static constexpr uint64_t KEEP_PAGES_BEHIND = 4;
+                if (pageStartPos > (offset_t)(KEEP_PAGES_BEHIND * PAGE_FRAMES)) {
+                    twComponent::releaseOldPagesGlobally(
+                        pageStartPos - (offset_t)(KEEP_PAGES_BEHIND * PAGE_FRAMES) );
+                }
             }
 
             // Freeze this page sequentially (via requestPage, Phase 2a: dedups
@@ -296,7 +326,12 @@ void RenderSession::renderThreadMain() {
             prevPage = frozenPage;
         }
 
+        const long long renderLoopMs =
+            (long long) std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - renderLoopT0 ).count();
         TW_LOGD( "render", "[RenderSession] Render loop complete. Frames: %zu", samplesWrittenVal );
+        TW_LOGI( "render", "[RenderSession] Render loop wall clock: %lld ms for %zu frames x %d channels",
+                 renderLoopMs, samplesWrittenVal, (int) renderChannels_ );
 
         // Flush any buffered frames (FileSink handles futures-based waiting)
         if (fileSink_) {

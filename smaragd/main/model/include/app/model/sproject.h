@@ -144,17 +144,25 @@ public:
     int getSRate() const { return sampleRate_; }
     const std::vector<std::uint32_t> &candidateRates() const { return candidateRates_; }
 
-    // Project channel count (persisted as <SProject channels='N'>; default 2,
-    // which is what every project sounds like today). Proposal 36 M1.
+    // Project channel count (persisted as <SProject channels='N'>; default 2
+    // for a legacy file without the attribute). Proposal 36 M1, wired B4/B5.
     //
-    // THIS IS DATA ONLY. Nothing reads it into a bus count, a mixer width or
-    // tw303aEnvironment — the signal flow goes wide in proposal 36 B4/B5.
-    // Wiring it now would drive STrack::setNBusses through a SHRINK on an undo
-    // of, say, 6 -> 2, and shrink is still Q_ASSERT_X( false, ... ) — an abort
-    // under -DCMAKE_BUILD_TYPE=Debug, and under the default RelWithDebInfo
-    // build (which strips NDEBUG but still gets Qt's QT_NO_DEBUG) a SILENT
-    // refusal that leaves the graph half-wired, which is the worse of the two.
-    // project_channels_test pins that no bus count moves.
+    // THIS IS THE ONE AUTHORITY FOR WIDTH, and it reaches the graph. Every
+    // track builds ONE twTrackMix / twPluginChain / twGainStage / twRewire of
+    // this width, the master mixer is this wide, a frozen page is this wide,
+    // and RenderSession writes a file of this many channels. A track has no bus
+    // count of its own — see main/objects/track/CONTRACT.md inv. 9. Monitoring
+    // is the ONE exception and it is a device-side reduction, not a second
+    // authority: twSpeaker plays ch0/ch1 and drops the rest.
+    //
+    // (Until B4 this comment read "THIS IS DATA ONLY. Nothing reads it into a
+    // bus count... STrack::setNBusses's shrink path is still Q_ASSERT_X(false)".
+    // That was M1's DEFINING constraint and the reason its ACs were written the
+    // way they were: propagating a width then would have driven an undo of
+    // 6 -> 2 into a shrink that Q_ASSERT_X could not even catch, because Qt
+    // defines QT_NO_DEBUG in this build and compiles those out — a silent
+    // half-wired graph. B4 deleted setNBusses outright, so both the hazard and
+    // the constraint are gone.)
     int channels() const { return channels_; }
 
     // The permitted widths: 1 / 2 / 4 / 6 / 8. Anything else is REFUSED by

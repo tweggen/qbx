@@ -323,6 +323,35 @@ int WASAPIBackend::openDevice(const std::string &deviceName,
     return 0;
 }
 
+// The endpoint's SHARED-MODE MIX RATE, without opening a stream on it. Cheap:
+// Activate + GetMixFormat, both of which shared mode answers from the endpoint's
+// stored format. 0 when it cannot be read, which the UI renders as "unknown"
+// rather than guessing.
+//
+// This exists because the rate is a per-ENDPOINT Windows setting and two
+// endpoints on ONE interface can disagree — which is not a hypothetical: a
+// US-16x08 with capture declared 44100 and render declared 48000 made Windows
+// resample the capture side of a stream whose hardware was clocked at 48000,
+// and hand us frames at 48000 x (48000/44100) = 52245 Hz under a 48000 label
+// (measured: 52144 Hz). Nothing downstream can correct for being lied to about
+// a clock, so the number has to be visible at the point of choice instead.
+static std::uint32_t endpointMixRate( IMMDevice *dev )
+{
+    if (!dev) return 0;
+    IAudioClient *client = nullptr;
+    if (FAILED(dev->Activate(IID_IAudioClient_local, CLSCTX_INPROC_SERVER, nullptr,
+                             reinterpret_cast<void **>(&client))) || !client)
+        return 0;
+    WAVEFORMATEX *fmt = nullptr;
+    std::uint32_t rate = 0;
+    if (SUCCEEDED(client->GetMixFormat(&fmt)) && fmt) {
+        rate = fmt->nSamplesPerSec;
+        CoTaskMemFree(fmt);
+    }
+    client->Release();
+    return rate;
+}
+
 std::vector<AudioDeviceInfo> WASAPIBackend::enumerateDevices() const
 {
     std::vector<AudioDeviceInfo> devices;
@@ -370,7 +399,8 @@ std::vector<AudioDeviceInfo> WASAPIBackend::enumerateDevices() const
                 props->Release();
             }
             if (!id.empty())
-                devices.push_back({ id, label.empty() ? id : label });
+                devices.push_back({ id, label.empty() ? id : label,
+                                    endpointMixRate( dev ) });
             dev->Release();
         }
         coll->Release();

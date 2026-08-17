@@ -11,6 +11,7 @@
 #include "app/model/sexternfile.h"
 
 class SExternFileList;
+class QContextMenuEvent;
 
 class SExternFileItem
     : public QTreeWidgetItem
@@ -32,8 +33,16 @@ public:
 
     void setProject( SProject *project );
 
+signals:
+    // The user picked "Cleanup..." from the context menu. This widget lives in
+    // app/model, which may include NO other app module (tools/check_layering.py,
+    // APP_DEPS['model'] == set()), so it cannot open the dialog itself — the
+    // shell, which sees both this list and app/servicesui, does that.
+    void cleanupRequested();
+
 protected:
     void startDrag(Qt::DropActions supportedActions) override;
+    void contextMenuEvent( QContextMenuEvent * ) override;
 
 private:
     void connectSignals();

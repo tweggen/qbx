@@ -72,16 +72,31 @@ Invariants:
    (`minRmsDelta`, a LEVEL discriminator) and rms(A - B) (`minDiffRms`, a
    CONTENT one, off by default). The level test is what a duplicated bus fails;
    the content test is what catches two channels at the same level holding
-   different audio. Today's sink duplicates, so channel_assert_dupmono.qxa
-   asserts the failure via expectReject — and is SUPPOSED to break when the
-   sink goes wide. ../test_channels4.wav is the asymmetric fixture it is proved
+   different audio.
+
+   **channel_assert_dupmono.qxa is NOT the sink gate it was designed as, and
+   this invariant said it was until proposal 36 B9.** It was written at M0 with
+   an `expectReject` that was "SUPPOSED to break when the sink goes wide". The
+   sink went wide at B5 and it did not break — because its fixture is
+   `test_sawtooth.wav`, a two-channel file whose channels are BYTE-IDENTICAL
+   (§7 trap 22), so its render has equal channels whether the engine is wide or
+   not. A gate whose fixture cannot distinguish the two states is not a gate for
+   that distinction. It still earns its place as the EQUAL-channels half of a
+   pair — see `meter_levels`, which asserts equal channels on the sawtooth and
+   different ones on `test_stereo.wav`, and which only a real per-channel path
+   passes both halves of.
+
+   ../test_channels4.wav is the asymmetric fixture it is proved
    against: 4 channels of a 480 Hz sine on a 6 dB RMS ladder
    (0.5 / 0.25 / 0.125 / 0.0625, pooled 0.28810), written and re-checked by
    tw303a/analysis/tools/gen_channel_fixture.cc (`--verify`).
-7b. assert-clip-channels (proposal 36 B3) asserts a CLIP's page width, because
-   no rendered file can show it before B5: the sink collapses the graph to one
-   bus and duplicates it, so `assert-channels-differ` on a render measures the
-   sink, not the clip. It resolves the clip through `SCut::resolveClip` — the
+7b. assert-clip-channels (proposal 36 B3) asserts a CLIP's page width. It was
+   written because no rendered file could show one: before B5 the sink
+   collapsed the graph to one bus and duplicated it, so `assert-channels-differ`
+   on a render measured the sink rather than the clip. B5 widened the sink, so a
+   FILE can show channels now — and this verb is still the only place a CLIP's
+   OWN width is observable, because everything between the clip and the file
+   (track mix, gain stage, rewire, master) can change it. It resolves the clip through `SCut::resolveClip` — the
    same one-snapshot component+position fold `twView::freezePage` uses — and
    reads the page the RESOLVED component published, which is exactly the seam
    AC B3.2 is about. Two things separate it from assert-meter: it declares a

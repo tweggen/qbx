@@ -61,6 +61,12 @@ Invariants:
    and it is not called at all when the rates already match — which is what
    makes "pages == WAV == the input file, sample for sample" a claim the gate
    can and does make.
+   At `stop()` the bridge runs the CAPTURE-RATE CHECK (main PR #55): frames
+   the device actually handed over per real second against the rate it was
+   opened at; past 1 % over ≥ 2 s it WARNS in semitones and names the usual
+   cause (input and output endpoints at different OS rates on one clock).
+   Nothing downstream can correct a misreported clock, so it is made visible,
+   never computed away.
 
 6. **Steady state on the bridge thread is allocation-free**, except for ONE
    growing-source chunk at a chunk boundary (512 KB every 1.37 s for stereo at

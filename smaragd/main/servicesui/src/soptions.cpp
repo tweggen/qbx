@@ -13,6 +13,10 @@ QVariant SOpt::def( const QString &key )
     if( key == WheelCtrlShift ) return (int) ZoomHorizontal;
     if( key == ZoomToCursor )   return true;
     if( key == InvertZoom )     return false;
+    // 100 % is not merely "the middle of the range": it is the value at which
+    // every wheel gesture reduces to exactly the arithmetic it had before this
+    // option existed, so a user who never opens the dialog sees no change.
+    if( key == WheelSensitivityPct ) return 100;
     if( key == FollowPlayhead ) return true;
     if( key == AudioDeviceId )  return QString();
 

@@ -231,3 +231,13 @@ scripted-playback crash. (The callback's two per-block vector allocations are
 gone since proposal 21 L1a — the ring sum needs the PLANAR buffers anyway, so
 they became members sized at device open.) NOT gated: the real-device
 behaviour of the two-lane machine (WASAPI), and any latency number for it.
+
+**`twSpeaker`'s one input plug carries NO AUDIO — only the wire format.** It had
+two until proposal 36 B5 and neither ever carried a sample: the callback reads
+frozen pages through `AudioEngine`, which asks the ROOT COMPONENT directly, so
+plug 0 exists to answer `getFormat().sampleRate` when the device is opened (and
+for the rate diagnostic) and plug 1 was read by nobody at all. B9 reviewed it
+for deletion as dead scaffolding and did NOT delete it: unlike `getDataPtr()`
+and `twFormatCaps::channelCounts` it is READ, so removing it is "find the wire
+rate somewhere else", not a cleanup. Recorded here so the next reader does not
+spend the same half hour concluding it is dead.

@@ -33,30 +33,22 @@ twFormatCaps twComponent::getOutputCaps( idx_t /*idx*/ ) const
 {
     // The engine exchanges Float32; `rates` left empty == any rate (the
     // negotiator intersects it with the candidate set D).
+    // NO CHANNEL COUNT IS STATED HERE (proposal 36 B9 deleted the field; see
+    // twformat.h). Caps carry rate and sample type; page width is
+    // getOutputChannels(), and nothing negotiates it.
     twFormatCaps c;
     c.types        = { twSampleType::Float32 };
-    // DERIVED, never independently stated (proposal 36 §5 B2). channelCounts was
-    // seeded a literal { 1 } and never narrowed, and from B2 on getOutputChannels()
-    // is authoritative for page width — two hard-coded 1s that could drift apart
-    // is exactly what the milestone forbids, so this reads the authority instead
-    // of restating it. That does NOT make it a second source of truth: nothing in
-    // the tree READS channelCounts (the negotiator has zero channel logic, §7 trap
-    // 5), so this is a value kept honest until B9 deletes the field.
-    c.channelCounts = { (std::uint16_t)getOutputChannels() };
     return c;
 }
 
 twFormatCaps twComponent::getInputCaps( idx_t /*idx*/ ) const
 {
+    // Likewise no channel count: a component's INPUT width is not declared by
+    // anything in the engine — the plug seam clamps per §4.4 rule 1 instead —
+    // so there was never anything honest to put here. B9 deleted the field
+    // rather than keep inventing a value for it.
     twFormatCaps c;
     c.types        = { twSampleType::Float32 };
-    // Deliberately NOT derived from getOutputChannels(): a component's INPUT
-    // width is not declared by anything in the engine at B2 (the plug seam
-    // clamps per §4.4 rule 1 instead), and inventing a declaration here would be
-    // the drifting second authority this milestone exists to avoid. Left at the
-    // pre-B2 literal; B9 deletes the field, or B4 gives input width a real
-    // declaration and this follows it.
-    c.channelCounts = { 1 };
     return c;
 }
 
@@ -519,6 +511,66 @@ void twComponent::releaseOldPages(offset_t keepAfterPos)
             ++it;
         }
     }
+}
+
+size_t twComponent::releaseOldPagesGlobally(offset_t keepAfterPos)
+{
+    // THE WIRING proposal 36 §7 trap 12 asked for, done at B9 after the growth
+    // was measured rather than assumed. The measurement: ONE 60-second offline
+    // render of the six-track corpus leaves 681 pages resident and frees none
+    // of them — 357 MB at width 2, 1.42 GB at width 8 — because until now the
+    // ONLY things that ever removed an entry from an outputPages_ map were
+    // component teardown and a re-freeze replacing the same key. An epoch bump
+    // marks pages stale IN PLACE; it does not prune. So residency grew linearly
+    // with the DURATION rendered and never came back down.
+    //
+    // Three things make this safe to call while workers are freezing:
+    //
+    //  * Erasing from the map drops ONE shared_ptr. A page bound into a
+    //    scheduler node, chained as a stalePredecessor, held by the render
+    //    loop's prevPage or read by an audio callback stays alive on its own
+    //    references. This can therefore never free a page anybody is using; it
+    //    can only turn a future lookup into a MISS, which the whole engine is
+    //    already built to answer by re-freezing.
+    //  * TRY_LOCK, and the registry lock is held for the whole walk, exactly as
+    //    componentPageStats documents. Pruning is opportunistic housekeeping: a
+    //    component busy freezing is skipped, not waited for, so this can neither
+    //    invert the lock order nor stall the caller.
+    //  * The caller chooses keepAfterPos with a margin. The same-component
+    //    predecessor edge chains DSP state from page N-1, so a window that kept
+    //    only the current page could break the state chain and change audio.
+    //    RenderSession keeps four pages behind the render position.
+    //
+    // Returns how many pages it dropped, so a caller can log or test it.
+    ComponentRegistry &r = componentRegistry();
+    std::lock_guard<std::mutex> registryLock( r.m );
+
+    size_t released = 0;
+    for (const twComponent *cc : r.live) {
+        if (!cc) {
+            continue;
+        }
+        // The registry stores const pointers because every OTHER walker over it
+        // is a read-only diagnostic. The objects themselves are not const — a
+        // component registers `this` from its own non-const constructor — so
+        // this cast adds no constness that was ever real. Kept local and
+        // explicit rather than widening the registry's element type, which
+        // would make every diagnostic walk look like it could mutate.
+        twComponent *c = const_cast<twComponent *>(cc);
+        std::unique_lock<std::mutex> lock(c->mutex(), std::try_to_lock);
+        if (!lock.owns_lock()) {
+            continue;
+        }
+        for (auto it = c->outputPages_.begin(); it != c->outputPages_.end(); ) {
+            if (it->first + (offset_t) twOutputPage::FRAME_CAPACITY < keepAfterPos) {
+                it = c->outputPages_.erase(it);
+                ++released;
+            } else {
+                ++it;
+            }
+        }
+    }
+    return released;
 }
 
 // --- Page-memory accounting (proposal 36 B1a) -------------------------------
@@ -1295,7 +1347,16 @@ length_t twComponent::calcOutputTo( sample_t *pDest, length_t length, idx_t idx 
     // Call the IOVector version (the new primary interface)
     length_t rendered = calcOutputTo(dest, idx);
 
-    // Copy result back to raw-pointer buffer
+    // Copy result back to raw-pointer buffer. The clamp is the caller-side half
+    // of proposal 36 §7 trap 21: CreateForPageOutput now sizes `dest` from the
+    // scratch page's own channelFrames() rather than FRAME_CAPACITY, so an
+    // override cannot legitimately report more than `length` — but the return
+    // value is an override's to choose, and pDest is the CALLER's buffer of
+    // exactly `length` frames. One min() is cheaper than trusting every
+    // override in the tree, present and future.
+    if (rendered > length) {
+        rendered = length;
+    }
     if (rendered > 0) {
         memcpy(pDest, tmpPage->channelPtr(0), rendered * sizeof(sample_t));
     }
