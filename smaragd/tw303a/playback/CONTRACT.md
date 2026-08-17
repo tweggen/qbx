@@ -115,28 +115,64 @@ Invariants:
     by the callback. Before L1a a plain assignment was safe only because the
     device could not be running yet.
 
-13. RING ENTRIES ARE POSITION-STAMPED AND EPOCH-TAGGED, and the RT sum is a PURE
-    FUNCTION (`twlive::mixRing`, extracted for the same reason
-    `twmonitor::pullChannels`/`interleave` are). An entry is summed only when
-      (a) its startPos is the frame being delivered — a mismatch is a counted
-          DROP, never an approximation; and
-      (b) the served root page's contentEpoch >= the entry's `flipEpoch` (ARM:
-          a stale root still CONTAINS the armed track, so summing would double
-          it), or, on the DISARM mirror, still < `flipEpochPrime` (a stale root
-          still LACKS the track, so the ring keeps filling the hole).
+13. THE RING IS A STREAM OF POSITION-STAMPED FRAMES, NOT A QUEUE OF BLOCKS,
+    and the RT sum is a PURE FUNCTION (`twlive::mixStream`, extracted for the
+    same reason `twmonitor::pullChannels`/`interleave` are).
+
+    THE STAMP IS A RANGE, NEVER AN EQUALITY. The RT's block is VARIABLE on a
+    real device — WASAPI asks the callback for `bufferFrames - padding`, so its
+    grid is irregular by construction (design F6) — while the pump produces
+    fixed-size blocks. An RT that summed an entry only when
+    `entry.startPos == theFrameBeingDelivered` would align with the pump
+    exactly never on hardware: every entry a mismatch, the live lane
+    permanently silent. So the consumer holds a CURSOR into the head entry
+    (`twLiveMixReader`, consumer-private, and it must live across callbacks) and
+    for a wanted range [P, P+n):
+      - entries wholly BEHIND P are dropped and counted (`dropped`);
+      - an entry starting AFTER the current want position is the FUTURE and is
+        KEPT — silence for the gap, counted `notYet`. Popping it would throw
+        away audio the very next callback needs;
+      - an overlap is summed from the entry's own offset and the entry is
+        popped only when exhausted. One 2048-frame callback consumes two
+        1024-frame entries; a 33-frame one consumes a sliver.
+    `frames` may differ from `framesPerEntry` in BOTH directions.
+
+    THE RUN ID is what makes "keep the future" safe. A REPOSITION abandons a
+    timeline, and everything queued for it is arbitrarily far from where the RT
+    now is, so the keep-the-future rule would hold it forever: the ring fills,
+    the producer can never write the new position, and the lane stops dead
+    (measured, on a seek back and on the STOPPED->PLAYING switch). The producer
+    stamps a monotone run id, bumps it in `applyReposition()` and publishes it
+    with `setRun()`; the consumer DROPS any entry not of the current run.
+
+    THE EPOCH GATE is evaluated PER ENTRY against the ROOT PAGE IN HAND, so a
+    flip that lands mid-entry takes effect mid-entry:
+      the served root page's contentEpoch >= the entry's `flipEpoch` (ARM: a
+      stale root still CONTAINS the armed track, so summing would double it),
+      or, on the DISARM mirror, still < `flipEpochPrime` (a stale root still
+      LACKS the track, so the ring keeps filling the hole).
     While STOPPED there is no root page and the ring is the only position
-    authority: out = ring. A 2-3 ms crossfade smooths both flips.
-    `AudioEngine::servedContentEpoch()` publishes (b)'s number: it is the page
-    the RT is already holding, never a second lookup.
+    authority: out = ring, consumed sequentially from the head. A 2-3 ms
+    crossfade smooths both flips and carries across entries and callbacks.
+    `AudioEngine::servedContentEpoch()` publishes the epoch: it is the page the
+    RT is already holding, never a second lookup. `twlive::mixRing` survives as
+    the one-entry primitive with the strict position claim, used by tests.
 
 14. THE LIVE CLOCK IS ENGINE-OWNED (twliveclock.h). A seqlock stamped by the
     render callback beside publishPosition() with
-    `{seq, deliveredFrame = published - bufferFramesProject, hostNs}`. NOT
-    PlaybackContext (app-implemented, UI-thread locatorPosition) and not
-    SApplication (unreachable from tw/). The publish-lag correction is applied
-    ONCE, here, so every consumer shares one definition — the same one
-    SMidiOutPump derives for its own anchor. Readers retry a BOUNDED number of
-    times and then report "no reading"; the pump is realtime too.
+    `{seq, deliveredFrame = published - bufferFramesProject, nextFrame =
+    published, hostNs}`. NOT PlaybackContext (app-implemented, UI-thread
+    locatorPosition) and not SApplication (unreachable from tw/). The
+    publish-lag correction is applied ONCE, here, so every consumer shares one
+    definition — the same one SMidiOutPump derives for its own anchor. Readers
+    retry a BOUNDED number of times and then report "no reading"; the pump is
+    realtime too.
+
+    TWO READINGS, DELIBERATELY NOT ONE. `deliveredFrame` is what is being
+    HEARD and is what MIDI-out and metering want; `nextFrame` is what the RT
+    will PULL next and is what the PUMP paces on. They differ by one device
+    buffer, and conflating them would put the live lane a buffer behind the
+    arrangement.
 
 15. THE PUMP NEVER RENDERS A PAGE AND NEVER ALLOCATES IN STEADY STATE. It marks
     itself `markLiveThread()` (RenderPolicy::Never), takes only a live-owned
@@ -147,14 +183,44 @@ Invariants:
     plan's transport is pushed onto every processor at adoption, so the plan and
     the processors cannot disagree for a block after a rebuild.
 
-16. ONE EXPLICIT REPOSITION per start/stop/seek/wrap, decided by the pump and
-    applied THROUGH THE PLAN (`forgetContinuity()` on every plan processor),
-    never by the app — which is not on this thread and does not know where a
-    block boundary is. A drift of more than two blocks between the clock's
-    target and the contiguous next position is a reposition; anything smaller is
-    the clock standing still between publications and must NOT reposition at
-    block rate. `leadFrames < 0` means "default to one block"; ZERO is a legal
-    explicit value (a synchronous harness driving the clock itself).
+16. THE PUMP PACES ON THE CLOCK, and FILLING THE RING UNTIL IT IS FULL IS
+    WRONG. While PLAYING it keeps `[nextFrame, nextFrame + leadFrames)` covered
+    — rendering while `nextPos < nextFrame + lead` and idling otherwise. The
+    original fill-until-full pump ran the ring's whole depth ahead, so the very
+    next clock stamp read as a multi-block BACKWARDS jump and it repositioned,
+    forgot continuity and re-rendered the covered range on every start. Pacing
+    on the frames the RT actually wants removes the failure mode instead of
+    widening a tolerance past it. `leadFrames < 0` means "default", which is
+    TWO blocks; ZERO is a legal explicit value. `requiredRingDepth()` is
+    `ceil(lead/block) + 2` and the pump warns once if the ring it was handed is
+    shallower.
+
+17. ONE EXPLICIT REPOSITION per start/stop/seek/wrap, decided by the pump and
+    applied THROUGH THE PLAN (`applyReposition()`: move the position, count it,
+    open a new RING RUN, `forgetContinuity()` on every plan processor), never by
+    the app — which is not on this thread and does not know where a block
+    boundary is. The rules are positional, not a drift tolerance:
+      `nextPos < nextFrame`                    fell behind, or a seek FORWARD
+                                               past the covered range;
+      `nextPos > nextFrame + lead + block`      the clock moved BACK (a seek back
+                                               or a loop wrap);
+      `requestReposition()`                     the app said so — the transport
+                                               knows before any clock reading
+                                               can show it.
+    A jump INSIDE the covered window needs none: the RT drops what it passed and
+    streams on. The reposition is applied BEFORE the ring slot is claimed, so a
+    full ring cannot lose it — which matters most in the case a reposition
+    creates, where the ring is full of the run being abandoned.
+
+18. THE LIVE LANE REQUIRES DEVICE RATE == PROJECT RATE, and `openLive()`
+    REFUSES otherwise (-1, one log naming both rates, `liveRateRefusals()`, and
+    the device closed again iff the frozen lane is not using it). The lane's
+    entries are stamped in PROJECT frames and summed straight into the device
+    buffer; the frozen lane has a resampler at this seam and the live lane has
+    nowhere to put one, because a resampler makes an entry's frame count
+    fractional while an entry has to carry a position. KNOWN DEBT — the
+    resolution path is a device-frame-stamped ring, or opening the device at the
+    project rate (ASIO, proposal 35).
 
 How to test: manual GUI playback (scripted toggle-playback segfaults under
 the runner — pre-existing, see the headless-testing notes); the render path
