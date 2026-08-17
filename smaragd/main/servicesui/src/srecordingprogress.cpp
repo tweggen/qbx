@@ -1,6 +1,6 @@
 #include "app/servicesui/srecordingprogress.h"
 
-#include "tw/record/recording_session.h"
+#include "app/shell/saudiorecorder.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -11,15 +11,14 @@
 #include <iomanip>
 #include <sstream>
 
-SRecordingProgressDialog::SRecordingProgressDialog(audio::RecordingSession *session,
+SRecordingProgressDialog::SRecordingProgressDialog(SAudioRecorder *recorder,
                                                    QWidget *parent)
-    : QDialog(parent), session_(session) {
+    : QDialog(parent), recorder_(recorder) {
     setWindowTitle("Recording...");
     setMinimumWidth(400);
-    setModal(true);
-
-    // Prevent user from closing the dialog directly
-    setWindowFlags(windowFlags() & ~Qt::WindowCloseButtonHint);
+    // NON-MODAL (proposal 21 L3b): the take runs while the app stays usable.
+    setModal(false);
+    setAttribute(Qt::WA_DeleteOnClose, false);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
@@ -95,16 +94,19 @@ void SRecordingProgressDialog::handleCompletion(bool success, const QString &err
 }
 
 void SRecordingProgressDialog::onStopClicked() {
-    if (session_ && !isComplete_) {
-        session_->requestStop();
+    if (recorder_ && !isComplete_) {
+        recorder_->stop();
+        handleCompletion(true, QString());
+        accept();
     }
 }
 
 void SRecordingProgressDialog::updateTimeDisplay() {
-    if (!session_) return;
+    if (!recorder_) return;
 
-    // Poll progress (thread-safe atomic) on the GUI thread.
-    recordedDuration_ = session_->recordedDurationSeconds();
+    // Poll progress on the GUI thread. The recorder is main-thread-only, so
+    // this is a plain read.
+    recordedDuration_ = recorder_->recordedSeconds();
     durationLabel_->setText("Duration: " + formatTime(recordedDuration_));
 
     // Refresh the main window's UI every ~500ms to show growing recorded clip (every 5 updates @ 100ms)
@@ -115,18 +117,17 @@ void SRecordingProgressDialog::updateTimeDisplay() {
         }
     }
 
-    // Poll for completion instead of receiving a worker-thread callback.
-    if (!isComplete_ && session_->isFinished()) {
-        handleCompletion(session_->succeeded(),
-                         QString::fromUtf8(session_->errorMessage()));
+    // The take may end without this dialog (a punch-out, or the record button
+    // pressed again). Follow it.
+    if (!isComplete_ && !recorder_->isActive()) {
+        const QString err = recorder_->errorMessage();
+        handleCompletion(err.isEmpty(), err);
     }
 }
 
 void SRecordingProgressDialog::closeEvent(QCloseEvent *event) {
-    if (!isComplete_) {
-        // Prevent closing while recording is active
-        event->ignore();
-    } else {
-        event->accept();
-    }
+    // Closing the window STOPS the take (it is not modal any more, so refusing
+    // to close would leave a window the user cannot get rid of).
+    if (!isComplete_ && recorder_ && recorder_->isActive()) recorder_->stop();
+    event->accept();
 }

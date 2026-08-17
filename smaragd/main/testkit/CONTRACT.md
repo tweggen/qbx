@@ -418,3 +418,56 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     makes frame 0 of the next dump the first frame of that phase — which is
     what lets a monitoring case use absolute frame windows instead of
     wall-clock guesses.
+
+## The recording verbs (proposal 21 L3b)
+
+14. **`record-start` / `record-stop` are ABSOLUTE and go through the production
+    entry points** (`SApplication::startRecording` / `stopRecording`), which is
+    what the record button calls — a script exercises the real path rather than
+    a copy of it. `record-start` is REJECTED when nothing is armed or the input
+    will not open; `record-stop` is REJECTED when not recording. Neither is
+    undoable: they are transport. The PLACEMENT they cause is one undo step.
+
+15. **A take that PUNCHES OUT ends without `record-stop`**, so a case that sets
+    a punch region must not call it afterwards (it would be rejected). The
+    dialog, the record button and the punch-out all converge on the same
+    `stop()`.
+
+16. **`assert-recorded-clip`'s numeric expectations are opt-in**, so one verb
+    serves the mid-take assertions (`growing`, `previewNonEmpty`,
+    `minDurationFrames`) and the post-take ones. It ALSO checks the placement
+    IDENTITY on every call once the take is over — the clip's link start must
+    equal `placementFrame(trimmed)` — so a recorder that reported the right
+    terms and applied different ones fails even when no expectation was given.
+
+17. **WHAT A RECORDING CASE CAN AND CANNOT CLAIM.** `P0`, the project frame
+    capture frame 0 maps to, depends on when the capture thread and the render
+    callback actually ran; it is NOT predictable and no case asserts it. What
+    IS a closed form in integers is the COMPENSATION — `-inputLatency -
+    outputLatency + userOffset` — because a case sets the reported input
+    latency (`SMARAGD_AUDIO_INPUT_LATENCY_FRAMES`) and the capture backend's
+    output latency is its own buffer (1024). `FileAudioInput` does NOT actually
+    delay by the reported latency, which is the point: the gate is on the
+    CONVERSION, not on the physics of a device no headless run can see.
+
+18. **`sourceAtStartFrame` is a FAITHFULNESS claim, not a latency one.** It
+    decodes the position-encoded fixture at the placed clip's first content
+    frame and compares it to the number of capture frames the mapping says were
+    trimmed. They agree only if every frame the file produced reached the pages
+    in order, none lost or duplicated between the device ring, the bridge
+    thread, the growing capture source and the placement. The tolerance is one
+    DECODE block (4096) because the decoder resolves 4096-frame blocks by
+    construction.
+
+19. **A LOOP-PASS COUNT IS A WALL-CLOCK QUANTITY.** It is captured material
+    divided by loop length, and captured material shrinks when the box is
+    loaded enough to cost ring overruns — `record_loop_takes` DID fail under a
+    concurrent suite with an exact count. Assert a FLOOR (`minTakes` /
+    `minPasses`) and let the verb assert the part that is not load-sensitive:
+    ONE COLUMN, and exactly as many takes as passes, which it does
+    unconditionally whenever more than one pass was committed.
+
+20. **Nothing undoable may come between a take and the `<undo/>` that gates
+    it.** A `select-take` probe placed there is undone instead, which is how
+    the first draft of `record_loop_takes` mis-read a working undo as a broken
+    one.

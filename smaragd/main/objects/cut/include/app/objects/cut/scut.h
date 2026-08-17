@@ -150,6 +150,12 @@ public:
     // Inv-1: resolve component + mapped position from ONE snapshot (never two
     // straddling getSnapshotBlocking() reads that a lazy reader build can split).
     virtual twResolvedClip resolveClip( offset_t off ) override;
+    /// Proposal 21 L3b: a window over a live recording IS a live recording,
+    /// so the track's routing predicate holds for the cut the arranger
+    /// actually owns and not only for the content behind it.
+    bool isLiveRecording() const override
+    { return content_ && content_->getSObject().isLiveRecording(); }
+
     SObject &getContent() const { return content_->getSObject(); }
     WarpedPos getLoopStart() const;
     // The clip's slip anchor. AUTHORITATIVE storage is the SOURCE-domain

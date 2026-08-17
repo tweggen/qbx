@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L3b. THE PLACEMENT CONVERSION (design D6), gated end to end.
+
+  Env, set on the CTest entry (see smaragd/CMakeLists.txt) because the runner
+  reads it at the first createAudioInput() call, long after the script is
+  parsed:
+    SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav
+    SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800     the driver's CLAIM
+    SMARAGD_CAPTURE_SPEED=1                     RUN_SERIAL, real time
+  The input is the position-encoded fixture (tw303a/analysis/tools/
+  gen_position_fixture -verify): a 4096-frame block staircase whose block k
+  decodes to frame k, so a decoded value IS a capture-frame index.
+
+  WHAT IS A CLOSED FORM HERE, AND WHAT DELIBERATELY IS NOT.
+
+  P0 - the project frame that capture frame 0's host time maps to - depends
+  on when the capture thread and the render callback actually ran, so it is
+  NOT predictable and nothing below asserts it. What IS exact, in integers, is
+  the COMPENSATION the conversion applied:
+
+      compensation = -inputLatency - outputLatency + userOffset
+
+  inputLatency is 4800 (this case sets it); outputLatency is the capture
+  backend's own buffer, 1024 frames (capture_backend.cc: outputLatencyFrames =
+  bufferFrames), at the project rate on a device whose rate the capture backend
+  adopts, so the projectRate/deviceRate scaling is exactly 1. Hence
+
+      offset 0    ->  compensation = -4800 - 1024        = -5824
+      offset +20  ->  compensation = -5824 - 960         = -6784
+
+  and the difference is EXACTLY 960 frames = 20 ms at 48 kHz, EARLIER, which is
+  the sign convention SSettings::recordingOffsetMs documents (positive = the
+  driver under-reports, compensate more, place the audio earlier).
+
+  assert-recorded-clip also checks the IDENTITY internally on every call -
+  the clip's actual link start must equal placementFrame(trimmed) - so a
+  recorder that reported the right terms and applied different ones fails here
+  even though every expectation above would pass.
+
+  THE PHYSICAL CLAIM is sourceAtStartFrame: the position-encoded value decoded
+  at the placed clip's first content frame must equal the number of capture
+  frames the mapping says were trimmed (0 here, because the transport was
+  already running). That is faithfulness - every frame the file produced
+  reached the pages in order, none lost or duplicated between the device ring,
+  the bridge thread, the growing capture source and the placement - and it is
+  what "the placed clip's positions read true" means. The tolerance is one
+  DECODE block (4096): the decoder resolves 4096-frame blocks by construction.
+
+  The transport is deliberately PLAYING before the take, so an anchor exists at
+  once and nothing is trimmed. Recording from a STOPPED transport is the
+  retrospective-mapping path and is covered by record_punch.
+-->
+<SActionScript version="1" name="record_offset_zero">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Monitoring off: this case is about the PLACEMENT, and a live lane
+         would put the input into the capture backend as well, which is
+         monitor_through_chain's job. -->
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+
+    <!-- TAKE 1: offset 0. .................................................. -->
+    <set-option key="audio/recordingOffsetMs/default" value="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          userOffsetFrames="0"
+                          compensationFrames="-5824"
+                          trimmedFrames="0"
+                          sourceAtStartFrame="0" sourceTolerance="4096"
+                          minDurationFrames="24000"/>
+
+    <!-- TAKE 2: offset +20 ms == 960 frames EARLIER. ....................... -->
+    <set-option key="audio/recordingOffsetMs/default" value="20"/>
+    <arm-track trackPath="1" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <assert-recorded-clip trackPath="1" clips="1" passes="1"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          userOffsetFrames="-960"
+                          compensationFrames="-6784"
+                          trimmedFrames="0"
+                          sourceAtStartFrame="0" sourceTolerance="4096"
+                          minDurationFrames="24000"/>
+
+    <!-- This case OWNS audio/recordingOffsetMs/default; put it back. -->
+    <set-option key="audio/recordingOffsetMs/default" value="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

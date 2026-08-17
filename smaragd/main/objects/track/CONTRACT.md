@@ -294,3 +294,26 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     file untouched, but a track that arrived armed is not a monitoring source
     until the user arms it in THIS session (`SLiveMonitor::projectChanged()`
     records the set). Opening a project must not open the microphone.
+
+19. **A LIVE RECORDING GOES INTO NEITHER THE BUS MIXERS NOR THE EVENT CLIP
+    SET** (proposal 21 L3b, design D7). `trackChildWasAdded` /
+    `WasRemoved` / `DurationChanged` route on `SObject::isLiveRecording()`
+    BEFORE they route on `contentKind()`, and the route is "do nothing but the
+    duration bookkeeping". The argument is exactly the one invariant 5b makes
+    for a MIDI clip: a growing recording has no root component, so inserting it
+    as a clip entry would cost a dummy freeze per page per clip AND make
+    `twView::getComponent() returned nullptr` fire once per freeze forever —
+    and its length moves ten times a second, which is the traffic design D7
+    says must not reach the root. The predicate is on the BASE CLASS for the
+    same reason `contentKind()` is: the track must route by it without knowing
+    the concrete type, and `objects/track` has no edge to `objects/wave`.
+
+20. **WHILE A LANE IS LIVE-OWNED, THE ROOT WALK IS DEFERRED AND ISSUED ONCE AT
+    DISARM.** `invalidateRootWalkOrDefer()` accumulates the union of the ranges
+    and `setLiveOwnedLane(false)` flushes exactly one
+    `invalidateRenderPathRange()` (design D7). The walk is the expensive half
+    of a clip edit — from the project root down, per hop, mapping domains —
+    and while the pump owns the lane its frozen output is not being summed at
+    all, so a walk per edit buys nothing. Note this is the GENERAL rule for
+    edits during monitoring; the growing recording clip is covered by 19 and
+    never reaches it.

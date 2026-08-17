@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L3b. LOOP RECORDING: ONE TAKE PER CYCLE PASS (design D7), which
+  is proposal 17's "phase 5" falling out of a verb that already existed rather
+  than being built.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  THE MECHANISM, so the numbers below are readable. The recorder does not
+  "detect a wrap": the placement conversion is LINEAR in capture frame, so the
+  pass a frame belongs to is arithmetic, `floor((placement - loopIn)/loopLen)`,
+  and the recorder splits the take at those boundaries and emits ONE
+  place-recording per segment, all at the loop start, inside ONE undo macro.
+  place-recording then does the rest by its own proposal-17 rules: the first
+  segment lands on an empty lane and becomes a plain cut; the second finds that
+  cut covering the column and becomes a TAKE; the third likewise. So a lane
+  ends with ONE COLUMN holding N takes, not N clips side by side, and that is
+  what `clips="1"` plus the take/pass identity below says.
+
+  WHY THE ASSERTION IS A FLOOR AND NOT AN EXACT COUNT. How many passes a take
+  produces is a WALL-CLOCK quantity ... captured material divided by the loop
+  length ... and captured material shrinks when the box is loaded enough to
+  cost ring overruns. An exact count is therefore load-sensitive, and this case
+  DID fail that way under a concurrent suite before it was relaxed. So the
+  count is a floor (7 s over a 2 s cycle leaves room for a second and a half of
+  loss before 3 passes stops being true), and the part that is NOT
+  load-sensitive is asserted instead, unconditionally, by the verb itself:
+  ONE COLUMN, and exactly as many TAKES as there were PASSES. That pair is the
+  whole claim of loop recording and it holds however many passes there were.
+
+  The whole loop-record is ONE undo step, which is the property that makes it
+  usable at all.
+-->
+<SActionScript version="1" name="record_loop_takes">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- The cycle region: 0 .. 2 s. set-property takes its value as a JSON
+         ARRAY (SSetPropertyAction::readXml), hence the brackets. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+    <wait-ms ms="7000"/>
+    <record-stop/>
+
+    <!-- ONE column at the loop start, AT LEAST three takes and three
+         committed passes (the floor; see the header), and the column is
+         exactly the loop long. The verb additionally asserts, without being
+         asked, that the take count EQUALS the pass count. -->
+    <assert-recorded-clip trackPath="0" clips="1" minTakes="3" minPasses="3"
+                          startFrame="0" startTolerance="0"
+                          durationFrames="96000" durationTolerance="0"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          compensationFrames="-5824"/>
+
+    <!-- ONE undo removes the whole pass. Nothing undoable may come between
+         the take and this: a select-take probe here would be undone instead,
+         which is how the first draft of this case mis-read a working undo as
+         a broken one. -->
+    <undo/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

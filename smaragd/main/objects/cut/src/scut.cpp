@@ -70,6 +70,13 @@ SCutSnapshot SCut::getSnapshotBlocking() const
 
 void SCut::ensureReader()
 {
+    // Same rule as buildCapture_ (proposal 21 L3b): a live recording has no
+    // reader. Building one means materialising a grain/vocoder chain over a
+    // source whose length changes under it, which is both expensive and
+    // meaningless -- the clip is a plain VIEW of the capture until the take
+    // ends, and the WAV-backed cut that replaces it then is an ordinary one
+    // with an ordinary reader.
+    if( isLiveRecording() ) return;
     if( readerTried_ ) return;
     // Blocking snapshot (Phase 2b): build from the CURRENT window params. With
     // the try-lock getSnapshot(), a second concurrent first-build (two broadcast
@@ -298,6 +305,13 @@ swap_complete:
 // Should only be called when capture_ is null.
 void SCut::buildCapture_()
 {
+    // A LIVE RECORDING is never captured (proposal 21 L3b). A capture is a
+    // RENDER of the content into a fixed-size snapshot, and the content here
+    // is a capture that is still growing: the snapshot would be stale before
+    // it was published, and building one costs seconds on the UI thread over a
+    // multi-second take. The growing clip draws from
+    // SRecordingContent::getPreview and needs no capture at all.
+    if( isLiveRecording() ) return;
     // Serialize concurrent builders: the UI thread (rebuildReader) and the
     // revalidator worker (revalPrepPreview) may both arrive here. The render
     // below can take tens of milliseconds, so this is a dedicated mutex — the
@@ -663,6 +677,12 @@ bool SCut::ensureCapturePeaks()
 int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
                       offset_t nProbes )
 {
+    // A LIVE RECORDING answers from its content's own incrementally-extended
+    // peak ladder, directly (proposal 21 L3b): there is no capture and there
+    // will not be one, and asking for one would build it.
+    if( isLiveRecording() )
+        return getContent().getPreview( dest, start, length, nProbes );
+
     // Try async capture first (non-blocking, may be stale or invalid)
     // If not ready, fall back to live content preview (sample-backed cuts only)
     auto page = getPreviewCapture();
@@ -1541,6 +1561,18 @@ void SCut::processWindowParamEvents()
 void SCut::invalidateAspects(uint32_t aspects)
 {
     if (aspects == 0 || !revalidator_) return;
+
+    // A LIVE RECORDING has nothing derivable to cache (proposal 21 L3b): its
+    // content grows ten times a second, so every aspect page the revalidator
+    // built would be stale before it was published, and the SCHEDULING is not
+    // free — measured, a growing clip re-scheduling a Preview recompute per
+    // tick starved the capture bridge's own thread badly enough to lose 2.2 s
+    // of input to ring overruns and put the capture backend 2.5 s behind its
+    // deadline. The clip draws from the content's own incrementally-extended
+    // peak ladder (SRecordingContent::getPreview) and needs no aspect at all;
+    // the WAV-backed cut that replaces it at stop is an ordinary one and is
+    // invalidated normally.
+    if (isLiveRecording()) return;
 
     // During project loading, invalidation is suppressed (all pages invalid anyway).
     // When enableInvalidation() is called, a full recomputation pass will begin.

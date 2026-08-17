@@ -290,6 +290,22 @@ const Fixture kFixtures[] = {
       "<set-track-input trackPath='1,0' input='audio:default:3'/>" },
     { "set-monitor-mode", "<set-monitor-mode trackPath='1,0' mode='on'/>" },
 
+    // Audio recording (proposal 21 L3b). record-start / record-stop carry no
+    // attributes at all, so they need no fixture row; assert-recorded-clip
+    // writes only what is non-default, so only the attributes below may be
+    // declared here.
+    { "assert-recorded-clip",
+      "<assert-recorded-clip trackPath='1,0' clips='1' takes='3' passes='3'"
+      " startFrame='48000' startTolerance='0' durationFrames='48000'"
+      " durationTolerance='0' minDurationFrames='24000'"
+      " inputLatencyFrames='4800' outputLatencyFrames='1024'"
+      " userOffsetFrames='-960' compensationFrames='-6784' trimmedFrames='0'"
+      " growing='true' previewNonEmpty='true' sourceAtStartFrame='0'"
+      " sourceTolerance='2048'/>" },
+    { "place-recording",
+      "<place-recording trackPath='0' filePath='x.wav' timePos='96000'"
+      " srcOffset='48000' length='24000'/>" },
+
     // --- the event test verbs ----------------------------------------------
     // clip AND trackPath, kind, contains and velocityTolerance are each
     // written only when set, so the fixture sets every one of them.

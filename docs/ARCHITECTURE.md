@@ -88,7 +88,7 @@ minimal.
 | app/model | SObject/SLink/SProject document tree | main/model/CONTRACT.md |
 | app/objects/cut | clip window (SCut) + renderer + window actions | main/objects/cut/CONTRACT.md |
 | app/objects/midi | event clip (SMidiSequence/SMidiCut) + renderer + event verbs | main/objects/midi/CONTRACT.md |
-| app/objects/wave | sample object + renderer + sample actions | main/objects/wave/CONTRACT.md |
+| app/objects/wave | sample object + renderer + sample actions; the GROWING recording content (proposal 21 L3b) | main/objects/wave/CONTRACT.md |
 | app/objects/track | track + clip sync to engine + placement actions | main/objects/track/CONTRACT.md |
 | app/objects/mixer | root mixer, plugin chain model, asset actions | main/objects/mixer/CONTRACT.md |
 | app/actions | command framework + generic verbs | main/actions/CONTRACT.md |
@@ -98,7 +98,7 @@ minimal.
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |
 | app/eventui | event editor (piano roll) + virtual keyboard | main/eventui/CONTRACT.md |
 | app/servicesui | render/record/options dialogs | main/servicesui/CONTRACT.md |
-| app/shell | SApplication, SMainWindow, main() — composition root | main/shell/CONTRACT.md |
+| app/shell | SApplication, SMainWindow, main() — composition root; the live monitor, the MIDI-out pump and the AUDIO RECORDER | main/shell/CONTRACT.md |
 | app/testkit | qxa runner, audio assertions | main/testkit/CONTRACT.md |
 
 ## Cross-module protocols (read these before touching audio paths)

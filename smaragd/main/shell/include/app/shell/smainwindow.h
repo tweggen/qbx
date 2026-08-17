@@ -206,7 +206,7 @@ protected slots:
     void stopPlaying();
     void gotoRangeStart();
     void onRecordTriggered();
-    void onRecordingCompleted();
+    void onRecordingFinished();
 
     void audioDeviceSelected( QAction * );
     void runTestSequence();

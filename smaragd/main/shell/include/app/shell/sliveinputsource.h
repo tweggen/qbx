@@ -9,18 +9,25 @@
 #include "tw/playback/twliveplan.h"
 
 namespace audio {
-class AudioInput;
+class CaptureBridge;
 }
 
 /**
  * An `AudioInput` device ring, seen as a `twLiveInputSource` (proposal 21
  * L1b, design D1/D9).
  *
- * `pull()` runs ON THE PUMP THREAD and is ALLOCATION-FREE: the interleaved
- * scratch and the channel map are sized once, on the main thread, when the
- * plan is built. It must not block, must not take a component mutex and must
- * not touch Qt, which is why the device is reached through `AudioInput::read`
- * -- a ring POP since L0 -- and nothing else.
+ * `pull()` runs ON THE PUMP THREAD and is ALLOCATION-FREE: the planar scratch
+ * and the channel map are sized once, on the main thread, when the plan is
+ * built. It must not block, must not take a component mutex and must not touch
+ * Qt, which is why the device is reached through `CaptureBridge::pullLive`
+ * -- a ring POP, no lock, no allocation -- and nothing else.
+ *
+ * SINCE L3b THE DEVICE IS THE BRIDGE'S, not this object's and not the
+ * monitor's directly (design D7: ONE input pump, three sinks). The bridge
+ * thread is the input ring's single consumer and fans the frames out; this is
+ * the LIVE sink and the only consumer of `pullLive()`. Recording is a second
+ * sink on the SAME bridge, which is what makes "monitoring and recording read
+ * one device" true rather than aspirational.
  *
  * `pos` is IGNORED. A device ring is a stream: what it has is what was
  * captured, and the pump stamps the block with the position it is rendering
@@ -36,7 +43,7 @@ class AudioInput;
 class SLiveAudioInputSource : public twLiveInputSource
 {
 public:
-    SLiveAudioInputSource( audio::AudioInput *input, unsigned mask,
+    SLiveAudioInputSource( audio::CaptureBridge *bridge, unsigned mask,
                            idx_t outChannels, length_t blockFrames );
 
     std::size_t pull( float *const *out, std::size_t channels,
@@ -53,9 +60,10 @@ public:
     { return pulled_.load( std::memory_order_relaxed ); }
 
 private:
-    audio::AudioInput   *input_ = nullptr;   // borrowed; SLiveMonitor owns it
+    audio::CaptureBridge *bridge_ = nullptr; // borrowed; SLiveMonitor owns it
     std::vector<int>     srcOfOut_;          // out channel c <- device channel
-    std::vector<float>   scratch_;           // interleaved, blockFrames x devCh
+    std::vector<float>   scratch_;           // planar, devCh x blockFrames
+    std::vector<float *> planes_;            // into scratch_, one per device ch
     unsigned             devChannels_ = 1;
     std::atomic<double>  peak_{ 0.0 };
     std::atomic<std::uint64_t> pulled_{ 0 };
