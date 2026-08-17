@@ -83,8 +83,11 @@
        sits between the second and third harmonic, so the sweep shows up as
        level and not only as timbre.
 
-       STEREO IS NOT GATED (the sink is mono until proposal 36 B5): channel 0
-       only, never L != R. -->
+       THIS CASE reads channel 0 only, and that is now a choice rather than a
+       limit: the sink has been as wide as the project since proposal 36 B5, and
+       stereo is gated since 2026-08-17 by instrument_stereo_render.qxa. What is
+       asserted here is continuity across a locate, which one channel says as
+       well as two. -->
 
   <setup project="new"/>
 

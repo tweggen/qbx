@@ -1015,6 +1015,11 @@ and 36 rebases; that is a decision recorded in STATE.md, never a drift. Until
 36-B5 lands the sink is mono, so P3's audio assertions read channel 0 only and
 **never assert `L != R`**. Pan automation (`self:Pan`) is unlocked by 36-B5 and is
 explicitly out of P5.
+**Stereo gated since 2026-08-17** (36-B5 having landed): `instrument_stereo_render.qxa`
+walks the generator mapping rows per channel out of a rendered file and
+`automation_stereo.qxa` does the same for a `self:Volume` ramp and a `param:`
+step, so the "channel 0 only, never `L != R`" caveat above applies to the cases
+P3/P5 shipped with and to nothing written after that date.
 
 ### 9.2 Proposal 21 — real-time dataflow (live lane)
 `process()` takes an event list in both modes; the processor is the merge point
@@ -1076,7 +1081,9 @@ param editor into the native editor.
 Tempo segments/ramps (37); return tracks / multi-out UI (P9); MIDI-FX chains
 between slots (P9); score/tab/tracker views (P9); MPE editing; MIDI clock/MTC;
 external-instrument audio return; PDC; placement-scope envelopes (32); pan
-automation (36-B5); live input/monitoring/recording (21 + P8); metronome engine;
+automation (36-B5 removed the reason it could not be HEARD; the pan itself is
+still unbuilt, and the stereo gates of 2026-08-17 do not change that); live
+input/monitoring/recording (21 + P8); metronome engine;
 a playback-run barrier (would need an RT page-boundary swap policy).
 
 ## 13. Adversarial review (v1 → v2)
