@@ -4,6 +4,7 @@
 #include "app/model/sobject.h"
 #include "tw/core/twfraction.h"
 
+class SLink;
 class SProject;
 
 /**
@@ -135,6 +136,30 @@ public:
     typedef SClipWindow *( *WrapFn )( SProject *, SObject &content );
     static void registerWrapFactory( SContentKind kind, WrapFn fn );
     static SClipWindow *wrapContent( SProject *project, SObject &content );
+
+    // --- the take-COLUMN factory (proposal 21 L4) -------------------------
+
+    /**
+     * Wrap a plain windowed placement into a take COLUMN in place, and
+     * collapse a one-take column back into a plain placement — the pair
+     * `stakes::wrapCutLinkIntoStack` / `stakes::collapseSingleTakeStack`
+     * already implements generically (both take an `SClipWindow`, neither
+     * names `SCut`).
+     *
+     * They are registered here for exactly the reason `windowTakeAt` exists on
+     * `SObject`: `objects/midi` sits at the RANK of `objects/cut` and must not
+     * depend on it, but `add-midi-take` has to be able to turn a plain MIDI
+     * clip into a column of MIDI takes. Registration is by static initializer
+     * from the slice that OWNS `STakeStack`, like the wrap factory above.
+     * Null (unregistered) yields null, never a crash.
+     */
+    typedef SLink *( *ColumnWrapFn )( SProject *, SObject *lane, SLink *clipLink );
+    typedef SLink *( *ColumnCollapseFn )( SObject *lane, SLink *columnLink );
+    static void registerTakeColumnFactory( ColumnWrapFn wrap,
+                                           ColumnCollapseFn collapse );
+    static SLink *wrapIntoTakeColumn( SProject *project, SObject *lane,
+                                      SLink *clipLink );
+    static SLink *collapseTakeColumn( SObject *lane, SLink *columnLink );
 
     /** The window interface of an object, or null when it is not a window. */
     static SClipWindow *of( SObject *obj );

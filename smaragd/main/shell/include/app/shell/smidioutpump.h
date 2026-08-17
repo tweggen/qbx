@@ -16,6 +16,8 @@
 #include "tw/devices/midi_output.h"
 #include "tw/events/tweventsource.h"
 
+#include "app/shell/splayheadclock.h"
+
 class QTimer;
 class SObject;
 class SProject;
@@ -205,13 +207,12 @@ private:
     std::map<STrack *, Cursor> cursors_;
     std::map<QString, QString> portIdCache_;   // portable name -> device id
 
-    // The playhead anchor (see the class comment).
-    bool    haveAnchor_ = false;
-    qint64  anchorAbs_  = 0;   // frame just delivered + iter * cycle length
-    qint64  anchorNs_   = 0;   // host time that frame will be HEARD at
+    // The playhead anchor. Its discipline - publication-driven, publish-lag
+    // and device-latency corrected, first-anchor guarded - moved verbatim into
+    // SPlayheadClock for proposal 21 L4, so the MIDI RECORDER reads the same
+    // clock backwards to place what it captured. Behaviour here is unchanged.
+    SPlayheadClock clock_;
     qint64  lastPos_    = 0;
-    qint64  runStartPos_ = 0;  // where this transport run began
-    quint64 lastPublishSeq_ = 0;   // last RT position publication we anchored on
     int     playIter_   = 0;   // loop iteration the PLAYHEAD is in
     bool    running_    = false;
 
