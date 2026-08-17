@@ -105,10 +105,18 @@ public:
     // Frames recorded so far — a cheap poll that does not copy the samples.
     std::size_t capturedFrames() const;
 
-    // Drop the recording. Called by startOutput() so that captured frame 0 is
-    // always the first frame of the CURRENT playback session: a case that plays,
+    // Drop the recording. Called by openDevice() so that captured frame 0 is
+    // always the first frame of the CURRENT DEVICE session: a case that plays,
     // edits, and plays again wants the second pass, and would otherwise have to
     // do arithmetic over the first one.
+    //
+    // It was the PLAYBACK session until proposal 21 L1a. The two were the same
+    // thing until the live lane made the device outlive the transport (design
+    // D5): with a track armed, Stop leaves the device open and Play starts a
+    // second frozen-lane run on it, which must NOT erase what the monitored
+    // input recorded in between. With no live lane the device still opens at
+    // play and closes at stop, so every existing dump-playback-capture case
+    // sees exactly the recording it saw before.
     void clearCapture();
 
     // A COPY of the block log, under the same lock and for the same reason as
