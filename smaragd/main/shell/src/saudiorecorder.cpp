@@ -176,7 +176,7 @@ bool SAudioRecorder::start()
         return false;
     }
 
-    // 3. THE FILES: one per armed track, named by wall clock, written where a
+    // 2. THE FILES: one per armed track, named by wall clock, written where a
     //    test can find them and where a -j run cannot collide (the test output
     //    dir when there is one, then the project's own directory).
     QString dir = app_->testOutputDir();
@@ -208,7 +208,8 @@ bool SAudioRecorder::start()
         return false;
     }
 
-    // 4. THE PLACEMENT TERMS that are known now. P0 arrives with the anchor.
+    // 3. THE PLACEMENT TERMS that are known now. P0 and the output latency
+    //    both arrive with the anchor (see tryAnchor_).
     placement_.inputLatencyProj = (std::int64_t)
         ( (double) bridge_->inputLatencyFrames() * projectRate_()
           / (double) ( bridge_->inputRate() ? bridge_->inputRate() : 48000u )

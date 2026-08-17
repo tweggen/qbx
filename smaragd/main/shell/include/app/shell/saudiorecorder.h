@@ -34,21 +34,27 @@ class CaptureBridge;
  *
  * WHAT IT DOES, in order.
  *
- * START (`start()`):
- *   1. collect the armed tracks; refuse if there are none;
- *   2. `SApplication::setPlaying(true)` — the transport funnel, so the MIDI-out
- *      pump, the automation recorder and the live monitor all learn that the
- *      transport started (design D7: "`startRecording` goes through
- *      `setPlaying()`"). `locatorHeldElsewhere()` is retired with it: the
- *      OUTPUT publication is the playhead authority in every mode;
- *   3. take a hold on `SLiveMonitor`'s bridge — THE app's one input pump — and
- *      open a capture SEGMENT on it with one WAV sink per armed track;
+ * START (`start()`), and the ORDER is load-bearing:
+ *   1. collect the armed tracks (refuse if there are none) and take a hold on
+ *      `SLiveMonitor`'s bridge - THE app's one input pump - resolving the
+ *      device name the way the monitor does;
+ *   2. open a capture SEGMENT on it, with one WAV sink per armed track;
+ *   3. compute the placement terms that are knowable now (`P0` and the output
+ *      latency both arrive with the anchor);
  *   4. put a GROWING CLIP on each armed track: one `SRecordingContent` over
  *      the segment's pages, one `SCut` per track, one `SLink` at the record
- *      start. Direct model mutation, deliberately NOT an action — like
+ *      start. Direct model mutation, deliberately NOT an action - like
  *      auto-disarm, it is transient UI state that the ONE undoable step at
  *      stop replaces;
- *   5. start a 100 ms tick.
+ *   5. LAST, and only after `active_` is set:
+ *      `SApplication::setPlaybackRunning(true)` - the transport funnel, so the
+ *      MIDI-out pump, the automation recorder and the live monitor all learn
+ *      that the transport started (design D7: "`startRecording` goes through
+ *      `setPlaying()`"). It is last because monitor AUTO is "input while
+ *      stopped OR RECORDING" (design D9): the plan has to be built with
+ *      `isRecordingActive()` already true, or plain Play would take the input
+ *      away from the take. `locatorHeldElsewhere()` is retired with it: the
+ *      OUTPUT publication is the playhead authority in every mode.
  *
  * TICK (`poll()`), three jobs, in this order:
  *   - ANCHOR. Until the engine clock has published since the run began, the
