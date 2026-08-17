@@ -58,7 +58,9 @@ namespace {
 // Outcome of probing ONE module. Unavailable is not a plugin verdict: it says
 // the out-of-process probe could not be run at all, so the caller falls back
 // in-process rather than caching a bogus failure for every module on disk.
-enum class ProbeOutcome { Ok, Failed, Timeout, Unavailable };
+// Cancelled is not a verdict either — the module was never judged, so it must
+// not become a record of ANY kind, least of all a sticky failure.
+enum class ProbeOutcome { Ok, Failed, Timeout, Unavailable, Cancelled };
 
 // In-process probe. Safe against a corrupt or foreign file (the loader refuses
 // it and logs), NOT safe against a plugin that crashes while being created —
@@ -113,11 +115,18 @@ std::vector<twPluginDescriptor> parseProbeJson( const QByteArray &raw,
     return out;
 }
 
+// How long one slice of the probe wait is. The cancel flag is checked once per
+// slice, so this is the worst-case latency of a cancel that lands while a probe
+// is in flight — teardown must not have to wait out a 15 s probe timeout to
+// find out that it was asked to stop.
+constexpr int kProbeWaitSliceMs = 100;
+
 // Out-of-process probe. A plugin that segfaults or hangs while being
 // instantiated takes down the PROBE, and becomes a cached failed/timeout record
 // — the app never sees it. This is proposal 08 §Decisions 2.
 ProbeOutcome probeOutOfProcess( const twPluginModuleFile &m,
                                 const std::string &probeExe, int timeoutMs,
+                                const std::atomic<bool> &cancel,
                                 std::vector<twPluginDescriptor> &out )
 {
     out.clear();
@@ -137,12 +146,29 @@ ProbeOutcome probeOutOfProcess( const twPluginModuleFile &m,
         return ProbeOutcome::Unavailable;
     }
 
-    if( !p.waitForFinished( timeoutMs ) ) {
-        p.kill();
-        p.waitForFinished( 2000 );
-        TW_LOGW( "plugins", "[scan] probing '%s' timed out after %d ms; recording it "
-                 "as a skipped module", m.path.c_str(), timeoutMs );
-        return ProbeOutcome::Timeout;
+    // Sliced rather than one waitForFinished( timeoutMs ), so a cancel arriving
+    // mid-probe is honoured in ~kProbeWaitSliceMs instead of after the full
+    // probe budget. The child is killed on the way out: an orphaned probe
+    // process outliving the app is exactly what crash isolation must not cost.
+    int waited = 0;
+    while( !p.waitForFinished( kProbeWaitSliceMs ) ) {
+        // waitForFinished() also answers false for a process that has ALREADY
+        // finished, so the state — not the return value — is what says whether
+        // there is still something to wait for.
+        if( p.state() == QProcess::NotRunning ) break;
+        if( cancel.load( std::memory_order_acquire ) ) {
+            p.kill();
+            p.waitForFinished( 2000 );
+            return ProbeOutcome::Cancelled;
+        }
+        waited += kProbeWaitSliceMs;
+        if( waited >= timeoutMs ) {
+            p.kill();
+            p.waitForFinished( 2000 );
+            TW_LOGW( "plugins", "[scan] probing '%s' timed out after %d ms; recording it "
+                     "as a skipped module", m.path.c_str(), timeoutMs );
+            return ProbeOutcome::Timeout;
+        }
     }
 
     if( p.exitStatus() != QProcess::NormalExit ) {
@@ -276,10 +302,12 @@ bool twPluginRegistry::rescanAsync( bool force )
         delete scanThread_;
         scanThread_ = nullptr;
     }
-    // Set BEFORE start(), so a caller that polls isScanning() immediately after
-    // rescanAsync() cannot observe "already finished" before the thread runs.
+    // Both set BEFORE start(), so a caller that polls isScanning() immediately
+    // after rescanAsync() cannot observe "already finished" before the thread
+    // runs — and so the worker never clears a cancel that arrived after it.
     scanning_.store( true, std::memory_order_release );
-    scanThread_ = QThread::create( [this, force]() { this->rescan( force ); } );
+    scanCancel_.store( false, std::memory_order_release );
+    scanThread_ = QThread::create( [this, force]() { this->rescanImpl( force, false ); } );
     scanThread_->setObjectName( "smaragd-plugin-scan" );
     scanThread_->start();
     return true;
@@ -294,8 +322,21 @@ void twPluginRegistry::waitForScan()
     scanThread_ = nullptr;
 }
 
+void twPluginRegistry::cancelScan()
+{
+    scanCancel_.store( true, std::memory_order_release );
+}
+
 void twPluginRegistry::rescan( bool force )
 {
+    // A direct call is an explicit new scan, so it owns the cancel flag.
+    rescanImpl( force, true );
+}
+
+void twPluginRegistry::rescanImpl( bool force, bool clearCancel )
+{
+    if( clearCancel ) scanCancel_.store( false, std::memory_order_release );
+
     scanning_.store( true, std::memory_order_release );
     ScanFlagGuard flagGuard{ scanning_ };
 
@@ -359,7 +400,22 @@ void twPluginRegistry::rescan( bool force )
     std::vector<twPluginDescriptor>            found;
     bool probeUsable = !probeExe.empty();
 
+    // Cancellation, checked here and once per probe slice. Nothing about a
+    // cancelled scan is published: the plugin list keeps whatever the last
+    // COMPLETE scan produced, and the cache file on disk is left exactly as it
+    // was. The registry stays usable, and the next rescan starts clean.
+    const auto cancelled = [this]() {
+        return scanCancel_.load( std::memory_order_acquire );
+    };
+    const auto bailOut = [&]( const char *where ) {
+        std::lock_guard<std::mutex> g( mutex_ );
+        stats_.running = false;
+        TW_LOGI( "plugins", "[scan] cancelled %s — the cache is left untouched and "
+                 "the registry keeps its previous plugin list", where );
+    };
+
     for( const twPluginModuleFile &m : mods ) {
+        if( cancelled() ) { bailOut( "between modules" ); return; }
         st.currentPath = m.path;
         {
             std::lock_guard<std::mutex> g( mutex_ );
@@ -397,15 +453,22 @@ void twPluginRegistry::rescan( bool force )
 
         ProbeOutcome po = ProbeOutcome::Unavailable;
         if( probeUsable ) {
-            po = probeOutOfProcess( m, probeExe, timeoutMs, rec.plugins );
+            po = probeOutOfProcess( m, probeExe, timeoutMs, scanCancel_, rec.plugins );
+            if( po == ProbeOutcome::Cancelled ) { bailOut( "mid-probe" ); return; }
             if( po == ProbeOutcome::Unavailable ) {
                 // A probe that will not start will not start for the next
                 // module either; stop paying 5 s per module for it.
                 probeUsable = false;
             }
         }
-        if( po == ProbeOutcome::Unavailable )
+        if( po == ProbeOutcome::Unavailable ) {
+            // The in-process fallback loads foreign code on THIS thread and
+            // cannot be interrupted part-way, so the last chance to notice a
+            // cancel is before it starts. The bounded wait in waitForScan() is
+            // what covers a module that never returns from here.
+            if( cancelled() ) { bailOut( "before an in-process probe" ); return; }
             po = probeInProcess( m, rec.plugins );
+        }
 
         ++st.modulesProbed;
         switch( po ) {

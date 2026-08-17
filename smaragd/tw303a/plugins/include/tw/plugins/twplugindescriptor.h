@@ -109,7 +109,25 @@ public:
     // Start a scan on a worker QThread. Returns false if one is already
     // running. A QThread (not a raw std::thread) deliberately: the scan uses
     // QProcess and QJson, and a std::thread adopted by Qt deadlocks teardown.
+    //
+    // It CLEARS any pending cancellation before starting: a cancel belongs to
+    // the scan that was running when it was asked for, never to the next one.
     bool rescanAsync( bool force = false );
+
+    // Ask a running scan to stop at the next module boundary (and to kill the
+    // probe process it is currently waiting on). Shutdown is the only caller
+    // that matters: without it, teardown could do nothing but wait out a full
+    // re-probe of every plugin installed on the machine.
+    //
+    // Cheap and idempotent; safe from any thread. A scan that is already
+    // finished ignores it, and the flag is cleared by the next rescanAsync()
+    // or rescan().
+    //
+    // A cancelled scan does NOT write the cache file. The table it has is
+    // partial, and the one caller is a process on its way out — writing from
+    // there is the kind of teardown-time I/O this whole fix exists to avoid.
+    void cancelScan();
+    bool scanCancelled() const { return scanCancel_.load( std::memory_order_acquire ); }
 
     bool isScanning() const { return scanning_.load( std::memory_order_acquire ); }
     void waitForScan();
@@ -132,6 +150,12 @@ public:
 private:
     void appendBuiltins_nolock();
 
+    // The scan body. clearCancel is false for the call rescanAsync() makes:
+    // it has ALREADY cleared the flag, before start(), so clearing it again
+    // from the worker would silently swallow a cancel that arrived in between
+    // — which is exactly the teardown race this exists to survive.
+    void rescanImpl( bool force, bool clearCancel );
+
     mutable std::mutex              mutex_;         // guards everything below
     std::vector<twPluginDescriptor> plugins_;
     std::vector<std::string>        searchPaths_;
@@ -144,6 +168,7 @@ private:
     twPluginScanProgressFn          progress_;
 
     std::atomic<bool>               scanning_{ false };
+    std::atomic<bool>               scanCancel_{ false };
     mutable std::mutex              threadMutex_;   // guards scanThread_ only
     QThread                        *scanThread_ = nullptr;
 };
