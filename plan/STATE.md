@@ -12100,3 +12100,82 @@ family: `~SProject`'s survivor pass missed `STrack`'s owned-but-unparented
 `cpPluginChainRef_` link — see the entry above). Gate: build clean, layering +
 logging clean, `ctest -j4` 171/171 twice (174 registered, 3 `au_*` disabled),
 `clip_properties_actions` 40/40 at workers 16 and 8, siblings 20/20.
+
+
+## 2026-08-17 — Proposal 37: stereo gates
+
+Proposal 37's instrument and automation phases (P3a/P3b/P3c/P5/P6) were designed
+and built while the sink was still mono, so every audio assertion they shipped
+reads CHANNEL 0 and each of the instrument cases carries the line "STEREO IS NOT
+GATED (proposal 36 B5)". 36-B5 landed on 2026-08-16: `RenderSession` writes the
+project's full width and `L != R` on a FILE is a legitimate claim. Two new cases
+close the gap; **no engine file was touched.**
+
+**`instrument_stereo_render.qxa`** walks the generator mapping rows of
+`twPluginSlotProcessor` (plugins inv. 16) per channel, out of rendered files:
+
+| project | plugin | row | what is asserted |
+|---|---|---|---|
+| channels=2 | `tw.test.clap.sine` (0 in / 2 out) | `DirectGen` | skew OFF: ch0 = ch1 = 0.556689 and `assert-channels-differ` is REJECTED (the default is unchanged, and channel 1 is real audio rather than silence). Skew ON: ch0 0.556689, ch1 0.278345, delta and rms(ch0-ch1) both 0.278 |
+| channels=1 | the same | `GenFold` | 0.417517 = 0.75 × the closed form, i.e. `0.5*(out0 + out1)`; the un-folded 0.556689 is asserted to be REJECTED, and channel 1 of the file does not exist |
+| channels=6 | the same | REFUSED (`Transparent` + `Unsupported`) | 2 outputs is neither 6, nor 1, nor "2 on a mono page", nor wider than the page — "no defined spread, so refuse rather than guess". Silent on channels 0/1/5, channel 6 rejected (a genuinely six-channel file) |
+| channels=2 | `tw.native.303` (0 in / 1 out) | `MonoSpread` | rms 0.178478 on ch0 AND ch1, fundamental in band on ch1, and `assert-channels-differ` REJECTED — equal channels are the RIGHT answer for a centre-panned mono voice, which is the trap the case is written around |
+
+**WideGen is NOT reachable from a script and stays engine-level only.** It is
+`0 -> M with M > C`, and the GenFold row (`0 -> 2 on C == 1`) is tested first, so
+a 2-output instrument can never take it; reaching it needs an instrument with at
+least three MAIN outputs and no in-repo fixture has one. It remains gated by
+`test_plugin_insert.cc`'s synthetic 0-in/4-out plugin.
+
+**`automation_stereo.qxa`** does the same for P5's two consumers, over
+`test_stereo.wav`'s 6 dB ladder (the only fixture that can carry the claim —
+`test_sawtooth.wav`'s channels are byte-identical): a `self:Volume` ramp of
+-45 dB → 0 dB over 144000 frames read per second on channel 0 (0.008372 /
+0.047079 / 0.264745) AND channel 1 (0.004186 / 0.023539 / 0.132371), each ±3 %
+and each a closed form scaled by the ladder, with the ratio between neighbouring
+seconds 5.6234; the image surviving the ramp (`assert-channels-differ` at second
+2); and a `param:0` step 0.5 → 1.0 at frame 70000 on `tw.test.clap.stereoskew`
+moving BOTH channels (0.25 → 0.5 and 0.0625 → 0.125) while keeping the skew's
+ratio of 4, plus render-vs-render byte identity.
+
+**One fixture change, and it is off by default.** `tw.test.clap.sine` wrote the
+SAME sample to every main channel, which cannot distinguish a wide sink from one
+duplicating channel 0. It now carries **param id 3, "Stereo Skew", stepped,
+default 0 = OFF**; ON, channels 1.. of the main bus are at half amplitude. Off,
+the DSP is instruction-for-instruction what it was, and the state blob still
+writes 8 bytes (the second double is appended only when the skew is set, exactly
+as the gain fixture's clip threshold is), so nothing that existed before moved.
+
+**A trap the case documents rather than fixes:** `set-project-channels`
+re-derives the slot's mapping and re-deriving RE-INSTANTIATES the plugin
+(`SPluginSlot::ensureChannels`), which re-applies `bypass_` and `savedState_` —
+but NOT a live `set-plugin-param` edit. The case therefore re-sets the skew after
+every width change; a case that did not would silently measure a default-off
+instrument and pass its "the channels are equal" half.
+
+**Caveats retired** (one line each, pointing at the new cases): plugins
+CONTRACT inv. 16 + inv. 37 + the "THE SINK IS NO LONGER MONO" block;
+`main/objects/track/CONTRACT.md` gates list and inv. 12's `self:Pan` reason
+(the sink being narrow is no longer why pan is absent — the pan itself is
+unbuilt); the "STEREO IS NOT GATED" headers of `instrument_sine_render.qxa`,
+`instrument_folder_drums.qxa` and `instrument_locate_continuity.qxa`;
+proposal 37 §9.1 and §12, the orchestration's P3b "Not gated" bullet and the
+P3b/P5 tracker rows; CLAUDE.md's multichannel, automation and fixture sections.
+
+**Gates.** Build clean; `check_layering.py` and `check_logging.py` clean;
+**`ctest -j4`: 173/173 passed, 0 failed, 176 registered** (174 + the 2 new
+cases), 3 `au_*` disabled off macOS, in 60.4 s. Both new cases were also proved
+able to FAIL: asserting channel 1 at channel 0's level (i.e. the wrong ratio)
+turns each of them red, and the wrong assertion was not committed. Goldens
+(`mc_golden_mono`, `mc_golden_stereo`) byte-identical, `plugins_test`,
+`plugins_scan_test` and every `plugin_*` case green — the fixture parameter
+defaults OFF, so the pre-existing renders are unchanged by construction.
+**NOT gated:** WideGen from a script (see above); pan (there is none); real
+third-party instruments; playback-vs-render channel identity (the capture
+backend records the monitor path, which `twSpeaker` deliberately folds to
+stereo). One flake seen ONCE, on the first `-j4` run after the fixture DLL was
+rebuilt — `instrument_sine_render` + `instrument_render_determinism{,_xproc}` +
+`instrument_locate_continuity` failed together, consistent with four processes
+racing to rewrite a `plugincache.json` invalidated by the new mtime/size; not
+reproduced in four subsequent `-j4` sweeps of the same subset or in the full
+run, and unrelated to the case content.
