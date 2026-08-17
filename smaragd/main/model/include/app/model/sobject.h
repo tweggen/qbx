@@ -446,9 +446,19 @@ public:
         { return muted_; }
     bool isArmedForRecording() const
         { return armed_; }
-    // Recording channel selection (bitmask: 0 = all channels, 1<<n = channel n)
+    // Recording channel selection (bitmask: 0 = all channels, 1<<n = channel n).
+    // The DEFAULT is bit 0 — the interface's first input only. It used to be 0
+    // ("all"), which on a 16-input interface wrote a 16-channel file with the
+    // signal in channel 0 and a dither floor in 1..15; since proposal 36 B3 a
+    // reader keeps its file's width, so a 2-channel track then took channel 1
+    // of that file and played a dead right speaker (see
+    // plan/todo/RECORDING_CHANNEL_COUNT.md). "All Channels" stays reachable
+    // from the ARM button's right-click menu for a live multitrack capture.
     uint32_t getRecordingChannels() const
         { return recordingChannels_; }
+    // Written to the project file only when it differs from this, so projects
+    // saved before the selection was serialized stay byte-unchanged.
+    static constexpr uint32_t DEFAULT_RECORDING_CHANNELS = 1u;
     double getVolume() const
         { return volume_; }
     double getPan() const
@@ -779,9 +789,10 @@ private:
     bool armed_;
     int editGroup_ = 0;   // 0 = ungrouped (proposal 17 phase 4)
     double volume_;
-    // Recording channel selection: bitmask of channels (bit 0 = ch 0, etc)
-    // 0 means "all channels" (default). Set via setRecordingChannels().
-    uint32_t recordingChannels_ = 0;
+    // Recording channel selection: bitmask of channels (bit 0 = ch 0, etc).
+    // 0 means "all channels"; the default is the first input alone — see
+    // getRecordingChannels(). Set via setRecordingChannels().
+    uint32_t recordingChannels_ = DEFAULT_RECORDING_CHANNELS;
 
     // Thread-safe state: audio thread may read volume while UI thread modifies it.
     // Made public so preview rendering can snapshot the volume safely.

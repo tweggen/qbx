@@ -1,8 +1,23 @@
 # The recorder writes the INPUT DEVICE's channel count (found 2026-08-17)
 
-> **Status: OPEN.** Diagnosed from a real user project, not from reading code.
-> The fix is deliberately not attempted here — it needs a product decision (see
-> §4). Written as a handoff so whoever picks it up starts from evidence.
+> **Status: PARTLY ADDRESSED (2026-08-17).** The product decision in §4 was
+> taken: **option 1, default a track to the first input channel**, plus the
+> serialization §4 called non-optional. `SObject::DEFAULT_RECORDING_CHANNELS`
+> is `1` (bit 0), the mask round-trips through the project file as
+> `recordingChannels='…'` (written only when it differs from the default, so
+> older files stay byte-unchanged), the ARM tooltip shows the selection from
+> the start, and un-checking the LAST channel is refused rather than silently
+> meaning "all". "All Channels" stays reachable from the ARM right-click menu.
+>
+> **Still open:** §5 (existing 16-channel files on disk — no migration, and no
+> per-clip source-channel choice) and §6 (nothing in the suite records
+> anything; a wide-file-into-narrow-track fixture case is still missing). The
+> new **Cleanup...** item in the resources dock's context menu deletes unused
+> recordings from the project directory, which makes iterating on this
+> testable but is not a migration.
+>
+> Diagnosed from a real user project, not from reading code. Written as a
+> handoff so whoever picks it up starts from evidence.
 
 ## 1. The symptom, as reported
 

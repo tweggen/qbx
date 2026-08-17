@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include <algorithm>
+#include <cmath>
 
 #include <QtDebug>
 #include <qwidget.h>
@@ -89,11 +90,20 @@
 // secondary-click (right-click) key and the accessibility screen-zoom scroll key.
 static inline bool hasPrimaryMod( Qt::KeyboardModifiers m ) { return m & Qt::ControlModifier; }
 
+// The wheel response AT 100 % SENSITIVITY. SOpt::WheelSensitivityPct scales all
+// four together (see loadWheelConfig); these stay the reference point, so the
+// default feel is stated once and can still be read off here.
+//
 // Vertical wheel-scroll: angleDelta units accumulated before stepping one track
 // lane. A standard mouse notch is 120 units; at 600 that is one lane per 5 notches
 // — ~1/5 the previous per-event sensitivity — and it also tames trackpad / Magic
 // Mouse sub-notch deltas that used to jump a whole lane each.
 static constexpr int SMV_WHEEL_VSCROLL_STEP = 600;
+// Zoom is multiplicative, so its sensitivity is an EXPONENT rather than a factor:
+// n notches at s == 1 must be the same zoom as one notch at s == n, which only
+// pow() gives. 1.2x per notch on the time axis, 1.5x on track height.
+static constexpr double SMV_WHEEL_ZOOM_H_BASE = 1.2;
+static constexpr double SMV_WHEEL_ZOOM_V_BASE = 1.5;
 
 void SMVActualView::setSecondWidth( double w )
 {
@@ -721,7 +731,25 @@ void SMVActualView::ctGlobalShow()
         qGlobalPopup_->addAction( "Delete sample", &smv_, SLOT( ctDeleteSample() ) );
         qGlobalPopup_->addSeparator();
     }
-    qGlobalPopup_->addAction( smv_.actNewTrack_ );
+    // "New track" from THIS menu goes below the lane the menu was opened on —
+    // the menu is aimed at a position, and every other track item in it acts
+    // there. So it is built per show against lastClickTrack_ rather than
+    // reusing smv_.actNewTrack_, whose Ctrl+T path has no click to aim at and
+    // follows the selection instead. Built fresh each time like the other
+    // per-click items above; qGlobalPopup_->clear() owns and deletes it.
+    {
+        QAction *aNew = qGlobalPopup_->addAction( smv_.actNewTrack_->text() );
+        // Display only. WidgetShortcut binds it to the menu, which has focus
+        // only while it is up, so it can never go ambiguous with the view's
+        // window-level Ctrl+T.
+        aNew->setShortcut( smv_.actNewTrack_->shortcut() );
+        aNew->setShortcutContext( Qt::WidgetShortcut );
+        // By QPointer: the lane could in principle be gone by the time the
+        // action fires, and a dead reference just means "append".
+        const QPointer<STrack> ref( lastClickTrack_ );
+        QObject::connect( aNew, &QAction::triggered, this,
+                          [this, ref]() { smv_.addTrackBelow_( ref.data() ); } );
+    }
     if( lastClickTrack_ ) {
         // How many tracks the track items below will actually act on. The menu
         // says so out loud: an item that silently hits four lanes when the
@@ -916,7 +944,71 @@ void SStdMixerView::ctAddTrack()
 {
     // Route through the action: undoable, and it rewires the speaker so the new
     // track is audible (the old direct insertTrack did neither).
+    //
+    // The new track lands BELOW a reference lane, not at the bottom of the
+    // arrangement; on a long arrangement the append also put it off screen.
+    //
+    // THIS entry point is the Ctrl+T shortcut, which names no click, so the
+    // reference is the selection. The context menu does NOT come through here:
+    // it is aimed at a position and builds its own item against the lane it was
+    // opened on (see SMVActualView::ctGlobalShow).
+    addTrackBelow_( newTrackReference_() );
+}
+
+STrack *SStdMixerView::newTrackReference_() const
+{
+    if( !model_ ) return nullptr;
+    // The LAST selected lane by position, so Ctrl+T after selecting a block
+    // lands under the block rather than under whichever member was clicked.
+    // add-track SELECTS the track it just made, so repeated Ctrl+T walks
+    // downwards; keyed off a click that may be many gestures old, every new
+    // lane would pile into the same slot instead, in reverse order.
+    const QList<STrack *> sel = orderByLane( model_->getSelectedTracks() );
+    if( !sel.isEmpty() ) return sel.last();
+    // Nothing selected: fall back to the last lane the user aimed at. With
+    // neither there is nothing to be below, and addTrackBelow_ appends.
+    if( qContent_ ) return qContent_->getLastClickTrack();
+    return nullptr;
+}
+
+void SStdMixerView::addTrackBelow_( STrack *ref )
+{
+    if( !model_ ) return;
+
+    const QList<int> refPath = ref ? strackpath::pathOf( model_, ref )
+                                   : QList<int>();
+    if( refPath.isEmpty() ) {
+        // No reference, or one that is not in the tree: append, as before.
+        SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+        return;
+    }
+
+    QList<int> parentPath = refPath;
+    const int slot = parentPath.takeLast();   // ref's slot in its container
+
+    if( parentPath.isEmpty() ) {
+        // Top level. add-track takes a TRACK index and a path step is a CHILD
+        // index, but the root mixer holds nothing except tracks, so the two
+        // coincide there — which is what lets this be one action instead of a
+        // macro. (ctGroupTrack() leans on the same identity.)
+        SApplication::app().submitAction( new SAddTrackAction( slot + 1 ) );
+        return;
+    }
+
+    // NESTED: add-track can only append at the MIXER's top level, so the track
+    // is born there and moved into the reference's container — two actions
+    // wrapped in one undo step, the ctGroupTrack()/ctAddTrackBelowLast()
+    // pattern.
+    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
+    if( stack ) stack->beginMacro( "Add track" );
     SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+    // submitAction drains synchronously (Phase 1), so the new track is now the
+    // last top-level one. An APPEND at the top level shifts no existing index,
+    // so parentPath and slot are still the ones we measured.
+    const int newIdx = model_->getNTracks() - 1;
+    SApplication::app().submitAction( new SReparentTrackAction(
+        QList<int>{ newIdx }, parentPath, slot + 1 ) );
+    if( stack ) stack->endMacro();
 }
 
 /**
@@ -3836,6 +3928,38 @@ void SMVActualView::loadWheelConfig()
     wheelZoomToCursor_ = s.value( SOpt::ZoomToCursor,  SOpt::def( SOpt::ZoomToCursor ) ).toBool();
     wheelInvertZoom_   = s.value( SOpt::InvertZoom,    SOpt::def( SOpt::InvertZoom ) ).toBool();
     followPlayhead_    = s.value( SOpt::FollowPlayhead, SOpt::def( SOpt::FollowPlayhead ) ).toBool();
+
+    // One sensitivity, four gestures. Clamped to the spin box's own range, which
+    // also catches a hand-edited INI: a zero or negative factor would divide the
+    // scroll threshold by zero and stall every gesture.
+    int pct = s.value( SOpt::WheelSensitivityPct,
+                       SOpt::def( SOpt::WheelSensitivityPct ) ).toInt();
+    pct = qBound( 10, pct, 500 );
+    wheelSensitivity_ = pct / 100.0;
+
+    // Scroll and pan are LINEAR in the gesture, so sensitivity divides the
+    // threshold / multiplies the step; zoom is multiplicative, so it raises the
+    // per-notch factor to the power (see the constants above).
+    //
+    // Each expression below is exact at 100 %: 100/100.0 is exactly 1.0, so the
+    // threshold rounds back to 600 and the two factors are handed back verbatim.
+    // The pow() calls are guarded by that equality rather than trusted, because
+    // pow(x, 1.0) returning exactly x is a quality-of-implementation property,
+    // not a guarantee — and "the default feel does not move" is the whole
+    // argument for shipping this option.
+    wheelVScrollStep_ = (int) std::lround( SMV_WHEEL_VSCROLL_STEP / wheelSensitivity_ );
+    if( wheelVScrollStep_ < 1 ) wheelVScrollStep_ = 1;
+    wheelZoomHFactor_ = ( wheelSensitivity_ == 1.0 )
+                        ? SMV_WHEEL_ZOOM_H_BASE
+                        : std::pow( SMV_WHEEL_ZOOM_H_BASE, wheelSensitivity_ );
+    wheelZoomVFactor_ = ( wheelSensitivity_ == 1.0 )
+                        ? SMV_WHEEL_ZOOM_V_BASE
+                        : std::pow( SMV_WHEEL_ZOOM_V_BASE, wheelSensitivity_ );
+
+    // The part-lane carried over from the old threshold means nothing under the
+    // new one — kept, it would cash in as a multi-lane jump on the first event
+    // after the setting was lowered.
+    wheelVScrollAccum_ = 0;
 }
 
 int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
@@ -3917,14 +4041,14 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
     switch( action ) {
 
     case SOpt::ScrollVertical: {
-        // Accumulate sub-notch deltas and step one lane per SMV_WHEEL_VSCROLL_STEP
+        // Accumulate sub-notch deltas and step one lane per wheelVScrollStep_
         // units, so a trackpad / Magic Mouse no longer jumps a whole lane per event
         // (~1/5 the old sensitivity). +delta = wheel up = scroll toward upper rows.
         if( smv_.qScrollVert_ ) {
             wheelVScrollAccum_ += dy;
-            int lanes = wheelVScrollAccum_ / SMV_WHEEL_VSCROLL_STEP;
+            int lanes = wheelVScrollAccum_ / wheelVScrollStep_;
             if( lanes != 0 ) {
-                wheelVScrollAccum_ -= lanes * SMV_WHEEL_VSCROLL_STEP;
+                wheelVScrollAccum_ -= lanes * wheelVScrollStep_;
                 smv_.qScrollVert_->setValue( smv_.qScrollVert_->value() - lanes );
             }
         }
@@ -3932,9 +4056,11 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
     }
 
     case SOpt::ScrollHorizontal: {
-        // Pan the timeline by ~1/8 of the visible span per notch.
+        // Pan the timeline by ~1/8 of the visible span per notch, scaled by the
+        // wheel sensitivity. The integer division stays FIRST so that at 100 %
+        // the scaling is a multiplication by exactly 1.0 of the very same value.
         offset_t span = getTimeOf( width() ) - getTimeOf( 0 );
-        offset_t step = span / 8;
+        offset_t step = (offset_t)( (double)( span / 8 ) * wheelSensitivity_ );
         if( step < 1 ) step = 1;
         offset_t cur = upperLeftOffset_;
         offset_t next = (dir > 0) ? ( cur > step ? cur - step : 0 )   // up = earlier
@@ -3946,7 +4072,7 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
     case SOpt::ZoomHorizontal: {
         bool in = (dir > 0);
         if( wheelInvertZoom_ ) in = !in;
-        double newW = secondWidth_ * ( in ? 1.2 : 1.0 / 1.2 );
+        double newW = secondWidth_ * ( in ? wheelZoomHFactor_ : 1.0 / wheelZoomHFactor_ );
         // anchorX < 0 = the pointer is not over the canvas (the gesture came
         // from the track-head column), so there is no time under it to hold
         // still: fall back to keeping the left edge, as zoom-to-cursor-off does.
@@ -3967,7 +4093,17 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
     case SOpt::ZoomVertical: {
         bool in = (dir > 0);
         if( wheelInvertZoom_ ) in = !in;
-        int h = in ? (trackHeight_ * 3) / 2 : (trackHeight_ * 2) / 3;
+        // Divide rather than multiply by the reciprocal on the way out: at the
+        // default 1.5 that reproduces the old (h*3)/2 and (h*2)/3 exactly, where
+        // h * (1.0/1.5) truncates one below on every h divisible by 3.
+        int h = in ? (int)( trackHeight_ * wheelZoomVFactor_ )
+                   : (int)( trackHeight_ / wheelZoomVFactor_ );
+        // Track height is an integer, so a gentle sensitivity can round back to
+        // where it started and the zoom simply stops responding. Move a pixel
+        // instead. Never reached at 100 % — the floor of 6 px is already past
+        // the point where 1.5x rounds to nothing.
+        if( in  && h <= trackHeight_ ) h = trackHeight_ + 1;
+        if( !in && h >= trackHeight_ ) h = trackHeight_ - 1;
         if( h < 6 ) h = 6;
         setTrackHeight( h );   // rebuilds the row geometry + the head column
         break;

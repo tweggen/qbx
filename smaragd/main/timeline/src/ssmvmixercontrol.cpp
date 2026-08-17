@@ -37,6 +37,7 @@
 #include "app/objects/track/ssettrackvolumeaction.h"
 #include "app/objects/track/seteditgroupaction.h"
 #include "app/objects/track/ssettrackmuteaction.h"
+#include "app/objects/track/ssettracknameaction.h"
 #include "app/objects/track/ssettracksoloaction.h"
 #include "app/model/seditgroups.h"
 #include "app/model/sobjectpath.h"
@@ -50,6 +51,10 @@
 #include "app/shell/sautomationrecorder.h"
 #include <QUndoStack>
 #include <QPair>
+
+// Defined next to setRecordingChannels(); declared here because the ctor seeds
+// the ARM tooltip from the track's current mask.
+static QString armTooltipFor( uint32_t channels );
 
 // The fader mapping now lives in app/timeline/sfadercurve.h, because the Track
 // Detail dock drives the same track volume and has to agree with this one.
@@ -482,6 +487,30 @@ void SSMVMixerControl::onArmedChanged( bool on )
     qArm_->setChecked( on );
 }
 
+void SSMVMixerControl::commitTrackName()
+{
+    if( !qTrkLabel_ ) return;
+    const QString typed = qTrkLabel_->text();
+    if( typed == tk_.getSName() ) return;   // no edit -> no undo entry
+
+    // Deliberately NOT over toggleTargets(): mute/solo/arm apply one boolean to
+    // every selected lane, but one typed string on four lanes would just give
+    // four identically-named tracks. A name is per-track.
+    // editingFinished also fires on the focus-out a head rebuild or a teardown
+    // causes, so the model may already be gone; there is nothing to commit
+    // against then.
+    SStdMixer *mixer = smv_.getModel();
+    const QList<int> path = mixer ? strackpath::pathOf( mixer, &tk_ )
+                                  : QList<int>();
+    if( path.isEmpty() ) {
+        // Not reachable from the mixer root (a head outliving its track, say):
+        // put the model's name back rather than dropping the edit silently.
+        qTrkLabel_->setText( tk_.getSName() );
+        return;
+    }
+    SApplication::app().submitAction( new SSetTrackNameAction( path, typed ) );
+}
+
 SSMVMixerControl::~SSMVMixerControl()
 {
     // Deletes all widgets by default
@@ -518,6 +547,21 @@ SSMVMixerControl::SSMVMixerControl(
     // Lose focus when Enter/Return is pressed
     QObject::connect( qTrkLabel_, &QLineEdit::returnPressed,
                       qTrkLabel_, &QLineEdit::clearFocus );
+    // ...and COMMIT the typed name. This field used to be wired to nothing at
+    // all: it was seeded from the model once and no edit ever reached it, so a
+    // rename was not saved, not undoable, and lost the next time the head was
+    // rebuilt. editingFinished covers both endings of the gesture — Enter (via
+    // the clearFocus above) and clicking away.
+    QObject::connect( qTrkLabel_, &QLineEdit::editingFinished,
+                      this, &SSMVMixerControl::commitTrackName );
+    // Keep the field honest about the model: an undo, a script or any other
+    // writer must show up here. Skipped while the user is typing, so a
+    // rebuild-triggered refresh cannot eat a half-entered name.
+    QObject::connect( &tk_, &SObject::sNameChanged,
+                      this, [this]( const QString &n ) {
+        if( qTrkLabel_ && !qTrkLabel_->hasFocus() && qTrkLabel_->text() != n )
+            qTrkLabel_->setText( n );
+    } );
 
     // Vertical fader, like a channel strip on a console. Works in tenths of a
     // dB; loud at the top (Qt vertical sliders put the maximum at the top).
@@ -673,6 +717,7 @@ SSMVMixerControl::SSMVMixerControl(
     qMute_->setChecked( tk_.isMuted() );
     qSolo_->setChecked( tk_.isSolo() );
     qArm_->setChecked( tk_.isArmedForRecording() );
+    qArm_->setToolTip( armTooltipFor( tk_.getRecordingChannels() ) );
     qTakes_->setChecked( smv_.isTrackTakesExpanded( &tk_ ) );
     qGroup_->setChecked( tk_.getEditGroup() != 0 );
     refreshAutomationButton();
@@ -790,8 +835,14 @@ void SSMVMixerControl::showChannelMenu()
                 // "All" mode: switch to single channel
                 channels = (1U << ch);
             } else {
-                // Toggle this channel
-                channels ^= (1U << ch);
+                // Toggle this channel. Un-checking the LAST one would land on
+                // mask 0, which does not mean "record nothing" — it means
+                // "record every input the interface has". Refuse instead:
+                // "All Channels" is its own menu entry and has to be chosen
+                // deliberately.
+                uint32_t toggled = channels ^ (1U << ch);
+                if( toggled == 0 ) return;
+                channels = toggled;
             }
             setRecordingChannels( channels );
         });
@@ -815,25 +866,36 @@ void SSMVMixerControl::showChannelMenu()
     menu.exec( QCursor::pos() );
 }
 
+// The ARM tooltip is the only place the input-channel selection is visible
+// without opening the right-click menu, so it is built from the mask in ONE
+// place and shown from the start — the default is no longer "all channels",
+// and a user who never opens that menu still has to be able to see which
+// input is being recorded.
+static QString armTooltipFor( uint32_t channels )
+{
+    QString tooltip = "Arm for Recording\n(Right-click to select input channels)";
+    if( channels == 0 ) {
+        tooltip += "\nSelected: All Channels";
+        return tooltip;
+    }
+    QString channelStr;
+    for( uint32_t ch = 0; ch < 32; ++ch ) {
+        if( channels & (1U << ch) ) {
+            if( !channelStr.isEmpty() ) channelStr += ", ";
+            channelStr += QString::number( ch + 1 );
+        }
+    }
+    tooltip += QString( "\nSelected: %1" ).arg( channelStr );
+    return tooltip;
+}
+
 void SSMVMixerControl::setRecordingChannels( uint32_t channels )
 {
     // Like ARM itself, this follows the selection: picking the input channels
     // for one armed lane out of several selected ones is never what was meant.
     for( STrack *t : toggleTargets() ) t->setRecordingChannels( channels );
 
-    // Update the ARM button tooltip to show selected channels
-    QString tooltip = "Arm for Recording\n(Right-click to select input channels)";
-    if( channels != 0 ) {
-        QString channelStr;
-        for( uint32_t ch = 0; ch < 32; ++ch ) {
-            if( channels & (1U << ch) ) {
-                if( !channelStr.isEmpty() ) channelStr += ", ";
-                channelStr += QString::number( ch + 1 );
-            }
-        }
-        tooltip += QString( "\nSelected: %1" ).arg( channelStr );
-    }
-    qArm_->setToolTip( tooltip );
+    qArm_->setToolTip( armTooltipFor( channels ) );
 }
 
 // Highlight follows the selection SET, not just the primary: with several

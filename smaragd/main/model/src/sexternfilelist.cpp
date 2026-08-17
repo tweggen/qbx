@@ -1,6 +1,8 @@
 
+#include <QContextMenuEvent>
 #include <QDebug>
 #include <QDrag>
+#include <QMenu>
 #include <QMimeData>
 #include <QPixmap>
 #include <QPainter>
@@ -149,6 +151,19 @@ void SExternFileList::startDrag(Qt::DropActions /*supportedActions*/)
     }
 
     drag->exec(Qt::CopyAction);
+}
+
+void SExternFileList::contextMenuEvent( QContextMenuEvent *event )
+{
+    // Deliberately a menu on the WIDGET, not on a row: "Cleanup..." acts on the
+    // project directory as a whole, so a right-click into the empty area below
+    // the last row has to offer it too.
+    QMenu menu( this );
+    QAction *cleanupAction = menu.addAction( tr( "Cleanup..." ) );
+    QAction *chosen = menu.exec( event->globalPos() );
+    if( chosen && chosen == cleanupAction ) {
+        emit cleanupRequested();
+    }
 }
 
 SExternFileItem::SExternFileItem( SExternFileList *parent, const SExternFile &ef )

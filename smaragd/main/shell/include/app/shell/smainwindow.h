@@ -221,6 +221,8 @@ protected slots:
     void undo();
     void redo();
     void showOptionsDialog();
+    // Opened from the resources dock's context menu (SExternFileList).
+    void showCleanupDialog();
 
     // Toolbar palette toggles (each submits the matching toggle action).
     void toggleSnapToGrid();
