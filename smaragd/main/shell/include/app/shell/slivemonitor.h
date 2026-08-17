@@ -94,6 +94,18 @@ public:
     /// (design D2). Also rebuilds, because the transport decides the feed
     /// policy and the automation hold.
     void transportChanged();
+    /**
+     * The transport is ABOUT to become `playing`, before twSpeaker::startOutput
+     * / stopOutput runs.
+     *
+     * The order is load-bearing, not cosmetic. `setPlaybackRunning` starts the
+     * readahead FIRST and flips `isPlaying_` after, so a rebuild driven by the
+     * flag alone would leave a track that monitor Auto is about to release
+     * still live-owned while the readahead was already freezing its chain -
+     * measured as six `liveOwnedRefusals` and six silent freezes. Releasing it
+     * BEFORE the frozen lane starts is what makes the Auto hand-over clean.
+     */
+    void transportAboutToChange( bool playing );
     void seeked();
 
     /// A render suspends every live lane for its duration and comes back as a
@@ -109,6 +121,12 @@ public:
     /// Peak of what the input actually delivered since the last read, 0..1.
     /// The pre-FX input meter (design D9); decays like every other meter.
     double inputPeak( const STrack *track ) const;
+    /// Freeze-path renders that arrived at a LIVE-OWNED processor and were
+    /// answered with silence (design D4). Process-wide. Surfaced here rather
+    /// than read straight off `twPluginSlotProcessor` because `app/testkit`
+    /// may not include `tw/plugins`, and one accessor beats widening a
+    /// module boundary for a counter.
+    static std::uint64_t liveOwnedRefusals();
     /// How many openLive() calls the speaker refused for a rate mismatch.
     std::uint64_t rateRefusals() const;
     /// Human-readable state for the head tooltip and the testkit.
@@ -120,7 +138,7 @@ private slots:
 
 private:
     SStdMixer *rootMixer() const;
-    void applyExclusion();                  // model flags -> mixer wiring
+    void applyExclusion( const SLiveClosure &affected );  // flags -> wiring
     void publishPlan( const SLiveClosure &closure, std::uint64_t flipEpoch,
                       std::uint64_t flipEpochPrime );
     std::uint64_t rootEpoch() const;
@@ -150,6 +168,9 @@ private:
     // Tracks whose ArmedForRecording came out of a file (design D9).
     std::vector<const STrack *> inertlyArmed_;
 
+    // >= 0 while a transport edge is in flight: the state the closure must
+    // be computed for, which is not yet the app's own flag.
+    int  pendingPlaying_ = -1;
     bool suspendedForRender_ = false;
     SLiveClosure suspended_;
     bool liveOpened_ = false;

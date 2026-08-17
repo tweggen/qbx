@@ -264,6 +264,37 @@ foreach(_serial midi_out_capture midi_out_chase_and_stop midi_out_loop_wrap
     endif()
 endforeach()
 
+# --- the live lane (proposal 21 L1b) -----------------------------------------
+#
+# All five PLAY (or monitor) in real time against a paced FILE INPUT and assert
+# what the capture backend was handed, so they are wall-clock tests in exactly
+# the sense the section above describes: RUN_SERIAL, and SMARAGD_CAPTURE_SPEED=1
+# spelled out rather than left to the default (the pacing is what makes a frame
+# count mean a wall-clock duration on both sides of the measurement).
+#
+# SMARAGD_AUDIO_INPUT_BACKEND has to be set HERE and not in the .qxa: the runner
+# reads it at the first createAudioInput() call, long after the script is
+# parsed, and there is no verb that could set it earlier. The paths are relative
+# to the shared WORKING_DIRECTORY (tests/cases), like every other fixture path
+# in a case. Both fixtures are committed and regenerable:
+# test_autosaw.wav by tests/tools/gen_auto_fixture.py, test_position.wav by
+# `gen_position_fixture --verify`.
+#
+# Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
+foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
+              render_while_armed)
+    if(TEST qxa.${_live})
+        set_tests_properties(qxa.${_live} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav")
+    endif()
+endforeach()
+if(TEST qxa.monitor_latency)
+    set_tests_properties(qxa.monitor_latency PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav")
+endif()
+
 # SMARAGD_CAPTURE_SPEED=1 is spelled out rather than left to the default: the
 # testkit maps a MIDI host time onto a project frame through the audio capture
 # backend's block log, and any other pacing changes what a project frame means

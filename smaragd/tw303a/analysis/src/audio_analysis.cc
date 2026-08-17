@@ -452,4 +452,63 @@ PositionDecode decodePositionAt(const std::string &filename,
     return out;
 }
 
+
+bool readAudioRegion(const std::string &filename, int64_t startFrame,
+                     int64_t frameCount, int channelIndex,
+                     std::vector<float> &out, int &sampleRate,
+                     std::string &error)
+{
+    out.clear();
+    sampleRate = 0;
+
+    SF_INFO sfInfo;
+    std::memset(&sfInfo, 0, sizeof(sfInfo));
+    SNDFILE *infile = sf_open(filename.c_str(), SFM_READ, &sfInfo);
+    if (!infile) {
+        error = std::string("Failed to open audio file: ") + sf_strerror(nullptr);
+        return false;
+    }
+    sampleRate = sfInfo.samplerate;
+    const int nch = sfInfo.channels > 0 ? sfInfo.channels : 1;
+
+    if (startFrame < 0) startFrame = 0;
+    if (startFrame >= sfInfo.frames) { sf_close(infile); return true; }
+    int64_t want = (frameCount < 0) ? (sfInfo.frames - startFrame)
+                                    : std::min<int64_t>(frameCount,
+                                                        sfInfo.frames - startFrame);
+    if (want <= 0) { sf_close(infile); return true; }
+    if (channelIndex >= nch) {
+        error = "Channel index out of range";
+        sf_close(infile);
+        return false;
+    }
+    if (sf_seek(infile, startFrame, SEEK_SET) < 0) {
+        error = "Seek failed";
+        sf_close(infile);
+        return false;
+    }
+
+    out.reserve((std::size_t) want);
+    std::vector<float> block((std::size_t) nch * 4096);
+    int64_t remaining = want;
+    while (remaining > 0) {
+        const sf_count_t chunk = std::min<int64_t>(remaining, 4096);
+        const sf_count_t got = sf_readf_float(infile, block.data(), chunk);
+        if (got <= 0) break;
+        for (sf_count_t i = 0; i < got; ++i) {
+            if (channelIndex >= 0) {
+                out.push_back(block[(std::size_t) (i * nch + channelIndex)]);
+            } else {
+                double acc = 0.0;
+                for (int c = 0; c < nch; ++c)
+                    acc += block[(std::size_t) (i * nch + c)];
+                out.push_back((float) (acc / nch));
+            }
+        }
+        remaining -= got;
+    }
+    sf_close(infile);
+    return true;
+}
+
 }  // namespace audio

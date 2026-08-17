@@ -94,7 +94,7 @@ std::uint64_t SLiveMonitor::rootEpoch() const
     return r ? r->contentEpochNow() : 0;
 }
 
-void SLiveMonitor::applyExclusion()
+void SLiveMonitor::applyExclusion( const SLiveClosure &affected )
 {
     SStdMixer *m = rootMixer();
     if( !m ) return;
@@ -104,7 +104,16 @@ void SLiveMonitor::applyExclusion()
     // freezes produce, and the pages already frozen still contain (or still
     // lack) the track (the mute precedent, sstdmixer.cpp).
     m->applyAudibility();
-    m->invalidateRenderPath();
+
+    // AND IT HAS TO BE PER MEMBER, not one call on the mixer. `SObject::
+    // invalidateRenderPath()` walks from the project ROOT and stales every
+    // chain CONTAINING the object it is called on - so calling it on the mixer
+    // stales the mixer and the root rewire and NOTHING BELOW THEM. The member
+    // tracks' own pages would keep being served, and a page frozen while the
+    // member was still live-owned is SILENCE for that track: measured as a
+    // folder that went quiet at the disarm and never came back.
+    for( STrack *t : affected.ordered ) t->invalidateRenderPath();
+    if( affected.ordered.empty() ) m->invalidateRenderPath();
 }
 
 void SLiveMonitor::retireClosureNodes( const SLiveClosure &closure )
@@ -263,8 +272,10 @@ void SLiveMonitor::refresh()
     SStdMixer *mixer = rootMixer();
     if( !mixer ) return;
 
+    const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
+                                                  : app_->isPlaying();
     const SLiveClosure want = sliveplan::computeClosure(
-        mixer, app_->isPlaying(), app_->isRecordingActive(), inertlyArmed_ );
+        mixer, playing, app_->isRecordingActive(), inertlyArmed_ );
 
     const bool sameSet = ( want.ordered == current_.ordered )
                          && ( want.sources == current_.sources );
@@ -282,14 +293,27 @@ void SLiveMonitor::refresh()
     for( STrack *t : current_.ordered )
         if( !want.contains( t ) ) leaving.ordered.push_back( t );
 
+    bool tailNow = false;
     if( !leaving.ordered.empty() ) {
         // A second disarm while a tail is in flight finishes the first one
         // synchronously: two overlapping tails would race over setLiveOwned.
         if( disarmTimer_->isActive() ) { disarmTimer_->stop(); finishDisarm(); }
 
         retireClosureNodes( leaving );
+        // OWNERSHIP IS RELEASED BEFORE THE RE-WIRE, and that order is the
+        // whole correctness of the hand-back.
+        //
+        // Releasing it AFTER looks safer and is wrong: the freeze path would
+        // regain the chain while the processors were still live-owned, the
+        // very next root page would be frozen as SILENCE for those tracks, and
+        // the epoch gate would flip the RT onto it - measured as a folder that
+        // went quiet for the whole tail. Releasing it here, while the
+        // exclusion is still applied, means no freeze can reach the chain yet
+        // (planPage skips a nulled plug), so the release is safe AND the first
+        // re-summed page carries real audio.
+        setClosureOwned( leaving, false );
         for( STrack *t : leaving.ordered ) t->setLiveOwnedLane( false );
-        applyExclusion();
+        applyExclusion( leaving );
         const std::uint64_t flipPrime = rootEpoch();
 
         // THE TAIL: the departing members are still rendered and still
@@ -298,7 +322,12 @@ void SLiveMonitor::refresh()
         // stops the moment the re-summed one lands (design D2).
         departing_ = current_;
         publishPlan( current_, 0, flipPrime );
-        disarmTimer_->start();
+        // THE TAIL IS ONLY FOR A HAND-BACK THAT SOMEBODY IS LISTENING TO.
+        // While the frozen lane is not PLAYING there is no root page being
+        // served, so there is nothing for the ring to cover and no reason to
+        // hold a processor the freeze path is about to want - and holding it
+        // is exactly what would count `liveOwnedRefusals` for no benefit.
+        tailNow = !app_->isPlaying();
     }
 
     // --- the ARM half ------------------------------------------------------
@@ -306,7 +335,17 @@ void SLiveMonitor::refresh()
     for( STrack *t : want.ordered )
         if( !current_.contains( t ) ) arriving.ordered.push_back( t );
 
+    // `current_` MUST be the new set before finishDisarm() runs: that function
+    // computes what is really gone as "departing minus current", and closes the
+    // device when `current_` is empty. Finishing the tail against the OLD set
+    // released nothing and left the device open - which then made every phase
+    // of a case share one capture session.
     current_ = want;
+
+    if( !leaving.ordered.empty() ) {
+        if( tailNow ) finishDisarm();
+        else          disarmTimer_->start();
+    }
 
     if( want.empty() ) {
         demandTimer_->stop();
@@ -319,11 +358,19 @@ void SLiveMonitor::refresh()
         retireClosureNodes( arriving );
         setClosureOwned( arriving, true );
         for( STrack *t : arriving.ordered ) t->setLiveOwnedLane( true );
-        applyExclusion();
+        applyExclusion( arriving );
     }
     const std::uint64_t flipEpoch = rootEpoch();
 
-    // 5. the device. openLive() REFUSES a device rate that is not the project
+    // 5. THE INPUT DEVICE, BEFORE the output one. The capture backend clears
+    //    its recording at DEVICE start, and FileAudioInput anchors its pacing
+    //    at startCapture(), so opening the input second would put a slice of
+    //    leading silence into every monitored recording and make it look like
+    //    monitoring latency. Opening it first costs nothing and makes
+    //    `assert-monitor-latency` measure the thing it is named after.
+    for( STrack *t : current_.sources ) ensureInput( t );
+
+    // 6. the output device. openLive() REFUSES a device rate that is not the project
     //    rate: the ring is stamped in PROJECT frames and the RT sums it
     //    straight into the device buffer, so the two only line up while the
     //    rates are equal. Refusing loudly beats monitoring at the wrong pitch.
@@ -344,13 +391,13 @@ void SLiveMonitor::refresh()
             // being heard from its own clips.
             for( STrack *t : current_.ordered ) t->setLiveOwnedLane( false );
             setClosureOwned( current_, false );
-            applyExclusion();
+            applyExclusion( current_ );
             current_ = SLiveClosure();
             return;
         }
     }
 
-    // 6. publish, then one explicit reposition.
+    // 7. publish, then one explicit reposition.
     publishPlan( current_, flipEpoch, 0 );
     if( pump_ ) pump_->requestReposition();
     if( !demandTimer_->isActive() ) demandTimer_->start();
@@ -367,22 +414,16 @@ void SLiveMonitor::finishDisarm()
         if( !current_.contains( t ) ) gone.ordered.push_back( t );
     departing_ = SLiveClosure();
 
-    // The plan that drops them has been published (or the pump stopped), so
-    // release ownership and let the frozen path have the chain back.
+    // The tail is over: the pump stops rendering the departing chain. Their
+    // ownership was already released when the disarm was requested, so there
+    // is nothing to hand back here - only the plan to drop.
     if( current_.empty() ) {
         stopPump();
     } else {
         publishPlan( current_, rootEpoch(), 0 );
         if( pump_ ) pump_->requestReposition();
     }
-    setClosureOwned( gone, false );
-
-    // The SECOND bump. A page frozen during the tail would have been SILENT
-    // for the departing track (the ownership guard answers silence and counts),
-    // and it would carry the current epoch, so it would be adopted as valid and
-    // the track would stay silent until the next unrelated edit. Staling it is
-    // what makes the overlap self-healing rather than audible.
-    if( SStdMixer *m = rootMixer() ) m->invalidateRenderPath();
+    setClosureOwned( gone, false );   // idempotent; the belt to the braces above
 
     if( current_.empty() ) {
         demandTimer_->stop();
@@ -395,8 +436,15 @@ void SLiveMonitor::finishDisarm()
     }
 }
 
+void SLiveMonitor::transportAboutToChange( bool playing )
+{
+    pendingPlaying_ = playing ? 1 : 0;
+    refresh();
+}
+
 void SLiveMonitor::transportChanged()
 {
+    pendingPlaying_ = -1;
     refresh();
     if( pump_ ) pump_->requestReposition();
 }
@@ -426,8 +474,9 @@ void SLiveMonitor::suspendForRender()
     stopPump();
     setClosureOwned( current_, false );
     for( STrack *t : current_.ordered ) t->setLiveOwnedLane( false );
+    SLiveClosure was = current_;
     current_ = SLiveClosure();
-    applyExclusion();
+    applyExclusion( was );
     demandTimer_->stop();
     demands_.clear();
     closeInputIfUnused();
@@ -503,6 +552,11 @@ double SLiveMonitor::inputPeak( const STrack *track ) const
         if( current_.sources[i] == track && sources_[i] )
             return sources_[i]->peekPeak();
     return 0.0;
+}
+
+std::uint64_t SLiveMonitor::liveOwnedRefusals()
+{
+    return audio::twPluginSlotProcessor::liveOwnedRefusals();
 }
 
 std::uint64_t SLiveMonitor::rateRefusals() const

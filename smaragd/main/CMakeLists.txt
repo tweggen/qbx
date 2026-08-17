@@ -322,6 +322,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertclipwindowaction.h
     testkit/include/app/testkit/sassertfileidenticalaction.h
     testkit/include/app/testkit/sassertlogaction.h
+    testkit/include/app/testkit/slivetestactions.h
     testkit/include/app/testkit/sassertsourcepositionaction.h
     testkit/include/app/testkit/sdragclipedgeaction.h
     testkit/include/app/testkit/seventuitestactions.h
@@ -354,6 +355,7 @@ set(APP_UI_FILES
     testkit/src/sassertclipwindowaction.cpp
     testkit/src/sassertfileidenticalaction.cpp
     testkit/src/sassertlogaction.cpp
+    testkit/src/slivetestactions.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/seventuitestactions.cpp

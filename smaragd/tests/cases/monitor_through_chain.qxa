@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L1b, AC1. AN INPUT IS HEARD THROUGH THE ARMED TRACK'S OWN
+  INSERT CHAIN, and monitor Auto is the tape machine.
+
+  This case runs with SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav and
+  SMARAGD_CAPTURE_SPEED=1 (set on the CTest entry - see smaragd/CMakeLists.txt).
+  FileAudioInput replays that WAV in 1024-frame blocks through a real capture
+  thread and ring, so the path under test is the production one: device ring ->
+  SLiveAudioInputSource::pull -> LiveGraphPump -> twLiveMixRing -> the RT
+  callback. The MEASUREMENT is the audio capture backend's own recording of
+  what the device was handed, which shares no code with any of that.
+
+  THE CLOSED FORM. test_autosaw.wav is a 480 Hz sawtooth of amplitude 0.4 whose
+  period is EXACTLY 100 frames (tests/tools/gen_auto_fixture.py), so its RMS is
+  0.4/sqrt(3) = 0.230940 with no window-length error at all. Through
+  tw.test.clap.gain at 0.5 that is 0.115470; bypassed, 0.230940. The +-3 % bands
+  below are those two numbers.
+
+  WHY EACH PHASE IS ITS OWN DEVICE SESSION. CaptureBackend clears its recording
+  at DEVICE start (proposal 21 L1a, testkit rule 1), and disarming the last live
+  lane closes the device. So a disarm between phases makes frame 0 of the next
+  dump the first frame of that phase - which is what lets every window below be
+  an absolute frame number instead of a wall-clock guess.
+-->
+<SActionScript version="1" name="monitor_through_chain">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: the armed one. Its chain is one gain insert. -->
+    <add-track index="-1"/>
+    <!-- Track 1: never armed. Six seconds of a 100 Hz sawtooth (amplitude
+         0.95, RMS 0.548) at -12 dB (x0.2512) = 0.1378, so it is audible
+         without swamping the monitored input. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="96000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-12"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.5"/>
+
+    <set-track-input trackPath="0" input="audio:file:3"/>
+
+    <!-- PHASE A: transport STOPPED, monitor Auto, gain 0.5. ................ -->
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="2100"/>
+    <dump-playback-capture filename="mon_a.wav" minFrames="72000"/>
+    <!-- 0.230940 * 0.5 = 0.115470, +-3 % -->
+    <assert-audio-energy filename="mon_a.wav" startFrame="48000" frameCount="24000"
+                         channel="0" minRms="0.11201" maxRms="0.11893"/>
+    <!-- The pre-FX input meter sees the raw sawtooth, peak 0.4. -->
+    <assert-input-meter trackPath="0" minPeak="0.35" maxPeak="0.45"
+                        contains="live=on"/>
+    <!-- Track 1 has six seconds of material and the transport is STOPPED, so
+         none of it may be in this recording: 0.1155 is the input alone. -->
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="500"/>
+
+    <!-- PHASE B: the same, with the insert BYPASSED. ...................... -->
+    <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="true"/>
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="2100"/>
+    <dump-playback-capture filename="mon_b.wav" minFrames="72000"/>
+    <!-- 0.230940, +-3 % -->
+    <assert-audio-energy filename="mon_b.wav" startFrame="48000" frameCount="24000"
+                         channel="0" minRms="0.22401" maxRms="0.23787"/>
+    <arm-track trackPath="0" armed="0"/>
+    <set-plugin-bypass trackPath="0" slotIndex="0" bypassed="false"/>
+    <wait-ms ms="500"/>
+
+    <!-- PHASE C: monitor AUTO + PLAY. Tape style: the input STOPS and the
+         track's own material takes over. ................................. -->
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="3000"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="mon_c.wav" minFrames="48000"/>
+    <!-- Track 1's clip at -12 dB is 0.1378; the input at 0.1155 (gain 0.5) is
+         GONE. The band excludes both the sum (0.1794) and the input alone. -->
+    <assert-audio-energy filename="mon_c.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.115" maxRms="0.160"/>
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="500"/>
+
+    <!-- PHASE D: monitor ON + PLAY. The clip appears AND the input keeps
+         sounding through the insert. ..................................... -->
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="3000"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="mon_d.wav" minFrames="48000"/>
+    <!-- sqrt(0.1378^2 + 0.1155^2) = 0.1798 for two uncorrelated sources; the
+         band is deliberately wide enough to survive their phase relationship
+         and narrow enough to exclude either one alone. -->
+    <assert-audio-energy filename="mon_d.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.163" maxRms="0.200"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- AC6: nobody rendered where they were not allowed to. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -777,6 +777,10 @@ void SApplication::liveLanesChanged()
 
 void SApplication::setPlaybackRunning( bool play )
 {
+    // BEFORE the frozen lane moves (see SLiveMonitor::transportAboutToChange):
+    // startOutput() starts the readahead immediately, and a track that monitor
+    // Auto is about to release must stop being live-owned first.
+    if( liveMonitor_ ) liveMonitor_->transportAboutToChange( play );
     if( !t3Speaker_ ) return;
     if( play ) {
         // Run barrier immediately before startOutput(), which performs the
