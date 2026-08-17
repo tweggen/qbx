@@ -2,15 +2,23 @@
 
 Purpose: realtime playback. twSpeaker (device lifecycle state machine +
 render callback), AudioEngine (graph pull, loop boundaries, device-rate
-resampling), readahead buffering.
+resampling), readahead buffering, and — since proposal 21 L1a — THE LIVE LANE:
+the LiveGraphPump, the position-stamped ring the RT sums, the live clock and
+the immutable live plan.
 
 Public headers: twspeaker.h, audio_engine.h, playback_context.h (the
-app-implemented services interface). audio_readahead.h retired at proposal 36
+app-implemented services interface), twliveclock.h, twlivering.h, twliveplan.h,
+twlivepump.h. audio_readahead.h retired at proposal 36
 B5: AudioReadaheadBuffer was a std::deque<AudioFrame> with no callers anywhere
 in the tree, and AudioFrame -- whose MAX_CHANNELS == 2 was the engine's hard
 stereo cap -- went with it.
 
-Depends on: tw/core, tw/pages, tw/graph, tw/devices, tw/sources (resampler).
+Depends on: tw/core, tw/pages, tw/graph, tw/devices, tw/sources (resampler),
+tw/schedule, and — since proposal 21 L1a — tw/plugins and tw/mix. The pump
+renders a live-owned track BLOCK-WISE, outside the frozen-page machinery, and
+the three pieces of the graph that survive block-wise are exactly
+twPluginSlotProcessor::render, twGainStage::applyGain and twRewire's channel
+map. Neither module depends on playback, so the DAG stays acyclic.
 Forbidden: tw/sinks (nothing here writes files), app headers — all app
 knowledge flows through audio::PlaybackContext.
 
@@ -79,9 +87,81 @@ Invariants:
    buffer; sharing one across channels would smear them together. The vector is
    sized in configureResampling(), never on the RT path.
 
+11. THE TWO-LANE MACHINE (proposal 21 L1a, design D5). Three independent axes:
+    device {CLOSED, OPEN} x frozen {IDLE, BUFFERING, PLAYING} x live {OFF, ON},
+    and
+
+        out = (frozen == PLAYING ? root : 0) + (live == ON ? ring : 0)
+
+    - `openLive()` opens the device AND starts the backend immediately: there is
+      no readahead behind a live lane and nothing to buffer, so the performer
+      hears the input the moment they arm.
+    - `startOutput()` ATTACHES when the device is already open — no second
+      openDevice (which would clear a capture backend's recording), no second
+      setRenderCallback. The callback is registered ONCE, by ensureDeviceOpen().
+    - The readahead priming gates THE FROZEN LANE'S PLAYING and never the ring.
+    - `stopOutput()` stops the LANE only while live is ON; the device stays open
+      and the callback keeps summing the ring.
+    - `closeLive()` closes the device iff the frozen lane is idle. The PUMP must
+      already be stopped — the app owns it, and closing under a running producer
+      would leave it writing into a ring nobody drains.
+    - With live OFF every path is exactly what it was: Play opens, priming
+      defers the backend start, Stop closes.
+
+12. THE ENGINE HANDLE IS READ AND WRITTEN ATOMICALLY. A new AudioEngine can now
+    be minted while the callback is RUNNING (Play attaching to a device the live
+    lane opened), so `audioEngine_` is accessed through std::atomic_load /
+    std::atomic_store everywhere. engineMutex_ stays a LEAF and is never taken
+    by the callback. Before L1a a plain assignment was safe only because the
+    device could not be running yet.
+
+13. RING ENTRIES ARE POSITION-STAMPED AND EPOCH-TAGGED, and the RT sum is a PURE
+    FUNCTION (`twlive::mixRing`, extracted for the same reason
+    `twmonitor::pullChannels`/`interleave` are). An entry is summed only when
+      (a) its startPos is the frame being delivered — a mismatch is a counted
+          DROP, never an approximation; and
+      (b) the served root page's contentEpoch >= the entry's `flipEpoch` (ARM:
+          a stale root still CONTAINS the armed track, so summing would double
+          it), or, on the DISARM mirror, still < `flipEpochPrime` (a stale root
+          still LACKS the track, so the ring keeps filling the hole).
+    While STOPPED there is no root page and the ring is the only position
+    authority: out = ring. A 2-3 ms crossfade smooths both flips.
+    `AudioEngine::servedContentEpoch()` publishes (b)'s number: it is the page
+    the RT is already holding, never a second lookup.
+
+14. THE LIVE CLOCK IS ENGINE-OWNED (twliveclock.h). A seqlock stamped by the
+    render callback beside publishPosition() with
+    `{seq, deliveredFrame = published - bufferFramesProject, hostNs}`. NOT
+    PlaybackContext (app-implemented, UI-thread locatorPosition) and not
+    SApplication (unreachable from tw/). The publish-lag correction is applied
+    ONCE, here, so every consumer shares one definition — the same one
+    SMidiOutPump derives for its own anchor. Readers retry a BOUNDED number of
+    times and then report "no reading"; the pump is realtime too.
+
+15. THE PUMP NEVER RENDERS A PAGE AND NEVER ALLOCATES IN STEADY STATE. It marks
+    itself `markLiveThread()` (RenderPolicy::Never), takes only a live-owned
+    processor's own mutex_ and `getPageIfExists`'s try-lock, and pushes the
+    ring. All per-plan state — scratch (owned by the plan), retained pages,
+    pointer arrays — is allocated at PLAN ADOPTION, at the top of a block. A
+    full ring is a counted DROP; it is never grown and never waited on. The
+    plan's transport is pushed onto every processor at adoption, so the plan and
+    the processors cannot disagree for a block after a rebuild.
+
+16. ONE EXPLICIT REPOSITION per start/stop/seek/wrap, decided by the pump and
+    applied THROUGH THE PLAN (`forgetContinuity()` on every plan processor),
+    never by the app — which is not on this thread and does not know where a
+    block boundary is. A drift of more than two blocks between the clock's
+    target and the contiguous next position is a reposition; anything smaller is
+    the clock standing still between publications and must NOT reposition at
+    block rate. `leadFrames < 0` means "default to one block"; ZERO is a legal
+    explicit value (a synchronous harness driving the clock itself).
+
 How to test: manual GUI playback (scripted toggle-playback segfaults under
 the runner — pre-existing, see the headless-testing notes); the render path
 shares the graph but not this module.
 
-Known debt: fixed buffer sizing (no user latency control); callback
-allocates two vectors per block; the scripted-playback crash.
+Known debt: fixed buffer sizing (no user latency control); the
+scripted-playback crash. (The callback's two per-block vector allocations are
+gone since proposal 21 L1a — the ring sum needs the PLANAR buffers anyway, so
+they became members sized at device open.) NOT gated: the real-device
+behaviour of the two-lane machine (WASAPI), and any latency number for it.

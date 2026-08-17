@@ -196,10 +196,16 @@ Invariants:
   SMARAGD_AUDIO_BACKEND=capture before SApplication exists, unless it is
   already set), which pumps the callback on a real-time paced clock and keeps
   every frame. Three rules for writing such a case:
-   1. Captured frame 0 is the first frame of the CURRENT playback session, i.e.
-      the locator position play started from (the recording is cleared at each
-      start). Measured leading silence is zero, but budget for a bounded amount
-      explicitly — do not assert content at frame 0 by luck.
+   1. Captured frame 0 is the first frame of the CURRENT DEVICE session
+      (`CaptureBackend::openDevice` clears the recording; proposal 21 L1a,
+      design D5). With NO LIVE LANE — which is every case today — the device is
+      still opened at play and closed at stop, so this is exactly the old
+      "current playback session" and every existing `dump-playback-capture`
+      case reads the same recording it always did. It stops being the same
+      thing once a track is armed: the device then outlives the transport, and
+      a second Play must NOT erase what the monitored input recorded in
+      between. Measured leading silence is zero, but budget for a bounded
+      amount explicitly — do not assert content at frame 0 by luck.
    2. Playback is REAL TIME. A case's wall-clock cost is the span it plays;
       keep the spans short (SMARAGD_CAPTURE_SPEED can accelerate a smoke run,
       but the committed case must pass at 1.0x).

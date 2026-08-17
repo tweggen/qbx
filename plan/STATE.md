@@ -12351,3 +12351,128 @@ and no render path was touched. The only edit inside `freezePage` is the guard's
 (`onRtThread()` → `!mayRender()`, identical for every unmarked thread), and the
 scheduler edit moves one state assignment earlier under a lock it was already
 taking.
+
+## 2026-08-17 — Proposal 21 L1a: live lane engine
+
+The ENGINE half of the live lane (design D1/D2/D5, orchestration brief L1a):
+the pump, the position-stamped epoch-gated ring, the live clock and transport
+model, the speaker's two-lane lifecycle, the processor's live-owned guard and
+second event source, and a synthetic-plan harness. **Nothing in the app calls
+any of it yet** — L1b wires arm/disarm — so every existing path is untouched
+and the goldens are byte-identical by construction.
+
+**New in `tw/playback`** (which now depends on `tw/plugins` and `tw/mix`; both
+are acyclic against it, and the pump needs exactly the three pieces of the graph
+that survive block-wise):
+
+- `twliveclock.h` — `twEngineClock`, a SEQLOCK stamped by the render callback
+  beside `publishPosition()` with `{seq, deliveredFrame, hostNs}`.
+  `deliveredFrame = published − bufferFramesProject`, i.e. `SMidiOutPump`'s
+  publish-lag correction applied ONCE so every consumer shares one definition.
+  Engine-owned on purpose: `PlaybackContext` is the app-implemented services
+  interface (UI-thread `locatorPosition()`) and `SApplication` is unreachable
+  from `tw/`. Readers retry a BOUNDED four times, then report "no reading".
+- `twlivering.h/.cc` — `twLiveMixRing` (SPSC, 4 deep, one device block per
+  entry, a full ring DROPS and counts) plus the RT sum as a PURE FUNCTION,
+  `twlive::mixRing` / `twlive::gateEntry`, extracted for the same reason
+  `twmonitor::pullChannels` is: the gate is the part most able to be got subtly
+  wrong and it has to be assertable without a device, a pump or a graph.
+- `twliveplan.h/.cc` — `twLivePlan` (immutable snapshot: ordered tracks →
+  processors, a `twGainStage::Envelope`, a channel map, frozen-input roots, live
+  children, scratch sized at `finalize()`), `twLiveInputSource` (the seam L1b
+  fills with a device ring), and `twlive::checkMasterShape()` — the D3
+  precondition, over the master's two components.
+- `twlivepump.h/.cc` — `LiveGraphPump`: `markLiveThread()`, MMCSS "Pro Audio",
+  a plan swapped by generation and adopted at the top of a block (which is also
+  where the old one dies), allocation-free steady state, paced by the RT's own
+  drain rather than by a timer. `renderOneBlock()` is public and SYNCHRONOUS so
+  the harness can drive it.
+
+**`twSpeaker` became an explicit three-axis machine** — device {CLOSED, OPEN} ×
+frozen {IDLE, BUFFERING, PLAYING} × live {OFF, ON}, `out = (frozen==PLAYING ?
+root : 0) + (live==ON ? ring : 0)`. `openLive()` opens AND starts the backend
+immediately (no readahead to prime); `startOutput()` ATTACHES to an already-open
+device (the callback is registered once, by `ensureDeviceOpen()`, and a new
+engine is minted under it); `stopOutput()` stops the LANE only while live is ON;
+`closeLive()` closes iff the frozen lane is idle. The engine handle is now read
+and written through `std::atomic_load/store` — a plain assignment was safe only
+while the device could not be running during a swap. The callback's two
+per-block vector allocations (recorded debt) are gone: the ring sum needs the
+planar buffers anyway, so they are members sized at device open.
+`AudioEngine::servedContentEpoch()` publishes the epoch of the page the RT is
+already holding, so the gate is a pure function of it rather than a second
+lookup. `CaptureBackend` clears its recording at DEVICE start rather than at
+play start (testkit rule 1 amended; with no live lane the device still opens at
+play, so every existing `dump-playback-capture` case reads the same recording).
+
+**`twPluginSlotProcessor` gained three flag-gated things**, all inert unless
+`setLiveOwned(true)`: the OWNERSHIP GUARD (a `render()` from a thread that is not
+the pump answers silence and bumps `liveOwnedRefusals()`, one log per slot, never
+an assert, and never touching continuity — that would make the pump's next block
+a spurious reposition); a SECOND EVENT SOURCE `liveEvents_` merged with note ids
+namespaced to 15; and `twLiveTransport {playing, feedEnabled, holdAutomationAt}`
+consulted per chunk. `twProcessContext.playing` is truthful for the first caller
+that can be stopped. **`feedEnabled=false` also skips the PRE-ROLL** — it chases
+and replays the same feed, so running it with the feed masked would put the
+sequenced material into the DSP by the back door, which is exactly what D2's mask
+exists to prevent.
+
+**Gates (all green).**
+- `./build.sh`, `check_layering.py` (the DAG grew `playback → {plugins, mix}`,
+  declared in both the checker and `tw303a/CMakeLists.txt`), `check_logging.py`.
+- **AC1** — `playback_test` walks CLOSED→OPEN(live) → PLAY attaches → STOP keeps
+  the device → disarm closes, and separately PLAY-without-live opens and closes
+  exactly as before. "No re-open" is measured, not asserted by inspection: the
+  capture backend clears at device open, so an unchanged recording across Play
+  IS the proof. Frame 0 = device start is gated deterministically (the second
+  `startOutput()` returns before the backend restarts, so the recording reads 0).
+- **AC2** — the synthetic-plan harness: 32 blocks of 1024 frames through
+  `tw.test.clap.gain` at 0.5 over a position-encoded input equal the frozen
+  render of the same material through the same insert **sample for sample, 0
+  differences in 65 536 comparisons** (32768 frames × 2 channels). Linear and
+  partition-invariant is the whole reason the claim is makeable — the pump
+  partitions at 1024 and the freeze path at 4096. A seek mid-run produces
+  EXACTLY ONE reposition, the next entry is stamped at the target, and the
+  output re-aligns to the material there. STOPPED: with `feedEnabled=false` the
+  block is EXACTLY silent (peak < 1e-6) while an injected live event sounds
+  (peak > 0.1), and the same feed sounds when `feedEnabled=true` — so the mask
+  has teeth; an automation curve present but held reads constant to 1e-6 across
+  the block at `valueAt(holdAutomationAt) = 0.5`.
+- **AC3** — the ring gate: position mismatch ⇒ silence + counter; arm
+  `rootEpoch < flipEpoch` ⇒ not summed, `>=` ⇒ summed; disarm
+  `rootEpoch < flipEpoch'` ⇒ STILL summed, and it stops exactly when the
+  re-summed page lands; stopped (no root page) ⇒ out = ring; the crossfade in
+  both directions; the SPSC ring's FIFO order, drop-on-full and `dropBefore`.
+  The master-shape precondition flips as designed: unity sum + identity map ⇒
+  LinearSplit; a non-unity input level, a swapped channel map, a width
+  disagreement or a missing component ⇒ Closure.
+- **AC4** — `liveOwnedRefusals`: a `render(positional)` from an unmarked thread
+  on a live-owned processor returns silence and counts exactly once; after
+  `setLiveOwned(false)` the same call renders normally and nothing further is
+  counted.
+- **AC5** — `qxa.mc_golden_mono` / `qxa.mc_golden_stereo` green and
+  `git status tests/goldens/` clean; every playback / instrument / automation /
+  midi_out case green.
+- `ctest --test-dir smaragd/build -j4`: **174/174 passed, 177 registered, 3 Not
+  Run (Disabled — the macOS-only `au_*` trio)**, 62.5 s.
+- Sweeps: `playback_test` × 50 at `SMARAGD_REVAL_WORKERS` {1,4,8,16} and
+  `qxa.instrument_render_determinism` × 50 at the same four — numbers in the PR.
+
+**NOT gated, and say so:** the real-device behaviour of the two-lane machine
+(WASAPI — nothing headless opens an output device, so `openLive` → `startOutput`
+attach has only been exercised against `CaptureBackend`); any latency number for
+the live path (proposal 35 / ASIO is the prerequisite, and a bound tight enough
+to separate the behaviours would flake); MMCSS actually being granted; anything
+app-side — L1b wires arm/disarm and **nothing in the app calls `openLive()`
+yet**, so the pump does not exist at runtime and the goldens hold by
+construction rather than by re-freezing; the folder-closure and frozen-input
+paths of the pump (`liveChildren` / `frozenInputs` are built and finalize-checked
+but have no live producer until L1b); the disarm crossfade end to end (the gate
+is on the pure function, not on a running lane).
+
+**One pre-existing hazard found and NOT fixed here** (it is `tw/graph`, outside
+this phase's module set): `tw303aEnvironment::bufferSize` has no initialiser and
+no default — the APP sets it at startup, so a unit test that never does reads
+whatever was on the stack, and `twMixer`'s constructor `calloc`s from it and
+throws. `playback_test` now calls `env.setBufferSize(4096)` before constructing
+one, with the reason stated at the call site.

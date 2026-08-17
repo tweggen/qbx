@@ -327,7 +327,7 @@ STATE.md + §6 + git are the durable state.
 | Phase | Status | Closed on | PR / commit | Notes |
 |---|---|---|---|---|
 | L0 input device layer + seams | ☑ | 2026-08-17 | `feat/21-l0-input-devices` | Capture thread + SPSC ring per device (WASAPI event-driven; ALSA/CoreAudio written, UNVERIFIED), `SMARAGD_AUDIO_INPUT_BACKEND` + `FileAudioInput` (paced 0.68-0.91 ms of a 2 ms bound), `midi-in-event`/`midi-in-replay`, `retireComponentNodes`, `RenderPolicy{Any,Never}` + `liveThreadRefusals`, the two `SSettings` offsets. ctest -j4 174/174, 177 registered. NOT gated: real capture hardware, ALSA/CoreAudio. |
-| L1a live lane engine | ☐ | | | |
+| L1a live lane engine | ☑ | 2026-08-17 | `feat/21-l1a-live-lane-engine` | `twLivePlan` + `LiveGraphPump` (markLiveThread, MMCSS, alloc-free steady state) + position-stamped epoch-gated `twLiveMixRing` with the RT sum as a pure function + engine-owned `twEngineClock` `{seq, deliveredFrame, hostNs}` + twSpeaker device×frozen×live machine (`openLive`/`closeLive`, attach-without-reopen, lane-only stop) + `setLiveOwned`/`setLiveEventSource`/`twLiveTransport` (flag-gated; `feedEnabled` also gates the PRE-ROLL) + `checkMasterShape` + the synthetic-plan harness. AC2 identity: 0 differences in 65 536 samples; 1 reposition for a seek, 0 for the contiguous run. ctest -j4 174/174, 177 registered. NOT gated: real WASAPI two-lane behaviour, any latency number, the folder-closure/frozen-input pump paths (no producer until L1b), anything app-side. |
 | L1b live lane app: audio monitoring | ☐ | | | |
 | L2 live instruments (37 P8a) | ☐ | | | |
 | L3a capture bridge engine | ☐ | | | |
