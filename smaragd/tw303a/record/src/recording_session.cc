@@ -460,11 +460,32 @@ void RecordingSession::recordThreadMain() {
         double wall = std::chrono::duration_cast<std::chrono::duration<double>>(
                           std::chrono::steady_clock::now() - captureStart ).count();
         double effRate = wall > 0.0 ? (double) totalInputFrames / wall : 0.0;
+        const double ratio = deviceRate > 0 ? effRate / deviceRate : 0.0;
         RECSESS_LOG( "capture-rate check — assumed deviceRate=%u Hz, "
                      "MEASURED effective=%.1f Hz over %.3fs (%lld input frames). "
                      "ratio meas/assumed=%.4f",
                      (unsigned) deviceRate, effRate, wall, totalInputFrames,
-                     deviceRate > 0 ? effRate / deviceRate : 0.0 );
+                     ratio );
+
+        // A DEBUG line is not enough for a take that is already wrong. Past 1 %
+        // over a run long enough to measure, the file carries the error as
+        // PITCH: the frames were written under a header saying deviceRate, so a
+        // ratio of r plays back at 1/r speed — 1.0863 is 8.6 % long, i.e. 1.47
+        // semitones flat. Warn, and name the cause that actually produced it,
+        // because the user cannot see a per-endpoint Windows rate setting from
+        // inside this app.
+        if( wall >= 2.0 && ratio > 0.0 && std::fabs( ratio - 1.0 ) > 0.01 ) {
+            TW_LOGW( "record",
+                     "RecordingSession: CAPTURE RATE IS WRONG by %.1f %% — this "
+                     "take is pitched %s by about %.2f semitones. The usual "
+                     "cause is the input and output ENDPOINTS being set to "
+                     "different rates in the OS while sharing one interface "
+                     "clock; check that both are set to %u Hz.",
+                     ( ratio - 1.0 ) * 100.0,
+                     ratio > 1.0 ? "DOWN" : "UP",
+                     std::fabs( 12.0 * std::log2( ratio ) ),
+                     (unsigned) targetRate );
+        }
     }
 
     // Stop and cleanup

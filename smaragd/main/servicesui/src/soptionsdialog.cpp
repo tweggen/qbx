@@ -334,6 +334,20 @@ void SOptionsDialog::applyMousePage()
     s.setValue( SOpt::FollowPlayhead, followPlayhead_->isChecked() );
 }
 
+// "Lautsprecher (US-16x08) — 48000 Hz". The rate is a per-ENDPOINT Windows
+// setting, and an input endpoint at one rate with an output endpoint at another
+// on the SAME interface makes the OS resample one side and misreport its clock
+// — which no arithmetic downstream can undo. Putting the number in the label is
+// the cheapest way to make a mismatch visible AT THE POINT OF CHOICE, next to
+// the other one. Rate 0 = the backend could not read it; say nothing rather
+// than guess.
+static QString sDeviceLabel( const std::string &name, std::uint32_t rate )
+{
+    const QString n = QString::fromStdString( name );
+    if( rate == 0 ) return n;
+    return QStringLiteral( "%1 — %2 Hz" ).arg( n ).arg( rate );
+}
+
 void SOptionsDialog::loadAudioPage()
 {
     // Load output devices
@@ -345,7 +359,7 @@ void SOptionsDialog::loadAudioPage()
         audioDevice_->addItem( "System default", "default" );
     } else {
         for( const audio::AudioDeviceInfo &d : devs ) {
-            audioDevice_->addItem( QString::fromStdString( d.name ),
+            audioDevice_->addItem( sDeviceLabel( d.name, d.sampleRate ),
                                    QString::fromStdString( d.id ) );
         }
     }
@@ -368,7 +382,7 @@ void SOptionsDialog::loadAudioPage()
         const std::vector<audio::AudioInputDeviceInfo> inDevs =
             in ? in->listDevices() : std::vector<audio::AudioInputDeviceInfo>();
         for( const audio::AudioInputDeviceInfo &d : inDevs ) {
-            audioInputDevice_->addItem( QString::fromStdString( d.name ),
+            audioInputDevice_->addItem( sDeviceLabel( d.name, d.sampleRate ),
                                         QString::fromStdString( d.id ) );
         }
     }
