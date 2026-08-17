@@ -6,7 +6,6 @@
 #include "app/model/sappcontext.h"
 
 #include <QUndoStack>
-#include <QByteArray>
 
 SActionHistory::SActionHistory(QObject *parent)
     : QObject(parent),
@@ -37,10 +36,7 @@ void SActionHistory::submit(SAction *forward, bool skipHistory)
         // when the undo command is destroyed. Just apply it and discard the inverse.
         SApplyResult result = forward->apply(project);
         if (result.applied) {
-            // DIAGNOSTIC (temporary): name the ACTION, so a repeating
-            // arrangement invalidation can be traced to the verb behind it.
-            const QByteArray why = forward->name().toUtf8();
-            project->notifyArrangementChanged(why.constData());   // invalidate cached renders
+            project->notifyArrangementChanged();   // invalidate cached renders
         }
         if (result.inverse) {
             delete result.inverse;
@@ -67,8 +63,7 @@ void SActionHistory::drain_()
         SApplyResult result = action->apply(project);
 
         if (result.applied) {
-            const QByteArray why = action->name().toUtf8();
-            project->notifyArrangementChanged(why.constData());   // invalidate cached renders
+            project->notifyArrangementChanged();   // invalidate cached renders
             onApplied_(id, result.inverse);
             // ownership of action transferred to undo command (or deleted there
             // when there is no inverse) — don't delete here.

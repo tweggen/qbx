@@ -170,7 +170,7 @@ void twSpeaker::startOutput()
             // ENFORCE "the RT path never renders" (thread-local flag; a
             // repeated store of `true` is free).
             twRtThreadGuard::markRtThread();
-            // DIAGNOSTIC (temporary): count what the DEVICE actually drains, so
+            // DIAGNOSTIC: count what the DEVICE actually drains, so
             // stopOutput can report an effective output rate. Every early
             // return below still fills `frames`, so it is counted here, once,
             // before any of them.
@@ -244,7 +244,7 @@ void twSpeaker::startOutput()
             return static_cast<std::size_t>(outFrames);
         });
 
-    // DIAGNOSTIC (temporary): arm the effective-output-rate measurement. The
+    // DIAGNOSTIC: arm the effective-output-rate measurement. The
     // wall clock starts HERE rather than at the first callback, so the priming
     // wait is included and shows up as a rate BELOW the device rate; a device
     // whose clock genuinely runs slow shows the same shortfall proportional to
@@ -287,7 +287,7 @@ void twSpeaker::stopOutput()
         outputState_.store(OutputState::STOPPING, std::memory_order_relaxed);
     } // Release stateMutex_
 
-    // DIAGNOSTIC (temporary) — the OUTPUT twin of RecordingSession's
+    // DIAGNOSTIC — the OUTPUT twin of RecordingSession's
     // capture-rate check. A ratio well below 1 on a run of several seconds
     // means the device drained fewer frames than the rate we opened it at, so
     // the arrangement came out slow and flat; ~1.0 exonerates the device and
@@ -408,7 +408,7 @@ void twSpeaker::monitorReadaheadBuffer()
 
                 if (backend_->startOutput() == 0) {
                     TWSPK_LOG( "monitorReadaheadBuffer: backend->startOutput() succeeded" );
-                    // DIAGNOSTIC (temporary): the instant the DEVICE actually
+                    // DIAGNOSTIC: the instant the DEVICE actually
                     // began draining, so stopOutput can separate the one-off
                     // priming gap from a sustained clock error. Without this
                     // split the two are indistinguishable in one ratio.

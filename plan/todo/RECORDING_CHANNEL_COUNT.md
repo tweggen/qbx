@@ -16,6 +16,13 @@
 > recordings from the project directory, which makes iterating on this
 > testable but is not a migration.
 >
+> **A SEPARATE recording defect surfaced in the same hand-test** and is written
+> up in `RECORDING_INVESTIGATION_2026_08_17.md`: the input and output ENDPOINTS
+> can be set to different sample rates in Windows while sharing one hardware
+> clock, which makes takes come out pitched. Do not confuse the two — this note
+> is about the CHANNEL COUNT, that one is about the RATE, and neither causes the
+> other.
+>
 > Diagnosed from a real user project, not from reading code. Written as a
 > handoff so whoever picks it up starts from evidence.
 
