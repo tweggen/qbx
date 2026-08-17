@@ -804,24 +804,15 @@ void SMainWindow::warnOnEndpointRateMismatch()
                  outName.toUtf8().constData(), (unsigned) outRate );
         QMessageBox::warning( this, "Input and output rates differ",
             QString( "The recording input and the playback output are set to "
-                     "DIFFERENT sample rates in the operating system:
-
-"
-                     "    Input:  %1 — %2 Hz
-"
-                     "    Output: %3 — %4 Hz
-
-"
+                     "DIFFERENT sample rates in the operating system:\n\n"
+                     "    Input:  %1 — %2 Hz\n"
+                     "    Output: %3 — %4 Hz\n\n"
                      "If these are the same interface they share one clock, so "
                      "the OS must resample one side — and it then reports that "
                      "side's rate incorrectly. Recordings can come out pitched "
-                     "by the ratio between them, and monitoring can play slow.
-
-"
+                     "by the ratio between them, and monitoring can play slow.\n\n"
                      "Set both to the same rate (ideally the project's, %5 Hz) "
-                     "in the system sound settings.
-
-"
+                     "in the system sound settings.\n\n"
                      "This warning is shown once per session." )
                 .arg( inName.isEmpty() ? QStringLiteral( "System default" ) : inName )
                 .arg( inRate )

@@ -997,8 +997,7 @@ void SSMVMixerControl::refreshArmTooltip_()
     // never opens the menu still sees which input is being recorded.
     {
         const uint32_t channels = tk_.getRecordingChannels();
-        if( channels == 0 ) tip += QStringLiteral( "
-Selected: All Channels" );
+        if( channels == 0 ) tip += QStringLiteral( "\nSelected: All Channels" );
         else {
             QString channelStr;
             for( uint32_t ch = 0; ch < 32; ++ch )
@@ -1006,8 +1005,7 @@ Selected: All Channels" );
                     if( !channelStr.isEmpty() ) channelStr += ", ";
                     channelStr += QString::number( ch + 1 );
                 }
-            tip += QStringLiteral( "
-Selected: %1" ).arg( channelStr );
+            tip += QStringLiteral( "\nSelected: %1" ).arg( channelStr );
         }
     }
     if( SLiveMonitor *mon = SApplication::app().liveMonitor() ) {
