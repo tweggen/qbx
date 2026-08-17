@@ -20,6 +20,7 @@ class LiveGraphPump;
 
 namespace audio {
 class AudioInput;
+class CaptureBridge;
 }
 
 class SLiveAudioInputSource;
@@ -153,6 +154,31 @@ private:
     void setClosureOwned( const SLiveClosure &closure, bool owned );
     bool ensureInput( STrack *track );
     void closeInputIfUnused();
+
+public:
+    /**
+     * THE APP'S ONE INPUT PUMP (proposal 21 L3b, design D7).
+     *
+     * `SLiveMonitor` OWNS the `CaptureBridge` because it already owned the
+     * input device: monitoring and recording must read ONE device, and the
+     * bridge is the object that drains its ring. Monitoring pops the bridge's
+     * live ring (`SLiveAudioInputSource` -> `pullLive`); recording opens a
+     * capture SEGMENT on the same bridge (`beginCapture`), which is why a
+     * record start while monitoring does not gap the monitored signal.
+     *
+     * `SAudioRecorder` BORROWS it: it never constructs or destroys one. The
+     * hold below is what stops `closeInputIfUnused()` from pulling the device
+     * out from under a take when the last lane disarms mid-recording.
+     */
+    audio::CaptureBridge *acquireBridge( const QString &deviceId );
+    void releaseBridge();
+    audio::CaptureBridge *bridge() const { return bridge_.get(); }
+    /// The device the bridge is open on ("" when closed).
+    QString inputDeviceId() const { return inputDeviceId_; }
+
+private:
+    bool ensureBridge( const QString &want );
+    void closeBridge();
     void ensurePump();
     void stopPump();
     /**
@@ -177,8 +203,9 @@ private:
     SLiveClosure current_;
     SLiveClosure departing_;
 
-    std::unique_ptr<audio::AudioInput>   input_;
+    std::unique_ptr<audio::CaptureBridge> bridge_;
     QString                              inputDeviceId_;
+    int                                  bridgeHolds_ = 0;   // recording holds
     std::vector<std::shared_ptr<SLiveAudioInputSource> > sources_;
     std::unique_ptr<LiveGraphPump>       pump_;
 

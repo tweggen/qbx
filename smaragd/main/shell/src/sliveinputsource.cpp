@@ -3,14 +3,14 @@
 #include <algorithm>
 #include <cmath>
 
-#include "tw/devices/audio_input.h"
+#include "tw/record/capture_bridge.h"
 
-SLiveAudioInputSource::SLiveAudioInputSource( audio::AudioInput *input,
+SLiveAudioInputSource::SLiveAudioInputSource( audio::CaptureBridge *bridge,
                                               unsigned mask, idx_t outChannels,
                                               length_t blockFrames )
-    : input_( input )
+    : bridge_( bridge )
 {
-    devChannels_ = input_ ? input_->getConfig().channels : 1u;
+    devChannels_ = bridge_ ? bridge_->inputChannels() : 1u;
     if( devChannels_ < 1u ) devChannels_ = 1u;
     if( outChannels < 1 ) outChannels = 1;
     if( blockFrames < 1 ) blockFrames = 1;
@@ -29,13 +29,19 @@ SLiveAudioInputSource::SLiveAudioInputSource( audio::AudioInput *input,
         srcOfOut_[(std::size_t) c] = selected[i];
     }
 
+    // PLANAR since L3b: pullLive() writes one buffer per device channel, which
+    // is also what the pump wants, so the interleaved hop is gone. Sized here,
+    // on the main thread — pull() allocates nothing.
     scratch_.assign( (std::size_t) blockFrames * devChannels_, 0.0f );
+    planes_.resize( devChannels_ );
+    for( unsigned c = 0; c < devChannels_; ++c )
+        planes_[c] = scratch_.data() + (std::size_t) c * (std::size_t) blockFrames;
 }
 
 std::size_t SLiveAudioInputSource::pull( float *const *out, std::size_t channels,
                                          std::size_t frames, offset_t /*pos*/ )
 {
-    if( !input_ || !out || frames == 0 ) return 0;
+    if( !bridge_ || !out || frames == 0 ) return 0;
 
     // Never ask for more than the scratch holds. The plan sized it for the
     // device block, and the pump renders exactly that -- a bigger request
@@ -44,9 +50,8 @@ std::size_t SLiveAudioInputSource::pull( float *const *out, std::size_t channels
     const std::size_t cap = scratch_.size() / devChannels_;
     if( frames > cap ) frames = cap;
 
-    const std::int32_t got = input_->read( scratch_.data(), frames );
-    if( got <= 0 ) return 0;
-    const std::size_t n = (std::size_t) got;
+    const std::size_t n = bridge_->pullLive( planes_.data(), devChannels_, frames );
+    if( n == 0 ) return 0;
 
     double peak = peak_.load( std::memory_order_relaxed );
     for( std::size_t c = 0; c < channels; ++c ) {
@@ -54,9 +59,9 @@ std::size_t SLiveAudioInputSource::pull( float *const *out, std::size_t channels
         if( !dst ) continue;
         const std::size_t sc =
             ( c < srcOfOut_.size() ) ? (std::size_t) srcOfOut_[c] : 0u;
-        const float *src = scratch_.data() + sc;
+        const float *src = planes_[ sc < devChannels_ ? sc : 0u ];
         for( std::size_t i = 0; i < n; ++i ) {
-            const float v = src[i * devChannels_];
+            const float v = src[i];
             dst[i] = v;
             const double a = ( v < 0.0f ) ? -(double) v : (double) v;
             if( a > peak ) peak = a;

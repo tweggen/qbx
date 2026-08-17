@@ -141,6 +141,21 @@ QWidget *SOptionsDialog::buildAudioPage()
     inputLatencyLabel_ = new QLabel;
     form->addRow( "Input latency:", inputLatencyLabel_ );
 
+    // THE LAST TERM OF THE PLACEMENT CONVERSION (proposal 21 L3b, design D6).
+    // Per INPUT DEVICE, and stored under the device's NAME, so it survives an
+    // id change the way midiPortId() does. Same range and same sign as the
+    // MIDI-out offset on the MIDI page: POSITIVE = the driver under-reports,
+    // compensate more, place the recorded audio EARLIER. It is the number a
+    // "record a click, look at where it landed, type the difference"
+    // calibration produces.
+    recordingOffsetMs_ = new QSpinBox;
+    recordingOffsetMs_->setRange( -500, 500 );
+    recordingOffsetMs_->setSuffix( " ms" );
+    form->addRow( "Recording offset (+ = earlier):", recordingOffsetMs_ );
+    form->addRow( new QLabel(
+        "Applies to the selected input device. The driver's reported latencies "
+        "are compensated automatically; this corrects what it misreports." ) );
+
     bufferSizeCombo_ = new QComboBox;
     form->addRow( "Buffer size:", bufferSizeCombo_ );
     form->addRow( new QLabel( "Smaller buffer = lower latency but higher CPU load. "
@@ -362,6 +377,9 @@ void SOptionsDialog::loadAudioPage()
     if( curIn.isEmpty() ) curIn = "default";
     int j = audioInputDevice_->findData( curIn );
     if( j >= 0 ) audioInputDevice_->setCurrentIndex( j );
+    if( recordingOffsetMs_ )
+        recordingOffsetMs_->setValue(
+            (int) SSettings::instance().recordingOffsetMs( curIn ) );
 
     // Load latencies (cached from startup) and buffer size options
     if( spk ) {
@@ -436,6 +454,12 @@ void SOptionsDialog::applyAudioPage()
 
     // Save input device
     QString inId = audioInputDevice_->currentData().toString();
+    if( !inId.isEmpty() && recordingOffsetMs_ ) {
+        // Written against the device the combo NOW names, so changing both in
+        // one visit stores the offset for the device it was typed for.
+        SSettings::instance().setRecordingOffsetMs(
+            inId, (double) recordingOffsetMs_->value() );
+    }
     if( !inId.isEmpty() ) {
         const bool moved = SSettings::instance().audioInputDeviceId() != inId;
         SSettings::instance().setAudioInputDeviceId( inId );

@@ -23,6 +23,7 @@
 #include <iostream>
 
 #include "app/shell/sapplication.h"
+#include "app/shell/saudiorecorder.h"
 #include "app/timeline/sgridtoolbar.h"
 #include "app/shell/smainwindow.h"
 #include "app/model/sobject.h"
@@ -758,178 +759,57 @@ void SMainWindow::gotoRangeStart()
     SApplication::app().setGlobalLocatorPos( pos );
 }
 
-// Collect armed tracks depth-first WITH their root-relative paths — nested
-// (folder) tracks record too. The order is the contract between recording
-// start (armedTrackIds) and completion (createdFiles are matched
-// positionally), so both sides call this.
-static void collectArmedTracks( SObject *container, const QList<int> &path,
-                                QList<QPair<STrack *, QList<int>>> &out )
-{
-    if( !container ) return;
-    for( int i = 0; i < container->childCount(); ++i ) {
-        SLink *lk = container->childAt( i );
-        if( !lk ) continue;
-        STrack *track = dynamic_cast<STrack *>( &lk->getSObject() );
-        if( !track ) continue;
-        QList<int> childPath = path;
-        childPath.append( i );
-        if( track->isArmedForRecording() ) {
-            out.append( qMakePair( track, childPath ) );
-        }
-        collectArmedTracks( track, childPath, out );
-    }
-}
-
 void SMainWindow::onRecordTriggered()
 {
     if( !currentProject_ ) return;
 
     if( SApplication::app().isRecordingActive() ) {
-        // Stop recording
-        audio::RecordingSession *session = SApplication::app().recordingSession();
-        if( session ) {
-            session->requestStop();
-        }
+        // Second press == stop. The recorder ends the capture, finalises the
+        // files out of the pages and commits ONE undo step (proposal 21 L3b).
+        SApplication::app().stopRecording();
+        if( recordingProgressDialog_ ) recordingProgressDialog_->close();
         actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
-    } else {
-        // Check if any tracks are armed (recursively — tracks nested in
-        // folder tracks record too, proposal 17 phase 2)
-        QList<QPair<STrack *, QList<int>>> armed;
-        collectArmedTracks( currentProject_->getRootComponent(), QList<int>(), armed );
-
-        if( armed.isEmpty() ) {
-            // Inform user to arm a track
-            QMessageBox::information( this, "No Tracks Armed",
-                "Please arm at least one track for recording before starting." );
-            return;
-        }
-
-        // Start recording
-        audio::RecordingParams params;
-        // Get input device from settings (defaults to "default" if not set)
-        QString inputDevId = SSettings::instance().audioInputDeviceId();
-        params.inputDeviceId = inputDevId.toStdString();
-        // Use the project file directory for recordings, or a default if unsaved
-        QString projectDir = currentFilePath_.isEmpty() ?
-            QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation ) :
-            QFileInfo( currentFilePath_ ).absolutePath();
-        params.projectDirectory = projectDir.toStdString();
-        params.sampleRate = currentProject_->getSRate();
-        params.channels = 2;
-
-        // Collect armed track IDs and per-track channel selections, in the
-        // SAME recursive order onRecordingCompleted will use — created files
-        // are matched to tracks positionally.
-        for( const auto &pr : armed ) {
-            params.armedTrackIds.push_back( pr.first->getSName().toStdString() );
-            params.trackChannels.push_back( pr.first->getRecordingChannels() );
-        }
-
-        // Remember where the playhead is now: the cut goes here, and the playhead
-        // advances from here during the capture.
-        recordingStartPos_ = SApplication::app().getGlobalLocatorPos();
-
-        // Note: latency sync offset will be calculated in onRecordingCompleted()
-        // after the input latency is known from the recording session.
-        recordingLatencySyncOffset_ = 0;
-
-        SApplication::app().startRecording( params );
-        actRecord_->setIcon( QIcon( QPixmap( (const char **)recon_xpm ) ) );
-
-        // Show recording progress dialog
-        audio::RecordingSession *recSession = SApplication::app().recordingSession();
-        if( recSession ) {
-            recordingProgressDialog_ = new SRecordingProgressDialog( recSession, this );
-            int result = recordingProgressDialog_->exec();
-
-            // Recording has ended: stop the monitoring playback we started in
-            // startRecording (safe now that the audio thread never touches Qt).
-            if( SApplication::app().isPlaying() ) {
-                SApplication::app().getSpeaker()->stopOutput();
-                SApplication::app().setPlaying( false );
-            }
-
-            // On dialog close, place the cuts on armed tracks
-            if( result == QDialog::Accepted ) {
-                onRecordingCompleted();
-            }
-        }
+        if( projectRootWidget_ ) projectRootWidget_->update();
+        return;
     }
+
+    // Where the take begins, for the arranger's in-progress overlay.
+    recordingStartPos_ = SApplication::app().getGlobalLocatorPos();
+
+    if( !SApplication::app().startRecording() ) {
+        QMessageBox::information(
+            this, "Cannot Record",
+            SApplication::app().audioRecorder()
+                ? QStringLiteral( "Recording could not start: %1" )
+                      .arg( SApplication::app().audioRecorder()->errorMessage() )
+                : QStringLiteral( "Recording could not start." ) );
+        return;
+    }
+    actRecord_->setIcon( QIcon( QPixmap( (const char **)recon_xpm ) ) );
+
+    // NON-MODAL (design D7): a take runs while the app stays usable, and the
+    // growing clip is drawn by the arranger from the model rather than by this
+    // dialog poking its parent. The dialog polls the recorder and follows a
+    // stop that happens anywhere else (a punch-out, the record button again).
+    if( !recordingProgressDialog_ ) {
+        recordingProgressDialog_ =
+            new SRecordingProgressDialog( SApplication::app().audioRecorder(), this );
+        QObject::connect( recordingProgressDialog_, &QDialog::finished,
+                          this, &SMainWindow::onRecordingFinished );
+    }
+    recordingProgressDialog_->show();
+    recordingProgressDialog_->raise();
 }
 
-void SMainWindow::onRecordingCompleted()
+// The take ended (from the dialog, the record button, or a punch-out). The
+// PLACEMENT already happened inside SAudioRecorder::stop() as one undo macro;
+// there is nothing left to do here but the UI.
+void SMainWindow::onRecordingFinished()
 {
-    if( !currentProject_ ) return;
-
-    audio::RecordingSession *recSession = SApplication::app().recordingSession();
-    if( !recSession ) return;
-
-    // Get the created files (one per armed track)
-    const auto &createdFiles = recSession->createdFiles();
-    if( createdFiles.empty() ) return;
-
-    // The recording start time, captured when recording began (the live locator
-    // has since advanced with the capture).
-    offset_t recordingStartTime = recordingStartPos_;
-
-    // Calculate latency sync offset if playback was running during recording.
-    // Offset = output_latency - input_latency (in frames).
-    // Positive offset: input is faster, so shift the clip earlier to compensate.
-    int64_t latencySyncFrames = 0;
-    auto speaker = SApplication::app().getSpeaker();
-    if( speaker ) {
-        audio::AudioBackend *backend = speaker->getBackend();
-        uint32_t inputLatency = recSession->getInputLatencyFrames();
-        if( backend && inputLatency > 0 ) {
-            uint32_t outputLatency = backend->getLatencyFrames();
-            latencySyncFrames = static_cast<int64_t>(outputLatency) - static_cast<int64_t>(inputLatency);
-        }
-    }
-
-    // Apply the offset to the recording start position
-    if( latencySyncFrames != 0 ) {
-        // latencySyncFrames is in samples; convert to the timeline representation
-        recordingStartTime += latencySyncFrames;
-    }
-
-    // Place the recordings through the action system (proposal 17 phase 2):
-    // one place-recording per armed track, all inside ONE undo macro. The
-    // action plans the file against the track's existing columns — new take
-    // per covered column (auto-activated), plain cuts for the gaps — so
-    // recording over material stacks takes instead of layering clips, and
-    // Ctrl-Z removes the whole recording pass.
-    QList<QPair<STrack *, QList<int>>> armed;
-    collectArmedTracks( currentProject_->getRootComponent(), QList<int>(), armed );
-
-    QUndoStack *undoStack = SApplication::app().actionHistory()->undoStack();
-    const bool macro = !armed.isEmpty() && undoStack;
-    if( macro ) undoStack->beginMacro( QStringLiteral( "Recording" ) );
-    int fileIndex = 0;
-    for( const auto &pr : armed ) {
-        STrack *track = pr.first;
-        if( fileIndex < (int)createdFiles.size() ) {
-            QString recordedFile = QString::fromStdString( createdFiles[fileIndex] );
-            if( QFileInfo( recordedFile ).exists() ) {
-                SApplication::app().submitAction( new SPlaceRecordingAction(
-                    pr.second, recordedFile, recordingStartTime ) );
-            }
-        }
-        // Auto-disarm stays a direct UI-state mutation (not undoable).
-        track->setArmedForRecording( false );
-        fileIndex++;
-    }
-    if( macro ) undoStack->endMacro();
-
-    // Return the playhead to where recording began, lining it up with the cut we
-    // just placed (it had advanced to the end during capture).
-    SApplication::app().setGlobalLocatorPos( recordingStartTime );
-
-    // Refresh the UI to display the newly placed clip
-    if( projectRootWidget_ ) {
-        projectRootWidget_->update();
-    }
-
+    if( SApplication::app().isRecordingActive() )
+        SApplication::app().stopRecording();
     actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
+    if( projectRootWidget_ ) projectRootWidget_->update();
 }
 
 SMainWindow::SMainWindow()

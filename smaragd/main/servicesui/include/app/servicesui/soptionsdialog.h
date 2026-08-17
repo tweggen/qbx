@@ -78,7 +78,8 @@ private:
 
     // Audio page.
     QComboBox *audioDevice_;         // Output device
-    QComboBox *audioInputDevice_;    // Input device (for recording)
+    QComboBox *audioInputDevice_;
+    QSpinBox  *recordingOffsetMs_ = nullptr;  // per input DEVICE (proposal 21 L3b)    // Input device (for recording)
     QComboBox *bufferSizeCombo_;     // Buffer size (ALSA only)
     QLabel *outputLatencyLabel_;     // Output latency display
     QLabel *inputLatencyLabel_;      // Input latency display

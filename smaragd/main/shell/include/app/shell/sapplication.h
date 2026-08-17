@@ -8,7 +8,6 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/render/render_session.h"
-#include "tw/record/recording_session.h"
 #include "tw/playback/playback_context.h"
 #include "tw/metering/tw_level_probe.h"
 #include "app/model/sappcontext.h"
@@ -28,6 +27,7 @@ class SAction;
 class SMidiOutPump;
 class SAutomationRecorder;
 class SLiveMonitor;
+class SAudioRecorder;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -107,6 +107,7 @@ public:
     // Locator position captured when the current recording began. The view uses
     // it (with the live locator) to draw the growing in-progress capture region.
     offset_t recordingStartFrame() const { return recordingStartFrame_; }
+    void setRecordingStartFrame( offset_t f ) { recordingStartFrame_ = f; }
     SActionHistory *actionHistory() const;
     void submitAction(SAction *action);
 
@@ -148,18 +149,32 @@ public:
     // schedule inv. 8). A project with no instrument does nothing at all.
     void beginRun( offset_t pos );
 
-    audio::RecordingSession *recordingSession() const;
-    void startRecording(const audio::RecordingParams &params);
+    // AUDIO RECORDING (proposal 21 L3b). One recorder per app; it owns the
+    // take, the growing clip and the placement. Never null after construction.
+    SAudioRecorder *audioRecorder() const { return audioRecorder_.get(); }
+    /// Begin a take on every armed track. False when nothing is armed or the
+    /// input would not open.
+    bool startRecording();
+    /// End the take and commit the placement (one undo step).
+    void stopRecording();
 
     // SAppContext: start/stop transport playback (speaker + playing flag).
     void setPlaybackRunning( bool play ) override;
 
     // audio::PlaybackContext — the speaker's view of the app. rootComponent()
-    // and locatorPosition() run on the UI thread; locatorHeldElsewhere() and
-    // publishPosition() run on the AUDIO thread (atomic ops only, no Qt).
+    // and locatorPosition() run on the UI thread; publishPosition() runs on the
+    // AUDIO thread (atomic ops only, no Qt).
+    //
+    // `locatorHeldElsewhere()` is RETIRED (proposal 21 L3b, design D7). It
+    // existed because the old recording path drove the playhead from the record
+    // worker and had to stop the render callback from also publishing it. A
+    // record start now goes through `setPlaybackRunning()` like any other
+    // transport start, so THE OUTPUT PUBLICATION IS THE PLAYHEAD AUTHORITY IN
+    // EVERY MODE — which is also what the placement conversion's anchor needs
+    // (it reads the engine clock, which was being stamped all along while the
+    // locator was "held").
     std::shared_ptr<twComponent> rootComponent() override;
     std::uint64_t locatorPosition() override { return getGlobalLocatorPos(); }
-    bool locatorHeldElsewhere() override { return isRecordingActive(); }
     void publishPosition(std::uint64_t absPos) override {
         setGlobalLocatorPosRealtime((offset_t) absPos);
     }
@@ -310,7 +325,7 @@ private:
     std::shared_ptr<twWhiteNoise> t3WhiteNoise_;
     SActionHistory *actionHistory_;
     std::unique_ptr<audio::RenderSession> renderSession_;
-    std::unique_ptr<audio::RecordingSession> recordingSession_;
+    std::unique_ptr<SAudioRecorder> audioRecorder_;
 
     SLink *currentSelectedSLink_;
 

@@ -16,6 +16,7 @@
 #include "app/shell/ssettings.h"
 #include "tw/core/twlog.h"
 #include "tw/devices/audio_input.h"
+#include "tw/record/capture_bridge.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twtrackmix.h"
@@ -67,11 +68,8 @@ SLiveMonitor::~SLiveMonitor()
     stopPump();
     setClosureOwned( current_, false );
     setClosureOwned( departing_, false );
-    if( input_ ) {
-        input_->stopCapture();
-        input_->closeDevice();
-        input_.reset();
-    }
+    bridgeHolds_ = 0;
+    closeBridge();
     if( liveOpened_ ) {
         if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
                                                   : std::shared_ptr<twSpeaker>() )
@@ -157,50 +155,97 @@ bool SLiveMonitor::ensureInput( STrack *track )
     QString want = track->trackInputAudioDevice();
     if( want.isEmpty() ) want = SSettings::instance().audioInputDeviceId();
     if( want.isEmpty() ) want = QStringLiteral( "default" );
+    return ensureBridge( want );
+}
 
-    if( input_ && inputDeviceId_ == want ) return true;
-    if( input_ ) {
-        input_->stopCapture();
-        input_->closeDevice();
-        input_.reset();
+bool SLiveMonitor::ensureBridge( const QString &want )
+{
+    if( bridge_ && bridge_->isRunning() && inputDeviceId_ == want ) {
+        bridge_->setLiveEnabled( true );
+        return true;
+    }
+    if( bridge_ ) {
+        if( bridgeHolds_ > 0 ) {
+            // A take is running on the device that is open. Changing devices
+            // mid-recording would throw the take away; keep what we have and
+            // say so.
+            TW_LOGW( "shell", "[LIVE] input device change to '%s' deferred: a "
+                              "recording holds '%s'",
+                     want.toStdString().c_str(),
+                     inputDeviceId_.toStdString().c_str() );
+            return true;
+        }
+        closeBridge();
     }
 
-    // Selected by SMARAGD_AUDIO_INPUT_BACKEND ahead of the platform (L0), so a
-    // headless case replays a WAV through the same capture thread and ring a
-    // device uses.
-    std::unique_ptr<audio::AudioInput> in = audio::createAudioInput();
-    if( !in ) return false;
+    // ONE input pump (design D7). The bridge owns the device, its capture
+    // thread and the ring drain; monitoring pops its live ring and a recording
+    // opens a capture segment on it. Selected by SMARAGD_AUDIO_INPUT_BACKEND
+    // ahead of the platform (L0), so a headless case replays a WAV through the
+    // same capture thread and ring a device uses.
     const int rate = app_->get303aEnvironment() ? app_->get303aEnvironment()->getSRate()
                                                 : 48000;
-    if( in->openDevice( want.toStdString(), (std::uint32_t) rate ) != 0 ) {
+    audio::CaptureBridgeParams p;
+    p.inputDeviceId = want.toStdString();
+    p.targetRate    = (std::uint32_t) rate;
+    // NO PAGES for a monitor-only session: they are the record of a RECORDING,
+    // and growing them here would leak the user's RAM for audio nobody asked
+    // to keep. beginCapture() opens a segment when a take starts.
+    p.capturePages  = false;
+    p.liveEnabled   = true;
+
+    std::unique_ptr<audio::CaptureBridge> br( new audio::CaptureBridge() );
+    if( !br->start( p ) ) {
         TW_LOGW( "shell", "[LIVE] input device '%s' would not open: %s",
-                 want.toStdString().c_str(), in->errorMessage() );
+                 want.toStdString().c_str(), br->errorMessage() );
         return false;
     }
-    if( in->startCapture() != 0 ) {
-        TW_LOGW( "shell", "[LIVE] input device '%s' would not start: %s",
-                 want.toStdString().c_str(), in->errorMessage() );
-        in->closeDevice();
-        return false;
-    }
-    input_         = std::move( in );
+    bridge_        = std::move( br );
     inputDeviceId_ = want;
-    TW_LOGI( "shell", "[LIVE] input open: backend=%s device='%s' %u ch @ %u Hz, "
+    TW_LOGI( "shell", "[LIVE] input open: device='%s' %u ch @ %u Hz -> %u Hz, "
                       "reported latency %u frames",
-             input_->backendName(), want.toStdString().c_str(),
-             input_->getConfig().channels, input_->getConfig().sampleRate,
-             input_->getLatencyFrames() );
+             want.toStdString().c_str(), bridge_->inputChannels(),
+             bridge_->inputRate(), bridge_->targetRate(),
+             bridge_->inputLatencyFrames() );
     return true;
+}
+
+void SLiveMonitor::closeBridge()
+{
+    if( !bridge_ ) return;
+    bridge_->stop();
+    bridge_.reset();
+    inputDeviceId_.clear();
+}
+
+audio::CaptureBridge *SLiveMonitor::acquireBridge( const QString &deviceId )
+{
+    QString want = deviceId;
+    if( want.isEmpty() ) want = SSettings::instance().audioInputDeviceId();
+    if( want.isEmpty() ) want = QStringLiteral( "default" );
+    if( !ensureBridge( want ) ) return nullptr;
+    ++bridgeHolds_;
+    // A recording with monitoring OFF has nothing popping the live ring;
+    // leaving the push on would fill it once and then count every frame of the
+    // take as an overrun.
+    bridge_->setLiveEnabled( !current_.empty() || !departing_.empty() );
+    return bridge_.get();
+}
+
+void SLiveMonitor::releaseBridge()
+{
+    if( bridgeHolds_ > 0 ) --bridgeHolds_;
+    closeInputIfUnused();
 }
 
 void SLiveMonitor::closeInputIfUnused()
 {
-    if( !current_.empty() || !departing_.empty() ) return;
-    if( !input_ ) return;
-    input_->stopCapture();
-    input_->closeDevice();
-    input_.reset();
-    inputDeviceId_.clear();
+    if( !current_.empty() || !departing_.empty() ) {
+        if( bridge_ ) bridge_->setLiveEnabled( true );
+        return;
+    }
+    if( bridgeHolds_ > 0 ) return;         // a take still owns the device
+    closeBridge();
 }
 
 void SLiveMonitor::ensurePump()
@@ -249,7 +294,7 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
         [this, &closure, &p]( STrack *t ) -> std::shared_ptr<twLiveInputSource> {
             if( !ensureInput( t ) ) return nullptr;
             auto src = std::make_shared<SLiveAudioInputSource>(
-                input_.get(), t->trackInputChannelMask(),
+                bridge_.get(), t->trackInputChannelMask(),
                 (idx_t) t->getChannels(), p.blockFrames );
             sources_.push_back( src );
             return src;
@@ -668,10 +713,11 @@ QString SLiveMonitor::describe() const
                     .arg( active() ? "on" : "off" )
                     .arg( current_.ordered.size() )
                     .arg( current_.sources.size() );
-    if( input_ )
-        s += QStringLiteral( " input=%1:%2" )
-                 .arg( QString::fromUtf8( input_->backendName() ) )
-                 .arg( inputDeviceId_ );
+    if( bridge_ )
+        s += QStringLiteral( " input=%1 inCh=%2 inLat=%3" )
+                 .arg( inputDeviceId_ )
+                 .arg( bridge_->inputChannels() )
+                 .arg( bridge_->inputLatencyFrames() );
     if( pump_ )
         s += QStringLiteral( " blocks=%1 repositions=%2 misses=%3 shortfalls=%4" )
                  .arg( pump_->blocks() ).arg( pump_->repositions() )

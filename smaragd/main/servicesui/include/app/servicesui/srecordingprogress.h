@@ -10,15 +10,22 @@ class QLabel;
 class QPushButton;
 class QTimer;
 
-namespace audio {
-class RecordingSession;
-}
+class SAudioRecorder;
 
+/**
+ * NON-MODAL since proposal 21 L3b (design D7). It used to `exec()` inside the
+ * record-button handler, which meant the whole app was blocked for the length
+ * of a take: no editing, no transport, no arming a second track, and the
+ * growing clip could only be repainted by this dialog poking its parent. Now
+ * it is a plain window that POLLS `SAudioRecorder` at 10 Hz and shows a
+ * duration; closing it stops the take, and stopping the take from anywhere
+ * else closes it.
+ */
 class SRecordingProgressDialog : public QDialog {
     Q_OBJECT
 
 public:
-    SRecordingProgressDialog(audio::RecordingSession *session, QWidget *parent = nullptr);
+    SRecordingProgressDialog(SAudioRecorder *recorder, QWidget *parent = nullptr);
     ~SRecordingProgressDialog() override;
 
 protected:
@@ -32,7 +39,7 @@ private:
     QString formatTime(double seconds) const;
     void handleCompletion(bool success, const QString &error);  // on the GUI thread
 
-    audio::RecordingSession *session_;
+    SAudioRecorder *recorder_;
 
     QLabel *statusLabel_ = nullptr;
     QLabel *durationLabel_ = nullptr;
