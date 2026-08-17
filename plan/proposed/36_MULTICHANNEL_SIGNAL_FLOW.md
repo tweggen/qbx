@@ -1,6 +1,16 @@
 # Proposal 36 — Configurable multichannel signal flow (mono / stereo / 4 / 6 / 8)
 
-> **Status: DRAFT v3 (2026-08-15).** v3 applies an adversarial review of v2 that
+> **Status: EXECUTED (2026-08-17).** All ten milestones landed — M0, M1, B1a,
+> B1b, B2, B3, B4, B5, B7, B8, B9 — across PRs #39, #40, #41, #42, #43, #44 and
+> #45. A project has a channel count (1/2/4/6/8) carried clip → track → master →
+> file, and **B9's measurements confirm the design's central claim: node count
+> and page count are FLAT in channel width** (`nodesExecuted` = 281 at widths 1,
+> 2, 6 and 8, over 62 runs, zero variance); only bytes scale, and ×8 width costs
+> ×1.6 in render wall clock. Remaining work is named in B9 as known debt, not as
+> missing capability. **The twenty-eight traps in §7 are the durable part of this
+> document** — read them before touching channel width anywhere.
+>
+> **DRAFT v3 (2026-08-15).** v3 applies an adversarial review of v2 that
 > found three blockers: the channel-at-the-plug mechanism did not exist and was
 > never designed (§4.6); the default per-channel render loop would corrupt every
 > cursor-bearing component, starting with the one it was meant to serve (§4.3);
@@ -856,19 +866,85 @@ assert the miss, not merely a changed key.
 **AC B8.4** Track head at 150/100/60/40 px and both column widths renders
 without clipping — grabs attached to the PR.
 
-### B9 — Contracts, cleanup, and the report
+### B9 — Contracts, cleanup, and the report ✅ **EXECUTED 2026-08-17**
 
-Amend `docs/contracts/FREEZE_PROTOCOL.md` §"Page geometry" (it currently says
-65536 **mono** frames, normatively) and the affected `CONTRACT.md` files; delete
-or wire the dead scaffolding (`twFormatCaps::channelCounts`, `twSpeaker`'s unread
-input plugs, `twConvertFrames`' planar refusal if a wire now needs it); publish
-the 8-channel measurements (node count, pages in flight, memory, freeze
-wall-clock, invalidation cost) that v1 would have gathered in its M6.
+## THE REPORT (AC B9.2) — the flat-node-count claim HOLDS
 
-**AC B9.1** No contract in the tree still asserts a mono page.
-**AC B9.2** Measurements published in this proposal; node count at 8 channels is
-within noise of the width-1 count (B's central claim, now evidenced or refuted).
-**AC B9.3** Full suite green; `repeat_test.sh` on the DSP-sensitive set.
+One corpus project, four widths, `SMARAGD_REVAL_WORKERS=4`, 11 runs each:
+
+| | w1 | w2 | w6 | w8 |
+|---|---|---|---|---|
+| **`nodesExecuted`** | **281** | **281** | **281** | **281** |
+| `nodeRetries` / `missPages` / `selfStale` | 33/33/0 | 33/33/0 | 33/33/0 | 33/33/0 |
+| **resident pages** after render | **66** | **66** | **66** | **66** |
+| resident page bytes | 18.2 MiB | 33.0 MiB | 92.0 MiB | 121.5 MiB |
+| cold render, median (range) | 57 ms (55–80) | 57 ms (55–61) | 81 ms (78–84) | 90 ms (88–118) |
+| warm re-render | 4 ms | 6 ms | 20 ms | 27 ms |
+| re-render after an invalidating edit | 6 ms | 7 ms | 26 ms | 35 ms |
+| `twCapturingSource` bytes | 230,400 | 460,800 | 1,382,400 | 1,843,200 |
+
+Plus widths 1 and 8 at workers ∈ {1, 8, 16}, 3 runs each. **62 runs,
+`nodesExecuted` = 281 every single time, zero variance.**
+
+**Node count *and* page count are flat in width; only bytes scale** — and as
+`Σ channel planes`, not `pages × width`, because a clip reader keeps its *file's*
+width (7 of the 66 pages are width 2 in every project — trap 22 again). **×8 width
+costs ×1.6 in render wall clock, not ×8.**
+
+Invalidation cost is 1–8 ms. The walk is width-independent *by construction*: it
+visits `(component, position)` entries, whose count is flat, and touches no
+samples. What scales is the byte-proportional re-freeze.
+
+That is the answer to §3's question. The parallel-wire model would have multiplied
+nodes, dependency counting, epoch bookkeeping and invalidation walks by N; the
+page model multiplies **bytes only**, which is the irreducible part.
+
+## Trap 12 — wired, and it was worse than recorded
+
+`releaseOldPages` having no caller meant **one 60-second render left 681 pages
+resident and freed none: 357 MB at width 2, 1.42 GB at width 8.** New
+`twComponent::releaseOldPagesGlobally()` (registry walk, try-lock per component),
+driven by `RenderSession` with a four-page margin → **108 pages at every duration
+and every width** (219 MB at w8). Page count is width-independent here too.
+
+It costs the render *loop* 6–31 % and **the process nothing**: 461→465 ms
+(w2/60 s) and 923→**896** ms (w8/60 s), five runs each side. The loop's timer
+simply now sees ~570 `free()` calls that teardown used to pay for.
+
+*Trap 12's premise was wrong in one clause: **invalidation does not prune** — it
+marks stale in place. What bounded the maps was teardown and same-key
+replacement.* Playback-path pruning is deliberately **not** done: proposal 16's
+stale fallback plus backward seeking makes "what may be dropped" a design
+question, recorded as known debt in `tw/graph` inv. 8c.
+
+## Cleanup: deleted / fixed / kept / sized
+
+- **Deleted**: `PageBase::getDataPtr()` (zero production callers);
+  `twFormatCaps::channelCounts` — *written twice by B2 and read **never***, the
+  negotiator discarding it on the spot, so it could only mislead; and
+  `twCapturingSource`'s six-argument constructor (trap 27), which was also the
+  last caller of the deprecated raw-pointer `calcOutputTo` outside `twTrackMix`.
+- **Fixed — trap 21**, out of scope for five milestones and in scope here:
+  `IOVector::CreateForPageOutput`/`availableFrames` use `page->channelFrames()`
+  instead of a hard-coded `FRAME_CAPACITY` (identical for every frozen page,
+  correct for a mono scratch), plus a `min()` on the memcpy-back.
+- **Kept, with the reason recorded**: `twSpeaker`'s surviving plug *is* read (the
+  device open rate), so removing it would be re-plumbing, not cleanup;
+  `twConvertFrames`' planar refusal stays, but the silent `return 0` now logs once.
+- **Sized, not fixed — trap 25**: captures go ×8 exactly (230,400 → 1,843,200 B)
+  **and** `buildCapture_` runs **7–9× per run** for one asset clip, with no
+  memoization and `oldReader_` holding a ref until `~SCut`. The real multiplier is
+  width × rebuilds × placements, and **only the first factor is this proposal's**.
+
+## Two corrections to this proposal, from B9's own measurements
+
+1. **B2's "`nodesExecuted` jitters ±2 at fixed workers" does not reproduce.** A
+   pure offline render is *deterministic* in node count — 62/62 identical. The
+   jitter B2 saw is a property of cases carrying concurrent playback readahead
+   demands, not of the scheduler. (`everAllocated`/`peakBytes` do still jitter, as
+   B1b warned; residency is quoted throughout.)
+2. **The goldens are `mc_mono.wav` / `mc_stereo.wav`**; `mc_golden_*` are the
+   *case* names. Several earlier entries conflate the two.
 
 ---
 
