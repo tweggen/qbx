@@ -357,8 +357,15 @@ void SApplication::initPluginRegistry()
     // The cache lives next to smaragd.ini, not in the sidecar store: the
     // sidecar store keys on a content hash of audio PCM and caps itself with an
     // LRU, which would silently evict the plugin table.
-    reg.setCachePath(
-        QDir( s.configDir() ).filePath( "plugincache.json" ).toStdString() );
+    //
+    // The NAME carries the scanner version (twPluginRegistry::cacheFileName),
+    // because the config dir is shared by every build this user runs while
+    // kScannerVersion is a source constant. Two builds at different versions
+    // sharing one file meant each rejected the other's records on every launch.
+    reg.setCachePath( QDir( s.configDir() )
+                          .filePath( QString::fromStdString(
+                              audio::twPluginRegistry::cacheFileName() ) )
+                          .toStdString() );
 
     // The APP supplies the probe path, so the registry stays dumb and headlessly
     // testable — and on macOS the executable lives inside the .app bundle next

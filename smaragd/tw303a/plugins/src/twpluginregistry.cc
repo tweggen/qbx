@@ -227,6 +227,11 @@ twPluginRegistry::~twPluginRegistry()
 
 // ---------------------------------------------------------------- config ----
 
+std::string twPluginRegistry::cacheFileName()
+{
+    return "plugincache.v" + std::to_string( kScannerVersion ) + ".json";
+}
+
 void twPluginRegistry::setSearchPaths( std::vector<std::string> dirs )
 {
     std::lock_guard<std::mutex> g( mutex_ );

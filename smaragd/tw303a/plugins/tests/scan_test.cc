@@ -363,6 +363,67 @@ int main( int argc, char **argv )
               << std::endl;
 #endif
 
+    // ---- 10: a cancelled scan leaves the registry usable --------------------
+    //
+    // Cancellation exists so that shutdown never has to wait out a full
+    // re-probe (CONTRACT invariant 28). The property that has to hold is that
+    // giving up is CLEAN: no half-written cache, no partial plugin list
+    // published, no sticky failure invented for a module that was never judged
+    // — and a later scan behaves exactly as if the cancelled one never ran.
+    //
+    // The cancel is issued from the PROGRESS CALLBACK, which the scan invokes
+    // on its own thread once per module. That is the only way to land one
+    // deterministically mid-scan; a cancel fired from this thread right after
+    // rescanAsync() would be a race with a scan of two tiny modules.
+    std::cout << "=== cancelling a scan ===" << std::endl;
+    {
+        const QString cancelCache = QDir( root ).filePath( "plugincache_cancel.json" );
+        twPluginRegistry reg;
+        reg.setSearchPaths( { modDir.toStdString() } );
+        reg.setCachePath( cancelCache.toStdString() );
+        reg.setScanProgress( [&reg]( const twPluginScanStats & ) { reg.cancelScan(); } );
+
+        audio::check( reg.rescanAsync( false ), "rescanAsync started a scan to cancel" );
+        audio::check( reg.waitForScan( 30000 ),
+                      "the cancelled scan joined well inside the bound" );
+        audio::check( !reg.isScanning(), "...and left isScanning() false" );
+        audio::check( !QFileInfo::exists( cancelCache ),
+                      "a cancelled scan writes NO cache file" );
+
+        // And now the part that matters: the registry is not poisoned.
+        reg.setScanProgress( nullptr );
+        audio::check( reg.rescanAsync( false ), "a rescan after a cancel starts" );
+        audio::check( reg.waitForScan( 120000 ), "...and runs to completion" );
+        const twPluginScanStats s = reg.scanStats();
+        std::cout << "       after cancel: " << audio::statsLine( s ) << std::endl;
+        audio::check( s.modulesFound == expectFound,
+                      "...seeing every module again" );
+        audio::check( s.modulesProbed == expectFound,
+                      "...probing every one of them (the cancel cached nothing)" );
+        if( haveFixture )
+            audio::check( audio::hasUid( reg.plugins(), audio::kGainUid ),
+                          "...and finding the plugin" );
+
+        std::map<std::string, twPluginModuleRecord> table;
+        audio::check( loadPluginScanCache( cancelCache.toStdString(),
+                                           twPluginRegistry::kScannerVersion, table ),
+                      "the cache written after the cancel parses" );
+        audio::check( (int) table.size() == expectFound,
+                      "...and has a record for every module" );
+    }
+
+    // ---- 11: the cache file name carries the scanner version ---------------
+    std::cout << "=== version-scoped cache file name ===" << std::endl;
+    {
+        const std::string n = twPluginRegistry::cacheFileName();
+        audio::check( n == "plugincache.v"
+                              + std::to_string( twPluginRegistry::kScannerVersion )
+                              + ".json",
+                      "cacheFileName() spells the scanner version into the name" );
+        audio::check( n.find( ".v" ) != std::string::npos,
+                      "...so two builds at different versions cannot share one file" );
+    }
+
     QDir( root ).removeRecursively();
 
     if( audio::gFailures ) {

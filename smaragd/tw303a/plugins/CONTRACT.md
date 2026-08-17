@@ -94,9 +94,14 @@ Invariants:
    Otherwise one crashing or hanging plugin costs a probe (or a timeout) on
    every launch, forever. kScannerVersion is part of the key, so any change to
    what the scanner derives invalidates every record including the failures.
-   The cache is <configDir>/plugincache.json, NOT twSidecarStore: that store
-   keys on a content hash of audio PCM and caps itself with an LRU, which would
-   silently evict the plugin table.
+   The cache is <configDir>/plugincache.v<kScannerVersion>.json (the app asks
+   twPluginRegistry::cacheFileName() for that spelling), NOT twSidecarStore:
+   that store keys on a content hash of audio PCM and caps itself with an LRU,
+   which would silently evict the plugin table. The version is in the FILE NAME
+   as well as in every record because the config dir is shared by every build
+   this user runs: one file meant a build at version N and a build at version
+   N+1 rejected each other's records on every launch, leaving both permanently
+   cold and re-probing every installed plugin in every process.
 10. Crash isolation is the probe EXECUTABLE, and the app supplies its path.
    setProbeExecutable() is what turns "load foreign code in our address space"
    into "load it in a child process we can bury". The registry does not go
@@ -349,6 +354,24 @@ Invariants:
    `AudioUnitParameterUnit` it stores per parameter (empty for indexed/boolean,
    so the host still formats those numerically). The null/placeholder plugin has
    no parameters, so the default empty override is correct.
+
+28. A SCAN IS CANCELLABLE, AND NO SHUTDOWN PATH MAY WAIT ON IT UNBOUNDED.
+   `cancelScan()` sets a flag the scan reads between modules and once per 100 ms
+   slice of the out-of-process probe wait, so a cancel costs at most one module
+   or ~100 ms. Every shutdown path CANCELS FIRST and then joins with a TIMEOUT
+   (`waitForScan( ms )`); an expired join LEAKS the worker rather than deleting
+   or terminating it, keeps the pointer so a later join can retry, and is worth
+   a loud log from the CALLER. Nothing may escape the thread body either — an
+   exception out of a QThread reaches `std::terminate`, whose `abort()` blocks
+   on the CRT lock that an exiting thread is already holding while it waits for
+   this one, and that deadlock has no timeout in it. This is not theoretical:
+   a `--test-case` run ends in `std::exit()`, which runs static destructors on
+   the calling thread while the scan thread keeps running, and the unbounded
+   wait in `~twPluginRegistry` hung every such run for its full 600 s CTest
+   timeout. A cancelled scan writes NO cache and publishes NO plugin list: its
+   table is partial, and a module it never judged must not become a record —
+   least of all a sticky failure. The registry stays usable and the next
+   `rescanAsync()` starts clean (asserted in `plugins_scan_test`).
 
 How to test: `ctest -R plugins_scan_test` — the scanner gate: cache miss/hit,
 invalidate-on-mtime, the stickiness of a failed record (and that force clears

@@ -86,9 +86,22 @@ public:
     void setSearchPaths( std::vector<std::string> dirs );
     std::vector<std::string> searchPaths() const;
 
-    // <configDir>/plugincache.json. Empty disables persistence (the scan then
+    // <configDir>/<cacheFileName()>. Empty disables persistence (the scan then
     // still works, it is just cold on every start).
     void setCachePath( std::string path );
+
+    // The file name the app must give setCachePath(): SCOPED BY SCANNER
+    // VERSION, "plugincache.v<kScannerVersion>.json".
+    //
+    // kScannerVersion is a source constant while the cache is one file per
+    // USER, so two builds at different versions used to share it and reject
+    // each other's records on EVERY launch -- a permanently cold cache and a
+    // full re-probe of every installed plugin in every process, which is what
+    // left a scan running long enough to still be in flight at exit. Records
+    // from a foreign version were already discarded wholesale on load, so a
+    // per-version file loses exactly nothing: each build just keeps its own
+    // warm table instead of trampling the other's.
+    static std::string cacheFileName();
 
     // The out-of-process probe executable (smaragd_pluginprobe). Empty, or a
     // path that cannot be started, falls back to probing IN-PROCESS — which is
