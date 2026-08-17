@@ -27,6 +27,26 @@ struct AudioInputDeviceInfo {
     std::uint32_t channels;   // number of input channels
 };
 
+// What the capture thread and its ring have done since the device was opened
+// (proposal 21 L0). Every counter is a plain relaxed atomic read: a meter, a
+// log line and a test all read them, none of them synchronise on them.
+//
+//   framesPushed   frames the capture thread put into the ring
+//   framesPopped   frames read() handed out
+//   overrunFrames  frames the DEVICE produced that the ring could not hold
+//                  (the consumer is not keeping up) — audio that was lost
+//   underrunFrames frames a NON-EMPTY ring could not satisfy in one read()
+//                  (a hole in the consumer's stream); an idle device with
+//                  nothing at all to give is not counted here
+//   captureWakeups times the capture thread woke with frames to move
+struct AudioInputStats {
+    std::uint64_t framesPushed   = 0;
+    std::uint64_t framesPopped   = 0;
+    std::uint64_t overrunFrames  = 0;
+    std::uint64_t underrunFrames = 0;
+    std::uint64_t captureWakeups = 0;
+};
+
 class AudioInput {
 public:
     virtual ~AudioInput() = default;
@@ -46,7 +66,17 @@ public:
 
     // Read frames from input buffer. Returns number of frames actually read
     // (may be less if buffer underflow). Returns -1 on error.
+    //
+    // Proposal 21 L0: this is a RING POP, not a device poll. The device is
+    // drained by a capture thread that pushes WHOLE packets into an SPSC ring
+    // (see audio_ring.h), so a caller asking for fewer frames than the device
+    // produced no longer loses the remainder — it stays in the ring for the
+    // next call. Non-blocking as before: 0 means "nothing available yet".
+    // ONE consumer thread only.
     virtual std::int32_t read(float *interleaved, std::size_t frameCount) = 0;
+
+    // Capture-thread / ring diagnostics. Zero for a backend that has neither.
+    virtual AudioInputStats stats() const { return {}; }
 
     // Query current configuration
     virtual const AudioInputConfig &getConfig() const = 0;
@@ -71,9 +101,36 @@ public:
 
     // Get error message from last failed operation
     virtual const char *errorMessage() const = 0;
+
+    // Which implementation this is: "wasapi" | "alsa" | "coreaudio" | "null" |
+    // "file". Mirrors MidiOutput::backendName(); it is what makes the env
+    // selection assertable without opening anything.
+    virtual const char *backendName() const = 0;
 };
 
+// Selected by SMARAGD_AUDIO_INPUT_BACKEND ahead of the platform, exactly like
+// SMARAGD_AUDIO_BACKEND does for the output side (proposal 21 L0, design D9):
+//
+//   file:<path>   FileAudioInput — replay a WAV in 1024-frame blocks, paced on
+//                 MidiOutScheduler::hostNowNs(), through a capture thread and a
+//                 ring like any device. This is what makes a monitoring or
+//                 recording case assertable at all.
+//   null          NullInput — silence, no device, no thread. The --test-case
+//                 DEFAULT (set in main.cpp unless already set): a headless
+//                 suite must not open the developer's microphone.
+//   default / ""  the compile-time platform pick (WASAPI / ALSA / CoreAudio).
+//
+// Unknown values warn and fall back to the platform, never to a null pointer.
+// Read per call — unlike the output backend there is no single mint point.
+//
+// Two companion variables shape the file backend, so a case can express them
+// without a second env grammar inside the path:
+//   SMARAGD_AUDIO_INPUT_LOOP=0|1              (default 1: loop at end)
+//   SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=<n>    reported inputLatencyFrames
 std::unique_ptr<AudioInput> createAudioInput();
+
+// The same selection, explicitly. `backend` empty == read the environment.
+std::unique_ptr<AudioInput> createAudioInput(const std::string &backend);
 
 }  // namespace audio
 

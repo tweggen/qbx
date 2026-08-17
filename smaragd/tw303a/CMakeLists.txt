@@ -479,6 +479,7 @@ tw_module(devices
         devices/include/tw/devices/null_backend.h
         devices/include/tw/devices/capture_backend.h
         devices/include/tw/devices/audio_input.h
+        devices/include/tw/devices/audio_ring.h
         devices/include/tw/devices/midi_output.h
         devices/include/tw/devices/midi_input.h
         devices/include/tw/devices/midi_out_scheduler.h
@@ -488,6 +489,11 @@ tw_module(devices
         devices/src/null_backend.cc
         devices/src/capture_backend.cc
         devices/src/audio_input.cc
+        devices/src/audio_ring.cc
+        devices/src/file_input.cc
+        devices/src/file_input.h
+        devices/src/precise_waiter.cc
+        devices/src/precise_waiter.h
         devices/src/null_input.cc
         devices/src/null_input.h
         devices/src/midi_factory.cc
@@ -966,6 +972,16 @@ target_compile_definitions(events_test PRIVATE
 # -j4 run's own load is what it reports.
 tw_module_test(devices_midi_test            devices/tests/midi_test.cc                  tw_devices)
 set_tests_properties(devices_midi_test PROPERTIES RUN_SERIAL TRUE)
+# The INPUT device layer (proposal 21 L0): the SPSC ring under a producer three
+# times the consumer's block (the WASAPI tail-drop regression), FileAudioInput's
+# paced replay of a position-coded fixture it generates itself, the capture MIDI
+# input's injection order, and the backend selection. Like devices_midi_test it
+# measures WALL-CLOCK pacing, so it needs the box to itself. It reaches
+# file_input.h, which is PRIVATE to the module (src/), the same way
+# plugins_scan_test reaches the scan cache's private header.
+tw_module_test(devices_input_test           devices/tests/input_test.cc                 tw_devices)
+target_include_directories(devices_input_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
+set_tests_properties(devices_input_test PROPERTIES RUN_SERIAL TRUE)
 # Proposal 36 B2: components declare their width (getOutputChannels), the wide
 # render path exists (renderPageWide), the plug channel rule and the direct
 # bound-page read. It lives under schedule/tests because AC B2.1 requires the
