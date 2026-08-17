@@ -22,6 +22,13 @@ Invariants:
    The UI playhead is driven by the pumpLocator QTimer.
 2. PlaybackContext implementation: rootComponent()/locatorPosition() UI
    thread; locatorHeldElsewhere()/publishPosition() audio thread, atomics.
+   locatorHeldElsewhere() is `recording AND nothing audible yet`, never
+   `recording` alone — see tw/record/CONTRACT.md inv. 1. publishPosition()
+   also stamps the priming lag once per take
+   (recordMonitorPrimingFrames), which is what places a recorded take
+   where the performer HEARD themselves: the clip moves EARLIER by
+   priming + outputLatency + inputLatency. A SUM and a minus — the old
+   `+ (output - input)` had the wrong sign and a near-zero magnitude.
 3. Session wiring (render/record onPosition, startLocatorFrames, speaker
    context) happens HERE — engine modules never see the app.
 4. Window layout restore order: openMostRecent() → restoreWindowLayout() →

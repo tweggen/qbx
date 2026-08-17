@@ -158,10 +158,24 @@ public:
     // publishPosition() run on the AUDIO thread (atomic ops only, no Qt).
     std::shared_ptr<twComponent> rootComponent() override;
     std::uint64_t locatorPosition() override { return getGlobalLocatorPos(); }
-    bool locatorHeldElsewhere() override { return isRecordingActive(); }
+    // The record worker owns the playhead only while NOTHING IS AUDIBLE. Once
+    // the monitoring playback is running, the speaker publishes the position it
+    // is actually delivering and the worker stands down — see
+    // recordLocatorFromCapture_.
+    bool locatorHeldElsewhere() override
+        { return isRecordingActive() && recordLocatorFromCapture_.load(
+                     std::memory_order_relaxed ); }
     void publishPosition(std::uint64_t absPos) override {
+        noteMonitorAudibleRealtime();
         setGlobalLocatorPosRealtime((offset_t) absPos);
     }
+
+    // How many PROJECT-rate frames the recorder had already captured when the
+    // monitoring playback became audible for the first time — the constant lag
+    // between "capture started" and "the arrangement started coming out of the
+    // speakers", which twSpeaker spends priming the readahead. 0 when there is
+    // no monitor (or none started). Read on the UI thread at placement time.
+    offset_t recordMonitorPrimingFrames() const;
 
     // How many times the RT thread has published a position in this process.
     // The MIDI-out pump anchors its clock on a PUBLICATION rather than on a
@@ -307,6 +321,25 @@ private:
     std::atomic<std::uint64_t> locatorPublishSeq_{ 0 };
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
+
+    // --- who moves the playhead while recording (see locatorHeldElsewhere) ---
+    // TRUE from the moment capture starts until the monitoring playback is
+    // running. It used to be "for the whole take", which put the displayed
+    // playhead ahead of what the user could HEAR by the readahead priming time
+    // (~1.4 s per page) and then let it drift further, because a capture-frame
+    // count is only a clock if the capture clock is right — and a measured
+    // take came in 8.6 % fast. Written on the UI thread, read on the audio and
+    // record threads.
+    std::atomic<bool> recordLocatorFromCapture_{ false };
+    // PROJECT-rate frames the recorder has captured so far (record thread).
+    std::atomic<std::uint64_t> recordCaptureFrames_{ 0 };
+    // Snapshot of the above taken on the FIRST publishPosition of a take, i.e.
+    // the priming lag. NOT_PRIMED until then; the capture's own frame count is
+    // the clock, so no host-time plumbing is needed to measure it.
+    static constexpr std::uint64_t NOT_PRIMED = ~0ull;
+    std::atomic<std::uint64_t> recordPrimingFrames_{ NOT_PRIMED };
+    // Audio-thread half of the snapshot above (atomics only, no Qt).
+    void noteMonitorAudibleRealtime();
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
     QTimer *meterTimer_ = nullptr;    // drives meterTick (proposal 34)

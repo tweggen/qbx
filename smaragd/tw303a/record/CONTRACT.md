@@ -11,9 +11,20 @@ Forbidden: app headers — the app supplies startLocatorFrames in params and
 receives positions via onPosition.
 
 Invariants:
-1. The record worker is the sole locator authority while active (the
-   speaker checks locatorHeldElsewhere) and publishes
-   startLocatorFrames + captured PROJECT-rate frames.
+1. The record worker is the locator authority only while NOTHING IS
+   AUDIBLE — from capture start until the monitoring playback is running
+   (the speaker checks locatorHeldElsewhere, which the app now gates on
+   that window rather than on "recording at all"). It publishes
+   startLocatorFrames + captured PROJECT-rate frames; once the monitor is
+   up the SPEAKER publishes the position it is actually delivering.
+   Why: startOutput() returns before the device starts (twSpeaker defers
+   it until the readahead is primed, ~1.4 s per page), so a playhead
+   driven by captured frames ran ahead of anything the user could hear for
+   the whole take — and then drifted further, because a capture-frame
+   count is only a clock if the capture clock is right. A measured take
+   delivered 8.6 % more frames than wall clock (see invariant 3's
+   diagnostic), which is a second reason not to steer the timeline with
+   it.
 2. Worker thread: no Qt (THREADING.md rule 1); the progress dialog POLLS
    the query methods, it does not use the callbacks.
 3. Files are written at the PROJECT rate regardless of device rate;
