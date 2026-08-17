@@ -12706,3 +12706,27 @@ OWN clips (design §10.1 — it needs proposal 20 §2). Also not gated: the
 but render nothing until L2; the Options input combo and the arm menu, which are
 real but have no headless gesture; and the `Closure` master mode, which is
 implemented and unreachable while `SStdMixer` builds a unity sum.
+
+**AC7 sweeps (orchestrator-collected, 2026-08-17; the agent's session was
+cut by API overload after launching them):** `monitor_folder_closure` 50/50 ×
+workers {1,4,8,16} = 200/200; `arm_during_playback` 200/200; `monitor_through_chain`
+200/200; `render_while_armed` 25/25 (workers 8); `monitor_latency` **48/50** at
+workers 8 while the box was ALSO running another worktree's suite — the case
+asserts a wall-clock lag budget (8192 frames; measured 5120–6144 idle), so it
+belongs in the same load-sensitive family as `twlog_test` and `devices_midi_test`
+(RUN_SERIAL protects it only from tests in the same ctest run). Re-run idle 8/8.
+Full suite on the branch after the sweeps: `ctest -j4` **179/179, 182 registered,
+3 Not Run (Disabled)**, 91.8 s.
+
+**Orchestrator review notes (accepted, recorded):** (1) the disarm releases
+processor ownership BEFORE the re-wire (measured necessity: otherwise the first
+re-summed page freezes as silence and the epoch gate flips the RT onto it), so for
+the length of the hand-back tail the pump and the freeze path both render the
+departing processors — bounded, mutex-serialised, but a stateful insert can
+carry a small artefact across the ~256 ms tail; (2) design D3's Closure master
+mode is REFUSED (one log line, arrangement untouched) rather than run: the plan
+builder can express it but the RT still adds the frozen root page whenever the
+frozen lane is PLAYING, and nothing reads `twLivePlan::masterLinear`. Unreachable
+today (the master is a unity `twMixer` + identity `twRewire` by construction);
+whoever adds a master insert chain lands on the log line and the fix is a
+`twSpeaker` flag that pulls-and-discards the root while a Closure plan is live.

@@ -889,7 +889,9 @@ Gates: the qxa cases `monitor_through_chain`, `monitor_latency`,
 monitored lag **5120 frames = 106.7 ms** (correlation 1.000) against an 8192
 budget; a mid-play hand-back gap of **8 frames** against 1024; an armed render
 **byte-identical** to the unarmed one; `liveThreadRefusals` and
-`liveOwnedRefusals` **0** in every case. **NOT gated:** real device latency and
+`liveOwnedRefusals` **0** in every case. `monitor_latency` is a WALL-CLOCK bound
+(like `twlog_test`): 48/50 under a second worktree's suite, 8/8 idle — confirm the
+box is idle before reading it as a regression. **NOT gated:** real device latency and
 jitter, WASAPI shared under load, ASIO, and hearing an ARMED track's own clips
 (design §10.1 — it needs proposal 20 §2).
 
