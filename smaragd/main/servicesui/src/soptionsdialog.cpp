@@ -4,6 +4,7 @@
 #include "app/shell/sapplication.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/devices/audio_backend.h"
+#include "tw/record/loopback_runner.h"
 #include "tw/devices/audio_input.h"
 #include "tw/devices/midi_output.h"
 #include "app/shell/smidiinputhub.h"
@@ -24,6 +25,7 @@
 #include <QAbstractItemView>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QApplication>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
@@ -173,6 +175,18 @@ QWidget *SOptionsDialog::buildAudioPage()
     form->addRow( new QLabel(
         "Applies to the selected input device. The driver's reported latencies "
         "are compensated automatically; this corrects what it misreports." ) );
+
+    // MEASURE IT INSTEAD OF TYPING IT (proposal 21 L6a). The label above asks
+    // the user to produce a number by ear; this produces it with a cable.
+    measureLoopbackBtn_ = new QPushButton( "Measure with a loopback cable..." );
+    measureLoopbackBtn_->setToolTip(
+        "Plays a short click out and listens for it coming back, then offers the "
+        "difference between the real round trip and what the driver claims.\n\n"
+        "Needs a cable from an output to the input, and ONE device selected for "
+        "both directions." );
+    form->addRow( QString(), measureLoopbackBtn_ );
+    connect( measureLoopbackBtn_, &QPushButton::clicked,
+             this, &SOptionsDialog::onMeasureLoopback );
 
     // TRANSPORT POLISH (proposal 21 L5). Three per-USER knobs, on the Audio
     // page because that is where the transport's other timing numbers already
@@ -557,6 +571,135 @@ void SOptionsDialog::loadAudioPage()
                                               Qt::CaseInsensitive );
         driverPanelBtn_->setVisible( isAsio );
         driverPanelBtn_->setEnabled( isAsio );
+    }
+}
+
+void SOptionsDialog::onMeasureLoopback()
+{
+    const QString outId = audioDevice_->currentData().toString();
+    const QString inId  = audioInputDevice_->currentData().toString();
+
+    // ONE DEVICE FOR BOTH DIRECTIONS, and this is not fussiness. The
+    // measurement counts frames from each stream's OWN start, so if the two
+    // streams started at different moments the difference carries that skew
+    // and is not a latency at all. On a full-duplex ASIO driver one callback
+    // serves both directions, so the two counters share an origin by
+    // construction; two separate endpoints do not. The runner refuses it as
+    // well — this check exists only so the refusal arrives as a sentence
+    // rather than as a failed run.
+    if( outId.isEmpty() || outId != inId ) {
+        QMessageBox::information(
+            this, "Measure round trip",
+            "This measurement needs ONE device selected for BOTH the output and "
+            "the input.\n\n"
+            "It counts frames from each stream's own start, so two separately "
+            "started streams would contribute the gap between their start times "
+            "as if it were latency. A full-duplex ASIO driver serves both "
+            "directions from one callback, which is what makes the two counts "
+            "comparable." );
+        return;
+    }
+
+    // Not while the transport owns the devices: the run starts and stops them.
+    if( SApplication::app().isPlaying() || SApplication::app().isRecordingActive() ) {
+        QMessageBox::information( this, "Measure round trip",
+                                  "Stop playback and recording first — the measurement "
+                                  "needs to start and stop the device itself." );
+        return;
+    }
+
+    if( QMessageBox::question(
+            this, "Measure round trip",
+            "Connect a cable from an OUTPUT of this device to the INPUT you record "
+            "from, then continue.\n\n"
+            "A short click will be played. The app will be unresponsive for about "
+            "three seconds.\n\n"
+            "Nothing is changed without your say-so: the result is shown first.",
+            QMessageBox::Ok | QMessageBox::Cancel ) != QMessageBox::Ok )
+        return;
+
+    // FRESH device objects rather than the app's. On ASIO the registry hands
+    // back the same underlying driver anyway (proposal 35), so this measures
+    // the device the user actually selected without disturbing whatever the
+    // speaker is holding.
+    std::unique_ptr<audio::AudioBackend> be = audio::createAudioBackend();
+    std::unique_ptr<audio::AudioInput>   in = audio::createAudioInput();
+    if( !be || !in ) return;
+
+    audio::LoopbackRunParams p;
+    p.outputDeviceId   = outId.toStdString();
+    p.inputDeviceId    = inId.toStdString();
+    p.inputChannel     = 0;
+    p.inputChannelMask = 1;
+
+    in->requestChannels( p.inputChannelMask );
+    if( in->openDevice( p.inputDeviceId, 0 ) != 0 ) {
+        QMessageBox::warning( this, "Measure round trip",
+                              QString( "The input device would not open:\n%1" )
+                                  .arg( QString::fromUtf8( in->errorMessage() ) ) );
+        return;
+    }
+    if( be->openDevice( p.outputDeviceId, 0 ) != 0 ) {
+        QMessageBox::warning( this, "Measure round trip",
+                              "The output device would not open." );
+        return;
+    }
+
+    // The run BLOCKS for the capture window plus the driver's start-up (~0.5 s
+    // on the hardware this was built against). A wait cursor is the honest
+    // signal; a progress dialog would not repaint anyway, because nothing
+    // returns to the event loop until the pass is done.
+    QApplication::setOverrideCursor( Qt::WaitCursor );
+    const audio::LoopbackRun r = audio::runLoopback( be.get(), in.get(), p );
+    QApplication::restoreOverrideCursor();
+
+    be->closeDevice();
+    in->closeDevice();
+
+    if( !r.result.found ) {
+        QString why = QString::fromStdString( r.error );
+        if( why.isEmpty() ) why = "No probe was found in the capture.";
+        QMessageBox::warning(
+            this, "Measure round trip",
+            why + "\n\n" +
+                QString::fromUtf8( audio::loopbackLevelAdvice(
+                    audio::loopbackLevelOf( r.result ) ) ) );
+        return;
+    }
+
+    const double offerMs = r.suggestedOffsetMs();
+    const audio::LoopbackLevel level = audio::loopbackLevelOf( r.result );
+
+    QString body =
+        QString( "Round trip: %1 frames (%2 ms)\n"
+                 "The driver reports %3 out + %4 in = %5 frames.\n\n"
+                 "Residual it did NOT report: %6 ms." )
+            .arg( (qlonglong) r.result.roundTripFrames )
+            .arg( audio::loopbackMs( r.result.roundTripFrames, r.sampleRate ), 0, 'f', 2 )
+            .arg( r.reportedOutputFrames )
+            .arg( r.reportedInputFrames )
+            .arg( r.reportedOutputFrames + r.reportedInputFrames )
+            .arg( offerMs, 0, 'f', 2 );
+
+    // A WEAK return is reported even though the measurement SUCCEEDED. The
+    // first real measurement on hardware passed at 1.5x the refusal floor —
+    // correct, but one gain step away from being refused — and a user deciding
+    // whether to trust a number deserves to know that.
+    if( level != audio::LoopbackLevel::Good )
+        body += QString( "\n\nNote: %1." )
+                    .arg( QString::fromUtf8( audio::loopbackLevelAdvice( level ) ) );
+
+    body += QString( "\n\nSet the recording offset to %1 ms?" )
+                .arg( offerMs, 0, 'f', 0 );
+
+    // IT PROPOSES; THE USER DISPOSES. And even "Yes" only fills the spin box —
+    // the value is not written until the dialog itself is applied, so there
+    // are two deliberate steps between a measurement and a timing constant
+    // that shifts every take recorded afterwards.
+    if( QMessageBox::question( this, "Measure round trip", body,
+                               QMessageBox::Yes | QMessageBox::No ) == QMessageBox::Yes ) {
+        if( recordingOffsetMs_ )
+            recordingOffsetMs_->setValue( (int) qRound( offerMs ) );
     }
 }
 

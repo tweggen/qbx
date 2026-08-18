@@ -45,6 +45,10 @@ private slots:
     // afterwards, because on a driver like the US-16x08 the buffer size lives
     // in that window and nowhere else.
     void onOpenDriverPanel();
+    // Runs a LOOPBACK CALIBRATION (proposal 21 L6a): emits a probe on the
+    // output, finds it on the input, and OFFERS the residual. It never applies
+    // anything by itself — see the .cpp for why that is not timidity.
+    void onMeasureLoopback();
 
 private:
     QWidget *buildMousePage();
@@ -96,6 +100,7 @@ private:
     // for a backend that has one — WASAPI does not, because a shared-mode
     // endpoint's settings live in the Windows sound control panel.
     QPushButton *driverPanelBtn_ = nullptr;
+    QPushButton *measureLoopbackBtn_ = nullptr;
     QLabel *outputLatencyLabel_;     // Output latency display
     QLabel *inputLatencyLabel_;      // Input latency display
 
