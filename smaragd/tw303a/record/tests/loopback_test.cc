@@ -164,6 +164,38 @@ static void testRefusal()
                r.peakToNoise, (long long) r.roundTripFrames);
     }
 
+    // THE ONE HARDWARE TAUGHT US, and the reason `minPeakAmplitude` exists.
+    // A relative SNR test alone passes on a NOISE SPIKE over a quiet floor,
+    // which is what an unconnected input actually looks like — real inputs
+    // have interference, relays and cables being touched, none of which
+    // Gaussian noise models. Measured on a real interface with NO CABLE: a
+    // peak of 0.0045 (0.45 % of full scale, 40 dB below the emitted probe)
+    // standing 17.9x above the RMS floor, reported as a confident 345.62 ms.
+    {
+        std::vector<float> cap(96000 * 2, 0.0f);
+        std::mt19937 rng(11);
+        std::normal_distribution<float> d(0.0f, 0.0002f);
+        for (float &v : cap) v = d(rng);
+        // One isolated spike: tiny in absolute terms, enormous relative to the
+        // floor around it. Exactly the shape that fooled the relative test.
+        cap[40000 * 2 + 0] = 0.0045f;
+
+        const LoopbackResult relOnly =
+            loopbackMeasure(cap.data(), 96000, 2, 0, 1000, 8.0f, 0.0f);
+        CHECK(relOnly.found,
+              "a NOISE SPIKE passes the relative test alone (this is the bug)");
+        printf("     (relative-only would claim %lld frames from a %.4f peak, "
+               "peak/noise %.1f)\n",
+               (long long) relOnly.roundTripFrames, relOnly.peakAmplitude,
+               relOnly.peakToNoise);
+
+        // With the absolute floor the caller actually uses (1 % of a 0.5
+        // probe = 0.005), the same capture is refused.
+        const LoopbackResult withAbs =
+            loopbackMeasure(cap.data(), 96000, 2, 0, 1000, 8.0f, 0.5f * 0.01f);
+        CHECK(!withAbs.found, "the ABSOLUTE floor refuses it");
+    }
+
     // Silence: nothing to find, and no division by a zero floor.
     {
         const std::vector<float> cap(96000 * 2, 0.0f);

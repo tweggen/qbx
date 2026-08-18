@@ -72,12 +72,30 @@ inline std::vector<float> loopbackProbe(std::size_t frames = 64, float amplitude
 // Find the probe's ARRIVAL in `captured` (interleaved, `channels` wide; only
 // `channel` is examined), given that it was EMITTED at `emittedAtFrame`.
 //
-// `minPeakToNoise` is the refusal threshold: below it, `found` is false and
-// the caller must say so rather than use the number.
+// TWO refusal thresholds, and BOTH are needed. `minPeakToNoise` is relative —
+// does the candidate stand clear of the floor — and `minPeakAmplitude` is
+// ABSOLUTE: is it plausibly the probe at all.
+//
+// THE ABSOLUTE ONE WAS ADDED AFTER HARDWARE PROVED THE RELATIVE ONE
+// INSUFFICIENT, and the failure is worth stating because it is the exact thing
+// this function exists to prevent. Run against a real interface with NO CABLE
+// CONNECTED, the relative test alone reported a confident 345.62 ms: the
+// unconnected input's own noise had a peak of 0.0045 — 0.45 % of full scale,
+// 40 dB below the emitted probe — standing 17.9x above an even quieter RMS
+// floor. Synthetic Gaussian noise never produced that, because Gaussian noise
+// has no spikes; real inputs do (interference, a relay, a cable being
+// touched), and a spike over a quiet floor passes any purely relative test.
+//
+// So the caller passes what it EMITTED, and a candidate must be within a
+// sensible loss of it. A line-level loopback returns near unity; a pad or a
+// mismatched level might cost 20-30 dB. Two orders of magnitude (40 dB) is
+// already generous, and it is three orders clear of the 0.0045 that fooled the
+// relative test.
 inline LoopbackResult loopbackMeasure(const float *captured, std::size_t frames,
                                       std::uint32_t channels, std::uint32_t channel,
                                       std::int64_t emittedAtFrame,
-                                      float minPeakToNoise = 8.0f)
+                                      float minPeakToNoise = 8.0f,
+                                      float minPeakAmplitude = 0.0f)
 {
     LoopbackResult r;
     if (!captured || frames == 0 || channels == 0 || channel >= channels) return r;
@@ -137,12 +155,17 @@ inline LoopbackResult loopbackMeasure(const float *captured, std::size_t frames,
     peakAt = onset;
     r.roundTripFrames = (std::int64_t) peakAt - emittedAtFrame;
 
-    // Refuse rather than guess: a peak that does not stand clear of the floor,
-    // or an arrival BEFORE the probe was emitted, is not a measurement. The
-    // second is not paranoia — it is what a stale capture buffer or a
-    // mis-stamped emit position looks like, and it must not become a negative
-    // "latency".
-    r.found = r.peakToNoise >= minPeakToNoise && r.roundTripFrames >= 0;
+    // Refuse rather than guess. Three ways to fail, and each one has been seen:
+    //   - too quiet in ABSOLUTE terms: not the probe, whatever its SNR (the
+    //     no-cable case above);
+    //   - not clear of the floor: something is there but it is not clean;
+    //   - an arrival BEFORE the emit: impossible, and what a stale capture
+    //     buffer or a mis-stamped emit position looks like. It must never
+    //     become a negative "latency" that is then subtracted from every
+    //     placement.
+    r.found = r.peakAmplitude >= minPeakAmplitude &&
+              r.peakToNoise   >= minPeakToNoise &&
+              r.roundTripFrames >= 0;
     return r;
 }
 
