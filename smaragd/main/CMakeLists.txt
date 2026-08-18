@@ -86,6 +86,8 @@ set(APP_CORE_FILES
     media/include/app/media/smediaregistry.h
     media/include/app/media/smediasource.h
     media/include/app/media/smediatypes.h
+    media/include/app/media/swebdavclient.h
+    media/include/app/media/swebdavmediasource.h
     media/src/slocalmediasource.cpp
     media/src/smedialocalwalker.h
     media/src/smedialocalwalker.cpp
@@ -93,6 +95,11 @@ set(APP_CORE_FILES
     media/src/smediaregistry.cpp
     media/src/smediasource.cpp
     media/src/smediatypes.cpp
+    # proposal 38 gate 4: the Nextcloud/WebDAV connector. UNIT-TEST ONLY --
+    # no account, no UI, no qxa case reaches this yet (gate 5c). PROPFIND/GET
+    # transport (swebdavclient) + the SMediaSource adapter (swebdavmediasource).
+    media/src/swebdavclient.cpp
+    media/src/swebdavmediasource.cpp
     # --- app/persistence
     persistence/include/app/persistence/sloadprojectaction.h
     persistence/include/app/persistence/sprojectloader.h
@@ -422,6 +429,14 @@ set(APP_UI_FILES
     testkit/src/stestfilepath.cpp
     testkit/src/strackselectionactions.cpp
     testkit/src/stransporttestactions.cpp
+    # proposal 38 gate 4: the WebDAV stub server. Deliberately NOT under
+    # include/app/testkit/ -- it is not part of testkit's public action-verb
+    # API, only a fixture two things link directly: this gate's own
+    # webdav_source_test (main/media/tests/, via an explicit extra include
+    # dir -- see the webdav_source_test target below) and gate 5c's
+    # `media-webdav-stub` verb, which will live in smaragd.exe.
+    testkit/src/swebdavstub.h
+    testkit/src/swebdavstub.cpp
 )
 
 # Layer 1 — the document model (+ the Phase 6 seams: SAppContext,
@@ -859,4 +874,31 @@ target_compile_definitions(media_source_test PRIVATE
 )
 add_test(NAME media_source_test COMMAND media_source_test)
 set_tests_properties(media_source_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The Nextcloud/WebDAV connector (proposal 38 gate 4): PROPFIND parsing, the
+# BFS search's concurrency cap and truncation, GET with progress/cancel, error
+# handling (401 does not retry, 404, a mid-body close), and a source destroyed
+# with requests in flight -- all against the in-repo stub
+# (main/testkit/src/swebdavstub.{h,cpp}), never a real server. UNIT-TEST ONLY:
+# no account, no UI, no qxa case reaches this yet (gate 5c adds those behind a
+# `media-webdav-stub` verb). The stub lives in main/testkit (not
+# main/media/tests) because smaragd.exe itself starts one in gate 5c and
+# links testkit already; this test reaches it through an explicit extra
+# include dir since swebdavstub.h is not part of testkit's public
+# include/app/testkit/ API.
+add_executable(webdav_source_test media/tests/webdav_source_test.cpp)
+target_include_directories(webdav_source_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/testkit/src
+)
+target_link_libraries(webdav_source_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+target_compile_definitions(webdav_source_test PRIVATE
+    SMEDIA_MODULE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/media"
+    SWEBDAV_TESTKIT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testkit/src"
+)
+add_test(NAME webdav_source_test COMMAND webdav_source_test)
+set_tests_properties(webdav_source_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
