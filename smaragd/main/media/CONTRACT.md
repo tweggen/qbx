@@ -4,12 +4,14 @@ Purpose: the media SOURCE layer of the media browser (proposal 38). The
 addressable identity of a media item (`SMediaRef` / `SMediaEntry`), the
 category → suffix table, the abstract `SMediaSource` ABI every provider
 answers through, the id → source registry, the local file-system provider,
-and (gate 4) the Nextcloud/WebDAV connector. Later gates add the cache and
-the drop helper here; the dock is a DIFFERENT module (`main/mediabrowser`,
-app_ui).
+(gate 4) the Nextcloud/WebDAV connector, and (gate 3) the content-addressed
+fetch CACHE plus the DROP helper that turns a `media:` payload into one
+`add-sample` over a local path. The dock is a DIFFERENT module
+(`main/mediabrowser`, app_ui).
 
 Public headers: app/media/{smediaref,smediatypes,smediasource,smediaregistry,
-slocalmediasource,swebdavclient,swebdavmediasource}.h
+slocalmediasource,smediacache,smediadrop,sdelayedlocalsource,swebdavclient,
+swebdavmediasource}.h
 
 **Gate 4's `SWebDavClient`/`SWebDavMediaSource` are UNIT-TEST ONLY as of this
 writing.** No account, no credential store, no UI and no qxa case reaches
@@ -22,10 +24,16 @@ Depends on (engine): tw/core, tw/graph (the base every app module gets).
 another engine module — a provider that knows what a page is has started doing
 the engine's job.
 
-App edges: `model` only, and today not even that in code — the dependency is
-declared because gate 3's cache reasons about `SFilePathRef`'s project-relative
-spelling. It must never grow an edge to `objects/*`: a provider that knows what
-an `SCut` is has started doing the dock's job.
+App edges: `model` ONLY. It must never grow an edge to `objects/*`, and since
+gate 3 that is a LAYER fact rather than a preference: this module is app_core
+and `SAddSampleAction` is app_objects, one layer UP, so the placement cannot be
+constructed here at all and no edit to `tools/check_layering.py` would change
+it. The placement is a HOOK the shell installs
+(`smediadrop::setPlacementHook`), exactly as the shell injects the plugin scan
+cache's path. `model` itself is used for real now: `SProject::externFiles()`
+(the eviction pin), `SProject::projectFilePath()` (the copy target, which is
+what `SFilePathRef`'s project-relative spelling needs), `SAppContext` and
+`strackpath::pathOf`.
 
 Qt edges: `Qt::Network` (gate 4's `QNetworkAccessManager`, the first HTTP
 client in this tree) and `Qt::Concurrent` (the PROPFIND XML parse, off the
@@ -255,14 +263,113 @@ Decisions gate 4 had to make that §B.7 did not spell out:
   reason the local provider has neither: the MVP places files by a fetched
   local path.
 
+## Gate 3: the cache and the drop helper
+
+### `SMediaCache` — `<configDir>/mediacache/<sourceId-hash>/<key>.<ext>`
+
+The content key is `sha1(sourceId + path + etag|mtime + size)` (§B.6). Six
+things about it that a reader would otherwise have to re-derive:
+
+- **The key needs metadata the DRAG PAYLOAD does not carry.** A `media:` drop
+  quotes an `SMediaRef` and nothing else — that is what keeps the arranger's new
+  branch five lines long — so the BROWSER, the only thing in the process that
+  ever holds an `SMediaEntry`, feeds one in as it lists (`noteEntry()`, called
+  from `SMediaBrowserPanel::appendEntries`). A ref the cache has never seen
+  still keys, over `(sourceId, path)` alone and marked as such, because a key
+  that refused to exist would turn an un-listed drop into a FAILURE rather than
+  into a cache that cannot detect a remote change.
+- **An etag WINS over an mtime.** It is the only change token a WebDAV server
+  promises to move on every write; a mtime that moved without one must not
+  manufacture a second key for the same content.
+- **EVERY WRITE GOES THROUGH `QSaveFile`** (trap T7) and every fetch temp is
+  `<key>.<pid>.<seq>.part` — the sidecar store's exact lesson, which cost a torn
+  payload that passed the reader's bounds check. A `.part` is never evictable:
+  it is somebody's in-flight download.
+- **A LOST RENAME IS NOT A FAILURE.** Two processes committing the same target
+  can collide in `MoveFileEx` on Windows (measured: four concurrent writers, and
+  it happens). The loser's answer is the winner's file, which is byte-identical
+  BY CONSTRUCTION because the key *is* the content — and `publish()` also
+  short-circuits when the target already exists, for the same reason. That is
+  what makes gate 3 AC 8 ("two processes fetching one key leave ONE INTACT
+  file") a property of the design rather than of who won the race.
+- **THE LRU ORDER IS THE FILE'S MODIFICATION TIME**, touched on every hit. No
+  index file, and therefore no cross-process index to tear. The touch opens
+  `ReadWrite`, not `ReadOnly`: a Windows handle opened `GENERIC_READ` has no
+  `FILE_WRITE_ATTRIBUTES` and `SetFileTime` fails on it.
+- **EVICTION MAY NEVER DELETE A FILE THE OPEN PROJECT REFERENCES** (trap T17).
+  `evictToCap()` takes the pinned set — `SProject::externFiles()`, collected by
+  `smediadrop` — and a cache that cannot get under its cap because the project
+  pins too much LOGS THAT AND STOPS rather than evicting anyway. Every eviction
+  is logged (T12).
+
+### `smediadrop` — what a `media:` drop MEANS
+
+**Placement is ALWAYS the existing `add-sample` over a LOCAL path.** There is no
+new action type, no placeholder clip and no `SCut` work anywhere in gate 3; the
+media layer's job ends at producing that path.
+
+- **A PENDING PLACEMENT HOLDS THE TARGET'S IDENTITY, NEVER ITS INDEX-PATH**
+  (§B.5, trap T18). An index-path is a position in a tree the user is free to
+  edit while a 40 MB file downloads, and a clip landing silently on the WRONG
+  lane is worse than not landing at all. It is a `QPointer`, which is that
+  identity plus the one thing a bare pointer or a serialized `id` cannot offer:
+  it cannot be confused by an address the allocator handed to a NEW track.
+- **The test is REACHABILITY FROM THE ROOT, not liveness.** `remove-track` is
+  undoable and PINS the removed track on the action object, so a removed track
+  is still alive. `strackpath::pathOf()` returning `{}` is the answer, read the
+  same way `SMVActualView::dropEvent` already reads it (a drop target is never
+  the root).
+- **A pending placement is dropped when the project is CLOSED OR SWITCHED**, so
+  the cancel is wired on `SApplication::setCurrentProject` — a close is one case
+  of a change, not the only one — and `finishPlacement` re-checks project
+  identity anyway.
+- **The project copy** (§B.6): the name is SANITISED for this file system
+  (WebDAV permits `:` `?` `*` `|`, a trailing dot and a trailing space; Windows
+  permits none of them — T19), the path is capped so `<projectdir>/media/<name>`
+  stays inside `MAX_PATH`, a collision NEVER overwrites (`name (2).ext`), and a
+  repeat drop of the SAME CONTENT reuses the existing copy. The two are told
+  apart by HASHING the existing file, and only on a collision — so it costs
+  nothing in the common case, and the reuse rule holds across sessions rather
+  than only within one.
+- **UNDO OF A DEFERRED DROP REMOVES THE CLIP AND LEAVES THE COPIED FILE
+  BEHIND.** The copy is not part of `SAddSampleAction`, so its undo cannot know
+  about it. This is ACCEPTED, not a bug to be fixed by hooking the action: the
+  resources dock's *Cleanup...* dialog is the precedent for exactly this class
+  of orphan. Recorded here rather than in a bug report six months from now.
+- **TWO CONCURRENT DEFERRED PLACEMENTS LAND IN FETCH-COMPLETION ORDER**, which
+  is not the order they were dropped in. Nothing promises otherwise and nothing
+  should: each placement is independent, and the alternative would mean holding
+  a finished download back behind a slower one. It cost a flake to learn —
+  `media_drop_deferred` asserted `clip 0,0 startTime=48000` and got the other
+  drop's frame in 4 runs of 10 — and the case now puts the two concurrent drops
+  on two different tracks, which states the real claim.
+
+### `SDelayedLocalSource` — TEST ONLY
+
+Registered as `testdelay` **only when `SMARAGD_MEDIA_TEST_SOURCE=1`**. It
+inherits the local walk verbatim and differs in three methods: `id()`, `caps()`
+(it reports `NeedsFetch`, which is the whole point — that is what makes the
+browser emit a `media:` payload) and `fetch()` (a `QTimer`, a copy, a
+configurable delay and a configurable failure). Gate 3 has no network, so
+without it the deferred branch could only be tested against a real server's
+timing. Same instinct as `twtestclap`.
+
 ## Knobs
 
-None yet. Gate 3 adds `SMARAGD_MEDIA_CACHE_DIR`.
+| Knob | Effect |
+|---|---|
+| `SMARAGD_MEDIA_CACHE_DIR=<path>` | Relocates the fetch cache. Read ONCE per process, and it WINS over the shell's injection — the knob exists so `ctest -j4` can isolate four processes, and a later injection winning would defeat that. |
+| `SMARAGD_MEDIA_CACHE_DIR=off` | Disables it: every lookup misses, `publish()` returns the fetched temp unchanged, nothing is reused. The result is unchanged, only slower — the same contract `SMARAGD_SIDECAR_DIR=off` has. |
+| `SMARAGD_MEDIA_TEST_SOURCE=1` | Registers `SDelayedLocalSource` as `testdelay`. A user must never find "Delayed local (test)" in the source combo, which is why this is a runtime knob and not a build flag. |
+| `SOpt::MediaCacheCapMB` | The LRU cap in MB, 2048 by default, pushed down by `SApplication::initMediaLayer()` because app_core cannot see `SSettings`. `<= 0` means no cap. |
 
 ## How to test
 
-`ctest -R media_source_test` (gate 1, local provider) and
-`ctest -R webdav_source_test` (gate 4, WebDAV connector). The local fixture
+`ctest -R media_source_test` (gate 1, local provider),
+`ctest -R media_cache_test` (gate 3, the cache and the project copy, including
+the four-process AC 8 check that this binary drives by re-execing itself),
+`ctest -R webdav_source_test` (gate 4, WebDAV connector), and the qxa case
+`media_drop_deferred` (gate 3 end to end, through the REAL drop handler). The local fixture
 tree is committed at `smaragd/tests/media/` and its shape is what makes every
 count a closed form:
 
@@ -288,6 +395,28 @@ run time than to commit, and the stub binds `127.0.0.1:0` (an OS-assigned
 port), which is what keeps it safe under `ctest -j4`.
 
 ## Known debt
+
+Gate 3's, first:
+
+- **Undo of a deferred drop leaves the project copy behind** (above). Accepted
+  and documented; *Cleanup...* is the housekeeping route.
+- **AC 5 — the project CLOSED or SWITCHED — is not reachable from a qxa
+  script.** No verb closes or swaps the current project (`load-project` loads
+  INTO the existing `SProject` object rather than replacing it), so the cancel
+  wired on `setCurrentProject` and the pending entry's own project-identity
+  check are code-reviewed and unexercised by the suite.
+- **No real network fetch is exercised anywhere in gate 3.** `testdelay` copies
+  a local file; what is under test is the deferred BRANCH, never the physics of
+  a download. Nothing here has ever run against a server.
+- **The cache is trimmed only on a drop.** `evictToCap()` is called from
+  `finishPlacement`, so a cache that goes over its cap and is then never dropped
+  into again stays over it. There is no periodic sweep and none at startup.
+- **`SOpt::MediaCacheCapMB` has no UI control.** It is read at startup from
+  `smaragd.ini`; only a hand edit or `set-option` writes it.
+- **A cache reference is never relocated at SAVE time** (§B.6, §F): a clip placed
+  while the project was unsaved keeps its absolute cache path, and saving
+  afterwards does not copy it in. The warning at drop time is the whole of the
+  mitigation.
 
 - `cancel()` cannot interrupt a walker blocked inside one `stat()` (inv. 1,
   local provider only -- `SWebDavClient::cancel()` has no equivalent gap, it

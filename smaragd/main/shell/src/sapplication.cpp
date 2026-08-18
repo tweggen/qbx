@@ -42,6 +42,11 @@
 #include "app/objects/track/sinstrumenttracks.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/spluginslot.h"
+#include "app/objects/track/strackpath.h"
+#include "app/objects/cut/saddsampleaction.h"
+#include "app/media/smediacache.h"
+#include "app/media/smediadrop.h"
+#include "app/model/splacements.h"
 
 #include <cmath>
 #include <limits>
@@ -61,6 +66,11 @@ SProject *SApplication::getCurrentProject() const
  */
 void SApplication::setCurrentProject( SProject *cp )
 {
+    // A pending media placement is made AGAINST a project (proposal 38 §B.5):
+    // closing OR switching drops it, and a close is one case of a change rather
+    // than the only one -- which is why this sits on the setter and not on a
+    // close handler.
+    if( currentProject_ != cp ) smediadrop::projectChanged();
     currentProject_ = cp;
     // Push the project's sample rate / candidate set into the engine. For a
     // loaded project this runs again after the loader has populated these from
@@ -658,9 +668,50 @@ SApplication::SApplication( int &argc, char **argv )
         twSidecarStore::instance().setRoot( root.toStdString() );
     }
 
+    // Proposal 38 gate 3: the media cache's root and cap, and the two hooks
+    // the media layer places through. Before the plugin scan for no reason
+    // other than symmetry with the sidecar store above.
+    initMediaLayer();
+
     // Proposal 08 M2: plugin discovery. Last, because it may start a background
     // scan and everything above it must already be in place.
     initPluginRegistry();
+}
+
+// Proposal 38 gate 3 (§B.5/§B.6). Two things the media layer cannot do for
+// itself, both for the same reason: app/media is app_core.
+//
+//   * The CACHE ROOT and CAP live next to smaragd.ini and in SOpt, and neither
+//     SSettings nor SOpt is visible from app_core -- exactly the shape
+//     initPluginRegistry() already uses for the plugin scan cache.
+//   * THE PLACEMENT ITSELF. SAddSampleAction is app_objects, one LAYER up from
+//     app/media, so nothing there can construct one; no edit to
+//     tools/check_layering.py would change that. The shell is the only module
+//     that sees both.
+void SApplication::initMediaLayer()
+{
+    SSettings &s = SSettings::instance();
+    SMediaCache &cache = SMediaCache::instance();
+    cache.setRoot( QDir( s.configDir() ).filePath(
+        QStringLiteral( "mediacache" ) ) );
+    cache.setCapMB( s.value( SOpt::MediaCacheCapMB,
+                             SOpt::def( SOpt::MediaCacheCapMB ) ).toLongLong() );
+
+    smediadrop::setPlacementHook(
+        []( SObject *track, const QString &localPath, offset_t timePos ) -> bool {
+            SApplication &app = SApplication::app();
+            SProject *project = app.getCurrentProject();
+            SObject  *root    = splacements::rootContainer( project );
+            if( !project || !root || !track ) return false;
+            // RE-RESOLVED HERE, at completion, from the track's own identity --
+            // never from an index-path captured at drop time (§B.5, T18). An
+            // empty path means the track is no longer in the tree, and the only
+            // safe answer to that is to place nothing.
+            const QList<int> path = strackpath::pathOf( root, track );
+            if( path.isEmpty() ) return false;
+            app.submitAction( new SAddSampleAction( path, localPath, timePos ) );
+            return true;
+        } );
 }
 
 SApplication::~SApplication()

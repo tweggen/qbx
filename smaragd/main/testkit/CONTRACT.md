@@ -738,3 +738,42 @@ panel and the arranger, and the shell is the only module that sees both.
     precedent, and the residual hazard is the same one the audited `smaragd.ini`
     row already names: the CONVENTION, not the locking. A future case that READS
     one of those keys would be racing one that writes it.
+
+## The gate-3 drop verbs (proposal 38)
+
+31. **`media-test-source` configures a provider that only exists under a knob.**
+    `SDelayedLocalSource` is registered as `testdelay` only when
+    `SMARAGD_MEDIA_TEST_SOURCE=1`; the verb REFUSES when it is not there rather
+    than silently doing nothing, because a case that configured no provider and
+    carried on would then be measuring the wrong one. Its `clearCache="1"` is
+    itself refused unless `SMARAGD_MEDIA_CACHE_DIR` named the cache root — a
+    case run without the knob must not be able to wipe a developer's real cache.
+
+32. **`media-drop-wait` waits on a CONDITION, never on a clock.** It pumps the
+    event loop until `smediadrop::pendingCount()` reaches zero, up to `waitMs`,
+    and a timeout is a real failure. `placed` / `failed` / `abandoned` /
+    `fetches` are then asserted EXACTLY, and the three counters are three
+    different claims: `abandoned` is "a fetch landed and DELIBERATELY placed
+    nothing" (the target track was gone, or the project changed), which is a
+    stronger statement than "no clip appeared".
+
+33. **`media_drop_deferred` writes `media/lastSourceId` and
+    `media/lastPath/testdelay`** and is `RUN_SERIAL`. It restores both, so the
+    INI comes back with identical CONTENT. `media/lastPath/testdelay` is
+    exclusively its own; `media/lastSourceId` is shared with the three gate-2
+    cases, all four of which are `RUN_SERIAL` and all four of which restore it
+    to `"local"`, so no run can observe another's value. It deliberately touches
+    neither `media/categoryMask` nor `media/searchRecursive` — the defaults are
+    what it wants, so there is nothing to restore.
+
+    Note on the phrase this repo has used elsewhere: the INI comes back
+    **identical in CONTENT**, which is the claim worth making. `QSettings` does
+    not promise to preserve section ORDER across processes, so an md5 can
+    legitimately move while nothing a case wrote has changed.
+
+34. **A deferred placement is asserted on the TRACK it names, not on a clip
+    index shared with another concurrent drop.** Two concurrent deferred
+    placements land in FETCH-COMPLETION order, which is not the order they were
+    dropped in and which nothing promises. Asserting `clip 0,0 startTime=48000`
+    with both drops on one track failed 4 runs in 10; one clip per track states
+    the real claim and is exact on every run.

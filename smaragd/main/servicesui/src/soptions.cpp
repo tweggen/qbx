@@ -72,6 +72,9 @@ QVariant SOpt::def( const QString &key )
     if( key == MediaLastPath )        return QString();
     if( key == MediaCategoryMask )    return 1;
     if( key == MediaSearchRecursive ) return false;
+    // Gate 3's cache cap (§B.6). 2 GB is a sample library's worth of downloads
+    // and small enough that a cache nobody prunes cannot fill a disk.
+    if( key == MediaCacheCapMB )      return 2048;
     return QVariant();
 }
 

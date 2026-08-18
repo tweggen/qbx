@@ -69,6 +69,7 @@
 #include "app/eventui/seventtimeaxis.h"
 #include "app/eventui/spianorollview.h"
 #include "app/eventui/svirtualkeyboarddock.h"
+#include "app/media/smediadrop.h"
 #include "app/mediabrowser/smediabrowserpanel.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssmvmixercontrol.h"
@@ -1182,6 +1183,16 @@ SMainWindow::SMainWindow()
     qDockMediaBrowser_->setWidget( mediaBrowser_ );
     addDockWidget( Qt::LeftDockWidgetArea, qDockMediaBrowser_ );
     qDockMediaBrowser_->hide();
+
+    // Proposal 38 gate 3: a deferred `media:` drop has things to say -- it is
+    // fetching, it could not fetch, the target track went away, the project is
+    // unsaved so the clip references a machine-local cache. app/media is
+    // app_core and owns no widget by contract, so the status line is a HOOK,
+    // installed here because this is where the status bar is. A message with
+    // nowhere to go is dropped, never queued.
+    smediadrop::setStatusHook( [ this ]( const QString &message ) {
+        statusBar()->showMessage( message, 6000 );
+    } );
 
     // View menu — built here rather than in the menu block above because it
     // needs the docks to exist for their toggleViewAction()s.

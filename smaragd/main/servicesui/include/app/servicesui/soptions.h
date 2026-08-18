@@ -145,10 +145,18 @@ inline constexpr const char *PreRollBars    = "transport/preRollBars";
 //                        category, and an empty mask means "no filter", which
 //                        is not what an empty checkbox list should mean.
 //   MediaSearchRecursive the recurse checkbox beside the search box.
+//   MediaCacheCapMB      (gate 3) the LRU cap, in MB, on the content-addressed
+//                        fetch cache under <configDir>/mediacache. 2048 by
+//                        default. It is a CACHE policy and the open project is
+//                        NOT a cache: SProject::externFiles() is subtracted
+//                        before anything is evicted, and a cache that cannot
+//                        reach its cap because the project pins too much logs
+//                        that and stops (§B.6, trap T17). <= 0 means "no cap".
 inline constexpr const char *MediaLastSourceId    = "media/lastSourceId";
 inline constexpr const char *MediaLastPath        = "media/lastPath";
 inline constexpr const char *MediaCategoryMask    = "media/categoryMask";
 inline constexpr const char *MediaSearchRecursive = "media/searchRecursive";
+inline constexpr const char *MediaCacheCapMB      = "media/cacheCapMB";
 
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );

@@ -480,6 +480,12 @@ const Fixture kFixtures[] = {
     { "assert-media-browser",
       "<assert-media-browser contains='rows=4' absent='notes.txt'"
       " rowCount='4' truncated='0' mode='browse' waitMs='2000'/>" },
+    { "media-test-source",
+      "<media-test-source delayMs='400' failPath='broken' reset='1'"
+      " clearCache='1'/>" },
+    { "media-drop-wait",
+      "<media-drop-wait waitMs='9000' placed='2' failed='1' abandoned='1'"
+      " fetches='3'/>" },
 
     { "assert-clip-window",
       "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"
