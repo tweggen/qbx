@@ -27,6 +27,7 @@ class STrackDetailPanel;
 class SClipPropertiesPanel;
 class SEventEditorDock;
 class SVirtualKeyboardDock;
+class SMediaBrowserPanel;
 
 class SMainWindow
     : public QMainWindow
@@ -212,6 +213,39 @@ public:
     bool virtualKeyRelease( int key );
     /// The keyboard dock's describe(), for assert-event-editor.
     QString describeVirtualKeys() const;
+
+    // TEST ENTRY POINTS for the media browser (proposal 38 gate 2). The dock
+    // is built in the ctor and NEVER shown in a headless run, so these push it
+    // its state explicitly (trap T10) and describe() is the oracle. They live
+    // here for the usual reason (testkit CONTRACT inv. 5: testkit may not
+    // include app/timeline) plus one that is specific to the drag:
+    // mediaBrowserDrag has to reach BOTH the panel and the arranger, and the
+    // shell is the only module that sees both.
+    //
+    //   mediaBrowserSetSource  — select a source by id and OPEN it.
+    //   mediaBrowserSetPath    — set the browse root, optionally EXPANDING one
+    //                            directory row through the real itemExpanded.
+    //   mediaBrowserSearch     — enter (or, with an empty needle, leave) search
+    //                            mode. `viaDebounce` lets the real 250 ms timer
+    //                            fire instead of flushing it.
+    //   mediaBrowserSetFilter  — the media-type checkbox menu.
+    //   mediaBrowserDrag       — build the REAL QMimeData the panel's startDrag
+    //                            builds and hand it to the REAL
+    //                            SMVActualView::dropEvent. There is no shortcut
+    //                            around the drop handler: a verb that submitted
+    //                            add-sample itself would pass while the gesture
+    //                            was broken.
+    //   describeMediaBrowser   — SMediaBrowserPanel::describe().
+    //   mediaBrowserBusy       — is any request the panel displays still live?
+    bool mediaBrowserSetSource( const QString &sourceId );
+    bool mediaBrowserSetPath( const QString &path, const QString &expandRow );
+    bool mediaBrowserSearch( const QString &needle, bool recursive,
+                             bool viaDebounce );
+    bool mediaBrowserSetFilter( const QString &categories );
+    bool mediaBrowserDrag( int row, const QString &name,
+                           const QString &trackPath, offset_t timePos );
+    QString describeMediaBrowser() const;
+    bool    mediaBrowserBusy() const;
 
     // Log dock control, for the log-stress test action (testkit may not include
     // app/servicesui, so it reaches the dock through the shell — the same route
@@ -433,6 +467,16 @@ private:
     QMetaObject::Connection axisScrollConn_;
     QDockWidget          *qDockVirtualKeys_ = nullptr;
     SVirtualKeyboardDock *virtualKeys_      = nullptr;
+
+    // The SEVENTH dock (proposal 38 gate 2). Created in the ctor beside the
+    // other six and hidden on a first run, for the reason every dock here is:
+    // shell CONTRACT inv. 4 fixes the restore order (openMostRecent() ->
+    // restoreWindowLayout() -> show()), and restoreState() can only place docks
+    // that already exist. Its objectName, "dock_media_browser", is the whole
+    // persistence mechanism -- docked/floating/closed round-trips through the
+    // existing ui/windowState blob and needs no settings key.
+    QDockWidget        *qDockMediaBrowser_ = nullptr;
+    SMediaBrowserPanel *mediaBrowser_      = nullptr;
     QAction *actClipProps_ = nullptr;   // the F2 (default) binding
 
     // Permanent mode indicator on the right of the status bar.

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 gate 2, AC 4 and AC 5. Incremental search through the REAL
+  SMediaBrowserPanel, and SUPERSESSION at the UI level.
+
+  THE COUNTS ARE FACTS ABOUT THE COMMITTED FIXTURE, not measurements
+  (smaragd/tests/media/):
+
+      lib/kick.wav   lib/snare.wav   lib/notes.txt
+      lib/sub/hat.wav                lib/sub/deep/tom.wav
+
+  A search matches the entry's WHOLE NAME, extension included, case
+  insensitively (app/media CONTRACT) - which is why the needle "a" matches
+  every .wav in the tree: recursive finds four, non-recursive finds the two
+  that sit directly in lib/. A search reports FILES only; a directory is a
+  container to walk, not a result.
+
+  WHAT IT PINS
+
+  1. Recursive vs non-recursive, both exact.
+  2. THE SUPERSESSION AC, at the UI level. Three searches issued back to back
+     with waitMs="0" - fire and return - and the panel shows the THIRD one's
+     results. It cannot show anything else: the view keeps the id of the
+     request it is DISPLAYING and drops any batch whose id is not that one
+     (app/media inv. 2, design §B.2). This is by construction, not by a cancel
+     winning a race, which is exactly why the assertion is stable rather than
+     lucky.
+  3. Clearing the search box returns mode=browse AT THE SAME PATH (AC 5).
+  4. The 250 ms DEBOUNCE is real: debounce="1" types into the line edit and
+     lets the timer fire, and the panel reports busy until it has.
+  5. The filter governs BOTH modes: the same needle under an empty mask finds
+     notes.txt too, because the suffix filter is source STATE and the search
+     carries its own snapshot of it.
+
+  OWNERSHIP (design AC 9, trap T6): this case OWNS media/lastSourceId,
+  media/lastPath/local, media/categoryMask and media/searchRecursive - the
+  panel persists all four, the recurse checkbox writes the last one on every
+  toggle. RUN_SERIAL, and every key is restored to its SOpt default at the end,
+  so smaragd.ini comes back byte-identical. No other case reads those keys.
+
+  NOT gated here: the truncation bound (reaching kMaxSearchEntries needs 5000
+  files, which is not worth the seconds - app/media's CONTRACT says the same
+  about gate 1), pixels, and the drag (media_browser_drag_local.qxa).
+-->
+<SActionScript version="1" name="media_browser_search">
+
+  <setup project="new"/>
+
+  <actions>
+    <media-browser-filter categories="audio"/>
+    <set-option key="media/lastPath/local" value="../media/lib"/>
+    <media-browser-source sourceId="local"/>
+    <assert-media-browser mode="browse" rowCount="3"/>
+
+    <!-- (1) Recursive: every .wav under the tree, because "a" is in ".wav". -->
+    <media-browser-search needle="a" recursive="1"/>
+    <assert-media-browser mode="search" rowCount="4"/>
+    <assert-media-browser contains="|recursive=1|"/>
+    <assert-media-browser contains="kick.wav,768044,0"/>
+    <assert-media-browser contains="tom.wav,768044,0"/>
+    <assert-media-browser absent="notes.txt"/>
+    <!-- A DIRECTORY is never a result, however well its name matches. -->
+    <assert-media-browser absent="sub,-1,1"/>
+
+    <!-- ...and non-recursive is exactly the two directly in lib/. -->
+    <media-browser-search needle="a" recursive="0"/>
+    <assert-media-browser mode="search" rowCount="2"/>
+    <assert-media-browser contains="kick.wav,768044,0"/>
+    <assert-media-browser absent="hat.wav"/>
+    <assert-media-browser absent="tom.wav"/>
+
+    <!-- (5) The filter governs the search too: with no mask, notes.txt is a
+         legitimate hit for "notes". -->
+    <media-browser-filter categories=""/>
+    <media-browser-search needle="notes" recursive="1"/>
+    <assert-media-browser rowCount="1" contains="notes.txt,73,0"/>
+    <media-browser-filter categories="audio"/>
+    <media-browser-search needle="notes" recursive="1"/>
+    <assert-media-browser rowCount="0"/>
+
+    <!-- (2) THE SUPERSESSION AC. Three recursive searches, back to back, the
+         first two with waitMs="0" so they are still in flight (or already
+         superseded) when the next is issued. The panel must show the THIRD. -->
+    <media-browser-search needle="kick" recursive="1" waitMs="0"/>
+    <media-browser-search needle="snare" recursive="1" waitMs="0"/>
+    <media-browser-search needle="tom" recursive="1" waitMs="2000"/>
+    <assert-media-browser mode="search" rowCount="1" waitMs="2000"/>
+    <assert-media-browser contains="tom.wav,768044,0"/>
+    <assert-media-browser absent="kick.wav"/>
+    <assert-media-browser absent="snare.wav"/>
+
+    <!-- (4) The REAL debounce: the text goes into the line edit and the 250 ms
+         timer is what issues the walk. waitMs has to exceed it. -->
+    <media-browser-search needle="hat" recursive="1" debounce="1" waitMs="4000"/>
+    <assert-media-browser mode="search" rowCount="1" contains="hat.wav"/>
+
+    <!-- (3) An empty needle returns to BROWSE at the same path (AC 5). -->
+    <media-browser-search needle="" recursive="1"/>
+    <assert-media-browser mode="browse" rowCount="3"/>
+    <assert-media-browser contains="sub,-1,1"/>
+    <assert-media-browser contains="kick.wav,768044,0"/>
+
+    <!-- Restore every key this case owns to its SOpt default (T6). -->
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/local" value=""/>
+    <set-option key="media/categoryMask" value="1"/>
+    <set-option key="media/searchRecursive" value="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

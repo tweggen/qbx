@@ -458,6 +458,29 @@ const Fixture kFixtures[] = {
       " startFrame='96000' timeoutMs='5000'/>" },
     { "wait-ms", "<wait-ms ms='3600'/>" },
 
+    // --- the media-browser verbs (proposal 38 gate 2) -----------------------
+    // Two of the six REJECT a default element on purpose (a path verb with
+    // neither a path nor an expand, and a drag naming neither a row nor a
+    // name, are case bugs rather than defaults), so they need a fixture to be
+    // audited at all. The other four round-trip from their defaults, and the
+    // rows below give them non-default values so an unread attribute cannot
+    // hide behind one.
+    { "media-browser-source",
+      "<media-browser-source sourceId='local' waitMs='3000'/>" },
+    { "media-browser-path",
+      "<media-browser-path path='../media/lib' expand='sub' waitMs='3000'/>" },
+    { "media-browser-search",
+      "<media-browser-search needle='kick' recursive='1' waitMs='0'"
+      " debounce='1'/>" },
+    { "media-browser-filter",
+      "<media-browser-filter categories='audio,midi' waitMs='3000'/>" },
+    { "media-browser-drag",
+      "<media-browser-drag row='2' name='kick.wav' trackPath='0,1'"
+      " timePos='48000'/>" },
+    { "assert-media-browser",
+      "<assert-media-browser contains='rows=4' absent='notes.txt'"
+      " rowCount='4' truncated='0' mode='browse' waitMs='2000'/>" },
+
     { "assert-clip-window",
       "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"
       " loopLength='24000' startOffset='4800' timebase='beats' take='1'/>" },

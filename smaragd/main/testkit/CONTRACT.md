@@ -696,3 +696,45 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     every boundary on a whole second of the ramp so each expectation is a closed
     form at tolerance 0. Reverting the span fails 18 of its 26 childSum
     assertions.
+
+
+## The media-browser verbs (proposal 38 gate 2)
+
+Six verbs — `media-browser-source`, `-path`, `-search`, `-filter`, `-drag` and
+`assert-media-browser` — driving the REAL `SMediaBrowserPanel`. They reach it
+through `SMainWindow` for the standing reason (inv. 5: testkit may not include
+`app/timeline`) plus one that is specific to the drag: it has to reach BOTH the
+panel and the arranger, and the shell is the only module that sees both.
+
+27. **The panel is built in the ctor and NEVER shown in a headless run**
+    (proposal 38 trap T10), so every verb pushes it its state explicitly and
+    `SMediaBrowserPanel::describe()` is the only oracle there is. Nothing in
+    these verbs may depend on the widget having been painted or laid out.
+
+28. **NOTHING SLEEPS.** The provider ABI is async by construction (app/media
+    inv. 1), so every verb that issues a request waits for the panel to go IDLE
+    — no live root request, no pending lazy expand, no search still inside its
+    250 ms debounce — up to `waitMs`, and FAILS on the timeout. A case that
+    slept for a fixed time would flake under `ctest -j4`, which is exactly the
+    load these bounds meet. `waitMs="0"` means "issue and return", and it is
+    what lets `media_browser_search` stack three searches to gate supersession.
+
+29. **A SYNTHETIC DROP IS THREE EVENTS, NOT ONE.** Qt discards a bare
+    `QEvent::Drop`: `QApplication::notify` tracks the drag TARGET a `DragEnter`
+    established, and a Drop with no active target never reaches
+    `QWidget::event` — measured, and true whether or not the widget is visible
+    (a `Qt::WA_DontShowOnScreen` `show()` does not help). `mediaBrowserDrag`
+    therefore sends DragEnter, DragMove and Drop in order. That is also better
+    coverage: `dragEnterEvent` and `dragMoveEvent` are the handlers that decide
+    whether the arranger accepts this MIME type at all.
+
+30. **The three cases OWN the four `media/*` keys and are `RUN_SERIAL`.** The
+    panel PERSISTS `media/lastSourceId`, `media/lastPath/<sourceId>`,
+    `media/categoryMask` and `media/searchRecursive`, and suppressing that under
+    `--test-case` was considered and rejected (design AC 9) — it would make the
+    gate test something other than the shipping code. Each case declares the
+    ownership in its header and restores all four to their `SOpt` defaults, so
+    `smaragd.ini` comes back byte-identical. This is the `midi_options_page`
+    precedent, and the residual hazard is the same one the audited `smaragd.ini`
+    row already names: the CONVENTION, not the locking. A future case that READS
+    one of those keys would be racing one that writes it.

@@ -126,6 +126,30 @@ inline constexpr const char *MetronomeLevel = "metronome/level";
 inline constexpr const char *CountInBars    = "transport/countInBars";
 inline constexpr const char *PreRollBars    = "transport/preRollBars";
 
+// MEDIA BROWSER (proposal 38 gate 2, design §B.4). Per-user and machine-local
+// for the reason every path in this table is: where this person keeps their
+// samples is a property of this machine, not of the song, and a project file
+// that carried a browse path would point at nothing on the next box.
+//
+//   MediaLastSourceId    which source the dock had selected. Restored WITHOUT
+//                        contacting it -- a source is opened when it is
+//                        SELECTED (§B.4), so a dock remembering a dead server
+//                        costs a banner at the next click, never a hang at
+//                        launch.
+//   MediaLastPath        a PREFIX, not a key: the panel reads and writes
+//                        "media/lastPath/<sourceId>", because two sources have
+//                        two unrelated path spaces and one shared key would
+//                        hand a WebDAV path to the local file system.
+//   MediaCategoryMask    the media-type checkbox menu, as smedia::Category
+//                        bits. Default Audio: the MVP registers no other
+//                        category, and an empty mask means "no filter", which
+//                        is not what an empty checkbox list should mean.
+//   MediaSearchRecursive the recurse checkbox beside the search box.
+inline constexpr const char *MediaLastSourceId    = "media/lastSourceId";
+inline constexpr const char *MediaLastPath        = "media/lastPath";
+inline constexpr const char *MediaCategoryMask    = "media/categoryMask";
+inline constexpr const char *MediaSearchRecursive = "media/searchRecursive";
+
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );
 

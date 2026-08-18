@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 gate 2, AC 3 (and the filter half of AC 8). The Media Browser
+  dock BROWSING the committed fixture tree, through the REAL SMediaBrowserPanel.
+
+  The panel is built in SMainWindow's ctor and is NEVER shown in a
+  headless test-case run (design trap T10), so every verb here pushes it its state
+  explicitly and SMediaBrowserPanel::describe() is the oracle. Nothing in this
+  case sleeps: each verb waits for the panel to go IDLE, because the provider
+  ABI is async by construction (app/media CONTRACT inv. 1) and a fixed sleep is
+  how a case flakes under `ctest -j4`.
+
+  THE FIXTURE'S SHAPE IS WHAT MAKES EVERY COUNT A CLOSED FORM
+  (smaragd/tests/media/, committed):
+
+      lib/kick.wav          768044 bytes (a copy of test_sawtooth.wav)
+      lib/snare.wav         768044
+      lib/notes.txt         the thing the Audio filter must omit
+      lib/sub/hat.wav       768044
+      lib/sub/deep/tom.wav  768044
+
+  WHAT IT PINS
+
+  1. Selecting the local source opens it AT THE REMEMBERED PATH - the
+     media/lastPath/<sourceId> key, set here through `set-option` so the case
+     does not depend on where this developer keeps their samples.
+  2. The exact row set under the Audio filter: DIRECTORIES FIRST, then files by
+     name, with notes.txt absent. Three rows, and each name asserted.
+  3. An empty category mask means NO FILTER, not "nothing": notes.txt comes
+     back, four rows. That is the positive control without which "absent
+     notes.txt" would also pass on a browser that shows nothing at all.
+  4. EXPANDING a directory row lists its children, lazily, through the real
+     itemExpanded path - and expanding the one inside it works too, so the
+     laziness is not a one-level special case.
+  5. A path that does not exist paints the inline BANNER (§B.4) rather than an
+     empty listing that reads as "this folder is empty".
+
+  OWNERSHIP (design AC 9, trap T6): this case OWNS the per-user keys
+  media/lastSourceId, media/lastPath/local, media/categoryMask and
+  media/searchRecursive - the panel PERSISTS every one of them, and suppressing
+  that under a headless test-case run was considered and rejected (it would make the gate
+  test something other than the shipping code). It is therefore RUN_SERIAL, and
+  it restores all four to their SOpt defaults at the end, so smaragd.ini comes
+  back byte-identical run to run. No other case reads those keys.
+
+  NOT gated here: pixels (the panel's paintEvent is never exercised - the
+  `screenshot` verb grabs a root window that is blank under
+  QT_QPA_PLATFORM=offscreen), the dock's docked/floating/closed round trip
+  (Qt's ui/windowState is an opaque blob; manual, per AC 2), and the search
+  mode (media_browser_search.qxa).
+-->
+<SActionScript version="1" name="media_browser_browse">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Preconditions, pushed rather than assumed. The filter goes through the
+         REAL checkbox menu (which also persists the mask); the path goes
+         through the SETTING, so that selecting the source exercises the
+         "restore the remembered path" branch instead of listing whatever
+         directory this developer last inserted a sample from. -->
+    <media-browser-filter categories="audio"/>
+    <set-option key="media/lastPath/local" value="../media/lib"/>
+
+    <media-browser-source sourceId="local"/>
+
+    <!-- (1)+(2) The exact row set. Directories first, then files by name;
+         sizes are the fixture's own bytes, and a directory's size is the
+         documented -1 ("unknown"), never QFileInfo::size()'s platform junk. -->
+    <assert-media-browser mode="browse" rowCount="3"
+                          contains="|source=local|"/>
+    <assert-media-browser contains="|filter=audio|"/>
+    <assert-media-browser contains="sub,-1,1"/>
+    <assert-media-browser contains="kick.wav,768044,0"/>
+    <assert-media-browser contains="snare.wav,768044,0"/>
+    <assert-media-browser absent="notes.txt"/>
+    <!-- Nothing was truncated and nothing failed: a bound is ANNOUNCED
+         (app/media inv. 4), so its absence has to be assertable too. -->
+    <assert-media-browser truncated="0" contains="|banner=0|error="/>
+
+    <!-- (3) An EMPTY mask is "no filter", and notes.txt proves it. Without
+         this row, "absent notes.txt" above would also pass on a panel that
+         listed nothing at all. -->
+    <media-browser-filter categories=""/>
+    <assert-media-browser rowCount="4" contains="notes.txt,73,0"/>
+    <assert-media-browser contains="|filter=|"/>
+    <media-browser-filter categories="audio"/>
+    <assert-media-browser rowCount="3" absent="notes.txt"/>
+
+    <!-- (4) LAZY EXPAND. `sub` gains hat.wav and its own subdirectory `deep`;
+         the children are inserted directly under it, so the depth-first row
+         order describe() reports is sub, deep, hat.wav, kick.wav, snare.wav. -->
+    <media-browser-path expand="sub"/>
+    <assert-media-browser rowCount="5" contains="hat.wav,768044,0"/>
+    <assert-media-browser contains="deep,-1,1"/>
+    <media-browser-path expand="deep"/>
+    <assert-media-browser rowCount="6" contains="tom.wav,768044,0"/>
+
+    <!-- Setting the path explicitly is the other half of AC 3, and it also
+         collapses the tree back to one directory's worth of rows. -->
+    <media-browser-path path="../media/lib/sub"/>
+    <assert-media-browser mode="browse" rowCount="2"
+                          contains="hat.wav,768044,0"/>
+    <assert-media-browser absent="kick.wav"/>
+
+    <!-- (5) An unreachable path is a BANNER, not an empty folder. The error
+         text comes from the provider, so the assertion is on the banner flag
+         plus the substring the walker writes. -->
+    <media-browser-path path="../media/no_such_dir"/>
+    <assert-media-browser rowCount="0" contains="|banner=1|"/>
+    <assert-media-browser contains="no such directory"/>
+
+    <!-- ...and Retry-by-way-of-a-good-path clears it again. -->
+    <media-browser-path path="../media/lib"/>
+    <assert-media-browser rowCount="3" contains="|banner=0|error="/>
+
+    <!-- Restore every key this case owns to its SOpt default (T6). -->
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/local" value=""/>
+    <set-option key="media/categoryMask" value="1"/>
+    <set-option key="media/searchRecursive" value="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

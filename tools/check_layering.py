@@ -130,6 +130,17 @@ APP_DEPS = {
     # that knows what an SCut is has started doing the dock's job. The DOCK is
     # a separate module (main/mediabrowser, app_ui) that gate 2 adds.
     'media':          {'model'},
+    # mediabrowser (proposal 38 gate 2) is the DOCK and nothing else. It sees
+    # `media` (the provider ABI it drives), `shell` (SSettings, for the four
+    # media/* keys it persists) and `servicesui` (SOpt, which is where those key
+    # NAMES live -- the same reason the servicesui -> actions edge exists: that
+    # module OWNS the per-user option table, and a second spelling of a key is
+    # how a setting silently stops round-tripping). `actions` is declared for
+    # gate 3, where a deferred placement submits `add-sample`. It must never
+    # reach app/timeline: a browser that knows what the arranger looks like has
+    # started doing the arranger's job, and the drag payload is the whole
+    # interface between them.
+    'mediabrowser':   {'actions', 'media', 'model', 'servicesui', 'shell'},
     'persistence':    {'actions', 'model'},
     'selection':      {'actions', 'model'},
     # timeline + objects/midi since proposal 37 P1: the Clip Properties dock
@@ -157,10 +168,14 @@ APP_DEPS = {
     # commits through the set-tempo verb instead of writing the project.
     # shell + eventui since proposal 37 P4: the event editor and the virtual
     # keyboard are docks, created in SMainWindow's ctor like every other one.
-    'shell':          {'actions', 'eventui', 'model', 'objects/cut',
-                       'objects/midi', 'objects/mixer', 'objects/track',
-                       'objects/wave', 'persistence', 'selection',
-                       'servicesui', 'testkit', 'timeline'},
+    # shell + mediabrowser since proposal 38 gate 2: the Media Browser is the
+    # SEVENTH dock, created in SMainWindow's ctor like every other one (shell
+    # CONTRACT inv. 4 -- restoreWindowLayout() runs later and can only restore
+    # docks that already exist).
+    'shell':          {'actions', 'eventui', 'mediabrowser', 'model',
+                       'objects/cut', 'objects/midi', 'objects/mixer',
+                       'objects/track', 'objects/wave', 'persistence',
+                       'selection', 'servicesui', 'testkit', 'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
     # testkit + pluginui since proposal 08 M5: assert-plugin-strip and
@@ -175,9 +190,15 @@ APP_DEPS = {
     # testkit + servicesui since proposal 37 P7b: assert-midi-options builds the
     # REAL SOptionsDialog off screen and asserts on describeMidiPage(), the same
     # shape as assert-plugin-strip reaching into pluginui.
-    'testkit':        {'actions', 'model', 'objects/cut', 'objects/midi',
-                       'objects/mixer', 'objects/track', 'objects/wave',
-                       'pluginui', 'servicesui', 'shell'},
+    # testkit + media + mediabrowser since proposal 38 gate 2: the six
+    # media-browser verbs drive the REAL panel, and gate 5c's WebDAV stub lands
+    # here too. Today they reach the panel THROUGH the shell (the drag has to,
+    # because testkit may not include app/timeline), so the two edges are
+    # declared ahead of the code that needs them rather than discovered later.
+    'testkit':        {'actions', 'media', 'mediabrowser', 'model',
+                       'objects/cut', 'objects/midi', 'objects/mixer',
+                       'objects/track', 'objects/wave', 'pluginui',
+                       'servicesui', 'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).
@@ -209,6 +230,7 @@ APP_ENG = {
     # only tw/core's TW_LOG. A provider that knows what a page is has started
     # doing the engine's job.
     'media':          _ENG_BASE,
+    'mediabrowser':   _ENG_BASE,
     'persistence':    _ENG_BASE,
     'selection':      _ENG_BASE,
     # timeline + metering since proposal 34: the track head owns an SLevelMeter
