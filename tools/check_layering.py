@@ -252,9 +252,17 @@ APP_ENG = {
     # captured playback and a render are comparable files.
     # testkit + events since proposal 37 P1: assert-midi-file reads twSmf and
     # assert-midi-events drives a twEventSource collect.
+    # testkit + sources since proposal 39 M1, and for ONE test only:
+    # preview_envelope_test builds a stub twRandomSource so that its fixture
+    # SCut is SAMPLE-backed - which is the branch of SCutRendererInline every
+    # audio clip in the app takes. The alternative was to give the fixture a
+    # non-Audio contentKind, i.e. to gate the collect seam on a path no real
+    # clip travels. Nothing else in testkit names tw/sources, and a VERB that
+    # wanted to should be questioned: a verb reads the MODEL, and the model
+    # already hands out its source through SObject::getRandomSource().
     'testkit':        _ENG_BASE | {'analysis', 'devices', 'events', 'metering',
                                    'pages', 'playback', 'schedule', 'sidecar',
-                                   'sinks'},
+                                   'sinks', 'sources'},
 }
 
 def main():

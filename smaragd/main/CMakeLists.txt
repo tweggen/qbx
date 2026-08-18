@@ -340,6 +340,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sasserttrackchannelsaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertclipwindowaction.h
+    testkit/include/app/testkit/sassertenvelopeaction.h
     testkit/include/app/testkit/sassertfileidenticalaction.h
     testkit/include/app/testkit/sassertlogaction.h
     testkit/include/app/testkit/slivetestactions.h
@@ -375,6 +376,7 @@ set(APP_UI_FILES
     testkit/src/sasserttrackchannelsaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertclipwindowaction.cpp
+    testkit/src/sassertenvelopeaction.cpp
     testkit/src/sassertfileidenticalaction.cpp
     testkit/src/sassertlogaction.cpp
     testkit/src/slivetestactions.cpp
@@ -704,6 +706,28 @@ target_link_libraries(preview_container_test
 )
 add_test(NAME preview_container_test COMMAND preview_container_test)
 set_tests_properties(preview_container_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The COLLECT SEAM (proposal 39 M1): SObjectRenderer::collectEnvelope() hands
+# out exactly the probes the renderer DRAWS - through the link-start fold, a
+# cut's slip, and loop tiling, each repetition into its own pixel span. The
+# painted side is read back out of a 256-tall QImage (y = 127 - value at that
+# height), so the two ends are measured against each other rather than against
+# a re-run of one of them. Sibling of preview_container_test; needs a
+# QApplication (offscreen) for the app object libraries' static registrars.
+#
+# Since M2 it also carries THE rule gate (proposal 39 M2): the drawn pixels are
+# the collected probes no matter what fader the link's PARENT object holds. That
+# one has to live here rather than in a .qxa, because the collect half never
+# carried the volume multiply and a script reading through collectEnvelope
+# cannot see it - only the pixels can.
+add_executable(preview_envelope_test testkit/src/preview_envelope_test.cpp)
+target_link_libraries(preview_envelope_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME preview_envelope_test COMMAND preview_envelope_test)
+set_tests_properties(preview_envelope_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # The project's CHANNEL COUNT as project data (proposal 36 M1): the default,
 # the legacy warn-and-default, the round trip, and â€” the reason it is a test and

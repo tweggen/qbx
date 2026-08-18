@@ -63,8 +63,24 @@ void SObject::setVolume( double d )
         if( fabs( volume_-d ) < 0.0001 ) return;
         volume_ = d;
     }
-    // Volume change affects preview rendering, so invalidate the cached preview
-    // so it gets regenerated at the new volume level (not just scaled on-the-fly).
+    // THE CALL STAYS; THE OLD COMMENT WAS WRONG (proposal 39 M2.5). It claimed
+    // previews are "regenerated at the new volume level", which is false for a
+    // SAMPLE-backed object and always was: straightCalcPreviewData() reads the
+    // random source against fixed SAMPLE_NORM_* bounds and never applies a
+    // volume, so a clip's stored preview bytes do not depend on any fader
+    // (plan/STATE.md:6576-6580). Until proposal 39 M2 the dependency was
+    // entirely at PAINT time, in drawObjectWaveform's per-probe multiply, and
+    // that is now gone.
+    //
+    // What the call IS for is the CONTAINER case. An object with no random
+    // source — an STrack, an SStdMixer — takes straightCalcPreviewData()'s
+    // other branch and reads getRootComponent()'s FROZEN PAGES; for a track
+    // that root is cpRewire_, which sits AFTER twGainStage (trackmix -> chain
+    // -> gain -> rewire, strack.cpp). So a container's own preview genuinely is
+    // post-fader, and its own setVolume() genuinely does invalidate it. Drop
+    // this and a folder or asset waveform keeps drawing at the old gain until
+    // something else frees previewData_ — which only durationChanged and
+    // gotUnreferenced do.
     invalidatePreview();
     emit volumeChanged( d );
     // Volume changes audio content but not arrangement:

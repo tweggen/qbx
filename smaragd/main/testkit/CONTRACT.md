@@ -592,3 +592,91 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     `transport/preRollBars`, and each puts its own key back — the same ownership
     convention `midi_record_modes` and `record_offset_zero` follow, and the same
     `RUN_SERIAL` that makes it safe. No other case reads either key.
+
+23. `assert-envelope` (proposal 39 M1) is THE one way a script reads a DRAWN
+    envelope, and it reads it through the object's own INLINE RENDERER
+    (`SObjectRenderer::collectEnvelope`), never through `SObject::getPreview()`.
+    The difference matters: a cut's slip, its stretch and its loop tiling live
+    in `SCutRendererInline`, so a verb that went straight to the preview would
+    be a second implementation of all of them — free to agree with itself while
+    disagreeing with every pixel on screen.
+
+    It goes out through `SMainWindow::collectClipEnvelope`, the same routing
+    inv. 5 gives `drag-clip-edge` and `assert-track-head`. Note what it does NOT
+    need: no arranger and NO PAINTER. A collect is expressed on a time window
+    (`SEnvelopeWindow`), so nothing here constructs a `QPainter` over a scratch
+    image in order to ignore it.
+
+    `snapshot` / `compareTo` store a probe array under a name and later assert a
+    BYTE-IDENTICAL match. That pair is the point of the verb: it lets a case say
+    "this edit did not move one byte of the waveform" without hard-coding a
+    single expected probe. The table is process-global and lives for the run —
+    one .qxa script per process.
+
+    `mode` has two values and any other is REJECTED rather than silently treated
+    as `clip`. `clip` reads ONE clip's own probes over `clip=`. `mode="childSum"`
+    (proposal 39 M3) reads the FOLDER-SUM OVERLAY of the lane at `trackPath=`,
+    through `SMainWindow::collectTrackChildSumEnvelope` ->
+    `STrack::collectChildSumEnvelope` — which is the exact call
+    `STrackRendererInline::draw()` makes to paint it, for the same reason clip
+    mode goes through the renderer. Everything else on the verb (`start`,
+    `length`, `width`, `column`, `min`/`max`, `tolerance`, `expectEmpty`,
+    `snapshot`, `compareTo`) means what it means in clip mode, so the
+    byte-identity pair is what gates "the folder's own fader moved nothing".
+
+24. `assert-lane-overlay` (proposal 39 M3) is the PIXEL gate on that overlay,
+    and it is the first verb in this repo that measures the arranger CANVAS's
+    paint at all — the `screenshot` verb grabs a root window that is blank under
+    `QT_QPA_PLATFORM=offscreen`, and `assert-lane-alignment grabPng=` writes a
+    PNG nobody asserts on.
+
+    It grabs the real canvas off screen (`SMainWindow::describeLaneOverlay`,
+    over `grabArrangerLanes`' sizing dance) and classifies every pixel of the
+    named lane's own band — inside the two 1 px separator lines the canvas draws
+    — against two references it does NOT read off the image: the LANE FILL
+    (`STrackRendererInline::laneFillColor()`, i.e. what the renderer itself
+    would fill with) and the CLIP BODY (`QColor(160,160,160)`).
+
+    **An overlay pixel is DEFINED as one strictly lighter than the fill and
+    strictly darker than the clip body**, which is design D4's relation stated
+    as a measurement. Draw the overlay darker than the lane, or as light as a
+    clip, and the count falls to zero and the assertion fails; the two wrong
+    directions are counted separately (`darkerThanFill`, `lighterThanClip`) so
+    a failure says which way it went. `expectOverlay="false"` is the negative
+    control and needs a lane that is bare — a lane holding a CLIP is not one,
+    because the anti-aliased edges of the file name drawn on that clip land at
+    every luminance between the text and the clip body, including inside the
+    band.
+
+    Two pieces of chrome are handled by identity rather than by luminance: the
+    PLAYHEAD (`QColor(30,200,30)`, whose luminance falls inside the band) is
+    counted in its own bucket, and the TIME GRID is not handled at all — run the
+    verb after `grid-disable`.
+
+25. `collapse-track` (proposal 39 M3a) folds a folder lane SHUT, or opens it
+    again. VIEW state, exactly like `set-lane-view`: not undoable, saved
+    nowhere. It exists because the folder-sum overlay is SOLD on the collapsed
+    folder — fold it shut and you can still see what is under it — and nothing
+    in the testkit reached the fold at all, so inv. 24's pixel gate necessarily
+    grabbed an EXPANDED folder.
+
+    It goes out through `SMainWindow::setTrackCollapsed` to
+    `SStdMixerView::toggleTrackCollapsed()`, the same call the head's fold
+    triangle makes (`ssmvmixercontrol.cpp`), rather than to a second writer of
+    the collapsed set: that one call owns the row rebuild and the control
+    column, so a second spelling of "collapsed" would be free to skip the half
+    of a fold that anyone can see.
+
+    **`collapsed` is ABSOLUTE, never a toggle.** A script that says what it
+    wants is idempotent and can be read without counting how many times it ran.
+
+    **There is no row-count probe and this verb does not invent one.** What is
+    observable after a fold is that the children's rows cease to exist, so every
+    lane BELOW the folder moves up by that many rows — which
+    `assert-lane-overlay`'s own report line already carries as `row=N`, and
+    `contains="row=N"` reads. The folder's own lane is painted by the same
+    renderer either way, so the same verb on the folder still finds the overlay,
+    and `assert-envelope mode="childSum" compareTo=` still reports the same
+    bytes: collapsing is view state and may not move one probe of what the
+    overlay describes. That trio is the user story, and it is what
+    `folder_sum_preview.qxa` asserts.

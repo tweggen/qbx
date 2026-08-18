@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 39 M1, AC M1.5/M1.6. The `assert-envelope` verb, over the SHIPPED
+  inline renderers.
+
+  preview_envelope_test (ctest) gates the collect SEAM against the DRAWN pixels,
+  but it has to build its leaf renderer as a fixture: a real SPlainWave needs
+  setWave(), which needs an SAppContext with a current project and a decodable
+  file. This case is the other half - a real project, a real ../test_sawtooth.wav,
+  a real SCut, and therefore the real SCutRendererInline -> SPlainWaveRendererInline
+  delegation, driven exactly as a script will drive it from M2 onward.
+
+  WHAT IT PINS
+
+  1. The verb produces an envelope AT ALL from a clip index-path, and the
+     envelope is DETERMINISTIC: the same window collected twice is
+     BYTE-IDENTICAL. That is the snapshot/compareTo pair, and it is the whole
+     mechanism M2 needs to assert "moving the fader did not move one byte of
+     the waveform" without hard-coding a single expected probe.
+
+  2. THE FIXTURE'S OWN SHAPE IS VISIBLE IN THE PROBES. ../test_sawtooth.wav is
+     a RAMPED sawtooth (testkit CONTRACT inv. 3): its amplitude grows linearly
+     across the four seconds. A 4-column probe of the whole clip therefore reads
+     0 / 25 / 50 / 76 - a straight line through the origin, ~25.4 per column,
+     which is the ramp itself and not a measurement anyone had to tune. A
+     collect reading the wrong part of the clip, or the same part four times,
+     cannot produce it. Without this the case would be self-referential:
+     comparing an array to itself passes on all-zeros.
+
+  3. An EVENT clip contributes NOTHING. SMidiCut has no waveform, so its
+     renderer inherits SObjectRenderer::collectEnvelope's `false` - the M1.4
+     property, at script level. `expectEmpty` is how a caller says so.
+
+  NOT gated here: pixels (preview_envelope_test does that), the volume
+  independence (that is M2's preview_volume_independent.qxa - TODAY the drawn
+  waveform IS still scaled by the fader, deliberately, so that M1 is verifiable
+  as behaviour-preserving), and mode="childSum" (M3).
+-->
+<SActionScript version="1" name="envelope_probe">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The whole 4-second clip in four columns, one per source second. The
+         ramp makes each one taller than the last, in a straight line: column 0
+         is the silence the ramp starts from, and 1/2/3 are 25 / 50 / 76.
+         tolerance defaults to 0 - the probes are integers. -->
+    <assert-envelope clip="0,0" start="0" length="192000" width="4"
+                     column="1" min="-25" max="25"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="4"
+                     column="2" min="-50" max="50"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="4"
+                     column="3" min="-76" max="76"/>
+
+    <!-- Deterministic: the same window, collected again, is byte-identical.
+         64 columns, so this compares 128 bytes rather than a lucky few. -->
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     snapshot="whole"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     compareTo="whole"/>
+
+    <!-- A DIFFERENT window is a different array, or compareTo would pass on
+         anything and prove nothing. -->
+    <assert-envelope clip="0,0" start="96000" length="96000" width="64"
+                     compareTo="whole" expectReject="true"/>
+
+    <!-- An event clip has no waveform: the renderer declines. -->
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="7680" name="Events"/>
+    <add-note clip="1,0" tick="0" dur="960" key="60" velocity="100" channel="0"/>
+    <assert-envelope clip="1,0" start="0" length="192000" width="16"
+                     expectEmpty="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

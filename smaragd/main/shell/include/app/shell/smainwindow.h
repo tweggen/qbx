@@ -10,6 +10,7 @@
 #include <QVariant>
 #include <QDoubleSpinBox>
 #include <QPointer>
+#include <vector>
 // #include <qpopupmenu.h>
 
 class SProject;
@@ -102,6 +103,49 @@ public:
     // shows two bars at their own heights rather than one folded one.
     bool grabLevelMeter( const QString &path, const twLevelSampleSet &s,
                          bool vertical, int w, int h );
+
+    // TEST ENTRY POINT (proposal 39 M1): collect the envelope a CLIP's own
+    // renderer DRAWS over a timeline window, into `out` (resized to `width`).
+    // `clipPath` is an index-path to the clip's SLink, the spelling slip-clip
+    // and assert-clip-channels use. Returns false when the path names no clip,
+    // the clip has no inline renderer, or the renderer produced no envelope
+    // (an event clip: SObjectRenderer::collectEnvelope defaults to false).
+    //
+    // Here for the same reason describeTrackHead and drag-clip-edge are:
+    // testkit may not include app/timeline (testkit CONTRACT inv. 5), and the
+    // point of the verb is that the SAME call the painter makes is what runs.
+    // It needs NO arranger and NO painter - a collect is expressed on a time
+    // window, not on a QPainter (see SEnvelopeWindow).
+    bool collectClipEnvelope( const QString &clipPath, offset_t start,
+                              length_t length, int width,
+                              std::vector<preview_t> &out );
+
+    // TEST ENTRY POINT (proposal 39 M3): the FOLDER-SUM twin of the above -
+    // the summed envelope of every descendant of the track at `trackPath`,
+    // which is the exact call STrackRendererInline::draw() makes to paint the
+    // overlay on that lane. Returns false, writing nothing, when the track is
+    // not a folder or nothing below it contributed.
+    bool collectTrackChildSumEnvelope( const QString &trackPath, offset_t start,
+                                       length_t length, int width,
+                                       std::vector<preview_t> &out );
+
+    // TEST ENTRY POINT (proposal 39 M3.10): grab the arranger canvas and
+    // MEASURE one lane's pixels, so the overlay's colour relations are asserted
+    // from an image rather than eyeballed. Returns a describe()-style line, or
+    // an empty string when the track/row cannot be resolved. See
+    // main/testkit/CONTRACT.md ("assert-lane-overlay").
+    QString describeLaneOverlay( const QString &trackPath, int w, int h,
+                                 const QString &pngPath );
+
+    // TEST ENTRY POINT (proposal 39 M3a): fold a folder lane SHUT, or open it
+    // again. ABSOLUTE, never a toggle - a script that says what it wants is
+    // idempotent and can be read without counting how many times it ran.
+    // It drives SStdMixerView::toggleTrackCollapsed(), the same call the head's
+    // fold triangle makes, rather than writing the collapsed set directly: the
+    // row rebuild, the head column and the take/automation sub-lane pruning all
+    // hang off that one call, and a second spelling of "collapsed" would be
+    // free to drift from it. False when the path names no lane.
+    bool setTrackCollapsed( const QString &trackPath, bool collapsed );
 
     // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
     // `headHeight` and return SSMVMixerControl::describeHead() — the density

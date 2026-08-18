@@ -410,3 +410,17 @@ void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
                         .arg( st.nTakes() ) );
     }
 }
+
+// The COLLECT terminal (proposal 39 M1). Identical delegation to draw()'s: the
+// active take's renderer over MY link but HIS object (CLIP_MODEL). No take, no
+// envelope — the "no take" hatch has no waveform to describe.
+bool STakeStackRendererInline::collectEnvelope( SLink &lk,
+                                                const SEnvelopeWindow &win,
+                                                preview_t *out )
+{
+    SObject *take = stack().activeTakeObject();
+    if( !take ) return false;
+    SObjectRenderer *rndr = take->getInlineRenderer();
+    if( !rndr ) return false;
+    return rndr->collectEnvelope( lk, win, out );
+}

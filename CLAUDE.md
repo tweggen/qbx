@@ -668,6 +668,114 @@ non-`SCut` object's `currentPage_` is always null. B8 removed it rather than
 "fixing" the cast: a page with no geometry cannot answer a
 `(start, length, nProbes)` question whatever its element type.
 
+### A drawn waveform is never scaled by the lane it sits on (proposal 39 M2)
+
+> **A drawn waveform describes the audio its object PRODUCES. The lane it is
+> drawn on never scales it.**
+
+`drawObjectWaveform` used to read the containing track's fader — a
+`dynamic_cast<SObject*>` on `lk.parent()`, which is the `STrack` in every path
+that creates a clip link — and multiply every 8-bit probe by it. So pulling a
+fader down redrew every clip on that lane thinner, and at −40 dB the arrangement
+visually emptied. Wrong three ways: a waveform is the CONTENT and a fader is the
+LEVEL (and there is a fader widget *and* a level meter for the level); the
+multiply happened AFTER quantisation to 8 bits, so a −20 dB clip drew as a
+dozen-valued ladder rather than as a quieter version of itself; and it
+contradicted what the stored preview bytes mean — volume is not baked into them
+(`plan/STATE.md:6576-6580`), so the paint-time multiply was the entire
+dependency. It is gone; the `qBound` to [−127,127] stays, because the folder-sum
+overlay (M3) accumulates into that same domain.
+
+A CONTAINER's own preview is still legitimately post-fader — the
+no-random-source branch of `straightCalcPreviewData` reads
+`getRootComponent()`'s frozen pages, and a track's root is `cpRewire_`,
+downstream of `twGainStage` — which is why `SObject::setVolume()` still calls
+`invalidatePreview()` (its comment claimed the opposite for years) and why an
+ASSET clip keeps the REFERENCED track's fader: that track is the clip's content,
+not its container.
+
+**The gate has to be a PIXEL gate.** The M1 collect seam never carried the
+multiply, so `assert-envelope` and everything else reading through
+`collectEnvelope` is blind to it by construction:
+`preview_volume_independent.qxa` states the rule at script level and passes on
+the pre-deletion binary. What bites is `preview_envelope_test` section 5 — the
+painted pixels against the collected probes through a link whose parent holds a
+non-unity fader, verified failing before the deletion (at −20 dB a painted
+column read 2/−2 where the collect said 20/−20).
+
+### A folder lane draws the sum of what is under it (proposal 39 M3/M3a)
+
+A track with child tracks is a summing container, and its lane was a blank
+rectangle: `STrackRendererInline::draw()` fills it and then `continue`s past
+every child in the clip loop — correctly, a child is its own lane — so
+**collapsing a folder made the arrangement underneath it vanish from the
+screen**. It now paints, faintly, on the lane background and behind the
+folder's own clips, the summed waveform of every descendant. Design:
+`plan/proposed/39_FOLDER_SUM_PREVIEW.md`. Invariants:
+`main/timeline/CONTRACT.md` inv. 22, `main/objects/track/CONTRACT.md`
+("the child-sum walk"), `main/objects/wave/CONTRACT.md`,
+`main/testkit/CONTRACT.md` 23-25.
+
+**Read this before touching the overlay — the obvious design is wrong for the
+FOURTH time in this codebase**, after the level meters, MIDI-out and the
+metronome, and for the same reason each time: *compute the audio and draw
+that*. Here the plumbing to do it not only exists, it already works.
+`STrack` has no random source, so **`folderTrack->getPreview()` returns the
+folder's real summed envelope today**, through
+`SObject::straightCalcPreviewData()`'s container branch. Nothing calls it and
+nothing should: that branch reaches its pages through **`requestPage()`, which
+DEMANDS A FREEZE**, so calling it from `paintEvent` renders the folder on the
+UI thread — exactly what `main/timeline/CONTRACT.md` inv. 1 forbids. And it is
+post-fader, so it would empty as the user pulls the folder's own fader down.
+
+| Thing to know | Why |
+|---|---|
+| The overlay is built from the children's **EXISTING previews** — the same arrays already drawn on the children's own lanes | No engine edit, no freeze, no worker, no cache, no invalidation protocol, and it draws on a project that has never been played. The alternative needs a background worker, a published snapshot and an invalidation for every child edit, gain change and plugin change — a proposal of its own, and `STrack::collectChildSumEnvelope()` is where it would land. |
+| It is a **sum of ENVELOPES, not the envelope of a SUM**, and that is stated in the CONTRACTs, the case header and the lane's tooltip | It OVER-STATES where children are out of phase, and it is blind to child plugins, instruments and automation, which exist only in frozen pages. A hint about where material is — not a meter, not an oracle. Nothing gates the approximation itself, deliberately: the in-phase fixture is a closed form *precisely because* it avoids the question. |
+| **The lane's own fader, mute and inserts are nowhere in its own background** — but a child one level down keeps its fader | M2's rule ("a drawn waveform describes the audio its object PRODUCES; the lane it is drawn on never scales it"), and this overlay IS the lane. A descendant carries the product of the gains from its own track up to but EXCLUDING the folder being drawn. Gated as a PAIR at tolerance 0: a child at −60 dB drops the sum to the other child's envelope exactly, the folder's own −20 dB leaves 128 probe bytes BYTE-IDENTICAL. Same for mute, both ways. |
+| The accumulator is **`int32` and the clamp happens ONCE**, at the end | `preview_t` is a `signed char`. Accumulating in it WRAPS, and a wrap makes two loud children draw *quieter* than one — a failure that looks like a feature. Wrapping and a missing clamp fail in OPPOSITE directions, so the fixture gates both: two children in phase read exactly 50 and exactly 100 in the doubling columns, and exactly 127 where the true sum is 152. |
+| Audibility is **`ssolo::isLaneAudible`**, resolved once per walk, never a local mute/solo chain | `main/timeline/CONTRACT.md` inv. 10 records that the two meter call sites' local copies of the direct-children-only rule are exactly how the meter and the ear came to disagree about a nested lane. `isLiveOwnedLane()` is deliberately NOT consulted — a live-owned lane's clips still exist. |
+| **Each clip gets its OWN pixel span**, sized the way the clip loop sizes the rect it draws that clip into | Design D3 said "the same window for every clip" and that is silently wrong, not merely imprecise: `SCutRendererInline::collectEnvelope` clamps a negative clip-relative position to 0, so a clip starting after the window's left edge would smear its audio across every column. **Found by reading, not by the gate** — every clip in the fixture starts at 0. |
+| Returning **false and writing nothing** when nothing contributed | So the painter draws nothing at all, rather than a flat line down the centre of every folder lane in the project. |
+| The colour is **derived** — `laneFillColor()` lightened, at partial alpha | It follows selection and every `STrackColorModifier` state instead of being a fourth hardcoded constant. What is contractual is the RELATION and it is measured, not eyeballed: strictly lighter than the lane fill, strictly darker than the clip body. |
+| Cost: (visible clips in the subtree) × (lane width in px) probe lookups per repaint | Each is an index into an array a child's preview already built. **Measured: 6.11 ms per 1200×800 canvas grab with the overlay against 1.78 ms without**, for a folder holding six children with a 4 s clip each — about what those same clips cost on their own lanes when the folder is EXPANDED. That is why there is no cache. |
+
+**The gate that bites is the PIXEL gate, and finding that out was the substance
+of M2.** The obvious one cannot bite: a case that snapshots a clip's envelope,
+moves the fader and compares **passes on the pre-fix binary**, because
+`assert-envelope` reads through `collectEnvelope`, which sits BELOW the
+paint-time multiply — everything a script could reach had been
+volume-independent since M1 landed. `preview_volume_independent.qxa` is
+committed anyway and its header says plainly that it is not what caught the
+bug; what caught it is `preview_envelope_test` section 5, which recovers the
+probes from the PIXELS.
+
+Gates: `ctest -R preview_envelope_test` and the qxa cases `envelope_probe`,
+`preview_volume_independent` and `folder_sum_preview`, plus
+`action_roundtrip_test`. `folder_sum_preview` also carries the pixel gate
+(`assert-lane-overlay`, **the first verb in this repo that measures the
+arranger CANVAS's paint at all** — `screenshot` grabs a root window that is
+blank under `QT_QPA_PLATFORM=offscreen`) and, since M3a, the **collapsed**
+folder: `collapse-track` drives `SStdMixerView::toggleTrackCollapsed()`, the
+fold triangle's own call, and the fold is observed through the lanes BELOW the
+folder moving up two rows — there is no row-count probe and none was invented.
+Measured: fill `#284664` (luminance 64), clip body 160, **overlayPixels 7999 at
+luminance 79, identical collapsed and expanded**, with `darkerThanFill`,
+`lighterThanClip`, `clipBodyPixels` and `otherPixels` all 0.
+
+**NOT gated:** the sum-of-envelopes approximation itself (above); pixel
+exactness and colour aesthetics (a luminance relation, not a palette); repaint
+latency under load (measured, not bounded); an ASSET clip's referenced-track
+fader, which is deliberately unchanged — that fader is baked into the capture
+the preview is computed from, and the referenced track is the clip's *content*,
+not its container; folders deeper than three levels and folders holding
+hundreds of clips; the fold TRIANGLE's own mouse event (the verb drives the
+call it makes, not a synthesised click); and a lane holding a CLIP as an
+`expectOverlay="false"` control — the anti-aliased edges of the file name drawn
+on a clip land at every luminance between the text and the clip body, so the
+negative controls are bare lanes, which is a weaker statement than "a clip's
+own waveform is never mistaken for an overlay".
+
 ### The render dialog DISPLAYS the channel count; it does not override it
 
 File → Render shows the project's width read-only. `RenderParams::channels` keeps
