@@ -310,7 +310,74 @@ L0 ─► L1a ─┬─► L1b ─┬─► L2 ─────────┐
 - **Gate:** click at the beat grid ± 1 block in the capture; render byte-identical
   to no-metronome; count-in shifts the placed clip by exactly N bars.
 
-### L6 — *(outline)* multi-device duplex + drift, loopback wizard, ASIO validation (35).
+### L6 — multi-device duplex + drift, loopback wizard, ASIO validation (35)
+
+**Brief written 2026-08-18, once 35 closed.** The outline bundled three things
+of very different size and risk, so it splits. Only L6a is a self-contained
+piece of work; L6b is coverage; L6c is a design problem that deserves its own
+proposal rather than a phase brief.
+
+**What closing 35 changed for this phase, and it is not what the outline
+assumed.** The outline treats ASIO as the thing that makes duplex safe — one
+driver, one clock — and it does. But 35's dispatchers route the two directions
+INDEPENDENTLY, which means **mixed mode is now reachable by a user**: WASAPI out
+with ASIO in, or the reverse, is two device ids and nothing coordinates them.
+So 35 did not remove the two-clock problem; it made it selectable from a combo
+box. That raises L6c's priority rather than lowering it, and it is the reason
+L6c gets a warning before it gets an implementation.
+
+#### L6a — the loopback latency calibration
+- **Entry:** 35 closed (duplex on one driver, gated).
+- **Why:** the app currently asks the user to do this BY HAND — Options → Audio
+  says "record a click, look at where it landed, type the difference" — and
+  that number (`audio/recordingOffsetMs/<device>`) is the last term of the
+  placement conversion (L3b, design D6). A wizard measures what the human is
+  being asked to eyeball.
+- **Deliverables:** a PURE measurement (`tw/record`): emit a known probe, find
+  it in the capture, return the round-trip in frames plus a confidence; the
+  driving action over the existing duplex path (`CaptureBridge` + the output
+  backend, which is what 35 Phase 3 proved); Options wiring that SHOWS the
+  measured number and applies it only on the user's word.
+- **Gate:** the measurement is a pure function of two buffers, so it is
+  unit-gated with SYNTHETIC captures — an exact delay recovered exactly, under
+  noise, and REFUSED (not guessed) when the probe is absent. The physical half
+  (a real cable) is Windows-manual by nature and named as such.
+- **NOT in it:** deciding the offset for the user. The wizard proposes; the
+  human accepts. A calibration that silently rewrites a timing constant is one
+  bad measurement away from moving every take a user records afterwards.
+
+#### L6b — ASIO validation
+- **Entry:** 35 closed.
+- **Status:** **mostly discharged by 35 itself** — the ABI gate, the output
+  path, the input path, full duplex on one driver and a real take through
+  `CaptureBridge` are all measured on hardware and recorded in STATE.
+- **What is genuinely left is COVERAGE THAT NEEDS A SECOND DRIVER**, and no
+  amount of work on this machine produces it: a wrapper driver (FlexASIO /
+  ASIO4ALL) for the plain-`bufferSwitch` path and a non-zero buffer
+  granularity, the registry's two-driver refusal, and mixed WASAPI/ASIO. This
+  is a shopping list for whoever has a second interface, not a phase.
+
+#### L6c — multi-device duplex and clock drift
+- **Entry:** L6a (the calibration is how drift is MEASURED before it can be
+  corrected).
+- **The problem, stated honestly:** two devices are two crystals. They differ
+  by tens of PPM, which is inaudible for a second and is a sample per few
+  seconds thereafter — a 3-hour session at 20 PPM is ~10 000 frames of skew.
+  Recording against a different clock than you monitor on means a take that
+  lines up at the top and does not at the bottom.
+- **Why it is NOT a phase brief:** the answer is a design choice with no
+  obviously right option (a drift-tracking resampler on one side; a
+  drift-compensating ring that drops/duplicates at zero crossings; or refusing
+  the configuration outright and saying why), each with a different cost in
+  quality, latency and complexity. Proposal 21 §11 already lists cross-device
+  drift as out of scope. **It should become its own proposal**, not a bullet
+  inherited from an outline.
+- **The cheap thing that is worth doing FIRST, and could ship without any of
+  that:** *detect and say so*. The app can already see both device ids and both
+  reported rates; a session whose input and output are different devices can be
+  named as such at the point it is chosen, exactly as the endpoint sample-rate
+  mismatch already is. Warning about a known-unhandled condition is worth more
+  than a half-built correction for it.
 
 ## 4. Failure & flake protocol
 A flake at any worker count is a bug. Suspects, in order: the arm/disarm drain
@@ -334,4 +401,6 @@ STATE.md + §6 + git are the durable state.
 | L3b audio recording app | ☑ | 2026-08-17 | `feat/21-l3b-recording-app` | `SRecordingContent` (a VIEW of the bridge's growing pages; `getRootComponent()` NULL + `isLiveRecording()` so `STrack` keeps it out of the bus mixers, the MIDI-clip argument again; peak ladder EXTENDED from the frontier) + `SRecordPlacement` (design D6 coded ONCE, anchored on `twEngineClock`, applied RETROSPECTIVELY, output latency read WITH the anchor, trim floor = the TRANSPORT start) + `SAudioRecorder` (capture SEGMENT on the monitor's bridge - ONE input pump; growing clips; punch as a CLAMP; loop passes as ARITHMETIC; ONE macro of `place-recording`) + `CaptureBridge::beginCapture/endCapture/capturePages/liveEnabled/captureStartHostNs` + `place-recording srcOffset/length` (proposal 17 phase 5 falls out) + non-modal dialog + `locatorHeldElsewhere` RETIRED + deferred root walk while live-owned + Options per-device offset + `record-start`/`record-stop`/`assert-recorded-clip`. **TWO DEFECTS THIS PHASE FOUND, both in `SCut`:** `buildCapture_()` over a growing content stalled ~2 s and SEGFAULTED, and `invalidateAspects()` per growth tick starved the bridge thread into **106 496 dropped input frames** with the capture backend **2.5 s** behind its deadline - all four derived-data paths now short-circuit on `isLiveRecording()`. A third, found by smoke-testing the DEFAULT flow: the recorder resolved its device name from the settings default while the monitor held the device under the track's own `trackInput` name, so a record start CLOSED AND REOPENED the input. Measured: compensation **-5824 exactly** (4800 reported input + 1024 capture-backend output) and **-6784** at `recordingOffsetMs=+20`, i.e. exactly **960 frames earlier**; placement identity `clipStart == placementFrame(trimmed)` exact on every run (P0=27098 -> 21274; P0=27314 -> 20530); `sourceAtStartFrame` decoded **0**, confidence 231100, `ringOverruns 0`; 7 s over a 2 s cycle -> **4 passes, 4 takes, ONE column**, duration 96000 exactly, ONE undo; punch placed **48000 / 48000** to the frame; a record start on a monitoring track opened **no** device and raised **no** deferral. ctest -j4 **184/184, 187 registered, 3 Not Run (Disabled)**, 123.6 s; goldens byte-identical. Sweeps (on the EXIT CODE, not the PASS line): `record_offset_zero` 50/50, `record_loop_takes` 50/50, `record_punch` 50/50 each x workers {1,4,8,16}; `record_while_monitoring` 25/25 x the same four. **700 runs, 0 failures.** NOT gated: real capture hardware and real driver latencies (`FileAudioInput` REPORTS a latency and does not delay by it - the gate is the CONVERSION, not the physics), ALSA/CoreAudio input, a device rate != the project rate, saving mid-take, the catch range (not implemented), and `SRecordingRendererInline::draw()` (no verb grabs the arranger canvas). Known limitation: a record stop STOPS the transport even for a punch drop-out into a run that was already playing. |
 | L4 MIDI recording (37 P8b) | ☑ | 2026-08-18 | `feat/21-l4-midi-recording` | `SPlayheadClock` EXTRACTED from `SMidiOutPump` (one clock, two consumers: forward to schedule a message, backward to place a note; the pump unchanged and `midi_out_*` green before anything else was written) + `SMidiRecorder` (main thread, 20 ms tick, a SECOND consumer of `MidiInFanout`; the tick maps NOTHING, so the mapping is retrospective by construction: `frameAtHostNs(msg) - inputOffsetProj`, no separate output-latency term because the clock already answers "the frame being HEARD") + `add-midi-take` and `place-midi-recording` in `objects/midi`, reaching a take column through a NEW generic seam on `SObject` rather than depending on `objects/cut` + modes/quantise as `SOpt` globals read once per take + the quantise INSIDE the placement's own composite + `assert-midi-recorded`. The split with `SAudioRecorder` is by TRACK INPUT, not by two buttons. ONE BUG THIS PHASE FOUND IN ITS OWN CODE: every loop pass was placed at its UNWRAPPED start (pass 2 of a 2 s cycle at frame 192000), so passes sat side by side instead of stacking takes on one column. Measured: notes at 22975/34975/46975/58975 vs the ideal 24000/36000/48000/60000 = **-1025 frames** (the published-vs-heard lead, i.e. the conversion working) inside a 4096 band, durations EXACTLY 9600; 1/16 quantise snapping at **tolerance 0**; 3 passes -> 3 takes on ONE column, one undo; new-take 2 takes / overdub 6 notes / replace 4 notes. ctest -j4 **193/193, 196 registered, 3 Not Run (Disabled)**, 182.2 s; goldens byte-identical. Sweeps (on the EXIT CODE): see STATE. NOT gated: real MIDI hardware, CoreMIDI/ALSA-seq, `midi/inputOffsetMs` (applied, no UI), sysex, the mode/quantise UI, a MIDI+audio track in one pass (implemented, no case), and `place-retro-midi`, which is NOT implemented - the ring is drained at the record start. |
 | L5 transport polish | ☑ | 2026-08-18 | `feat/21-l5-transport-polish` | `twMetronomeSource` (tw/playback) - a `twLiveInputSource` generated BY POSITION from an immutable `twTempoMap` snapshot, never a component and therefore never in a render; a reduced-rational beat with ONE floored division per beat, both click waveforms rendered in the ctor (alloc-free `pull`), and a half-open ACTIVE RANGE that makes "exactly N bars" a property of the waveform rather than a race with a pump that renders two blocks ahead + `twLiveMixRing::framesDelivered()` (the only wall-clock-free measure of a STOPPED lane) + the click as a synthetic plan track at the output on an `SLiveClosure` FLAG, so a lane exists iff `armed u monitor u metronome` and the arm/disarm protocol is untouched + count-in / pre-roll as TRANSPORT behaviours in `SApplication` around the two recorders (a 5 ms poll ending on delivered frames, with a wall-clock watchdog) + `set-count-in`/`set-pre-roll` in servicesui (ONE new module edge: `servicesui -> actions`) + the latency readout (`outputLatencyFramesProject()` = `meterLatencyFrames()` minus its transport gate) + the FX-strip latency badge and chain total, announced as NOT compensated. THE READING TAKEN on count-in: it is BEFORE the record position, the playhead does not move, and recording begins AT THE LOCATOR (Cubase/Logic/REAPER) - measured, the clip lands at **96000 exactly**. FOUR DEFECTS THIS PHASE FOUND IN ITS OWN CODE: the count-in ran BACKWARDS first (negative positions, which `gateEpoch` discards as unwritten slots - a count-in at bar 1 would have been silent); the transport start REPLAYED the first beat (the grid is in the arrangement domain and the start repositions to the locator) - hence `muteCountIn()`; but the click could not simply be DROPPED, because losing the last lane closes the device and the transport start re-opens it, clearing the capture backend recording - hence mute-then-start-then-end; and a metronome-only lane leaves through NO disarm path, so `finishDisarm()` never ran. A FIFTH finding is about L1a, not L5: a live lane coming up on STOPPED->PLAYING costs one reposition, and at workers=1 the beat at frame 0 came out EARLY in **1 run in 50** and was swallowed in the other 49, with a **~5087-frame (106 ms) hole** either way - design D2 seen from the outside for the first time, recorded in `tw303a/playback/CONTRACT.md` and worked around by measuring from 1 s in. Measured: click grid errors **0, -5, 0, 0, 0, -5** (worst |5| against 1024) in playback and **-33..-38** (worst |38|) through a count-in; accent ratio **2.0584** against a closed form of 2; inter-click RMS **exactly 0.000000**; metronome off => **0** clicks; the render **byte-identical** with the click on and off; count-in placement **96000** exactly with `comp=-5824`, `trim=9921` and **exactly 8** clicks before it; pre-roll placement **89895** for a record start at 96256, `trim=0`. ctest -j4 **197/197**, 200 registered, 3 Not Run (Disabled), 188.6 s. Goldens byte-identical. Sweeps on the EXIT CODE, N=50 x workers {1,4,8,16}: `metronome_click` w1 50/50, w4 50/50, w8 50/50, w16 50/50; `metronome_render_identity` w1 50/50, w4 50/50, w8 50/50, w16 50/50; `record_count_in` w1 50/50, w4 50/50, w8 50/50, w16 50/50; `record_pre_roll` w1 50/50, w4 50/50, w8 50/50, w16 50/50. NOT gated: real device latency numbers, the readout's and the badge's pixels, plugin delay compensation (not implemented, 37 P9), a count-in or pre-roll longer than 2 bars, the two knobs combined in one take, the Options page's three new controls, the first second of a live-lane playback run, and a render taken WHILE a click lane is up (not reachable from a script). |
-| L6 multi-device / ASIO validation (outline) | ☐ | | | gated on 35 |
+| L6a loopback latency calibration | ☐ | | | brief written 2026-08-18; 35 closed |
+| L6b ASIO validation | ◐ | | | mostly discharged BY 35; what is left needs a SECOND DRIVER |
+| L6c multi-device duplex + drift | ☐ | | | should become its OWN PROPOSAL; mixed mode is now user-reachable, so warn first |

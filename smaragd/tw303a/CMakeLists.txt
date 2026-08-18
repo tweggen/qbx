@@ -1090,6 +1090,11 @@ target_include_directories(multi_backend_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 # (PRIVATE to tw_devices) the same way devices_input_test does, and writes its
 # fixtures into the build tree rather than the source tree.
 tw_module_test(record_bridge_test           record/tests/record_bridge_test.cc          tw_record)
+# The loopback CALIBRATION measurement (proposal 21 L6a). Pure arithmetic over
+# two buffers, so it runs on every platform — the physical half of a loopback
+# (a cable between an output and an input) is Windows-manual by nature and is
+# not what this gates.
+tw_module_test(loopback_test                record/tests/loopback_test.cc               tw_record)
 target_include_directories(record_bridge_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
 set_tests_properties(record_bridge_test PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
     ENVIRONMENT "TW_RECORD_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/record-test")

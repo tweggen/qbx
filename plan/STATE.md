@@ -14247,9 +14247,16 @@ device; `AsioDevice` calls `IASIO::controlPanel()`.
 window that a human has to close. `audio_backend_probe panel <id>` exists for
 exactly that — it opens the device, prints the buffer sizes, shows the panel,
 and prints them again after it closes, so a change is visible as a diff rather
-than as a claim. It has NOT been run in this session, because running it would
-have put a modal window on the requester's desktop and blocked waiting for
-them; it is handed over rather than reported as done.
+than as a claim.
+
+**RUN BY THE REQUESTER, 2026-08-18: the panel is displayed** on the US-16x08
+through the production path. What that confirms is the whole call chain —
+`WinMultiBackend` → `AsioBackend` → `AsioDevice::openControlPanel` →
+`IASIO::controlPanel()` — on an open device. What is still UNCONFIRMED is the
+other half: that CHANGING a setting in there shows up in the re-read
+(`getAvailableBufferSizes()` moving while `getConfig().bufferFrames` does not).
+The probe prints both lists either side of the panel, so the next person to
+change the buffer size in it gets that answer for free.
 
 ### The proposal is closed
 
@@ -14263,6 +14270,80 @@ in any form (a wrapper, a non-zero buffer granularity, the two-driver refusal,
 mixed WASAPI/ASIO), the deferred input-channel path, and the app-level
 recording path above `CaptureBridge`.
 
+## 2026-08-18 — Proposal 21 L6: the brief, and L6a's measurement
+
+L6 was an OUTLINE — "multi-device duplex + drift, loopback wizard, ASIO
+validation (35) | own briefs" — bundling three things of very different size
+and risk. Now that 35 is closed it has a brief
+(`plan/proposed/21_ORCHESTRATION.md` § L6), and it splits three ways.
+
+### What closing 35 changed, and it is not what the outline assumed
+
+The outline treats ASIO as the thing that makes duplex safe: one driver, one
+clock. It is. But 35's dispatchers route the two directions INDEPENDENTLY, so
+**mixed mode is now reachable from a combo box** — WASAPI out with ASIO in, or
+the reverse, is two device ids and nothing coordinates them. 35 did not remove
+the two-clock problem; it made it SELECTABLE. That raises L6c's priority rather
+than lowering it.
+
+### The split
+
+- **L6a — loopback latency calibration.** The one self-contained piece, and
+  the one with a user visible today: Options → Audio currently asks the human
+  to "record a click, look at where it landed, type the difference", and that
+  number is the last term of the placement conversion (D6).
+- **L6b — ASIO validation.** Mostly DISCHARGED by 35 itself. What is left needs
+  a SECOND DRIVER and no work on this machine produces it: a wrapper driver for
+  the plain-`bufferSwitch` path and a non-zero buffer granularity, the
+  registry's two-driver refusal, mixed WASAPI/ASIO. A shopping list, not a
+  phase.
+- **L6c — multi-device duplex and drift.** **Should become its own proposal.**
+  Two devices are two crystals; tens of PPM is a sample per few seconds, so a
+  3-hour session at 20 PPM is ~10 000 frames of skew — a take that lines up at
+  the top and does not at the bottom. The answer is a design choice with no
+  obviously right option (a drift-tracking resampler, a compensating ring that
+  drops at zero crossings, or refusing the configuration and saying why), and
+  proposal 21 §11 already puts cross-device drift out of scope. The cheap thing
+  worth doing FIRST, and shippable without any of it: **detect and warn**, the
+  way the endpoint sample-rate mismatch already is.
+
+### L6a's measurement is in (the wizard is not)
+
+`tw/record/loopback_calibration.h`: emit a known probe, find it in the capture,
+return the round trip plus a confidence, and convert that into the offset to
+OFFER the user. Pure, header-only, and gated by `loopback_test` (ctest, all
+platforms) against synthetic captures where the true delay is known exactly.
+
+Three decisions worth keeping:
+
+- **The probe is an IMPULSE, not a tone or a chirp.** A tone has no unique
+  point to align to: every period looks like every other, so the answer is
+  ambiguous by one period — 109 frames at 440 Hz, and wrong in a way that looks
+  entirely plausible.
+- **THE ARRIVAL IS THE ONSET, NOT THE PEAK, and a failing test is what
+  established that.** The probe's first two samples differ by only ~3 % in
+  magnitude, so a noise floor eight times below the probe is enough to make
+  sample 1 the larger and report the arrival ONE FRAME LATE — measured, 4801
+  against a true 4800. The peak now supplies amplitude and SNR only; the onset
+  is found by walking back from it to the first sample clearing 25 % of it,
+  which is also what survives filtering in the path.
+- **It REFUSES rather than guessing.** A capture with no probe in it still has
+  a largest sample, and reporting its position would write a random number into
+  a setting that shifts every take the user records afterwards. Gated: noise
+  with no probe is refused (it would otherwise have claimed 87808 frames),
+  silence is refused, an arrival BEFORE the emit is refused, the wrong channel
+  finds nothing.
+- **The offer is the RESIDUAL, not the round trip.** The app already
+  compensates the driver's reported latencies automatically, so offering the
+  whole round trip would double-count everything the driver got right. Gated in
+  closed form: an honest driver yields exactly zero.
+
+**What is NOT built: the wizard itself** — the action that drives a real
+output+input pass over `CaptureBridge` and the Options UI that shows the number
+and applies it on the user's word. The measurement is the half that can be
+silently wrong; the driving is the half that needs a cable. Explicitly NOT
+built either, and named in the brief: anything that writes the offset without
+the user accepting it.
 
 ## 2026-08-18 — Proposal 39: the folder lane's sum waveform, and preview/volume decoupling
 
