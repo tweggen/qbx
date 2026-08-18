@@ -1,8 +1,14 @@
 # Proposal 35 — ASIO audio backend (Windows)
 
-**Status:** Phase 1 landed 2026-08-15 (PR #31 — SDK detection +
-`asio_probe`). The manual Windows gate run is PENDING and is the Phase 1
-exit criterion: runbook in `docs/ASIO_WINDOWS_GATE.md`. Phases 2–5 not
+**Status:** **Phase 1 CLOSED 2026-08-18.** It landed 2026-08-15 (PR #31 —
+SDK detection + `asio_probe`) and its exit criterion — the manual Windows
+gate run — **PASSED on that date against a real vendor driver** (Tascam
+US-16x08, ASIO driver version 1001, on the MinGW x64 build): `open` and
+`tone` both reported `GATE PASSED`, with an audible 440 Hz sine on the
+connected monitors and no ABI tell of any kind. **Phase 2 is unblocked** —
+but see the proposal-36 note below: it must be re-planned before it is
+written. The run, and the driver facts it bought, are recorded in
+`docs/ASIO_WINDOWS_GATE.md` § "The gate run of 2026-08-18". Phases 2–5 not
 started.
 
 **Post-landing notes (2026-08-18):**
@@ -19,6 +25,19 @@ started.
   latency work needs one driver/one clock), and the recording docs name ASIO
   as the fix for the split-clock capture-rate failure class — this proposal
   is now on the critical path of two others.
+- **What the gate run measured (2026-08-18, Tascam US-16x08).** One driver is
+  not a survey, but these are the first real numbers this design has and three
+  of them change what Phase 2/4/5 should do. Full output and reasoning in
+  `docs/ASIO_WINDOWS_GATE.md`.
+
+  | Measured | Consequence for this design |
+  |---|---|
+  | 16 in / 8 out on ONE instance; all channels `ASIOSTInt32LSB` | Full duplex out of one `AsioDevice` as designed, and 8 outs give 36's wide sink somewhere real to go. The hand-rolled packed Int24 converter is NOT exercised by this hardware and stays unit-test-only. |
+  | Rates 44100 / 48000 / 88200 / 96000; the run opened at 48000 while the driver's current rate was 44100 | Native rate selection works, which is the whole point: `twNegotiator` gets a real `supportedRates()` and the split-clock capture-rate failure class has one clock. No 32k and no 176.4/192k — the `{32k…192k}` sweep correctly returns four. |
+  | `ASIOGetLatencies` gave out 702 at 44100 and out 735 at 48000 | **Latency is RATE-DEPENDENT.** It must be read after `setSampleRate` + `createBuffers`, never cached from open. ~1002 frames round trip ≈ 22.7 ms is the number `meterLatencyFrames()` and 21 L6 would work with. |
+  | buffer min == max == preferred == 256, granularity 0 | The `granularity == 0 ⇒ {preferred}` branch. On this driver the Phase 4 buffer-size combo has EXACTLY ONE entry — the size is set in the vendor's own control panel — so **Phase 5 is worth more than Phase 4 here**, the reverse of the order below. Neither is on the critical path; note it when they are scheduled. |
+  | `outputReady: not supported` | Step 3 of the data path is a no-op on this driver. Keep the call (a win on many others), expect nothing from it here. |
+  | 0 `bufferSwitch`, 356 `bufferSwitchTimeInfo` | Not a driver quirk — the probe answers `kAsioSupportsTimeInfo` with 1 on purpose. It does mean the production backend inherits the obligation: **answer that message and you MUST implement `bufferSwitchTimeInfo`**, because a driver that honours it will never call plain `bufferSwitch` again. |
 
 ## Why
 
@@ -88,6 +107,12 @@ callbacks (`bufferSwitch`, `bufferSwitchTimeInfo`, `sampleRateDidChange`,
 thread.
 
 ### `bufferSwitch(index)` data path (driver thread, RT rules)
+
+Both entry points land in the same body. Answering `kAsioSupportsTimeInfo`
+makes a modern driver call `bufferSwitchTimeInfo` and **never call plain
+`bufferSwitch` again** (measured: 356 and 0 on the US-16x08), so implementing
+one of the two is not optional — implement both, and treat the `ASIOTime` the
+TimeInfo variant carries as the sample-position source 21 L6 will want.
 
 No locks, no allocation, no logging — scratch buffers are pre-allocated at
 `createBuffers` time; errors latch into atomics and are logged from the
@@ -160,7 +185,11 @@ called cross-thread without marshaling).
    `tone` subcommands). *Gated:* build green on macOS (block inert) and
    Windows with AND without the SDK; layering/logging/ctest unchanged.
    *Ungated:* probe run against FlexASIO / ASIO4ALL and one real driver —
-   Windows-manual.
+   Windows-manual. **DONE 2026-08-18: `GATE PASSED` on a real vendor driver
+   (Tascam US-16x08), tone audible.** A wrapper driver (FlexASIO / ASIO4ALL)
+   has still NOT been run, and it is the one that would exercise the plain
+   `bufferSwitch` path and a non-zero buffer granularity — worth doing
+   alongside Phase 2 rather than blocking it.
 2. **Output + dispatcher** — `spsc_ring`, `asio_convert`, `asio_device`
    (output half + registry + fence), `asio_backend`, `asio_id`,
    `win_multi_backend`, factory change, CONTRACT edits,
