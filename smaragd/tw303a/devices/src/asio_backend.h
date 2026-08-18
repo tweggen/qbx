@@ -42,6 +42,7 @@ public:
     std::vector<AudioDeviceInfo> enumerateDevices() const override;
     std::vector<std::uint32_t> getAvailableBufferSizes() const override;
     int setBufferSize(std::uint32_t frameCount) override;
+    int openControlPanel() override;
 
     const char *name() const override { return "asio"; }
 

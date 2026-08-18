@@ -478,6 +478,64 @@ void AsioDevice::setRenderCallback(RenderCallback cb)
     callbackValid_.store(callback_ != nullptr, std::memory_order_release);
 }
 
+// --- the driver's control panel (Phase 5) -----------------------------------
+
+int AsioDevice::openControlPanel()
+{
+    // stateMutex_ IS held across the modal call, deliberately. It does not
+    // touch the audio path — the callback never takes this lock — and holding
+    // it is what stops a start/stop or a buffer-size change racing a panel the
+    // user has open. The UI thread is blocked anyway: it is the one inside the
+    // driver's window.
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    if (!driver_) return -1;
+
+    const long beforeMin = info_.bufMin, beforeMax = info_.bufMax;
+    const long beforePref = info_.bufPreferred, beforeGran = info_.bufGranularity;
+    const double beforeRate = sampleRate_;
+    const std::uint64_t beforeResets = resetRequests_.load(std::memory_order_relaxed);
+
+    const ASIOError r = driver_->controlPanel();
+    if (r != ASE_OK && r != ASE_NotPresent) {
+        TW_LOGW("devices", "AsioDevice: controlPanel() returned %d", (int) r);
+        return -1;
+    }
+    if (r == ASE_NotPresent) {
+        TW_LOGI("devices", "AsioDevice: '%s' has no control panel", info_.name.c_str());
+        return -1;
+    }
+
+    // RE-READ. The whole point of the panel on a driver like the US-16x08 is
+    // that the buffer size lives in there and nowhere else, so the numbers we
+    // reported a moment ago may now be wrong.
+    driver_->getBufferSize(&info_.bufMin, &info_.bufMax, &info_.bufPreferred,
+                           &info_.bufGranularity);
+    ASIOSampleRate cur = 0;
+    if (driver_->getSampleRate(&cur) == ASE_OK && (double) cur > 0.0)
+        sampleRate_ = (double) cur;
+
+    const bool bufMoved = info_.bufMin != beforeMin || info_.bufMax != beforeMax ||
+                          info_.bufPreferred != beforePref ||
+                          info_.bufGranularity != beforeGran;
+    const bool rateMoved = sampleRate_ != beforeRate;
+    const std::uint64_t resets =
+        resetRequests_.load(std::memory_order_relaxed) - beforeResets;
+
+    if (bufMoved || rateMoved || resets) {
+        // NOT applied here. Rebuilding the buffers needs the driver stopped,
+        // and the user may be listening to something; this is the same
+        // "takes effect on the next Play" contract a device change has.
+        TW_LOGI("devices",
+                "AsioDevice: control panel changed something — buffer %ld/%ld/%ld/%ld"
+                " -> %ld/%ld/%ld/%ld, rate %.0f -> %.0f, %llu reset request(s). Applied on"
+                " the next Play.",
+                beforeMin, beforeMax, beforePref, beforeGran, info_.bufMin, info_.bufMax,
+                info_.bufPreferred, info_.bufGranularity, beforeRate, sampleRate_,
+                (unsigned long long) resets);
+    }
+    return 0;
+}
+
 // --- the input half ---------------------------------------------------------
 
 std::uint32_t AsioDevice::inputStreamChannels() const

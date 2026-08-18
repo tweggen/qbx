@@ -24,6 +24,7 @@
 #include <QAbstractItemView>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStringList>
@@ -200,6 +201,22 @@ QWidget *SOptionsDialog::buildAudioPage()
     form->addRow( "Buffer size:", bufferSizeCombo_ );
     form->addRow( new QLabel( "Smaller buffer = lower latency but higher CPU load. "
                              "Requires restart of playback to take effect." ) );
+
+    // THE DRIVER'S OWN PANEL (proposal 35 Phase 5). Hidden unless the current
+    // backend has one, which today means ASIO: a WASAPI endpoint's settings
+    // live in the Windows sound control panel and are not ours to open.
+    //
+    // It matters more than it looks. On a driver whose buffer size is FIXED —
+    // the gate hardware reports min == max == preferred == 256 — the combo
+    // above has exactly one entry, and this window is the ONLY place that
+    // number can be changed at all.
+    driverPanelBtn_ = new QPushButton( "Driver Control Panel..." );
+    driverPanelBtn_->setToolTip(
+        "Opens the audio driver's own settings window. Buffer size and sample "
+        "rate changed there take effect on the next Play." );
+    form->addRow( QString(), driverPanelBtn_ );
+    connect( driverPanelBtn_, &QPushButton::clicked,
+             this, &SOptionsDialog::onOpenDriverPanel );
 
     return page;
 }
@@ -527,6 +544,55 @@ void SOptionsDialog::loadAudioPage()
         inputLatencyLabel_->setText( "(not available)" );
         bufferSizeCombo_->setEnabled( false );
     }
+
+    // The panel button is shown only for a backend that HAS a panel. There is
+    // no "does it?" query that does not open one, so the id prefix is the
+    // test: `asio:` has one, everything else does not. A driver that turns out
+    // to have none answers ASE_NotPresent and the click is a no-op with a log
+    // line, which is the honest outcome for a question only the driver can
+    // answer.
+    if( driverPanelBtn_ ) {
+        const QString outId = audioDevice_->currentData().toString();
+        const bool isAsio = outId.startsWith( QStringLiteral( "asio:" ),
+                                              Qt::CaseInsensitive );
+        driverPanelBtn_->setVisible( isAsio );
+        driverPanelBtn_->setEnabled( isAsio );
+    }
+}
+
+void SOptionsDialog::onOpenDriverPanel()
+{
+    auto spk = SApplication::app().getSpeaker();
+    audio::AudioBackend *backend = spk ? spk->getBackend() : nullptr;
+    if( !backend ) return;
+
+    // The device must be OPEN for the driver to have a panel to show: the
+    // panel belongs to an instantiated driver, not to a CLSID. When nothing is
+    // playing there is no open device, so say that rather than appearing to do
+    // nothing.
+    if( backend->getConfig().sampleRate == 0 ) {
+        QMessageBox::information(
+            this, "Driver Control Panel",
+            "The audio device is not open yet.\n\n"
+            "Press Play once (or arm a track) so the driver is running, then "
+            "open this panel." );
+        return;
+    }
+
+    // BLOCKS for as long as the user leaves the driver's window open. That is
+    // the driver's call being modal, not a choice here; every host behaves
+    // this way.
+    const int rc = backend->openControlPanel();
+    if( rc != 0 ) {
+        QMessageBox::information(
+            this, "Driver Control Panel",
+            "This driver does not offer a control panel." );
+        return;
+    }
+
+    // Re-read: the whole point of the panel on a fixed-buffer driver is that
+    // the number it shows is the one that just changed.
+    loadAudioPage();
 }
 
 void SOptionsDialog::applyAudioPage()

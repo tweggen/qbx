@@ -46,6 +46,7 @@ public:
     std::vector<AudioDeviceInfo> enumerateDevices() const override;
     std::vector<std::uint32_t> getAvailableBufferSizes() const override;
     int setBufferSize(std::uint32_t frameCount) override;
+    int openControlPanel() override;
     std::uint32_t getLatencyFrames() const override;
 
     // Reports the ACTIVE backend, not "winmulti": callers log it, and a log

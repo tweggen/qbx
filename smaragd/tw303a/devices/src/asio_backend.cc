@@ -133,6 +133,21 @@ int AsioBackend::setBufferSize(std::uint32_t frameCount)
     return device_->setBufferSize(frameCount);
 }
 
+int AsioBackend::openControlPanel()
+{
+    // NOT under mutex_: the call is modal and can sit there for as long as the
+    // user leaves the window open. Taking a copy of the shared_ptr is enough —
+    // it keeps the device alive — and holding the facade's lock for minutes
+    // would block every query the UI makes while the panel is up.
+    std::shared_ptr<AsioDevice> dev;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        dev = device_;
+    }
+    if (!dev) return -1;
+    return dev->openControlPanel();
+}
+
 std::vector<AudioDeviceInfo> AsioBackend::enumerateDevices() const
 {
     // REGISTRY ONLY — no driver is loaded to fill this list. Loading each one

@@ -21,6 +21,7 @@
 
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
+#include "tw/record/capture_bridge.h"
 
 #ifdef TW_HAVE_ASIO
 // PRIVATE to the module, and reached here on purpose: the gate's own
@@ -54,6 +55,82 @@ const char *fmtName(twSampleType t)
     case twSampleType::Int32:   return "Int32";
     default:                    return "?";
     }
+}
+
+// Phase 4: the INPUT device list, exactly as the Options dialog builds it —
+// `createAudioInput()->listDevices()`, which on Windows is the dispatcher and
+// therefore merges the WASAPI endpoints with the ASIO drivers. An ASIO entry
+// reports NO rate and NO channel count on purpose: filling those in would
+// mean loading every installed driver to populate a combo box.
+int cmdInputs()
+{
+    auto in = audio::createAudioInput();
+    if (!in) { std::printf("createAudioInput() returned nothing\n"); return 1; }
+
+    std::printf("backend: %s\n", in->backendName());
+    std::printf("  %-52s  %s\n", "default", "System default");
+    const std::vector<audio::AudioInputDeviceInfo> devs = in->listDevices();
+    for (const audio::AudioInputDeviceInfo &d : devs) {
+        std::printf("  %-52s  %s", d.id.c_str(), d.name.c_str());
+        if (d.sampleRate) std::printf("  [%u Hz]", d.sampleRate);
+        if (d.channels)   std::printf("  (%u ch)", d.channels);
+        std::printf("\n");
+    }
+    std::printf("%zu device(s) + the default\n", devs.size());
+    return 0;
+}
+
+// Phase 5: the driver's own control panel. Opens the device first, because
+// a panel belongs to an INSTANTIATED driver rather than to a CLSID, then
+// blocks until the window is closed and reports whether the driver moved
+// its own numbers underneath us.
+int cmdPanel(const std::string &id)
+{
+    auto be = audio::createAudioBackend();
+    if (!be) return 1;
+    std::printf("=== panel %s\n", id.c_str());
+    if (be->openDevice(id, 0) != 0) {
+        std::printf("  FAILED: openDevice\n");
+        return 1;
+    }
+
+    const audio::AudioConfig before = be->getConfig();
+    const std::vector<std::uint32_t> sizesBefore = be->getAvailableBufferSizes();
+    std::printf("  before : %u Hz, %u frames; sizes:", before.sampleRate,
+                before.bufferFrames);
+    for (std::uint32_t z : sizesBefore) std::printf(" %u", z);
+    std::printf("\n");
+
+    std::printf("  opening the driver panel — CLOSE IT to continue...\n");
+    std::fflush(stdout);
+    const int rc = be->openControlPanel();
+    if (rc != 0) {
+        std::printf("  RESULT : this backend/driver offers no control panel\n");
+        be->closeDevice();
+        return 1;
+    }
+
+    const audio::AudioConfig after = be->getConfig();
+    const std::vector<std::uint32_t> sizesAfter = be->getAvailableBufferSizes();
+    std::printf("  after  : %u Hz, %u frames; sizes:", after.sampleRate,
+                after.bufferFrames);
+    for (std::uint32_t z : sizesAfter) std::printf(" %u", z);
+    std::printf("\n");
+
+    // `bufferFrames` is what the CURRENT buffers were built with and does
+    // not move until the next open — that is the "takes effect on next
+    // Play" contract. The SIZES list is what the driver now offers, and it
+    // is the one that shows a panel change immediately.
+    if (sizesBefore != sizesAfter)
+        std::printf("  note   : the driver now offers different buffer sizes; the "
+                    "           open stream keeps %u frames until the next Play\n",
+                    after.bufferFrames);
+    else
+        std::printf("  note   : nothing the host can see changed\n");
+
+    be->closeDevice();
+    std::printf("  RESULT : panel shown\n");
+    return 0;
 }
 
 int cmdList()
@@ -410,6 +487,93 @@ int cmdDuplex(const std::string &id, int seconds, std::uint64_t mask, bool withO
     return rc;
 }
 
+// --- take: a REAL recording, through the layer that writes takes ------------
+//
+// `capture` above reads the device's ring directly. This one drives
+// `CaptureBridge` — the object `SAudioRecorder` drives — so it exercises the
+// path a take actually travels: ASIO callback -> device ring -> the bridge's
+// drain thread -> growing capture pages -> the WAV writer thread -> a file on
+// disk, with the channel MASK applied per sink.
+//
+// What it does NOT cover, and cannot without the Qt app: the placement
+// conversion (`SRecordPlacement`), the growing clip, and the undo macro. Those
+// are `SAudioRecorder`'s, and they are backend-agnostic — the device is the
+// part that was new.
+int cmdTake(const std::string &id, int seconds, std::uint64_t mask, const std::string &out)
+{
+    std::printf("=== take %s (%d s, mask 0x%llx) -> %s\n",
+                id.c_str(), seconds, (unsigned long long) mask, out.c_str());
+
+    audio::CaptureBridgeParams p;
+    p.inputDeviceId    = id;
+    p.targetRate       = 48000;
+    p.capturePages     = true;    // a take KEEPS its audio; that is the difference
+    p.liveEnabled      = false;   // not monitoring here
+    p.inputChannelMask = mask;
+
+    // The sinks go in the PARAMS: with capturePages = true, start() opens the
+    // segment itself, and a beginCapture() after it is refused as a second
+    // one. (Measured: "beginCapture while a segment is already open".)
+    audio::CaptureWavSink sink;
+    sink.path        = out;
+    sink.channelMask = (std::uint32_t) mask;
+    p.wavSinks.push_back(sink);
+
+    audio::CaptureBridge br;
+    if (!br.start(p)) {
+        std::printf("  FAILED: bridge start: %s\n", br.errorMessage());
+        return 1;
+    }
+    std::printf("  bridge : %u ch in @ %u Hz -> %u Hz, reported input latency %u\n",
+                br.inputChannels(), br.inputRate(), br.targetRate(),
+                br.inputLatencyFrames());
+
+    std::this_thread::sleep_for(std::chrono::seconds(seconds));
+
+    br.endCapture();
+    const audio::CaptureBridgeStats st = br.stats();
+    br.stop();
+
+    std::printf("  stats  : framesIn %llu, overruns %llu, wavLate %llu\n",
+                (unsigned long long) st.framesIn, (unsigned long long) st.ringOverruns,
+                (unsigned long long) st.wavLate);
+
+    // The file is the assertion: a take that produced no bytes is not a take.
+    std::FILE *f = std::fopen(out.c_str(), "rb");
+    long bytes = 0;
+    if (f) { std::fseek(f, 0, SEEK_END); bytes = std::ftell(f); std::fclose(f); }
+    // THE ASSERTION IS AN IDENTITY, not a threshold. A 16-bit mono WAV of N
+    // frames is exactly N*2 bytes plus a 44-byte canonical header, so
+    // "every frame the bridge took in reached the file" is checkable to the
+    // BYTE rather than approximated. Measured on the first run: 170240
+    // frames in, 340524 bytes on disk, 170240*2 + 44 = 340524.
+    //
+    // Note what is deliberately NOT compared: seconds * rate. A take is
+    // short by the driver's start-up ramp (~475 ms on the gate driver), and
+    // judging the file against wall-clock seconds would fail a perfect
+    // recording for a reason that has nothing to do with the file.
+    const int    bits      = 16;
+    const int    nch       = 1;   // the mask selects one channel per sink here
+    const long   expectBytes =
+        (long) (st.framesIn * (bits / 8) * nch) + 44;
+    std::printf("  file   : %ld bytes on disk; %llu frames in x %d bytes + 44 = %ld\n",
+                bytes, (unsigned long long) st.framesIn, (bits / 8) * nch, expectBytes);
+
+    int rc = 0;
+    if (bytes < 1024) {
+        std::printf("  ! the take wrote essentially nothing\n");
+        rc = 1;
+    } else if (bytes != expectBytes) {
+        std::printf("  ! %ld bytes short of the frames the bridge reports taking in\n",
+                    expectBytes - bytes);
+        rc = 1;
+    } else {
+        std::printf("  ok     : every captured frame reached the file, exactly\n");
+    }
+    std::printf("  RESULT : %s\n", rc == 0 ? "take written" : "FAILED");
+    return rc;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -432,10 +596,13 @@ int main(int argc, char **argv)
     int rc = 2;
     if (av.empty()) {
         std::printf("usage: audio_backend_probe list\n"
+                    "       audio_backend_probe inputs\n"
+                    "       audio_backend_probe panel   <device-id>\n"
                     "       audio_backend_probe open <device-id> [--rate=N]\n"
                     "       audio_backend_probe tone <device-id> [seconds] [--rate=N]\n"
                     "       audio_backend_probe capture <device-id> [seconds] [mask]\n"
                     "       audio_backend_probe duplex  <device-id> [seconds] [mask]\n"
+                    "       audio_backend_probe take    <device-id> [seconds] [mask] [out.wav]\n"
                     "\n"
                     "Drives the PRODUCTION output path (createAudioBackend -> the Windows\n"
                     "dispatcher -> WASAPI or ASIO). Device ids come from `list`; a BARE id\n"
@@ -444,6 +611,20 @@ int main(int argc, char **argv)
         rc = cmdList();
     } else if (av[0] == "open" && av.size() >= 2) {
         rc = cmdOpen(av[1], rate);
+    } else if (av[0] == "take" && av.size() >= 2) {
+        int seconds = 3;
+        if (av.size() >= 3) {
+            seconds = std::atoi(av[2].c_str());
+            if (seconds < 1 || seconds > 60) seconds = 3;
+        }
+        std::uint64_t mask = 1;
+        if (av.size() >= 4) mask = std::strtoull(av[3].c_str(), nullptr, 0);
+        const std::string out = av.size() >= 5 ? av[4] : std::string("asio_take.wav");
+        rc = cmdTake(av[1], seconds, mask, out);
+    } else if (av[0] == "panel" && av.size() >= 2) {
+        rc = cmdPanel(av[1]);
+    } else if (av[0] == "inputs") {
+        rc = cmdInputs();
     } else if (av[0] == "duplex" && av.size() >= 2) {
         int seconds = 3;
         if (av.size() >= 3) {
