@@ -280,6 +280,20 @@ Invariants:
 34. The capture ring is `AudioRing` — see inv. 30. The callback pushes whole
     blocks and never blocks; an overrun is a counter, as inv. 20 requires.
 
+35. **`openControlPanel()` IS THE ONE CALL ON `AudioBackend` THAT BLOCKS.**
+    Every other method here is a control-plane call that returns promptly; this
+    one shows the DRIVER's own modal window and does not return until the user
+    closes it, so it belongs on the UI thread and nowhere else — it also needs
+    a message pump, because the driver parks a real window on the HWND it was
+    given at `init`. The default implementation returns -1 ("no panel"), which
+    is what WASAPI keeps: a shared-mode endpoint's settings live in the Windows
+    sound control panel and are not ours to open. It requires an OPEN device —
+    a panel belongs to an instantiated driver, not to a CLSID. Afterwards the
+    driver's buffer size and rate are RE-READ, and what the user changed
+    applies on the NEXT open: `getAvailableBufferSizes()` moves at once while
+    `getConfig().bufferFrames` does not, which is the visible shape of the
+    no-live-renegotiation debt.
+
 How to test: WASAPI is the only regularly exercised backend (manual GUI
 playback); Null backend keeps headless/CI paths honest. devices/tools/
 asio_probe (Windows, needs the drop-in ASIO SDK — proposal 35) triages an

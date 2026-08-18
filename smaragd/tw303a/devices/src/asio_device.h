@@ -100,6 +100,13 @@ public:
 
     void setRenderCallback(RenderCallback cb);
 
+    // The driver's own control panel (Phase 5). BLOCKS until the user closes
+    // it, and must be called from a thread with a message pump. Afterwards the
+    // driver's buffer size and rate may have CHANGED, so this re-reads them —
+    // a caller that shows the numbers is otherwise showing yesterday's.
+    // Returns 0 if the panel was shown.
+    int openControlPanel();
+
     // --- the INPUT half (Phase 3) -------------------------------------------
     //
     // WHICH inputs are open is demand-driven and GROW-ONLY: see asio_channels.h

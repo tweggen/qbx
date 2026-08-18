@@ -173,7 +173,7 @@ plan/
     │                                 frozen pages BY POSITION; zero engine
     │                                 edits. Read it before touching metering:
     │                                 the naive freeze-time design is wrong)
-    ├── 35_ASIO_BACKEND.md           (Phases 1-4 CLOSED 2026-08-18 — the SDK
+    ├── 35_ASIO_BACKEND.md           (ALL 5 PHASES CLOSED 2026-08-18 — the SDK
     │                                 drop-in + asio_probe ABI gate (PASSED on
     │                                 a Tascam US-16x08, see
     │                                 docs/ASIO_WINDOWS_GATE.md), the output
@@ -182,10 +182,13 @@ plan/
     │                                 duplex; Phase 4 needed NO code — 21 L1b
     │                                 had already made the input combo real and
     │                                 Phase 3's dispatcher put ASIO in it.
-    │                                 Phase 5 (driver Control Panel button) is
-    │                                 the only one left, and it is worth MORE
-    │                                 than 4 was on a driver whose buffer size
-    │                                 lives in the vendor panel; 21 L6 unblocked)
+    │                                 Phase 5 added the driver Control Panel
+    │                                 button, which is the ONLY way to change
+    │                                 the buffer size on a driver that reports
+    │                                 min==max==preferred. What remains is
+    │                                 COVERAGE, not capability — one machine
+    │                                 with one driver is not a survey.
+    │                                 21 L6 is unblocked)
     └── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
                                       the page carries N planar channels; read
                                       §4.3-§4.6 and the 28 traps before touching

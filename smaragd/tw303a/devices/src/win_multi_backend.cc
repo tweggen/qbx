@@ -149,6 +149,19 @@ int WinMultiBackend::setBufferSize(std::uint32_t frameCount)
     return active_() ? active_()->setBufferSize(frameCount) : -1;
 }
 
+int WinMultiBackend::openControlPanel()
+{
+    // The active backend answers, and WASAPI's answer is -1 ("no panel") from
+    // the base class — which is correct: a shared-mode endpoint's settings live
+    // in the Windows sound control panel, not in ours to open.
+    AudioBackend *be = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        be = active_();
+    }
+    return be ? be->openControlPanel() : -1;
+}
+
 std::vector<AudioDeviceInfo> WinMultiBackend::enumerateDevices() const
 {
     std::lock_guard<std::mutex> lk(mutex_);

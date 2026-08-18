@@ -14200,3 +14200,65 @@ the growing clip, the loop-pass takes and the undo macro. Those are
 `SAudioRecorder`'s and they are backend-agnostic — the device was the new part
 — but "backend-agnostic" is an argument, not a measurement, and it should be
 recorded as one.
+
+## 2026-08-18 — Proposal 35 Phase 5: the driver Control Panel button (proposal CLOSED)
+
+The last phase, and the proposal's own bullet calls it "(optional)". It is not
+optional on hardware like the gate driver: the US-16x08 reports
+min == max == preferred == 256, so the Options buffer-size combo has exactly
+ONE entry and the driver's own window is the only place that number can be
+changed at all. Invariants: `tw303a/devices/CONTRACT.md` inv. 35.
+
+`AudioBackend::openControlPanel()` is a **default-implemented virtual returning
+-1**, so no other backend changed a line. WASAPI keeps that -1, and it is the
+right answer rather than a gap: a shared-mode endpoint's settings live in the
+Windows sound control panel and are not ours to open. `WinMultiBackend`
+forwards to whichever backend is active; `AsioBackend` forwards to the shared
+device; `AsioDevice` calls `IASIO::controlPanel()`.
+
+### The four things that make it behave
+
+- **It BLOCKS**, because the driver's call is modal, and the whole app is
+  unresponsive while the window is open. That is not a choice here — every host
+  behaves this way — so it is stated in the interface comment rather than left
+  to be discovered. It is the ONE method on `AudioBackend` that does not return
+  promptly.
+- **The device must be OPEN.** A panel belongs to an instantiated driver, not
+  to a CLSID, so with nothing playing there is nothing to show. The dialog says
+  "press Play once, then open this panel" instead of appearing to do nothing.
+- **`stateMutex_` IS held across the modal call, deliberately.** It never
+  touches the audio path — the callback does not take it — and holding it is
+  what stops a start/stop or a `setBufferSize` racing a panel the user has
+  open. The facade above it does the opposite and takes only a `shared_ptr`
+  copy, because holding the FACADE's lock for minutes would block every query
+  the UI makes while the window is up.
+- **The numbers are RE-READ afterwards** and the dialog reloads. What the user
+  changed applies on the **next Play**: rebuilding buffers needs the driver
+  stopped. So `getAvailableBufferSizes()` moves at once while
+  `getConfig().bufferFrames` does not — that difference is the visible shape of
+  the "no live renegotiation" debt this proposal declared in Phase 2.
+
+### Verification, and its limit
+
+`./build.sh` green; `check_layering` and `check_logging` clean; `ctest -j4`
+**198/198 passed, 201 registered, 3 Not Run (Disabled)**.
+
+**The panel itself is NOT machine-verifiable and cannot be**: it opens a modal
+window that a human has to close. `audio_backend_probe panel <id>` exists for
+exactly that — it opens the device, prints the buffer sizes, shows the panel,
+and prints them again after it closes, so a change is visible as a diff rather
+than as a claim. It has NOT been run in this session, because running it would
+have put a modal window on the requester's desktop and blocked waiting for
+them; it is handed over rather than reported as done.
+
+### The proposal is closed
+
+All five phases: SDK detection + the ABI gate (1), the output backend and the
+one-list dispatcher (2), the input half and full duplex (3), input enumeration
+(4 — already satisfied, no code), the control panel (5). **What remains is
+COVERAGE, not capability.** Everything touching a real driver is Windows-manual
+by nature, and one machine with one driver is not a survey; the per-phase "not
+gated" lists say what that leaves open. The largest items are a second driver
+in any form (a wrapper, a non-zero buffer granularity, the two-driver refusal,
+mixed WASAPI/ASIO), the deferred input-channel path, and the app-level
+recording path above `CaptureBridge`.

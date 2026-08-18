@@ -80,6 +80,59 @@ int cmdInputs()
     return 0;
 }
 
+// Phase 5: the driver's own control panel. Opens the device first, because
+// a panel belongs to an INSTANTIATED driver rather than to a CLSID, then
+// blocks until the window is closed and reports whether the driver moved
+// its own numbers underneath us.
+int cmdPanel(const std::string &id)
+{
+    auto be = audio::createAudioBackend();
+    if (!be) return 1;
+    std::printf("=== panel %s\n", id.c_str());
+    if (be->openDevice(id, 0) != 0) {
+        std::printf("  FAILED: openDevice\n");
+        return 1;
+    }
+
+    const audio::AudioConfig before = be->getConfig();
+    const std::vector<std::uint32_t> sizesBefore = be->getAvailableBufferSizes();
+    std::printf("  before : %u Hz, %u frames; sizes:", before.sampleRate,
+                before.bufferFrames);
+    for (std::uint32_t z : sizesBefore) std::printf(" %u", z);
+    std::printf("\n");
+
+    std::printf("  opening the driver panel — CLOSE IT to continue...\n");
+    std::fflush(stdout);
+    const int rc = be->openControlPanel();
+    if (rc != 0) {
+        std::printf("  RESULT : this backend/driver offers no control panel\n");
+        be->closeDevice();
+        return 1;
+    }
+
+    const audio::AudioConfig after = be->getConfig();
+    const std::vector<std::uint32_t> sizesAfter = be->getAvailableBufferSizes();
+    std::printf("  after  : %u Hz, %u frames; sizes:", after.sampleRate,
+                after.bufferFrames);
+    for (std::uint32_t z : sizesAfter) std::printf(" %u", z);
+    std::printf("\n");
+
+    // `bufferFrames` is what the CURRENT buffers were built with and does
+    // not move until the next open — that is the "takes effect on next
+    // Play" contract. The SIZES list is what the driver now offers, and it
+    // is the one that shows a panel change immediately.
+    if (sizesBefore != sizesAfter)
+        std::printf("  note   : the driver now offers different buffer sizes; the "
+                    "           open stream keeps %u frames until the next Play\n",
+                    after.bufferFrames);
+    else
+        std::printf("  note   : nothing the host can see changed\n");
+
+    be->closeDevice();
+    std::printf("  RESULT : panel shown\n");
+    return 0;
+}
+
 int cmdList()
 {
     auto be = audio::createAudioBackend();
@@ -544,6 +597,7 @@ int main(int argc, char **argv)
     if (av.empty()) {
         std::printf("usage: audio_backend_probe list\n"
                     "       audio_backend_probe inputs\n"
+                    "       audio_backend_probe panel   <device-id>\n"
                     "       audio_backend_probe open <device-id> [--rate=N]\n"
                     "       audio_backend_probe tone <device-id> [seconds] [--rate=N]\n"
                     "       audio_backend_probe capture <device-id> [seconds] [mask]\n"
@@ -567,6 +621,8 @@ int main(int argc, char **argv)
         if (av.size() >= 4) mask = std::strtoull(av[3].c_str(), nullptr, 0);
         const std::string out = av.size() >= 5 ? av[4] : std::string("asio_take.wav");
         rc = cmdTake(av[1], seconds, mask, out);
+    } else if (av[0] == "panel" && av.size() >= 2) {
+        rc = cmdPanel(av[1]);
     } else if (av[0] == "inputs") {
         rc = cmdInputs();
     } else if (av[0] == "duplex" && av.size() >= 2) {

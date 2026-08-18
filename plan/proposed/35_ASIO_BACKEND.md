@@ -1,6 +1,15 @@
 # Proposal 35 — ASIO audio backend (Windows)
 
-**Status:** **Phase 1 CLOSED 2026-08-18.** It landed 2026-08-15 (PR #31 —
+**Status:** **ALL FIVE PHASES CLOSED 2026-08-18.** Phase 1 (SDK detection +
+the `asio_probe` ABI gate), Phase 2 (output backend + the one-list Windows
+dispatcher), Phase 3 (input half + full duplex on one driver), Phase 4 (input
+enumeration — **already satisfied**, no code needed), Phase 5 (the driver
+Control Panel button). What remains is COVERAGE, not capability: everything
+touching a real driver is Windows-manual by nature, and one machine with one
+driver is not a survey — the per-phase "not gated" lists say what that leaves
+open. Detail below.
+
+**Phase 1 history:** It landed 2026-08-15 (PR #31 —
 SDK detection + `asio_probe`) and its exit criterion — the manual Windows
 gate run — **PASSED on that date against a real vendor driver** (Tascam
 US-16x08, ASIO driver version 1001, on the MinGW x64 build): `open` and
@@ -259,6 +268,28 @@ called cross-thread without marshaling).
    `ASIOControlPanel()` behind it, Options button enabled for `asio:` ids;
    panel-driven buffer changes surface as `kAsioResetRequest` → reopen on
    next Play.
+   **EXECUTED 2026-08-18**, and it is not optional on hardware like the gate
+   driver: the US-16x08 reports min == max == preferred == 256, so the Options
+   buffer-size combo has exactly ONE entry and this window is the only place
+   that number can be changed at all. Four notes:
+
+   - `AudioBackend::openControlPanel()` is a **default-implemented virtual
+     returning -1**, so no other backend changed. WASAPI's answer stays -1 and
+     that is correct rather than a gap: a shared-mode endpoint's settings live
+     in the Windows sound control panel and are not ours to open.
+   - **It BLOCKS**, because the driver's call is modal. It is called on the UI
+     thread, from the Options dialog, and the whole app is unresponsive while
+     the user has the window open. Every host behaves this way; it is stated in
+     the interface comment rather than discovered.
+   - **The device must be OPEN.** A panel belongs to an instantiated driver,
+     not to a CLSID, so with nothing playing there is nothing to show — the
+     dialog says so instead of appearing to do nothing.
+   - **The numbers are RE-READ after the panel closes** (`getBufferSize`,
+     `getSampleRate`) and the dialog reloads. What the user changed applies on
+     the **next Play**, not immediately: rebuilding buffers needs the driver
+     stopped. `AvailableBufferSizes` therefore moves at once while
+     `getConfig().bufferFrames` does not, and that difference is the visible
+     shape of the "no live renegotiation" debt.
 
 ## Phase 2, re-planned (2026-08-18)
 
