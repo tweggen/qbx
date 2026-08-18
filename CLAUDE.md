@@ -172,12 +172,14 @@ plan/
     │                                 frozen pages BY POSITION; zero engine
     │                                 edits. Read it before touching metering:
     │                                 the naive freeze-time design is wrong)
-    ├── 35_ASIO_BACKEND.md           (Phase 1 landed 2026-08-15 — SDK drop-in
-    │                                 detection + the asio_probe ABI gate; the
-    │                                 manual Windows gate run is PENDING, see
+    ├── 35_ASIO_BACKEND.md           (Phase 1 CLOSED 2026-08-18 — SDK drop-in
+    │                                 detection + the asio_probe ABI gate, and
+    │                                 the manual Windows gate run PASSED on a
+    │                                 Tascam US-16x08; the run and the driver
+    │                                 facts it bought are recorded in
     │                                 docs/ASIO_WINDOWS_GATE.md. Phases 2-5 not
     │                                 started; 21 L6 waits on this; re-plan
-    │                                 Phase 2 against 36's channel model)
+    │                                 Phase 2 against 36's channel model FIRST)
     └── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
                                       the page carries N planar channels; read
                                       §4.3-§4.6 and the 28 traps before touching

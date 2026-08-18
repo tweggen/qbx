@@ -13722,3 +13722,101 @@ proposal-35 Phase 2 output-path design predates it and its mono-fan-out
 assumptions are stale — re-plan against 36 before building `AsioDevice`
 (noted in the proposal header). Proposal 21 stopped at L6 gated on ASIO/35,
 so this proposal is now on the critical path of the live-latency work.
+
+## 2026-08-18 — Proposal 35 Phase 1 CLOSED: the Windows ASIO gate run PASSED
+
+Docs only; no code changed. The entry above records Phase 1 landing with its
+exit criterion **pending**: proving on a real Windows machine that this
+MinGW-built host can drive an MSVC-built ASIO driver end to end. That run
+happened today and **passed**, so Phase 2 is unblocked and this closes the
+phase. Runbook and the full record: `docs/ASIO_WINDOWS_GATE.md`.
+
+### The run
+
+Windows 11, MinGW x64 build of `main` at 585f80a, ASIO SDK 2.3.4
+(`ASIO-SDK_2.3.4_2025-10-15.zip`, dropped into `smaragd/third_party/asiosdk`),
+one driver installed: **Tascam US-16x08**, driver version 1001. All three
+subcommands run: `list` found it, `open` and `tone` both ended
+`GATE PASSED: the MinGW <-> MSVC ASIO ABI works here`, and **the 2-second
+440 Hz sine was audible on the connected monitors** — which is the half of
+the gate the probe cannot check for itself, since `RESULT` is a frame count.
+
+Clean in every ABI respect that matters: no `SUSPECT VTABLE MISMATCH`, no
+`SUSPECT VTABLE/STRUCT MISMATCH`, no out-of-range `bufferSwitch` index, no
+callbacks after `stop()` returned, no `kAsioResetRequest`, no crash. Risk 1 of
+proposal 35 is settled on real vendor hardware, the way `vst3_probe` settled
+it for VST3 before M6.
+
+Two output lines look like problems and are not, both recorded so the next
+reader does not re-diagnose them. `91136 delivered, ~96000 expected (95%)` is
+not a dropout: `expected` is `rate × seconds` against a fixed sleep and does
+not measure when the stream started, so the ~101 ms shortfall is driver
+start-up; the failure threshold is `< 50%`. `0 bufferSwitch, 356
+bufferSwitchTimeInfo` is not a quirk either — the probe answers
+`kAsioSupportsTimeInfo` with 1 deliberately, so the driver takes the path the
+production backend will use.
+
+### What it bought, beyond the pass
+
+The first real driver numbers this design has. Three of them change what
+should be built, and they are tabulated in both the proposal header and
+`docs/ASIO_WINDOWS_GATE.md`:
+
+- **Latency is RATE-DEPENDENT** (out 702 at 44100, 735 at 48000) — read
+  `ASIOGetLatencies` after `setSampleRate` + `createBuffers`, never cache it
+  from open. ~1002 frames round trip ≈ 22.7 ms is what
+  `meterLatencyFrames()` and proposal 21 L6 would work with.
+- **A driver that accepts TimeInfo never calls plain `bufferSwitch` again**,
+  so the backend must implement `bufferSwitchTimeInfo` — and the `ASIOTime`
+  it carries is the sample-position source L6 wants.
+- **buffer min == max == preferred == 256, granularity 0** ⇒ the Phase 4
+  buffer-size combo would have exactly ONE entry on this hardware; the size
+  lives in the vendor control panel, which makes **Phase 5 worth more than
+  Phase 4** here — the reverse of the proposal's ordering.
+- Rates 44100/48000/88200/96000 with the run opening at 48000 while the
+  driver sat at 44100: **native rate selection works**, which is the
+  one-driver-one-clock fix for the endpoint sample-rate trap.
+- 16 in / 8 out on one instance, all `Int32LSB`: full duplex from one
+  `AsioDevice` as designed. The packed **Int24** converter is not exercised
+  by this hardware.
+- `outputReady: not supported` on this driver — keep the call, expect nothing
+  from it here.
+
+### Verification, and its limits
+
+Docs-only branch: no build, no ctest, no layering/logging run — nothing
+compiles from this change. What is NOT proven, and is named in both documents
+rather than left to a green-looking record: **no wrapper driver has been run**
+(FlexASIO / ASIO4ALL — the one that would exercise the plain-`bufferSwitch`
+path and a non-zero granularity), no second vendor driver, so nothing here
+separates "how ASIO behaves" from "how the US-16x08 behaves"; the stop-fence
+case that CONTRACT invariant 3 is being reworded for went unobserved (this
+driver delivered no late callbacks); and the input path is untouched —
+`asio_probe` is output-only, input is Phase 3.
+
+### Next
+
+**The Phase 2 re-plan was done in the same session** and is
+`plan/proposed/35_ASIO_BACKEND.md` § "Phase 2, re-planned (2026-08-18)". Read
+it before writing any of Phase 2; two of its findings are worth naming here
+because the header's original staleness note pointed the wrong way:
+
+- **Less is stale than the note claimed.** `RenderCallback` is still
+  interleaved (`audio_backend.h:46`) — proposal 36 went planar one seam ABOVE
+  the backend, at `AudioEngine::pullBlock` — so the output-half data path
+  needed no edit at all. And the `c % 2` fan-out that note calls stale is
+  `twmonitor::interleave` in `twSpeaker`, not anything in proposal 35; it is
+  current shipped behaviour and Phase 2 does not touch it. Checked
+  repo-wide, nothing outside a backend reads an output `AudioConfig::channels`.
+- **What genuinely changed is a question WASAPI shared mode never posed:** how
+  many of a pro interface's outputs to open. With 8 outs and a `c % 2`
+  fan-out, reporting `channels = 8` would put the monitor mix on OUT 1/2 AND
+  3/4 AND 5/6 AND 7/8 — routinely headphone amps and outboard sends.
+  **DECIDED (requester): the ASIO device opens OUTPUTS 1–2 ONLY** and reports
+  that number. It is exactly the shipped "monitoring is stereo" rule rather
+  than an approximation of it, it makes `twSpeaker` need zero changes for
+  ASIO (so the WASAPI-through-dispatcher regression stays meaningful), and it
+  is the cheapest correct thing on the driver thread. What it forgoes is
+  stated in the proposal: a wider project cannot reach the other outputs, and
+  monitoring cannot be routed to OUT 3/4 — both need an output-routing model,
+  which is its own proposal after Phase 2 lands.

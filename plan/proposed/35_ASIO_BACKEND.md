@@ -1,24 +1,49 @@
 # Proposal 35 — ASIO audio backend (Windows)
 
-**Status:** Phase 1 landed 2026-08-15 (PR #31 — SDK detection +
-`asio_probe`). The manual Windows gate run is PENDING and is the Phase 1
-exit criterion: runbook in `docs/ASIO_WINDOWS_GATE.md`. Phases 2–5 not
+**Status:** **Phase 1 CLOSED 2026-08-18.** It landed 2026-08-15 (PR #31 —
+SDK detection + `asio_probe`) and its exit criterion — the manual Windows
+gate run — **PASSED on that date against a real vendor driver** (Tascam
+US-16x08, ASIO driver version 1001, on the MinGW x64 build): `open` and
+`tone` both reported `GATE PASSED`, with an audible 440 Hz sine on the
+connected monitors and no ABI tell of any kind. **Phase 2 is unblocked** —
+but see the proposal-36 note below: it must be re-planned before it is
+written. The run, and the driver facts it bought, are recorded in
+`docs/ASIO_WINDOWS_GATE.md` § "The gate run of 2026-08-18". Phases 2–5 not
 started.
 
 **Post-landing notes (2026-08-18):**
 
 - **Proposal 36 (multichannel signal flow) executed 2026-08-16, AFTER this
-  design was written.** Pages now carry N planar channels, so the design's
-  Phase 2 output-path assumptions — mono pull fanned out `c % 2`, the
-  "rendered WAV channels equal by construction" caveat — are STALE. Re-plan
-  the `AsioDevice` output half and the `AudioConfig.channels` handling
-  against 36's channel model (read 36 §4.3–§4.6 and its traps first). The
-  dispatcher/id scheme, the registry/facade split, the input ring and the
-  SDK-free loading strategy are unaffected.
+  design was written**, so the Phase 2 output path had to be re-planned
+  against 36's channel model. **That was done on 2026-08-18 — see
+  "Phase 2, re-planned" below, which is now the authority.** Two corrections
+  it makes to this note as originally written, kept here because the wrong
+  reading is the tempting one: the `c % 2` fan-out named here is
+  `twmonitor::interleave` in `twSpeaker`, **not** anything in this proposal,
+  and it is current shipped behaviour that Phase 2 does not touch; and
+  `RenderCallback` is still interleaved, so the output half's data path
+  description needed no edit at all. What genuinely changed is the
+  `AudioConfig::channels` question — how many of a pro interface's outputs to
+  open — which WASAPI shared mode never posed. The dispatcher/id scheme, the
+  registry/facade split, the input ring and the SDK-free loading strategy are
+  unaffected.
 - **Proposal 21 stopped at L6 explicitly gated on this proposal** (duplex
   latency work needs one driver/one clock), and the recording docs name ASIO
   as the fix for the split-clock capture-rate failure class — this proposal
   is now on the critical path of two others.
+- **What the gate run measured (2026-08-18, Tascam US-16x08).** One driver is
+  not a survey, but these are the first real numbers this design has and three
+  of them change what Phase 2/4/5 should do. Full output and reasoning in
+  `docs/ASIO_WINDOWS_GATE.md`.
+
+  | Measured | Consequence for this design |
+  |---|---|
+  | 16 in / 8 out on ONE instance; all channels `ASIOSTInt32LSB` | Full duplex out of one `AsioDevice` as designed, and 8 outs give 36's wide sink somewhere real to go. The hand-rolled packed Int24 converter is NOT exercised by this hardware and stays unit-test-only. |
+  | Rates 44100 / 48000 / 88200 / 96000; the run opened at 48000 while the driver's current rate was 44100 | Native rate selection works, which is the whole point: `twNegotiator` gets a real `supportedRates()` and the split-clock capture-rate failure class has one clock. No 32k and no 176.4/192k — the `{32k…192k}` sweep correctly returns four. |
+  | `ASIOGetLatencies` gave out 702 at 44100 and out 735 at 48000 | **Latency is RATE-DEPENDENT.** It must be read after `setSampleRate` + `createBuffers`, never cached from open. ~1002 frames round trip ≈ 22.7 ms is the number `meterLatencyFrames()` and 21 L6 would work with. |
+  | buffer min == max == preferred == 256, granularity 0 | The `granularity == 0 ⇒ {preferred}` branch. On this driver the Phase 4 buffer-size combo has EXACTLY ONE entry — the size is set in the vendor's own control panel — so **Phase 5 is worth more than Phase 4 here**, the reverse of the order below. Neither is on the critical path; note it when they are scheduled. |
+  | `outputReady: not supported` | Step 3 of the data path is a no-op on this driver. Keep the call (a win on many others), expect nothing from it here. |
+  | 0 `bufferSwitch`, 356 `bufferSwitchTimeInfo` | Not a driver quirk — the probe answers `kAsioSupportsTimeInfo` with 1 on purpose. It does mean the production backend inherits the obligation: **answer that message and you MUST implement `bufferSwitchTimeInfo`**, because a driver that honours it will never call plain `bufferSwitch` again. |
 
 ## Why
 
@@ -88,6 +113,12 @@ callbacks (`bufferSwitch`, `bufferSwitchTimeInfo`, `sampleRateDidChange`,
 thread.
 
 ### `bufferSwitch(index)` data path (driver thread, RT rules)
+
+Both entry points land in the same body. Answering `kAsioSupportsTimeInfo`
+makes a modern driver call `bufferSwitchTimeInfo` and **never call plain
+`bufferSwitch` again** (measured: 356 and 0 on the US-16x08), so implementing
+one of the two is not optional — implement both, and treat the `ASIOTime` the
+TimeInfo variant carries as the sample-position source 21 L6 will want.
 
 No locks, no allocation, no logging — scratch buffers are pre-allocated at
 `createBuffers` time; errors latch into atomics and are logged from the
@@ -160,14 +191,19 @@ called cross-thread without marshaling).
    `tone` subcommands). *Gated:* build green on macOS (block inert) and
    Windows with AND without the SDK; layering/logging/ctest unchanged.
    *Ungated:* probe run against FlexASIO / ASIO4ALL and one real driver —
-   Windows-manual.
+   Windows-manual. **DONE 2026-08-18: `GATE PASSED` on a real vendor driver
+   (Tascam US-16x08), tone audible.** A wrapper driver (FlexASIO / ASIO4ALL)
+   has still NOT been run, and it is the one that would exercise the plain
+   `bufferSwitch` path and a non-zero buffer granularity — worth doing
+   alongside Phase 2 rather than blocking it.
 2. **Output + dispatcher** — `spsc_ring`, `asio_convert`, `asio_device`
    (output half + registry + fence), `asio_backend`, `asio_id`,
    `win_multi_backend`, factory change, CONTRACT edits,
    `multi_backend_test`. *Ungated:* playback via FlexASIO + real driver;
    WASAPI regression through the dispatcher (bare persisted id, `default`,
    prefixed); meter latency sanity; start/stop cycling; `setBufferSize`
-   while stopped.
+   while stopped. **RE-PLANNED 2026-08-18 against proposal 36 and the gate
+   run — read the section below before writing any of it.**
 3. **Input + full duplex** — input half of `bufferSwitch`, `asio_input`,
    `win_multi_input`, factory change, refcounted cross-facade start/stop.
    *Ungated:* ASIO record-only; record-while-playing on the same driver;
@@ -180,6 +216,134 @@ called cross-thread without marshaling).
    `ASIOControlPanel()` behind it, Options button enabled for `asio:` ids;
    panel-driven buffer changes surface as `kAsioResetRequest` → reopen on
    next Play.
+
+## Phase 2, re-planned (2026-08-18)
+
+The header note says the Phase 2 output path is stale after proposal 36. It
+is — but **narrower, and in a different place, than that note claims**, and
+the difference is worth stating because the obvious re-reading throws away
+work that is still correct. This section supersedes the Phase 2 bullet above
+where the two disagree.
+
+### What is NOT stale, verified against the tree
+
+- **`RenderCallback` is unchanged**: `std::function<size_t(float *out,
+  size_t frames, uint32_t channels)>`, **interleaved**
+  (`devices/include/tw/devices/audio_backend.h:46`). Proposal 36 went planar
+  at `AudioEngine::pullBlock`, which is one seam ABOVE the backend. So the
+  output-half description in "§ `bufferSwitch(index)` data path" — pull
+  interleaved float into scratch, zero the shortfall, convert per channel
+  into `bufferInfos_[ch].buffers[index]` — is **still exactly right** and
+  needs no edit.
+- **The `c % 2` fan-out the header calls stale is not in this proposal at
+  all.** It is `twmonitor::interleave` (`playback/include/tw/playback/
+  twspeaker.h:57`), it is CURRENT shipped behaviour, and it is what proposal
+  36 B5 deliberately left in place: `L = ch0; R = (width >= 2) ? ch1 : ch0`,
+  that pair then meeting the device's channel count. Nothing in Phase 2 has
+  to touch it.
+- **Nothing outside a backend reads an output `AudioConfig::channels`.**
+  Checked repo-wide: the only consumers are the backend's own conversion and
+  the `channels` argument `twSpeaker`'s callback receives. `RenderSession`,
+  the file writers and `CaptureBridge` all carry their own, unrelated
+  `channels`.
+- The dispatcher/id scheme, the registry/facade split, the input ring and the
+  SDK-free loading strategy are unaffected, as the header already says.
+
+So "Reused unchanged: `twSpeaker`" — a line that was in doubt — **stays
+true**, and that is a decision, not an accident. See the next part.
+
+### The one thing proposal 36 really does change: how many outputs to open
+
+WASAPI shared mode handed this design a 2-channel endpoint and the question
+never arose. ASIO does not: the gate driver has **8 outputs**. Because
+`twmonitor::interleave` writes `out[i * deviceChannels + c] = (c % 2 == 0) ?
+l : r`, a backend that reports `channels = 8` puts the monitor mix on OUT 1/2
+**and** 3/4 **and** 5/6 **and** 7/8 — which on a pro interface are routinely
+headphone amps and outboard sends.
+
+> **DECIDED (requester, 2026-08-18): the ASIO device opens OUTPUTS 1–2 ONLY.**
+> `createBuffers` is called for output channels 0 and 1 (fewer if the driver
+> has fewer), and `getConfig().channels` reports that number — never the
+> driver's `ASIOGetChannels` output count.
+
+Why this and not the alternatives:
+
+- It is **exactly the shipped monitoring rule**, not an approximation of it.
+  Proposal 36 §8 names channel roles and a fold law as non-goals, and the
+  device rule that came out of that is "monitoring is stereo, rendering is
+  not". An ASIO backend that opened eight outputs would be the first thing in
+  the tree to have an opinion about physical output routing, and it would be
+  expressing that opinion through a `c % 2` accident rather than a design.
+- It makes **`twSpeaker` need zero changes for ASIO output**, so the
+  WASAPI-through-dispatcher regression and the ASIO path exercise the same
+  code above the backend — which is what makes that regression meaningful.
+- It is the cheapest correct thing: no conversion of six channels of silence
+  every block, on the driver thread, under RT rules.
+
+What it forgoes, stated plainly so nobody discovers it as a bug: **a
+6-channel project is monitored on OUT 1/2 and its other channels are not
+reachable from any physical output**, and monitoring cannot be routed to,
+say, OUT 3/4. Both need an output-routing model (which physical output is
+"main", what a wider project does with the rest). That is its own proposal,
+after Phase 2 lands, and it would revisit proposal 36's device rule rather
+than extend this one. A render is unaffected — it already writes the
+project's full width to a file.
+
+### What the gate run adds to the Phase 2 spec
+
+From `docs/ASIO_WINDOWS_GATE.md` § "The gate run of 2026-08-18". These are
+requirements, not observations:
+
+1. **Implement BOTH callback entry points into one body.** We answer
+   `kAsioSupportsTimeInfo`, and a driver that honours it **never calls plain
+   `bufferSwitch` again** (measured 356 / 0). Implementing only the one the
+   design's prose names would produce a silent, non-obvious dead stream on
+   every modern driver. Keep the `ASIOTime` the TimeInfo variant carries: it
+   is the sample-position source proposal 21 L6 will want, and it is free
+   here.
+2. **Read `ASIOGetLatencies` AFTER `setSampleRate` + `createBuffers`, and
+   again after any rate change.** Measured 702 frames out at 44100 and 735 at
+   48000 on one driver — latency is rate-dependent, so an open-time cache is
+   wrong by 33 frames before anything interesting happens. It feeds
+   `AudioConfig::outputLatencyFrames`, hence `meterLatencyFrames()`, hence
+   every position the meters, MIDI-out pump and both recorders compensate
+   with.
+3. **`ASIOSTInt32LSB` is the type that matters first** — it is what the gate
+   driver uses on all 24 channels. The full set stays as designed; the packed
+   **Int24** path is the one with no hardware behind it, so it is
+   unit-test-only until a driver turns up that needs it. Say so in the PR
+   rather than implying it was exercised.
+4. **`outputReady()` may be unsupported** (it is, on the gate driver). Call
+   it when the driver advertises it, treat its absence as normal, and never
+   let the return value gate anything.
+5. **The `granularity == 0 ⇒ {preferred}` branch of the buffer-size walk is
+   the real-hardware case**, not a corner: the gate driver reports
+   min == max == preferred == 256. The consequence for Phase 4 is recorded in
+   the header table — the combo would have one entry — and it is why Phase 5
+   is worth more than Phase 4 on that hardware.
+6. **`supportedRates()` comes from `ASIOCanSampleRate` over the sweep** and
+   really is a short list (44100 / 48000 / 88200 / 96000 on the gate driver,
+   with no 32k and no 176.4/192k). `twNegotiator` can then pick the project
+   rate natively — which is the whole point, and the fix for the endpoint
+   sample-rate trap in CLAUDE.md.
+
+### Phase 2 deliverables, revised
+
+Unchanged from the table above: `spsc_ring.h`, `asio_convert.h`, `asio_id.h`,
+`asio_backend.{h,cc}`, `win_multi_backend.{h,cc}`, the factory change, the
+CONTRACT edits, `multi_backend_test.cc`.
+
+Changed:
+
+- `asio_device.{h,cc}` — add the two-output policy (`outs = min(2,
+  deviceOutCount)`, buffers created for exactly those), both callback
+  trampolines into one body, and the latency re-read ordering.
+- `multi_backend_test.cc` — the granularity walk must cover the
+  `granularity == 0` case with `min == max == preferred` as a named row, and
+  the converter tests must cover Int32LSB de-interleave explicitly.
+- Nothing in `tw/playback`. If a Phase 2 diff touches `twSpeaker`, the
+  two-output decision above has been dropped somewhere and that is the thing
+  to re-examine first.
 
 ## Risks
 
