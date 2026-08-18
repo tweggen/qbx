@@ -173,6 +173,29 @@ QWidget *SOptionsDialog::buildAudioPage()
         "Applies to the selected input device. The driver's reported latencies "
         "are compensated automatically; this corrects what it misreports." ) );
 
+    // TRANSPORT POLISH (proposal 21 L5). Three per-USER knobs, on the Audio
+    // page because that is where the transport's other timing numbers already
+    // are. Whether the metronome is ON is a PROJECT property and stays on the
+    // transport bar - this is only how loud it is.
+    metronomeLevel_ = new QSpinBox;
+    metronomeLevel_->setRange( 0, 100 );
+    metronomeLevel_->setSuffix( " %" );
+    form->addRow( "Metronome level:", metronomeLevel_ );
+
+    countInBars_ = new QSpinBox;
+    countInBars_->setRange( 0, 8 );
+    countInBars_->setSuffix( " bar(s)" );
+    form->addRow( "Count-in:", countInBars_ );
+
+    preRollBars_ = new QSpinBox;
+    preRollBars_->setRange( 0, 8 );
+    preRollBars_->setSuffix( " bar(s)" );
+    form->addRow( "Pre-roll:", preRollBars_ );
+    form->addRow( new QLabel(
+        "Count-in clicks the bars BEFORE the record position without moving "
+        "the playhead; pre-roll ROLLS them. Recording begins at the locator "
+        "either way." ) );
+
     bufferSizeCombo_ = new QComboBox;
     form->addRow( "Buffer size:", bufferSizeCombo_ );
     form->addRow( new QLabel( "Smaller buffer = lower latency but higher CPU load. "
@@ -432,6 +455,19 @@ void SOptionsDialog::loadAudioPage()
     if( recordingOffsetMs_ )
         recordingOffsetMs_->setValue(
             (int) SSettings::instance().recordingOffsetMs( curIn ) );
+    if( metronomeLevel_ )
+        metronomeLevel_->setValue( (int) qRound(
+            100.0 * SSettings::instance()
+                        .value( SOpt::MetronomeLevel,
+                                SOpt::def( SOpt::MetronomeLevel ) ).toDouble() ) );
+    if( countInBars_ )
+        countInBars_->setValue( SSettings::instance()
+                                    .value( SOpt::CountInBars,
+                                            SOpt::def( SOpt::CountInBars ) ).toInt() );
+    if( preRollBars_ )
+        preRollBars_->setValue( SSettings::instance()
+                                    .value( SOpt::PreRollBars,
+                                            SOpt::def( SOpt::PreRollBars ) ).toInt() );
 
     // Load latencies (cached from startup) and buffer size options
     if( spk ) {
@@ -521,6 +557,18 @@ void SOptionsDialog::applyAudioPage()
         // else in the app is watching this key.
         if( moved ) SApplication::app().liveLanesChanged();
     }
+
+    // Transport polish (proposal 21 L5). The level is a plan-rebuild trigger,
+    // and it arrives through the plan SIGNATURE the demand tick compares
+    // (SLiveMonitor::planSignature) rather than through a signal - the same
+    // arrangement a fader move uses.
+    if( metronomeLevel_ )
+        SSettings::instance().setValue( SOpt::MetronomeLevel,
+                                        metronomeLevel_->value() / 100.0 );
+    if( countInBars_ )
+        SSettings::instance().setValue( SOpt::CountInBars, countInBars_->value() );
+    if( preRollBars_ )
+        SSettings::instance().setValue( SOpt::PreRollBars, preRollBars_->value() );
 
     // Apply buffer size change (if supported)
     if( auto spk = SApplication::app().getSpeaker() ) {

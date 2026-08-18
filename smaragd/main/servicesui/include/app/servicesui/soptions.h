@@ -108,6 +108,24 @@ inline constexpr const char *MidiInputPortIds  = "midi/inputPortIds";
 inline constexpr const char *MidiRecordMode     = "midi/recordMode";
 inline constexpr const char *MidiRecordQuantize = "midi/recordQuantize";
 
+// TRANSPORT POLISH (proposal 21 L5). All three are GLOBAL and per-user rather
+// than per project, for the reason the MIDI-recording pair are: "how loud do I
+// want the click" and "how many bars do I want before a take" are properties of
+// how this person works, not of the song. Whether the metronome is ON is a
+// PROJECT property (`SProjectProps::Metronome`) and stays one - it travels with
+// the arrangement and is on the transport bar.
+//
+//   MetronomeLevel   linear amplitude of the ACCENTED click, 0..1. An ordinary
+//                    beat is half of it, so the accent ratio is exactly 2 and a
+//                    case can assert the ladder in closed form.
+//   CountInBars      bars of click BEFORE the record position, 0..8. Default 0:
+//                    a count-in nobody asked for delays every take.
+//   PreRollBars      bars the transport ROLLS before the record position, 0..8,
+//                    with recording beginning at the locator. Default 0.
+inline constexpr const char *MetronomeLevel = "metronome/level";
+inline constexpr const char *CountInBars    = "transport/countInBars";
+inline constexpr const char *PreRollBars    = "transport/preRollBars";
+
 // Default value for a key (invalid QVariant if unknown). Scroll-first defaults.
 QVariant def( const QString &key );
 

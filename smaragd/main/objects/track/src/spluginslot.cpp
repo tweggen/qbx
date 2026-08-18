@@ -522,6 +522,14 @@ void SPluginSlot::restoreState( const std::vector<std::uint8_t> &state )
 // declared range to label a lane and to scale it. It may not include
 // tw/plugins (tools/check_layering.py), and it should not have to: the slot
 // already owns the plugin, so the translation belongs here.
+// PROPOSAL 21 L5. Reported, never compensated - see the header.
+std::uint32_t SPluginSlot::reportedLatencyFrames() const
+{
+    if( !proc_ ) return 0;
+    audio::twPlugin *plugin = proc_->plugin();
+    return plugin ? plugin->reportedLatency() : 0u;
+}
+
 QVector<SPluginSlot::ParamRow> SPluginSlot::paramRows() const
 {
     QVector<ParamRow> out;

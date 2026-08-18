@@ -318,6 +318,39 @@ foreach(_rec record_offset_zero record_loop_takes record_punch
     endif()
 endforeach()
 
+# --- transport polish (proposal 21 L5) ---------------------------------------
+#
+# THE METRONOME CASES have no audio input at all: the click is a live source
+# that is a pure function of POSITION (twmetronome.h), so the `null` default a
+# headless run already takes is exactly right - the same argument the
+# live-instrument six make. They ARE wall-clock cases in the sense the section
+# above describes (the click is produced by the pump and consumed by the RT
+# callback, and the measurement is the capture backend's recording), so
+# RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out.
+foreach(_met metronome_click metronome_render_identity)
+    if(TEST qxa.${_met})
+        set_tests_properties(qxa.${_met} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
+
+# THE COUNT-IN / PRE-ROLL CASES record, so they take the same paced,
+# position-encoded input and the same reported latency as the L3b record four -
+# which is what makes `compensationFrames="-5824"` a closed form in both.
+#
+# record_count_in WRITES transport/countInBars and record_pre_roll writes
+# transport/preRollBars through set-count-in / set-pre-roll, and each puts its
+# own key back; between them they OWN those two keys, and no other case reads
+# them.
+foreach(_pre record_count_in record_pre_roll)
+    if(TEST qxa.${_pre})
+        set_tests_properties(qxa.${_pre} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav;SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800")
+    endif()
+endforeach()
+
 if(TEST qxa.monitor_latency)
     set_tests_properties(qxa.monitor_latency PROPERTIES
         RUN_SERIAL TRUE

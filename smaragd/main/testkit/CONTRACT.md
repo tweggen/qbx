@@ -557,3 +557,38 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     position leads the heard one by one device buffer plus the output latency.
     Measured on the capture backend: **-1025 frames**, inside
     `midi_record_placement`'s 4096 band.
+
+21. **`assert-metronome-clicks` gates a SEQUENCE, not an onset** (proposal 21
+    L5). `assert-audio-onset` answers "when did sound start", which is right for
+    one note; a metronome is a GRID, and the claim worth gating is four
+    properties at once — N clicks, on the beat, with silence between them, one
+    in every bar louder.
+
+    Three things about how it measures, each of which is the difference between
+    a gate and a coin toss:
+
+    - **The grid is anchored on the FIRST DETECTED ONSET.** Capture frame 0 is
+      the DEVICE start, and how many blocks the ring took to fill before the
+      first entry was summed is a property of the box. The SPACING is not — it
+      comes from the tempo map — so that is what `intervalFrames` bounds.
+    - **The accent PHASE is searched, and the FIRST onset is excluded from the
+      level comparison.** Which beat of the bar the first summed entry carries
+      is again the box's business; and the first click of a live-lane session
+      sits inside the RT's 2-3 ms fade-in ramp and is attenuated BY CONSTRUCTION
+      (measured 0.2109 against a full 0.4720). Its POSITION is still the anchor;
+      only its level is not a claim.
+    - **`silenceMaxRms` measures the MIDDLE of each gap.** Without a silence
+      assertion "eight clicks" is satisfied by a continuous tone with eight
+      louder moments in it; measuring the whole gap would fail on the click's
+      own decay tail.
+
+    `count` is EXACT and `minCount`/`maxCount` are the bounded form. Only a
+    COUNT-IN can claim an exact count, because its click range is closed by
+    POSITION; a run bounded by a wall-clock `wait-ms` produces a count that
+    depends on the box.
+
+22. **The transport-polish cases own two `smaragd.ini` keys between them.**
+    `record_count_in` writes `transport/countInBars`, `record_pre_roll` writes
+    `transport/preRollBars`, and each puts its own key back — the same ownership
+    convention `midi_record_modes` and `record_offset_zero` follow, and the same
+    `RUN_SERIAL` that makes it safe. No other case reads either key.

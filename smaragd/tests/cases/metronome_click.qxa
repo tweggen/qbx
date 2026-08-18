@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L5. THE METRONOME IS A LIVE-LANE SOURCE, and it clicks on the
+  beat grid.
+
+  Env, set on the CTest entry (see smaragd/CMakeLists.txt): RUN_SERIAL and
+  SMARAGD_CAPTURE_SPEED=1. This is a wall-clock case in exactly the sense the
+  L1b/L2 playback cases are - the click is produced by the PUMP and consumed by
+  the RT callback, and the MEASUREMENT is the audio capture backend's own
+  recording of what the device was handed, which shares no code with either.
+
+  No SMARAGD_AUDIO_INPUT_BACKEND: the metronome has no audio input at all. It
+  is a live source that is a pure function of POSITION, which is the whole
+  design (twmetronome.h) - so a headless run needs no device on the input side.
+
+  THE CLOSED FORM. A new project is 120 BPM, 4/4, 48 kHz, so
+
+      beat = 48000 * 60 / 120 = 24000 frames
+      bar  = 4 * 24000        = 96000 frames = 2 s
+
+  and the accented click (beat 1 of a bar) is at the level SOpt::MetronomeLevel
+  names while an ordinary beat is HALF of it - so the accent ratio is exactly
+  2.0 by construction, and the 1.5 asserted below is that with room for the
+  onset detector's window.
+
+  WHAT IS NOT A CLOSED FORM, and is therefore bounded rather than asserted: HOW
+  MANY clicks a wall-clock `wait-ms` produces, and WHERE capture frame 0 falls
+  relative to the beat grid. Capture frame 0 is the DEVICE start, and how many
+  blocks the ring took to fill before the first entry was summed is a property
+  of the box. The SPACING is not - it comes from the tempo map - and that is
+  what `intervalFrames` gates, anchored on the first onset. The bar accent's
+  PHASE is searched for the same reason.
+
+  ...AND THE FIRST SECOND IS SKIPPED, which is not a convenience. A live lane
+  that comes up on a STOPPED->PLAYING transition costs exactly ONE REPOSITION
+  (design D2): the pump starts at the locator while the engine clock is still
+  invalid, the frozen lane then primes and publishes, and the pump repositions
+  onto it - abandoning a run whose entries the consumer drops. MEASURED on this
+  box, at workers=1: the beat at frame 0 is delivered EARLY in about one run in
+  fifty and swallowed in the other forty-nine, with a ~5087-frame (106 ms) hole
+  after it either way. The steady grid after that is exact to five frames.
+
+  So the window starts at 48000 (one second in). Anchoring on a click that may
+  or may not be a survivor of the abandoned run would make this case a coin
+  flip on the box's timing rather than a gate on the beat grid - it failed
+  exactly that way, 49/50, before the window was moved.
+-->
+<SActionScript version="1" name="metronome_click">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- One empty track. The project is otherwise silent, so everything in the
+         capture below is the click and nothing else. -->
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+
+    <!-- PHASE A: metronome ON, two bars of transport. ..................... -->
+    <metronome-enable/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <!-- The lane exists BECAUSE of the metronome: nothing is armed and nothing
+         monitors, so `live=on` here is the "armed u monitor u metronome"
+         predicate being true on its third term alone. -->
+    <assert-input-meter trackPath="0" contains="metronome=on"/>
+    <wait-ms ms="4200"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="met_on.wav" minFrames="96000"/>
+
+    <!-- From one second in (see the header). Five is the floor the remaining
+         3.2 s cannot miss even if the device took a while to start; twelve is
+         the ceiling 4.2 s of beats cannot exceed. The claims that MATTER are
+         the ones between them. -->
+    <assert-metronome-clicks filename="met_on.wav" channel="0"
+                             startFrame="48000"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             minCount="5" maxCount="12"
+                             intervalFrames="24000" toleranceFrames="1024"
+                             accentEvery="4" accentRatio="1.5"
+                             silenceMaxRms="0.01"/>
+
+    <!-- PHASE B: metronome OFF - a silent project stays silent. ............ -->
+    <metronome-disable/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2500"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="met_off.wav" minFrames="48000"/>
+    <assert-metronome-clicks filename="met_off.wav" channel="0"
+                             threshold="0.05" window="64" count="0"/>
+
+    <!-- The pump never rendered a page and no freeze met a live-owned
+         processor: a metronome lane live-owns NOTHING at all. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L5. A RENDER NEVER HAS A CLICK IN IT.
+
+  The metronome is a LIVE-LANE source (design D1): it exists only where a pump
+  exists, and `SLiveMonitor::suspendForRender()` drops every lane for the
+  duration of a render. So a project rendered with the metronome ON must be
+  BYTE-IDENTICAL to the same project rendered with it OFF - not "similar", not
+  "the click is quiet enough", identical.
+
+  Byte-identical is the right gate for the same reason render_while_armed uses
+  it: two renders of one project in one process are a pure function of the
+  graph.
+
+  WHY THE PLAY PHASE IS IN THE MIDDLE, and why it is not decoration. Without it
+  this case would compare two renders of a project whose metronome switch was
+  merely SET, and a metronome implemented as a graph component that nobody had
+  instantiated yet would pass. The play phase makes the click demonstrably
+  AUDIBLE in the same process - `metronome=on` in the live state, and the
+  clicks measured by metronome_click - before the second render is taken.
+
+  WHAT THIS DOES NOT REACH, said plainly: a render taken WHILE a click lane is
+  up. The click sounds only while the transport rolls, and a render does not
+  run the transport, so no script can put the two together. The suspend path
+  itself - a live lane dropped for a render and re-armed afterwards - is
+  render_while_armed's gate; what is asserted HERE is the property that matters
+  for the metronome, that the click is not in the file.
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (the CTest entry): the middle phase is
+  a real-time transport run.
+-->
+<SActionScript version="1" name="metronome_render_identity">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-tempo bpm="120"/>
+
+    <!-- The reference: metronome OFF (the project default). -->
+    <render filename="met_off.wav" format="wav" quality="10" durationSec="2.0"/>
+
+    <!-- Now switch it ON and PLAY, so the click is genuinely being produced by
+         a pump in this process. -->
+    <metronome-enable/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <assert-input-meter trackPath="0" contains="metronome=on"/>
+    <wait-ms ms="1500"/>
+    <toggle-playback play="0"/>
+
+    <!-- ...and render again. The lane is suspended for the render's duration
+         and comes back as a fresh arm afterwards. -->
+    <render filename="met_on.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="met_on.wav" expected="met_off.wav"/>
+
+    <metronome-disable/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

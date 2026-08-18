@@ -334,3 +334,11 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     is a whole spelling rather than a scheme because there is exactly one such
     port and it exists on every machine; `midi:keyboard:any` means the same
     thing.
+
+21. **`SPluginSlot::reportedLatencyFrames()` is REPORTED, never compensated**
+    (proposal 21 L5). It exists here for the same reason `paramRows()` does: the
+    FX strip and the transport readout have to show it, and the number belongs
+    to the plugin the slot owns. **Nothing anywhere compensates for it** —
+    plugin delay compensation is out of scope (proposal 37 P9) — so every mount
+    that displays it must also say that it is not compensated. 0 for a Missing
+    or Unsupported slot, and 0 for the many plugins that report nothing.

@@ -364,6 +364,17 @@ const Fixture kFixtures[] = {
     { "assert-render-policy",
       "<assert-render-policy liveThreadRefusals='0' liveOwnedRefusals='64'"
       " minLiveOwnedRefusals='1'/>" },
+    // Transport polish (proposal 21 L5). Every optional attribute is present,
+    // because each of them is written only when it was given.
+    { "assert-metronome-clicks",
+      "<assert-metronome-clicks filename='met.wav' channel='1'"
+      " startFrame='4096' threshold='0.05' window='128' minGapFrames='4800'"
+      " count='8' minCount='4' maxCount='12' accentEvery='4'"
+      " intervalFrames='24000' toleranceFrames='1024'"
+      " accentRatio='1.8' silenceMaxRms='0.01' firstFrame='2048'"
+      " firstTolerance='512'/>" },
+    { "set-count-in", "<set-count-in bars='2'/>" },
+    { "set-pre-roll",  "<set-pre-roll bars='1'/>" },
     // edge='end' deliberately: with an empty edge and lane='notes', readXml
     // DEFAULTS toKey to key (a move needs a destination, a resize does not),
     // which would hide a dropped toKey.

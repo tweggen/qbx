@@ -56,6 +56,12 @@ public:
     //   reload=0|tooltip=<row tooltip>
     QString describeSlot( int slotIndex ) const;
 
+    /// "0 frames (0.0 ms)" — the chain's TOTAL reported plugin latency, as the
+    /// strip's footer shows it (proposal 21 L5). Reported, never compensated.
+    QString chainLatencyText() const;
+    /// The same number, unformatted: the sum of every slot's reported latency.
+    std::uint32_t chainLatencyFrames() const;
+
     // Is there an "Add Instrument" affordance right now? It is hidden once the
     // track has an instrument, because a second one is refused.
     bool addInstrumentEnabled() const;

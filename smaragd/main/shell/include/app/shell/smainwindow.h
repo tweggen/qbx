@@ -329,6 +329,13 @@ private:
     // sink duplicates one bus); stereo comes for free when the mixer grows a
     // second one.
     SLevelMeter *qMasterMeter_ = nullptr;
+    // THE LATENCY READOUT (proposal 21 L5, design D5). Round trip in ms on the
+    // transport bar, the full breakdown in the tooltip. It reads the devices
+    // that are OPEN, so it is 0 ms with nothing running and changes the moment
+    // a device does - which is the whole point: "why is my monitoring late" is
+    // a question the transport bar should be able to answer.
+    QLabel *qLatencyLabel_ = nullptr;
+    QString lastLatencyText_;
     QDoubleSpinBox *tempoSpin_ = nullptr;  // Transport tempo (BPM) box
     // Who had the keyboard before the tempo box took it, so Return can give it
     // back. Cleared implicitly — always re-checked for liveness before use.

@@ -8,6 +8,8 @@
 
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/model/sprojectprops.h"
+#include "app/servicesui/soptions.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
@@ -232,10 +234,11 @@ audio::CaptureBridge *SLiveMonitor::acquireBridge( const QString &deviceId )
     if( want.isEmpty() ) want = QStringLiteral( "default" );
     if( !ensureBridge( want ) ) return nullptr;
     ++bridgeHolds_;
-    // A recording with monitoring OFF has nothing popping the live ring;
-    // leaving the push on would fill it once and then count every frame of the
-    // take as an overrun.
-    bridge_->setLiveEnabled( !current_.empty() || !departing_.empty() );
+    // needsInput(), not empty(): a recording with monitoring off has nothing
+    // popping the live ring, and neither has a lane that exists only because
+    // the metronome is on. Leaving the push on would fill the ring once and
+    // then count every frame of the take as an overrun.
+    bridge_->setLiveEnabled( current_.needsInput() || departing_.needsInput() );
     return bridge_.get();
 }
 
@@ -247,7 +250,9 @@ void SLiveMonitor::releaseBridge()
 
 void SLiveMonitor::closeInputIfUnused()
 {
-    if( !current_.empty() || !departing_.empty() ) {
+    // Again needsInput() rather than empty(): a lane that exists only because
+    // the metronome is on must not hold the machine's microphone open.
+    if( current_.needsInput() || departing_.needsInput() ) {
         if( bridge_ ) bridge_->setLiveEnabled( true );
         return;
     }
@@ -436,6 +441,116 @@ void SLiveMonitor::requestLiveChase()
         if( m.source ) m.source->requestChase();
 }
 
+// --- the metronome and the count-in (proposal 21 L5) ------------------------
+
+bool SLiveMonitor::metronomeEnabled() const
+{
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    return p && p->prop( SProjectProps::Metronome, false ).toBool();
+}
+
+std::uint64_t SLiveMonitor::ringFramesDelivered() const
+{
+    std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
+                                          : std::shared_ptr<twSpeaker>();
+    return spk ? spk->liveRing().framesDelivered() : 0ull;
+}
+
+// The click's SNAPSHOT, rebuilt only when it actually moved. A plan is
+// republished for a fader move and for every transport edge, and the source
+// carries two rendered click waveforms -- so comparing the config is what keeps
+// a monitoring session from re-synthesising them thirty times a minute.
+std::shared_ptr<twLiveInputSource> SLiveMonitor::ensureMetronome( bool want )
+{
+    if( !want ) { metronome_.reset(); return nullptr; }
+
+    twMetronomeConfig cfg;
+    if( SProject *p = app_ ? app_->getCurrentProject() : nullptr )
+        cfg.tempo = p->tempoMap();          // THE tempo authority (37 D2)
+    cfg.sampleRate = app_ && app_->get303aEnvironment()
+                         ? app_->get303aEnvironment()->getSRate() : 48000;
+    double level = SSettings::instance()
+                       .value( SOpt::MetronomeLevel,
+                               SOpt::def( SOpt::MetronomeLevel ) ).toDouble();
+    if( !( level > 0.0 ) ) level = 0.0;
+    if( level > 1.0 )      level = 1.0;
+    cfg.accentLevel = (float) level;
+    cfg.beatLevel   = (float) ( level * 0.5 );
+    if( countInActive_ ) {
+        // THE COUNT-IN GRID IS ANCHORED AT THE RECORD POSITION and counts N
+        // bars forward from it, over the stopped lane's ordinary virtual
+        // counter. It is heard BEFORE the take because the transport has not
+        // started yet -- the playhead does not move at all during a count-in --
+        // so "N bars of click, then recording begins at the locator" holds
+        // without any position ever going negative (see sliveplanbuilder.cpp).
+        //
+        // The RANGE is what makes the count exact: the pump renders one to two
+        // blocks ahead, so a plain "stop clicking now" would always let the
+        // downbeat past the end through (twmetronome.h).
+        cfg.gridOrigin = countInAnchor_;
+        cfg.rangeStart = countInAnchor_;
+        cfg.rangeEnd   = countInAnchor_ + countInTotal_;
+    }
+
+    if( !metronome_ || metronomeCfg_ != cfg ) {
+        metronomeCfg_ = cfg;
+        metronome_    = std::make_shared<twMetronomeSource>( cfg );
+    }
+    return metronome_;
+}
+
+offset_t SLiveMonitor::barFrames() const
+{
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    if( !p ) return 0;
+    const int rate = app_->get303aEnvironment() ? app_->get303aEnvironment()->getSRate()
+                                                : 48000;
+    const offset_t n = (offset_t) p->tempoMap().barFrames( rate ).floorToInt();
+    return n > 0 ? n : 0;
+}
+
+void SLiveMonitor::beginCountIn( offset_t frames )
+{
+    if( frames <= 0 || !app_ ) return;
+    countInTotal_  = frames;
+    countInAnchor_ = app_->getGlobalLocatorPos();
+    countInActive_ = true;
+    // The click joins the plan and the lane opens; the stopped lane's virtual
+    // counter runs FORWARD from the locator and the click's range covers
+    // `[locator, locator + frames)`. THE BASELINE IS TAKEN AFTER refresh(),
+    // because openLive() resets the ring - and its counters - when it opens the
+    // device.
+    refresh();
+    if( pump_ ) pump_->requestReposition();
+    countInBase_ = ringFramesDelivered();
+}
+
+void SLiveMonitor::muteCountIn()
+{
+    if( !countInActive_ || countInTotal_ == 0 ) return;
+    countInTotal_ = 0;          // an EMPTY click range; see the header
+    refresh();
+}
+
+void SLiveMonitor::endCountIn()
+{
+    if( !countInActive_ ) return;
+    countInActive_ = false;
+    countInTotal_  = 0;
+    refresh();
+}
+
+offset_t SLiveMonitor::countInRemainingFrames() const
+{
+    if( !countInActive_ ) return 0;
+    const std::uint64_t d = ringFramesDelivered();
+    // A ring reset under us (a device re-open) restarts the count rather than
+    // wrapping the subtraction into an eternity of remaining frames.
+    if( d < countInBase_ ) countInBase_ = d;
+    const offset_t done = (offset_t) ( d - countInBase_ );
+    return countInTotal_ > done ? ( countInTotal_ - done ) : (offset_t) 0;
+}
+
 // --- the plan ---------------------------------------------------------------
 
 void SLiveMonitor::publishPlan( const SLiveClosure &closure,
@@ -444,6 +559,14 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
 {
     std::shared_ptr<twSpeaker> spk = app_->getSpeaker();
     if( !spk ) return;
+
+    // NO EXCLUSION, NO EPOCH GATE (proposal 21 L5). `flipEpoch` exists so the
+    // RT does not sum a ring entry onto a root page that still CONTAINS the
+    // armed track. A lane with no track members - a metronome-only one - nulled
+    // no plug and bumped nothing, so there is nothing for the page to be too
+    // old for, and passing an epoch here would gate the click off until an
+    // unrelated re-freeze happened to land.
+    if( closure.ordered.empty() ) { flipEpoch = 0; flipEpochPrime = 0; }
 
     SLivePlanBuilder::Params p;
     p.mixer       = rootMixer();
@@ -458,6 +581,10 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     if( audio::AudioBackend *b = spk->getBackend() )
         p.blockFrames = (length_t) b->getConfig().bufferFrames;
     if( p.blockFrames <= 0 ) p.blockFrames = 1024;
+
+    // THE CLICK (proposal 21 L5). A synthetic plan track at the output; it owns
+    // no STrack and live-owns nothing, so nothing above this line changes.
+    p.metronome = ensureMetronome( closure.metronome );
 
     // One source object per source track, rebuilt with the plan: the scratch
     // and the channel map are sized HERE, on the main thread, so the pump's
@@ -495,12 +622,18 @@ void SLiveMonitor::refresh()
 
     const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
                                                   : app_->isPlaying();
-    const SLiveClosure want = sliveplan::computeClosure(
+    SLiveClosure want = sliveplan::computeClosure(
         mixer, playing, app_->isRecordingActive(), inertlyArmed_ );
+    // A LIVE LANE EXISTS IFF armed u monitor u metronome (design D9). The
+    // metronome owns no track, so it joins as a FLAG and leaves the whole
+    // arm/disarm protocol below untouched.
+    want.metronome = sliveplan::metronomeWanted(
+        metronomeEnabled(), playing, app_->isRecordingActive(), countInActive_ );
 
     const bool sameSet = ( want.ordered == current_.ordered )
                          && ( want.sources == current_.sources )
-                         && ( want.midiFeeds == current_.midiFeeds );
+                         && ( want.midiFeeds == current_.midiFeeds )
+                         && ( want.metronome == current_.metronome );
     if( sameSet ) {
         // Nothing structural moved: only the transport, the fader or an insert
         // did. Rebuild and republish -- a plan is a SNAPSHOT, so a fader move
@@ -511,6 +644,8 @@ void SLiveMonitor::refresh()
         // transport half of the clock lives there, and a Play/Stop with the
         // same closure is exactly the case where the mapping changes and the
         // set does not.
+        // empty() accounts for the metronome, so a click-only lane republishes
+        // here too - which is what a tempo edit while playing needs.
         if( !current_.empty() ) {
             attachLiveEvents( current_ );
             publishPlan( current_, rootEpoch(), 0 );
@@ -588,6 +723,21 @@ void SLiveMonitor::refresh()
     if( want.empty() ) {
         demandTimer_->stop();
         demands_.clear();
+        // A METRONOME-ONLY LANE LEAVES THROUGH NO DISARM PATH. It live-owned
+        // nothing and nulled no plug, so `leaving` is empty and finishDisarm()
+        // will never run - which before L5 could not happen, because the only
+        // way to reach an empty set was for a track to have left. Without this
+        // the pump would keep clicking off the old plan forever.
+        if( leaving.ordered.empty() && departing_.empty() ) {
+            stopPump();
+            ensureMetronome( false );
+            closeInputIfUnused();
+            if( liveOpened_ ) {
+                if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() )
+                    spk->closeLive();
+                liveOpened_ = false;
+            }
+        }
         return;
     }
 
@@ -769,7 +919,11 @@ void SLiveMonitor::suspendForRender()
     for( STrack *t : current_.ordered ) t->setLiveOwnedLane( false );
     SLiveClosure was = current_;
     current_ = SLiveClosure();
-    applyExclusion( was );
+    // Only when something was WIRED. A metronome-only lane nulled no plug and
+    // live-owned nothing, so there is nothing to undo - and applyExclusion's
+    // empty-set fallback would stale the master chain for a render that is
+    // about to freeze it, for no reason at all.
+    if( !was.ordered.empty() ) applyExclusion( was );
     demandTimer_->stop();
     demands_.clear();
     closeInputIfUnused();
@@ -903,6 +1057,22 @@ std::vector<std::uintptr_t> SLiveMonitor::planSignature() const
         }
         sig.push_back( 0xFFFFu );   // a member separator, so two shapes cannot alias
     }
+    // THE CLICK, so a TEMPO or TIME-SIGNATURE edit republishes (design section
+    // 3's rebuild triggers). Asked rather than wired, exactly like the fader:
+    // `set-tempo` re-derives every beats-timebase link in the project and would
+    // otherwise have to know about the live lane as well.
+    sig.push_back( current_.metronome ? 1u : 0u );
+    if( current_.metronome ) {
+        if( SProject *p = app_ ? app_->getCurrentProject() : nullptr ) {
+            sig.push_back( (std::uintptr_t) p->tempoMap().usPerQuarter() );
+            sig.push_back( (std::uintptr_t) p->tempoMap().numerator() );
+            sig.push_back( (std::uintptr_t) p->tempoMap().denominator() );
+        }
+        sig.push_back( (std::uintptr_t) llround(
+            1000.0 * SSettings::instance()
+                         .value( SOpt::MetronomeLevel,
+                                 SOpt::def( SOpt::MetronomeLevel ) ).toDouble() ) );
+    }
     return sig;
 }
 
@@ -947,6 +1117,15 @@ QString SLiveMonitor::describe() const
                      .arg( m.thru ? QStringLiteral( "on" ) : QStringLiteral( "off" ) );
         }
     }
+    if( current_.metronome )
+        s += QStringLiteral( " metronome=on clicks=%1" )
+                 .arg( metronome_ ? (qulonglong) metronome_->clicksEmitted() : 0ull );
+    else
+        s += QStringLiteral( " metronome=off" );
+    if( countInActive_ )
+        s += QStringLiteral( " countIn=%1/%2" )
+                 .arg( (qlonglong) countInRemainingFrames() )
+                 .arg( (qlonglong) countInTotal_ );
     if( !lastRefusal_.isEmpty() ) s += QStringLiteral( " refused='%1'" ).arg( lastRefusal_ );
     return s;
 }

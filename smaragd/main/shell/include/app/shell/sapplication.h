@@ -163,9 +163,60 @@ public:
     SMidiRecorder *midiRecorder() const { return midiRecorder_.get(); }
     /// Begin a take on every armed track, audio and MIDI. False when nothing
     /// is armed or the audio input would not open for the audio half.
+    ///
+    /// COUNT-IN AND PRE-ROLL (proposal 21 L5) are handled HERE, around the two
+    /// recorders, because they are TRANSPORT behaviours and neither recorder
+    /// owns the transport on its own. With either configured and the transport
+    /// stopped this returns true immediately and the take begins later, from
+    /// `pumpRecordPreamble()`; `recordPreambleActive()` says so.
     bool startRecording();
-    /// End the take and commit the placement (one undo step per recorder).
+    /// End the take and commit the placement (one undo step per recorder). A
+    /// preamble still running is CANCELLED (nothing was recorded yet).
     void stopRecording();
+
+    // --- count-in / pre-roll (proposal 21 L5) ------------------------------
+
+    /**
+     * THE READING TAKEN, stated once, here.
+     *
+     * COUNT-IN: the click plays for N bars BEFORE the record position while
+     * the transport is STOPPED (the playhead sits at the locator), then the
+     * transport starts and recording begins AT THE LOCATOR. The placed clip
+     * therefore lands exactly where it would have with no count-in, and the
+     * capture holds N bars of clicks before the first recorded frame. That is
+     * Cubase / Logic / REAPER; the alternative reading -- roll the count-in
+     * bars ON the timeline, so the take lands N bars later -- would make the
+     * count-in silently move the user's recording.
+     *
+     * PRE-ROLL: the transport STARTS N bars before the locator and rolls
+     * through them (so the arrangement is heard), and recording begins when
+     * the playhead reaches the locator. The take is recorded into a run that
+     * was already playing, so `SAudioRecorder` sees `wasPlaying_` and the
+     * trim floor is the transport start, exactly as for a punch-in.
+     *
+     * The two compose: the count-in runs first, then the pre-roll rolls.
+     */
+    bool recordPreambleActive() const { return preamblePhase_ != 0; }
+    /// Abandon a preamble in flight. Nothing was recorded, so there is nothing
+    /// to commit and nothing to undo.
+    void cancelRecordPreamble();
+    /// "off" | "countIn N/M" | "preRoll at F" — for the UI and the testkit.
+    QString recordPreambleState() const;
+
+    // --- the latency readout (proposal 21 L5, design D5) -------------------
+
+    /// The device's output latency in PROJECT frames, WITHOUT the "only while
+    /// playing" gate `meterLatencyFrames()` applies. The readout has to show a
+    /// number while the transport is stopped; a compensation must not.
+    offset_t outputLatencyFramesProject() const;
+    /// The open input device's reported latency in PROJECT frames, or 0.
+    offset_t inputLatencyFramesProject() const;
+    /**
+     * "in 4800 fr (100.0 ms) | out 1024 fr (21.3 ms) | round trip 5824 fr
+     * (121.3 ms)" — the transport bar's readout and its tooltip, from the
+     * devices that are actually OPEN. Terms whose device is closed read 0.
+     */
+    QString latencyReport() const;
 
     // SAppContext: start/stop transport playback (speaker + playing flag).
     void setPlaybackRunning( bool play ) override;
@@ -317,6 +368,8 @@ private slots:
     // instant playback stops, whereas meters need a tick at a static position
     // (to decay) plus a tail after stop, or the bars freeze mid-level.
     void pumpMeters();
+    /// The count-in / pre-roll poll (proposal 21 L5).
+    void pumpRecordPreamble();
     // A render suspends every live lane for its duration and comes back as a
     // FRESH arm (proposal 21 design D4). The render session signals completion
     // from ITS OWN thread, so this is reached by a queued invocation and runs
@@ -367,6 +420,18 @@ private:
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
     QTimer *meterTimer_ = nullptr;    // drives meterTick (proposal 34)
+    // The count-in / pre-roll sequencer (proposal 21 L5). A 5 ms poll rather
+    // than a single-shot QTimer of the count-in's DURATION: the count-in ends
+    // when the RT has actually been handed N bars of click, which is a frame
+    // count on the live ring and not a wall-clock interval (twlivering.h).
+    bool startRecordingNow_();
+    void beginPreRoll_( offset_t preRoll );
+    void finishRecordPreamble_();
+    QElapsedTimer preambleClock_;
+    QTimer  *preambleTimer_ = nullptr;
+    int      preamblePhase_ = 0;      // 0 off, 1 count-in, 2 pre-roll
+    offset_t preambleTarget_ = 0;     // the LOCATOR the take must begin at
+    qint64   preambleDeadlineMs_ = 0; // a device that never runs must not hang
     QElapsedTimer meterClock_;        // monotonic ms handed to the ballistics
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages

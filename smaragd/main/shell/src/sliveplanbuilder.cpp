@@ -32,6 +32,16 @@ bool isMidiInput( const STrack *t )
     return t && t->hasMidiTrackInput();
 }
 
+bool metronomeWanted( bool metronomeOn, bool playing, bool recording,
+                      bool countIn )
+{
+    // THE COUNT-IN IS NOT CONDITIONAL ON THE METRONOME SWITCH. A count-in with
+    // no click is a silent wait, which is not a feature anybody asked for; the
+    // click is what a count-in IS. Cubase / Logic / REAPER all behave this way.
+    if( countIn ) return true;
+    return metronomeOn && ( playing || recording );
+}
+
 
 namespace {
 
@@ -191,6 +201,9 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
                          const SourceFn &sourceFor )
 {
     if( closure.empty() || !params.mixer ) return nullptr;
+    // A metronome-only lane is legal (proposal 21 L5): press Play with the
+    // click on and nothing armed, and the plan is one synthetic track.
+    if( closure.ordered.empty() && !params.metronome ) return nullptr;
 
     auto plan = std::make_shared<twLivePlan>();
     plan->blockFrames    = params.blockFrames;
@@ -207,6 +220,15 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
     plan->transport.playing          = params.playing;
     plan->transport.feedEnabled      = params.playing;
     plan->transport.holdAutomationAt = params.playing ? (offset_t) -1 : params.locator;
+    // The stopped lane's virtual counter, UNCHANGED by a count-in (proposal 21
+    // L5): the count-in runs the ordinary stopped lane FORWARD from the
+    // locator, and it is the CLICK GRID that is anchored at the record
+    // position. Running the counter backwards from `locator - N bars` was the
+    // first design and is wrong for a reason worth recording: at a locator
+    // inside the first N bars it produces NEGATIVE positions, and a ring entry
+    // stamped below zero is discarded by twlive::gateEpoch as an unwritten
+    // slot -- so a count-in at bar 1, the commonest case there is, would have
+    // been silent.
     plan->stoppedAnchor              = params.locator;
 
     // THE MASTER-SHAPE PRECONDITION (design D3), checked on every build rather
@@ -270,11 +292,34 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
     // folder: no input, no inserts, unity gain, its members as liveChildren.
     // Under Closure it additionally reads every UNARMED top-level track's
     // frozen root, which IS "the pump renders the master" (design D3).
-    // topLevel cannot be empty for a non-empty closure - the walk stops at the
-    // root mixer, so every member has an ancestor that is a direct child of it
-    // - but front() on an empty vector is not a diagnosis, it is a crash.
-    if( closure.topLevel.empty() ) return nullptr;
-    const bool needSum = closure.topLevel.size() > 1 || !plan->masterLinear;
+    // THE CLICK (proposal 21 L5, design D1). One synthetic track, appended
+    // AFTER every closure member so the topological order finalize() checks
+    // still holds, with no input device, no inserts, unity gain and an identity
+    // map. It owns no STrack, is in no `indexOf`, and nothing above ever asks
+    // whether it is armed - which is exactly why it perturbs nothing.
+    int metroIndex = -1;
+    if( params.metronome ) {
+        twLiveTrackPlan m;
+        m.name     = "metronome";
+        m.channels = params.width < 1 ? 1 : params.width;
+        m.input    = params.metronome;
+        metroIndex = (int) plan->tracks.size();
+        plan->tracks.push_back( std::move( m ) );
+    }
+
+    if( closure.topLevel.empty() ) {
+        // METRONOME ONLY: the click IS the output. A topLevel that is empty
+        // while the closure is NOT cannot happen - the walk stops at the root
+        // mixer, so every member has an ancestor that is a direct child of it -
+        // but front() on an empty vector is not a diagnosis, it is a crash, so
+        // the case is handled rather than assumed away.
+        if( metroIndex < 0 ) return nullptr;
+        plan->outputTrack = metroIndex;
+        if( !plan->finalize() ) return nullptr;
+        return plan;
+    }
+    const bool needSum = closure.topLevel.size() > 1 || !plan->masterLinear
+                         || metroIndex >= 0;
     if( !needSum ) {
         plan->outputTrack = indexOf[closure.topLevel.front()];
     } else {
@@ -282,6 +327,7 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
         master.name     = plan->masterLinear ? "live sum" : "master";
         master.channels = params.width < 1 ? 1 : params.width;
         for( STrack *t : closure.topLevel ) master.liveChildren.push_back( indexOf[t] );
+        if( metroIndex >= 0 ) master.liveChildren.push_back( metroIndex );
         if( !plan->masterLinear ) {
             for( SLink *lk : params.mixer->childLinks() ) {
                 if( !lk ) continue;

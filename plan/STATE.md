@@ -13476,3 +13476,185 @@ the SAME pass (implemented and reachable, no case); and **`place-retro-midi`**,
 which design D8 lists as later work and which is **NOT implemented** — the
 recorder DRAINS its ring at the record start, so nothing played before the
 button is kept.
+## 2026-08-18 — Proposal 21 L5: transport polish
+
+The metronome is audible, a record start can be counted in or pre-rolled, the
+transport bar reports the round trip, and the FX strip reports each plugin's
+latency. Branch `feat/21-l5-transport-polish`, on top of L4.
+
+### What was built
+
+**`twMetronomeSource` (`tw/playback/twmetronome.h`, new).** A
+`twLiveInputSource` and nothing else: never a component, never in the frozen
+graph, therefore never in a render. It produces the click BY POSITION out of an
+immutable `twTempoMap` snapshot — the beat is one note of the time signature's
+denominator, the accent is beat 1 of a bar, the beat length is a reduced
+rational and `frameOfBeat(k)` is ONE floored division. Both click waveforms
+(1 kHz / 1.5 kHz decaying sines, 20 ms, −60 dB by the end) are rendered in the
+constructor, so `pull()` allocates nothing, takes no lock and touches no Qt. A
+half-open ACTIVE RANGE `[rangeStart, rangeEnd)` is what makes "exactly N bars of
+click" a property of the waveform rather than a race with a pump that renders
+one to two blocks ahead.
+
+**The plan.** `SLiveClosure` gains a `metronome` FLAG (not a member) and
+`needsInput()`; `SLivePlanBuilder` appends one synthetic track at the output —
+no `STrack`, no inserts, unity gain, identity map. A live lane now exists iff
+`armed ∪ monitor ∪ metronome`. `sliveplan::metronomeWanted()` is the one
+predicate: on while PLAYING or RECORDING, and unconditionally through a
+count-in. `SMetronomeAction` stops being a stub because `SApplication` turns
+`SProjectProps::Metronome`'s `propertyChanged` into `liveLanesChanged()`; a
+tempo, time-signature or level edit arrives through the plan SIGNATURE the 40 ms
+demand tick already compares.
+
+**Count-in and pre-roll** (`SOpt::CountInBars` / `PreRollBars`, 0..8, default 0;
+verbs `set-count-in` / `set-pre-roll`, per-user and not undoable). They live in
+`SApplication` around the two recorders, because neither recorder owns the
+transport. `startRecording()` splits into a preamble sequencer (a 5 ms poll) and
+`startRecordingNow_()`.
+
+**The readout.** `outputLatencyFramesProject()` is `meterLatencyFrames()`
+without its transport gate (`meterLatencyFrames()` is now one line on top of
+it); `inputLatencyFramesProject()` reads the open `CaptureBridge`;
+`latencyReport()` renders in/out/round-trip in frames and ms into a transport-bar
+label refreshed off `meterTick` and pushed only when it changes.
+
+**The badge.** `SPluginSlot::reportedLatencyFrames()`, shown per row and as a
+chain total in the FX strip, both only when non-zero, and appended to
+`describeSlot()` as `|latency=` AT THE END so every proposal-08 M5 contiguous
+span still matches.
+
+### The reading taken on count-in, and the record-start sequence
+
+**The count-in is BEFORE the record position and the playhead does not move.**
+N bars of click play while the transport is STOPPED, then the transport starts
+and recording begins AT THE LOCATOR — so the placed clip lands exactly where it
+would have with no count-in, and the capture holds the N bars before it. Cubase,
+Logic and REAPER all do this. The rejected reading — roll the count-in bars ON
+the timeline so the take lands N bars later — makes a preference silently move
+the user's recording. **Pre-roll** is the other half: the transport STARTS N bars
+early and rolls through them, recording begins at the locator, and the take goes
+into a run that was already playing (so nothing is trimmed and the clip lands a
+few thousand frames BEFORE the locator, which is what latency compensation IS).
+Neither is offered while the transport is already running.
+
+The sequence, from `record-start`:
+
+1. transport stopped and either knob non-zero ⇒ `startRecording()` returns TRUE
+   immediately and arms a 5 ms poll with a wall-clock watchdog;
+2. count-in: `SLiveMonitor::beginCountIn(frames)` — the click joins the plan
+   with the range `[locator, locator + frames)`, the lane opens, the STOPPED
+   virtual counter runs forward from the locator;
+3. the poll ends it on `twLiveMixRing::framesDelivered()`, i.e. frames the RT
+   was actually handed — not on a timer;
+4. `muteCountIn()` closes the click's range to zero while KEEPING the source in
+   the plan;
+5. `startRecordingNow_()` (the transport starts, the frozen lane attaches to the
+   already-running device);
+6. `endCountIn()` drops the lane, by which time the frozen lane holds the device;
+7. with pre-roll instead, step 2 seeks to `locator − N bars` and starts the
+   transport, and the poll waits for the published playhead to reach the locator.
+
+### Three defects this phase found, all in its own code, all gated
+
+- **The count-in ran BACKWARDS first.** The virtual counter started at
+  `locator − N bars`, which at a locator inside the first N bars produces
+  NEGATIVE positions — and `twlive::gateEpoch` discards a ring entry stamped
+  below zero as an unwritten slot. A count-in at bar 1, the commonest case there
+  is, would have been silent. The grid now counts FORWARD from the locator.
+- **The transport start replayed the first beat.** The count-in grid lives in
+  the arrangement's position domain, and the transport start repositions the
+  pump back to the locator; measured as a fifth, accented click after a one-bar
+  count-in. `muteCountIn()` closes the range before the take starts.
+- **...but the click could not simply be dropped**, because dropping the last
+  live lane calls `twSpeaker::closeLive()`, the transport start then RE-OPENS the
+  device, and the capture backend clears its recording at device start — taking
+  the whole count-in with it. Hence mute-then-start-then-end.
+
+A fourth, structural: a metronome-only lane leaves through NO disarm path
+(`leaving` is empty because it owned no track), so `finishDisarm()` never runs
+and the pump would have kept clicking off the old plan forever. Before L5 an
+empty live set could only be reached by a track LEAVING.
+
+### ...and one measurement that turned out to be about L1a, not L5
+
+`metronome_click` was **49/50 at workers=1** on its first sweep, and the failing
+run says what happened rather than merely that it failed: NINE onsets instead of
+eight, the extra one at capture frame 1003, and a gap of **29087** frames to the
+next instead of 24000.
+
+That is design D2's **one reposition per STOPPED→PLAYING transition**, seen from
+the outside. The pump starts at the locator while the engine clock is still
+invalid and delivers the beat at frame 0; the frozen lane then primes (0.059 s
+here) and publishes; the pump repositions onto the publication and abandons a
+run whose queued entries the consumer drops. Measured on this box, at
+workers = 1: **the beat at frame 0 is delivered EARLY in about one run in fifty
+and swallowed in the other forty-nine, with a ~5087-frame (106 ms) hole after it
+either way.** The steady grid after that is exact to five frames.
+
+It is not a metronome defect and it is not new — it is what L1a's model costs at
+a transport start, and a monitored INPUT pays it too (it is simply not audible
+there, because an input has no onset at frame 0). Fixing it would mean changing
+the pump's start behaviour, which is settled design (ground rule 1). So the case
+was WINDOWED instead: `assert-metronome-clicks startFrame="48000"`, one second
+in, past the transient. Anchoring the grid on a click that may or may not be a
+survivor of the abandoned run made the case a coin flip on the box's timing
+rather than a gate on the beat grid. **60/60 at workers=1 after the change**,
+before the full sweep.
+
+### Measured
+
+| Claim | Number |
+|---|---|
+| click grid error, playback, from 1 s in (7 clicks) | **0, −5, 0, 0, 0, −5** frames; worst **\|5\|** against 1024 |
+| the STOPPED→PLAYING live-lane transient | one abandoned run: the beat at frame 0 early in ~1 run in 50, swallowed otherwise, then a **~5087-frame (106 ms) hole**. Design D2's one reposition, measured |
+| click grid error, through a 2-bar count-in (8 clicks) | **−33, −33, −33, −38, −33, −33, −33**; worst **\|38\|** against 1024 |
+| accent ratio (closed form 2.0) | **2.0584** at the searched phase, against ≥ 1.5 |
+| inter-click RMS | **0.000000** against < 0.01 |
+| metronome OFF | **0** clicks |
+| render with the click on vs off | **byte-identical** (`assert-file-identical`) |
+| count-in placement | clip at **96000 exactly** (`startFrame=96000`), `p0=91903`, `comp=-5824`, `trim=9921`, 8 clicks before it |
+| pre-roll placement | record start **96256**, `p0=95719`, clip at **89895** = `p0 − 5824`, `trim=0` |
+| first click of a lane session | **0.2109** against a full **0.4720** — the RT's fade-in ramp, excluded from the accent search by construction |
+
+### Gate
+
+- `./build.sh` (re-configure), `python tools/check_layering.py` — clean,
+  `python tools/check_logging.py` — clean.
+- `ctest --test-dir smaragd/build -j4`: **197/197 passed, 200 registered, 3 Not
+  Run (Disabled)** (the macOS-only `au_*` trio), 190.1 s. Reconciled against
+  `ctest -N`.
+- Goldens byte-identical; `git status smaragd/tests/goldens/` clean.
+- Every existing `record_*`, `midi_record_*`, `live_instrument_*`, `monitor_*`,
+  `takes_*` and `midi_out_*` case green in that run.
+- `tests/sweep_l5.sh` (new) from `tests/cases/`, N=50 × `SMARAGD_REVAL_WORKERS`
+  {1,4,8,16}, judged on the EXIT CODE rather than on the `PASS - ` line (that
+  script cannot see a teardown crash):
+
+  | case | w1 | w4 | w8 | w16 |
+  |---|---|---|---|---|
+  | `metronome_click` | 50/50 | 50/50 | 50/50 | 50/50 |
+  | `metronome_render_identity` | 50/50 | 50/50 | 50/50 | 50/50 |
+  | `record_count_in` | 50/50 | 50/50 | 50/50 | 50/50 |
+  | `record_pre_roll` | 50/50 | 50/50 | 50/50 | 50/50 |
+
+  **800 runs, 0 failures** — on the final binary. The FIRST sweep of
+  `metronome_click` was 49/50 at w1 and that failure is written up above; it was
+  the case anchoring its grid on the start-of-run transient, not a defect in the
+  click.
+
+### One new module edge
+
+`servicesui → actions`, declared in `tools/check_layering.py`, for `set-count-in`
+/ `set-pre-roll` and nothing else. They are registered there because that is the
+module that owns the option table (`SOpt`) and the only one that may include both
+it and `SSettings`.
+
+### NOT gated
+
+Real device latency numbers (the readout reports what the driver claims; no
+headless run can check the physics), the readout's and the badge's pixels,
+**plugin delay compensation, which is not implemented** (proposal 37 P9 owns
+it), a count-in or pre-roll longer than 2 bars, the two knobs COMBINED in one
+take (implemented and reachable, no case), and the Options page's three new
+controls (no verb builds the Audio page off screen the way
+`assert-midi-options` builds the MIDI one).
