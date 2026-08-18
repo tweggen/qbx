@@ -164,6 +164,38 @@ static void testRefusal()
                r.peakToNoise, (long long) r.roundTripFrames);
     }
 
+    // THE ONE HARDWARE TAUGHT US, and the reason `minPeakAmplitude` exists.
+    // A relative SNR test alone passes on a NOISE SPIKE over a quiet floor,
+    // which is what an unconnected input actually looks like — real inputs
+    // have interference, relays and cables being touched, none of which
+    // Gaussian noise models. Measured on a real interface with NO CABLE: a
+    // peak of 0.0045 (0.45 % of full scale, 40 dB below the emitted probe)
+    // standing 17.9x above the RMS floor, reported as a confident 345.62 ms.
+    {
+        std::vector<float> cap(96000 * 2, 0.0f);
+        std::mt19937 rng(11);
+        std::normal_distribution<float> d(0.0f, 0.0002f);
+        for (float &v : cap) v = d(rng);
+        // One isolated spike: tiny in absolute terms, enormous relative to the
+        // floor around it. Exactly the shape that fooled the relative test.
+        cap[40000 * 2 + 0] = 0.0045f;
+
+        const LoopbackResult relOnly =
+            loopbackMeasure(cap.data(), 96000, 2, 0, 1000, 8.0f, 0.0f);
+        CHECK(relOnly.found,
+              "a NOISE SPIKE passes the relative test alone (this is the bug)");
+        printf("     (relative-only would claim %lld frames from a %.4f peak, "
+               "peak/noise %.1f)\n",
+               (long long) relOnly.roundTripFrames, relOnly.peakAmplitude,
+               relOnly.peakToNoise);
+
+        // With the absolute floor the caller actually uses (1 % of a 0.5
+        // probe = 0.005), the same capture is refused.
+        const LoopbackResult withAbs =
+            loopbackMeasure(cap.data(), 96000, 2, 0, 1000, 8.0f, 0.5f * 0.01f);
+        CHECK(!withAbs.found, "the ABSOLUTE floor refuses it");
+    }
+
     // Silence: nothing to find, and no division by a zero floor.
     {
         const std::vector<float> cap(96000 * 2, 0.0f);
@@ -230,6 +262,50 @@ static void testSuggestedOffset()
     CHECK(loopbackMs(1000, 0) == 0.0, "a zero rate yields 0 rather than a division");
 }
 
+// --- 5. the LEVEL advice (added after the first real measurement) ------------
+
+static void testLevelAdvice()
+{
+    printf("\n-- the level advice --\n");
+
+    const float floor_ = 0.5f * 0.01f;   // what the runner passes: 1% of the probe
+
+    // THE CASE THAT PROMPTED THIS. A real cable between OUT 1 and IN 1 of a
+    // US-16x08 returned 0.0076 for a probe emitted at 0.5 — it MEASURED
+    // correctly (1084 frames against a driver-claimed 1039) but sat only 1.5x
+    // above the refusal floor. A little less gain and the same good cable
+    // would have been refused with "check the cable", which is the wrong
+    // advice when the cable is fine.
+    {
+        const std::size_t emitted = 1000;
+        std::vector<float> cap = synthCapture(96000, 2, 0, emitted + 1084, 0.0002f, 0.0076f);
+        const LoopbackResult r =
+            loopbackMeasure(cap.data(), 96000, 2, 0, emitted, 8.0f, floor_);
+        CHECK(r.found && r.roundTripFrames == 1084, "the weak-but-real return still measures");
+        CHECK(loopbackLevelOf(r) == LoopbackLevel::Weak, "and is reported as WEAK, not Good");
+        printf("     (headroom %.2fx: %s)\n", r.headroom,
+               loopbackLevelAdvice(loopbackLevelOf(r)));
+    }
+    {
+        // A healthy line-level return.
+        const std::size_t emitted = 1000;
+        std::vector<float> cap = synthCapture(96000, 2, 0, emitted + 1084, 0.0002f, 0.4f);
+        const LoopbackResult r =
+            loopbackMeasure(cap.data(), 96000, 2, 0, emitted, 8.0f, floor_);
+        CHECK(r.found && loopbackLevelOf(r) == LoopbackLevel::Good, "a strong return is Good");
+    }
+    {
+        // Below the floor: refused AND told why, which is the difference
+        // between "check the cable" and "raise the gain".
+        const std::size_t emitted = 1000;
+        std::vector<float> cap = synthCapture(96000, 2, 0, emitted + 1084, 0.0002f, 0.002f);
+        const LoopbackResult r =
+            loopbackMeasure(cap.data(), 96000, 2, 0, emitted, 8.0f, floor_);
+        CHECK(!r.found, "below the floor is refused");
+        CHECK(loopbackLevelOf(r) == LoopbackLevel::TooWeak, "and reported as TOO WEAK");
+    }
+}
+
 int main()
 {
     printf("=== loopback_test (proposal 21 L6a: the calibration measurement) ===\n");
@@ -238,6 +314,7 @@ int main()
     testNoise();
     testRefusal();
     testSuggestedOffset();
+    testLevelAdvice();
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
            failures == 1 ? "" : "s");

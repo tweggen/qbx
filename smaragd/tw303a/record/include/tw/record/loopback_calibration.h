@@ -51,7 +51,55 @@ struct LoopbackResult {
     // worse than one that says it failed, because the wrong number is silently
     // applied to every take the user records afterwards.
     bool  found = false;
+
+    // How much room the return had above the refusal threshold, as a ratio.
+    // 1.0 means it only just qualified.
+    //
+    // THIS EXISTS BECAUSE THE FIRST REAL SUCCESSFUL MEASUREMENT HAD ALMOST
+    // NONE. A cable between OUT 1 and IN 1 of a US-16x08 returned a peak of
+    // 0.0076 for a probe emitted at 0.5 — a 36 dB loss, 1.5x the floor — and
+    // it measured correctly (1084 frames against a driver-claimed 1039). But a
+    // little less input gain and the same good cable would have been refused,
+    // and "no probe found — check the cable" is unhelpful advice when the
+    // cable is fine and the GAIN is what needs raising. A caller that can see
+    // the margin can say the useful thing instead.
+    float headroom = 0.0f;
 };
+
+// What to tell the user about the signal LEVEL, independent of whether the
+// measurement succeeded. Separating this from `found` is the point: a pass
+// with no margin and a comfortable pass are both "found", and only one of them
+// should be trusted without a second look.
+enum class LoopbackLevel {
+    None,      // nothing there at all
+    TooWeak,   // below the floor — refused
+    Weak,      // qualified, but with little room; the gain wants raising
+    Good,      // comfortable
+    Hot,       // close to clipping; the measurement is fine, the level is not
+};
+
+inline LoopbackLevel loopbackLevelOf(const LoopbackResult &r)
+{
+    if (r.peakAmplitude <= 0.0f) return LoopbackLevel::None;
+    if (!r.found && r.headroom < 1.0f) return LoopbackLevel::TooWeak;
+    if (r.peakAmplitude > 0.95f) return LoopbackLevel::Hot;
+    if (r.headroom < 4.0f) return LoopbackLevel::Weak;
+    return LoopbackLevel::Good;
+}
+
+inline const char *loopbackLevelAdvice(LoopbackLevel l)
+{
+    switch (l) {
+    case LoopbackLevel::None:    return "nothing arrived on that input at all";
+    case LoopbackLevel::TooWeak: return "the return is too quiet to trust — raise the "
+                                        "input gain, or check the cable and the output level";
+    case LoopbackLevel::Weak:    return "the return is weak; the measurement stands, but "
+                                        "raising the input gain would make it more reliable";
+    case LoopbackLevel::Hot:     return "the return is close to clipping; lower the output "
+                                        "or the input gain";
+    default:                     return "the return level is comfortable";
+    }
+}
 
 // One click, `frames` long, with an instantaneous attack — the attack is the
 // thing being timed, so it must be the first sample. The decay is only there
@@ -72,12 +120,30 @@ inline std::vector<float> loopbackProbe(std::size_t frames = 64, float amplitude
 // Find the probe's ARRIVAL in `captured` (interleaved, `channels` wide; only
 // `channel` is examined), given that it was EMITTED at `emittedAtFrame`.
 //
-// `minPeakToNoise` is the refusal threshold: below it, `found` is false and
-// the caller must say so rather than use the number.
+// TWO refusal thresholds, and BOTH are needed. `minPeakToNoise` is relative —
+// does the candidate stand clear of the floor — and `minPeakAmplitude` is
+// ABSOLUTE: is it plausibly the probe at all.
+//
+// THE ABSOLUTE ONE WAS ADDED AFTER HARDWARE PROVED THE RELATIVE ONE
+// INSUFFICIENT, and the failure is worth stating because it is the exact thing
+// this function exists to prevent. Run against a real interface with NO CABLE
+// CONNECTED, the relative test alone reported a confident 345.62 ms: the
+// unconnected input's own noise had a peak of 0.0045 — 0.45 % of full scale,
+// 40 dB below the emitted probe — standing 17.9x above an even quieter RMS
+// floor. Synthetic Gaussian noise never produced that, because Gaussian noise
+// has no spikes; real inputs do (interference, a relay, a cable being
+// touched), and a spike over a quiet floor passes any purely relative test.
+//
+// So the caller passes what it EMITTED, and a candidate must be within a
+// sensible loss of it. A line-level loopback returns near unity; a pad or a
+// mismatched level might cost 20-30 dB. Two orders of magnitude (40 dB) is
+// already generous, and it is three orders clear of the 0.0045 that fooled the
+// relative test.
 inline LoopbackResult loopbackMeasure(const float *captured, std::size_t frames,
                                       std::uint32_t channels, std::uint32_t channel,
                                       std::int64_t emittedAtFrame,
-                                      float minPeakToNoise = 8.0f)
+                                      float minPeakToNoise = 8.0f,
+                                      float minPeakAmplitude = 0.0f)
 {
     LoopbackResult r;
     if (!captured || frames == 0 || channels == 0 || channel >= channels) return r;
@@ -137,12 +203,19 @@ inline LoopbackResult loopbackMeasure(const float *captured, std::size_t frames,
     peakAt = onset;
     r.roundTripFrames = (std::int64_t) peakAt - emittedAtFrame;
 
-    // Refuse rather than guess: a peak that does not stand clear of the floor,
-    // or an arrival BEFORE the probe was emitted, is not a measurement. The
-    // second is not paranoia — it is what a stale capture buffer or a
-    // mis-stamped emit position looks like, and it must not become a negative
-    // "latency".
-    r.found = r.peakToNoise >= minPeakToNoise && r.roundTripFrames >= 0;
+    // Refuse rather than guess. Three ways to fail, and each one has been seen:
+    //   - too quiet in ABSOLUTE terms: not the probe, whatever its SNR (the
+    //     no-cable case above);
+    //   - not clear of the floor: something is there but it is not clean;
+    //   - an arrival BEFORE the emit: impossible, and what a stale capture
+    //     buffer or a mis-stamped emit position looks like. It must never
+    //     become a negative "latency" that is then subtracted from every
+    //     placement.
+    r.headroom = (minPeakAmplitude > 0.0f) ? (r.peakAmplitude / minPeakAmplitude)
+                                            : 1e9f;
+    r.found = r.peakAmplitude >= minPeakAmplitude &&
+              r.peakToNoise   >= minPeakToNoise &&
+              r.roundTripFrames >= 0;
     return r;
 }
 

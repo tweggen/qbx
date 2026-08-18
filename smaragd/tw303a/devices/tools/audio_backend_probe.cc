@@ -22,6 +22,7 @@
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
 #include "tw/record/capture_bridge.h"
+#include "tw/record/loopback_runner.h"
 
 #ifdef TW_HAVE_ASIO
 // PRIVATE to the module, and reached here on purpose: the gate's own
@@ -131,6 +132,69 @@ int cmdPanel(const std::string &id)
     be->closeDevice();
     std::printf("  RESULT : panel shown\n");
     return 0;
+}
+
+// Proposal 21 L6a: a REAL loopback pass. Needs a CABLE from an output to an
+// input on the same device — the runner refuses two devices, because across
+// two clocks the number carries the start skew rather than the latency.
+int cmdLoopback(const std::string &id, std::uint32_t channel)
+{
+    std::printf("=== loopback %s (reading input channel %u)\n", id.c_str(), channel);
+    std::printf("    connect an OUTPUT to that INPUT with a cable before running this\n");
+
+    auto be = audio::createAudioBackend();
+    auto in = audio::createAudioInput();
+    if (!be || !in) return 1;
+
+    audio::LoopbackRunParams p;
+    p.outputDeviceId   = id;
+    p.inputDeviceId    = id;
+    p.inputChannel     = channel;
+    p.inputChannelMask = (std::uint64_t) 1 << channel;
+
+    in->requestChannels(p.inputChannelMask);
+    if (in->openDevice(id, 0) != 0) {
+        std::printf("  FAILED: input openDevice: %s\n", in->errorMessage());
+        return 1;
+    }
+    if (be->openDevice(id, 0) != 0) {
+        std::printf("  FAILED: output openDevice\n");
+        return 1;
+    }
+
+    const audio::LoopbackRun r = audio::runLoopback(be.get(), in.get(), p);
+
+    std::printf("  rate   : %u Hz; driver reported %u out + %u in = %u frames\n",
+                r.sampleRate, r.reportedOutputFrames, r.reportedInputFrames,
+                r.reportedOutputFrames + r.reportedInputFrames);
+    std::printf("  capture: %llu frames\n", (unsigned long long) r.framesCaptured);
+
+    int rc = 0;
+    if (!r.error.empty()) {
+        std::printf("  ! %s\n", r.error.c_str());
+        rc = 1;
+    }
+    if (r.result.found) {
+        std::printf("  MEASURED: round trip %lld frames = %.2f ms\n",
+                    (long long) r.result.roundTripFrames,
+                    audio::loopbackMs(r.result.roundTripFrames, r.sampleRate));
+        std::printf("            peak %.4f, peak/noise %.1f, headroom %.1fx over the refusal floor\n",
+                    r.result.peakAmplitude, r.result.peakToNoise,
+                    r.result.headroom);
+        std::printf("  LEVEL  : %s\n",
+                    audio::loopbackLevelAdvice(audio::loopbackLevelOf(r.result)));
+        // The RESIDUAL is the number a user would type into Options; the
+        // round trip is not, because the driver-reported part is already
+        // compensated automatically.
+        std::printf("  OFFER  : recording offset %+.2f ms (the residual the driver "
+                    "did NOT report)\n", r.suggestedOffsetMs());
+        rc = 0;
+    }
+
+    be->closeDevice();
+    in->closeDevice();
+    std::printf("  RESULT : %s\n", rc == 0 ? "measured" : "no measurement");
+    return rc;
 }
 
 int cmdList()
@@ -598,6 +662,7 @@ int main(int argc, char **argv)
         std::printf("usage: audio_backend_probe list\n"
                     "       audio_backend_probe inputs\n"
                     "       audio_backend_probe panel   <device-id>\n"
+                    "       audio_backend_probe loopback <device-id> [in-channel]\n"
                     "       audio_backend_probe open <device-id> [--rate=N]\n"
                     "       audio_backend_probe tone <device-id> [seconds] [--rate=N]\n"
                     "       audio_backend_probe capture <device-id> [seconds] [mask]\n"
@@ -621,6 +686,10 @@ int main(int argc, char **argv)
         if (av.size() >= 4) mask = std::strtoull(av[3].c_str(), nullptr, 0);
         const std::string out = av.size() >= 5 ? av[4] : std::string("asio_take.wav");
         rc = cmdTake(av[1], seconds, mask, out);
+    } else if (av[0] == "loopback" && av.size() >= 2) {
+        std::uint32_t chan = 0;
+        if (av.size() >= 3) chan = (std::uint32_t) std::atoi(av[2].c_str());
+        rc = cmdLoopback(av[1], chan);
     } else if (av[0] == "panel" && av.size() >= 2) {
         rc = cmdPanel(av[1]);
     } else if (av[0] == "inputs") {

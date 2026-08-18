@@ -14732,3 +14732,113 @@ pinned **20/20 by exit code** over `SMARAGD_REVAL_WORKERS` {1,4,8,16}.
 `assert-lane-overlay`'s clips all still start at 0); a clip whose start does NOT
 land on a column boundary; and looped, stretched, warp-anchored or take-stacked
 clips at an offset, where the same sub-window arithmetic meets a piecewise map.
+
+## 2026-08-18 — Proposal 21 L6a: the loopback RUNNER, and a defect only hardware could show
+
+The measurement landed with the L6 brief; this is the half that drives two real
+streams. `tw/record/loopback_runner.{h,cc}`: attach a render callback that
+emits the probe exactly once at a known output-frame position, drain the input
+into one buffer, measure. `audio_backend_probe loopback <id> [in-channel]` runs
+it against hardware.
+
+### Where the two streams get a shared time reference — the whole problem
+
+"Round trip" is (arrival in the capture) − (departure from the output), and
+those are counted by different streams. What makes them comparable is that both
+sides are driven by ONE clock.
+
+**On a full-duplex ASIO device that is exactly true**, and it is why this was
+worth building now rather than before 35: one `bufferSwitch` hands the input and
+output buffers for the SAME instant, so output frame N and input frame N are
+simultaneous by construction.
+
+**Across two devices it is false**, and the error is not small — the streams
+start at unrelated moments, so the difference carries the START SKEW as well as
+the latency. The runner therefore **REFUSES** a cross-device pass rather than
+returning a number that looks like a latency. That refusal is the honest
+boundary of L6a: measuring across two clocks is L6c and needs drift handling,
+not a bigger buffer.
+
+### THE DEFECT: a relative SNR test is not enough, and only hardware showed it
+
+The measurement's refusal criterion was peak-to-noise alone, and
+`loopback_test` covered "noise with no probe is refused" — with GAUSSIAN noise,
+which passed. Run against the real interface **with no cable connected**, the
+same code reported a confident **345.62 ms**:
+
+```
+peak 0.0045, peak/noise 17.9   ->  "MEASURED: round trip 16590 frames"
+```
+
+0.0045 is 0.45 % of full scale and 40 dB below the emitted probe. It is not a
+returned probe; it is the unconnected input's own noise, and it passed because
+**a spike over a quiet floor satisfies any purely relative test**. Gaussian
+noise has no spikes; real inputs do — interference, a relay, a cable being
+touched — so the synthetic gate could not have found this and the hardware
+found it in one run.
+
+Fixed with an ABSOLUTE threshold beside the relative one: a candidate must be
+within a sensible loss of what was EMITTED (`minReturnFraction`, default 1 % =
+40 dB, already generous for a line-level loopback and three orders clear of the
+0.0045 that fooled it). The no-cable run now says **"no probe found — check the
+cable, the input channel, and that the output is not muted"**.
+
+`loopback_test` gained the case that would have caught it, and it asserts BOTH
+halves: the same synthetic spike (peak 0.0045, peak/noise 22.5 — the hardware's
+shape) is **found** by the relative test alone and **refused** once the absolute
+floor is applied. A regression test that only asserted the fix would not have
+recorded why the fix is needed.
+
+### Verification
+
+`./build.sh` green; `check_layering` and `check_logging` clean; `ctest -j4`
+green on the merged tree (main had moved: proposal 39's #68/#71 and proposal
+38's #73 landed from other sessions while this was in progress).
+
+Hardware, on the US-16x08, BOTH directions of the answer:
+
+- **NO cable**: the pass runs end to end (96000 frames captured, driver
+  reporting 735 out + 304 in) and **correctly refuses**.
+- **OUT 1 patched to IN 1** — the positive case, measured 2026-08-18:
+
+  ```
+  MEASURED: round trip 1084 frames = 22.58 ms
+            peak 0.0076, peak/noise 43.4
+  OFFER  : recording offset +0.94 ms
+  ```
+
+  **The driver is honest to within 45 frames.** It claimed 1039 (735 out +
+  304 in); the cable measured 1084. So the automatic compensation was already
+  right to within a millisecond on this interface, and the residual a user
+  would be offered is ~1 ms. That is a genuinely useful thing to know about
+  this hardware, and it is also the first evidence that the whole chain —
+  probe emission, capture, onset detection, residual arithmetic — produces a
+  number that means something.
+
+### WHAT THE FIRST REAL SUCCESS EXPOSED: a pass with no margin
+
+That measurement is correct and it very nearly did not happen. The return
+peaked at **0.0076** for a probe emitted at **0.5** — a 36 dB loss, sitting
+only **1.5x above the refusal floor** and a mere 1.7x above the no-cable noise
+peak. A little less input gain and the same good cable would have been REFUSED,
+with the message "no probe found — check the cable", which is precisely the
+wrong advice when the cable is fine and the GAIN is what wants raising.
+
+So the result now carries `headroom` (how far above the floor it landed) and a
+`LoopbackLevel` — None / TooWeak / Weak / Good / Hot — with advice written for
+a human. A pass with no margin and a comfortable pass are both `found`, and
+only one of them should be trusted without a second look; collapsing them into
+a bool threw away the distinction that matters for telling a user what to do.
+
+Gated against the real case: a synthetic capture built at the hardware's own
+numbers reports **headroom 1.50x** and classifies as **Weak**, not Good.
+
+
+### Still not built
+
+The Options UI — a button, a progress indication for the ~2 s pass, the measured
+number shown, and applying it only on the user's word. The engine returns a
+`LoopbackRun` with everything that dialog needs (round trip, the driver's own
+claim, the residual to offer, the confidence, and an error string written for a
+human). Deliberately still absent, per the brief: anything that writes the
+offset without the user accepting it.
