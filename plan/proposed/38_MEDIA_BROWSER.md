@@ -7,8 +7,11 @@
 > subagent.
 >
 > **Scope for the MVP:** two sources (local, Nextcloud/WebDAV), one media
-> category (audio), browse + incremental search + drag-to-timeline. **No**
+> category (audio), browse + incremental search + drag-to-timeline, and
+> credentials **encrypted at rest** by the platform's own store (§B.8). **No**
 > BPM/key analysis, **no** metadata extraction, **no** audition — see §F.
+> Token auth (Nextcloud Login Flow v2, then OAuth2 where a deployment needs it)
+> is the named direction and §B.8a is what keeps the MVP from blocking it.
 
 ---
 
@@ -63,6 +66,12 @@ Qt6::Network ships in qtbase, so this costs no new external dependency and no
 vcpkg work — but it is the first HTTP client in this codebase and every
 convention for one is being set here. Qt Xml is already linked, so a WebDAV
 `PROPFIND` response parses with `QDomDocument` and needs nothing new either.
+
+The credential store (§B.8) is the same story: `crypt32` on Windows (MinGW
+ships it) and `Security.framework` on macOS (in the SDK) are platform SDK
+links, not dependencies to acquire. Only Linux's libsecret is genuinely
+optional, and its absence degrades to a named fallback rather than to plain
+text.
 
 ### A.4 What the user asked for
 
@@ -366,25 +375,111 @@ Four rules that are not negotiable:
 - **The PROPFIND response is parsed off the GUI thread** (`QtConcurrent::run` +
   a queued result). A directory of 10 000 entries is a megabyte of XML.
 
-### B.8 Credentials
+### B.8 Credentials — `SSecretStore`, and what "encrypted" honestly means
 
-Qt ships no keychain and this proposal does not add QtKeychain. Accounts live
-in `SSettings`:
+**A secret is never written to `smaragd.ini` in plain text.** It goes through
+`SSecretStore` (`main/shell`, beside `SSettings`), which stores and retrieves a
+secret by key name and whose backend is chosen at build time by platform:
+
+| Backend | Where the bytes live | How protected |
+|---|---|---|
+| **`dpapi`** (Windows) | ciphertext, base64, in the INI | `CryptProtectData` with `CRYPTPROTECT_UI_FORBIDDEN`, **user-scoped**: the key is derived from the Windows logon credential and never leaves LSA. Links `crypt32` — present in MinGW, no new dependency |
+| **`keychain`** (macOS) | in the **login keychain**, not in the INI at all | Security.framework `SecItemAdd` / `SecItemCopyMatching`, `kSecClassGenericPassword`, service `com.smaragd.media`. Links `Security.framework` — in the SDK, no new dependency |
+| **`libsecret`** (Linux, when found) | in the Secret Service | libsecret, keyed the same way. An **optional** dependency, `TW_HAVE_LIBSECRET` |
+| **`obfuscated`** (fallback) | ciphertext, base64, in the INI | AES-128 under a key derived from a build salt + the machine/user id. **This is obfuscation, not protection** — see below |
+
+The INI keeps only the non-secret half plus a scheme tag:
 
 ```
 media/nextcloud/<accountId>/url
 media/nextcloud/<accountId>/user
-media/nextcloud/<accountId>/password      <- only when "Remember" is checked
+media/nextcloud/<accountId>/passwordScheme   dpapi | keychain | libsecret | obfuscated
+media/nextcloud/<accountId>/passwordEnc      <- dpapi / obfuscated only; base64 ciphertext
 ```
 
-The password is stored **in plain text in `smaragd.ini`**, and the accounts
-dialog says exactly that next to the checkbox. With "Remember" off, the
-password is held in memory for the session and the key is not written. This is
-honest rather than good; the mitigation that makes it acceptable is the app
-password — a per-application, revocable credential that is not the user's
-account password. A keychain integration is a follow-up (§F).
+Five rules, each of which is an AC in gate 5:
 
-### B.9 The twelve traps, decided up front
+1. **The scheme tag is load-bearing.** A DPAPI blob is user- and machine-bound
+   by design, so an INI copied to another machine, another user account, or a
+   roamed `%APPDATA%` **cannot** decrypt — and must fail *readably*: the account
+   reports `undecryptable`, the UI says "re-enter the password for this
+   account", and nothing is sent to the server. Without the tag the failure
+   would be a garbage credential in an `Authorization` header and a 401 nobody
+   can explain.
+2. **A secret never appears in a log, a `describe()`, an exception message or a
+   URL.** `describeMediaPage()` reports `password=set|unset|undecryptable` and
+   never a length, never a prefix. The `Authorization` header is redacted in
+   every diagnostic. This is gateable and is gated: a case sets a known
+   password, exercises a request, and asserts `assert-log contains="<that
+   password>" maxCount="0"`.
+3. **A secret never enters a `.qxp`.** An account is machine-local
+   configuration, like a device id. Nothing in this proposal touches the
+   project file.
+4. **"Remember" off still means off.** The password is held in memory for the
+   session and no key of any kind is written.
+5. **The `--test-case` default backend is `memory`.** A headless suite must not
+   write into the developer's real keychain or Secret Service — and on macOS a
+   keychain access from a background test can block on a UI prompt nobody can
+   see, which is exactly the `qoffscreen` failure mode again (a case burning its
+   whole timeout at ~0 % CPU). `SMARAGD_SECRET_BACKEND=dpapi|keychain|libsecret
+   |obfuscated|memory` overrides ahead of the platform choice, mirroring
+   `SMARAGD_AUDIO_BACKEND` and `SMARAGD_MIDI_BACKEND` exactly.
+
+**What this does and does not buy, stated plainly**, because a credential store
+that oversells itself is worse than one that does not:
+
+- On Windows, macOS and Linux-with-libsecret it is **real** encryption at rest,
+  keyed off the user's login. Another user on the same box cannot read it; a
+  stolen `smaragd.ini`, a backup, a synced config directory or a support-bundle
+  upload does not carry a usable password.
+- The **`obfuscated` fallback does not protect against anyone holding the
+  binary**, because the key ships inside it. It is there so that no platform
+  ever falls back to plain text, and the accounts dialog says "stored obfuscated
+  — not protected against someone with access to this machine" when it is in
+  use. It is never silently substituted for a real backend: a platform whose
+  real backend fails at runtime logs a warning naming the reason.
+- **Nothing here changes what goes over the wire.** HTTP Basic sends the
+  password to the server on every request; TLS is what protects that, and the
+  app password is what limits the blast radius. Encryption at rest and
+  encryption in transit are different problems and only the first one is solved
+  here.
+- **The plaintext is a `QString` in RAM while an account is open.** Qt strings
+  are implicitly shared and copy-on-write, so there is no honest way to zero
+  them; claiming a scrub would be false. The secret is fetched from the store
+  at open and released when the last source for the account closes — that
+  bounds the window, and no more than that is claimed.
+
+**Migration:** any `media/nextcloud/<id>/password` plaintext key found (only a
+pre-release dev build could have written one) is read once, re-stored through
+`SSecretStore`, and the plaintext key is **removed** — never left behind beside
+the ciphertext.
+
+### B.8a Token-based auth is the direction, and the next step is not OAuth2
+
+The requester's intent — move off a stored password to a token flow — is right,
+and the concrete next step is **Nextcloud Login Flow v2**, not OAuth2:
+
+- **Login Flow v2** (`POST /index.php/login/v2`, then poll the returned
+  endpoint) opens the user's browser, has them authenticate against their own
+  server — including any SSO or 2FA it uses — and hands back a **server-issued
+  app password**, revocable from the user's security page. The user never types
+  their real password into Smaragd, and **no client registration is needed on
+  the server**.
+- **OAuth2** on Nextcloud requires an administrator to register a client id and
+  secret per deployment, and a desktop app cannot keep a client secret. It is
+  the right answer for a hosted service we control, and the wrong first step for
+  software a user points at their own server.
+
+Either way the credential that comes back is a bearer-ish string that lands in
+the **same `SSecretStore`** — which is why the store is being built now, with a
+backend seam and a scheme tag, rather than a single hard-coded encrypt call.
+Login Flow v2 is a follow-up (§F), not part of the MVP; what the MVP owes it is
+not painting itself into a corner, and that is discharged by (a) the store, and
+(b) `SWebDavClient` taking an **`Authorization` header value** rather than a
+username/password pair, so a `Bearer` token is a caller change and not a client
+change.
+
+### B.9 The fifteen traps, decided up front
 
 | # | Trap | Decision |
 |---|---|---|
@@ -400,6 +495,9 @@ account password. A keychain integration is a follow-up (§F).
 | T10 | A dock built for a `describe()` gate is never shown, so lazy paint-time state is empty | Build it off screen and push it its state explicitly — the `assert-plugin-strip` / `grabHead` pattern |
 | T11 | A cache path in a saved `.qxp` is machine-local | Copy into `<projectdir>/media/` when the project has a path; warn loudly when it does not (§B.6) |
 | T12 | A silent bound (search truncation, cache eviction, in-flight cap) reads as complete coverage | Each one logs and the footer shows it (§B.2 inv. 4) |
+| T13 | A secret reaching a log, a `describe()`, an error string or a support bundle | Redacted at the source; gated by a case that greps the log ring for the password it just set (§B.8 rule 2) |
+| T14 | A DPAPI blob copied to another machine decrypting to garbage and being SENT | The scheme tag makes the failure explicit — `undecryptable`, re-enter, nothing on the wire (§B.8 rule 1) |
+| T15 | A headless case writing into the developer's real keychain, or blocking on an invisible macOS keychain prompt | `SMARAGD_SECRET_BACKEND=memory` is the `--test-case` default, ahead of the platform choice (§B.8 rule 5) |
 
 ---
 
@@ -674,51 +772,129 @@ already source-agnostic from gate 2). The cache.
 
 ---
 
-### GATE 5 — accounts, credentials, and the Options page
+### GATE 5 — the secret store, accounts, and the Options page
 
 **Deliverable.** A user can add a Nextcloud account in Edit → Options → Media,
-test it, and see it in the browser's source picker.
+test it, and see it in the browser's source picker — with the password
+**encrypted at rest** by the platform's own credential protection.
+
+This gate is the largest of the six because it is two things: the secret store
+and the accounts UI. **Split it in two PRs if a subagent needs it** —
+`SSecretStore` plus `secret_store_test` is a clean, self-contained first half
+with no UI in it at all, and the page can follow.
 
 **Files.**
 
 ```
-main/servicesui/src/soptionsdialog.cpp     a new "Media" page
+main/shell/include/app/shell/ssecretstore.h    the backend seam (§B.8)
+main/shell/src/ssecretstore.cpp                dispatch + memory + obfuscated
+main/shell/src/ssecretstore_win.cpp            DPAPI          (crypt32)
+main/shell/src/ssecretstore_mac.mm             Keychain       (Security.framework)
+main/shell/src/ssecretstore_linux.cpp          libsecret, behind TW_HAVE_LIBSECRET
+main/shell/tests/secret_store_test.cpp         ctest target
+main/media/include/app/media/smediacredentials.h   the provider INTERFACE
+main/servicesui/src/soptionsdialog.cpp         a new "Media" page
 main/servicesui/include/app/servicesui/soptionsdialog.h  + describeMediaPage()
-main/shell/include/app/shell/ssettings.h   account accessors (§B.8)
-main/testkit/src/smediatestactions.cpp     + assert-media-options
-tests/cases/media_options_page.qxa         RUN_SERIAL, owns its keys
-docs/ACTIONS.md                            + the verb row
+main/shell/include/app/shell/ssettings.h       account accessors (§B.8)
+main/testkit/src/smediatestactions.cpp         + assert-media-options
+tests/cases/media_options_page.qxa             RUN_SERIAL, owns its keys
+tests/cases/media_secret_redaction.qxa         RUN_SERIAL
+docs/ACTIONS.md                                + the verb row
 ```
 
+**`SSecretStore` lives in `main/shell`, next to `SSettings`** — machine-local
+configuration is already that module's job, and a credential store is not
+media-specific. `main/media` therefore never sees a secret store: it declares
+`smedia::CredentialProvider` (an interface: "give me the `Authorization` header
+value for this source id") and the **shell installs an implementation on the
+registry at startup**. That is `SAppContext`'s exact shape — the lower module
+declares the seam, the composition root implements it — and it keeps the layer
+boundary of §B.1 intact.
+
+**`SWebDavClient` takes an `Authorization` HEADER VALUE, not a user/password
+pair.** Basic is then `"Basic " + base64(user:secret)` computed by the provider,
+and a future Login Flow v2 token is `"Bearer …"` with no change to the client
+(§B.8a).
+
 The page mirrors the MIDI page's build/load/apply triple (servicesui CONTRACT
-inv. 7) — a list of accounts, Add/Edit/Remove, and a per-account form of URL,
-username, app password, a **Remember password** checkbox with the plain-text
-warning beside it, and a **Test connection** button reporting the HTTP status.
+inv. 7): a list of accounts, Add/Edit/Remove, a per-account form of URL,
+username and app password, a **Remember password** checkbox, a line naming the
+**backend actually in use** ("stored with Windows DPAPI, protected by your login"
+/ "stored obfuscated — not protected against someone with access to this
+machine"), and a **Test connection** button reporting the HTTP status.
 `assert-media-options` builds the REAL `SOptionsDialog` off screen and matches
 `describeMediaPage()`, exactly as `assert-midi-options` does.
 
 **ACs.**
 
-1. An account round-trips through `SSettings`: add, restart, still listed, and
-   the browser's source combo offers `nextcloud:<accountId>`.
-2. With **Remember off**, `media/nextcloud/<id>/password` is **absent from the
-   INI** (asserted by reading the file), and the source is usable for the rest
-   of the session.
-3. With Remember on, the key is present, and the dialog shows the plain-text
-   warning (`assert-media-options contains="plaintext"`).
-4. Removing an account removes every one of its keys and closes any open
-   source for it.
-5. **Test connection** against the gate-4 stub reports success; against a
-   `401` it reports the status text and does not save a broken account
-   silently.
-6. `media_options_page.qxa` is **`RUN_SERIAL`**, declares in its header that it
-   OWNS the `media/nextcloud/qxatest/*` keys, and restores them, leaving
-   `smaragd.ini` byte-identical (T6, the `midi_options_page` precedent —
-   verify with an md5 across a full `-j4` run and say so in the PR body).
-7. An account whose URL is not parseable is refused at the dialog, not at the
-   first request.
+*The store (`secret_store_test`, every platform):*
 
-**Do not touch.** The provider layer. The cache.
+1. Store → retrieve → delete round-trips for every backend the platform
+   compiles, driven through `SMARAGD_SECRET_BACKEND`; a retrieve of an unknown
+   key returns "unset", never an empty string that could be sent as a password.
+2. A secret containing non-ASCII, embedded NULs, and 4 KB of data round-trips
+   byte-exactly. (An app password is ASCII; a future token need not be.)
+3. **The ciphertext is not the plaintext**: for `dpapi` and `obfuscated`, the
+   stored INI value contains neither the plaintext nor any 8-byte substring of
+   it, and differs across two stores of the same secret where the backend
+   salts (DPAPI does).
+4. **A corrupt / foreign blob is `undecryptable`, never garbage.** Overwrite
+   `passwordEnc` with random base64 and with a blob from a different scheme tag:
+   both report `undecryptable`, both log a warning, and neither yields a string
+   a caller could send (§B.8 rule 1, T14).
+5. A scheme tag naming a backend this build does not have reports
+   `undecryptable` and names the scheme in the log — it does not fall back to
+   another backend and try to decrypt.
+6. `SMARAGD_SECRET_BACKEND=memory` writes **no INI key and no keychain item**;
+   asserted by an mtime + md5 check on the INI and by the absence of the
+   keychain service.
+
+*The accounts page:*
+
+7. An account round-trips: add, restart, still listed, and the browser's source
+   combo offers `nextcloud:<accountId>`.
+8. **No plaintext password key is ever written.** `grep` the INI for the known
+   test password after a save with Remember ON: absent. `passwordScheme` is
+   present, `passwordEnc` is present (or absent with a keychain backend), and
+   `media/nextcloud/<id>/password` **does not exist**.
+9. With **Remember off**, neither `passwordEnc` nor `passwordScheme` is written,
+   and the source is usable for the rest of the session.
+10. The dialog names the backend in use, and says "not protected" **only** when
+    the `obfuscated` fallback is active (`assert-media-options contains=`).
+11. Removing an account removes every one of its keys **and its stored secret**
+    (a keychain item left behind is a leak that outlives the app) and closes any
+    open source for it.
+12. **Test connection** against the gate-4 stub reports success; against a `401`
+    it reports the status text and does not save a broken account silently.
+13. An account whose URL is not parseable is refused at the dialog, not at the
+    first request.
+
+*Redaction (`media_secret_redaction.qxa`):*
+
+14. A case sets a password of a known, unusual literal, drives a browse and a
+    failing request against the stub, and asserts `assert-log contains="<that
+    literal>" maxCount="0"` **and** `contains="Basic " maxCount="0"` — the
+    secret reaches neither the log ring nor an error string, and the
+    `Authorization` header is redacted in diagnostics (§B.8 rule 2, T13).
+15. `describeMediaPage()` reports `password=set|unset|undecryptable` and the
+    literal appears nowhere in it.
+
+*Hygiene:*
+
+16. Both new cases are **`RUN_SERIAL`**, declare in their headers that they OWN
+    the `media/nextcloud/qxatest/*` keys, restore them, and leave `smaragd.ini`
+    byte-identical — verified with an md5 across a full `-j4` run and stated in
+    the PR body (T6, the `midi_options_page` precedent).
+17. A plaintext `media/nextcloud/<id>/password` planted by the test is migrated
+    on load: re-stored through the store and the plaintext key **removed**.
+
+**Do not touch.** The provider layer's ABI. The cache. `SSettings`'s existing
+keys.
+
+**Ungated and named in the PR body:** whether DPAPI/Keychain/libsecret actually
+resist an attacker — the ACs verify the plumbing and the failure modes, not the
+cryptography, which is the platform's. Real-keychain behaviour on macOS
+(prompting, locked keychains, first-unlock) is manual, per §C.6.
 
 ---
 
@@ -733,7 +909,7 @@ and the parts no headless gate can reach have a runbook.
 main/media/CONTRACT.md          completed (all invariants, all knobs)
 main/mediabrowser/CONTRACT.md   completed
 main/timeline/CONTRACT.md       + the `media:` drop branch invariant
-main/shell/CONTRACT.md          + the 7th dock
+main/shell/CONTRACT.md          + the 7th dock, + SSecretStore's invariants
 docs/ARCHITECTURE.md            + both modules in the map
 docs/MEDIA_BROWSER_MANUAL_GATE.md   the runbook (new)
 CLAUDE.md                       a "Media browser (proposal 38)" section
@@ -746,7 +922,10 @@ numbered, reproducible procedure against **a real Nextcloud server**, with a
 place to record the result. It covers exactly what §D says is ungated — TLS
 against a real certificate, a real app password, a large directory (≥ 2000
 entries), a large file (≥ 100 MB) with progress and cancel, a slow/flaky link,
-and a server with a self-signed certificate.
+and a server with a self-signed certificate. It also covers the **credential
+store on real hardware**: the password survives a restart, a `smaragd.ini`
+copied to a second machine reports `undecryptable` and prompts rather than
+sending anything, and on macOS a locked keychain is handled without a hang.
 
 **ACs.**
 
@@ -755,11 +934,14 @@ and a server with a self-signed certificate.
 2. `docs/ACTIONS.md` has a row for all seven new verbs with their real
    attribute defaults, and `action_roundtrip_test` covers each (it enumerates
    the registry, so a verb missing `writeXml`/`readXml` symmetry fails).
-3. The CLAUDE.md section states, in the house's own idiom, the three things a
+3. The CLAUDE.md section states, in the house's own idiom, the four things a
    newcomer will otherwise get wrong: placement is always `add-sample` over a
    local path (§B.5); a cache path in a saved project is not portable, hence
-   the project copy (§B.6/T11); and results are dropped by request id, not by
-   winning a cancel race (§B.2 inv. 2).
+   the project copy (§B.6/T11); results are dropped by request id, not by
+   winning a cancel race (§B.2 inv. 2); and a secret goes through
+   `SSecretStore`, never into the INI, a log or a `describe()` — with
+   `SMARAGD_SECRET_BACKEND=memory` as the `--test-case` default listed beside
+   the other backend knobs (§B.8).
 4. The manual runbook has been **run once** and its result recorded in the
    file, as `docs/ASIO_WINDOWS_GATE.md` requires of itself.
 5. `plan/STATE.md` carries the chronological record, including anything the
@@ -777,7 +959,9 @@ search modes and their row sets; the drag payload through the real drop
 handler; placement, undo and project-relative persistence; the cache's keying,
 reuse, eviction and cross-process safety; the WebDAV client's parsing, error
 handling, concurrency cap, truncation, progress and cancel — against a stub;
-the accounts page's load/apply and its credential rule.
+the accounts page's load/apply; and the secret store's round-trip, its
+"never plaintext in the INI" rule, its `undecryptable` failure modes and its
+redaction from the log.
 
 **NOT gated, and named in every PR body that touches it:**
 
@@ -798,6 +982,11 @@ the accounts page's load/apply and its credential rule.
   that hangs on `stat`). The bounds exist and are logged; they are not measured.
 - **Very large downloads.** The stub serves a fixture WAV; a 100 MB body's
   memory behaviour is manual.
+- **Whether the platform credential stores actually resist an attacker.** The
+  ACs gate the plumbing and the failure modes; the cryptography is DPAPI's,
+  Keychain's and libsecret's, and this proposal does not audit it. Real-keychain
+  behaviour on macOS — prompting, a locked keychain, first-unlock — is manual
+  (every headless run uses `SMARAGD_SECRET_BACKEND=memory`).
 
 ---
 
@@ -808,10 +997,14 @@ the accounts page's load/apply and its credential rule.
    there is no house precedent for reply lifetime, proxies or TLS. §B.7's four
    rules and gate 4's ACs are the precedent being set. *Mitigation:* the stub
    server makes the client's behaviour observable without a server.
-2. **A plain-text password in `smaragd.ini`.** Accepted, labelled, and mitigated
-   by app passwords (§B.8). A keychain is a follow-up. If the requester judges
-   this unacceptable, the fallback is prompt-per-session, which is gate 5 minus
-   the persistence branch — a smaller change, not a larger one.
+2. **Credential storage.** Encrypted at rest through the platform's own store
+   (§B.8), so no plain text is written anywhere. Two residual exposures are
+   named rather than papered over: the `obfuscated` fallback is not protection
+   against someone holding the binary (it exists only so that no platform ever
+   degrades to plain text, and the UI says so when it is active), and HTTP Basic
+   still puts the password on the wire on every request — which is what a token
+   flow fixes, and why §B.8a puts Nextcloud **Login Flow v2** next rather than
+   OAuth2. A revocable app password is the mitigation in the meantime.
 3. **The cache in a saved project.** T11's copy-into-the-project rule covers the
    saved case; the unsaved case is a warning, and relocation-on-save is not in
    the MVP. A user who drops a remote file into an unsaved project, saves, and
@@ -849,7 +1042,8 @@ Explicitly **not** in this proposal, each with the reason:
 | **Favourites, tags, ratings, collections** | An asset manager, not a browser. |
 | **Waveform thumbnails in the browser** | Needs a preview probe per row; the preview machinery is per-`SCut`, not per-file-on-a-server. |
 | **Relocating an already-placed cache reference at Save time** | §B.6/T11. The resources dock's *Cleanup…* dialog is where it would belong. |
-| **A keychain for credentials** | QtKeychain is a new external dependency; the app-password mitigation makes it deferrable (§B.8). |
+| **Nextcloud Login Flow v2 / OAuth2** | The direction, and §B.8a is the analysis: Login Flow v2 first (browser login against the user's own server, SSO and 2FA included, a revocable app password back, **no client registration**), OAuth2 only where a deployment demands it and an admin can register a client. The MVP's job is not to block it — `SSecretStore` and an `Authorization`-header-taking client are what discharge that. |
+| **libsecret as a hard dependency** | Optional (`TW_HAVE_LIBSECRET`). A Linux build without it uses the `obfuscated` fallback and says so. |
 
 ---
 
@@ -861,5 +1055,5 @@ Explicitly **not** in this proposal, each with the reason:
 | 2 | The dock: source picker, tree, filter, incremental search, drag out (local) | 3 qxa cases through the REAL panel and the REAL drop handler |
 | 3 | The cache, the `media:` payload, deferred placement, project-relative copy | `media_cache_test` + a deferred-drop case + a two-process cache race |
 | 4 | The Nextcloud/WebDAV connector | `webdav_source_test` + 2 qxa cases, against an in-repo stub server |
-| 5 | Accounts, credentials, the Options → Media page | `media_options_page.qxa` (RUN_SERIAL) + `assert-media-options` |
+| 5 | **`SSecretStore`** (DPAPI / Keychain / libsecret), accounts, the Options → Media page | `secret_store_test` + `media_options_page.qxa` + `media_secret_redaction.qxa` (both RUN_SERIAL) |
 | 6 | Contracts, docs, CLAUDE.md, STATE.md, the manual runbook | the runbook, run once and recorded |
