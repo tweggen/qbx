@@ -179,6 +179,14 @@ public:
 
     // Every call is ASYNC and returns a request id. Results arrive on the
     // MAIN thread, tagged with that id.
+    // The suffix filter is source STATE, not a per-call argument. Gate 1
+    // found this: `listDirectory` had no way to take one, yet AC 3 requires a
+    // filtered listing — and a lazily-expanded tree has no caller in a
+    // position to re-supply it on each expand. One dock control governs both
+    // modes, so one piece of state is also the honest model.
+    virtual void setSuffixFilter( const QStringList &suffixes ) = 0;
+    virtual QStringList suffixFilter() const = 0;
+
     virtual int  listDirectory( const QString &dirPath ) = 0;
     virtual int  search( const QString &rootPath, const QString &needle,
                          bool recursive, const QStringList &suffixes ) = 0;
@@ -648,8 +656,16 @@ Six gates in order — each builds on the last and each is green on its own. One
 PR each, **except gate 5, which is prescribed as three** (5a/5b/5c). **Every gate ends with the standing gate list**: `./build.sh`,
 `python tools/check_layering.py`, `python tools/check_logging.py`,
 `ctest --test-dir smaragd/build -j4 --output-on-failure`, and a reconciled
-count (**174 + N registered / 171 + N run / 3 disabled** on a non-Apple box,
-where N is the cases that gate adds). That is not repeated per gate below.
+count. That is not repeated per gate below.
+
+**MEASURE the baseline; do not quote CLAUDE.md's.** That table says
+174 registered / 171 run / 3 disabled and it is **stale** — it was measured at
+proposal 36 B9 (2026-08-17), before proposal 21 L2-L5 added their cases. Both
+gate-1 and gate-5a execution independently measured the tip of `main` at
+**200 registered / 197 run / 3 Not Run (Disabled)** (169 `.qxa` + unit tests).
+The rule is the invariant, not the number: run `ctest -N`, compare it against
+the run's own summary, and account for exactly the tests your gate adds. Gate 6
+fixes the CLAUDE.md figure.
 
 Each gate's brief is self-contained: the files, the wiring, the ACs, and an
 explicit *do not touch* list.
@@ -707,11 +723,15 @@ new audio content is added.
 8. **Threading:** every `entriesReady` / `requestFailed` / `fetchFinished`
    emission is asserted to arrive on the main thread
    (`QThread::currentThread() == qApp->thread()`).
-9. `grep -rn "std::thread" main/media/` is empty.
+9. `grep -rn "std::thread" main/media/ --include=*.h --include=*.cpp` is empty.
+   **Scoped to CODE deliberately**: AC 10 requires `CONTRACT.md` to state inv. 1
+   verbatim, and that text contains the literal — so an unscoped grep matches
+   the document that exists to forbid the thing. Gate 1 hit this.
 10. `main/media/CONTRACT.md` exists and states inv. 1-6 of §B.2 verbatim.
-11. **No widget in a provider:** `grep -rnE "#include <Q(Widget|TreeWidget|Dialog|Menu|Painter|Pixmap)" main/media/`
+11. **No widget in a provider:** `grep -rnE "#include <Q(Widget|TreeWidget|Dialog|Menu|Painter|Pixmap)" main/media/ --include=*.h --include=*.cpp`
     is empty. This is a grep, not a compiler error — see §B.1; the compiler will
-    not catch it, because `app_model` links `Qt::Widgets` PUBLIC.
+    not catch it, because `app_model` links `Qt::Widgets` PUBLIC. Scoped to code
+    for the same reason as AC 9.
 12. **A source destroyed mid-walk does not crash and delivers nothing after.**
     Start a recursive search over the fixture tree, delete the source while
     batches are in flight, spin the event loop. This is the AC that separates
