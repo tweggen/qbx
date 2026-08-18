@@ -58,6 +58,18 @@ Invariants:
    track may be armed on it right now, and the Options dialog is not where a
    monitoring session gets torn down.
 
+10. **The Media page (proposal 38 GATE 5b) is a LIVE page, not a
+    build/load/apply one — closer to the Plugins page's "Rescan now" than to
+    the MIDI page.** Add/Save/Remove/Test connection commit IMMEDIATELY
+    through `SApplication::mediaAccounts()` (`SMediaAccountManager`), because
+    the state that matters — the account list, the registered
+    `SWebDavMediaSource` — lives on that long-lived manager, not on this
+    dialog; `apply()`/`accept()` therefore touch nothing extra for this page.
+    `describeMediaPage()` follows `describeMidiPage()`'s shape (one line per
+    fact, `key=value`, a `  acct[i]=...` row per account) and NEVER prints a
+    password value, length or prefix (AC 15) — only
+    `set|unset|undecryptable`.
+
 How to test: `ctest -R qxa.log_dock_scale` covers the log dock's scale
 requirement numerically (300k records, asserts the worst drain tick). The
 other dialogs are manual; the headless render action bypasses them by design.

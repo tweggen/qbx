@@ -30,6 +30,7 @@ class SAutomationRecorder;
 class SLiveMonitor;
 class SAudioRecorder;
 class SMidiRecorder;
+class SMediaAccountManager;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -276,6 +277,10 @@ public:
     // recorder (L4) is a second consumer of the same ports, and neither of
     // them may own the other's device.
     SMidiInputHub *midiInputHub() const { return midiInputHub_.get(); }
+    // The Nextcloud accounts model (proposal 38 GATE 5b). Never null after
+    // construction; Options -> Media and the media browser's source combo
+    // both read it, and it is what installs smedia::CredentialProvider.
+    SMediaAccountManager *mediaAccounts() const { return mediaAccounts_.get(); }
     // The computer keyboard as a real MIDI port (design D9). The piano-roll
     // dock reaches it through here: `app/eventui` may not include tw/devices,
     // and routing the two calls through the shell is the same arrangement the
@@ -441,6 +446,7 @@ private:
     std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
     std::unique_ptr<SLiveMonitor> liveMonitor_;   // proposal 21 L1b
     std::unique_ptr<SMidiInputHub> midiInputHub_; // proposal 21 L2
+    std::unique_ptr<SMediaAccountManager> mediaAccounts_; // proposal 38 GATE 5b
     std::unique_ptr<SAutomationRecorder> automationRecorder_;  // proposal 37 P6
     bool isPlaying_;
     SProject *currentProject_;

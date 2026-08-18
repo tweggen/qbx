@@ -9,9 +9,11 @@ class QComboBox;
 class QCheckBox;
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
 class QPushButton;
 class QSpinBox;
 class QTimer;
+class QLineEdit;
 
 // Per-user preferences dialog: a category tree on the left, one option page per
 // category on the right (QStackedWidget), with OK / Cancel / Apply. Reads from
@@ -36,6 +38,12 @@ public:
     // (the house pattern: build the REAL widget off screen, assert on its
     // describe() string). Never parsed by production code.
     QString describeMidiPage() const;
+    // Same house pattern, for the Media page (proposal 38 GATE 5b). Reports
+    // the backend in use, whether Remember is offered (and why not, when it
+    // is not), and one line per account with `password=set|unset|
+    // undecryptable` -- NEVER the secret itself, its length or a prefix
+    // (AC 15).
+    QString describeMediaPage() const;
 
 private slots:
     void apply();             // write all pages to SSettings (no close)
@@ -49,6 +57,16 @@ private slots:
     // output, finds it on the input, and OFFERS the residual. It never applies
     // anything by itself — see the .cpp for why that is not timidity.
     void onMeasureLoopback();
+    // Media page (proposal 38 GATE 5b). Add/Save both go through
+    // onMediaSaveAccount() -- "Add" only clears the form to a fresh accountId
+    // first; the persistence call is the SAME one either way, which is what
+    // keeps the dialog and the testkit verbs (`set-media-account`) on one
+    // code path (AC 13's "refused at the dialog" is this call refusing).
+    void onMediaAccountSelected( QListWidgetItem *current, QListWidgetItem *previous );
+    void onMediaAddAccount();
+    void onMediaSaveAccount();
+    void onMediaRemoveAccount();
+    void onMediaTestConnection();
 
 private:
     QWidget *buildMousePage();
@@ -56,11 +74,13 @@ private:
     QWidget *buildLogPage();
     QWidget *buildMidiPage();
     QWidget *buildPluginsPage();
+    QWidget *buildMediaPage();
     void loadMousePage();
     void loadAudioPage();
     void loadLogPage();
     void loadMidiPage();
     void loadPluginsPage();
+    void loadMediaPage();
     void applyMousePage();
     void applyAudioPage();
     void applyLogPage();
@@ -72,6 +92,10 @@ private:
     void resetPluginDirsToDefaults();
     void rescanPluginsNow();
     void updatePluginScanStatus();
+    // Media page helpers.
+    void refreshMediaAccountList();     // rebuild mediaAccountList_ from the manager
+    void loadMediaAccountIntoForm( const QString &accountId );
+    void clearMediaForm();
 
     QTreeWidget    *tree_;
     QStackedWidget *stack_;
@@ -133,6 +157,25 @@ private:
     QCheckBox   *pluginScanOnStartup_;
     QLabel      *pluginStatusLabel_;
     QTimer      *pluginStatusTimer_;
+
+    // Media page (proposal 38 GATE 5b). Save/Remove/Test connection commit
+    // IMMEDIATELY through SApplication::mediaAccounts() -- a LIVE action like
+    // the Plugins page's "Rescan now", because the state that matters (the
+    // account list, the registered SWebDavMediaSource) lives on that
+    // long-lived manager, not on this dialog. OK/Cancel/Apply therefore touch
+    // nothing extra for this page.
+    QListWidget *mediaAccountList_;
+    QLineEdit   *mediaAccountId_;    // editable only while adding a NEW account
+    QLineEdit   *mediaUrl_;
+    QLineEdit   *mediaUser_;
+    QLineEdit   *mediaPassword_;     // QLineEdit::Password echo mode
+    QCheckBox   *mediaRemember_;
+    QLabel      *mediaBackendLabel_;
+    QPushButton *mediaAddBtn_;
+    QPushButton *mediaSaveBtn_;
+    QPushButton *mediaRemoveBtn_;
+    QPushButton *mediaTestBtn_;
+    QLabel      *mediaTestResultLabel_;
 };
 
 #endif // SOPTIONSDIALOG_H

@@ -10,14 +10,33 @@ fetch CACHE plus the DROP helper that turns a `media:` payload into one
 (`main/mediabrowser`, app_ui).
 
 Public headers: app/media/{smediaref,smediatypes,smediasource,smediaregistry,
-slocalmediasource,smediacache,smediadrop,sdelayedlocalsource,swebdavclient,
-swebdavmediasource}.h
+slocalmediasource,smediacache,smediadrop,sdelayedlocalsource,
+smediacredentials,swebdavclient,swebdavmediasource}.h
 
-**Gate 4's `SWebDavClient`/`SWebDavMediaSource` are UNIT-TEST ONLY as of this
-writing.** No account, no credential store, no UI and no qxa case reaches
-them yet — `main/media/tests/webdav_source_test.cpp`, against the in-repo
-stub (`main/testkit/src/swebdavstub.{h,cpp}`), is the entire coverage. Gate
-5c wires an account and the real thing up to the dock.
+**`smediacredentials.h` (GATE 5b) is the credential SEAM, header-only and
+deliberately so.** It declares `smedia::CredentialProvider` ("give me the
+Authorization header value for this source id") and a process-wide
+install/get pair, implemented entirely as `inline` functions over a
+function-local static — proposal 38 §C restricts this gate to "adding the
+credentials header" under `main/media/src`, not a new translation unit, and a
+`.cpp` here would need `SSecretStore` reachable from a module that must never
+see it (`main/shell`'s `SMediaAccountManager` is the one and only
+implementation, installed at `SApplication` construction). No production code
+in THIS module calls `credentialProvider()` — `SWebDavMediaSource`'s
+Authorization header is computed by its CALLER and handed to its constructor
+(§B.8a) — the seam exists for code that only knows a source's id, which as of
+gate 5b is nothing yet.
+
+**Gate 4's `SWebDavClient`/`SWebDavMediaSource` are no longer UNIT-TEST
+ONLY for the ACCOUNT half.** GATE 5b (`main/shell`) gives them a real caller:
+`SMediaAccountManager` constructs a live `SWebDavMediaSource` per persisted
+Nextcloud account and registers it with `SMediaRegistry`, so
+`main/media/tests/webdav_source_test.cpp` is no longer the only thing that
+has ever driven this code — `qxa.media_options_page` and
+`qxa.media_secret_redaction` (`main/testkit`) now do too, end to end against
+the in-repo stub. What is STILL missing is the DOCK actually browsing one:
+gate 5c wires `SMediaBrowserPanel` up to a real account and adds the qxa
+cases for it.
 
 Depends on (engine): tw/core, tw/graph (the base every app module gets).
 `tw/core/twlog.h` is the only one actually used. It must NEVER grow an edge to

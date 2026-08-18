@@ -630,3 +630,50 @@ warning reach the user through a hook rather than through a `QWidget*`.
 **A pending placement is cancelled from `setCurrentProject`**, not from a close
 handler: proposal 38 §B.5 says closed OR SWITCHED, and a close is one case of a
 change rather than the only one.
+
+## Nextcloud accounts (proposal 38 GATE 5b)
+
+37. **`SMediaAccountManager` is the accounts model, and it owns three things a
+    dialog is not allowed to own separately.** Persistence of url/user
+    (`SSettings`), the password (`SSecretStore`, §B.8), and the LIVE
+    `SWebDavMediaSource` instances registered with `SMediaRegistry` all go
+    through this ONE object (owned by `SApplication`, never null after
+    construction), so an account added through Options -> Media is
+    immediately live for the media browser's source combo without the dialog
+    and the dock having to agree on anything. It also implements
+    `smedia::CredentialProvider` (`app/media/smediacredentials.h`) and
+    installs itself as the process-wide provider at construction, clearing it
+    at destruction — the seam `main/media` declares and `main/shell` is the
+    only implementation of, exactly as `SAppContext` is.
+
+38. **The Options dialog and every testkit verb call the SAME manager
+    method.** `SOptionsDialog::onMediaSaveAccount()` and the testkit's
+    `set-media-account` both call `SMediaAccountManager::setAccount()`
+    directly — there is no second, UI-only validation path — so "an
+    unparseable URL is refused at the dialog" (AC 13) is the SAME refusal a
+    script can drive without synthesizing a button click, the same
+    `set-option` bypasses a spin box to reach `SSettings` directly.
+
+39. **A password is never re-read into the UI.** `loadMediaAccountIntoForm()`
+    clears the password field and reports only `SMediaAccountManager::
+    account()`'s `passwordStatus` (`Unset`/`Set`/`Undecryptable`) — the
+    plaintext is fetched from the store only inside `setAccount()`'s own call
+    to build the `Authorization` header for the source it registers, and
+    nowhere else holds onto it past that call.
+
+40. **Remember OFF SCRUBS, it does not merely skip.** `setAccount()` calls
+    `SSecretStore::remove()` whenever `remember` is false OR the resolved
+    backend cannot persist — never only when there was nothing to remove —
+    because a checkbox that only ever ADDS a secret and never takes one away
+    is not really an "off" state (AC 9, §B.8 rule 4).
+
+41. **`SMediaAccountManager`'s own `QSettings` is a SEPARATE instance from
+    `SSettings::instance()`'s, pointed at the SAME on-disk file** (identical
+    `IniFormat`/`UserScope`/`"Smaragd"`/`"smaragd"` quadruple — Qt shares one
+    `QConfFile` per path within a process, so the two coexist safely and a
+    write through either is visible through both). This is deliberate, not
+    an oversight: `SSecretStore`'s header explains why it never reaches for
+    `SSettings` itself (its OWN unit test must never touch the real INI), so
+    the composition root that owns a REAL, persistent `SSecretStore` has to
+    hand it a `QSettings` explicitly, and that `QSettings` cannot be
+    `SSettings`'s private member (there is no accessor for it, on purpose).

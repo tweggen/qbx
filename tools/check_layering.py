@@ -183,10 +183,16 @@ APP_DEPS = {
     # SEVENTH dock, created in SMainWindow's ctor like every other one (shell
     # CONTRACT inv. 4 -- restoreWindowLayout() runs later and can only restore
     # docks that already exist).
-    # shell + media since proposal 38 gate 3: the shell is the composition root
-    # that installs smediadrop's placement and status hooks and pushes the cache
-    # its root + cap, and it is the only place that sees BOTH app/media and
-    # SAddSampleAction.
+    # shell + media since proposal 38 gates 3 and 5b. The shell is the
+    # composition root for the whole media layer: it installs smediadrop's
+    # placement and status hooks and pushes the cache its root + cap (gate 3 --
+    # it is the only place that sees BOTH app/media and SAddSampleAction, which
+    # live one layer apart), and SMediaAccountManager implements
+    # smedia::CredentialProvider and owns the SWebDavMediaSource instances it
+    # registers with SMediaRegistry (gate 5b -- the composition root
+    # implementing what `media` only declares the seam for). `APP_DEPS` is NOT
+    # transitive, so `shell` needs its own edge here even though `mediabrowser`
+    # already has one.
     'shell':          {'actions', 'eventui', 'media', 'mediabrowser', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
                        'objects/track', 'objects/wave', 'persistence',

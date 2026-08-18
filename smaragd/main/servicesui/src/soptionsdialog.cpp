@@ -9,6 +9,7 @@
 #include "tw/devices/midi_output.h"
 #include "app/shell/smidiinputhub.h"
 #include "app/shell/smidioutpump.h"
+#include "app/shell/smediaaccountmanager.h"
 #include "tw/core/twlog.h"
 
 #include <QTreeWidget>
@@ -23,6 +24,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QAbstractItemView>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QApplication>
@@ -65,6 +67,7 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "MIDI" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Log" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Plugins" ) ) );
+    tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Media" ) ) );
 
     stack_ = new QStackedWidget;
     stack_->addWidget( buildMousePage() );   // index 0
@@ -72,6 +75,7 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     stack_->addWidget( buildMidiPage() );    // index 2
     stack_->addWidget( buildLogPage() );     // index 3
     stack_->addWidget( buildPluginsPage() ); // index 4
+    stack_->addWidget( buildMediaPage() );   // index 5
 
     QObject::connect( tree_, &QTreeWidget::currentItemChanged,
                       this, [this]( QTreeWidgetItem *cur, QTreeWidgetItem * ) {
@@ -1052,6 +1056,241 @@ void SOptionsDialog::updatePluginScanStatus()
     SApplication &app = SApplication::app();
     pluginStatusLabel_->setText( app.pluginScanStatusText() );
     pluginRescanBtn_->setEnabled( !app.isPluginScanActive() );
+}
+
+// ---------------------------------------------------------------- Media page
+// (proposal 38 GATE 5b, design §C GATE 5.) Mirrors the Plugins page's LIVE
+// pattern: Add/Save/Remove/Test connection commit straight through
+// SApplication::mediaAccounts() rather than through OK/Apply, because the
+// state that matters — the account list, the registered SWebDavMediaSource —
+// lives on that long-lived manager. This is also what keeps a testkit verb
+// that calls the manager directly and a real button click on the SAME code
+// path: `onMediaSaveAccount()` is exactly what `SMediaAccountManager::
+// setAccount()` returning false looks like from either caller (AC 13).
+
+QWidget *SOptionsDialog::buildMediaPage()
+{
+    QWidget     *page = new QWidget;
+    QVBoxLayout *v    = new QVBoxLayout( page );
+
+    mediaBackendLabel_ = new QLabel;
+    mediaBackendLabel_->setWordWrap( true );
+    v->addWidget( mediaBackendLabel_ );
+
+    v->addWidget( new QLabel( "Nextcloud accounts:" ) );
+    mediaAccountList_ = new QListWidget;
+    mediaAccountList_->setSelectionMode( QAbstractItemView::SingleSelection );
+    v->addWidget( mediaAccountList_, 1 );
+
+    QFormLayout *form = new QFormLayout;
+    mediaAccountId_ = new QLineEdit;
+    mediaAccountId_->setToolTip(
+        "A short name for this connection (\"home\", \"band-share\", ...). "
+        "Becomes the browser's source id, nextcloud:<this>." );
+    form->addRow( "Account id:", mediaAccountId_ );
+    mediaUrl_ = new QLineEdit;
+    mediaUrl_->setPlaceholderText(
+        "https://cloud.example.com/remote.php/dav/files/<username>/" );
+    form->addRow( "Server URL:", mediaUrl_ );
+    mediaUser_ = new QLineEdit;
+    form->addRow( "Username:", mediaUser_ );
+    mediaPassword_ = new QLineEdit;
+    mediaPassword_->setEchoMode( QLineEdit::Password );
+    mediaPassword_->setToolTip(
+        "A Nextcloud app password (Settings -> Security -> Devices & sessions -> "
+        "Create new app password on the server), not your login password." );
+    form->addRow( "App password:", mediaPassword_ );
+    v->addLayout( form );
+
+    mediaRemember_ = new QCheckBox( "Remember this password" );
+    v->addWidget( mediaRemember_ );
+
+    QHBoxLayout *btns = new QHBoxLayout;
+    mediaAddBtn_    = new QPushButton( "Add" );
+    mediaSaveBtn_   = new QPushButton( "Save" );
+    mediaRemoveBtn_ = new QPushButton( "Remove" );
+    mediaTestBtn_   = new QPushButton( "Test connection" );
+    btns->addWidget( mediaAddBtn_ );
+    btns->addWidget( mediaSaveBtn_ );
+    btns->addWidget( mediaRemoveBtn_ );
+    btns->addStretch();
+    btns->addWidget( mediaTestBtn_ );
+    v->addLayout( btns );
+
+    mediaTestResultLabel_ = new QLabel;
+    mediaTestResultLabel_->setWordWrap( true );
+    v->addWidget( mediaTestResultLabel_ );
+
+    QObject::connect( mediaAccountList_, &QListWidget::currentItemChanged,
+                      this, &SOptionsDialog::onMediaAccountSelected );
+    QObject::connect( mediaAddBtn_, &QPushButton::clicked,
+                      this, &SOptionsDialog::onMediaAddAccount );
+    QObject::connect( mediaSaveBtn_, &QPushButton::clicked,
+                      this, &SOptionsDialog::onMediaSaveAccount );
+    QObject::connect( mediaRemoveBtn_, &QPushButton::clicked,
+                      this, &SOptionsDialog::onMediaRemoveAccount );
+    QObject::connect( mediaTestBtn_, &QPushButton::clicked,
+                      this, &SOptionsDialog::onMediaTestConnection );
+
+    loadMediaPage();
+    return page;
+}
+
+void SOptionsDialog::refreshMediaAccountList()
+{
+    const QString wasSelected = mediaAccountId_->text();
+    mediaAccountList_->blockSignals( true );
+    mediaAccountList_->clear();
+    SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
+    for( const QString &id : mgr->accountIds() )
+        mediaAccountList_->addItem( id );
+    mediaAccountList_->blockSignals( false );
+
+    for( int i = 0; i < mediaAccountList_->count(); ++i ) {
+        if( mediaAccountList_->item( i )->text() == wasSelected ) {
+            mediaAccountList_->setCurrentRow( i );
+            return;
+        }
+    }
+}
+
+void SOptionsDialog::clearMediaForm()
+{
+    mediaAccountId_->clear();
+    mediaAccountId_->setEnabled( true );   // an id is only fixed once SAVED
+    mediaUrl_->clear();
+    mediaUser_->clear();
+    mediaPassword_->clear();
+    mediaRemember_->setChecked( SApplication::app().mediaAccounts()->canRememberPasswords() );
+    mediaTestResultLabel_->clear();
+}
+
+void SOptionsDialog::loadMediaAccountIntoForm( const QString &accountId )
+{
+    SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
+    const SMediaAccountInfo info = mgr->account( accountId );
+    mediaAccountId_->setText( info.accountId );
+    mediaAccountId_->setEnabled( false );   // renaming is remove + re-add
+    mediaUrl_->setText( info.url );
+    mediaUser_->setText( info.user );
+    mediaPassword_->clear();   // never re-populated: the secret is never read back into the UI
+    mediaRemember_->setChecked( info.passwordStatus != SMediaPasswordStatus::Unset );
+    mediaRemember_->setEnabled( mgr->canRememberPasswords() );
+    mediaTestResultLabel_->clear();
+}
+
+void SOptionsDialog::loadMediaPage()
+{
+    // Re-check for a legacy plaintext password key every time the page loads
+    // (AC 17): the real trigger — an app LAUNCH finding one on disk — already
+    // ran once at startup, so this is a cheap, harmless re-check that also
+    // gives a qxa case a way to observe the migration without restarting the
+    // process.
+    SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
+    mgr->rescanForPlaintextMigration();
+
+    mediaBackendLabel_->setText( mgr->backendDescription() );
+    mediaRemember_->setEnabled( mgr->canRememberPasswords() );
+
+    refreshMediaAccountList();
+    if( mediaAccountList_->currentItem() == nullptr ) clearMediaForm();
+}
+
+void SOptionsDialog::onMediaAccountSelected( QListWidgetItem *current, QListWidgetItem * )
+{
+    if( !current ) { clearMediaForm(); return; }
+    loadMediaAccountIntoForm( current->text() );
+}
+
+void SOptionsDialog::onMediaAddAccount()
+{
+    mediaAccountList_->setCurrentItem( nullptr );
+    clearMediaForm();
+}
+
+void SOptionsDialog::onMediaSaveAccount()
+{
+    const QString accountId = mediaAccountId_->text().trimmed();
+    if( accountId.isEmpty() ) {
+        mediaTestResultLabel_->setText( "An account id is required." );
+        return;
+    }
+
+    SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
+    QString error;
+    const bool ok = mgr->setAccount( accountId, mediaUrl_->text().trimmed(),
+                                     mediaUser_->text(), mediaPassword_->text(),
+                                     mediaRemember_->isChecked(), &error );
+    if( !ok ) {
+        mediaTestResultLabel_->setText( "Not saved: " + error );
+        return;
+    }
+
+    mediaTestResultLabel_->setText( "Saved." );
+    refreshMediaAccountList();
+    for( int i = 0; i < mediaAccountList_->count(); ++i ) {
+        if( mediaAccountList_->item( i )->text() == accountId ) {
+            mediaAccountList_->setCurrentRow( i );
+            break;
+        }
+    }
+}
+
+void SOptionsDialog::onMediaRemoveAccount()
+{
+    QListWidgetItem *cur = mediaAccountList_->currentItem();
+    if( !cur ) return;
+    SApplication::app().mediaAccounts()->removeAccount( cur->text() );
+    refreshMediaAccountList();
+    if( mediaAccountList_->currentItem() == nullptr ) clearMediaForm();
+}
+
+void SOptionsDialog::onMediaTestConnection()
+{
+    SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
+    mediaTestResultLabel_->setText( "Testing..." );
+    QApplication::processEvents();   // paint "Testing..." before the (bounded) blocking call
+    const QString result = mgr->testConnection( mediaUrl_->text().trimmed(),
+                                                mediaUser_->text(), mediaPassword_->text() );
+    mediaTestResultLabel_->setText( result );
+}
+
+QString SOptionsDialog::describeMediaPage() const
+{
+    SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
+    QStringList lines;
+    lines << QString( "backend=%1 canRemember=%2" )
+                 .arg( mgr->secretBackendName() )
+                 .arg( mgr->canRememberPasswords() ? "yes" : "no" );
+    lines << QString( "reason=%1" ).arg( mgr->backendDescription() );
+    const QStringList ids = mgr->accountIds();
+    lines << QString( "accounts=%1" ).arg( ids.size() );
+    for( int i = 0; i < ids.size(); ++i ) {
+        const SMediaAccountInfo info = mgr->account( ids.at( i ) );
+        QString passwordWord;
+        switch( info.passwordStatus ) {
+        case SMediaPasswordStatus::Set:            passwordWord = "set"; break;
+        case SMediaPasswordStatus::Unset:          passwordWord = "unset"; break;
+        case SMediaPasswordStatus::Undecryptable:  passwordWord = "undecryptable"; break;
+        }
+        // Built by concatenation, not QString(...).arg(...): `accountId`
+        // appears twice (acct[]=<id> and source=nextcloud:<id>), and a
+        // repeated %n placeholder is exactly the kind of thing arg() chains
+        // get subtly wrong.
+        lines << QStringLiteral( "  acct[%1]=" ).arg( i ) + info.accountId
+                     + QStringLiteral( " url=" ) + info.url
+                     + QStringLiteral( " user=" ) + info.user
+                     + QStringLiteral( " password=" ) + passwordWord
+                     + QStringLiteral( " source=nextcloud:" ) + info.accountId;
+    }
+    lines << QString( "selected=%1" )
+                 .arg( mediaAccountList_->currentItem()
+                           ? mediaAccountList_->currentItem()->text() : QString() );
+    lines << QString( "form.remember=%1 enabled=%2" )
+                 .arg( mediaRemember_->isChecked() ? 1 : 0 )
+                 .arg( mediaRemember_->isEnabled() ? 1 : 0 );
+    lines << QString( "lastTest=%1" ).arg( mediaTestResultLabel_->text() );
+    return lines.join( "\n" );
 }
 
 void SOptionsDialog::accept()

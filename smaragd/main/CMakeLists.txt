@@ -84,6 +84,7 @@ set(APP_CORE_FILES
     media/include/app/media/sdelayedlocalsource.h
     media/include/app/media/slocalmediasource.h
     media/include/app/media/smediacache.h
+    media/include/app/media/smediacredentials.h
     media/include/app/media/smediadrop.h
     media/include/app/media/smediaref.h
     media/include/app/media/smediaregistry.h
@@ -345,6 +346,7 @@ set(APP_UI_FILES
     shell/include/app/shell/sliveinputsource.h
     shell/include/app/shell/slivemonitor.h
     shell/include/app/shell/sliveplanbuilder.h
+    shell/include/app/shell/smediaaccountmanager.h
     shell/include/app/shell/smidiinputhub.h
     shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smidirecorder.h
@@ -358,6 +360,7 @@ set(APP_UI_FILES
     shell/src/sliveinputsource.cpp
     shell/src/slivemonitor.cpp
     shell/src/sliveplanbuilder.cpp
+    shell/src/smediaaccountmanager.cpp
     shell/src/smidiinputhub.cpp
     shell/src/smidioutpump.cpp
     shell/src/smidirecorder.cpp

@@ -314,6 +314,41 @@ foreach(_serial midi_out_capture midi_out_chase_and_stop midi_out_loop_wrap
     endif()
 endforeach()
 
+# --- Nextcloud accounts / Options -> Media (proposal 38 GATE 5b) -------------
+#
+# All three write real per-user keys under media/nextcloud/qxatest/* into the
+# SHARED smaragd.ini -- RUN_SERIAL, each owns and restores every key it
+# touches, verified by reading the file directly (assert-settings-file), not
+# through a QSettings cache.
+#
+# media_options_page and media_secret_redaction additionally need a backend
+# that actually PERSISTS to disk (AC 8/9/17 are specifically about what lands
+# on disk), so they override SMARAGD_SECRET_BACKEND to `dpapi` -- `memory` is
+# the --test-case default (§B.8 rule 5, T15) and would round-trip fine
+# in-process, but never touches the INI at all, so it cannot gate any of
+# those three ACs.
+#
+# media_options_no_store instead FORCES `none` -- SMARAGD_SECRET_BACKEND is
+# read ONCE per process by SMediaAccountManager's constructor, so seeing that
+# backend's "Remember is disabled" behaviour (AC 10) needs its own CTest entry
+# with its own environment, the same way the other two need `dpapi` rather
+# than the default.
+#
+# Note ENVIRONMENT is REPLACED, not appended, so the render timeout is
+# restated in both blocks below.
+foreach(_media_dpapi media_options_page media_secret_redaction)
+    if(TEST qxa.${_media_dpapi})
+        set_tests_properties(qxa.${_media_dpapi} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=dpapi")
+    endif()
+endforeach()
+if(TEST qxa.media_options_no_store)
+    set_tests_properties(qxa.media_options_no_store PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=none")
+endif()
+
 # --- the live lane (proposal 21 L1b) -----------------------------------------
 #
 # All five PLAY (or monitor) in real time against a paced FILE INPUT and assert

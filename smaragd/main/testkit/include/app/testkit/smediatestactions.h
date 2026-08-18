@@ -128,6 +128,170 @@ private:
     qint64   timePos_   = 0;
 };
 
+// --------------------------------------------------------------------------
+// proposal 38 GATE 5b -- the Nextcloud accounts model and Options -> Media.
+// --------------------------------------------------------------------------
+
+// set-media-account — calls SMediaAccountManager::setAccount() directly, the
+// same call the dialog's Add/Save button makes (`set-option`'s convention:
+// bypass the widget, exercise the SAME production code the widget calls).
+//   accountId = "" (required)
+//   url       = ""
+//   user      = ""
+//   password  = ""
+//   remember  = "1"
+//   expectOk  = "1"   fails the ACTION (not an assertion) on a mismatch, so
+//                     AC 13's "refused, not saved" is a driving step, not a
+//                     separate assert-* call
+class SSetMediaAccountAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "set-media-account" ); }
+    QStringList knownAttributes() const override
+    { return { "accountId", "url", "user", "password", "remember", "expectOk" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString accountId_;
+    QString url_;
+    QString user_;
+    QString password_;
+    bool    remember_ = true;
+    bool    expectOk_ = true;
+};
+
+// remove-media-account — SMediaAccountManager::removeAccount() (AC 11).
+//   accountId = "" (required)
+class SRemoveMediaAccountAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "remove-media-account" ); }
+    QStringList knownAttributes() const override
+    { return { "accountId" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString accountId_;
+};
+
+// media-test-connection — SMediaAccountManager::testConnection() (AC 12).
+// `useStub` starts a THROWAWAY in-process SWebDavStub (never a fixed port,
+// same discipline as gate 4's own test) so the case needs no external
+// server: "ok" answers every PROPFIND with a small canned listing, "401"
+// answers with a 401 fault on every path. `url` is ignored whenever `useStub`
+// is non-empty.
+//   url            = ""
+//   user           = ""
+//   password       = ""
+//   useStub        = ""     "" | "ok" | "401"
+//   expectContains = ""     substring the result string must contain
+//   expectAbsent   = ""     substring that must NOT appear
+class SMediaTestConnectionAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "media-test-connection" ); }
+    QStringList knownAttributes() const override
+    { return { "url", "user", "password", "useStub", "expectContains", "expectAbsent" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString url_;
+    QString user_;
+    QString password_;
+    QString useStub_;
+    QString expectContains_;
+    QString expectAbsent_;
+};
+
+// media-account-redaction-drive — proposal 38 AC 14/T13, ONE self-contained
+// driving action (so the whole flow sits inside ONE `assert-log` window,
+// SAssertLogAction::beginAction()'s rule): starts a throwaway in-process
+// stub, saves a REAL account through SMediaAccountManager::setAccount()
+// (exercising SSettings + SSecretStore for real, which is what "sets a
+// password" needs to mean for the redaction gate to be honest), then issues
+// a PROPFIND that SUCCEEDS ("a browse") and one that gets a 401 fault
+// ("a failing request") through the REAL registered SWebDavMediaSource.
+// Never asserts anything itself — a following `assert-log` does that.
+//   accountId = "qxatest"
+//   user      = "qxauser"
+//   password  = "" (required — this is the literal AC 14 checks for)
+//   remember  = "1"
+class SMediaAccountRedactionDriveAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "media-account-redaction-drive" ); }
+    QStringList knownAttributes() const override
+    { return { "accountId", "user", "password", "remember" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString accountId_ = QStringLiteral( "qxatest" );
+    QString user_      = QStringLiteral( "qxauser" );
+    QString password_;
+    bool    remember_  = true;
+};
+
+// assert-media-options — the Options -> Media page, built off screen, same
+// house pattern as assert-midi-options: match against describeMediaPage().
+//   contains / absent   substrings of the describe() dump
+//   accountCount        exact count (-1 = not checked)
+class SAssertMediaOptionsAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "assert-media-options" ); }
+    QStringList knownAttributes() const override
+    { return { "contains", "absent", "accountCount" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString contains_;
+    QString absent_;
+    int     accountCount_ = -1;
+};
+
+// assert-settings-file — the ON-DISK smaragd.ini, resolved via
+// SSettings::instance().configDir() rather than a path the script would have
+// to guess at (there is no per-platform smaragd.ini path expressible in a
+// .qxa). AC 8/9's "grep the INI for the plaintext password: absent" and "no
+// passwordScheme/passwordEnc key was written" both read this file directly,
+// the same way `assert-file-contains` reads a saved .qxp.
+//
+// A plain whole-file substring check, DELIBERATELY not scoped to an INI
+// "section": QSettings::IniFormat only brackets the FIRST path component as
+// a "[group]" header ("media/nextcloud/qxatest/url" is written under
+// "[media]" as the single key "nextcloud\qxatest\url=..."), so a
+// scoping scheme built around "[section]" headers would silently never
+// match anything below the top level and pass every case vacuously. Callers
+// scope for themselves instead, by writing the full disk-spelled key
+// (`nextcloud\qxatest\passwordScheme`) — the account id already makes it
+// unique, which is the only scoping an account-keyed assertion needs.
+//   contains = ""   substring that must be present
+//   absent   = ""   substring that must NOT be present
+class SAssertSettingsFileAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "assert-settings-file" ); }
+    QStringList knownAttributes() const override
+    { return { "contains", "absent" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString contains_;
+    QString absent_;
+};
+
 // assert-media-browser — match SMediaBrowserPanel::describe().
 //   contains  = ""     substring that must appear
 //   absent    = ""     substring that must NOT appear

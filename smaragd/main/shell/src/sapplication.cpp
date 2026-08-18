@@ -30,6 +30,7 @@
 #include "app/shell/smidirecorder.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/sautomationrecorder.h"
+#include "app/shell/smediaaccountmanager.h"
 #include "app/servicesui/soptions.h"
 #include "app/actions/sactionhistory.h"
 #include "app/actions/saction.h"
@@ -634,6 +635,14 @@ SApplication::SApplication( int &argc, char **argv )
     // that a headless case's `midi-in-event` reaches the port the live lane
     // drains rather than the probe (see SMidiInputHub's constructor).
     midiInputHub_.reset( new SMidiInputHub() );
+    // The Nextcloud accounts model (proposal 38 GATE 5b). No ordering
+    // dependency on anything around it -- it only touches SSettings (always
+    // usable) and SMediaRegistry (a lazily-constructed static) -- but it is
+    // constructed here, close to the other machine-local per-app services,
+    // rather than lazily on first Options-dialog open, so a project reopened
+    // with a saved `sourceId="nextcloud:..."` finds its source already
+    // registered.
+    mediaAccounts_.reset( new SMediaAccountManager( this ) );
     liveMonitor_.reset( new SLiveMonitor( this ) );
     automationRecorder_.reset( new SAutomationRecorder( this ) );
     // AFTER the monitor: the recorder borrows the monitor's bridge (design D7,
@@ -738,6 +747,7 @@ SApplication::~SApplication()
     // scheduler, and both belong to ports this owns.
     midiInputHub_.reset();
     midiOutPump_.reset();
+    mediaAccounts_.reset();
     automationRecorder_.reset();
     DTOR_DEL( actionHistory_ );
     t3Speaker_.reset();
