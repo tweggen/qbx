@@ -76,6 +76,23 @@ set(APP_CORE_FILES
     actions/src/ssetpropertyaction.cpp
     actions/src/ssnaptogridaction.cpp
     actions/src/stoggleplaybackaction.cpp
+    # --- app/media (proposal 38 gate 1). No widget, ever: the source ABI,
+    # the local provider and the id -> source registry. See
+    # main/media/CONTRACT.md -- the compiler does NOT enforce the no-widget
+    # rule (app_model links Qt::Widgets PUBLIC), a grep in media_source_test
+    # does.
+    media/include/app/media/slocalmediasource.h
+    media/include/app/media/smediaref.h
+    media/include/app/media/smediaregistry.h
+    media/include/app/media/smediasource.h
+    media/include/app/media/smediatypes.h
+    media/src/slocalmediasource.cpp
+    media/src/smedialocalwalker.h
+    media/src/smedialocalwalker.cpp
+    media/src/smediaref.cpp
+    media/src/smediaregistry.cpp
+    media/src/smediasource.cpp
+    media/src/smediatypes.cpp
     # --- app/persistence
     persistence/include/app/persistence/sloadprojectaction.h
     persistence/include/app/persistence/sprojectloader.h
@@ -421,10 +438,20 @@ target_link_libraries(app_model
 add_library(app_core OBJECT ${APP_CORE_FILES})
 target_include_directories(app_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/actions/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/media/include
     ${CMAKE_CURRENT_SOURCE_DIR}/persistence/include
     ${CMAKE_CURRENT_SOURCE_DIR}/selection/include
 )
-target_link_libraries(app_core PUBLIC app_model tw_render)
+# Qt::Network and Qt::Concurrent arrive with app/media (proposal 38). Neither
+# is used by gate 1 -- Network is gate 4's WebDAV client -- but they are linked
+# on the layer rather than the module because LAYERS, not modules, are the
+# CMake targets (§B.1). They propagate upward; that is the one accepted
+# impurity.
+target_link_libraries(app_core PUBLIC
+    app_model tw_render
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Concurrent
+)
 
 # Layer 3 — the object slices (cut, wave, track, mixer).
 add_library(app_objects OBJECT ${APP_OBJECTS_FILES})
@@ -741,4 +768,22 @@ target_link_libraries(project_channels_test
 )
 add_test(NAME project_channels_test COMMAND project_channels_test)
 set_tests_properties(project_channels_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The media SOURCE layer (proposal 38 gate 1): the async/id-tagged contract,
+# supersession, cancel, main-thread delivery, and a source destroyed mid-walk.
+# Three of its twelve ACs are greps over main/media's own sources (no
+# std::thread, no widget include, the CONTRACT states its invariants), which is
+# why the test is told where both trees are rather than guessing from argv[0].
+add_executable(media_source_test media/tests/media_source_test.cpp)
+target_link_libraries(media_source_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+target_compile_definitions(media_source_test PRIVATE
+    SMEDIA_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/media"
+    SMEDIA_MODULE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/media"
+)
+add_test(NAME media_source_test COMMAND media_source_test)
+set_tests_properties(media_source_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

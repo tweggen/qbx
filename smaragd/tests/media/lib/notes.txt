@@ -1,0 +1,1 @@
+Not audio. This file exists so the suffix filter has something to omit.

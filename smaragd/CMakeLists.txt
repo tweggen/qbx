@@ -49,8 +49,13 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Widgets Xml REQUIRED)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Widgets Xml REQUIRED)
+# Network and Concurrent arrive with proposal 38 (the media browser). Network
+# is the first HTTP client in this tree and is not used until gate 4 -- it is
+# named here so that gate does not have to touch the root file. Concurrent is a
+# SEPARATE Qt component and was absent from the tree entirely; forgetting it is
+# a link error at the END of a gate rather than at its start.
+find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Widgets Xml Network Concurrent REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Widgets Xml Network Concurrent REQUIRED)
 message(STATUS "smaragd: using Qt ${QT_VERSION_MAJOR} (${Qt${QT_VERSION_MAJOR}_VERSION})")
 
 set(SMARAGD_MACOS   OFF)

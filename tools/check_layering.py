@@ -124,6 +124,12 @@ APP_DEPS = {
     'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
                        'persistence'},
     'actions':        {'model'},
+    # media (proposal 38 gate 1) is the media-browser's SOURCE layer: the
+    # provider ABI, the local walk, and later the cache and the WebDAV client.
+    # `model` only, and it must never grow an edge to objects/* -- a provider
+    # that knows what an SCut is has started doing the dock's job. The DOCK is
+    # a separate module (main/mediabrowser, app_ui) that gate 2 adds.
+    'media':          {'model'},
     'persistence':    {'actions', 'model'},
     'selection':      {'actions', 'model'},
     # timeline + objects/midi since proposal 37 P1: the Clip Properties dock
@@ -199,6 +205,10 @@ APP_ENG = {
     'objects/track':  _ENG_BASE | {'events', 'mix', 'plugins', 'schedule'},
     'objects/mixer':  _ENG_BASE | {'mix', 'schedule'},
     'actions':        _ENG_BASE | {'render'},
+    # media reaches NO engine module beyond the base every app module gets --
+    # only tw/core's TW_LOG. A provider that knows what a page is has started
+    # doing the engine's job.
+    'media':          _ENG_BASE,
     'persistence':    _ENG_BASE,
     'selection':      _ENG_BASE,
     # timeline + metering since proposal 34: the track head owns an SLevelMeter
