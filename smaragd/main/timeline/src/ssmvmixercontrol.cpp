@@ -22,6 +22,7 @@
 #include "app/shell/sapplication.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/slivemonitor.h"
+#include "app/shell/smidiinputhub.h"
 #include "tw/devices/audio_input.h"
 #include "app/shell/ssettings.h"
 #include "app/model/sproject.h"
@@ -885,6 +886,52 @@ void SSMVMixerControl::showChannelMenu()
                 setTrackInput_( id, mask );
             } );
         }
+
+        // --- THE COMPUTER KEYBOARD, plus every MIDI port this machine offers
+        //     (proposal 21 L2, design D9). `SMidiInputHub::listPorts()` reports
+        //     the keyboard FIRST and it gets its own top-level entry here: its
+        //     spec is the bare word "keyboard", never "midi:<name>:...", which
+        //     is STrack's own special case (trackInputMidiPort()) rather than a
+        //     name this menu would have to spell correctly.
+        SMidiInputHub *hub = SApplication::app().midiInputHub();
+        const std::vector<audio::MidiPortInfo> midiPorts =
+            hub ? hub->listPorts() : std::vector<audio::MidiPortInfo>();
+        if( !midiPorts.empty() ) dev->addSeparator();
+        for( const audio::MidiPortInfo &p : midiPorts ) {
+            const QString name = QString::fromStdString( p.name );
+            if( QString::fromStdString( p.id ) == QStringLiteral( "keyboard" ) ) {
+                QAction *a = dev->addAction(
+                    name.isEmpty() ? QStringLiteral( "Keyboard" ) : name );
+                a->setCheckable( true );
+                a->setChecked( tk_.getTrackInput() == QStringLiteral( "keyboard" ) );
+                connect( a, &QAction::triggered, this, [this]() {
+                    setTrackInputSpec_( QStringLiteral( "keyboard" ) );
+                } );
+                continue;
+            }
+            // A submenu per port, for the channel: "any" (the whole point of a
+            // MIDI port over an audio one is that most instruments want every
+            // channel) plus 1..16, matching `midi:<port>:<ch|any>`.
+            QMenu *portMenu = dev->addMenu( QStringLiteral( "MIDI: %1" ).arg( name ) );
+            const bool onThisPort = tk_.trackInputMidiPort() == name;
+            QAction *any = portMenu->addAction( QStringLiteral( "Any channel" ) );
+            any->setCheckable( true );
+            any->setChecked( onThisPort && tk_.trackInputMidiChannel() < 0 );
+            connect( any, &QAction::triggered, this, [this, name]() {
+                setTrackInputSpec_( QStringLiteral( "midi:%1:any" ).arg( name ) );
+            } );
+            portMenu->addSeparator();
+            for( int ch = 0; ch < 16; ++ch ) {
+                QAction *chAct = portMenu->addAction(
+                    QStringLiteral( "Channel %1" ).arg( ch + 1 ) );
+                chAct->setCheckable( true );
+                chAct->setChecked( onThisPort && tk_.trackInputMidiChannel() == ch );
+                connect( chAct, &QAction::triggered, this, [this, name, ch]() {
+                    setTrackInputSpec_(
+                        QStringLiteral( "midi:%1:%2" ).arg( name ).arg( ch ) );
+                } );
+            }
+        }
     }
     menu.addSeparator();
 
@@ -944,11 +991,20 @@ void SSMVMixerControl::showChannelMenu()
 // The two live-input verbs, over the SELECTION like every other head toggle.
 void SSMVMixerControl::setTrackInput_( const QString &device, unsigned mask )
 {
-    SStdMixer *mixer = smv_.getModel();
-    if( !mixer ) return;
     const QString spec = device.isEmpty()
         ? QStringLiteral( "none" )
         : QStringLiteral( "audio:%1:%2" ).arg( device ).arg( mask, 0, 16 );
+    setTrackInputSpec_( spec );
+}
+
+// The MIDI/keyboard counterpart (proposal 21 L2, design D9): `spec` is already
+// the portable spelling STrack wants ("keyboard" or "midi:<port>:<ch|any>"),
+// so unlike setTrackInput_ above there is nothing here to assemble from a
+// device id and a mask - just the same submit-over-the-selection macro.
+void SSMVMixerControl::setTrackInputSpec_( const QString &spec )
+{
+    SStdMixer *mixer = smv_.getModel();
+    if( !mixer ) return;
     const QList<STrack *> targets = toggleTargets();
     QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
     const bool macro = targets.size() > 1 && stack;

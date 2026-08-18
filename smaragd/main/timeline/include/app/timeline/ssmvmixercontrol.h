@@ -114,6 +114,12 @@ protected slots:
     // selection like every other head toggle, plus the tooltip that
     // ANNOUNCES the live state - including a refused rate.
     void setTrackInput_( const QString &device, unsigned mask );
+    // The MIDI/keyboard half (proposal 21 L2, design D9): submits a spec that
+    // is ALREADY the portable spelling STrack wants - "keyboard" or
+    // "midi:<port>:<ch|any>" - rather than one this control assembles from a
+    // device id and a mask. Shares setTrackInput_'s over-the-selection macro
+    // discipline and its tooltip refresh.
+    void setTrackInputSpec_( const QString &spec );
     void setMonitorMode_( STrack::MonitorMode mode );
     void refreshArmTooltip_();
 
