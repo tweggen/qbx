@@ -62,6 +62,16 @@ QVariant SOpt::def( const QString &key )
     if( key == MetronomeLevel ) return 0.5;
     if( key == CountInBars )    return 0;
     if( key == PreRollBars )    return 0;
+    // Media browser (proposal 38 gate 2). "local" is the only source the MVP
+    // registers, so remembering it is the honest default rather than an empty
+    // string the combo would have to interpret. The mask is Audio (1) --
+    // smedia::Category::Audio, spelled as the literal because app/servicesui
+    // may not include app/media and a second include for one bit would be a
+    // layering edge bought for nothing.
+    if( key == MediaLastSourceId )    return QStringLiteral( "local" );
+    if( key == MediaLastPath )        return QString();
+    if( key == MediaCategoryMask )    return 1;
+    if( key == MediaSearchRecursive ) return false;
     return QVariant();
 }
 

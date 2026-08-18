@@ -19,6 +19,11 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QCloseEvent>
+#include <QApplication>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 
 #include <iostream>
 
@@ -64,6 +69,7 @@
 #include "app/eventui/seventtimeaxis.h"
 #include "app/eventui/spianorollview.h"
 #include "app/eventui/svirtualkeyboarddock.h"
+#include "app/mediabrowser/smediabrowserpanel.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
@@ -1160,6 +1166,23 @@ SMainWindow::SMainWindow()
     tabifyDockWidget( qDockEventEditor_, qDockVirtualKeys_ );
     qDockVirtualKeys_->hide();
 
+    // The media browser (proposal 38 gate 2) — the SEVENTH dock, LEFT, beside
+    // the resources dock. Created here in the ctor for the reason every dock
+    // above is (shell CONTRACT inv. 4), hidden on a first run so it does not
+    // steal width from the arranger, and persisted entirely by its objectName
+    // through the existing ui/windowState blob.
+    //
+    // Constructing it contacts NOTHING: a media source is registered (which
+    // does no I/O) and opened when it is SELECTED, so a dock remembering a
+    // dead server costs a banner at the next click rather than a hang at
+    // launch (design §B.4).
+    qDockMediaBrowser_ = new QDockWidget( tr( "Media Browser" ), this );
+    qDockMediaBrowser_->setObjectName( "dock_media_browser" );
+    mediaBrowser_ = new SMediaBrowserPanel( qDockMediaBrowser_ );
+    qDockMediaBrowser_->setWidget( mediaBrowser_ );
+    addDockWidget( Qt::LeftDockWidgetArea, qDockMediaBrowser_ );
+    qDockMediaBrowser_->hide();
+
     // View menu — built here rather than in the menu block above because it
     // needs the docks to exist for their toggleViewAction()s.
     QMenu *viewMenu = new QMenu( tr( "&View" ), this );
@@ -1186,6 +1209,12 @@ SMainWindow::SMainWindow()
     QAction *actKeys = qDockVirtualKeys_->toggleViewAction();
     actKeys->setText( tr( "Virtual &keyboard" ) );
     viewMenu->addAction( actKeys );
+    // No shortcut in the MVP (design §B.4): every free Ctrl+Shift letter that
+    // reads as "media" is already taken or ambiguous, and a binding nobody
+    // chose is worse than none.
+    QAction *actMedia = qDockMediaBrowser_->toggleViewAction();
+    actMedia->setText( tr( "&Media browser" ) );
+    viewMenu->addAction( actMedia );
     menuBar()->insertMenu( qAudioMenu_->menuAction(), viewMenu );
 
     // F2 (default) opens the clip properties panel. There is no keybinding UI,
@@ -1973,6 +2002,144 @@ static STrack *trackAtPath_( const QString &trackPath )
     if( !root ) return nullptr;
     SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
     return dynamic_cast<STrack *>( lane );
+}
+
+// --- the media browser's test entry points (proposal 38 gate 2) ------------
+
+bool SMainWindow::mediaBrowserSetSource( const QString &sourceId )
+{
+    if( !mediaBrowser_ ) return false;
+    return mediaBrowser_->selectSource( sourceId );
+}
+
+bool SMainWindow::mediaBrowserSetPath( const QString &path,
+                                       const QString &expandRow )
+{
+    if( !mediaBrowser_ ) return false;
+    if( !path.isEmpty() && !mediaBrowser_->setBrowsePath( path ) ) return false;
+    if( expandRow.isEmpty() ) return true;
+    // An expand can only be asked for once the row EXISTS, and the listing that
+    // creates it is async -- so the verb waits for the root listing before
+    // calling this a second time with the row name. Reporting false here is
+    // therefore "no such directory row", which is a case bug, not a timing one.
+    return mediaBrowser_->expandRowNamed( expandRow );
+}
+
+bool SMainWindow::mediaBrowserSearch( const QString &needle, bool recursive,
+                                      bool viaDebounce )
+{
+    if( !mediaBrowser_ ) return false;
+    return mediaBrowser_->setSearch( needle, recursive, viaDebounce );
+}
+
+bool SMainWindow::mediaBrowserSetFilter( const QString &categories )
+{
+    if( !mediaBrowser_ ) return false;
+    return mediaBrowser_->setCategories( categories );
+}
+
+QString SMainWindow::describeMediaBrowser() const
+{
+    return mediaBrowser_ ? mediaBrowser_->describe() : QString();
+}
+
+bool SMainWindow::mediaBrowserBusy() const
+{
+    return mediaBrowser_ && mediaBrowser_->isBusy();
+}
+
+// The drag, end to end and with no shortcut in it: the panel builds the REAL
+// QMimeData its startDrag() builds, and the arranger's REAL dropEvent consumes
+// it. Everything in between -- the x/y the drop is delivered at, the row it
+// resolves to, the snap, the index-path it derives, the SAddSampleAction it
+// submits -- is production code. A verb that submitted `add-sample` itself
+// would pass while the gesture was broken (testkit CONTRACT inv. 5).
+//
+// `trackPath` and `timePos` are turned into PIXELS here, exactly as
+// SStdMixerView::dragClipEdge turns its own arguments into pixels, because the
+// drop handler reads the position off the event and nothing else.
+bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
+                                    const QString &trackPath, offset_t timePos )
+{
+    if( !mediaBrowser_ ) return false;
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    SMVActualView *canvas = v->contentView();
+    if( !canvas ) return false;
+
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) {
+        qWarning() << "media-browser-drag: no track at path" << trackPath;
+        return false;
+    }
+    const int rowIdx = v->rowIndexOfTrack( track );
+    if( rowIdx < 0 ) {
+        qWarning() << "media-browser-drag: track" << trackPath << "has no lane";
+        return false;
+    }
+
+    QMimeData *mime = mediaBrowser_->createDragMime( row, name );
+    if( !mime ) {
+        // A DIRECTORY row, an out-of-range row, an unknown name, or a source
+        // whose payload this gate does not ship. Refused, never a drop of
+        // something else.
+        qWarning() << "media-browser-drag: no draggable row for row" << row
+                   << "name" << name;
+        return false;
+    }
+
+    const int x  = canvas->getXPosOfOffset( timePos );
+    const int th = v->rowHeight( rowIdx );
+    const int y  = canvas->laneTop( rowIdx ) + th / 2;
+    if( x < 0 || y < 0 ) { delete mime; return false; }
+
+    // The window is never shown in a headless run, so the canvas may be smaller
+    // than the point we are dropping at -- and rowAtViewY / getTimeOf are pure
+    // arithmetic that would happily answer for a point outside it. Grow it, the
+    // same way dragClipEdge does, so the drop lands inside the widget.
+    if( canvas->width() < x + 64 || canvas->height() < y + th + 64 )
+        canvas->resize( qMax( canvas->width(), x + 64 ),
+                        qMax( canvas->height(), y + th + 64 ) );
+
+    // THE GESTURE IS THREE EVENTS, NOT ONE, AND THAT IS NOT DECORATION.
+    // Qt refuses a bare Drop: QApplication::notify tracks the drag TARGET that
+    // a DragEnter established, and a Drop arriving with no active target is
+    // discarded before QWidget::event ever sees it (measured -- sendEvent
+    // returns false and dropEvent is not called, whether or not the widget is
+    // visible; a Qt::WA_DontShowOnScreen show() does not help either). With the
+    // enter and the move sent first, the whole sequence delivers to a window
+    // that was never shown -- which is what a headless run needs, because a qxa
+    // run on Windows uses the REAL platform plugin and a shown window would
+    // appear on the developer's screen.
+    //
+    // It is also better coverage: dragEnterEvent and dragMoveEvent are the two
+    // handlers that decide whether the arranger accepts this MIME type at all,
+    // and a verb that skipped them would pass on a build that rejected it.
+    QDragEnterEvent enter( QPoint( x, y ), Qt::CopyAction, mime,
+                           Qt::LeftButton, Qt::NoModifier );
+    QApplication::sendEvent( canvas, &enter );
+    QDragMoveEvent move( QPoint( x, y ), Qt::CopyAction, mime,
+                         Qt::LeftButton, Qt::NoModifier );
+    QApplication::sendEvent( canvas, &move );
+    QDropEvent drop( QPointF( x, y ), Qt::CopyAction, mime,
+                     Qt::LeftButton, Qt::NoModifier );
+    const bool delivered = QApplication::sendEvent( canvas, &drop );
+    const bool accepted  = drop.isAccepted();
+    delete mime;   // the events do not take ownership
+
+    if( !enter.isAccepted() ) {
+        qWarning() << "media-browser-drag: the arranger refused the drag ENTER "
+                      "-- it does not accept this MIME type";
+        return false;
+    }
+    if( !delivered || !accepted ) {
+        // dropEvent returns without accepting when it cannot resolve the row,
+        // the track or the project.
+        qWarning() << "media-browser-drag: the arranger refused the drop at"
+                   << x << y << "(row" << rowIdx << ")";
+        return false;
+    }
+    return true;
 }
 
 bool SMainWindow::selectTrackGesture( const QString &trackPath,

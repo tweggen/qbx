@@ -292,6 +292,12 @@ set(APP_UI_FILES
     eventui/src/seventtimeruler.cpp
     eventui/src/spianorollview.cpp
     eventui/src/svirtualkeyboarddock.cpp
+    # --- app/mediabrowser (proposal 38 gate 2). The media browser DOCK, and
+    # nothing else: the source ABI, the providers and (later) the cache live in
+    # app/media, one layer down, where no widget may appear. Rank of
+    # pluginui/eventui -- a UI slice that is hosted by the shell.
+    mediabrowser/include/app/mediabrowser/smediabrowserpanel.h
+    mediabrowser/src/smediabrowserpanel.cpp
     # --- app/pluginui
     pluginui/include/app/pluginui/spluginbrowserdialog.h
     pluginui/include/app/pluginui/splugineffectstrip.h
@@ -373,6 +379,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sgrouptrackaction.h
     testkit/include/app/testkit/slanelayouttestactions.h
     testkit/include/app/testkit/slogstressaction.h
+    testkit/include/app/testkit/smediatestactions.h
     testkit/include/app/testkit/smetertestactions.h
     testkit/include/app/testkit/smiditestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
@@ -409,6 +416,7 @@ set(APP_UI_FILES
     testkit/src/sgrouptrackaction.cpp
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
+    testkit/src/smediatestactions.cpp
     testkit/src/smetertestactions.cpp
     testkit/include/app/testkit/smidiouttestactions.h
     testkit/src/smidiouttestactions.cpp
@@ -472,6 +480,7 @@ add_library(app_ui OBJECT ${APP_UI_FILES})
 target_include_directories(app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/timeline/include
     ${CMAKE_CURRENT_SOURCE_DIR}/eventui/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/mediabrowser/include
     ${CMAKE_CURRENT_SOURCE_DIR}/pluginui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/servicesui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shell/include

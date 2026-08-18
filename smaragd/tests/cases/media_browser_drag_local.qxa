@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 gate 2, AC 6 and AC 7. DRAG A LOCAL FILE OUT OF THE BROWSER AND
+  ONTO THE TIMELINE, end to end, with no shortcut anywhere in it.
+
+  `media-browser-drag` builds the REAL QMimeData the panel's startDrag() builds
+  ("file:<absolute path>" under application/x-smaragd-resource) and hands it to
+  the REAL SMVActualView::dropEvent at the pixel that names (trackPath,
+  timePos). Everything between is production code: the row the drop resolves
+  to, the snap, the index-path it derives, and the SAddSampleAction it submits.
+  A verb that submitted `add-sample` itself would pass while the gesture was
+  broken (testkit CONTRACT inv. 5) - and it would also hide the one claim this
+  case exists to make, which is that GATE 2 NEEDS NO TIMELINE CHANGE AT ALL: the
+  `file:` branch of dropEvent has always accepted this payload (design §A.1).
+
+  WHAT IT PINS
+
+  1. Exactly one clip, at exactly frame 48000. 48000 frames is 1.000 s, which
+     at the default 30 px/s is pixel 30 exactly and at the default 120 BPM is
+     beat 2 exactly - so neither the pixel round trip nor the grid snap can
+     move it, and `startTime="48000"` is a closed form rather than a tolerance.
+  2. THE FILE THE BROWSER NAMED IS THE FILE THAT SOUNDS. lib/kick.wav is a byte
+     copy of ../test_sawtooth.wav, a RAMPED sawtooth (testkit CONTRACT inv. 3),
+     so the rendered energy per source second is the ramp: ~0.06 in second 0,
+     ~0.29 in second 2, ~0.40 in second 3, and SILENCE before the clip starts.
+     Those are the same bounds delete_clip_undo_restores.qxa uses, shifted by
+     the 48000 the drop asked for. A drop of the wrong file, or at the wrong
+     frame, fails them.
+  3. ONE UNDO removes it. The drag itself is not an undo step - the
+     SAddSampleAction the drop handler submits is, which is exactly the
+     property that makes a browser drop indistinguishable from Insert-sample.
+  4. A DIRECTORY row is REFUSED and places nothing (AC 7, design §B.5), and so
+     is a row that does not exist. Both through expectReject="true", because a
+     refusal that silently succeeded would place SOMETHING and this case would
+     then be asserting the wrong clip.
+
+  OWNERSHIP (design AC 9, trap T6): this case OWNS media/lastSourceId,
+  media/lastPath/local, media/categoryMask and media/searchRecursive. It is
+  RUN_SERIAL and restores all four to their SOpt defaults at the end, so
+  smaragd.ini comes back byte-identical.
+
+  NOT gated here: the ghost pixmap and every other ergonomic of the drag (a
+  synthesised drop goes straight to dropEvent - there is no hover, no
+  auto-scroll and no cursor), the panel's pixels, and the `media:` payload,
+  which does not exist until gate 3.
+-->
+<SActionScript version="1" name="media_browser_drag_local">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <media-browser-filter categories="audio"/>
+    <set-option key="media/lastPath/local" value="../media/lib"/>
+    <media-browser-source sourceId="local"/>
+    <assert-media-browser mode="browse" rowCount="3"
+                          contains="kick.wav,768044,0"/>
+
+    <!-- (4) A DIRECTORY is not draggable. Refused BEFORE the real drop, so a
+         regression here cannot be masked by the clip the next line places. -->
+    <media-browser-drag name="sub" trackPath="0" timePos="0"
+                        expectReject="true"/>
+    <!-- ...and neither is a row that is not there. -->
+    <media-browser-drag name="no_such.wav" trackPath="0" timePos="0"
+                        expectReject="true"/>
+    <!-- Nothing was placed by either. -->
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <!-- (1) The real thing. -->
+    <media-browser-drag name="kick.wav" trackPath="0" timePos="48000"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="192000"/>
+    <!-- ...and exactly ONE clip: a second one would sit at index 1. -->
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- (2) It SOUNDS, and it sounds like the fixture, in the right place. -->
+    <render filename="drag.wav" format="wav" quality="10" durationSec="6"/>
+    <assert-audio-energy filename="drag.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0" maxRms="0.002"/>
+    <assert-audio-energy filename="drag.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="drag.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="drag.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- (3) ONE undo. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <!-- Restore every key this case owns to its SOpt default (T6). -->
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/local" value=""/>
+    <set-option key="media/categoryMask" value="1"/>
+    <set-option key="media/searchRecursive" value="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

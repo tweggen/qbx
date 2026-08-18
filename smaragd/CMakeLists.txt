@@ -250,6 +250,27 @@ if(TEST qxa.log_dock_scale)
     set_tests_properties(qxa.log_dock_scale PROPERTIES RUN_SERIAL TRUE)
 endif()
 
+# --- the media browser (proposal 38 gate 2) ----------------------------------
+#
+# These three drive the REAL SMediaBrowserPanel, and the panel PERSISTS its
+# state: media/lastSourceId, media/lastPath/<sourceId>, media/categoryMask and
+# media/searchRecursive all reach the shared per-user smaragd.ini. Suppressing
+# that under --test-case was considered and rejected (design AC 9): it would
+# make the gate test something other than the shipping code. So they get the
+# `midi_options_page` treatment instead -- RUN_SERIAL, each declaring in its
+# header that it OWNS those four keys, and each restoring them to their SOpt
+# defaults so the INI comes back byte-identical.
+#
+# They are NOT wall-clock tests: every verb waits for the panel to go idle
+# rather than sleeping, so RUN_SERIAL here is about the shared INI and nothing
+# else.
+foreach(_media media_browser_browse media_browser_search
+                media_browser_drag_local)
+    if(TEST qxa.${_media})
+        set_tests_properties(qxa.${_media} PROPERTIES RUN_SERIAL TRUE)
+    endif()
+endforeach()
+
 # --- MIDI out (proposal 37 P7b) ----------------------------------------------
 #
 # These four PLAY, in real time, and assert WHEN a MIDI message reached the wire

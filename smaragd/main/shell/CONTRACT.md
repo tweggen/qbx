@@ -88,8 +88,14 @@ Invariants:
    `dock_extern_file_list`, `dock_track_detail`, `dock_log`,
    `dock_clip_properties`, and — since proposal 37 P4 —
    `dock_event_editor` (bottom, tabified with the Log) and
-   `dock_virtual_keyboard` (bottom, tabified with the editor). Both start
-   hidden; the View menu carries their toggles (Ctrl+Shift+E for the editor).
+   `dock_virtual_keyboard` (bottom, tabified with the editor), and — since
+   proposal 38 gate 2 — `dock_media_browser` (LEFT, beside the resources
+   dock), which makes SEVEN. All of the later ones start hidden; the View menu
+   carries their toggles (Ctrl+Shift+E for the editor; the media browser has no
+   shortcut). Constructing the media browser CONTACTS NOTHING — a media source
+   is registered, which does no I/O, and opened only when it is SELECTED — so a
+   dock restored with `media/lastSourceId` naming a dead server costs a banner
+   at the next click rather than a hang at launch.
 8. **The event editor's time axis is linked to the arranger HERE**
    (`linkEventEditorAxis()`), because the shell is the only module that sees
    both app/timeline and app/eventui — the editor deliberately has no
