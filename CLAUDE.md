@@ -16,10 +16,24 @@ the action-verb reference is `docs/ACTIONS.md`.
 
 - Engine: `tw303a/<module>/` builds one `tw_<module>` static lib each with a
   build-enforced dependency DAG; includes are `tw/<module>/<header>.h`.
-- App: `main/<module>/` with `app/<module>/<header>.h` includes, built as ONE
-  OBJECT library (`smaragd_app`) — the app is a single strongly-connected
-  component until the Phase 6 interface work; OBJECT (not STATIC) is required
-  because actions self-register via static initializers.
+- App: `main/<module>/` with `app/<module>/<header>.h` includes, built as
+  **FOUR layered OBJECT libraries** — `app_model < app_core < app_objects <
+  app_ui` — since the Phase 6 interface work. (This line said "ONE OBJECT
+  library (`smaragd_app`)" for a long time after that stopped being true, and
+  an agent reading it goes looking for a structure that does not exist.)
+  OBJECT (not STATIC) is required because actions and the loader/editor/
+  extern-file registries self-register via static initializers, which a
+  STATIC lib would drop.
+
+  **The layer boundary does NOT stop a WIDGET include, and believing it does
+  is how a "no widget here" rule gets written with no gate behind it.**
+  `app_model` links `Qt::Widgets` **PUBLIC** and each layer links the one below
+  it PUBLIC, so every Qt widget header is available at every layer — indeed
+  `SExternFileList` is a `QTreeWidget` living in the LOWEST one. What the build
+  enforces is the `app/<module>/…` include GRAPH: each layer publishes only its
+  own include dirs, so `app_core` cannot include `app/objects/...`. Everything
+  finer than that is `tools/check_layering.py`'s business, and anything finer
+  still (like "no widget in `app/media`") is a contract plus a grep.
 - Before committing: `python tools/check_layering.py` (module boundaries),
   `python tools/check_logging.py` (no direct stderr/stdout writes — everything
   goes through `TW_LOG*` / `syslog()`, proposal 24) and the qxa suite from
@@ -189,14 +203,23 @@ plan/
     │                                 COVERAGE, not capability — one machine
     │                                 with one driver is not a survey.
     │                                 21 L6 is unblocked)
-    └── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
-                                      the page carries N planar channels; read
-                                      §4.3-§4.6 and the 28 traps before touching
-                                      channel width anywhere)
+    ├── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
+    │                                 the page carries N planar channels; read
+    │                                 §4.3-§4.6 and the 28 traps before touching
+    │                                 channel width anywhere)
+    └── 38_MEDIA_BROWSER.md          (EXECUTED 2026-08-18, all six gates — the
+                                      media browser dock, the local and
+                                      Nextcloud/WebDAV providers, the fetch
+                                      cache and SSecretStore. The real-server
+                                      runbook is PENDING:
+                                      docs/MEDIA_BROWSER_MANUAL_GATE.md)
 docs/
 ├── PROJECT_OVERVIEW.md   # This document's source
 ├── ARCHITECTURE.md       # Module map (start here for code navigation)
-└── BUILD.md              # Build instructions
+├── BUILD.md              # Build instructions
+├── ACTIONS.md            # every action verb and its attributes (the scripting API)
+├── ASIO_WINDOWS_GATE.md  # manual runbook — PASSED 2026-08-18
+└── MEDIA_BROWSER_MANUAL_GATE.md   # manual runbook — PENDING
 ```
 
 ## Build & Run
@@ -332,18 +355,36 @@ so this suite is the entire safety net and every branch pays it in full; `-j` is
 the cheapest available win.
 
 Measured on this repo's usual Windows box (16 logical cores, 16 GB RAM),
-171 tests run + 3 disabled, four modes back to back, nothing else of consequence
-on the machine (**re-measured 2026-08-17, proposal 36 B9**):
+217 tests run + 3 disabled, four modes back to back, nothing else of consequence
+on the machine (**re-measured 2026-08-18, proposal 38 gate 6**):
 
 | Mode | Wall clock | Speedup | Result |
 |---|---|---|---|
-| serial | 164 s | 1.00× | 171/171 green |
-| `-j2` | 94 s | 1.74× | 171/171 green |
-| **`-j4`** | **57 s** | **2.9×** | **171/171 green** |
-| `-j8` | 42 s | 3.9× | 171/171 green |
+| serial | 329 s | 1.00× | 217/217 green |
+| `-j2` | 239 s | 1.38× | 217/217 green |
+| **`-j4`** | **203 s** | **1.62×** | **217/217 green** |
+| `-j8` | 182 s | 1.81× | 217/217 green |
 
-Counts reconciled both ways: **174 registered / 171 run / 3 Not Run (Disabled)**
+Counts reconciled both ways: **220 registered / 217 run / 3 Not Run (Disabled)**
 — the disabled three are the macOS-only `au_*` trio.
+
+**THE SPEEDUP COLLAPSED AND IT IS NOT A REGRESSION — IT IS `RUN_SERIAL`.** The
+previous edition of this table read 164 s serial and **2.9× at `-j4`**. The
+suite has since grown from 171 to 217 running tests, and **41 of them now carry
+`RUN_SERIAL`** — proposal 21's live/monitor/record/metronome cases, proposal
+37's MIDI-out cases and proposal 38's media cases, every one of them for a good
+reason: a wall-clock latency bound, or ownership of a key in the shared INI.
+CTest runs a `RUN_SERIAL` test **alone within the invocation**, so those 41 are
+a floor no `-j` can go below and the parallel part of the suite is only what is
+left over. **Measured, not inferred: those 41 tests alone take 155 s at `-j8`
+— 85 % of the whole `-j8` run's 182 s.** The other 176 tests are 27 seconds.
+Expect the ratio to keep falling as more timing-shaped features land; the
+number to watch is the `RUN_SERIAL` count, not the core count.
+
+The practical reading is the opposite of what a shrinking speedup usually
+means: **`-j4` still saves two minutes and costs nothing**, and a serial run at
+five and a half minutes is still cheap enough to reach for whenever you are
+flake-hunting.
 
 **THE OLD NUMBERS IN THIS TABLE WERE 20× LARGER AND THE REASON IS NOT THE
 MACHINE.** It read 2338 s serial / 791 s at `-j4` for 107 tests, and it is worth
@@ -378,8 +419,10 @@ argument for `-j`.
 - **Reconcile the count**: registered vs run vs skipped — `ctest -N` against the run's
   own summary, and do it for the parallel run too. A silently-unregistered case is a
   failure mode this repo has actually hit. On a non-Apple box the expected shape is
-  **174 registered / 171 run / 3 Not Run (Disabled)** — the disabled three are the
-  macOS-only `au_*` trio.
+  **220 registered / 217 run / 3 Not Run (Disabled)** — the disabled three are the
+  macOS-only `au_*` trio. **This figure goes stale every time a gate lands, and it
+  has been quoted stale before**: it read 174/171 for a month, through proposal 21
+  L2-L5 and all of 35, 38 and 39. MEASURE it; never quote it, including from here.
 - **A case that fails once and passes on re-run is not a pass.** Pin it with
   `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]`, swept over
   `SMARAGD_REVAL_WORKERS` {1,4,8,16}, before deciding it is a flake. Report it either way.
@@ -458,7 +501,7 @@ contract: a change that breaks one of these breaks the parallel gate.
 | **`.qxp` save targets** | No collision. Nine cases save into the build root; the names are unique per case (`au_missing_resave`, `au_slot_resave`, `clip_properties_actions`, `exact_stretch_roundtrip`, `plugin_missing_resave`, `plugin_remove_restores_param`, `plugin_slot_resave`, `takes_roundtrip`, `warp_anchors_roundtrip`) and each is written and read back **by its own case only**. No case consumes another case's artifact. |
 | **The sidecar (QAF) store** | **This was a real bug, now fixed.** One shared per-user cache dir, and **80 of 89 cases use the same `test_sawtooth.wav`** → the same content hash → the same aspect keys, so concurrent stores of one key are the normal case, not the exotic one. The writer used a fixed `<path>.tmp`, so two processes truncated and interleaved into one temp and one published the mixture. Only the QAF **header** is CRC-protected — a torn payload of the right length passes the reader's bounds check and feeds wrong analysis data (onsets / f0 / warp.pcm) into the engine. The temp is now `<path>.<pid>.<seq>.tmp`; see `tw303a/sidecar/CONTRACT.md` inv. 2. Note the hazard is **latent**: it only bites when a key is cold, i.e. on the runs right after an aspect-version bump or a cleared cache — exactly when nobody is expecting it. |
 | **`plugincache.v<n>.json`** | Harmless. Written on every run (`plugins/scanOnStartup` defaults true), but through `QSaveFile` — write-to-temp-then-rename, so a concurrent write is a lost update at worst, never a torn file. Verified live: parsed as valid JSON repeatedly while four `smaragd.exe` processes rewrote it. A lost update costs a re-probe, and records are keyed on path+size+mtime so it cannot manufacture a false failure. |
-| **`smaragd.ini`** | Harmless — but **not for the reason this row used to give**. It said "a headless run does not write it at all — mtime unchanged across a full suite", and that is **false**: measured across a full `-j4` run, the file's **mtime moves**. Two `.qxa` cases write it deliberately through the `set-option` verb (`midi_options_page` → `midi/…`, `midi_out_chase_and_stop` → `midi/chaseNoteOns`), and `SStdMixerView::saveTrackControlWidth` writes `MixerView/TrackControlWidth` whenever a case changes the track-control column width (the only guard is `changed`). What makes it harmless is stronger than "nobody writes": both `set-option` cases are **`RUN_SERIAL`**, so they never run beside anything; each restores its key, so the file comes back **byte-identical** (md5 unchanged, verified across a full run); each declares in its own header that it OWNS its key, and no other case reads those keys; and Qt still takes a `QLockFile` around `QSettings` writes, so even a concurrent write could not tear. **The residual hazard is the ownership convention, not the locking** — a future case that READS `midi/chaseNoteOns` would be racing one that writes it, and `RUN_SERIAL` on the writer is what would have to be noticed. Whether a headless run should be writing a user's preferences at all is a separate question and is not fixed here. |
+| **`smaragd.ini`** | Harmless — but **not for the reason this row used to give**. It said "a headless run does not write it at all — mtime unchanged across a full suite", and that is **false**: measured across a full `-j4` run, the file's **mtime moves**. Two `.qxa` cases write it deliberately through the `set-option` verb (`midi_options_page` → `midi/…`, `midi_out_chase_and_stop` → `midi/chaseNoteOns`), and `SStdMixerView::saveTrackControlWidth` writes `MixerView/TrackControlWidth` whenever a case changes the track-control column width (the only guard is `changed`). What makes it harmless is stronger than "nobody writes": both `set-option` cases are **`RUN_SERIAL`**, so they never run beside anything; each restores its key, so the file comes back with **identical CONTENT** — and content identity is the honest claim, not byte identity. An earlier edition of this row said "**byte-identical** (md5 unchanged, verified across a full run)" and **that is wrong**. Proposal 38 gate 2 measured `midi_options_page` ALONE, with no other case in the run: the content was identical and the **md5 moved**. `QSettings` rewrites the whole INI from its own in-memory map and does not promise to preserve section ORDER across processes, so an md5 can legitimately change while every key is exactly as it was. **Never gate on the md5 of `smaragd.ini`.** What actually holds is content identity PLUS the ownership convention: each case declares in its own header that it OWNS its key, and no other case reads those keys; and Qt still takes a `QLockFile` around `QSettings` writes, so even a concurrent write could not tear. **The residual hazard is the ownership convention, not the locking** — a future case that READS `midi/chaseNoteOns` would be racing one that writes it, and `RUN_SERIAL` on the writer is what would have to be noticed. Proposal 38's media cases join the same convention — `media/lastSourceId`, `media/lastPath/<sourceId>`, `media/categoryMask`, `media/searchRecursive` and everything under `media/nextcloud/<id>/` — which is why every one of them is `RUN_SERIAL` too. Whether a headless run should be writing a user's preferences at all is a separate question and is not fixed here. |
 | **`smaragd.log`** | Not shared. `--test-case` runs deliberately take **no file sink** (`main/shell/src/main.cpp`), which the code already justifies by naming `ctest -j`. |
 | **Wall-clock latency assertions** | Not isolation bugs — see the table above. `RUN_SERIAL`. |
 
@@ -1476,6 +1519,78 @@ measured and recorded, not asserted. A render taken WHILE a click lane is up is
 not reachable from a script either (the click sounds only while the transport
 rolls, and a render does not run the transport); `render_while_armed` gates the
 suspend path itself.
+
+## Media browser (proposal 38 — six gates, executed 2026-08-18)
+
+A dockable browser beside the arranger: pick a data source (the local file
+system, or a Nextcloud/WebDAV account), browse its tree or search it
+incrementally, filter by media type, and drag a file onto the timeline. Two
+new modules — `main/media` (app_core, the source ABI, the two providers, the
+fetch cache, the drop helper; **no widget, ever**) and `main/mediabrowser`
+(app_ui, the dock and nothing else) — plus `SSecretStore` and
+`SMediaAccountManager` in `main/shell`. Design and the twenty traps:
+`plan/proposed/38_MEDIA_BROWSER.md`. Invariants: `main/media/CONTRACT.md`
+(inv. 1-6 + the cache and drop sections), `main/mediabrowser/CONTRACT.md`
+(1-9), `main/timeline/CONTRACT.md` inv. 23, `main/shell/CONTRACT.md` inv. 37-47,
+`main/testkit/CONTRACT.md` 35-45.
+
+**Read this before touching the media layer — four things a newcomer gets
+wrong, and the first one is the load-bearing sentence of the whole design.**
+
+| Thing to know | Why |
+|---|---|
+| **PLACEMENT IS ALWAYS `add-sample` OVER A LOCAL PATH. The media layer's job ENDS at producing that path** | There is no new action type, no placeholder clip and no `SCut` work anywhere in this feature. A local row emits `file:<abspath>` — **byte for byte** what `SExternFileList` has always emitted and `SMVActualView::dropEvent` has always accepted — which is why the whole of gate 2 changed **not one line** of the 4000-line arranger. A remote row emits `media:<uri>` and the arranger's one new branch (five lines, inv. 23) hands it to `smediadrop::placeWhenLocal`, which fetches and then submits the SAME `SAddSampleAction`. |
+| A **CACHE PATH IN A SAVED PROJECT IS NOT PORTABLE**, hence the copy into `<projectdir>/media/` | A `.qxp` stores sample paths portably (`SFilePathRef`: relative to the project file, else to `~`, else absolute) and the app-config cache directory is machine-local, so a clip pointing into it serialises as an absolute path that means nothing on the next machine (trap T11). On a drop the cached file is copied into `<projectdir>/media/<name>` and the clip references THAT; the name is SANITISED for Windows and a collision becomes `name (2).ext`, **never an overwrite**. If the project is unsaved the clip references the cache and a status message plus a `TW_LOG` warning say so — and it is **not** relocated later, which is why the warning has to be loud. Consequence to know rather than rediscover: **undo of a deferred drop removes the clip and leaves the copied file behind** — the copy is not part of `SAddSampleAction`, and the resources dock's *Cleanup…* is the precedent for that class of orphan. |
+| Results are dropped **BY REQUEST ID**, never by winning a cancel race | The panel keeps the id of the request it is DISPLAYING and drops any batch tagged with anything else, so a late result from a superseded search cannot repaint over a newer one **by construction** (media inv. 2 / mediabrowser inv. 1). `cancel()` is a courtesy that saves the walk, not the correctness property. And the cross-thread hand-back is a worker `QObject`'s **SIGNAL**, never `QMetaObject::invokeMethod` on a raw pointer (trap T16): the pool thread would have to dereference a source that can be deleted at any moment, and a `QPointer` does not fix it — Qt drops a queued emission to a dead receiver under its own mutex, and that is the only mechanism here that is safe. The safe and unsafe forms look identical on a machine that never loses the race, which is what `media_source_test`'s destroy-a-source-mid-walk case exists for. **No `std::thread` in either module** — proposal 19's rule, unchanged. |
+| A secret goes through **`SSecretStore`**, never into the INI, a log or a `describe()` | Backends: `dpapi` (Windows, ciphertext in the INI), `keychain` (macOS, not in the INI at all), `libsecret` (Linux, optional), `none` (nothing persisted, "Remember" DISABLED), `memory` (the test backend). **There is deliberately no encrypt-it-ourselves tier** — this tree links no cipher, and a scheme that must document itself as protecting nothing is a checkbox rather than a control. The **scheme tag is load-bearing**: a blob is decrypted only through the backend named at the key, so an INI carried to another machine reports `undecryptable` and **sends nothing** rather than putting garbage in an `Authorization` header. Redaction is gated, and the case asserts the absence of the password **AND its base64 spelling** — a Basic header leaks `base64(user:password)`, so a grep for the literal alone would pass with the credential in plain sight in the log. |
+
+**The knobs, beside the other backend knobs:**
+
+| Knob | Effect |
+|---|---|
+| `SMARAGD_SECRET_BACKEND=dpapi\|keychain\|libsecret\|none\|memory` | Picks the credential store ahead of the platform choice, exactly as `SMARAGD_AUDIO_BACKEND` / `SMARAGD_MIDI_BACKEND` do. **`memory` is the `--test-case` default**: a headless suite must not write into the developer's real keychain, and on macOS a keychain access from a background test can BLOCK ON A UI PROMPT NOBODY CAN SEE — the `qoffscreen` failure mode again. Read once per process, so a case that needs `none` needs its own CTest entry. |
+| `SMARAGD_MEDIA_CACHE_DIR=<path>` / `=off` | Relocates the fetch cache / disables it (every lookup misses; the result is unchanged, only slower). Same contract as `SMARAGD_SIDECAR_DIR`, and for the same reason: `ctest -j4` runs four processes against one shared directory. It WINS over the shell's injection. |
+| `SMARAGD_MEDIA_TEST_SOURCE=1` | Registers `SDelayedLocalSource` as `testdelay` — a local provider with a configurable delay and failure, which is what makes the DEFERRED placement branch testable with no network. A user must never find "Delayed local (test)" in the source combo, which is why it is a runtime knob and not a build flag. |
+
+Two more things worth knowing:
+
+- **Eviction may never delete a file the open project references.** The LRU cap
+  (`SOpt::MediaCacheCapMB`, 2048 by default) subtracts every path in
+  `SProject::externFiles()` before evicting, and a cache that cannot get under
+  its cap **logs that and stops** rather than evicting anyway. Without the pin,
+  the honest reading of "LRU past 2 GB" is a clip that plays today and is
+  silent next week.
+- **A bound is ANNOUNCED, never silent.** Search truncation
+  (`kMaxSearchEntries = 5000`, `kMaxSearchDepth = 12`), the in-flight PROPFIND
+  cap (4), and cache eviction all reach the footer or the log. Silent
+  truncation reads as "covered everything".
+
+Gates: `media_source_test`, `media_cache_test`, `webdav_source_test`,
+`secret_store_test`, and the qxa cases `media_browser_browse`,
+`media_browser_search`, `media_browser_drag_local`, `media_drop_deferred`,
+`media_options_page`, `media_options_no_store`, `media_secret_redaction`,
+`media_webdav_browse`, `media_webdav_drop` — every media case `RUN_SERIAL`,
+each declaring in its header which `media/*` keys it OWNS and restoring them.
+
+**NOT gated, and it is a long list on purpose:** a real Nextcloud server; **TLS
+against a real certificate** (the stub is plain HTTP, so no line of TLS
+handling has ever been executed by any gate — TLS-error surfacing is unproven);
+redirects; rate limiting; `WWW-Authenticate`; a real server's PROPFIND dialect
+(the stub speaks ours); large directories and large bodies; network physics and
+a flaky link; **resumable downloads, which are not implemented at all** (a
+cancelled fetch restarts); the dock's docked/floating/closed round trip through
+Qt's opaque `ui/windowState` blob (manual, and **still unrun**); pixels (no
+`paintEvent` of the panel is gated anywhere); drag ergonomics (synthesised
+drops go straight to `dropEvent`); whether the platform credential stores
+actually resist an attacker (the plumbing and the failure modes are gated, the
+cryptography is DPAPI's / Keychain's / libsecret's); and **the macOS Keychain
+and Linux libsecret backends, which are written and have never been
+COMPILED** — this box is Windows/MinGW.
+
+All of that is `docs/MEDIA_BROWSER_MANUAL_GATE.md`, which is **PENDING**: it
+needs a real server and real credentials, and it landed with the feature rather
+than after it, exactly as `docs/ASIO_WINDOWS_GATE.md` did for proposal 35
+Phase 1.
 
 ## Plugin Hosting (proposal 08 — M0..M8 executed; VST3 landed 2026-07-29)
 

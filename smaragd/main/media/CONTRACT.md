@@ -410,8 +410,12 @@ timing. Same instinct as `twtestclap`.
 `ctest -R media_source_test` (gate 1, local provider),
 `ctest -R media_cache_test` (gate 3, the cache and the project copy, including
 the four-process AC 8 check that this binary drives by re-execing itself),
-`ctest -R webdav_source_test` (gate 4, WebDAV connector), and the qxa case
-`media_drop_deferred` (gate 3 end to end, through the REAL drop handler). The local fixture
+`ctest -R webdav_source_test` (gate 4, WebDAV connector), and the qxa cases
+`media_drop_deferred` (gate 3 end to end, through the REAL drop handler),
+`media_webdav_browse` and `media_webdav_drop` (gate 5c: the dock browsing a
+REAL registered WebDAV source over a real TCP socket, and a drop out of it
+whose rendered audio is asserted). Every media qxa case is `RUN_SERIAL` and
+declares in its header which `media/*` keys it OWNS. The local fixture
 tree is committed at `smaragd/tests/media/` and its shape is what makes every
 count a closed form:
 
@@ -464,8 +468,11 @@ Gate 3's, first:
   local provider only -- `SWebDavClient::cancel()` has no equivalent gap, it
   `abort()`s a real `QNetworkReply`).
 - `truncatedCount` is a lower bound (inv. 4).
-- No provider is registered anywhere yet — gate 2 mounts the dock and gate 5
-  the accounts. `SMediaRegistry` is exercised only by `media_source_test`.
+- ~~No provider is registered anywhere yet.~~ **Closed by gates 2 and 5b**:
+  the dock registers the local source at construction and
+  `SMediaAccountManager` registers one `SWebDavMediaSource` per persisted
+  Nextcloud account. `SMediaRegistry` is now exercised by the qxa cases as
+  well as by `media_source_test`.
 - The `kMaxSearchEntries` / `kMaxSearchDepth` truncation paths are NOT gated by
   gate 1's local provider: reaching either needs 5000 files or a 13-deep tree
   built at run time, and neither is worth the seconds it costs there. Gate 4

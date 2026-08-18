@@ -1,6 +1,14 @@
 # Proposal 38: Media browser
 
-> **Status: PROPOSED (2026-08-18).** A dockable media browser: pick a data
+> **Status: EXECUTED (2026-08-18).** All six gates landed, in eight PRs
+> (#70 the design, #72 gate 1, #78 gate 2, #79 gate 3, #77 gate 4, #73 gate 5a,
+> #80 gate 5b, #82 gate 5c, and this one for gate 6 — plus #81, a
+> `record_offset_zero` fix this work uncovered on `main`). §I at the end of
+> this file is what the execution found, INCLUDING the four places this
+> document was wrong. The one thing outstanding is
+> `docs/MEDIA_BROWSER_MANUAL_GATE.md`, which is PENDING and says so.
+>
+> **Originally proposed 2026-08-18.** A dockable media browser: pick a data
 > source (local file system, Nextcloud), browse its tree or search it
 > incrementally, filter by media type, and drag a file onto the timeline.
 > Six gates, each independently gateable and sized for a single subagent (gate
@@ -368,19 +376,39 @@ The ghost pixmap is lifted from `SExternFileList::startDrag`. A directory row
 is not draggable. A multi-selection drags its first file only, matching the
 drop handler's existing "one clip per drop" comment.
 
-The `media:` branch in `SMVActualView::dropEvent`, in full:
+The `media:` branch in `SMVActualView::dropEvent`, in full — **corrected at
+gate 6 to what was actually built; the version this document printed until then
+could never have compiled**, see §I.1:
 
 ```cpp
 } else if( payload.startsWith( QStringLiteral( "media:" ) ) ) {
-    const SMediaRef ref = SMediaRef::fromUri( payload.mid( 6 ) );
-    smediadrop::placeWhenLocal( ref, trackId, timePos, this );
+    smediadrop::placeWhenLocal( SMediaRef::fromUri( payload.mid( 6 ) ),
+                                track, timePos );
 }
 ```
 
-`smediadrop::placeWhenLocal` (in `main/media`) is the ONLY new asynchrony in
-the placement path, and it does exactly one thing: get a local path, then
-submit the **existing** `SAddSampleAction`. It never invents a clip, never
-touches `SCut`, and never adds an action type.
+Three differences from the sketch, each of them forced:
+
+- **No `QWidget *`.** `main/media` owns no widget by contract, so the status
+  message ("Fetching …", "the target track is gone", the unsaved-project
+  warning) is a HOOK — `smediadrop::setStatusHook`, installed by
+  `SMainWindow`'s ctor, which is where the status bar is.
+- **The `STrack *` itself, not a `trackId`.** Held as a `QPointer`, which is
+  the target's identity plus the one thing a bare pointer or a serialized id
+  cannot offer: it cannot be confused by an address the allocator later hands
+  to a new track.
+- **`placeWhenLocal` cannot construct an `SAddSampleAction`**, because that
+  class is **app_objects and `main/media` is app_core, one layer below**. The
+  include does not resolve and no edit to `tools/check_layering.py` would make
+  it. `SApplication::initMediaLayer()` installs
+  `smediadrop::setPlacementHook`, exactly as the shell already injects the
+  plugin scan cache's path.
+
+With those three substitutions the sentence below is unchanged and is still the
+whole of it: `smediadrop::placeWhenLocal` is the ONLY new asynchrony in the
+placement path, and it does exactly one thing — get a local path, then submit
+the **existing** `SAddSampleAction`. It never invents a clip, never touches
+`SCut`, and never adds an action type.
 
 **IT CAPTURES THE TRACK'S IDENTITY, NOT ITS INDEX-PATH.** An index-path is a
 position in a tree that the user is free to edit while a 40 MB file downloads:
@@ -623,7 +651,7 @@ not painting itself into a corner, and that is discharged by (a) the store, and
 username/password pair, so a `Bearer` token is a caller change and not a client
 change.
 
-### B.9 The fifteen traps, decided up front
+### B.9 The twenty traps, decided up front
 
 | # | Trap | Decision |
 |---|---|---|
@@ -1328,3 +1356,152 @@ Explicitly **not** in this proposal, each with the reason:
 | 4 | The Nextcloud/WebDAV connector — **unit-tested only, no app coverage** | `webdav_source_test` against the in-repo stub (which lives in `main/testkit`) |
 | 5 | **Three PRs.** 5a `SSecretStore` (DPAPI / Keychain / libsecret / none); 5b accounts + the Options → Media page; 5c the end-to-end WebDAV cases gate 4 could not host | `secret_store_test`; `media_options_page` + `media_secret_redaction`; `media_webdav_browse` + `media_webdav_drop` (all RUN_SERIAL) |
 | 6 | Contracts, docs, CLAUDE.md, STATE.md, the manual runbook | the runbook, run once and recorded |
+
+---
+
+## I. What the execution found (2026-08-18, gate 6)
+
+Eight PRs: **#70** the design, **#72** gate 1, **#78** gate 2, **#79** gate 3,
+**#77** gate 4, **#73** gate 5a, **#80** gate 5b, **#82** gate 5c, and gate 6.
+Plus **#81**, which is not this proposal's work at all — see I.6.
+
+### I.1 Four things this document said that were WRONG
+
+Recorded rather than quietly fixed, because each of them would have cost the
+next reader time.
+
+1. **§B.5's printed `placeWhenLocal` call could never have compiled**, and no
+   `check_layering.py` edit could have made it legal. It passed a `QWidget *`
+   into `main/media`, which forbids widgets by contract, and it called
+   `SAddSampleAction`, which lives in **app_objects — one LAYER above
+   app_core, where `main/media` lives**. What was built is two HOOKS
+   (`SApplication::initMediaLayer()` installs the placement one,
+   `SMainWindow`'s ctor the status one), mirroring how the shell already
+   injects the plugin scan cache's path. §B.5 now prints the real call.
+2. **§B.1's "the compiler enforces no-widget-in-a-provider" was false** — this
+   one the design's own adversarial review had already caught and corrected
+   before gate 1 started, and it is repeated here because the same belief
+   reappeared while writing gate 6's documentation. `app_model` links
+   `Qt::Widgets` **PUBLIC** and each layer links the one below it PUBLIC, so
+   every Qt widget header is reachable from every layer — `SExternFileList` is
+   a `QTreeWidget` in the LOWEST one. What the build enforces is the
+   `app/<module>/…` include GRAPH. The rule is a contract plus a grep (gate 1
+   AC 11), and `CLAUDE.md` and `docs/ARCHITECTURE.md` now say so too.
+3. **`CLAUDE.md`'s test-count baseline was stale by a wide margin**, and §C
+   already warned not to quote it: it read `174 registered / 171 run` as
+   "re-measured 2026-08-17", from before proposal 21 L2-L5, 35, 38 and 39
+   landed their cases. Gate 6 measured the real figure and rewrote the table —
+   see I.3.
+4. **`CLAUDE.md`'s `smaragd.ini` claim overclaimed.** Its "Why `-j` is safe"
+   table said each case "restores its key, so the file comes back
+   **byte-identical** (md5 unchanged, verified across a full run)". Gate 2
+   measured otherwise, on `midi_options_page` ALONE with no other case in the
+   run: the CONTENT was identical and the **md5 moved**. `QSettings` rewrites
+   the whole file from its in-memory map and does not promise to preserve
+   section ORDER across processes. What holds is **content identity plus the
+   ownership convention**, and nothing may ever gate on that file's md5.
+
+### I.2 What each gate cost that the design did not predict
+
+- **Gate 4 — the stub earned its keep twice on the first day.** Building a
+  server we control caught `QUrl::setPath()` **double-encoding an
+  already-encoded path**, and `Qt::RFC2822Date` **rejecting RFC 1123's literal
+  `GMT`** — which is exactly what Nextcloud sends, so the Modified column
+  would have been blank against every real server. Neither is a bug in our
+  logic; both are Qt behaving as documented and the design assuming otherwise.
+- **Gate 3 — two concurrent deferred placements land in FETCH-COMPLETION
+  ORDER, not drop order.** The case originally asserted drop order and failed
+  **4 runs in 10**. There is no ordering guarantee anywhere in the design and
+  there should not be one: two independent fetches finish when they finish.
+  The case asserts the SET, not the sequence.
+- **Gate 5b caught itself shipping a VACUOUS gate** and reverted it. An
+  `assert-settings-file section=` filter had been added to scope a check to one
+  account; `QSettings::IniFormat` brackets only the FIRST `/`-separated
+  component as a `[group]`, so a "[section]" scope can never match below the
+  top group and **every scoped assertion would have passed while checking
+  nothing**. The attribute was removed and cases write the disk-spelled prefix
+  (`nextcloud\qxatest\`) themselves.
+- **Gate 5c then found `docs/ACTIONS.md` still documenting that reverted
+  attribute** — a doc row outliving its code by one PR. Fixed in 7d83c05.
+- **Gate 6 found the WebDAV stub had never inspected the `Authorization`
+  header** (`grep -c Authorization` → 0), which gate 5c's own PR body had
+  named. The credential chain was EXERCISED end to end and never VERIFIED: the
+  stub would have served those files just as happily for an empty header. The
+  stub now takes an expected header VALUE and answers 401 to anything else,
+  `media_webdav_browse` demands the base64 LITERAL for every PROPFIND it
+  makes, and it carries a negative control — measured: neutering the compare
+  fails the case at exactly that assertion and nowhere else.
+
+### I.3 The measured suite, at the tip
+
+220 registered / **217 run** / 3 Not Run (Disabled — the macOS-only `au_*`
+trio), 100 % passing in all four modes on the usual box (16 logical cores,
+16 GB):
+
+| Mode | Wall clock | Speedup |
+|---|---|---|
+| serial | 329 s | 1.00× |
+| `-j2` | 239 s | 1.38× |
+| `-j4` | 203 s | 1.62× |
+| `-j8` | 182 s | 1.81× |
+
+**The speedup has collapsed since the 2.9×-at-`-j4` this document's §C quoted,
+and it is not a regression: 41 of the 217 tests now carry `RUN_SERIAL`.** Those
+41 alone take **155 s at `-j8` — 85 % of the whole `-j8` run** — and the other
+176 take 27 seconds. Every one of the 41 has a good reason (a wall-clock
+latency bound, or ownership of a key in the shared INI), and this proposal
+added nine of them. The number to watch from here is the `RUN_SERIAL` count,
+not the core count.
+
+`media_webdav_browse` was additionally run **20/20 by exit code** after gate
+6's hardening.
+
+### I.4 What is documented where
+
+`main/media/CONTRACT.md` and `main/mediabrowser/CONTRACT.md` were written by
+their own gates and gate 6 verified rather than rewrote them; the corrections
+it did make are the credential claim (I.2) and `mediabrowser` inv. 7's
+byte-identity overclaim (I.1.4). `main/timeline/CONTRACT.md`'s `media:` section
+became numbered **invariant 23**. `main/shell/CONTRACT.md` gained the
+**`SSecretStore` invariants 42-47**, which were the one real gap: the store's
+five rules existed only in its own header and had never been lifted into a
+CONTRACT. `docs/ARCHITECTURE.md` gained both modules and the "the layer
+boundary does not stop a widget include" note. `docs/ACTIONS.md` was audited
+verb by verb against `readXml()` — **14 of the 15 new verbs matched name for
+name and default for default**; the fifteenth needed gate 6's own new
+`expectAuth`. Two pre-existing defects in that file were repaired on the way
+past: a bare blank line inside the table that silently ended it at row 41
+(everything after rendered as pipe-soup), and a duplicated, stale
+`assert-render-policy` row.
+
+### I.5 What is still NOT gated
+
+Unchanged from §D, restated because a closeout is where a coverage claim gets
+overread. A real Nextcloud server; **TLS against a real certificate** — the
+stub is plain HTTP, so no line of TLS handling has ever been executed by any
+gate; redirects; rate limiting; `WWW-Authenticate`; a real server's PROPFIND
+dialect; large directories and large bodies; network physics and a flaky link;
+resumable downloads (**not implemented** — a cancelled fetch restarts); the
+dock's docked/floating/closed round trip; pixels; drag ergonomics; whether the
+platform credential stores actually resist an attacker; and the **macOS
+Keychain and Linux libsecret backends, which are written and have never been
+COMPILED** — the development box is Windows/MinGW, so running the runbook on
+either platform is a first BUILD as much as a first run.
+
+All of it is `docs/MEDIA_BROWSER_MANUAL_GATE.md`, twelve numbered steps with a
+results table, and **it is PENDING**. It landed with the feature rather than
+after it, exactly as `docs/ASIO_WINDOWS_GATE.md` did for proposal 35 Phase 1 —
+and that precedent also says how it ends: a recorded run, with the design
+consequences it turns up written down beside it.
+
+### I.6 A bug on `main` that this work uncovered (PR #81)
+
+Not proposal 38's, and worth the paragraph because of the SHAPE of it.
+`record_offset_zero` was failing on `main` for an unrelated reason: the
+recording offset is keyed by input-device **NAME**, this box's INI holds
+`inputDeviceId=asio:{…}`, and the case's `.../default` key was therefore never
+read. Take 1 asserted **0** — which is also exactly what a failed lookup
+returns. **The gate passed under the very fault it existed to catch**, for as
+long as the lookup happened to succeed. The fix rejected a `"default"`
+fallback on the grounds that lending one device's physical latency correction
+to another is worse than the zero it would replace.
