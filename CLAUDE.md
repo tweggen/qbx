@@ -458,9 +458,38 @@ contract: a change that breaks one of these breaks the parallel gate.
 | **`.qxp` save targets** | No collision. Nine cases save into the build root; the names are unique per case (`au_missing_resave`, `au_slot_resave`, `clip_properties_actions`, `exact_stretch_roundtrip`, `plugin_missing_resave`, `plugin_remove_restores_param`, `plugin_slot_resave`, `takes_roundtrip`, `warp_anchors_roundtrip`) and each is written and read back **by its own case only**. No case consumes another case's artifact. |
 | **The sidecar (QAF) store** | **This was a real bug, now fixed.** One shared per-user cache dir, and **80 of 89 cases use the same `test_sawtooth.wav`** → the same content hash → the same aspect keys, so concurrent stores of one key are the normal case, not the exotic one. The writer used a fixed `<path>.tmp`, so two processes truncated and interleaved into one temp and one published the mixture. Only the QAF **header** is CRC-protected — a torn payload of the right length passes the reader's bounds check and feeds wrong analysis data (onsets / f0 / warp.pcm) into the engine. The temp is now `<path>.<pid>.<seq>.tmp`; see `tw303a/sidecar/CONTRACT.md` inv. 2. Note the hazard is **latent**: it only bites when a key is cold, i.e. on the runs right after an aspect-version bump or a cleared cache — exactly when nobody is expecting it. |
 | **`plugincache.v<n>.json`** | Harmless. Written on every run (`plugins/scanOnStartup` defaults true), but through `QSaveFile` — write-to-temp-then-rename, so a concurrent write is a lost update at worst, never a torn file. Verified live: parsed as valid JSON repeatedly while four `smaragd.exe` processes rewrote it. A lost update costs a re-probe, and records are keyed on path+size+mtime so it cannot manufacture a false failure. |
-| **`smaragd.ini`** | Harmless — but **not for the reason this row used to give**. It said "a headless run does not write it at all — mtime unchanged across a full suite", and that is **false**: measured across a full `-j4` run, the file's **mtime moves**. Two `.qxa` cases write it deliberately through the `set-option` verb (`midi_options_page` → `midi/…`, `midi_out_chase_and_stop` → `midi/chaseNoteOns`), and `SStdMixerView::saveTrackControlWidth` writes `MixerView/TrackControlWidth` whenever a case changes the track-control column width (the only guard is `changed`). What makes it harmless is stronger than "nobody writes": both `set-option` cases are **`RUN_SERIAL`**, so they never run beside anything; each restores its key, so the file comes back **byte-identical** (md5 unchanged, verified across a full run); each declares in its own header that it OWNS its key, and no other case reads those keys; and Qt still takes a `QLockFile` around `QSettings` writes, so even a concurrent write could not tear. **The residual hazard is the ownership convention, not the locking** — a future case that READS `midi/chaseNoteOns` would be racing one that writes it, and `RUN_SERIAL` on the writer is what would have to be noticed. Whether a headless run should be writing a user's preferences at all is a separate question and is not fixed here. |
+| **`smaragd.ini`** | Harmless for CONCURRENCY, and it was NOT harmless for something else — see the row below. Also: **not for the reason this row used to give**. It said "a headless run does not write it at all — mtime unchanged across a full suite", and that is **false**: measured across a full `-j4` run, the file's **mtime moves**. Two `.qxa` cases write it deliberately through the `set-option` verb (`midi_options_page` → `midi/…`, `midi_out_chase_and_stop` → `midi/chaseNoteOns`), and `SStdMixerView::saveTrackControlWidth` writes `MixerView/TrackControlWidth` whenever a case changes the track-control column width (the only guard is `changed`). What makes it harmless is stronger than "nobody writes": both `set-option` cases are **`RUN_SERIAL`**, so they never run beside anything; each restores its key, so the file comes back **byte-identical** (md5 unchanged, verified across a full run); each declares in its own header that it OWNS its key, and no other case reads those keys; and Qt still takes a `QLockFile` around `QSettings` writes, so even a concurrent write could not tear. **The residual hazard is the ownership convention, not the locking** — a future case that READS `midi/chaseNoteOns` would be racing one that writes it, and `RUN_SERIAL` on the writer is what would have to be noticed. Whether a headless run should be writing a user's preferences at all is a separate question and is not fixed here. |
 | **`smaragd.log`** | Not shared. `--test-case` runs deliberately take **no file sink** (`main/shell/src/main.cpp`), which the code already justifies by naming `ctest -j`. |
 | **Wall-clock latency assertions** | Not isolation bugs — see the table above. `RUN_SERIAL`. |
+
+**A CASE THAT FAILS DOES NOT RESTORE THE KEY IT OWNS.** The audit above says
+each `set-option` case "restores its key, so the file comes back
+byte-identical", and that is only true when the case PASSES: a script that
+fails mid-way never reaches its final `set-option`. Seen on 2026-08-18 — ten
+failed runs of `record_offset_zero` (for the unrelated reason below) left
+`audio/recordingOffsetMs/default = 20`, and the next suite's
+`record_loop_takes` inherited it and failed with compensation **−6784 instead
+of −5824**: exactly 960 frames, i.e. the 20 ms. `RUN_SERIAL` does not help,
+because the leak is between RUNS rather than within one. **If a record case
+fails with a compensation off by exactly 960 frames, check `smaragd.ini`
+before looking at the change under test.** (The registration comment for those
+cases also claimed "no other case reads it", which is false — `SAudioRecorder`
+reads the key on every take, and the other three cases simply assume it is 0.)
+
+**A `--test-case` RUN MUST NOT INHERIT THE DEVELOPER'S DEVICE SELECTION**, and
+that is a different hazard from the concurrency one above. `--test-case` forces
+`SMARAGD_AUDIO_BACKEND=capture` and `SMARAGD_AUDIO_INPUT_BACKEND=null`, so a
+headless suite never opens real hardware — but a device ID is not only used to
+OPEN a device, it is the KEY for `audio/recordingOffsetMs/<device>`. Selecting
+an ASIO driver in Edit → Options → Audio writes `audio/inputDeviceId` into this
+shared file, after which `qxa.record_offset_zero` — which sets the offset for
+`default` and asserts it was applied — read 0 and **failed 10 runs out of 10 on
+that machine while passing everywhere else** (2026-08-18). `SSettings::testMode()`
+now answers `"default"` for both device ids in a test run and writes nothing, so
+the developer's selection survives and the suite is deterministic. The rule:
+**isolated from the developer's hardware was never the same as isolated from
+their CHOICE of it**, and anything else keyed on a device id inherits this
+protection.
 
 Deliberately **not** isolated per test, with reasons:
 

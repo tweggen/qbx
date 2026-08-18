@@ -705,36 +705,57 @@ void SOptionsDialog::onMeasureLoopback()
 
 void SOptionsDialog::onOpenDriverPanel()
 {
-    auto spk = SApplication::app().getSpeaker();
-    audio::AudioBackend *backend = spk ? spk->getBackend() : nullptr;
-    if( !backend ) return;
+    // THE PANEL FOLLOWS THE SELECTION, NOT WHAT HAPPENS TO BE OPEN — and
+    // getting that wrong is what this code did first. The button's visibility
+    // is driven by the COMBO, but the action asked
+    // `twSpeaker::getBackend()->openControlPanel()`, i.e. whichever backend the
+    // dispatcher had last routed. Device changes "take effect on the next
+    // Play", so selecting an ASIO driver and pressing this before playing asked
+    // the WASAPI backend for a panel — which correctly answered "none",
+    // producing "this driver does not offer a control panel" for a driver that
+    // very much does. Reported from the app on 2026-08-18, after the same
+    // driver's panel had opened fine from `audio_backend_probe panel`, which
+    // opens the selected id explicitly.
+    const QString outId = audioDevice_->currentData().toString();
 
-    // The device must be OPEN for the driver to have a panel to show: the
-    // panel belongs to an instantiated driver, not to a CLSID. When nothing is
-    // playing there is no open device, so say that rather than appearing to do
-    // nothing.
-    if( backend->getConfig().sampleRate == 0 ) {
+    if( !outId.startsWith( QStringLiteral( "asio:" ), Qt::CaseInsensitive ) ) {
         QMessageBox::information(
             this, "Driver Control Panel",
-            "The audio device is not open yet.\n\n"
-            "Press Play once (or arm a track) so the driver is running, then "
-            "open this panel." );
+            "This device has no driver control panel of its own.\n\n"
+            "A shared-mode Windows endpoint is configured in the system's own "
+            "Sound settings, not by the application." );
+        return;
+    }
+
+    // A fresh backend opened on the SELECTED id, exactly as the loopback
+    // measurement does. On ASIO this is free: the registry hands back the same
+    // underlying driver the app may already be holding (proposal 35), so this
+    // shows the panel of the driver the user picked without waiting for a Play
+    // and without disturbing whatever the speaker has open.
+    std::unique_ptr<audio::AudioBackend> be = audio::createAudioBackend();
+    if( !be || be->openDevice( outId.toStdString(), 0 ) != 0 ) {
+        QMessageBox::warning(
+            this, "Driver Control Panel",
+            "That device would not open, so it has no panel to show.\n\n"
+            "Another application may be holding the driver — ASIO allows only "
+            "one at a time." );
         return;
     }
 
     // BLOCKS for as long as the user leaves the driver's window open. That is
-    // the driver's call being modal, not a choice here; every host behaves
-    // this way.
-    const int rc = backend->openControlPanel();
+    // the driver's call being modal, not a choice here; every host behaves this
+    // way.
+    const int rc = be->openControlPanel();
+    be->closeDevice();
+
     if( rc != 0 ) {
-        QMessageBox::information(
-            this, "Driver Control Panel",
-            "This driver does not offer a control panel." );
+        QMessageBox::information( this, "Driver Control Panel",
+                                  "This driver does not offer a control panel." );
         return;
     }
 
-    // Re-read: the whole point of the panel on a fixed-buffer driver is that
-    // the number it shows is the one that just changed.
+    // Re-read: the whole point of the panel on a fixed-buffer driver is that the
+    // number it shows is the one that just changed.
     loadAudioPage();
 }
 

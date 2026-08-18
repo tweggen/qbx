@@ -14905,3 +14905,109 @@ detecting a mixed-device session and saying so, as the endpoint sample-rate
 mismatch already is — is now MORE reachable than when the brief was written,
 because this dialog already knows both device ids and already refuses when they
 differ. That refusal is, in effect, the first mixed-device warning in the app.
+
+## 2026-08-18 — The driver-panel button acted on the wrong backend (found in the app)
+
+Reported from the running app, and it is a good example of a bug that every
+gate would miss because both halves are individually correct.
+
+**Symptom:** with the US-16x08's ASIO driver selected for BOTH input and
+output, Edit → Options → Audio → "Driver Control Panel..." answered **"This
+driver does not offer a control panel"** — for a driver whose panel had opened
+perfectly from `audio_backend_probe panel` minutes earlier.
+
+**Cause:** the button's VISIBILITY is driven by the combo SELECTION
+(`outId.startsWith("asio:")`), while its ACTION asked
+`twSpeaker::getBackend()->openControlPanel()` — whichever backend the
+dispatcher had last ROUTED. Device changes "take effect on the next Play"
+(`twSpeaker::setOutputDevice` only records the id), so selecting ASIO and
+pressing the button before ever playing asked the **WASAPI** backend for a
+panel. WASAPI correctly answers −1, "no panel", because a shared-mode
+endpoint's settings live in the Windows Sound control panel and are not ours to
+open. Two correct answers, one wrong question.
+
+The probe never hit it because `audio_backend_probe panel <id>` opens the id it
+was given, explicitly.
+
+**Fix:** the panel now follows the SELECTION, like everything else the button's
+visibility implies. A non-`asio:` selection gets a sentence about Windows Sound
+settings rather than a claim about the driver; an `asio:` selection opens a
+FRESH backend on that id, shows the panel, and closes — which on ASIO costs
+nothing, because the registry hands back the same underlying driver the app may
+already be holding (proposal 35), so the panel appears without waiting for a
+Play and without disturbing the speaker. A device that will not open now says
+so, and names the likely reason (ASIO allows one application at a time).
+
+**The lesson worth carrying:** the loopback wizard added in the same session
+already did this correctly — it builds fresh devices from the SELECTED ids —
+and the panel button did not, because it was written first and against a
+simpler assumption. Any Options control that acts on "the audio device" has to
+decide which of the two it means: the one SELECTED or the one OPEN. They are
+routinely different, and they became different only when proposal 35 gave
+Windows two backends behind one list.
+
+**Not gated, and cannot be today:** no verb builds the Audio page off screen, so
+the button, its guards and its wording are hand-verified only. The rest of the
+Audio page's controls read `getBackend()` too, but only to DISPLAY what is
+currently in force — which is a defensible reading of a page that already says
+"Device changes take effect on the next Play".
+
+
+## 2026-08-18 — A qxa case that fails ONLY on a machine where a device was selected
+
+Found while gating the Options wizard, and it is the most valuable thing in
+this session's suite runs: **`qxa.record_offset_zero` failed 10 runs out of 10**
+on this machine, deterministically, while passing everywhere else and in every
+earlier run on the same branch. Not a flake, and not caused by the change under
+test.
+
+### What it was
+
+The case writes `audio/recordingOffsetMs/default = 20` and asserts the recorder
+applied −960 frames. It read **0**.
+
+`SAudioRecorder::deviceName_` falls back to
+`SSettings::audioInputDeviceId()`, and that key had become
+`asio:{FA12DE15-...}` — because the developer had selected the ASIO driver for
+both directions in Edit → Options → Audio and applied it. `smaragd.ini` is a
+SHARED per-user file, so from that moment every headless run inherited the
+selection, the recorder keyed the offset on the ASIO id, and the case's
+`default` key was never consulted:
+
+```
+deviceId=asio:{FA12DE15-...}
+inputDeviceId=asio:{FA12DE15-...}
+recordingOffsetMs\default=0                        <- what the case writes (20)
+recordingOffsetMs\asio%3A%7BFA12DE15-...%7D=0      <- what the recorder read
+```
+
+### Why no gate could have caught it
+
+Every existing safeguard is about the BACKEND: `--test-case` forces
+`SMARAGD_AUDIO_BACKEND=capture` and `SMARAGD_AUDIO_INPUT_BACKEND=null` so a
+headless suite never opens the developer's hardware. All correct, and all
+beside the point — a device ID is not only used to OPEN a device, it is the KEY
+for `audio/recordingOffsetMs/<device>`. The suite was isolated from the
+developer's hardware and not from the developer's CHOICE of it.
+
+It was invisible until ASIO made selecting a non-default input device both
+possible and attractive. CLAUDE.md's "-j is safe" audit lists `smaragd.ini` as
+harmless because the two cases that write it own their keys and restore them;
+that analysis is still right and simply does not cover a key the APP writes
+during ordinary use.
+
+### The fix
+
+`SSettings::setTestMode(true)`, set in `main.cpp` beside the two backend
+defaults it belongs with. In test mode `audioDeviceId()` and
+`audioInputDeviceId()` return `"default"` whatever the file holds, and
+**nothing is written** — the developer's own selection survives untouched.
+Verified: **0/10 → 8/8** on the case, then the full suite.
+
+### The rule this leaves behind
+
+A `--test-case` run must not inherit the developer's device SELECTION, not just
+their device. Anything else keyed on a device id — offsets, per-device
+latencies, future per-device preferences — inherits the same protection now,
+which is the point of fixing it at `SSettings` rather than in the one case that
+happened to notice.

@@ -30,6 +30,22 @@ public:
 
     // Selected audio output device id (backend-specific; empty == system
     // default). Matches AudioDeviceInfo::id from the audio backend.
+    // A --test-case RUN MUST NOT INHERIT THE DEVELOPER'S DEVICE SELECTION.
+    // When this is on, audioDeviceId() and audioInputDeviceId() return
+    // "default" whatever the settings file holds; nothing is written, so the
+    // user's own selection survives untouched.
+    //
+    // It exists because a real bug got through without it (2026-08-18):
+    // selecting an ASIO driver in Options wrote audio/inputDeviceId, and the
+    // record cases key `audio/recordingOffsetMs/<device>` on that id — so a
+    // case that sets the offset for "default" and asserts it was applied read
+    // 0 instead, and FAILED 10 runs out of 10 on that developer's machine
+    // while passing everywhere else. Same reasoning as forcing the audio and
+    // input BACKENDS in a test run: what the developer happens to have
+    // selected must not decide what the suite measures.
+    static void setTestMode( bool on );
+    static bool testMode();
+
     QString audioDeviceId() const;
     void    setAudioDeviceId( const QString &id );
 

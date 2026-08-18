@@ -33,8 +33,19 @@ void SSettings::setValue( const QString &key, const QVariant &val )
     emit changed( key );
 }
 
+namespace {
+// Not a member: it is process-wide and is set before any SSettings exists.
+bool g_testMode = false;
+}
+
+void SSettings::setTestMode( bool on ) { g_testMode = on; }
+bool SSettings::testMode() { return g_testMode; }
+
 QString SSettings::audioDeviceId() const
 {
+    // See the header: a test run uses the DEFAULT device, never whatever the
+    // developer last picked. Read-only — the stored value is left alone.
+    if( g_testMode ) return QStringLiteral( "default" );
     return value( "audio/deviceId" ).toString();
 }
 
@@ -45,6 +56,9 @@ void SSettings::setAudioDeviceId( const QString &id )
 
 QString SSettings::audioInputDeviceId() const
 {
+    // Same rule as audioDeviceId(), and this is the one that actually bit:
+    // `audio/recordingOffsetMs/<device>` is keyed on this string.
+    if( g_testMode ) return QStringLiteral( "default" );
     return value( "audio/inputDeviceId" ).toString();
 }
 

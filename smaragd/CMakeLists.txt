@@ -311,7 +311,23 @@ endforeach()
 # 960 frames more.
 #
 # record_offset_zero WRITES audio/recordingOffsetMs/default through set-option
-# and puts it back; it OWNS that key, and no other case reads it.
+# and puts it back at the end.
+#
+# THAT COMMENT USED TO SAY "it OWNS that key, and no other case reads it", AND
+# THAT IS FALSE. `SAudioRecorder` reads `recordingOffsetMs(deviceName_)` on
+# every take, so EVERY case in this list reads the key — the other three simply
+# assume it is 0, which is baked into their expected compensation of -5824.
+#
+# The consequence, seen on 2026-08-18: a case that FAILS mid-script never
+# reaches its restore step. Ten failed runs of record_offset_zero (for an
+# unrelated reason) left the key at 20, and the next suite's record_loop_takes
+# read it and failed with compensation -6784 — exactly 960 frames, i.e. the
+# 20 ms, more than it expected. RUN_SERIAL does not help: the leak is between
+# RUNS, not within one.
+#
+# So if a record case fails with a compensation off by exactly 960 frames,
+# CHECK smaragd.ini FIRST — `recordingOffsetMs\default` should be 0 — before
+# looking at the change under test.
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
 foreach(_rec record_offset_zero record_loop_takes record_punch

@@ -169,6 +169,22 @@ int main( int argc, char *argv[] )
         if (qEnvironmentVariableIsEmpty("SMARAGD_AUDIO_INPUT_BACKEND"))
             qputenv("SMARAGD_AUDIO_INPUT_BACKEND", "null");
 
+        // ... and the DEVICE IDS, for the same reason one rung up: what the
+        // developer happens to have selected in Options must not decide what
+        // the suite measures. Forcing the backends was not enough, because a
+        // device ID is not only used to OPEN a device — it is the KEY for
+        // `audio/recordingOffsetMs/<device>`, which the record cases set and
+        // assert.
+        //
+        // Found the hard way on 2026-08-18: selecting an ASIO driver in
+        // Options wrote `audio/inputDeviceId=asio:{...}` into the shared
+        // smaragd.ini, and `qxa.record_offset_zero` — which writes the offset
+        // for "default" and asserts it was applied — then read 0 and failed
+        // 10 runs out of 10 on that machine while passing everywhere else.
+        // SSettings answers "default" in test mode and WRITES NOTHING, so the
+        // developer's own selection survives.
+        SSettings::setTestMode(true);
+
 #ifdef Q_OS_LINUX
         // Same intent as the previous argv rewrite, minus the undefined
         // behaviour: that version built `new char*[argc + 2]`, filled every slot
