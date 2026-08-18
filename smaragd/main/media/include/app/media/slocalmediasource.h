@@ -39,9 +39,16 @@ namespace smedia {
 constexpr int kMaxSearchEntries = 5000;
 constexpr int kMaxSearchDepth   = 12;
 
+// The WebDAV connector's own bound (proposal 38 gate 4, §B.7): at most this
+// many PROPFINDs in flight for one recursive search. Declared beside the
+// other two shared bounds -- §B.2 inv. 4 names all three together -- even
+// though only SWebDavMediaSource reads it; the local walk has no network
+// round trip to cap.
+constexpr int kMaxInFlightPropfinds = 4;
+
 // Batching (§B.2 inv. 3): flush every kBatchEntries entries or kBatchMs
 // milliseconds, whichever comes first, so a recursive walk shows its first
-// hits immediately.
+// hits immediately. Shared with the WebDAV connector for the same reason.
 constexpr int kBatchEntries = 200;
 constexpr int kBatchMs      = 100;
 
