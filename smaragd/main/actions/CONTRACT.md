@@ -31,3 +31,11 @@ submit/apply/reject path.
 
 Known debt: sactionhistory reaches SApplication for the current project
 (shell edge); expectReject is per-element, not per-verb.
+
+**`metronome-toggle/-enable/-disable` stopped being a stub in proposal 21 L5**,
+without one line of this module changing. They still only flip
+`SProjectProps::Metronome`; what is new is that `SApplication` watches that
+property and turns it into a live-plan rebuild, so the click joins the live lane
+while the transport rolls. That is the shape a toggle verb should have — the
+verb owns the STATE, the shell owns what the state MEANS — and it is why the
+action needed no knowledge of the pump, the plan or the audio device.

@@ -1243,6 +1243,74 @@ catch range (design D8 lists it as later work; **not implemented** — the ring 
 drained at the record start), the mode/quantise UI, and recording a MIDI and an
 audio track in the SAME pass (implemented and reachable, no case).
 
+## Metronome, count-in, latency readout (proposal 21 L5 — executed 2026-08-18)
+
+The click is audible, a record start can be counted in or pre-rolled, the
+transport bar shows the round trip, and the FX strip shows each plugin's
+reported latency. Design: `plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md`
+D1/D2/D5/D6 and §6. Invariants: `tw303a/playback/CONTRACT.md` inv. 19-20,
+`main/shell/CONTRACT.md` inv. 32-36, `main/servicesui/CONTRACT.md`,
+`main/pluginui/CONTRACT.md`, `main/objects/track/CONTRACT.md` inv. 21,
+`main/testkit/CONTRACT.md` 21-22.
+
+**Read this before touching the metronome — the obvious design is wrong for the
+third time in this codebase, and for the same reason the meters' and MIDI-out's
+were.** The click is NOT a graph component. It is a `twLiveInputSource` on a
+synthetic plan track, rendered by the PUMP, BY POSITION, out of an immutable
+tempo snapshot — so it exists only where a pump exists, and a render (which
+suspends every lane) can never contain one. A component would have needed a
+special case to keep it out of the export, and every special case is a place the
+exclusion can be forgotten.
+
+| Thing to know | Why |
+|---|---|
+| A live lane exists iff **`armed ∪ monitor ∪ metronome`**, and the metronome is a FLAG on `SLiveClosure`, not a member | It owns no track, live-owns nothing and nulls no plug, so the whole arm/disarm protocol is untouched and a metronome-only lane cannot change one byte of what the frozen graph produces. `metronome_render_identity` gates that byte-for-byte. |
+| **A metronome-only lane leaves through NO disarm path** | `leaving` is empty because it owned no track, so `finishDisarm()` never runs — the pump would keep clicking off the old plan forever. `refresh()`'s `want.empty()` branch stops it. Before L5 an empty live set could only be reached by a track LEAVING, so the path did not exist. |
+| No exclusion ⇒ **`flipEpoch` = 0** | The epoch gate exists so the RT does not sum onto a root page that still CONTAINS the armed track. A lane that excluded nothing bumped nothing, and passing an epoch would gate the click off until an unrelated re-freeze happened to land. |
+| The click is a **pure function of the block position**; a tempo/level edit builds a NEW source | No "next click" cursor to get out of step with a seek, a wrap or a reposition, and a click straddling a block boundary is finished by the next block because both compute the same answer. `pull()` allocates nothing (both waveforms are rendered in the ctor). |
+| The beat is one note of the time signature's **denominator**, from `twTempoMap` — the ONE tempo authority | A quarter in 4/4, an eighth in 6/8, which is what every DAW's click does. The beat length is a REDUCED RATIONAL and `frameOfBeat(k)` is one floored division, so beat k is never the accumulation of k roundings. |
+| **COUNT-IN: the playhead does not move.** N bars of click while STOPPED, then recording begins AT THE LOCATOR | Cubase / Logic / REAPER. The placed clip lands exactly where it would have with no count-in (measured: **96000 exactly**) and the capture holds the N bars before it. The rejected reading — roll the bars ON the timeline — makes a preference silently move the user's recording. |
+| **PRE-ROLL: the transport rolls** N bars into the locator, recording begins there | The take goes into a run that was already playing, so nothing is trimmed and the clip lands a few thousand frames BEFORE the locator — which is what latency compensation IS. Neither knob is offered while the transport is already running. |
+| The count-in grid counts **FORWARD from the locator**, never backwards from `locator − N bars` | Backwards produces NEGATIVE positions at a locator inside the first N bars, and `twlive::gateEpoch` discards a ring entry stamped below zero as an unwritten slot — so a count-in at bar 1, the commonest case there is, would have been silent. |
+| The count-in ends on **frames the RT was actually handed** (`twLiveMixRing::framesDelivered`), not on a timer | While stopped there is no engine clock at all; a `QTimer` would measure the Windows scheduler (15.6 ms) against a grid the gate asserts to 38 frames. A wall-clock WATCHDOG still exists — a device that never opens delivers no frames, and a transport that never starts is a hang. |
+| **The click stops before the transport starts; the LANE stops after** (`muteCountIn`) | Both were paid for by a failing gate. The click first, because the transport start repositions the pump back to the locator and would re-render the count-in's first beat (measured: a fifth, accented click). The lane last, because dropping the last lane calls `closeLive()`, the transport start re-opens the device, and the capture backend clears its recording at device start — taking the count-in with it. |
+| **A live lane coming up on a STOPPED→PLAYING transition costs ONE REPOSITION, and it is AUDIBLE on a click** | Design D2, measured from the outside for the first time here: the pump starts at the locator while the engine clock is still invalid, the frozen lane primes and publishes, the pump repositions onto the publication and the consumer drops the abandoned run. At workers=1 the beat at frame 0 came out EARLY in **1 run in 50** and was swallowed in the other 49, with a **~5087-frame (106 ms) hole** after it either way; the steady grid is then exact to 5 frames. A monitored INPUT pays the same cost and simply has no onset to make it audible. `metronome_click` therefore measures from **1 s in** — anchoring on a click that may or may not have survived the abandoned run made the case a coin flip (49/50) on the box rather than a gate on the grid. |
+| **The FIRST click of a live-lane session is attenuated by construction** | It sits inside the RT's 2–3 ms fade-in ramp: measured **0.2109** against a full **0.4720**. `assert-metronome-clicks` therefore excludes onset 0 from the accent comparison and searches the accent PHASE — capture frame 0 is the DEVICE start, so which beat the first summed entry carries is the box's business. Its POSITION is still the grid anchor. |
+| The **accent ratio is exactly 2** by construction | `SOpt::MetronomeLevel` is the ACCENTED level and an ordinary beat is half of it, so a gate can assert the ladder in closed form (measured 2.0584 through the onset detector). |
+| `outputLatencyFramesProject()` is `meterLatencyFrames()` **without** the "only while playing" gate | The gate belongs to the COMPENSATION — shifting a position nobody is playing is meaningless — not to the READOUT, which must show a number the moment a device opens, including when ARMING opens it with the transport stopped. |
+| **PDC is out of scope** (proposal 37 P9), and every mount that shows a latency says so | The live lane has no delay line anywhere: the pump renders block-wise straight into the ring, so a latency-reporting plugin monitored live is heard late by exactly the badge's number. The row tooltip, the chain footer and the transport readout all state it. |
+
+**Verbs:** `metronome-toggle/-enable/-disable` are AUDIBLE now (they were a
+state-only stub); `set-count-in` / `set-pre-roll` (0..8 bars, per-user, NOT
+undoable — a preference does not belong on the arrangement's undo stack).
+`SOpt::MetronomeLevel` / `CountInBars` / `PreRollBars`, all on Edit → Options →
+Audio beside the recording offset. Whether the metronome is ON stays a PROJECT
+property: it travels with the arrangement.
+
+Gates: the qxa cases `metronome_click`, `metronome_render_identity`,
+`record_count_in`, `record_pre_roll` (all `RUN_SERIAL` at
+`SMARAGD_CAPTURE_SPEED=1`; the two record cases take the L3b paced `file:` input
+so `compensationFrames="-5824"` is the same closed form there), the new
+`assert-metronome-clicks` verb, `plugin_ui_strip_and_editor` (`latency=0`) and
+`action_roundtrip_test`. Measured: click grid errors **0, −5, 0, 0, 0, −5**
+frames over playback measured from 1 s in (worst |5| against 1024) and
+**−33 … −38** through a count-in (worst |38|); inter-click RMS **exactly 0.000000**; metronome
+OFF ⇒ **0** clicks; the render **byte-identical** with the click on and off;
+count-in placement **96000 exactly**, `comp=-5824`, `trim=9921`; pre-roll
+placement 89895 for a record start at 96256 (`trim=0`).
+
+**NOT gated:** real device latency numbers (the readout reports what the driver
+claims, and no headless run can check the physics), the readout's and the
+badge's pixels, plugin delay compensation (not implemented), a count-in or
+pre-roll longer than 2 bars, the two knobs COMBINED in one take (implemented and
+reachable, no case), the Options page's three new controls (no verb builds the
+Audio page off screen the way `assert-midi-options` builds the MIDI one), and
+**the first second of a live-lane playback run** — the transient above is
+measured and recorded, not asserted. A render taken WHILE a click lane is up is
+not reachable from a script either (the click sounds only while the transport
+rolls, and a render does not run the transport); `render_while_armed` gates the
+suspend path itself.
+
 ## Plugin Hosting (proposal 08 — M0..M8 executed; VST3 landed 2026-07-29)
 
 CLAP, **VST3** and **AudioUnit** (macOS) audio-effect plugins are scanned,
