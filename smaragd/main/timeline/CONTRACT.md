@@ -318,3 +318,11 @@ long-term shape.
     lookups per repaint, each an index into an array a child's preview already
     built — about what the same clips cost on their own lanes when the folder
     is expanded. No cache, no snapshot, no invalidation, no thread.
+
+    The collapsed folder is the whole point of it, and it is gated since
+    proposal 39 M3a: `collapse-track` drives `toggleTrackCollapsed()` — the
+    fold triangle's own call — so a case can shut the folder, watch every lane
+    below it move up two rows, and find the same overlay, at the same pixel
+    count, on the folder's row. The paint is identical either way by
+    construction (the folder's row is drawn by this renderer whether or not its
+    children have rows); what the gate closes is the CLAIM, not a suspected bug.

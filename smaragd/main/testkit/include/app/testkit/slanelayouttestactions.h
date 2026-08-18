@@ -91,4 +91,52 @@ private:
     int     grabHeight_ = 0;
 };
 
+
+/**
+ * `collapse-track` - fold a folder lane SHUT, or open it again (proposal 39
+ * M3a).
+ *
+ * VIEW state, exactly like set-lane-view: not undoable, saved nowhere. It
+ * exists because the folder-sum overlay is SOLD on the collapsed folder - fold
+ * it shut and you can still see what is under it - and nothing in the testkit
+ * reached the fold at all, so M3's pixel gate necessarily grabbed an EXPANDED
+ * folder.
+ *
+ * It goes out through SMainWindow (testkit may not include app/timeline,
+ * testkit CONTRACT inv. 5) to SStdMixerView::toggleTrackCollapsed(), the same
+ * call the head's fold triangle makes - not to a second writer of the collapsed
+ * set, which would be free to skip the row rebuild that IS the fold.
+ *
+ * `collapsed` is ABSOLUTE, not a toggle: a script that says what it wants is
+ * idempotent, and it can be read without counting how many times it ran.
+ *
+ * WHAT IS OBSERVABLE afterwards, because there is no row-count probe and this
+ * verb does not invent one: the children's rows are GONE, so every lane BELOW
+ * the folder moves up by that many rows - which `assert-lane-overlay`'s
+ * `contains="row=N"` reads straight off its own report line. And the folder's
+ * own lane is still painted by the same renderer, so `assert-lane-overlay` on
+ * it still finds the overlay. That pair is the user story.
+ *
+ * XML format:
+ * <collapse-track trackPath="0" collapsed="1"/>
+ * <collapse-track trackPath="0" collapsed="0"/>
+ */
+class SCollapseTrackAction : public SAction {
+public:
+    SCollapseTrackAction() = default;
+
+    QString name() const override { return QStringLiteral("collapse-track"); }
+    QStringList knownAttributes() const override
+    {
+        return { QStringLiteral("trackPath"), QStringLiteral("collapsed") };
+    }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString trackPath_ = QStringLiteral("0");
+    bool    collapsed_ = true;
+};
+
 #endif

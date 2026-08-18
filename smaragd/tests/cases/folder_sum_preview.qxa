@@ -47,12 +47,17 @@
   other with snapshot/compareTo, i.e. BYTE-IDENTICAL probe arrays, so they hold
   without hard-coding a single expected byte.
 
+  THE COLLAPSED FOLDER (M3a) is gated at the bottom of this case. It is the
+  claim the feature is sold on and it was untested until `collapse-track`
+  existed; the fold is observed through the rows BELOW the folder moving up,
+  which assert-lane-overlay already reports, rather than through a new probe.
+
   NOT GATED HERE: the sum-of-envelopes approximation itself (above); pixel
   exactness and colour aesthetics (assert-lane-overlay asserts a luminance
   RELATION, not a palette); folders deeper than three levels; a folder holding
-  hundreds of clips; and COLLAPSING the folder - no verb reaches
-  SStdMixerView::toggleTrackCollapsed, and the folder's own row is painted by
-  the same renderer either way, so the grab below is of an expanded folder.
+  hundreds of clips; and the fold TRIANGLE itself - collapse-track drives
+  SStdMixerView::toggleTrackCollapsed, which is what the triangle's click
+  handler calls, but the mouse event on the head is not synthesised.
 -->
 <SActionScript version="1" name="folder_sum_preview">
 
@@ -148,6 +153,60 @@
                          expectOverlay="false"/>
     <assert-lane-overlay trackPath="2,0" grabWidth="900" grabHeight="700"
                          expectOverlay="false"/>
+
+    <!-- =========== M3a: the COLLAPSED folder, which is the story ========== -->
+    <!-- Everything above grabbed an EXPANDED folder. The folder's own row is
+         painted by the same renderer either way, so this is not a bug hunt - it
+         is the claim the feature is SOLD on ("fold it shut and you can still
+         see what is under it"), and until `collapse-track` existed nothing in
+         the testkit reached SStdMixerView::toggleTrackCollapsed at all.
+
+         WHAT MAKES THE FOLD OBSERVABLE. There is no row-count probe and none
+         was invented: the children's rows simply cease to exist, so every lane
+         BELOW the folder moves up by that many rows, and assert-lane-overlay
+         already prints the row it measured. Rows here are
+
+             expanded    0:folder  1:childA  2:childB  3:plain  4:folder2  5:empty
+             collapsed   0:folder                      1:plain  2:folder2  3:empty
+
+         so the empty folder at "2" reading row=4 and then row=2 IS "two rows
+         disappeared", asserted with the verb that was already there. -->
+    <assert-lane-overlay trackPath="2" grabWidth="900" grabHeight="700"
+                         expectOverlay="false" contains="row=4"/>
+
+    <collapse-track trackPath="0" collapsed="1"/>
+
+    <!-- The two child rows are gone. -->
+    <assert-lane-overlay trackPath="2" grabWidth="900" grabHeight="700"
+                         expectOverlay="false" contains="row=2"/>
+    <!-- The heads still sit exactly on the lanes they head, with two fewer of
+         them - the fold rebuilds the control column, and that rebuild is the
+         half of collapsing that a direct write of the collapsed set would
+         skip. -->
+    <assert-lane-alignment/>
+
+    <!-- THE USER STORY. The folder is shut, its children are off the screen,
+         and its own lane still carries the summed waveform of both of them -
+         same minPixels floor as the expanded grab, same luminance relation. -->
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="700"
+                         minPixels="200" contains="row=0"
+                         grabPng="folder_sum_collapsed.png"/>
+    <!-- ...and it is the SAME envelope, byte for byte: collapsing is view
+         state, so it may not move one probe of what the overlay describes.
+         (`sum2` was snapshotted while the folder was open.) -->
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="64" compareTo="sum2"/>
+
+    <!-- ABSOLUTE, so asking again changes nothing. -->
+    <collapse-track trackPath="0" collapsed="1"/>
+    <assert-lane-overlay trackPath="2" grabWidth="900" grabHeight="700"
+                         expectOverlay="false" contains="row=2"/>
+
+    <!-- Open it again and the rows come back where they were, so the rest of
+         this case measures the arrangement it was written against. -->
+    <collapse-track trackPath="0" collapsed="0"/>
+    <assert-lane-overlay trackPath="2" grabWidth="900" grabHeight="700"
+                         expectOverlay="false" contains="row=4"/>
 
     <!-- ============ M3.6: a CHILD's fader moves it, ours does not ======= -->
     <set-track-volume trackPath="0,0" volume="-60"/>

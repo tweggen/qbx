@@ -425,6 +425,9 @@ const Fixture kFixtures[] = {
       "<assert-lane-overlay trackPath='0,1' expectOverlay='false'"
       " minPixels='200' grabWidth='900' grabHeight='700'"
       " grabPng='folder.png' contains='row=0'/>" },
+    // ABSOLUTE, so both attributes are always written.
+    { "collapse-track",
+      "<collapse-track trackPath='0,1' collapsed='0'/>" },
 
     // timebase is written only when non-empty.
     // --- the MIDI-out verbs (proposal 37 P7b) -------------------------------

@@ -2249,6 +2249,27 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
         .arg( clipBodyPixels ).arg( playheadPixels ).arg( otherPixels );
 }
 
+// --- proposal 39 M3a: the fold path ---------------------------------------
+//
+// The overlay is SOLD on the collapsed folder ("fold it shut and you can still
+// see what is under it"), and nothing reached the fold at all before this - so
+// the grab that gated M3.10 was of an EXPANDED folder. This is the one call
+// that changes.
+//
+// ABSOLUTE rather than a toggle, and through toggleTrackCollapsed() rather than
+// around it: that call owns the row rebuild and the head column, so a second
+// writer of collapsed_ would be a second definition of what "collapsed" does.
+bool SMainWindow::setTrackCollapsed( const QString &trackPath, bool collapsed )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    if( v->isTrackCollapsed( track ) != collapsed )
+        v->toggleTrackCollapsed( track );
+    return true;
+}
+
 // --- proposal 37 P6 test seams -------------------------------------------
 
 bool SMainWindow::grabTrackHead( const QString &path, const QString &trackPath,

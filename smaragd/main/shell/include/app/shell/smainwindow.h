@@ -137,6 +137,16 @@ public:
     QString describeLaneOverlay( const QString &trackPath, int w, int h,
                                  const QString &pngPath );
 
+    // TEST ENTRY POINT (proposal 39 M3a): fold a folder lane SHUT, or open it
+    // again. ABSOLUTE, never a toggle - a script that says what it wants is
+    // idempotent and can be read without counting how many times it ran.
+    // It drives SStdMixerView::toggleTrackCollapsed(), the same call the head's
+    // fold triangle makes, rather than writing the collapsed set directly: the
+    // row rebuild, the head column and the take/automation sub-lane pruning all
+    // hang off that one call, and a second spelling of "collapsed" would be
+    // free to drift from it. False when the path names no lane.
+    bool setTrackCollapsed( const QString &trackPath, bool collapsed );
+
     // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
     // `headHeight` and return SSMVMixerControl::describeHead() — the density
     // rules for the instrument "I" and automation "A" buttons, and whether the

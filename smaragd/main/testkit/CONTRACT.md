@@ -652,3 +652,31 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     PLAYHEAD (`QColor(30,200,30)`, whose luminance falls inside the band) is
     counted in its own bucket, and the TIME GRID is not handled at all — run the
     verb after `grid-disable`.
+
+25. `collapse-track` (proposal 39 M3a) folds a folder lane SHUT, or opens it
+    again. VIEW state, exactly like `set-lane-view`: not undoable, saved
+    nowhere. It exists because the folder-sum overlay is SOLD on the collapsed
+    folder — fold it shut and you can still see what is under it — and nothing
+    in the testkit reached the fold at all, so inv. 24's pixel gate necessarily
+    grabbed an EXPANDED folder.
+
+    It goes out through `SMainWindow::setTrackCollapsed` to
+    `SStdMixerView::toggleTrackCollapsed()`, the same call the head's fold
+    triangle makes (`ssmvmixercontrol.cpp`), rather than to a second writer of
+    the collapsed set: that one call owns the row rebuild and the control
+    column, so a second spelling of "collapsed" would be free to skip the half
+    of a fold that anyone can see.
+
+    **`collapsed` is ABSOLUTE, never a toggle.** A script that says what it
+    wants is idempotent and can be read without counting how many times it ran.
+
+    **There is no row-count probe and this verb does not invent one.** What is
+    observable after a fold is that the children's rows cease to exist, so every
+    lane BELOW the folder moves up by that many rows — which
+    `assert-lane-overlay`'s own report line already carries as `row=N`, and
+    `contains="row=N"` reads. The folder's own lane is painted by the same
+    renderer either way, so the same verb on the folder still finds the overlay,
+    and `assert-envelope mode="childSum" compareTo=` still reports the same
+    bytes: collapsing is view state and may not move one probe of what the
+    overlay describes. That trio is the user story, and it is what
+    `folder_sum_preview.qxa` asserts.
