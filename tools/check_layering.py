@@ -275,12 +275,45 @@ APP_ENG = {
                                    'sinks', 'sources'},
 }
 
+# A file under <module>/tools/ is NOT part of that module's library.
+#
+# The DAG this script enforces is a constraint on LIBRARIES: tw_<mod> may only
+# link what its row in DEPS allows, so that no cycle and no back-edge can exist
+# between the static libs. A tools/ file is never compiled into tw_<mod>. It is
+# its own add_executable with its own link line — `audio_backend_probe` is
+# `add_executable(audio_backend_probe devices/tools/audio_backend_probe.cc)`
+# followed by `target_link_libraries(... PRIVATE tw_devices tw_record tw_core)`
+# (tw303a/CMakeLists.txt:860-864), and depending on two libraries is exactly
+# what an executable is for.
+#
+# Attributing such a file to `tw_devices` made the check report a violation that
+# the build does not have and could not have. That is a false positive, and a
+# false positive in a mandatory gate is expensive: it fails `main` itself, so it
+# fails every branch cut from main until someone works out it is not theirs.
+#
+# THE EXEMPTION IS THE MODULE-DAG CHECK ONLY. The app-header check still applies
+# here, deliberately: an engine tool including an app header would be a real
+# inversion whatever target it is compiled into, and no tools/ file does it
+# today. Verified by putting one there and watching this script still report it.
+#
+# (Pre-existing and NOT changed here: APP_HEADERS only matches the LEGACY bare
+# spelling — `#include "sobject.h"` — so the modern `#include
+# "app/model/sobject.h"` slips past it anywhere in the engine, tools/ or not.
+# Widening it is a separate change with its own blast radius.)
+#
+# `tests/` is deliberately NOT exempt — a test's includes have been treated as
+# in-scope throughout (proposal 39 M1 added an explicit `testkit -> sources`
+# edge rather than exempting the test that needed it).
+TOOLS_DIR = os.sep + 'tools' + os.sep
+
+
 def main():
     bad = []
     for mod in DEPS:
         allowed = closure(mod)
         moddir = os.path.join(TW, mod)
         for root, _dirs, files in os.walk(moddir):
+            in_tools = TOOLS_DIR in (root + os.sep)
             for fn in files:
                 if not fn.endswith(('.h', '.cc', '.cpp', '.mm')):
                     continue
@@ -290,6 +323,8 @@ def main():
                     if APP_HEADERS.search(line):
                         bad.append(f'{p}:{i}: engine file includes app header: '
                                    f'{line.strip()}')
+                    if in_tools:
+                        continue
                     m = TW_INCLUDE.search(line)
                     if m and m.group(1) not in allowed:
                         bad.append(f'{p}:{i}: {mod} may not include tw/'
