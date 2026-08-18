@@ -94,6 +94,13 @@ still a meaningful gate.
   (front L/R, quarter scale) and the run should end with
   `GATE PASSED: the MinGW <-> MSVC ASIO ABI works here.`
 
+Add **`--no-timeinfo`** to `open` or `tone` to answer NO to
+`kAsioSupportsTimeInfo`, which makes a driver that supports both entry points
+take the plain `bufferSwitch` path. Run `tone` BOTH ways: the production
+backend implements both, and this is the only way to exercise the legacy one
+without installing a second driver. The run line reports which was negotiated
+and the `calls` line reports which the driver actually used.
+
 `<driver name>` is matched case-insensitively as a substring, so
 `tone flex 2` works for FlexASIO.
 
@@ -186,10 +193,32 @@ has, and three of them change what should be built.
 
 ### Still not proven
 
-- **No wrapper driver has been run** (FlexASIO, ASIO4ALL). That is the one
-  that would exercise the plain-`bufferSwitch` path, a non-zero buffer-size
-  granularity, and a driver whose control panel we do not control. Worth doing
-  alongside Phase 2 rather than blocking it.
+- **The legacy `bufferSwitch` path IS covered — no second driver needed.**
+  Which entry point a driver calls is the HOST's choice, not a driver
+  property: `asio_probe tone <driver> [s] --no-timeinfo` answers NO to
+  `kAsioSupportsTimeInfo` and the driver falls back. Measured on the US-16x08
+  on 2026-08-18, back to back:
+
+  | Run | `bufferSwitch` | `bufferSwitchTimeInfo` | Frames |
+  |---|---|---|---|
+  | default | 0 | 322 | 86 % |
+  | `--no-timeinfo` | **357** | **0** | 95 % |
+
+  Both `GATE PASSED`, both `tone lifecycle OK`. **The driver honours the
+  negotiation in both directions**, which is a stronger result than a second
+  driver would have given: it is the exact behaviour Phase 2 depends on, on
+  the hardware in the room. (The 86 % / 95 % difference is driver start-up
+  inside the fixed sleep window, not a delivery problem — see above.)
+- **No wrapper driver has been run** (FlexASIO, ASIO4ALL), and that is now a
+  small gap rather than the main one. What it would still add is a **non-zero
+  buffer-size granularity** — impossible to synthesise here, since this driver
+  is fixed at min == max == preferred == 256 — and a driver whose control
+  panel we do not control. The granularity walk is pure arithmetic and is
+  unit-tested in `multi_backend_test`; nothing else about it is provable
+  without such a driver. Optional, never blocking. Note also that installing
+  one cannot displace a vendor driver: `HKLM\SOFTWARE\ASIO` is a flat list of
+  independent keys, each naming its own CLSID and its own DLL, and there is no
+  "active driver" slot to claim.
 - **No second vendor driver**, so nothing here distinguishes "how ASIO
   behaves" from "how the US-16x08 behaves".
 - **Nothing about the stop-fence under stress**: this driver delivered no
