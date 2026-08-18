@@ -335,6 +335,8 @@ void waitForMediaRequest( SMediaSource *src, int requestId, int timeoutMs )
     } );
     to.start( timeoutMs );
     loop.exec();
+}
+
 SDelayedLocalSource *delayedSource()
 {
     return qobject_cast<SDelayedLocalSource *>(
@@ -409,6 +411,13 @@ bool SRemoveMediaAccountAction::readXml( const QDomElement &elem, int )
         qWarning() << "remove-media-account: needs an accountId=";
         return false;
     }
+    return true;
+}
+
+// --------------------------------------------------------------------------
+// media-test-source (proposal 38 gate 3)
+// --------------------------------------------------------------------------
+
 SApplyResult SMediaTestSourceAction::apply( SProject * /*project*/ )
 {
     SDelayedLocalSource *src = delayedSource();
@@ -667,6 +676,10 @@ bool SAssertSettingsFileAction::readXml( const QDomElement &elem, int )
 {
     contains_ = elem.attribute( "contains" );
     absent_   = elem.attribute( "absent" );
+    return true;
+}
+
+// --------------------------------------------------------------------------
 // media-drop-wait (proposal 38 gate 3)
 // --------------------------------------------------------------------------
 
@@ -771,6 +784,7 @@ static const bool s_reg_media =
       SActionRegistry::instance().registerType(
           QStringLiteral( "assert-settings-file" ),
           [] { return new SAssertSettingsFileAction; } ),
+      SActionRegistry::instance().registerType(
           QStringLiteral( "media-test-source" ),
           [] { return new SMediaTestSourceAction; } ),
       SActionRegistry::instance().registerType(
