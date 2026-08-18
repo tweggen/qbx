@@ -13820,3 +13820,110 @@ because the header's original staleness note pointed the wrong way:
   stated in the proposal: a wider project cannot reach the other outputs, and
   monitoring cannot be routed to OUT 3/4 — both need an output-routing model,
   which is its own proposal after Phase 2 lands.
+
+## 2026-08-18 — Proposal 35 Phase 2: the ASIO output backend + the Windows dispatcher
+
+WASAPI endpoints and ASIO drivers are now ONE device list, and an `asio:` id
+plays through a real driver. `createAudioBackend()` on Windows returns a
+`WinMultiBackend` that routes by id prefix; an `AsioBackend` facade sits on a
+shared `AsioDevice` that owns the `IASIO` instance, the buffers, the callback
+and a refcounted start/stop (the input facade is Phase 3). Design, with the
+2026-08-18 re-plan against proposal 36: `plan/proposed/35_ASIO_BACKEND.md`
+§ "Phase 2, re-planned". Invariants: `tw303a/devices/CONTRACT.md` 3-5 reworded,
+25-30 new.
+
+### The decision the re-plan turned on
+
+**The device opens OUTPUTS 1-2 ONLY** and reports `channels = 2`, never the
+driver's output count (requester, 2026-08-18). It is the shipped device rule —
+monitoring is stereo (36 B5) — rather than an approximation, and on an 8-out
+interface reporting 8 would have made `twmonitor::interleave`'s `c % 2` fan-out
+put the monitor mix on OUT 1/2 AND 3/4 AND 5/6 AND 7/8, i.e. onto headphone
+amps and outboard sends. Consequence, and the point of it: **`tw/playback` is
+untouched by this phase.** A wider project still renders its full width to a
+file; reaching physical outputs 3.. needs an output-routing model and is a
+later proposal.
+
+### Three bugs the hardware found that no amount of reading would have
+
+None came from the suite. All three came from `audio_backend_probe`, a new tool
+that drives the PRODUCTION path (`createAudioBackend` → dispatcher → backend)
+rather than reaching around it the way `asio_probe` does.
+
+1. **`ASIOCallbacks` must OUTLIVE `createBuffers`.** The driver keeps the
+   POINTER, not a copy, and dereferences it on every callback for the life of
+   the stream. A local in `createBuffers_()` dies while the driver is still
+   calling through it: SIGSEGV **on the driver's thread at a stack address**,
+   with a garbage backtrace because the "return address" never was one.
+   `asio_probe` is accidentally immune — its struct is a local in `cmdTone`,
+   which spans the whole run — so the Phase 1 ABI gate could not have caught
+   it. Now a member (`asioCallbacks_`).
+2. **The stop fence needed a GATE, not only a wait.** `stopOutput()` promises
+   "no callback in flight OR FORTHCOMING", and on a driver-owned thread the
+   second half cannot be delivered by waiting. Measured: the US-16x08 delivers
+   **256 frames after `ASIOStop()` returns, on every run**, and the in-flight
+   spin alone let that reach the app's render callback — exactly the teardown
+   hazard the invariant exists for. `acceptCallbacks_` is now cleared BEFORE
+   `ASIOStop`, so a late callback is turned away having touched nothing, and is
+   counted and logged rather than hidden. **This contradicts the Phase 1 gate
+   run**, which reported no late callbacks: the probe stops differently, and
+   one observation of "this driver does not" was not evidence.
+3. **Enumeration must NOT prefix WASAPI ids.** The design namespaces ids
+   `wasapi:` / `asio:`; emitting the `wasapi:` half would have silently broken
+   every existing user, because the device picker compares menu entries against
+   the current device string VERBATIM (`smainwindow.cpp`) — a stored bare id
+   would match nothing, the menu would check-mark the FIRST entry, and applying
+   the Options page would then switch the user's device. The prefix is accepted
+   on input and never produced, so enumeration is byte-identical to what
+   shipped and `asio:` is the only new spelling anywhere.
+
+### `spsc_ring.h` was written and deleted
+
+Proposal 35's file table lists one for the input half. `tw/devices/audio_ring.h`
+is ALREADY a lock-free SPSC ring — head/tail atomics, no mutex — already driven
+by the WASAPI, ALSA and file capture threads, which is the same shape an ASIO
+`bufferSwitch` has. Phase 3 uses `AudioRing`. Worth recording why the duplicate
+was a mistake beyond redundancy: it had reintroduced exactly the bug
+`devices/CONTRACT.md` inv. 20 already forbids — drop-OLDEST on overflow needs
+the producer to move the consumer's index, which is a data race — and the
+threaded test caught it reordering within minutes of being written. The
+invariant was there; the code was written anyway.
+
+### Also not as designed
+
+- `asio_bufsize.h` is a new SDK-free header rather than code inside
+  `asio_device`, so the granularity walk can be gated without hardware. The
+  gate driver reports min == max == preferred == 256 (granularity 0) and
+  therefore exercises exactly ONE of its three branches.
+- The design's "the per-device latency keys `audio/outputLatency/<id>` keep
+  working" is moot: **no such key exists**. The only per-device settings key is
+  `audio/recordingOffsetMs/<input NAME>`, which an output id does not touch.
+
+### Verification
+
+`./build.sh` green; `check_layering` and `check_logging` clean;
+`ctest -j4` **198/198 passed, 201 registered, 3 Not Run (Disabled)** — the
+macOS-only `au_*` trio. (The count in CLAUDE.md's table, 174/171, predates
+proposals 21 L4 and L5; 201 is 200 on `main` plus the new
+`multi_backend_test`.) The suite was run twice, before and after the stop-gate
+fix, green both times.
+
+REAL HARDWARE, through `audio_backend_probe` on a Tascam US-16x08:
+
+| Check | Result |
+|---|---|
+| `list` | 3 entries — `default`, one bare WASAPI endpoint id, one `asio:{FA12DE15-…}` |
+| ASIO `open` | routed `asio`; 48000 Hz, **2 ch**, 256 frames, out latency **735** frames; rates 44100/48000/88200/96000; buffer sizes {256} |
+| ASIO `tone` ×3 | `tone lifecycle OK` every run, audible sine, 84 % of the clock's frames (driver start-up), **0 late callbacks through the gate** |
+| WASAPI regression | `default`, the BARE endpoint id, and the `wasapi:`-prefixed id all route to `wasapi` and play — 101 %, 102 %, 102 % |
+| A bogus `asio:` CLSID | clean failure, exit 1, no crash, a log line naming the cause |
+
+**NOT gated, and not provable here:** anything needing a second driver — a
+wrapper (FlexASIO / ASIO4ALL), a non-zero buffer granularity, a driver that
+ignores the TimeInfo negotiation, and the "driver A out + driver B in"
+rejection (Phase 3 has the input half; the registry refusal itself is
+unexercised because this box has one driver). Also: `setBufferSize` on a
+driver that offers more than one size, the meter latency against a real
+measurement rather than the driver's claim, `kAsioResetRequest` handling (the
+latch is written, nothing has requested one), and every input path — Phase 3.
+No qxa case touches ASIO and none can: the whole path needs a real driver.

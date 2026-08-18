@@ -124,6 +124,7 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
 | Platform | Backend | Status |
 |----------|---------|--------|
 | Windows  | WASAPI  | ✅ Audible, device picker, float32/int16/int32 |
+| Windows  | ASIO    | ✅ Output audible (proposal 35 Phase 2); one list with WASAPI, ids `asio:<clsid>`. Input/duplex is Phase 3 |
 | Linux    | ALSA    | ✅ Implemented (xrun recovery added), untested since refactor |
 | macOS    | CoreAudio | ✅ Audible, device picker |
 | PipeWire/JACK/PulseAudio | — | ❌ Placeholders only |
@@ -172,14 +173,14 @@ plan/
     │                                 frozen pages BY POSITION; zero engine
     │                                 edits. Read it before touching metering:
     │                                 the naive freeze-time design is wrong)
-    ├── 35_ASIO_BACKEND.md           (Phase 1 CLOSED 2026-08-18 — SDK drop-in
-    │                                 detection + the asio_probe ABI gate, and
-    │                                 the manual Windows gate run PASSED on a
-    │                                 Tascam US-16x08; the run and the driver
-    │                                 facts it bought are recorded in
-    │                                 docs/ASIO_WINDOWS_GATE.md. Phases 2-5 not
-    │                                 started; 21 L6 waits on this; re-plan
-    │                                 Phase 2 against 36's channel model FIRST)
+    ├── 35_ASIO_BACKEND.md           (Phases 1-2 EXECUTED 2026-08-18 — the SDK
+    │                                 drop-in + asio_probe ABI gate (PASSED on
+    │                                 a Tascam US-16x08, see
+    │                                 docs/ASIO_WINDOWS_GATE.md), then the
+    │                                 output backend + the one-list Windows
+    │                                 dispatcher. Phases 3-5 (input/duplex,
+    │                                 input enumeration, control panel) not
+    │                                 started; 21 L6 waits on those)
     └── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
                                       the page carries N planar channels; read
                                       §4.3-§4.6 and the 28 traps before touching
@@ -492,7 +493,10 @@ coverage that does not exist. Unreproduced flakes get named too.
 
 1. **Linux ALSA:** Untested since refactor (though xrun recovery added).
 2. **PipeWire/JACK/PulseAudio:** Placeholders only.
-3. **WASAPI:** Shared mode only (no exclusive/bit-perfect).
+3. **WASAPI:** Shared mode only (no exclusive/bit-perfect). ASIO now offers the
+   low-latency path on Windows for OUTPUT (proposal 35 Phase 2) — recording
+   still goes through WASAPI until Phase 3, so the endpoint sample-rate trap
+   below is NOT yet fixed by it.
 4. **Resampler:** Linear (pitch-correct, not mastering-grade).
 5. **No CI:** Only Windows/Qt6/MinGW regularly tested.
 6. **Latency:** Buffer sizing largely fixed; no user-facing control.
@@ -1186,8 +1190,11 @@ baseline on the capture backend: 0.9470 over 1.081 s, 0.9925 over 6.878 s, with
 prefer long takes: priming shrinks with length, a real rate error does not.
 
 **ASIO would remove this whole failure class** — one driver, one clock, matched
-in/out — and `asio_driver_list.cc` is already in the tree. It is a proposal, not
-a patch.
+in/out. **Half of it is now in the tree** (proposal 35 Phase 2, 2026-08-18):
+the OUTPUT backend exists and an `asio:<clsid>` device plays. It does **not**
+fix this trap yet, and saying otherwise would be the easy mistake — the trap is
+a CAPTURE/RENDER endpoint pair, and ASIO capture is Phase 3. Until then a
+recording still goes through WASAPI whatever the output device is.
 
 ### Known Limitations & Future Work
 

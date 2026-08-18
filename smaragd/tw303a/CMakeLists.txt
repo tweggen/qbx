@@ -762,6 +762,13 @@ if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
         devices/include/tw/devices/wasapi_backend.h
         devices/src/wasapi_input.cc
         devices/src/wasapi_input.h
+        # The OUTPUT dispatcher (proposal 35 Phase 2). Compiled with WASAPI, not
+        # with ASIO: a build WITHOUT the Steinberg SDK still has to PARSE an
+        # `asio:` device id — a user who selected a driver in an SDK-enabled
+        # build and then ran an SDK-less one must get a reason, not a mystery.
+        devices/src/win_multi_backend.cc
+        devices/src/win_multi_backend.h
+        devices/src/asio_id.h
     )
     message(STATUS "tw_devices: WASAPI backend and input (recording) enabled")
 endif()
@@ -822,6 +829,33 @@ endif()
 set(TW_ASIOSDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/asiosdk)
 if(SMARAGD_WINDOWS AND ENABLE_ASIO)
     if(EXISTS ${TW_ASIOSDK_DIR}/common/iasiodrv.h)
+        # Phase 2: the backend itself. TW_HAVE_ASIO is PRIVATE to tw_devices and
+        # must never enter a public tw/devices/*.h — the same ODR/ABI discipline
+        # TW_HAVE_CLAP and TW_HAVE_VST3 keep. The SDK include dir is likewise
+        # PRIVATE: only asio_device.cc names an SDK type.
+        target_compile_definitions(tw_devices PRIVATE TW_HAVE_ASIO=1)
+        target_include_directories(tw_devices PRIVATE ${TW_ASIOSDK_DIR}/common)
+        target_link_libraries(tw_devices PRIVATE ole32 advapi32 user32)
+        target_sources(tw_devices PRIVATE
+            devices/src/asio_device.cc
+            devices/src/asio_device.h
+            devices/src/asio_backend.cc
+            devices/src/asio_backend.h
+            devices/src/asio_driver_list.cc
+            devices/src/asio_driver_list.h
+            devices/src/asio_convert.h
+            devices/src/asio_bufsize.h
+        )
+
+        # audio_backend_probe drives the PRODUCTION path (createAudioBackend ->
+        # the dispatcher -> WASAPI or ASIO) against a real device. A TARGET, not
+        # a gate — like clap_probe and vst3_probe — because everything it walks
+        # needs real hardware. It is the only way Phase 2's backend can be
+        # verified at all, so it is built whenever the backend is.
+        add_executable(audio_backend_probe devices/tools/audio_backend_probe.cc)
+        target_link_libraries(audio_backend_probe PRIVATE tw_devices tw_core)
+        set_target_properties(audio_backend_probe PROPERTIES AUTOMOC OFF)
+
         add_executable(asio_probe
             devices/tools/asio_probe.cc
             devices/src/asio_driver_list.cc
@@ -1023,6 +1057,16 @@ set_tests_properties(devices_midi_test PROPERTIES RUN_SERIAL TRUE)
 tw_module_test(devices_input_test           devices/tests/input_test.cc                 tw_devices)
 target_include_directories(devices_input_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
 set_tests_properties(devices_input_test PROPERTIES RUN_SERIAL TRUE)
+
+# The CROSS-PLATFORM half of the ASIO backend (proposal 35 Phase 2): device-id
+# routing, the SPSC ring, the buffer-size granularity walk and the sample
+# converters. Every one of those is a header with no SDK type and no Windows
+# type in it, deliberately, so this runs on macOS and Linux too — which is the
+# only coverage those four will ever get, since everything that touches a real
+# driver is Windows-manual by nature. NOT RUN_SERIAL: it measures nothing
+# wall-clock and opens no device.
+tw_module_test(multi_backend_test           devices/tests/multi_backend_test.cc         tw_devices)
+target_include_directories(multi_backend_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
 # The CAPTURE BRIDGE gate (proposal 21 L3a): twGrowingCaptureSource as a data
 # structure, then the whole fan-out end to end over a paced FileAudioInput —
 # pages == WAV == the input file SAMPLE-EXACT at 2 and 6 channels, a
