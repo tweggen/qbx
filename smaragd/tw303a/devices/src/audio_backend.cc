@@ -13,6 +13,12 @@
 #endif
 #if defined(QBX_WIN_WASAPI)
 #  include "tw/devices/wasapi_backend.h"
+// The Windows OUTPUT path goes through a dispatcher that merges the WASAPI
+// endpoints and the ASIO drivers into ONE device list and routes by id prefix
+// (proposal 35, Phase 2). It is compiled whenever WASAPI is, with its ASIO
+// half under TW_HAVE_ASIO, so a build without the Steinberg SDK still PARSES a
+// prefixed id and fails it with a reason.
+#  include "../src/win_multi_backend.h"
 #endif
 #if defined(QBX_MAC_COREAUDIO)
 #  include "tw/devices/coreaudio_backend.h"
@@ -53,7 +59,7 @@ std::unique_ptr<AudioBackend> createAudioBackend()
     }
 
 #if defined(QBX_WIN_WASAPI)
-    return std::unique_ptr<AudioBackend>(new WASAPIBackend());
+    return std::unique_ptr<AudioBackend>(new WinMultiBackend());
 #elif defined(QBX_LINUX_ALSA)
     return std::unique_ptr<AudioBackend>(new ALSABackend());
 #elif defined(QBX_MAC_COREAUDIO)

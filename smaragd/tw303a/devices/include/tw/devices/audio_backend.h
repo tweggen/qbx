@@ -81,6 +81,23 @@ public:
     // not supported); call getConfig().bufferFrames to get the actual size.
     virtual int setBufferSize(uint32_t frameCount) { return -1; }
 
+    // Open the DRIVER'S OWN control panel, if it has one. Returns 0 when a
+    // panel was shown, -1 when the backend has none — which is the default, so
+    // no existing backend changes (proposal 35 Phase 5).
+    //
+    // Three things a caller must know:
+    //   - It BLOCKS until the user closes the panel, because the driver's call
+    //     is modal. Call it from the UI thread; it is not a control-plane call
+    //     that returns promptly like the others on this interface.
+    //   - It needs a thread with a MESSAGE PUMP. The driver parks a real window
+    //     on the HWND it was given at init.
+    //   - What the user changes in there — buffer size, rate — takes effect on
+    //     the NEXT open, not immediately. The driver reports the change as a
+    //     reset request; there is deliberately no live renegotiation (proposal
+    //     35, declared debt). A caller should re-read getConfig() and
+    //     getAvailableBufferSizes() afterwards and say "next Play".
+    virtual int openControlPanel() { return -1; }
+
     // Rates this device can be opened at WITHOUT the host resampling. A
     // shared-mode backend reports its single mix rate; an exclusive-capable one
     // may report several. Empty == unknown until opened. Pure query: it may

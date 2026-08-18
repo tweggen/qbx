@@ -265,7 +265,11 @@ public:
     QString inputDeviceId() const { return inputDeviceId_; }
 
 private:
-    bool ensureBridge( const QString &want );
+    // `channelMask` is the ARMING TRACK's recording channels (bit n == input
+    // n). It is passed down rather than computed from a project walk
+    // because the device's channel set is GROW-ONLY: each arm adds its own
+    // channels, and the union falls out without anyone maintaining it.
+    bool ensureBridge( const QString &want, std::uint64_t channelMask = 0 );
     void closeBridge();
     // --- live INSTRUMENTS (proposal 21 L2, design D2/D4/D8) ----------------
     //
