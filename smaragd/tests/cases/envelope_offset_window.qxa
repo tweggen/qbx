@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 39, the follow-up gate: A CLIP THAT DOES NOT START AT FRAME 0, READ
+  THROUGH A WINDOW THAT DOES NOT START AT FRAME 0.
+
+  WHY THIS CASE EXISTS
+
+  Design D3 said: ask every clip for probes over the SAME visible time range.
+  That is silently wrong, and M3's execution record says so in as many words -
+  SCutRendererInline::collectEnvelope maps a clip-relative position through
+  cutSourceTimeOf, which CLAMPS A NEGATIVE REL TO 0, so a clip starting AFTER
+  the window's left edge does not decline and does not shift: it stretches its
+  whole content across EVERY column of the window it was handed. M3 fixed it by
+  giving each clip its own PIXEL SPAN, sized the way STrackRendererInline's clip
+  loop sizes the rect it draws that clip's waveform into.
+
+  It was found by READING, and until this case existed the gate could not see
+  it: every clip in folder_sum_preview.qxa and envelope_probe.qxa starts at
+  frame 0 and every window in them starts at 0, which is exactly the one
+  configuration in which the wrong answer and the right answer coincide. This
+  case is the two conditions those cases avoid, in both modes of the verb.
+
+  IT HAS BEEN WATCHED FAIL. With the per-clip span reverted to D3's "one window
+  for every clip" and the binary rebuilt, 18 of the 26 childSum assertions below
+  fail, among them
+
+    assert-envelope FAILED: "childSum of track 0 [96000, 672000) over 12
+      columns" - column 4 is min -50 max 50 - expected min 0 max 0 within 0
+
+  which is clip B's audio landing in a column clip B does not cover. On the SAME
+  reverted binary folder_sum_preview, envelope_probe and preview_volume_independent
+  ALL STILL PASS - three cases over this exact seam, none of them able to see it.
+  Restored, this one passes. (Proposal 39 already shipped a gate that could not
+  bite - preview_volume_independent reads below the seam its bug sat above - so
+  "watched fail" is the bar here, not "looks right".)
+
+  THE FIXTURE AND WHY THE NUMBERS ARE THESE NUMBERS
+
+  ../test_sawtooth.wav is a RAMPED sawtooth 4 s long (192000 frames at 48 kHz;
+  testkit CONTRACT inv. 3), and a probe column is a POINT SAMPLE of that ramp at
+  the column's own mapped source time - which is why envelope_probe reads
+  0 / 25 / 50 / 76 for the whole clip in four columns: one column per source
+  second, ~25.4 per second, a straight line through the origin. Every expected
+  value below is that same line read at a different place, at tolerance 0.
+
+  THE LAYOUT is chosen so that EVERY COLUMN BOUNDARY FALLS ON A WHOLE SECOND of
+  both the timeline and each clip's own content, so no column straddles a
+  transition and no expected value is a rounding argument:
+
+      clip A  at  96000 ( 2 s), covering seconds  2 ..  6
+      clip B  at 384000 ( 8 s), covering seconds  8 .. 12
+      window  at  96000 ( 2 s), 12 s long, 12 columns  =>  1 s per column
+
+              second   2  3  4  5 | 6  7 | 8  9 10 11 | 12 13
+              column   0  1  2  3 | 4  5 | 6  7  8  9 | 10 11
+              covered  A  A  A  A | -  - | B  B  B  B | -  -
+              expected 0 25 50 76 | 0  0 | 0 25 50 76 | 0  0
+
+  THE TWO-SECOND GAP between the clips is the discriminator, and it is
+  deliberate rather than incidental: columns 4 and 5 are covered by NOTHING, so
+  they must read EXACTLY 0/0. Under the D3 behaviour clip B's content is spread
+  over all twelve columns and they carry audio - and so does column 1, which is
+  inside A but gets B's smear added on top of it. Both are asserted, because a
+  case that only checked the silent columns would also be satisfied by a clip
+  that declined entirely, which is a different bug with the same symptom.
+
+  THE SECOND WINDOW, [192000, 576000) over 8 columns (seconds 4 .. 12), adds the
+  other side of the same arithmetic: its left edge falls INSIDE clip A, so A's
+  span is clipped at the left (isx < 0) while B's still starts four columns in.
+  A left-clipped clip reads the MIDDLE of its ramp - 50 / 76, not 0 / 25 - which
+  a collect that ignored the offset could not produce.
+
+  MODE="CLIP" is the other half, and it gates the same arithmetic one level
+  down, where there is no per-clip span at all: SMainWindow::collectClipEnvelope
+  hands the renderer the window as given, so what is pinned there is the
+  clip->source map's own handling of a non-zero clip start against a non-zero
+  window start. The last of those assertions pins the CLAMP ITSELF, which is the
+  mechanism the folder walk exists to avoid feeding: a window reaching left of
+  the clip reads the clip's first 96000 frames across all four columns
+  (0 / 12 / 25 / 38 - the same line sampled every half second). That is recorded
+  here as documentation, not as an endorsement - the painter never hands a clip
+  a window wider than its own rect, and M3's walk is what guarantees the folder
+  overlay does not either.
+
+  NOT GATED HERE: pixels - this case asserts numbers, and folder_sum_preview's
+  assert-lane-overlay is the paint gate whose clips all start at 0, so an offset
+  clip's PIXELS remain ungated; a clip whose start does not land on a column
+  boundary (deliberately avoided - the sub-window is floored to whole columns,
+  so a fractional start would turn every expected value into a rounding
+  argument); looped, stretched or take-stacked clips at an offset; and the
+  sum-of-envelopes approximation itself, which this case avoids for the same
+  reason folder_sum_preview does - by never overlapping two children.
+-->
+<SActionScript version="1" name="envelope_offset_window">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 0 = the folder | 1 = child A | 2 = child B -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="96000"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="384000"/>
+
+    <!-- Each reparent renumbers the top level, so the source index is re-read
+         rather than counted forward (folder_sum_preview does the same). -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+    <!-- Folder 0 now holds A at 0,0 and B at 0,1. -->
+
+    <!-- ============ mode="clip": an offset clip, offset windows ========== -->
+
+    <!-- ANCHOR. Clip B starts at 384000, and a window aligned to it reads the
+         clip from its own beginning: the fixture's straight line, unmoved by
+         the fact that neither number is zero. A collect that forgot to subtract
+         the clip start would read 384000 frames into a 192000-frame file. -->
+    <assert-envelope clip="0,1,0" start="384000" length="192000" width="4"
+                     column="0" min="0" max="0"/>
+    <assert-envelope clip="0,1,0" start="384000" length="192000" width="4"
+                     column="1" min="-25" max="25"/>
+    <assert-envelope clip="0,1,0" start="384000" length="192000" width="4"
+                     column="2" min="-50" max="50"/>
+    <assert-envelope clip="0,1,0" start="384000" length="192000" width="4"
+                     column="3" min="-76" max="76"/>
+
+    <!-- A window starting INSIDE the offset clip, two seconds in: the same line
+         read at 2 s and 3 s. Both numbers non-zero, both ends of the mapping
+         exercised. -->
+    <assert-envelope clip="0,1,0" start="480000" length="96000" width="2"
+                     column="0" min="-50" max="50"/>
+    <assert-envelope clip="0,1,0" start="480000" length="96000" width="2"
+                     column="1" min="-76" max="76"/>
+
+    <!-- THE CLAMP, pinned as the mechanism. This window reaches 96000 frames
+         LEFT of the clip; cutSourceTimeOf clamps that negative rel to 0, so all
+         four columns land inside the clip's first 96000 frames - 24000 per
+         column, i.e. the half-second samples 0 / 12 / 25 / 38. The clip does
+         NOT decline and does NOT shift. This is exactly what would happen to
+         every clip in a folder if the walk below handed each of them the whole
+         lane window. -->
+    <assert-envelope clip="0,1,0" start="288000" length="192000" width="4"
+                     column="1" min="-12" max="12"/>
+    <assert-envelope clip="0,1,0" start="288000" length="192000" width="4"
+                     column="3" min="-38" max="38"/>
+
+    <!-- ========== mode="childSum": the per-clip span, which is the fix ===== -->
+
+    <!-- The 12-column window of the table in the header. Take the whole array
+         first, so the per-column assertions below are not the only thing this
+         window is measured by. -->
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" expectEmpty="false" snapshot="gapped"/>
+
+    <!-- Clip A occupies columns 0..3 and reads its own ramp from the start. -->
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="0" min="0" max="0"/>
+    <!-- COLUMN 1 IS THE FIRST DISCRIMINATOR: A alone puts 25 here, and under
+         D3's shared window B's smear lands on top of it. -->
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="1" min="-25" max="25"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="2" min="-50" max="50"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="3" min="-76" max="76"/>
+
+    <!-- COLUMNS 4 AND 5 ARE THE DIRECT DISCRIMINATOR: the two-second gap
+         between the clips. No clip covers them, so they are EXACTLY 0/0.
+         Under D3 they carry clip B's smeared audio. -->
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="4" min="0" max="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="5" min="0" max="0"/>
+
+    <!-- Clip B occupies columns 6..9 and likewise reads from ITS own start, not
+         from wherever the window began. -->
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="6" min="0" max="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="7" min="-25" max="25"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="8" min="-50" max="50"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="9" min="-76" max="76"/>
+
+    <!-- ...and nothing runs past the end of the last clip. -->
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="10" min="0" max="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="11" min="0" max="0"/>
+
+    <!-- A window lying entirely in the GAP draws NOTHING at all - both clips
+         are outside it, so the walk contributes nothing and the painter paints
+         no overlay rather than a flat line on the centre. -->
+    <assert-envelope mode="childSum" trackPath="0" start="288000" length="96000"
+                     width="8" expectEmpty="true"/>
+
+    <!-- THE SECOND WINDOW: its left edge falls INSIDE clip A, so A's span is
+         clipped at the LEFT and reads the MIDDLE of its ramp (50 / 76) while
+         B's still starts four columns in. Seconds 4..12 over 8 columns. -->
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="0" min="-50" max="50"/>
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="1" min="-76" max="76"/>
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="2" min="0" max="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="3" min="0" max="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="4" min="0" max="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="5" min="-25" max="25"/>
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="6" min="-50" max="50"/>
+    <assert-envelope mode="childSum" trackPath="0" start="192000" length="384000"
+                     width="8" column="7" min="-76" max="76"/>
+
+    <!-- The offset does not cost the walk its semantics: a CHILD's fader still
+         moves the sum and the FOLDER's own still does not, on a fixture where
+         every clip is somewhere other than zero. -60 dB is a linear 0.001, so
+         A's contribution rounds to nothing and its four columns go silent while
+         B's are untouched. -->
+    <set-track-volume trackPath="0,0" volume="-60"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="3" min="0" max="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" column="9" min="-76" max="76"/>
+    <set-track-volume trackPath="0,0" volume="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" compareTo="gapped"/>
+
+    <set-track-volume trackPath="0" volume="-20"/>
+    <assert-envelope mode="childSum" trackPath="0" start="96000" length="576000"
+                     width="12" compareTo="gapped"/>
+    <set-track-volume trackPath="0" volume="0"/>
+  </actions>
+
+</SActionScript>

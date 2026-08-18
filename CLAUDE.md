@@ -692,7 +692,7 @@ folder's own clips, the summed waveform of every descendant. Design:
 `plan/proposed/39_FOLDER_SUM_PREVIEW.md`. Invariants:
 `main/timeline/CONTRACT.md` inv. 22, `main/objects/track/CONTRACT.md`
 ("the child-sum walk"), `main/objects/wave/CONTRACT.md`,
-`main/testkit/CONTRACT.md` 23-25.
+`main/testkit/CONTRACT.md` 23-26.
 
 **Read this before touching the overlay — the obvious design is wrong for the
 FOURTH time in this codebase**, after the level meters, MIDI-out and the
@@ -713,7 +713,7 @@ post-fader, so it would empty as the user pulls the folder's own fader down.
 | **The lane's own fader, mute and inserts are nowhere in its own background** — but a child one level down keeps its fader | M2's rule ("a drawn waveform describes the audio its object PRODUCES; the lane it is drawn on never scales it"), and this overlay IS the lane. A descendant carries the product of the gains from its own track up to but EXCLUDING the folder being drawn. Gated as a PAIR at tolerance 0: a child at −60 dB drops the sum to the other child's envelope exactly, the folder's own −20 dB leaves 128 probe bytes BYTE-IDENTICAL. Same for mute, both ways. |
 | The accumulator is **`int32` and the clamp happens ONCE**, at the end | `preview_t` is a `signed char`. Accumulating in it WRAPS, and a wrap makes two loud children draw *quieter* than one — a failure that looks like a feature. Wrapping and a missing clamp fail in OPPOSITE directions, so the fixture gates both: two children in phase read exactly 50 and exactly 100 in the doubling columns, and exactly 127 where the true sum is 152. |
 | Audibility is **`ssolo::isLaneAudible`**, resolved once per walk, never a local mute/solo chain | `main/timeline/CONTRACT.md` inv. 10 records that the two meter call sites' local copies of the direct-children-only rule are exactly how the meter and the ear came to disagree about a nested lane. `isLiveOwnedLane()` is deliberately NOT consulted — a live-owned lane's clips still exist. |
-| **Each clip gets its OWN pixel span**, sized the way the clip loop sizes the rect it draws that clip into | Design D3 said "the same window for every clip" and that is silently wrong, not merely imprecise: `SCutRendererInline::collectEnvelope` clamps a negative clip-relative position to 0, so a clip starting after the window's left edge would smear its audio across every column. **Found by reading, not by the gate** — every clip in the fixture starts at 0. |
+| **Each clip gets its OWN pixel span**, sized the way the clip loop sizes the rect it draws that clip into | Design D3 said "the same window for every clip" and that is silently wrong, not merely imprecise: `SCutRendererInline::collectEnvelope` clamps a negative clip-relative position to 0, so a clip starting after the window's left edge would smear its audio across every column. Found by READING; **gated since 2026-08-18 by `envelope_offset_window.qxa`**, the only case whose clips AND window both start somewhere other than 0 — that is the one configuration in which the wrong answer and the right one coincide, which is why `folder_sum_preview` still passes with the span reverted while eighteen of the new case's assertions fail (a column no clip covers reads 50 where it must read 0). |
 | Returning **false and writing nothing** when nothing contributed | So the painter draws nothing at all, rather than a flat line down the centre of every folder lane in the project. |
 | The colour is **derived** — `laneFillColor()` lightened, at partial alpha | It follows selection and every `STrackColorModifier` state instead of being a fourth hardcoded constant. What is contractual is the RELATION and it is measured, not eyeballed: strictly lighter than the lane fill, strictly darker than the clip body. |
 | Cost: (visible clips in the subtree) × (lane width in px) probe lookups per repaint | Each is an index into an array a child's preview already built. **Measured: 6.11 ms per 1200×800 canvas grab with the overlay against 1.78 ms without**, for a folder holding six children with a 4 s clip each — about what those same clips cost on their own lanes when the folder is EXPANDED. That is why there is no cache. |
@@ -729,8 +729,8 @@ bug; what caught it is `preview_envelope_test` section 5, which recovers the
 probes from the PIXELS.
 
 Gates: `ctest -R preview_envelope_test` and the qxa cases `envelope_probe`,
-`preview_volume_independent` and `folder_sum_preview`, plus
-`action_roundtrip_test`. `folder_sum_preview` also carries the pixel gate
+`preview_volume_independent`, `folder_sum_preview` and `envelope_offset_window`,
+plus `action_roundtrip_test`. `folder_sum_preview` also carries the pixel gate
 (`assert-lane-overlay`, **the first verb in this repo that measures the
 arranger CANVAS's paint at all** — `screenshot` grabs a root window that is
 blank under `QT_QPA_PLATFORM=offscreen`) and, since M3a, the **collapsed**
@@ -752,7 +752,9 @@ call it makes, not a synthesised click); and a lane holding a CLIP as an
 `expectOverlay="false"` control — the anti-aliased edges of the file name drawn
 on a clip land at every luminance between the text and the clip body, so the
 negative controls are bare lanes, which is a weaker statement than "a clip's
-own waveform is never mistaken for an overlay".
+own waveform is never mistaken for an overlay"; and an OFFSET clip's PIXELS —
+`envelope_offset_window` asserts numbers, and the paint gate's clips all still
+start at 0.
 
 ### The render dialog DISPLAYS the channel count; it does not override it
 

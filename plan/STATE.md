@@ -13881,8 +13881,11 @@ clip" was WRONG, and silently so.** `SCutRendererInline::collectEnvelope`
 clamps a negative clip-relative position to 0, so a clip starting after the
 window's left edge would smear its audio across every column. Each clip is
 therefore given its OWN pixel span, sized the way the clip loop sizes the rect
-it draws that clip into. **Found by reading, not by the gate** — every clip in
-the fixture starts at 0.
+it draws that clip into. **Found by reading**, and for a day ungated, because
+every clip in this fixture starts at 0 and every window starts at 0 — exactly
+the one configuration in which the wrong answer and the right one coincide.
+**Gated since 2026-08-18 by `envelope_offset_window.qxa`**; see the follow-up
+section below.
 
 Paint half: `drawChildSumOverlay()` runs after the lane fill (which would
 otherwise erase it) and before the clip loop (so the folder's own clips sit on
@@ -14018,3 +14021,92 @@ The branch adds four cases to M0's 200: `envelope_probe` (M1),
   with a current project.
 - **Whether the coarse-ladder quantisation argument is visible to a user** —
   that is an aesthetic claim, not an assertion.
+
+## Proposal 39 follow-up — the offset-clip envelope gate (2026-08-18)
+
+Branch `test/39-offset-clip-envelope` off `60fc705`. **One new qxa case and
+documentation. No production code was touched**, and that is the point: the fix
+landed in M3 (c04b5a3) and what was missing was any evidence that it is
+load-bearing.
+
+M3's own record named this as the single largest hole it left. Design D3 said
+"ask every clip for probes over the SAME visible time range";
+`SCutRendererInline::collectEnvelope` maps through `cutSourceTimeOf`, which
+CLAMPS a negative clip-relative position to 0, so a clip starting AFTER the
+window's left edge does not decline and does not shift — it stretches its whole
+content across every column of the window it was handed. M3 gave each clip its
+own pixel span instead. It was found by READING, and the suite could not see it,
+because every clip in `folder_sum_preview.qxa` and `envelope_probe.qxa` starts at
+frame 0 and every `assert-envelope` window in them starts at 0 — which is exactly
+the one configuration in which the wrong answer and the right one coincide.
+
+`smaragd/tests/cases/envelope_offset_window.qxa` is those two conditions, in both
+modes of the verb. `../test_sawtooth.wav` ramps and a probe column is a point
+sample of it, so the whole clip in four columns reads 0 / 25 / 50 / 76 — ~25.4
+per source second, a straight line through the origin. Every column boundary is
+put on a WHOLE SECOND of both the timeline and each clip's own content, so no
+column straddles a transition and no expected value is a rounding argument:
+
+```
+clip A  at  96000 ( 2 s), covering seconds  2 ..  6
+clip B  at 384000 ( 8 s), covering seconds  8 .. 12
+window  at  96000 ( 2 s), 12 s long, 12 columns  =>  1 s per column
+
+        column   0  1  2  3 | 4  5 | 6  7  8  9 | 10 11
+        covered  A  A  A  A | -  - | B  B  B  B | -  -
+        measured 0 25 50 76 | 0  0 | 0 25 50 76 | 0  0
+```
+
+The **two-second gap** is the discriminator: columns 4 and 5 are covered by
+nothing and must read EXACTLY 0/0. A second window, `[192000, 576000)` over 8
+columns, puts the left edge INSIDE clip A so its span is clipped at the LEFT and
+it reads the MIDDLE of its ramp — measured **50 / 76 / 0 / 0 / 0 / 25 / 50 / 76**.
+`mode="clip"` pins the same arithmetic one level down, where there is no per-clip
+span at all: clip B through a window aligned to it reads 0 / 25 / 50 / 76,
+through a window two seconds into it reads 50 / 76, and through a window reaching
+96000 frames LEFT of it reads **0 / 12 / 25 / 38** — the clamp itself, recorded
+as the mechanism rather than endorsed.
+
+**IT WAS WATCHED FAIL.** With `sChildSumAddClip`'s span computation reverted to
+D3 (`isx = 0; SEnvelopeWindow sub = w.win;`) and the binary rebuilt, **18 of the
+26 childSum assertions fail**:
+
+```
+assert-envelope: stored "childSum of track 0 [96000, 672000) over 12 columns"
+  as "gapped" "[0]0/0 [1]-37/37 [2]-75/75 [3]-114/114"
+assert-envelope FAILED: ... - column 1 is min -37 max 37 - expected min -25 max 25 within 0
+assert-envelope FAILED: ... - column 4 is min -50 max 50 - expected min 0 max 0 within 0
+assert-envelope FAILED: ... - column 5 is min -63 max 62 - expected min 0 max 0 within 0
+assert-envelope FAILED: ... - column 8 is min 0 max 0 - expected min -50 max 50 within 0
+FAIL - envelope_offset_window.qxa
+# Actions rejected: 18
+```
+
+The shape is exactly the predicted smear: clip B, handed a window beginning
+288000 frames left of it, has its negative rel clamped to 0 and spreads its four
+seconds over all twelve columns at 24000 frames a column — so the gap columns
+carry 50 and 63 where they must carry 0, and clip B's own last columns run off
+the end and read 0 where they must read 50 and 76.
+
+**On the SAME reverted binary `folder_sum_preview`, `envelope_probe` and
+`preview_volume_independent` all still PASS.** That is the hole demonstrated
+rather than asserted: three cases over this exact seam and none of them could see
+it. Restored, the new case passes.
+
+Two deliberate choices in the case. The gap columns are asserted **as well as**
+the covered ones, because "a column that should be silent is loud" would also be
+satisfied by a clip that declined entirely — a different bug with the same
+symptom — and the covered columns rule that out. And every clip start lands on a
+column boundary on purpose: the sub-window is floored to whole columns, so a
+fractional start would make every expected value a rounding argument instead of a
+closed form.
+
+Gates: `./build.sh`, `check_layering.py` and `check_logging.py` clean; `ctest
+-j4` **205 registered / 202 run / 3 Not Run (Disabled)**, 0 failed, serial
+likewise; `smaragd/tests/goldens/` byte-identical; `envelope_offset_window`
+pinned **20/20 by exit code** over `SMARAGD_REVAL_WORKERS` {1,4,8,16}.
+
+**Still NOT gated:** an offset clip's PIXELS (this case asserts numbers, and
+`assert-lane-overlay`'s clips all still start at 0); a clip whose start does NOT
+land on a column boundary; and looped, stretched, warp-anchored or take-stacked
+clips at an offset, where the same sub-window arithmetic meets a piecewise map.

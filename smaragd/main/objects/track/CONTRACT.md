@@ -372,7 +372,10 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
       waveform into. Handing a clip the whole lane window would be silently
       wrong rather than imprecise: a cut's collect clamps a negative
       clip-relative position to 0, so a clip starting after the window's left
-      edge would smear its audio across every column.
+      edge would smear its audio across every column. Gate:
+      `envelope_offset_window.qxa`, the only case whose clips AND window both
+      start somewhere other than 0 — which is why `folder_sum_preview.qxa`
+      passes with the span reverted and this one fails 18 assertions.
     - **The accumulator is `int32` and the clamp to [-127,127] happens ONCE, at
       the end.** `preview_t` is a `signed char`: accumulating in it wraps, and a
       wrap makes two loud children draw QUIETER than one — a failure that looks

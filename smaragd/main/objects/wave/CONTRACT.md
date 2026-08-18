@@ -138,8 +138,11 @@ Every renderer that draws a waveform overrides `SObjectRenderer::collectEnvelope
 by routing its EXISTING walk to the collect terminal; the base returns false and
 writes nothing, which is the right answer for an object with no waveform.
 Gates: `preview_envelope_test` (ctest — the collected probes against the DRAWN
-pixels, through the link-start fold, a cut's slip and loop tiling) and
-`envelope_probe.qxa` (the shipped renderers, end to end).
+pixels, through the link-start fold, a cut's slip and loop tiling),
+`envelope_probe.qxa` (the shipped renderers, end to end) and
+`envelope_offset_window.qxa` (the only one whose CLIP and WINDOW both start
+somewhere other than 0 — a cut's collect clamps a negative clip-relative
+position to 0, so nothing anchored at 0 can tell a correct map from that clamp).
 
 WHAT A DRAWN WAVEFORM DESCRIBES (proposal 39 M2). One rule, and it is the
 reason `drawObjectWaveform` no longer looks at `lk.parent()` at all:

@@ -680,3 +680,19 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     bytes: collapsing is view state and may not move one probe of what the
     overlay describes. That trio is the user story, and it is what
     `folder_sum_preview.qxa` asserts.
+
+26. **A case that reads an envelope must put its clips and its window somewhere
+    other than frame 0**, or it cannot see the commonest way the collect can be
+    wrong. `SCutRendererInline::collectEnvelope` clamps a negative clip-relative
+    position to 0, so a clip handed a window that begins to its LEFT does not
+    decline and does not shift — it stretches its whole content across every
+    column. Every case written before 2026-08-18 (`envelope_probe`,
+    `preview_volume_independent`, `folder_sum_preview`) starts every clip at 0
+    and every window at 0, which is exactly the configuration in which the wrong
+    answer and the right one coincide, and all three PASS on a binary with the
+    per-clip span removed. `envelope_offset_window.qxa` is the one that does not:
+    clips at 96000 and 384000, windows at 96000 and 192000, a two-second GAP
+    whose columns must read exactly 0/0, and a column-per-second layout that puts
+    every boundary on a whole second of the ramp so each expectation is a closed
+    form at tolerance 0. Reverting the span fails 18 of its 26 childSum
+    assertions.

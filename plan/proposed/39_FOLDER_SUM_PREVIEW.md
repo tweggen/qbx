@@ -409,8 +409,12 @@ those clips on their own lanes when the folder is expanded, which is D5's claim.
    left edge would have smeared its audio across every column instead of
    occupying the ones it covers. Each clip gets its OWN pixel span, sized the way
    the clip loop sizes the rect it draws that clip into. **Caught by reading, not
-   by a gate — and the gate still cannot see it**, because every clip in the
-   fixture starts at frame 0. That is the single largest hole left here.
+   by a gate** — and for a day it was recorded here as the single largest hole
+   left, because every clip in `folder_sum_preview.qxa` starts at frame 0 and
+   every window in it starts at 0, which is exactly the one configuration in
+   which the wrong answer and the right one coincide. **CLOSED 2026-08-18 by
+   `envelope_offset_window.qxa`** — see the follow-up section at the end of this
+   record, including the failure it was watched to produce.
 3. **D4's `isEmpty()` claim was wrong.** `SObject::isEmpty()` is
    `childOrder_.isEmpty()` and a folder's child *tracks* ARE child links, so it
    was already false for the common folder and the early-out never swallowed
@@ -441,3 +445,95 @@ write of `collapsed_` would have skipped; the folder's own lane still reports it
 overlay; and the childSum array is byte-identical to the snapshot taken while it
 was open. **This closes a claim, not a suspected bug** — the paint is literally
 the same either way, and the case header says so.
+
+### Follow-up, 2026-08-18 — the offset-clip hole is CLOSED
+
+Branch `test/39-offset-clip-envelope` off `60fc705`. **One new case, no
+production code touched**, which is the point: the fix landed in M3 and what was
+missing was the evidence that it is load-bearing.
+
+`smaragd/tests/cases/envelope_offset_window.qxa` exercises the two conditions
+every earlier case avoided — **a clip that does not start at frame 0** and **an
+`assert-envelope` window whose `start=` is not 0** — in both modes of the verb.
+
+**The layout, and why the numbers are these numbers.** `../test_sawtooth.wav` is
+a ramped sawtooth 4 s long and a probe column is a point sample of that ramp, so
+the whole clip in four columns reads 0 / 25 / 50 / 76 (~25.4 per source second,
+a straight line through the origin — the same line `envelope_probe` pins). Every
+column boundary is placed on a WHOLE SECOND of both the timeline and each clip's
+own content, so no column straddles a transition and no expected value is a
+rounding argument:
+
+```
+clip A  at  96000 ( 2 s), covering seconds  2 ..  6
+clip B  at 384000 ( 8 s), covering seconds  8 .. 12
+window  at  96000 ( 2 s), 12 s long, 12 columns  =>  1 s per column
+
+        second   2  3  4  5 | 6  7 | 8  9 10 11 | 12 13
+        column   0  1  2  3 | 4  5 | 6  7  8  9 | 10 11
+        covered  A  A  A  A | -  - | B  B  B  B | -  -
+        measured 0 25 50 76 | 0  0 | 0 25 50 76 | 0  0
+```
+
+The **two-second gap** is the discriminator: columns 4 and 5 are covered by
+nothing and must read EXACTLY 0/0. A second window, `[192000, 576000)` over 8
+columns, puts the left edge INSIDE clip A so its span is clipped at the left and
+it reads the MIDDLE of its ramp — measured **50 / 76 / 0 / 0 / 0 / 25 / 50 / 76**
+— which a collect that ignored the offset cannot produce. `mode="clip"` pins the
+same arithmetic one level down, where there is no per-clip span at all: clip B
+read through a window aligned to it gives 0 / 25 / 50 / 76, through a window two
+seconds into it gives 50 / 76, and through a window reaching 96000 frames LEFT of
+it gives **0 / 12 / 25 / 38** — the clamp itself, recorded as the mechanism the
+folder walk exists to avoid feeding.
+
+**IT WAS WATCHED FAIL, and that is the whole value of the exercise.** With
+`sChildSumAddClip`'s span computation reverted to D3's "the same window for every
+clip" (`isx = 0; SEnvelopeWindow sub = w.win;`) and the binary rebuilt:
+
+```
+assert-envelope: stored "childSum of track 0 [96000, 672000) over 12 columns"
+  as "gapped" "[0]0/0 [1]-37/37 [2]-75/75 [3]-114/114"
+assert-envelope FAILED: ... - column 1 is min -37 max 37 - expected min -25 max 25 within 0
+assert-envelope FAILED: ... - column 2 is min -75 max 75 - expected min -50 max 50 within 0
+assert-envelope FAILED: ... - column 3 is min -114 max 114 - expected min -76 max 76 within 0
+assert-envelope FAILED: ... - column 4 is min -50 max 50 - expected min 0 max 0 within 0
+assert-envelope FAILED: ... - column 5 is min -63 max 62 - expected min 0 max 0 within 0
+assert-envelope FAILED: ... - column 6 is min -76 max 76 - expected min 0 max 0 within 0
+assert-envelope FAILED: ... - column 7 is min -88 max 88 - expected min -25 max 25 within 0
+assert-envelope FAILED: ... - column 8 is min 0 max 0 - expected min -50 max 50 within 0
+assert-envelope FAILED: ... - column 9 is min 0 max 0 - expected min -76 max 76 within 0
+FAIL - envelope_offset_window.qxa
+# Actions rejected: 18
+```
+
+**18 of the 26 childSum assertions fail**, and the shape is exactly the smear the
+M3 commit message predicted by reading: clip B, whose window would begin 288000
+frames left of it, has its negative rel clamped to 0 and stretches its whole four
+seconds across all twelve columns at 24000 frames a column, so the gap columns
+carry 50 and 63 where they must carry 0, and clip B's own last two columns run
+off the end and read 0 where they must read 50 and 76.
+
+**On the SAME reverted binary, `folder_sum_preview`, `envelope_probe` and
+`preview_volume_independent` all still PASS.** That is the hole, demonstrated
+rather than asserted: three cases over this exact seam, and none of them could
+see it. Restored, `envelope_offset_window` passes.
+
+Two things the design of the case is deliberate about. The gap columns are
+asserted **as well as** the covered ones, because "a column that should be
+silent is loud" would also be satisfied by a clip that declined entirely — a
+different bug with the same symptom — and the covered columns rule that out. And
+every clip start lands on a column boundary on purpose: the sub-window is floored
+to whole columns, so a fractional start would turn every expected value into a
+rounding argument rather than a closed form.
+
+Gates: `./build.sh`, `check_layering.py` and `check_logging.py` clean; `ctest
+-j4` **205 registered / 202 run / 3 Not Run (Disabled)**, 0 failed, and a serial
+run likewise; `smaragd/tests/goldens/` byte-identical (this branch adds a test
+and edits docs — it moves no audio and no pixel); `envelope_offset_window` pinned
+**20/20 by exit code** over `SMARAGD_REVAL_WORKERS` {1,4,8,16}.
+
+**Still NOT gated after this**: an offset clip's PIXELS — this case asserts
+numbers, and `assert-lane-overlay`'s clips all still start at 0; a clip whose
+start does NOT land on a column boundary; and looped, stretched, warp-anchored or
+take-stacked clips at an offset, where the same sub-window arithmetic meets a
+piecewise map.
