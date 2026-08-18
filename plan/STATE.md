@@ -13973,18 +13973,45 @@ have implicated the backend. It does not survive more samples — a quieter box
 gives 0 for both. The lesson is the same as the one above: four runs under
 uncontrolled load are not a measurement.
 
-### The one STABLE difference, and it is not the click
+### The "one stable difference" — CHASED, AND IT WAS AN ARTIFACT
 
-Start-up before the first callback, every run without exception:
+This entry first recorded an unexplained start-up difference: **477–490 ms**
+before the first callback on the production path against **~200 ms** for
+`asio_probe`, "every run without exception", and named it as the whole of the
+frame-count difference (84 % vs 93 %). **There is no such difference.** Both
+paths wait the same ~475 ms, and the comparison was between two numbers that
+were not measuring the same thing.
 
-- `audio_backend_probe` (the production path): **477–490 ms**
-- `asio_probe` (talks to IASIO directly): **~200 ms**
+Two mistakes, and the second one is the instructive one:
 
-That is the whole of the frame-count difference (84 % vs 93 %), it is
-deterministic, and it is unexplained. It is half a second of silence after
-pressing Play, so it matters for the app even though it is not audible as a
-glitch. Both paths call `createBuffers` then `start()` and then sleep; the
-delta is somewhere in what the backend does around that. **Open.**
+1. The ~200 ms was never measured. It was INFERRED from `asio_probe`'s
+   frame-count percentage — a number derived from a window — while the
+   477–490 ms was measured directly with a clock. Instrumenting `asio_probe`
+   the same way gives **472–484 ms**, identical to the production path.
+2. **`asio_probe`'s window was longer than it claimed.** It sleeps in 30 ×
+   100 ms chunks and judged the frame count against `rate * seconds`; every
+   chunk overshoots at Windows timer granularity, so a nominal 3000 ms run
+   really lasts **3274–3279 ms** (measured; ~9 ms per sleep). Against the
+   nominal window it scored 93–94 %; against its own MEASURED window it scores
+   **85–86 %** — the same as the production path's 84 %, because it is the same
+   driver doing the same thing.
+
+`asio_probe` now measures its run window and reports the percentage against
+that, and says so when the loop overshoots. A percentage whose denominator is
+assumed rather than measured is how a driver-ramp of half a second hid behind
+a "93 %" for a whole session.
+
+**What is actually true, and it is a DRIVER property rather than ours:** the
+Tascam US-16x08 takes **~475 ms from `ASIOStart()` returning to its first
+callback**, on both code paths. 475 ms of 3278 ms is 14.5 %, which accounts for
+the whole frame shortfall exactly — nothing is lost, the stream simply starts
+late. `ASIOStart()` itself returns in **0.4–0.6 ms**, so the wait is the
+driver's ramp and not a blocking call we could overlap.
+
+It is still worth knowing for the app: half a second of silence after pressing
+Play on ASIO, which lands on top of `twSpeaker`'s readahead priming rather than
+inside it. Recorded for proposal 21 L6 and for anyone measuring monitoring
+latency on this interface. Not a defect, and nothing on our side shortens it.
 
 ### Also done here
 

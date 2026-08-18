@@ -147,6 +147,12 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
     double worstWorkMs = 0.0;
     std::uint64_t bigGaps = 0;
     double firstCallbackMs = -1.0;
+    // Measured from AFTER startOutput() RETURNS, which is the only reading
+    // that can be compared with asio_probe: both sleep for `seconds` starting
+    // there, so it is the window the frame count is judged against.
+    double firstAfterStartMs = -1.0;
+    std::chrono::steady_clock::time_point tStarted{};
+    bool started = false;
     const auto t0 = std::chrono::steady_clock::now();
     auto prev = t0;
 
@@ -157,6 +163,9 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
                 std::chrono::duration<double, std::milli>(now - t0).count();
             if (firstCallbackMs < 0.0) {
                 firstCallbackMs = sinceStartMs;
+                if (started)
+                    firstAfterStartMs =
+                        std::chrono::duration<double, std::milli>(now - tStarted).count();
             } else {
                 const double gapMs =
                     std::chrono::duration<double, std::milli>(now - prev).count();
@@ -187,11 +196,21 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
             return frames;
         });
 
+    // TIME THE START ITSELF. ASIOStart may block while the driver primes, and
+    // a blocking start is indistinguishable from a slow ramp unless the two
+    // are measured apart.
+    const auto tBeforeStart = std::chrono::steady_clock::now();
     if (be->startOutput() != 0) {
         std::printf("  FAILED: startOutput\n");
         be->closeDevice();
         return 1;
     }
+    tStarted = std::chrono::steady_clock::now();
+    started  = true;
+    const double startCallMs =
+        std::chrono::duration<double, std::milli>(tStarted - tBeforeStart).count();
+    const double openToStartMs =
+        std::chrono::duration<double, std::milli>(tBeforeStart - t0).count();
     std::printf("  running: you should HEAR a 440 Hz sine for %d s\n", seconds);
     std::this_thread::sleep_for(std::chrono::seconds(seconds));
 
@@ -243,9 +262,12 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
                         "period — the HOST is implicated\n",
                         worstWorkMs, periodMs);
     }
+    std::printf("  startup: setRenderCallback+prep %.1f ms; startOutput() call itself "
+                "%.1f ms; first callback %.1f ms AFTER start returned\n",
+                openToStartMs, startCallMs, firstAfterStartMs);
     if (firstCallbackMs > 50.0)
-        std::printf("  note   : %.0f ms of the shortfall is start-up before the first "
-                    "callback, not a dropout\n",
+        std::printf("  note   : %.0f ms total before the first callback, and the "
+                    "sleep window begins after start() returns\n",
                     firstCallbackMs);
 
     int rc = 0;
