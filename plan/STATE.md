@@ -13722,3 +13722,299 @@ proposal-35 Phase 2 output-path design predates it and its mono-fan-out
 assumptions are stale — re-plan against 36 before building `AsioDevice`
 (noted in the proposal header). Proposal 21 stopped at L6 gated on ASIO/35,
 so this proposal is now on the critical path of the live-latency work.
+
+## 2026-08-18 — Proposal 39: the folder lane's sum waveform, and preview/volume decoupling
+
+Branch `feat/39-folder-sum-preview`, worktree
+`.claude/worktrees/folder-sum-preview`, off `585f80a`. Two changes deliberately
+in one run, because they touch the same eighteen lines of `drawObjectWaveform`
+and the same question — *what does a drawn waveform describe?* The answer this
+proposal adopts, in one sentence:
+
+> **A drawn waveform describes the audio its object PRODUCES. The lane it is
+> drawn on never scales it.**
+
+Design and the full AC list: `plan/proposed/39_FOLDER_SUM_PREVIEW.md`.
+
+### M0 — baseline (no code)
+
+`./build.sh` green; `check_layering.py` and `check_logging.py` clean.
+`ctest -j4`: **200 registered / 197 run / 3 Not Run (Disabled)** — the disabled
+three are the macOS-only `au_*` trio — in 221 s, **196 passed, 1 failed**.
+
+The failure was **`qxa.plugin_strip_nested_track`, and it is PRE-EXISTING**:
+the worktree carried no code change at all, so nothing on the branch could have
+caused it. Pinned in isolation **5/5 green** from `smaragd/tests/cases/`, which
+puts it in the same class as the full-suite-load flakes CLAUDE.md already
+records (`clip_properties_actions`, `split_plain_screenshot`). Root cause not
+established, not chased here, named in the PR. Note for the count ACs:
+CLAUDE.md's "174 registered / 171 run" predates later cases; **200 / 197 / 3**
+is the number this branch is measured against.
+
+### M1 — the collect seam, and the `assert-envelope` verb (adbc8f4)
+
+A PURE REFACTOR PLUS A TEST VERB: no pixel and no byte of audio moved, and the
+per-probe track-volume multiply stayed exactly where it was, deliberately, so
+that M1 is verifiable as behaviour-preserving and M2 could delete it against a
+gate that already existed.
+
+`drawObjectWaveform` did three things — map pixel columns to the object's own
+time domain, fetch probes, draw lines. The first two became
+`collectObjectEnvelope()`, and the draw is collect + draw over it: **ONE
+probe-producing path**, so a drawn waveform and a read one cannot describe
+different audio. The collect takes a TIME WINDOW (`SEnvelopeWindow`), never an
+`SRenderContext` — a context holds a `QPainter&`, so a headless caller could
+only build one over a scratch `QImage`, a painter that exists solely to be
+ignored and exactly the sort of prop that later hides a bug in the thing it was
+propping up.
+
+`SObjectRenderer::collectEnvelope()` is the seam, so a caller never
+`dynamic_cast`s a concrete clip type (`main/timeline/CONTRACT.md` inv. 2). The
+base returns false and writes NOTHING — an event clip has no waveform, which is
+the right answer rather than a bug. Implemented by the four renderers that draw
+one, each by routing its EXISTING walk to the collect terminal;
+`SCutRendererInline` is the interesting one, its two domain maps and its loop
+tiling now spelled ONCE (`cutSourceTimeOf`, `loopSegSourceTimeOf`,
+`cutIsContainer`, `forEachLoopTile`) and called by `draw()` and the collect
+alike, with each loop repetition filling ITS OWN pixel span.
+
+Gates: `preview_envelope_test` (new ctest — the collected probes against the
+DRAWN PIXELS, recovered from a 256-tall `QImage` where `y = 127 - value`;
+verified to FAIL when the tile write is deliberately misplaced) and
+`envelope_probe.qxa` (new — the SHIPPED renderers end to end; the ramp reads
+0/25/50/76 across four columns). `ctest -j4` **202 / 199 / 3**, 0 failed.
+
+`check_layering` gained `testkit → tw/sources`, for ONE test:
+`preview_envelope_test` needs a stub `twRandomSource` so its fixture cut is
+SAMPLE-backed, which is the branch every audio clip takes. The alternative was
+to mislabel the fixture's `contentKind`, i.e. to gate the seam on a path no
+real clip travels.
+
+### M2 — preview/volume decoupling (3e2826c)
+
+`drawObjectWaveform` read the CONTAINING TRACK's fader —
+`dynamic_cast<SObject*>` on `lk.parent()`, which is the `STrack` in every path
+that creates a clip link — and multiplied every 8-bit probe by it. So pulling a
+fader down redrew every clip on that lane thinner, and at −40 dB the
+arrangement visually emptied. Deleted, with nothing replacing it. Wrong three
+independent ways, which is why it is a deletion and not a fix: a waveform is
+the CONTENT and a fader is the LEVEL (and this app has a fader widget AND a
+level meter for the level); the multiply landed AFTER quantisation to 8 bits,
+so a −20 dB clip drew as a coarse dozen-valued ladder rather than as a quieter
+version of itself; and it contradicted what the stored bytes mean — volume is
+not baked into a preview (`plan/STATE.md:6576-6580`), so the paint-time
+multiply was the whole dependency. The `qBound` to [−127,127] STAYS: it costs
+nothing on probes already in range, and M3's overlay accumulates into that same
+domain, where a saturated column is the normal case.
+
+**THE GATE HAD TO BE A PIXEL GATE, AND FINDING THAT OUT IS THE SUBSTANCE OF
+THIS MILESTONE.** The plan called for a `.qxa` over `assert-envelope`,
+demonstrated failing first. It does not fail, **and it cannot**:
+`assert-envelope` reads through `SObjectRenderer::collectEnvelope`, and M1
+deliberately left the multiply in the DRAW half alone, so everything below the
+seam was volume-independent from the moment M1 landed.
+`preview_volume_independent.qxa` is written and committed anyway — it states
+the rule where the rule will be read and pins it for every LATER consumer of
+the seam, M3's folder walk being one — but it PASSED on the pre-deletion
+binary, and the case says so in its own header rather than posing as the thing
+that caught the bug.
+
+What caught it is `preview_envelope_test` section 5: paint through a link whose
+parent object holds −60/−20/−6/0/+6 dB and recover the probes from the pixels,
+against the collected array. Verified failing before the deletion in both
+directions — at −20 dB `painted -2/2, collected -20/20`; at +6 dB
+`painted -39/39`; at −60 dB `painted 0/0` — and green after it.
+
+`SObject::setVolume()` KEEPS its `invalidatePreview()` and loses its comment,
+which had claimed previews are "regenerated at the new volume level". False for
+a sample-backed object and always was. But the call is not dead: an object with
+NO random source takes `straightCalcPreviewData()`'s other branch and reads
+`getRootComponent()`'s FROZEN PAGES, and for a track that root is `cpRewire_`,
+downstream of `twGainStage` — so a CONTAINER's own preview genuinely IS
+post-fader. Same reasoning is why an ASSET clip keeps the REFERENCED track's
+fader: that track is the clip's content, not its container.
+`volumeDbSnapshot()` was left with zero callers and KEPT — it is the only
+mutex-holding fader read, and deleting the safe reader would leave the racy one
+as the only option.
+
+`ctest -j4` **203 / 200 / 3**, 0 failed. `tests/goldens` untouched: a paint
+change moved no audio.
+
+### M3 — the folder sum overlay (c04b5a3)
+
+A folder lane was a blank rectangle. It now paints, faintly, on the lane
+background and behind the folder's own clips, the summed waveform of every
+descendant.
+
+**THE OBVIOUS DESIGN IS WRONG, and it is wrong the way this codebase has been
+wrong three times before** (the meters, MIDI-out, the metronome): compute the
+folder's summed AUDIO and draw that. The plumbing is fully wired and works
+today — `STrack` has no random source, so `folderTrack->getPreview()` already
+returns the real summed envelope through `straightCalcPreviewData()`'s
+container branch. That branch reaches its pages through **`requestPage()`,
+which DEMANDS A FREEZE**, so calling it from `paintEvent` renders the folder on
+the UI thread (`main/timeline/CONTRACT.md` inv. 1); and it is post-fader, so it
+would empty as the user pulls the folder's own fader down. So the overlay is a
+SUM OF ENVELOPES built from previews the children already have: no engine edit,
+no freeze, no worker, no cache, no invalidation, and it draws on a project that
+has never been played. The honest cost is stated in the CONTRACTs and the case
+header — it OVER-STATES where children are out of phase and cannot see child
+plugins, instruments or automation, which exist only in frozen pages.
+
+Model half, in `objects/track` and with no new layering edge:
+`STrack::hasChildTracks()` (replacing `sstdmixerview.cpp`'s local copy of the
+same predicate — one definition) and `STrack::collectChildSumEnvelope()`. Four
+things decide whether the numbers mean anything, each gated: **our own fader is
+nowhere in our own answer** (each direct child starts at ITS OWN linear gain
+and recursion multiplies each further level in, so a descendant carries the
+product of the gains up to but EXCLUDING the track being asked); **audibility
+is `ssolo::isLaneAudible`**, resolved once per walk, never a local mute/solo
+chain (`timeline/CONTRACT.md` inv. 10 records that the local copies are exactly
+how a solo nested in a folder became a no-op); **the accumulator is `int32` and
+the clamp happens ONCE** (`preview_t` is a `signed char`, and accumulating in
+it wraps — which makes two loud children draw QUIETER than one, a failure that
+looks like a feature); and **false, writing nothing**, when nothing
+contributed.
+
+**A FINDING THAT MUST NOT BE RE-DERIVED: design D3's "the same window for every
+clip" was WRONG, and silently so.** `SCutRendererInline::collectEnvelope`
+clamps a negative clip-relative position to 0, so a clip starting after the
+window's left edge would smear its audio across every column. Each clip is
+therefore given its OWN pixel span, sized the way the clip loop sizes the rect
+it draws that clip into. **Found by reading, not by the gate** — every clip in
+the fixture starts at 0.
+
+Paint half: `drawChildSumOverlay()` runs after the lane fill (which would
+otherwise erase it) and before the clip loop (so the folder's own clips sit on
+top) — not at the canvas's own seam, where the renderer's `fillRect` would
+paint over it on the next line. The colour is `finalColor.lighter(140)` at
+alpha 140, DERIVED so it follows selection and every `STrackColorModifier`
+state. `laneFillColor()` was factored out unchanged so the pixel gate can know
+what the fill IS rather than guessing it off the image. The `isEmpty()`
+early-out moved below the overlay; it changes NO behaviour today (a folder's
+child tracks ARE child links, so `isEmpty()` is already false for the common
+folder) and moved because the reading it invites — "a folder holds no clips of
+its own, so it is empty" — is the one that would silently take the overlay
+away.
+
+Test half: `assert-envelope mode="childSum"` over `trackPath=`, routed to the
+exact call the painter makes; and **`assert-lane-overlay`, the first verb in
+this repo that measures the arranger CANVAS's paint at all** (`screenshot`
+grabs a root window that is blank offscreen, and `assert-lane-alignment`'s
+`grabPng` writes a PNG nobody asserts on). It classifies every pixel of one
+lane's band against two references it does NOT read off the image — the lane
+fill and the clip body `QColor(160,160,160)` — and an OVERLAY pixel IS one
+strictly lighter than the fill and strictly darker than the clip body, i.e.
+design D4's relation stated as a measurement.
+
+Gate: `folder_sum_preview.qxa`. Two children holding `../test_sawtooth.wav` in
+phase; one clip probes 0/25/50/76 over four columns and the sum reads
+**0/50/100/127** — exact doubling at columns 1 and 2, and column 3 is the CLAMP
+(the true sum is 152). Both halves at tolerance 0, because wrapping and a
+missing clamp fail in OPPOSITE directions. Then −60 dB on a CHILD drops the sum
+to the other child's envelope exactly, −20 dB on the FOLDER leaves 128 bytes
+BYTE-IDENTICAL, and mute does the same both ways. Nested: the grandchild
+reaches the top folder at 25/50/76 at unity and at 13/25/38 with the MIDDLE
+folder at −6 dB, while the top folder's own −6 dB still moves nothing. The grab
+measured fill `#284664` (luminance 64), clip body 160, **overlayPixels 7999 at
+luminance 79..79**, `darkerThanFill` 0, `lighterThanClip` 0, `clipBodyPixels`
+0, `otherPixels` 0; both negative controls read 0.
+
+`ctest -j4` **204 / 201 / 3**, 0 failed, serial likewise green; goldens
+untouched; `folder_sum_preview` pinned **20/20 by EXIT CODE** over
+`SMARAGD_REVAL_WORKERS` {1,4,8,16}.
+
+**Repaint cost, MEASURED AND NOT ASSERTED** (AC M4.5 — a bound tight enough to
+separate the two would be flaky): 200 canvas grabs at 1200×800 of a project
+whose folder holds SIX children each with a 4 s clip, median of 3 runs, against
+a same-shape 0-grab run to subtract start-up — **6.11 ms per grab with the
+overlay, 1.78 ms without**, i.e. ~4.3 ms per full-canvas repaint. That is the
+same order of work the arranger already does to draw those clips on their own
+lanes when the folder is EXPANDED, which is design D5's claim and the reason
+there is no cache.
+
+`volumeDbSnapshot()` has a caller again: the walk reads a CHILD's fader on the
+same paint path the old multiply ran on, so it reads it the same safe way. Not
+a contradiction of M2 — what M2 deleted was scaling a waveform by the fader of
+the lane it is drawn ON.
+
+### M3a — the COLLAPSED folder
+
+M3's own report named this as the biggest gap: the folder's own row is painted
+by the same renderer whether or not its children have rows, so the M3.10 grab
+was necessarily of an EXPANDED folder — and the collapsed folder is the whole
+user story ("fold it shut and you can still see what is under it"). Nothing in
+the testkit reached the fold at all.
+
+`collapse-track trackPath= collapsed=` (new, `slanelayouttestactions.cpp`) goes
+out through `SMainWindow::setTrackCollapsed` — testkit may not include
+`app/timeline` — to `SStdMixerView::toggleTrackCollapsed()`, **the same call
+the head's fold triangle makes**, rather than to a second writer of the
+collapsed set: that one call owns the row rebuild and the control column, so a
+second spelling of "collapsed" would be free to skip the half of a fold that
+anyone can see. `collapsed` is **ABSOLUTE, never a toggle**, so a script is
+idempotent and can be read without counting how many times it ran. Registered
+in `action_roundtrip_test` and documented in `docs/ACTIONS.md`.
+
+**No row-count probe was invented, because one is not needed.** What is
+observable after a fold is that the children's rows cease to exist, so every
+lane BELOW the folder moves up by that many rows — and `assert-lane-overlay`'s
+own report line already carries `row=N`, which its `contains=` reads. So
+`folder_sum_preview.qxa` now asserts, at the end of the existing 6-row
+arrangement: the empty folder at `trackPath="2"` reads **row=4** expanded and
+**row=2** collapsed (two rows gone); `assert-lane-alignment` still holds in the
+collapsed state, so the rebuilt control column still sits on its lanes; the
+folder's own lane still reports the overlay at the same `minPixels="200"` floor
+and at **row=0**; the childSum probe array is still **BYTE-IDENTICAL** to the
+snapshot taken while it was open (collapsing is view state and may not move one
+probe of what the overlay describes); asking for `collapsed="1"` twice changes
+nothing; and expanding restores **row=4**.
+
+Measured: **overlayPixels 7999 at luminance 79, identical collapsed and
+expanded**, which is the paint being literally the same either way — this gate
+closes a CLAIM, not a suspected bug.
+
+### M4 — gates
+
+`./build.sh` (re-configures, so the new case is registered — the qxa glob is
+`CONFIGURE_DEPENDS`), `check_layering.py` and `check_logging.py` clean.
+
+`ctest -j4`: **204 registered / 201 run / 3 Not Run (Disabled)**, 0 failed.
+Serial run likewise green. `smaragd/tests/goldens/` byte-identical throughout —
+this proposal is UI-only and moved no audio, and `mc_golden_mono` /
+`mc_golden_stereo` are green in every run. `qxa.plugin_strip_nested_track`, the
+pre-existing M0 flake, passed.
+
+The branch adds four cases to M0's 200: `envelope_probe` (M1),
+`preview_volume_independent` (M2), `folder_sum_preview` (M3/M3a) and the C++
+`preview_envelope_test` (M1/M2).
+
+### NOT gated
+
+- **The sum-of-envelopes approximation itself.** No case asserts the overlay
+  equals the folder's real summed audio, because it does not: children out of
+  phase over-state, and child plugins, instruments and automation are invisible
+  to it. The in-phase fixture is a closed form *precisely because* it avoids
+  the question.
+- **Pixel exactness and colour aesthetics.** `assert-lane-overlay` asserts a
+  luminance RELATION, not a palette.
+- **Repaint latency under load.** Measured (above), not bounded.
+- **An ASSET clip's referenced-track fader**, deliberately unchanged since M2
+  and with no case.
+- **Folders deeper than three levels**, and folders holding hundreds of clips.
+- **The fold TRIANGLE's own mouse event.** `collapse-track` drives the call the
+  triangle's handler makes; the click on the head is not synthesised.
+- **A lane holding a CLIP as an `expectOverlay="false"` control.** The
+  anti-aliased edges of the file name drawn on that clip land at every
+  luminance between the text and the clip body, including inside the overlay
+  band — so the negative controls are bare lanes, which is a weaker statement
+  than "a clip's own waveform is never mistaken for an overlay".
+- **`SPlainWaveRendererInline` / `SRecordingRendererInline` /
+  `STakeStackRendererInline`'s own collect bodies** (one line each, covered
+  only indirectly: `envelope_probe` drives the plain-wave one through a cut;
+  the recording and take-stack ones have no case). No warp-anchor (piecewise
+  map) case either, and `preview_envelope_test`'s leaf renderer is a structural
+  clone of the shipped one because a real `SPlainWave` needs an `SAppContext`
+  with a current project.
+- **Whether the coarse-ladder quantisation argument is visible to a user** —
+  that is an aesthetic claim, not an assertion.
