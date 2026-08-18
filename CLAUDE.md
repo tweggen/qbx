@@ -163,9 +163,11 @@ plan/
     ├── 20_DATAFLOW_FOLLOWUPS.md     (OPEN — preview lanes, pipelining,
     │                                 retirements, housekeeping; start here
     │                                 for the next engine work)
-    ├── 21_REALTIME_DATAFLOW_INTEGRATION.md (DRAFT — live inputs / live
-    │                                 plugin instruments: live lane +
-    │                                 capture bridge + frontier contract)
+    ├── 21_REALTIME_DATAFLOW_INTEGRATION.md (executed 2026-08-18, L0–L5 —
+    │                                 live monitoring through the chain, live
+    │                                 instruments, audio + MIDI recording,
+    │                                 metronome/count-in; L6 gated on ASIO/35;
+    │                                 §13.3 = the execution findings)
     └── 34_LEVEL_METERS.md           (executed 2026-08-05 — level meters read
                                       frozen pages BY POSITION; zero engine
                                       edits. Read it before touching metering:

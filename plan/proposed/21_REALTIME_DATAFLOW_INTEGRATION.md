@@ -1,6 +1,13 @@
-# Proposal 21 (DRAFT v3.3): Real-time data flows in the demand-driven dataflow
+# Proposal 21 (v3.3 — EXECUTED L0–L5): Real-time data flows in the demand-driven dataflow
 
-> **Status: DRAFT v3.2 (2026-08-17).** v3.2 applies the reviewer's verification
+> **Status: EXECUTED (2026-08-18) — every executable phase L0–L5 has landed** on
+> `main` (PR #58: L0, L1a, L3a, L1b, L3b; PR #59: L2, L4, L5). L6 (multi-device
+> duplex + drift, loopback wizard, ASIO validation) stays an outline gated on
+> proposal 35; PDC on the live path is proposal 37 P9. §13.3 records the five
+> execution findings (E1–E5) that amended D1/D2/D3/D5, and `21_ORCHESTRATION.md`
+> §6 is the closed tracker with the measured gates per phase.
+>
+> v3.2 (2026-08-17) applied the reviewer's verification
 > pass (§13.2: the processor holds TWO event sources — the feed and the live
 > source — so the stopped-transport feed mask and the live member never
 > contradict; the position atomic is ENGINE-owned; the epoch gate names the root
