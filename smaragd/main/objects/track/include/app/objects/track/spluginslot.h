@@ -105,6 +105,19 @@ public:
     };
     QVector<ParamRow> paramRows() const;
 
+    /**
+     * What the live plugin REPORTS as its processing latency, in frames
+     * (proposal 21 L5). 0 for a Missing / Unsupported slot, and 0 for the many
+     * plugins that report nothing.
+     *
+     * It is here for the same reason `paramRows()` is: the FX strip
+     * (app/pluginui) and the transport readout have to show it, and the number
+     * belongs to the plugin the slot owns. NOTHING COMPENSATES FOR IT - plugin
+     * delay compensation is out of scope (proposal 37 P9) - so every mount that
+     * shows it must also say that it is not compensated.
+     */
+    std::uint32_t reportedLatencyFrames() const;
+
     // The descriptor actually used to instantiate: the registry's own record for
     // (format, uid) when the scan knows it, otherwise the stored one.
     const audio::twPluginDescriptor &getEffectiveDescriptor() const { return effective_; }

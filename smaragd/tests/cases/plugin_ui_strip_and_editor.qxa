@@ -61,6 +61,13 @@
          effect, so this is the assertion that says the derivation did not
          start calling everything an instrument. -->
     <assert-plugin-strip trackIndex="0" slotIndex="0" contains="kind=effect"/>
+    <!-- The LATENCY BADGE field (proposal 21 L5). The test CLAP reports no
+         latency, so the number is 0 - which is the honest expectation and is
+         still the only thing that proves the plugin's reported latency reaches
+         the widget at all. It is APPENDED to describeSlot, after every field
+         the spans above assert, so none of them moved. Nothing compensates for
+         a non-zero value: plugin delay compensation is out of scope. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="latency=0"/>
 
     <!-- 2. Drive the editor's slider. The value LABEL must show the plugin's own
          value-to-text (the fixture formats value*100 as an integer), proving units

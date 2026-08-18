@@ -246,6 +246,26 @@ void SPluginEffectStrip::rebuildUI()
         }
         rowLayout->addWidget(nameLabel);
 
+        // THE LATENCY BADGE (proposal 21 L5). Shown only when the plugin
+        // reports one, so a chain of ordinary effects is unchanged on screen;
+        // the number is REPORTED and nothing compensates for it (proposal 37 P9
+        // owns plugin delay compensation), which is what the tooltip says.
+        const std::uint32_t slotLatency = slot->reportedLatencyFrames();
+        if (slotLatency > 0) {
+            double rate = 48000.0;
+            if (SProject *pr = SApplication::app().getCurrentProject())
+                if (pr->getSRate() > 0) rate = pr->getSRate();
+            QLabel *lat = new QLabel(
+                QStringLiteral("%1 ms").arg(
+                    QString::number(1000.0 * (double) slotLatency / rate, 'f', 1)));
+            lat->setStyleSheet("QLabel { color: #a06000; border: none; }");
+            lat->setToolTip(tr("This plugin reports %1 frames of latency. It is "
+                               "NOT compensated: the live monitoring lane has no "
+                               "delay line, so what you hear through it is late "
+                               "by this much.").arg(slotLatency));
+            rowLayout->addWidget(lat);
+        }
+
         QString tooltip = reasonTooltip(slot);
         if (isInstrumentRow) {
             tooltip = tr("Instrument (slot 0): it sounds this track's MIDI clips "
@@ -348,6 +368,20 @@ void SPluginEffectStrip::rebuildUI()
         nameLabel->installEventFilter(this);
     }
 
+    // THE CHAIN TOTAL (proposal 21 L5), below the rows and only when there is
+    // one to report. Series inserts, so the delay is a plain sum.
+    {
+        const std::uint32_t total = chainLatencyFrames();
+        if (total > 0) {
+            QLabel *foot = new QLabel(tr("Chain latency: %1").arg(chainLatencyText()));
+            foot->setObjectName(QStringLiteral("chainLatency"));
+            foot->setStyleSheet("QLabel { color: #a06000; border: none; }");
+            foot->setToolTip(tr("Reported by the plugins, NOT compensated. Plugin "
+                                "delay compensation is not implemented."));
+            pluginsLayout_->addWidget(foot);
+        }
+    }
+
     pluginsLayout_->addStretch();
 
     // Hidden once the track has one: a second instrument is refused, and an
@@ -395,7 +429,39 @@ QString SPluginEffectStrip::describeSlot(int slotIndex) const
         .arg(pw.tooltip)
         // DERIVED from the descriptor, like everything else about the role.
         .arg(pw.slot->isInstrument() ? QStringLiteral("instrument")
-                                     : QStringLiteral("effect"));
+                                     : QStringLiteral("effect"))
+        // APPENDED AT THE END on purpose (proposal 21 L5): the M5 cases assert
+        // contiguous spans of the fields above, and a field inserted among them
+        // would break assertions that are about something else entirely.
+        + QStringLiteral("|latency=%1").arg(pw.slot->reportedLatencyFrames());
+}
+
+// THE CHAIN TOTAL (proposal 21 L5). A plain sum: every insert is in series, so
+// the delay a chain adds is the sum of what its plugins report. NOTHING
+// COMPENSATES FOR IT — plugin delay compensation is out of scope (proposal 37
+// P9) — and on the LIVE lane in particular the pump renders block-wise with no
+// delay line anywhere, so a latency-reporting plugin monitored live is heard
+// late by exactly this much.
+std::uint32_t SPluginEffectStrip::chainLatencyFrames() const
+{
+    std::uint32_t total = 0;
+    if (!pluginChain_) return total;
+    const int n = pluginChain_->getSlotCount();
+    for (int i = 0; i < n; ++i)
+        if (SPluginSlot *s = pluginChain_->getSlotAt(i))
+            total += s->reportedLatencyFrames();
+    return total;
+}
+
+QString SPluginEffectStrip::chainLatencyText() const
+{
+    const std::uint32_t total = chainLatencyFrames();
+    double rate = 48000.0;
+    if (SProject *p = SApplication::app().getCurrentProject())
+        if (p->getSRate() > 0) rate = p->getSRate();
+    return QStringLiteral("%1 frames (%2 ms)")
+        .arg(total)
+        .arg(QString::number(1000.0 * (double) total / rate, 'f', 1));
 }
 
 bool SPluginEffectStrip::eventFilter(QObject *watched, QEvent *event)
