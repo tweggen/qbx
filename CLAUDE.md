@@ -1220,6 +1220,21 @@ so it survives an id change. It is the number a "record a click, look at where
 it landed, type the difference" calibration produces; the driver's *reported*
 latencies are compensated automatically.
 
+**Since proposal 21 L6a (2026-08-18) a MEASUREMENT can produce it instead** —
+"Measure with a loopback cable..." beside the spin box plays a click, finds it
+coming back, and offers the residual the driver did not report. Three things to
+know: it needs **ONE device for both directions** (it counts frames from each
+stream's own start, so two separately started streams would contribute their
+start gap as if it were latency — a full-duplex ASIO driver serves both from
+one callback, two endpoints do not); it **blocks for ~3 s** and says so; and it
+**never applies anything** — "Yes" fills the spin box, and the value is written
+only when the dialog is applied. Measured on a Tascam US-16x08: round trip 1084
+frames against a driver-claimed 1039, i.e. a residual of **+0.94 ms** — that
+driver reports honestly and its offset can stay 0. The engine half is
+`tw/record/loopback_{calibration,runner}.h` and is gated by `loopback_test`;
+**the dialog is hand-verified only**, since no verb builds the Audio page off
+screen.
+
 ### Gates
 
 The qxa cases `record_offset_zero`, `record_loop_takes`, `record_punch`,

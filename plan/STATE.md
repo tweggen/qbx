@@ -14842,3 +14842,66 @@ number shown, and applying it only on the user's word. The engine returns a
 claim, the residual to offer, the confidence, and an error string written for a
 human). Deliberately still absent, per the brief: anything that writes the
 offset without the user accepting it.
+
+## 2026-08-18 — Proposal 21 L6a COMPLETE: the loopback wizard in Options
+
+The last piece. Edit → Options → Audio gains **"Measure with a loopback
+cable..."** beside the recording-offset spin box — the control whose own label
+has been asking the user to produce that number by ear.
+
+### What it does, and the three places it stops to ask
+
+1. **It refuses two devices, with a sentence rather than a failed run.** The
+   measurement counts frames from each stream's OWN start, so two separately
+   started streams contribute the gap between their start times as if it were
+   latency. A full-duplex ASIO driver serves both directions from one callback,
+   which is what makes the two counts comparable; two endpoints do not. The
+   runner refuses this too — the dialog's check exists only so the refusal
+   arrives as an explanation.
+2. **It refuses while the transport owns the devices**, because the run starts
+   and stops them itself.
+3. **It asks before playing anything**, naming what will happen: a click, about
+   three seconds of unresponsive UI, and nothing changed without the user's
+   say-so.
+
+Then it BLOCKS — the pass is the capture window plus the driver's start-up
+(~0.5 s on this hardware), and a progress dialog would not repaint anyway
+because nothing returns to the event loop. A wait cursor is the honest signal,
+the same call the driver control panel already makes.
+
+### It proposes; the user disposes — and even "Yes" only fills the box
+
+A successful measurement is SHOWN first: the round trip in frames and ms, what
+the driver claimed, and the residual it did not report. Answering Yes sets the
+SPIN BOX; the value is not written until the dialog itself is applied. So there
+are two deliberate steps between a measurement and a timing constant that
+shifts every take recorded afterwards — which is the L6a brief's requirement,
+and the reason the engine never had an "apply" of its own.
+
+**A WEAK return is reported even when the measurement SUCCEEDED.** The first
+real measurement on hardware passed at 1.5x the refusal floor — correct, and
+one gain step from being refused — and someone deciding whether to trust a
+number deserves to know that. `LoopbackLevel` supplies the sentence.
+
+### Verification, and the gap in it
+
+`./build.sh` green; `check_layering` and `check_logging` clean; `ctest -j4`
+green.
+
+**The dialog itself has NO headless gate, and cannot have one today.** There is
+no verb that builds the Audio page off screen the way `assert-midi-options`
+builds the MIDI one — CLAUDE.md already records that gap for L5's three
+controls, and this inherits it. What IS gated is everything the dialog calls:
+`loopback_test` covers the measurement, the refusals and the level advice, and
+the runner's own refusals are hardware-measured. The wiring between them —
+button, guards, wording, the spin box — is hand-verified only, and is named
+here rather than left to a green suite to imply.
+
+### L6a is complete; L6b and L6c are not L6a's shape
+
+L6b (ASIO validation) is discharged apart from what needs a second driver.
+**L6c should be its own proposal**, and the cheap thing worth doing first —
+detecting a mixed-device session and saying so, as the endpoint sample-rate
+mismatch already is — is now MORE reachable than when the brief was written,
+because this dialog already knows both device ids and already refuses when they
+differ. That refusal is, in effect, the first mixed-device warning in the app.
