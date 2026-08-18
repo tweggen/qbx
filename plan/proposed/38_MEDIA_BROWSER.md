@@ -3,8 +3,17 @@
 > **Status: PROPOSED (2026-08-18).** A dockable media browser: pick a data
 > source (local file system, Nextcloud), browse its tree or search it
 > incrementally, filter by media type, and drag a file onto the timeline.
-> Six gates, each one PR, each independently gateable and sized for a single
-> subagent.
+> Six gates, each independently gateable and sized for a single subagent (gate
+> 5 is three PRs).
+>
+> **Revised 2026-08-18 after an adversarial review** that verified the claims
+> about the existing tree and found six real defects. What changed: §B.1's
+> "the compiler enforces it" was false; the wiring table was missing
+> `Qt::Concurrent` and a `shell → media` edge; §B.2's cross-thread hand-back was
+> a use-after-free; gate 4's qxa half could not have been built; `kAudio` did
+> not match the dialog it claimed to match; and §B.8's `obfuscated` fallback
+> needed a cipher this tree does not link — it is now `none`. Traps T16-T20 and
+> §G are the rest of that pass.
 >
 > **Scope for the MVP:** two sources (local, Nextcloud/WebDAV), one media
 > category (audio), browse + incremental search + drag-to-timeline, and
@@ -51,7 +60,7 @@ Three routes, all of them a file dialog or a file manager:
 
 | Route | Site |
 |---|---|
-| Insert sample… | `SStdMixerView::ctInsertSample` — `QFileDialog::getOpenFileName` with the filter `*.wav *.mp3 *.flac *.aiff *.aif *.ogg *.opus` (`sstdmixerview.cpp:458`) |
+| Insert sample… | `SStdMixerView::ctInsertSample` — a `QFileDialog` whose first entry is "Audio and MIDI" and whose "Audio files" entry is `*.wav *.mp3 *.flac *.aiff *.aif *.ogg *.opus` (`sstdmixerview.cpp:458-462`) |
 | Drag from the OS file manager | `dropEvent`'s `hasUrls()` branch (`:4151`) |
 | Drag from the resources dock | only for a file the project ALREADY references |
 
@@ -92,11 +101,23 @@ main/mediabrowser/   — app_ui  layer.  The dock. Rank of pluginui / eventui.
 ```
 
 `main/media` holds the source ABI, the two providers, the local cache and the
-drop helper. `main/mediabrowser` holds the dock and nothing else. The split is
-a **compile-time** boundary, not a convention: `main/CMakeLists.txt` builds
-`app_core` as an OBJECT library that publishes only the lower layers' include
-dirs, so a provider that includes a widget header **fails to compile**. That is
-worth a module boundary on its own, and it also buys three things:
+drop helper. `main/mediabrowser` holds the dock and nothing else.
+
+**What the layer boundary actually enforces — and what it does not.** An
+earlier draft of this section claimed a provider that includes a widget header
+"fails to compile". **That is false**, and a subagent relying on it would get no
+error: `app_model` links `Qt::Widgets` **PUBLIC**
+(`smaragd/main/CMakeLists.txt:407-417`) and `app_core` links `app_model` PUBLIC
+(`:425`), so every Qt widget header is available at every layer — indeed
+`SExternFileList` is a `QTreeWidget` living in the LOWEST layer. What the build
+enforces is only the `app/<module>/…` include graph, through per-layer include
+directories; the finer module edges are `tools/check_layering.py`'s business.
+
+"No widget in a provider" is therefore a **contract plus a grep**, not a
+compiler error: it is stated in `main/media/CONTRACT.md` and gated by
+`grep -rnE "#include <Q(Widget|TreeWidget|Dialog|Menu|Painter|Pixmap)" main/media/`
+being empty (gate 1 AC 11). The module split is still worth having — it buys
+three things:
 
 - the testkit (app_ui) can gate the provider layer directly, with no dock;
 - `app/timeline`'s drop handler can reach `SMediaCache` (a `timeline → media`
@@ -112,10 +133,16 @@ subagent must not have to discover):
 
 | File | Edit |
 |---|---|
-| `smaragd/CMakeLists.txt:52-53` | add `Network` to both `find_package` component lists |
-| `smaragd/main/CMakeLists.txt` | `APP_CORE_FILES` += `media/…`; `app_core` include dir += `media/include`; `target_link_libraries(app_core … Qt::Network)` |
+| `smaragd/CMakeLists.txt:52-53` | add **`Network`** AND **`Concurrent`** to both `find_package` component lists. Concurrent is a SEPARATE Qt component and is absent from the tree today (`grep -rn Concurrent smaragd/*/CMakeLists.txt` is empty); §B.2 and §B.7 both call for `QtConcurrent`, so forgetting it is a link error at the end of gate 1, not at the start |
+| `smaragd/main/CMakeLists.txt` | `APP_CORE_FILES` += `media/…`; `app_core` include dir += `media/include`; `target_link_libraries(app_core … Qt::Network Qt::Concurrent)` |
 | `smaragd/main/CMakeLists.txt` | `APP_UI_FILES` += `mediabrowser/…`; `app_ui` include dir += `mediabrowser/include` |
-| `tools/check_layering.py` | `APP_DEPS['media'] = {'model'}`; `APP_DEPS['mediabrowser'] = {'actions','media','model','shell'}`; `APP_DEPS['timeline'] += 'media'`; `APP_DEPS['shell'] += 'mediabrowser'`; `APP_DEPS['testkit'] += {'media','mediabrowser'}`; `APP_ENG['media'] = _ENG_BASE`; `APP_ENG['mediabrowser'] = _ENG_BASE` |
+| `tools/check_layering.py` | `APP_DEPS['media'] = {'model'}`; `APP_DEPS['mediabrowser'] = {'actions','media','model','shell'}`; `APP_DEPS['timeline'] += 'media'`; `APP_DEPS['shell'] += {'media','mediabrowser'}`; `APP_DEPS['testkit'] += {'media','mediabrowser'}`; `APP_ENG['media'] = _ENG_BASE`; `APP_ENG['mediabrowser'] = _ENG_BASE` |
+
+**`APP_DEPS` is NOT transitive** — the allowed set is literally
+`APP_DEPS[mod] | {mod}` (`check_layering.py:283`). So `shell` needs **`media`**
+in its own set, not merely `mediabrowser`: gate 5 has the shell implement
+`smedia::CredentialProvider`, which is an `app/media/…` include from `app/shell`
+and fails the checker without it.
 
 `media` depends on `model` only (for `SFilePathRef` and nothing else) and on NO
 engine module beyond the `core`/`graph` base every module gets. It must never
@@ -170,13 +197,36 @@ Six invariants, and they are the whole reason the ABI looks like this:
 
 1. **Everything is async and id-tagged.** A recursive walk of a sample library
    is seconds of work; a `PROPFIND` is a network round trip. Neither may run on
-   the GUI thread. `SLocalMediaSource` walks on a `QThreadPool` (a **Qt-owned**
-   thread — `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` back to the
-   source is the only way results cross); `SWebDavMediaSource` uses
-   `QNetworkAccessManager`, which is async by construction. **No `std::thread`
-   anywhere in this module**: proposal 19's rule that a non-Qt thread must
-   never emit a Qt signal (Qt adopts the thread and the teardown join
-   deadlocks) applies here exactly as it does in the engine.
+   the GUI thread. `SLocalMediaSource` walks on a **private, bounded**
+   `QThreadPool`; `SWebDavMediaSource` uses `QNetworkAccessManager`, which is
+   async by construction. **No `std::thread` anywhere in this module**:
+   proposal 19's rule that a non-Qt thread must never emit a Qt signal (Qt
+   adopts the thread and the teardown join deadlocks) applies here exactly as
+   it does in the engine.
+
+   **THE CROSS-THREAD HAND-BACK IS A WORKER `QObject` WITH A SIGNAL, NEVER
+   `QMetaObject::invokeMethod` ON A RAW POINTER.** An earlier draft specified
+   the latter and it is a use-after-free: the pool thread dereferences the
+   source to post the event, and a source can be deleted at any moment — gate 5
+   AC 11 deletes one on account removal, and teardown deletes them all. A
+   `QPointer` does not fix it either; `QPointer` is only safe to read on the
+   thread that owns the object, so T3's guard covers handlers already ON the
+   main thread and nothing else. The walk therefore lives in a `QObject` whose
+   `batchReady` signal is connected to the source with `Qt::QueuedConnection`,
+   because **Qt tears connections down under its own mutex when the receiver
+   dies** — a queued emission to a destroyed receiver is dropped, not crashed.
+   The worker is owned by the pool task and `deleteLater`s itself. Gate 1 AC 12
+   destroys a source mid-walk and is the only thing that will catch a subagent
+   improvising the raw-pointer version, because the safe and unsafe forms are
+   indistinguishable on a machine that never loses the race.
+
+   **A private pool, not `QThreadPool::globalInstance()`, and a named hang.**
+   Two threads, dedicated to this module. `cancel()` is checked between
+   entries, so a walker blocked inside a single `stat()` — a dead network mount,
+   a spun-down drive — **never sees it and pins its thread until the OS returns**.
+   That is an accepted limitation, stated because it cannot be designed away
+   without an out-of-process walker; what the private pool buys is that it
+   cannot starve `QtConcurrent` or anything else Qt runs on the global pool.
 2. **Supersession is by ID, never by a flag.** The view keeps the id of the
    request it is displaying and **drops any batch whose id is not that one**.
    A late result from a cancelled walk therefore cannot repaint over a newer
@@ -208,15 +258,22 @@ entry per category. The category → suffix mapping lives in **one** place:
 namespace smedia {
     enum Category { Audio = 1, Midi = 2 };          // Midi declared, not shipped
     const QStringList &suffixesFor( int categoryMask );
-    inline const QStringList kAudio = { "wav","aiff","aif","flac","ogg","oga",
-                                        "opus","mp3" };
+    inline const QStringList kAudio = { "wav","mp3","flac","aiff","aif","ogg",
+                                        "opus" };   // == the dialog's list
 }
 ```
 
 **The list is what the IMPORTER can actually decode, and that is a decision,
 not an oversight.** Import runs through `twSampleSource` → libsndfile (+mpg123
-for MP3); the existing Insert-sample filter is `*.wav *.mp3 *.flac *.aiff *.aif
-*.ogg *.opus` and this matches it exactly. The request named **mp4** — *AAC in
+for MP3); `kAudio` is **byte-for-byte the seven suffixes** of the existing
+Insert-sample dialog's "Audio files" entry (`sstdmixerview.cpp:460`). An
+earlier draft added `oga` to it and still claimed the two matched — they did
+not, and because gate 2 AC 8 builds the dialog's filter string FROM `kAudio`,
+that one extra suffix would have silently changed a shipping dialog. **Adding a
+suffix to this list is a user-visible change to Insert-sample and needs its own
+decision and its own line in a PR body**, which is the whole point of there
+being one list. (`.oga` is a legitimate candidate — libsndfile reads it — but
+it is a separate change.) The request named **mp4** — *AAC in
 an MP4 container is not decodable by the current import path*, so listing it
 would offer the user a file that fails at the drop. It is deliberately absent;
 adding AAC is an import-path change (a libsndfile build with the relevant
@@ -279,6 +336,18 @@ arranger at its minimum.
 
 Per-user state in `SSettings`, under new `SOpt` keys: `media/lastSourceId`,
 `media/lastPath/<sourceId>`, `media/categoryMask`, `media/searchRecursive`.
+**Writing those keys is what makes every gate-2 case `RUN_SERIAL`** — see gate 2
+AC 9; a panel that persists is a panel that touches the shared INI.
+
+Four states the design owes an answer to, because they are the first things a
+user meets and the easiest things to leave undefined:
+
+| State | Behaviour |
+|---|---|
+| **First run**, no `media/lastPath` | The local source opens at the last Insert-sample directory (`SSettings::lastDir("sample", …)`) — the one place the app already remembers where this user keeps audio — then `QStandardPaths::MusicLocation`, then home |
+| **A source that is unreachable** | Nothing is contacted at startup. A source is opened when it is SELECTED, and a failure paints an inline banner in the panel naming the error, with **Retry**; an `undecryptable` credential (§B.8) paints **Re-enter password** and opens the accounts page. A dock restored with `media/lastSourceId` pointing at a dead server therefore costs a banner, never a hang at launch |
+| **No project open, or a project switch** | The panel is independent of the project — browsing is always available. Only a DROP needs a project, and a pending placement is dropped on a project change (§B.5) |
+| **Symlinks on the local walk** | **Not followed.** It bounds a loop without relying on `kMaxSearchDepth`, and it makes gate 1's exact-count ACs a fact about the fixture rather than about the walker's mood |
 
 ### B.5 Drag out — two payloads, one placement path
 
@@ -296,7 +365,7 @@ The `media:` branch in `SMVActualView::dropEvent`, in full:
 ```cpp
 } else if( payload.startsWith( QStringLiteral( "media:" ) ) ) {
     const SMediaRef ref = SMediaRef::fromUri( payload.mid( 6 ) );
-    smediadrop::placeWhenLocal( ref, trackPath, timePos, this );
+    smediadrop::placeWhenLocal( ref, trackId, timePos, this );
 }
 ```
 
@@ -304,6 +373,17 @@ The `media:` branch in `SMVActualView::dropEvent`, in full:
 the placement path, and it does exactly one thing: get a local path, then
 submit the **existing** `SAddSampleAction`. It never invents a clip, never
 touches `SCut`, and never adds an action type.
+
+**IT CAPTURES THE TRACK'S IDENTITY, NOT ITS INDEX-PATH.** An index-path is a
+position in a tree that the user is free to edit while a 40 MB file downloads:
+delete a track above the target, or reorder a folder, and a path captured at
+drop time now names **a different track** — a clip landing silently on the
+wrong lane, which is worse than not landing at all. The pending placement
+therefore holds the target `SObject`'s id, re-resolves it to a path at
+completion, and **refuses with a status message if the track is gone**. Same
+rule for the project: a pending placement is dropped when the project it was
+made against is closed OR switched, not merely closed (`SApplication`'s
+current-project change is the signal; a close is one case of it).
 
 **PLACEMENT IS ALWAYS `add-sample` OVER A LOCAL PATH. The media layer's job
 ends at producing that path.** Everything below follows from that sentence.
@@ -318,10 +398,44 @@ Two stages, and they are different things:
    content-addressed so a re-fetch of an unchanged file is free, and
    LRU-evicted against a cap (`SOpt::MediaCacheCapMB`, default 2048) with the
    eviction **logged**.
+
+   **EVICTION MAY NEVER DELETE A FILE THE OPEN PROJECT REFERENCES.** The cap is
+   a cache policy and the project is not a cache; without a pin, the honest
+   reading of "LRU past 2 GB" is *a clip that plays today and is silent next
+   week*, announced only by a log line nobody reads. Before evicting, the store
+   subtracts every path in `SProject::externFiles()` — which is exactly the set
+   of files the project has a clip over, already maintained. A cache that
+   cannot get under its cap because the project pins too much **logs that and
+   stops**, rather than evicting anyway.
 2. **The project copy.** On a drop, if the project has a file path, the cached
    file is copied to `<projectdir>/media/<name>` and the clip references THAT.
    If the project is unsaved, the clip references the cache path directly and a
    status-bar message plus a `TW_LOG` warning say so.
+
+   Three rules the copy needs and an earlier draft did not state:
+
+   - **The name is SANITISED for the local file system.** WebDAV permits `:`,
+     `?`, `*`, `|`, a trailing dot and a trailing space in a file name; Windows
+     permits none of them, and this repo is tested on Windows first. Illegal
+     characters become `_`, and the result is capped so that
+     `<projectdir>/media/<name>` stays inside `MAX_PATH` on a default Windows
+     configuration. (The design decodes `Drum%20Kit/kick%231.wav` proudly in
+     gate 4 AC 2 and would then have failed to write it.)
+   - **A name COLLISION does not overwrite.** Two different remote files both
+     called `kick.wav` must not become one file and two clips over it — the
+     second silently replacing the first's audio is a data-loss bug with no
+     symptom. On collision with a file whose content key differs, the copy is
+     `kick (2).wav`.
+   - **A REPEAT drop of the same remote file reuses the existing copy.** Same
+     content key, same target: no second file, no `(2)`. A user dragging the
+     same loop onto four tracks gets one file.
+
+   And one consequence to state rather than discover: **undo of a deferred drop
+   removes the clip and leaves the copied file behind.** The copy is not part of
+   `SAddSampleAction`, so its undo cannot know about it. This is survivable and
+   has a precedent — the resources dock's *Cleanup…* dialog exists for exactly
+   this class of orphan — but it is a real asymmetry and belongs in the
+   CONTRACT, not in a bug report six months from now.
 
 **The second stage exists because of `SFilePathRef`.** A `.qxp` stores sample
 paths portably — relative to the project file, else relative to `~`, else
@@ -386,16 +500,31 @@ secret by key name and whose backend is chosen at build time by platform:
 | **`dpapi`** (Windows) | ciphertext, base64, in the INI | `CryptProtectData` with `CRYPTPROTECT_UI_FORBIDDEN`, **user-scoped**: the key is derived from the Windows logon credential and never leaves LSA. Links `crypt32` — present in MinGW, no new dependency |
 | **`keychain`** (macOS) | in the **login keychain**, not in the INI at all | Security.framework `SecItemAdd` / `SecItemCopyMatching`, `kSecClassGenericPassword`, service `com.smaragd.media`. Links `Security.framework` — in the SDK, no new dependency |
 | **`libsecret`** (Linux, when found) | in the Secret Service | libsecret, keyed the same way. An **optional** dependency, `TW_HAVE_LIBSECRET` |
-| **`obfuscated`** (fallback) | ciphertext, base64, in the INI | AES-128 under a key derived from a build salt + the machine/user id. **This is obfuscation, not protection** — see below |
+| **`none`** (fallback) | **nowhere** | No real store on this platform ⇒ **"Remember" is disabled** and the password is kept for the session only. See below — this replaces an earlier `obfuscated` design |
 
 The INI keeps only the non-secret half plus a scheme tag:
 
 ```
 media/nextcloud/<accountId>/url
 media/nextcloud/<accountId>/user
-media/nextcloud/<accountId>/passwordScheme   dpapi | keychain | libsecret | obfuscated
-media/nextcloud/<accountId>/passwordEnc      <- dpapi / obfuscated only; base64 ciphertext
+media/nextcloud/<accountId>/passwordScheme   dpapi | keychain | libsecret
+media/nextcloud/<accountId>/passwordEnc      <- dpapi only; base64 ciphertext
 ```
+
+**There is no encrypt-it-ourselves fallback, and that is a deliberate reversal.**
+An earlier draft specified an `obfuscated` backend: AES-128 under a key derived
+from a build salt. Two things killed it. **It needs a cipher this tree does not
+have** — no crypto library is linked anywhere, and Qt6 ships `QCryptographicHash`
+but no public AES — so it was either an unacknowledged new dependency or
+hand-rolled AES in a DAW, and hand-rolled crypto in a codebase with no security
+surface is the worst of the three options. And **its own documentation would
+have had to say it protects nothing**, which is a scheme that exists to make a
+checkbox feel safe. A platform with no real store now says so and does not
+pretend: the password is session-only, the Remember checkbox is disabled with a
+tooltip naming the reason, and the user can install libsecret (or use an app
+password and re-enter it) with full knowledge of the trade. No secret is stored
+weakly anywhere, and no code path can be reached that writes a password we
+cannot protect.
 
 Five rules, each of which is an AC in gate 5:
 
@@ -409,9 +538,14 @@ Five rules, each of which is an AC in gate 5:
 2. **A secret never appears in a log, a `describe()`, an exception message or a
    URL.** `describeMediaPage()` reports `password=set|unset|undecryptable` and
    never a length, never a prefix. The `Authorization` header is redacted in
-   every diagnostic. This is gateable and is gated: a case sets a known
-   password, exercises a request, and asserts `assert-log contains="<that
-   password>" maxCount="0"`.
+   every diagnostic — as `Authorization: Basic <redacted>`, so a log still shows
+   WHICH scheme was used. This is gateable and is gated, and **what the case
+   asserts absent is the password AND its base64 spelling**: a Basic header
+   leaks `base64(user:password)`, not the password, so a case that greps only
+   for the literal would pass while the credential sat in the log in plain
+   sight. It must NOT assert `"Basic "` absent — that forbids the correctly
+   redacted line and every sentence containing the word, forcing redaction to
+   erase the scheme name to satisfy its own gate.
 3. **A secret never enters a `.qxp`.** An account is machine-local
    configuration, like a device id. Nothing in this proposal touches the
    project file.
@@ -422,8 +556,11 @@ Five rules, each of which is an AC in gate 5:
    keychain access from a background test can block on a UI prompt nobody can
    see, which is exactly the `qoffscreen` failure mode again (a case burning its
    whole timeout at ~0 % CPU). `SMARAGD_SECRET_BACKEND=dpapi|keychain|libsecret
-   |obfuscated|memory` overrides ahead of the platform choice, mirroring
-   `SMARAGD_AUDIO_BACKEND` and `SMARAGD_MIDI_BACKEND` exactly.
+   |none|memory` overrides ahead of the platform choice, mirroring
+   `SMARAGD_AUDIO_BACKEND` and `SMARAGD_MIDI_BACKEND` exactly. **`memory` is a
+   real store with process lifetime** — the options-page cases need a backend
+   that round-trips, and they must not be the ones writing DPAPI blobs into the
+   developer's INI.
 
 **What this does and does not buy, stated plainly**, because a credential store
 that oversells itself is worse than one that does not:
@@ -432,12 +569,11 @@ that oversells itself is worse than one that does not:
   keyed off the user's login. Another user on the same box cannot read it; a
   stolen `smaragd.ini`, a backup, a synced config directory or a support-bundle
   upload does not carry a usable password.
-- The **`obfuscated` fallback does not protect against anyone holding the
-  binary**, because the key ships inside it. It is there so that no platform
-  ever falls back to plain text, and the accounts dialog says "stored obfuscated
-  — not protected against someone with access to this machine" when it is in
-  use. It is never silently substituted for a real backend: a platform whose
-  real backend fails at runtime logs a warning naming the reason.
+- Everywhere else **nothing is persisted at all**. There is no weak tier, so
+  there is no tier whose strength anyone has to reason about. A real backend
+  that fails at RUNTIME (a locked keychain, a Secret Service that is not
+  running) degrades to the same place — session-only, with a warning naming the
+  reason — and never silently to a weaker store.
 - **Nothing here changes what goes over the wire.** HTTP Basic sends the
   password to the server on every request; TLS is what protects that, and the
   app password is what limits the blast radius. Encryption at rest and
@@ -498,13 +634,18 @@ change.
 | T13 | A secret reaching a log, a `describe()`, an error string or a support bundle | Redacted at the source; gated by a case that greps the log ring for the password it just set (§B.8 rule 2) |
 | T14 | A DPAPI blob copied to another machine decrypting to garbage and being SENT | The scheme tag makes the failure explicit — `undecryptable`, re-enter, nothing on the wire (§B.8 rule 1) |
 | T15 | A headless case writing into the developer's real keychain, or blocking on an invisible macOS keychain prompt | `SMARAGD_SECRET_BACKEND=memory` is the `--test-case` default, ahead of the platform choice (§B.8 rule 5) |
+| T16 | A pool thread posting a result to a source that is being deleted | The hand-back is a worker `QObject`'s SIGNAL, never `invokeMethod` on a raw pointer — Qt drops a queued emission to a dead receiver under its own mutex (§B.2 inv. 1). Gate 1 AC 12 |
+| T17 | Eviction deleting audio the open project plays | The project's `externFiles()` are PINNED; a cache that cannot reach its cap says so and stops (§B.6) |
+| T18 | A slow fetch completing onto a stale index-path — a clip on the WRONG track | The pending placement holds the track's OBJECT ID and re-resolves at completion; a vanished track places nothing (§B.5) |
+| T19 | A remote name that is legal on WebDAV and illegal on Windows (`:`, `?`, trailing dot), or two remote files with one name | Sanitise, and disambiguate a collision as `name (2).ext` — never overwrite (§B.6) |
+| T20 | Believing the compiler enforces "no widget in a provider" | It does not: `app_model` links `Qt::Widgets` PUBLIC. Contract + grep, gate 1 AC 11 (§B.1) |
 
 ---
 
 ## C. The gates
 
-Six gates, one PR each, in order — each builds on the last and each is green on
-its own. **Every gate ends with the standing gate list**: `./build.sh`,
+Six gates in order — each builds on the last and each is green on its own. One
+PR each, **except gate 5, which is prescribed as three** (5a/5b/5c). **Every gate ends with the standing gate list**: `./build.sh`,
 `python tools/check_layering.py`, `python tools/check_logging.py`,
 `ctest --test-dir smaragd/build -j4 --output-on-failure`, and a reconciled
 count (**174 + N registered / 171 + N run / 3 disabled** on a non-Apple box,
@@ -560,13 +701,22 @@ new audio content is added.
 6. **Supersession:** issuing a second search while the first is running and
    dropping the first's id yields no entry tagged with the stale id after the
    test's own cancel point.
-7. **Cancel:** a cancelled recursive search stops emitting within a bounded
-   number of further batches, and `cancel()` on an unknown id is a no-op.
+7. **Cancel:** a cancelled recursive search emits **at most one** further batch
+   (the one already assembled when the flag was seen), and `cancel()` on an
+   unknown id is a no-op. "Bounded" without a number is not checkable.
 8. **Threading:** every `entriesReady` / `requestFailed` / `fetchFinished`
    emission is asserted to arrive on the main thread
    (`QThread::currentThread() == qApp->thread()`).
 9. `grep -rn "std::thread" main/media/` is empty.
 10. `main/media/CONTRACT.md` exists and states inv. 1-6 of §B.2 verbatim.
+11. **No widget in a provider:** `grep -rnE "#include <Q(Widget|TreeWidget|Dialog|Menu|Painter|Pixmap)" main/media/`
+    is empty. This is a grep, not a compiler error — see §B.1; the compiler will
+    not catch it, because `app_model` links `Qt::Widgets` PUBLIC.
+12. **A source destroyed mid-walk does not crash and delivers nothing after.**
+    Start a recursive search over the fixture tree, delete the source while
+    batches are in flight, spin the event loop. This is the AC that separates
+    the signal/slot hand-back §B.2 inv. 1 requires from the raw-pointer
+    `invokeMethod` that looks identical until the day it loses the race.
 
 **Do not touch.** Any widget. `main/timeline`. The drag or drop paths. Any
 existing test.
@@ -644,9 +794,18 @@ writes the model directly would pass while the gesture is broken.
 8. The panel's suffix filter and the Insert-sample dialog's filter come from
    the same `smedia::kAudio` — asserted by a grep in the PR body, since the
    dialog string is built from it.
-9. `media/*` settings keys are written only by the panel; the three cases above
-   do not write any (they set state through verbs, not settings), so **none of
-   them needs `RUN_SERIAL`** — state that explicitly in the PR body.
+9. **The three cases are `RUN_SERIAL` and OWN the `media/*` keys.** An earlier
+   draft claimed the opposite — that driving the panel through verbs writes no
+   settings — and it is false: §B.4 has the panel persist `media/lastSourceId`,
+   `media/lastPath/<sourceId>`, `media/categoryMask` and
+   `media/searchRecursive`, and the verbs drive the REAL panel (T10), so every
+   one of those writes fires. That is exactly `SStdMixerView::saveTrackControlWidth`'s
+   shape, which the audited `smaragd.ini` row already names as the residual
+   hazard. Each case therefore declares in its header that it owns those keys,
+   restores them, and leaves the INI **byte-identical** across a full `-j4` run
+   (md5, stated in the PR body). Suppressing persistence under `--test-case` was
+   considered and rejected: it would make the gate test something other than the
+   shipping code.
 
 **Do not touch.** `SMVActualView::dropEvent` — the `file:` branch already
 handles this gate entirely (§A.1). `main/media`'s ABI.
@@ -693,9 +852,14 @@ against a real server's timing.
    `SDelayedLocalSource` at a delay long enough that the drop returns first.
 4. A **failed** fetch places nothing, logs an error
    (`assert-log level="error"`) and shows a status message.
-5. Closing the project while a placement is pending cancels it: nothing is
-   placed, and no crash (the pending list is `QPointer`-guarded and cleared on
-   project close).
+5. Closing **or switching** the project while a placement is pending cancels
+   it: nothing is placed. There is no sanitizer build in this repo, so "no
+   crash" here is an assertion of observed behaviour and not of memory safety —
+   say so in the PR body rather than letting a green run imply more.
+5a. **A pending placement whose target track was deleted mid-fetch places
+   NOTHING** and reports it, rather than resolving a stale index-path onto
+   whichever track now sits at those indices (§B.5). Delete the track, let the
+   delayed source complete, assert the clip count on every track is unchanged.
 6. A second drop of the same pending ref while the first is in flight results
    in **two** clips, not one and not three — the pending list is keyed by
    placement, not by ref.
@@ -725,18 +889,33 @@ Nextcloud server, gated end to end with no network and no account.
 main/media/include/app/media/swebdavclient.h      PROPFIND / GET, one QNAM
 main/media/include/app/media/swebdavmediasource.h
 main/media/src/swebdavclient.cpp, swebdavmediasource.cpp
-main/media/tests/webdav_stub.{h,cpp}      QTcpServer speaking PROPFIND+GET
-main/media/tests/webdav_source_test.cpp
-tests/cases/media_webdav_browse.qxa
-tests/cases/media_webdav_drop.qxa
+main/testkit/src/swebdavstub.{h,cpp}      QTcpServer speaking PROPFIND+GET
+main/media/tests/webdav_source_test.cpp   links the stub from testkit
 ```
+
+**GATE 4 IS UNIT-TEST ONLY. Its two qxa cases have moved to gate 5c**, and this
+is a correction to an earlier draft that could not have been built. Those cases
+claimed to "drive the REAL panel against a stub started by the case" — but a
+`.qxa` runs inside `smaragd.exe`, the stub was placed in `main/media/tests`
+where only the unit-test binary links it, **no verb existed to start it**, and
+registering a WebDAV source needs a URL and a credential whose only entry points
+(the accounts page, `CredentialProvider`) do not ship until gate 5. It was a
+gate with a hidden forward dependency on the next one.
+
+The fix is two moves. The stub lives in **`main/testkit`** — which the app
+already links, so both the unit test and a running `smaragd.exe` can start one —
+and the end-to-end cases land in gate 5c behind a new `media-webdav-stub` verb,
+once accounts exist to point at it. Gate 4 then has no forward dependency and no
+end-to-end coverage; gate 5c supplies the latter one PR later.
 
 **The stub is the gate.** A `QTcpServer` on `127.0.0.1:0` that answers
 `PROPFIND` with a canned multistatus body built from a table and `GET` with the
 bytes of a fixture WAV, and that can be told to answer `401`, `404`, `500`, to
 stall, or to close mid-body. Plain HTTP, no TLS — TLS is Qt's code, not ours,
 and a self-signed certificate in the repo would be a liability. That leaves
-"TLS error surfacing" as manual (§C.6).
+"TLS error surfacing" as manual (§C.6). Binding `127.0.0.1:0` (an
+OS-assigned port) is what keeps it safe under `ctest -j4`: no fixed port, so
+four concurrent cases cannot collide.
 
 **ACs.**
 
@@ -761,11 +940,11 @@ and a self-signed certificate in the repo would be a liability. That leaves
 7. Destroying the source with requests in flight aborts them and does not
    crash (run under the test's own teardown; note that no sanitizer build
    exists in this repo, so this is an assertion of behaviour, not of memory).
-8. `media_webdav_browse.qxa` and `media_webdav_drop.qxa` drive the REAL panel
-   against a stub started by the case, and the drop's rendered audio matches
-   the fixture's RMS — the full chain, from PROPFIND to a sounding clip.
-9. `ignoreSslErrors` appears nowhere: `grep -rn "ignoreSslErrors" smaragd/` is
+8. `ignoreSslErrors` appears nowhere: `grep -rn "ignoreSslErrors" smaragd/` is
    empty.
+9. End-to-end coverage is **deferred to gate 5c** and the PR body says so
+   plainly: at the end of gate 4 the WebDAV client is unit-tested and has never
+   been driven from the app.
 
 **Do not touch.** The panel's UI code (the source is chosen by id; the panel is
 already source-agnostic from gate 2). The cache.
@@ -778,27 +957,35 @@ already source-agnostic from gate 2). The cache.
 test it, and see it in the browser's source picker — with the password
 **encrypted at rest** by the platform's own credential protection.
 
-This gate is the largest of the six because it is two things: the secret store
-and the accounts UI. **Split it in two PRs if a subagent needs it** —
-`SSecretStore` plus `secret_store_test` is a clean, self-contained first half
-with no UI in it at all, and the page can follow.
+**This gate is THREE PRs, not one**, and the split is prescribed rather than
+offered — it is the largest gate and it absorbed gate 4's end-to-end cases:
+
+- **5a — `SSecretStore` + `secret_store_test`.** No UI at all, no media code.
+- **5b — the accounts model, the Options → Media page, `assert-media-options`.**
+- **5c — the end-to-end WebDAV cases** (`media_webdav_browse.qxa`,
+  `media_webdav_drop.qxa`) behind a new **`media-webdav-stub`** verb that starts
+  the gate-4 stub in-process, now that an account exists to point the panel at.
+  This is the coverage gate 4 deliberately does not have.
 
 **Files.**
 
 ```
 main/shell/include/app/shell/ssecretstore.h    the backend seam (§B.8)
-main/shell/src/ssecretstore.cpp                dispatch + memory + obfuscated
+main/shell/src/ssecretstore.cpp                dispatch + memory + none
 main/shell/src/ssecretstore_win.cpp            DPAPI          (crypt32)
 main/shell/src/ssecretstore_mac.mm             Keychain       (Security.framework)
 main/shell/src/ssecretstore_linux.cpp          libsecret, behind TW_HAVE_LIBSECRET
+main/testkit/src/swebdavstub.{h,cpp}           MOVED HERE from gate 4
 main/shell/tests/secret_store_test.cpp         ctest target
 main/media/include/app/media/smediacredentials.h   the provider INTERFACE
 main/servicesui/src/soptionsdialog.cpp         a new "Media" page
 main/servicesui/include/app/servicesui/soptionsdialog.h  + describeMediaPage()
 main/shell/include/app/shell/ssettings.h       account accessors (§B.8)
 main/testkit/src/smediatestactions.cpp         + assert-media-options
-tests/cases/media_options_page.qxa             RUN_SERIAL, owns its keys
-tests/cases/media_secret_redaction.qxa         RUN_SERIAL
+tests/cases/media_options_page.qxa             5b. RUN_SERIAL, owns its keys
+tests/cases/media_secret_redaction.qxa         5b. RUN_SERIAL
+tests/cases/media_webdav_browse.qxa            5c. from gate 4
+tests/cases/media_webdav_drop.qxa              5c. from gate 4
 docs/ACTIONS.md                                + the verb row
 ```
 
@@ -819,9 +1006,10 @@ and a future Login Flow v2 token is `"Bearer …"` with no change to the client
 The page mirrors the MIDI page's build/load/apply triple (servicesui CONTRACT
 inv. 7): a list of accounts, Add/Edit/Remove, a per-account form of URL,
 username and app password, a **Remember password** checkbox, a line naming the
-**backend actually in use** ("stored with Windows DPAPI, protected by your login"
-/ "stored obfuscated — not protected against someone with access to this
-machine"), and a **Test connection** button reporting the HTTP status.
+**backend actually in use** ("stored with Windows DPAPI, protected by your
+login" / "this system has no credential store — the password is kept for this
+session only", the latter with **Remember disabled**), and a **Test connection**
+button reporting the HTTP status.
 `assert-media-options` builds the REAL `SOptionsDialog` off screen and matches
 `describeMediaPage()`, exactly as `assert-midi-options` does.
 
@@ -834,10 +1022,12 @@ machine"), and a **Test connection** button reporting the HTTP status.
    key returns "unset", never an empty string that could be sent as a password.
 2. A secret containing non-ASCII, embedded NULs, and 4 KB of data round-trips
    byte-exactly. (An app password is ASCII; a future token need not be.)
-3. **The ciphertext is not the plaintext**: for `dpapi` and `obfuscated`, the
-   stored INI value contains neither the plaintext nor any 8-byte substring of
-   it, and differs across two stores of the same secret where the backend
-   salts (DPAPI does).
+3. **The ciphertext is not the plaintext**: for `dpapi`, the stored INI value
+   contains neither the plaintext nor any 8-byte substring of it, and differs
+   across two stores of the same secret (DPAPI salts).
+3a. **`none` persists nothing and disables Remember** — no INI key, no keychain
+   item, and the store reports that it cannot remember rather than appearing to
+   succeed and losing the secret at exit.
 4. **A corrupt / foreign blob is `undecryptable`, never garbage.** Overwrite
    `passwordEnc` with random base64 and with a blob from a different scheme tag:
    both report `undecryptable`, both log a warning, and neither yields a string
@@ -848,19 +1038,37 @@ machine"), and a **Test connection** button reporting the HTTP status.
 6. `SMARAGD_SECRET_BACKEND=memory` writes **no INI key and no keychain item**;
    asserted by an mtime + md5 check on the INI and by the absence of the
    keychain service.
+6a. **`secret_store_test` NEVER touches the user's real `smaragd.ini` or real
+   keychain.** ACs 3-5 read and corrupt `passwordEnc` values, and going through
+   the `SSettings` singleton would mutate the developer's own INI **from a ctest
+   unit test running concurrently with the qxa suite** — breaking the audited
+   byte-identical-INI property from a test that declares no `RUN_SERIAL` and has
+   no way to. The test constructs its own `QSettings` over a temp file and
+   passes it in; the store takes its settings object rather than reaching for
+   the singleton. Same for the keychain: `SMARAGD_SECRET_BACKEND` selects, and
+   the real-backend ACs run against a test-scoped service name.
 
 *The accounts page:*
 
 7. An account round-trips: add, restart, still listed, and the browser's source
    combo offers `nextcloud:<accountId>`.
+7a. **The options-page cases name their backend explicitly.** Rule 5 makes
+   `memory` the `--test-case` default, but ACs 8 and 17 need a backend that
+   actually persists, so `media_options_page.qxa` sets
+   `SMARAGD_SECRET_BACKEND=dpapi` (or the platform's real one) in its CTest
+   environment — and is `RUN_SERIAL` and restores its keys precisely because
+   that writes real ciphertext into the shared INI. An earlier draft left this
+   implied; implied is how the `-j` contract gets broken.
 8. **No plaintext password key is ever written.** `grep` the INI for the known
    test password after a save with Remember ON: absent. `passwordScheme` is
    present, `passwordEnc` is present (or absent with a keychain backend), and
    `media/nextcloud/<id>/password` **does not exist**.
 9. With **Remember off**, neither `passwordEnc` nor `passwordScheme` is written,
    and the source is usable for the rest of the session.
-10. The dialog names the backend in use, and says "not protected" **only** when
-    the `obfuscated` fallback is active (`assert-media-options contains=`).
+10. The dialog names the backend in use, and offers Remember **only** when a
+    real store is present — with `SMARAGD_SECRET_BACKEND=none` the checkbox is
+    disabled and the reason is in `describeMediaPage()`
+    (`assert-media-options contains=`).
 11. Removing an account removes every one of its keys **and its stored secret**
     (a keychain item left behind is a leak that outlives the app) and closes any
     open source for it.
@@ -872,10 +1080,12 @@ machine"), and a **Test connection** button reporting the HTTP status.
 *Redaction (`media_secret_redaction.qxa`):*
 
 14. A case sets a password of a known, unusual literal, drives a browse and a
-    failing request against the stub, and asserts `assert-log contains="<that
-    literal>" maxCount="0"` **and** `contains="Basic " maxCount="0"` — the
-    secret reaches neither the log ring nor an error string, and the
-    `Authorization` header is redacted in diagnostics (§B.8 rule 2, T13).
+    failing request against the stub, and asserts BOTH `assert-log
+    contains="<that literal>" maxCount="0"` **and** `contains="<base64 of
+    user:literal>" maxCount="0"` — a Basic header leaks the base64, not the
+    password, so the second assertion is the one that actually bites. It
+    deliberately does NOT assert `"Basic "` absent: that would forbid the
+    correctly redacted `Authorization: Basic <redacted>` line (§B.8 rule 2, T13).
 15. `describeMediaPage()` reports `password=set|unset|undecryptable` and the
     literal appears nowhere in it.
 
@@ -887,6 +1097,16 @@ machine"), and a **Test connection** button reporting the HTTP status.
     the PR body (T6, the `midi_options_page` precedent).
 17. A plaintext `media/nextcloud/<id>/password` planted by the test is migrated
     on load: re-stored through the store and the plaintext key **removed**.
+
+*End to end (5c):*
+
+18. `media-webdav-stub` starts a stub on `127.0.0.1:0` and reports its port; an
+    account pointed at it appears in the source combo, browses, and searches —
+    the panel driven by the gate-2 verbs, unchanged.
+19. A drop from that source places a clip whose rendered audio matches the
+    fixture's RMS: the full chain, PROPFIND → GET → cache → project copy →
+    `add-sample` → a sounding clip. This is the first time any of it runs
+    inside the app.
 
 **Do not touch.** The provider layer's ABI. The cache. `SSettings`'s existing
 keys.
@@ -942,9 +1162,17 @@ sending anything, and on macOS a locked keychain is handled without a hang.
    `SSecretStore`, never into the INI, a log or a `describe()` — with
    `SMARAGD_SECRET_BACKEND=memory` as the `--test-case` default listed beside
    the other backend knobs (§B.8).
-4. The manual runbook has been **run once** and its result recorded in the
-   file, as `docs/ASIO_WINDOWS_GATE.md` requires of itself.
-5. `plan/STATE.md` carries the chronological record, including anything the
+4. The manual runbook exists and is precise enough to follow. **Running it is
+   the AUTHOR's step, not a subagent's** — it needs a real Nextcloud server and
+   real credentials, which is exactly how `docs/ASIO_WINDOWS_GATE.md` is
+   structured (Phase 1 landed with the gate run PENDING and said so). The gate-6
+   PR may therefore land with the runbook unrun, provided it says so.
+5. **CLAUDE.md's stale module line is fixed on the way past.** It states the app
+   is "ONE OBJECT library (`smaragd_app`)"; the tree has had four
+   (`app_model < app_core < app_objects < app_ui`) since Phase 6, and an agent
+   reading that line looks for a structure that does not exist. Not this
+   proposal's doing, but this proposal is the next thing to edit that file.
+6. `plan/STATE.md` carries the chronological record, including anything the
    execution found that this design got wrong.
 
 ---
@@ -999,9 +1227,9 @@ redaction from the log.
    server makes the client's behaviour observable without a server.
 2. **Credential storage.** Encrypted at rest through the platform's own store
    (§B.8), so no plain text is written anywhere. Two residual exposures are
-   named rather than papered over: the `obfuscated` fallback is not protection
-   against someone holding the binary (it exists only so that no platform ever
-   degrades to plain text, and the UI says so when it is active), and HTTP Basic
+   named rather than papered over: a platform with no credential store cannot
+   remember a password at all (session-only, Remember disabled — there is
+   deliberately no weak tier to reason about), and HTTP Basic
    still puts the password on the wire on every request — which is what a token
    flow fixes, and why §B.8a puts Nextcloud **Login Flow v2** next rather than
    OAuth2. A revocable app password is the mitigation in the meantime.
@@ -1043,17 +1271,39 @@ Explicitly **not** in this proposal, each with the reason:
 | **Waveform thumbnails in the browser** | Needs a preview probe per row; the preview machinery is per-`SCut`, not per-file-on-a-server. |
 | **Relocating an already-placed cache reference at Save time** | §B.6/T11. The resources dock's *Cleanup…* dialog is where it would belong. |
 | **Nextcloud Login Flow v2 / OAuth2** | The direction, and §B.8a is the analysis: Login Flow v2 first (browser login against the user's own server, SSO and 2FA included, a revocable app password back, **no client registration**), OAuth2 only where a deployment demands it and an admin can register a client. The MVP's job is not to block it — `SSecretStore` and an `Authorization`-header-taking client are what discharge that. |
-| **libsecret as a hard dependency** | Optional (`TW_HAVE_LIBSECRET`). A Linux build without it uses the `obfuscated` fallback and says so. |
+| **libsecret as a hard dependency** | Optional (`TW_HAVE_LIBSECRET`). A Linux build without it cannot remember a password: session-only, Remember disabled, reason shown. |
+| **Any encrypt-it-ourselves fallback** | Rejected outright (§B.8): it needs a cipher this tree does not link, and a scheme that documents itself as protecting nothing is a checkbox, not a control. |
 
 ---
 
-## G. Summary of the six gates
+## G. Two decisions this proposal does NOT make
+
+Both are the requester's, both are cheap to change now and expensive later.
+
+1. **What happens to the resources dock (`SExternFileList`).** §A.1 analyses it
+   and then ships a second dock beside it forever. The default outcome is **two
+   docks that both drag files onto the timeline with different payloads** — one
+   listing the project's referenced files with ref counts, one browsing sources.
+   The options are: leave both (the MVP's implicit choice); give the media
+   browser a built-in "This project" source so the two merge and the old dock
+   retires; or keep both and rename them so the split is obvious. It is a
+   product call, not a technical one, and nothing in gates 1-6 forecloses any of
+   the three — but doing nothing IS choosing the first.
+2. **Whether `.oga` (and later `.m4a`) joins the audio suffix list.** §B.3 pins
+   `kAudio` to the Insert-sample dialog's exact seven, so the browser and the
+   dialog can never disagree. Adding one is now a deliberate, user-visible
+   change to BOTH — which is the point, but it means the list is frozen until
+   someone decides.
+
+---
+
+## H. Summary of the six gates
 
 | Gate | Ships | Gated by |
 |---|---|---|
 | 1 | `main/media`: the ABI + the local provider, async, bounded, id-tagged | `media_source_test` over a committed fixture tree |
 | 2 | The dock: source picker, tree, filter, incremental search, drag out (local) | 3 qxa cases through the REAL panel and the REAL drop handler |
 | 3 | The cache, the `media:` payload, deferred placement, project-relative copy | `media_cache_test` + a deferred-drop case + a two-process cache race |
-| 4 | The Nextcloud/WebDAV connector | `webdav_source_test` + 2 qxa cases, against an in-repo stub server |
-| 5 | **`SSecretStore`** (DPAPI / Keychain / libsecret), accounts, the Options → Media page | `secret_store_test` + `media_options_page.qxa` + `media_secret_redaction.qxa` (both RUN_SERIAL) |
+| 4 | The Nextcloud/WebDAV connector — **unit-tested only, no app coverage** | `webdav_source_test` against the in-repo stub (which lives in `main/testkit`) |
+| 5 | **Three PRs.** 5a `SSecretStore` (DPAPI / Keychain / libsecret / none); 5b accounts + the Options → Media page; 5c the end-to-end WebDAV cases gate 4 could not host | `secret_store_test`; `media_options_page` + `media_secret_redaction`; `media_webdav_browse` + `media_webdav_drop` (all RUN_SERIAL) |
 | 6 | Contracts, docs, CLAUDE.md, STATE.md, the manual runbook | the runbook, run once and recorded |
