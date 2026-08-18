@@ -13658,3 +13658,67 @@ it), a count-in or pre-roll longer than 2 bars, the two knobs COMBINED in one
 take (implemented and reachable, no case), and the Options page's three new
 controls (no verb builds the Audio page off screen the way
 `assert-midi-options` builds the MIDI one).
+
+## 2026-08-15 — Proposal 35 Phase 1: ASIO SDK detection + asio_probe ABI spike (PR #31)
+
+(Recorded 2026-08-18 — the merge predates the two 2026-08-17/18 entries above;
+this close-out also added `docs/ASIO_WINDOWS_GATE.md` and the status/plan-tree
+updates.)
+
+Branch `feat/asio-backend`. The first PR-sized slice of proposal 35 (full
+design landed with this PR as `plan/proposed/35_ASIO_BACKEND.md`): before any
+backend architecture exists, prove that this MinGW-built host can drive an
+MSVC-built ASIO driver end to end — the exact de-risking role `vst3_probe`
+played for proposal 08 M6, resting on the same x64
+single-calling-convention bet.
+
+### What landed
+
+- **`ENABLE_ASIO` CMake option** (Windows default ON) + sentinel detection of
+  `smaragd/third_party/asiosdk` mirroring the VST3 block. The Steinberg SDK is
+  licensed but NOT redistributable, so unlike clap/vst3_pluginterfaces it is a
+  **manual drop-in and gitignored**; absent SDK ⇒ clean build with one
+  configure WARNING carrying the instructions.
+- **`devices/src/asio_driver_list.{h,cc}`** — driver enumeration as our own
+  `HKLM\SOFTWARE\ASIO` registry scan (pure advapi32, 64-bit view). **Zero SDK
+  sources are compiled anywhere** — headers only — which sidesteps the
+  MSVC-isms in the SDK's `host/pc/asiolist.cpp` on MinGW entirely. Phase 2
+  promotes this file into `tw_devices`.
+- **`devices/tools/asio_probe.cc`** — the gate. `list` / `open <driver>` /
+  `tone <driver> [s]` walk enumerate → CoCreate (ASIO's CLSID-doubles-as-IID
+  convention) → `init` → channels/rates/buffer sizes/latencies →
+  `createBuffers` → `start` → `bufferSwitch`(+TimeInfo) → `stop` → dispose →
+  `Release`, flagging vtable/POD-layout mismatches (garbage driver name,
+  implausible counts, double-buffer index outside {0,1}) explicitly. It also
+  measures whether callbacks arrive after `stop()` returns — input for the
+  Phase 2 stop-fence. x64-only by `#error`. Lives in `tools/`
+  (check_logging ALLOW_DIR: the printed report IS the output).
+- One-line note in `devices/CONTRACT.md` pointing at the probe. The invariant
+  rewordings (3/4/5) come with Phase 2, which actually changes the factory.
+
+### Verification, and its limits
+
+`./build.sh` on macOS green with the block inert (configure shows `ASIO=OFF`),
+`check_layering` and `check_logging` clean, ctest 106 registered / 106 run.
+Four cases (`qxa.grain_minimal_stretch`, `grain_multiple_stretch_factors`,
+`grain_pitch_octave_up`, `grain_pitch_with_stretch`) failed on the first full
+suite run, then pinned with `repeat_test.sh` N=20 each: **20/20 deterministic
+in isolation**. Named per convention as an unreproduced full-suite-load flake
+— the same "fails once inside a long run, passes pinned" pattern the
+proposal-37 P2 session recorded three times. This change cannot reach those
+cases: no engine source or macOS build flag differs; the only build-graph
+delta is a Windows-gated executable target never compiled on macOS.
+
+**NOT gated, and the Phase 1 exit criterion:** the probe run itself — it needs
+Windows + the drop-in SDK + an installed driver. Runbook:
+`docs/ASIO_WINDOWS_GATE.md` (FlexASIO/ASIO4ALL plus ideally one real vendor
+driver, expecting `GATE PASSED`). A Windows build with and without the SDK
+present is likewise manual. **Phase 2 starts only on `GATE PASSED`.**
+
+### Cross-proposal notes
+
+Proposal 36 (multichannel pages) executed the day after this merged: the
+proposal-35 Phase 2 output-path design predates it and its mono-fan-out
+assumptions are stale — re-plan against 36 before building `AsioDevice`
+(noted in the proposal header). Proposal 21 stopped at L6 gated on ASIO/35,
+so this proposal is now on the critical path of the live-latency work.
