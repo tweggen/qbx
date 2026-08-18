@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <vector>
+#include <cmath>
 
 #include <qobject.h>
 
@@ -1380,6 +1381,168 @@ void STrack::applyChildTrackAudibility()
                                               : (offset_t) affected.end;
         invalidateRenderPathRange( (offset_t) affected.start, end );
     }
+}
+
+// --- the folder-sum preview (proposal 39 M3, design D3) ---------------------
+//
+// Everything below runs on the MAIN thread from paintEvent (and from the
+// assert-envelope verb, which is the same call). It must never block, freeze,
+// demand a page or wait: every probe it touches is an index into an array a
+// child's own preview already built, which is the whole reason the exact
+// answer (STrack::getPreview() over this folder, post-fader and behind
+// requestPage()) is not used. See the header for the three rules.
+
+bool STrack::hasChildTracks() const
+{
+    for( SLink *lk : childLinks() ) {
+        if( !lk ) continue;
+        if( dynamic_cast<STrack *>( &lk->getSObject() ) ) return true;
+    }
+    return false;
+}
+
+namespace {
+
+// One walk's running state. The min/max accumulators are int32 and are clamped
+// ONCE, by the caller, at the end: accumulating in preview_t (a signed char)
+// wraps, and a wrap makes two loud children draw QUIETER than one child.
+struct SChildSumWalk
+{
+    const SEnvelopeWindow &win;
+    std::vector<int32_t>  &sumMin;
+    std::vector<int32_t>  &sumMax;
+    SObject               *root;      // for ssolo; may be null (plain mute)
+    bool                   anySolo;
+    bool                   any;       // did anything non-zero contribute?
+};
+
+double sChildSumLinearGain( double db )
+{
+    return pow( 10.0, db / 20.0 );
+}
+
+// Add ONE clip's drawn envelope, scaled by the accumulated lane gain.
+//
+// The clip gets ITS OWN PIXEL SPAN, exactly as STrackRendererInline's clip loop
+// sizes the rect it draws that clip's waveform into. Handing a clip the whole
+// lane window instead would be silently wrong rather than merely imprecise: a
+// cut's collect clamps a negative clip-relative position to 0 (see
+// cutSourceTimeOf), so a clip starting after the window's left edge would smear
+// its audio across every column instead of occupying the ones it covers.
+void sChildSumAddClip( SChildSumWalk &w, SLink &lk, double gain )
+{
+    SObject &obj = lk.getSObject();
+    if( !lk.hasStartTime() ) return;
+    if( !obj.hasDuration() ) return;
+
+    // Through the RENDERER, never the concrete type (main/timeline/CONTRACT.md
+    // inv. 2). An object with no waveform - an event clip - declines and
+    // contributes nothing, which is the right answer rather than a bug.
+    SObjectRenderer *rndr = obj.getInlineRenderer();
+    if( !rndr ) return;
+
+    const double t0 = (double) w.win.leftTime;
+    const double t1 = (double) w.win.rightTime;
+    if( t1 <= t0 ) return;
+    const double wpx = (double) w.win.width;
+    if( wpx < 1.0 ) return;
+
+    const double st = (double) lk.getStartTime();
+    const double en = st + (double) obj.getDuration();
+    if( st >= t1 || en <= t0 ) return;                 // outside the window
+
+    int isx = (int) ( ( st - t0 ) * wpx / ( t1 - t0 ) );
+    int iex = (int) ( ( en - t0 ) * wpx / ( t1 - t0 ) );
+    if( isx < 0 ) isx = 0;
+    if( iex > w.win.width ) iex = w.win.width;
+    if( iex <= isx ) return;
+
+    SEnvelopeWindow sub;
+    sub.leftTime  = (offset_t) ( t0 + (double) isx * ( t1 - t0 ) / wpx );
+    sub.rightTime = (offset_t) ( t0 + (double) iex * ( t1 - t0 ) / wpx );
+    sub.width     = iex - isx;
+
+    std::vector<preview_t> pv( (size_t) sub.width, preview_t{ 0, 0 } );
+    if( !rndr->collectEnvelope( lk, sub, pv.data() ) ) return;
+
+    for( int i = 0; i < sub.width; ++i ) {
+        if( !pv[i].min && !pv[i].max ) continue;
+        w.sumMin[isx + i] += (int32_t) llround( (double) pv[i].min * gain );
+        w.sumMax[isx + i] += (int32_t) llround( (double) pv[i].max * gain );
+        w.any = true;
+    }
+}
+
+// Add `track`'s own clips at `gain`, then recurse into its child tracks with
+// their own faders folded in. The FOLDER being drawn is never passed here with
+// its own gain applied - the top-level caller starts each child at that child's
+// gain alone, which is what "up to but EXCLUDING the folder" means.
+void sChildSumAddTrack( SChildSumWalk &w, STrack &track, double gain )
+{
+    for( SLink *lk : track.childLinks() ) {
+        if( !lk ) continue;
+        STrack *child = dynamic_cast<STrack *>( &lk->getSObject() );
+        if( child ) {
+            // THE shared audibility rule, never a local mute/solo chain
+            // (main/timeline/CONTRACT.md inv. 10).
+            if( !ssolo::isLaneAudible( w.root, child, w.anySolo ) ) continue;
+            sChildSumAddTrack( w, *child,
+                               gain * sChildSumLinearGain(
+                                          child->volumeDbSnapshot() ) );
+        } else {
+            sChildSumAddClip( w, *lk, gain );
+        }
+    }
+}
+
+}  // namespace
+
+bool STrack::collectChildSumEnvelope( const SEnvelopeWindow &win,
+                                      preview_t *out ) const
+{
+    if( !out ) return false;
+    const int width = win.width < 1 ? 1 : win.width;
+    if( win.rightTime <= win.leftTime ) return false;
+
+    STrack &self = const_cast<STrack &>( *this );
+    if( !self.hasChildTracks() ) return false;
+
+    SObject *root = splacements::rootContainer( self.getProjectSafe() );
+
+    std::vector<int32_t> sumMin( (size_t) width, 0 );
+    std::vector<int32_t> sumMax( (size_t) width, 0 );
+    SEnvelopeWindow useWin = win;
+    useWin.width = width;
+    SChildSumWalk w{ useWin, sumMin, sumMax, root,
+                     ssolo::anySoloInTree( root ), false };
+
+    // OUR OWN FADER IS NOT IN THE PRODUCT: each direct child starts at ITS OWN
+    // gain. That is the rule the proposal adopts - the lane a waveform is drawn
+    // on never scales it - and it is what makes M3.6's pair meaningful (a
+    // child's fader moves the overlay, ours does not).
+    for( SLink *lk : self.childLinks() ) {
+        if( !lk ) continue;
+        STrack *child = dynamic_cast<STrack *>( &lk->getSObject() );
+        if( !child ) continue;
+        if( !ssolo::isLaneAudible( root, child, w.anySolo ) ) continue;
+        sChildSumAddTrack( w, *child,
+                           sChildSumLinearGain( child->volumeDbSnapshot() ) );
+    }
+
+    if( !w.any ) return false;      // nothing to draw, so draw NOTHING
+
+    // ONE clamp, here, on an int32 sum (design D3 / AC M3.2).
+    for( int i = 0; i < width; ++i ) {
+        int32_t mn = sumMin[i];
+        int32_t mx = sumMax[i];
+        if( mn < -127 ) mn = -127;
+        if( mn >  127 ) mn =  127;
+        if( mx < -127 ) mx = -127;
+        if( mx >  127 ) mx =  127;
+        out[i].min = (previewPart_t) mn;
+        out[i].max = (previewPart_t) mx;
+    }
+    return true;
 }
 
 // --- automation (proposal 37 P5, design D5) ---------------------------------

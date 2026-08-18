@@ -63,6 +63,30 @@ struct SEnvelopeWindow
     int      width     = 1;   // number of probe columns to produce
 };
 
+/**
+ * The window a PAINT path collects over: the two probes drawObjectWaveform()
+ * has always taken from its context — ctx.getTimeOf( rect.left() ) and
+ * ctx.getTimeOf( rect.right() + 1 ) — and the rect's width.
+ *
+ * It lives beside SEnvelopeWindow rather than beside drawObjectWaveform()
+ * because more than one module has to spell it and they are not allowed to see
+ * each other: app/objects/wave derives it for a clip, app/objects/track (the
+ * folder-sum overlay, proposal 39 M3) derives it for a lane, and objects/track
+ * may not include objects/wave. One spelling, so a lane's overlay and the clips
+ * on it cover exactly the same time span.
+ */
+inline SEnvelopeWindow envelopeWindowOfContext( SRenderContext &ctx )
+{
+    const QRect r = ctx.getVisibRect();
+    SEnvelopeWindow win;
+    // Time span of the visible rect: the context maps pixel -> time. The right
+    // boundary is open-ended, consistent with STrackRendererInline.
+    win.leftTime  = ctx.getTimeOf( r.topLeft().x() );
+    win.rightTime = ctx.getTimeOf( r.right() + 1 );
+    win.width     = r.width() < 1 ? 1 : r.width();
+    return win;
+}
+
 class SObjectRenderer 
     : public QObject
 {

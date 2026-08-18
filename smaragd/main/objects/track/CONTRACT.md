@@ -342,3 +342,47 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     plugin delay compensation is out of scope (proposal 37 P9) — so every mount
     that displays it must also say that it is not compensated. 0 for a Missing
     or Unsupported slot, and 0 for the many plugins that report nothing.
+
+22. **`hasChildTracks()` IS THE ONE DEFINITION OF "THIS IS A FOLDER"**
+    (proposal 39 M3). Any child link whose object is an `STrack`. The arranger
+    spelled it locally in `sstdmixerview.cpp` to decide whether a row gets a
+    fold triangle; the folder-sum overlay asks the same question, and two
+    spellings of it is one more than there should be. The local copy is gone.
+
+23. **`collectChildSumEnvelope()` IS A SUM OF ENVELOPES, AND IT NEVER TOUCHES
+    THE ENGINE** (proposal 39 M3, design D3). The walk, in full:
+
+    - Direct children first: each starts at ITS OWN linear gain
+      (`pow(10, volumeDbSnapshot()/20)`), and recursion multiplies each further
+      level in. So a descendant's contribution carries the product of the gains
+      of every track from its own track up to but **EXCLUDING** the track being
+      asked. **Our own fader is nowhere in our own answer**, which is M2's rule
+      applied to the lane the overlay is drawn on; a child one level down is
+      not that lane, so its fader does count.
+    - **Audibility is `ssolo::isLaneAudible`**, resolved once per walk against
+      the project root, never a local `isMuted()`/`isSolo()` chain. An
+      inaudible lane contributes nothing. `main/timeline/CONTRACT.md` inv. 10
+      records what the local copies cost the last time: a solo nested inside a
+      folder was a no-op and the meters disagreed with the ear. Note this is
+      audibility ONLY — `isLiveOwnedLane()` is deliberately not consulted, for
+      the same reason inv. 16-18 give: a live-owned lane's clips still exist.
+    - A clip is asked through `SObject::getInlineRenderer()->collectEnvelope()`
+      — never by concrete type — and is given **its own pixel span**, sized the
+      way `STrackRendererInline`'s clip loop sizes the rect it draws that clip's
+      waveform into. Handing a clip the whole lane window would be silently
+      wrong rather than imprecise: a cut's collect clamps a negative
+      clip-relative position to 0, so a clip starting after the window's left
+      edge would smear its audio across every column.
+    - **The accumulator is `int32` and the clamp to [-127,127] happens ONCE, at
+      the end.** `preview_t` is a `signed char`: accumulating in it wraps, and a
+      wrap makes two loud children draw QUIETER than one — a failure that looks
+      like a feature. `folder_sum_preview.qxa` gates both directions (exact
+      doubling where it fits, exactly 127 where it does not).
+    - **False, writing nothing, when nothing contributed**, so the painter draws
+      nothing at all rather than a flat line at zero.
+
+    It runs on the MAIN thread from `paintEvent` and must never block, freeze,
+    demand a page or wait — every probe is an index into an array a child's
+    preview already built. The exact answer (this track's own `getPreview()`,
+    which really is the summed output) goes through `requestPage()` and is
+    therefore unusable here; see `main/timeline/CONTRACT.md` inv. 22.

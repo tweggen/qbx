@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 39 M3 - the folder lane's SUM WAVEFORM.
+
+  A folder lane used to be a blank rectangle: STrackRendererInline skips every
+  child track in its clip loop (correctly - a child is its own lane), so
+  collapsing a folder made the arrangement under it disappear from the screen.
+  It now paints, faintly, behind its own clips, the summed envelope of
+  everything below it.
+
+  WHAT IS AND IS NOT BEING MEASURED
+
+  The overlay is a SUM OF ENVELOPES, NOT THE ENVELOPE OF A SUM, and nothing
+  here pretends otherwise. Both children hold the SAME file at the SAME
+  position, so they are in phase by construction and the sum has a closed form;
+  that is precisely how this case avoids asserting the approximation. Out of
+  phase it over-states, and child plugins / instruments / automation are
+  invisible to it because they live only in frozen pages. See the proposal's
+  "Not gated".
+
+  THE ARITHMETIC (all of it measured, none of it tuned)
+
+  ../test_sawtooth.wav is a RAMPED sawtooth (testkit CONTRACT inv. 3). Probed
+  in FOUR columns over its whole 4 s, ONE clip reads
+
+        column   0     1     2     3
+        probe    0    25    50    76        (a straight line, ~25.4/column)
+
+  Two identical children in phase therefore double to 0 / 50 / 100 / 152 - and
+  152 does not fit a signed char. So:
+
+    columns 1 and 2 gate the DOUBLING            (exactly 50 and exactly 100)
+    column 3 gates the CLAMP                     (exactly 127, never 152-256)
+
+  Both halves are wanted. An accumulator kept in preview_t would WRAP at column
+  3 and draw the sum QUIETER than one child - a failure that looks like a
+  feature - while a missing clamp would draw garbage. They fail in opposite
+  directions and only an int32 accumulator clamped ONCE passes both (AC M3.2).
+
+  THE SEMANTIC RULE, WHICH IS THE POINT OF THE WHOLE PROPOSAL
+
+    A drawn waveform describes the audio its object PRODUCES.
+    The lane it is drawn on never scales it.
+
+  So a CHILD's fader moves the overlay and the FOLDER's own fader does not, and
+  the same for mute. Those two pairs (M3.6 / M3.7) are asserted against each
+  other with snapshot/compareTo, i.e. BYTE-IDENTICAL probe arrays, so they hold
+  without hard-coding a single expected byte.
+
+  NOT GATED HERE: the sum-of-envelopes approximation itself (above); pixel
+  exactness and colour aesthetics (assert-lane-overlay asserts a luminance
+  RELATION, not a palette); folders deeper than three levels; a folder holding
+  hundreds of clips; and COLLAPSING the folder - no verb reaches
+  SStdMixerView::toggleTrackCollapsed, and the folder's own row is painted by
+  the same renderer either way, so the grab below is of an expanded folder.
+-->
+<SActionScript version="1" name="folder_sum_preview">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The grid crosses every lane and would land in the pixel histogram as
+         chrome; the overlay gate wants a clean band. -->
+    <grid-disable/>
+
+    <!-- 0 folder | 1,2 children with material | 3 plain track with material
+         | 4 folder whose child (5) is EMPTY -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Each reparent renumbers what is left at the top level, so the source
+         index is re-read every time rather than counted forward. -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+    <reparent-track source="3" destParent="2" destIndex="-1"/>
+    <!-- Top level now: 0 = folder(A,B), 1 = plain, 2 = folder(empty). -->
+
+    <!-- ================= M3.5: the children, then the doubling ========== -->
+
+    <!-- ANCHOR the closed form on the measured child first: a doubling
+         assertion over a fixture whose own numbers are assumed proves nothing
+         if the fixture ever changes. -->
+    <assert-envelope clip="0,0,0" start="0" length="192000" width="4"
+                     column="1" min="-25" max="25"/>
+    <assert-envelope clip="0,0,0" start="0" length="192000" width="4"
+                     column="2" min="-50" max="50"/>
+    <assert-envelope clip="0,0,0" start="0" length="192000" width="4"
+                     column="3" min="-76" max="76"/>
+
+    <!-- Column 0 is the silence the ramp starts from: 0 + 0 = 0. -->
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="0" min="0" max="0"/>
+    <!-- EXACTLY twice, tolerance 0. -->
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="1" min="-50" max="50"/>
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="2" min="-100" max="100"/>
+    <!-- 76 + 76 = 152: the CLAMP, once, at the end. A signed-char accumulator
+         wraps here to -104 and draws the sum quieter than one child. -->
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="3" min="-127" max="127"/>
+
+    <!-- ============ M3.8: a folder with NO clips of its own draws ======== -->
+    <!-- Folder 0 holds only child tracks. With expectEmpty left at its "false"
+         default this asserts the collect PRODUCED an envelope - i.e. that the
+         isEmpty() early-out does not swallow the common folder. 64 columns of
+         it, snapshotted for the two byte-identity pairs below. -->
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="64" expectEmpty="false" snapshot="sum2"/>
+
+    <!-- ================ M3.9: nothing to draw draws nothing ============= -->
+    <!-- A track with material but NO child tracks is not a folder. -->
+    <assert-envelope mode="childSum" trackPath="1" start="0" length="192000"
+                     width="16" expectEmpty="true"/>
+    <!-- A folder whose child is empty has nothing below it. -->
+    <assert-envelope mode="childSum" trackPath="2" start="0" length="192000"
+                     width="16" expectEmpty="true"/>
+    <!-- ...and neither is the empty child itself. -->
+    <assert-envelope mode="childSum" trackPath="2,0" start="0" length="192000"
+                     width="16" expectEmpty="true"/>
+
+    <!-- ==================== M3.10: the PIXEL gate ======================= -->
+    <!-- The overlay's colour is a RELATION, not a constant: strictly lighter
+         than the lane fill (so it reads as material) and darker than the clip
+         body grey (so it reads as background). Measured off a real canvas grab.
+         Folder 0 first - it has material below it. -->
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="700"
+                         minPixels="200" grabPng="folder_sum_lanes.png"/>
+    <!-- The NEGATIVE control, on the same grab: a lane with nothing below it
+         and nothing on it must contain NO pixel in the overlay band at all -
+         otherwise "there are overlay pixels" would be a claim about the
+         arranger's chrome rather than about the overlay. Both the folder whose
+         child is empty and the empty child itself.
+         (The plain track at "1" is deliberately NOT used here: its lane holds a
+         clip, and the anti-aliased edges of the file-name text drawn on that
+         clip land at every luminance between the text and the clip body,
+         including inside the band. That is a fact about text rendering, not
+         about the overlay.) -->
+    <assert-lane-overlay trackPath="2" grabWidth="900" grabHeight="700"
+                         expectOverlay="false"/>
+    <assert-lane-overlay trackPath="2,0" grabWidth="900" grabHeight="700"
+                         expectOverlay="false"/>
+
+    <!-- ============ M3.6: a CHILD's fader moves it, ours does not ======= -->
+    <set-track-volume trackPath="0,0" volume="-60"/>
+    <!-- -60 dB is a linear 0.001: 76 * 0.001 rounds to 0, so the sum falls to
+         the OTHER child's envelope exactly. -->
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="1" min="-25" max="25"/>
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="3" min="-76" max="76"/>
+    <set-track-volume trackPath="0,0" volume="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="64" compareTo="sum2"/>
+
+    <!-- OUR OWN fader: 128 bytes BYTE-IDENTICAL across -20 dB. That pair is
+         the whole semantic rule. -->
+    <set-track-volume trackPath="0" volume="-20"/>
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="64" compareTo="sum2"/>
+    <!-- ...and the ramp is still there, so the comparison cannot be passing on
+         an all-zero array. -->
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="2" min="-100" max="100"/>
+    <set-track-volume trackPath="0" volume="0"/>
+
+    <!-- ==================== M3.7: the same for MUTE ===================== -->
+    <set-track-mute trackPath="0,1" muted="1"/>
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="4" column="3" min="-76" max="76"/>
+    <set-track-mute trackPath="0,1" muted="0"/>
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="64" compareTo="sum2"/>
+
+    <set-track-mute trackPath="0" muted="1"/>
+    <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+                     width="64" compareTo="sum2"/>
+    <set-track-mute trackPath="0" muted="0"/>
+
+    <!-- ================= M3.11: nested, one closed form ================= -->
+    <!-- 3 = top folder, 3,0 = middle folder, 3,0,0 = the grandchild. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackPath="5" filePath="../test_sawtooth.wav" timePos="0"/>
+    <reparent-track source="5" destParent="4" destIndex="-1"/>
+    <reparent-track source="4" destParent="3" destIndex="-1"/>
+
+    <!-- At unity the grandchild reaches the top folder unscaled. -->
+    <assert-envelope mode="childSum" trackPath="3" start="0" length="192000"
+                     width="4" column="1" min="-25" max="25"/>
+    <assert-envelope mode="childSum" trackPath="3" start="0" length="192000"
+                     width="4" column="3" min="-76" max="76"/>
+
+    <!-- The MIDDLE folder's fader is on the path from the grandchild's own
+         track up to (but excluding) the folder being drawn, so it scales the
+         contribution: round( p * 10^(-6/20) ) = round( p * 0.5011872 ), i.e.
+         25 -> 13, 50 -> 25, 76 -> 38. Tolerance 0. -->
+    <set-track-volume trackPath="3,0" volume="-6"/>
+    <assert-envelope mode="childSum" trackPath="3" start="0" length="192000"
+                     width="4" column="1" min="-13" max="13"/>
+    <assert-envelope mode="childSum" trackPath="3" start="0" length="192000"
+                     width="4" column="2" min="-25" max="25"/>
+    <assert-envelope mode="childSum" trackPath="3" start="0" length="192000"
+                     width="4" column="3" min="-38" max="38"/>
+
+    <!-- The TOP folder's own fader still changes nothing, at depth two. -->
+    <assert-envelope mode="childSum" trackPath="3" start="0" length="192000"
+                     width="64" snapshot="nested"/>
+    <set-track-volume trackPath="3" volume="-6"/>
+    <assert-envelope mode="childSum" trackPath="3" start="0" length="192000"
+                     width="64" compareTo="nested"/>
+  </actions>
+
+</SActionScript>

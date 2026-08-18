@@ -613,5 +613,42 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     single expected probe. The table is process-global and lives for the run —
     one .qxa script per process.
 
-    `mode` is `clip` today and any other value is REJECTED rather than silently
-    treated as `clip`; `mode="childSum"` arrives with proposal 39 M3.
+    `mode` has two values and any other is REJECTED rather than silently treated
+    as `clip`. `clip` reads ONE clip's own probes over `clip=`. `mode="childSum"`
+    (proposal 39 M3) reads the FOLDER-SUM OVERLAY of the lane at `trackPath=`,
+    through `SMainWindow::collectTrackChildSumEnvelope` ->
+    `STrack::collectChildSumEnvelope` — which is the exact call
+    `STrackRendererInline::draw()` makes to paint it, for the same reason clip
+    mode goes through the renderer. Everything else on the verb (`start`,
+    `length`, `width`, `column`, `min`/`max`, `tolerance`, `expectEmpty`,
+    `snapshot`, `compareTo`) means what it means in clip mode, so the
+    byte-identity pair is what gates "the folder's own fader moved nothing".
+
+24. `assert-lane-overlay` (proposal 39 M3) is the PIXEL gate on that overlay,
+    and it is the first verb in this repo that measures the arranger CANVAS's
+    paint at all — the `screenshot` verb grabs a root window that is blank under
+    `QT_QPA_PLATFORM=offscreen`, and `assert-lane-alignment grabPng=` writes a
+    PNG nobody asserts on.
+
+    It grabs the real canvas off screen (`SMainWindow::describeLaneOverlay`,
+    over `grabArrangerLanes`' sizing dance) and classifies every pixel of the
+    named lane's own band — inside the two 1 px separator lines the canvas draws
+    — against two references it does NOT read off the image: the LANE FILL
+    (`STrackRendererInline::laneFillColor()`, i.e. what the renderer itself
+    would fill with) and the CLIP BODY (`QColor(160,160,160)`).
+
+    **An overlay pixel is DEFINED as one strictly lighter than the fill and
+    strictly darker than the clip body**, which is design D4's relation stated
+    as a measurement. Draw the overlay darker than the lane, or as light as a
+    clip, and the count falls to zero and the assertion fails; the two wrong
+    directions are counted separately (`darkerThanFill`, `lighterThanClip`) so
+    a failure says which way it went. `expectOverlay="false"` is the negative
+    control and needs a lane that is bare — a lane holding a CLIP is not one,
+    because the anti-aliased edges of the file name drawn on that clip land at
+    every luminance between the text and the clip body, including inside the
+    band.
+
+    Two pieces of chrome are handled by identity rather than by luminance: the
+    PLAYHEAD (`QColor(30,200,30)`, whose luminance falls inside the band) is
+    counted in its own bucket, and the TIME GRID is not handled at all — run the
+    verb after `grid-disable`.

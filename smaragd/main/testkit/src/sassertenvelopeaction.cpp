@@ -1,6 +1,7 @@
 #include "app/testkit/sassertenvelopeaction.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QDebug>
 #include <QDomElement>
 #include <QMap>
@@ -9,6 +10,7 @@
 
 #include "app/actions/sactionregistry.h"
 #include "app/shell/smainwindow.h"
+#include "app/shell/sapplication.h"
 
 namespace {
 
@@ -47,16 +49,17 @@ QString describeProbes( const QVector<preview_t> &pv, int from, int count )
 
 SApplyResult SAssertEnvelopeAction::apply( SProject * )
 {
-    if( mode_ != QStringLiteral( "clip" ) ) {
+    const bool childSum = ( mode_ == QStringLiteral( "childSum" ) );
+    if( !childSum && mode_ != QStringLiteral( "clip" ) ) {
         // Never silently fall back to the clip walk: a script that asked for a
         // mode this build does not have must FAIL, not measure something else.
         qWarning() << "assert-envelope: unsupported mode" << mode_
-                   << "(this build implements mode=clip only;"
-                      " mode=childSum arrives with proposal 39 M3)";
+                   << "(this build implements mode=clip and mode=childSum)";
         return { false, nullptr };
     }
-    if( clipPath_.isEmpty() ) {
-        qWarning() << "assert-envelope: no clip path";
+    if( childSum ? trackPath_.isEmpty() : clipPath_.isEmpty() ) {
+        qWarning() << "assert-envelope: mode" << mode_ << "needs"
+                   << ( childSum ? "trackPath=" : "clip=" );
         return { false, nullptr };
     }
     if( width_ < 1 ) {
@@ -70,9 +73,17 @@ SApplyResult SAssertEnvelopeAction::apply( SProject * )
         return { false, nullptr };
     }
 
+    // ONE verb, two collect terminals - and both are the call the PAINTER
+    // makes, never a re-derivation of it. childSum reads the folder-sum overlay
+    // (proposal 39 M3), so a script's number and the lane's pixels come out of
+    // the same walk.
     std::vector<preview_t> raw;
-    const bool got = win->collectClipEnvelope( clipPath_, (offset_t) start_,
-                                               (length_t) length_, width_, raw );
+    const bool got =
+        childSum
+            ? win->collectTrackChildSumEnvelope( trackPath_, (offset_t) start_,
+                                                 (length_t) length_, width_, raw )
+            : win->collectClipEnvelope( clipPath_, (offset_t) start_,
+                                        (length_t) length_, width_, raw );
 
     QVector<preview_t> pv;
     pv.reserve( width_ );
@@ -83,8 +94,9 @@ SApplyResult SAssertEnvelopeAction::apply( SProject * )
         if( pv[i].min != 0 || pv[i].max != 0 ) { allZero = false; break; }
 
     const QString where =
-        QString( "clip %1 [%2, %3) over %4 columns" )
-            .arg( clipPath_ ).arg( (qlonglong) start_ )
+        QString( "%1 %2 [%3, %4) over %5 columns" )
+            .arg( childSum ? "childSum of track" : "clip" )
+            .arg( childSum ? trackPath_ : clipPath_ ).arg( (qlonglong) start_ )
             .arg( (qlonglong)( start_ + length_ ) ).arg( width_ );
 
     // --- expectEmpty: the collect produced nothing at all -------------------
@@ -102,9 +114,9 @@ SApplyResult SAssertEnvelopeAction::apply( SProject * )
 
     if( !got ) {
         qWarning() << "assert-envelope FAILED:" << where
-                   << "- the renderer produced no envelope"
-                      " (no clip at that path, no inline renderer, or"
-                      " collectEnvelope returned false)";
+                   << "- the collect produced no envelope (nothing at that"
+                      " path, no inline renderer, not a folder, or nothing"
+                      " below it contributed)";
         return { false, nullptr };
     }
 
@@ -170,6 +182,7 @@ SApplyResult SAssertEnvelopeAction::apply( SProject * )
 void SAssertEnvelopeAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "clip", clipPath_ );
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "mode", mode_ );
     elem.setAttribute( "start", QString::number( (qlonglong) start_ ) );
     elem.setAttribute( "length", QString::number( (qlonglong) length_ ) );
@@ -189,6 +202,7 @@ bool SAssertEnvelopeAction::readXml( const QDomElement &elem, int /*version*/ )
     // makes the action undeserializable and breaks the round-trip audit, which
     // feeds every verb a DEFAULT instance through write->read->write.
     clipPath_    = elem.attribute( "clip" );
+    trackPath_   = elem.attribute( "trackPath" );
     mode_        = elem.attribute( "mode", "clip" );
     start_       = elem.attribute( "start", "0" ).toLongLong();
     length_      = elem.attribute( "length", "0" ).toLongLong();
@@ -207,4 +221,119 @@ static const bool s_reg_assert_envelope =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "assert-envelope" ),
           [] { return new SAssertEnvelopeAction; } ),
+      true );
+
+
+// --- assert-lane-overlay (proposal 39 M3.10) ------------------------------
+
+SApplyResult SAssertLaneOverlayAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "assert-lane-overlay: no main window";
+        return { false, nullptr };
+    }
+
+    QString png;
+    if( !grabPng_.isEmpty() ) {
+        if( grabPng_.contains( '/' ) || grabPng_.contains( QLatin1Char( 0x5c ) )
+            || grabPng_.contains( ".." ) ) {
+            qWarning() << "assert-lane-overlay: grabPng contains path"
+                          " separators:" << grabPng_;
+            return { false, nullptr };
+        }
+        SApplication &app = SApplication::app();
+        if( app.testOutputDir().isEmpty() || !app.ensureOutputDirExists() ) {
+            qWarning() << "assert-lane-overlay FAILED: no usable test output"
+                          " directory";
+            return { false, nullptr };
+        }
+        png = QDir( app.testOutputDir() ).filePath( grabPng_ );
+    }
+
+    const QString rep = win->describeLaneOverlay( trackPath_, grabWidth_,
+                                                  grabHeight_, png );
+    if( rep.isEmpty() ) {
+        qWarning() << "assert-lane-overlay FAILED: no lane at" << trackPath_
+                   << "(or the canvas could not be grabbed)";
+        return { false, nullptr };
+    }
+    qDebug() << "assert-lane-overlay: track" << trackPath_ << rep;
+
+    // Parse the two counts back out of the report. It is a describe() line for
+    // the same reason describeTrackHead is one: the numbers belong in the log
+    // of every run, pass or fail, and a struct crossing the shell boundary
+    // would put them nowhere.
+    auto field = [&rep]( const QString &key ) -> long long {
+        const int i = rep.indexOf( key + QLatin1Char( '=' ) );
+        if( i < 0 ) return -1;
+        int j = i + key.size() + 1;
+        int k = j;
+        while( k < rep.size() && ( rep[k].isDigit() || rep[k] == '-' ) ) ++k;
+        return rep.mid( j, k - j ).toLongLong();
+    };
+    const long long overlay  = field( QStringLiteral( "overlayPixels" ) );
+    const long long fillPx   = field( QStringLiteral( "fillPixels" ) );
+    const long long darker   = field( QStringLiteral( "darkerThanFill" ) );
+    const long long lighter  = field( QStringLiteral( "lighterThanClip" ) );
+
+    if( expectOverlay_ ) {
+        // The fill must be ON SCREEN, or "lighter than the fill" is a relation
+        // against a colour nothing painted.
+        if( fillPx <= 0 ) {
+            qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                       << "- the lane fill colour is nowhere in the band:" << rep;
+            return { false, nullptr };
+        }
+        if( overlay < minPixels_ ) {
+            qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                       << "- expected at least" << minPixels_
+                       << "overlay pixels (strictly lighter than the lane fill,"
+                          " strictly darker than the clip body), got" << overlay
+                       << "- darkerThanFill" << darker
+                       << "lighterThanClip" << lighter << "|" << rep;
+            return { false, nullptr };
+        }
+    } else if( overlay > 0 ) {
+        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                   << "- expected NO overlay, found" << overlay
+                   << "pixels |" << rep;
+        return { false, nullptr };
+    }
+
+    if( !contains_.isEmpty() && !rep.contains( contains_ ) ) {
+        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                   << "- report does not contain" << contains_ << "|" << rep;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertLaneOverlayAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "expectOverlay", expectOverlay_ ? "true" : "false" );
+    elem.setAttribute( "minPixels", minPixels_ );
+    if( grabWidth_ > 0 )       elem.setAttribute( "grabWidth", grabWidth_ );
+    if( grabHeight_ > 0 )      elem.setAttribute( "grabHeight", grabHeight_ );
+    if( !grabPng_.isEmpty() )  elem.setAttribute( "grabPng", grabPng_ );
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+}
+
+bool SAssertLaneOverlayAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_     = elem.attribute( "trackPath", "0" );
+    expectOverlay_ = elem.attribute( "expectOverlay", "true" ) == "true";
+    minPixels_     = elem.attribute( "minPixels", "1" ).toInt();
+    grabWidth_     = elem.attribute( "grabWidth", "0" ).toInt();
+    grabHeight_    = elem.attribute( "grabHeight", "0" ).toInt();
+    grabPng_       = elem.attribute( "grabPng" );
+    contains_      = elem.attribute( "contains" );
+    return true;
+}
+
+static const bool s_reg_assert_lane_overlay =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-lane-overlay" ),
+          [] { return new SAssertLaneOverlayAction; } ),
       true );

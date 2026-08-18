@@ -26,12 +26,19 @@
  *                    column="10" min="-90" max="90" tolerance="2"/>
  *   <assert-envelope clip="0,0" start="0" length="192000" snapshot="before"/>
  *   <assert-envelope clip="0,0" start="0" length="192000" compareTo="before"/>
+ *   <assert-envelope mode="childSum" trackPath="0" start="0" length="192000"
+ *                    width="64" column="10" min="-60" max="60"/>
  *
  * Parameters:
  * - clip:       index-path to the clip's SLink (the spelling slip-clip and
  *               assert-clip-channels use)
- * - mode:       "clip" (default). M3 adds "childSum" over `trackPath`; any
- *               other value is REJECTED rather than silently treated as clip.
+ * - mode:       "clip" (default) reads ONE clip's own probes through its
+ *               renderer; "childSum" reads the FOLDER-SUM OVERLAY of the track
+ *               at `trackPath` - STrack::collectChildSumEnvelope(), the exact
+ *               call STrackRendererInline::draw() makes to paint it. Any other
+ *               value is REJECTED rather than silently treated as clip.
+ * - trackPath:  index-path to a LANE (childSum mode only), the spelling
+ *               set-track-volume and assert-track-head use
  * - start,
  *   length:     the TIMELINE window, in frames
  * - width:      number of probe columns (default 64)
@@ -70,7 +77,8 @@ public:
                  QStringLiteral( "width" ),     QStringLiteral( "column" ),
                  QStringLiteral( "min" ),       QStringLiteral( "max" ),
                  QStringLiteral( "tolerance" ), QStringLiteral( "expectEmpty" ),
-                 QStringLiteral( "snapshot" ),  QStringLiteral( "compareTo" ) };
+                 QStringLiteral( "snapshot" ),  QStringLiteral( "compareTo" ),
+                 QStringLiteral( "trackPath" ) };
     }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -78,6 +86,7 @@ public:
 
 private:
     QString  clipPath_;
+    QString  trackPath_;
     QString  mode_        = QStringLiteral( "clip" );
     int64_t  start_       = 0;
     int64_t  length_      = 0;
@@ -89,6 +98,81 @@ private:
     bool     expectEmpty_ = false;
     QString  snapshot_;
     QString  compareTo_;
+};
+
+/**
+ * `assert-lane-overlay` - the PIXEL gate on the folder-sum overlay
+ * (proposal 39 M3, AC M3.10).
+ *
+ * assert-envelope proves the NUMBERS; this proves they reached the screen, and
+ * in the right colour. It grabs the real arranger canvas off screen
+ * (SMainWindow::grabArrangerLanes' machinery), finds the named lane's own band
+ * - inside the two separator lines the canvas draws - and classifies every
+ * pixel in it against two references:
+ *
+ *   the LANE FILL   (STrackRendererInline::laneFillColor, i.e. what the
+ *                    renderer itself would fill with, never a guess read off
+ *                    the image), and
+ *   the CLIP BODY   (QColor(160,160,160), the grey a clip is drawn in).
+ *
+ * An OVERLAY pixel is one strictly LIGHTER than the fill and strictly DARKER
+ * than the clip body - which is design D4's relation, stated as a measurement.
+ * Draw the overlay darker than the lane, or as light as a clip, and the count
+ * goes to zero and this fails; the two wrong directions are counted separately
+ * (`darkerThanFill`, `lighterThanClip`) so the failure says which way it went.
+ *
+ * This closes part of the gap CLAUDE.md records - the `screenshot` verb grabs
+ * a root window that is blank under QT_QPA_PLATFORM=offscreen, so before this
+ * nothing gated the arranger CANVAS's paint at all.
+ *
+ * Run it with the time grid OFF (`grid-disable`): a grid line crosses every
+ * lane and would land in the histogram as chrome.
+ *
+ * XML format:
+ *   <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+ *                        minPixels="200" grabPng="folder.png"/>
+ *   <assert-lane-overlay trackPath="1" expectOverlay="false"/>
+ *
+ * Parameters:
+ * - trackPath:     index-path to the lane (default "0")
+ * - expectOverlay: "true" (default) requires overlay pixels; "false" requires
+ *                  NONE, which is how a non-folder lane is gated
+ * - minPixels:     how many overlay pixels are enough (default 1). A waveform
+ *                  over material fills hundreds; one is the honest floor for
+ *                  "it drew"
+ * - grabWidth,
+ *   grabHeight:    the canvas size to grab at (0 = whatever the hidden layout
+ *                  gave it, which is not a picture of anything - pass them)
+ * - grabPng:       also save the grab under this name in the test output dir.
+ *                  Coverage, never an oracle
+ * - contains:      optional substring of the report line, for a claim this
+ *                  verb has no dedicated attribute for
+ */
+class SAssertLaneOverlayAction : public SAction
+{
+public:
+    SAssertLaneOverlayAction() = default;
+
+    QString name() const override { return QStringLiteral( "assert-lane-overlay" ); }
+    QStringList knownAttributes() const override
+    {
+        return { QStringLiteral( "trackPath" ),  QStringLiteral( "expectOverlay" ),
+                 QStringLiteral( "minPixels" ),  QStringLiteral( "grabWidth" ),
+                 QStringLiteral( "grabHeight" ), QStringLiteral( "grabPng" ),
+                 QStringLiteral( "contains" ) };
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_     = QStringLiteral( "0" );
+    bool    expectOverlay_ = true;
+    int     minPixels_     = 1;
+    int     grabWidth_     = 0;
+    int     grabHeight_    = 0;
+    QString grabPng_;
+    QString contains_;
 };
 
 #endif // SASSERTENVELOPEACTION_H

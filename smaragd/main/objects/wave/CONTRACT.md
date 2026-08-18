@@ -130,6 +130,9 @@ The collect takes a TIME WINDOW, never an `SRenderContext` — a context holds a
 overlay of proposal 39 M3) could only build one over a scratch `QImage`: a
 painter that exists solely to be ignored. `drawObjectWaveform` derives the
 window from its context (`envelopeWindowOfContext`) and is otherwise unchanged.
+That derivation MOVED to `app/model/sobjectrenderer.h` at M3, beside
+`SEnvelopeWindow` itself: the folder-sum overlay derives the same window for a
+LANE, and `objects/track` may not include `objects/wave`.
 
 Every renderer that draws a waveform overrides `SObjectRenderer::collectEnvelope`
 by routing its EXISTING walk to the collect terminal; the base returns false and

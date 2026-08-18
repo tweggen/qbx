@@ -120,6 +120,23 @@ public:
                               length_t length, int width,
                               std::vector<preview_t> &out );
 
+    // TEST ENTRY POINT (proposal 39 M3): the FOLDER-SUM twin of the above -
+    // the summed envelope of every descendant of the track at `trackPath`,
+    // which is the exact call STrackRendererInline::draw() makes to paint the
+    // overlay on that lane. Returns false, writing nothing, when the track is
+    // not a folder or nothing below it contributed.
+    bool collectTrackChildSumEnvelope( const QString &trackPath, offset_t start,
+                                       length_t length, int width,
+                                       std::vector<preview_t> &out );
+
+    // TEST ENTRY POINT (proposal 39 M3.10): grab the arranger canvas and
+    // MEASURE one lane's pixels, so the overlay's colour relations are asserted
+    // from an image rather than eyeballed. Returns a describe()-style line, or
+    // an empty string when the track/row cannot be resolved. See
+    // main/testkit/CONTRACT.md ("assert-lane-overlay").
+    QString describeLaneOverlay( const QString &trackPath, int w, int h,
+                                 const QString &pngPath );
+
     // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
     // `headHeight` and return SSMVMixerControl::describeHead() — the density
     // rules for the instrument "I" and automation "A" buttons, and whether the

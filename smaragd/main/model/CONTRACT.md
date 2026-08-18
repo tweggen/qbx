@@ -22,12 +22,22 @@ the reverse search exactly as the old STrack cast did), and splacements.h
 resolution+validation that action code uses instead of STrack/SStdMixer
 casts; lane-ness is isPathContainer, the active lane is activeLane).
 volumeDbSnapshot() is the thread-safe volume read (it holds volumeMutex_,
-which a bare getVolume() does not). It has had NO CALLER since proposal 39
-M2 deleted the paint-time fader multiply from drawObjectWaveform — kept
-anyway, because it is the only correct way for anything off the UI thread to
-read a fader, and deleting the one safe reader would leave the racy one as
-the only option. Removing it is a separate decision, not a side effect of a
-paint change.
+which a bare getVolume() does not). Proposal 39 M2 left it with NO CALLER —
+it deleted the paint-time fader multiply from drawObjectWaveform — and kept
+it anyway, because it is the only correct way for anything off the UI thread
+to read a fader and deleting the one safe reader would leave the racy one as
+the only option. M3 gave it a caller again: STrack::collectChildSumEnvelope()
+reads a CHILD's fader on the same paint path, which is the same race the old
+multiply had, so it reads it the same safe way. (Not a contradiction of M2:
+what M2 deleted was scaling a waveform by the fader of the lane it is drawn
+ON. Scaling a child's contribution by the CHILD's fader is the rule, not the
+exception — see main/objects/track/CONTRACT.md inv. 23.)
+
+SEnvelopeWindow and envelopeWindowOfContext() both live in
+app/model/sobjectrenderer.h: the window a paint path collects over is derived
+by objects/wave (for a clip) and by objects/track (for a folder lane), and
+those two may not see each other. One spelling, so a lane's overlay and the
+clips on it cover the same span.
 Dependency invalidation goes through the virtual
 SObject::invalidateAspects() (base no-op, SCut overrides); extern-file
 creation goes through SProject::registerExternFileFactory() (the wave slice

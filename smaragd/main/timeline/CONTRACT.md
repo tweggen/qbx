@@ -283,3 +283,38 @@ long-term shape.
     The tooltip ANNOUNCES the live state, including the one failure a user
     cannot otherwise see: `openLive()` refuses a device whose rate is not the
     project rate.
+
+22. **A FOLDER LANE'S BACKGROUND IS A SUM OF ENVELOPES — never a freeze, never
+    blocking, and never scaled by the lane's own fader** (proposal 39 M3).
+    `STrackRendererInline::draw()` paints
+    `STrack::collectChildSumEnvelope()`'s probes on the lane background, after
+    the fill and before the clip loop, so the overlay sits above the background
+    and behind the folder's own clips. Three things about it are load-bearing:
+
+    - **The exact answer exists and must not be used here.**
+      `folderTrack->getPreview()` already returns the folder's real summed
+      output, through `SObject::straightCalcPreviewData()`'s container branch —
+      and that branch reaches its pages via `requestPage()`, which DEMANDS A
+      FREEZE. Calling it from `paintEvent` renders the folder on the UI thread,
+      which inv. 1 forbids. The overlay is therefore built from previews that
+      already exist: it over-states where children are out of phase, and it
+      cannot see child plugins, instruments or automation, which live only in
+      frozen pages. It is a hint about where material is, not a meter.
+    - **The lane's own fader, mute and inserts are nowhere in it.** That is
+      M2's rule ("a drawn waveform describes the audio its object PRODUCES; the
+      lane it is drawn on never scales it"), and this overlay IS the lane. A
+      child one level down is not the lane being drawn on, so a child's own
+      fader does scale its contribution.
+    - **The colour is DERIVED from the lane's final colour**
+      (`STrackRendererInline::laneFillColor()` lightened, at partial alpha),
+      never a fourth hardcoded constant, so it follows selection and every
+      `STrackColorModifier` state. What is contractual is the RELATION, and it
+      is measured: strictly lighter in luminance than the lane fill, strictly
+      darker than the clip body `QColor(160,160,160)`. Gate:
+      `assert-lane-overlay` in `folder_sum_preview.qxa` — the first thing in
+      this repo that gates the arranger CANVAS's pixels at all.
+
+    Cost: (visible clips in the subtree) x (lane width in pixels) probe
+    lookups per repaint, each an index into an array a child's preview already
+    built — about what the same clips cost on their own lanes when the folder
+    is expanded. No cache, no snapshot, no invalidation, no thread.

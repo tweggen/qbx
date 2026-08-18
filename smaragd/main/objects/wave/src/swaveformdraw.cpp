@@ -7,18 +7,6 @@
 #include "app/model/slink.h"
 #include "app/model/sobjectrenderer.h"
 
-SEnvelopeWindow envelopeWindowOfContext( SRenderContext &ctx )
-{
-    const QRect r = ctx.getVisibRect();
-    SEnvelopeWindow win;
-    // Time span of the visible rect: the context maps pixel -> time. The right
-    // boundary is open-ended, consistent with STrackRendererInline.
-    win.leftTime  = ctx.getTimeOf( r.topLeft().x() );
-    win.rightTime = ctx.getTimeOf( r.right() + 1 );
-    win.width     = r.width() < 1 ? 1 : r.width();
-    return win;
-}
-
 bool collectObjectEnvelope( SObject &obj, SLink &lk, const SEnvelopeWindow &win,
                             preview_t *out )
 {

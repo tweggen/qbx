@@ -23,11 +23,11 @@ class SLink;
 bool collectObjectEnvelope( SObject &obj, SLink &lk, const SEnvelopeWindow &win,
                             preview_t *out );
 
-// The window drawObjectWaveform() derives from a render context: the two probes
-// ctx.getTimeOf( rect.left() ) / ctx.getTimeOf( rect.right() + 1 ) and the
-// rect's width. Shared so a renderer that has to re-derive one for a nested
-// context (SCutRendererInline's loop tiles) spells it the same way.
-SEnvelopeWindow envelopeWindowOfContext( SRenderContext &ctx );
+// NOTE: envelopeWindowOfContext() — the window drawObjectWaveform() derives
+// from a render context — moved to app/model/sobjectrenderer.h at proposal 39
+// M3, beside SEnvelopeWindow itself. The folder-sum overlay derives the same
+// window for a LANE and objects/track may not include objects/wave, so the one
+// spelling has to sit where both can reach it.
 
 // Draw obj's rendered-audio waveform into ctx's visible rect, using ctx's time
 // mapping for the horizontal scale (the caller's context already accounts for

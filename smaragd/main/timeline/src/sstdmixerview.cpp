@@ -2913,16 +2913,6 @@ void SStdMixerView::contentDurationChanged( length_t newDur )
 #endif
 }
 
-// True if a container has at least one child that is itself a track (so it is a
-// foldable parent in the arranger).
-static bool hasChildTracks( SObject *container )
-{
-    for( SLink *lk : container->childLinks() ) {
-        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) return true;
-    }
-    return false;
-}
-
 // The take-lane row count of a track: the widest take stack among its clips
 // (proposal 17 phase 3). 0 = no stacks, nothing to expand.
 static int maxTakesOf( STrack *tk )
@@ -2942,7 +2932,10 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
     for( SLink *lk : container->childLinks() ) {
         STrack *tk = dynamic_cast<STrack*>( &lk->getSObject() );
         if( !tk ) continue;          // clips render inside their track's own lane
-        bool kids = hasChildTracks( tk );
+        // STrack::hasChildTracks(), not a local copy: the folder-sum overlay
+        // asks the same question (proposal 39 M3.1) and two spellings of "is
+        // this a folder" is one more than there should be.
+        bool kids = tk->hasChildTracks();
         bool col = collapsed_.contains( tk );
         rows_.append( STrackRow{ tk, lk, container, depth, kids, col } );
         // Take lanes directly below the track's composite lane.

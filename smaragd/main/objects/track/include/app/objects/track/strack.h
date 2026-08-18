@@ -6,6 +6,7 @@
 #include <qlist.h>
 #include <memory>
 #include "app/model/sobject.h"
+#include "app/model/sobjectrenderer.h"   // SEnvelopeWindow, preview_t
 #include "tw/events/tweventclipset.h"
 #include "tw/events/tweventmerge.h"
 
@@ -289,6 +290,56 @@ public:
     // pass, never during normal editing.
     void adoptPluginChain( SPluginChain *chain );
     virtual int seekTo( offset_t ofs ) override;
+
+    // --- the folder-sum preview (proposal 39 M3, design D3) ---------------
+
+    /**
+     * True if any child link of ours is itself an STrack — i.e. we are a
+     * FOLDER lane. THE one definition: the arranger used to spell it locally in
+     * sstdmixerview.cpp to decide whether a row gets a fold triangle, and the
+     * overlay asks the same question, so a second copy would be two answers to
+     * "is this a folder".
+     */
+    bool hasChildTracks() const;
+
+    /**
+     * Fill out[0..win.width) with the SUM OF OUR DESCENDANTS' DRAWN ENVELOPES
+     * over `win`, and return true; false — writing nothing — when nothing
+     * contributed, so the painter draws nothing at all.
+     *
+     * IT IS A SUM OF ENVELOPES, NOT THE ENVELOPE OF A SUM, and that is the
+     * whole design (proposal 39, "The headline finding"). The exact answer
+     * exists — STrack::getPreview() already returns this folder's summed
+     * output — and it is unusable here: its container branch reaches its pages
+     * through requestPage(), which DEMANDS A FREEZE, and this runs from
+     * paintEvent (main/timeline/CONTRACT.md inv. 1 forbids a paint path that
+     * blocks). So the overlay is built from previews that already exist: it
+     * over-states where children are out of phase, and it cannot see child
+     * plugins, instruments or automation, which live only in frozen pages. A
+     * hint about where material is — never a meter and never an oracle.
+     *
+     * Three rules decide what the numbers mean:
+     *
+     * - OUR OWN FADER IS NOWHERE IN IT. A drawn waveform describes the audio
+     *   its object produces and the lane it is drawn on never scales it
+     *   (the rule M2 adopted), and this overlay IS the lane. A descendant's
+     *   contribution is scaled by the product of the gains of every track from
+     *   its own track up to but EXCLUDING us — so a child one level down keeps
+     *   its own fader, because that child is not the lane being drawn on.
+     * - AUDIBILITY IS ssolo::isLaneAudible, never a local mute/solo chain.
+     *   main/timeline/CONTRACT.md inv. 10 records what local copies of that
+     *   rule cost the last time: a solo nested inside a folder was a no-op and
+     *   the meters disagreed with the ear.
+     * - THE ACCUMULATOR IS int32 AND THE CLAMP HAPPENS ONCE, at the end.
+     *   preview_t is a signed char; accumulating in it wraps, and a wrap makes
+     *   two loud children draw QUIETER than one — a failure that looks like a
+     *   feature.
+     *
+     * Never blocks, never freezes, never demands: every probe is an index into
+     * an array a child's preview already built.
+     */
+    bool collectChildSumEnvelope( const SEnvelopeWindow &win,
+                                  preview_t *out ) const;
 
     // Path search may descend into track lanes (see SObject::isPathContainer).
     virtual bool isPathContainer() const override { return true; }
