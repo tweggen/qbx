@@ -19,6 +19,13 @@
   AUDIBLE in the same process - `metronome=on` in the live state, and the
   clicks measured by metronome_click - before the second render is taken.
 
+  WHAT THIS DOES NOT REACH, said plainly: a render taken WHILE a click lane is
+  up. The click sounds only while the transport rolls, and a render does not
+  run the transport, so no script can put the two together. The suspend path
+  itself - a live lane dropped for a render and re-armed afterwards - is
+  render_while_armed's gate; what is asserted HERE is the property that matters
+  for the metronome, that the click is not in the file.
+
   RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (the CTest entry): the middle phase is
   a real-time transport run.
 -->
