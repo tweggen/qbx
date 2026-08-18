@@ -14247,9 +14247,16 @@ device; `AsioDevice` calls `IASIO::controlPanel()`.
 window that a human has to close. `audio_backend_probe panel <id>` exists for
 exactly that — it opens the device, prints the buffer sizes, shows the panel,
 and prints them again after it closes, so a change is visible as a diff rather
-than as a claim. It has NOT been run in this session, because running it would
-have put a modal window on the requester's desktop and blocked waiting for
-them; it is handed over rather than reported as done.
+than as a claim.
+
+**RUN BY THE REQUESTER, 2026-08-18: the panel is displayed** on the US-16x08
+through the production path. What that confirms is the whole call chain —
+`WinMultiBackend` → `AsioBackend` → `AsioDevice::openControlPanel` →
+`IASIO::controlPanel()` — on an open device. What is still UNCONFIRMED is the
+other half: that CHANGING a setting in there shows up in the re-read
+(`getAvailableBufferSizes()` moving while `getConfig().bufferFrames` does not).
+The probe prints both lists either side of the panel, so the next person to
+change the buffer size in it gets that answer for free.
 
 ### The proposal is closed
 
