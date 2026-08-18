@@ -331,6 +331,7 @@ set(APP_UI_FILES
     shell/include/app/shell/smidirecorder.h
     shell/include/app/shell/splayheadclock.h
     shell/include/app/shell/smainwindow.h
+    shell/include/app/shell/ssecretstore.h
     shell/include/app/shell/ssettings.h
     shell/src/sautomationrecorder.cpp
     shell/src/sapplication.cpp
@@ -342,6 +343,8 @@ set(APP_UI_FILES
     shell/src/smidioutpump.cpp
     shell/src/smidirecorder.cpp
     shell/src/smainwindow.cpp
+    shell/src/ssecretstore.cpp
+    shell/src/ssecretstorebackend.h
     shell/src/ssettings.cpp
     # --- app/testkit
     testkit/include/app/testkit/sactionrunner.h
@@ -478,6 +481,59 @@ target_include_directories(app_ui PUBLIC
 target_include_directories(app_ui PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(app_ui PUBLIC app_objects tw303a)
 
+# --- SSecretStore backends (proposal 38 GATE 5a, main/shell/CONTRACT.md) -----
+# `dpapi` and `keychain` follow the platform unconditionally -- crypt32 ships
+# with MinGW and Security.framework ships in the macOS SDK, so neither is a
+# new dependency (mirrors ENABLE_WASAPI/ENABLE_COREAUDIO's "always available on
+# their platform" shape in the top-level CMakeLists.txt). `libsecret` is
+# genuinely optional: TW_HAVE_LIBSECRET defaults to whatever pkg-config found
+# at configure time, exactly the TW_HAVE_CLAP/TW_HAVE_VST3 discipline in
+# tw303a/CMakeLists.txt -- when it is OFF, ssecretstore_linux.cpp is not even
+# added to the build, and resolveBackend()'s Linux default falls through to
+# "none".
+if(SMARAGD_WINDOWS)
+    target_sources(app_ui PRIVATE
+        shell/src/ssecretstore_win.cpp
+    )
+    target_compile_definitions(app_ui PRIVATE TW_HAVE_DPAPI=1)
+    target_link_libraries(app_ui PRIVATE crypt32)
+    message(STATUS "app_ui: SSecretStore DPAPI backend enabled")
+endif()
+
+if(SMARAGD_MACOS)
+    find_library(SMARAGD_SECURITY_FRAMEWORK Security)
+    target_sources(app_ui PRIVATE
+        shell/src/ssecretstore_mac.mm
+    )
+    target_compile_definitions(app_ui PRIVATE TW_HAVE_KEYCHAIN=1)
+    target_link_libraries(app_ui PRIVATE ${SMARAGD_SECURITY_FRAMEWORK})
+    message(STATUS "app_ui: SSecretStore Keychain backend enabled (UNTESTED on the Windows box this gate was built on)")
+endif()
+
+set(_smaragd_have_libsecret FALSE)
+if(SMARAGD_LINUX)
+    find_package(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIBSECRET libsecret-1)
+        if(LIBSECRET_FOUND)
+            set(_smaragd_have_libsecret TRUE)
+        endif()
+    endif()
+endif()
+option(TW_HAVE_LIBSECRET
+    "Build the libsecret credential backend for SSecretStore (Linux)"
+    ${_smaragd_have_libsecret})
+if(SMARAGD_LINUX AND TW_HAVE_LIBSECRET)
+    target_sources(app_ui PRIVATE
+        shell/src/ssecretstore_linux.cpp
+    )
+    target_compile_definitions(app_ui PRIVATE TW_HAVE_LIBSECRET=1)
+    target_link_libraries(app_ui PRIVATE PkgConfig::LIBSECRET)
+    message(STATUS "app_ui: SSecretStore libsecret backend enabled (UNTESTED on the Windows box this gate was built on)")
+elseif(SMARAGD_LINUX)
+    message(STATUS "app_ui: libsecret not found; SSecretStore falls back to the 'none' backend on Linux "
+                    "(install libsecret-1-dev and re-configure to enable it)")
+endif()
 
 # Optionally embed a bundled UI font. Drop a TTF at main/resources/FreeSans.ttf
 # and re-run CMake: it is compiled into the binary (AUTORCC) and used as the
@@ -717,6 +773,23 @@ target_link_libraries(filepathref_test
 )
 add_test(NAME filepathref_test COMMAND filepathref_test)
 set_tests_properties(filepathref_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# SSecretStore (proposal 38 GATE 5a, §B.8): store/retrieve/delete round trips,
+# byte-exact non-ASCII+NUL secrets, the ciphertext-not-plaintext + DPAPI-salts
+# checks, the `none`/`memory` no-INI-write checks, and the Undecryptable
+# failure modes (corrupt blob, foreign/uncompiled scheme tag) — never the
+# platform cryptography itself. Constructs its OWN private-temp-file QSettings
+# and never references SSettings::instance() (AC 6a), so unlike the two
+# RUN_SERIAL qxa cases in gate 5b that DO touch the shared smaragd.ini, this
+# binary needs no RUN_SERIAL and is safe under `ctest -j4`.
+add_executable(secret_store_test shell/tests/secret_store_test.cpp)
+target_link_libraries(secret_store_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME secret_store_test COMMAND secret_store_test)
+set_tests_properties(secret_store_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The CONTAINER branch of SObject::straightCalcPreviewData(): a preview built
