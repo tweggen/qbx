@@ -174,6 +174,15 @@ bool SAudioRecorder::start()
     if( deviceName_.isEmpty() )
         deviceName_ = SSettings::instance().audioInputDeviceId();
     if( deviceName_.isEmpty() ) deviceName_ = QStringLiteral( "default" );
+    // THE SAME NAME KEYS THE USER'S CALIBRATION, further down: the offset is
+    // read as `audio/recordingOffsetMs/<deviceName_>`, which is exactly what
+    // SOptionsDialog::applyAudioPage() writes under (the input combo's device
+    // id). Log it -- a lookup that misses returns 0.0, which is
+    // indistinguishable from a calibration of zero, so without this line a
+    // take that silently used the wrong key looks exactly like an uncalibrated
+    // device.
+    TW_LOGI( "shell", "[REC] input device '%s' (recordingOffsetMs key)",
+             deviceName_.toStdString().c_str() );
     bridge_ = mon ? mon->acquireBridge( deviceName_ ) : nullptr;
     if( !bridge_ ) {
         error_ = QStringLiteral( "input device would not open" );
@@ -515,7 +524,7 @@ void SAudioRecorder::commitPlacement_()
 QString SAudioRecorder::describe() const
 {
     return QStringLiteral( "rec=%1 start=%2 p0=%3 anchored=%4 inLat=%5 outLat=%6 "
-                           "userOff=%7 comp=%8 trim=%9 passes=%10" )
+                           "userOff=%7 comp=%8 trim=%9 passes=%10 dev=%11" )
         .arg( active_ ? "on" : "off" )
         .arg( (qlonglong) recordStart_ )
         .arg( (qlonglong) placement_.p0 )
@@ -525,5 +534,6 @@ QString SAudioRecorder::describe() const
         .arg( (qlonglong) placement_.userOffsetProj )
         .arg( (qlonglong) placement_.compensationFrames() )
         .arg( (qlonglong) trimmed_ )
-        .arg( lastPassCount_ );
+        .arg( lastPassCount_ )
+        .arg( deviceName_.isEmpty() ? QStringLiteral( "-" ) : deviceName_ );
 }

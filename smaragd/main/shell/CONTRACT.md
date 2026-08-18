@@ -255,6 +255,25 @@ start and a record stop MEAN in the app.
     negation lives in ONE setter — `SRecordPlacement::setUserOffsetMs` — with
     the reasoning beside it, rather than being spread over call sites.
 
+20a. **THE OFFSET IS READ UNDER THE DEVICE `start()` RESOLVED, AND THAT
+    RESOLUTION IS NOT THE SETTINGS DEFAULT.** `deviceName_` is the armed
+    track's own `trackInput` device first, then whatever the monitor already
+    has open, then `audio/inputDeviceId`, then `"default"` — the monitor's own
+    order, so a record start never fights it for the device (commit 3c5fd6f).
+    `audio/recordingOffsetMs/<deviceName_>` is then the key, and it is the key
+    `SOptionsDialog::applyAudioPage()` writes under, so the production round
+    trip agrees. Two consequences that have both been paid for:
+    **a miss is silent** — `SSettings::recordingOffsetMs()` answers 0.0 for a
+    device it has never heard of, which is exactly what an uncalibrated device
+    answers, so nothing downstream can tell the two apart and the resolved name
+    is LOGGED at every start for that reason; and **a headless case must NAME
+    its device** (`set-track-input`), because the third rung is a per-user
+    preference the suite does not set — `record_offset_zero` relied on it and
+    silently stopped gating anything the day the machine's owner picked an
+    input device in Options. Do NOT "fix" a miss by falling back to
+    `"default"`: the number is a physical correction for ONE device's latency
+    error, so lending it to another device is worse than the zero it replaces.
+
 21. **THE ANCHOR IS TAKEN ONCE, RETROSPECTIVELY, AND ONLY FROM THIS RUN.**
     Capture frame 0's host time precedes the first publication when a take
     starts from a STOPPED transport (the readahead primes before the RT

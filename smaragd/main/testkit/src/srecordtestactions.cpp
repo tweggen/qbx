@@ -67,7 +67,8 @@ QStringList SAssertRecordedClipAction::knownAttributes() const
              QStringLiteral( "trimmedFrames" ),    QStringLiteral( "passes" ),
              QStringLiteral( "growing" ),          QStringLiteral( "previewNonEmpty" ),
              QStringLiteral( "sourceAtStartFrame" ),
-             QStringLiteral( "sourceTolerance" ) };
+             QStringLiteral( "sourceTolerance" ),
+             QStringLiteral( "inputDevice" ) };
 }
 
 SApplyResult SAssertRecordedClipAction::apply( SProject *project )
@@ -175,7 +176,8 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
     // ---- the placement conversion's own terms ------------------------------
     SAudioRecorder *rec = SApplication::app().audioRecorder();
     if( !rec
-        && ( inputLatency_ != kUnset || outputLatency_ != kUnset
+        && ( !inputDevice_.isEmpty()
+             || inputLatency_ != kUnset || outputLatency_ != kUnset
              || userOffset_ != kUnsetS || compensation_ != kUnsetS
              || trimmed_ != kUnset || passes_ != kUnset
              || sourceAtStart_ != kUnset ) ) {
@@ -184,6 +186,22 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
     }
     if( rec ) {
         const SRecordPlacement &pl = rec->placement();
+
+        // WHICH DEVICE THE OFFSET WAS READ FOR. Checked FIRST, because it is
+        // the explanation for the offset assertion below rather than an
+        // independent claim: `recordingOffsetMs()` answers 0.0 for a device it
+        // has never heard of, so a case whose expected offset is 0 passes
+        // whatever key the recorder resolved, and a case whose expected offset
+        // is not 0 fails with "user offset 0 expected -960" and no hint that
+        // the key, not the arithmetic, was wrong.
+        if( !inputDevice_.isEmpty() && rec->inputDeviceName() != inputDevice_ ) {
+            qWarning() << "assert-recorded-clip: the take resolved input device"
+                       << rec->inputDeviceName() << "expected" << inputDevice_
+                       << "— audio/recordingOffsetMs/<device> was read under the"
+                       << "first name, so any offset expectation below is about"
+                       << "a different device";
+            return { false, nullptr };
+        }
 
         if( inputLatency_ != kUnset && pl.inputLatencyProj != inputLatency_ ) {
             qWarning() << "assert-recorded-clip: input latency"
@@ -322,6 +340,8 @@ void SAssertRecordedClipAction::writeXml( QDomElement &elem ) const
         elem.setAttribute( "sourceAtStartFrame", QString::number( sourceAtStart_ ) );
     if( sourceTolerance_ != 4096 )
         elem.setAttribute( "sourceTolerance", QString::number( sourceTolerance_ ) );
+    if( !inputDevice_.isEmpty() )
+        elem.setAttribute( "inputDevice", inputDevice_ );
 }
 
 bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
@@ -346,6 +366,7 @@ bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
     previewNonEmpty_   = elem.attribute( "previewNonEmpty", "false" ) == "true";
     sourceAtStart_     = elem.attribute( "sourceAtStartFrame", "-1" ).toLongLong();
     sourceTolerance_   = elem.attribute( "sourceTolerance", "4096" ).toLongLong();
+    inputDevice_       = elem.attribute( "inputDevice", "" );
     return true;
 }
 

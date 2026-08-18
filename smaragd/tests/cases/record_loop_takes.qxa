@@ -40,6 +40,15 @@
     <add-track index="-1"/>
     <set-monitor-mode trackPath="0" mode="off"/>
 
+    <!-- NAME THE INPUT DEVICE. The user offset the placement applies is read
+         as `audio/recordingOffsetMs/<device>`, and without this the device is
+         whatever `audio/inputDeviceId` names in the person's own smaragd.ini
+         - so every frame position below would move by that machine's
+         calibration. `qxa-record-input` is a name no real device can have, and
+         SMARAGD_AUDIO_INPUT_BACKEND=file: ignores it anyway. See
+         record_offset_zero, which gates the term itself. -->
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+
     <!-- The cycle region: 0 .. 2 s. set-property takes its value as a JSON
          ARRAY (SSetPropertyAction::readXml), hence the brackets. -->
     <set-property key="rangeStart" value="[0]"/>

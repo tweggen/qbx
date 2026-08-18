@@ -390,8 +390,16 @@ endforeach()
 # compensation exactly -5824 frames, and +20 ms of recordingOffsetMs exactly
 # 960 frames more.
 #
-# record_offset_zero WRITES audio/recordingOffsetMs/default through set-option
-# and puts it back; it OWNS that key, and no other case reads it.
+# record_offset_zero WRITES audio/recordingOffsetMs/qxa-record-input through
+# set-option and puts it back; it OWNS that key, and no other case reads it.
+# The device name is deliberately one no real device can have, and the case's
+# tracks NAME it through set-track-input, because the recorder resolves the
+# offset key from the armed track's input first and the app-wide
+# audio/inputDeviceId setting only as a fallback. It used to write the key for
+# "default" and rely on that fallback, which made the assertion depend on
+# whether the person running the suite had ever picked an input device in
+# Edit -> Options -> Audio -- and it failed silently, because a missing key
+# reads 0.0, the same answer an uncalibrated device gives.
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
 foreach(_rec record_offset_zero record_loop_takes record_punch

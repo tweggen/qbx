@@ -31,7 +31,8 @@
  *                         trimmedFrames="-1" passes="-1"
  *                         growing="false" previewNonEmpty="false"
  *                         sourceAtStartFrame="-1" sourceTolerance="4096"
- *                         minDurationFrames="-1"/>
+ *                         minDurationFrames="-1"
+ *                         inputDevice=""/>
  *
  * Every numeric expectation is opt-in (the sentinel means "unchecked"), so one
  * verb serves the mid-take assertions and the post-take ones.
@@ -56,6 +57,15 @@
  * backend's output latency can predict that number to the frame, and the verb
  * ALSO checks the identity internally — so a recorder whose stored terms and
  * actual placement disagree fails even when the expected value is not given.
+ *
+ * `inputDevice` is the one term that is NOT arithmetic, and it exists because
+ * a wrong answer here is invisible. `userOffsetFrames` comes from
+ * `SSettings::recordingOffsetMs(<the recorder's resolved input device>)`, and
+ * a lookup that misses returns 0.0 -- the same value an uncalibrated device
+ * legitimately has. So a case that writes `audio/recordingOffsetMs/<dev>` and
+ * then asserts a NON-zero offset is really asserting two things at once, and
+ * only one of them used to be checked: that the term is applied, and that it
+ * was read under the key the case wrote. Name the device and both are gated.
  *
  * `sourceAtStartFrame` is the physical claim, and it is about FAITHFULNESS
  * rather than about latency: it decodes the position-encoded fixture at the
@@ -118,6 +128,7 @@ private:
     bool   previewNonEmpty_   = false;
     qint64 sourceAtStart_     = kUnset;
     qint64 sourceTolerance_   = 4096;
+    QString inputDevice_;                        // empty == unchecked
 };
 
 #endif // _SRECORDTESTACTIONS_H_
