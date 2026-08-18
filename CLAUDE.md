@@ -168,18 +168,24 @@ plan/
     │                                 instruments, audio + MIDI recording,
     │                                 metronome/count-in; L6 gated on ASIO/35;
     │                                 §13.3 = the execution findings)
-    └── 34_LEVEL_METERS.md           (executed 2026-08-05 — level meters read
-                                      frozen pages BY POSITION; zero engine
-                                      edits. Read it before touching metering:
-                                      the naive freeze-time design is wrong)
+    ├── 34_LEVEL_METERS.md           (executed 2026-08-05 — level meters read
+    │                                 frozen pages BY POSITION; zero engine
+    │                                 edits. Read it before touching metering:
+    │                                 the naive freeze-time design is wrong)
+    ├── 35_ASIO_BACKEND.md           (Phase 1 landed 2026-08-15 — SDK drop-in
+    │                                 detection + the asio_probe ABI gate; the
+    │                                 manual Windows gate run is PENDING, see
+    │                                 docs/ASIO_WINDOWS_GATE.md. Phases 2-5 not
+    │                                 started; 21 L6 waits on this; re-plan
+    │                                 Phase 2 against 36's channel model)
+    └── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
+                                      the page carries N planar channels; read
+                                      §4.3-§4.6 and the 28 traps before touching
+                                      channel width anywhere)
 docs/
 ├── PROJECT_OVERVIEW.md   # This document's source
 ├── ARCHITECTURE.md       # Module map (start here for code navigation)
 └── BUILD.md              # Build instructions
-    ├── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
-    │                                 the page carries N planar channels; read
-    │                                 §4.3-§4.6 and the 28 traps before touching
-    │                                 channel width anywhere)
 ```
 
 ## Build & Run

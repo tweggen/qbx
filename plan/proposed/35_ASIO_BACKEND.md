@@ -1,6 +1,24 @@
 # Proposal 35 — ASIO audio backend (Windows)
 
-**Status:** Phase 1 in progress (SDK detection + `asio_probe` spike).
+**Status:** Phase 1 landed 2026-08-15 (PR #31 — SDK detection +
+`asio_probe`). The manual Windows gate run is PENDING and is the Phase 1
+exit criterion: runbook in `docs/ASIO_WINDOWS_GATE.md`. Phases 2–5 not
+started.
+
+**Post-landing notes (2026-08-18):**
+
+- **Proposal 36 (multichannel signal flow) executed 2026-08-16, AFTER this
+  design was written.** Pages now carry N planar channels, so the design's
+  Phase 2 output-path assumptions — mono pull fanned out `c % 2`, the
+  "rendered WAV channels equal by construction" caveat — are STALE. Re-plan
+  the `AsioDevice` output half and the `AudioConfig.channels` handling
+  against 36's channel model (read 36 §4.3–§4.6 and its traps first). The
+  dispatcher/id scheme, the registry/facade split, the input ring and the
+  SDK-free loading strategy are unaffected.
+- **Proposal 21 stopped at L6 explicitly gated on this proposal** (duplex
+  latency work needs one driver/one clock), and the recording docs name ASIO
+  as the fix for the split-clock capture-rate failure class — this proposal
+  is now on the critical path of two others.
 
 ## Why
 
