@@ -69,6 +69,8 @@
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
+#include "app/media/smediadrop.h"
+#include "app/media/smediaref.h"
 #include "app/model/splacements.h"
 #include "app/actions/sactionhistory.h"
 #include <QFrame>
@@ -4224,6 +4226,15 @@ void SMVActualView::dropEvent(QDropEvent *e)
         // mixer->indexOfChildObject(), which only sees top-level children and
         // made a drop onto a grouped lane a silent no-op.
         SApplication::app().submitAction(new SAddSampleAction(trackPath, filePath, timePos));
+    } else if (payload.startsWith(QStringLiteral("media:"))) {
+        // A REMOTE row out of the media browser (proposal 38 §B.5). Everything
+        // under this line is app/media's: get a local path, then submit the
+        // SAME SAddSampleAction the file: branch above does. No new action
+        // type, no placeholder clip, no SCut work. It is handed the TRACK, not
+        // trackPath -- a pending placement must hold the target's identity, not
+        // a position in a tree the user can edit during a 40 MB download (T18).
+        smediadrop::placeWhenLocal(SMediaRef::fromUri(payload.mid(6)),
+                                   track, timePos);
     }
 
     // Repaint the lanes so the newly placed clip becomes visible — the view's

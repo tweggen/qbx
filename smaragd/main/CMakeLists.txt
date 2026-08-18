@@ -81,14 +81,20 @@ set(APP_CORE_FILES
     # main/media/CONTRACT.md -- the compiler does NOT enforce the no-widget
     # rule (app_model links Qt::Widgets PUBLIC), a grep in media_source_test
     # does.
+    media/include/app/media/sdelayedlocalsource.h
     media/include/app/media/slocalmediasource.h
+    media/include/app/media/smediacache.h
+    media/include/app/media/smediadrop.h
     media/include/app/media/smediaref.h
     media/include/app/media/smediaregistry.h
     media/include/app/media/smediasource.h
     media/include/app/media/smediatypes.h
     media/include/app/media/swebdavclient.h
     media/include/app/media/swebdavmediasource.h
+    media/src/sdelayedlocalsource.cpp
     media/src/slocalmediasource.cpp
+    media/src/smediacache.cpp
+    media/src/smediadrop.cpp
     media/src/smedialocalwalker.h
     media/src/smedialocalwalker.cpp
     media/src/smediaref.cpp
@@ -884,6 +890,23 @@ target_compile_definitions(media_source_test PRIVATE
 add_test(NAME media_source_test COMMAND media_source_test)
 set_tests_properties(media_source_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The media CACHE and the project copy (proposal 38 gate 3): the content key's
+# stability and change detection, cache hit/miss, the per-writer temp, LRU
+# eviction with the project PIN (trap T17), the disabled shape, the project
+# copy's name sanitisation (T19) -- and AC 8, which RE-EXECS THIS BINARY four
+# times (`--cache-child`) so that "two processes fetching one key leave one
+# intact file" is a real two-process claim rather than two serialised writes on
+# one thread. Same shape as qxa.instrument_render_determinism_xproc.
+add_executable(media_cache_test media/tests/media_cache_test.cpp)
+target_link_libraries(media_cache_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME media_cache_test COMMAND media_cache_test)
+set_tests_properties(media_cache_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 300)
 
 # The Nextcloud/WebDAV connector (proposal 38 gate 4): PROPFIND parsing, the
 # BFS search's concurrency cap and truncation, GET with progress/cancel, error

@@ -326,3 +326,23 @@ long-term shape.
     count, on the folder's row. The paint is identical either way by
     construction (the folder's row is drawn by this renderer whether or not its
     children have rows); what the gate closes is the CLAIM, not a suspected bug.
+
+## The `media:` drop branch (proposal 38 gate 3)
+
+`SMVActualView::dropEvent` has ONE new branch and it is five lines: parse the
+`media:` payload into an `SMediaRef` and call `smediadrop::placeWhenLocal`.
+Everything under it belongs to `app/media`. Two things are contractual:
+
+- **The `file:` and `asset:` branches are byte-unchanged.** That is what keeps
+  every existing placement path — Insert sample, an OS file drop, the resources
+  dock, and gate 2's LOCAL browser rows, which still emit `file:` — exactly as
+  it was.
+- **The branch hands over the `STrack`, not `trackPath`.** A pending placement
+  must hold the target's IDENTITY, because an index-path is a position in a tree
+  the user is free to edit during a 40 MB download, and a clip landing silently
+  on the wrong lane is worse than not landing at all (proposal 38 §B.5, trap
+  T18). The arranger still derives `trackPath` above, for the two branches that
+  place synchronously and for which it cannot go stale.
+
+The arranger never learns what a source, a fetch or a cache is. The payload is
+the whole interface, exactly as it already was for `file:` and `asset:`.

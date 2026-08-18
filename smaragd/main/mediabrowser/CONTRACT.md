@@ -59,9 +59,23 @@ module starts no thread of its own and touches no other one.
    `SExternFileList::startDrag` emits and `SMVActualView::dropEvent` has always
    accepted (design §A.1). That identity is why gate 2 changes not one line of
    `app/timeline`. A DIRECTORY row is not draggable (`mimeForItem` returns
-   null and the item loses `Qt::ItemIsDragEnabled`), and a source with no
-   payload yet — every remote one, until gate 3's `media:` — is refused loudly
-   rather than silently dragged as a path that means nothing here.
+   null and the item loses `Qt::ItemIsDragEnabled`).
+
+   **Since gate 3, a row whose source reports `NeedsFetch` emits
+   `media:<uri>`** instead, and the arranger's one new branch hands that to
+   `smediadrop::placeWhenLocal`. The fork is on the CAPABILITY, never on the id
+   `"local"`: a source that does not report `NeedsFetch` already has its file on
+   this file system, which is exactly what the `file:` branch wants, so a second
+   local-shaped provider needs no entry in a list here.
+
+4a. **THE PANEL FEEDS THE CACHE WHAT A LISTING KNEW** — `appendEntries` calls
+   `SMediaCache::noteEntry()` for every row. A `media:` payload carries an
+   `SMediaRef` and nothing else (that is what keeps the arranger's branch five
+   lines), so this dock is the ONLY thing in the process that ever holds an
+   entry's etag / mtime / size, and the cache's content key needs all three to
+   be able to notice that a remote file changed. Dropping this call does not
+   break anything visibly — it silently turns the cache into one that can never
+   detect a remote edit.
 
 5. **A BOUND IS ANNOUNCED** (app/media inv. 4). `truncatedCount > 0` on the
    final batch reaches the footer as "N items shown; at least M more were not

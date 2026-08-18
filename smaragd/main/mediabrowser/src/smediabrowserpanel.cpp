@@ -1,6 +1,8 @@
 #include "app/mediabrowser/smediabrowserpanel.h"
 
+#include "app/media/sdelayedlocalsource.h"
 #include "app/media/slocalmediasource.h"
+#include "app/media/smediacache.h"
 #include "app/media/smediaref.h"
 #include "app/media/smediaregistry.h"
 #include "app/media/smediasource.h"
@@ -234,6 +236,17 @@ void SMediaBrowserPanel::registerBuiltinSources()
     if( SMediaRegistry::instance().source( QStringLiteral( "local" ) ) ) return;
     localSource_ = new SLocalMediaSource( this );
     SMediaRegistry::instance().registerSource( localSource_ );
+
+    // The gate-3 test provider, and ONLY under SMARAGD_MEDIA_TEST_SOURCE=1: a
+    // user must never find "Delayed local (test)" in the source combo. It is
+    // what makes the deferred `media:` branch gateable with no network — the
+    // same instinct as twtestclap.
+    if( SDelayedLocalSource::isEnabled()
+        && !SMediaRegistry::instance().source(
+               SDelayedLocalSource::sourceIdString() ) ) {
+        delayedSource_ = new SDelayedLocalSource( this );
+        SMediaRegistry::instance().registerSource( delayedSource_ );
+    }
 }
 
 void SMediaBrowserPanel::reloadSourceCombo()
@@ -469,6 +482,12 @@ void SMediaBrowserPanel::appendEntries( QTreeWidgetItem *parent,
                                         const QVector<SMediaEntry> &batch )
 {
     if( batch.isEmpty() ) return;
+    // FEED THE CACHE WHAT THE LISTING KNEW (§B.6). A `media:` drag payload
+    // carries an SMediaRef and nothing else — that is what keeps the arranger's
+    // new branch five lines long — so the browser is the only thing in the
+    // process that ever holds an entry's etag / mtime / size, and the content
+    // key needs all three to be able to notice that a remote file CHANGED.
+    for( const SMediaEntry &e : batch ) SMediaCache::instance().noteEntry( e );
     if( parent ) {
         // Drop the placeholder on the first real child.
         if( parent->childCount() == 1
@@ -512,20 +531,29 @@ QMimeData *SMediaBrowserPanel::mimeForItem( const QTreeWidgetItem *item ) const
     const QString path = item->data( 0, kRolePath ).toString();
     if( path.isEmpty() ) return nullptr;
 
+    // TWO PAYLOADS, ONE PLACEMENT PATH (§B.5).
+    //
     // A LOCAL row emits "file:<absolute path>" — the payload
-    // SMVActualView::dropEvent has always accepted, which is why this gate
-    // needs no timeline change at all (§A.1). A remote row's "media:" payload
-    // is gate 3.
-    if( sourceId_ != QStringLiteral( "local" ) ) {
-        TW_LOGW( "media", "browser: source '%s' has no drag payload yet "
-                          "(the media: payload is gate 3)",
-                 sourceId_.toUtf8().constData() );
-        return nullptr;
-    }
-
+    // SMVActualView::dropEvent has always accepted, which is why gate 2 needed
+    // no timeline change at all (§A.1).
+    //
+    // Any OTHER source emits "media:<uri>", and the arranger's one new branch
+    // hands it to smediadrop::placeWhenLocal. The decision is by CAPABILITY
+    // rather than by the id "local", so a second local-shaped provider does not
+    // have to be added to a list here: a source that does NOT report NeedsFetch
+    // is already on this file system and its path is directly placeable, which
+    // is exactly what the `file:` branch wants.
     QMimeData *mime = new QMimeData;
-    mime->setData( QStringLiteral( "application/x-smaragd-resource" ),
-                   ( QStringLiteral( "file:" ) + path ).toUtf8() );
+    const bool needsFetch =
+        source_ && ( source_->caps() & SMediaSource::NeedsFetch );
+    if( needsFetch ) {
+        const SMediaRef ref( sourceId_, path );
+        mime->setData( QStringLiteral( "application/x-smaragd-resource" ),
+                       ( QStringLiteral( "media:" ) + ref.toUri() ).toUtf8() );
+    } else {
+        mime->setData( QStringLiteral( "application/x-smaragd-resource" ),
+                       ( QStringLiteral( "file:" ) + path ).toUtf8() );
+    }
     return mime;
 }
 
