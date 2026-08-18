@@ -27,16 +27,24 @@ Authorization header is computed by its CALLER and handed to its constructor
 (§B.8a) — the seam exists for code that only knows a source's id, which as of
 gate 5b is nothing yet.
 
-**Gate 4's `SWebDavClient`/`SWebDavMediaSource` are no longer UNIT-TEST
-ONLY for the ACCOUNT half.** GATE 5b (`main/shell`) gives them a real caller:
+**`SWebDavClient`/`SWebDavMediaSource` ARE NO LONGER UNIT-TEST ONLY, and as
+of GATE 5c not in any half.** Gate 5b (`main/shell`) gave them a real caller —
 `SMediaAccountManager` constructs a live `SWebDavMediaSource` per persisted
-Nextcloud account and registers it with `SMediaRegistry`, so
-`main/media/tests/webdav_source_test.cpp` is no longer the only thing that
-has ever driven this code — `qxa.media_options_page` and
-`qxa.media_secret_redaction` (`main/testkit`) now do too, end to end against
-the in-repo stub. What is STILL missing is the DOCK actually browsing one:
-gate 5c wires `SMediaBrowserPanel` up to a real account and adds the qxa
-cases for it.
+Nextcloud account and registers it with `SMediaRegistry`. Gate 5c gave them a
+real USER: `qxa.media_webdav_browse` drives the REAL `SMediaBrowserPanel`
+against an in-process stub through the gate-2 verbs unchanged, and
+`qxa.media_webdav_drop` runs the whole chain — PROPFIND → GET → cache →
+project copy → `add-sample` → a clip whose RENDERED AUDIO is asserted against
+the fixture's own per-second energy. `main/media/tests/webdav_source_test.cpp`
+is no longer the only thing that has ever driven this code, and the dock now
+browses a remote source in a headless gate.
+
+**What that does NOT mean:** the server on the other end is
+`main/testkit`'s `SWebDavStub`. Plain HTTP, no TLS, no redirects, no rate
+limiting, no `WWW-Authenticate` challenge and no real authentication at all
+(it never inspects the `Authorization` header it is sent), one canonical
+PROPFIND dialect. Everything gated is OUR half of the conversation; a real
+Nextcloud server stays the manual runbook's job (§C.6, gate 6).
 
 Depends on (engine): tw/core, tw/graph (the base every app module gets).
 `tw/core/twlog.h` is the only one actually used. It must NEVER grow an edge to
@@ -451,10 +459,13 @@ Gate 3's, first:
   real PROPFIND round trips per branch and was judged not worth the seconds
   either. The batching, cancel, supersession and mid-walk-destruction paths ARE
   gated for both providers.
-- **`SWebDavClient`/`SWebDavMediaSource` are UNIT-TEST ONLY (gate 4).** No
-  account, no credential, no UI, no qxa case has ever driven them -- see the
-  module-level note near the top of this file and gate 4's PR body. Gate 5c
-  is the only thing that closes this.
+- **CLOSED by gate 5c.** This bullet used to read "`SWebDavClient`/
+  `SWebDavMediaSource` are UNIT-TEST ONLY (gate 4) -- no account, no
+  credential, no UI, no qxa case has ever driven them". `qxa.media_webdav_browse`
+  and `qxa.media_webdav_drop` close it: the dock browses and searches a real
+  registered WebDAV source, and a drop out of it places a clip whose rendered
+  audio is asserted. What remains ungated is the SERVER, not the client -- see
+  the note at the top of this file and the bullet below.
 - Not gated by gate 4, named plainly rather than implied: a real Nextcloud
   server (TLS, real app-password auth, redirects, rate limiting -- manual
   runbook only, §C.6 of the proposal), network physics (throughput, latency, a

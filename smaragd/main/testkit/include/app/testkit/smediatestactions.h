@@ -393,4 +393,75 @@ private:
     int fetches_   = -1;
 };
 
+// media-webdav-stub — start (or stop) the PROCESS-OWNED in-process WebDAV
+// server the end-to-end cases browse and download from (proposal 38 §C GATE 5,
+// sub-PR 5c, AC 18/19).
+//
+// HOW A CASE LEARNS THE PORT, AND WHY IT IS THIS WAY. The stub binds
+// 127.0.0.1:0 — an OS-assigned port, never a fixed one, which is the whole
+// reason four concurrent `ctest -j4` cases cannot collide over it. A .qxa is a
+// static document: it cannot interpolate a value produced at run time into a
+// later attribute, so a case can never write the URL down. Rather than invent a
+// variable-substitution mechanism for one verb, THIS VERB WRITES THE URL WHERE
+// THE REST OF THE FLOW READS IT: given an `accountId`, it calls
+// SMediaAccountManager::setAccount() itself with the stub's own baseUrl(), so
+// the account — and with it the "nextcloud:<accountId>" source in the browser's
+// combo — exists the moment the verb returns. The case then names the SOURCE
+// ID, which is static, and never the URL, which is not.
+//
+// The alternatives were considered and are worse: a fixed port re-introduces
+// exactly the collision the OS-assigned one removes, and reporting the port
+// into a log line the case greps would let a case READ the port and still not
+// be able to USE it.
+//
+// ONE STUB PER PROCESS, parented to qApp so it cannot outlive the application
+// object, and `action="stop"` tears it down explicitly at the end of a case
+// (idempotent: stopping a stub that was never started is a no-op, which is what
+// makes a defensive stop at the top of a case free).
+//
+//   action     = "start"   | "stop"
+//   fixtureDir = ""        a LOCAL directory mirrored into the stub's PROPFIND
+//                          table, recursively, REAL BYTES AND ALL — so a GET of
+//                          lib/kick.wav returns the committed fixture's WAV and
+//                          a dropped clip actually sounds. Relative to the
+//                          runner's CWD (tests/cases), like every other path in
+//                          a .qxa. Empty = leave the table as it is.
+//   accountId  = ""        empty = do not touch the accounts model at all
+//   user       = "qxauser"
+//   password   = "qxapass"
+//   remember   = "0"       0 = nothing is persisted for the secret, which is
+//                          what keeps these cases out of the shared INI beyond
+//                          the url/user pair they remove at the end
+//   fault      = ""        "" | "401" | "404" | "500" | "closemidbody" |
+//                          "stall" — EMPTY CLEARS EVERY INJECTED FAULT, so a
+//                          case restores the healthy server with one line
+//   faultPath  = ""        the request path the fault applies to ("" = the root
+//                          listing)
+//
+// THE STUB IS NOT A NEXTCLOUD SERVER. Plain HTTP with no TLS, no redirects, no
+// rate limiting, no real authentication (it never inspects the Authorization
+// header it is sent) and one canonical PROPFIND dialect. What it gates is OUR
+// half of the conversation; a real server is the manual runbook's job (§C.6).
+class SMediaWebDavStubAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "media-webdav-stub" ); }
+    QStringList knownAttributes() const override
+    { return { "action", "fixtureDir", "accountId", "user", "password",
+               "remember", "fault", "faultPath" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString action_     = QStringLiteral( "start" );
+    QString fixtureDir_;
+    QString accountId_;
+    QString user_       = QStringLiteral( "qxauser" );
+    QString password_   = QStringLiteral( "qxapass" );
+    bool    remember_   = false;
+    QString fault_;
+    QString faultPath_;
+};
+
 #endif  // SMEDIATESTACTIONS_H

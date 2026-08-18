@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 GATE 5c, AC 19. THE WHOLE CHAIN, INSIDE THE APP, FOR THE FIRST
+  TIME: PROPFIND -> GET -> cache -> project copy -> add-sample -> A CLIP THAT
+  SOUNDS.
+
+  Every piece of this existed and was gated in isolation before today. Gate 3
+  drove the deferred `media:` branch against SDelayedLocalSource, a test-only
+  provider that copies a LOCAL file after a delay - "the deferred BRANCH is what
+  is under test, never the physics of a download", as its own header says. Gate 4
+  drove SWebDavClient against the stub from a unit-test binary and had no app in
+  it at all. This case is the join: the bytes the clip plays came out of a TCP
+  socket.
+
+  WHAT MAKES THAT ASSERTABLE. The stub serves the committed fixture tree with
+  REAL FILE BYTES (fixtureDir="../media/lib"), and lib/kick.wav is a byte copy of
+  ../test_sawtooth.wav - the RAMPED sawtooth whose per-source-second energy is a
+  documented constant (testkit CONTRACT inv. 3). So the four assert-audio-energy
+  windows below are the SAME numbers media_browser_drag_local.qxa asserts over
+  the LOCAL provider, shifted by the same 48000 the drop asked for. A drop that
+  placed the wrong file, at the wrong frame, or a truncated download, fails them.
+  Asserting only that a clip exists would pass on every one of those.
+
+  HOW THIS CASE LEARNS THE PORT: it does not. See media_webdav_browse.qxa's
+  header - `media-webdav-stub` writes the stub's own baseUrl() into the account
+  itself, because a .qxa cannot interpolate a run-time value and a FIXED port is
+  exactly what makes concurrent cases collide.
+
+  THE CACHE IS PER CASE. The CTest entry sets SMARAGD_MEDIA_CACHE_DIR into this
+  case's own test-output directory, for the reason SMARAGD_SIDECAR_DIR exists:
+  the cache is otherwise a shared per-user directory and `ctest -j4` runs four
+  processes against it. Without it this case would write into the developer's
+  real cache and its second-drop claim (below) would be measuring a hit inherited
+  from a previous run.
+
+  WHAT IT PINS
+
+  1. The full chain, once. One drop of a REMOTE file, deferred, and when it lands
+     there is exactly one clip at exactly 48000 - and it SOUNDS like the fixture,
+     in the right place, with silence before it.
+  2. THE PROJECT COPY (§B.6, T11). The project is SAVED BEFORE the drop, so the
+     fetched file is copied to <projectdir>/media/ and the re-saved .qxp stores a
+     RELATIVE path. A clip left pointing into the machine-local cache would
+     serialise as an absolute path that means nothing on the next machine, which
+     is the whole of what SFilePathRef exists to prevent. (The unsaved-project
+     half - the warning, and the clip referencing the cache - is gate 3's
+     media_drop_deferred; it is not repeated here.)
+  3. A REPEAT DROP OF THE SAME REMOTE FILE REUSES BOTH CACHES. The second drop
+     places SYNCHRONOUSLY (the assertion is made BEFORE media-drop-wait runs at
+     all, so a second fetch would fail it), and the project copy is REUSED rather
+     than disambiguated - "media/kick (2).wav" is asserted ABSENT. A user
+     dragging the same loop onto four tracks gets one file.
+  4. ONE UNDO STEP PER DROP. The placement is the same SAddSampleAction the
+     `file:` branch has always submitted; there is no new action type anywhere in
+     the media layer.
+
+  WHAT IS NOT PINNED HERE
+
+   * THE STUB IS NOT A NEXTCLOUD SERVER: plain HTTP, no TLS, no redirects, no
+     rate limiting, no WWW-Authenticate challenge and NO REAL AUTHENTICATION (it
+     never inspects the Authorization header it is sent), one canonical PROPFIND
+     dialect. A real server is the manual runbook's job (§C.6 / gate 6).
+   * A download big or slow enough to be interesting. 768 KB over loopback is not
+     a network; fetchProgress, a mid-body close and a cancelled GET are gate 4's
+     unit test, against this same stub.
+   * The undo asymmetry (§B.6): undoing a deferred drop removes the clip and
+     LEAVES THE COPIED FILE BEHIND, deliberately - the copy is not part of
+     SAddSampleAction. Documented, not asserted.
+
+  SETTINGS OWNERSHIP (trap T6). RUN_SERIAL. This case OWNS media/lastSourceId,
+  media/lastPath/nextcloud:qxastub, media/categoryMask, media/searchRecursive and
+  every key under media/nextcloud/qxastub/*; it restores the first four to their
+  SOpt defaults and removes the account, so smaragd.ini comes back with identical
+  CONTENT run to run. (CONTENT, not md5: QSettings rewrites the file from its own
+  in-memory map and does not promise to preserve section ORDER across processes,
+  so an md5 can legitimately move while every key is exactly as it was.)
+  SMARAGD_SECRET_BACKEND=memory is set explicitly rather than inherited: the
+  account only has to work for THIS process, and `memory` writes no INI key and
+  no keychain item at all.
+-->
+<SActionScript version="1" name="media_webdav_drop">
+
+  <setup project="new"/>
+
+  <actions>
+    <remove-media-account accountId="qxastub"/>
+
+    <add-track index="-1"/>
+
+    <!-- The project is saved FIRST so the fetched file has somewhere portable
+         to be copied to (2). -->
+    <save-project path="../../build/test-output/media_webdav_drop/media_webdav_drop.qxp"/>
+
+    <media-webdav-stub accountId="qxastub" fixtureDir="../media/lib"
+                       user="qxauser" password="qxapass" remember="0"/>
+
+    <media-browser-filter categories="audio"/>
+    <media-browser-source sourceId="nextcloud:qxastub" waitMs="10000"/>
+    <assert-media-browser mode="browse" rowCount="3"
+                          contains="kick.wav,768044,0"/>
+
+    <!-- (1) The drop. The row reports NeedsFetch, so the panel builds a
+         "media:<uri>" payload and the arranger's deferred branch takes it. -->
+    <media-browser-drag name="kick.wav" trackPath="0" timePos="48000"/>
+    <media-drop-wait waitMs="30000" placed="1" failed="0" abandoned="0"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- ...and it SOUNDS like the fixture, in the right place. These are
+         media_browser_drag_local.qxa's numbers, over the same audio, arrived at
+         over a socket instead of off the disk. -->
+    <render filename="drop.wav" format="wav" quality="10" durationSec="6"/>
+    <assert-audio-energy filename="drop.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0" maxRms="0.002"/>
+    <assert-audio-energy filename="drop.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="drop.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="drop.wav"
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- (2) The project copy, and the PORTABLE spelling it exists for. -->
+    <save-project path="../../build/test-output/media_webdav_drop/media_webdav_drop.qxp"/>
+    <assert-file-contains path="../../build/test-output/media_webdav_drop/media_webdav_drop.qxp"
+                          text="media/kick.wav"/>
+
+    <!-- (3) A repeat drop of the SAME remote file. Cached, so it places
+         SYNCHRONOUSLY - asserted before media-drop-wait, which a second fetch
+         would fail - and reuses the project copy rather than making a (2). -->
+    <media-browser-drag name="kick.wav" trackPath="0" timePos="288000"/>
+    <assert-clip-window clip="0,1" startTime="288000" duration="192000"/>
+    <media-drop-wait waitMs="10000" placed="2" failed="0" abandoned="0"/>
+    <save-project path="../../build/test-output/media_webdav_drop/media_webdav_drop.qxp"/>
+    <assert-file-contains path="../../build/test-output/media_webdav_drop/media_webdav_drop.qxp"
+                          text="media/kick (2).wav" absent="true"/>
+
+    <!-- (4) One undo step per drop. -->
+    <undo count="2"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <media-webdav-stub action="stop"/>
+
+    <!-- Restore every key this case owns (T6). -->
+    <remove-media-account accountId="qxastub"/>
+    <assert-settings-file absent="nextcloud\qxastub\"/>
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/nextcloud:qxastub" value=""/>
+    <set-option key="media/categoryMask" value="1"/>
+    <set-option key="media/searchRecursive" value="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

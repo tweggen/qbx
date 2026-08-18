@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 GATE 5c, AC 18. THE FIRST TIME THE WEBDAV CONNECTOR IS DRIVEN
+  FROM INSIDE THE APP. Gate 4 unit-tested SWebDavClient / SWebDavMediaSource
+  against the stub and said so plainly (gate 4 AC 9: "at the end of gate 4 the
+  WebDAV client is unit-tested and has never been driven from the app"); gate 5b
+  built the accounts model that can point one at a URL. This case is where the
+  two meet: a real SMediaAccountManager account, a real SWebDavMediaSource in
+  SMediaRegistry, the real SMediaBrowserPanel, and PROPFINDs going over a real
+  TCP socket - driven by the gate-2 verbs, UNCHANGED, which is the claim AC 18
+  actually makes.
+
+  HOW THIS CASE LEARNS THE PORT. It does not, and it must not. The stub binds
+  127.0.0.1:0 - an OS-assigned port, never a fixed one, which is exactly what
+  stops four concurrent `ctest -j4` cases colliding over it - and a .qxa is a
+  static document that cannot interpolate a run-time value into a later
+  attribute. So `media-webdav-stub` writes the URL where the rest of the flow
+  reads it: given accountId=, it calls SMediaAccountManager::setAccount()
+  ITSELF, with the stub's own baseUrl(). From here this case names only the
+  SOURCE ID, "nextcloud:qxastub", which is static. See the verb's header for the
+  two alternatives that were considered and are worse.
+
+  THE STUB SERVES THE COMMITTED FIXTURE TREE, REAL BYTES AND ALL
+  (smaragd/tests/media/, mirrored by fixtureDir="../media/lib"):
+
+      kick.wav          768044 bytes (a byte copy of test_sawtooth.wav)
+      snare.wav         768044
+      notes.txt         73      the thing the Audio filter must omit
+      sub/hat.wav       768044
+      sub/deep/tom.wav  768044
+
+  That is the SAME tree media_browser_browse.qxa walks through the LOCAL
+  provider, and that is deliberate: every row count and every "name,size,isDir"
+  triple below is identical to the local case's, so a difference between the two
+  providers shows up as a diff between two nearly identical files rather than as
+  a number nobody can check. The sizes are the fixture's own bytes and a
+  directory's size is the documented -1 ("unknown").
+
+  WHAT IT PINS
+
+  1. An account pointed at the stub becomes a source. `media-browser-source
+     sourceId="nextcloud:qxastub"` succeeds, which it can only do when
+     SMediaRegistry holds that id - and the source combo is rebuilt from that
+     same registry list on every sourcesChanged, with selectSource() setting its
+     current index by findData(). (The combo's ROWS are not in describe(), so
+     what is asserted here is the registry membership the combo is built from,
+     not the widget's item list. Stated rather than implied.)
+  2. Browsing the root over PROPFIND: three rows under the Audio filter,
+     directories first, notes.txt absent - and present again with an empty mask,
+     which is the positive control without which "absent notes.txt" would also
+     pass on a browser that showed nothing at all.
+  3. LAZY EXPAND over the wire: expanding `sub` issues its own depth-1 PROPFIND
+     and expanding `deep` inside it issues another, so the laziness is not a
+     one-level special case. Then an explicit path, which collapses back.
+  4. SEARCH over the wire - the client-side breadth-first walk of depth-1
+     PROPFINDs (§B.7: search is deliberately client-side, so a server answering
+     SEARCH with a 501 cannot break it). Recursive finds every .wav in the tree
+     ("a" is in ".wav"); non-recursive finds the two directly in the root; a
+     directory is never a result however well its name matches.
+  5. A SERVER FAULT IS A BANNER, not an empty folder. The stub is told to answer
+     500 for `sub`, the panel browses there, and the inline banner (§B.4) comes
+     up with zero rows; clearing the fault and browsing back clears it. The
+     assertion is on the banner FLAG and the row count, not on the message text
+     - the wording comes from Qt's own network error string and is not this
+     repo's to pin.
+
+  WHAT IS NOT PINNED HERE, and it matters more than usual:
+
+   * THE STUB IS NOT A NEXTCLOUD SERVER. Plain HTTP: no TLS (so no certificate
+     validation and no TLS-error surfacing), no redirects, no rate limiting, no
+     WWW-Authenticate challenge, and NO REAL AUTHENTICATION AT ALL - it never
+     inspects the Authorization header it is sent, so nothing here proves the
+     credential reached the wire in a form a server would accept. One canonical
+     PROPFIND dialect, not Nextcloud's. All of that is the manual runbook's job
+     (§C.6 / gate 6).
+   * Pixels. The panel is built off screen and never shown (trap T10);
+     describe() is the oracle and paintEvent is not exercised.
+   * The 401-does-not-retry rule, the mid-body close, the in-flight cap and the
+     truncation bound: gate 4's unit test owns all four, against the same stub.
+
+  SETTINGS OWNERSHIP (trap T6). RUN_SERIAL. This case OWNS
+  media/lastSourceId, media/lastPath/nextcloud:qxastub, media/categoryMask,
+  media/searchRecursive, and every key under media/nextcloud/qxastub/*. It
+  restores the first four to their SOpt defaults and removes the account, so
+  smaragd.ini comes back with identical CONTENT. (CONTENT, not md5: QSettings
+  rewrites the whole file from its own in-memory map and does not promise to
+  preserve section ORDER across processes, so an md5 can legitimately move while
+  every key is exactly as it was.) media/lastSourceId is shared with the four
+  other RUN_SERIAL media cases and every one of them restores it to "local".
+  SMARAGD_SECRET_BACKEND=memory is set explicitly by the CTest entry rather than
+  inherited: the account only has to work for THIS process, and `memory` writes
+  no INI key and no keychain item at all.
+-->
+<SActionScript version="1" name="media_webdav_browse">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Defensive: a previous run that died mid-script cannot have left a
+         server behind (the process is gone), but it could have left the
+         account's url/user keys. -->
+    <remove-media-account accountId="qxastub"/>
+
+    <!-- (1) The stub, the fixture tree, and the account - one verb, because the
+         port only exists once the server is listening. -->
+    <media-webdav-stub accountId="qxastub" fixtureDir="../media/lib"
+                       user="qxauser" password="qxapass" remember="0"/>
+    <!-- The account IS in the model the source combo is built from. No
+         accountCount= here on purpose: this INI is the developer's own and
+         may legitimately hold their real accounts too. -->
+    <assert-media-options contains="qxastub"/>
+
+    <media-browser-filter categories="audio"/>
+    <media-browser-source sourceId="nextcloud:qxastub" waitMs="10000"/>
+
+    <!-- (2) The root, over PROPFIND. Identical to media_browser_browse.qxa's
+         local listing, on purpose. -->
+    <assert-media-browser mode="browse" rowCount="3"
+                          contains="|source=nextcloud:qxastub|"/>
+    <assert-media-browser contains="|filter=audio|"/>
+    <assert-media-browser contains="sub,-1,1"/>
+    <assert-media-browser contains="kick.wav,768044,0"/>
+    <assert-media-browser contains="snare.wav,768044,0"/>
+    <assert-media-browser absent="notes.txt"/>
+    <!-- Nothing was truncated and nothing failed: a bound is ANNOUNCED
+         (app/media inv. 4), so its absence has to be assertable too. -->
+    <assert-media-browser truncated="0" contains="|banner=0|error="/>
+
+    <!-- The positive control for the line above. -->
+    <media-browser-filter categories="" waitMs="10000"/>
+    <assert-media-browser rowCount="4" contains="notes.txt,73,0"/>
+    <media-browser-filter categories="audio" waitMs="10000"/>
+    <assert-media-browser rowCount="3" absent="notes.txt"/>
+
+    <!-- (3) LAZY EXPAND, two levels, each its own depth-1 PROPFIND. -->
+    <media-browser-path expand="sub" waitMs="10000"/>
+    <assert-media-browser rowCount="5" contains="hat.wav,768044,0"/>
+    <assert-media-browser contains="deep,-1,1"/>
+    <media-browser-path expand="deep" waitMs="10000"/>
+    <assert-media-browser rowCount="6" contains="tom.wav,768044,0"/>
+
+    <!-- (4) SEARCH: the client-side breadth-first walk, from the root. -->
+    <media-browser-search needle="a" recursive="1" waitMs="10000"/>
+    <assert-media-browser mode="search" rowCount="4"/>
+    <assert-media-browser contains="kick.wav,768044,0"/>
+    <assert-media-browser contains="tom.wav,768044,0"/>
+    <assert-media-browser absent="notes.txt"/>
+    <!-- A DIRECTORY is never a result, however well its name matches. -->
+    <assert-media-browser absent="sub,-1,1"/>
+
+    <media-browser-search needle="a" recursive="0" waitMs="10000"/>
+    <assert-media-browser mode="search" rowCount="2"/>
+    <assert-media-browser contains="snare.wav,768044,0"/>
+    <assert-media-browser absent="hat.wav"/>
+    <assert-media-browser absent="tom.wav"/>
+
+    <!-- An empty needle returns to BROWSE at the same path, which is still the
+         root - the ROOT IS ONLY REACHABLE THIS WAY, because setBrowsePath()
+         refuses an empty spelling and a WebDAV root IS the empty path. -->
+    <media-browser-search needle="" recursive="1" waitMs="10000"/>
+    <assert-media-browser mode="browse" rowCount="3"/>
+    <assert-media-browser contains="kick.wav,768044,0"/>
+
+    <!-- ...and an explicit remote path collapses to one directory's worth. -->
+    <media-browser-path path="sub" waitMs="10000"/>
+    <assert-media-browser mode="browse" rowCount="2"
+                          contains="hat.wav,768044,0"/>
+    <assert-media-browser absent="kick.wav"/>
+
+    <!-- (5) A 500 from the server is a BANNER, not an empty folder. Re-listing
+         the SAME path is what re-issues the PROPFIND: setBrowsePath() has no
+         same-path early-out, on purpose (it is what the Retry button rides on). -->
+    <media-webdav-stub fault="500" faultPath="sub"/>
+    <media-browser-path path="sub" waitMs="10000"/>
+    <assert-media-browser rowCount="0" contains="|banner=1|"/>
+
+    <!-- ...and an empty fault= restores the healthy server in one line. -->
+    <media-webdav-stub fault=""/>
+    <media-browser-path path="sub" waitMs="10000"/>
+    <assert-media-browser rowCount="2" contains="|banner=0|error="/>
+    <assert-media-browser contains="hat.wav,768044,0"/>
+
+    <!-- Tear the server down explicitly rather than leaving it to teardown. -->
+    <media-webdav-stub action="stop"/>
+
+    <!-- Restore every key this case owns (T6). -->
+    <remove-media-account accountId="qxastub"/>
+    <assert-settings-file absent="nextcloud\qxastub\"/>
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/nextcloud:qxastub" value=""/>
+    <set-option key="media/categoryMask" value="1"/>
+    <set-option key="media/searchRecursive" value="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>
