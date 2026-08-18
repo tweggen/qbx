@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 GATE 5b, AC 10: with no real credential store, Remember is
+  DISABLED and describeMediaPage() states the reason. There is no weak/
+  obfuscated tier by design (§B.8) - a platform (or, here, a forced test
+  backend) with no real store says so plainly rather than pretending.
+
+  A SEPARATE case from media_options_page.qxa and media_secret_redaction.qxa,
+  not a third scenario folded into either: SMARAGD_SECRET_BACKEND is read
+  ONCE per process, by SMediaAccountManager's constructor, so seeing the
+  `none` backend at all needs its own CTest entry with its own environment,
+  the same reason media_options_page.qxa needs `dpapi` rather than the
+  test-case default (`memory`).
+
+  RUN_SERIAL and owns/restores media/nextcloud/qxatest/*: url/user still land
+  on disk (the account is usable for the session even though its password is
+  not remembered) - no secret ever does, which is the point of this case.
+-->
+<SActionScript version="1" name="media_options_no_store">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Defensive: a previous run that failed mid-script could have left
+         "qxatest" behind. -->
+    <remove-media-account accountId="qxatest"/>
+
+    <assert-media-options contains="backend=none canRemember=no"/>
+    <assert-media-options contains="This system has no credential store"/>
+    <!-- The Remember checkbox itself: unchecked AND disabled. -->
+    <assert-media-options contains="form.remember=0 enabled=0"/>
+
+    <!-- Remember=1 is REQUESTED but the backend cannot honour it: url/user
+         still persist (AC 9's "the source stays usable for the session"
+         still holds even here), no secret reaches disk, and the account
+         reports password=unset - never a silent success that quietly loses
+         the secret at exit (AC 3a's discipline, one layer up). -->
+    <set-media-account accountId="qxatest"
+                       url="https://cloud.invalid.example/remote.php/dav/files/qxauser/"
+                       user="qxauser" password="Qxa5bNoStorePw" remember="1"
+                       expectOk="1"/>
+    <assert-media-options contains="password=unset"/>
+    <!-- QSettings::IniFormat only brackets the FIRST path component, so
+         "media/nextcloud/qxatest/*" lands under "[media]" as keys spelled
+         "nextcloud\qxatest\..." on disk - that is what a raw-file check has
+         to look for, not a "[section]" header. -->
+    <assert-settings-file contains="nextcloud\qxatest\url="/>
+    <assert-settings-file absent="nextcloud\qxatest\passwordScheme"/>
+    <assert-settings-file absent="nextcloud\qxatest\passwordEnc"/>
+    <assert-settings-file absent="Qxa5bNoStorePw"/>
+
+    <remove-media-account accountId="qxatest"/>
+    <assert-media-options absent="qxatest"/>
+    <assert-settings-file absent="nextcloud\qxatest\"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

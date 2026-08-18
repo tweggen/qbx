@@ -738,3 +738,58 @@ panel and the arranger, and the shell is the only module that sees both.
     precedent, and the residual hazard is the same one the audited `smaragd.ini`
     row already names: the CONVENTION, not the locking. A future case that READS
     one of those keys would be racing one that writes it.
+
+
+## The Nextcloud accounts verbs (proposal 38 GATE 5b)
+
+`set-media-account`, `remove-media-account`, `media-test-connection`,
+`media-account-redaction-drive`, `assert-media-options` and
+`assert-settings-file` — driving `SMediaAccountManager`
+(`SApplication::mediaAccounts()`) and `SOptionsDialog`'s Media page directly.
+
+31. **The CRUD verbs bypass the WIDGET, not the CODE PATH.** `set-media-account`
+    / `remove-media-account` call `SMediaAccountManager::setAccount()` /
+    `removeAccount()` directly — the SAME calls `SOptionsDialog::
+    onMediaSaveAccount()` / `onMediaRemoveAccount()` make — rather than
+    synthesizing a button click, exactly the `set-option` convention (inv. 30's
+    sibling verbs synthesize a real drop for the SAME reason a widget's own
+    geometry is part of what is under test there; an account's validation has
+    no such geometry, so bypassing the widget loses nothing).
+
+32. **`media-test-connection` and `media-account-redaction-drive` start their
+    OWN throwaway `SWebDavStub`**, bound to `127.0.0.1:0` like every other use
+    of that stub in this tree (never a fixed port — the whole reason `ctest -j4`
+    can run four processes without a port collision). Neither needs the
+    `media-webdav-stub` verb gate 5c adds: that one starts a stub for the
+    DOCK to browse against across several actions in one script, which needs a
+    port a later action can address; these two are each a single self-contained
+    action and start, use and stop their stub inside ONE `apply()` call.
+
+33. **`media-account-redaction-drive` is ONE action on purpose**, not a
+    sequence of `set-media-account` + two browse verbs, because `assert-log`'s
+    window is "since the action immediately before it started" (`sassertlogaction.h`):
+    spreading the drive across several actions would put only the LAST one
+    inside the window an immediately-following `assert-log` reads.
+
+34. **`assert-settings-file` reads the ON-DISK spelling, which is NOT the
+    logical `SSettings` key.** `QSettings::IniFormat` brackets only the FIRST
+    `/`-separated component as a `[group]` header; everything below that is one
+    key with the remaining `/`s written as `\`s — `"media/nextcloud/qxatest/
+    url"` lands under `[media]` as `nextcloud\qxatest\url=...`. A case that
+    wants to scope a check to one account writes the disk-spelled prefix itself
+    (`nextcloud\qxatest\`) rather than passing a `section=` — a "[section]"
+    header scoping scheme was tried and reverted (proposal 38 GATE 5b) because
+    it can never match below the top group and would make every scoped
+    assertion pass vacuously.
+
+35. **The two OPTIONS-PAGE cases (`media_options_page`, `media_secret_redaction`)
+    override `SMARAGD_SECRET_BACKEND=dpapi`** (set in `smaragd/CMakeLists.txt`,
+    not in the `.qxa`, because the runner reads it before any script is
+    parsed) and are `RUN_SERIAL`, owning and restoring every key under
+    `media/nextcloud/qxatest/*` — the `midi_options_page` precedent, inv. 30's
+    sibling. `media_options_page` additionally calls `media-browser-source`
+    (inv. 27's verb), which persists `media/lastSourceId` as a side effect
+    (design AC 9), so it owns and restores that key too. `media_options_no_store`
+    forces `SMARAGD_SECRET_BACKEND=none` instead, in ITS OWN CTest entry — the
+    backend is read once per process, so seeing AC 10's "Remember disabled"
+    behaviour needs a whole separate process, not a mid-script switch.

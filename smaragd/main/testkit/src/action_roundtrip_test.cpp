@@ -481,6 +481,27 @@ const Fixture kFixtures[] = {
       "<assert-media-browser contains='rows=4' absent='notes.txt'"
       " rowCount='4' truncated='0' mode='browse' waitMs='2000'/>" },
 
+    // --- Nextcloud accounts / Options -> Media (proposal 38 gate 5b) --------
+    // set-media-account and remove-media-account both REJECT a default
+    // element (no accountId=), so they need a fixture to be audited at all.
+    { "set-media-account",
+      "<set-media-account accountId='qxatest' url='https://cloud.example.com/'"
+      " user='qxauser' password='s3cret' remember='0' expectOk='0'/>" },
+    { "remove-media-account",
+      "<remove-media-account accountId='qxatest'/>" },
+    { "media-test-connection",
+      "<media-test-connection url='https://cloud.example.com/' user='qxauser'"
+      " password='s3cret' useStub='401' expectContains='401'"
+      " expectAbsent='200'/>" },
+    { "media-account-redaction-drive",
+      "<media-account-redaction-drive accountId='qxatest' user='qxauser'"
+      " password='s3cret' remember='0'/>" },
+    { "assert-media-options",
+      "<assert-media-options contains='accounts=1' absent='foo'"
+      " accountCount='1'/>" },
+    { "assert-settings-file",
+      "<assert-settings-file contains='foo' absent='bar'/>" },
+
     { "assert-clip-window",
       "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"
       " loopLength='24000' startOffset='4800' timebase='beats' take='1'/>" },

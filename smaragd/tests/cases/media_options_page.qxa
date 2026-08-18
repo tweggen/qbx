@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 GATE 5b: Edit -> Options -> Media (the accounts model), ACs
+  7, 7a, 8, 9, 11, 12, 13, 16, 17.
+
+  Mirrors midi_options_page.qxa's shape: the REAL SOptionsDialog, built off
+  screen, matched against describeMediaPage(). RUN_SERIAL because it writes
+  real per-user keys under media/nextcloud/qxatest/* (and, via
+  media-browser-source, media/lastSourceId) into the SHARED smaragd.ini (set
+  in smaragd/CMakeLists.txt) - this case OWNS every key under that prefix
+  plus media/lastSourceId, and restores all of them, verified with
+  assert-settings-file (which reads the file directly, bypassing any
+  QSettings cache).
+
+  ON-DISK KEY SPELLING: QSettings::IniFormat only brackets the FIRST path
+  component as a "[group]" header, so "media/nextcloud/qxatest/url" is
+  written under "[media]" as the single key "nextcloud\qxatest\url=..." -
+  every assert-settings-file check below therefore matches the DISK spelling
+  (backslashes below the top group), not the logical "media/..." spelling
+  the production code uses through QSettings' own API (which normalises the
+  two for you - only a raw-file reader needs to know the difference).
+
+  AC 7a: this case's CTest entry sets SMARAGD_SECRET_BACKEND=dpapi. `memory`
+  is the test-case default (rule 5, T15) and would round-trip in-process
+  fine, but AC 8/9/17 are specifically about what lands ON DISK, which
+  `memory` never touches - so this case needs a backend that persists, and
+  RUN_SERIAL is what makes writing real ciphertext into the developer's own
+  INI safe under `ctest -j4`.
+
+  AC 10 (SMARAGD_SECRET_BACKEND=none disables Remember) is NOT in this file:
+  it needs a different backend for the whole process, which CTest sets once
+  per test entry - see media_options_no_store.qxa.
+-->
+<SActionScript version="1" name="media_options_page">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Defensive: a previous run that failed mid-script could have left
+         "qxatest" behind. Idempotent either way. -->
+    <remove-media-account accountId="qxatest"/>
+
+    <!-- AC 13: an unparseable URL is refused AT THE CALL - no persistence,
+         no HTTP request. Never falls back to "the first request fails". -->
+    <set-media-account accountId="qxatest" url="not a url at all"
+                       user="qxauser" password="Qxa5bTestSecretZQ9" remember="1"
+                       expectOk="0"/>
+    <assert-media-options absent="qxatest"/>
+    <assert-settings-file absent="nextcloud\qxatest\"/>
+
+    <!-- AC 7 / AC 8: a valid account, Remember ON. -->
+    <set-media-account accountId="qxatest"
+                       url="https://cloud.invalid.example/remote.php/dav/files/qxauser/"
+                       user="qxauser" password="Qxa5bTestSecretZQ9" remember="1"
+                       expectOk="1"/>
+    <assert-media-options contains="accounts=1"/>
+    <assert-media-options contains="source=nextcloud:qxatest"/>
+    <assert-media-options contains="user=qxauser"/>
+    <assert-media-options contains="password=set"/>
+    <assert-settings-file contains="nextcloud\qxatest\passwordScheme=dpapi"/>
+    <assert-settings-file contains="nextcloud\qxatest\passwordEnc="/>
+    <!-- The plaintext password value is NOWHERE in the file... -->
+    <assert-settings-file absent="Qxa5bTestSecretZQ9"/>
+    <!-- ...and no literal "password=" key exists anywhere (passwordScheme=
+         and passwordEnc= do not match this substring: after "password" comes
+         "S" or "E", never "="). -->
+    <assert-settings-file absent="password="/>
+
+    <!-- AC 7 continued: the browser's source combo really offers it - this
+         is the REAL SMediaBrowserPanel, through SMediaRegistry, not a
+         standalone claim. selectSource() returns false when the registry has
+         no such id. waitMs="0" skips waiting for the (unreachable) listing
+         request and asserts SELECTION alone - this call also persists
+         media/lastSourceId, restored at the end. -->
+    <media-browser-source sourceId="nextcloud:qxatest" waitMs="0"/>
+
+    <!-- AC 12: Test connection, against a throwaway in-process stub (never a
+         fixed port). -->
+    <media-test-connection url="https://cloud.invalid.example/ignored/"
+                           user="qxauser" password="Qxa5bTestSecretZQ9"
+                           useStub="ok" expectContains="200 OK"/>
+    <media-test-connection url="https://cloud.invalid.example/ignored/"
+                           user="qxauser" password="wrong-password"
+                           useStub="401" expectContains="401"/>
+
+    <!-- AC 17: a legacy PLAINTEXT password key (only a pre-release dev build
+         could have written one) is migrated on the next page LOAD and the
+         plaintext key is removed either way. -->
+    <set-option key="media/nextcloud/qxatest/password" value="LegacyPlainPw77"/>
+    <assert-settings-file contains="nextcloud\qxatest\password=LegacyPlainPw77"/>
+    <assert-media-options contains="password=set"/>   <!-- triggers rescanForPlaintextMigration() -->
+    <assert-settings-file absent="password="/>
+    <assert-settings-file absent="LegacyPlainPw77"/>
+
+    <!-- AC 9: Remember OFF writes nothing password-shaped at all, and SCRUBS
+         whatever was remembered before - "off" means off, not "adds only". -->
+    <set-media-account accountId="qxatest"
+                       url="https://cloud.invalid.example/remote.php/dav/files/qxauser/"
+                       user="qxauser" password="Qxa5bTestSecretZQ9c" remember="0"
+                       expectOk="1"/>
+    <assert-media-options contains="password=unset"/>
+    <assert-settings-file absent="passwordScheme"/>
+    <assert-settings-file absent="passwordEnc"/>
+    <assert-settings-file absent="Qxa5bTestSecretZQ9c"/>
+    <!-- The account is still usable FOR THIS SESSION (a live source is still
+         registered with the password just supplied, even though nothing was
+         written to disk). -->
+    <media-browser-source sourceId="nextcloud:qxatest" waitMs="0"/>
+
+    <!-- AC 11: removing an account removes EVERY key, including the secret. -->
+    <remove-media-account accountId="qxatest"/>
+    <assert-media-options absent="qxatest"/>
+    <assert-settings-file absent="nextcloud\qxatest\"/>
+
+    <!-- Restore the ONE key media-browser-source persisted as a side effect
+         (proposal 38 gate 2 design), back to SOpt::def(MediaLastSourceId). -->
+    <set-option key="media/lastSourceId" value="local"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

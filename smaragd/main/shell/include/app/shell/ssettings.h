@@ -27,6 +27,16 @@ public:
     // change. Prefer SOpt keys + SOpt::def() for the default.
     QVariant value( const QString &key, const QVariant &def = QVariant() ) const;
     void     setValue( const QString &key, const QVariant &val );
+    // Whether `key` has ANY stored value -- distinct from value() returning a
+    // default, and what proposal 38 GATE 5b's plaintext-password migration
+    // (§B.8 "Migration") needs: a legacy `media/nextcloud/<id>/password` key
+    // must be told apart from "never written".
+    bool     contains( const QString &key ) const;
+    // Erases `key` outright (a no-op, not an error, when absent). Emits
+    // changed() -- unlike setValue(), even though there is no new value,
+    // because "this key used to mean something and no longer does" is
+    // exactly what the migration case needs a listener to see.
+    void     remove( const QString &key );
 
     // Selected audio output device id (backend-specific; empty == system
     // default). Matches AudioDeviceInfo::id from the audio backend.
@@ -95,6 +105,30 @@ public:
     QStringList recentProjects() const;
     void        addRecentProject( const QString &path );
     void        removeRecentProject( const QString &path );
+
+    // Nextcloud/WebDAV accounts (proposal 38 GATE 5b, §B.8). ONLY the
+    // non-secret half lives here -- url and user, plus the ordered id list
+    // the accounts page and the source combo iterate. The password itself
+    // never touches this class: `SMediaAccountManager` (main/shell) stores it
+    // through `SSecretStore` under the SAME key prefix
+    // ("media/nextcloud/<accountId>"), which is what makes the on-disk shape
+    //   media/nextcloud/accounts        = "home,band-share,..."
+    //   media/nextcloud/<id>/url
+    //   media/nextcloud/<id>/user
+    //   media/nextcloud/<id>/passwordScheme   (SSecretStore, dpapi-only below)
+    //   media/nextcloud/<id>/passwordEnc
+    // read as one coherent record per account without this class knowing
+    // SSecretStore exists.
+    QStringList mediaNextcloudAccountIds() const;
+    void        setMediaNextcloudAccountIds( const QStringList &ids );
+    QString     mediaNextcloudUrl( const QString &accountId ) const;
+    void        setMediaNextcloudUrl( const QString &accountId, const QString &url );
+    QString     mediaNextcloudUser( const QString &accountId ) const;
+    void        setMediaNextcloudUser( const QString &accountId, const QString &user );
+    // Clears url/user for `accountId` (AC 11's "every one of its keys" --
+    // the secret half is SSecretStore::remove(), called separately by the
+    // caller, exactly as it stores the secret half separately).
+    void        removeMediaNextcloudAccountFields( const QString &accountId );
 
     // Directories scanned for plugin modules, recursively (proposal 08 M2).
     // Falls back to SOpt::def( SOpt::PluginSearchPaths ), i.e. the engine's

@@ -172,7 +172,13 @@ APP_DEPS = {
     # SEVENTH dock, created in SMainWindow's ctor like every other one (shell
     # CONTRACT inv. 4 -- restoreWindowLayout() runs later and can only restore
     # docks that already exist).
-    'shell':          {'actions', 'eventui', 'mediabrowser', 'model',
+    # shell + media since proposal 38 GATE 5b: SMediaAccountManager
+    # implements smedia::CredentialProvider (app/media/smediacredentials.h)
+    # and owns the SWebDavMediaSource instances it registers with
+    # SMediaRegistry -- the composition root implementing what `media`
+    # only declares the seam for. `APP_DEPS` is NOT transitive, so `shell`
+    # needs its own edge here even though `mediabrowser` already has one.
+    'shell':          {'actions', 'eventui', 'media', 'mediabrowser', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
                        'objects/track', 'objects/wave', 'persistence',
                        'selection', 'servicesui', 'testkit', 'timeline'},

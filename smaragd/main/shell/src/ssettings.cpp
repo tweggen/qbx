@@ -33,6 +33,19 @@ void SSettings::setValue( const QString &key, const QVariant &val )
     emit changed( key );
 }
 
+bool SSettings::contains( const QString &key ) const
+{
+    return settings_.contains( key );
+}
+
+void SSettings::remove( const QString &key )
+{
+    if( !settings_.contains( key ) ) return;   // no-op: don't churn/emit
+    settings_.remove( key );
+    settings_.sync();
+    emit changed( key );
+}
+
 QString SSettings::audioDeviceId() const
 {
     return value( "audio/deviceId" ).toString();
@@ -109,6 +122,47 @@ QStringList SSettings::midiInputPortIds() const
 void SSettings::setMidiInputPortIds( const QStringList &ids )
 {
     setValue( "midi/inputPortIds", ids );
+}
+
+QStringList SSettings::mediaNextcloudAccountIds() const
+{
+    return value( "media/nextcloud/accounts" ).toStringList();
+}
+
+void SSettings::setMediaNextcloudAccountIds( const QStringList &ids )
+{
+    setValue( "media/nextcloud/accounts", ids );
+}
+
+QString SSettings::mediaNextcloudUrl( const QString &accountId ) const
+{
+    if( accountId.isEmpty() ) return QString();
+    return value( "media/nextcloud/" + accountId + "/url" ).toString();
+}
+
+void SSettings::setMediaNextcloudUrl( const QString &accountId, const QString &url )
+{
+    if( accountId.isEmpty() ) return;
+    setValue( "media/nextcloud/" + accountId + "/url", url );
+}
+
+QString SSettings::mediaNextcloudUser( const QString &accountId ) const
+{
+    if( accountId.isEmpty() ) return QString();
+    return value( "media/nextcloud/" + accountId + "/user" ).toString();
+}
+
+void SSettings::setMediaNextcloudUser( const QString &accountId, const QString &user )
+{
+    if( accountId.isEmpty() ) return;
+    setValue( "media/nextcloud/" + accountId + "/user", user );
+}
+
+void SSettings::removeMediaNextcloudAccountFields( const QString &accountId )
+{
+    if( accountId.isEmpty() ) return;
+    remove( "media/nextcloud/" + accountId + "/url" );
+    remove( "media/nextcloud/" + accountId + "/user" );
 }
 
 uint32_t SSettings::audioOutputLatencyFrames( const QString &deviceId ) const
