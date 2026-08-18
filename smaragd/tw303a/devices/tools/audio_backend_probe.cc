@@ -178,8 +178,11 @@ int cmdLoopback(const std::string &id, std::uint32_t channel)
         std::printf("  MEASURED: round trip %lld frames = %.2f ms\n",
                     (long long) r.result.roundTripFrames,
                     audio::loopbackMs(r.result.roundTripFrames, r.sampleRate));
-        std::printf("            peak %.4f, peak/noise %.1f\n",
-                    r.result.peakAmplitude, r.result.peakToNoise);
+        std::printf("            peak %.4f, peak/noise %.1f, headroom %.1fx over the refusal floor\n",
+                    r.result.peakAmplitude, r.result.peakToNoise,
+                    r.result.headroom);
+        std::printf("  LEVEL  : %s\n",
+                    audio::loopbackLevelAdvice(audio::loopbackLevelOf(r.result)));
         // The RESIDUAL is the number a user would type into Options; the
         // round trip is not, because the driver-reported part is already
         // compensated automatically.

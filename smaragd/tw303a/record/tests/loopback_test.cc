@@ -262,6 +262,50 @@ static void testSuggestedOffset()
     CHECK(loopbackMs(1000, 0) == 0.0, "a zero rate yields 0 rather than a division");
 }
 
+// --- 5. the LEVEL advice (added after the first real measurement) ------------
+
+static void testLevelAdvice()
+{
+    printf("\n-- the level advice --\n");
+
+    const float floor_ = 0.5f * 0.01f;   // what the runner passes: 1% of the probe
+
+    // THE CASE THAT PROMPTED THIS. A real cable between OUT 1 and IN 1 of a
+    // US-16x08 returned 0.0076 for a probe emitted at 0.5 — it MEASURED
+    // correctly (1084 frames against a driver-claimed 1039) but sat only 1.5x
+    // above the refusal floor. A little less gain and the same good cable
+    // would have been refused with "check the cable", which is the wrong
+    // advice when the cable is fine.
+    {
+        const std::size_t emitted = 1000;
+        std::vector<float> cap = synthCapture(96000, 2, 0, emitted + 1084, 0.0002f, 0.0076f);
+        const LoopbackResult r =
+            loopbackMeasure(cap.data(), 96000, 2, 0, emitted, 8.0f, floor_);
+        CHECK(r.found && r.roundTripFrames == 1084, "the weak-but-real return still measures");
+        CHECK(loopbackLevelOf(r) == LoopbackLevel::Weak, "and is reported as WEAK, not Good");
+        printf("     (headroom %.2fx: %s)\n", r.headroom,
+               loopbackLevelAdvice(loopbackLevelOf(r)));
+    }
+    {
+        // A healthy line-level return.
+        const std::size_t emitted = 1000;
+        std::vector<float> cap = synthCapture(96000, 2, 0, emitted + 1084, 0.0002f, 0.4f);
+        const LoopbackResult r =
+            loopbackMeasure(cap.data(), 96000, 2, 0, emitted, 8.0f, floor_);
+        CHECK(r.found && loopbackLevelOf(r) == LoopbackLevel::Good, "a strong return is Good");
+    }
+    {
+        // Below the floor: refused AND told why, which is the difference
+        // between "check the cable" and "raise the gain".
+        const std::size_t emitted = 1000;
+        std::vector<float> cap = synthCapture(96000, 2, 0, emitted + 1084, 0.0002f, 0.002f);
+        const LoopbackResult r =
+            loopbackMeasure(cap.data(), 96000, 2, 0, emitted, 8.0f, floor_);
+        CHECK(!r.found, "below the floor is refused");
+        CHECK(loopbackLevelOf(r) == LoopbackLevel::TooWeak, "and reported as TOO WEAK");
+    }
+}
+
 int main()
 {
     printf("=== loopback_test (proposal 21 L6a: the calibration measurement) ===\n");
@@ -270,6 +314,7 @@ int main()
     testNoise();
     testRefusal();
     testSuggestedOffset();
+    testLevelAdvice();
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
            failures == 1 ? "" : "s");

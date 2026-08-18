@@ -14795,12 +14795,44 @@ recorded why the fix is needed.
 green on the merged tree (main had moved: proposal 39's #68/#71 and proposal
 38's #73 landed from other sessions while this was in progress).
 
-Hardware, on the US-16x08 with NO cable: the pass runs end to end — 96000
-frames captured, driver reporting 735 out + 304 in — and **correctly refuses**.
-**The positive case is UNVERIFIED**: nobody has yet run it with a cable between
-an output and an input, so no true round trip has been measured on real
-hardware. That is the one thing left before the wizard is worth putting in front
-of a user, and it needs sixty seconds and a patch cable.
+Hardware, on the US-16x08, BOTH directions of the answer:
+
+- **NO cable**: the pass runs end to end (96000 frames captured, driver
+  reporting 735 out + 304 in) and **correctly refuses**.
+- **OUT 1 patched to IN 1** — the positive case, measured 2026-08-18:
+
+  ```
+  MEASURED: round trip 1084 frames = 22.58 ms
+            peak 0.0076, peak/noise 43.4
+  OFFER  : recording offset +0.94 ms
+  ```
+
+  **The driver is honest to within 45 frames.** It claimed 1039 (735 out +
+  304 in); the cable measured 1084. So the automatic compensation was already
+  right to within a millisecond on this interface, and the residual a user
+  would be offered is ~1 ms. That is a genuinely useful thing to know about
+  this hardware, and it is also the first evidence that the whole chain —
+  probe emission, capture, onset detection, residual arithmetic — produces a
+  number that means something.
+
+### WHAT THE FIRST REAL SUCCESS EXPOSED: a pass with no margin
+
+That measurement is correct and it very nearly did not happen. The return
+peaked at **0.0076** for a probe emitted at **0.5** — a 36 dB loss, sitting
+only **1.5x above the refusal floor** and a mere 1.7x above the no-cable noise
+peak. A little less input gain and the same good cable would have been REFUSED,
+with the message "no probe found — check the cable", which is precisely the
+wrong advice when the cable is fine and the GAIN is what wants raising.
+
+So the result now carries `headroom` (how far above the floor it landed) and a
+`LoopbackLevel` — None / TooWeak / Weak / Good / Hot — with advice written for
+a human. A pass with no margin and a comfortable pass are both `found`, and
+only one of them should be trusted without a second look; collapsing them into
+a bool threw away the distinction that matters for telling a user what to do.
+
+Gated against the real case: a synthetic capture built at the hardware's own
+numbers reports **headroom 1.50x** and classifies as **Weak**, not Good.
+
 
 ### Still not built
 
