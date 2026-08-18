@@ -38,6 +38,7 @@
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
+#include "app/model/sobjectrenderer.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/cut/splacerecordingaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
@@ -80,6 +81,7 @@
 #include "app/objects/mixer/sremovetrackaction.h"
 #include "app/objects/cut/saddsampleaction.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/objects/track/strackrndrinline.h"
 #include "app/persistence/ssaveprojectaction.h"
 #include "app/persistence/sloadprojectaction.h"
 #include "app/actions/ssnaptogridaction.h"
@@ -2068,6 +2070,205 @@ QString SMainWindow::describeTrackHead( const QString &trackPath,
     return head.describeHead();
 }
 
+
+// --- proposal 39 M1 test seam --------------------------------------------
+
+bool SMainWindow::collectClipEnvelope( const QString &clipPath, offset_t start,
+                                       length_t length, int width,
+                                       std::vector<preview_t> &out )
+{
+    out.clear();
+    if( width < 1 ) return false;
+
+    // The APP's project, not this window's: a headless --test-case run drives
+    // SApplication directly and leaves currentProject_ null (the same reason
+    // describeTrackHead reads it there).
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+    SObject *mixer = splacements::rootContainer( proj );
+    if( !mixer ) return false;
+    SLink *link = splacements::placementAt(
+        mixer, strackpath::stringToPath( clipPath ) );
+    if( !link ) return false;
+
+    // Through the RENDERER, never through the concrete object type: the canvas
+    // may not branch on what a clip IS (main/timeline/CONTRACT.md inv. 2), and
+    // a verb that did would silently disagree with the drawn clip the moment
+    // either changed.
+    SObjectRenderer *rndr = link->getSObject().getInlineRenderer();
+    if( !rndr ) return false;
+
+    SEnvelopeWindow win;
+    win.leftTime  = start;
+    win.rightTime = start + ( length > 0 ? length : 1 );
+    win.width     = width;
+
+    out.assign( (size_t) width, preview_t{ 0, 0 } );
+    if( !rndr->collectEnvelope( *link, win, out.data() ) ) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+bool SMainWindow::collectTrackChildSumEnvelope( const QString &trackPath,
+                                               offset_t start, length_t length,
+                                               int width,
+                                               std::vector<preview_t> &out )
+{
+    out.clear();
+    if( width < 1 ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+
+    SEnvelopeWindow win;
+    win.leftTime  = start;
+    win.rightTime = start + ( length > 0 ? length : 1 );
+    win.width     = width;
+
+    out.assign( (size_t) width, preview_t{ 0, 0 } );
+    // The EXACT call STrackRendererInline::draw() makes to paint the overlay -
+    // not a re-derivation of it, for the same reason assert-envelope goes
+    // through the clip's own renderer.
+    if( !track->collectChildSumEnvelope( win, out.data() ) ) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+// --- the M3.10 pixel gate -------------------------------------------------
+//
+// The overlay's colour is a RELATION, not a constant (design D4): strictly
+// lighter than the lane it sits on, darker than a clip body, so it reads as
+// background. A relation that is only ever eyeballed is not gated at all, and
+// CLAUDE.md records that the arranger canvas has essentially no paint gate - so
+// this measures it from real pixels.
+//
+// It classifies by that relation on purpose. An "overlay pixel" IS one that is
+// strictly lighter than the fill and strictly darker than the clip body: draw
+// the overlay darker than the lane, or as light as a clip, and the count falls
+// to zero and the assertion fails. The two failure directions are counted
+// separately (darkerThanFill / lighterThanClip) so a failure says which way it
+// went rather than only that it happened.
+namespace {
+int sLuminance( QRgb c )
+{
+    // Rec. 601 luma, integer. The comparison only needs a monotone ordering;
+    // what matters is that ONE spelling of "lighter" is used throughout.
+    return ( 299 * qRed( c ) + 587 * qGreen( c ) + 114 * qBlue( c ) ) / 1000;
+}
+}  // namespace
+
+QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h,
+                                          const QString &pngPath )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return QString();
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return QString();
+
+    SMVActualView *canvas = v->contentView();
+    // Same sizing dance grabArrangerLanes() does, and for the same reason: the
+    // canvas is inside a never-shown window and its geometry belongs to its
+    // parents, so resizing the child alone is undone before grab() renders.
+    if( w > 0 && h > 0 ) {
+        resize( w + v->getTrackControlWidth() + 48, h + 160 );
+        if( layout() ) layout()->activate();
+        if( v->layout() ) v->layout()->activate();
+    }
+    const QPixmap pm = canvas->grab();
+    if( pm.isNull() ) return QString();
+    if( !pngPath.isEmpty() ) pm.save( pngPath, "PNG" );
+    const QImage img = pm.toImage();
+
+    const int row = v->rowIndexOfTrack( track );
+    if( row < 0 ) return QString();
+    // The lane rect the renderer was handed: laneTop()+1 .. +laneHeight()-2,
+    // i.e. INSIDE the two 1px separator lines the canvas draws itself. Reading
+    // those in would put chrome in the histogram.
+    const int top = canvas->laneTop( row ) + 1;
+    const int lh  = canvas->laneHeight( row ) - 2;
+    if( lh < 1 || top < 0 || top + lh > img.height() ) {
+        // Say WHICH way it went. A lane scrolled off the bottom of the grab is
+        // the ordinary mistake here - the grab height has to cover every row
+        // above the one being measured - and "no lane at that path" is exactly
+        // the wrong diagnosis for it.
+        return QString( "row=%1 band=%2,%3 OUTSIDE the %4x%5 grab"
+                        " - raise grabHeight" )
+            .arg( row ).arg( top ).arg( lh )
+            .arg( img.width() ).arg( img.height() );
+    }
+
+    const QColor fill = STrackRendererInline::laneFillColor( *track );
+    const int lumFill = sLuminance( fill.rgb() );
+    const int lumClip = sLuminance( QColor( 160, 160, 160 ).rgb() );
+
+    // The PLAYHEAD crosses every lane, once, in exactly this colour, and its
+    // luminance (129) happens to fall inside the overlay band - so it is
+    // counted as chrome by IDENTITY rather than being allowed to pass as
+    // material. It is the only such line the canvas draws over a lane once the
+    // time grid is off, which is why this verb asks for `grid-disable`.
+    const QRgb playhead = QColor( 30, 200, 30 ).rgb() | 0xff000000u;
+
+    int fillPixels = 0, overlayPixels = 0, darkerThanFill = 0;
+    int lighterThanClip = 0, clipBodyPixels = 0, playheadPixels = 0;
+    int otherPixels = 0;
+    int overlayLumMin = 255, overlayLumMax = 0;
+    QRgb overlaySample = 0;
+    for( int y = top; y < top + lh; ++y ) {
+        for( int x = 0; x < img.width(); ++x ) {
+            const QRgb c = img.pixel( x, y ) | 0xff000000u;
+            if( c == ( fill.rgb() | 0xff000000u ) ) { ++fillPixels; continue; }
+            if( c == playhead )     { ++playheadPixels; continue; }
+            const int lum = sLuminance( c );
+            if( lum == lumClip )    { ++clipBodyPixels; continue; }
+            if( lum <  lumFill )    { ++darkerThanFill; continue; }
+            if( lum >  lumClip )    { ++lighterThanClip; continue; }
+            if( lum > lumFill && lum < lumClip ) {
+                ++overlayPixels;
+                if( lum < overlayLumMin ) overlayLumMin = lum;
+                if( lum > overlayLumMax ) { overlayLumMax = lum; overlaySample = c; }
+                continue;
+            }
+            ++otherPixels;                       // lum == lumFill, colour != fill
+        }
+    }
+    if( !overlayPixels ) { overlayLumMin = 0; overlayLumMax = 0; }
+
+    return QString( "row=%1 band=%2,%3 fill=#%4 fillLum=%5 clipLum=%6"
+                    " overlayPixels=%7 overlayLum=%8..%9 overlaySample=#%10"
+                    " fillPixels=%11 darkerThanFill=%12 lighterThanClip=%13"
+                    " clipBodyPixels=%14 playheadPixels=%15 otherPixels=%16" )
+        .arg( row ).arg( top ).arg( lh )
+        .arg( (uint) ( fill.rgb() & 0xffffff ), 6, 16, QChar( '0' ) )
+        .arg( lumFill ).arg( lumClip )
+        .arg( overlayPixels ).arg( overlayLumMin ).arg( overlayLumMax )
+        .arg( (uint) ( overlaySample & 0xffffff ), 6, 16, QChar( '0' ) )
+        .arg( fillPixels ).arg( darkerThanFill ).arg( lighterThanClip )
+        .arg( clipBodyPixels ).arg( playheadPixels ).arg( otherPixels );
+}
+
+// --- proposal 39 M3a: the fold path ---------------------------------------
+//
+// The overlay is SOLD on the collapsed folder ("fold it shut and you can still
+// see what is under it"), and nothing reached the fold at all before this - so
+// the grab that gated M3.10 was of an EXPANDED folder. This is the one call
+// that changes.
+//
+// ABSOLUTE rather than a toggle, and through toggleTrackCollapsed() rather than
+// around it: that call owns the row rebuild and the head column, so a second
+// writer of collapsed_ would be a second definition of what "collapsed" does.
+bool SMainWindow::setTrackCollapsed( const QString &trackPath, bool collapsed )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    if( v->isTrackCollapsed( track ) != collapsed )
+        v->toggleTrackCollapsed( track );
+    return true;
+}
 
 // --- proposal 37 P6 test seams -------------------------------------------
 

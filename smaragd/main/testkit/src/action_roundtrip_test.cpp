@@ -413,6 +413,21 @@ const Fixture kFixtures[] = {
     { "assert-lane-alignment",
       "<assert-lane-alignment grabPng='lanes.png' grabWidth='900'"
       " grabHeight='700'/>" },
+    // --- the folder-sum preview verbs (proposal 39) -------------------------
+    // assert-envelope writes trackPath / snapshot / compareTo only when set,
+    // and the childSum half of it is unreachable from a default instance.
+    { "assert-envelope",
+      "<assert-envelope clip='0,0' trackPath='0,1' mode='childSum'"
+      " start='48000' length='96000' width='32' column='4' min='-25' max='25'"
+      " tolerance='2' expectEmpty='false' snapshot='a' compareTo='b'/>" },
+    // Every grab attribute is written only when given, `contains` likewise.
+    { "assert-lane-overlay",
+      "<assert-lane-overlay trackPath='0,1' expectOverlay='false'"
+      " minPixels='200' grabWidth='900' grabHeight='700'"
+      " grabPng='folder.png' contains='row=0'/>" },
+    // ABSOLUTE, so both attributes are always written.
+    { "collapse-track",
+      "<collapse-track trackPath='0,1' collapsed='0'/>" },
 
     // timebase is written only when non-empty.
     // --- the MIDI-out verbs (proposal 37 P7b) -------------------------------

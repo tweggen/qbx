@@ -25,6 +25,10 @@ class STakeStackRendererInline : public SObjectRenderer
 public:
     explicit STakeStackRendererInline( STakeStack & );
     void draw( SLink &, SRenderContext & ) override;
+    // Delegates to the ACTIVE take's renderer, identically to draw() (proposal
+    // 39 M1): a stack is one clip whose identity is whichever take is audible,
+    // so the envelope a caller reads is the envelope on screen.
+    bool collectEnvelope( SLink &, const SEnvelopeWindow &, preview_t * ) override;
 private:
     STakeStack &stack() const;
 };

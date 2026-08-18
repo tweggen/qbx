@@ -163,3 +163,39 @@ static const bool s_reg_assertlanealignment = (
         []{ return new SAssertLaneAlignmentAction; }
     ), true
 );
+
+// --- collapse-track (proposal 39 M3a) -------------------------------------
+
+SApplyResult SCollapseTrackAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = mainWindow();
+    if (!win) {
+        qWarning() << "SCollapseTrackAction: no main window";
+        return {false, nullptr};
+    }
+    if (!win->setTrackCollapsed(trackPath_, collapsed_)) {
+        qWarning() << "SCollapseTrackAction: no lane at" << trackPath_;
+        return {false, nullptr};
+    }
+    return {true, nullptr};   // view state: nothing to undo
+}
+
+void SCollapseTrackAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("trackPath", trackPath_);
+    elem.setAttribute("collapsed", collapsed_ ? 1 : 0);
+}
+
+bool SCollapseTrackAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    trackPath_ = elem.attribute("trackPath", "0");
+    collapsed_ = elem.attribute("collapsed", "1").toInt() != 0;
+    return true;
+}
+
+static const bool s_reg_collapsetrack = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("collapse-track"),
+        []{ return new SCollapseTrackAction; }
+    ), true
+);

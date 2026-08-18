@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 39 M2, AC M2.3/M2.4. THE RULE, at script level:
+
+      A drawn waveform describes the audio its object PRODUCES.
+      The lane it is drawn on never scales it.
+
+  So a clip's envelope is a property of the clip, and no amount of moving the
+  containing track's fader - or muting it - may move one byte of it. Before M2
+  it did: drawObjectWaveform read the containing track's volumeDbSnapshot() and
+  multiplied every probe by it, so pulling a fader down redrew the arrangement
+  as a thinner waveform, and at -40 dB it visually emptied.
+
+  HOW THIS IS ASSERTED WITHOUT A SINGLE HARD-CODED PROBE. snapshot/compareTo
+  (proposal 39 M1) stores a 64-column array under a name and later asserts a
+  BYTE-IDENTICAL match, reporting the first differing column and both values.
+  That is the whole mechanism: it says "this edit moved nothing" rather than
+  "this edit produced these bytes", which is the assertion the rule actually
+  makes and the one that survives a fixture change.
+
+  AND IT IS NOT SELF-REFERENTIAL. compareTo would pass on all-zeros, so the
+  case ALSO pins the ramp's own shape (0 / 25 / 50 / 76 across four columns,
+  the fixture's linear amplitude ramp - testkit CONTRACT inv. 3) BOTH before
+  and after the fader moves. At -20 dB a scaled envelope reads 0 / 2 / 5 / 7,
+  which is a different failure line from the compareTo one and localises the
+  regression to the multiply rather than to the probe machinery.
+
+  WHAT THIS CASE CANNOT SEE, and what does. assert-envelope reads through
+  SObjectRenderer::collectEnvelope, i.e. the COLLECT half of the seam, and M1
+  deliberately left the volume multiply in the DRAW half alone. So this case
+  passes on the pre-M2 binary too - it pins the RULE for everything downstream
+  of the seam (M3's folder walk reads exactly this call), and it is not the
+  gate that catches the multiply itself. That one is a PIXEL gate:
+  preview_envelope_test's "the lane's fader never scales the drawn waveform"
+  section paints through a link whose parent object holds a non-unity fader and
+  recovers the probes from the pixels. It was verified to FAIL before the
+  deletion and pass after.
+
+  NOT gated here: the folder overlay (M3), pixels (preview_envelope_test), and
+  an ASSET clip's referenced-track fader, which is deliberately KEPT - that
+  fader is baked into the capture the preview is computed from, and the
+  referenced track is the clip's CONTENT rather than its container.
+-->
+<SActionScript version="1" name="preview_volume_independent">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The material, before anything is touched: the ramp, and the array the
+         rest of the case is measured against. -->
+    <assert-envelope clip="0,0" start="0" length="192000" width="4"
+                     column="3" min="-76" max="76"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     snapshot="base"/>
+
+    <!-- -20 dB. A scaled envelope would read 7 here, not 76. -->
+    <set-track-volume trackPath="0" volume="-20"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="4"
+                     column="3" min="-76" max="76"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     compareTo="base"/>
+
+    <!-- +6 dB. The other direction: a scaled envelope would CLAMP at 127 and
+         flat-top the ramp rather than merely shrinking it. -->
+    <set-track-volume trackPath="0" volume="6"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="4"
+                     column="3" min="-76" max="76"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     compareTo="base"/>
+
+    <!-- -60 dB, the value at which the old behaviour emptied the arrangement:
+         every probe of a ramped fixture quantises to 0. -->
+    <set-track-volume trackPath="0" volume="-60"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     compareTo="base"/>
+
+    <!-- Back to unity, and still the same bytes: the property is INDEPENDENCE,
+         not a lucky fixed point at some particular gain. -->
+    <set-track-volume trackPath="0" volume="0"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     compareTo="base"/>
+
+    <!-- M2.4: mute, both directions. Mute is STRUCTURAL - the parent nulls the
+         child's plug - so the track's own audio genuinely goes away, and the
+         clip's waveform still must not, for exactly the same reason: the clip
+         still produces what it produces. -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="4"
+                     column="3" min="-76" max="76"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     compareTo="base"/>
+
+    <set-track-mute trackPath="0" muted="0"/>
+    <assert-envelope clip="0,0" start="0" length="192000" width="64"
+                     compareTo="base"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -53,3 +53,13 @@ void SPlainWaveRendererInline::draw( SLink &lk, SRenderContext &ctx )
     if( getPlainWave().isAnalyzing() )
         drawAnalyzingBadge( p, r );
 }
+
+// The COLLECT terminal (proposal 39 M1). A plain wave has no domain mapping of
+// its own beyond the link start, which collectObjectEnvelope folds, so this is
+// the same single call the draw path makes.
+bool SPlainWaveRendererInline::collectEnvelope( SLink &lk,
+                                                const SEnvelopeWindow &win,
+                                                preview_t *out )
+{
+    return collectObjectEnvelope( getPlainWave(), lk, win, out );
+}

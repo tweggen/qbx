@@ -119,5 +119,66 @@ the stored spelling and load_project_render.qxa for the legacy fallback.
 Also: record_offset_zero.qxa / record_loop_takes.qxa / record_punch.qxa
 (record_punch is the one that asserts a NON-EMPTY preview mid-take).
 
+THE COLLECT SEAM (proposal 39 M1). `swaveformdraw` now has TWO entry points
+and exactly ONE probe-producing path:
+
+  collectObjectEnvelope( obj, lk, SEnvelopeWindow, preview_t *out )
+  drawObjectWaveform   ( obj, lk, SRenderContext, QColor )   // collect + draw
+
+The collect takes a TIME WINDOW, never an `SRenderContext` — a context holds a
+`QPainter&`, so a headless caller (the `assert-envelope` verb, the folder-sum
+overlay of proposal 39 M3) could only build one over a scratch `QImage`: a
+painter that exists solely to be ignored. `drawObjectWaveform` derives the
+window from its context (`envelopeWindowOfContext`) and is otherwise unchanged.
+That derivation MOVED to `app/model/sobjectrenderer.h` at M3, beside
+`SEnvelopeWindow` itself: the folder-sum overlay derives the same window for a
+LANE, and `objects/track` may not include `objects/wave`.
+
+Every renderer that draws a waveform overrides `SObjectRenderer::collectEnvelope`
+by routing its EXISTING walk to the collect terminal; the base returns false and
+writes nothing, which is the right answer for an object with no waveform.
+Gates: `preview_envelope_test` (ctest — the collected probes against the DRAWN
+pixels, through the link-start fold, a cut's slip and loop tiling),
+`envelope_probe.qxa` (the shipped renderers, end to end) and
+`envelope_offset_window.qxa` (the only one whose CLIP and WINDOW both start
+somewhere other than 0 — a cut's collect clamps a negative clip-relative
+position to 0, so nothing anchored at 0 can tell a correct map from that clamp).
+
+WHAT A DRAWN WAVEFORM DESCRIBES (proposal 39 M2). One rule, and it is the
+reason `drawObjectWaveform` no longer looks at `lk.parent()` at all:
+
+> **A drawn waveform describes the audio its object PRODUCES. The lane it is
+> drawn on never scales it.**
+
+Until M2 the draw half read the containing track's `volumeDbSnapshot()` and
+multiplied every probe by it, so pulling a fader down redrew every clip on that
+lane as a thinner waveform and at -40 dB the arrangement visually emptied. Wrong
+three independent ways: a waveform is the CONTENT and a fader is the LEVEL, and
+this app has a fader widget AND a level meter (proposal 34) for the level; the
+multiply landed AFTER the probes were quantised to 8 bits, so a -20 dB clip drew
+as a coarse dozen-valued ladder rather than as a quieter version of itself; and
+it contradicted what the stored bytes mean — volume is not baked into a preview
+(`plan/STATE.md:6576-6580`), so the paint-time multiply was the whole
+dependency. The `qBound` to [-127,127] stays: it costs nothing on probes already
+in range, and M3's folder-sum overlay accumulates into this same domain, where a
+saturated column is the normal case.
+
+The rule is about the CONTAINER, not about content. A container object's OWN
+preview is legitimately post-fader — `straightCalcPreviewData()`'s no-random-
+source branch reads `getRootComponent()`'s frozen pages, and for a track that
+root is `cpRewire_`, downstream of `twGainStage` — which is why
+`SObject::setVolume()` still calls `invalidatePreview()`, and why an ASSET
+clip keeps the REFERENCED track's fader: that track is the clip's content, not
+its container.
+
+Gate: `preview_envelope_test` section 5 — the painted pixels against the
+collected probes through a link whose parent object holds -60/-20/-6/0/+6 dB.
+It has to be a PIXEL gate, because the collect half never carried the multiply
+and everything reading through `collectEnvelope` is blind to it by construction.
+Verified to fail before the deletion (at -20 dB a painted column read 2/-2 where
+the collect said 20/-20). `preview_volume_independent.qxa` states the same rule
+at script level, over `set-track-volume` and `set-track-mute`, and is what pins
+it for every LATER consumer of the seam.
+
 Known debt: swaveformdraw is shared by other renderers (cut) — candidate
 for a render-support module when slices become real targets.

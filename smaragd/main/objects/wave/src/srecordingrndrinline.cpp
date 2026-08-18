@@ -37,3 +37,12 @@ void SRecordingRendererInline::draw( SLink &lk, SRenderContext &ctx )
         p.drawText( r, Qt::AlignBottom | Qt::AlignLeft, QStringLiteral( " REC" ) );
     }
 }
+
+// The COLLECT terminal (proposal 39 M1): the same shared envelope the draw
+// loop walks, out of the content's own incrementally-extended peak ladder.
+bool SRecordingRendererInline::collectEnvelope( SLink &lk,
+                                                const SEnvelopeWindow &win,
+                                                preview_t *out )
+{
+    return collectObjectEnvelope( getRecording(), lk, win, out );
+}
