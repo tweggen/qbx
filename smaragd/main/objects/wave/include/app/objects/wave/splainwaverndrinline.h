@@ -15,6 +15,8 @@ public:
     ~SPlainWaveRendererInline() {};
 
     virtual void draw( SLink &, SRenderContext & );
+    // The collect terminal of the same walk draw() makes (proposal 39 M1).
+    bool collectEnvelope( SLink &, const SEnvelopeWindow &, preview_t * ) override;
     SPlainWave &getPlainWave() const { return (SPlainWave &)getObject(); }
 };
 

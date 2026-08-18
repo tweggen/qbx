@@ -15,6 +15,91 @@
 #include "app/objects/wave/swaveformdraw.h"
 
 namespace {
+
+// ---------------------------------------------------------------------------
+// The cut's two DOMAIN MAPS and its loop TILING, spelled once (proposal 39 M1).
+//
+// draw() and collectEnvelope() are the same walk with two different terminals,
+// so every piece of arithmetic between the pixel and the source sample lives
+// here and is called by both. A second copy in the collect would be a second
+// implementation of the stretch/warp map and the tiling, free to disagree with
+// what is on screen — which is exactly the failure the collect seam exists to
+// make impossible.
+// ---------------------------------------------------------------------------
+
+// clip-relative position -> SOURCE time, through the SHARED clip->source map
+// (the one playback derives its window from, proposal 18 Phase 4; piecewise
+// when warp anchors exist). The wave renderer subtracts lk.getStartTime()
+// again, so clipStart is added back here.
+offset_t cutSourceTimeOf( const SCut &cut, offset_t clipStart, int64_t rel )
+{
+    if( rel < 0 ) rel = 0;
+    return clipStart + (offset_t) cut.clipToSource( Fraction( rel ) ).floorToInt();
+}
+
+// The same map for a pixel inside ONE loop repetition: the segment is segLen
+// samples of grain OUTPUT starting at segLeftX pixels, so the position inside
+// the repetition is the pixel ramp scaled by segLen/segWpx.
+offset_t loopSegSourceTimeOf( const SCut &cut, offset_t clipStart,
+                              double segLeftX, double segWpx, length_t segLen,
+                              int x )
+{
+    double rel = ( (double) x - segLeftX ) * (double) segLen / segWpx;
+    if( rel < 0 ) rel = 0;
+    return cutSourceTimeOf( cut, clipStart, (int64_t) rel );
+}
+
+// A cut whose content has no random source is a CONTAINER capture (a live asset
+// over a track or the mixer) - unless the content is not audio at all, which is
+// the case proposal 37 added: an event object also answers null here, and
+// drawing its "rendered output" would be a waveform of silence. Ask what the
+// material IS (contentKind) before asking how it is read, so the heuristic
+// cannot mistake a second content kind for an asset.
+bool cutIsContainer( SCut &cut )
+{
+    SObject &content = cut.getContent();
+    return content.contentKind() == SContentKind::Audio
+        && !content.getRandomSource();
+}
+
+// Walk the loop tiles across a pixel span. `fn( segLeftX, segRightX, segWpx,
+// isx, iex )` receives one repetition's UNCLIPPED left/right edge (which is
+// what the segment's own time map is anchored on) and the CLIPPED integer pixel
+// span it actually covers. ta/tb are the times at xa and xa+width, i.e. exactly
+// the two probes an SEnvelopeWindow carries — so a collect can walk the same
+// tiles with a virtual origin of 0 (the geometry is relative, and flooring a
+// double offset by an integer origin is the same either way).
+template <typename F>
+void forEachLoopTile( offset_t clipStart, length_t segLen,
+                      int xa, int width, offset_t ta, offset_t tb, F &&fn )
+{
+    if( width < 1 ) width = 1;
+    const int xb = xa + width;
+    // Pixels-per-sample from two probe points of the parent (timeline) mapping.
+    double spp = ( (double) tb - (double) ta ) / (double)( xb - xa );
+    if( spp <= 0.0 ) spp = 1.0;
+    const double clipLeftX = (double) xa + ( (double) clipStart - (double) ta ) / spp;
+    double segWpx = (double) segLen / spp;
+    if( segWpx < 1.0 ) segWpx = 1.0;
+
+    const int right = xa + width;
+    int k = 0;
+    if( clipLeftX < (double) xa )
+        k = (int)( ( (double) xa - clipLeftX ) / segWpx );
+    for( ; ; k++ ) {
+        const double sx = clipLeftX + (double) k * segWpx;
+        if( sx >= (double) right ) break;
+        const double ex = sx + segWpx;
+        const int isx = (int)( sx > (double) xa ? sx : (double) xa );
+        const int iex = (int)( ex < (double) right ? ex : (double) right );
+        if( iex <= isx ) continue;
+        fn( sx, ex, segWpx, isx, iex );
+    }
+}
+
+}  // namespace
+
+namespace {
 // A render context that maps one loop-repetition's pixel span onto the content's
 // raw SOURCE samples. The loop segment is loopLength samples of grain OUTPUT
 // starting at startOffset (both in the stretched OUTPUT domain, like the rest of
@@ -34,15 +119,13 @@ public:
           cut_( cut ),
           segLeftX_( segLeftX ), segWpx_( segWpx ), segLen_( segLen ) {}
     virtual offset_t getTimeOf( int x ) const {
-        double rel = ( (double) x - segLeftX_ ) * (double) segLen_ / segWpx_;
-        if( rel < 0 ) rel = 0;
-        // rel is the position inside this repetition; the SHARED
-        // clip->source map (the one playback derives its window from,
-        // proposal 18 Phase 4) yields the source sample the waveform is
-        // read from. Pixels quantize rel; the map itself is exact.
-        // W1: map-aware conversion (piecewise when warp anchors exist).
-        return clipStart_ + (offset_t) cut_
-                   .clipToSource( Fraction( (int64_t) rel ) ).floorToInt();
+        // rel is the position inside this repetition; the SHARED clip->source
+        // map (the one playback derives its window from, proposal 18 Phase 4)
+        // yields the source sample the waveform is read from. Pixels quantize
+        // rel; the map itself is exact. W1: map-aware conversion (piecewise
+        // when warp anchors exist). ONE spelling, shared with the collect.
+        return loopSegSourceTimeOf( cut_, clipStart_, segLeftX_, segWpx_,
+                                    segLen_, x );
     }
 private:
     offset_t    clipStart_;
@@ -314,15 +397,8 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     // this cut. A sample-backed cut delegates to the content's own renderer.
     // Both fold the cut's startOffset into the time mapping (via the
     // InlineRenderContext / LoopSegmentContext) so the drawn region matches what
-    // plays.
-    // A cut whose content has no random source is a CONTAINER capture (a live
-    // asset over a track or the mixer) - unless the content is not audio at
-    // all, which is the case proposal 37 added: an event object also answers
-    // null here, and drawing its "rendered output" would be a waveform of
-    // silence. Ask what the material IS (contentKind) before asking how it is
-    // read, so the heuristic cannot mistake a second content kind for an asset.
-    const bool container = content.contentKind() == SContentKind::Audio
-                        && !content.getRandomSource();
+    // plays. cutIsContainer() is the one spelling of that question.
+    const bool container = cutIsContainer( cut );
     SObjectRenderer *rndr = container ? NULL : content.getInlineRenderer();
     if( !container && !rndr ) {
         p.drawText( visibRect, Qt::AlignCenter, "SCut: No renderer." );
@@ -355,44 +431,33 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         // CONTINUE past the content end for BOTH cut kinds: a container cut's
         // capture is zero past its natural length, so a single linear pass would
         // otherwise draw a flat/zero tail — matching a wave-backed looped cut.
-        length_t segLen   = cut.getLoopLength().frames();
+        const length_t segLen = cut.getLoopLength().frames();
 
-        // Pixels-per-sample from two probe points of the parent (timeline) mapping.
+        // The tiling geometry is forEachLoopTile()'s, shared with the collect
+        // terminal - a second copy here is how the envelope a caller reads and
+        // the envelope on screen come to describe different tiles.
         int xa = visibRect.x();
         int xb = visibRect.x() + visibRect.width();
         if( xb <= xa ) xb = xa + 1;
-        double ta = (double) ctx.getTimeOf( xa );
-        double tb = (double) ctx.getTimeOf( xb );
-        double spp = ( tb - ta ) / (double)( xb - xa );     // timeline samples / pixel
-        if( spp <= 0.0 ) spp = 1.0;
-        double clipLeftX = (double) xa + ( (double) lk.getStartTime() - ta ) / spp;
-        double segWpx = (double) segLen / spp;
-        if( segWpx < 1.0 ) segWpx = 1.0;
-
-        int right = visibRect.x() + visibRect.width();
-        int k = 0;
-        if( clipLeftX < visibRect.x() )
-            k = (int)( ( visibRect.x() - clipLeftX ) / segWpx );
-        for( ; ; k++ ) {
-            double sx = clipLeftX + (double) k * segWpx;
-            if( sx >= right ) break;
-            double ex = sx + segWpx;
-            int isx = (int)( sx > visibRect.x() ? sx : visibRect.x() );
-            int iex = (int)( ex < right ? ex : right );
-            if( iex <= isx ) continue;
-            LoopSegmentContext lctx( p, lk.getStartTime(), cut,
-                                     sx, segWpx, segLen );
-            lctx.setVisibRect( QRect( isx, visibRect.y(), iex - isx, visibRect.height() ) );
-            drawSeg( lctx );
-            if( ex < right ) {                              // loop boundary divider
-                p.setPen( QColor( 70, 70, 70 ) );
-                p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
-                // Grab handle at the divider's upper end; drag it to re-tile the
-                // loop (SMVActualView::loopMarkerAt hit-tests the same box).
-                if( segWpx >= LOOP_HANDLE_MIN_SEG_PX )
-                    drawLoopHandle( p, visibRect, (int) ex );
-            }
-        }
+        const int right = visibRect.x() + visibRect.width();
+        forEachLoopTile(
+            lk.getStartTime(), segLen, visibRect.x(), visibRect.width(),
+            ctx.getTimeOf( xa ), ctx.getTimeOf( xb ),
+            [&]( double sx, double ex, double segWpx, int isx, int iex ) {
+                LoopSegmentContext lctx( p, lk.getStartTime(), cut,
+                                         sx, segWpx, segLen );
+                lctx.setVisibRect( QRect( isx, visibRect.y(),
+                                          iex - isx, visibRect.height() ) );
+                drawSeg( lctx );
+                if( ex < right ) {                          // loop boundary divider
+                    p.setPen( QColor( 70, 70, 70 ) );
+                    p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
+                    // Grab handle at the divider's upper end; drag it to re-tile
+                    // the loop (SMVActualView::loopMarkerAt hit-tests the same box).
+                    if( segWpx >= LOOP_HANDLE_MIN_SEG_PX )
+                        drawLoopHandle( p, visibRect, (int) ex );
+                }
+            } );
     }
 
     // Onset ticks + user warp-marker handles over the waveform (proposal 28 W2).
@@ -411,6 +476,68 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
                     cut.getPreserveFormants() );
 }
 
+// ---------------------------------------------------------------------------
+// The COLLECT terminal (proposal 39 M1). Same branch, same maps, same tiles as
+// draw() above - only the terminal differs, so an envelope a caller READS and
+// the waveform a user SEES cannot describe different audio.
+// ---------------------------------------------------------------------------
+bool SCutRendererInline::collectEnvelope( SLink &lk, const SEnvelopeWindow &win,
+                                          preview_t *out )
+{
+    if( !out ) return false;
+    const int width = win.width < 1 ? 1 : win.width;
+
+    SCut &cut = getCut();
+    SObject &content = cut.getContent();
+
+    const bool container = cutIsContainer( cut );
+    SObjectRenderer *rndr = container ? NULL : content.getInlineRenderer();
+    if( !container && !rndr ) return false;   // draw() paints "no renderer" here
+
+    const offset_t clipStart = lk.getStartTime();
+
+    // The collect twin of drawSeg(): ONE linear repetition, already mapped into
+    // the content's own domain.
+    auto collectSeg = [&]( const SEnvelopeWindow &seg, preview_t *dst ) -> bool {
+        if( container ) return collectObjectEnvelope( cut, lk, seg, dst );
+        return rndr->collectEnvelope( lk, seg, dst );
+    };
+
+    if( !cut.isLooping() ) {
+        // InlineRenderContext::getTimeOf, at the two boundaries the draw path
+        // probes - the columns between them are linear either way.
+        SEnvelopeWindow inner;
+        inner.leftTime  = cutSourceTimeOf( cut, clipStart,
+                              (int64_t) win.leftTime  - (int64_t) clipStart );
+        inner.rightTime = cutSourceTimeOf( cut, clipStart,
+                              (int64_t) win.rightTime - (int64_t) clipStart );
+        inner.width     = width;
+        return collectSeg( inner, out );
+    }
+
+    // LOOPING: tile the loop segment across the width, each repetition writing
+    // its OWN pixel span. Columns no tile covers stay silent rather than
+    // inheriting the caller's buffer - a gap in the drawn waveform is a gap in
+    // the collected one, and a summing caller (M3) must not read stack junk.
+    for( int i = 0; i < width; ++i ) { out[i].min = 0; out[i].max = 0; }
+
+    const length_t segLen = cut.getLoopLength().frames();
+    bool any = false;
+    forEachLoopTile(
+        clipStart, segLen, 0, width, win.leftTime, win.rightTime,
+        [&]( double sx, double /*ex*/, double segWpx, int isx, int iex ) {
+            // LoopSegmentContext::getTimeOf at this tile's two boundaries.
+            SEnvelopeWindow seg;
+            seg.leftTime  = loopSegSourceTimeOf( cut, clipStart, sx, segWpx,
+                                                 segLen, isx );
+            seg.rightTime = loopSegSourceTimeOf( cut, clipStart, sx, segWpx,
+                                                 segLen, iex );
+            seg.width     = iex - isx;
+            if( collectSeg( seg, out + isx ) ) any = true;
+        } );
+    return any;
+}
+
 /**
  * Return the absolute time (in samples, for now) of the given x position.
  * We calculate it by adjusting the time given by the parent context 
@@ -424,11 +551,10 @@ offset_t SCutRendererInline::InlineRenderContext::getTimeOf( int x ) const
     // clip-relative position; there is no second stretch computation to
     // disagree with what plays. (The wave renderer subtracts the link start
     // time again, so we add it back here.)
-    int64_t rel = (int64_t) parentRC_.getTimeOf( x ) - (int64_t) clipStart_;
-    if( rel < 0 ) rel = 0;
-    // W1: map-aware conversion (piecewise when warp anchors exist).
-    return clipStart_ + (offset_t) cut_
-               .clipToSource( Fraction( rel ) ).floorToInt();
+    // ONE spelling, shared with the collect terminal (proposal 39 M1).
+    return cutSourceTimeOf( cut_, clipStart_,
+                            (int64_t) parentRC_.getTimeOf( x )
+                                - (int64_t) clipStart_ );
 }
 
 SCutRendererInline::InlineRenderContext::~InlineRenderContext()

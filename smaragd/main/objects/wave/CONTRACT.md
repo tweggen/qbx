@@ -119,5 +119,26 @@ the stored spelling and load_project_render.qxa for the legacy fallback.
 Also: record_offset_zero.qxa / record_loop_takes.qxa / record_punch.qxa
 (record_punch is the one that asserts a NON-EMPTY preview mid-take).
 
+THE COLLECT SEAM (proposal 39 M1). `swaveformdraw` now has TWO entry points
+and exactly ONE probe-producing path:
+
+  collectObjectEnvelope( obj, lk, SEnvelopeWindow, preview_t *out )
+  drawObjectWaveform   ( obj, lk, SRenderContext, QColor )   // collect + draw
+
+The collect takes a TIME WINDOW, never an `SRenderContext` — a context holds a
+`QPainter&`, so a headless caller (the `assert-envelope` verb, the folder-sum
+overlay of proposal 39 M3) could only build one over a scratch `QImage`: a
+painter that exists solely to be ignored. `drawObjectWaveform` derives the
+window from its context (`envelopeWindowOfContext`) and is otherwise unchanged,
+INCLUDING the per-probe track-volume multiply — removing that is M2's job,
+deliberately separate so M1 is verifiable as pixel- and byte-preserving.
+
+Every renderer that draws a waveform overrides `SObjectRenderer::collectEnvelope`
+by routing its EXISTING walk to the collect terminal; the base returns false and
+writes nothing, which is the right answer for an object with no waveform.
+Gates: `preview_envelope_test` (ctest — the collected probes against the DRAWN
+pixels, through the link-start fold, a cut's slip and loop tiling) and
+`envelope_probe.qxa` (the shipped renderers, end to end).
+
 Known debt: swaveformdraw is shared by other renderers (cut) — candidate
 for a render-support module when slices become real targets.

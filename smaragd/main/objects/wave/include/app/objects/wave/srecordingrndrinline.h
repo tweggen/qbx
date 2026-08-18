@@ -29,6 +29,9 @@ public:
     ~SRecordingRendererInline() override {}
 
     void draw( SLink &, SRenderContext & ) override;
+    // The collect terminal of the same walk draw() makes (proposal 39 M1). The
+    // FRONTIER rule is a paint decoration and has no envelope counterpart.
+    bool collectEnvelope( SLink &, const SEnvelopeWindow &, preview_t * ) override;
     SRecordingContent &getRecording() const
     { return (SRecordingContent &) getObject(); }
 };

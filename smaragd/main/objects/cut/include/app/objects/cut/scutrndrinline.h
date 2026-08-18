@@ -35,6 +35,19 @@ public:
     ~SCutRendererInline();
 
     virtual void draw( SLink &, SRenderContext & );
+
+    /**
+     * The COLLECT terminal of the same walk draw() makes (proposal 39 M1, D2).
+     *
+     * It is the interesting one: a cut owns the clip->source map (slip offset,
+     * stretch, warp anchors), the container/sample branch AND the loop tiling,
+     * and every one of those must come out of the collect exactly as it comes
+     * out of the paint. Each loop repetition therefore fills ITS OWN pixel span
+     * of `out` - returning tile 0's probes for every tile is the failure this
+     * shape exists to make impossible, and preview_envelope_test gates it.
+     */
+    bool collectEnvelope( SLink &, const SEnvelopeWindow &, preview_t * ) override;
+
     SCut &getCut() const { return (SCut &)getObject(); }
 
 private:

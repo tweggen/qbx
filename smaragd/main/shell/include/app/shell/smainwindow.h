@@ -10,6 +10,7 @@
 #include <QVariant>
 #include <QDoubleSpinBox>
 #include <QPointer>
+#include <vector>
 // #include <qpopupmenu.h>
 
 class SProject;
@@ -102,6 +103,22 @@ public:
     // shows two bars at their own heights rather than one folded one.
     bool grabLevelMeter( const QString &path, const twLevelSampleSet &s,
                          bool vertical, int w, int h );
+
+    // TEST ENTRY POINT (proposal 39 M1): collect the envelope a CLIP's own
+    // renderer DRAWS over a timeline window, into `out` (resized to `width`).
+    // `clipPath` is an index-path to the clip's SLink, the spelling slip-clip
+    // and assert-clip-channels use. Returns false when the path names no clip,
+    // the clip has no inline renderer, or the renderer produced no envelope
+    // (an event clip: SObjectRenderer::collectEnvelope defaults to false).
+    //
+    // Here for the same reason describeTrackHead and drag-clip-edge are:
+    // testkit may not include app/timeline (testkit CONTRACT inv. 5), and the
+    // point of the verb is that the SAME call the painter makes is what runs.
+    // It needs NO arranger and NO painter - a collect is expressed on a time
+    // window, not on a QPainter (see SEnvelopeWindow).
+    bool collectClipEnvelope( const QString &clipPath, offset_t start,
+                              length_t length, int width,
+                              std::vector<preview_t> &out );
 
     // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
     // `headHeight` and return SSMVMixerControl::describeHead() — the density

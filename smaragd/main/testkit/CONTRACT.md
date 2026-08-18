@@ -592,3 +592,26 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     `transport/preRollBars`, and each puts its own key back — the same ownership
     convention `midi_record_modes` and `record_offset_zero` follow, and the same
     `RUN_SERIAL` that makes it safe. No other case reads either key.
+
+23. `assert-envelope` (proposal 39 M1) is THE one way a script reads a DRAWN
+    envelope, and it reads it through the object's own INLINE RENDERER
+    (`SObjectRenderer::collectEnvelope`), never through `SObject::getPreview()`.
+    The difference matters: a cut's slip, its stretch and its loop tiling live
+    in `SCutRendererInline`, so a verb that went straight to the preview would
+    be a second implementation of all of them — free to agree with itself while
+    disagreeing with every pixel on screen.
+
+    It goes out through `SMainWindow::collectClipEnvelope`, the same routing
+    inv. 5 gives `drag-clip-edge` and `assert-track-head`. Note what it does NOT
+    need: no arranger and NO PAINTER. A collect is expressed on a time window
+    (`SEnvelopeWindow`), so nothing here constructs a `QPainter` over a scratch
+    image in order to ignore it.
+
+    `snapshot` / `compareTo` store a probe array under a name and later assert a
+    BYTE-IDENTICAL match. That pair is the point of the verb: it lets a case say
+    "this edit did not move one byte of the waveform" without hard-coding a
+    single expected probe. The table is process-global and lives for the run —
+    one .qxa script per process.
+
+    `mode` is `clip` today and any other value is REJECTED rather than silently
+    treated as `clip`; `mode="childSum"` arrives with proposal 39 M3.

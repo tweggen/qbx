@@ -38,6 +38,7 @@
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
+#include "app/model/sobjectrenderer.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/cut/splacerecordingaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
@@ -2068,6 +2069,46 @@ QString SMainWindow::describeTrackHead( const QString &trackPath,
     return head.describeHead();
 }
 
+
+// --- proposal 39 M1 test seam --------------------------------------------
+
+bool SMainWindow::collectClipEnvelope( const QString &clipPath, offset_t start,
+                                       length_t length, int width,
+                                       std::vector<preview_t> &out )
+{
+    out.clear();
+    if( width < 1 ) return false;
+
+    // The APP's project, not this window's: a headless --test-case run drives
+    // SApplication directly and leaves currentProject_ null (the same reason
+    // describeTrackHead reads it there).
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+    SObject *mixer = splacements::rootContainer( proj );
+    if( !mixer ) return false;
+    SLink *link = splacements::placementAt(
+        mixer, strackpath::stringToPath( clipPath ) );
+    if( !link ) return false;
+
+    // Through the RENDERER, never through the concrete object type: the canvas
+    // may not branch on what a clip IS (main/timeline/CONTRACT.md inv. 2), and
+    // a verb that did would silently disagree with the drawn clip the moment
+    // either changed.
+    SObjectRenderer *rndr = link->getSObject().getInlineRenderer();
+    if( !rndr ) return false;
+
+    SEnvelopeWindow win;
+    win.leftTime  = start;
+    win.rightTime = start + ( length > 0 ? length : 1 );
+    win.width     = width;
+
+    out.assign( (size_t) width, preview_t{ 0, 0 } );
+    if( !rndr->collectEnvelope( *link, win, out.data() ) ) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
 
 // --- proposal 37 P6 test seams -------------------------------------------
 
