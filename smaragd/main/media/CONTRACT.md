@@ -41,10 +41,25 @@ browses a remote source in a headless gate.
 
 **What that does NOT mean:** the server on the other end is
 `main/testkit`'s `SWebDavStub`. Plain HTTP, no TLS, no redirects, no rate
-limiting, no `WWW-Authenticate` challenge and no real authentication at all
-(it never inspects the `Authorization` header it is sent), one canonical
-PROPFIND dialect. Everything gated is OUR half of the conversation; a real
-Nextcloud server stays the manual runbook's job (§C.6, gate 6).
+limiting, no `WWW-Authenticate` challenge, one canonical PROPFIND dialect.
+Everything gated is OUR half of the conversation; a real Nextcloud server
+stays the manual runbook's job (`docs/MEDIA_BROWSER_MANUAL_GATE.md`).
+
+**THE CREDENTIAL IS CHECKED, since gate 6, and it was not before.** Gate 5c
+shipped a stub that never inspected the `Authorization` header it was sent, so
+the chain `SSecretStore` -> `smedia::CredentialProvider` -> `SWebDavClient`'s
+header -> the wire was EXERCISED end to end and never VERIFIED: those same
+files would have been served just as happily for an empty or malformed header,
+and "the credential path works" was an assumption inside a suite whose whole
+purpose is to remove assumptions. `SWebDavStub::setExpectedAuthorization()`
+(driven by `media-webdav-stub expectAuth=`) now answers **401** to any request
+whose header is not byte-for-byte the value the case wrote down, ahead of any
+injected fault. `qxa.media_webdav_browse` sets it to `Basic
+cXhhdXNlcjpxeGFwYXNz` for every PROPFIND it makes and carries the negative
+control — a wrong password is a banner, not a silent pass — without which a
+stub that ignored the setting would pass every row count in the file. It is
+still an exact string compare against one value, and nothing like a real
+server's authentication.
 
 Depends on (engine): tw/core, tw/graph (the base every app module gets).
 `tw/core/twlog.h` is the only one actually used. It must NEVER grow an edge to

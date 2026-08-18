@@ -113,6 +113,11 @@ void SWebDavStub::setNamespacePrefix( const QString &prefix )
     namespacePrefix_ = prefix;
 }
 
+void SWebDavStub::setExpectedAuthorization( const QString &headerValue )
+{
+    expectedAuth_ = headerValue;
+}
+
 void SWebDavStub::setResponseDelayMs( int ms )
 {
     responseDelayMs_ = qMax( 0, ms );
@@ -190,7 +195,8 @@ void SWebDavStub::onReadyRead( Conn *conn )
     const QString method  = parts.at( 0 ).toUpper();
     const QString rawPath = parts.at( 1 );
 
-    qint64 contentLength = 0;
+    qint64  contentLength = 0;
+    QString authorization;              // "" also means "the client sent none"
     for( int i = 1; i < lines.size(); ++i ) {
         const QString line = QString::fromLatin1( lines.at( i ) ).trimmed();
         const int     colon = line.indexOf( QLatin1Char( ':' ) );
@@ -198,6 +204,12 @@ void SWebDavStub::onReadyRead( Conn *conn )
         const QString key = line.left( colon ).trimmed().toLower();
         if( key == QLatin1String( "content-length" ) ) {
             contentLength = line.mid( colon + 1 ).trimmed().toLongLong();
+        } else if( key == QLatin1String( "authorization" ) ) {
+            // The VALUE, verbatim apart from the surrounding whitespace HTTP
+            // allows. Never logged, never echoed into a response body: it
+            // carries base64(user:password) and §B.8 rule 2 forbids a secret
+            // reaching a log even from the test half of the wire.
+            authorization = line.mid( colon + 1 ).trimmed();
         }
     }
 
@@ -210,7 +222,7 @@ void SWebDavStub::onReadyRead( Conn *conn )
     // our tests, but harmless to support) starts clean.
     conn->inBuffer.remove( 0, bodyStart + contentLength );
 
-    handleRequest( conn, method, rawPath );
+    handleRequest( conn, method, rawPath, authorization );
 }
 
 QString SWebDavStub::normalisedRequestPath( const QString &rawPath ) const
@@ -225,7 +237,8 @@ QString SWebDavStub::normalisedRequestPath( const QString &rawPath ) const
     return p;
 }
 
-void SWebDavStub::handleRequest( Conn *conn, const QString &method, const QString &rawPath )
+void SWebDavStub::handleRequest( Conn *conn, const QString &method, const QString &rawPath,
+                                 const QString &authorization )
 {
     const QString path = normalisedRequestPath( rawPath );
 
@@ -234,7 +247,13 @@ void SWebDavStub::handleRequest( Conn *conn, const QString &method, const QStrin
     ++activeCount_;
     peakConcurrent_ = qMax( peakConcurrent_, activeCount_ );
 
-    const Fault fault = faultFor( path );
+    // The credential is checked BEFORE the injected fault, because that is the
+    // order a real server works in: a request that cannot authenticate is
+    // rejected before anything decides what it was asking for. The request is
+    // still COUNTED above -- gate 4's "the stub counts requests" exists to
+    // prove a 401 was asked for exactly once.
+    Fault fault = faultFor( path );
+    if( !expectedAuth_.isEmpty() && authorization != expectedAuth_ ) fault = Fault::Status401;
     const int   delay = responseDelayMs_;
 
     if( delay > 0 ) {

@@ -9,8 +9,11 @@
 // one of these per Nextcloud account, the dock browses and searches it
 // (qxa.media_webdav_browse) and a drop out of it places a clip whose rendered
 // audio is asserted (qxa.media_webdav_drop). What is still stubbed is the
-// SERVER -- main/testkit's SWebDavStub is plain HTTP with no TLS, no redirects
-// and no real authentication -- see main/media/CONTRACT.md.
+// SERVER -- main/testkit's SWebDavStub is plain HTTP with no TLS and no
+// redirects; since gate 6 it does compare the Authorization header against one
+// exact expected value, which is what makes the browse case a statement about
+// the credential and is still nothing like a real server's authentication.
+// See main/media/CONTRACT.md.
 
 #ifndef SWEBDAVMEDIASOURCE_H
 #define SWEBDAVMEDIASOURCE_H

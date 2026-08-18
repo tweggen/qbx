@@ -57,9 +57,16 @@
   WHAT IS NOT PINNED HERE
 
    * THE STUB IS NOT A NEXTCLOUD SERVER: plain HTTP, no TLS, no redirects, no
-     rate limiting, no WWW-Authenticate challenge and NO REAL AUTHENTICATION (it
-     never inspects the Authorization header it is sent), one canonical PROPFIND
-     dialect. A real server is the manual runbook's job (§C.6 / gate 6).
+     rate limiting, no WWW-Authenticate challenge, one canonical PROPFIND
+     dialect. A real server is the manual runbook's job
+     (docs/MEDIA_BROWSER_MANUAL_GATE.md).
+   * THE CREDENTIAL, here. Since gate 6 the stub CAN demand an exact
+     Authorization header value (`media-webdav-stub expectAuth=`), and
+     media_webdav_browse.qxa uses it so that its green rows are a statement
+     about the bytes on the wire. THIS case deliberately does not: what it
+     gates is the fetch/cache/copy/place chain, and one case carrying the
+     credential proof is enough - a second copy of it would only be a second
+     place to keep the base64 literal in step.
    * A download big or slow enough to be interesting. 768 KB over loopback is not
      a network; fetchProgress, a mid-body close and a cancelled GET are gate 4's
      unit test, against this same stub.

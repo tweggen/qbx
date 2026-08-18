@@ -437,18 +437,39 @@ private:
 //                          case restores the healthy server with one line
 //   faultPath  = ""        the request path the fault applies to ("" = the root
 //                          listing)
+//   expectAuth = ""        THE `Authorization` HEADER VALUE THE SERVER DEMANDS,
+//                          in full ("Basic <base64 of user:password>"). Empty =
+//                          the header is not inspected at all, which is the
+//                          pre-gate-6 behaviour every other case relies on.
+//                          When it is set, any request whose header does not
+//                          match EXACTLY is answered 401 -- ahead of `fault=`,
+//                          because a real server rejects a credential before it
+//                          dispatches a method.
+//
+//                          IT IS NOT STICKY, exactly as `fault=` is not: each
+//                          invocation states the server's whole state, so a
+//                          later `<media-webdav-stub fault="500" …/>` that does
+//                          not repeat it clears it. Spelling the base64 LITERAL
+//                          in the case is the point -- deriving it here from
+//                          user=/password= would be a second implementation of
+//                          SMediaAccountManager::basicHeader() checking itself,
+//                          whereas a literal is what makes a green browse a
+//                          statement about the BYTES on the wire.
 //
 // THE STUB IS NOT A NEXTCLOUD SERVER. Plain HTTP with no TLS, no redirects, no
-// rate limiting, no real authentication (it never inspects the Authorization
-// header it is sent) and one canonical PROPFIND dialect. What it gates is OUR
-// half of the conversation; a real server is the manual runbook's job (§C.6).
+// rate limiting, no WWW-Authenticate challenge and one canonical PROPFIND
+// dialect. Since gate 6 it DOES check the credential when `expectAuth=` says
+// to -- an exact string compare against one header value, which is the whole of
+// its "authentication" and nothing like a real server's. What it gates is OUR
+// half of the conversation; a real server is the manual runbook's job (§C.6,
+// docs/MEDIA_BROWSER_MANUAL_GATE.md).
 class SMediaWebDavStubAction : public SAction {
 public:
     QString name() const override
     { return QStringLiteral( "media-webdav-stub" ); }
     QStringList knownAttributes() const override
     { return { "action", "fixtureDir", "accountId", "user", "password",
-               "remember", "fault", "faultPath" }; }
+               "remember", "fault", "faultPath", "expectAuth" }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -462,6 +483,7 @@ private:
     bool    remember_   = false;
     QString fault_;
     QString faultPath_;
+    QString expectAuth_;
 };
 
 #endif  // SMEDIATESTACTIONS_H

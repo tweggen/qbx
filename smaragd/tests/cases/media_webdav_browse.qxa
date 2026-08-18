@@ -57,7 +57,20 @@
      SEARCH with a 501 cannot break it). Recursive finds every .wav in the tree
      ("a" is in ".wav"); non-recursive finds the two directly in the root; a
      directory is never a result however well its name matches.
-  5. A SERVER FAULT IS A BANNER, not an empty folder. The stub is told to answer
+  5. THE CREDENTIAL REACHES THE WIRE, BYTE FOR BYTE. Every PROPFIND below is
+     made against a stub that demands `Basic cXhhdXNlcjpxeGFwYXNz` - the base64
+     of `qxauser:qxapass`, the exact pair `media-webdav-stub` handed to
+     SMediaAccountManager::setAccount() - and answers 401 to anything else. So
+     every green row count above is also a statement about the bytes in the
+     Authorization header, not merely about the PROPFIND parser. The literal is
+     spelled out rather than derived: deriving it would be a second copy of
+     SMediaAccountManager::basicHeader() checking itself.
+
+     Item (6) is its NEGATIVE CONTROL, and it is not optional - without it a
+     stub that silently ignored expectAuth= would pass every assertion in this
+     file, which is precisely the failure gate 6 exists to close.
+
+  6. A SERVER FAULT IS A BANNER, not an empty folder. The stub is told to answer
      500 for `sub`, the panel browses there, and the inline banner (§B.4) comes
      up with zero rows; clearing the fault and browsing back clears it. The
      assertion is on the banner FLAG and the row count, not on the message text
@@ -67,12 +80,16 @@
   WHAT IS NOT PINNED HERE, and it matters more than usual:
 
    * THE STUB IS NOT A NEXTCLOUD SERVER. Plain HTTP: no TLS (so no certificate
-     validation and no TLS-error surfacing), no redirects, no rate limiting, no
-     WWW-Authenticate challenge, and NO REAL AUTHENTICATION AT ALL - it never
-     inspects the Authorization header it is sent, so nothing here proves the
-     credential reached the wire in a form a server would accept. One canonical
-     PROPFIND dialect, not Nextcloud's. All of that is the manual runbook's job
-     (§C.6 / gate 6).
+     validation and no TLS-error surfacing), no redirects, no rate limiting and
+     no WWW-Authenticate challenge; one canonical PROPFIND dialect, not
+     Nextcloud's. All of that is the manual runbook's job (§C.6,
+     docs/MEDIA_BROWSER_MANUAL_GATE.md).
+
+     What it DOES check since gate 6 is the credential - see (6). Gate 5c
+     shipped without that and its own PR body named the hole: the chain
+     SSecretStore -> smedia::CredentialProvider -> SWebDavClient's header ->
+     the wire was exercised end to end and never verified, because the stub
+     would have served these same files just as happily for an empty header.
    * Pixels. The panel is built off screen and never shown (trap T10);
      describe() is the oracle and paintEvent is not exercised.
    * The 401-does-not-retry rule, the mid-body close, the in-flight cap and the
@@ -104,7 +121,8 @@
     <!-- (1) The stub, the fixture tree, and the account - one verb, because the
          port only exists once the server is listening. -->
     <media-webdav-stub accountId="qxastub" fixtureDir="../media/lib"
-                       user="qxauser" password="qxapass" remember="0"/>
+                       user="qxauser" password="qxapass" remember="0"
+                       expectAuth="Basic cXhhdXNlcjpxeGFwYXNz"/>
     <!-- The account IS in the model the source combo is built from. No
          accountCount= here on purpose: this INI is the developer's own and
          may legitimately hold their real accounts too. -->
@@ -170,12 +188,36 @@
     <!-- (5) A 500 from the server is a BANNER, not an empty folder. Re-listing
          the SAME path is what re-issues the PROPFIND: setBrowsePath() has no
          same-path early-out, on purpose (it is what the Retry button rides on). -->
-    <media-webdav-stub fault="500" faultPath="sub"/>
+    <media-webdav-stub fault="500" faultPath="sub"
+                       expectAuth="Basic cXhhdXNlcjpxeGFwYXNz"/>
     <media-browser-path path="sub" waitMs="10000"/>
     <assert-media-browser rowCount="0" contains="|banner=1|"/>
 
-    <!-- ...and an empty fault= restores the healthy server in one line. -->
-    <media-webdav-stub fault=""/>
+    <!-- ...and an empty fault= restores the healthy server in one line.
+         expectAuth= is repeated because it is NOT sticky either: one
+         invocation states the server's whole state. -->
+    <media-webdav-stub fault="" expectAuth="Basic cXhhdXNlcjpxeGFwYXNz"/>
+    <media-browser-path path="sub" waitMs="10000"/>
+    <assert-media-browser rowCount="2" contains="|banner=0|error="/>
+    <assert-media-browser contains="hat.wav,768044,0"/>
+
+    <!-- (6) THE NEGATIVE CONTROL FOR THE CREDENTIAL. The server is told to
+         demand base64("qxauser:wrong") instead; the account still holds
+         "qxapass", so the header the client actually sends no longer matches
+         and every PROPFIND comes back 401. A WRONG PASSWORD IS A VISIBLE
+         FAILURE, not a silent pass - which is the assertion that stops a stub
+         ignoring expectAuth= from making every row count above vacuous. It
+         also pins that the PASSWORD is compared and not merely the presence
+         of a header: the two spellings share their first eleven base64
+         characters, the encoding of the "qxauser:" half. -->
+    <media-webdav-stub expectAuth="Basic cXhhdXNlcjp3cm9uZw=="/>
+    <media-browser-path path="sub" waitMs="10000"/>
+    <assert-media-browser rowCount="0" contains="|banner=1|"/>
+
+    <!-- ...and the right credential brings the listing straight back. A 401 is
+         reported ONCE and nothing retries (§B.7), so there is no session state
+         to clear here - which is itself worth pinning. -->
+    <media-webdav-stub expectAuth="Basic cXhhdXNlcjpxeGFwYXNz"/>
     <media-browser-path path="sub" waitMs="10000"/>
     <assert-media-browser rowCount="2" contains="|banner=0|error="/>
     <assert-media-browser contains="hat.wav,768044,0"/>

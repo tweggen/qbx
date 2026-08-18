@@ -913,6 +913,12 @@ SApplyResult SMediaWebDavStubAction::apply( SProject * /*project*/ )
     g_stub->clearFaults();
     if( fault != SWebDavStub::Fault::None ) g_stub->setFault( faultPath_, fault );
 
+    // The credential the server demands. Set unconditionally (empty = do not
+    // inspect the header), so one invocation states the whole of the server's
+    // state -- the same rule `fault=` follows, and the reason neither is
+    // sticky.
+    g_stub->setExpectedAuthorization( expectAuth_ );
+
     if( !accountId_.isEmpty() ) {
         // THE PORT IS WRITTEN WHERE THE FLOW READS IT (see the header): a .qxa
         // cannot interpolate a run-time value into a later attribute, so the
@@ -946,6 +952,7 @@ void SMediaWebDavStubAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "remember", remember_ ? "1" : "0" );
     elem.setAttribute( "fault", fault_ );
     elem.setAttribute( "faultPath", faultPath_ );
+    elem.setAttribute( "expectAuth", expectAuth_ );
 }
 
 bool SMediaWebDavStubAction::readXml( const QDomElement &elem, int )
@@ -958,6 +965,7 @@ bool SMediaWebDavStubAction::readXml( const QDomElement &elem, int )
     remember_   = elem.attribute( "remember", "0" ) != "0";
     fault_      = elem.attribute( "fault" );
     faultPath_  = elem.attribute( "faultPath" );
+    expectAuth_ = elem.attribute( "expectAuth" );
     if( action_ != QLatin1String( "start" ) && action_ != QLatin1String( "stop" ) ) {
         qWarning() << "media-webdav-stub: action= must be start or stop, not" << action_;
         return false;
