@@ -1,6 +1,8 @@
 #include "app/testkit/slivetestactions.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 
 #include <QDebug>
@@ -506,6 +508,236 @@ bool SAssertAudioOnsetAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+// --- assert-metronome-clicks ------------------------------------------------
+
+QStringList SAssertMetronomeClicksAction::knownAttributes() const
+{
+    return { QStringLiteral( "filename" ),      QStringLiteral( "channel" ),
+             QStringLiteral( "startFrame" ),    QStringLiteral( "threshold" ),
+             QStringLiteral( "window" ),        QStringLiteral( "minGapFrames" ),
+             QStringLiteral( "count" ),         QStringLiteral( "minCount" ),
+             QStringLiteral( "maxCount" ),      QStringLiteral( "accentEvery" ),
+             QStringLiteral( "intervalFrames" ),
+             QStringLiteral( "toleranceFrames" ), QStringLiteral( "accentRatio" ),
+             QStringLiteral( "silenceMaxRms" ), QStringLiteral( "firstFrame" ),
+             QStringLiteral( "firstTolerance" ) };
+}
+
+SApplyResult SAssertMetronomeClicksAction::apply( SProject *project )
+{
+    if( filename_.isEmpty() ) {
+        qWarning() << "assert-metronome-clicks: filename is required";
+        return { false, nullptr };
+    }
+    QString path;
+    if( !resolveOrReject( filename_, project, "assert-metronome-clicks", path ) )
+        return { false, nullptr };
+
+    std::string err;
+    int rate = 0;
+    std::vector<float> pcm;
+    if( !audio::readAudioRegion( path.toStdString(), startFrame_, -1, channel_,
+                                 pcm, rate, err ) ) {
+        qWarning() << "assert-metronome-clicks: cannot read" << path
+                   << QString::fromStdString( err );
+        return { false, nullptr };
+    }
+
+    const qint64 w   = window_ > 0 ? window_ : 64;
+    const qint64 gap = minGapFrames_ > 0 ? minGapFrames_ : 1;
+    const qint64 n   = (qint64) pcm.size();
+
+    // ONE PASS, running-window RMS, with a dead time after each hit so a 20 ms
+    // click is one event rather than a few hundred.
+    std::vector<qint64>  onsets;
+    std::vector<double>  peaks;
+    for( qint64 i = 0; i + w <= n; ++i ) {
+        double sum = 0.0;
+        for( qint64 k = 0; k < w; ++k ) sum += (double) pcm[i + k] * pcm[i + k];
+        if( std::sqrt( sum / (double) w ) < threshold_ ) continue;
+        onsets.push_back( startFrame_ + i );
+        double pk = 0.0;
+        for( qint64 k = i; k < std::min( n, i + gap ); ++k )
+            pk = std::max( pk, (double) std::fabs( pcm[(std::size_t) k] ) );
+        peaks.push_back( pk );
+        i += gap;                       // the dead time
+    }
+
+    QStringList report;
+    for( std::size_t k = 0; k < onsets.size(); ++k )
+        report << QStringLiteral( "%1@%2(pk %3)" )
+                      .arg( k ).arg( onsets[k] )
+                      .arg( QString::number( peaks[k], 'f', 4 ) );
+    qInfo().noquote() << QStringLiteral(
+        "assert-metronome-clicks: %1 -> %2 click(s) at %3 Hz: %4" )
+        .arg( filename_ ).arg( onsets.size() ).arg( rate )
+        .arg( report.join( QStringLiteral( ", " ) ) );
+
+    if( count_ >= 0 && (int) onsets.size() != count_ ) {
+        qWarning() << "assert-metronome-clicks: expected" << count_
+                   << "click(s), found" << onsets.size();
+        return { false, nullptr };
+    }
+    if( minCount_ >= 0 && (int) onsets.size() < minCount_ ) {
+        qWarning() << "assert-metronome-clicks:" << onsets.size() << "click(s) <"
+                   << minCount_;
+        return { false, nullptr };
+    }
+    if( maxCount_ >= 0 && (int) onsets.size() > maxCount_ ) {
+        qWarning() << "assert-metronome-clicks:" << onsets.size() << "click(s) >"
+                   << maxCount_;
+        return { false, nullptr };
+    }
+    if( onsets.empty() ) return { true, nullptr };
+
+    if( firstFrame_ >= 0 && firstTolerance_ >= 0 ) {
+        const qint64 d = std::llabs( onsets[0] - firstFrame_ );
+        qInfo().noquote() << QStringLiteral(
+            "assert-metronome-clicks: first onset %1, expected %2, error %3 frames" )
+            .arg( onsets[0] ).arg( firstFrame_ ).arg( d );
+        if( d > firstTolerance_ ) {
+            qWarning() << "assert-metronome-clicks: first onset off by" << d
+                       << ">" << firstTolerance_;
+            return { false, nullptr };
+        }
+    }
+
+    // THE GRID, anchored on the first onset (see the header for why).
+    if( intervalFrames_ > 0 && onsets.size() >= 2 ) {
+        qint64 worst = 0;
+        QStringList errs;
+        for( std::size_t k = 1; k < onsets.size(); ++k ) {
+            const qint64 ideal = onsets[0] + (qint64) k * intervalFrames_;
+            const qint64 e     = onsets[k] - ideal;
+            errs << QString::number( e );
+            worst = std::max( worst, std::llabs( e ) );
+        }
+        qInfo().noquote() << QStringLiteral(
+            "assert-metronome-clicks: grid errors (frames) = [%1], worst |%2| "
+            "against %3" )
+            .arg( errs.join( QStringLiteral( ", " ) ) )
+            .arg( worst ).arg( tolerance_ );
+        if( worst > tolerance_ ) {
+            qWarning() << "assert-metronome-clicks: worst grid error" << worst
+                       << ">" << tolerance_;
+            return { false, nullptr };
+        }
+    }
+
+    // THE BAR ACCENT. The phase is SEARCHED rather than assumed to be 0: which
+    // beat of the bar the first SUMMED ring entry carries depends on when the
+    // device started draining, which is the box's business. What is the CODE's
+    // business, and is what this asserts, is that one click in every `every` is
+    // louder than every other one by at least `accentRatio`.
+    if( accentRatio_ > 0.0 && accentEvery_ > 1
+        && (int) onsets.size() >= accentEvery_ + 1 ) {
+        double best = -1.0;
+        int    bestPhase = -1;
+        for( int ph = 0; ph < accentEvery_; ++ph ) {
+            double minAcc = 1e30, maxOth = 0.0;
+            int    nAcc = 0, nOth = 0;
+            // FROM 1: the first click of a live-lane session sits inside the
+            // RT's fade-in ramp and is attenuated by construction.
+            for( std::size_t k = 1; k < peaks.size(); ++k ) {
+                if( (int) ( k % (std::size_t) accentEvery_ ) == ph ) {
+                    minAcc = std::min( minAcc, peaks[k] ); ++nAcc;
+                } else {
+                    maxOth = std::max( maxOth, peaks[k] ); ++nOth;
+                }
+            }
+            if( nAcc == 0 || nOth == 0 || maxOth <= 0.0 ) continue;
+            const double r = minAcc / maxOth;
+            if( r > best ) { best = r; bestPhase = ph; }
+        }
+        qInfo().noquote() << QStringLiteral(
+            "assert-metronome-clicks: accent ratio = %1 at phase %2 (>= %3)" )
+            .arg( QString::number( best, 'f', 4 ) ).arg( bestPhase )
+            .arg( QString::number( accentRatio_, 'f', 4 ) );
+        if( best < accentRatio_ ) {
+            qWarning() << "assert-metronome-clicks: best accent ratio" << best
+                       << "<" << accentRatio_;
+            return { false, nullptr };
+        }
+    }
+
+    // SILENCE BETWEEN THE CLICKS. Without it "four clicks" is satisfied by a
+    // continuous tone with four louder moments in it.
+    if( silenceMaxRms_ > 0.0 && onsets.size() >= 2 ) {
+        double worst = 0.0;
+        for( std::size_t k = 0; k + 1 < onsets.size(); ++k ) {
+            const qint64 a = onsets[k] + gap - startFrame_;
+            const qint64 b = onsets[k + 1] - startFrame_;
+            if( b - a < 2 * w ) continue;
+            // The MIDDLE of the gap: the click's own decay tail lives at the
+            // start of it, and a release ramp is not a failure.
+            const qint64 from = a + ( b - a ) / 3;
+            const qint64 to   = b - ( b - a ) / 8;
+            double sum = 0.0;
+            qint64 cnt = 0;
+            for( qint64 i = from; i < to && i < n; ++i, ++cnt )
+                sum += (double) pcm[(std::size_t) i] * pcm[(std::size_t) i];
+            if( cnt <= 0 ) continue;
+            worst = std::max( worst, std::sqrt( sum / (double) cnt ) );
+        }
+        qInfo().noquote() << QStringLiteral(
+            "assert-metronome-clicks: loudest inter-click RMS = %1 (< %2)" )
+            .arg( QString::number( worst, 'f', 6 ) )
+            .arg( QString::number( silenceMaxRms_, 'f', 6 ) );
+        if( worst >= silenceMaxRms_ ) {
+            qWarning() << "assert-metronome-clicks: inter-click RMS" << worst
+                       << ">=" << silenceMaxRms_;
+            return { false, nullptr };
+        }
+    }
+    return { true, nullptr };
+}
+
+void SAssertMetronomeClicksAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "filename", filename_ );
+    elem.setAttribute( "channel", channel_ );
+    elem.setAttribute( "startFrame", QString::number( startFrame_ ) );
+    elem.setAttribute( "threshold", QString::number( threshold_ ) );
+    elem.setAttribute( "window", QString::number( window_ ) );
+    elem.setAttribute( "minGapFrames", QString::number( minGapFrames_ ) );
+    if( count_ >= 0 )         elem.setAttribute( "count", count_ );
+    if( minCount_ >= 0 )      elem.setAttribute( "minCount", minCount_ );
+    if( maxCount_ >= 0 )      elem.setAttribute( "maxCount", maxCount_ );
+    if( accentEvery_ > 0 )    elem.setAttribute( "accentEvery", accentEvery_ );
+    if( intervalFrames_ > 0 ) elem.setAttribute( "intervalFrames",
+                                                 QString::number( intervalFrames_ ) );
+    elem.setAttribute( "toleranceFrames", QString::number( tolerance_ ) );
+    if( accentRatio_ > 0.0 )   elem.setAttribute( "accentRatio",
+                                                  QString::number( accentRatio_ ) );
+    if( silenceMaxRms_ > 0.0 ) elem.setAttribute( "silenceMaxRms",
+                                                  QString::number( silenceMaxRms_ ) );
+    if( firstFrame_ >= 0 )     elem.setAttribute( "firstFrame",
+                                                  QString::number( firstFrame_ ) );
+    if( firstTolerance_ >= 0 ) elem.setAttribute( "firstTolerance",
+                                                  QString::number( firstTolerance_ ) );
+}
+
+bool SAssertMetronomeClicksAction::readXml( const QDomElement &elem, int )
+{
+    filename_       = elem.attribute( "filename", "" );
+    channel_        = elem.attribute( "channel", "0" ).toInt();
+    startFrame_     = elem.attribute( "startFrame", "0" ).toLongLong();
+    threshold_      = elem.attribute( "threshold", "0.05" ).toDouble();
+    window_         = elem.attribute( "window", "64" ).toLongLong();
+    minGapFrames_   = elem.attribute( "minGapFrames", "4800" ).toLongLong();
+    count_          = elem.attribute( "count", "-1" ).toInt();
+    minCount_       = elem.attribute( "minCount", "-1" ).toInt();
+    maxCount_       = elem.attribute( "maxCount", "-1" ).toInt();
+    accentEvery_    = elem.attribute( "accentEvery", "0" ).toInt();
+    intervalFrames_ = elem.attribute( "intervalFrames", "0" ).toLongLong();
+    tolerance_      = elem.attribute( "toleranceFrames", "1024" ).toLongLong();
+    accentRatio_    = elem.attribute( "accentRatio", "0" ).toDouble();
+    silenceMaxRms_  = elem.attribute( "silenceMaxRms", "0" ).toDouble();
+    firstFrame_     = elem.attribute( "firstFrame", "-1" ).toLongLong();
+    firstTolerance_ = elem.attribute( "firstTolerance", "-1" ).toLongLong();
+    return true;
+}
+
 static const bool s_reg_live_test_actions = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-monitor-latency" ),
@@ -522,4 +754,7 @@ static const bool s_reg_live_test_actions = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-audio-onset" ),
         []{ return new SAssertAudioOnsetAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "assert-metronome-clicks" ),
+        []{ return new SAssertMetronomeClicksAction; } ),
     true );
