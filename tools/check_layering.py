@@ -129,6 +129,13 @@ APP_DEPS = {
     # `model` only, and it must never grow an edge to objects/* -- a provider
     # that knows what an SCut is has started doing the dock's job. The DOCK is
     # a separate module (main/mediabrowser, app_ui) that gate 2 adds.
+    # `media` gained the cache and the drop helper in gate 3. It still sees
+    # `model` ONLY, and that is not a taste -- app/media is app_core and
+    # SAddSampleAction is app_objects, one LAYER up, so the placement cannot be
+    # constructed here at all. It is a HOOK the shell installs
+    # (smediadrop::setPlacementHook), exactly as the shell injects the plugin
+    # scan cache's path. A provider that knew what an SCut is would have started
+    # doing the dock's job.
     'media':          {'model'},
     # mediabrowser (proposal 38 gate 2) is the DOCK and nothing else. It sees
     # `media` (the provider ABI it drives), `shell` (SSettings, for the four
@@ -145,9 +152,13 @@ APP_DEPS = {
     'selection':      {'actions', 'model'},
     # timeline + objects/midi since proposal 37 P1: the Clip Properties dock
     # grows an SMidiCut page, and the ruler's Set BPM commits through set-tempo.
-    'timeline':       {'actions', 'model', 'objects/cut', 'objects/midi',
-                       'objects/mixer', 'objects/track', 'objects/wave',
-                       'pluginui', 'servicesui', 'shell'},
+    # timeline + media since proposal 38 gate 3: dropEvent's ONE new branch
+    # (five lines) hands a `media:` payload to smediadrop::placeWhenLocal. The
+    # arranger never learns what a source or a cache is -- the payload is the
+    # whole interface, the same way it already is for `file:` and `asset:`.
+    'timeline':       {'actions', 'media', 'model', 'objects/cut',
+                       'objects/midi', 'objects/mixer', 'objects/track',
+                       'objects/wave', 'pluginui', 'servicesui', 'shell'},
     'pluginui':       {'model', 'objects/mixer', 'objects/track', 'shell'},
     # eventui (proposal 37 P4) sits at the RANK of pluginui: a UI slice that
     # edits ONE object kind through the action system and is hosted by the
@@ -172,12 +183,16 @@ APP_DEPS = {
     # SEVENTH dock, created in SMainWindow's ctor like every other one (shell
     # CONTRACT inv. 4 -- restoreWindowLayout() runs later and can only restore
     # docks that already exist).
-    # shell + media since proposal 38 GATE 5b: SMediaAccountManager
-    # implements smedia::CredentialProvider (app/media/smediacredentials.h)
-    # and owns the SWebDavMediaSource instances it registers with
-    # SMediaRegistry -- the composition root implementing what `media`
-    # only declares the seam for. `APP_DEPS` is NOT transitive, so `shell`
-    # needs its own edge here even though `mediabrowser` already has one.
+    # shell + media since proposal 38 gates 3 and 5b. The shell is the
+    # composition root for the whole media layer: it installs smediadrop's
+    # placement and status hooks and pushes the cache its root + cap (gate 3 --
+    # it is the only place that sees BOTH app/media and SAddSampleAction, which
+    # live one layer apart), and SMediaAccountManager implements
+    # smedia::CredentialProvider and owns the SWebDavMediaSource instances it
+    # registers with SMediaRegistry (gate 5b -- the composition root
+    # implementing what `media` only declares the seam for). `APP_DEPS` is NOT
+    # transitive, so `shell` needs its own edge here even though `mediabrowser`
+    # already has one.
     'shell':          {'actions', 'eventui', 'media', 'mediabrowser', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
                        'objects/track', 'objects/wave', 'persistence',

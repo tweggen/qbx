@@ -51,6 +51,7 @@ class QTimer;
 class QToolButton;
 class QTreeWidgetItem;
 
+class SDelayedLocalSource;
 class SLocalMediaSource;
 class SMediaSource;
 class SMediaBrowserPanel;
@@ -199,6 +200,9 @@ private:
 
     SMediaSource      *source_      = nullptr;   // not owned (the registry's)
     SLocalMediaSource *localSource_ = nullptr;   // owned by THIS panel
+    // The gate-3 test provider, present ONLY under SMARAGD_MEDIA_TEST_SOURCE=1.
+    // Also owned by this panel.
+    SDelayedLocalSource *delayedSource_ = nullptr;
 
     // Supersession (inv. 2): the id of the ROOT request being displayed, and
     // the pending lazy expands. A batch tagged with anything else is dropped.

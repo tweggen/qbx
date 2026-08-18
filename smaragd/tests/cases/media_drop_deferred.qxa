@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 gate 3. DROP A FILE THAT IS NOT YET ON THIS MACHINE, and get the
+  clip when it lands - as one undo step, on the track the drop named, and
+  nowhere at all when the fetch fails or the target went away.
+
+  Everything here runs through production code. `media-browser-drag` builds the
+  REAL QMimeData the panel's startDrag() builds - now "media:<uri>" under
+  application/x-smaragd-resource, because the source reports NeedsFetch - and
+  hands it to the REAL SMVActualView::dropEvent, whose ONE new branch (five
+  lines) calls smediadrop::placeWhenLocal. The placement is the SAME
+  SAddSampleAction the `file:` branch has always submitted; there is no new
+  action type anywhere in gate 3.
+
+  THE SOURCE IS `testdelay` (SDelayedLocalSource), registered only under
+  SMARAGD_MEDIA_TEST_SOURCE=1, which the CTest entry sets. It reads the same
+  committed fixture tree the local provider does, reports NeedsFetch, and
+  copies after a configurable delay with a configurable failure - the same
+  instinct as twtestclap. Gate 3 has no network, so without it the deferred
+  branch could only be tested against a real server's timing.
+
+  THE CACHE IS PER CASE AND EMPTIED FIRST: the CTest entry sets
+  SMARAGD_MEDIA_CACHE_DIR into this case's own test-output directory, and
+  `media-test-source clearCache="1"` empties it. Both are needed. The knob keeps
+  another process under `ctest -j4` out of it; the clear keeps the PREVIOUS RUN
+  of this same case out of it, without which every `fetches=` below would read
+  one number on a cold box and another on the second run - the exact shape of a
+  gate that passes once and then quietly stops meaning anything.
+
+  WHAT IT PINS
+
+  1. AC 3 + AC 6. Two drops of an UNCACHED ref, issued back to back onto two
+     DIFFERENT tracks. Neither places anything before the fetch lands
+     (delayMs=800 - the drop handler returns first, which is what "deferred"
+     MEANS), and when it does there are TWO clips, each at exactly the frame
+     and on exactly the track its own drop named. Not one, and not three: the
+     pending list is keyed by PLACEMENT, not by ref.
+
+     TWO DIFFERENT TRACKS ON PURPOSE, and this cost a flake to learn: two
+     concurrent deferred placements land in FETCH-COMPLETION order, which is
+     not the order they were dropped in. With both on one track the case
+     asserted `clip 0,0 startTime=48000` and got 192000 in 4 runs out of 10 -
+     the assertion was about the arrival ORDER, which nothing promises, rather
+     than about the placement, which everything does. One clip per track states
+     the real claim and is exact on every run.
+  2. AC 2. A THIRD drop of the same ref, now cached, places SYNCHRONOUSLY - the
+     clip is asserted BEFORE media-drop-wait runs at all - and `fetches` does
+     not move. That is the no-re-fetch claim end to end, through a real
+     provider, rather than through a counter on the cache.
+  3. Each placement is exactly ONE undo step: three drops, three undos, no
+     clips left.
+  4. AC 4. A fetch told to FAIL places nothing, logs an error, and leaves the
+     clip count where it was.
+  5. AC 5a (trap T18). The target track is REMOVED while the fetch is in
+     flight. Nothing is placed - not on the removed track and not on whichever
+     track now sits at the index-path the drop resolved to. This is the whole
+     reason a pending placement holds the target's IDENTITY: an index-path is a
+     position in a tree the user is free to edit during a 40 MB download, and a
+     clip landing silently on the WRONG lane is worse than not landing at all.
+     `remove-track` is undoable and PINS the removed track on the action object,
+     so the track is still ALIVE here - which is exactly why the test is
+     REACHABILITY FROM THE ROOT and not liveness.
+  6. AC 7 (trap T11). With a SAVED project the fetched file is copied to
+     <projectdir>/media/ and the saved .qxp stores a RELATIVE path. A clip left
+     pointing into the machine-local cache would serialise as an absolute path
+     that means nothing on the next machine, which is the whole of what
+     SFilePathRef exists to prevent.
+
+  NOT PINNED HERE, and said plainly rather than implied:
+
+   * AC 5 (the project CLOSED or SWITCHED cancels a pending placement) is NOT
+     reachable from a script. No verb closes or switches the current project:
+     `load-project` loads INTO the existing SProject object rather than
+     swapping it, so neither SApplication::setCurrentProject (where the cancel
+     is wired) nor the pending entry's own project-identity check can fire.
+   * No real network fetch. `testdelay` copies a local file - the deferred
+     BRANCH is what is under test, never the physics of a download.
+   * "Places nothing" is asserted as observed behaviour. There is no sanitizer
+     build in this repo, so nothing here is a claim about memory safety.
+
+  SETTINGS (trap T6). This case writes media/lastSourceId and
+  media/lastPath/testdelay, and restores both to their SOpt defaults, so
+  smaragd.ini comes back with identical CONTENT. It is RUN_SERIAL.
+  media/lastPath/testdelay is EXCLUSIVELY this case's. media/lastSourceId is
+  shared with media_browser_browse / media_browser_search /
+  media_browser_drag_local - all four are RUN_SERIAL and all four restore it to
+  "local", so no run can ever observe another's value. This case deliberately
+  touches neither media/categoryMask nor media/searchRecursive: the defaults
+  (audio, non-recursive) are exactly what it wants, so there is nothing to
+  restore.
+-->
+<SActionScript version="1" name="media_drop_deferred">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>   <!-- 0: the deferred + cached placements -->
+    <add-track index="-1"/>   <!-- 1: the failed fetch, and the copy      -->
+    <add-track index="-1"/>   <!-- 2: removed mid-fetch (AC 5a)           -->
+
+    <set-option key="media/lastPath/testdelay" value="../media/lib"/>
+    <media-test-source delayMs="800" failPath="" reset="1" clearCache="1"/>
+    <media-browser-source sourceId="testdelay"/>
+    <assert-media-browser mode="browse" rowCount="3" contains="kick.wav"/>
+
+    <!-- (1) AC 3 + AC 6: two drops of an UNCACHED ref, back to back, onto two
+         different tracks (see the header: their completion ORDER is not
+         promised, their PLACEMENT is). -->
+    <media-browser-drag name="kick.wav" trackPath="0" timePos="48000"/>
+    <media-browser-drag name="kick.wav" trackPath="1" timePos="192000"/>
+    <!-- Neither has placed anything yet: the fetch takes 800 ms and the drop
+         handler returned immediately. THIS is the deferred branch. -->
+    <assert-clip-window clip="0,0" expectReject="true"/>
+    <assert-clip-window clip="1,0" expectReject="true"/>
+
+    <media-drop-wait waitMs="15000" placed="2" failed="0" abandoned="0"
+                     fetches="2"/>
+    <!-- AC 7, the OTHER half: the project has no file yet, so the clip
+         references the machine-local cache and that is said out loud rather
+         than discovered on the next machine (T11). -->
+    <assert-log level="warn" contains="the project has never been saved"
+                minCount="1"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="192000" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- (2) AC 2: the ref is CACHED now, so this one places SYNCHRONOUSLY. The
+         assertion is made BEFORE media-drop-wait, so a deferred placement
+         would fail it. -->
+    <media-browser-drag name="kick.wav" trackPath="0" timePos="288000"/>
+    <assert-clip-window clip="0,1" startTime="288000" duration="192000"/>
+    <media-drop-wait waitMs="5000" placed="3" failed="0" abandoned="0"
+                     fetches="2"/>
+
+    <!-- (3) THREE drops, THREE undo steps. -->
+    <undo count="3"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+    <assert-clip-window clip="1,0" expectReject="true"/>
+    <redo count="3"/>
+    <assert-clip-window clip="0,0" startTime="48000"/>
+    <assert-clip-window clip="0,1" startTime="288000"/>
+    <assert-clip-window clip="1,0" startTime="192000"/>
+
+    <!-- (4) AC 4: a fetch that FAILS places nothing and logs an error. -->
+    <media-test-source failPath="snare"/>
+    <media-browser-drag name="snare.wav" trackPath="1" timePos="336000"/>
+    <media-drop-wait waitMs="15000" placed="3" failed="1" abandoned="0"
+                     fetches="2"/>
+    <assert-log level="error" contains="drop: fetch of" minCount="1"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- (5) AC 5a / T18: the target track is REMOVED while the fetch runs.
+         snare.wav is still uncached (its only fetch failed), so this is a real
+         pending placement. -->
+    <media-test-source failPath=""/>
+    <media-browser-drag name="snare.wav" trackPath="2" timePos="48000"/>
+    <remove-track trackPath="2"/>
+    <media-drop-wait waitMs="15000" placed="3" failed="1" abandoned="1"
+                     fetches="3"/>
+    <assert-log level="warn" contains="the target track was removed"
+                minCount="1"/>
+    <!-- Nothing landed anywhere: track 0 still has exactly its two clips and
+         track 1 exactly its one. -->
+    <assert-clip-window clip="0,2" expectReject="true"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- (6) AC 7 / T11: with a SAVED project the fetched file is copied into
+         <projectdir>/media/ and the .qxp stores a RELATIVE path. -->
+    <save-project path="../../build/test-output/media_drop_deferred/media_drop_deferred.qxp"/>
+    <media-browser-drag name="snare.wav" trackPath="1" timePos="384000"/>
+    <media-drop-wait waitMs="15000" placed="4" failed="1" abandoned="1"/>
+    <assert-clip-window clip="1,1" startTime="384000"/>
+    <save-project path="../../build/test-output/media_drop_deferred/media_drop_deferred.qxp"/>
+    <assert-file-contains path="../../build/test-output/media_drop_deferred/media_drop_deferred.qxp"
+                          text="media/snare.wav"/>
+
+    <!-- Restore every key this case writes (T6). -->
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/testdelay" value=""/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

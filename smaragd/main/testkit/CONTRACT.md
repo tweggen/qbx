@@ -739,6 +739,45 @@ panel and the arranger, and the shell is the only module that sees both.
     row already names: the CONVENTION, not the locking. A future case that READS
     one of those keys would be racing one that writes it.
 
+## The gate-3 drop verbs (proposal 38)
+
+31. **`media-test-source` configures a provider that only exists under a knob.**
+    `SDelayedLocalSource` is registered as `testdelay` only when
+    `SMARAGD_MEDIA_TEST_SOURCE=1`; the verb REFUSES when it is not there rather
+    than silently doing nothing, because a case that configured no provider and
+    carried on would then be measuring the wrong one. Its `clearCache="1"` is
+    itself refused unless `SMARAGD_MEDIA_CACHE_DIR` named the cache root — a
+    case run without the knob must not be able to wipe a developer's real cache.
+
+32. **`media-drop-wait` waits on a CONDITION, never on a clock.** It pumps the
+    event loop until `smediadrop::pendingCount()` reaches zero, up to `waitMs`,
+    and a timeout is a real failure. `placed` / `failed` / `abandoned` /
+    `fetches` are then asserted EXACTLY, and the three counters are three
+    different claims: `abandoned` is "a fetch landed and DELIBERATELY placed
+    nothing" (the target track was gone, or the project changed), which is a
+    stronger statement than "no clip appeared".
+
+33. **`media_drop_deferred` writes `media/lastSourceId` and
+    `media/lastPath/testdelay`** and is `RUN_SERIAL`. It restores both, so the
+    INI comes back with identical CONTENT. `media/lastPath/testdelay` is
+    exclusively its own; `media/lastSourceId` is shared with the three gate-2
+    cases, all four of which are `RUN_SERIAL` and all four of which restore it
+    to `"local"`, so no run can observe another's value. It deliberately touches
+    neither `media/categoryMask` nor `media/searchRecursive` — the defaults are
+    what it wants, so there is nothing to restore.
+
+    Note on the phrase this repo has used elsewhere: the INI comes back
+    **identical in CONTENT**, which is the claim worth making. `QSettings` does
+    not promise to preserve section ORDER across processes, so an md5 can
+    legitimately move while nothing a case wrote has changed.
+
+34. **A deferred placement is asserted on the TRACK it names, not on a clip
+    index shared with another concurrent drop.** Two concurrent deferred
+    placements land in FETCH-COMPLETION order, which is not the order they were
+    dropped in and which nothing promises. Asserting `clip 0,0 startTime=48000`
+    with both drops on one track failed 4 runs in 10; one clip per track states
+    the real claim and is exact on every run.
+
 
 ## The Nextcloud accounts verbs (proposal 38 GATE 5b)
 
@@ -747,7 +786,7 @@ panel and the arranger, and the shell is the only module that sees both.
 `assert-settings-file` — driving `SMediaAccountManager`
 (`SApplication::mediaAccounts()`) and `SOptionsDialog`'s Media page directly.
 
-31. **The CRUD verbs bypass the WIDGET, not the CODE PATH.** `set-media-account`
+35. **The CRUD verbs bypass the WIDGET, not the CODE PATH.** `set-media-account`
     / `remove-media-account` call `SMediaAccountManager::setAccount()` /
     `removeAccount()` directly — the SAME calls `SOptionsDialog::
     onMediaSaveAccount()` / `onMediaRemoveAccount()` make — rather than
@@ -756,7 +795,7 @@ panel and the arranger, and the shell is the only module that sees both.
     geometry is part of what is under test there; an account's validation has
     no such geometry, so bypassing the widget loses nothing).
 
-32. **`media-test-connection` and `media-account-redaction-drive` start their
+36. **`media-test-connection` and `media-account-redaction-drive` start their
     OWN throwaway `SWebDavStub`**, bound to `127.0.0.1:0` like every other use
     of that stub in this tree (never a fixed port — the whole reason `ctest -j4`
     can run four processes without a port collision). Neither needs the
@@ -765,13 +804,13 @@ panel and the arranger, and the shell is the only module that sees both.
     port a later action can address; these two are each a single self-contained
     action and start, use and stop their stub inside ONE `apply()` call.
 
-33. **`media-account-redaction-drive` is ONE action on purpose**, not a
+37. **`media-account-redaction-drive` is ONE action on purpose**, not a
     sequence of `set-media-account` + two browse verbs, because `assert-log`'s
     window is "since the action immediately before it started" (`sassertlogaction.h`):
     spreading the drive across several actions would put only the LAST one
     inside the window an immediately-following `assert-log` reads.
 
-34. **`assert-settings-file` reads the ON-DISK spelling, which is NOT the
+38. **`assert-settings-file` reads the ON-DISK spelling, which is NOT the
     logical `SSettings` key.** `QSettings::IniFormat` brackets only the FIRST
     `/`-separated component as a `[group]` header; everything below that is one
     key with the remaining `/`s written as `\`s — `"media/nextcloud/qxatest/
@@ -782,7 +821,7 @@ panel and the arranger, and the shell is the only module that sees both.
     it can never match below the top group and would make every scoped
     assertion pass vacuously.
 
-35. **The two OPTIONS-PAGE cases (`media_options_page`, `media_secret_redaction`)
+39. **The two OPTIONS-PAGE cases (`media_options_page`, `media_secret_redaction`)
     override `SMARAGD_SECRET_BACKEND=dpapi`** (set in `smaragd/CMakeLists.txt`,
     not in the `.qxa`, because the runner reads it before any script is
     parsed) and are `RUN_SERIAL`, owning and restoring every key under

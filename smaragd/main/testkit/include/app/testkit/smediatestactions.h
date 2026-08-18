@@ -319,4 +319,78 @@ private:
     int     waitMs_    = 0;
 };
 
+// --------------------------------------------------------------------------
+// Proposal 38 GATE 3 — the deferred `media:` drop
+// --------------------------------------------------------------------------
+
+// media-test-source — configure SDelayedLocalSource, the test-only provider
+// that is remote-SHAPED (NeedsFetch + a delayed copy). It exists only when
+// SMARAGD_MEDIA_TEST_SOURCE=1, so this verb REFUSES when it is not registered
+// rather than silently doing nothing.
+//
+//   delayMs  = "150"   how long a fetch takes. Long enough that the drop
+//                      handler returns FIRST is what makes AC 3 a real
+//                      deferred placement rather than a synchronous one.
+//   failPath = ""      a substring; a fetch whose source path contains it FAILS
+//                      instead of copying (AC 4). "" clears it.
+//   reset    = "0"     1 = zero the source's fetch counter AND smediadrop's
+//                      placed/failed/abandoned counters.
+//   clearCache = "0"   1 = empty the media cache. REFUSED (and the verb fails)
+//                      unless SMARAGD_MEDIA_CACHE_DIR named the root, so a case
+//                      run without the knob cannot wipe a developer's real
+//                      cache. A gate that asserts a FETCH COUNT on a cold key
+//                      needs this: a cache directory surviving between runs
+//                      would make the second run measure a hit.
+class SMediaTestSourceAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "media-test-source" ); }
+    QStringList knownAttributes() const override
+    { return { "delayMs", "failPath", "reset", "clearCache" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    int     delayMs_ = -1;        // -1 = leave alone
+    QString failPath_;
+    bool    hasFailPath_ = false;
+    bool    reset_ = false;
+    bool    clearCache_ = false;
+};
+
+// media-drop-wait — pump the event loop until no `media:` placement is still
+// pending, then optionally assert what happened.
+//
+// NOTHING HERE SLEEPS FOR A FIXED TIME, for the same reason nothing else in
+// this file does: the fetch finishes when it finishes, and a case that slept
+// long enough on an idle box would flake under `ctest -j4`.
+//
+//   waitMs    = "8000"
+//   placed    = "-1"   exact smediadrop::placedCount() (-1 = not checked)
+//   failed    = "-1"   exact smediadrop::failedCount()
+//   abandoned = "-1"   exact smediadrop::abandonedCount() — the T18 / project
+//                      -changed path, i.e. "a fetch landed and DELIBERATELY
+//                      placed nothing", which is a different claim from "no
+//                      clip appeared"
+//   fetches   = "-1"   exact SDelayedLocalSource::fetchCount(), which is how
+//                      the cache-reuse assertion is made from a script
+class SMediaDropWaitAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "media-drop-wait" ); }
+    QStringList knownAttributes() const override
+    { return { "waitMs", "placed", "failed", "abandoned", "fetches" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    int waitMs_    = 8000;
+    int placed_    = -1;
+    int failed_    = -1;
+    int abandoned_ = -1;
+    int fetches_   = -1;
+};
+
 #endif  // SMEDIATESTACTIONS_H

@@ -602,6 +602,35 @@ than guessed at. The trim floor already distinguishes the two cases
     that shows a plugin's reported latency says so, because the live lane has no
     delay line anywhere: what you hear through it really is late by that much.
 
+## The media layer's two hooks (proposal 38 gate 3)
+
+`SApplication::initMediaLayer()`, called from the ctor beside
+`initPluginRegistry()`, does two things `app/media` cannot do for itself — and
+in both cases the reason is that `app/media` is **app_core**:
+
+1. **The cache's ROOT and CAP.** `<configDir>/mediacache` and
+   `SOpt::MediaCacheCapMB` both live behind `SSettings`, which app_core cannot
+   see. Exactly the shape `initPluginRegistry()` already uses for the plugin
+   scan cache's path. `SMARAGD_MEDIA_CACHE_DIR` beats the injection, because the
+   knob exists so `ctest -j4` can isolate four processes.
+2. **THE PLACEMENT ITSELF.** `SAddSampleAction` is app_objects, one LAYER above
+   app/media, so nothing there can construct one; no edit to
+   `tools/check_layering.py` would change that. `smediadrop::setPlacementHook`
+   takes a lambda that re-resolves the target track's index-path FROM THE
+   TRACK'S OWN IDENTITY at completion — never from a path captured at drop time
+   (trap T18) — and submits the same `add-sample` the `file:` branch does. An
+   empty path means the track is no longer in the tree, and the only safe answer
+   to that is to place nothing.
+
+`SMainWindow`'s ctor installs the third piece, `setStatusHook`, because that is
+where the status bar is: `app/media` owns no widget by contract, so "fetching
+…", "could not fetch …", "the target track is gone" and the unsaved-project
+warning reach the user through a hook rather than through a `QWidget*`.
+
+**A pending placement is cancelled from `setCurrentProject`**, not from a close
+handler: proposal 38 §B.5 says closed OR SWITCHED, and a close is one case of a
+change rather than the only one.
+
 ## Nextcloud accounts (proposal 38 GATE 5b)
 
 37. **`SMediaAccountManager` is the accounts model, and it owns three things a

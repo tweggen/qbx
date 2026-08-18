@@ -4,6 +4,9 @@
 #include "app/media/smediaregistry.h"
 #include "app/media/smediasource.h"
 #include "app/shell/sapplication.h"
+#include "app/media/sdelayedlocalsource.h"
+#include "app/media/smediacache.h"
+#include "app/media/smediadrop.h"
 #include "app/shell/smainwindow.h"
 #include "app/shell/smediaaccountmanager.h"
 #include "app/shell/ssettings.h"
@@ -307,6 +310,7 @@ bool SAssertMediaBrowserAction::readXml( const QDomElement &elem, int )
 
 // --------------------------------------------------------------------------
 // proposal 38 GATE 5b -- the Nextcloud accounts model and Options -> Media.
+// media-test-source (proposal 38 gate 3)
 // --------------------------------------------------------------------------
 
 namespace {
@@ -331,6 +335,11 @@ void waitForMediaRequest( SMediaSource *src, int requestId, int timeoutMs )
     } );
     to.start( timeoutMs );
     loop.exec();
+SDelayedLocalSource *delayedSource()
+{
+    return qobject_cast<SDelayedLocalSource *>(
+        SMediaRegistry::instance().source(
+            SDelayedLocalSource::sourceIdString() ) );
 }
 
 }   // namespace
@@ -400,6 +409,46 @@ bool SRemoveMediaAccountAction::readXml( const QDomElement &elem, int )
         qWarning() << "remove-media-account: needs an accountId=";
         return false;
     }
+SApplyResult SMediaTestSourceAction::apply( SProject * /*project*/ )
+{
+    SDelayedLocalSource *src = delayedSource();
+    if( !src ) {
+        // REFUSED, never a silent no-op: the source exists only under
+        // SMARAGD_MEDIA_TEST_SOURCE=1, and a case that configured nothing and
+        // carried on would then be measuring the wrong provider.
+        qWarning() << "media-test-source: no 'testdelay' source is registered "
+                      "(SMARAGD_MEDIA_TEST_SOURCE=1?)";
+        return { false, nullptr };
+    }
+    if( delayMs_ >= 0 )  src->setFetchDelayMs( delayMs_ );
+    if( hasFailPath_ )   src->setFailSubstring( failPath_ );
+    if( reset_ ) {
+        src->resetFetchCount();
+        smediadrop::resetCounters();
+    }
+    if( clearCache_ && !SMediaCache::instance().clearAll() ) {
+        qWarning() << "media-test-source: the cache refused to clear "
+                      "(SMARAGD_MEDIA_CACHE_DIR unset?)";
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SMediaTestSourceAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "delayMs", delayMs_ );
+    elem.setAttribute( "failPath", failPath_ );
+    elem.setAttribute( "reset", reset_ ? "1" : "0" );
+    elem.setAttribute( "clearCache", clearCache_ ? "1" : "0" );
+}
+
+bool SMediaTestSourceAction::readXml( const QDomElement &elem, int )
+{
+    delayMs_     = elem.attribute( "delayMs", "-1" ).toInt();
+    hasFailPath_ = elem.hasAttribute( "failPath" );
+    failPath_    = elem.attribute( "failPath" );
+    reset_       = elem.attribute( "reset", "0" ) == QLatin1String( "1" );
+    clearCache_  = elem.attribute( "clearCache", "0" ) == QLatin1String( "1" );
     return true;
 }
 
@@ -618,6 +667,68 @@ bool SAssertSettingsFileAction::readXml( const QDomElement &elem, int )
 {
     contains_ = elem.attribute( "contains" );
     absent_   = elem.attribute( "absent" );
+// media-drop-wait (proposal 38 gate 3)
+// --------------------------------------------------------------------------
+
+SApplyResult SMediaDropWaitAction::apply( SProject * /*project*/ )
+{
+    QElapsedTimer t;
+    t.start();
+    while( smediadrop::pendingCount() > 0 ) {
+        QCoreApplication::processEvents();
+        if( t.elapsed() > waitMs_ ) {
+            qWarning() << "media-drop-wait:" << smediadrop::pendingCount()
+                       << "placement(s) still pending after" << waitMs_ << "ms";
+            return { false, nullptr };
+        }
+        QThread::msleep( 2 );
+    }
+    // One more turn: fetchFinished is delivered queued, and the LAST completion
+    // clears the pending list before the placement it triggers has been
+    // processed by anything downstream.
+    QCoreApplication::processEvents();
+
+    struct Check { const char *what; int want; int got; };
+    const Check checks[] = {
+        { "placed",    placed_,    smediadrop::placedCount() },
+        { "failed",    failed_,    smediadrop::failedCount() },
+        { "abandoned", abandoned_, smediadrop::abandonedCount() },
+    };
+    for( const Check &c : checks ) {
+        if( c.want >= 0 && c.want != c.got ) {
+            qWarning() << "media-drop-wait:" << c.what << "expected" << c.want
+                       << "but got" << c.got;
+            return { false, nullptr };
+        }
+    }
+    if( fetches_ >= 0 ) {
+        SDelayedLocalSource *src = delayedSource();
+        const int got = src ? src->fetchCount() : -1;
+        if( got != fetches_ ) {
+            qWarning() << "media-drop-wait: fetches expected" << fetches_
+                       << "but got" << got;
+            return { false, nullptr };
+        }
+    }
+    return { true, nullptr };
+}
+
+void SMediaDropWaitAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "waitMs", waitMs_ );
+    elem.setAttribute( "placed", placed_ );
+    elem.setAttribute( "failed", failed_ );
+    elem.setAttribute( "abandoned", abandoned_ );
+    elem.setAttribute( "fetches", fetches_ );
+}
+
+bool SMediaDropWaitAction::readXml( const QDomElement &elem, int )
+{
+    waitMs_    = elem.attribute( "waitMs", "8000" ).toInt();
+    placed_    = elem.attribute( "placed", "-1" ).toInt();
+    failed_    = elem.attribute( "failed", "-1" ).toInt();
+    abandoned_ = elem.attribute( "abandoned", "-1" ).toInt();
+    fetches_   = elem.attribute( "fetches", "-1" ).toInt();
     return true;
 }
 
@@ -660,4 +771,9 @@ static const bool s_reg_media =
       SActionRegistry::instance().registerType(
           QStringLiteral( "assert-settings-file" ),
           [] { return new SAssertSettingsFileAction; } ),
+          QStringLiteral( "media-test-source" ),
+          [] { return new SMediaTestSourceAction; } ),
+      SActionRegistry::instance().registerType(
+          QStringLiteral( "media-drop-wait" ),
+          [] { return new SMediaDropWaitAction; } ),
       true );

@@ -271,6 +271,30 @@ foreach(_media media_browser_browse media_browser_search
     endif()
 endforeach()
 
+# --- the deferred `media:` drop (proposal 38 gate 3) --------------------------
+#
+# Same INI argument as the three above (it writes media/lastSourceId and
+# media/lastPath/testdelay and restores both), plus two environment variables
+# that CANNOT live in the .qxa because they are read before any script runs:
+#
+#   SMARAGD_MEDIA_TEST_SOURCE=1 registers SDelayedLocalSource, the test-only
+#     provider that is remote-SHAPED (NeedsFetch + a delayed copy). Without it
+#     the deferred branch has nothing to be driven by; a user must never see
+#     "Delayed local (test)" in the source combo, which is why it is a knob and
+#     not a build flag.
+#   SMARAGD_MEDIA_CACHE_DIR points the cache into THIS case's own output
+#     directory. The cache is otherwise a shared per-user directory, and the
+#     case asserts an exact FETCH COUNT on a cold key -- which a hit inherited
+#     from a previous run, or from another process under `ctest -j4`, would
+#     silently make wrong. The same reason SMARAGD_SIDECAR_DIR exists.
+#
+# ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
+if(TEST qxa.media_drop_deferred)
+    set_tests_properties(qxa.media_drop_deferred PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_MEDIA_TEST_SOURCE=1;SMARAGD_MEDIA_CACHE_DIR=${CMAKE_BINARY_DIR}/test-output/media_drop_deferred/mediacache")
+endif()
+
 # --- MIDI out (proposal 37 P7b) ----------------------------------------------
 #
 # These four PLAY, in real time, and assert WHEN a MIDI message reached the wire

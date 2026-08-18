@@ -386,6 +386,9 @@ private:
     // app state it has no business duplicating.
     friend class SLiveMonitor;
     void initPluginRegistry();
+    // Proposal 38 gate 3: the media cache's root/cap and smediadrop's
+    // placement hook. See the definition for why the hook exists at all.
+    void initMediaLayer();
 
     // Start (or re-arm) the metering pump. No-op during an offline render.
     void startMetering();
