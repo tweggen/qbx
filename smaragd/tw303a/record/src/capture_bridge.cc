@@ -69,6 +69,12 @@ std::uint64_t CaptureBridge::frontier() const
     return src ? src->frontier() : 0;
 }
 
+int CaptureBridge::requestInputChannels( std::uint64_t mask )
+{
+    if( !input_ ) return -1;
+    return input_->requestChannels( mask );
+}
+
 bool CaptureBridge::start( const CaptureBridgeParams &params )
 {
     if( running_.load( std::memory_order_acquire ) ) {
@@ -88,6 +94,11 @@ bool CaptureBridge::start( const CaptureBridgeParams &params )
             return false;
         }
         input_ = ownedInput_.get();
+        // BEFORE the open: an ASIO device chooses its channel set at
+        // createBuffers time, and the cheapest moment to tell it is while no
+        // driver is running at all. A no-op on every other backend.
+        if( params.inputChannelMask )
+            input_->requestChannels( params.inputChannelMask );
         if( input_->openDevice( params.inputDeviceId, params.targetRate ) < 0 ) {
             lastError_ = std::string( "Failed to open input device: " ) + input_->errorMessage();
             ownedInput_.reset();

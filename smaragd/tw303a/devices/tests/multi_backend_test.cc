@@ -31,6 +31,7 @@
 // devices_midi_test and devices_input_test it is NOT RUN_SERIAL.
 
 #include "asio_bufsize.h"
+#include "asio_channels.h"
 #include "asio_convert.h"
 #include "asio_id.h"
 
@@ -283,12 +284,73 @@ static void testConverters()
     }
 }
 
+// --- 4. the input channel set (Phase 3) --------------------------------------
+
+static void testChannels()
+{
+    printf("\n-- asio_channels: mask -> opened set --\n");
+
+    {
+        const auto v = asioChannelsFromMask(0x1, 16);
+        CHECK(v.size() == 1 && v[0] == 0, "bit 0 -> input 0 alone");
+    }
+    {
+        const auto v = asioChannelsFromMask(0x21, 16);   // bits 0 and 5
+        CHECK(v.size() == 2 && v[0] == 0 && v[1] == 5, "bits 0,5 -> inputs 0 and 5");
+    }
+    {
+        // A project saved on a 16-input interface, opened on a 2-input one:
+        // arm what exists rather than failing the open.
+        const auto v = asioChannelsFromMask(0x21, 2);
+        CHECK(v.size() == 1 && v[0] == 0, "bits above the device count are ignored");
+    }
+    CHECK(asioChannelsFromMask(0xFF, 0).empty(), "a device with no inputs opens none");
+
+    printf("\n-- asio_channels: THE STREAM IS NOT COMPACTED --\n");
+
+    // THE ONE THAT MATTERS. recordingChannels_ is a mask where bit n means
+    // input n, applied per WAV sink. If opening {0,5} produced a 2-wide
+    // stream, bit 5 would come to mean "the second channel I happened to
+    // open" and a take would land on the wrong input, silently.
+    CHECK(asioStreamWidthFor(0x21, 16) == 6, "opening {0,5} gives a 6-wide stream");
+    CHECK(asioStreamWidthFor(0x1, 16) == 1, "opening {0} gives a 1-wide stream");
+    CHECK(asioStreamWidthFor(0x8000, 16) == 16, "opening {15} alone still gives 16");
+    CHECK(asioStreamWidthFor(0, 16) == 0, "opening nothing gives no stream");
+
+    printf("\n-- asio_channels: grow-only --\n");
+
+    std::uint64_t open = 0;
+    open = asioGrowMask(open, 0x1, 16);
+    CHECK(open == 0x1, "first arm opens input 0");
+    open = asioGrowMask(open, 0x20, 16);
+    CHECK(open == 0x21, "arming input 5 keeps input 0 open");
+    open = asioGrowMask(open, 0x0, 16);
+    CHECK(open == 0x21, "DISARMING EVERYTHING CLOSES NOTHING (grow-only)");
+    open = asioGrowMask(open, 0xFFFF0000ull, 4);
+    CHECK(open == 0x21, "bits above the device count never enter the set");
+
+    printf("\n-- asio_channels: is a request already satisfied? --\n");
+
+    // This is what decides whether a request may disturb a running stream:
+    // satisfied -> do nothing; not satisfied -> defer to the next start.
+    CHECK(asioMaskSatisfied(0x21, 0x1, 16), "an already-open channel needs no reopen");
+    CHECK(asioMaskSatisfied(0x21, 0x21, 16), "the whole open set needs no reopen");
+    CHECK(!asioMaskSatisfied(0x21, 0x2, 16), "a NEW channel does need one");
+    CHECK(asioMaskSatisfied(0x1, 0x8000, 2),
+          "a request the device cannot satisfy is not a reason to reopen");
+    CHECK(asioMaskSatisfied(0, 0xFF, 0), "a device with no inputs is always satisfied");
+
+    CHECK(kAsioDefaultInputMask == 1,
+          "the default is input 0 alone, matching DEFAULT_RECORDING_CHANNELS");
+}
+
 int main()
 {
-    printf("=== multi_backend_test (proposal 35 Phase 2, cross-platform half) ===\n");
+    printf("=== multi_backend_test (proposal 35 Phases 2-3, cross-platform half) ===\n");
     testDeviceIds();
     testBufferSizes();
     testConverters();
+    testChannels();
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
            failures == 1 ? "" : "s");

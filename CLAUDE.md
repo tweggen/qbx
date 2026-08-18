@@ -124,7 +124,7 @@ the plugin search paths. Gates: `filepathref_test` (ctest) and
 | Platform | Backend | Status |
 |----------|---------|--------|
 | Windows  | WASAPI  | ✅ Audible, device picker, float32/int16/int32 |
-| Windows  | ASIO    | ✅ Output audible (proposal 35 Phase 2); one list with WASAPI, ids `asio:<clsid>`. Input/duplex is Phase 3 |
+| Windows  | ASIO    | ✅ Full duplex (proposal 35 Phases 2-3): output audible, input captured, ONE driver instance and one clock. One device list with WASAPI, ids `asio:<clsid>`. Input channels open ON DEMAND and grow-only |
 | Linux    | ALSA    | ✅ Implemented (xrun recovery added), untested since refactor |
 | macOS    | CoreAudio | ✅ Audible, device picker |
 | PipeWire/JACK/PulseAudio | — | ❌ Placeholders only |
@@ -173,14 +173,15 @@ plan/
     │                                 frozen pages BY POSITION; zero engine
     │                                 edits. Read it before touching metering:
     │                                 the naive freeze-time design is wrong)
-    ├── 35_ASIO_BACKEND.md           (Phases 1-2 EXECUTED 2026-08-18 — the SDK
+    ├── 35_ASIO_BACKEND.md           (Phases 1-3 EXECUTED 2026-08-18 — the SDK
     │                                 drop-in + asio_probe ABI gate (PASSED on
     │                                 a Tascam US-16x08, see
-    │                                 docs/ASIO_WINDOWS_GATE.md), then the
-    │                                 output backend + the one-list Windows
-    │                                 dispatcher. Phases 3-5 (input/duplex,
-    │                                 input enumeration, control panel) not
-    │                                 started; 21 L6 waits on those)
+    │                                 docs/ASIO_WINDOWS_GATE.md), the output
+    │                                 backend + the one-list Windows
+    │                                 dispatcher, then the input half and full
+    │                                 duplex. Phases 4-5 (Options input
+    │                                 enumeration, control panel) not started;
+    │                                 21 L6 is now unblocked)
     └── 36_MULTICHANNEL_SIGNAL_FLOW.md (executed 2026-08-16, M0..B8 —
                                       the page carries N planar channels; read
                                       §4.3-§4.6 and the 28 traps before touching
@@ -429,6 +430,14 @@ this failure is a delayed-destruction variant of exactly what it guards.
 grepping stdout for `^PASS - `, so a case that passes and *then* crashes on exit
 counts as a pass, while `ctest` — which judges by exit code — fails it. When you
 are chasing a teardown crash, loop on the exit code instead.
+
+**And it cannot pin the RECORD / LIVE cases at all** — it reports **0/15** for a
+case `ctest` passes 12/12. Those cases need an environment the CTest entry sets
+and the script does not: `SMARAGD_CAPTURE_SPEED=1`, the paced `file:` input
+(`SMARAGD_AUDIO_INPUT_BACKEND`), `SMARAGD_AUDIO_INPUT_LATENCY_FRAMES` and a
+`--test-output-dir`. A 0/N from it on `record_*`, `monitor_*`, `metronome_*` or
+`live_instrument_*` is the harness failing, not the case. Loop
+`ctest -R "^qxa.<case>$"` instead — it reproduces the entry exactly.
 
 #### Why `-j` is safe (audited, not assumed)
 
@@ -1189,12 +1198,20 @@ baseline on the capture backend: 0.9470 over 1.081 s, 0.9925 over 6.878 s, with
 `SINCE DEVICE START` at 1.0176 and 1.0014). Compare like-for-like durations and
 prefer long takes: priming shrinks with length, a real rate error does not.
 
-**ASIO would remove this whole failure class** — one driver, one clock, matched
-in/out. **Half of it is now in the tree** (proposal 35 Phase 2, 2026-08-18):
-the OUTPUT backend exists and an `asio:<clsid>` device plays. It does **not**
-fix this trap yet, and saying otherwise would be the easy mistake — the trap is
-a CAPTURE/RENDER endpoint pair, and ASIO capture is Phase 3. Until then a
-recording still goes through WASAPI whatever the output device is.
+**ASIO removes this whole failure class** — one driver, one clock, matched
+in/out — and **both halves are now in the tree** (proposal 35 Phases 2-3,
+2026-08-18): pick an `asio:<clsid>` device for BOTH input and output and the
+two share one `IASIO` instance, so there is no second endpoint to be declared
+at a different rate and nothing for the OS to resample behind our back.
+
+Two caveats before treating it as the fix. **It is a per-device choice, not a
+mode**: a project still recording through a WASAPI input while playing through
+an ASIO output has two clocks again, and mixed mode is deliberately allowed
+(the dispatchers route each direction independently). And **nothing has yet
+recorded a take through ASIO end to end** — the duplex path is verified with a
+probe that reads the ring, not with `SAudioRecorder`. The trap's diagnostics
+above stay exactly as they are; they cost nothing and they are what would catch
+a mixed-clock session.
 
 ### Known Limitations & Future Work
 

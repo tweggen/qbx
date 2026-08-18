@@ -36,6 +36,8 @@
 
 #include "asio_convert.h"
 
+#include "tw/devices/audio_ring.h"
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -98,6 +100,28 @@ public:
 
     void setRenderCallback(RenderCallback cb);
 
+    // --- the INPUT half (Phase 3) -------------------------------------------
+    //
+    // WHICH inputs are open is demand-driven and GROW-ONLY: see asio_channels.h
+    // for the mask convention and why the stream is not compacted. The set can
+    // only be changed while the driver is STOPPED — ASIO fixes it at
+    // createBuffers time — so a request that arrives mid-stream is recorded and
+    // applied at the next start rather than restarting the stream under
+    // whoever is listening.
+    //
+    // Returns 0 when the request was already satisfied or has been applied,
+    // 1 when it was DEFERRED to the next start, -1 on failure.
+    int requestInputChannels(std::uint64_t mask);
+
+    // The interleaved stream the ring carries: max(open channel) + 1, with
+    // unopened channels silent, so bit n stays input n all the way up.
+    std::uint32_t inputStreamChannels() const;
+    std::uint32_t inputLatencyFrames() const;
+
+    // ONE consumer. Returns frames.
+    std::size_t readInput(float *interleaved, std::size_t frames);
+    AudioRing   *inputRing() { return &inRing_; }
+
     // REFCOUNTED. The first caller starts the driver; the last one stops it.
     // A recording started while playback runs therefore does not restart the
     // stream, and a recording alone starts it with the output half emitting
@@ -123,7 +147,9 @@ private:
 
     int  open_(const std::string &clsidOrName, std::uint32_t preferredRate, std::string *errorOut);
     void close_();
+    // Builds BOTH halves: outputs 0..1 and whatever `inOpenMask_` names.
     int  createBuffers_(long frames);
+    int  reopenForChannels_(std::uint64_t mask);
     void disposeBuffers_();
     // Close the callback gate, then spin until none is in flight. See the .cc:
     // the callback thread is DRIVER-owned, so there is nothing to join, and
@@ -175,6 +201,27 @@ private:
         AsioType  type = AsioType::Unsupported;
     };
     std::vector<ChannelBuf> outBufs_;
+
+    // INPUT. `inChannelNums_` are the DRIVER channel indices we opened, in the
+    // order createBuffers was given them; `inBufs_` is parallel to it. The
+    // interleaved stream is `inStreamChannels_` wide (max index + 1), so a
+    // sample from driver channel c lands at interleaved slot c and every slot
+    // nobody opened stays silent.
+    std::vector<ChannelBuf> inBufs_;
+    std::vector<int>        inChannelNums_;
+    std::uint64_t           inOpenMask_    = 0;   // what IS open
+    std::uint64_t           inWantMask_    = 0;   // what has been asked for
+    std::uint32_t           inStreamChannels_ = 0;
+    std::uint32_t           inputLatency_  = 0;
+    // The capture ring. NOT a second SPSC implementation: `AudioRing` is
+    // already lock-free (head/tail atomics, no mutex) and is already driven by
+    // the WASAPI, ALSA and file capture threads — the same shape a driver
+    // callback has. Its drop-NEWEST-and-count overflow rule is the one
+    // devices/CONTRACT.md inv. 20 requires, because in SPSC the producer may
+    // not move the consumer's index.
+    AudioRing               inRing_;
+    std::vector<float>      inScratch_;   // interleaved, filled in the callback
+
     long                    bufferFrames_ = 0;
     double                  sampleRate_   = 48000.0;
     std::uint32_t           outputLatency_ = 0;

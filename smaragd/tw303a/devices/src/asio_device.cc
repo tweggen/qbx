@@ -4,6 +4,7 @@
 #include "asio_device.h"
 
 #include "asio_bufsize.h"
+#include "asio_channels.h"
 #include "asio_driver_list.h"
 
 #include "tw/core/twlog.h"
@@ -239,12 +240,29 @@ int AsioDevice::createBuffers_(long frames)
     const long useCh = info_.outputChannels < 2 ? info_.outputChannels : 2;
     if (useCh <= 0) return -1;
 
-    std::vector<ASIOBufferInfo> infos((std::size_t) useCh);
+    // THE INPUT SET IS DEMAND-DRIVEN and grow-only (asio_channels.h). Nobody
+    // having asked yet means input 0 alone, which is what
+    // SObject::DEFAULT_RECORDING_CHANNELS selects anyway — a pro interface's
+    // sixteen inputs are not opened because it happens to have sixteen.
+    if (inOpenMask_ == 0)
+        inOpenMask_ = asioGrowMask(0, inWantMask_ ? inWantMask_ : kAsioDefaultInputMask,
+                                   (int) info_.inputChannels);
+    inChannelNums_ = asioChannelsFromMask(inOpenMask_, (int) info_.inputChannels);
+    const long inCh = (long) inChannelNums_.size();
+
+    std::vector<ASIOBufferInfo> infos((std::size_t) (useCh + inCh));
     for (long i = 0; i < useCh; ++i) {
         infos[(std::size_t) i].isInput    = ASIOFalse;
         infos[(std::size_t) i].channelNum = i;
         infos[(std::size_t) i].buffers[0] = nullptr;
         infos[(std::size_t) i].buffers[1] = nullptr;
+    }
+    for (long i = 0; i < inCh; ++i) {
+        ASIOBufferInfo &bi = infos[(std::size_t) (useCh + i)];
+        bi.isInput    = ASIOTrue;
+        bi.channelNum = inChannelNums_[(std::size_t) i];
+        bi.buffers[0] = nullptr;
+        bi.buffers[1] = nullptr;
     }
 
     // MEMBER, never a local — the driver keeps this pointer for the life of
@@ -261,7 +279,8 @@ int AsioDevice::createBuffers_(long frames)
     // the call.
     s_active_ = this;
 
-    const ASIOError r = driver_->createBuffers(infos.data(), useCh, frames, asioCallbacks_.get());
+    const ASIOError r = driver_->createBuffers(infos.data(), useCh + inCh, frames,
+                                               asioCallbacks_.get());
     if (r != ASE_OK) {
         s_active_ = nullptr;
         TW_LOGE("devices", "AsioDevice: createBuffers(%ld ch, %ld frames) failed (%d)",
@@ -297,6 +316,51 @@ int AsioDevice::createBuffers_(long frames)
         return -1;
     }
 
+    // The input half, parallel to inChannelNums_.
+    inBufs_.assign((std::size_t) inCh, ChannelBuf{});
+    bool inUnsupported = false;
+    for (long i = 0; i < inCh; ++i) {
+        const ASIOBufferInfo &bi = infos[(std::size_t) (useCh + i)];
+        inBufs_[(std::size_t) i].buffers[0] = bi.buffers[0];
+        inBufs_[(std::size_t) i].buffers[1] = bi.buffers[1];
+
+        ASIOChannelInfo ci;
+        std::memset(&ci, 0, sizeof(ci));
+        ci.channel = inChannelNums_[(std::size_t) i];
+        ci.isInput = ASIOTrue;
+        if (driver_->getChannelInfo(&ci) == ASE_OK)
+            inBufs_[(std::size_t) i].type = mapType(ci.type);
+        if (!asioTypeSupported(inBufs_[(std::size_t) i].type)) {
+            inUnsupported = true;
+            TW_LOGE("devices", "AsioDevice: input channel %d uses an unsupported sample "
+                               "type (MSB or DSD)",
+                    inChannelNums_[(std::size_t) i]);
+        }
+    }
+    if (inUnsupported) {
+        driver_->disposeBuffers();
+        outBufs_.clear();
+        inBufs_.clear();
+        s_active_ = nullptr;
+        return -1;
+    }
+
+    // The stream stays indexed by DRIVER channel — see asio_channels.h. A
+    // compacted stream would silently redefine every recordingChannels_ mask
+    // in the project.
+    inStreamChannels_ = (std::uint32_t) asioStreamWidthFor(inOpenMask_,
+                                                           (int) info_.inputChannels);
+    if (inStreamChannels_ > 0) {
+        // Two seconds of ring: a recording consumer polls on a timer, and the
+        // cost of depth here is bytes rather than latency (the ring is drained
+        // by position, never waited on).
+        // reset(CHANNELS, FRAMES) — that order, and getting it backwards sizes
+        // the ring at one frame of 96000 channels, which the driver thread
+        // then walks straight off the end of.
+        inRing_.reset(inStreamChannels_, (std::size_t) (sampleRate_ * 2.0));
+        inScratch_.assign((std::size_t) frames * inStreamChannels_, 0.0f);
+    }
+
     bufferFrames_    = frames;
     buffersBuilt_    = true;
     postOutputReady_ = driver_->outputReady() == ASE_OK;
@@ -309,10 +373,13 @@ int AsioDevice::createBuffers_(long frames)
     // meterLatencyFrames(), hence every position the meters, the MIDI-out pump
     // and both recorders compensate with.
     long lIn = 0, lOut = 0;
-    if (driver_->getLatencies(&lIn, &lOut) == ASE_OK && lOut >= 0)
-        outputLatency_ = (std::uint32_t) lOut;
-    else
+    if (driver_->getLatencies(&lIn, &lOut) == ASE_OK) {
+        outputLatency_ = lOut >= 0 ? (std::uint32_t) lOut : 0;
+        inputLatency_  = lIn  >= 0 ? (std::uint32_t) lIn  : 0;
+    } else {
         outputLatency_ = 0;
+        inputLatency_  = 0;
+    }
 
     return 0;
 }
@@ -323,6 +390,11 @@ void AsioDevice::disposeBuffers_()
     buffersBuilt_ = false;
     outBufs_.clear();
     scratch_.clear();
+    inBufs_.clear();
+    inChannelNums_.clear();
+    inScratch_.clear();
+    // inOpenMask_ is NOT cleared: the set is grow-only across a re-open, which
+    // is what makes arming a channel a second time free.
 }
 
 void AsioDevice::close_()
@@ -406,6 +478,67 @@ void AsioDevice::setRenderCallback(RenderCallback cb)
     callbackValid_.store(callback_ != nullptr, std::memory_order_release);
 }
 
+// --- the input half ---------------------------------------------------------
+
+std::uint32_t AsioDevice::inputStreamChannels() const
+{
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    return inStreamChannels_;
+}
+
+std::uint32_t AsioDevice::inputLatencyFrames() const
+{
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    return inputLatency_;
+}
+
+std::size_t AsioDevice::readInput(float *interleaved, std::size_t frames)
+{
+    // NO LOCK: the ring is the synchronisation, and taking stateMutex_ here
+    // would put a control-plane lock between a recording consumer and the
+    // driver thread. ONE consumer, as AudioRing requires.
+    return inRing_.pop(interleaved, frames);
+}
+
+int AsioDevice::requestInputChannels(std::uint64_t mask)
+{
+    std::lock_guard<std::mutex> lk(stateMutex_);
+    if (!driver_) return -1;
+
+    inWantMask_ = asioGrowMask(inWantMask_, mask, (int) info_.inputChannels);
+    if (asioMaskSatisfied(inOpenMask_, inWantMask_, (int) info_.inputChannels))
+        return 0;  // already open — the common case once a session is warm
+
+    if (started_.load(std::memory_order_acquire) > 0) {
+        // DEFERRED. Changing the set needs disposeBuffers + createBuffers,
+        // which needs the driver stopped, and stopping it here would punch a
+        // hole in whatever is currently being monitored or played. Same model
+        // as a device change: it takes effect on the next start.
+        TW_LOGI("devices",
+                "AsioDevice: input channels 0x%llx requested while running; open set is "
+                "0x%llx. Applied at the next start (stopping the driver now would gap "
+                "playback).",
+                (unsigned long long) inWantMask_, (unsigned long long) inOpenMask_);
+        return 1;
+    }
+    return reopenForChannels_(inWantMask_) == 0 ? 0 : -1;
+}
+
+int AsioDevice::reopenForChannels_(std::uint64_t mask)
+{
+    // Caller holds stateMutex_ and has established the driver is stopped.
+    const std::uint64_t grown = asioGrowMask(inOpenMask_, mask, (int) info_.inputChannels);
+    if (grown == inOpenMask_ && buffersBuilt_) return 0;
+    inOpenMask_ = grown;
+
+    const long frames = bufferFrames_ > 0 ? bufferFrames_ : info_.bufPreferred;
+    const int rc = createBuffers_(frames);
+    if (rc == 0)
+        TW_LOGI("devices", "AsioDevice: input channel set is now 0x%llx (%u-wide stream)",
+                (unsigned long long) inOpenMask_, inStreamChannels_);
+    return rc;
+}
+
 // --- start / stop -----------------------------------------------------------
 
 int AsioDevice::startRef()
@@ -414,6 +547,17 @@ int AsioDevice::startRef()
     if (!driver_ || !buffersBuilt_) return -1;
 
     if (started_.fetch_add(1, std::memory_order_acq_rel) == 0) {
+        // A channel request that arrived while the stream was running was
+        // deferred to exactly here — the one moment the set can change without
+        // interrupting anybody.
+        if (!asioMaskSatisfied(inOpenMask_, inWantMask_, (int) info_.inputChannels)) {
+            if (reopenForChannels_(inWantMask_) != 0) {
+                started_.store(0, std::memory_order_release);
+                TW_LOGE("devices", "AsioDevice: could not open the requested input "
+                                   "channels at start");
+                return -1;
+            }
+        }
         // Open the gate BEFORE start(): a driver may fire its first callback
         // from inside start() itself.
         acceptCallbacks_.store(true, std::memory_order_release);
@@ -584,6 +728,31 @@ void AsioDevice::render_(long index)
     }
 
     if (postOutputReady_ && driver_) driver_->outputReady();
+
+    // --- the INPUT half ------------------------------------------------------
+    //
+    // Order matters only for latency, not correctness: the output is written
+    // first so the driver has it as early as possible, and the capture is
+    // pushed afterwards. Nothing here allocates, locks or logs — the ring is
+    // lock-free and its overflow is a counter (inv. 20), which is why an
+    // overrun costs a number a test can read rather than a stall in a driver
+    // callback.
+    if (inStreamChannels_ > 0 && !inBufs_.empty() &&
+        inScratch_.size() >= (std::size_t) inStreamChannels_ * frames) {
+        // Unopened slots stay silent, so a mask bit nobody opened reads as
+        // silence rather than as another channel's audio.
+        std::fill(inScratch_.begin(),
+                  inScratch_.begin() + (std::ptrdiff_t) (frames * inStreamChannels_), 0.0f);
+        for (std::size_t i = 0; i < inBufs_.size(); ++i) {
+            const void *src = inBufs_[i].buffers[index];
+            if (!src) continue;
+            const std::size_t slot = (std::size_t) inChannelNums_[i];
+            if (slot >= inStreamChannels_) continue;
+            asioToFloat(inScratch_.data(), inStreamChannels_, slot, src, inBufs_[i].type,
+                        frames);
+        }
+        inRing_.push(inScratch_.data(), frames);
+    }
 
     inCallback_.fetch_sub(1, std::memory_order_acq_rel);
 }

@@ -20,6 +20,7 @@
 // it walks needs a real endpoint or a real driver.
 
 #include "tw/devices/audio_backend.h"
+#include "tw/devices/audio_input.h"
 
 #ifdef TW_HAVE_ASIO
 // PRIVATE to the module, and reached here on purpose: the gate's own
@@ -299,6 +300,116 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
     return rc;
 }
 
+// --- duplex: the INPUT half, and both halves on ONE driver (Phase 3) ---------
+
+int cmdDuplex(const std::string &id, int seconds, std::uint64_t mask, bool withOutput)
+{
+    std::printf("=== duplex %s (%d s, input mask 0x%llx, output %s)\n",
+                id.c_str(), seconds, (unsigned long long) mask, withOutput ? "on" : "off");
+
+    auto in = audio::createAudioInput();
+    if (!in) { std::printf("  FAILED: createAudioInput\n"); return 1; }
+
+    // The request comes BEFORE the open on purpose: that is the cheapest
+    // moment to choose the channel set, and it is what the app will do (the
+    // armed set is known before a device is touched).
+    in->requestChannels(mask);
+    if (in->openDevice(id, 0) != 0) {
+        std::printf("  FAILED: input openDevice: %s\n", in->errorMessage());
+        return 1;
+    }
+    std::printf("  in     : backend %s, %u Hz, %u ch stream, %u frames, in latency %u\n",
+                in->backendName(), in->getConfig().sampleRate, in->getConfig().channels,
+                in->getConfig().bufferFrames, in->getConfig().inputLatencyFrames);
+
+    // THE DUPLEX CLAIM: the same driver, opened a second time through the
+    // OUTPUT factory, must be the SAME device — one IASIO instance, one clock.
+    // If the registry handed out a second driver instead, this is where it
+    // would show up as a refusal.
+    std::unique_ptr<audio::AudioBackend> be;
+    if (withOutput) {
+        be = audio::createAudioBackend();
+        if (!be || be->openDevice(id, 0) != 0) {
+            std::printf("  FAILED: output openDevice on the SAME driver — full duplex is "
+                        "not working\n");
+            return 1;
+        }
+        double phase = 0.0;
+        const double step = 2.0 * 3.14159265358979323846 * 440.0 /
+                            (double) be->getConfig().sampleRate;
+        be->setRenderCallback([phase, step](float *out, std::size_t frames,
+                                            std::uint32_t ch) mutable {
+            for (std::size_t i = 0; i < frames; ++i, phase += step) {
+                const float v = (float) (std::sin(phase) * 0.25);
+                for (std::uint32_t k = 0; k < ch; ++k) out[i * ch + k] = v;
+            }
+            return frames;
+        });
+        std::printf("  out    : backend %s, %u Hz, %u ch\n", be->name(),
+                    be->getConfig().sampleRate, be->getConfig().channels);
+        if (be->startOutput() != 0) {
+            std::printf("  FAILED: startOutput\n");
+            return 1;
+        }
+    }
+
+    if (in->startCapture() != 0) {
+        std::printf("  FAILED: startCapture\n");
+        return 1;
+    }
+
+    // Drain like a recording consumer does: poll, never block.
+    const std::uint32_t ch = in->getConfig().channels ? in->getConfig().channels : 1;
+    std::vector<float> buf(4096 * ch);
+    std::uint64_t got = 0;
+    std::vector<double> peak(ch, 0.0);
+    const auto tEnd = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+    while (std::chrono::steady_clock::now() < tEnd) {
+        const std::int32_t n = in->read(buf.data(), 4096);
+        if (n > 0) {
+            got += (std::uint64_t) n;
+            for (std::int32_t f = 0; f < n; ++f)
+                for (std::uint32_t k = 0; k < ch; ++k) {
+                    const double a = std::fabs((double) buf[(std::size_t) f * ch + k]);
+                    if (a > peak[k]) peak[k] = a;
+                }
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+
+    in->stopCapture();
+    if (be) be->stopOutput();
+
+    const audio::AudioInputStats st = in->stats();
+    const std::uint64_t expect =
+        (std::uint64_t) in->getConfig().sampleRate * (std::uint64_t) seconds;
+    std::printf("  frames : %llu captured, ~%llu expected (%.0f%%)\n",
+                (unsigned long long) got, (unsigned long long) expect,
+                expect ? 100.0 * (double) got / (double) expect : 0.0);
+    std::printf("  ring   : pushed %llu, popped %llu, overruns %llu, underruns %llu\n",
+                (unsigned long long) st.framesPushed, (unsigned long long) st.framesPopped,
+                (unsigned long long) st.overrunFrames,
+                (unsigned long long) st.underrunFrames);
+    std::printf("  peaks  :");
+    for (std::uint32_t k = 0; k < ch; ++k) std::printf(" ch%u=%.4f", k, peak[k]);
+    std::printf("\n");
+
+    int rc = 0;
+    if (got == 0) {
+        std::printf("  ! nothing was captured at all\n");
+        rc = 1;
+    }
+    if (st.overrunFrames > 0)
+        std::printf("  note   : %llu frames overran the ring — the consumer fell behind\n",
+                    (unsigned long long) st.overrunFrames);
+
+    in->closeDevice();
+    if (be) be->closeDevice();
+    std::printf("  RESULT : %s\n", rc == 0 ? "duplex lifecycle OK" : "FAILED");
+    return rc;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -323,6 +434,8 @@ int main(int argc, char **argv)
         std::printf("usage: audio_backend_probe list\n"
                     "       audio_backend_probe open <device-id> [--rate=N]\n"
                     "       audio_backend_probe tone <device-id> [seconds] [--rate=N]\n"
+                    "       audio_backend_probe capture <device-id> [seconds] [mask]\n"
+                    "       audio_backend_probe duplex  <device-id> [seconds] [mask]\n"
                     "\n"
                     "Drives the PRODUCTION output path (createAudioBackend -> the Windows\n"
                     "dispatcher -> WASAPI or ASIO). Device ids come from `list`; a BARE id\n"
@@ -331,6 +444,24 @@ int main(int argc, char **argv)
         rc = cmdList();
     } else if (av[0] == "open" && av.size() >= 2) {
         rc = cmdOpen(av[1], rate);
+    } else if (av[0] == "duplex" && av.size() >= 2) {
+        int seconds = 3;
+        if (av.size() >= 3) {
+            seconds = std::atoi(av[2].c_str());
+            if (seconds < 1 || seconds > 60) seconds = 3;
+        }
+        std::uint64_t mask = 1;
+        if (av.size() >= 4) mask = std::strtoull(av[3].c_str(), nullptr, 0);
+        rc = cmdDuplex(av[1], seconds, mask, true);
+    } else if (av[0] == "capture" && av.size() >= 2) {
+        int seconds = 3;
+        if (av.size() >= 3) {
+            seconds = std::atoi(av[2].c_str());
+            if (seconds < 1 || seconds > 60) seconds = 3;
+        }
+        std::uint64_t mask = 1;
+        if (av.size() >= 4) mask = std::strtoull(av[3].c_str(), nullptr, 0);
+        rc = cmdDuplex(av[1], seconds, mask, false);
     } else if (av[0] == "tone" && av.size() >= 2) {
         int seconds = 2;
         if (av.size() >= 3) {

@@ -14022,3 +14022,117 @@ latency on this interface. Not a defect, and nothing on our side shortens it.
   driver did not call", and neither probe could answer it before.
 - `audio_backend_probe` reads `AsioDevice::lateCallbacks()` directly, so the
   gate's behaviour is observable rather than inferred.
+
+## 2026-08-18 — Proposal 35 Phase 3: the ASIO input half and full duplex
+
+An `asio:` device now records as well as plays, through ONE driver instance.
+`AsioBackend` and `AsioInput` acquire the SAME `AsioDevice`, so there is one
+`IASIO`, one `createBuffers`, one callback and **one clock** — which is the
+whole reason ASIO matters for recording, and the structural fix for the
+endpoint sample-rate trap (CLAUDE.md): capture and render cannot drift when
+there is only one clock to drift from. Invariants: `tw303a/devices/CONTRACT.md`
+inv. 31-34.
+
+### The decision this phase turned on: which inputs to open
+
+Requester, 2026-08-18: **open on demand**, with a per-device configuration
+option held in reserve if it produces artefacts. The interface has 16 inputs
+and opening all of them because it has them is not free.
+
+What that costs, and it was raised before the choice was made: ASIO fixes the
+channel set at `createBuffers` time and changing it needs the driver STOPPED.
+So arming an input that is not already open cannot be free. Two refinements
+make it nearly so:
+
+- **GROW-ONLY.** The set only ever expands; disarming closes nothing. Arming a
+  channel a second time — the common case once a session is warm — costs
+  nothing at all, and the set converges on the union of what has been used.
+- **NEVER RESTART A RUNNING STREAM.** A request that arrives while the stream
+  is running is recorded and applied at the next start, exactly as a device
+  change is ("takes effect on next Play"). Stopping the driver to add a
+  channel would punch a hole in whatever is being monitored.
+
+Nobody having asked opens **input 0 alone**, matching
+`SObject::DEFAULT_RECORDING_CHANNELS`. The reserved fallback — a per-device
+"channels to open" preference — is **not built**; it is the answer if deferral
+turns out to bite.
+
+### THE ONE THAT WOULD HAVE BEEN WRONG AUDIO: the stream is not compacted
+
+`SObject::recordingChannels_` and `CaptureWavSink::channelMask` are bitmasks
+where **bit n means input n**. Opening inputs {0, 5} and handing up a
+two-channel stream — the memory-efficient thing — would silently redefine every
+mask in the project: bit 5 would come to mean "the second channel I happened to
+open" rather than IN 6, and a take would land on the wrong input with nothing
+to show for it. So the stream is `max(opened) + 1` wide and the channels nobody
+asked for are SILENT. Conversion cost still scales with what is open (the
+callback converts opened channels only); only the indices are paid for.
+
+Gated in `multi_backend_test` and confirmed on hardware — see below. It is the
+one piece of this phase whose failure mode is wrong audio rather than silence,
+which is why it is a named section in `asio_channels.h`.
+
+### App wiring
+
+`CaptureBridgeParams::inputChannelMask` → `AudioInput::requestChannels()` before
+`openDevice`, and `CaptureBridge::requestInputChannels()` for a device that is
+already open. `SLiveMonitor::ensureInput(track)` passes the ARMING TRACK's own
+`getRecordingChannels()`, rather than walking the project for a union — because
+the device set is grow-only, arming tracks one at a time accumulates the union
+with nobody maintaining it.
+
+### A bug the hardware found in ten seconds
+
+`AudioRing::reset` is `reset(CHANNELS, capacityFrames)` and it was called with
+the arguments the other way round, sizing the ring at one frame of 96000
+channels. The driver thread then walked straight off the end of it: SIGSEGV in
+`memmove` inside `AudioRing::push`, on the first callback. Nothing in the type
+system objects to two integers in the wrong order — the hardware objected
+immediately.
+
+### Verification
+
+`./build.sh` green; `check_layering` and `check_logging` clean; `ctest -j4`
+**198/198 passed, 201 registered, 3 Not Run (Disabled)**.
+
+**One unreproduced failure, reported per convention.** `qxa.record_pre_roll`
+failed once, in the FIRST of two full `-j4` runs on this branch; the second run
+was clean, and it passed **12 of 12** looped in isolation through ctest
+afterwards. It is not attributable to this change by construction:
+`requestChannels` is overridden ONLY by `AsioInput` and `WinMultiInput`, so on
+the `file:` backend that case uses it resolves to the base class's no-op and
+the new `inputChannelMask` is never non-zero. `record_pre_roll` is a
+`RUN_SERIAL` wall-clock placement case, which is the shape that has produced
+load-sensitive failures here before (`record_loop_takes`, CLAUDE.md). Treat it
+as open rather than dismissed.
+
+Note for whoever hunts it: **`repeat_test.sh` cannot pin these record cases.**
+It reports 0/15 for a case ctest passes 12/12, because it does not reproduce
+the environment the CTest entry sets (`SMARAGD_CAPTURE_SPEED`, the paced
+`file:` input, `SMARAGD_AUDIO_INPUT_LATENCY_FRAMES`, `--test-output-dir`). Loop
+`ctest -R` instead. That is a second way the script misleads, alongside the
+teardown-crash blindness CLAUDE.md already records.
+
+`multi_backend_test`
+gains the channel-set gate: mask → opened set, bits above the device count
+ignored (a project from a 16-input interface must still arm what exists on a
+2-input one), the not-compacted width rule, grow-only, and the
+already-satisfied predicate that decides whether a request may disturb a
+running stream.
+
+REAL HARDWARE, via `audio_backend_probe capture|duplex` on a Tascam US-16x08:
+
+| Check | Result |
+|---|---|
+| `capture` mask 0x1 | 1-channel stream, in latency **304** frames, **0 overruns**, signal on ch0 |
+| `capture` mask 0x21 (IN 1 + IN 6) | **6-channel** stream; signal on ch0 and ch5, **exactly 0.0000 on ch1-ch4** — the not-compacted rule, on hardware |
+| `duplex` mask 0x1 | input AND output open on ONE driver, both routed `asio`, tone audible while capturing, **0 overruns** |
+
+**NOT gated:** a second driver in any form (mixed WASAPI-out/ASIO-in, the
+A-out/B-in refusal, a wrapper driver); the DEFERRED path — a channel request
+arriving mid-stream is implemented and logged but was not exercised on
+hardware, because it needs an arm during playback on a real driver; recording
+an actual take through ASIO end to end (the probe reads the ring, it does not
+drive `SAudioRecorder`); the per-device "channels to open" preference, which is
+not built; and every input latency claim beyond what the driver reports. No qxa
+case touches any of it and none can.

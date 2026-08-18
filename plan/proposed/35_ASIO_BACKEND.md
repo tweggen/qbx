@@ -215,6 +215,24 @@ called cross-thread without marshaling).
    `win_multi_input`, factory change, refcounted cross-facade start/stop.
    *Ungated:* ASIO record-only; record-while-playing on the same driver;
    both mixed modes; A-out/B-in rejected cleanly.
+   **EXECUTED 2026-08-18.** Two things were not in this bullet and are worth
+   naming:
+
+   - **The input channel set is DEMAND-DRIVEN and grow-only** (requester,
+     2026-08-18), not "open what the interface has". A 16-input interface does
+     not open sixteen channels because a track armed one; `requestChannels`
+     (new on `AudioInput`, no-op elsewhere) tells the device what to open
+     before it opens, the set never shrinks, and a request arriving mid-stream
+     is deferred to the next start rather than stopping the driver under
+     whoever is listening. The requester's fallback — a per-device
+     "which channels to open" preference — is NOT built; it is the answer if
+     deferral turns out to bite in practice.
+   - **The stream is NOT compacted.** Opening {0, 5} gives a six-channel
+     stream with 1-4 silent, because `SObject::recordingChannels_` and
+     `CaptureWavSink::channelMask` both mean "bit n == input n". Compacting
+     would silently redefine every mask in the project and land takes on the
+     wrong input. See `asio_channels.h`; it is the one piece of Phase 3 whose
+     failure mode is wrong audio rather than no audio.
 4. **Options input-device enumeration** — replace the hardcoded "System
    default" input combo with `createAudioInput()->listDevices()` (closes the
    long-standing Phase-7 TODO). ASIO entries report channels=0 in enumeration

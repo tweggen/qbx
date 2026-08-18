@@ -768,7 +768,10 @@ if(SMARAGD_WINDOWS AND ENABLE_WASAPI)
         # build and then ran an SDK-less one must get a reason, not a mystery.
         devices/src/win_multi_backend.cc
         devices/src/win_multi_backend.h
+        devices/src/win_multi_input.cc
+        devices/src/win_multi_input.h
         devices/src/asio_id.h
+        devices/src/asio_channels.h
     )
     message(STATUS "tw_devices: WASAPI backend and input (recording) enabled")
 endif()
@@ -841,6 +844,8 @@ if(SMARAGD_WINDOWS AND ENABLE_ASIO)
             devices/src/asio_device.h
             devices/src/asio_backend.cc
             devices/src/asio_backend.h
+            devices/src/asio_input.cc
+            devices/src/asio_input.h
             devices/src/asio_driver_list.cc
             devices/src/asio_driver_list.h
             devices/src/asio_convert.h
