@@ -200,14 +200,16 @@ called cross-thread without marshaling).
    add is a **non-zero buffer granularity**, which this driver cannot produce
    (min == max == preferred == 256) and which is unit-tested rather than
    hardware-gated. Optional, never blocking.
-2. **Output + dispatcher** — `spsc_ring`, `asio_convert`, `asio_device`
-   (output half + registry + fence), `asio_backend`, `asio_id`,
+2. **Output + dispatcher** — `asio_convert`, `asio_bufsize`, `asio_device`
+   (output half + registry + gate/fence), `asio_backend`, `asio_id`,
    `win_multi_backend`, factory change, CONTRACT edits,
-   `multi_backend_test`. *Ungated:* playback via FlexASIO + real driver;
-   WASAPI regression through the dispatcher (bare persisted id, `default`,
-   prefixed); meter latency sanity; start/stop cycling; `setBufferSize`
-   while stopped. **RE-PLANNED 2026-08-18 against proposal 36 and the gate
-   run — read the section below before writing any of it.**
+   `multi_backend_test`, `audio_backend_probe`. *Ungated:* playback via
+   FlexASIO; meter latency sanity against a real measurement;
+   `setBufferSize` on a driver that offers more than one size.
+   **RE-PLANNED 2026-08-18 against proposal 36 and the gate run — read the
+   section below before writing any of it. EXECUTED 2026-08-18**, with the
+   real-driver checks done through `audio_backend_probe` (ASIO open/tone,
+   and the WASAPI regression at all three id spellings).
 3. **Input + full duplex** — input half of `bufferSwitch`, `asio_input`,
    `win_multi_input`, factory change, refcounted cross-facade start/stop.
    *Ungated:* ASIO record-only; record-while-playing on the same driver;
@@ -333,7 +335,7 @@ requirements, not observations:
 
 ### Phase 2 deliverables, revised
 
-Unchanged from the table above: `spsc_ring.h`, `asio_convert.h`, `asio_id.h`,
+Unchanged from the table above: `asio_convert.h`, `asio_id.h`,
 `asio_backend.{h,cc}`, `win_multi_backend.{h,cc}`, the factory change, the
 CONTRACT edits, `multi_backend_test.cc`.
 
@@ -342,12 +344,69 @@ Changed:
 - `asio_device.{h,cc}` — add the two-output policy (`outs = min(2,
   deviceOutCount)`, buffers created for exactly those), both callback
   trampolines into one body, and the latency re-read ordering.
-- `multi_backend_test.cc` — the granularity walk must cover the
-  `granularity == 0` case with `min == max == preferred` as a named row, and
-  the converter tests must cover Int32LSB de-interleave explicitly.
+- `asio_bufsize.h` — NEW, and not in the table above. The granularity walk was
+  listed as living inside `asio_device`; it is a free function in its own
+  SDK-free header instead, for the same reason `asio_id` and `asio_convert`
+  are: it is the part that can be gated without hardware, and the gate driver
+  exercises only one of its three branches.
+- **`spsc_ring.h` is CANCELLED.** `tw/devices/audio_ring.h` is already a
+  lock-free SPSC ring — head/tail atomics, no mutex — and is already driven by
+  the WASAPI, ALSA and file capture threads, which is the same shape an ASIO
+  `bufferSwitch` has. Phase 3 uses `AudioRing`. One was written before this was
+  checked, and it had reintroduced precisely the bug `devices/CONTRACT.md`
+  inv. 20 already forbids (drop-OLDEST on overflow needs the producer to move
+  the consumer's index, which is a data race); the threaded test caught it
+  reordering. Two implementations of a lock-free structure is the duplication
+  this repo has paid for before.
+- `audio_backend_probe.cc` — NEW tool, not in the table above and the reason
+  three real bugs were found rather than shipped. It drives the PRODUCTION
+  path (`createAudioBackend` → dispatcher → backend) with `list` / `open` /
+  `tone`, and it is the ONLY way any of Phase 2 can be exercised against a
+  driver; `asio_probe` proves the ABI but bypasses every class Phase 2 adds.
+- `multi_backend_test.cc` — the granularity walk covers the `granularity == 0`
+  case with `min == max == preferred` as a named row, and the converters cover
+  de-interleave per type plus packed Int24, saturation, and the deliberate
+  non-clamping of the float types.
 - Nothing in `tw/playback`. If a Phase 2 diff touches `twSpeaker`, the
   two-output decision above has been dropped somewhere and that is the thing
-  to re-examine first.
+  to re-examine first. (It did not: the diff is `tw/devices` and CMake only.)
+
+### What Phase 2 cost that nothing predicted
+
+Three bugs, none of which any amount of reading would have found, and all
+three from the hardware probe rather than the suite:
+
+1. **`ASIOCallbacks` MUST OUTLIVE `createBuffers`.** The driver does not copy
+   the struct — it keeps the POINTER and dereferences it on every callback for
+   the life of the stream. A local in `createBuffers_()` therefore dies while
+   the driver is still calling through it: an immediate SIGSEGV **on the
+   driver's thread, at a stack address**, with a backtrace of pure garbage
+   because the "return address" never was one. `asio_probe` is accidentally
+   immune (its struct is a local in `cmdTone`, which spans the whole run), so
+   the ABI gate could never have surfaced it. Now a member.
+2. **The stop fence needed a GATE, not just a wait.** `stopOutput()`'s contract
+   is "no callback in flight OR FORTHCOMING", and on a driver-owned thread the
+   second half cannot be delivered by waiting — nothing stops the driver
+   entering the trampoline once more after `ASIOStop()` returns, and the gate
+   driver does exactly that, **256 frames, on every run**. Measured: the
+   in-flight spin alone let a late callback through into the app's render
+   callback, which is precisely the teardown hazard the invariant exists for.
+   `acceptCallbacks_` is cleared BEFORE `ASIOStop`, so a late callback is
+   turned away having touched nothing, and is counted and logged rather than
+   hidden. Note this contradicts the Phase 1 gate run, which reported no late
+   callbacks — the probe stops differently, and one observation of "this driver
+   does not" was not evidence.
+3. **Enumeration must NOT prefix WASAPI ids.** The design says ids are
+   namespaced `wasapi:` / `asio:`; emitting the `wasapi:` half would have been
+   a silent regression for every existing user, because the device picker
+   compares its menu entries against the current device string VERBATIM
+   (`smainwindow.cpp`) — a stored bare id would match nothing, the menu would
+   check-mark the FIRST entry, and applying the Options page would then switch
+   the user's device. The prefix is accepted on input and never produced.
+   (Relatedly, the design's claim that "the per-device latency keys
+   `audio/outputLatency/<id>` keep working" is moot: no such key exists. The
+   only per-device settings key is `audio/recordingOffsetMs/<input NAME>`,
+   which the output id does not touch.)
 
 ## Risks
 
