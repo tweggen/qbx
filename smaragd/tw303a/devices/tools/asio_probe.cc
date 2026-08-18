@@ -238,15 +238,47 @@ struct ToneState {
     std::atomic<bool>             resetRequested{ false };
     std::atomic<bool>             rateChanged{ false };
     std::atomic<int>              badIndex{ 0 };
+
+    // Callback TIMING, so this probe and audio_backend_probe can be compared
+    // like for like. A dropout is a gap of several buffer periods, and the
+    // only way to tell "the backend upsets the driver" from "this driver does
+    // this" is to measure the same thing on a path that shares no backend
+    // code at all — which is what this one is.
+    std::atomic<long long>        lastNs{ 0 };
+    std::atomic<long long>        startedNs{ 0 };   // when start() RETURNED
+    std::atomic<long long>        firstCbNs{ 0 };
+    std::atomic<long long>        worstGapNs{ 0 };
+    std::atomic<long long>        worstWorkNs{ 0 };
+    std::atomic<long>             bigGaps{ 0 };
 };
 
 ToneState *gTone = nullptr;
+
+long long nowNs()
+{
+    return (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch() ).count();
+}
 
 void fillTone( long index )
 {
     ToneState *t = gTone;
     if( !t )
         return;
+
+    const long long tin = nowNs();
+    if( t->firstCbNs.load( std::memory_order_relaxed ) == 0 )
+        t->firstCbNs.store( tin, std::memory_order_relaxed );
+    const long long prev = t->lastNs.exchange( tin, std::memory_order_relaxed );
+    if( prev != 0 ) {
+        const long long gap = tin - prev;
+        if( gap > t->worstGapNs.load( std::memory_order_relaxed ) )
+            t->worstGapNs.store( gap, std::memory_order_relaxed );
+        const long long period =
+            (long long)( 2.0e9 * (double)t->bufferFrames / t->sampleRate );
+        if( period > 0 && gap > period )
+            t->bigGaps.fetch_add( 1, std::memory_order_relaxed );
+    }
     if( index != 0 && index != 1 ) {
         // A double-buffer index outside {0,1} means the ABI fell apart —
         // record it, write nothing.
@@ -308,6 +340,10 @@ void fillTone( long index )
     t->phase = phase;
     t->framesDelivered.fetch_add( t->bufferFrames, std::memory_order_relaxed );
 
+    const long long work = nowNs() - tin;
+    if( work > t->worstWorkNs.load( std::memory_order_relaxed ) )
+        t->worstWorkNs.store( work, std::memory_order_relaxed );
+
     if( t->postOutputReady )
         t->driver->outputReady();
 }
@@ -333,21 +369,31 @@ void cbSampleRateDidChange( ASIOSampleRate /*rate*/ )
         gTone->rateChanged.store( true, std::memory_order_relaxed );
 }
 
+// Which callback entry point to negotiate for. See kAsioSupportsTimeInfo
+// below: this is a HOST choice, and flipping it is what exercises the legacy
+// path without installing a second driver.
+bool gAnswerTimeInfo = true;
+
 long cbAsioMessage( long selector, long value, void * /*message*/, double * /*opt*/ )
 {
     switch( selector ) {
     case kAsioSelectorSupported:
-        return ( value == kAsioEngineVersion || value == kAsioResetRequest ||
-                 value == kAsioSupportsTimeInfo )
-                   ? 1
-                   : 0;
+        if( value == kAsioSupportsTimeInfo )
+            return gAnswerTimeInfo ? 1 : 0;
+        return ( value == kAsioEngineVersion || value == kAsioResetRequest ) ? 1 : 0;
     case kAsioEngineVersion:
         return 2;
     case kAsioSupportsTimeInfo:
         // Answer YES so a modern driver takes the bufferSwitchTimeInfo path —
-        // the one the production backend will use. The plain-bufferSwitch
-        // path stays covered by drivers that never ask.
-        return 1;
+        // the one the production backend will use.
+        //
+        // `--no-timeinfo` answers NO instead, which is the ONLY way to reach
+        // the plain-bufferSwitch path on a driver that supports both: which
+        // entry point a driver calls is OUR decision, not a property of the
+        // driver, so covering the legacy path needs no second driver — it
+        // needs this flag. Measured on the US-16x08: 0/356 with the flag off,
+        // and the reverse with it on.
+        return gAnswerTimeInfo ? 1 : 0;
     case kAsioResetRequest:
         if( gTone )
             gTone->resetRequested.store( true, std::memory_order_relaxed );
@@ -584,14 +630,18 @@ int cmdTone( const std::string &arg, int seconds )
 
     long lIn = 0, lOut = 0;
     drv->getLatencies( &lIn, &lOut );
-    std::printf( "  run    : %.0f Hz, %ld frames/buffer, latency out %ld, outputReady %s\n",
-                 (double)rate, bPref, lOut, tone.postOutputReady ? "yes" : "no" );
+    std::printf( "  run    : %.0f Hz, %ld frames/buffer, latency out %ld, outputReady %s,"
+                 " timeInfo %s\n",
+                 (double)rate, bPref, lOut, tone.postOutputReady ? "yes" : "no",
+                 gAnswerTimeInfo ? "requested" : "DECLINED (--no-timeinfo)" );
 
     // Publish the state BEFORE start — a driver may fire the first
     // bufferSwitch from inside start() itself.
     gTone = &tone;
 
+    const long long tBeforeStart = nowNs();
     r = drv->start();
+    tone.startedNs.store( nowNs(), std::memory_order_relaxed );
     if( r != ASE_OK ) {
         std::printf( "  FAILED: start -> %s\n", aseName( r ) );
         gTone = nullptr;
@@ -600,6 +650,11 @@ int cmdTone( const std::string &arg, int seconds )
         return 1;
     }
 
+    // THE WINDOW IS MEASURED, NOT ASSUMED. This loop sleeps in 100 ms chunks
+    // and every chunk overshoots (Windows timer granularity), so a nominal
+    // 3 s run really lasts longer — and judging the frame count against
+    // rate*seconds then flatters it, hiding the driver's start-up ramp.
+    const long long tRunStart = nowNs();
     for( int elapsed = 0; elapsed < seconds * 10; ++elapsed ) {
         std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
         if( tone.resetRequested.load( std::memory_order_relaxed ) ) {
@@ -608,6 +663,7 @@ int cmdTone( const std::string &arg, int seconds )
         }
     }
 
+    const double runMs = ( nowNs() - tRunStart ) / 1e6;
     r = drv->stop();
     std::printf( "  stop   : %s\n", aseName( r ) );
 
@@ -625,14 +681,51 @@ int cmdTone( const std::string &arg, int seconds )
     gTone = nullptr;
 
     const long delivered = tone.framesDelivered.load( std::memory_order_relaxed );
-    const long expected = (long)( (double)rate * seconds );
-    std::printf( "  frames : %ld delivered, ~%ld expected  (%.0f%%)\n", delivered, expected,
+    // Against the MEASURED window, not the nominal one.
+    const long expected = (long)( (double)rate * runMs / 1000.0 );
+    std::printf( "  frames : %ld delivered, ~%ld expected over a MEASURED %.0f ms "
+                 "window  (%.0f%%)\n", delivered, expected, runMs,
                  expected > 0 ? 100.0 * (double)delivered / (double)expected : 0.0 );
+    if( runMs > seconds * 1000.0 + 50.0 )
+        std::printf( "  note   : the 100 ms sleep loop overshot by %.0f ms; judging the "
+                     "frame count against %d000 ms would flatter it\n",
+                     runMs - seconds * 1000.0, seconds );
     std::printf( "  calls  : %ld bufferSwitch, %ld bufferSwitchTimeInfo\n",
                  tone.switches.load( std::memory_order_relaxed ),
                  tone.timeInfoSwitches.load( std::memory_order_relaxed ) );
+    {
+        const double periodMs = 1000.0 * (double)tone.bufferFrames / tone.sampleRate;
+        const double gapMs  = tone.worstGapNs.load( std::memory_order_relaxed ) / 1e6;
+        const double workMs = tone.worstWorkNs.load( std::memory_order_relaxed ) / 1e6;
+        std::printf( "  timing : period %.2f ms; worst gap %.2f ms; %ld gap(s) > 2x "
+                     "period; worst work %.3f ms\n",
+                     periodMs, gapMs, tone.bigGaps.load( std::memory_order_relaxed ),
+                     workMs );
+        const long long st = tone.startedNs.load( std::memory_order_relaxed );
+        const long long fc = tone.firstCbNs.load( std::memory_order_relaxed );
+        std::printf( "  startup: start() call itself %.1f ms; first callback %.1f ms "
+                     "AFTER start returned\n",
+                     ( st - tBeforeStart ) / 1e6,
+                     fc ? ( fc - st ) / 1e6 : -1.0 );
+    }
     if( tone.rateChanged.load( std::memory_order_relaxed ) )
         std::printf( "  note   : driver reported sampleRateDidChange during the run\n" );
+
+    // Did the driver honour the negotiation? Phase 2 implements BOTH entry
+    // points into one body, so neither answer here is a failure — but a
+    // driver that ignores the answer is worth knowing about before the
+    // backend relies on it.
+    const long plainCalls = tone.switches.load( std::memory_order_relaxed );
+    const long infoCalls  = tone.timeInfoSwitches.load( std::memory_order_relaxed );
+    if( !gAnswerTimeInfo && infoCalls > 0 )
+        warn( "declined kAsioSupportsTimeInfo and the driver called "
+              "bufferSwitchTimeInfo %ld times anyway — it ignores the negotiation",
+              infoCalls );
+    if( gAnswerTimeInfo && infoCalls == 0 && plainCalls > 0 )
+        std::printf( "  note   : driver has no timeInfo support; it used plain "
+                     "bufferSwitch despite the offer\n" );
+    if( !gAnswerTimeInfo && plainCalls > 0 && infoCalls == 0 )
+        std::printf( "  note   : legacy bufferSwitch path exercised end to end\n" );
 
     bool ok = true;
     if( tone.badIndex.load( std::memory_order_relaxed ) ) {
@@ -667,15 +760,31 @@ int main( int argc, char **argv )
     SetErrorMode( SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
                   | SEM_NOOPENFILEERRORBOX );
 
-    if( argc < 2 ) {
+    // Flags are stripped first so they may appear anywhere; what is left is
+    // the positional command line.
+    std::vector<std::string> av;
+    for( int i = 1; i < argc; ++i ) {
+        const std::string a = argv[i];
+        if( a == "--no-timeinfo" )
+            gAnswerTimeInfo = false;
+        else
+            av.push_back( a );
+    }
+
+    if( av.empty() ) {
         std::printf(
             "usage: asio_probe list\n"
-            "       asio_probe open <driver-name-or-clsid>\n"
-            "       asio_probe tone <driver-name-or-clsid> [seconds]\n"
+            "       asio_probe open <driver-name-or-clsid> [--no-timeinfo]\n"
+            "       asio_probe tone <driver-name-or-clsid> [seconds] [--no-timeinfo]\n"
             "\n"
             "Proposal 35 Phase 1 ABI gate: drives an MSVC-built ASIO driver from this\n"
             "MinGW-built host — enumerate -> CoCreate -> init -> channels/rates/buffers\n"
-            "-> createBuffers -> start -> bufferSwitch -> stop -> dispose -> Release.\n" );
+            "-> createBuffers -> start -> bufferSwitch -> stop -> dispose -> Release.\n"
+            "\n"
+            "--no-timeinfo answers NO to kAsioSupportsTimeInfo, so a driver that\n"
+            "supports both entry points takes the plain bufferSwitch path instead.\n"
+            "Which one a driver calls is the HOST's choice, so this covers the legacy\n"
+            "path without needing a second driver installed.\n" );
         return 2;
     }
 
@@ -687,20 +796,20 @@ int main( int argc, char **argv )
         return 1;
     }
 
-    const std::string cmd = argv[1];
+    const std::string cmd = av[0];
     int rc = 2;
     if( cmd == "list" ) {
         rc = cmdList();
-    } else if( cmd == "open" && argc >= 3 ) {
-        rc = cmdOpen( argv[2] );
-    } else if( cmd == "tone" && argc >= 3 ) {
+    } else if( cmd == "open" && av.size() >= 2 ) {
+        rc = cmdOpen( av[1] );
+    } else if( cmd == "tone" && av.size() >= 2 ) {
         int seconds = 2;
-        if( argc >= 4 ) {
-            seconds = std::atoi( argv[3] );
+        if( av.size() >= 3 ) {
+            seconds = std::atoi( av[2].c_str() );
             if( seconds < 1 || seconds > 60 )
                 seconds = 2;
         }
-        rc = cmdTone( argv[2], seconds );
+        rc = cmdTone( av[1], seconds );
     } else {
         std::printf( "unknown or incomplete command '%s' — run without arguments for usage\n",
                      cmd.c_str() );

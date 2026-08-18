@@ -40,6 +40,11 @@ public:
 private slots:
     void apply();             // write all pages to SSettings (no close)
     void accept() override;   // apply + close
+    // Opens the DRIVER's own window (proposal 35 Phase 5). BLOCKS until the
+    // user closes it — the driver's call is modal — and re-reads the numbers
+    // afterwards, because on a driver like the US-16x08 the buffer size lives
+    // in that window and nowhere else.
+    void onOpenDriverPanel();
 
 private:
     QWidget *buildMousePage();
@@ -86,7 +91,11 @@ private:
     QSpinBox  *metronomeLevel_ = nullptr;     // accented click, 0..100 %
     QSpinBox  *countInBars_    = nullptr;
     QSpinBox  *preRollBars_    = nullptr;    // Input device (for recording)
-    QComboBox *bufferSizeCombo_;     // Buffer size (ALSA only)
+    QComboBox *bufferSizeCombo_;     // Buffer size (ALSA and ASIO)
+    // The DRIVER's own settings window (proposal 35 Phase 5). Shown only
+    // for a backend that has one — WASAPI does not, because a shared-mode
+    // endpoint's settings live in the Windows sound control panel.
+    QPushButton *driverPanelBtn_ = nullptr;
     QLabel *outputLatencyLabel_;     // Output latency display
     QLabel *inputLatencyLabel_;      // Input latency display
 

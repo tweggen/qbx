@@ -25,11 +25,40 @@ Invariants:
    applies to everything reachable from it.
 2. openDevice/startOutput/stopOutput/closeDevice are blocking control-plane
    calls (UI/worker thread), never called from the callback.
-3. stopOutput() blocks until the callback thread has exited — callers rely
-   on this for teardown ordering.
+3. stopOutput() guarantees NO CALLBACK IS IN FLIGHT OR FORTHCOMING when it
+   returns — callers rely on this for teardown ordering. On WASAPI/ALSA/
+   CoreAudio that is a thread JOIN, because the callback thread is ours. On
+   ASIO IT CANNOT BE: the callback thread belongs to the DRIVER and there is
+   nothing to join, so the guarantee is met by an atomic callback-depth FENCE
+   spun after ASIOStop() returns (`AsioDevice::fenceCallbacks_`). The fence is
+   CAPPED at 2 s and logs rather than hanging, because a misbehaving driver
+   must not take the UI thread with it.
+   THE FENCE ALONE IS NOT ENOUGH, and this is the part to keep: waiting cannot
+   deliver the "forthcoming" half of the promise, because nothing stops a
+   driver-owned thread entering the trampoline once more after ASIOStop()
+   returns. So a GATE (`acceptCallbacks_`) is cleared BEFORE ASIOStop and a
+   late callback is turned away at the top of `render_()` having touched
+   nothing. Measured on a US-16x08 through `audio_backend_probe`: the gate
+   turns away a callback in **2 runs out of 5** — real, and intermittent.
 4. Device ids are backend-native strings; "default"/empty = system default.
+   ON WINDOWS THEY ARE ALSO NAMESPACED (proposal 35 Phase 2, `asio_id.h`):
+   `asio:<clsid-or-name>` selects an ASIO driver and everything else — a
+   `wasapi:` prefix, a bare endpoint id, an unrecognised string — routes to
+   WASAPI. THE BARE FALLBACK IS LOAD-BEARING: every `audio/deviceId` written
+   before the dispatcher existed is a bare endpoint id, and it must keep
+   working. The `wasapi:` prefix is ACCEPTED but NEVER EMITTED — enumeration
+   returns WASAPI ids exactly as it always did, because the device picker
+   matches its menu entries against the current device string VERBATIM, so
+   prefixing would leave a returning user's selection matching nothing and the
+   UI check-marking the wrong device.
 5. createAudioBackend()/createAudioInput() choose the platform impl via the
-   QBX_* defines; adding a backend touches this module + CMake only.
+   QBX_* defines; adding a backend touches this module + CMake only. On
+   Windows `createAudioBackend()` returns a DISPATCHER (`WinMultiBackend`)
+   that merges both device lists and routes by id, so twSpeaker still builds
+   one backend in its constructor and switching worlds is a device-id change.
+   The dispatcher NEVER falls back silently: an `asio:` id that fails to open
+   is an error, because a user who chose ASIO and was quietly given shared-mode
+   WASAPI would be listening to the thing they picked ASIO to avoid.
 6. SMARAGD_AUDIO_BACKEND (capture|null|default) outranks the platform choice
    in createAudioBackend(). It is read ONCE, inside twSpeaker's constructor —
    which is why the selection is an environment variable and not an argument:
@@ -171,10 +200,114 @@ Invariants:
     gate, and re-pointing a green measured path at a new class buys nothing.
     This is the form a future consolidation takes, not that consolidation.
 
+--- ASIO (proposal 35 Phase 2; the input half is Phase 3) ---
+
+25. AT MOST ONE ASIO DRIVER IS LIVE PER PROCESS, and that is forced by the ABI
+    rather than chosen: ASIO's callbacks carry NO context pointer, so a
+    process-global "active device" is the only expressible shape and a second
+    driver would silently steal the first one's callbacks. `AsioDeviceRegistry`
+    makes it explicit — the same driver is SHARED (which is what will let a
+    Phase 3 recording start without restarting playback), a different one is
+    REFUSED with a message the UI can show. Driver start/stop is REFCOUNTED
+    across the facades for the same reason.
+26. THE OUTPUT HALF OPENS TWO CHANNELS AND REPORTS TWO, never the driver's
+    output count. It is the shipped device rule — monitoring is stereo
+    (`twSpeaker`, proposal 36 B5) — and it is what keeps a monitor mix off an
+    8-out interface's headphone amps and outboard sends, which is where
+    `twmonitor::interleave`'s `c % 2` fan-out would otherwise put it. A wider
+    project still RENDERS its full width to a file; reaching physical outputs
+    3.. needs an output-routing model and is a later proposal.
+27. BOTH CALLBACK ENTRY POINTS LAND IN ONE BODY. We answer
+    `kAsioSupportsTimeInfo` with 1, and a driver that honours it never calls
+    plain `bufferSwitch` again — measured on a US-16x08 via `asio_probe
+    --no-timeinfo`: 0/322 with the offer, 357/0 without it. Implementing only
+    the one the design's prose names would be a silent dead stream on every
+    modern driver.
+28. LATENCIES ARE READ AFTER setSampleRate AND createBuffers, and again after
+    any rate change — never cached from open. Measured on a US-16x08: output
+    latency 702 frames at 44100 and 735 at 48000. The number feeds
+    `AudioConfig::outputLatencyFrames`, hence `meterLatencyFrames()`, hence
+    every position the meters, the MIDI-out pump and both recorders compensate
+    with.
+29. THE CALLBACK OBEYS THREADING.md rule 1 like any other: no locks, no
+    allocation, no logging. Scratch is sized at createBuffers time; a rate
+    change and a reset request LATCH into atomics and are reported from the
+    control plane; the device reopens on the next Play (declared debt — there
+    is no live renegotiation). An unsupported sample type (MSB, DSD) is
+    refused AT OPEN, so the callback never meets one.
+30. THERE IS NO SECOND SPSC RING. Proposal 35's file table lists an
+    `spsc_ring.h` for the input half; it was written and DELETED, because
+    `audio_ring.h` is already a lock-free SPSC ring with no mutex in it and is
+    already driven by the WASAPI, ALSA and file capture threads — the same
+    shape an ASIO `bufferSwitch` has. Phase 3 uses `AudioRing`. Note that the
+    deleted one had reintroduced exactly the bug inv. 20 forbids: it dropped
+    the OLDEST frames on overflow, which needs the producer to move the
+    consumer's index, and the threaded test caught it reordering.
+
+--- ASIO INPUT / full duplex (proposal 35 Phase 3) ---
+
+31. FULL DUPLEX IS ONE DEVICE, NOT TWO. `AsioBackend` and `AsioInput` acquire
+    the SAME `AsioDevice` from the registry, so there is one `IASIO`, one
+    `createBuffers`, one callback and ONE CLOCK. That last one is the whole
+    reason ASIO matters for recording: capture and render cannot drift, which
+    is exactly the failure the Windows endpoint sample-rate trap produces (see
+    CLAUDE.md). Start/stop is REFCOUNTED — a recording started while playback
+    runs does not restart the driver, a recording alone runs it with the
+    output half emitting silence, and closing one facade leaves the other's
+    stream untouched.
+32. **THE INPUT CHANNEL SET IS DEMAND-DRIVEN AND GROW-ONLY.** ASIO fixes the
+    set at `createBuffers` time and changing it needs the driver STOPPED, so
+    `requestChannels(mask)` (new on `AudioInput`, a no-op everywhere else)
+    tells the device what to open BEFORE it opens. The set never shrinks — so
+    arming a channel a second time is free and disarming disturbs nothing —
+    and a request that arrives while the stream is RUNNING is recorded and
+    applied at the next start, never by stopping the driver under whoever is
+    listening. That is the same "takes effect on next Play" model a device
+    change already uses. Nobody having asked means INPUT 0 ALONE, matching
+    `SObject::DEFAULT_RECORDING_CHANNELS`, so a pro interface's sixteen inputs
+    are not opened merely because it has sixteen.
+33. **THE CAPTURE STREAM IS NOT COMPACTED: bit n is input n, everywhere.**
+    Opening inputs {0, 5} yields a SIX-channel stream whose channels 1-4 are
+    silent, not a two-channel one. Compacting would be the memory-efficient
+    thing and would silently redefine every mask in the project —
+    `SObject::recordingChannels_` and `CaptureWavSink::channelMask` both mean
+    "input n" — so bit 5 would come to mean "the second channel I happened to
+    open" and a take would land on the wrong input with nothing to show for
+    it. The conversion cost still scales with what is open, because the
+    callback converts opened channels only. Gated in `multi_backend_test`
+    ("THE STREAM IS NOT COMPACTED") and measured on hardware: mask 0x21 gives
+    a 6-wide stream with signal on ch0 and ch5 and EXACTLY 0.0000 on ch1-ch4.
+34. The capture ring is `AudioRing` — see inv. 30. The callback pushes whole
+    blocks and never blocks; an overrun is a counter, as inv. 20 requires.
+
+35. **`openControlPanel()` IS THE ONE CALL ON `AudioBackend` THAT BLOCKS.**
+    Every other method here is a control-plane call that returns promptly; this
+    one shows the DRIVER's own modal window and does not return until the user
+    closes it, so it belongs on the UI thread and nowhere else — it also needs
+    a message pump, because the driver parks a real window on the HWND it was
+    given at `init`. The default implementation returns -1 ("no panel"), which
+    is what WASAPI keeps: a shared-mode endpoint's settings live in the Windows
+    sound control panel and are not ours to open. It requires an OPEN device —
+    a panel belongs to an instantiated driver, not to a CLSID. Afterwards the
+    driver's buffer size and rate are RE-READ, and what the user changed
+    applies on the NEXT open: `getAvailableBufferSizes()` moves at once while
+    `getConfig().bufferFrames` does not, which is the visible shape of the
+    no-live-renegotiation debt.
+
 How to test: WASAPI is the only regularly exercised backend (manual GUI
 playback); Null backend keeps headless/CI paths honest. devices/tools/
 asio_probe (Windows, needs the drop-in ASIO SDK — proposal 35) triages an
-installed ASIO driver end to end without starting the app. The CAPTURE backend is
+installed ASIO driver end to end without starting the app; `--no-timeinfo`
+makes it take the legacy `bufferSwitch` path, which is the ONLY way to cover
+that path without installing a second driver. devices/tools/
+audio_backend_probe drives the PRODUCTION path instead (createAudioBackend ->
+the dispatcher -> WASAPI or ASIO) with `list` / `open <id>` / `tone <id>`, and
+is the only way Phase 2's backend can be exercised at all — run it on BOTH an
+`asio:` id and a bare WASAPI one, the second being the dispatcher regression
+that matters most. `multi_backend_test` (ctest, ALL platforms) covers the
+parts that were deliberately written SDK-free so they could be covered: id
+routing incl. the bare fallback, the buffer-size granularity walk, and the
+de-interleaved converters incl. packed Int24. The CAPTURE backend is
 what makes the playback path assertable at all — it is the headless default, so
 every qxa case with a <toggle-playback> runs through it, and
 playback_start_after_edit_position decodes its recording position by position.

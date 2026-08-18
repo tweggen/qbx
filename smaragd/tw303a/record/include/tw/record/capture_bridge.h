@@ -49,6 +49,18 @@ struct CaptureBridgeParams {
     // (one page per channel).
     std::size_t   chunkFrames = 0;
 
+    // INPUT CHANNELS TO MAKE AVAILABLE, as a bitmask where bit n means input n
+    // — the same convention as `CaptureWavSink::channelMask` and
+    // `SObject::recordingChannels_`. 0 means "no opinion".
+    //
+    // Only ASIO acts on it (proposal 35 Phase 3): every other backend opens the
+    // endpoint's channels whether anyone asked or not, whereas an ASIO driver
+    // fixes its channel set at createBuffers time and must be told BEFORE it
+    // opens. Passing the union of the armed tracks' masks is what lets a user
+    // record input 6 of a 16-input interface without the device opening all
+    // sixteen.
+    std::uint64_t inputChannelMask = 0;
+
     std::vector<CaptureWavSink> wavSinks;
 
     // Does this bridge CAPTURE (append to the pages and to the files) from the
@@ -221,6 +233,13 @@ public:
     std::uint32_t inputChannels() const { return inputChannels_; }
     std::uint32_t inputRate() const { return inputRate_; }
     std::uint32_t targetRate() const { return targetRate_; }
+    // Ask the OPEN device to make these input channels available (bit n ==
+    // input n). Grow-only and, on ASIO, deferred to the next start when the
+    // stream is already running — so calling it per arm is safe and cheap.
+    // Returns the backend's answer: 0 applied/already open, 1 deferred, -1 no
+    // device.
+    int requestInputChannels( std::uint64_t mask );
+
     std::uint32_t inputLatencyFrames() const { return inputLatencyFrames_; }
 
     CaptureBridgeStats stats() const;

@@ -1,5 +1,12 @@
 # ASIO Phase 1 — the Windows gate run (manual)
 
+> **STATUS: PASSED 2026-08-18** against a real vendor driver (Tascam
+> US-16x08). Phase 1 is closed and Phase 2 is unblocked. The record of that
+> run — and the driver facts it bought, several of which change Phase 2/4/5 —
+> is at the end of this file. The runbook is kept because it should be RE-RUN
+> for every further driver: one driver is not a survey, and a wrapper driver
+> (FlexASIO / ASIO4ALL) is still untried.
+
 Proposal 35 Phase 1 (PR #31, merged 2026-08-15) put the ASIO SDK detection and
 the `asio_probe` spike into the tree. Everything that could be gated by CI-less
 automation was (macOS build with the block inert, layering, logging, ctest);
@@ -24,21 +31,33 @@ git checkout main && git pull
 ### 2. Drop in the Steinberg ASIO SDK
 
 Download the SDK from <https://www.steinberg.net/asiosdk> (free, requires
-accepting Steinberg's license). Unzip it and place it so that this exact path
-exists:
+accepting Steinberg's license). That URL redirects to the current release —
+**`ASIO-SDK_2.3.4_2025-10-15.zip`** as of 2026-08-18, ~8.9 MB, the version the
+gate run below used. Unzip it and place it so that this exact path exists:
 
 ```
 smaragd/third_party/asiosdk/common/iasiodrv.h
 ```
 
-The zip usually unpacks to a versioned folder (`asiosdk_2.3.3_...`) — rename
-or move that folder to `asiosdk`. The directory is **gitignored on purpose**:
-Steinberg's license forbids redistribution, so it must never be committed.
+The 2.3.4 zip unpacks to a folder named plainly **`ASIOSDK`** (older 2.3.3
+zips used a versioned name) — rename or move it to `asiosdk`. The directory is
+**gitignored on purpose**: Steinberg's license forbids redistribution, so it
+must never be committed. Only `common/` is ever read: `asio_probe.cc` includes
+`iasiodrv.h`, which pulls `asio.h` and `asiosys.h` from beside it, and we
+compile ZERO SDK sources.
 
 ### 3. Build, and check the configure line
 
+**A plain `./build.sh` on an existing `build/` will NOT pick the SDK up.** The
+sentinel is an `EXISTS()` test in `smaragd/tw303a/CMakeLists.txt`, and a
+directory appearing is invisible to CMake's dependency graph — so nothing
+re-runs configure and `asio_probe` is silently never built. `_env.sh` does
+exactly this `touch` for the clap/vst3 submodules for the same reason, but
+that path runs from `rebuild.sh`, not from an incremental build:
+
 ```bash
-./build.sh          # Git Bash, as usual
+touch smaragd/tw303a/CMakeLists.txt   # forces exactly one reconfigure
+./build.sh                            # Git Bash, as usual
 ```
 
 Watch the configure output for:
@@ -75,6 +94,13 @@ still a meaningful gate.
   (front L/R, quarter scale) and the run should end with
   `GATE PASSED: the MinGW <-> MSVC ASIO ABI works here.`
 
+Add **`--no-timeinfo`** to `open` or `tone` to answer NO to
+`kAsioSupportsTimeInfo`, which makes a driver that supports both entry points
+take the plain `bufferSwitch` path. Run `tone` BOTH ways: the production
+backend implements both, and this is the only way to exercise the legacy one
+without installing a second driver. The run line reports which was negotiated
+and the `calls` line reports which the driver actually used.
+
 `<driver name>` is matched case-insensitively as a substring, so
 `tone flex 2` works for FlexASIO.
 
@@ -105,3 +131,98 @@ tried) into the proposal-35 thread — a comment on PR #31, a note handed to the
 next Claude session, or a YouTrack issue if one gets created for Phase 2.
 On `GATE PASSED`, Phase 2 (output backend + the `WinMultiBackend` dispatcher —
 see `plan/proposed/35_ASIO_BACKEND.md`) is unblocked.
+
+---
+
+## The gate run of 2026-08-18
+
+**Verdict: `GATE PASSED`.** `open` and `tone` both reported it, the 2-second
+440 Hz sine was **audible on the connected monitors** (the one thing the probe
+cannot check for itself — `RESULT` is a frame count, not a sound), and none of
+the ABI tells fired: no `SUSPECT VTABLE MISMATCH`, no `SUSPECT VTABLE/STRUCT
+MISMATCH`, no out-of-range `bufferSwitch` index, no callbacks after `stop()`,
+no `kAsioResetRequest`, no crash. The MinGW↔MSVC vtable bet — risk 1 of
+proposal 35, and the entire reason Phase 1 exists — is settled on real vendor
+hardware, exactly as `vst3_probe` settled it for VST3 before M6.
+
+**Setup:** Windows 11, MinGW x64 build from `main` at 585f80a, ASIO SDK
+2.3.4, one driver installed: **Tascam US-16x08**, driver version 1001,
+CLSID `{FA12DE15-482E-4214-8D11-6817497635C0}`.
+
+### What the driver reported
+
+```
+chans  : 16 in, 8 out  (ASE_OK)
+buffer : min 256, max 256, preferred 256, granularity 0  (ASE_OK)
+rate   : current 44100;  supported: 44100 48000 88200 96000
+         all 24 channels Int32LSB
+create : 2 ch x 256 frames -> ASE_OK
+latency: input 300 frames, output 702 frames  (at 44100)
+outputReady: not supported
+run    : 48000 Hz, 256 frames/buffer, latency out 735, outputReady no
+frames : 91136 delivered, ~96000 expected  (95%)
+calls  : 0 bufferSwitch, 356 bufferSwitchTimeInfo
+```
+
+### Reading the two lines that look like problems and are not
+
+- **`95%` of expected frames.** Not a dropout. `expected` is computed as
+  `rate × seconds` (`asio_probe.cc:628`) against a fixed sleep — it does not
+  measure when the stream actually started — so the missing ~4864 frames
+  (~101 ms) are the driver's start-up delay inside that window. The probe's
+  failure threshold is `delivered < expected / 2`.
+- **`0 bufferSwitch, 356 bufferSwitchTimeInfo`.** Not a driver quirk: the
+  probe answers `kAsioSupportsTimeInfo` with 1 on purpose
+  (`asio_probe.cc:347`) so that a modern driver takes the path the production
+  backend will use. The US-16x08 honours it. The obligation this transfers to
+  Phase 2 is in the table below.
+
+### What it changes for Phases 2, 4 and 5
+
+One driver is not a survey — but these are the first real numbers this design
+has, and three of them change what should be built.
+
+| Measured | Consequence |
+|---|---|
+| 16 in / 8 out on ONE instance, all `ASIOSTInt32LSB` | Full duplex out of one `AsioDevice` as designed, and 8 outs give proposal 36's wide sink somewhere real to go. The hand-rolled packed **Int24** converter is not exercised by this hardware and stays unit-test-only until a driver that uses it turns up. |
+| Rates 44100 / 48000 / 88200 / 96000; **`tone` ran at 48000 while the driver's current rate was 44100** | Native rate selection works. This is the fix for the endpoint sample-rate trap (see CLAUDE.md): one driver, one clock, in and out matched — no 52 144 Hz stream under a 48000 label. `twNegotiator` gets a real `supportedRates()`. No 32k and no 176.4/192k, so the `{32k…192k}` probe sweep correctly returns four. |
+| Output latency **702 frames at 44100 but 735 at 48000** | **Latency is RATE-DEPENDENT.** `ASIOGetLatencies` must be read after `setSampleRate` + `createBuffers` and never cached from open. ~1002 frames round trip ≈ 22.7 ms is the figure `SApplication::meterLatencyFrames()` and proposal 21 L6 would work with. |
+| buffer min == max == preferred == 256, granularity 0 | Exercises the `granularity == 0 ⇒ {preferred}` branch of the walk. Honest consequence: on this driver the **Phase 4 buffer-size combo has exactly one entry** — the size is set in the vendor's own control panel — so **Phase 5 (the Control Panel button) is worth more than Phase 4 here**, the reverse of the proposal's ordering. Neither is on the critical path; note it when they are scheduled. |
+| `outputReady: not supported` | Step 3 of the `bufferSwitch` data path is a no-op on this driver. Keep the call — it is a latency win on many others — but expect nothing from it here. |
+| The driver never calls plain `bufferSwitch` once TimeInfo is accepted | **Answer `kAsioSupportsTimeInfo` and you MUST implement `bufferSwitchTimeInfo`.** Implement both entry points into one body, and treat the `ASIOTime` the TimeInfo variant carries as the sample-position source proposal 21 L6 will want. |
+
+### Still not proven
+
+- **The legacy `bufferSwitch` path IS covered — no second driver needed.**
+  Which entry point a driver calls is the HOST's choice, not a driver
+  property: `asio_probe tone <driver> [s] --no-timeinfo` answers NO to
+  `kAsioSupportsTimeInfo` and the driver falls back. Measured on the US-16x08
+  on 2026-08-18, back to back:
+
+  | Run | `bufferSwitch` | `bufferSwitchTimeInfo` | Frames |
+  |---|---|---|---|
+  | default | 0 | 322 | 86 % |
+  | `--no-timeinfo` | **357** | **0** | 95 % |
+
+  Both `GATE PASSED`, both `tone lifecycle OK`. **The driver honours the
+  negotiation in both directions**, which is a stronger result than a second
+  driver would have given: it is the exact behaviour Phase 2 depends on, on
+  the hardware in the room. (The 86 % / 95 % difference is driver start-up
+  inside the fixed sleep window, not a delivery problem — see above.)
+- **No wrapper driver has been run** (FlexASIO, ASIO4ALL), and that is now a
+  small gap rather than the main one. What it would still add is a **non-zero
+  buffer-size granularity** — impossible to synthesise here, since this driver
+  is fixed at min == max == preferred == 256 — and a driver whose control
+  panel we do not control. The granularity walk is pure arithmetic and is
+  unit-tested in `multi_backend_test`; nothing else about it is provable
+  without such a driver. Optional, never blocking. Note also that installing
+  one cannot displace a vendor driver: `HKLM\SOFTWARE\ASIO` is a flat list of
+  independent keys, each naming its own CLSID and its own DLL, and there is no
+  "active driver" slot to claim.
+- **No second vendor driver**, so nothing here distinguishes "how ASIO
+  behaves" from "how the US-16x08 behaves".
+- **Nothing about the stop-fence under stress**: this driver delivered no
+  callbacks after `stop()` returned, so the case invariant 3 is being reworded
+  for remains unobserved in the wild.
+- **No input path at all** — `asio_probe` is output-only; the input half is
+  Phase 3.

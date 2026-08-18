@@ -164,13 +164,22 @@ bool SLiveMonitor::ensureInput( STrack *track )
     QString want = track->trackInputAudioDevice();
     if( want.isEmpty() ) want = SSettings::instance().audioInputDeviceId();
     if( want.isEmpty() ) want = QStringLiteral( "default" );
-    return ensureBridge( want );
+    // The track's own recording channels travel with the request: on ASIO the
+    // device opens exactly what has been asked for (proposal 35 Phase 3), and
+    // because that set is grow-only, arming tracks one at a time accumulates
+    // the union without anyone having to compute it.
+    return ensureBridge( want, track ? (std::uint64_t) track->getRecordingChannels() : 0 );
 }
 
-bool SLiveMonitor::ensureBridge( const QString &want )
+bool SLiveMonitor::ensureBridge( const QString &want, std::uint64_t channelMask )
 {
     if( bridge_ && bridge_->isRunning() && inputDeviceId_ == want ) {
         bridge_->setLiveEnabled( true );
+        // The device is already open, so a NEW channel cannot be added without
+        // stopping the driver — the backend records it and applies it at the
+        // next start rather than gapping what is playing. Already-open
+        // channels, which is the common case, cost nothing.
+        if( channelMask ) bridge_->requestInputChannels( channelMask );
         return true;
     }
     if( bridge_ ) {
@@ -202,6 +211,7 @@ bool SLiveMonitor::ensureBridge( const QString &want )
     // to keep. beginCapture() opens a segment when a take starts.
     p.capturePages  = false;
     p.liveEnabled   = true;
+    p.inputChannelMask = channelMask;
 
     std::unique_ptr<audio::CaptureBridge> br( new audio::CaptureBridge() );
     if( !br->start( p ) ) {

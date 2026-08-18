@@ -12,6 +12,12 @@
 
 #ifdef QBX_WIN_WASAPI
 #include "wasapi_input.h"
+// The Windows INPUT path goes through a dispatcher that merges the WASAPI
+// endpoints and the ASIO drivers into ONE list and routes by id prefix
+// (proposal 35 Phase 3), exactly as the output path does. Compiled with
+// WASAPI, not with ASIO, so an SDK-less build still parses an `asio:` id and
+// fails it with a reason.
+#include "win_multi_input.h"
 #endif
 
 #ifdef QBX_LINUX_ALSA
@@ -42,7 +48,7 @@ bool envFlag(const char *name, bool def)
 std::unique_ptr<AudioInput> createPlatformInput()
 {
 #ifdef QBX_WIN_WASAPI
-    return std::make_unique<WASAPIInput>();
+    return std::make_unique<WinMultiInput>();
 #elif defined(QBX_LINUX_ALSA)
     return std::make_unique<ALSAInput>();
 #elif defined(QBX_MAC_COREAUDIO)

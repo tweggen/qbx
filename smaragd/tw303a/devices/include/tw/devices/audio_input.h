@@ -97,6 +97,26 @@ public:
     // Called after openDevice(); may probe the device but must not disturb capture.
     virtual std::vector<uint32_t> getAvailableBufferSizes() const { return {}; }
 
+    // Ask the device to make these INPUT CHANNELS available, as a bitmask
+    // where bit n means input n — the same convention as
+    // SObject::recordingChannels_, which the capture bridge applies per sink.
+    //
+    // Default: a NO-OP returning 0, because every backend but ASIO opens the
+    // endpoint's channels whether anyone asked or not and has nothing to do
+    // here. ASIO is different: the channel set is fixed at createBuffers time
+    // and changing it needs the driver STOPPED, so it has to be told what to
+    // open before it opens (proposal 35 Phase 3).
+    //
+    // Contract for a backend that implements it:
+    //   - GROW-ONLY. The set never shrinks, so a channel armed once stays
+    //     cheap to arm again and disarming never disturbs a running stream.
+    //   - It NEVER restarts a running stream. If capture is running and the
+    //     mask asks for something not yet open, the request is recorded and
+    //     applied at the next start — the same "takes effect on next Play"
+    //     model a device change already uses. Returns 1 to say so.
+    //   - Returns 0 when the request is already satisfied or was applied.
+    virtual int requestChannels(std::uint64_t /*mask*/) { return 0; }
+
     // Request a specific buffer size (in frames). Returns 0 on success, -1 on error.
     // Only valid after openDevice(). Requires capture to be stopped.
     // The backend may return a different size than requested (if the exact size is
