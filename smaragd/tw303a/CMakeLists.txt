@@ -854,6 +854,11 @@ if(SMARAGD_WINDOWS AND ENABLE_ASIO)
         # verified at all, so it is built whenever the backend is.
         add_executable(audio_backend_probe devices/tools/audio_backend_probe.cc)
         target_link_libraries(audio_backend_probe PRIVATE tw_devices tw_core)
+        # It reaches the module-private AsioDevice to read the gate counter —
+        # the only direct evidence of late callbacks.
+        target_compile_definitions(audio_backend_probe PRIVATE TW_HAVE_ASIO=1)
+        target_include_directories(audio_backend_probe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/devices/src)
         set_target_properties(audio_backend_probe PROPERTIES AUTOMOC OFF)
 
         add_executable(asio_probe

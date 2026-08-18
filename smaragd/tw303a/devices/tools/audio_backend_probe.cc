@@ -21,6 +21,15 @@
 
 #include "tw/devices/audio_backend.h"
 
+#ifdef TW_HAVE_ASIO
+// PRIVATE to the module, and reached here on purpose: the gate's own
+// counter is the only direct evidence of whether this driver delivers a
+// callback after ASIOStop() returns. acquire() with an empty name returns
+// the LIVE instance, so this queries the device the backend already holds.
+#  include "asio_device.h"
+#endif
+
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -124,15 +133,57 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
 
     // The callback runs on the DRIVER's thread. Everything it touches is
     // captured by value or is an atomic; nothing here allocates or logs.
+    //
+    // IT ALSO TIMES ITSELF, because "the tone had a click in it" is not a
+    // diagnosis. A dropout shows up here as one inter-callback GAP far larger
+    // than the buffer period; a phase discontinuity in our own generator would
+    // not. Recording the worst gap AND WHERE IT FELL separates the two without
+    // anyone having to listen twice.
     double phase = 0.0;
     std::uint64_t framesSeen = 0;
+    std::uint64_t calls = 0;
+    double worstGapMs = 0.0;
+    double worstGapAtS = 0.0;
+    double worstWorkMs = 0.0;
+    std::uint64_t bigGaps = 0;
+    double firstCallbackMs = -1.0;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto prev = t0;
+
     be->setRenderCallback(
-        [&phase, &framesSeen, step](float *out, std::size_t frames, std::uint32_t ch) {
+        [&](float *out, std::size_t frames, std::uint32_t ch) {
+            const auto now = std::chrono::steady_clock::now();
+            const double sinceStartMs =
+                std::chrono::duration<double, std::milli>(now - t0).count();
+            if (firstCallbackMs < 0.0) {
+                firstCallbackMs = sinceStartMs;
+            } else {
+                const double gapMs =
+                    std::chrono::duration<double, std::milli>(now - prev).count();
+                if (gapMs > worstGapMs) {
+                    worstGapMs  = gapMs;
+                    worstGapAtS = sinceStartMs / 1000.0;
+                }
+                if (gapMs > 2.0 * 1000.0 * (double) frames / 48000.0) ++bigGaps;
+            }
+            prev = now;
+            ++calls;
+
             for (std::size_t i = 0; i < frames; ++i, phase += step) {
                 const float v = (float) (std::sin(phase) * 0.25);
                 for (std::uint32_t k = 0; k < ch; ++k) out[i * ch + k] = v;
             }
             framesSeen += frames;
+
+            // HOW LONG WE TOOK, which is the half of the question the gap
+            // cannot answer. A gap of 3 buffer periods means either the host
+            // held the driver up or the driver never called; only the work
+            // time separates the two, and it is the only one of the two we
+            // could fix.
+            const double workMs =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - now).count();
+            if (workMs > worstWorkMs) worstWorkMs = workMs;
             return frames;
         });
 
@@ -146,9 +197,17 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
 
     const std::uint64_t before = framesSeen;
     be->stopOutput();
-    // After stopOutput() returns, the contract is "no callback in flight or
-    // forthcoming". On ASIO there is no thread to join — the fence in
-    // AsioDevice is what has to hold — so this is where a violation shows up.
+
+    // THE SAMPLE MUST BE TAKEN AFTER stopOutput() RETURNS, and getting this
+    // wrong reads as a fence failure that is not one. The contract is "no
+    // callback runs after stopOutput RETURNS" — one already in flight when the
+    // stop was requested is entitled to finish, and the fence exists precisely
+    // to wait for it. Comparing against a count sampled BEFORE the call reports
+    // every ordinary stop as a violation, because the in-flight callback
+    // increments between the two reads. Measured: that false positive fired on
+    // 2 runs in 3, at exactly one buffer (256 frames) — which is what an
+    // in-flight callback looks like.
+    const std::uint64_t atReturn = framesSeen;
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     const std::uint64_t after = framesSeen;
 
@@ -157,11 +216,47 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
                 (unsigned long long) before, (unsigned long long) expect,
                 expect ? 100.0 * (double) before / (double) expect : 0.0);
 
+    // The period one callback SHOULD take, against what happened. A gap far
+    // above the period is a dropout, and a dropout is what a click sounds
+    // like; the start-up delay is reported separately so it cannot be
+    // mistaken for one.
+    const double periodMs = c.bufferFrames && c.sampleRate
+                                ? 1000.0 * (double) c.bufferFrames / (double) c.sampleRate
+                                : 0.0;
+    std::printf("  timing : %llu callbacks, period %.2f ms; first at %.1f ms; "
+                "worst gap %.2f ms at t=%.2f s; %llu gap(s) > 2x period; "
+                "worst OUR work %.3f ms\n",
+                (unsigned long long) calls, periodMs, firstCallbackMs, worstGapMs,
+                worstGapAtS, (unsigned long long) bigGaps, worstWorkMs);
+    if (periodMs > 0.0 && worstGapMs > periodMs * 2.0) {
+        std::printf("  ! a gap of %.1fx the buffer period — a dropout, i.e. a click\n",
+                    worstGapMs / periodMs);
+        // Attribute it. If our own work never came close to the period, the
+        // host did not cause the gap and no change here can remove it.
+        if (worstWorkMs < periodMs * 0.5)
+            std::printf("           our worst callback took %.3f ms of a %.2f ms "
+                        "period (%.1f%%), so the gap is the DRIVER or the OS, "
+                        "not the host\n",
+                        worstWorkMs, periodMs, 100.0 * worstWorkMs / periodMs);
+        else
+            std::printf("           our worst callback took %.3f ms of a %.2f ms "
+                        "period — the HOST is implicated\n",
+                        worstWorkMs, periodMs);
+    }
+    if (firstCallbackMs > 50.0)
+        std::printf("  note   : %.0f ms of the shortfall is start-up before the first "
+                    "callback, not a dropout\n",
+                    firstCallbackMs);
+
     int rc = 0;
-    if (after != before) {
-        std::printf("  ! %llu frames arrived AFTER stopOutput() returned — the stop fence "
-                    "did not hold\n",
-                    (unsigned long long) (after - before));
+    if (before != atReturn)
+        std::printf("  note   : %llu frame(s) from a callback in flight at the stop — "
+                    "expected, and what the fence waits for\n",
+                    (unsigned long long) (atReturn - before));
+    if (after != atReturn) {
+        std::printf("  ! %llu frames arrived AFTER stopOutput() returned — the render "
+                    "callback was reached after the gate closed\n",
+                    (unsigned long long) (after - atReturn));
         rc = 1;
     }
     if (before < expect / 2) {
@@ -169,6 +264,14 @@ int cmdTone(const std::string &id, int seconds, std::uint32_t rate)
         rc = 1;
     }
 
+#ifdef TW_HAVE_ASIO
+    if (id.rfind("asio:", 0) == 0 || id.rfind("ASIO:", 0) == 0) {
+        if (auto dev = audio::AsioDevice::acquire("", 0, nullptr))
+            std::printf("  gate   : %llu callback(s) arrived after the gate closed "
+                        "and were turned away\n",
+                        (unsigned long long) dev->lateCallbacks());
+    }
+#endif
     be->closeDevice();
     std::printf("  RESULT : %s\n", rc == 0 ? "tone lifecycle OK" : "FAILED");
     return rc;

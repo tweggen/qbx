@@ -238,15 +238,43 @@ struct ToneState {
     std::atomic<bool>             resetRequested{ false };
     std::atomic<bool>             rateChanged{ false };
     std::atomic<int>              badIndex{ 0 };
+
+    // Callback TIMING, so this probe and audio_backend_probe can be compared
+    // like for like. A dropout is a gap of several buffer periods, and the
+    // only way to tell "the backend upsets the driver" from "this driver does
+    // this" is to measure the same thing on a path that shares no backend
+    // code at all — which is what this one is.
+    std::atomic<long long>        lastNs{ 0 };
+    std::atomic<long long>        worstGapNs{ 0 };
+    std::atomic<long long>        worstWorkNs{ 0 };
+    std::atomic<long>             bigGaps{ 0 };
 };
 
 ToneState *gTone = nullptr;
+
+long long nowNs()
+{
+    return (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch() ).count();
+}
 
 void fillTone( long index )
 {
     ToneState *t = gTone;
     if( !t )
         return;
+
+    const long long tin = nowNs();
+    const long long prev = t->lastNs.exchange( tin, std::memory_order_relaxed );
+    if( prev != 0 ) {
+        const long long gap = tin - prev;
+        if( gap > t->worstGapNs.load( std::memory_order_relaxed ) )
+            t->worstGapNs.store( gap, std::memory_order_relaxed );
+        const long long period =
+            (long long)( 2.0e9 * (double)t->bufferFrames / t->sampleRate );
+        if( period > 0 && gap > period )
+            t->bigGaps.fetch_add( 1, std::memory_order_relaxed );
+    }
     if( index != 0 && index != 1 ) {
         // A double-buffer index outside {0,1} means the ABI fell apart —
         // record it, write nothing.
@@ -307,6 +335,10 @@ void fillTone( long index )
 
     t->phase = phase;
     t->framesDelivered.fetch_add( t->bufferFrames, std::memory_order_relaxed );
+
+    const long long work = nowNs() - tin;
+    if( work > t->worstWorkNs.load( std::memory_order_relaxed ) )
+        t->worstWorkNs.store( work, std::memory_order_relaxed );
 
     if( t->postOutputReady )
         t->driver->outputReady();
@@ -643,6 +675,15 @@ int cmdTone( const std::string &arg, int seconds )
     std::printf( "  calls  : %ld bufferSwitch, %ld bufferSwitchTimeInfo\n",
                  tone.switches.load( std::memory_order_relaxed ),
                  tone.timeInfoSwitches.load( std::memory_order_relaxed ) );
+    {
+        const double periodMs = 1000.0 * (double)tone.bufferFrames / tone.sampleRate;
+        const double gapMs  = tone.worstGapNs.load( std::memory_order_relaxed ) / 1e6;
+        const double workMs = tone.worstWorkNs.load( std::memory_order_relaxed ) / 1e6;
+        std::printf( "  timing : period %.2f ms; worst gap %.2f ms; %ld gap(s) > 2x "
+                     "period; worst work %.3f ms\n",
+                     periodMs, gapMs, tone.bigGaps.load( std::memory_order_relaxed ),
+                     workMs );
+    }
     if( tone.rateChanged.load( std::memory_order_relaxed ) )
         std::printf( "  note   : driver reported sampleRateDidChange during the run\n" );
 

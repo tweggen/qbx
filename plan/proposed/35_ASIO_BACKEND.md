@@ -387,15 +387,21 @@ three from the hardware probe rather than the suite:
 2. **The stop fence needed a GATE, not just a wait.** `stopOutput()`'s contract
    is "no callback in flight OR FORTHCOMING", and on a driver-owned thread the
    second half cannot be delivered by waiting — nothing stops the driver
-   entering the trampoline once more after `ASIOStop()` returns, and the gate
-   driver does exactly that, **256 frames, on every run**. Measured: the
-   in-flight spin alone let a late callback through into the app's render
-   callback, which is precisely the teardown hazard the invariant exists for.
-   `acceptCallbacks_` is cleared BEFORE `ASIOStop`, so a late callback is
+   entering the trampoline once more after `ASIOStop()` returns.
+   `acceptCallbacks_` is cleared BEFORE `ASIOStop`, so such a callback is
    turned away having touched nothing, and is counted and logged rather than
-   hidden. Note this contradicts the Phase 1 gate run, which reported no late
-   callbacks — the probe stops differently, and one observation of "this driver
-   does not" was not evidence.
+   hidden.
+
+   **CORRECTION, 2026-08-18.** This item first read "the gate driver does
+   exactly that, 256 frames, on every run". That was WRONG, and the way it was
+   wrong is worth keeping: the probe sampled its frame counter BEFORE calling
+   `stopOutput()`, so a callback that was legitimately IN FLIGHT — the very
+   thing the fence exists to wait for — was counted as one that arrived after
+   the return. Sampling after the call returns, and reading the gate's own
+   counter, gives the real figure: the driver delivers a late callback in
+   **2 runs out of 5**. The gate is still right and still fires; the
+   measurement that motivated it was an artifact, and "measured" was doing work
+   in that sentence that it had not earned.
 3. **Enumeration must NOT prefix WASAPI ids.** The design says ids are
    namespaced `wasapi:` / `asio:`; emitting the `wasapi:` half would have been
    a silent regression for every existing user, because the device picker

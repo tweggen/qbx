@@ -441,7 +441,11 @@ int AsioDevice::stopRef()
         acceptCallbacks_.store(false, std::memory_order_release);
         driver_->stop();
         fenceCallbacks_();
-        const std::uint64_t late = lateCallbacks_.exchange(0, std::memory_order_relaxed);
+        // LOAD, not exchange: the count is evidence, and a counter that is
+        // consumed by the act of reporting it cannot be queried afterwards
+        // by anything else (which is how a claim about it went into a
+        // contract document unverified).
+        const std::uint64_t late = lateCallbacks_.load(std::memory_order_relaxed);
         if (late)
             TW_LOGI("devices",
                     "AsioDevice: '%s' delivered %llu callback(s) after stop() returned; "

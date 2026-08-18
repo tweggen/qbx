@@ -13860,14 +13860,11 @@ rather than reaching around it the way `asio_probe` does.
    it. Now a member (`asioCallbacks_`).
 2. **The stop fence needed a GATE, not only a wait.** `stopOutput()` promises
    "no callback in flight OR FORTHCOMING", and on a driver-owned thread the
-   second half cannot be delivered by waiting. Measured: the US-16x08 delivers
-   **256 frames after `ASIOStop()` returns, on every run**, and the in-flight
-   spin alone let that reach the app's render callback — exactly the teardown
-   hazard the invariant exists for. `acceptCallbacks_` is now cleared BEFORE
-   `ASIOStop`, so a late callback is turned away having touched nothing, and is
-   counted and logged rather than hidden. **This contradicts the Phase 1 gate
-   run**, which reported no late callbacks: the probe stops differently, and
-   one observation of "this driver does not" was not evidence.
+   second half cannot be delivered by waiting: nothing stops the driver
+   entering the trampoline once more after `ASIOStop()` returns.
+   `acceptCallbacks_` is cleared BEFORE `ASIOStop`, so such a callback is
+   turned away having touched nothing. **See the correction below** — the
+   number first recorded here was an artifact of the probe's own check.
 3. **Enumeration must NOT prefix WASAPI ids.** The design namespaces ids
    `wasapi:` / `asio:`; emitting the `wasapi:` half would have silently broken
    every existing user, because the device picker compares menu entries against
@@ -13927,3 +13924,74 @@ driver that offers more than one size, the meter latency against a real
 measurement rather than the driver's claim, `kAsioResetRequest` handling (the
 latch is written, nothing has requested one), and every input path — Phase 3.
 No qxa case touches ASIO and none can: the whole path needs a real driver.
+
+## 2026-08-18 — Proposal 35 Phase 2 follow-up: a click, a false positive, and a correction
+
+A user report — "440 Hz on both channels for 3 s, with a click in the middle"
+— against the Phase 2 backend on a Tascam US-16x08. Instrumenting rather than
+guessing turned up three things, one of which corrects the entry above.
+
+### THE CORRECTION: the late-callback figure was an artifact
+
+The Phase 2 entry states that the driver delivers **256 frames after
+`ASIOStop()` returns, on every run**, and that the in-flight spin alone let
+that reach the app's render callback. **That number was wrong.**
+`audio_backend_probe` sampled its frame counter BEFORE calling `stopOutput()`,
+so a callback that was legitimately IN FLIGHT at the stop — the very thing the
+fence exists to wait for — was counted as one that arrived AFTER the return.
+Every ordinary stop therefore read as a violation, at exactly one buffer, which
+is what an in-flight callback looks like.
+
+Sampling after the call returns, and reading the gate's own counter (which now
+`load`s rather than `exchange`s, so reporting it does not consume it), gives
+the real figure: **the driver delivers a late callback in 2 runs out of 5**.
+
+So the gate is still right, still fires, and still costs one relaxed atomic
+load — but "measured, on every run" was doing work in that sentence that it had
+not earned. A check that reports a violation on every healthy run is not
+evidence of a violation; it is evidence of a broken check.
+
+### The click is REAL, is a driver/OS dropout, and is NOT the host
+
+Measured through the render callback, per run: the inter-callback GAP, where it
+fell, and how long OUR callback took.
+
+| | our work per callback | worst gap | gaps > 2× period |
+|---|---|---|---|
+| under load (batched runs) | 0.089–0.259 ms | 14.5–19.9 ms (2.7–3.7×) | 1–8 per run |
+| on a quiet box | 0.074–0.090 ms | 6.5–9.4 ms (1.2–1.8×) | **0 in 5 runs** |
+
+The period is 5.33 ms (256 frames at 48 kHz). **Our callback never exceeds
+5 % of it**, so the host is not delaying the driver — a gap of three periods is
+the driver or the OS not calling, and no change on this side removes it. It is
+also LOAD-DEPENDENT, which is why the first batch looked structural: those runs
+were launched back to back while a build was finishing.
+
+**A claim made and withdrawn in the same session:** an early comparison read
+"2 big gaps every run for the Phase 2 path vs 0 for `asio_probe`", which would
+have implicated the backend. It does not survive more samples — a quieter box
+gives 0 for both. The lesson is the same as the one above: four runs under
+uncontrolled load are not a measurement.
+
+### The one STABLE difference, and it is not the click
+
+Start-up before the first callback, every run without exception:
+
+- `audio_backend_probe` (the production path): **477–490 ms**
+- `asio_probe` (talks to IASIO directly): **~200 ms**
+
+That is the whole of the frame-count difference (84 % vs 93 %), it is
+deterministic, and it is unexplained. It is half a second of silence after
+pressing Play, so it matters for the app even though it is not audible as a
+glitch. Both paths call `createBuffers` then `start()` and then sleep; the
+delta is somewhere in what the backend does around that. **Open.**
+
+### Also done here
+
+- `asio_probe` and `audio_backend_probe` both report callback timing now
+  (period, first-callback delay, worst gap and where it fell, gaps over 2×,
+  and — for the backend probe — how long our own callback took). Comparing the
+  two paths like for like is what separated "the backend is slow" from "the
+  driver did not call", and neither probe could answer it before.
+- `audio_backend_probe` reads `AsioDevice::lateCallbacks()` directly, so the
+  gate's behaviour is observable rather than inferred.

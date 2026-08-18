@@ -31,9 +31,15 @@ Invariants:
    ASIO IT CANNOT BE: the callback thread belongs to the DRIVER and there is
    nothing to join, so the guarantee is met by an atomic callback-depth FENCE
    spun after ASIOStop() returns (`AsioDevice::fenceCallbacks_`). The fence is
-   CAPPED at 2 s and logs rather than hanging — some drivers deliver late
-   callbacks after stop() (asio_probe reports it when they do; the gate driver
-   did not), and a misbehaving driver must not take the UI thread with it.
+   CAPPED at 2 s and logs rather than hanging, because a misbehaving driver
+   must not take the UI thread with it.
+   THE FENCE ALONE IS NOT ENOUGH, and this is the part to keep: waiting cannot
+   deliver the "forthcoming" half of the promise, because nothing stops a
+   driver-owned thread entering the trampoline once more after ASIOStop()
+   returns. So a GATE (`acceptCallbacks_`) is cleared BEFORE ASIOStop and a
+   late callback is turned away at the top of `render_()` having touched
+   nothing. Measured on a US-16x08 through `audio_backend_probe`: the gate
+   turns away a callback in **2 runs out of 5** — real, and intermittent.
 4. Device ids are backend-native strings; "default"/empty = system default.
    ON WINDOWS THEY ARE ALSO NAMESPACED (proposal 35 Phase 2, `asio_id.h`):
    `asio:<clsid-or-name>` selects an ASIO driver and everything else — a
