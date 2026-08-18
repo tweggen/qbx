@@ -244,6 +244,42 @@ Invariants:
     the OLDEST frames on overflow, which needs the producer to move the
     consumer's index, and the threaded test caught it reordering.
 
+--- ASIO INPUT / full duplex (proposal 35 Phase 3) ---
+
+31. FULL DUPLEX IS ONE DEVICE, NOT TWO. `AsioBackend` and `AsioInput` acquire
+    the SAME `AsioDevice` from the registry, so there is one `IASIO`, one
+    `createBuffers`, one callback and ONE CLOCK. That last one is the whole
+    reason ASIO matters for recording: capture and render cannot drift, which
+    is exactly the failure the Windows endpoint sample-rate trap produces (see
+    CLAUDE.md). Start/stop is REFCOUNTED — a recording started while playback
+    runs does not restart the driver, a recording alone runs it with the
+    output half emitting silence, and closing one facade leaves the other's
+    stream untouched.
+32. **THE INPUT CHANNEL SET IS DEMAND-DRIVEN AND GROW-ONLY.** ASIO fixes the
+    set at `createBuffers` time and changing it needs the driver STOPPED, so
+    `requestChannels(mask)` (new on `AudioInput`, a no-op everywhere else)
+    tells the device what to open BEFORE it opens. The set never shrinks — so
+    arming a channel a second time is free and disarming disturbs nothing —
+    and a request that arrives while the stream is RUNNING is recorded and
+    applied at the next start, never by stopping the driver under whoever is
+    listening. That is the same "takes effect on next Play" model a device
+    change already uses. Nobody having asked means INPUT 0 ALONE, matching
+    `SObject::DEFAULT_RECORDING_CHANNELS`, so a pro interface's sixteen inputs
+    are not opened merely because it has sixteen.
+33. **THE CAPTURE STREAM IS NOT COMPACTED: bit n is input n, everywhere.**
+    Opening inputs {0, 5} yields a SIX-channel stream whose channels 1-4 are
+    silent, not a two-channel one. Compacting would be the memory-efficient
+    thing and would silently redefine every mask in the project —
+    `SObject::recordingChannels_` and `CaptureWavSink::channelMask` both mean
+    "input n" — so bit 5 would come to mean "the second channel I happened to
+    open" and a take would land on the wrong input with nothing to show for
+    it. The conversion cost still scales with what is open, because the
+    callback converts opened channels only. Gated in `multi_backend_test`
+    ("THE STREAM IS NOT COMPACTED") and measured on hardware: mask 0x21 gives
+    a 6-wide stream with signal on ch0 and ch5 and EXACTLY 0.0000 on ch1-ch4.
+34. The capture ring is `AudioRing` — see inv. 30. The callback pushes whole
+    blocks and never blocks; an overrun is a counter, as inv. 20 requires.
+
 How to test: WASAPI is the only regularly exercised backend (manual GUI
 playback); Null backend keeps headless/CI paths honest. devices/tools/
 asio_probe (Windows, needs the drop-in ASIO SDK — proposal 35) triages an

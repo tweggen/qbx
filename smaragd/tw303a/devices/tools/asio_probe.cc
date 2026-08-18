@@ -245,6 +245,8 @@ struct ToneState {
     // this" is to measure the same thing on a path that shares no backend
     // code at all — which is what this one is.
     std::atomic<long long>        lastNs{ 0 };
+    std::atomic<long long>        startedNs{ 0 };   // when start() RETURNED
+    std::atomic<long long>        firstCbNs{ 0 };
     std::atomic<long long>        worstGapNs{ 0 };
     std::atomic<long long>        worstWorkNs{ 0 };
     std::atomic<long>             bigGaps{ 0 };
@@ -265,6 +267,8 @@ void fillTone( long index )
         return;
 
     const long long tin = nowNs();
+    if( t->firstCbNs.load( std::memory_order_relaxed ) == 0 )
+        t->firstCbNs.store( tin, std::memory_order_relaxed );
     const long long prev = t->lastNs.exchange( tin, std::memory_order_relaxed );
     if( prev != 0 ) {
         const long long gap = tin - prev;
@@ -635,7 +639,9 @@ int cmdTone( const std::string &arg, int seconds )
     // bufferSwitch from inside start() itself.
     gTone = &tone;
 
+    const long long tBeforeStart = nowNs();
     r = drv->start();
+    tone.startedNs.store( nowNs(), std::memory_order_relaxed );
     if( r != ASE_OK ) {
         std::printf( "  FAILED: start -> %s\n", aseName( r ) );
         gTone = nullptr;
@@ -644,6 +650,11 @@ int cmdTone( const std::string &arg, int seconds )
         return 1;
     }
 
+    // THE WINDOW IS MEASURED, NOT ASSUMED. This loop sleeps in 100 ms chunks
+    // and every chunk overshoots (Windows timer granularity), so a nominal
+    // 3 s run really lasts longer — and judging the frame count against
+    // rate*seconds then flatters it, hiding the driver's start-up ramp.
+    const long long tRunStart = nowNs();
     for( int elapsed = 0; elapsed < seconds * 10; ++elapsed ) {
         std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
         if( tone.resetRequested.load( std::memory_order_relaxed ) ) {
@@ -652,6 +663,7 @@ int cmdTone( const std::string &arg, int seconds )
         }
     }
 
+    const double runMs = ( nowNs() - tRunStart ) / 1e6;
     r = drv->stop();
     std::printf( "  stop   : %s\n", aseName( r ) );
 
@@ -669,9 +681,15 @@ int cmdTone( const std::string &arg, int seconds )
     gTone = nullptr;
 
     const long delivered = tone.framesDelivered.load( std::memory_order_relaxed );
-    const long expected = (long)( (double)rate * seconds );
-    std::printf( "  frames : %ld delivered, ~%ld expected  (%.0f%%)\n", delivered, expected,
+    // Against the MEASURED window, not the nominal one.
+    const long expected = (long)( (double)rate * runMs / 1000.0 );
+    std::printf( "  frames : %ld delivered, ~%ld expected over a MEASURED %.0f ms "
+                 "window  (%.0f%%)\n", delivered, expected, runMs,
                  expected > 0 ? 100.0 * (double)delivered / (double)expected : 0.0 );
+    if( runMs > seconds * 1000.0 + 50.0 )
+        std::printf( "  note   : the 100 ms sleep loop overshot by %.0f ms; judging the "
+                     "frame count against %d000 ms would flatter it\n",
+                     runMs - seconds * 1000.0, seconds );
     std::printf( "  calls  : %ld bufferSwitch, %ld bufferSwitchTimeInfo\n",
                  tone.switches.load( std::memory_order_relaxed ),
                  tone.timeInfoSwitches.load( std::memory_order_relaxed ) );
@@ -683,6 +701,12 @@ int cmdTone( const std::string &arg, int seconds )
                      "period; worst work %.3f ms\n",
                      periodMs, gapMs, tone.bigGaps.load( std::memory_order_relaxed ),
                      workMs );
+        const long long st = tone.startedNs.load( std::memory_order_relaxed );
+        const long long fc = tone.firstCbNs.load( std::memory_order_relaxed );
+        std::printf( "  startup: start() call itself %.1f ms; first callback %.1f ms "
+                     "AFTER start returned\n",
+                     ( st - tBeforeStart ) / 1e6,
+                     fc ? ( fc - st ) / 1e6 : -1.0 );
     }
     if( tone.rateChanged.load( std::memory_order_relaxed ) )
         std::printf( "  note   : driver reported sampleRateDidChange during the run\n" );

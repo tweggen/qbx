@@ -40,6 +40,7 @@ started.
   |---|---|
   | 16 in / 8 out on ONE instance; all channels `ASIOSTInt32LSB` | Full duplex out of one `AsioDevice` as designed, and 8 outs give 36's wide sink somewhere real to go. The hand-rolled packed Int24 converter is NOT exercised by this hardware and stays unit-test-only. |
   | Rates 44100 / 48000 / 88200 / 96000; the run opened at 48000 while the driver's current rate was 44100 | Native rate selection works, which is the whole point: `twNegotiator` gets a real `supportedRates()` and the split-clock capture-rate failure class has one clock. No 32k and no 176.4/192k — the `{32k…192k}` sweep correctly returns four. |
+  | `ASIOStart()` returns in 0.4–0.6 ms, first callback ~475 ms later | The driver's own RAMP, identical on the direct-IASIO and the production paths (measured 2026-08-18, both probes). Half a second of silence after Play on this interface; it lands on top of `twSpeaker`'s readahead priming rather than inside it, and nothing host-side shortens it. Relevant to proposal 21 L6; not a defect. |
   | `ASIOGetLatencies` gave out 702 at 44100 and out 735 at 48000 | **Latency is RATE-DEPENDENT.** It must be read after `setSampleRate` + `createBuffers`, never cached from open. ~1002 frames round trip ≈ 22.7 ms is the number `meterLatencyFrames()` and 21 L6 would work with. |
   | buffer min == max == preferred == 256, granularity 0 | The `granularity == 0 ⇒ {preferred}` branch. On this driver the Phase 4 buffer-size combo has EXACTLY ONE entry — the size is set in the vendor's own control panel — so **Phase 5 is worth more than Phase 4 here**, the reverse of the order below. Neither is on the critical path; note it when they are scheduled. |
   | `outputReady: not supported` | Step 3 of the data path is a no-op on this driver. Keep the call (a win on many others), expect nothing from it here. |
@@ -214,6 +215,24 @@ called cross-thread without marshaling).
    `win_multi_input`, factory change, refcounted cross-facade start/stop.
    *Ungated:* ASIO record-only; record-while-playing on the same driver;
    both mixed modes; A-out/B-in rejected cleanly.
+   **EXECUTED 2026-08-18.** Two things were not in this bullet and are worth
+   naming:
+
+   - **The input channel set is DEMAND-DRIVEN and grow-only** (requester,
+     2026-08-18), not "open what the interface has". A 16-input interface does
+     not open sixteen channels because a track armed one; `requestChannels`
+     (new on `AudioInput`, no-op elsewhere) tells the device what to open
+     before it opens, the set never shrinks, and a request arriving mid-stream
+     is deferred to the next start rather than stopping the driver under
+     whoever is listening. The requester's fallback — a per-device
+     "which channels to open" preference — is NOT built; it is the answer if
+     deferral turns out to bite in practice.
+   - **The stream is NOT compacted.** Opening {0, 5} gives a six-channel
+     stream with 1-4 silent, because `SObject::recordingChannels_` and
+     `CaptureWavSink::channelMask` both mean "bit n == input n". Compacting
+     would silently redefine every mask in the project and land takes on the
+     wrong input. See `asio_channels.h`; it is the one piece of Phase 3 whose
+     failure mode is wrong audio rather than no audio.
 4. **Options input-device enumeration** — replace the hardcoded "System
    default" input combo with `createAudioInput()->listDevices()` (closes the
    long-standing Phase-7 TODO). ASIO entries report channels=0 in enumeration
