@@ -192,10 +192,14 @@ called cross-thread without marshaling).
    Windows with AND without the SDK; layering/logging/ctest unchanged.
    *Ungated:* probe run against FlexASIO / ASIO4ALL and one real driver —
    Windows-manual. **DONE 2026-08-18: `GATE PASSED` on a real vendor driver
-   (Tascam US-16x08), tone audible.** A wrapper driver (FlexASIO / ASIO4ALL)
-   has still NOT been run, and it is the one that would exercise the plain
-   `bufferSwitch` path and a non-zero buffer granularity — worth doing
-   alongside Phase 2 rather than blocking it.
+   (Tascam US-16x08), tone audible — on BOTH callback entry points.** The
+   legacy path needed no second driver: `--no-timeinfo` declines
+   `kAsioSupportsTimeInfo` and the driver falls back (measured 357/0 against
+   the default's 0/322), so it honours the negotiation in both directions. A
+   wrapper driver (FlexASIO / ASIO4ALL) has still NOT been run; what it would
+   add is a **non-zero buffer granularity**, which this driver cannot produce
+   (min == max == preferred == 256) and which is unit-tested rather than
+   hardware-gated. Optional, never blocking.
 2. **Output + dispatcher** — `spsc_ring`, `asio_convert`, `asio_device`
    (output half + registry + fence), `asio_backend`, `asio_id`,
    `win_multi_backend`, factory change, CONTRACT edits,
