@@ -305,7 +305,7 @@ const Fixture kFixtures[] = {
       " inputLatencyFrames='4800' outputLatencyFrames='1024'"
       " userOffsetFrames='-960' compensationFrames='-6784' trimmedFrames='0'"
       " growing='true' previewNonEmpty='true' sourceAtStartFrame='0'"
-      " sourceTolerance='2048'/>" },
+      " sourceTolerance='2048' inputDevice='qxa-record-input'/>" },
     { "place-recording",
       "<place-recording trackPath='0' filePath='x.wav' timePos='96000'"
       " srcOffset='48000' length='24000'/>" },

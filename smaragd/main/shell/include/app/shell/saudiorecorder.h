@@ -107,6 +107,14 @@ public:
     int lastPassCount() const { return lastPassCount_; }
     /// The files the last take wrote, in armed-track order.
     const QList<QString> &lastFiles() const { return lastFiles_; }
+    /// THE INPUT DEVICE THE LAST/CURRENT TAKE RESOLVED TO, and therefore the
+    /// key `audio/recordingOffsetMs/<name>` was read under (see start()).
+    /// Exposed because that resolution is the one term of the placement
+    /// conversion a case cannot otherwise see: a lookup that misses returns
+    /// 0.0, which is indistinguishable from a calibration of zero, so a gate
+    /// on the offset is only worth anything if it can also assert WHICH device
+    /// was asked about.
+    QString inputDeviceName() const { return deviceName_; }
 
     QString describe() const;
 

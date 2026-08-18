@@ -50,6 +50,32 @@
   The transport is deliberately PLAYING before the take, so an anchor exists at
   once and nothing is trimmed. Recording from a STOPPED transport is the
   retrospective-mapping path and is covered by record_punch.
+
+  WHY THE TRACKS NAME THEIR INPUT DEVICE, AND WHY THE DEVICE IS A NAME NO REAL
+  DEVICE CAN HAVE.
+
+  The user offset is read as `audio/recordingOffsetMs/<device>`, where <device>
+  is what SAudioRecorder::start() resolves: the armed track's own `trackInput`
+  device FIRST, then whatever the monitor has open, then the app-wide
+  `audio/inputDeviceId` SETTING, then "default". This case used to write the
+  key for "default" and rely on the last rung, which only holds on a machine
+  where the user has never picked an input device in Edit -> Options -> Audio.
+  On a machine where they have, the recorder read that device's key, found
+  nothing, and got 0.0, indistinguishable from a calibration of zero, so
+  TAKE 1 (which expects 0) passed and only TAKE 2 failed. The suite ran against
+  a per-user preference it did not set.
+
+  `set-track-input` takes the FIRST rung, so the key is now decided by the
+  case and not by the box. The device is spelled `qxa-record-input` rather
+  than `default` for the same reason: `audio/recordingOffsetMs/default` is a
+  REAL user preference (the calibration of the system default input), and a
+  case has no business writing one. SMARAGD_AUDIO_INPUT_BACKEND=file:... makes
+  the name inert (FileAudioInput ignores the device id), so it selects a
+  settings key and nothing else.
+
+  `inputDevice=` on assert-recorded-clip closes the loop: without it, a case
+  asserting `userOffsetFrames="0"` proves nothing at all, because a lookup that
+  MISSES also answers 0.
 -->
 <SActionScript version="1" name="record_offset_zero">
 
@@ -65,8 +91,12 @@
     <set-monitor-mode trackPath="0" mode="off"/>
     <set-monitor-mode trackPath="1" mode="off"/>
 
+    <!-- The device the offset key is written for and read under. See above. -->
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:1"/>
+
     <!-- TAKE 1: offset 0. .................................................. -->
-    <set-option key="audio/recordingOffsetMs/default" value="0"/>
+    <set-option key="audio/recordingOffsetMs/qxa-record-input" value="0"/>
     <arm-track trackPath="0" armed="1"/>
     <set-locator position="0"/>
     <toggle-playback play="1"/>
@@ -77,6 +107,7 @@
     <record-stop/>
 
     <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          inputDevice="qxa-record-input"
                           inputLatencyFrames="4800"
                           outputLatencyFrames="1024"
                           userOffsetFrames="0"
@@ -86,7 +117,7 @@
                           minDurationFrames="24000"/>
 
     <!-- TAKE 2: offset +20 ms == 960 frames EARLIER. ....................... -->
-    <set-option key="audio/recordingOffsetMs/default" value="20"/>
+    <set-option key="audio/recordingOffsetMs/qxa-record-input" value="20"/>
     <arm-track trackPath="1" armed="1"/>
     <set-locator position="0"/>
     <toggle-playback play="1"/>
@@ -97,6 +128,7 @@
     <record-stop/>
 
     <assert-recorded-clip trackPath="1" clips="1" passes="1"
+                          inputDevice="qxa-record-input"
                           inputLatencyFrames="4800"
                           outputLatencyFrames="1024"
                           userOffsetFrames="-960"
@@ -105,8 +137,9 @@
                           sourceAtStartFrame="0" sourceTolerance="4096"
                           minDurationFrames="24000"/>
 
-    <!-- This case OWNS audio/recordingOffsetMs/default; put it back. -->
-    <set-option key="audio/recordingOffsetMs/default" value="0"/>
+    <!-- This case OWNS audio/recordingOffsetMs/qxa-record-input, a key no
+         real device can produce; put it back anyway. -->
+    <set-option key="audio/recordingOffsetMs/qxa-record-input" value="0"/>
 
     <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
   </actions>

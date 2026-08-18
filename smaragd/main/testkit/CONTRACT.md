@@ -455,6 +455,16 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     equal `placementFrame(trimmed)` — so a recorder that reported the right
     terms and applied different ones fails even when no expectation was given.
 
+16a. **A CASE THAT ASSERTS `userOffsetFrames` MUST ALSO ASSERT
+    `inputDevice`.** The offset comes from
+    `SSettings::recordingOffsetMs(<the recorder's resolved input device>)`, and
+    a lookup that MISSES returns 0.0 — indistinguishable from a device
+    calibrated to zero. So `userOffsetFrames="0"` is not an assertion at all
+    without the device name, and a non-zero expectation fails with an error
+    about arithmetic when the fault is the key. Name the device with
+    `set-track-input` (the first rung of the resolution), key the option under
+    that name, and assert it back with `inputDevice=`.
+
 17. **WHAT A RECORDING CASE CAN AND CANNOT CLAIM.** `P0`, the project frame
     capture frame 0 maps to, depends on when the capture thread and the render
     callback actually ran; it is NOT predictable and no case asserts it. What
