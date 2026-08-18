@@ -2,7 +2,6 @@
 
 #include <qpainter.h>
 #include <QVarLengthArray>
-#include <cmath>
 
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
@@ -56,27 +55,35 @@ bool drawObjectWaveform( SObject &obj, SLink &lk, SRenderContext &ctx,
     QVarLengthArray<preview_t> pv( w );
     if( !collectObjectEnvelope( obj, lk, win, pv.data() ) ) return false;
 
-    // Apply track volume scaling: convert dB to linear gain
-    // Snapshot the volume to avoid race conditions with the audio thread.
-    // Track parent is typically an STrack; get its volume in dB.
-    double volumeGain = 1.0;
-    if( SObject *parentObj = dynamic_cast<SObject *>( lk.parent() ) ) {
-        // Thread-safe volume read (volumeDbSnapshot holds the volume mutex;
-        // the paint path races the UI slider / audio thread).
-        volumeGain = pow( 10.0, parentObj->volumeDbSnapshot() / 20.0 );
-    }
-
+    // NOTHING SCALES THE PROBES HERE (proposal 39 M2). A drawn waveform
+    // describes the audio its object PRODUCES; the lane it is drawn on never
+    // scales it. This used to read the containing track's fader
+    // (dynamic_cast<SObject*> on lk.parent(), an STrack in every path that
+    // creates a clip link) and multiply every probe by it, which was wrong
+    // three ways: a waveform is the content and a fader is the level — we have
+    // a fader widget AND a level meter for the level; the multiply happened
+    // AFTER the probes were quantised to 8 bits, so at -20 dB the envelope
+    // collapsed onto a dozen values and drew as a coarse ladder rather than a
+    // quieter version of itself; and it contradicted what the stored preview
+    // bytes mean (volume is not baked into them — plan/STATE.md:6576-6580), so
+    // the paint-time multiply was the entire dependency. At -40 dB the
+    // arrangement visually emptied.
+    //
+    // Gate: preview_envelope_test section 5 (the painted pixels against the
+    // collected probes, through a link whose parent holds a non-unity fader).
+    //
+    // The clamp stays. The probes are already in range, so it costs nothing —
+    // and the folder-sum overlay (M3) sums envelopes into this same [-127,127]
+    // domain, where a caller handing over a saturated column is the normal case
+    // rather than the exotic one.
     p.setPen( waveColor );
     for( int i = 0; i < w; i++ ) {
         int x = i + tl;
-        // Scale the preview peaks by the volume gain, clamp to [-127, 127]
-        int scaledMin = (int)( pv[i].min * volumeGain );
-        int scaledMax = (int)( pv[i].max * volumeGain );
-        scaledMin = qBound( -127, scaledMin, 127 );
-        scaledMax = qBound( -127, scaledMax, 127 );
+        int mn = qBound( -127, (int) pv[i].min, 127 );
+        int mx = qBound( -127, (int) pv[i].max, 127 );
 
-        int y1 = top + ( ( 127 - scaledMin ) * height ) / 256;
-        int y2 = top + ( ( 127 - scaledMax ) * height ) / 256;
+        int y1 = top + ( ( 127 - mn ) * height ) / 256;
+        int y2 = top + ( ( 127 - mx ) * height ) / 256;
         p.drawLine( x, y1, x, y2 );
     }
     return true;

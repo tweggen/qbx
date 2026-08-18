@@ -20,8 +20,14 @@ sobjectpath.h (generic index-path helpers; SObject::isPathContainer scopes
 the reverse search exactly as the old STrack cast did), and splacements.h
 (the placement service: rootContainer/laneAt/placementAt — the generic
 resolution+validation that action code uses instead of STrack/SStdMixer
-casts; lane-ness is isPathContainer, the active lane is activeLane, and
-volumeDbSnapshot gives renderers a thread-safe volume read).
+casts; lane-ness is isPathContainer, the active lane is activeLane).
+volumeDbSnapshot() is the thread-safe volume read (it holds volumeMutex_,
+which a bare getVolume() does not). It has had NO CALLER since proposal 39
+M2 deleted the paint-time fader multiply from drawObjectWaveform — kept
+anyway, because it is the only correct way for anything off the UI thread to
+read a fader, and deleting the one safe reader would leave the racy one as
+the only option. Removing it is a separate decision, not a side effect of a
+paint change.
 Dependency invalidation goes through the virtual
 SObject::invalidateAspects() (base no-op, SCut overrides); extern-file
 creation goes through SProject::registerExternFileFactory() (the wave slice

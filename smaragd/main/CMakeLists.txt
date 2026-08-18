@@ -715,6 +715,12 @@ set_tests_properties(preview_container_test PROPERTIES
 # height), so the two ends are measured against each other rather than against
 # a re-run of one of them. Sibling of preview_container_test; needs a
 # QApplication (offscreen) for the app object libraries' static registrars.
+#
+# Since M2 it also carries THE rule gate (proposal 39 M2): the drawn pixels are
+# the collected probes no matter what fader the link's PARENT object holds. That
+# one has to live here rather than in a .qxa, because the collect half never
+# carried the volume multiply and a script reading through collectEnvelope
+# cannot see it - only the pixels can.
 add_executable(preview_envelope_test testkit/src/preview_envelope_test.cpp)
 target_link_libraries(preview_envelope_test
     PRIVATE

@@ -646,6 +646,41 @@ non-`SCut` object's `currentPage_` is always null. B8 removed it rather than
 "fixing" the cast: a page with no geometry cannot answer a
 `(start, length, nProbes)` question whatever its element type.
 
+### A drawn waveform is never scaled by the lane it sits on (proposal 39 M2)
+
+> **A drawn waveform describes the audio its object PRODUCES. The lane it is
+> drawn on never scales it.**
+
+`drawObjectWaveform` used to read the containing track's fader — a
+`dynamic_cast<SObject*>` on `lk.parent()`, which is the `STrack` in every path
+that creates a clip link — and multiply every 8-bit probe by it. So pulling a
+fader down redrew every clip on that lane thinner, and at −40 dB the arrangement
+visually emptied. Wrong three ways: a waveform is the CONTENT and a fader is the
+LEVEL (and there is a fader widget *and* a level meter for the level); the
+multiply happened AFTER quantisation to 8 bits, so a −20 dB clip drew as a
+dozen-valued ladder rather than as a quieter version of itself; and it
+contradicted what the stored preview bytes mean — volume is not baked into them
+(`plan/STATE.md:6576-6580`), so the paint-time multiply was the entire
+dependency. It is gone; the `qBound` to [−127,127] stays, because the folder-sum
+overlay (M3) accumulates into that same domain.
+
+A CONTAINER's own preview is still legitimately post-fader — the
+no-random-source branch of `straightCalcPreviewData` reads
+`getRootComponent()`'s frozen pages, and a track's root is `cpRewire_`,
+downstream of `twGainStage` — which is why `SObject::setVolume()` still calls
+`invalidatePreview()` (its comment claimed the opposite for years) and why an
+ASSET clip keeps the REFERENCED track's fader: that track is the clip's content,
+not its container.
+
+**The gate has to be a PIXEL gate.** The M1 collect seam never carried the
+multiply, so `assert-envelope` and everything else reading through
+`collectEnvelope` is blind to it by construction:
+`preview_volume_independent.qxa` states the rule at script level and passes on
+the pre-deletion binary. What bites is `preview_envelope_test` section 5 — the
+painted pixels against the collected probes through a link whose parent holds a
+non-unity fader, verified failing before the deletion (at −20 dB a painted
+column read 2/−2 where the collect said 20/−20).
+
 ### The render dialog DISPLAYS the channel count; it does not override it
 
 File → Render shows the project's width read-only. `RenderParams::channels` keeps

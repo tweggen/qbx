@@ -538,6 +538,86 @@ int main( int argc, char **argv )
         check( untouched, "…and writes NOTHING into the output buffer" );
     }
 
+    // =========== 5. THE LANE'S FADER NEVER SCALES THE DRAWN WAVEFORM (M2)
+    //
+    // THE RULE (proposal 39): a drawn waveform describes the audio its object
+    // PRODUCES; the lane it is drawn on never scales it. drawObjectWaveform
+    // used to read the containing track's fader - dynamic_cast<SObject*> on
+    // lk.parent(), which is the STrack in every path that creates a clip link -
+    // and multiply every probe by it, so pulling a fader down redrew the
+    // arrangement thinner and at -40 dB emptied it.
+    //
+    // THIS IS THE GATE THAT BITES, and it has to be a PIXEL gate. The collect
+    // half never carried the multiply (M1 left it in the draw half alone,
+    // deliberately, so that M1 was verifiable as behaviour-preserving), so
+    // everything that reads through collectEnvelope - assert-envelope,
+    // preview_volume_independent.qxa, M3's folder walk - is blind to it by
+    // construction. Only the painted pixels can see it, and the read-back above
+    // is a genuinely independent look at them.
+    //
+    // Verified to FAIL before the deletion, in both directions: at -20 dB the
+    // painted column read 2/-2 where the collect said 20/-20, and at +6 dB the
+    // tall material clamped at 127.
+    {
+        const length_t DUR = 240000;
+        const offset_t S   = 100000;
+        const int      W   = 64;
+        const length_t L   = 64000;
+
+        // The CONTAINER: what an STrack is to a clip link as far as the draw
+        // path is concerned - the link's QObject parent, dynamic_cast to
+        // SObject for its fader. Attached with setParent() rather than through
+        // the ctor, per slink.h's construction rule.
+        SourceObject container( DUR );
+        SourceObject obj( DUR );
+        SLink lk( obj, nullptr );
+        lk.setStartTime( S );
+        lk.setParent( &container );
+        check( dynamic_cast<SObject *>( lk.parent() ) == &container,
+               "the fixture link's parent IS the container the draw path read" );
+
+        bool ok = false;
+        std::vector<preview_t> got = collectThrough(
+            *obj.getInlineRenderer(), lk, S, S + L, W, ok );
+        check( ok, "the contained object collects an envelope" );
+
+        // The material is TALL, so any gain but unity has to move it: a probe
+        // of 20..100 scaled by -20 dB lands on 2..10, and by +6 dB on 40..200
+        // (which then clamps). Without this the comparison could pass on a flat
+        // array that no gain could have changed.
+        int tall = 0;
+        for( int i = 0; i < W; ++i ) if( got[i].max >= 20 ) ++tall;
+        check( tall >= W / 2,
+               "...over material tall enough that a gain would be visible" );
+
+        const double DBS[] = { 0.0, -20.0, -6.0, 6.0, -60.0 };
+        for( double db : DBS ) {
+            container.setVolume( db );
+            std::vector<preview_t> painted;
+            std::vector<bool> covered;
+            paintAndRecover( *obj.getInlineRenderer(), lk, 7, S,
+                             (double) L / (double) W, W, painted, covered );
+            char what[160];
+            std::snprintf( what, sizeof( what ),
+                           "the DRAWN pixels are the collected probes with the "
+                           "container's fader at %+g dB", db );
+            const bool same = sameProbes( painted, got );
+            check( same, what );
+            if( !same ) {
+                const int at = firstDifference( painted, got );
+                if( at >= 0 )
+                    std::printf( "     (first differs at column %d: painted "
+                                 "%d/%d, collected %d/%d)\n", at,
+                                 (int) painted[at].min, (int) painted[at].max,
+                                 (int) got[at].min, (int) got[at].max );
+            }
+        }
+
+        // Detach before the fixtures unwind. Declaration order already makes it
+        // safe; saying it is cheaper than relying on it.
+        lk.setParent( nullptr );
+    }
+
     if( g_failures ) {
         std::printf( "\n%d check(s) failed\n", g_failures );
         return 1;
