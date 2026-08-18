@@ -89,6 +89,12 @@ private:
     int     minCount_ = -1;
     int     maxCount_ = -1;
     int     index_    = -1;
+    // MIDI-THRU (proposal 21 L2 AC5). `maxLagMs` bounds how long after the
+    // LAST `midi-in-event` injection the matched messages reached the wire, in
+    // MILLISECONDS, host time to host time - no frame mapping at all, because
+    // thru has no position: it is a key the performer is pressing right now.
+    // The measured worst lag is printed on success as well as on failure.
+    double  maxLagMs_ = -1.0;
 };
 
 // dump-midi-capture - write the capture MIDI recording out as text.

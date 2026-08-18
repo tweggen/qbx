@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L2, AC5. MIDI-THRU: what arrives at an armed track's input also
+  leaves at its MIDI OUT, immediately.
+
+  THE PATH IS DELIBERATELY NOT THE PUMP'S. Design D8: the MIDI input device
+  thread hands the bytes to `MidiOutScheduler` through a SECOND, dedicated
+  IMMEDIATE SPSC ring and wakes the sender at once - never `enqueue()`, whose
+  single producer is the app's main-thread MIDI-out pump (devices inv. 11).
+  Thru has no due time to be scheduled at: it is a key the performer is
+  pressing right now, and the only correct answer is "as soon as the wire is
+  free". It is also OUTSIDE `flush()`'s discard, because a flush drops a queued
+  FUTURE and a thru byte has no future to belong to.
+
+  THE MEASUREMENT IS HOST TIME TO HOST TIME, with no frame mapping anywhere in
+  it. `midi-in-event` records the instant it injected; the capture MIDI port
+  records the instant `send()` was entered, and deliberately NOT the due time it
+  was asked for (proposal 37 D6, review #12). The difference is the whole thru
+  latency: one sender wake, which design D8 budgets at <= 2 ms and the
+  acceptance criterion bounds at 5.
+
+  THIS IS A WALL-CLOCK BOUND, so the case is RUN_SERIAL at
+  SMARAGD_CAPTURE_SPEED=1 and it measures the box as well as the code. If it
+  fails, confirm the box is idle before reading it as a regression - the same
+  caveat `twlog_test` and `monitor_latency` carry.
+
+  MEASURED, idle box: note-on 0.125 ms, note-off 0.011 ms, against the 5 ms
+  bound and design D8's 2 ms budget for one sender wake. The panic on disarm
+  produced 16 all-notes-off messages (one per channel).
+-->
+<SActionScript version="1" name="live_instrument_thru">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <!-- The track sends to the capture port, and takes its input from the
+         capture port. Same NAME, different device halves: CaptureMidiOutput
+         records what leaves, CaptureMidiInput delivers what a script injects. -->
+    <set-track-midi-output trackPath="0" port="capture" channel="-1" offsetMs="0"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="400"/>
+
+    <!-- ......................................................... note ON -->
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+    <wait-ms ms="300"/>
+    <assert-midi-out port="capture" kind="noteon" key="60" channel="0"
+                     count="1" maxLagMs="5"/>
+
+    <!-- ...and it also SOUNDED. Thru and the live lane are two consumers of
+         one fan-out (design D8), so a case that proved only one of them would
+         not have proved the fan-out at all. -->
+    <wait-ms ms="900"/>
+    <dump-playback-capture filename="thru.wav" minFrames="60000"/>
+    <assert-audio-frequency filename="thru.wav" channel="0"
+                            startFrame="36000" frameCount="20000"
+                            minHz="256" maxHz="268"/>
+    <assert-audio-energy filename="thru.wav" channel="0"
+                         startFrame="36000" frameCount="20000"
+                         minRms="0.53450" maxRms="0.57904"/>
+
+    <!-- ........................................................ note OFF -->
+    <midi-in-event kind="noteoff" key="60" channel="0"/>
+    <wait-ms ms="300"/>
+    <assert-midi-out port="capture" kind="noteoff" key="60" channel="0"
+                     count="1" maxLagMs="5"/>
+
+    <!-- ......................... disarm PANICS the port ................. -->
+    <!-- A key held when the user disarms is otherwise a stuck note on their
+         hardware synth, so the fan-out clears its thru route and the scheduler
+         sends sustain-off + all-notes-off on every channel. -->
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="600"/>
+    <assert-midi-out port="capture" kind="cc" cc="123" minCount="1"/>
+
+    <!-- ...and thru is OFF: nothing injected after the disarm reaches the
+         wire. The count is exactly the one note-on this case ever sent. -->
+    <midi-in-event kind="noteon" key="72" velocity="100" channel="0"/>
+    <wait-ms ms="400"/>
+    <assert-midi-out port="capture" kind="noteon" count="1"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

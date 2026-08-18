@@ -16,6 +16,8 @@
 #include "tw/devices/midi_output.h"
 #include "tw/events/tweventsource.h"
 
+#include "app/shell/splayheadclock.h"
+
 class QTimer;
 class SObject;
 class SProject;
@@ -127,6 +129,20 @@ public:
     // against the backend's own id/name list, then the name verbatim.
     QString resolvePortId( const QString &portName ) const;
 
+    /**
+     * The scheduler for `portName`, started, for MIDI-THRU (proposal 21 L2,
+     * design D8). Null when the port will not open.
+     *
+     * It is THE SAME scheduler the sequenced feed sends through, deliberately:
+     * two schedulers on one port would be two threads racing one device, and
+     * thru and playback have to interleave on the wire in the order the events
+     * happened. They do not collide because they use DIFFERENT rings - the
+     * pump's `enqueue()` (main thread, due-timed) and the fan-out's
+     * `sendImmediate()` (device thread, now) - which is exactly why the
+     * immediate ring exists instead of a second producer on the first.
+     */
+    audio::MidiOutScheduler *thruSchedulerFor( const QString &portName );
+
 private slots:
     void tick();
 
@@ -191,13 +207,12 @@ private:
     std::map<STrack *, Cursor> cursors_;
     std::map<QString, QString> portIdCache_;   // portable name -> device id
 
-    // The playhead anchor (see the class comment).
-    bool    haveAnchor_ = false;
-    qint64  anchorAbs_  = 0;   // frame just delivered + iter * cycle length
-    qint64  anchorNs_   = 0;   // host time that frame will be HEARD at
+    // The playhead anchor. Its discipline - publication-driven, publish-lag
+    // and device-latency corrected, first-anchor guarded - moved verbatim into
+    // SPlayheadClock for proposal 21 L4, so the MIDI RECORDER reads the same
+    // clock backwards to place what it captured. Behaviour here is unchanged.
+    SPlayheadClock clock_;
     qint64  lastPos_    = 0;
-    qint64  runStartPos_ = 0;  // where this transport run began
-    quint64 lastPublishSeq_ = 0;   // last RT position publication we anchored on
     int     playIter_   = 0;   // loop iteration the PLAYHEAD is in
     bool    running_    = false;
 

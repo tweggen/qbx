@@ -51,6 +51,17 @@ QVariant SOpt::def( const QString &key )
     if( key == MidiOutOffsetMs )  return 0;
     if( key == MidiChaseNoteOns ) return false;
     if( key == MidiInputPortIds ) return QStringList();
+    // MIDI recording (proposal 21 L4). New-take because it is the only mode
+    // that cannot destroy what was already played; quantise OFF because a
+    // performance the user did not ask to have quantised must arrive as played.
+    if( key == MidiRecordMode )     return QStringLiteral( "new-take" );
+    if( key == MidiRecordQuantize ) return QStringLiteral( "off" );
+    // Transport polish (proposal 21 L5). Both bar counts are 0 because a
+    // count-in or a pre-roll nobody asked for delays every take; the click
+    // level is a comfortable -6 dBFS accent with the beat 6 dB under it.
+    if( key == MetronomeLevel ) return 0.5;
+    if( key == CountInBars )    return 0;
+    if( key == PreRollBars )    return 0;
     return QVariant();
 }
 

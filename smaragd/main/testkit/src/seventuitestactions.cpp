@@ -4,10 +4,12 @@
 #include <QDebug>
 #include <QDir>
 #include <QDomElement>
+#include <QThread>
 
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
+#include "tw/devices/midi_out_scheduler.h"
 
 namespace {
 
@@ -32,6 +34,34 @@ SApplyResult SVirtualKeyAction::apply( SProject * )
         qWarning() << "virtual-key: no main window";
         return { false, nullptr };
     }
+
+    // --- PLAY the port (proposal 21 L2) -----------------------------------
+    if( release_ ) {
+        if( !win->virtualKeyRelease( key_ ) ) {
+            qWarning() << "virtual-key: release failed for key" << key_;
+            return { false, nullptr };
+        }
+        return { true, nullptr };
+    }
+    if( hold_ ) {
+        if( !win->virtualKeyHold( key_, velocity_ ) ) {
+            qWarning() << "virtual-key: hold failed for key" << key_;
+            return { false, nullptr };
+        }
+        if( durationMs_ > 0 ) {
+            // Paced on the ONE steady clock, pumping: a bare sleep would stop
+            // the locator, the meters and the pumps the case is measuring.
+            const qint64 due = audio::MidiOutScheduler::hostNowNs()
+                               + (qint64) durationMs_ * 1000000LL;
+            while( audio::MidiOutScheduler::hostNowNs() < due ) {
+                QCoreApplication::processEvents();
+                QThread::msleep( 1 );
+            }
+            win->virtualKeyRelease( key_ );
+        }
+        return { true, nullptr };
+    }
+
     if( !win->virtualKey( key_, velocity_, durationTicks_ ) ) {
         qWarning() << "virtual-key: no event clip to write into (key" << key_
                    << ")";
@@ -47,6 +77,9 @@ void SVirtualKeyAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "key", key_ );
     elem.setAttribute( "velocity", QString::number( velocity_ ) );
     elem.setAttribute( "durationTicks", QString::number( durationTicks_ ) );
+    if( hold_ )    elem.setAttribute( "hold", "1" );
+    if( release_ ) elem.setAttribute( "release", "1" );
+    if( durationMs_ > 0 ) elem.setAttribute( "durationMs", durationMs_ );
 }
 
 bool SVirtualKeyAction::readXml( const QDomElement &elem, int )
@@ -54,6 +87,11 @@ bool SVirtualKeyAction::readXml( const QDomElement &elem, int )
     key_ = elem.attribute( "key", "60" ).toInt();
     velocity_ = elem.attribute( "velocity", "100" ).toDouble();
     durationTicks_ = elem.attribute( "durationTicks", "960" ).toLongLong();
+    hold_    = elem.attribute( "hold", "0" ).toInt() != 0;
+    release_ = elem.attribute( "release", "0" ).toInt() != 0;
+    durationMs_ = elem.attribute( "durationMs", "0" ).toInt();
+    // key=-1 means "every held key" and is legal for RELEASE only.
+    if( release_ && key_ == -1 ) return true;
     if( key_ < 0 || key_ > 127 ) {
         qWarning() << "virtual-key: key out of range:" << key_;
         return false;

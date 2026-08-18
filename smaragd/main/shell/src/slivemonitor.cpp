@@ -1,17 +1,22 @@
 #include "app/shell/slivemonitor.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include <QTimer>
 
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/model/sprojectprops.h"
+#include "app/servicesui/soptions.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/strack.h"
 #include "app/shell/sapplication.h"
+#include "app/shell/smidiinputhub.h"
+#include "app/shell/smidioutpump.h"
 #include "app/shell/sliveinputsource.h"
 #include "app/shell/ssettings.h"
 #include "tw/core/twlog.h"
@@ -22,6 +27,8 @@
 #include "tw/mix/twtrackmix.h"
 #include "tw/plugins/twpluginchain.h"
 #include "tw/pages/tw_output_page.h"
+#include "tw/devices/midi_out_scheduler.h"
+#include "tw/playback/twliveeventclock.h"
 #include "tw/playback/twlivepump.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/plugins/twpluginslotproc.h"
@@ -66,6 +73,8 @@ SLiveMonitor::~SLiveMonitor()
     // threads follow -- a join during static destruction is the deadlock this
     // project has already paid for once.
     stopPump();
+    detachLiveEvents( current_ );
+    detachLiveEvents( departing_ );
     setClosureOwned( current_, false );
     setClosureOwned( departing_, false );
     bridgeHolds_ = 0;
@@ -225,10 +234,11 @@ audio::CaptureBridge *SLiveMonitor::acquireBridge( const QString &deviceId )
     if( want.isEmpty() ) want = QStringLiteral( "default" );
     if( !ensureBridge( want ) ) return nullptr;
     ++bridgeHolds_;
-    // A recording with monitoring OFF has nothing popping the live ring;
-    // leaving the push on would fill it once and then count every frame of the
-    // take as an overrun.
-    bridge_->setLiveEnabled( !current_.empty() || !departing_.empty() );
+    // needsInput(), not empty(): a recording with monitoring off has nothing
+    // popping the live ring, and neither has a lane that exists only because
+    // the metronome is on. Leaving the push on would fill the ring once and
+    // then count every frame of the take as an overrun.
+    bridge_->setLiveEnabled( current_.needsInput() || departing_.needsInput() );
     return bridge_.get();
 }
 
@@ -240,7 +250,9 @@ void SLiveMonitor::releaseBridge()
 
 void SLiveMonitor::closeInputIfUnused()
 {
-    if( !current_.empty() || !departing_.empty() ) {
+    // Again needsInput() rather than empty(): a lane that exists only because
+    // the metronome is on must not hold the machine's microphone open.
+    if( current_.needsInput() || departing_.needsInput() ) {
         if( bridge_ ) bridge_->setLiveEnabled( true );
         return;
     }
@@ -263,6 +275,282 @@ void SLiveMonitor::stopPump()
     pump_.reset();
 }
 
+// --- live instruments (proposal 21 L2, design D2/D4/D8) ---------------------
+
+void SLiveMonitor::attachLiveEvents( const SLiveClosure &closure )
+{
+    SMidiInputHub *hub = app_ ? app_->midiInputHub() : nullptr;
+    if( !hub ) return;
+
+    // THE CLOCK, once. It reads the ENGINE clock (the atomic the RT callback
+    // stamps), and there is exactly one of those, so there is exactly one of
+    // these. `playing` is republished here rather than polled because the
+    // sources run on the PUMP and may not ask the app anything.
+    const int rate = app_->get303aEnvironment()
+                         ? app_->get303aEnvironment()->getSRate() : 48000;
+    if( !eventClock_ ) {
+        if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() )
+            eventClock_ = std::make_shared<twLiveEventClock>( spk->engineClock(), rate );
+    }
+    if( eventClock_ ) {
+        eventClock_->setSampleRate( rate );
+        const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
+                                                      : app_->isPlaying();
+        eventClock_->setPlaying( playing );
+    }
+
+    // PRUNE FIRST. A consumer can stay in the closure (an audio input of its
+    // own, or a second armed child) while the feed that put it there is gone;
+    // keeping its source alive would keep draining a ring nobody asked for.
+    for( auto it = midiLive_.begin(); it != midiLive_.end(); ) {
+        const bool wanted =
+            std::find_if( closure.midiFeeds.begin(), closure.midiFeeds.end(),
+                          [&]( const SLiveMidiFeed &f ) {
+                              return f.consumer == it->feed.consumer;
+                          } ) != closure.midiFeeds.end();
+        if( wanted ) { ++it; continue; }
+        releaseLiveEntry( *it );
+        it = midiLive_.erase( it );
+    }
+
+    for( const SLiveMidiFeed &feed : closure.midiFeeds ) {
+        auto it = std::find_if( midiLive_.begin(), midiLive_.end(),
+                                [&]( const MidiLive &m ) {
+                                    return m.feed.consumer == feed.consumer;
+                                } );
+        if( it != midiLive_.end() ) {
+            // Already live. A source is deliberately NOT rebuilt on a
+            // republish: it holds the ring cursor and the HELD-NOTE TABLE, and
+            // rebuilding it under a finger would drop the note being played.
+            //
+            // The THRU ROUTE IS NOT RE-EVALUATED EITHER, and that is a stated
+            // limitation rather than an oversight: it is resolved once, at the
+            // arm, so moving a track's `midiOutPort` while it is armed keeps
+            // sending to the old port until the next arm. Re-routing it here
+            // would mean panicking and re-opening a port under a held key,
+            // which is a worse failure than the one it fixes.
+            if( it->source ) it->source->setSampleRate( rate );
+            continue;
+        }
+
+        SPluginSlot *slot = feed.consumer ? feed.consumer->instrumentSlot() : nullptr;
+        const std::shared_ptr<audio::twPluginSlotProcessor> proc =
+            slot ? slot->getProcessor() : nullptr;
+        if( !proc ) continue;
+
+        MidiLive live;
+        live.feed   = feed;
+        live.fanout = hub->fanoutFor( feed.port );
+        if( !live.fanout ) continue;
+
+        const std::uint16_t mask =
+            ( feed.channel < 0 ) ? (std::uint16_t) 0xFFFF
+                                 : (std::uint16_t)( 1u << feed.channel );
+        live.sink = live.fanout->acquire(
+            mask, feed.consumer->getSName().toStdString().c_str() );
+        if( !live.sink ) continue;
+
+        live.source = std::make_shared<audio::twLiveEventSource>( live.sink, rate );
+        live.source->setClock( eventClock_ );
+        // The input latency, in PROJECT frames. It is the USER's per-port
+        // correction and nothing else: MidiInput has no latency to report -
+        // no MIDI API this app hosts offers one - so the number a "play a
+        // click, look at where it landed, type the difference" calibration
+        // produces is the whole of it. POSITIVE means the byte arrived that
+        // much AFTER the key went down, so the source subtracts it.
+        const double offsetMs =
+            SSettings::instance().midiInputOffsetMs( feed.port );
+        live.source->setLatencyFrames(
+            (offset_t) llround( offsetMs * rate / 1000.0 ) );
+        // The one chase at live start: whatever is already held gets re-attacked
+        // in the first block the processor renders.
+        live.source->requestChase();
+
+        // THE SECOND SOURCE (design D2). Never setEventSource.
+        proc->setLiveEventSource( live.source );
+
+        // MIDI-THRU (design D8). The ARMED track's port first - it is the one
+        // being played - and the consumer's as the fallback, which is the
+        // folder-drum-machine shape where the child has no port of its own.
+        const bool ownPort = !feed.armed->getMidiOutPort().isEmpty();
+        const QString thruPort = ownPort ? feed.armed->getMidiOutPort()
+                                         : feed.consumer->getMidiOutPort();
+        const int thruChannel = ownPort ? feed.armed->getMidiOutChannel()
+                                        : feed.consumer->getMidiOutChannel();
+        if( !thruPort.isEmpty() && app_->midiOutPump() ) {
+            if( audio::MidiOutScheduler *sched =
+                    app_->midiOutPump()->thruSchedulerFor( thruPort ) ) {
+                if( live.fanout->setThru( sched, thruChannel ) )
+                    live.thru = sched;
+            }
+        }
+
+        TW_LOGI( "shell", "[LIVE] instrument armed: track='%s' port='%s' ch=%d "
+                          "thru=%s",
+                 feed.consumer->getSName().toStdString().c_str(),
+                 feed.port.toStdString().c_str(), feed.channel,
+                 live.thru ? thruPort.toStdString().c_str() : "off" );
+        midiLive_.push_back( std::move( live ) );
+    }
+}
+
+// The teardown half of ONE entry, in design D4's order. Called from the disarm
+// path (before ownership is released) and from the prune in attachLiveEvents.
+void SLiveMonitor::releaseLiveEntry( MidiLive &m )
+{
+    // 1. THE FLUSH. The source turns its held-note table into note-offs at
+    //    offset 0 of whatever block the pump renders next. The hand-back
+    //    GUARANTEES the rest: setLiveOwned(false) forgets continuity, so the
+    //    freeze path's first render resets every instance and no voice can
+    //    survive the disarm whatever the pump did or did not get to do.
+    if( m.source ) m.source->requestAllNotesOff();
+
+    // 2. Detach the SECOND SOURCE, before ownership goes (design D4).
+    if( m.feed.consumer ) {
+        if( SPluginSlot *slot = m.feed.consumer->instrumentSlot() ) {
+            if( const std::shared_ptr<audio::twPluginSlotProcessor> proc =
+                    slot->getProcessor() )
+                proc->setLiveEventSource( nullptr );
+        }
+    }
+
+    // 3. THRU stops, and the port PANICS: a key held when the user disarmed
+    //    would otherwise be a stuck note on their hardware synth, which is the
+    //    one failure mode a performer never forgives.
+    if( m.fanout ) m.fanout->clearThru();
+    if( m.thru )   m.thru->panic();
+    if( m.fanout && m.sink ) m.fanout->release( m.sink );
+    m.sink   = nullptr;
+    m.fanout = nullptr;
+    m.thru   = nullptr;
+    m.source.reset();
+}
+
+void SLiveMonitor::detachLiveEvents( const SLiveClosure &leaving )
+{
+    for( auto it = midiLive_.begin(); it != midiLive_.end(); ) {
+        if( !leaving.contains( it->feed.consumer ) ) { ++it; continue; }
+        releaseLiveEntry( *it );
+        it = midiLive_.erase( it );
+    }
+}
+
+void SLiveMonitor::requestLiveChase()
+{
+    for( MidiLive &m : midiLive_ )
+        if( m.source ) m.source->requestChase();
+}
+
+// --- the metronome and the count-in (proposal 21 L5) ------------------------
+
+bool SLiveMonitor::metronomeEnabled() const
+{
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    return p && p->prop( SProjectProps::Metronome, false ).toBool();
+}
+
+std::uint64_t SLiveMonitor::ringFramesDelivered() const
+{
+    std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
+                                          : std::shared_ptr<twSpeaker>();
+    return spk ? spk->liveRing().framesDelivered() : 0ull;
+}
+
+// The click's SNAPSHOT, rebuilt only when it actually moved. A plan is
+// republished for a fader move and for every transport edge, and the source
+// carries two rendered click waveforms -- so comparing the config is what keeps
+// a monitoring session from re-synthesising them thirty times a minute.
+std::shared_ptr<twLiveInputSource> SLiveMonitor::ensureMetronome( bool want )
+{
+    if( !want ) { metronome_.reset(); return nullptr; }
+
+    twMetronomeConfig cfg;
+    if( SProject *p = app_ ? app_->getCurrentProject() : nullptr )
+        cfg.tempo = p->tempoMap();          // THE tempo authority (37 D2)
+    cfg.sampleRate = app_ && app_->get303aEnvironment()
+                         ? app_->get303aEnvironment()->getSRate() : 48000;
+    double level = SSettings::instance()
+                       .value( SOpt::MetronomeLevel,
+                               SOpt::def( SOpt::MetronomeLevel ) ).toDouble();
+    if( !( level > 0.0 ) ) level = 0.0;
+    if( level > 1.0 )      level = 1.0;
+    cfg.accentLevel = (float) level;
+    cfg.beatLevel   = (float) ( level * 0.5 );
+    if( countInActive_ ) {
+        // THE COUNT-IN GRID IS ANCHORED AT THE RECORD POSITION and counts N
+        // bars forward from it, over the stopped lane's ordinary virtual
+        // counter. It is heard BEFORE the take because the transport has not
+        // started yet -- the playhead does not move at all during a count-in --
+        // so "N bars of click, then recording begins at the locator" holds
+        // without any position ever going negative (see sliveplanbuilder.cpp).
+        //
+        // The RANGE is what makes the count exact: the pump renders one to two
+        // blocks ahead, so a plain "stop clicking now" would always let the
+        // downbeat past the end through (twmetronome.h).
+        cfg.gridOrigin = countInAnchor_;
+        cfg.rangeStart = countInAnchor_;
+        cfg.rangeEnd   = countInAnchor_ + countInTotal_;
+    }
+
+    if( !metronome_ || metronomeCfg_ != cfg ) {
+        metronomeCfg_ = cfg;
+        metronome_    = std::make_shared<twMetronomeSource>( cfg );
+    }
+    return metronome_;
+}
+
+offset_t SLiveMonitor::barFrames() const
+{
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    if( !p ) return 0;
+    const int rate = app_->get303aEnvironment() ? app_->get303aEnvironment()->getSRate()
+                                                : 48000;
+    const offset_t n = (offset_t) p->tempoMap().barFrames( rate ).floorToInt();
+    return n > 0 ? n : 0;
+}
+
+void SLiveMonitor::beginCountIn( offset_t frames )
+{
+    if( frames <= 0 || !app_ ) return;
+    countInTotal_  = frames;
+    countInAnchor_ = app_->getGlobalLocatorPos();
+    countInActive_ = true;
+    // The click joins the plan and the lane opens; the stopped lane's virtual
+    // counter runs FORWARD from the locator and the click's range covers
+    // `[locator, locator + frames)`. THE BASELINE IS TAKEN AFTER refresh(),
+    // because openLive() resets the ring - and its counters - when it opens the
+    // device.
+    refresh();
+    if( pump_ ) pump_->requestReposition();
+    countInBase_ = ringFramesDelivered();
+}
+
+void SLiveMonitor::muteCountIn()
+{
+    if( !countInActive_ || countInTotal_ == 0 ) return;
+    countInTotal_ = 0;          // an EMPTY click range; see the header
+    refresh();
+}
+
+void SLiveMonitor::endCountIn()
+{
+    if( !countInActive_ ) return;
+    countInActive_ = false;
+    countInTotal_  = 0;
+    refresh();
+}
+
+offset_t SLiveMonitor::countInRemainingFrames() const
+{
+    if( !countInActive_ ) return 0;
+    const std::uint64_t d = ringFramesDelivered();
+    // A ring reset under us (a device re-open) restarts the count rather than
+    // wrapping the subtraction into an eternity of remaining frames.
+    if( d < countInBase_ ) countInBase_ = d;
+    const offset_t done = (offset_t) ( d - countInBase_ );
+    return countInTotal_ > done ? ( countInTotal_ - done ) : (offset_t) 0;
+}
+
 // --- the plan ---------------------------------------------------------------
 
 void SLiveMonitor::publishPlan( const SLiveClosure &closure,
@@ -271,6 +559,14 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
 {
     std::shared_ptr<twSpeaker> spk = app_->getSpeaker();
     if( !spk ) return;
+
+    // NO EXCLUSION, NO EPOCH GATE (proposal 21 L5). `flipEpoch` exists so the
+    // RT does not sum a ring entry onto a root page that still CONTAINS the
+    // armed track. A lane with no track members - a metronome-only one - nulled
+    // no plug and bumped nothing, so there is nothing for the page to be too
+    // old for, and passing an epoch here would gate the click off until an
+    // unrelated re-freeze happened to land.
+    if( closure.ordered.empty() ) { flipEpoch = 0; flipEpochPrime = 0; }
 
     SLivePlanBuilder::Params p;
     p.mixer       = rootMixer();
@@ -285,6 +581,10 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     if( audio::AudioBackend *b = spk->getBackend() )
         p.blockFrames = (length_t) b->getConfig().bufferFrames;
     if( p.blockFrames <= 0 ) p.blockFrames = 1024;
+
+    // THE CLICK (proposal 21 L5). A synthetic plan track at the output; it owns
+    // no STrack and live-owns nothing, so nothing above this line changes.
+    p.metronome = ensureMetronome( closure.metronome );
 
     // One source object per source track, rebuilt with the plan: the scratch
     // and the channel map are sized HERE, on the main thread, so the pump's
@@ -322,17 +622,34 @@ void SLiveMonitor::refresh()
 
     const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
                                                   : app_->isPlaying();
-    const SLiveClosure want = sliveplan::computeClosure(
+    SLiveClosure want = sliveplan::computeClosure(
         mixer, playing, app_->isRecordingActive(), inertlyArmed_ );
+    // A LIVE LANE EXISTS IFF armed u monitor u metronome (design D9). The
+    // metronome owns no track, so it joins as a FLAG and leaves the whole
+    // arm/disarm protocol below untouched.
+    want.metronome = sliveplan::metronomeWanted(
+        metronomeEnabled(), playing, app_->isRecordingActive(), countInActive_ );
 
     const bool sameSet = ( want.ordered == current_.ordered )
-                         && ( want.sources == current_.sources );
+                         && ( want.sources == current_.sources )
+                         && ( want.midiFeeds == current_.midiFeeds )
+                         && ( want.metronome == current_.metronome );
     if( sameSet ) {
         // Nothing structural moved: only the transport, the fader or an insert
         // did. Rebuild and republish -- a plan is a SNAPSHOT, so a fader move
         // on a closure member is only heard once a new one is built (design
         // section 3's rebuild triggers).
-        if( !current_.empty() ) publishPlan( current_, rootEpoch(), 0 );
+        //
+        // The live sources are re-offered too, and it is NOT a no-op: the
+        // transport half of the clock lives there, and a Play/Stop with the
+        // same closure is exactly the case where the mapping changes and the
+        // set does not.
+        // empty() accounts for the metronome, so a click-only lane republishes
+        // here too - which is what a tempo edit while playing needs.
+        if( !current_.empty() ) {
+            attachLiveEvents( current_ );
+            publishPlan( current_, rootEpoch(), 0 );
+        }
         return;
     }
 
@@ -348,6 +665,12 @@ void SLiveMonitor::refresh()
         if( disarmTimer_->isActive() ) { disarmTimer_->stop(); finishDisarm(); }
 
         retireClosureNodes( leaving );
+        // THE LIVE EVENT SOURCE GOES FIRST (design D4's disarm order): the
+        // all-notes-off flush is asked for while the processor still HAS the
+        // source, and the source is detached before ownership - never after,
+        // because setLiveOwned(false) drops it anyway and the flush would then
+        // have nowhere to land.
+        detachLiveEvents( leaving );
         // OWNERSHIP IS RELEASED BEFORE THE RE-WIRE, and that order is the
         // whole correctness of the hand-back.
         //
@@ -400,6 +723,21 @@ void SLiveMonitor::refresh()
     if( want.empty() ) {
         demandTimer_->stop();
         demands_.clear();
+        // A METRONOME-ONLY LANE LEAVES THROUGH NO DISARM PATH. It live-owned
+        // nothing and nulled no plug, so `leaving` is empty and finishDisarm()
+        // will never run - which before L5 could not happen, because the only
+        // way to reach an empty set was for a track to have left. Without this
+        // the pump would keep clicking off the old plan forever.
+        if( leaving.ordered.empty() && departing_.empty() ) {
+            stopPump();
+            ensureMetronome( false );
+            closeInputIfUnused();
+            if( liveOpened_ ) {
+                if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() )
+                    spk->closeLive();
+                liveOpened_ = false;
+            }
+        }
         return;
     }
 
@@ -430,6 +768,12 @@ void SLiveMonitor::refresh()
                     "live monitoring is off" ).arg( QString::fromUtf8( shape.reason ) );
                 TW_LOGW( "shell", "[LIVE] %s", lastRefusal_.toStdString().c_str() );
             }
+            // Nothing is armed on this path, but a PREVIOUS pass may have left
+            // live sources attached (the master can only stop being linear
+            // while something is already monitoring). Dropping the closure
+            // without dropping them would leave a ring being drained for a
+            // lane nobody renders.
+            detachLiveEvents( current_ );
             current_ = SLiveClosure();
             return;
         }
@@ -439,9 +783,19 @@ void SLiveMonitor::refresh()
         // 1. drain, 2. own, 3. wire + bump, 4. read the epoch.
         retireClosureNodes( arriving );
         setClosureOwned( arriving, true );
+        // ...and only THEN the second event source (design D4): a live source
+        // installed on a processor the freeze path still owns would be
+        // collected by a freeze worker, which is the one reader it may not
+        // have.
         for( STrack *t : arriving.ordered ) t->setLiveOwnedLane( true );
         applyExclusion( arriving );
     }
+    // ...and only THEN the second event source (design D4): a live source
+    // installed on a processor the freeze path still owns would be collected
+    // by a freeze worker, which is the one reader it may not have. Outside the
+    // `arriving` guard on purpose - a feed can change (a different port, a
+    // different channel, a new armed child) while the closure does not.
+    attachLiveEvents( want );
     const std::uint64_t flipEpoch = rootEpoch();
 
     // 5. THE INPUT DEVICE, BEFORE the output one. The capture backend clears
@@ -472,6 +826,7 @@ void SLiveMonitor::refresh()
             // The exclusion stays UNDONE: a track nobody can monitor must keep
             // being heard from its own clips.
             for( STrack *t : current_.ordered ) t->setLiveOwnedLane( false );
+            detachLiveEvents( current_ );
             setClosureOwned( current_, false );
             applyExclusion( current_ );
             current_ = SLiveClosure();
@@ -482,6 +837,7 @@ void SLiveMonitor::refresh()
     // 7. publish, then one explicit reposition.
     publishPlan( current_, flipEpoch, 0 );
     if( pump_ ) pump_->requestReposition();
+    requestLiveChase();
     if( !demandTimer_->isActive() ) demandTimer_->start();
     pumpDemands();
     // Meters keep ticking while a live lane is ON, at a standing playhead.
@@ -504,7 +860,9 @@ void SLiveMonitor::finishDisarm()
     } else {
         publishPlan( current_, rootEpoch(), 0 );
         if( pump_ ) pump_->requestReposition();
+        requestLiveChase();
     }
+    detachLiveEvents( gone );          // idempotent
     setClosureOwned( gone, false );   // idempotent; the belt to the braces above
 
     if( current_.empty() ) {
@@ -529,6 +887,7 @@ void SLiveMonitor::transportChanged()
     pendingPlaying_ = -1;
     refresh();
     if( pump_ ) pump_->requestReposition();
+    requestLiveChase();
 }
 
 void SLiveMonitor::seeked()
@@ -538,6 +897,7 @@ void SLiveMonitor::seeked()
     // also changes the anchor and the automation hold -- both live in the plan.
     if( !current_.empty() ) publishPlan( current_, rootEpoch(), 0 );
     pump_->requestReposition();
+    requestLiveChase();
 }
 
 void SLiveMonitor::suspendForRender()
@@ -554,11 +914,16 @@ void SLiveMonitor::suspendForRender()
 
     suspended_ = current_;
     stopPump();
+    detachLiveEvents( current_ );
     setClosureOwned( current_, false );
     for( STrack *t : current_.ordered ) t->setLiveOwnedLane( false );
     SLiveClosure was = current_;
     current_ = SLiveClosure();
-    applyExclusion( was );
+    // Only when something was WIRED. A metronome-only lane nulled no plug and
+    // live-owned nothing, so there is nothing to undo - and applyExclusion's
+    // empty-set fallback would stale the master chain for a render that is
+    // about to freeze it, for no reason at all.
+    if( !was.ordered.empty() ) applyExclusion( was );
     demandTimer_->stop();
     demands_.clear();
     closeInputIfUnused();
@@ -692,6 +1057,22 @@ std::vector<std::uintptr_t> SLiveMonitor::planSignature() const
         }
         sig.push_back( 0xFFFFu );   // a member separator, so two shapes cannot alias
     }
+    // THE CLICK, so a TEMPO or TIME-SIGNATURE edit republishes (design section
+    // 3's rebuild triggers). Asked rather than wired, exactly like the fader:
+    // `set-tempo` re-derives every beats-timebase link in the project and would
+    // otherwise have to know about the live lane as well.
+    sig.push_back( current_.metronome ? 1u : 0u );
+    if( current_.metronome ) {
+        if( SProject *p = app_ ? app_->getCurrentProject() : nullptr ) {
+            sig.push_back( (std::uintptr_t) p->tempoMap().usPerQuarter() );
+            sig.push_back( (std::uintptr_t) p->tempoMap().numerator() );
+            sig.push_back( (std::uintptr_t) p->tempoMap().denominator() );
+        }
+        sig.push_back( (std::uintptr_t) llround(
+            1000.0 * SSettings::instance()
+                         .value( SOpt::MetronomeLevel,
+                                 SOpt::def( SOpt::MetronomeLevel ) ).toDouble() ) );
+    }
     return sig;
 }
 
@@ -722,6 +1103,29 @@ QString SLiveMonitor::describe() const
         s += QStringLiteral( " blocks=%1 repositions=%2 misses=%3 shortfalls=%4" )
                  .arg( pump_->blocks() ).arg( pump_->repositions() )
                  .arg( pump_->frozenInputMisses() ).arg( pump_->inputShortfalls() );
+    if( !midiLive_.empty() ) {
+        s += QStringLiteral( " midi=%1" ).arg( midiLive_.size() );
+        for( const MidiLive &m : midiLive_ ) {
+            s += QStringLiteral( " [%1<-%2:%3 held=%4 late=%5 thru=%6]" )
+                     .arg( m.feed.consumer ? m.feed.consumer->getSName()
+                                           : QStringLiteral( "?" ) )
+                     .arg( m.feed.port )
+                     .arg( m.feed.channel < 0 ? QStringLiteral( "any" )
+                                              : QString::number( m.feed.channel ) )
+                     .arg( m.source ? (qulonglong) m.source->heldNotes() : 0ull )
+                     .arg( m.source ? (qulonglong) m.source->lateClamped() : 0ull )
+                     .arg( m.thru ? QStringLiteral( "on" ) : QStringLiteral( "off" ) );
+        }
+    }
+    if( current_.metronome )
+        s += QStringLiteral( " metronome=on clicks=%1" )
+                 .arg( metronome_ ? (qulonglong) metronome_->clicksEmitted() : 0ull );
+    else
+        s += QStringLiteral( " metronome=off" );
+    if( countInActive_ )
+        s += QStringLiteral( " countIn=%1/%2" )
+                 .arg( (qlonglong) countInRemainingFrames() )
+                 .arg( (qlonglong) countInTotal_ );
     if( !lastRefusal_.isEmpty() ) s += QStringLiteral( " refused='%1'" ).arg( lastRefusal_ );
     return s;
 }

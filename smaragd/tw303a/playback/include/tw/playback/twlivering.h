@@ -265,6 +265,15 @@ public:
     // Stream-side (review fix 1).
     std::uint64_t dropped()    const { return dropped_.load( std::memory_order_relaxed ); }
     std::uint64_t notYet()     const { return notYet_.load( std::memory_order_relaxed ); }
+    // FRAMES OF LIVE AUDIO THE RT ACTUALLY HANDED THE DEVICE, cumulative
+    // (proposal 21 L5). It is the only wall-clock-free measure of how far a
+    // STOPPED live lane has got: while stopped there is no engine clock and no
+    // root page, so the ring IS the transport, and a count-in that ends after
+    // N bars of PUMP time has to count exactly this. A QTimer would measure the
+    // scheduler instead - 15.6 ms of granularity on Windows, against a beat
+    // grid the same case asserts to the frame.
+    std::uint64_t framesDelivered() const
+    { return delivered_.load( std::memory_order_relaxed ); }
     void noteOutcome( twLiveMixOutcome o );
     void noteStream( const twLiveStreamStats &s );
     void resetStats();
@@ -297,6 +306,7 @@ private:
     std::atomic<std::uint64_t> overruns_{ 0 };
     std::atomic<std::uint64_t> dropped_{ 0 };
     std::atomic<std::uint64_t> notYet_{ 0 };
+    std::atomic<std::uint64_t> delivered_{ 0 };
 };
 
 #endif  // _TW_LIVE_RING_H_

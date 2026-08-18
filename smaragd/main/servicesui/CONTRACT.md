@@ -49,8 +49,14 @@ Invariants:
    that would create one. WinMM has no such concept (tw/devices CONTRACT
    inv. 18); a loopMIDI-style driver shows up as an ordinary device instead.
    Same shape as the MP3 render option's gating.
-9. Input ports are LISTED and PERSISTED here (`midi/inputPortIds`) and read by
-   nobody: opening them is proposal 37 P8. The page says so.
+9. Input ports are LISTED and PERSISTED here (`midi/inputPortIds`), and since
+   proposal 21 L2 the page is ACTIVE: applying it OPENS every selected port
+   through `SMidiInputHub`. The list is the HUB's, not the out-pump's probe,
+   so the COMPUTER KEYBOARD appears in it - it is a real in-process MidiInput
+   port (design D9) and it is listed FIRST, because it is the one that exists
+   whatever `SMARAGD_MIDI_BACKEND` chose. Deselecting does NOT close a port: a
+   track may be armed on it right now, and the Options dialog is not where a
+   monitoring session gets torn down.
 
 How to test: `ctest -R qxa.log_dock_scale` covers the log dock's scale
 requirement numerically (300k records, asserts the worst drain tick). The
@@ -61,3 +67,47 @@ Known debt: the MIDI page cannot EDIT the `midi/portId/<name>` mapping — it li
 Known debt: render extent enum duplicated between dialog and params. The log
 page's "write a rotating log file" setting only takes effect on restart —
 starting/stopping the writer mid-session was not worth the complexity.
+
+`SOpt` gained `midi/recordMode` (new-take | overdub | replace) and
+`midi/recordQuantize` (off | 1/4 | 1/8 | 1/16 | 1/8t | ...) for proposal 21
+L4. Both are GLOBAL and per-user, not per track: "how does a recorded pass
+combine with what is already there" and "quantise the input" are properties
+of how this person works, and every reference DAW puts them in one place
+beside the transport. `SMidiRecorder` reads both ONCE at each record start,
+so a change made during a take cannot make the commit disagree with the
+capture. The defaults are the two that cannot destroy anything: new-take
+(the previous performance is still take 0) and off (a performance nobody
+asked to have quantised arrives as played). **Known debt: neither has a UI
+control yet** - the Options MIDI page does not show them, and a headless
+case reaches them through `set-option`.
+
+## Transport polish (proposal 21 L5)
+
+Three per-USER keys and two verbs live here, and they live here for one reason:
+this is the module that owns the option table (`SOpt`) and the only one that may
+include both it and `SSettings`.
+
+- `SOpt::MetronomeLevel` (linear amplitude of the ACCENTED click, 0..1, default
+  0.5), `SOpt::CountInBars` and `SOpt::PreRollBars` (0..8, both default 0). An
+  ordinary beat is HALF the accented level, so the accent ratio is exactly 2 and
+  a gate can assert the ladder in closed form.
+- `set-count-in` / `set-pre-roll` (`STransportBarsAction`) write those last two.
+  **NOT undoable**, exactly as `set-option` is not: how many bars this person
+  likes before a take is a preference, and putting a preference on the
+  arrangement's undo stack would make Ctrl-Z mean two different things. They are
+  named verbs rather than two spellings of `set-option` because a named verb can
+  refuse a range (8 bars at 60 BPM is half a minute of waiting; past that it is
+  a typo) and because `set-option` lives in the TESTKIT while these are
+  production behaviour.
+- **Whether the metronome is ON is a PROJECT property** (`SProjectProps::
+  Metronome`, on the transport bar) and deliberately stays one: it travels with
+  the arrangement. Only how loud it is is per-user.
+
+The Options dialog's AUDIO page carries all three, beside the recording offset —
+that is where the transport's other timing numbers already are. Changing the
+level takes effect through the live plan's SIGNATURE (the 40 ms demand tick
+compares it), which is the same arrangement a fader move uses; there is no
+signal to wire.
+
+**This module now has an edge to `app/actions`** (`tools/check_layering.py`), for
+the two verbs above and nothing else.

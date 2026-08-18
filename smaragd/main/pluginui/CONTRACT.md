@@ -144,3 +144,25 @@ embedding (a deliberate deferral of proposal 08). The drop handler's
 was declared and never defined — so drag-to-reorder cannot fire today even
 though `reorder-plugin` behind it is tested; that is pre-existing and untouched
 by M5.
+
+## The plugin latency badge (proposal 21 L5)
+
+The FX strip shows each slot's `SPluginSlot::reportedLatencyFrames()` in ms, and
+the chain's total below the rows — both only when they are non-zero, so a chain
+of ordinary effects looks exactly as it did.
+
+Two invariants:
+
+- **`describeSlot()` appends `|latency=<frames>` AT THE END.** The proposal-08 M5
+  cases assert contiguous SPANS of that string (`name=…|state=…`,
+  `nameEnabled=…|…|reload=…`), so a field inserted among them would break
+  assertions that are about something else entirely. Gated by
+  `plugin_ui_strip_and_editor` (`contains="latency=0"` — the test CLAP reports
+  none, which is the honest expectation and still proves the number reaches the
+  widget).
+- **The number is REPORTED, never compensated, and every mount says so.** Plugin
+  delay compensation is out of scope (proposal 37 P9), and the LIVE lane has no
+  delay line anywhere: the pump renders block-wise straight into the ring. A
+  latency-reporting plugin monitored live is heard late by exactly the badge's
+  number, and the row tooltip, the chain footer's tooltip and the transport
+  bar's latency readout all state it.

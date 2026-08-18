@@ -987,6 +987,48 @@ jitter, WASAPI shared under load, ASIO, and hearing an ARMED track's own clips
 
 ## Recording Audio (proposal 21 L3b - executed 2026-08-17)
 
+### Live instruments (proposal 21 L2 = 37 P8a — executed 2026-08-17)
+
+A track's instrument can be PLAYED, live, from a MIDI port or the computer
+keyboard, merged with the sequenced feed while the transport runs, with MIDI-thru
+and the ownership protocol. Engine: `tw/devices` (`MidiInRing`, `MidiInFanout`,
+`MidiOutScheduler::sendImmediate`, `KeyboardMidiInput`, `twLiveEventSource`) plus
+`twLiveEventClock` in `tw/playback`; app: `SLiveMonitor` extended +
+`SMidiInputHub` in `main/shell`. Design: `21_REALTIME_DATAFLOW_INTEGRATION.md`
+D2/D4/D8/D9. Invariants: `tw303a/devices/CONTRACT.md` inv. 20–23,
+`main/shell/CONTRACT.md` inv. 19–23.
+
+| Thing to know | Why |
+|---|---|
+| The live source is the processor's **SECOND** event source, never a `setEventSource` swap and never a member of `eventFeed()` | `STrack::syncInstrumentSlot()` re-applies the feed from adopt / insert / remove and would silently overwrite a live source; `setEventSource` also clears continuity and bumps the param epoch, which an arm must not do per call; and the feed is ALSO read by `SMidiOutPump` and `assert-midi-events`, while a ring-draining `collect` has exactly ONE legal reader. |
+| A MIDI-armed track contributes its **CONSUMER** to the closure, not itself | `sliveplan::midiConsumerFor` walks the routing UP the way `eventFeed()` walks it down. An armed CHILD of a folder drum machine is a MIDI SOURCE while the **FOLDER** is the live instrument and the thing that leaves the frozen sum — the child stays in it, because its own clips must keep playing (§3 case (iii)). A MIDI track whose notes reach no instrument is deliberately **not** a source: excluding it would trade the arrangement for silence. |
+| **A late live event is CLAMPED to offset 0 and never dropped** — and being late is the NORMAL case | The pump renders ahead of the RT, so a byte arriving while a block is built is by construction older than that block. Clamping is what makes the latency the ring depth plus the lead rather than a whole extra block. An event mapped PAST the block waits in `pending_` for the next collect, in order. |
+| The host-time → frame mapping is the ENGINE CLOCK while playing and **the block being rendered** while stopped | While stopped there is no clock at all — the pump counts virtual blocks — so anchoring "now" at the block is the honest answer rather than inventing a reading. Both routes land on the same clamp in practice. |
+| The MIDI input device thread writes **ONE RING PER CONSUMER**, and the fan-out owns the sinks forever | A consumer registering its own ring would have to unregister it and then prove the device thread was not inside a `push()` on it, and that has no lock-free answer. Acquire clears the sink BEFORE raising its flag; the producer never pushes into an inactive one. |
+| **MIDI-thru is a second, IMMEDIATE ring on `MidiOutScheduler`, never `enqueue()`** | `enqueue()` is single-producer and that producer is the main-thread pump (devices inv. 11). Two rings let a device thread and the main thread coexist with no lock on either path. Thru is drained FIRST, sends with due time 0 (never handed to a driver queue), and sits OUTSIDE `flush()`'s discard — a flush drops a queued FUTURE, and a thru byte is a key being pressed now. Measured **0.011–0.125 ms**. |
+| The computer keyboard is a **real `MidiInput` port** and `SMARAGD_MIDI_BACKEND` cannot reach it | `createMidiInput("keyboard")` names it explicitly. The variable chooses the SYSTEM MIDI implementation; the computer keyboard exists whatever it chooses, so it must neither replace the hardware backend nor be replaced by it. Every consumer downstream then has ONE shape to handle. |
+| A port is opened once and **never closed until teardown** | Opening a device is not free — but the load-bearing reason is that `CaptureMidiInput::inject()` is a NO-OP on a closed port, so closing one on disarm would silently swallow a script's events between two phases of a case. The hub's enumeration probe is constructed FIRST so a listening port is always the newer `active()`. |
+| The disarm flush is best-effort; **the hand-back is what guarantees no hanging voice** | `detachLiveEvents` asks the source for all-notes-off before ownership drops, but `setLiveOwned(false)` also forgets continuity, so the freeze path's first render resets every instance. The thru port is PANICked separately — a key held at the disarm is otherwise a stuck note on the user's hardware. |
+| A live lane on a loaded box **drops about one 1024-frame block in 25 runs**, and that is the CONTRACT | Design D2: the RT sums a ring entry only when its stamp matches the frame being delivered, and a miss is SILENCE plus a counter (`twLiveMixRing::misses`) — one DEVICE BLOCK wide by construction. Measured at `SMARAGD_REVAL_WORKERS=8`, where eight revalidation workers plus the readahead run against a pump that must wake every ~21 ms. **1024 is the house bound for a live lane** (`arm_during_playback` measured 8 frames against it); anything tighter is asserting something the design cannot offer, and `live_instrument_disarm_playback` was 46/50 until its 512 moved to the FROZEN side — where it reads exactly 0.040405 on every run. |
+| **The hand-back of a stateful generator costs ONE phase step** (measured 0.319–0.341 at amplitude 0.787) | The pump and the freeze path are two DSP streams by design (D4), so two renderings of the same held note agree in frequency and level but not in accumulated phase. Design D2 calls for a 2–3 ms crossfade at the flip; the RT does not have one. `live_instrument_disarm_playback` therefore bounds the GAP tightly (1 frame) and leaves the step unbounded across the flip, while asserting **exactly 0.040405** — the sine's closed-form maximum step — on either side. |
+| `virtual-key` has **two modes** and they are not folded together | `hold`/`release` PLAY the port; the default WRITES a note at the locator. The real mouse handler does both, because a user pressing a key means both — but a case measuring what an instrument SOUNDS must not also be editing the project under the measurement. |
+
+Gates: the qxa cases `live_instrument_play`, `live_instrument_merge`,
+`live_instrument_disarm_playback`, `live_instrument_ownership`,
+`live_instrument_thru`, `live_instrument_keyboard` — all `RUN_SERIAL` at
+`SMARAGD_CAPTURE_SPEED=1`, no `SMARAGD_AUDIO_INPUT_BACKEND` (a MIDI-armed
+instrument track has no audio input at all) — plus `action_roundtrip_test` and
+`midi_options_page`. Measured: onset lag **4544 frames = 94.67 ms**; the two-tone
+merge **0.472966** against 0.472441; the hand-back gap **1 frame**; thru
+**0.125 / 0.011 ms**; `liveOwnedRefusals` **2** when the guard is meant to fire
+and **0** everywhere else. **NOT gated:** real MIDI hardware / WinMM jitter,
+CoreMIDI / ALSA-seq, latency on a real audio device, sysex over the live lane,
+the cross-PROCESS render comparison (the in-process before/after byte gate is
+used), the folder-instrument-fed-by-an-armed-child shape (implemented, no case),
+and `midi/inputOffsetMs` (applied, no UI and no case).
+
+## Recording Audio
+
 Arm a track, press Record (or Ctrl-R): a **growing clip** appears on every armed
 lane and draws its waveform as the capture arrives, the app stays usable
 throughout, and at stop the whole take is placed as **one undo step** -
@@ -1145,6 +1187,129 @@ a patch.
 4. **Multi-input:** One WAV per input device; multiple inputs with separate files not yet supported.
 5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
 6. **No headless coverage at all.** Nothing in the qxa suite records anything, and every device path needs real endpoints. Every recording change to date has been hand-verified only — say so in the PR rather than letting a green suite imply otherwise.
+
+## Recording MIDI (proposal 21 L4 = 37 P8b — executed 2026-08-18)
+
+Arm a track whose input is `midi:<port>:<ch|any>` or `keyboard`, press Record:
+what the performer plays becomes an event clip on that track — latency-mapped,
+one take per loop pass, optionally quantised, as **one undo step**. Design:
+`plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` **D6** (the placement
+conversion) and **D8** (the recorder as a main-thread consumer of a tee).
+Invariants: `main/shell/CONTRACT.md` inv. 25-31, `main/objects/midi/CONTRACT.md`
+("The recording verbs"), `main/model/CONTRACT.md` ("The generic take-column
+seam"), `main/testkit/CONTRACT.md` 18-20.
+
+**Read this before touching MIDI recording — the obvious design is wrong for
+exactly the reason MIDI-OUT's was, mirrored.** MIDI-out must not be emitted at
+freeze time because pages are frozen ahead of the playhead; MIDI-IN must not be
+PLACED on the tick that receives it, because when the first bytes arrive there
+is often no playhead clock at all. Both are answered by the same object.
+
+| Thing to know | Why |
+|---|---|
+| `SPlayheadClock` is THE host-time ↔ project-frame conversion, and both MIDI directions use it | `SMidiOutPump` reads it forward to schedule a message; `SMidiRecorder` reads it backward to place a note. It is the pump's own anchor discipline moved out unchanged — publication-driven re-anchoring (measured: anchoring on a position CHANGE put the first note of a run 59 ms early), the publish-lag correction, the device-latency term, the guarded first anchor. A second implementation would be a second set of corrections to keep in step. |
+| **The tick maps NOTHING.** It buffers `{hostTimeNs, bytes}`; the model is touched only at the stop | That is what makes the mapping RETROSPECTIVE by construction rather than by a special case. A take begun from a stopped transport captures its first messages before the RT has published anything, and backward extrapolation on a clock linear in host time is exact — the same argument `SRecordPlacement` makes for audio. |
+| The conversion is one line: `projectFrame(msg) = clock.frameAtHostNs(msg.hostTimeNs) − inputOffsetProj` | `frameAtHostNs` already answers "the frame being HEARD", so there is no separate output-latency term — design D6's derivation, that the performer plays to what they hear. `inputOffsetProj` is the port's `midi/inputOffsetMs`, and its sign is the app-wide one: **POSITIVE = EARLIER** ("this controller arrives late, compensate more"). |
+| The split with `SAudioRecorder` is by **TRACK INPUT**, never by two record buttons | An armed track whose `trackInput` is `midi:`/`keyboard` goes to `SMidiRecorder`, every other armed track to `SAudioRecorder`. One press records a guitar and a synth part together. Without the filter a MIDI-armed track would get an audio WAV sink and a growing audio clip out of a device it never asked for. |
+| The MIDI recorder starts FIRST and does not touch the transport; only a MIDI-ONLY run starts it from `startRecording` | Monitor AUTO is "input while stopped OR RECORDING" (design D9), so `isRecordingActive()` must already be true when the transport edge rebuilds the live plan. At the stop the MIDI half commits FIRST, while the transport is still running — its anchor is only valid while the RT is publishing. |
+| The recorder's ring is a **SECOND consumer of `MidiInFanout`**; the live lane's is untouched | Design D8: the device thread writes one ring per consumer, so SPSC stays SPSC. Two armed tracks on one port SHARE the sink (a ring has one consumer); the channel filter is applied when the buffer is READ. At a record start the ring is DRAINED, never `clear()`ed — `clear()` is only safe while the producer is idle, and a performer's finger is not. |
+| **`add-take` is audio-only, so `add-midi-take` is a new verb** — and both it and `place-midi-recording` live in `objects/midi` | `add-take` addresses a FILE and seeds grain params; `SRemoveTakeAction` builds its inverse from an `SExternFile` path, so an event take removed through it would be a NON-UNDOABLE removal. And a take stack lives in `objects/cut`, which `objects/midi` sits at the RANK of and must not depend on — so the verbs reach a column through the generic seam on `SObject` (`windowTakeCount` / `insertWindowTake` / …) plus a registered wrap factory, exactly as `objects/track` consults MIDI-ness only through `contentKind()`. |
+| Modes and input quantise are **`SOpt` globals**, read ONCE per take | new-take (default) / overdub / replace, and off / 1/4 / 1/8 / 1/16 / 1/8t / … The two defaults are the two that cannot destroy anything. Reading them once is what stops a settings change mid-take making the commit disagree with the capture. **Neither has a UI control yet.** |
+| The quantise is a `quantize-notes` **inside `place-midi-recording`'s own composite** | One undo entry covers the recording AND its grid. A separate action would leave the user two things to undo for one take. |
+| Loop passes are **ARITHMETIC on wrap-counted frames**, and every pass is placed at the **LOOP START** | `floor((f − loopIn)/loopLen)`, never wrap detection: a 20 ms poll cannot see a wrap between two ticks. `passStart(pass)` is unbounded (pass 2 of a 2 s cycle starts at 192000), so placing there would put pass 2 three loops to the right instead of stacking a take on pass 1's column. |
+| A note held at the stop is CLOSED there; a note whose mapping lands before its pass is CLAMPED into it, never dropped | A recording with an unterminated note is not a recording. Being early is the NORMAL case for the first messages of a take begun from a stopped transport, exactly as being late is normal for a live event. Both are counted, not silent. |
+| **All-notes-off on stop is NOT sent from the recorder** | Closing the held notes in the RECORDING is its half. The sounding half already has two owners — `SMidiOutPump::stop()` panics its run's ports, L2's `detachLiveEvents` flushes the live source at disarm — and a third flush would be a duplicate on the user's hardware. |
+
+Gates: the qxa cases `midi_record_placement`, `midi_record_modes` (all three
+modes against one pre-existing clip, plus the 1/16 input quantise) and
+`midi_record_loop_takes` — all `RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1` with no
+`SMARAGD_AUDIO_INPUT_BACKEND` (a MIDI-armed track has no audio input at all) —
+plus `action_roundtrip_test`. Measured: notes placed at **22975 / 34975 / 46975 /
+58975** against the ideal 24000 / 36000 / 48000 / 60000, i.e. **−1025 frames**
+inside a 4096 band, with durations **exactly 9600**; a 1/16 grid snapping to
+24000 / 36000 / 48000 / 60000 at **tolerance 0**; **3 passes → 3 takes on ONE
+column**, removed by ONE undo.
+
+**THE −1025 IS THE CONVERSION WORKING, NOT AN ERROR.** `midi-in-replay
+startFrame=` waits on the PUBLISHED locator while the recorder maps to the frame
+being HEARD, and the published position leads the heard one by one device buffer
+plus the output latency. A case that wanted to remove it would have to measure
+the same two terms a second time.
+
+**NOT gated:** real MIDI hardware and its jitter, CoreMIDI / ALSA-seq,
+`midi/inputOffsetMs` (applied, no UI and no case), sysex (system messages are
+skipped by the recorder, as they are refused by the ring), a `place-retro-midi`
+catch range (design D8 lists it as later work; **not implemented** — the ring is
+drained at the record start), the mode/quantise UI, and recording a MIDI and an
+audio track in the SAME pass (implemented and reachable, no case).
+
+## Metronome, count-in, latency readout (proposal 21 L5 — executed 2026-08-18)
+
+The click is audible, a record start can be counted in or pre-rolled, the
+transport bar shows the round trip, and the FX strip shows each plugin's
+reported latency. Design: `plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md`
+D1/D2/D5/D6 and §6. Invariants: `tw303a/playback/CONTRACT.md` inv. 19-20,
+`main/shell/CONTRACT.md` inv. 32-36, `main/servicesui/CONTRACT.md`,
+`main/pluginui/CONTRACT.md`, `main/objects/track/CONTRACT.md` inv. 21,
+`main/testkit/CONTRACT.md` 21-22.
+
+**Read this before touching the metronome — the obvious design is wrong for the
+third time in this codebase, and for the same reason the meters' and MIDI-out's
+were.** The click is NOT a graph component. It is a `twLiveInputSource` on a
+synthetic plan track, rendered by the PUMP, BY POSITION, out of an immutable
+tempo snapshot — so it exists only where a pump exists, and a render (which
+suspends every lane) can never contain one. A component would have needed a
+special case to keep it out of the export, and every special case is a place the
+exclusion can be forgotten.
+
+| Thing to know | Why |
+|---|---|
+| A live lane exists iff **`armed ∪ monitor ∪ metronome`**, and the metronome is a FLAG on `SLiveClosure`, not a member | It owns no track, live-owns nothing and nulls no plug, so the whole arm/disarm protocol is untouched and a metronome-only lane cannot change one byte of what the frozen graph produces. `metronome_render_identity` gates that byte-for-byte. |
+| **A metronome-only lane leaves through NO disarm path** | `leaving` is empty because it owned no track, so `finishDisarm()` never runs — the pump would keep clicking off the old plan forever. `refresh()`'s `want.empty()` branch stops it. Before L5 an empty live set could only be reached by a track LEAVING, so the path did not exist. |
+| No exclusion ⇒ **`flipEpoch` = 0** | The epoch gate exists so the RT does not sum onto a root page that still CONTAINS the armed track. A lane that excluded nothing bumped nothing, and passing an epoch would gate the click off until an unrelated re-freeze happened to land. |
+| The click is a **pure function of the block position**; a tempo/level edit builds a NEW source | No "next click" cursor to get out of step with a seek, a wrap or a reposition, and a click straddling a block boundary is finished by the next block because both compute the same answer. `pull()` allocates nothing (both waveforms are rendered in the ctor). |
+| The beat is one note of the time signature's **denominator**, from `twTempoMap` — the ONE tempo authority | A quarter in 4/4, an eighth in 6/8, which is what every DAW's click does. The beat length is a REDUCED RATIONAL and `frameOfBeat(k)` is one floored division, so beat k is never the accumulation of k roundings. |
+| **COUNT-IN: the playhead does not move.** N bars of click while STOPPED, then recording begins AT THE LOCATOR | Cubase / Logic / REAPER. The placed clip lands exactly where it would have with no count-in (measured: **96000 exactly**) and the capture holds the N bars before it. The rejected reading — roll the bars ON the timeline — makes a preference silently move the user's recording. |
+| **PRE-ROLL: the transport rolls** N bars into the locator, recording begins there | The take goes into a run that was already playing, so nothing is trimmed and the clip lands a few thousand frames BEFORE the locator — which is what latency compensation IS. Neither knob is offered while the transport is already running. |
+| The count-in grid counts **FORWARD from the locator**, never backwards from `locator − N bars` | Backwards produces NEGATIVE positions at a locator inside the first N bars, and `twlive::gateEpoch` discards a ring entry stamped below zero as an unwritten slot — so a count-in at bar 1, the commonest case there is, would have been silent. |
+| The count-in ends on **frames the RT was actually handed** (`twLiveMixRing::framesDelivered`), not on a timer | While stopped there is no engine clock at all; a `QTimer` would measure the Windows scheduler (15.6 ms) against a grid the gate asserts to 38 frames. A wall-clock WATCHDOG still exists — a device that never opens delivers no frames, and a transport that never starts is a hang. |
+| **The click stops before the transport starts; the LANE stops after** (`muteCountIn`) | Both were paid for by a failing gate. The click first, because the transport start repositions the pump back to the locator and would re-render the count-in's first beat (measured: a fifth, accented click). The lane last, because dropping the last lane calls `closeLive()`, the transport start re-opens the device, and the capture backend clears its recording at device start — taking the count-in with it. |
+| **A live lane coming up on a STOPPED→PLAYING transition costs ONE REPOSITION, and it is AUDIBLE on a click** | Design D2, measured from the outside for the first time here: the pump starts at the locator while the engine clock is still invalid, the frozen lane primes and publishes, the pump repositions onto the publication and the consumer drops the abandoned run. At workers=1 the beat at frame 0 came out EARLY in **1 run in 50** and was swallowed in the other 49, with a **~5087-frame (106 ms) hole** after it either way; the steady grid is then exact to 5 frames. A monitored INPUT pays the same cost and simply has no onset to make it audible. `metronome_click` therefore measures from **1 s in** — anchoring on a click that may or may not have survived the abandoned run made the case a coin flip (49/50) on the box rather than a gate on the grid. |
+| **The FIRST click of a live-lane session is attenuated by construction** | It sits inside the RT's 2–3 ms fade-in ramp: measured **0.2109** against a full **0.4720**. `assert-metronome-clicks` therefore excludes onset 0 from the accent comparison and searches the accent PHASE — capture frame 0 is the DEVICE start, so which beat the first summed entry carries is the box's business. Its POSITION is still the grid anchor. |
+| The **accent ratio is exactly 2** by construction | `SOpt::MetronomeLevel` is the ACCENTED level and an ordinary beat is half of it, so a gate can assert the ladder in closed form (measured 2.0584 through the onset detector). |
+| `outputLatencyFramesProject()` is `meterLatencyFrames()` **without** the "only while playing" gate | The gate belongs to the COMPENSATION — shifting a position nobody is playing is meaningless — not to the READOUT, which must show a number the moment a device opens, including when ARMING opens it with the transport stopped. |
+| **PDC is out of scope** (proposal 37 P9), and every mount that shows a latency says so | The live lane has no delay line anywhere: the pump renders block-wise straight into the ring, so a latency-reporting plugin monitored live is heard late by exactly the badge's number. The row tooltip, the chain footer and the transport readout all state it. |
+
+**Verbs:** `metronome-toggle/-enable/-disable` are AUDIBLE now (they were a
+state-only stub); `set-count-in` / `set-pre-roll` (0..8 bars, per-user, NOT
+undoable — a preference does not belong on the arrangement's undo stack).
+`SOpt::MetronomeLevel` / `CountInBars` / `PreRollBars`, all on Edit → Options →
+Audio beside the recording offset. Whether the metronome is ON stays a PROJECT
+property: it travels with the arrangement.
+
+Gates: the qxa cases `metronome_click`, `metronome_render_identity`,
+`record_count_in`, `record_pre_roll` (all `RUN_SERIAL` at
+`SMARAGD_CAPTURE_SPEED=1`; the two record cases take the L3b paced `file:` input
+so `compensationFrames="-5824"` is the same closed form there), the new
+`assert-metronome-clicks` verb, `plugin_ui_strip_and_editor` (`latency=0`) and
+`action_roundtrip_test`. Measured: click grid errors **0, −5, 0, 0, 0, −5**
+frames over playback measured from 1 s in (worst |5| against 1024) and
+**−33 … −38** through a count-in (worst |38|); inter-click RMS **exactly 0.000000**; metronome
+OFF ⇒ **0** clicks; the render **byte-identical** with the click on and off;
+count-in placement **96000 exactly**, `comp=-5824`, `trim=9921`; pre-roll
+placement 89895 for a record start at 96256 (`trim=0`).
+
+**NOT gated:** real device latency numbers (the readout reports what the driver
+claims, and no headless run can check the physics), the readout's and the
+badge's pixels, plugin delay compensation (not implemented), a count-in or
+pre-roll longer than 2 bars, the two knobs COMBINED in one take (implemented and
+reachable, no case), the Options page's three new controls (no verb builds the
+Audio page off screen the way `assert-midi-options` builds the MIDI one), and
+**the first second of a live-lane playback run** — the transient above is
+measured and recorded, not asserted. A render taken WHILE a click lane is up is
+not reachable from a script either (the click sounds only while the transport
+rolls, and a render does not run the transport); `render_while_armed` gates the
+suspend path itself.
 
 ## Plugin Hosting (proposal 08 — M0..M8 executed; VST3 landed 2026-07-29)
 

@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L5. COUNT-IN: the click plays for N bars, THEN recording begins
+  AT THE LOCATOR.
+
+  THE READING TAKEN, because there are two and they differ by N bars of the
+  user's recording. The count-in is BEFORE the record position (Cubase / Logic
+  / REAPER): the playhead does not move during it, the click counts the bars in,
+  and the take then begins exactly where the locator was. The rejected reading -
+  roll the count-in bars ON the timeline, so the take lands N bars later - makes
+  a preference silently move the recording.
+
+  Env, on the CTest entry: RUN_SERIAL, SMARAGD_CAPTURE_SPEED=1,
+  SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800.
+
+  THE CLOSED FORM. 120 BPM, 4/4, 48 kHz:
+
+      beat = 24000 frames,  bar = 96000 frames = 2 s
+
+  so TWO bars of count-in are EIGHT clicks, 24000 frames apart, with beats 1
+  and 5 accented.
+  It is EXACTLY eight and not "about eight" because the click carries a
+  half-open ACTIVE RANGE `[locator, locator + countIn)` (twmetronome.h): the
+  pump renders one to two blocks ahead of the RT, so a plain "stop clicking now"
+  would always let the downbeat past the end through, and the count would be
+  eight or nine depending on the box.
+
+  THE LOCATOR IS 96000 (bar 3), not 0, so the placement assertion is about the
+  count-in and not about a clamp at the start of the project.
+
+  WHY THE ARMED TRACK'S MONITOR IS OFF. This case measures the CLICK in the
+  capture, and a monitored input would put the position-encoded fixture in there
+  as well - which is monitor_through_chain's job. With monitoring off the only
+  live lane in this run is the count-in's, which is exactly the claim "a live
+  lane exists iff armed u monitor u METRONOME".
+
+  ...and the project's own metronome switch stays OFF, which is what makes the
+  click count EXACT: the count-in clicks and nothing else does, so the capture
+  holds eight clicks and then the take, with no click over the take at all.
+-->
+<SActionScript version="1" name="record_count_in">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+    <set-track-input trackPath="0" input="audio:file:1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- This case OWNS transport/countInBars and transport/preRollBars; both
+         are put back at the end. -->
+    <set-count-in bars="2"/>
+    <set-pre-roll bars="0"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="96000"/>
+
+    <!-- record-start returns immediately: the count-in runs on the event loop
+         (SApplication::pumpRecordPreamble) and the take begins when the RT has
+         been handed two bars of click. -->
+    <record-start/>
+    <wait-ms ms="4700"/>
+    <!-- ...by now the two-bar count-in is over and the take is running. -->
+    <wait-ms ms="1400"/>
+    <record-stop/>
+
+    <!-- THE PLACEMENT: at the LOCATOR. The take started the transport, so the
+         trim floor is the transport start (design D6) and the compensated
+         placement is clamped up to it - which is what "the clip lands where you
+         put the locator" means in the presence of latency compensation. -->
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          startFrame="96000" startTolerance="2048"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          userOffsetFrames="0"
+                          compensationFrames="-5824"
+                          minDurationFrames="24000"/>
+
+    <!-- THE CLICKS: exactly EIGHT, on the beat, one in four louder, silence
+         between them - and NOTHING after them, because the project's own
+         metronome is off, so the take itself is clickless. Capture frame 0 is
+         the device start, which the count-in itself caused, so the whole
+         count-in is in this recording.
+
+         EXACTLY eight is the claim worth making and it is only true because
+         the click carries a half-open range AND stops before the transport
+         does its start-of-run reposition (SLiveMonitor::muteCountIn) - without
+         either of those the count is nine, with the extra one a replay of the
+         first beat. -->
+    <dump-playback-capture filename="countin.wav" minFrames="192000"/>
+    <assert-metronome-clicks filename="countin.wav" channel="0"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             count="8"
+                             intervalFrames="24000" toleranceFrames="1024"
+                             accentEvery="4" accentRatio="1.5"
+                             silenceMaxRms="0.01"/>
+
+    <set-count-in bars="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

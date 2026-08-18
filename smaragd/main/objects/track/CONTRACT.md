@@ -325,3 +325,20 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     all, so a walk per edit buys nothing. Note this is the GENERAL rule for
     edits during monitoring; the growing recording clip is covered by 19 and
     never reaches it.
+
+19. **A `midi:` / `keyboard` `trackInput` makes the CONSUMER a live source, not
+    the track** (proposal 21 L2, design D4). `trackInputMidiPort()` /
+    `trackInputMidiChannel()` parse the spelling; who SOUNDS the notes is the
+    live monitor's question and it answers it with `sliveplan::midiConsumerFor`,
+    which walks the routing up the way `eventFeed()` walks it down. `keyboard`
+    is a whole spelling rather than a scheme because there is exactly one such
+    port and it exists on every machine; `midi:keyboard:any` means the same
+    thing.
+
+21. **`SPluginSlot::reportedLatencyFrames()` is REPORTED, never compensated**
+    (proposal 21 L5). It exists here for the same reason `paramRows()` does: the
+    FX strip and the transport readout have to show it, and the number belongs
+    to the plugin the slot owns. **Nothing anywhere compensates for it** —
+    plugin delay compensation is out of scope (proposal 37 P9) — so every mount
+    that displays it must also say that it is not compensated. 0 for a Missing
+    or Unsupported slot, and 0 for the many plugins that report nothing.

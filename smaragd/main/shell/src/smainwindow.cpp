@@ -826,6 +826,15 @@ void SMainWindow::onRecordTriggered()
 {
     if( !currentProject_ ) return;
 
+    // A COUNT-IN or PRE-ROLL in flight is not yet a take (proposal 21 L5), so
+    // isRecordingActive() is false - but a second press must still mean "stop",
+    // or the button would look dead for the length of the preamble.
+    if( SApplication::app().recordPreambleActive() ) {
+        SApplication::app().cancelRecordPreamble();
+        actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
+        return;
+    }
+
     if( SApplication::app().isRecordingActive() ) {
         // Second press == stop. The recorder ends the capture, finalises the
         // files out of the pages and commits ONE undo step (proposal 21 L3b).
@@ -975,6 +984,43 @@ SMainWindow::SMainWindow()
                       } );
     QObject::connect( &SApplication::app(), &SApplication::meterReset,
                       qMasterMeter_, &SLevelMeter::resetMeter );
+
+    // THE LATENCY READOUT (proposal 21 L5, design D5's "latency honesty").
+    // Refreshed off meterTick because that is the one main-thread tick that
+    // keeps running at a standing playhead and for a tail after a stop, so a
+    // device opened by ARMING (with the transport stopped) is picked up
+    // without another lifecycle edge. The text is only pushed when it CHANGES:
+    // a QLabel::setText thirty times a second would repaint the toolbar for
+    // nothing.
+    qLatencyLabel_ = new QLabel( QStringLiteral( "\u21ba --" ), this );
+    qLatencyLabel_->setObjectName( QStringLiteral( "latency_readout" ) );
+    qTBTransport_->addWidget( qLatencyLabel_ );
+    QObject::connect( &SApplication::app(), &SApplication::meterTick, this,
+                      [this]( offset_t, qint64, bool ) {
+                          if( !qLatencyLabel_ ) return;
+                          SApplication &app = SApplication::app();
+                          const QString full = app.latencyReport();
+                          if( full == lastLatencyText_ ) return;
+                          lastLatencyText_ = full;
+                          const double rate = app.get303aEnvironment()
+                                              && app.get303aEnvironment()->getSRate() > 0
+                                                  ? app.get303aEnvironment()->getSRate()
+                                                  : 48000.0;
+                          const double rt =
+                              1000.0 * (double) ( app.inputLatencyFramesProject()
+                                                  + app.outputLatencyFramesProject() )
+                              / rate;
+                          qLatencyLabel_->setText(
+                              QStringLiteral( "\u21ba %1 ms" )
+                                  .arg( QString::number( rt, 'f', 1 ) ) );
+                          // PDC is out of scope (proposal 37 P9): the live lane
+                          // is not delay-compensated, so the tooltip says so
+                          // rather than letting the number imply it.
+                          qLatencyLabel_->setToolTip(
+                              QStringLiteral( "%1\nThe live monitoring lane is "
+                                              "NOT plugin-delay-compensated." )
+                                  .arg( full ) );
+                      } );
 
     addToolBar( Qt::TopToolBarArea, qTBTransport_ );
 
@@ -2185,6 +2231,28 @@ bool SMainWindow::virtualKey( int key, double velocity, qint64 durationTicks )
 {
     if( !virtualKeys_ ) return false;
     return virtualKeys_->pressNote( key, velocity, durationTicks );
+}
+
+bool SMainWindow::virtualKeyHold( int key, double velocity )
+{
+    if( !virtualKeys_ ) return false;
+    if( key < 0 || key > 127 ) return false;
+    virtualKeys_->holdNote( key, velocity );
+    return true;
+}
+
+bool SMainWindow::virtualKeyRelease( int key )
+{
+    if( !virtualKeys_ ) return false;
+    if( key < 0 ) { virtualKeys_->releaseAll(); return true; }
+    if( key > 127 ) return false;
+    virtualKeys_->releaseNote( key );
+    return true;
+}
+
+QString SMainWindow::describeVirtualKeys() const
+{
+    return virtualKeys_ ? virtualKeys_->describe() : QString();
 }
 
 bool SMainWindow::grabLevelMeter( const QString &path, const twLevelSampleSet &s,

@@ -11,6 +11,14 @@
 
 #include "app/shell/sliveplanbuilder.h"
 #include "tw/core/twtypes.h"
+// The fan-out's Sink is a NESTED type, so it cannot be forward-declared; and
+// the live event source is held by shared_ptr and destroyed here. Both are
+// tw/devices, which app/shell already depends on.
+#include "tw/devices/midi_in_fanout.h"
+#include "tw/devices/twliveeventsource.h"
+// The metronome CONFIG is held by value (the comparison is what decides whether
+// a republish needs a new source), so it cannot be forward-declared.
+#include "tw/playback/twmetronome.h"
 
 class QTimer;
 class SApplication;
@@ -24,6 +32,11 @@ class CaptureBridge;
 }
 
 class SLiveAudioInputSource;
+class twLiveEventClock;
+
+namespace audio {
+class MidiOutScheduler;
+}
 
 /**
  * SLiveMonitor - the APP half of the live lane (proposal 21 L1b, design
@@ -118,6 +131,62 @@ public:
     /// user arms it in this session (design D9).
     void projectChanged();
 
+    // --- the metronome and the count-in (proposal 21 L5) -------------------
+
+    /**
+     * Begin a COUNT-IN of `frames` project frames, ending at the LOCATOR.
+     *
+     * The reading taken (see `main/shell/CONTRACT.md`): the count-in is BEFORE
+     * the record position, Cubase / Logic / REAPER style. THE PLAYHEAD DOES NOT
+     * MOVE - the click plays for N bars on the stopped lane while the transport
+     * sits at the locator, and recording then begins AT THE LOCATOR, so the
+     * placed clip lands exactly where it would have without a count-in and the
+     * capture holds N bars of clicks before it.
+     *
+     * The click grid is anchored AT the record position and counts forward,
+     * which is why no position here is ever negative; running the virtual
+     * counter backwards from `locator - frames` was the first design and made a
+     * count-in at bar 1 silent (sliveplanbuilder.cpp says why).
+     *
+     * It is measured in FRAMES THE RT HAS ACTUALLY BEEN HANDED
+     * (`twLiveMixRing::framesDelivered`), not in wall clock: while stopped
+     * there is no engine clock at all, and a QTimer would measure the Windows
+     * scheduler (15.6 ms of granularity) against a beat grid the same case
+     * asserts to the frame.
+     */
+    void beginCountIn( offset_t frames );
+    /**
+     * The count-in has counted. THE CLICK STOPS HERE; THE LANE DOES NOT.
+     *
+     * Both halves are load-bearing and both were paid for by a failing gate.
+     *
+     * The click has to stop BEFORE the transport starts, because the count-in
+     * grid lives in the ARRANGEMENT's position domain: the transport start
+     * repositions the pump back to the locator, and the pump would then render
+     * the very first beat of the count-in a SECOND time. Measured as a fifth,
+     * accented click after a one-bar count-in.
+     *
+     * The lane has to survive, because dropping the last live lane calls
+     * `twSpeaker::closeLive()`, which CLOSES the device while the frozen lane
+     * is still stopped - and the transport start would then re-open it, which
+     * clears the capture backend's recording and takes the whole count-in with
+     * it. Keeping the lane up means the transport start ATTACHES the frozen
+     * lane to a device that is already running (design D5), and nothing
+     * restarts.
+     *
+     * So the range is closed to zero length and the source keeps its seat.
+     */
+    void muteCountIn();
+    /// End it (the click leaves the plan unless the metronome is on and the
+    /// transport is rolling). Idempotent.
+    void endCountIn();
+    bool     countInActive() const { return countInActive_; }
+    /// Frames still to go; 0 once the count-in is over or was never begun.
+    offset_t countInRemainingFrames() const;
+    /// Frames per bar at the project's current tempo and time signature, from
+    /// THE tempo authority. 0 when there is no project.
+    offset_t barFrames() const;
+
     bool active() const;
     /// Is this track being rendered by the pump right now?
     bool isLive( const STrack *track ) const;
@@ -145,6 +214,19 @@ private slots:
     void pumpEdits();
 
 private:
+    // One live event source per CONSUMING track (proposal 21 L2). Keyed by the
+    // consumer rather than by the armed track because that is what the
+    // processor hangs off: two armed children bubbling into one folder
+    // instrument share ONE source and therefore one ring, which is also the
+    // only shape an SPSC ring allows.
+    struct MidiLive {
+        SLiveMidiFeed                              feed;
+        audio::MidiInFanout                       *fanout = nullptr;
+        audio::MidiInFanout::Sink                 *sink   = nullptr;
+        std::shared_ptr<audio::twLiveEventSource>  source;
+        audio::MidiOutScheduler                   *thru   = nullptr;
+    };
+
     SStdMixer *rootMixer() const;
     void applyExclusion( const SLiveClosure &affected );  // flags -> wiring
     void publishPlan( const SLiveClosure &closure, std::uint64_t flipEpoch,
@@ -154,6 +236,12 @@ private:
     void setClosureOwned( const SLiveClosure &closure, bool owned );
     bool ensureInput( STrack *track );
     void closeInputIfUnused();
+    /// The click, rebuilt only when its snapshot actually changed (a plan is
+    /// republished every time a fader moves; the source holds click waveforms).
+    std::shared_ptr<twLiveInputSource> ensureMetronome( bool want );
+    /// Is the project's metronome switch on?
+    bool metronomeEnabled() const;
+    std::uint64_t ringFramesDelivered() const;
 
 public:
     /**
@@ -179,6 +267,29 @@ public:
 private:
     bool ensureBridge( const QString &want );
     void closeBridge();
+    // --- live INSTRUMENTS (proposal 21 L2, design D2/D4/D8) ----------------
+    //
+    // THE ORDER IS THE PROTOCOL, and it is the mirror image of the audio one:
+    //
+    //   arm     retire -> setLiveOwned(true) -> attachLiveEvents(...)
+    //           -> wire the exclusion -> read the epoch -> publish
+    //   disarm  detachLiveEvents(...)  [all-notes-off + setLiveEventSource(0)]
+    //           -> setLiveOwned(false) (which forgets continuity)
+    //           -> un-wire -> read the epoch' -> publish the tail
+    //
+    // `setLiveEventSource` is deliberately NOT a `setEventSource` swap and NOT
+    // a member of `STrack::eventFeed()` (design D2): the feed is re-applied by
+    // `STrack::syncInstrumentSlot()` from adopt / insert / remove and would
+    // silently overwrite a live source, and it is ALSO read by SMidiOutPump and
+    // `assert-midi-events`, while a ring-draining collect has exactly one legal
+    // reader.
+    void attachLiveEvents( const SLiveClosure &closure );
+    void detachLiveEvents( const SLiveClosure &leaving );
+    void releaseLiveEntry( MidiLive &m );
+    /// Ask every live source to re-attack what the performer is holding. Runs
+    /// wherever the pump is asked to reposition - a reposition resets the
+    /// instrument's voices, and a held key must survive it (design D4).
+    void requestLiveChase();
     void ensurePump();
     void stopPump();
     /**
@@ -208,6 +319,21 @@ private:
     int                                  bridgeHolds_ = 0;   // recording holds
     std::vector<std::shared_ptr<SLiveAudioInputSource> > sources_;
     std::unique_ptr<LiveGraphPump>       pump_;
+
+    // THE CLICK (proposal 21 L5). Owned here for the same reason the audio
+    // input sources are: the plan holds it while the pump renders, and the
+    // monitor is the one object that knows when the plan is republished.
+    std::shared_ptr<twMetronomeSource>   metronome_;
+    twMetronomeConfig                    metronomeCfg_;
+    bool                                 countInActive_ = false;
+    offset_t                             countInTotal_  = 0;
+    offset_t                             countInAnchor_ = 0;
+    mutable std::uint64_t                countInBase_   = 0;
+
+    std::vector<MidiLive>                midiLive_;
+    // The host-time -> project-frame mapping the live sources share. One per
+    // monitor: it reads the ENGINE clock, which there is exactly one of.
+    std::shared_ptr<twLiveEventClock>    eventClock_;
 
     QTimer *disarmTimer_ = nullptr;
     QTimer *demandTimer_ = nullptr;

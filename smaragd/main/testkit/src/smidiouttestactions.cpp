@@ -14,6 +14,7 @@
 #include "app/actions/sactionregistry.h"
 #include "app/servicesui/soptionsdialog.h"
 #include "app/shell/sapplication.h"
+#include "app/testkit/smidiintestactions.h"
 #include "app/shell/smidioutpump.h"
 #include "app/shell/ssettings.h"
 
@@ -142,7 +143,8 @@ QStringList SAssertMidiOutAction::knownAttributes() const
              QStringLiteral( "cc" ),       QStringLiteral( "value" ),
              QStringLiteral( "at" ),       QStringLiteral( "tolerance" ),
              QStringLiteral( "count" ),    QStringLiteral( "minCount" ),
-             QStringLiteral( "maxCount" ), QStringLiteral( "index" ) };
+             QStringLiteral( "maxCount" ), QStringLiteral( "index" ),
+             QStringLiteral( "maxLagMs" ) };
 }
 
 SApplyResult SAssertMidiOutAction::apply( SProject * )
@@ -200,6 +202,37 @@ SApplyResult SAssertMidiOutAction::apply( SProject * )
         return { false, nullptr };
     }
 
+    // MIDI-THRU LATENCY (proposal 21 L2 AC5), host time to host time. It is a
+    // WALL-CLOCK bound, which is why the case that uses it is RUN_SERIAL.
+    if( maxLagMs_ >= 0.0 ) {
+        const qint64 injected = smidiin::lastInjectedHostNs();
+        if( injected == 0 ) {
+            qWarning() << "assert-midi-out: maxLagMs needs a midi-in-event to"
+                          " measure from, and nothing has been injected in this"
+                          " run";
+            return { false, nullptr };
+        }
+        double worstMs = -1e30;
+        for( const Msg &m : hits ) {
+            const double lagMs = double( m.hostNs - injected ) / 1e6;
+            if( lagMs > worstMs ) worstMs = lagMs;
+        }
+        if( hits.isEmpty() ) {
+            qWarning() << "assert-midi-out: maxLagMs matched no message";
+            return { false, nullptr };
+        }
+        qInfo().noquote() << QString( "assert-midi-out: thru lag %1 ms"
+                                      " (bound %2 ms, %3 match(es))" )
+                                 .arg( QString::number( worstMs, 'f', 3 ) )
+                                 .arg( QString::number( maxLagMs_, 'f', 3 ) )
+                                 .arg( hits.size() );
+        if( worstMs > maxLagMs_ ) {
+            qWarning() << "assert-midi-out: thru lag" << worstMs
+                       << "ms exceeds" << maxLagMs_ << "ms";
+            return { false, nullptr };
+        }
+    }
+
     // The measured lateness is the number the gate is actually about, so it is
     // reported on SUCCESS too - a passing assertion with 4000 frames of error
     // is one machine away from a failing one.
@@ -229,6 +262,8 @@ void SAssertMidiOutAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "minCount", QString::number( minCount_ ) );
     elem.setAttribute( "maxCount", QString::number( maxCount_ ) );
     elem.setAttribute( "index", QString::number( index_ ) );
+    if( maxLagMs_ >= 0.0 )
+        elem.setAttribute( "maxLagMs", QString::number( maxLagMs_ ) );
 }
 
 bool SAssertMidiOutAction::readXml( const QDomElement &elem, int )
@@ -246,6 +281,7 @@ bool SAssertMidiOutAction::readXml( const QDomElement &elem, int )
     minCount_  = elem.attribute( "minCount", "-1" ).toInt();
     maxCount_  = elem.attribute( "maxCount", "-1" ).toInt();
     index_     = elem.attribute( "index", "-1" ).toInt();
+    maxLagMs_  = elem.attribute( "maxLagMs", "-1" ).toDouble();
     return true;
 }
 

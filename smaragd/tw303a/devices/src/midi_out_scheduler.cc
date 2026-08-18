@@ -197,6 +197,48 @@ bool MidiOutScheduler::enqueue(std::int64_t dueHostTimeNs,
     return true;
 }
 
+bool MidiOutScheduler::sendImmediate(const std::uint8_t *bytes, std::size_t size)
+{
+    if (!bytes || size == 0 || size > kMaxMessageBytes ||
+        !running_.load(std::memory_order_acquire)) {
+        dropped_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    const std::size_t head = immHead_.load(std::memory_order_relaxed);
+    const std::size_t next = (head + 1) % kImmediateSlots;
+    if (next == immTail_.load(std::memory_order_acquire)) {
+        dropped_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    Slot &s = immRing_[head];
+    s.dueHostTimeNs = 0;                 // 0 == "at the next opportunity"
+    s.size          = (std::uint8_t) size;
+    std::copy(bytes, bytes + size, s.bytes);
+
+    immHead_.store(next, std::memory_order_release);
+    wake();                              // NOW, not at the next deadline
+    return true;
+}
+
+void MidiOutScheduler::drainImmediate()
+{
+    std::size_t tail = immTail_.load(std::memory_order_relaxed);
+    const std::size_t head = immHead_.load(std::memory_order_acquire);
+    if (tail == head) return;
+    const std::int64_t now = hostNowNs();
+    while (tail != head) {
+        // Sent with due time 0, i.e. never handed to a driver queue even when
+        // the backend supports timestamps: a thru message has no future time
+        // to be scheduled at, only "as soon as possible".
+        sendNow(immRing_[tail], now);
+        immSent_.fetch_add(1, std::memory_order_relaxed);
+        tail = (tail + 1) % kImmediateSlots;
+    }
+    immTail_.store(tail, std::memory_order_release);
+}
+
 void MidiOutScheduler::drainRing(std::vector<Slot> &pending)
 {
     std::size_t tail = tail_.load(std::memory_order_relaxed);
@@ -253,6 +295,12 @@ void MidiOutScheduler::threadMain()
         // early, followed by a stop() that discards, is a stuck note.
         idle_.store(false, std::memory_order_release);
 
+        // MIDI-THRU FIRST, and deliberately OUTSIDE the discard below: a
+        // flush() drops the queued FUTURE (a playhead that no longer exists),
+        // whereas a thru byte describes a key the performer is pressing right
+        // now and has no future to belong to.
+        drainImmediate();
+
         if (discard_.load(std::memory_order_acquire)) {
             // flush(): the queued future belongs to a playhead that no longer
             // exists. Drain the ring INTO the discard, so nothing enqueued
@@ -307,7 +355,9 @@ void MidiOutScheduler::threadMain()
 
         const bool nothingPending =
             pending.empty() && head_.load(std::memory_order_acquire) ==
-                                   tail_.load(std::memory_order_relaxed);
+                                   tail_.load(std::memory_order_relaxed)
+            && immHead_.load(std::memory_order_acquire) ==
+                   immTail_.load(std::memory_order_relaxed);
         idle_.store(nothingPending, std::memory_order_release);
 
         const std::int64_t deadline =

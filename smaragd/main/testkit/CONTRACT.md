@@ -486,3 +486,109 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     it.** A `select-take` probe placed there is undone instead, which is how
     the first draft of `record_loop_takes` mis-read a working undo as a broken
     one.
+
+## Live instruments (proposal 21 L2)
+
+14. **`assert-audio-onset` REPORTS the number it measured, pass or fail.** The
+    acceptance criterion asks for the onset lag to be RECORDED, not for a
+    boolean, so the verb prints "onset lag N frames (M ms)" on every run. The
+    scan is a running RMS window rather than a per-sample threshold: one sample
+    above the line is a click or a dither bit, and an onset a case can reason
+    about is where ENERGY begins. `afterMidiIn="1"` measures RELATIVE to the
+    last injection by mapping its host time through
+    `CaptureBackend::frameAtHostTime` - the AUDIO backend's own block log,
+    which shares no code with the pump, the ring or the event source. No
+    latency term belongs in that comparison: the capture dump IS what the
+    device was handed, and `frameAtHostTime` answers in exactly that domain.
+
+15. **`assert-render-policy` grew a MINIMUM, and only one case may use it.**
+    `minLiveOwnedRefusals` exists for `live_instrument_ownership`, which
+    asserts that the ownership guard FIRED. "At most 0" and "at least 1" are
+    different claims; the minimum defaults to 0 so every other case means
+    exactly what it meant.
+
+16. **`assert-midi-out maxLagMs` is HOST TIME TO HOST TIME**, with no frame
+    mapping anywhere in it - unlike `at`, which maps through the audio clock.
+    Thru has no position: it is a key being pressed right now, and the only
+    question is how long the wire took. Both sides are recorded by things that
+    are not the thing under test (`midi-in-event`'s injection instant and the
+    capture port's `send()` instant), which is what makes the number worth
+    anything.
+
+17. **`virtual-key` has TWO MODES and a case must choose.** `hold`/`release`
+    PLAY the computer keyboard's MIDI port; the default WRITES a note at the
+    locator. The real mouse handler does both, because a user pressing a key
+    means both - but a case measuring what an instrument SOUNDS must not also
+    be editing the project under the measurement, so the verb keeps them apart.
+    `key="-1"` with `release` lets go of everything.
+
+18. **`assert-midi-recorded` asserts SHAPE, not placement** (proposal 21 L4).
+    Where a recorded note landed is `assert-midi-events`' job, over the clip's
+    own frame-domain snapshot, per note, with a tolerance — a far better
+    instrument than a second one that would have to re-derive the same domain.
+    What this verb checks is how many event columns the lane holds, how many
+    takes are on the first of them, and — from `SMidiRecorder` itself — how many
+    passes, notes and non-note events were committed, in which mode and under
+    which quantise grid.
+
+    Reading BOTH sides is the point. A recorder that reports three passes while
+    the lane holds one take is exactly the failure "one take per pass" is a
+    claim about, and neither number alone can see it — so the verb asserts that
+    identity UNCONDITIONALLY whenever more than one pass was committed, as
+    `assert-recorded-clip` does for audio.
+
+19. **A MIDI pass COUNT is wall-clock, a NOTE count is not.** How many cycle
+    passes a take produces is elapsed time over loop length, so a loop case
+    asserts `minPasses` / `minTakes`. How many notes arrived is a property of
+    the performance being replayed, so `notes` can be exact. The same split
+    `assert-recorded-clip` documents, for the same reason.
+
+20. **`midi-in-replay` WITHOUT `startFrame` exercises the RETROSPECTIVE
+    mapping.** It begins the instant the take does — while the readahead is
+    still priming and the RT thread has published nothing — so the recorder
+    buffers the host times and maps them at the stop, backwards through whatever
+    anchor exists by then (design D6). Notes whose mapping lands before the pass
+    are CLAMPED into it, so a case in that shape asserts COUNTS.
+
+    WITH `startFrame` the performance is held until the playhead is running and
+    the placement becomes a closed form — with a SYSTEMATIC OFFSET that is the
+    conversion working rather than an error: `startFrame` waits on the PUBLISHED
+    locator while the recorder maps to the frame being HEARD, and the published
+    position leads the heard one by one device buffer plus the output latency.
+    Measured on the capture backend: **-1025 frames**, inside
+    `midi_record_placement`'s 4096 band.
+
+21. **`assert-metronome-clicks` gates a SEQUENCE, not an onset** (proposal 21
+    L5). `assert-audio-onset` answers "when did sound start", which is right for
+    one note; a metronome is a GRID, and the claim worth gating is four
+    properties at once — N clicks, on the beat, with silence between them, one
+    in every bar louder.
+
+    Three things about how it measures, each of which is the difference between
+    a gate and a coin toss:
+
+    - **The grid is anchored on the FIRST DETECTED ONSET.** Capture frame 0 is
+      the DEVICE start, and how many blocks the ring took to fill before the
+      first entry was summed is a property of the box. The SPACING is not — it
+      comes from the tempo map — so that is what `intervalFrames` bounds.
+    - **The accent PHASE is searched, and the FIRST onset is excluded from the
+      level comparison.** Which beat of the bar the first summed entry carries
+      is again the box's business; and the first click of a live-lane session
+      sits inside the RT's 2-3 ms fade-in ramp and is attenuated BY CONSTRUCTION
+      (measured 0.2109 against a full 0.4720). Its POSITION is still the anchor;
+      only its level is not a claim.
+    - **`silenceMaxRms` measures the MIDDLE of each gap.** Without a silence
+      assertion "eight clicks" is satisfied by a continuous tone with eight
+      louder moments in it; measuring the whole gap would fail on the click's
+      own decay tail.
+
+    `count` is EXACT and `minCount`/`maxCount` are the bounded form. Only a
+    COUNT-IN can claim an exact count, because its click range is closed by
+    POSITION; a run bounded by a wall-clock `wait-ms` produces a count that
+    depends on the box.
+
+22. **The transport-polish cases own two `smaragd.ini` keys between them.**
+    `record_count_in` writes `transport/countInBars`, `record_pre_roll` writes
+    `transport/preRollBars`, and each puts its own key back — the same ownership
+    convention `midi_record_modes` and `record_offset_zero` follow, and the same
+    `RUN_SERIAL` that makes it safe. No other case reads either key.

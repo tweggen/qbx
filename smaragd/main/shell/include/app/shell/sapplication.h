@@ -25,9 +25,11 @@ class SProject;
 class SActionHistory;
 class SAction;
 class SMidiOutPump;
+class SMidiInputHub;
 class SAutomationRecorder;
 class SLiveMonitor;
 class SAudioRecorder;
+class SMidiRecorder;
 class QTimer;
 
 typedef QList<SLink*> SSelectionList;
@@ -152,11 +154,69 @@ public:
     // AUDIO RECORDING (proposal 21 L3b). One recorder per app; it owns the
     // take, the growing clip and the placement. Never null after construction.
     SAudioRecorder *audioRecorder() const { return audioRecorder_.get(); }
-    /// Begin a take on every armed track. False when nothing is armed or the
-    /// input would not open.
+    // MIDI RECORDING (proposal 21 L4 = 37 P8b). The SECOND recorder, and the
+    // split between them is by TRACK INPUT rather than by two record buttons:
+    // an armed track whose `trackInput` is `midi:`/`keyboard` belongs to this
+    // one, every other armed track to the audio recorder. A record start runs
+    // both, so a project with an armed guitar and an armed synth part records
+    // both in one pass. Never null after construction.
+    SMidiRecorder *midiRecorder() const { return midiRecorder_.get(); }
+    /// Begin a take on every armed track, audio and MIDI. False when nothing
+    /// is armed or the audio input would not open for the audio half.
+    ///
+    /// COUNT-IN AND PRE-ROLL (proposal 21 L5) are handled HERE, around the two
+    /// recorders, because they are TRANSPORT behaviours and neither recorder
+    /// owns the transport on its own. With either configured and the transport
+    /// stopped this returns true immediately and the take begins later, from
+    /// `pumpRecordPreamble()`; `recordPreambleActive()` says so.
     bool startRecording();
-    /// End the take and commit the placement (one undo step).
+    /// End the take and commit the placement (one undo step per recorder). A
+    /// preamble still running is CANCELLED (nothing was recorded yet).
     void stopRecording();
+
+    // --- count-in / pre-roll (proposal 21 L5) ------------------------------
+
+    /**
+     * THE READING TAKEN, stated once, here.
+     *
+     * COUNT-IN: the click plays for N bars BEFORE the record position while
+     * the transport is STOPPED (the playhead sits at the locator), then the
+     * transport starts and recording begins AT THE LOCATOR. The placed clip
+     * therefore lands exactly where it would have with no count-in, and the
+     * capture holds N bars of clicks before the first recorded frame. That is
+     * Cubase / Logic / REAPER; the alternative reading -- roll the count-in
+     * bars ON the timeline, so the take lands N bars later -- would make the
+     * count-in silently move the user's recording.
+     *
+     * PRE-ROLL: the transport STARTS N bars before the locator and rolls
+     * through them (so the arrangement is heard), and recording begins when
+     * the playhead reaches the locator. The take is recorded into a run that
+     * was already playing, so `SAudioRecorder` sees `wasPlaying_` and the
+     * trim floor is the transport start, exactly as for a punch-in.
+     *
+     * The two compose: the count-in runs first, then the pre-roll rolls.
+     */
+    bool recordPreambleActive() const { return preamblePhase_ != 0; }
+    /// Abandon a preamble in flight. Nothing was recorded, so there is nothing
+    /// to commit and nothing to undo.
+    void cancelRecordPreamble();
+    /// "off" | "countIn N/M" | "preRoll at F" — for the UI and the testkit.
+    QString recordPreambleState() const;
+
+    // --- the latency readout (proposal 21 L5, design D5) -------------------
+
+    /// The device's output latency in PROJECT frames, WITHOUT the "only while
+    /// playing" gate `meterLatencyFrames()` applies. The readout has to show a
+    /// number while the transport is stopped; a compensation must not.
+    offset_t outputLatencyFramesProject() const;
+    /// The open input device's reported latency in PROJECT frames, or 0.
+    offset_t inputLatencyFramesProject() const;
+    /**
+     * "in 4800 fr (100.0 ms) | out 1024 fr (21.3 ms) | round trip 5824 fr
+     * (121.3 ms)" — the transport bar's readout and its tooltip, from the
+     * devices that are actually OPEN. Terms whose device is closed read 0.
+     */
+    QString latencyReport() const;
 
     // SAppContext: start/stop transport playback (speaker + playing flag).
     void setPlaybackRunning( bool play ) override;
@@ -211,6 +271,17 @@ public:
     // The live lane (proposal 21 L1b). Never null after construction; the
     // arm/disarm ordering, the pump and the input device all live in there.
     SLiveMonitor *liveMonitor() const { return liveMonitor_.get(); }
+    // The app's MIDI INPUT ports (proposal 21 L2). Never null after
+    // construction. Owned here rather than by SLiveMonitor because the MIDI
+    // recorder (L4) is a second consumer of the same ports, and neither of
+    // them may own the other's device.
+    SMidiInputHub *midiInputHub() const { return midiInputHub_.get(); }
+    // The computer keyboard as a real MIDI port (design D9). The piano-roll
+    // dock reaches it through here: `app/eventui` may not include tw/devices,
+    // and routing the two calls through the shell is the same arrangement the
+    // arranger's zoom uses.
+    void keyboardNoteOn( int key, int velocity, int channel = 0 );
+    void keyboardNoteOff( int key, int channel = 0 );
     // SAppContext: a track was armed / disarmed, or its input or monitor mode
     // moved. One plan rebuild, here, on the main thread.
     void liveLanesChanged() override;
@@ -297,6 +368,8 @@ private slots:
     // instant playback stops, whereas meters need a tick at a static position
     // (to decay) plus a tail after stop, or the bars freeze mid-level.
     void pumpMeters();
+    /// The count-in / pre-roll poll (proposal 21 L5).
+    void pumpRecordPreamble();
     // A render suspends every live lane for its duration and comes back as a
     // FRESH arm (proposal 21 design D4). The render session signals completion
     // from ITS OWN thread, so this is reached by a queued invocation and runs
@@ -326,6 +399,12 @@ private:
     SActionHistory *actionHistory_;
     std::unique_ptr<audio::RenderSession> renderSession_;
     std::unique_ptr<SAudioRecorder> audioRecorder_;
+    std::unique_ptr<SMidiRecorder>  midiRecorder_;   // proposal 21 L4
+    // True while a MIDI-only take is running, i.e. one that the AUDIO recorder
+    // did not start the transport for. It decides who stops the transport at
+    // the end, and it is a flag rather than a re-derivation because the armed
+    // set is cleared by the commit before the stop finishes.
+    bool midiOwnsTransport_ = false;
 
     SLink *currentSelectedSLink_;
 
@@ -341,11 +420,24 @@ private:
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
     QTimer *meterTimer_ = nullptr;    // drives meterTick (proposal 34)
+    // The count-in / pre-roll sequencer (proposal 21 L5). A 5 ms poll rather
+    // than a single-shot QTimer of the count-in's DURATION: the count-in ends
+    // when the RT has actually been handed N bars of click, which is a frame
+    // count on the live ring and not a wall-clock interval (twlivering.h).
+    bool startRecordingNow_();
+    void beginPreRoll_( offset_t preRoll );
+    void finishRecordPreamble_();
+    QElapsedTimer preambleClock_;
+    QTimer  *preambleTimer_ = nullptr;
+    int      preamblePhase_ = 0;      // 0 off, 1 count-in, 2 pre-roll
+    offset_t preambleTarget_ = 0;     // the LOCATOR the take must begin at
+    qint64   preambleDeadlineMs_ = 0; // a device that never runs must not hang
     QElapsedTimer meterClock_;        // monotonic ms handed to the ballistics
     int meterTailTicks_ = 0;          // remaining decay ticks after a stop
     twLevelProbe masterProbe_;        // reads the mixer root's frozen pages
     std::unique_ptr<SMidiOutPump> midiOutPump_;   // proposal 37 P7b
     std::unique_ptr<SLiveMonitor> liveMonitor_;   // proposal 21 L1b
+    std::unique_ptr<SMidiInputHub> midiInputHub_; // proposal 21 L2
     std::unique_ptr<SAutomationRecorder> automationRecorder_;  // proposal 37 P6
     bool isPlaying_;
     SProject *currentProject_;

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L5. PRE-ROLL: the transport rolls N bars into the record
+  position, and recording begins AT THE LOCATOR.
+
+  The difference from a count-in, and it is the whole difference: a count-in is
+  SILENT TIMELINE - the playhead does not move and only the click sounds - while
+  a pre-roll actually PLAYS the bars before the take, so the performer hears the
+  arrangement running up to their entry. Recording begins at the locator in both
+  cases.
+
+  Env, on the CTest entry: RUN_SERIAL, SMARAGD_CAPTURE_SPEED=1,
+  SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800.
+
+  WHAT IS EXACT AND WHAT IS NOT. The take is recorded into a run that was
+  ALREADY PLAYING, so nothing is trimmed (design D6: the trim floor is the
+  transport start, which here is 96000 frames earlier) and the placement is the
+  compensated one - `P0 - 4800 - 1024`. `P0` depends on when the capture thread
+  and the render callback actually ran and is not predictable, so the START is
+  bounded rather than asserted, while the COMPENSATION is exactly -5824 and is.
+
+  The 8192-frame band on the start is the 5 ms preamble poll plus the
+  compensation itself: the take begins on the first poll at or after the
+  playhead reaches 96000, and the clip is then placed 5824 frames earlier than
+  that. It excludes 0 - the pre-roll's own start - by two orders of magnitude,
+  which is the thing a broken pre-roll would produce.
+-->
+<SActionScript version="1" name="record_pre_roll">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+    <set-track-input trackPath="0" input="audio:file:1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- This case OWNS transport/preRollBars; it is put back at the end. -->
+    <set-count-in bars="0"/>
+    <set-pre-roll bars="1"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="96000"/>
+
+    <!-- The transport starts at 0 and rolls; the take begins at 96000. -->
+    <record-start/>
+    <wait-ms ms="2600"/>
+    <wait-ms ms="1400"/>
+    <record-stop/>
+
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          startFrame="96000" startTolerance="8192"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          userOffsetFrames="0"
+                          compensationFrames="-5824"
+                          trimmedFrames="0"
+                          minDurationFrames="12000"/>
+
+    <set-pre-roll bars="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

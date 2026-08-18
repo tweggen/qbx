@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L2, AC1. AN INSTRUMENT IS PLAYED FROM A MIDI INPUT, LIVE, WITH
+  THE TRANSPORT STOPPED.
+
+  The path under test is the production one end to end: CaptureMidiInput
+  (`midi-in-event`) -> MidiInFanout, on the injecting thread as a device
+  callback -> a per-consumer SPSC ring -> twLiveEventSource::collect, ON THE
+  PUMP, inside twPluginSlotProcessor::render -> the CLAP instrument -> the live
+  ring -> the RT callback. Nothing in the middle is asked what it thinks it did:
+  the measurement is the audio capture backend's own recording of what the
+  device was handed.
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (smaragd/CMakeLists.txt) - the onset
+  bound below is a WALL-CLOCK latency bound, so it measures the box as well as
+  the code. If it fails, confirm the box is idle before reading it as a
+  regression.
+
+  THE CLOSED FORM. `tw.test.clap.sine` is 16 envelope-less sine voices with
+  amp = velocity and instant on/off, so one held note is exactly
+
+      x(t) = (velocity/127) * sin(2 pi f t)
+
+  and its rms over any whole number of periods is (100/127)/sqrt(2) = 0.556769.
+  C4 (key 60) is 261.626 Hz. The +-4 % band below is the 16-bit round trip plus
+  the chunk boundaries, the same allowance instrument_sine_render makes.
+
+  THE ONSET BUDGET, and why it is that number. The pump keeps the ring covered
+  `lead` frames ahead of the RT (2 blocks) and the ring is
+  twLiveMixRingDefaultDepth = 4 blocks deep, so a note that arrives while a
+  block is being built is heard at worst ring-depth + lead blocks later. AC1
+  allows ring depth + 3 output blocks = 7 x 1024 = 7168 frames = 149 ms; the
+  bound here is 12288 (12 blocks, 256 ms) because a block is a device-config
+  number rather than a constant and the headroom costs nothing - the MEASURED
+  value is what the criterion asks to be recorded, and assert-audio-onset
+  prints it on every run whether it passes or fails.
+
+  MEASURED, first run, idle box: onset lag 4544 frames = 94.67 ms; fundamental
+  261.648 Hz; rms 0.556787 against the closed form 0.556769.
+
+  THE MEASUREMENT OF THE LAG IS INDEPENDENT OF THE LIVE LANE. `afterMidiIn="1"`
+  maps the injection's host time to a capture frame through
+  CaptureBackend::frameAtHostTime - the AUDIO backend's own block log, which
+  shares no code with the pump, the ring or the event source.
+-->
+<SActionScript version="1" name="live_instrument_play">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <!-- Says which half broke if the audio below is silent: the slot really is
+         an instrument and really is wired to the track's (sequenced) feed. -->
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+
+    <!-- The live input. `capture` is the port CaptureMidiInput offers and the
+         one a headless test run already selects; `any` takes every channel. -->
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- ARM, transport STOPPED. Monitor Auto is the tape machine, so stopped
+         means the input is live (design D9). -->
+    <arm-track trackPath="0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <wait-ms ms="600"/>
+
+    <!-- ................................................ the note goes down -->
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="live_a.wav" minFrames="72000"/>
+
+    <!-- HOW LATE, in frames, measured against the audio block log. -->
+    <assert-audio-onset filename="live_a.wav" afterMidiIn="1" channel="0"
+                        threshold="0.05" maxFrame="12288"/>
+    <!-- ...and it is C4, at the closed-form level, a second in. -->
+    <assert-audio-frequency filename="live_a.wav" channel="0"
+                            startFrame="50000" frameCount="20000"
+                            minHz="256" maxHz="268"/>
+    <!-- 0.556769 +-4 % -->
+    <assert-audio-energy filename="live_a.wav" channel="0"
+                         startFrame="50000" frameCount="20000"
+                         minRms="0.53450" maxRms="0.57904"/>
+
+    <!-- ................................................. and comes back up -->
+    <midi-in-event kind="noteoff" key="60" channel="0"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="live_b.wav" minFrames="130000"/>
+    <!-- Below one 16-bit lsb: the note-off reached the plugin, and the sine
+         reports tailFrames() == 0 honestly, so nothing may sound after it. -->
+    <assert-audio-energy filename="live_b.wav" channel="0"
+                         startFrame="125000" frameCount="4000"
+                         minRms="0" maxRms="0.0005"/>
+
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- Nobody rendered where they were not allowed to. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

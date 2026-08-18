@@ -27,6 +27,22 @@ bool isAudioInput( const STrack *t )
     return t && t->getTrackInput().startsWith( QStringLiteral( "audio:" ) );
 }
 
+bool isMidiInput( const STrack *t )
+{
+    return t && t->hasMidiTrackInput();
+}
+
+bool metronomeWanted( bool metronomeOn, bool playing, bool recording,
+                      bool countIn )
+{
+    // THE COUNT-IN IS NOT CONDITIONAL ON THE METRONOME SWITCH. A count-in with
+    // no click is a silent wait, which is not a feature anybody asked for; the
+    // click is what a count-in IS. Cubase / Logic / REAPER all behave this way.
+    if( countIn ) return true;
+    return metronomeOn && ( playing || recording );
+}
+
+
 namespace {
 
 // One walk of the lane tree that records depth and parent for every track.
@@ -54,7 +70,34 @@ void walk( SObject *node, STrack *parentTrack, int depth, TreeInfo &info )
     }
 }
 
+// WHICH SLOT 0 WILL SOUND THIS TRACK'S LIVE NOTES (design D4).
+//
+// The same rule STrack::eventFeed() applies, read upward: a track that holds an
+// instrument CONSUMES the events; otherwise they go to the parent iff this
+// track bubbles them up (`midiRouting`), and the question repeats there. A
+// track that neither sounds nor bubbles is the end of the line and the answer
+// is "nothing" - which is a legitimate answer and is why the caller must not
+// treat every armed MIDI track as a live source.
+STrack *midiConsumerIn( const TreeInfo &info, STrack *t )
+{
+    for( STrack *cur = t; cur; ) {
+        if( cur->instrumentSlot() ) return cur;
+        if( !cur->bubblesEventsUp() ) return nullptr;
+        auto it = info.parent.find( cur );
+        cur = ( it == info.parent.end() ) ? nullptr : it->second;
+    }
+    return nullptr;
+}
+
 }  // namespace
+
+STrack *midiConsumerFor( SObject *rootMixer, STrack *t )
+{
+    if( !rootMixer || !t ) return nullptr;
+    TreeInfo info;
+    walk( rootMixer, nullptr, 0, info );
+    return midiConsumerIn( info, t );
+}
 
 SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
                              const std::vector<const STrack *> &inertlyArmed )
@@ -67,15 +110,44 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
 
     // 1. The SOURCES: (armed AND monitorEffective) OR monitorMode == on,
     //    intersected with "has an input this phase can render".
+    //
+    // AN AUDIO INPUT MAKES ITS OWN TRACK A SOURCE. A MIDI INPUT MAKES ITS
+    // CONSUMER ONE (design D4, section 3 case (iii)): the notes are heard on
+    // whatever slot 0 will sound them, which is the track itself when it holds
+    // an instrument and the folder above it when the child bubbles its events
+    // up. The armed CHILD then stays in the frozen sum - it is a MIDI source,
+    // not an audio one, and its own clips must keep playing.
     for( STrack *t : info.all ) {
-        if( !sliveplan::isAudioInput( t ) ) continue;
+        const bool audio = sliveplan::isAudioInput( t );
+        const bool midi  = sliveplan::isMidiInput( t );
+        if( !audio && !midi ) continue;
         const bool inert =
             std::find( inertlyArmed.begin(), inertlyArmed.end(),
                        (const STrack *) t ) != inertlyArmed.end();
         const bool armed = t->isArmedForRecording() && !inert;
         const bool want  = ( armed && t->monitorEffective( playing, recording ) )
                            || t->getMonitorMode() == STrack::MonitorMode::On;
-        if( want ) out.sources.push_back( t );
+        if( !want ) continue;
+        if( audio ) {
+            out.sources.push_back( t );
+            continue;
+        }
+        STrack *consumer = midiConsumerIn( info, t );
+        if( !consumer ) {
+            // Nothing would sound these notes. Excluding the track from the
+            // frozen sum would silence its clips for no gain (design D3), so
+            // it is simply not a live source.
+            continue;
+        }
+        SLiveMidiFeed feed;
+        feed.armed    = t;
+        feed.consumer = consumer;
+        feed.port     = t->trackInputMidiPort();
+        feed.channel  = t->trackInputMidiChannel();
+        out.midiFeeds.push_back( feed );
+        if( std::find( out.sources.begin(), out.sources.end(), consumer )
+            == out.sources.end() )
+            out.sources.push_back( consumer );
     }
     if( out.sources.empty() ) return out;
 
@@ -129,6 +201,9 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
                          const SourceFn &sourceFor )
 {
     if( closure.empty() || !params.mixer ) return nullptr;
+    // A metronome-only lane is legal (proposal 21 L5): press Play with the
+    // click on and nothing armed, and the plan is one synthetic track.
+    if( closure.ordered.empty() && !params.metronome ) return nullptr;
 
     auto plan = std::make_shared<twLivePlan>();
     plan->blockFrames    = params.blockFrames;
@@ -145,6 +220,15 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
     plan->transport.playing          = params.playing;
     plan->transport.feedEnabled      = params.playing;
     plan->transport.holdAutomationAt = params.playing ? (offset_t) -1 : params.locator;
+    // The stopped lane's virtual counter, UNCHANGED by a count-in (proposal 21
+    // L5): the count-in runs the ordinary stopped lane FORWARD from the
+    // locator, and it is the CLICK GRID that is anchored at the record
+    // position. Running the counter backwards from `locator - N bars` was the
+    // first design and is wrong for a reason worth recording: at a locator
+    // inside the first N bars it produces NEGATIVE positions, and a ring entry
+    // stamped below zero is discarded by twlive::gateEpoch as an unwritten
+    // slot -- so a count-in at bar 1, the commonest case there is, would have
+    // been silent.
     plan->stoppedAnchor              = params.locator;
 
     // THE MASTER-SHAPE PRECONDITION (design D3), checked on every build rather
@@ -172,8 +256,13 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
         if( auto r = std::dynamic_pointer_cast<twRewire>( t->getRootComponent() ) )
             tp.channelMap = r->channelMap();
 
-        if( std::find( closure.sources.begin(), closure.sources.end(), t )
-            != closure.sources.end() )
+        // ONLY an AUDIO source gets an input. An instrument track driven live
+        // from MIDI is design section 3 case (ii): slot 0 is a generator and
+        // the slot's audio input is silence, so asking for one here would open
+        // the machine's microphone for a track that never wanted it.
+        if( sliveplan::isAudioInput( t )
+            && std::find( closure.sources.begin(), closure.sources.end(), t )
+                   != closure.sources.end() )
             tp.input = sourceFor ? sourceFor( t ) : nullptr;
 
         // The children. A child track in the closure is a LIVE child (already
@@ -203,11 +292,34 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
     // folder: no input, no inserts, unity gain, its members as liveChildren.
     // Under Closure it additionally reads every UNARMED top-level track's
     // frozen root, which IS "the pump renders the master" (design D3).
-    // topLevel cannot be empty for a non-empty closure - the walk stops at the
-    // root mixer, so every member has an ancestor that is a direct child of it
-    // - but front() on an empty vector is not a diagnosis, it is a crash.
-    if( closure.topLevel.empty() ) return nullptr;
-    const bool needSum = closure.topLevel.size() > 1 || !plan->masterLinear;
+    // THE CLICK (proposal 21 L5, design D1). One synthetic track, appended
+    // AFTER every closure member so the topological order finalize() checks
+    // still holds, with no input device, no inserts, unity gain and an identity
+    // map. It owns no STrack, is in no `indexOf`, and nothing above ever asks
+    // whether it is armed - which is exactly why it perturbs nothing.
+    int metroIndex = -1;
+    if( params.metronome ) {
+        twLiveTrackPlan m;
+        m.name     = "metronome";
+        m.channels = params.width < 1 ? 1 : params.width;
+        m.input    = params.metronome;
+        metroIndex = (int) plan->tracks.size();
+        plan->tracks.push_back( std::move( m ) );
+    }
+
+    if( closure.topLevel.empty() ) {
+        // METRONOME ONLY: the click IS the output. A topLevel that is empty
+        // while the closure is NOT cannot happen - the walk stops at the root
+        // mixer, so every member has an ancestor that is a direct child of it -
+        // but front() on an empty vector is not a diagnosis, it is a crash, so
+        // the case is handled rather than assumed away.
+        if( metroIndex < 0 ) return nullptr;
+        plan->outputTrack = metroIndex;
+        if( !plan->finalize() ) return nullptr;
+        return plan;
+    }
+    const bool needSum = closure.topLevel.size() > 1 || !plan->masterLinear
+                         || metroIndex >= 0;
     if( !needSum ) {
         plan->outputTrack = indexOf[closure.topLevel.front()];
     } else {
@@ -215,6 +327,7 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
         master.name     = plan->masterLinear ? "live sum" : "master";
         master.channels = params.width < 1 ? 1 : params.width;
         for( STrack *t : closure.topLevel ) master.liveChildren.push_back( indexOf[t] );
+        if( metroIndex >= 0 ) master.liveChildren.push_back( metroIndex );
         if( !plan->masterLinear ) {
             for( SLink *lk : params.mixer->childLinks() ) {
                 if( !lk ) continue;

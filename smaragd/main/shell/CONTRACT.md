@@ -328,3 +328,270 @@ transport-behaviour decision beyond L3b's brief and it interacts with
 `toggle-playback`'s handling of a redundant Play, so it is recorded here rather
 than guessed at. The trim floor already distinguishes the two cases
 (`wasPlaying_`), so the information a fix needs is present.
+
+## Live instruments (proposal 21 L2, design D2/D4/D8/D9)
+
+19. **A MIDI-armed track contributes its CONSUMER to the closure, not itself.**
+    `sliveplan::midiConsumerFor` walks the routing UP the way
+    `STrack::eventFeed()` walks it down: a track that holds an instrument
+    consumes the events, otherwise they go to the parent iff the track bubbles
+    them up. So an armed CHILD of a folder drum machine is a MIDI SOURCE while
+    the FOLDER is the live instrument and the thing that leaves the frozen sum —
+    the child stays in it, because its own clips must keep playing (design
+    section 3 case (iii)). A MIDI track whose notes would reach NO instrument
+    is deliberately not a source at all: excluding it would trade the
+    arrangement for silence.
+
+20. **`setLiveEventSource` is the SECOND source, never a `setEventSource`
+    swap, and never a member of `eventFeed()`** (design D2). The feed is
+    re-applied by `STrack::syncInstrumentSlot()` from adopt / insert / remove
+    and would silently overwrite a live source; `setEventSource` also clears
+    continuity and bumps the param epoch, which an arm must not do per call;
+    and the feed is ALSO read by `SMidiOutPump` and `assert-midi-events`, while
+    a ring-draining `collect` has exactly ONE legal reader. The arrangement's
+    feed is untouched by an arm.
+
+    ARM order: `retireComponentNodes` → `setLiveOwned(true)` →
+    `attachLiveEvents` → wire the exclusion → `flipEpoch` → publish →
+    `requestReposition()` + `requestLiveChase()`. Installing the source BEFORE
+    ownership would let a freeze worker collect the ring.
+
+    DISARM order (the mirror, and inv. 13's rule holds unchanged):
+    `detachLiveEvents` (all-notes-off flush → `setLiveEventSource(nullptr)` →
+    thru off + `panic()`) → `setLiveOwned(false)` (which forgets continuity) →
+    un-wire → `flipEpochPrime` → the tail plan. The flush is best-effort within
+    the blocks the pump still renders; what GUARANTEES no hanging voice is the
+    hand-back itself, because the freeze path's first render resets every
+    instance.
+
+21. **A live source is keyed by its CONSUMER and is never rebuilt on a
+    republish.** Two armed children bubbling into one folder instrument share
+    ONE source and therefore one ring, which is also the only shape an SPSC
+    ring allows. It holds the ring cursor and the HELD-NOTE TABLE, so
+    rebuilding it under a finger would drop the note being played;
+    `attachLiveEvents` therefore prunes and adds, and touches nothing that is
+    already correct.
+
+22. **`SMidiInputHub` owns every open input port and never closes one until
+    teardown.** Opening a MIDI device is not free and a disarm/arm cycle must
+    not drop it — but the load-bearing reason is that
+    `CaptureMidiInput::inject()` is a NO-OP on a closed port, so closing one on
+    disarm would silently swallow a script's events between two phases of a
+    case. Its enumeration probe is constructed FIRST, before any listening
+    port, so a listening port is always the newer `CaptureMidiInput::active()`
+    and a headless injection reaches the port the live lane drains. The
+    computer keyboard is opened EAGERLY at construction: it is in-process, and
+    the piano-roll dock has to be able to play it before any track is armed.
+    `recorderSink()` is L4's hook and is spelled out now so the shape is fixed
+    before there is a second consumer to argue with.
+
+23. **MIDI-thru shares the sequenced feed's scheduler, and disarm PANICS it.**
+    Two schedulers on one port would be two threads racing one device, and
+    thru and playback have to interleave on the wire in the order the events
+    happened; they do not collide because they use different RINGS (inv. 21 of
+    tw/devices). The thru port is the ARMED track's `midiOutPort`, falling back
+    to the consumer's — the folder-drum-machine shape, where the child has no
+    port of its own. A key held when the user disarms is otherwise a stuck note
+    on their hardware synth, which is the one failure mode a performer never
+    forgives.
+
+24. **A LIVE LANE DROPS BLOCKS UNDER LOAD, AND 1024 FRAMES IS THE BOUND.** The
+    RT sums a ring entry only when its stamp matches the frame it is delivering
+    (design D2); a miss is SILENCE plus `twLiveMixRing::misses`, and that
+    silence is ONE DEVICE BLOCK wide by construction. Measured at
+    `SMARAGD_REVAL_WORKERS=8` - eight revalidation workers plus the readahead
+    against a pump that must wake every ~21 ms - the live lane misses a block
+    in roughly 2 runs in 25. A case that asserts a sub-block gap on a
+    PUMP-rendered window is therefore asserting something the design does not
+    offer: `live_instrument_disarm_playback` was 46/50 until its 512-frame
+    bound moved to the FROZEN window, where it is deterministic and reads
+    exactly 0.040405 with a gap of 1 frame on every run. 1024 is the same bound
+    L1b's own live cases already carry.
+
+## MIDI recording (proposal 21 L4 = 37 P8b, design D6/D8/D9)
+
+25. **`SPlayheadClock` is THE host-time <-> project-frame conversion, and there
+    is exactly one of it.** `SMidiOutPump` asks it forward ("what host time is
+    frame F heard at?") to schedule a message; `SMidiRecorder` asks it backward
+    ("what frame was being heard when this byte arrived?") to place a recorded
+    note. It is the pump's own anchor discipline moved out unchanged:
+    re-anchored on every position PUBLICATION rather than every position CHANGE
+    (the two differ exactly once, at the start, and that is the time that
+    matters - measured: anchoring on a change put the first note of a run 59 ms
+    early), the publish-lag correction (`twSpeaker` publishes AFTER the pull, so
+    the frame just delivered is `P - bufferFrames`), the device-latency term
+    through `meterLatencyFrames()`, and the GUARD on the first anchor of a run
+    (a locate is published by the UI thread before the engine's seek lands, and
+    anchoring on that publication would put a whole window in the past). A
+    second implementation of any of that would be a second set of corrections to
+    keep in step.
+
+26. **`SMidiRecorder` maps NOTHING on its tick.** The 20 ms poll pops each
+    port's recorder ring into a buffer of `{hostTimeNs, bytes}` and offers the
+    playhead to the clock; the model is touched only at the stop, inside one
+    undo macro. That is what makes the mapping RETROSPECTIVE by construction
+    rather than by a special case: a take begun from a stopped transport
+    captures its first messages before the RT has published anything, and
+    backward extrapolation on a clock linear in host time is exact. The
+    conversion, in one line:
+
+        projectFrame(msg) = clock.frameAtHostNs(msg.hostTimeNs) - inputOffsetProj
+
+    `frameAtHostNs` already answers "the frame being HEARD", so there is no
+    separate output-latency term here - design D6's derivation, that the
+    performer plays to what they hear. `inputOffsetProj` is the port's
+    `midi/inputOffsetMs` and its sign is the app-wide one: POSITIVE = EARLIER.
+
+27. **The split between the two recorders is by TRACK INPUT, never by two
+    record buttons.** `SApplication::startRecording()` runs both: an armed track
+    whose `trackInput` is `midi:`/`keyboard` belongs to `SMidiRecorder`, every
+    other armed track to `SAudioRecorder` (`collectArmed` in each filters on
+    `hasMidiTrackInput()`, in opposite directions). Without that filter a
+    MIDI-armed track would be given an audio WAV sink and a growing audio clip
+    out of an input device it never asked for.
+
+    ORDER, and it is load-bearing: the MIDI recorder starts FIRST and does not
+    touch the transport; the audio recorder starts second and owns the transport
+    edge whenever it has a take of its own; only a MIDI-ONLY run starts the
+    transport from `startRecording` itself. Monitor AUTO is "input while stopped
+    OR RECORDING" (design D9), so `isRecordingActive()` has to be true before
+    the live plan is rebuilt by that edge - which is why the MIDI half sets its
+    `active_` before anything transport-shaped happens.
+
+    At the stop the MIDI recorder commits FIRST, while the transport is still
+    running: its anchor is only valid while the RT thread is publishing.
+
+28. **The recorder's ring is a SECOND consumer of the fan-out, and the live
+    lane's is untouched.** `SMidiInputHub::recorderSink(port)` mints one sink
+    per PORT and keeps it for the process (design D8: the device thread writes
+    one ring per consumer, so SPSC stays SPSC). Two armed tracks on one port
+    SHARE that sink, because a ring has exactly one consumer; the per-track
+    channel filter is applied when the buffer is read, not when it is filled.
+    At a record start the ring is DRAINED, never `clear()`ed - `clear()` is only
+    safe while the producer is known to be idle, and a performer's finger is not.
+    A retrospective `place-retro-midi` (design D8) would keep what was drained;
+    it is not implemented.
+
+29. **Loop passes are ARITHMETIC on wrap-counted frames**, exactly as they are
+    for audio: `floor((f - loopIn) / loopLen)`, never wrap detection, because a
+    20 ms poll cannot see a wrap between two ticks. The tick folds
+    `iteration * cycleLength` into the clock's anchor so every frame the
+    recorder computes is unwrapped and monotone. **Every pass is PLACED AT THE
+    LOOP START** - `passStart(pass)` is unbounded (pass 2 of a 2 s cycle starts
+    at 192000) and placing there would put pass 2 three loops to the right
+    instead of stacking a take on pass 1's column.
+
+30. **A note still held at the stop is CLOSED at the stop frame, and a note
+    whose mapping lands before its pass is CLAMPED into it, never dropped.** A
+    recording with an unterminated note is not a recording; and being early is
+    the NORMAL case for the first messages of a take begun from a stopped
+    transport, exactly as being late is the normal case for a live event
+    (`twLiveEventSource`). Both are counted (`clampedNotes()`), not silent.
+
+31. **ALL-NOTES-OFF ON STOP IS NOT SENT FROM THE RECORDER.** Closing the held
+    notes in the RECORDING is its half. The sounding half already has two
+    owners: `SMidiOutPump::stop()` panics every MIDI-out port its run used, and
+    L2's `detachLiveEvents` flushes the live source's held-note table at disarm.
+    A third flush would be a duplicate all-notes-off on the user's hardware, and
+    the recorder is not the thing holding those notes.
+
+32. **THE METRONOME IS A LIVE LANE, AND A LANE EXISTS IFF `armed u monitor u
+    METRONOME`** (proposal 21 L5, design D1/D9). The click joins the plan as a
+    SYNTHETIC track at the output — no `STrack`, no processors, unity gain,
+    identity map — carried on `SLiveClosure::metronome`, a FLAG rather than a
+    member. That is what leaves the entire arm/disarm protocol untouched:
+    nothing is retired, nothing is live-owned, no plug is nulled, so a
+    metronome-only lane cannot change one byte of what the frozen graph
+    produces.
+
+    Three consequences that are easy to get wrong and were:
+
+    - **A metronome-only lane leaves through NO DISARM PATH.** `leaving` is
+      empty because it owned no track, so `finishDisarm()` never runs and the
+      pump would keep clicking off the old plan forever. `refresh()` stops the
+      pump, drops the source and closes the lane in the `want.empty()` branch.
+      Before L5 an empty live set could only be reached by a track LEAVING, so
+      the path did not exist.
+    - **No exclusion means no epoch gate.** `flipEpoch` exists so the RT does
+      not sum a ring entry onto a root page that still CONTAINS the armed track.
+      A lane with no track members bumped nothing, so `publishPlan` passes 0 —
+      otherwise the click would be gated off until an unrelated re-freeze
+      happened to land.
+    - **It must not open the microphone.** `SLiveClosure::needsInput()` (the
+      SOURCES, not `empty()`) is what `closeInputIfUnused` and `acquireBridge`
+      ask, or a click-only lane would hold the input device and push into a live
+      ring nobody pops.
+
+33. **COUNT-IN AND PRE-ROLL ARE TRANSPORT BEHAVIOURS AROUND THE RECORDERS**, and
+    they live in `SApplication` because neither recorder owns the transport on
+    its own (proposal 21 L5). THE READING TAKEN, stated once here:
+
+    - **Count-in**: the click plays for N bars BEFORE the record position while
+      the transport is STOPPED. THE PLAYHEAD DOES NOT MOVE. Recording then
+      begins AT THE LOCATOR, so the placed clip lands exactly where it would
+      have without a count-in and the capture holds N bars of clicks before it.
+      That is Cubase / Logic / REAPER. The rejected reading — roll the count-in
+      bars ON the timeline, so the take lands N bars later — makes a preference
+      silently move the user's recording.
+    - **Pre-roll**: the transport STARTS N bars before the locator and rolls
+      through them, so the arrangement is heard running up to the entry, and
+      recording begins when the playhead reaches the locator. The take is
+      recorded into a run that was already playing, so `SAudioRecorder` sees
+      `wasPlaying_` and nothing is trimmed — which is what latency compensation
+      IS, and is why a pre-rolled take lands a few thousand frames BEFORE the
+      locator while a counted-in one lands exactly ON it.
+    - They compose: the count-in counts, then the pre-roll rolls.
+
+    Neither is offered while the transport is ALREADY running: punching in while
+    the tape rolls has no count-in in any DAW, and a pre-roll would mean seeking
+    backwards under a running take.
+
+34. **THE COUNT-IN ENDS ON DELIVERED FRAMES, NOT ON A TIMER**, and the click
+    grid is anchored AT the record position (proposal 21 L5). Two things the
+    obvious implementations get wrong:
+
+    - `twLiveMixRing::framesDelivered()` is the clock. While stopped there is no
+      engine clock at all, and a `QTimer` of the count-in's DURATION would
+      measure the Windows scheduler against a grid the gate asserts to 38
+      frames. A wall-clock WATCHDOG still exists, at twice the preamble plus two
+      seconds, because a device that never opens delivers no frames and a
+      transport that never starts is a hang.
+    - The grid counts FORWARD from the locator. Running the pump's virtual
+      counter BACKWARDS from `locator - N bars` was the first design and is
+      wrong: at a locator inside the first N bars it produces NEGATIVE
+      positions, and `twlive::gateEpoch` discards a ring entry stamped below
+      zero as an unwritten slot — so a count-in at bar 1, the commonest case
+      there is, would have been silent.
+
+35. **THE CLICK STOPS BEFORE THE TRANSPORT STARTS; THE LANE STOPS AFTER**
+    (`SLiveMonitor::muteCountIn`, proposal 21 L5). Both orders are load-bearing
+    and both were paid for by a failing gate:
+
+    - the click has to stop FIRST because the count-in grid is in the
+      ARRANGEMENT's position domain, and the transport start repositions the
+      pump back to the locator — which re-renders the count-in's first beat.
+      Measured as a fifth, accented click after a one-bar count-in;
+    - the lane has to survive because dropping the last live lane calls
+      `twSpeaker::closeLive()`, which CLOSES the device while the frozen lane is
+      still stopped; the transport start would then re-open it, and the capture
+      backend clears its recording at device start — taking the whole count-in
+      with it.
+
+    So `muteCountIn()` closes the click's range to zero length and keeps the
+    source in the plan; `endCountIn()` drops the lane once the take is running,
+    by which time the frozen lane is holding the device.
+
+36. **THE LATENCY READOUT DESCRIBES THE DEVICES, NOT THE PLAYHEAD** (proposal 21
+    L5, design D5). `SApplication::outputLatencyFramesProject()` is
+    `meterLatencyFrames()` WITHOUT its "only while playing" gate, and
+    `meterLatencyFrames()` is now one line on top of it. The gate belongs to the
+    COMPENSATION — shifting a position nobody is playing is meaningless — and
+    not to the READOUT, which has to show a number the moment a device opens,
+    including when arming opens it with the transport stopped. `latencyReport()`
+    reads the input side off the open `CaptureBridge`, whose reported latency is
+    already in PROJECT frames (it delivers at the target rate), so only the
+    output term is rate-scaled.
+
+    **PLUGIN DELAY COMPENSATION IS OUT OF SCOPE** (proposal 37 P9). Every mount
+    that shows a plugin's reported latency says so, because the live lane has no
+    delay line anywhere: what you hear through it really is late by that much.

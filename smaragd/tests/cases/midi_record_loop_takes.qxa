@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L4 (= 37 P8b). LOOP MIDI RECORDING: ONE TAKE PER CYCLE PASS, all
+  on ONE column, in ONE undo step - the event twin of record_loop_takes.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL.
+
+  THE MECHANISM, so the numbers below are readable. The recorder does not
+  "detect a wrap": every captured message carries a host time, the host
+  time -> project frame mapping is LINEAR, and the frames it produces are
+  WRAP-COUNTED (the tick folds `iteration * cycleLength` into the clock's
+  anchor). So the pass a note belongs to is arithmetic - `floor((f - loopIn) /
+  loopLen)` - and the recorder splits the take at those boundaries and emits
+  ONE place-midi-recording per pass, ALL AT THE LOOP START, inside ONE undo
+  macro. `place-midi-recording` then does the rest by its own rules: the first
+  pass lands on an empty lane and becomes a clip; the second finds that clip
+  covering the column and becomes a TAKE; the third likewise. A 20 ms poll
+  could not see a wrap between two ticks, which is exactly why none of this is
+  a poll.
+
+  WHY THE ASSERTION IS A FLOOR AND NOT AN EXACT COUNT. How many passes a take
+  produces is a WALL-CLOCK quantity - elapsed time over loop length - and the
+  performance is replayed in real time, so on a loaded box the last pass may or
+  may not be reached. The count is therefore a floor. What is NOT
+  load-sensitive, and what `assert-midi-recorded` checks unconditionally
+  whenever more than one pass was committed, is ONE COLUMN with exactly as many
+  TAKES as there were PASSES. That pair is the whole claim of loop recording
+  and it holds however many passes there happened to be.
+
+  The cycle is 0 .. 2 s (0 .. 96000 frames) and the performance - four notes
+  over one second - is replayed four times with a 500 ms gap, so every 2 s
+  window contains notes and no pass is silent.
+-->
+<SActionScript version="1" name="midi_record_loop_takes">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- The cycle region: 0 .. 2 s. set-property takes its value as a JSON
+         ARRAY (SSetPropertyAction::readXml), hence the brackets. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <!-- ONE column at the loop start, AT LEAST three takes and three committed
+         passes (the floor; see the header), and the column is exactly the loop
+         long. The verb additionally asserts, without being asked, that the
+         take count EQUALS the pass count. -->
+    <assert-midi-recorded trackPath="0" clips="1" minTakes="3" minPasses="3"
+                          startFrame="0" startTolerance="0"
+                          durationFrames="96000" durationTolerance="0"
+                          mode="new-take"/>
+
+    <!-- ONE undo removes the whole take. Nothing undoable may come between the
+         recording and this. -->
+    <undo/>
+    <assert-midi-recorded trackPath="0" clips="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

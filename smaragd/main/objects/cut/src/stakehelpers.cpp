@@ -3,6 +3,7 @@
 #include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/model/sclipwindow.h"
 
 namespace stakes {
 
@@ -65,3 +66,14 @@ SLink *collapseSingleTakeStack( SObject *lane, SLink *stackLink )
 }
 
 }  // namespace stakes
+
+// Register the pair with the model's generic take-COLUMN factory, so a slice
+// that may not depend on objects/cut (objects/midi, at the same rank) can
+// still turn a plain placement into a column and collapse it back. A static
+// initializer, exactly like SClipWindow::registerWrapFactory in scut.cpp -
+// and it works for the same reason: `smaragd_app` is an OBJECT library, so
+// nothing strips a translation unit whose only reference is a static ctor.
+static const bool s_reg_take_column = (
+    SClipWindow::registerTakeColumnFactory( &stakes::wrapCutLinkIntoStack,
+                                            &stakes::collapseSingleTakeStack ),
+    true );

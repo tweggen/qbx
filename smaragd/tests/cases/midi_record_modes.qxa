@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L4 (= 37 P8b). THE THREE INPUT-RECORD MODES, each against the
+  SAME pre-existing clip, each undone before the next one so all three see
+  identical starting conditions.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL.
+
+  NOTE this case OWNS the midi/recordMode and midi/recordQuantize settings:
+  `set-option` writes the real per-user smaragd.ini, so no other case may touch
+  those keys, and this one puts both back at the end.
+
+  THE FIXTURE. A two-second event clip at 24000 (0.5 s) holding two notes -
+  key 72 at tick 0 and key 74 at tick 960. At the default 120 BPM / PPQ 960 at
+  48 kHz one tick is exactly 25 frames, so a quarter note is 24000 frames and
+  every number below is an integer.
+
+  WHAT EACH MODE MEANS (design D8), and what would go wrong under the others:
+
+    new-take  the pass becomes a NEW take on the column. The performance that
+              was there is still take 0 and can be gone back to. This is the
+              default because it is the only one of the three that cannot
+              destroy what was already played.
+    overdub   the pass is MERGED into the active take: 2 + 4 = 6 notes in ONE
+              take, no column. The hi-hat-onto-a-kick-and-snare case.
+    replace   the notes inside the RECORDED WINDOW go and the pass takes their
+              place: 4 notes, no column. Events OUTSIDE the window and every
+              non-note event anywhere survive - which is what makes it a
+              replace rather than a clear.
+
+  THE PERFORMANCE IS REPLAYED WITHOUT `startFrame`, so it begins the instant
+  the take does - i.e. while the readahead is still priming and the RT thread
+  has published nothing. That is the RETROSPECTIVE mapping (design D6): the
+  recorder buffers the host times and maps them at the stop, backwards through
+  whatever anchor exists by then. Notes whose mapping lands before the pass are
+  CLAMPED into it rather than dropped, so this case asserts COUNTS and leaves
+  the frame-exact placement to midi_record_placement, where the performance is
+  held until the playhead is running.
+-->
+<SActionScript version="1" name="midi_record_modes">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <insert-midi-clip trackPath="0" timePos="24000" duration="3840" name="Part"/>
+    <add-note clip="0,0" tick="0"   dur="480" key="72" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="960" dur="480" key="74" velocity="100" channel="0"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+
+    <set-option key="midi/recordQuantize" value="off"/>
+
+    <!-- ================== 1. new take ================================== -->
+    <set-option key="midi/recordMode" value="new-take"/>
+    <set-locator position="24000"/>
+    <arm-track trackPath="0" armed="1"/>
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <!-- ONE column, TWO takes. The recorder committed one pass. -->
+    <assert-midi-recorded trackPath="0" clips="1" takes="2" passes="1"
+                          notes="4" mode="new-take"/>
+    <!-- Take 0 is what was there; take 1 is what was just played. -->
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" key="72"
+                        count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" count="4"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" key="60"
+                        count="1"/>
+    <!-- ONE undo puts the column back to a plain clip with its two notes. -->
+    <undo/>
+    <assert-midi-recorded trackPath="0" clips="1" takes="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+
+    <!-- ================== 2. overdub =================================== -->
+    <set-option key="midi/recordMode" value="overdub"/>
+    <set-locator position="24000"/>
+    <arm-track trackPath="0" armed="1"/>
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <!-- NO column: the pass went into the take that was already there. -->
+    <assert-midi-recorded trackPath="0" clips="1" takes="1" passes="1"
+                          notes="4" mode="overdub"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="6"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="72" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="74" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="65" count="1"/>
+    <undo/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+
+    <!-- ================== 3. replace ================================== -->
+    <set-option key="midi/recordMode" value="replace"/>
+    <set-locator position="24000"/>
+    <arm-track trackPath="0" armed="1"/>
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <!-- The two notes that were inside the recorded window are GONE and the
+         four that were played are there instead. -->
+    <assert-midi-recorded trackPath="0" clips="1" takes="1" passes="1"
+                          notes="4" mode="replace"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="4"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="72" count="0"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="74" count="0"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="60" count="1"/>
+    <undo/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+
+    <!-- ================== 4. input quantise =========================== -->
+    <!--
+      A SECOND, empty track, so the pass becomes a fresh clip and the grid is
+      the only thing acting on the note positions. The performance is held
+      until the playhead reaches 1.0 s (as in midi_record_placement), which is
+      what makes this a CLOSED FORM rather than a measurement: unquantised the
+      notes land within ~1000 frames of 24000 / 36000 / 48000 / 60000 inside
+      the clip, and a 1/16 grid at 120 BPM / PPQ 960 is 240 ticks = EXACTLY
+      6000 frames - so each of those four is already a grid line and the snap
+      is to itself, to the frame. tolerance="0" is therefore not optimism: it
+      is the point. An unquantised run misses it by ~1000 frames.
+    -->
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+
+    <set-option key="midi/recordMode" value="new-take"/>
+    <set-option key="midi/recordQuantize" value="1/16"/>
+
+    <set-locator position="24000"/>
+    <arm-track trackPath="1" armed="1"/>
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="48000"/>
+    <wait-ms ms="400"/>
+    <record-stop/>
+
+    <assert-midi-recorded trackPath="1" clips="1" takes="1" passes="1"
+                          notes="4" quantize="1/16"/>
+    <assert-midi-events scope="clip" clip="1,0" kind="noteon" count="4"/>
+    <assert-midi-events scope="clip" clip="1,0" kind="noteon" key="60"
+                        at="24000" tolerance="0" count="1"/>
+    <assert-midi-events scope="clip" clip="1,0" kind="noteon" key="62"
+                        at="36000" tolerance="0" count="1"/>
+    <assert-midi-events scope="clip" clip="1,0" kind="noteon" key="64"
+                        at="48000" tolerance="0" count="1"/>
+    <assert-midi-events scope="clip" clip="1,0" kind="noteon" key="65"
+                        at="60000" tolerance="0" count="1"/>
+    <!-- The quantise is INSIDE the recording's own undo entry (design D8), so
+         ONE undo takes the clip and its grid away together. -->
+    <undo/>
+    <assert-midi-recorded trackPath="1" clips="0"/>
+
+    <!-- Put the settings back: this case owns them (see the header). -->
+    <set-option key="midi/recordMode" value="new-take"/>
+    <set-option key="midi/recordQuantize" value="off"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

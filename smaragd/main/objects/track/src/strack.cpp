@@ -172,6 +172,40 @@ unsigned STrack::trackInputChannelMask() const
     return ok ? mask : 0u;
 }
 
+QString STrack::trackInputMidiPort() const
+{
+    // `keyboard` is a whole spelling of its own, not a scheme: it names the
+    // ONE in-process port (audio::KeyboardMidiInput::kPortId), and spelling it
+    // `midi:keyboard:any` would work too.
+    if( trackInput_ == QStringLiteral( "keyboard" ) )
+        return QStringLiteral( "keyboard" );
+    if( !trackInput_.startsWith( QStringLiteral( "midi:" ) ) ) return QString();
+    // midi:<port>:<ch|any> - the port name may contain no colon; the LAST one
+    // separates the channel, exactly as the audio spelling separates the mask.
+    const QString rest  = trackInput_.mid( 5 );
+    const int     colon = rest.lastIndexOf( QLatin1Char( ':' ) );
+    const QString port  = ( colon < 0 ) ? rest : rest.left( colon );
+    // An empty port ("midi::any") means "the default input port", which is what
+    // an empty device means on the audio side.
+    return port;
+}
+
+int STrack::trackInputMidiChannel() const
+{
+    if( trackInput_ == QStringLiteral( "keyboard" ) ) return -1;
+    if( !trackInput_.startsWith( QStringLiteral( "midi:" ) ) ) return -1;
+    const QString rest  = trackInput_.mid( 5 );
+    const int     colon = rest.lastIndexOf( QLatin1Char( ':' ) );
+    if( colon < 0 ) return -1;
+    const QString ch = rest.mid( colon + 1 ).trimmed();
+    if( ch.isEmpty() || ch.compare( QStringLiteral( "any" ),
+                                    Qt::CaseInsensitive ) == 0 )
+        return -1;
+    bool ok = false;
+    const int v = ch.toInt( &ok );
+    return ( ok && v >= 0 && v < 16 ) ? v : -1;
+}
+
 STrack::MonitorMode STrack::monitorModeFromString( const QString &s, bool *ok )
 {
     if( ok ) *ok = true;

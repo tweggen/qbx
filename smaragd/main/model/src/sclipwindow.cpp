@@ -39,3 +39,44 @@ SClipWindow *SClipWindow::of( SObject *obj )
     // extended to a second window type at all.
     return obj ? dynamic_cast<SClipWindow *>( obj ) : nullptr;
 }
+
+// The take-COLUMN factory (proposal 21 L4). Two function pointers rather than
+// a per-kind hash: a column is ONE thing, and the pair is registered together
+// by the slice that owns STakeStack, so a build with one and not the other is
+// not expressible.
+static SClipWindow::ColumnWrapFn &columnWrapFn()
+{
+    static SClipWindow::ColumnWrapFn fn = nullptr;
+    return fn;
+}
+
+static SClipWindow::ColumnCollapseFn &columnCollapseFn()
+{
+    static SClipWindow::ColumnCollapseFn fn = nullptr;
+    return fn;
+}
+
+void SClipWindow::registerTakeColumnFactory( ColumnWrapFn wrap,
+                                             ColumnCollapseFn collapse )
+{
+    if( wrap ) columnWrapFn() = wrap;
+    if( collapse ) columnCollapseFn() = collapse;
+}
+
+SLink *SClipWindow::wrapIntoTakeColumn( SProject *project, SObject *lane,
+                                        SLink *clipLink )
+{
+    ColumnWrapFn fn = columnWrapFn();
+    if( !fn ) {
+        qWarning() << "SClipWindow::wrapIntoTakeColumn: no take-column factory "
+                      "registered";
+        return nullptr;
+    }
+    return fn( project, lane, clipLink );
+}
+
+SLink *SClipWindow::collapseTakeColumn( SObject *lane, SLink *columnLink )
+{
+    ColumnCollapseFn fn = columnCollapseFn();
+    return fn ? fn( lane, columnLink ) : nullptr;
+}

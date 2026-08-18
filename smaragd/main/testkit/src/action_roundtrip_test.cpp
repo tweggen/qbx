@@ -310,6 +310,30 @@ const Fixture kFixtures[] = {
       "<place-recording trackPath='0' filePath='x.wav' timePos='96000'"
       " srcOffset='48000' length='24000'/>" },
 
+    // MIDI recording (proposal 21 L4). Both verbs carry CHILD elements, so the
+    // round trip has to survive the events as well as the attributes; the
+    // children are `<e .../>` and not `<n .../>` because a recorded pass
+    // carries CCs as well as notes and the note spelling would read a CC back
+    // as a NoteOn. record-start / record-stop still carry no attributes.
+    { "add-midi-take",
+      "<add-midi-take clip='1,0' index='2' activate='0' name='Take 3'"
+      " lengthTicks='3840'>"
+      "<e k='note' t='0' d='480' ch='0' key='60' v='100'/>"
+      "<e k='note' t='960' d='240' ch='0' key='67' v='80'/>"
+      "</add-midi-take>" },
+    { "place-midi-recording",
+      "<place-midi-recording trackPath='1,0' timePos='96000'"
+      " durationTicks='3840' mode='overdub' quantize='1/16' name='Rec'>"
+      "<e k='note' t='0' d='480' ch='0' key='60' v='100'/>"
+      "<e k='cc' t='480' ch='0' p='7' v='64'/>"
+      "</place-midi-recording>" },
+    { "assert-midi-recorded",
+      "<assert-midi-recorded trackPath='1,0' clips='1' takes='3' minTakes='2'"
+      " passes='3' minPasses='2' notes='8' minNotes='4' events='2'"
+      " startFrame='48000' startTolerance='0' durationFrames='96000'"
+      " durationTolerance='0' mode='new-take' quantize='1/16'"
+      " contains='rec=off'/>" },
+
     // --- the event test verbs ----------------------------------------------
     // clip AND trackPath, kind, contains and velocityTolerance are each
     // written only when set, so the fixture sets every one of them.
@@ -325,8 +349,32 @@ const Fixture kFixtures[] = {
     // --- the event-editor verbs (proposal 37 P4) ---------------------------
     // Every attribute is written unconditionally by these four, so a fixture
     // declaring all of them keeps all of them in the audit.
+    // The PLAY mode of proposal 21 L2 is folded in rather than given a second
+    // fixture: the lookup returns the FIRST match for a verb, so one element
+    // has to carry every attribute. `release` is absent because writeXml omits
+    // it when false, which is the rule the header above states.
     { "virtual-key",
-      "<virtual-key key='67' velocity='90' durationTicks='480'/>" },
+      "<virtual-key key='67' velocity='90' durationTicks='480' hold='1'"
+      " durationMs='250'/>" },
+    // The live-instrument assertions (proposal 21 L2).
+    { "assert-audio-onset",
+      "<assert-audio-onset filename='cap.wav' channel='1' startFrame='4096'"
+      " threshold='0.05' window='128' minFrame='0' maxFrame='12288'"
+      " afterMidiIn='1'/>" },
+    { "assert-render-policy",
+      "<assert-render-policy liveThreadRefusals='0' liveOwnedRefusals='64'"
+      " minLiveOwnedRefusals='1'/>" },
+    // Transport polish (proposal 21 L5). Every optional attribute is present,
+    // because each of them is written only when it was given.
+    { "assert-metronome-clicks",
+      "<assert-metronome-clicks filename='met.wav' channel='1'"
+      " startFrame='4096' threshold='0.05' window='128' minGapFrames='4800'"
+      " count='8' minCount='4' maxCount='12' accentEvery='4'"
+      " intervalFrames='24000' toleranceFrames='1024'"
+      " accentRatio='1.8' silenceMaxRms='0.01' firstFrame='2048'"
+      " firstTolerance='512'/>" },
+    { "set-count-in", "<set-count-in bars='2'/>" },
+    { "set-pre-roll",  "<set-pre-roll bars='1'/>" },
     // edge='end' deliberately: with an empty edge and lane='notes', readXml
     // DEFAULTS toKey to key (a move needs a destination, a resize does not),
     // which would hide a dropped toKey.
@@ -370,10 +418,12 @@ const Fixture kFixtures[] = {
     // --- the MIDI-out verbs (proposal 37 P7b) -------------------------------
     // port/kind are written only when non-empty and `at` only when it was
     // given, so the fixture sets all three plus every numeric attribute.
+    // maxLagMs (proposal 21 L2 AC5) is written only when >= 0, so it belongs
+    // in the one fixture rather than in a second element.
     { "assert-midi-out",
       "<assert-midi-out port='capture' kind='noteon' channel='2' key='60'"
       " cc='7' value='100' at='-9600' tolerance='2048' count='1'"
-      " minCount='1' maxCount='2' index='0'/>" },
+      " minCount='1' maxCount='2' index='0' maxLagMs='5'/>" },
     // minCount is written only when non-zero.
     { "dump-midi-capture",
       "<dump-midi-capture filename='midi_out.txt' minCount='6'/>" },

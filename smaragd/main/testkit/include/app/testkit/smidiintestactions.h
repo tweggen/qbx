@@ -32,6 +32,21 @@
  * that one is `active()` and the verbs use it instead.
  */
 
+namespace smidiin {
+/**
+ * The host time (MidiOutScheduler::hostNowNs domain) of the LAST message any
+ * MIDI-in verb injected, or 0.
+ *
+ * It exists so `assert-audio-onset afterMidiIn="1"` can say how long after a
+ * note-on the audio actually started, IN FRAMES, through the AUDIO capture
+ * backend's own block log - the same independent mapping `assert-midi-out`
+ * uses, and for the same reason: the thing being measured (the live lane) must
+ * not also be the thing doing the measuring.
+ */
+qint64 lastInjectedHostNs();
+void   setLastInjectedHostNs( qint64 ns );
+}  // namespace smidiin
+
 // midi-in-event — inject ONE message.
 //
 //   kind      noteon | noteoff | cc | pitchbend | programchange |

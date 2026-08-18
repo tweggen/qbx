@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L2, AC4. THE OWNERSHIP GUARD FIRES, AND FIRING IS ALL IT DOES.
+
+  While a slot is live-owned its processor belongs to ONE thread - the
+  LiveGraphPump, which renders it block by block. The exclusion wiring means no
+  NEW freeze PLAN contains the chain, and `retireComponentNodes` drains the
+  in-flight ones, but that leaves a whole class of arrivals neither of those
+  can stop: a demand that is not a graph node at all. A preview, an asset
+  capture, a level probe - anything that freezes a component DIRECTLY rather
+  than through the root - reaches the chain by its own route, because the
+  exclusion nulls the track's plug AT THE MIXER and does not touch the inside
+  of the track.
+
+  `assert-meter` is exactly such an arrival: it freezes the page covering a
+  position ITSELF, with no transport and no scheduler, and runs the production
+  twLevelProbe on it. So it is the honest headless stand-in for the preview
+  that a user scrolling the arranger would produce.
+
+  WHAT MUST HAPPEN. The call answers SILENCE and COUNTS
+  (`twPluginSlotProcessor::liveOwnedRefusals`), rather than interleaving a
+  second position stream into a stateful plugin and corrupting the voice the
+  performer is holding. It is deliberately not an assert: design D4 says the
+  arrival is recoverable, so it has to be a number a test can bound - which is
+  why `assert-render-policy` grew `minLiveOwnedRefusals`. "At most 0" and "at
+  least 1" are different claims, and this is the only case in the suite that
+  makes the second one.
+
+  AND THE AUDIBLE PATH IS UNAFFECTED: the live note keeps sounding at its
+  closed-form level right through the refused freeze, and once the track is
+  disarmed the SAME probe reads real audio.
+
+  MEASURED, idle box: liveOwnedRefusals 2 while armed and STILL 2 at exit (no
+  further refusals after the hand-back - which is the second half of the claim,
+  and the reason the upper bound is asserted twice); the probed page reads rms
+  exactly 0 while armed and 0.5568 after; the live tone measures 0.556932 at
+  391.976 Hz right through the refused freeze.
+-->
+<SActionScript version="1" name="live_instrument_ownership">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <!-- A SEQUENCED note, so the frozen page at 0.5 s has something in it to
+         be missing while the chain is live-owned and to be there afterwards. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Seq"/>
+    <add-note clip="0,0" tick="0" dur="3840" key="60" velocity="100" channel="0"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- Before anything is armed: the probe reads the arrangement. This is the
+         control - without it, "silence while armed" could just mean the page
+         was silent all along. 0.556769 +-4 %. -->
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0.53450" maxRms="0.57904"/>
+
+    <!-- ARM (transport STOPPED, Auto = tape machine = input is live). -->
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="400"/>
+    <midi-in-event kind="noteon" key="67" velocity="100" channel="0"/>
+    <wait-ms ms="900"/>
+
+    <!-- THE FOREIGN ARRIVAL. The freeze reaches a live-owned processor and is
+         answered with silence: expectMiss is false because a page IS produced
+         (an empty one), so the probe reads a real level, and that level is 0. -->
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0" maxRms="0.0005"/>
+    <assert-meter trackPath="0" position="72000"
+                  minRms="0" maxRms="0.0005"/>
+
+    <!-- ...and the performer never heard it. G4 at the closed-form level,
+         through the whole of the above. -->
+    <wait-ms ms="700"/>
+    <dump-playback-capture filename="own.wav" minFrames="72000"/>
+    <assert-audio-frequency filename="own.wav" channel="0"
+                            startFrame="48000" frameCount="20000"
+                            minHz="384" maxHz="400"/>
+    <assert-audio-energy filename="own.wav" channel="0"
+                         startFrame="48000" frameCount="20000"
+                         minRms="0.53450" maxRms="0.57904"/>
+
+    <!-- The guard FIRED. This is the assertion the case exists for. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="64"
+                          minLiveOwnedRefusals="1"/>
+
+    <!-- ============== DISARM: the same probe reads audio =============== -->
+    <midi-in-event kind="noteoff" key="67" channel="0"/>
+    <arm-track trackPath="0" armed="0"/>
+    <!-- Past the 250 ms disarm tail, so the chain really has been handed back
+         and the pages frozen during the tail have been staled by the second
+         epoch bump. -->
+    <wait-ms ms="900"/>
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0.53450" maxRms="0.57904"/>
+    <assert-meter trackPath="0" position="72000"
+                  minRms="0.53450" maxRms="0.57904"/>
+
+    <!-- NOTHING refused after the hand-back. The upper bound is unchanged, so
+         a leak of refusals into the disarmed state would fail here. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="64"
+                          minLiveOwnedRefusals="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

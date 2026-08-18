@@ -11,8 +11,10 @@
 #include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/devices/audio_backend.h"
+#include "tw/devices/keyboard_midi.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/schedule/capture_revalidator.h"
+#include "tw/record/capture_bridge.h"
 #include "tw/dsp/twwhitenoise.h"
 #include "tw/dsp/twconstant.h"
 
@@ -20,9 +22,12 @@
 #include "app/model/slink.h"
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
+#include "app/model/sprojectprops.h"
 #include "app/shell/ssettings.h"
+#include "app/shell/smidiinputhub.h"
 #include "app/shell/smidioutpump.h"
 #include "app/shell/saudiorecorder.h"
+#include "app/shell/smidirecorder.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/sautomationrecorder.h"
 #include "app/servicesui/soptions.h"
@@ -74,6 +79,17 @@ void SApplication::setCurrentProject( SProject *cp )
     // user arms it in this session (design D9): loading a project must not open
     // the microphone.
     if( liveMonitor_ ) liveMonitor_->projectChanged();
+    // THE METRONOME SWITCH IS A PLAN-REBUILD TRIGGER (proposal 21 L5, design
+    // section 3). It is a project PROPERTY, so the only signal it raises is
+    // propertyChanged; one connection here turns it into the same
+    // liveLanesChanged() every arm verb calls. UniqueConnection because
+    // setCurrentProject runs again after a load.
+    if( cp )
+        connect( cp, &SProject::propertyChanged, this,
+                 [this]( const QString &key, const QVariant & ) {
+                     if( key == QLatin1String( SProjectProps::Metronome ) )
+                         liveLanesChanged();
+                 }, Qt::UniqueConnection );
 }
 
 void SApplication::rewireSpeaker()
@@ -325,7 +341,17 @@ offset_t SApplication::meterLatencyFrames() const
     // Only the live output path has a device buffer sitting between the position
     // the RT thread published and the sound the ear gets. A render publishes
     // positions faster than realtime and is not metered at all (startMetering).
-    if( !isPlaying_ || !t3Speaker_ ) return 0;
+    if( !isPlaying_ ) return 0;
+    return outputLatencyFramesProject();
+}
+
+// The same conversion WITHOUT the transport gate (proposal 21 L5). The latency
+// READOUT has to show a number while the transport is stopped - it describes
+// the device, not the playhead - while a COMPENSATION applied at a standstill
+// would shift a position nobody is playing.
+offset_t SApplication::outputLatencyFramesProject() const
+{
+    if( !t3Speaker_ ) return 0;
 
     audio::AudioBackend *backend = t3Speaker_->getBackend();
     if( !backend ) return 0;
@@ -356,6 +382,32 @@ offset_t SApplication::outputBufferFramesProject() const
     if( devRate == 0 || projRate <= 0 ) return (offset_t) devBuffer;
     return (offset_t) ( ( (double) devBuffer * (double) projRate )
                         / (double) devRate + 0.5 );
+}
+
+offset_t SApplication::inputLatencyFramesProject() const
+{
+    if( !liveMonitor_ ) return 0;
+    audio::CaptureBridge *br = liveMonitor_->bridge();
+    if( !br ) return 0;
+    // The bridge already delivers at the TARGET rate (the project's), so its
+    // reported latency is in project frames and needs no scaling - unlike the
+    // output side, where the device rate is the device's own.
+    return (offset_t) br->inputLatencyFrames();
+}
+
+QString SApplication::latencyReport() const
+{
+    const int rate = t3Env_ && t3Env_->getSRate() > 0 ? t3Env_->getSRate() : 48000;
+    const offset_t in  = inputLatencyFramesProject();
+    const offset_t out = outputLatencyFramesProject();
+    auto ms = [rate]( offset_t f ) {
+        return QString::number( 1000.0 * (double) f / (double) rate, 'f', 1 );
+    };
+    return QStringLiteral( "in %1 fr (%2 ms) | out %3 fr (%4 ms) | "
+                           "round trip %5 fr (%6 ms)" )
+        .arg( (qlonglong) in ).arg( ms( in ) )
+        .arg( (qlonglong) out ).arg( ms( out ) )
+        .arg( (qlonglong) ( in + out ) ).arg( ms( in + out ) );
 }
 
 void SApplication::startMetering()
@@ -566,12 +618,21 @@ SApplication::SApplication( int &argc, char **argv )
     // The live lane (proposal 21 L1b). A sibling of the MIDI-out pump in every
     // respect that matters: constructed with the app, destroyed FIRST, and the
     // owner of a std::thread whose join must happen on the main thread.
+    // The MIDI input ports (proposal 21 L2), BEFORE the live monitor that
+    // acquires sinks from them and before any project can arm a track. Its own
+    // enumeration probe must also be constructed before any listening port, so
+    // that a headless case's `midi-in-event` reaches the port the live lane
+    // drains rather than the probe (see SMidiInputHub's constructor).
+    midiInputHub_.reset( new SMidiInputHub() );
     liveMonitor_.reset( new SLiveMonitor( this ) );
     automationRecorder_.reset( new SAutomationRecorder( this ) );
     // AFTER the monitor: the recorder borrows the monitor's bridge (design D7,
     // one input pump) and must be destroyed BEFORE it, which the reverse
     // construction order in the destructor below gives.
     audioRecorder_.reset( new SAudioRecorder( this ) );
+    // The MIDI half of a record start (proposal 21 L4). After the input hub,
+    // whose recorder SINKS it acquires, and destroyed before it.
+    midiRecorder_.reset( new SMidiRecorder( this ) );
     selectionList_ = new SSelectionList();
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
@@ -619,8 +680,12 @@ SApplication::~SApplication()
     // The live lane goes first: it stops and JOINS the pump thread and closes
     // the input device, and both of those must happen before the speaker it
     // hands audio to is destroyed.
+    midiRecorder_.reset();
     audioRecorder_.reset();
     liveMonitor_.reset();
+    // AFTER the live monitor: it holds fan-out sinks and a thru route into a
+    // scheduler, and both belong to ports this owns.
+    midiInputHub_.reset();
     midiOutPump_.reset();
     automationRecorder_.reset();
     DTOR_DEL( actionHistory_ );
@@ -785,6 +850,18 @@ void SApplication::resumeLiveAfterRender()
     if( liveMonitor_ ) liveMonitor_->resumeAfterRender();
 }
 
+void SApplication::keyboardNoteOn( int key, int velocity, int channel )
+{
+    if( audio::KeyboardMidiInput *kb = audio::KeyboardMidiInput::active() )
+        kb->noteOn( key, velocity, channel );
+}
+
+void SApplication::keyboardNoteOff( int key, int channel )
+{
+    if( audio::KeyboardMidiInput *kb = audio::KeyboardMidiInput::active() )
+        kb->noteOff( key, channel );
+}
+
 void SApplication::liveLanesChanged()
 {
     if( liveMonitor_ ) liveMonitor_->refresh();
@@ -812,22 +889,228 @@ void SApplication::setPlaybackRunning( bool play )
 
 bool SApplication::isRecordingActive() const
 {
-    return audioRecorder_ && audioRecorder_->isActive();
+    return ( audioRecorder_ && audioRecorder_->isActive() )
+        || ( midiRecorder_ && midiRecorder_->isActive() );
 }
 
+
+// ------------------------------------------- count-in / pre-roll (21 L5) ---
+//
+// The reading taken is stated in sapplication.h beside recordPreambleActive().
+// In short: the count-in is BEFORE the record position and the pre-roll ROLLS
+// into it, and in both cases the take begins AT THE LOCATOR - so neither knob
+// can silently move the user's recording.
+
+QString SApplication::recordPreambleState() const
+{
+    if( preamblePhase_ == 1 && liveMonitor_ )
+        return QStringLiteral( "countIn %1" )
+                   .arg( (qlonglong) liveMonitor_->countInRemainingFrames() );
+    if( preamblePhase_ == 2 )
+        return QStringLiteral( "preRoll at %1" ).arg( (qlonglong) preambleTarget_ );
+    return QStringLiteral( "off" );
+}
+
+// Bars -> frames through THE tempo authority (37 D2), never through a BPM
+// double: SLiveMonitor::barFrames() reads the project's twTempoMap, which is
+// the same object the click's own grid comes from, so the count-in cannot end
+// half a frame off the beat it counted.
+static offset_t sBarsToFrames( SLiveMonitor *mon, int bars )
+{
+    if( !mon || bars <= 0 ) return 0;
+    const offset_t bar = mon->barFrames();
+    return bar > 0 ? bar * (offset_t) bars : (offset_t) 0;
+}
+
+void SApplication::pumpRecordPreamble()
+{
+    if( preamblePhase_ == 0 ) { if( preambleTimer_ ) preambleTimer_->stop(); return; }
+
+    // THE WATCHDOG. A device that refused to open (or a live lane the master
+    // shape refused) delivers no frames at all, and a count-in measured in
+    // delivered frames would then never end. Past the deadline the take starts
+    // anyway: a missing preamble is a nuisance, a transport that never starts
+    // is a hang.
+    const bool expired = preambleClock_.isValid()
+                         && preambleClock_.elapsed() > preambleDeadlineMs_;
+
+    if( preamblePhase_ == 1 ) {
+        const offset_t left = liveMonitor_ ? liveMonitor_->countInRemainingFrames()
+                                           : (offset_t) 0;
+        if( left > 0 && !expired ) return;
+        if( expired )
+            TW_LOGW( "shell", "[TRANSPORT] count-in watchdog fired with %lld "
+                              "frames to go; starting the take anyway",
+                     (long long) left );
+        const int preRollBars = SSettings::instance()
+                                    .value( SOpt::PreRollBars,
+                                            SOpt::def( SOpt::PreRollBars ) ).toInt();
+        const offset_t preRoll = sBarsToFrames( liveMonitor_.get(), preRollBars );
+        if( preRoll > 0 ) {
+            beginPreRoll_( preRoll );
+            return;
+        }
+        finishRecordPreamble_();
+        return;
+    }
+
+    // PHASE 2, the pre-roll: the transport is rolling from `locator - N bars`
+    // and the take begins when the PUBLISHED playhead reaches the locator.
+    // Published rather than heard, deliberately: the recorder's own conversion
+    // is what turns the button press into a placement, and asking for the heard
+    // frame here would apply the output latency twice.
+    if( !expired && getGlobalLocatorPos() < preambleTarget_ ) return;
+    if( expired )
+        TW_LOGW( "shell", "[TRANSPORT] pre-roll watchdog fired at %lld (target "
+                          "%lld); starting the take anyway",
+                 (long long) getGlobalLocatorPos(), (long long) preambleTarget_ );
+    finishRecordPreamble_();
+}
+
+void SApplication::beginPreRoll_( offset_t preRoll )
+{
+    preamblePhase_ = 2;
+    if( liveMonitor_ ) liveMonitor_->endCountIn();
+    offset_t from = preambleTarget_ - preRoll;
+    if( from < 0 ) from = 0;
+    setGlobalLocatorPos( from );
+    TW_LOGI( "shell", "[TRANSPORT] pre-roll: rolling from %lld to the record "
+                      "position %lld",
+             (long long) from, (long long) preambleTarget_ );
+    if( !isPlaying_ ) setPlaybackRunning( true );
+}
+
+void SApplication::finishRecordPreamble_()
+{
+    const int phase = preamblePhase_;
+    preamblePhase_ = 0;
+    if( preambleTimer_ ) preambleTimer_->stop();
+    // The locator goes back to the record position for a COUNT-IN (the playhead
+    // never moved, but a seek in between must not be silently honoured) and
+    // stays where the roll put it for a PRE-ROLL, which is already there.
+    if( phase == 1 ) setGlobalLocatorPos( preambleTarget_ );
+    // THE CLICK STOPS FIRST, THE LANE LAST. Both orders matter and both were
+    // paid for by a failing gate - SLiveMonitor::muteCountIn() has the two
+    // reasons written out.
+    if( liveMonitor_ ) liveMonitor_->muteCountIn();
+    startRecordingNow_();
+    if( liveMonitor_ ) liveMonitor_->endCountIn();
+}
+
+void SApplication::cancelRecordPreamble()
+{
+    if( preamblePhase_ == 0 ) return;
+    preamblePhase_ = 0;
+    if( preambleTimer_ ) preambleTimer_->stop();
+    if( liveMonitor_ ) liveMonitor_->endCountIn();
+}
+
+// THE ENTRY POINT for a record start, and since proposal 21 L5 it has a
+// PREAMBLE in front of it: a count-in and / or a pre-roll, either of which
+// defers the actual take to `startRecordingNow_()` from `pumpRecordPreamble()`.
+// The reading taken for both is stated in sapplication.h.
 bool SApplication::startRecording()
 {
-    // Everything a record start MEANS lives in SAudioRecorder (proposal 21
-    // L3b): the transport edge through setPlaybackRunning(), the capture
-    // segment on the app's ONE input pump, the growing clip, the placement
-    // conversion and the one-macro commit at stop. This is the entry point and
-    // nothing else.
-    return audioRecorder_ ? audioRecorder_->start() : false;
+    // A PREAMBLE ALREADY IN FLIGHT owns this start. Without this guard a second
+    // press during a count-in would begin the take immediately AND leave the
+    // poll to begin it a second time when the click ran out.
+    if( preamblePhase_ != 0 ) return true;
+
+    // COUNT-IN / PRE-ROLL (proposal 21 L5). Only from a STOPPED transport:
+    // punching in while the tape is rolling has no count-in in any DAW, and a
+    // pre-roll would mean seeking backwards under a running take.
+    if( !isPlaying_ ) {
+        const int countInBars = SSettings::instance()
+                                    .value( SOpt::CountInBars,
+                                            SOpt::def( SOpt::CountInBars ) ).toInt();
+        const int preRollBars = SSettings::instance()
+                                    .value( SOpt::PreRollBars,
+                                            SOpt::def( SOpt::PreRollBars ) ).toInt();
+        const offset_t countIn = sBarsToFrames( liveMonitor_.get(), countInBars );
+        const offset_t preRoll = sBarsToFrames( liveMonitor_.get(), preRollBars );
+        if( countIn > 0 || preRoll > 0 ) {
+            preambleTarget_ = getGlobalLocatorPos();
+            preambleClock_.restart();
+            // Twice the preamble plus two seconds: long enough that a healthy
+            // but slow device finishes, short enough that a dead one does not
+            // hang the transport.
+            const double rate = ( t3Env_ && t3Env_->getSRate() > 0 )
+                                    ? t3Env_->getSRate() : 48000.0;
+            preambleDeadlineMs_ =
+                (qint64) ( 2000.0 + 2000.0 * (double) ( countIn + preRoll ) / rate );
+            if( !preambleTimer_ ) {
+                preambleTimer_ = new QTimer( this );
+                preambleTimer_->setInterval( 5 );
+                connect( preambleTimer_, &QTimer::timeout, this,
+                         &SApplication::pumpRecordPreamble );
+            }
+            preambleTimer_->start();
+            if( countIn > 0 ) {
+                preamblePhase_ = 1;
+                TW_LOGI( "shell", "[TRANSPORT] count-in: %d bar(s) = %lld frames "
+                                  "before the record position %lld",
+                         countInBars, (long long) countIn,
+                         (long long) preambleTarget_ );
+                if( liveMonitor_ ) liveMonitor_->beginCountIn( countIn );
+            } else {
+                beginPreRoll_( preRoll );
+            }
+            return true;
+        }
+    }
+    return startRecordingNow_();
+}
+
+// Everything a record start MEANS lives in the two recorders: the audio half in
+// SAudioRecorder (proposal 21 L3b) - the transport edge through
+// setPlaybackRunning(), the capture segment on the app's ONE input pump, the
+// growing clip, the placement conversion, the one-macro commit - and the MIDI
+// half in SMidiRecorder (L4).
+//
+// THE MIDI RECORDER GOES FIRST AND DOES NOT TOUCH THE TRANSPORT. Two reasons,
+// both load-bearing: monitor AUTO is "input while stopped OR RECORDING" (design
+// D9), so isRecordingActive() has to be true BEFORE the live plan is rebuilt by
+// the transport edge; and the audio recorder owns that edge whenever it has a
+// take of its own, so only a MIDI-ONLY run starts the transport here.
+bool SApplication::startRecordingNow_()
+{
+    const bool midiOk  = midiRecorder_  ? midiRecorder_->start()  : false;
+    const bool audioOk = audioRecorder_ ? audioRecorder_->start() : false;
+    midiOwnsTransport_ = ( midiOk && !audioOk );
+    if( !midiOk && !audioOk ) return false;
+    if( midiOwnsTransport_ ) {
+        setRecordingStartFrame( midiRecorder_->recordStartFrame() );
+        if( !isPlaying_ ) setPlaybackRunning( true );
+        else              liveLanesChanged();
+    }
+    return true;
 }
 
 void SApplication::stopRecording()
 {
+    // A preamble in flight is CANCELLED rather than stopped: nothing has been
+    // recorded, so there is nothing to commit and nothing to undo.
+    if( preamblePhase_ != 0 ) {
+        cancelRecordPreamble();
+        return;
+    }
+    // The MIDI recorder commits FIRST, while the transport is still running:
+    // every host time it captured is mapped through the playhead clock's
+    // anchor, and that anchor is only valid while the RT thread is publishing
+    // (SPlayheadClock). The audio recorder's stop() is what ends the transport
+    // when the take had an audio half.
+    const bool wasMidiOnly = midiOwnsTransport_;
+    const offset_t midiStart =
+        midiRecorder_ ? midiRecorder_->recordStartFrame() : (offset_t) 0;
+    if( midiRecorder_ ) midiRecorder_->stop();
     if( audioRecorder_ ) audioRecorder_->stop();
+    if( wasMidiOnly ) {
+        midiOwnsTransport_ = false;
+        if( isPlaying_ ) setPlaybackRunning( false );
+        // Line the playhead up with what was just placed (it advanced during
+        // the take), exactly as SAudioRecorder::stop() does for its own.
+        setGlobalLocatorPos( midiStart );
+    }
 }
 
 

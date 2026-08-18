@@ -44,6 +44,10 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <thread>
+#include <chrono>
+#include <thread>
+#include <chrono>
 
 static int failures = 0;
 #define CHECK(cond, msg)                                                    \
@@ -192,12 +196,48 @@ int main()
               "(the --test-case default: a headless suite opens no microphone)");
 
         // The null input is inert in the way the default depends on: it opens
-        // without touching hardware and reads silence.
+        // without touching hardware and reads silence — PACED like a silent
+        // device (proposal 21 integration fix): read() hands out only the frames
+        // real time has produced since startCapture(), so a consumer that idles
+        // on "0 frames" (CaptureBridge) can be stopped, and a growing recording
+        // over the null input grows at real time, not as fast as memset runs.
+        // Measured before the fix: a MIDI-only live arm hung every case at its
+        // disarm, the bridge thread spinning on an infinite silent source.
         std::vector<float> buf(256 * 2, 1.0f);
-        CHECK(n && n->openDevice("default", 48000) == 0 &&
-                  n->startCapture() == 0 &&
-                  n->read(buf.data(), 256) == 256 && buf[0] == 0.0f,
-              "the null input opens, captures and reads silence");
+        bool nullOk = n && n->openDevice("default", 48000) == 0 && n->startCapture() == 0;
+        std::int32_t got = 0;
+        if (nullOk) {
+            // 256 frames at 48 kHz = 5.33 ms of real time; wait for them.
+            for (int i = 0; i < 200 && got < 256; ++i) {
+                const std::int32_t r = n->read(buf.data() + (std::size_t) got * 2,
+                                               (std::size_t) (256 - got));
+                if (r > 0) got += r;
+                else std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        CHECK(nullOk && got == 256 && buf[0] == 0.0f && buf[255 * 2] == 0.0f,
+              "the null input opens, captures and reads silence (paced at its rate)");
+        if (nullOk) {
+            // PACED, not infinite: spinning on read() for ~40 ms of wall clock
+            // yields about 40 ms of frames at 48 kHz, never an unbounded stream.
+            // (A single "next read is short" check is not usable here: a Windows
+            // 1 ms sleep is ~15 ms, so the loop above may leave a backlog.)
+            const auto t0 = std::chrono::steady_clock::now();
+            std::uint64_t total = 0;
+            std::vector<float> spin(1024 * 2, 0.0f);
+            for (;;) {
+                const std::int32_t r = n->read(spin.data(), 1024);
+                if (r > 0) total += (std::uint64_t) r;
+                const double ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - t0).count();
+                if (ms >= 40.0) break;
+            }
+            const double elapsed = std::chrono::duration<double>(
+                                       std::chrono::steady_clock::now() - t0).count();
+            const double expect = elapsed * 48000.0;
+            CHECK(total <= (std::uint64_t) (expect + 2048.0) && total >= (std::uint64_t) (expect * 0.5),
+                  "the null input is PACED at its rate: ~40 ms of spinning reads ~40 ms of frames");
+        }
 
         setEnv("SMARAGD_AUDIO_INPUT_BACKEND", "default");
         auto d2 = audio::createAudioInput();

@@ -41,7 +41,12 @@ DEPS = {
     # tw/events/twevent.h. tw/events is core-only and NOT in the dataflow DAG,
     # so this adds no page dependency (design F15: plugins may not reach mix).
     'plugins':  ['core', 'graph', 'events'],
-    'devices':  ['core'],
+    # devices -> events since proposal 21 L2: twLiveEventSource IS a
+    # twEventSource - it turns the bytes a MIDI input delivers into the ONE
+    # twEvent this codebase has. tw/events is core-only and outside the
+    # dataflow DAG, so this adds no page dependency; the alternative
+    # (events -> devices) would break the leaf status events is kept at.
+    'devices':  ['core', 'events'],
     'sinks':    ['core'],
     # playback → schedule since proposal 19 stage 5: the readahead is a
     # demand consumer of the page scheduler instead of pulling freezes.
@@ -136,7 +141,12 @@ APP_DEPS = {
     # SELECTED track" fallback.
     'eventui':        {'actions', 'model', 'objects/midi', 'objects/mixer',
                        'objects/track', 'shell'},
-    'servicesui':     {'model', 'shell'},
+    # servicesui + actions since proposal 21 L5: `set-count-in` / `set-pre-roll`
+    # are registered here because this is the module that OWNS the per-user
+    # option table (SOpt) and the only one that may include both it and
+    # SSettings. Every other option verb in the tree lives beside its own
+    # setting for the same reason.
+    'servicesui':     {'actions', 'model', 'shell'},
     # shell + objects/midi since proposal 37 P1: the transport tempo box
     # commits through the set-tempo verb instead of writing the project.
     # shell + eventui since proposal 37 P4: the event editor and the virtual

@@ -380,7 +380,14 @@ void CaptureBridge::bridgeThreadMain()
 
     const auto wait = idleWait( blockFrames_, inputRate_ );
 
+    // After stop is requested the loop DRAINS what the device still holds and
+    // then exits — bounded, so an input that never runs dry (a misbehaving
+    // backend handing out frames unboundedly) can never pin the join in
+    // stop(). Measured: the null input used to be exactly that, and a MIDI-only
+    // live arm hung every case at its disarm.
+    unsigned drainAfterStop = 0;
     for( ;; ) {
+        if( bridgeStop_.load( std::memory_order_acquire ) && ++drainAfterStop > 64 ) break;
         const std::int32_t got = input_->read( pop.data(), popFrames );
         if( got < 0 ) {
             BRIDGE_WARN( "input read error: %s", input_->errorMessage() );

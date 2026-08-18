@@ -318,11 +318,96 @@ foreach(_rec record_offset_zero record_loop_takes record_punch
     endif()
 endforeach()
 
+# --- transport polish (proposal 21 L5) ---------------------------------------
+#
+# THE METRONOME CASES have no audio input at all: the click is a live source
+# that is a pure function of POSITION (twmetronome.h), so the `null` default a
+# headless run already takes is exactly right - the same argument the
+# live-instrument six make. They ARE wall-clock cases in the sense the section
+# above describes (the click is produced by the pump and consumed by the RT
+# callback, and the measurement is the capture backend's recording), so
+# RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out.
+foreach(_met metronome_click metronome_render_identity)
+    if(TEST qxa.${_met})
+        set_tests_properties(qxa.${_met} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
+
+# THE COUNT-IN / PRE-ROLL CASES record, so they take the same paced,
+# position-encoded input and the same reported latency as the L3b record four -
+# which is what makes `compensationFrames="-5824"` a closed form in both.
+#
+# record_count_in WRITES transport/countInBars and record_pre_roll writes
+# transport/preRollBars through set-count-in / set-pre-roll, and each puts its
+# own key back; between them they OWN those two keys, and no other case reads
+# them.
+foreach(_pre record_count_in record_pre_roll)
+    if(TEST qxa.${_pre})
+        set_tests_properties(qxa.${_pre} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav;SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800")
+    endif()
+endforeach()
+
 if(TEST qxa.monitor_latency)
     set_tests_properties(qxa.monitor_latency PROPERTIES
         RUN_SERIAL TRUE
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav")
 endif()
+
+# --- live instruments (proposal 21 L2) ---------------------------------------
+#
+# All six PLAY a live instrument in real time and assert what the capture
+# backend was handed, so they are wall-clock tests in exactly the sense the
+# section above describes: RUN_SERIAL, with SMARAGD_CAPTURE_SPEED=1 spelled out
+# rather than left to the default. Three of them bound a LATENCY directly - the
+# note-on-to-audio onset (live_instrument_play), the MIDI-thru delta
+# (live_instrument_thru) and the hand-back gap (live_instrument_disarm_playback)
+# - and those numbers measure the box as well as the code.
+#
+# No SMARAGD_AUDIO_INPUT_BACKEND here, unlike the L1b five: a MIDI-armed
+# instrument track has NO audio input source at all (design section 3 case
+# (ii)), so the `null` default a headless run already takes is exactly right.
+# The MIDI half arrives through CaptureMidiInput, which
+# SMARAGD_MIDI_BACKEND=capture already selects by default.
+foreach(_liveinst live_instrument_play live_instrument_merge
+                  live_instrument_disarm_playback live_instrument_ownership
+                  live_instrument_thru live_instrument_keyboard)
+    if(TEST qxa.${_liveinst})
+        set_tests_properties(qxa.${_liveinst} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
+
+# --- MIDI recording (proposal 21 L4 = 37 P8b) --------------------------------
+#
+# All three RECORD a real-time-paced performance and assert where it was PLACED
+# on the timeline, so they are wall-clock tests in exactly the sense the section
+# above describes: RUN_SERIAL, with SMARAGD_CAPTURE_SPEED=1 spelled out rather
+# than left to the default. The recorder maps a MIDI host time onto a project
+# frame through the playhead clock, and any other pacing changes what a project
+# frame means in wall-clock terms while the injected messages keep meaning
+# wall-clock.
+#
+# No SMARAGD_AUDIO_INPUT_BACKEND, for the same reason the live-instrument six
+# have none: a MIDI-armed track has NO audio input at all (design section 3
+# case (ii)), so the `null` default a headless run already takes is right. The
+# MIDI half arrives through CaptureMidiInput, which SMARAGD_MIDI_BACKEND=capture
+# already selects by default.
+#
+# midi_record_modes WRITES midi/recordMode and midi/recordQuantize through
+# set-option and puts both back; it OWNS those two keys, and no other case
+# reads them.
+foreach(_mrec midi_record_placement midi_record_modes midi_record_loop_takes)
+    if(TEST qxa.${_mrec})
+        set_tests_properties(qxa.${_mrec} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+    endif()
+endforeach()
 
 # SMARAGD_CAPTURE_SPEED=1 is spelled out rather than left to the default: the
 # testkit maps a MIDI host time onto a project frame through the audio capture
