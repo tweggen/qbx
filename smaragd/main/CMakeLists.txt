@@ -291,6 +291,7 @@ set(APP_UI_FILES
     servicesui/include/app/servicesui/srecordingprogress.h
     servicesui/include/app/servicesui/srenderdialog.h
     servicesui/include/app/servicesui/srenderprogress.h
+    servicesui/include/app/servicesui/stransportoptionactions.h
     servicesui/src/scleanupdialog.cpp
     servicesui/src/slogmodel.cpp
     servicesui/src/slogview.cpp
@@ -299,6 +300,7 @@ set(APP_UI_FILES
     servicesui/src/srecordingprogress.cpp
     servicesui/src/srenderdialog.cpp
     servicesui/src/srenderprogress.cpp
+    servicesui/src/stransportoptionactions.cpp
     # --- app/shell
     shell/include/app/shell/sapplication.h
     shell/include/app/shell/sautomationrecorder.h

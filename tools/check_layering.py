@@ -141,7 +141,12 @@ APP_DEPS = {
     # SELECTED track" fallback.
     'eventui':        {'actions', 'model', 'objects/midi', 'objects/mixer',
                        'objects/track', 'shell'},
-    'servicesui':     {'model', 'shell'},
+    # servicesui + actions since proposal 21 L5: `set-count-in` / `set-pre-roll`
+    # are registered here because this is the module that OWNS the per-user
+    # option table (SOpt) and the only one that may include both it and
+    # SSettings. Every other option verb in the tree lives beside its own
+    # setting for the same reason.
+    'servicesui':     {'actions', 'model', 'shell'},
     # shell + objects/midi since proposal 37 P1: the transport tempo box
     # commits through the set-tempo verb instead of writing the project.
     # shell + eventui since proposal 37 P4: the event editor and the virtual
