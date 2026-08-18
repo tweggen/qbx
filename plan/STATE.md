@@ -13796,10 +13796,27 @@ driver delivered no late callbacks); and the input path is untouched —
 
 ### Next
 
-Phase 2 (output backend + `WinMultiBackend` dispatcher) is unblocked but
-**must be re-planned before it is written**: proposal 36 executed after this
-design and its Phase 2 output-path assumptions (mono pull fanned out `c % 2`,
-"rendered WAV channels equal by construction") are stale — re-plan the
-`AsioDevice` output half and `AudioConfig.channels` against 36 §4.3–§4.6. The
-dispatcher/id scheme, registry/facade split, input ring and SDK-free loading
-are unaffected.
+**The Phase 2 re-plan was done in the same session** and is
+`plan/proposed/35_ASIO_BACKEND.md` § "Phase 2, re-planned (2026-08-18)". Read
+it before writing any of Phase 2; two of its findings are worth naming here
+because the header's original staleness note pointed the wrong way:
+
+- **Less is stale than the note claimed.** `RenderCallback` is still
+  interleaved (`audio_backend.h:46`) — proposal 36 went planar one seam ABOVE
+  the backend, at `AudioEngine::pullBlock` — so the output-half data path
+  needed no edit at all. And the `c % 2` fan-out that note calls stale is
+  `twmonitor::interleave` in `twSpeaker`, not anything in proposal 35; it is
+  current shipped behaviour and Phase 2 does not touch it. Checked
+  repo-wide, nothing outside a backend reads an output `AudioConfig::channels`.
+- **What genuinely changed is a question WASAPI shared mode never posed:** how
+  many of a pro interface's outputs to open. With 8 outs and a `c % 2`
+  fan-out, reporting `channels = 8` would put the monitor mix on OUT 1/2 AND
+  3/4 AND 5/6 AND 7/8 — routinely headphone amps and outboard sends.
+  **DECIDED (requester): the ASIO device opens OUTPUTS 1–2 ONLY** and reports
+  that number. It is exactly the shipped "monitoring is stereo" rule rather
+  than an approximation of it, it makes `twSpeaker` need zero changes for
+  ASIO (so the WASAPI-through-dispatcher regression stays meaningful), and it
+  is the cheapest correct thing on the driver thread. What it forgoes is
+  stated in the proposal: a wider project cannot reach the other outputs, and
+  monitoring cannot be routed to OUT 3/4 — both need an output-routing model,
+  which is its own proposal after Phase 2 lands.
