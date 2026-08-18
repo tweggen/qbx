@@ -288,6 +288,8 @@ void twLiveMixRing::noteStream( const twLiveStreamStats &s )
     if( s.notYet )  notYet_.fetch_add( s.notYet, std::memory_order_relaxed );
     if( s.gated )   gated_.fetch_add( s.gated, std::memory_order_relaxed );
     if( s.starved ) misses_.fetch_add( s.starved, std::memory_order_relaxed );
+    if( s.framesSummed )
+        delivered_.fetch_add( s.framesSummed, std::memory_order_relaxed );
 }
 
 void twLiveMixRing::noteOutcome( twLiveMixOutcome o )
@@ -311,4 +313,5 @@ void twLiveMixRing::resetStats()
     overruns_.store( 0, std::memory_order_relaxed );
     dropped_.store( 0, std::memory_order_relaxed );
     notYet_.store( 0, std::memory_order_relaxed );
+    delivered_.store( 0, std::memory_order_relaxed );
 }
