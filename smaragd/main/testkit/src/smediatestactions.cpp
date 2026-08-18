@@ -19,6 +19,9 @@
 
 #include <QApplication>
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
+#include <QPointer>
 #include <QDomElement>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -746,6 +749,231 @@ bool SMediaDropWaitAction::readXml( const QDomElement &elem, int )
 }
 
 // --------------------------------------------------------------------------
+// media-webdav-stub (proposal 38 GATE 5c)
+// --------------------------------------------------------------------------
+
+namespace {
+
+// ONE stub per process. Parented to qApp, so it cannot outlive the application
+// object: a QTcpServer torn down after QCoreApplication has gone is a teardown
+// crash with a network-shaped delay on it, and the same instinct that aborts
+// every QNetworkReply in the source's destructor (§B.7) applies to the other
+// end of the wire. A QPointer, not a raw one, so the qApp deletion is
+// observable here rather than dangling.
+QPointer<SWebDavStub> g_stub;
+
+constexpr int    kMaxMirrorDepth = 8;
+constexpr qint64 kMaxMirrorFile  = 32ll * 1024 * 1024;
+constexpr qint64 kMaxMirrorTotal = 128ll * 1024 * 1024;
+
+// Mirror a LOCAL directory into the stub's PROPFIND table, recursively, with
+// the real file bytes as each entry's GET body -- which is what makes a drop
+// out of the browser end in audio a render can be asserted against (AC 19),
+// rather than in a placeholder.
+//
+// The stub's own setDirectory() registers both halves from one call (the
+// listing AND every non-dir entry's GET body), so this walk is one call per
+// directory and nothing else.
+bool mirrorDirectory( SWebDavStub *stub, const QString &absRoot,
+                      const QString &relPath, int depth,
+                      int &nFiles, qint64 &nBytes, QString *error )
+{
+    if( depth > kMaxMirrorDepth ) {
+        *error = QStringLiteral( "fixture tree deeper than %1 levels at '%2'" )
+                     .arg( kMaxMirrorDepth ).arg( relPath );
+        return false;
+    }
+    const QString absHere = relPath.isEmpty()
+                                ? absRoot
+                                : absRoot + QLatin1Char( '/' ) + relPath;
+    QDir dir( absHere );
+    if( !dir.exists() ) {
+        *error = QStringLiteral( "no such fixture directory: %1" ).arg( absHere );
+        return false;
+    }
+
+    QVector<SWebDavStubEntry> entries;
+    QStringList               subdirs;
+    const QFileInfoList       infos =
+        dir.entryInfoList( QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name );
+    for( const QFileInfo &fi : infos ) {
+        SWebDavStubEntry e;
+        e.name  = fi.fileName();
+        e.isDir = fi.isDir();
+        if( e.isDir ) {
+            // A directory's size is the documented -1 ("unknown"), never
+            // QFileInfo::size()'s platform junk -- the same rule
+            // SLocalMediaSource follows, so the two providers describe() one
+            // tree identically and a case can be read against either.
+            e.sizeBytes = -1;
+            subdirs << ( relPath.isEmpty()
+                             ? e.name
+                             : relPath + QLatin1Char( '/' ) + e.name );
+        } else {
+            if( fi.size() > kMaxMirrorFile ) {
+                *error = QStringLiteral( "fixture file '%1' is %2 bytes (max %3)" )
+                             .arg( fi.fileName() )
+                             .arg( fi.size() )
+                             .arg( kMaxMirrorFile );
+                return false;
+            }
+            QFile f( fi.absoluteFilePath() );
+            if( !f.open( QIODevice::ReadOnly ) ) {
+                *error = QStringLiteral( "cannot read fixture file %1" )
+                             .arg( fi.absoluteFilePath() );
+                return false;
+            }
+            e.content   = f.readAll();
+            e.sizeBytes = e.content.size();
+            e.modified  = fi.lastModified().toUTC();
+            // An etag the cache's content key can key on, derived from the two
+            // things that change when the bytes do.
+            e.etag = QStringLiteral( "\"%1-%2\"" )
+                         .arg( e.sizeBytes )
+                         .arg( fi.lastModified().toUTC().toMSecsSinceEpoch() );
+            nBytes += e.sizeBytes;
+            ++nFiles;
+            if( nBytes > kMaxMirrorTotal ) {
+                *error = QStringLiteral( "fixture tree exceeds %1 bytes" )
+                             .arg( kMaxMirrorTotal );
+                return false;
+            }
+        }
+        entries.append( e );
+    }
+    stub->setDirectory( relPath, entries );
+
+    for( const QString &sub : subdirs )
+        if( !mirrorDirectory( stub, absRoot, sub, depth + 1, nFiles, nBytes, error ) )
+            return false;
+    return true;
+}
+
+bool faultFromWord( const QString &word, SWebDavStub::Fault *out )
+{
+    if( word.isEmpty() )                          { *out = SWebDavStub::Fault::None;         return true; }
+    if( word == QLatin1String( "401" ) )          { *out = SWebDavStub::Fault::Status401;    return true; }
+    if( word == QLatin1String( "404" ) )          { *out = SWebDavStub::Fault::Status404;    return true; }
+    if( word == QLatin1String( "500" ) )          { *out = SWebDavStub::Fault::Status500;    return true; }
+    if( word == QLatin1String( "closemidbody" ) ) { *out = SWebDavStub::Fault::CloseMidBody; return true; }
+    if( word == QLatin1String( "stall" ) )        { *out = SWebDavStub::Fault::Stall;        return true; }
+    return false;
+}
+
+}   // namespace
+
+SApplyResult SMediaWebDavStubAction::apply( SProject * /*project*/ )
+{
+    if( action_ == QLatin1String( "stop" ) ) {
+        // Idempotent on purpose, so a defensive stop costs a case nothing.
+        if( g_stub ) {
+            g_stub->stop();
+            delete g_stub.data();
+            g_stub = nullptr;
+        }
+        return { true, nullptr };
+    }
+
+    if( !g_stub ) {
+        g_stub = new SWebDavStub( qApp );
+        if( !g_stub->start() ) {
+            qWarning() << "media-webdav-stub: could not bind 127.0.0.1:0";
+            delete g_stub.data();
+            g_stub = nullptr;
+            return { false, nullptr };
+        }
+    }
+
+    if( !fixtureDir_.isEmpty() ) {
+        const QString absRoot =
+            QDir::cleanPath( QDir::current().absoluteFilePath( fixtureDir_ ) );
+        g_stub->clearDirectories();
+        int     nFiles = 0;
+        qint64  nBytes = 0;
+        QString error;
+        if( !mirrorDirectory( g_stub, absRoot, QString(), 0, nFiles, nBytes, &error ) ) {
+            qWarning() << "media-webdav-stub:" << error;
+            return { false, nullptr };
+        }
+        qDebug().noquote()
+            << QStringLiteral( "media-webdav-stub: serving %1 file(s) / %2 bytes "
+                               "from %3 at %4" )
+                   .arg( nFiles )
+                   .arg( nBytes )
+                   .arg( absRoot, g_stub->baseUrl().toString() );
+    }
+
+    // An EMPTY fault= clears every injected fault, so one line restores the
+    // healthy server after a failure phase.
+    SWebDavStub::Fault fault = SWebDavStub::Fault::None;
+    if( !faultFromWord( fault_, &fault ) ) {
+        qWarning() << "media-webdav-stub: unknown fault" << fault_;
+        return { false, nullptr };
+    }
+    g_stub->clearFaults();
+    if( fault != SWebDavStub::Fault::None ) g_stub->setFault( faultPath_, fault );
+
+    if( !accountId_.isEmpty() ) {
+        // THE PORT IS WRITTEN WHERE THE FLOW READS IT (see the header): a .qxa
+        // cannot interpolate a run-time value into a later attribute, so the
+        // verb hands the stub's own base URL straight to the accounts model --
+        // the SAME SMediaAccountManager::setAccount() the Options dialog's Save
+        // button calls. From here the case names the SOURCE ID, which is
+        // static.
+        SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
+        QString               error;
+        if( !mgr->setAccount( accountId_, g_stub->baseUrl().toString(), user_,
+                              password_, remember_, &error ) ) {
+            qWarning() << "media-webdav-stub: setAccount failed -" << error;
+            return { false, nullptr };
+        }
+        if( !SMediaRegistry::instance().source( QStringLiteral( "nextcloud:" )
+                                                + accountId_ ) ) {
+            qWarning() << "media-webdav-stub: the account was not registered as a source";
+            return { false, nullptr };
+        }
+    }
+    return { true, nullptr };   // a test verb has nothing to undo
+}
+
+void SMediaWebDavStubAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "action", action_ );
+    elem.setAttribute( "fixtureDir", fixtureDir_ );
+    elem.setAttribute( "accountId", accountId_ );
+    elem.setAttribute( "user", user_ );
+    elem.setAttribute( "password", password_ );
+    elem.setAttribute( "remember", remember_ ? "1" : "0" );
+    elem.setAttribute( "fault", fault_ );
+    elem.setAttribute( "faultPath", faultPath_ );
+}
+
+bool SMediaWebDavStubAction::readXml( const QDomElement &elem, int )
+{
+    action_     = elem.attribute( "action", "start" );
+    fixtureDir_ = elem.attribute( "fixtureDir" );
+    accountId_  = elem.attribute( "accountId" );
+    user_       = elem.attribute( "user", "qxauser" );
+    password_   = elem.attribute( "password", "qxapass" );
+    remember_   = elem.attribute( "remember", "0" ) != "0";
+    fault_      = elem.attribute( "fault" );
+    faultPath_  = elem.attribute( "faultPath" );
+    if( action_ != QLatin1String( "start" ) && action_ != QLatin1String( "stop" ) ) {
+        qWarning() << "media-webdav-stub: action= must be start or stop, not" << action_;
+        return false;
+    }
+    SWebDavStub::Fault ignored;
+    if( !faultFromWord( fault_, &ignored ) ) {
+        // REFUSED at parse time, never at the first request: a case that
+        // misspelled a fault would otherwise assert a healthy server's answer
+        // and pass while gating nothing.
+        qWarning() << "media-webdav-stub: unknown fault" << fault_;
+        return false;
+    }
+    return true;
+}
+
+// --------------------------------------------------------------------------
 
 static const bool s_reg_media =
     ( SActionRegistry::instance().registerType(
@@ -790,4 +1018,7 @@ static const bool s_reg_media =
       SActionRegistry::instance().registerType(
           QStringLiteral( "media-drop-wait" ),
           [] { return new SMediaDropWaitAction; } ),
+      SActionRegistry::instance().registerType(
+          QStringLiteral( "media-webdav-stub" ),
+          [] { return new SMediaWebDavStubAction; } ),
       true );

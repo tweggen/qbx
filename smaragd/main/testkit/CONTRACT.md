@@ -842,3 +842,77 @@ panel and the arranger, and the shell is the only module that sees both.
     forces `SMARAGD_SECRET_BACKEND=none` instead, in ITS OWN CTest entry — the
     backend is read once per process, so seeing AC 10's "Remember disabled"
     behaviour needs a whole separate process, not a mid-script switch.
+
+## The end-to-end WebDAV verb (proposal 38 GATE 5c)
+
+`media-webdav-stub` — the PROCESS-OWNED `SWebDavStub` the two end-to-end cases
+(`media_webdav_browse`, `media_webdav_drop`) browse and download from. This is
+the coverage gate 4 deliberately does not have: at the end of gate 4 the WebDAV
+client was unit-tested and had never been driven from the app (gate 4 AC 9).
+
+40. **THE CASE NEVER LEARNS THE PORT, AND MUST NOT. THE VERB WRITES THE URL
+    WHERE THE FLOW READS IT.** The stub binds `127.0.0.1:0` — an OS-assigned
+    port, never a fixed one, which is the whole reason four concurrent
+    `ctest -j4` cases cannot collide over it — and a `.qxa` is a static document
+    that cannot interpolate a run-time value into a later attribute. So given an
+    `accountId=`, this verb calls `SMediaAccountManager::setAccount()` ITSELF
+    with the stub's own `baseUrl()`, which is the same production path the
+    Options dialog's Save button calls; the case then names only the SOURCE ID
+    `nextcloud:<accountId>`, which is static. Two alternatives were considered
+    and are worse: a fixed port re-introduces exactly the collision the
+    OS-assigned one removes, and printing the port into a log line the case
+    greps would let a case READ the port and still not be able to USE it.
+    Consequence to keep in mind when reading either case: the URL appears in no
+    `.qxa` at all, so `nextcloud:qxastub` is the only handle on the server.
+
+41. **ONE STUB PER PROCESS, PARENTED TO `qApp`.** A `QTcpServer` torn down after
+    `QCoreApplication` has gone is a teardown crash with a network-shaped delay
+    on it — the same instinct that makes `SWebDavMediaSource` abort every reply
+    in its destructor (§B.7), applied to the other end of the wire. Held as a
+    `QPointer` so the qApp deletion is observable here rather than dangling.
+    `action="stop"` is idempotent, which is what makes a defensive stop free.
+
+42. **`fixtureDir=` mirrors REAL BYTES, and that is what makes AC 19 an audio
+    assertion rather than a clip-exists assertion.** The walk registers one
+    `setDirectory()` per directory (the stub wires up both the PROPFIND listing
+    and every non-dir entry's GET body from that one call) with each file's
+    actual content, its size, its mtime and an etag derived from both — so a GET
+    of `lib/kick.wav` returns the committed sawtooth fixture and the dropped
+    clip's RENDERED ENERGY is the same closed form `media_browser_drag_local`
+    asserts over the LOCAL provider. A directory's size is the documented `-1`,
+    matching `SLocalMediaSource`, so the two providers `describe()` one tree
+    identically and the two cases can be read against each other. Bounded at 8
+    levels / 32 MB per file / 128 MB total, refused loudly rather than silently
+    truncated.
+
+43. **An EMPTY `fault=` CLEARS every injected fault**, so one line restores the
+    healthy server after a failure phase, and an unknown fault word is refused
+    in `readXml` — at PARSE time, never at the first request, because a case
+    that misspelled a fault would otherwise assert a healthy server's answer and
+    pass while gating nothing.
+
+44. **THE STUB IS NOT A NEXTCLOUD SERVER, and neither case may be read as
+    saying otherwise.** Plain HTTP: no TLS (so no certificate validation and no
+    TLS-error surfacing), no redirects, no rate limiting, no
+    `WWW-Authenticate` challenge, and NO REAL AUTHENTICATION AT ALL — it never
+    inspects the `Authorization` header it is sent, so nothing in gate 5c proves
+    a credential reached the wire in a form a server would accept. One canonical
+    PROPFIND dialect, not Nextcloud's. What is gated is OUR half of the
+    conversation; a real server is the manual runbook's job (§C.6, gate 6).
+
+45. **Both cases are `RUN_SERIAL` and own their keys** — `media/lastSourceId`,
+    `media/lastPath/nextcloud:qxastub`, `media/categoryMask`,
+    `media/searchRecursive` and everything under `media/nextcloud/qxastub/*` —
+    restoring the first four to their `SOpt` defaults and removing the account,
+    so `smaragd.ini` comes back with identical CONTENT run to run. **Content,
+    not md5**: `QSettings` rewrites the whole file from its own in-memory map
+    and does not promise to preserve section ORDER across processes, so an md5
+    can legitimately move while every key is exactly as it was. Both set
+    `SMARAGD_SECRET_BACKEND=memory` EXPLICITLY rather than inheriting the
+    `--test-case` default (§B.8 rule 5, T15): the account only has to work for
+    THIS process, and `memory` writes no INI key and no keychain item at all —
+    which is why, unlike the gate-5b options cases, neither of these needs
+    `dpapi`. `media_webdav_drop` additionally sets `SMARAGD_MEDIA_CACHE_DIR`
+    into its own output directory, for the reason `SMARAGD_SIDECAR_DIR` exists,
+    and because its "a repeat drop does not re-fetch" claim would otherwise be
+    measuring a hit inherited from a previous run.

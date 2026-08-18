@@ -5,9 +5,12 @@
 // (main/media/CONTRACT.md) exactly the way SLocalMediaSource adapts QDir:
 // async, id-tagged, batched, cancel-safe, and honest about what it dropped.
 //
-// UNIT-TEST ONLY as of gate 4 -- see main/media/CONTRACT.md and the gate 4
-// section of plan/proposed/38_MEDIA_BROWSER.md. No account, no credential
-// store, no UI reaches this class yet; that is gate 5.
+// Driven END TO END since gate 5c: SMediaAccountManager (main/shell) registers
+// one of these per Nextcloud account, the dock browses and searches it
+// (qxa.media_webdav_browse) and a drop out of it places a clip whose rendered
+// audio is asserted (qxa.media_webdav_drop). What is still stubbed is the
+// SERVER -- main/testkit's SWebDavStub is plain HTTP with no TLS, no redirects
+// and no real authentication -- see main/media/CONTRACT.md.
 
 #ifndef SWEBDAVMEDIASOURCE_H
 #define SWEBDAVMEDIASOURCE_H

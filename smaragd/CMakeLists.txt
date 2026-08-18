@@ -349,6 +349,49 @@ if(TEST qxa.media_options_no_store)
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=none")
 endif()
 
+# --- the end-to-end WebDAV cases (proposal 38 GATE 5c) -----------------------
+#
+# The first time the WebDAV connector is driven from inside the app: an account
+# pointed at an in-process SWebDavStub, the REAL SMediaBrowserPanel browsing and
+# searching it, and a drop out of it placing a clip whose RENDERED AUDIO is
+# asserted (PROPFIND -> GET -> cache -> project copy -> add-sample). The stub
+# binds 127.0.0.1:0 -- an OS-assigned port, never a fixed one -- which is what
+# lets these run beside three other processes without a port collision; the
+# `media-webdav-stub` verb writes the resulting URL straight into the account,
+# because a .qxa cannot interpolate a run-time value into a later attribute.
+#
+# RUN_SERIAL for the SETTINGS reason, not a timing one (nothing here asserts a
+# wall clock; every verb waits for the panel to go idle): both write
+# media/lastSourceId, media/lastPath/nextcloud:qxastub, media/categoryMask,
+# media/searchRecursive and media/nextcloud/qxastub/* into the shared
+# smaragd.ini, and both restore all of it.
+#
+# SMARAGD_SECRET_BACKEND=memory is spelled out rather than inherited from the
+# --test-case default (proposal 38 §B.8 rule 5, T15). The account only has to
+# work for THIS process, and `memory` writes no INI key and no keychain item at
+# all -- which is exactly why, unlike the gate-5b options cases, neither of
+# these needs `dpapi`. Leaving it implicit is how a default change would
+# silently start writing real ciphertext from a case that never asked for it.
+#
+# media_webdav_drop additionally needs SMARAGD_MEDIA_CACHE_DIR pointed into its
+# OWN output directory: the media cache is otherwise a shared per-user
+# directory (the same reason SMARAGD_SIDECAR_DIR exists), and the case's "a
+# repeat drop of the same remote file does not re-fetch and does not make a
+# second project copy" claim would otherwise be measuring a hit inherited from
+# a previous run.
+#
+# ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
+if(TEST qxa.media_webdav_browse)
+    set_tests_properties(qxa.media_webdav_browse PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=memory")
+endif()
+if(TEST qxa.media_webdav_drop)
+    set_tests_properties(qxa.media_webdav_drop PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=memory;SMARAGD_MEDIA_CACHE_DIR=${CMAKE_BINARY_DIR}/test-output/media_webdav_drop/mediacache")
+endif()
+
 # --- the live lane (proposal 21 L1b) -----------------------------------------
 #
 # All five PLAY (or monitor) in real time against a paced FILE INPUT and assert
