@@ -1276,24 +1276,25 @@ Explicitly **not** in this proposal, each with the reason:
 
 ---
 
-## G. Two decisions this proposal does NOT make
+## G. Two decisions, resolved by the requester (2026-08-18)
 
-Both are the requester's, both are cheap to change now and expensive later.
-
-1. **What happens to the resources dock (`SExternFileList`).** §A.1 analyses it
-   and then ships a second dock beside it forever. The default outcome is **two
-   docks that both drag files onto the timeline with different payloads** — one
-   listing the project's referenced files with ref counts, one browsing sources.
-   The options are: leave both (the MVP's implicit choice); give the media
-   browser a built-in "This project" source so the two merge and the old dock
-   retires; or keep both and rename them so the split is obvious. It is a
-   product call, not a technical one, and nothing in gates 1-6 forecloses any of
-   the three — but doing nothing IS choosing the first.
-2. **Whether `.oga` (and later `.m4a`) joins the audio suffix list.** §B.3 pins
-   `kAudio` to the Insert-sample dialog's exact seven, so the browser and the
-   dialog can never disagree. Adding one is now a deliberate, user-visible
-   change to BOTH — which is the point, but it means the list is frozen until
-   someone decides.
+1. **The resources dock stays, unchanged and separate.** The adversarial review
+   asked whether `SExternFileList` should be subsumed. The requester's answer:
+   it is **a debugging / housekeeping panel that is rarely opened** — a project
+   inventory with ref counts and a Cleanup entry point — and the media browser
+   is a working tool for getting material INTO a project. Those are different
+   jobs for different moments, and merging them would put housekeeping in front
+   of someone reaching for a kick drum. So: two docks, deliberately; **no "This
+   project" source** in the browser; no rename; `SExternFileList` is not touched
+   by any of the six gates. The overlap is one shared payload spelling
+   (`file:<abspath>`), which is a feature — it is why gate 2 needs no timeline
+   change at all.
+2. **`.oga` is OUT, and it was never requested.** The requester's brief said
+   "mp3/mp4/ogg/wav/aiff"; `oga` was introduced by this document's own §B.3 and
+   is simply a second spelling of Ogg, which `ogg` already covers. `kAudio` is
+   the Insert-sample dialog's exact seven and the two can never disagree.
+   Adding a suffix later is a deliberate, user-visible change to BOTH — which is
+   the point of there being one list.
 
 ---
 
