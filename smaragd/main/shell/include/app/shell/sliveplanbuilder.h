@@ -55,6 +55,19 @@ struct SLiveMidiFeed {
 };
 
 struct SLiveClosure {
+    /**
+     * THE METRONOME (proposal 21 L5, design D1). It is not a track and owns no
+     * track, so it is a FLAG rather than a member: a live lane exists iff
+     * `armed u monitor u metronome`, and the click joins the plan at the
+     * OUTPUT as a synthetic source with no processors and unity gain.
+     *
+     * Keeping it out of `ordered` is what leaves the whole arm/disarm protocol
+     * untouched - nothing is retired, nothing is live-owned, no plug is nulled
+     * - so a metronome-only lane cannot change one byte of what the frozen
+     * graph produces. That is the property `metronome_render_identity` gates.
+     */
+    bool metronome = false;
+
     /// Every member, children before parents.
     std::vector<STrack *> ordered;
     /// The subset that has a live INPUT (the armed / monitoring tracks).
@@ -67,7 +80,12 @@ struct SLiveClosure {
     /// "in the closure ⇒ null the plug".
     std::vector<STrack *> topLevel;
 
-    bool empty() const { return ordered.empty(); }
+    /// No lane at all. The metronome counts: it is the one member of the live
+    /// set that is not a track.
+    bool empty() const { return ordered.empty() && !metronome; }
+    /// Is there anything the INPUT DEVICE is needed for? A metronome-only lane
+    /// needs no microphone, and opening one would be a surprise.
+    bool needsInput() const { return !sources.empty(); }
     bool contains( const STrack *t ) const;
 };
 
@@ -91,6 +109,18 @@ namespace sliveplan {
  */
 SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
                              const std::vector<const STrack *> &inertlyArmed );
+
+/**
+ * Should the click be in the plan right now (proposal 21 L5)?
+ *
+ * `metronomeOn` is the project's own `SProjectProps::Metronome`; the click is
+ * audible while the transport is PLAYING or RECORDING, which is what every
+ * reference DAW does - a metronome ticking at a stopped playhead is a bug
+ * report, not a feature. `countIn` overrides both: the count-in IS the stopped
+ * transport's live lane, ticking down to the record start (design D2).
+ */
+bool metronomeWanted( bool metronomeOn, bool playing, bool recording,
+                      bool countIn );
 
 /// Does this track's `trackInput` name an audio device (the L1b half)?
 bool isAudioInput( const STrack *t );
@@ -131,6 +161,16 @@ public:
         std::uint64_t flipEpoch      = 0;
         std::uint64_t flipEpochPrime = 0;
         length_t   leadFrames    = -1;   // < 0 = the pump's default (2 blocks)
+        /**
+         * THE CLICK, as a live source (proposal 21 L5, design D1/D2). Non-null
+         * adds ONE synthetic plan track at the output: no inserts, unity gain,
+         * identity map, `input` = this. It is never a member of the closure
+         * and never live-owns anything, so it cannot perturb the frozen graph.
+         *
+         * A render never sees it: `SLiveMonitor::suspendForRender()` drops
+         * every lane, so there is no branch here for "is this a render".
+         */
+        std::shared_ptr<twLiveInputSource> metronome;
     };
 
     static std::shared_ptr<twLivePlan> build( const SLiveClosure &closure,
