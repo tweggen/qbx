@@ -237,6 +237,24 @@ called cross-thread without marshaling).
    default" input combo with `createAudioInput()->listDevices()` (closes the
    long-standing Phase-7 TODO). ASIO entries report channels=0 in enumeration
    so listing does not load every driver.
+   **ALREADY SATISFIED — verified 2026-08-18, no code written.** This bullet
+   was drafted before proposal 21 L1b, which made the combo real for its own
+   reasons (main PR #54, plus PR #55 for the rate/channel label). The ASIO half
+   then arrived with Phase 3 at zero cost: `createAudioInput()` returns
+   `WinMultiInput`, whose `listDevices()` merges both worlds, and the dialog
+   calls exactly that. Measured through `audio_backend_probe inputs`, which
+   builds the list the same way the dialog does:
+
+   ```
+   default                                        System default
+   {0.0.1.00000000}.{222c8bf0-…}   Mikrofon (US-16x08)  [48000 Hz]  (16 ch)
+   asio:{FA12DE15-482E-4214-8D11-6817497635C0}    ASIO: US-16x08 ASIO
+   ```
+
+   The ASIO row carries no rate and no channel count, which is the bullet's own
+   requirement and is what keeps enumeration from loading every installed
+   driver to fill a combo box. **Nothing remains of this phase**; what it
+   promised is on screen.
 5. **(optional) Control Panel button** — `openControlPanel()` default virtual,
    `ASIOControlPanel()` behind it, Options button enabled for `asio:` ids;
    panel-driven buffer changes surface as `kAsioResetRequest` → reopen on

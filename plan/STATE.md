@@ -14136,3 +14136,67 @@ an actual take through ASIO end to end (the probe reads the ring, it does not
 drive `SAudioRecorder`); the per-device "channels to open" preference, which is
 not built; and every input latency claim beyond what the driver reports. No qxa
 case touches any of it and none can.
+
+## 2026-08-18 — Proposal 35 Phase 4 (already satisfied) + a real take through ASIO
+
+Two small things, one of which is a piece of work NOT done because it turned
+out to be unnecessary.
+
+### Phase 4 was already satisfied, and no code was written for it
+
+The phase reads "replace the hardcoded 'System default' input combo with
+`createAudioInput()->listDevices()`". That bullet predates proposal 21 L1b,
+which made the combo real for its own reasons (main PR #54, and PR #55 for the
+rate/channel label). The ASIO half then arrived with Phase 3 **at zero cost**:
+`createAudioInput()` returns `WinMultiInput`, whose `listDevices()` merges the
+WASAPI endpoints with the ASIO drivers, and `SOptionsDialog::loadAudioPage`
+calls exactly that.
+
+Verified rather than assumed, through the new `audio_backend_probe inputs`
+(which builds the list the same way the dialog does):
+
+```
+default                                        System default
+{0.0.1.00000000}.{222c8bf0-…}   Mikrofon (US-16x08)  [48000 Hz]  (16 ch)
+asio:{FA12DE15-482E-4214-8D11-6817497635C0}    ASIO: US-16x08 ASIO
+```
+
+The ASIO row carries no rate and no channel count — the phase's own
+requirement, and what keeps enumeration from loading every installed driver to
+populate a combo box. Note the endpoint rates in that listing: input 48000 and
+output 48000, i.e. this machine is currently NOT in the endpoint sample-rate
+trap, which is worth knowing when reading any recording measurement taken here.
+
+### A REAL TAKE, through the layer that writes takes
+
+The Phase 3 close-out named this as not gated: "recording an actual take
+through ASIO end to end — the probe reads the ring, it does not drive
+`SAudioRecorder`". Half of that is now closed. `audio_backend_probe take`
+drives **`CaptureBridge`** — the object `SAudioRecorder` drives — so a take
+travels the real path: ASIO callback → device ring → the bridge's drain thread
+→ growing capture pages → the WAV writer thread → a file, with the channel mask
+applied per sink.
+
+**The assertion is an IDENTITY, not a threshold.** A 16-bit mono WAV of N
+frames is exactly `N*2 + 44` bytes, so "every frame the bridge took in reached
+the file" is checkable to the byte:
+
+| Run | framesIn | ring overruns | bytes on disk | `framesIn*2 + 44` |
+|---|---|---|---|---|
+| 4 s | 170240 | **0** | 340524 | 340524 |
+| 3 s | 122368 | **0** | 244780 | 244780 |
+| 3 s | 122112 | **0** | 244268 | 244268 |
+
+`wavLate` was 1536 in each — the WAV thread fell behind and caught up, which is
+the designed behaviour (a slow disk costs `wavLate`, never a ring overrun).
+
+What is deliberately NOT compared is `seconds * rate`: a take is short by the
+driver's ~475 ms start-up ramp, and judging the file against wall-clock seconds
+would fail a perfect recording for a reason that has nothing to do with the
+file.
+
+**Still not covered, and it needs the GUI:** `SRecordPlacement`'s conversion,
+the growing clip, the loop-pass takes and the undo macro. Those are
+`SAudioRecorder`'s and they are backend-agnostic — the device was the new part
+— but "backend-agnostic" is an argument, not a measurement, and it should be
+recorded as one.

@@ -858,7 +858,10 @@ if(SMARAGD_WINDOWS AND ENABLE_ASIO)
         # needs real hardware. It is the only way Phase 2's backend can be
         # verified at all, so it is built whenever the backend is.
         add_executable(audio_backend_probe devices/tools/audio_backend_probe.cc)
-        target_link_libraries(audio_backend_probe PRIVATE tw_devices tw_core)
+        # tw_record too: the `take` subcommand drives CaptureBridge, which is
+        # the object SAudioRecorder drives — so a take goes through the real
+        # write path rather than the probe reading the ring itself.
+        target_link_libraries(audio_backend_probe PRIVATE tw_devices tw_record tw_core)
         # It reaches the module-private AsioDevice to read the gate counter —
         # the only direct evidence of late callbacks.
         target_compile_definitions(audio_backend_probe PRIVATE TW_HAVE_ASIO=1)
