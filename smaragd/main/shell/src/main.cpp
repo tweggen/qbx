@@ -355,6 +355,12 @@ int main( int argc, char *argv[] )
     bool runMode = parser.isSet("run-actions");
     QString scriptPath = testMode ? parser.value("test-case") : parser.value("run-actions");
 
+    // Before any window exists: the ONLY consumer today is
+    // SApplication::notifyAudioOutputUnavailable(), which must never pop a
+    // modal dialog under --test-case (nobody can dismiss it — the qoffscreen
+    // failure mode again, a whole CTest timeout burned at ~0 s of CPU).
+    app.setTestCaseMode( testMode );
+
     // Create main window (only shown in interactive mode)
     SMainWindow *win = new SMainWindow();
     if (!testMode && runMode) {
@@ -458,6 +464,17 @@ int main( int argc, char *argv[] )
             win->resize( 800, 600 );
             win->showMaximized();
         }
+
+        // The audio-interface-unavailable check (see SMainWindow::
+        // checkAudioOutputAtStartup and SApplication::
+        // notifyAudioOutputUnavailable). Interactive-only BY PLACEMENT: this
+        // line is unreachable from the runMode/testMode branch above, which
+        // is what keeps a headless --test-case or a scripted --run-actions
+        // session from ever seeing the dialog it can trigger — belt and
+        // suspenders with SApplication::isTestCaseMode()'s own guard. After
+        // the window is shown, so the probe's dialog (if any) appears on top
+        // of a visible workspace rather than before anything is on screen.
+        win->checkAudioOutputAtStartup();
     }
 
     app.exec();

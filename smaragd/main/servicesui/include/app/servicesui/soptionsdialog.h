@@ -32,7 +32,11 @@ class SOptionsDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit SOptionsDialog( QWidget *parent = nullptr );
+    // initialPage indexes the tree/stack pair below (0 = Mouse navigation,
+    // 1 = Audio, ...); out-of-range falls back to 0. Lets a caller (e.g. the
+    // "audio device unavailable" dialog) open straight to the Audio page
+    // instead of making the user find it.
+    explicit SOptionsDialog( QWidget *parent = nullptr, int initialPage = 0 );
 
     // One line per fact the MIDI page is showing, for headless coverage
     // (the house pattern: build the REAL widget off screen, assert on its
