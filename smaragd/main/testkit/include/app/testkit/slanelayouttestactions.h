@@ -26,6 +26,16 @@
  * <set-lane-view automationTrack="0" automationTarget="self:Volume"
  *                automationSlot="-1" showAutomation="1"/>
  * <set-lane-view clipEnvelopes="1"/>
+ *
+ * `secondWidth` (horizontal zoom, px/second) and `scrollX` (horizontal pan,
+ * project frames) are the ONE exception to "changes nothing that is saved"
+ * above (fix/track-list-polish m): they drive
+ * `SMVActualView::setSecondWidth()`/`setLeftOffset()` directly, the same
+ * calls the zoom buttons and the wheel make, which is exactly what
+ * `saveViewStateToProject()` is hooked to — so setting them here is how a
+ * case puts the view into a state worth a save/load round-trip case.
+ *
+ * <set-lane-view secondWidth="45.0" scrollX="12345"/>
  */
 class SSetLaneViewAction : public SAction {
 public:
@@ -47,6 +57,8 @@ private:
     int    automationSlot_ = -1;
     int    showAutomation_ = -1;      // -1 = untouched
     int    clipEnvelopes_ = -1;       // -1 = untouched
+    double secondWidth_ = 0.0;        // <= 0 = untouched
+    qlonglong scrollX_ = -1;          // < 0 = untouched
 };
 
 /**
@@ -137,6 +149,80 @@ public:
 private:
     QString trackPath_ = QStringLiteral("0");
     bool    collapsed_ = true;
+};
+
+/**
+ * `assert-lane-view` (fix/track-list-polish m) - read back the two pieces of
+ * state that item (m) makes persist across save/load: a track's fold state
+ * (STrack::isCollapsed(), unrelated to any arranger being open) and the
+ * arranger's zoom/pan (SMVActualView::secondWidth_/upperLeftOffset_, which
+ * only exist once an arranger has been built).
+ *
+ * Every attribute is optional and independent, exactly like set-lane-view:
+ * give `trackPath` + `collapsed` to check fold state, `secondWidth` and/or
+ * `scrollX` to check zoom/pan, any combination in one call.
+ *
+ * `secondWidth` compares to a tolerance (it is a double, px/second);
+ * `scrollX` compares EXACTLY (project frames, an integer quantity).
+ *
+ * XML format:
+ * <assert-lane-view trackPath="0" collapsed="1"/>
+ * <assert-lane-view secondWidth="45.0" scrollX="12345"/>
+ */
+class SAssertLaneViewAction : public SAction {
+public:
+    SAssertLaneViewAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-lane-view"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString trackPath_;
+    int     expectCollapsed_ = -1;      // -1 = not checked
+    double  expectSecondWidth_ = -1.0;  // < 0 = not checked
+    qlonglong expectScrollX_ = -1;      // < 0 = not checked
+};
+
+/**
+ * `assert-scroll-range` (fix/track-list-polish l) - the NUMERIC gate on the
+ * scroll-padding fix: after scrolling the vertical scrollbar to its OWN
+ * maximum (the number a real mouse wheel is capped by, via
+ * `SMainWindow::arrangerDescribeScrollRange` / `tkVerticalScrollMaximum`),
+ * is the true LAST row now fully visible in the canvas?
+ *
+ * Deliberately not `set-lane-view topRow=<rowCount-1>`: that call clamps only
+ * to `rowCount()-1` and bypasses the scrollbar's `maximum()` entirely, so it
+ * cannot see the bug this fixes (a `maximum()` computed one row too low,
+ * which without the fix leaves the last row permanently clipped no matter
+ * how far a wheel scrolls).
+ *
+ * `expectFullyVisible` = "" (not checked; "true"/"false" otherwise),
+ * `expectMaxAtLeast` = "-1" (< 0 = not checked; >= 0 asserts
+ * `maxScroll >= N` — there IS scroll room, which is what distinguishes the
+ * fix from simply having nothing to scroll for), `expectMaxAtMost` = "-1"
+ * (< 0 = not checked; the negative control — a project whose content
+ * already fits the viewport must not gain unwanted scroll room, e.g.
+ * `expectMaxAtMost="0"`).
+ *
+ * XML format:
+ * <assert-scroll-range expectFullyVisible="true" expectMaxAtLeast="1"/>
+ * <assert-scroll-range expectMaxAtMost="0"/>
+ */
+class SAssertScrollRangeAction : public SAction {
+public:
+    SAssertScrollRangeAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-scroll-range"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString expectFullyVisible_;   // "" = not checked
+    int     expectMaxAtLeast_ = -1;
+    int     expectMaxAtMost_ = -1;
 };
 
 #endif

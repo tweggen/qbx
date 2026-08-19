@@ -1887,6 +1887,35 @@ void SMVActualView::loadRangeFromProject()
     }
 }
 
+// --- zoom / horizontal pan persistence (fix/track-list-polish m) ----------
+// Same shape as saveRangeToProject()/loadRangeFromProject() just above: a
+// generic project property (SProjectProps), read once at construction
+// (the view is rebuilt per project) and written on every change so a save
+// always sees the latest value.
+
+void SMVActualView::saveViewStateToProject()
+{
+    if( !smv_.model_ ) return;
+    SProject &p = smv_.model_->getProject();
+    p.setProp( SProjectProps::TimelineZoomSecondWidth, secondWidth_ );
+    p.setProp( SProjectProps::TimelineScrollX, (qulonglong) upperLeftOffset_ );
+}
+
+void SMVActualView::loadViewStateFromProject()
+{
+    SProject &p = smv_.model_->getProject();
+    secondWidth_ = p.prop( SProjectProps::TimelineZoomSecondWidth, 30.0 ).toDouble();
+    if( secondWidth_ < 0.000001 ) secondWidth_ = 0.000001;   // setSecondWidth's own clamp
+    upperLeftOffset_ = (offset_t) p.prop(
+        SProjectProps::TimelineScrollX, (qulonglong) 0 ).toULongLong();
+    // Keep upperLeftX_ (pixel space) consistent with upperLeftOffset_ (frame
+    // space) exactly the way setSecondWidth() does — the same formula, so a
+    // restored zoom+pan pair maps to the same pixel origin a fresh
+    // setSecondWidth(secondWidth_) would have produced.
+    int srate = p.getSRate();
+    upperLeftX_ = (int) ( ( (double) upperLeftOffset_ ) / srate * secondWidth_ );
+}
+
 void SMVActualView::drawRange( QPainter &p, const QRect &myRect )
 {
     if( !rangeValid_ ) return;
@@ -2994,7 +3023,7 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
         // asks the same question (proposal 39 M3.1) and two spellings of "is
         // this a folder" is one more than there should be.
         bool kids = tk->hasChildTracks();
-        bool col = collapsed_.contains( tk );
+        bool col = tk->isCollapsed();
         rows_.append( STrackRow{ tk, lk, container, depth, kids, col } );
         // Take lanes directly below the track's composite lane.
         if( takesExpanded_.contains( tk ) ) {
@@ -3194,8 +3223,10 @@ int SStdMixerView::rowIndexOfTrack( const STrack *t ) const
 void SStdMixerView::toggleTrackCollapsed( STrack *t )
 {
     if( !t ) return;
-    if( collapsed_.contains( t ) ) collapsed_.remove( t );
-    else                           collapsed_.insert( t );
+    // Fold state lives on the track itself now (fix/track-list-polish m), so
+    // this call is a straight flip-and-rebuild rather than a set membership
+    // toggle — and it is what makes the flip visible on the next save.
+    t->setCollapsed( !t->isCollapsed() );
     refreshTrackTree();
 }
 
@@ -3400,7 +3431,7 @@ void SStdMixerView::nTracksChanged()
         if( currValue<0 ) currValue = 0;
         trackSliderMoved( currValue );
     }
-    qScrollVert_->setMaximum( qMax( 0, (int) newNTracks-pageStep ) );
+    qScrollVert_->setMaximum( verticalScrollMaximum( pageStep ) );
 }
 
 void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
@@ -3578,6 +3609,11 @@ void SStdMixerView::tkSetTopRow( int row )
     qContent_->setTopOffset( row );
 }
 
+int SStdMixerView::tkVerticalScrollMaximum() const
+{
+    return qScrollVert_->maximum();
+}
+
 QString SStdMixerView::tkCheckLaneAlignment() const
 {
     // 1. The row model itself: heights present, prefix sums consistent, and
@@ -3680,7 +3716,18 @@ void SStdMixerView::recalcPageStep()
     // "how many rows fit" depends on which rows are on screen.
     int vis = visibleRowCountFrom( (int) qContent_->getTopRow() );
     qScrollVert_->setPageStep( vis );
-    qScrollVert_->setMaximum( qMax( 0, rowCount()-vis ) );
+    qScrollVert_->setMaximum( verticalScrollMaximum( vis ) );
+}
+
+// See the header for why this exists (fix/track-list-polish l): a single
+// definition of "how far may qScrollVert_ go" shared by recalcPageStep() and
+// nTracksChanged(), so a track add/remove cannot silently undo the padding a
+// resize just computed.
+int SStdMixerView::verticalScrollMaximum( int vis ) const
+{
+    const int availPx = qContent_ ? qContent_->height() - SMV_TIME_RULER_HEIGHT : 0;
+    const bool overflow = totalRowsHeight() > availPx;
+    return qMax( 0, rowCount() - vis + ( overflow ? 1 : 0 ) );
 }
 
 void SStdMixerView::viewResized()
@@ -3988,9 +4035,14 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     setAcceptDrops(true);
 
     trackHeight_ = 100;      // BASE lane height; per-track scales ride on it
-    secondWidth_ = 30.;
-    upperLeftX_ = upperLeftY_ = 0;
+    upperLeftY_ = 0;
     topRow_ = 0;
+    // Zoom / horizontal pan (fix/track-list-polish m): secondWidth_,
+    // upperLeftOffset_ and upperLeftX_ used to be hard-coded here (30., 0, 0).
+    // loadViewStateFromProject() sets them from what a previous save left in
+    // the project's property dict, falling back to those same numbers when
+    // there is nothing saved (a fresh project, or one written before this).
+    loadViewStateFromProject();
 
     QObject::connect( smv_.model_, SIGNAL( trackInserted( int, STrack & ) ),
                       SLOT( update() ) );
@@ -4016,6 +4068,17 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     QObject::connect( &smv_.model_->getProject(),
                       SIGNAL( captureRevalidated() ),
                       this, SLOT( update() ) );
+
+    // Persist zoom / horizontal pan across save/load (fix/track-list-polish
+    // m). Every path that changes them — the wheel, the zoom buttons, the
+    // scrollbar — funnels through setSecondWidth()/setLeftOffset(), so
+    // hooking their signals here covers all of them without hunting down
+    // each call site, the same way saveRangeToProject() is called from the
+    // one place a range drag ends.
+    QObject::connect( this, &SMVActualView::secondWidthChanged,
+                      this, [this]( double ) { saveViewStateToProject(); } );
+    QObject::connect( this, &SMVActualView::leftOffsetChanged,
+                      this, [this]( offset_t ) { saveViewStateToProject(); } );
 
     // Mouse-wheel navigation config: cache now and refresh whenever the user
     // changes it in the options dialog.

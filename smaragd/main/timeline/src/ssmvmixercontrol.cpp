@@ -641,18 +641,31 @@ SSMVMixerControl::SSMVMixerControl(
     QFont btnFont = QApplication::font();
     btnFont.setPointSize( 8 );
     btnFont.setBold( true );
+    // The DESELECTED state of these buttons sets no background of its own
+    // (it keeps the plain native button face), so it used to leave the
+    // glyph's colour to whatever the platform/theme default happened to be —
+    // low contrast against that face in practice. A `QPushButton { color:… }`
+    // base rule fixes only the glyph; a `:checked` rule is more specific in
+    // Qt's stylesheet cascade and still wins whenever the button IS engaged,
+    // so the active-state background/colour pairs below are unchanged
+    // (fix/track-list-polish n).
+    static const QString INACTIVE_GLYPH = QStringLiteral(
+        "QPushButton { color:#303030; }" );
+
     qMute_ = new QPushButton( "M", this );
     qMute_->setCheckable( true );
     qMute_->setFixedSize( 20, 20 );
     qMute_->setFont( btnFont );
     qMute_->setToolTip( "Mute" );
-    qMute_->setStyleSheet( "QPushButton:checked { background:#d04040; color:white; }" );
+    qMute_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#d04040; color:white; }" );
     qSolo_ = new QPushButton( "S", this );
     qSolo_->setCheckable( true );
     qSolo_->setFixedSize( 20, 20 );
     qSolo_->setFont( btnFont );
     qSolo_->setToolTip( "Solo" );
-    qSolo_->setStyleSheet( "QPushButton:checked { background:#e0c020; color:black; }" );
+    qSolo_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#e0c020; color:black; }" );
 
     qArm_ = new QPushButton( "R", this );
     qArm_->setCheckable( true );
@@ -660,7 +673,8 @@ SSMVMixerControl::SSMVMixerControl(
     qArm_->setFont( btnFont );
     qArm_->setToolTip( "Arm for Recording / Monitoring\n"
                        "(Right-click for input, channels and monitor mode)" );
-    qArm_->setStyleSheet( "QPushButton:checked { background:#c04040; color:white; }" );
+    qArm_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#c04040; color:white; }" );
     qArm_->setContextMenuPolicy( Qt::CustomContextMenu );
 
     qTakes_ = new QPushButton( "T", this );
@@ -668,14 +682,16 @@ SSMVMixerControl::SSMVMixerControl(
     qTakes_->setFixedSize( 20, 20 );
     qTakes_->setFont( btnFont );
     qTakes_->setToolTip( "Show take lanes (takes stack up when you record over a clip)" );
-    qTakes_->setStyleSheet( "QPushButton:checked { background:#4080c0; color:white; }" );
+    qTakes_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#4080c0; color:white; }" );
 
     qGroup_ = new QPushButton( "G", this );
     qGroup_->setCheckable( true );
     qGroup_->setFixedSize( 20, 20 );
     qGroup_->setFont( btnFont );
     qGroup_->setToolTip( "Edit group: lock this track (and its subtree) together" );
-    qGroup_->setStyleSheet( "QPushButton:checked { background:#40a060; color:white; }" );
+    qGroup_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#40a060; color:white; }" );
 
     // Proposal 37 6.1 - the second pair. Both are FULL-DENSITY ONLY and both
     // additionally require the button column to still fit vertically: five

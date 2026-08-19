@@ -199,15 +199,23 @@ Invariants:
      clip-body gesture (move, slip, duplicate, stretch) exactly as it was.
 
 18. **There is ONE pruning walk for EVERY per-track UI-state set**
-   (`SStdMixerView::pruneUiState`, proposal 30 §E.5, proposal 37 P6). The fold
-   set, the take-lane set, the per-track height scales and the shown-automation
-   set are all keyed by `STrack*`, and a removed track otherwise leaves a
-   dangling key for a later track allocated at the same address to inherit —
-   a new lane that mysteriously remembers a deleted one's state. The walk is
-   over the MODEL, not over `rows_`: a collapsed folder's children are alive
-   and have no row, and pruning against the rows would forget their state on
-   every fold. It runs from `rebuildRows()`, which is the one funnel every
+   (`SStdMixerView::pruneUiState`, proposal 30 §E.5, proposal 37 P6). The
+   take-lane set, the per-track height scales and the shown-automation set are
+   all keyed by `STrack*`, and a removed track otherwise leaves a dangling key
+   for a later track allocated at the same address to inherit — a new lane
+   that mysteriously remembers a deleted one's state. The walk is over the
+   MODEL, not over `rows_`: a collapsed folder's children are alive and have
+   no row, and pruning against the rows would forget their state on every
+   fold. It runs from `rebuildRows()`, which is the one funnel every
    structural change already passes through.
+
+   The FOLD set used to be pruned here too, and isn't any more
+   (fix/track-list-polish m): fold state moved onto `STrack` itself
+   (`STrack::isCollapsed()`/`setCollapsed()`, a plain serialized attribute,
+   written only when true) so it can be saved with the project. Being an
+   ordinary object attribute it dies with the object automatically — no
+   dangling key is possible — and it gets a save/load round trip for free
+   through the path every other track attribute already takes.
 
 19. **The head's "A" button governs EVERY automation lane the track owns** —
    its own `self:` lanes and its plugin slots' `param:` lanes alike, in one
@@ -245,7 +253,14 @@ Invariants:
      (proposal 33 M3). The app's own slider press/release is the punch-in.
 
 How to test: lane_alignment.qxa (lane geometry + head placement under zoom,
-scroll, per-track heights and take lanes), test_track_column_expansion.qxa,
+scroll, per-track heights and take lanes), track_list_scroll_padding.qxa
+(fix/track-list-polish l — the vertical scroll-range padding, via
+assert-scroll-range's numeric gate: scrolling to the scrollbar's own
+maximum() brings the true last row fully into view when content overflows
+the viewport, and adds no scroll room when it already fits),
+track_list_view_roundtrip.qxa (fix/track-list-polish m — fold state and
+zoom/pan survive a save/load round trip, via assert-lane-view),
+test_track_column_expansion.qxa,
 test_track_width_dragging.qxa, clip_properties_actions.qxa (the property
 verbs the panel submits), screenshot actions in the render cases;
 meter_levels.qxa + meter_postfader.qxa (the meter's levels, its miss path and

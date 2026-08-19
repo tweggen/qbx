@@ -57,9 +57,25 @@ public:
     bool arrangerSetLaneView( int laneScaleRow, double laneScale,
                               int toggleTakesRow, int baseTrackHeight,
                               int topRow );
+    // TEST ENTRY POINT (fix/track-list-polish m): drive the horizontal zoom
+    // (`SMVActualView::setSecondWidth`) and/or pan (`setLeftOffset`, project
+    // frames) directly — the same calls the zoom buttons and the wheel make,
+    // which is exactly what triggers a save (SMVActualView's
+    // secondWidthChanged/leftOffsetChanged -> saveViewStateToProject()).
+    // `secondWidth` <= 0 or `scrollX` < 0 leaves that one untouched.
+    bool arrangerSetZoomPan( double secondWidth, qlonglong scrollX );
     // "" when aligned, else a description of the first mismatch. A null
     // QString with no arranger at all is reported as an error by the caller.
     QString arrangerLaneAlignment();
+
+    // TEST ENTRY POINT (fix/track-list-polish l): scroll the vertical
+    // scrollbar to its OWN maximum (the number a real mouse wheel is capped
+    // by — see SStdMixerView::tkVerticalScrollMaximum()'s comment on why
+    // tkSetTopRow(rowCount()-1) would not test this) and report
+    // "maxScroll=<int>|lastRowBottom=<int>|canvasHeight=<int>|fullyVisible=
+    // true|false" — the numeric form of "does the padding let the true last
+    // track end up fully visible". "" when there is no arranger or no rows.
+    QString arrangerDescribeScrollRange();
 
     // TEST ENTRY POINT: build the REAL track head at `headHeight` and return its
     // meter's SLevelMeter::describe() string. Goes through the shell because the
@@ -157,6 +173,16 @@ public:
     // hang off that one call, and a second spelling of "collapsed" would be
     // free to drift from it. False when the path names no lane.
     bool setTrackCollapsed( const QString &trackPath, bool collapsed );
+
+    // TEST ENTRY POINT (fix/track-list-polish m): read fold state back
+    // without needing the arranger to exist (STrack::isCollapsed() directly),
+    // so a save/load round-trip case can check it before ever opening a view.
+    bool isTrackCollapsed( const QString &trackPath );
+    // TEST ENTRY POINT (fix/track-list-polish m): the arranger's zoom/pan as
+    // "secondWidth=<double>|scrollX=<qulonglong frames>", the same two values
+    // SMVActualView::saveViewStateToProject() persists. "" when there is no
+    // arranger.
+    QString arrangerDescribeView();
 
     // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
     // `headHeight` and return SSMVMixerControl::describeHead() — the density

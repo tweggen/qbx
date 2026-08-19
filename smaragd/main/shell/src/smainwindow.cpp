@@ -2649,6 +2649,29 @@ bool SMainWindow::setTrackCollapsed( const QString &trackPath, bool collapsed )
     return true;
 }
 
+// TEST ENTRY POINT (fix/track-list-polish m): read fold state back, the
+// SMVMixerView-side of the same round trip setTrackCollapsed drives. Reads
+// STrack::isCollapsed() directly rather than v->isTrackCollapsed(track) —
+// same value, but this also works with no arranger at all (a loaded project
+// before its view is ever built), which a save/load-only case may want.
+bool SMainWindow::isTrackCollapsed( const QString &trackPath )
+{
+    STrack *track = trackAtPath_( trackPath );
+    return track && track->isCollapsed();
+}
+
+// TEST ENTRY POINT (fix/track-list-polish m): the arranger's zoom/pan, the
+// same two numbers loadViewStateFromProject()/saveViewStateToProject() round
+// trip through the project. "" when there is no arranger.
+QString SMainWindow::arrangerDescribeView()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return QString();
+    return QStringLiteral( "secondWidth=%1|scrollX=%2" )
+        .arg( v->contentView()->getSecondWidth(), 0, 'f', 6 )
+        .arg( (qulonglong) v->contentView()->getLeftOffset() );
+}
+
 // --- proposal 37 P6 test seams -------------------------------------------
 
 bool SMainWindow::grabTrackHead( const QString &path, const QString &trackPath,
@@ -2897,6 +2920,33 @@ QString SMainWindow::arrangerLaneAlignment()
     SStdMixerView *v = ensureArranger_();
     if( !v ) return QStringLiteral( "no arranger view" );
     return v->tkCheckLaneAlignment();
+}
+
+bool SMainWindow::arrangerSetZoomPan( double secondWidth, qlonglong scrollX )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return false;
+    if( secondWidth > 0.0 ) v->contentView()->setSecondWidth( secondWidth );
+    if( scrollX >= 0 )      v->contentView()->setLeftOffset( (offset_t) scrollX );
+    return true;
+}
+
+QString SMainWindow::arrangerDescribeScrollRange()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() || v->rowCount() <= 0 ) return QString();
+    const int maxScroll = v->tkVerticalScrollMaximum();
+    // Scroll exactly as far as the real scrollbar's own maximum allows —
+    // NOT to rowCount()-1, which tkSetTopRow() would happily accept but which
+    // is not what a mouse wheel can actually reach (see the header comment on
+    // tkVerticalScrollMaximum()).
+    v->tkSetTopRow( maxScroll );
+    const int lastRow = v->rowCount() - 1;
+    const int bottom = v->contentView()->laneTop( lastRow ) + v->rowHeight( lastRow );
+    const int canvasHeight = v->contentView()->height();
+    return QStringLiteral( "maxScroll=%1|lastRowBottom=%2|canvasHeight=%3|fullyVisible=%4" )
+        .arg( maxScroll ).arg( bottom ).arg( canvasHeight )
+        .arg( bottom <= canvasHeight ? "true" : "false" );
 }
 
 void SMainWindow::groupTrack()
