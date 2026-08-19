@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  add-track's generated default name disambiguates by varying the END of the
+  name (the noun) before the BEGINNING (the adjective) — the reverse of what
+  it used to do. Reason: the track-control column is narrow, and when it
+  elides a long name it is the tail that gets cut, so a run of tracks whose
+  names only ever differed at the FRONT could read as one repeated name on
+  screen once the differing part is the part that got truncated.
+
+  generateTrackName()'s counter is a function-local static, so it starts at 0
+  the first time it runs in this process. This script is the first thing in
+  the process to call add-track (a "new" project starts with ZERO tracks —
+  see mute_silences_track.qxa), so the first two generated names are a closed
+  form: adjective index (n / nNouns) % nAdjectives, noun index n % nNouns.
+  With n=0 and n=1 both landing on adjective index 0 ("Grumpy") and noun
+  indices 0/1 ("Narwhal"/"Waffle"), the two tracks are "GrumpyNarwhal" and
+  "GrumpyWaffle" — same front, different end. That is the whole behavioural
+  change, made assertable without hard-coding every adjective/noun in the
+  pool: front stays equal (prefix), end differs (differsFrom), and the whole
+  string is pinned exactly as a belt-and-suspenders check against the pool
+  itself drifting silently.
+-->
+<SActionScript version="1" name="track_name_disambiguation">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Exact names: the closed form for the first two calls into a fresh
+         process's generateTrackName(). If this ever goes stale because the
+         adjective/noun pools changed, the prefix/differsFrom checks below
+         still gate the behaviour that matters. -->
+    <assert-track-name trackPath="0" name="GrumpyNarwhal"/>
+    <assert-track-name trackPath="1" name="GrumpyWaffle"/>
+
+    <!-- The behavioural claim, independent of the exact word list: the FRONT
+         of consecutively-created names stays the same for far longer than the
+         END does, so two tracks created back-to-back share a prefix and
+         differ only in what a front-truncating elide would keep. -->
+    <assert-track-name trackPath="0" prefix="Grumpy" differsFrom="1"/>
+    <assert-track-name trackPath="1" prefix="Grumpy" differsFrom="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -13,6 +13,15 @@
 // into the adjective bag. A process-wide counter walks distinct combinations so
 // consecutive new tracks don't collide; after the pool wraps, a number is
 // appended.
+//
+// The counter varies the NOUN (the end of the name) fastest and the ADJECTIVE
+// (the front) only once every nN names, deliberately — the track-control
+// column is narrow, and when it elides a long name it keeps the front and
+// drops the tail, or vice versa depending on the platform style, but either
+// way a run of consecutive tracks that only ever changed at the front reads
+// as one repeated name once the differing part is the part that gets cut.
+// Disambiguating at the END first keeps consecutively-created tracks visually
+// distinct for far longer before ever touching the front of the name.
 static QString generateTrackName()
 {
     static const char *adjs[] = {
@@ -32,7 +41,8 @@ static QString generateTrackName()
     const int nN = (int)(sizeof(nouns)/sizeof(nouns[0]));
     static int counter = 0;
     int n = counter++;
-    QString name = QString(adjs[n % nA]) + nouns[(n / nA) % nN];
+    // Noun (end) varies on every call; adjective (front) only every nN calls.
+    QString name = QString(adjs[(n / nN) % nA]) + nouns[n % nN];
     int cycle = n / (nA * nN);
     if (cycle > 0) name += QString::number(cycle + 1);   // ...Otter2 after wrap
     return name;
