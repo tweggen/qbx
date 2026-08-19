@@ -241,6 +241,113 @@ int twSampleSource::loadWav()
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// A libsndfile virtual-IO view of a file with any leading ID3v2 tag HIDDEN.
+//
+// WHY THIS EXISTS, because 'just call sf_open' is the obvious code and it hangs
+// the whole application. libsndfile hands an MP3 stream to mpg123, which parses
+// the ID3v2 tag itself; on Windows/MinGW mpg123's own config.h does
+//
+//     #define strcasecmp _stricmp    // ports/cmake/src/config.cmake.h.in:167
+//
+// and mingw-w64's <string.h> supplies
+//
+//     __CRT_INLINE int strcasecmp(a, b) { return _stricmp(a, b); }
+//
+// so that inline body becomes _stricmp calling ITSELF. __CRT_INLINE is
+// gnu_inline, so at -O0/-O1 GCC emits a call to the real CRT symbol and nothing
+// is wrong -- but mpg123 ships built at -O3, where GCC inlines the recursive
+// body and folds the tail call into a literal self-jump. Every id3.c frame
+// handler that compares a tag string case-insensitively (COMM/COM, TXXX/TXX and
+// RVA2 -- but NOT USLT, APIC or plain text frames) therefore spins forever
+// inside INT123_parse_new_id3, on whatever thread called sf_open. That thread is
+// the UI thread (twWavInput's ctor decodes synchronously), so the window wedges
+// with no dialog, no crash and no CPU-idle wait to notice.
+//
+// The fix has to be on OUR side of the seam: libsndfile exposes no way to skip
+// tag parsing, and rebuilding mpg123 would bind every developer and every build
+// to a patched dependency. Presenting the stream with the tag already gone means
+// mpg123 never sees a frame to trip over. Skipping is safe for every format we
+// import: nothing but a genuine ID3v2 tag can begin with a valid ID3v2 header,
+// and a FLAC/AIFF carrying one prepended is exactly the case that also wants it
+// gone. What is lost is iTunes' iTunSMPB gapless padding; mpg123 takes gapless
+// from the Xing/LAME header inside the first AUDIO frame, which survives.
+//
+// Using QFile rather than the platform's own handle also retires the
+// #ifdef _WIN32 sf_wchar_open split: QFile speaks UTF-16 on Windows natively, so
+// a non-ASCII sample path now decodes through one code path everywhere.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct SndFileView {
+    QFile      file;
+    sf_count_t base = 0;   // offset of the first byte libsndfile may see
+    sf_count_t len  = 0;   // bytes from base to EOF
+    sf_count_t pos  = 0;   // cursor, relative to base
+
+    explicit SndFileView( const QString &path ) : file( path ) {}
+};
+
+sf_count_t sfvGetFilelen( void *user )
+{
+    return static_cast<SndFileView *>( user )->len;
+}
+
+sf_count_t sfvSeek( sf_count_t offset, int whence, void *user )
+{
+    SndFileView *v = static_cast<SndFileView *>( user );
+    sf_count_t p = ( whence == SEEK_SET ) ? offset
+                 : ( whence == SEEK_CUR ) ? v->pos + offset
+                                          : v->len + offset;
+    if( p < 0 )      p = 0;
+    if( p > v->len ) p = v->len;
+    v->pos = p;
+    v->file.seek( v->base + p );
+    return v->pos;
+}
+
+sf_count_t sfvRead( void *ptr, sf_count_t count, void *user )
+{
+    SndFileView *v = static_cast<SndFileView *>( user );
+    if( count > v->len - v->pos ) count = v->len - v->pos;
+    if( count <= 0 ) return 0;
+    v->file.seek( v->base + v->pos );
+    const qint64 got = v->file.read( static_cast<char *>( ptr ), count );
+    if( got <= 0 ) return 0;
+    v->pos += got;
+    return got;
+}
+
+sf_count_t sfvTell( void *user )
+{
+    return static_cast<SndFileView *>( user )->pos;
+}
+
+/**
+ * Total byte size of a leading ID3v2 tag, or 0 when there is none.
+ *
+ * Header: 'ID3', version, revision, flags, then FOUR SYNCSAFE size bytes (7
+ * bits each) covering the tag body only. Bit 4 of flags means a 10-byte footer
+ * follows. Version and size are validated the way the spec requires a reader to
+ * validate them, so a file that merely happens to start with those three
+ * letters is left alone rather than silently truncated.
+ */
+qint64 leadingId3v2Size( QFile &f )
+{
+    unsigned char h[ 10 ];
+    if( !f.seek( 0 ) ) return 0;
+    if( f.read( reinterpret_cast<char *>( h ), 10 ) != 10 ) return 0;
+    if( h[ 0 ] != 'I' || h[ 1 ] != 'D' || h[ 2 ] != '3' ) return 0;
+    if( h[ 3 ] == 0xff || h[ 4 ] == 0xff ) return 0;                 // bogus version
+    if( ( h[ 6 ] | h[ 7 ] | h[ 8 ] | h[ 9 ] ) & 0x80 ) return 0;     // not syncsafe
+    const qint64 body = ( (qint64) h[ 6 ] << 21 ) | ( (qint64) h[ 7 ] << 14 )
+                      | ( (qint64) h[ 8 ] <<  7 ) |   (qint64) h[ 9 ];
+    const qint64 total = 10 + body + ( ( h[ 5 ] & 0x10 ) ? 10 : 0 );  // footer flag
+    return ( total > 0 && total < f.size() ) ? total : 0;
+}
+
+}   // namespace
+
 // General-purpose importer: decode any libsndfile-readable file (MP3, FLAC,
 // AIFF, Ogg/Opus, and non-16-bit WAV) to the same resident planar-Float32 layout
 // loadWav() produces, so every downstream reader is format-agnostic. MP3 read
@@ -250,15 +357,34 @@ int twSampleSource::loadSndfile()
     SF_INFO info;
     memset( &info, 0, sizeof( info ) );   // format must be zero before an SFM_READ open
 
-#ifdef _WIN32
-    // libsndfile can't open a UTF-8 path on Windows; hand it the wide spelling
-    // so non-ASCII sample paths decode.
-    const std::wstring wpath = fileName_.toStdWString();
-    SNDFILE *snd = sf_wchar_open( wpath.c_str(), SFM_READ, &info );
-#else
-    const QByteArray path8 = fileName_.toUtf8();
-    SNDFILE *snd = sf_open( path8.constData(), SFM_READ, &info );
-#endif
+    // The view must outlive the SNDFILE: libsndfile calls back into it for
+    // every read and seek, including from inside sf_close.
+    SndFileView view( fileName_ );
+    if( !view.file.open( QIODevice::ReadOnly ) ) {
+        qWarning( "twSampleSource: cannot open %s: %s.",
+                  (const char *) fileName_.toUtf8().constData(),
+                  (const char *) view.file.errorString().toUtf8().constData() );
+        return -1;
+    }
+    view.base = leadingId3v2Size( view.file );
+    view.len  = view.file.size() - view.base;
+    view.pos  = 0;
+    view.file.seek( view.base );
+    if( view.base > 0 ) {
+        TW_LOGD( "sources", "twSampleSource: hiding %lld bytes of leading ID3v2 tag in %s.",
+                 (long long) view.base,
+                 (const char *) fileName_.toUtf8().constData() );
+    }
+
+    SF_VIRTUAL_IO vio;
+    memset( &vio, 0, sizeof( vio ) );
+    vio.get_filelen = sfvGetFilelen;
+    vio.seek        = sfvSeek;
+    vio.read        = sfvRead;
+    vio.write       = nullptr;              // SFM_READ only
+    vio.tell        = sfvTell;
+
+    SNDFILE *snd = sf_open_virtual( &vio, SFM_READ, &info, &view );
     if( !snd ) {
         qWarning( "twSampleSource: libsndfile cannot open \"%s\": %s.\n",
                   (const char *) fileName_.toUtf8().constData(), sf_strerror( nullptr ) );

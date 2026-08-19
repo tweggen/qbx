@@ -170,9 +170,40 @@ record_bridge_test` (invariant 13 — odd-sized appends across chunk boundaries,
 the short read at the frontier, the masked interleaved read, the index-exhausted
 refusal and the one-copy handover); grain_*.qxa for the audible
 grain path; qxa.render_split_slip_offset for offset semantics end-to-end;
-qxa.mp3_sample_import for the libsndfile decode path (RMS discriminator over a
+qxa.mp3_sample_import and qxa.mp3_sample_import_id3 (invariant 14 — the same
+audio and the same RMS band with and without a 147-byte ID3v2.3 tag carrying
+COMM/TXXX/RVA2; WITHOUT the fix the tagged one does not fail, it TIMES OUT)
+for the libsndfile decode path (RMS discriminator over a
 committed MP3 fixture — never a byte-cmp, since mpg123 decode is not
 reproducible across versions/platforms).
+
+14. **THE LIBSNDFILE OPEN GOES THROUGH A VIRTUAL-IO VIEW THAT HIDES ANY
+    LEADING ID3v2 TAG, and calling `sf_open` directly HANGS THE APPLICATION
+    on Windows.** libsndfile hands an MP3 stream to mpg123, which parses the
+    tag itself. mpg123's own `ports/cmake/src/config.cmake.h.in:167` does
+    `#define strcasecmp _stricmp`, and mingw-w64's `<string.h>` supplies
+    `__CRT_INLINE int strcasecmp(a,b){ return _stricmp(a,b); }` — so that
+    inline body becomes `_stricmp` calling ITSELF. `__CRT_INLINE` is
+    `gnu_inline`, so at -O0/-O1 GCC calls the real CRT symbol and nothing is
+    wrong; mpg123 ships built at **-O3**, where GCC inlines the recursive body
+    and folds the tail call into a literal **self-jump**. Every `id3.c` handler
+    that compares a tag string case-insensitively — **COMM/COM, TXXX/TXX and
+    RVA2, but NOT USLT, APIC or plain text frames** — then spins forever inside
+    `INT123_parse_new_id3`, on the thread that called `sf_open`. That thread is
+    the **UI thread** (`twWavInput`'s ctor decodes synchronously), so the
+    symptom is a wedged window with no dialog and no crash. Measured: 69% of
+    the readable MP3s in one real library carry one of those frames.
+
+    The skip is safe for every format we import — nothing but a genuine ID3v2
+    tag can begin with a valid ID3v2 header, and a FLAC/AIFF carrying one
+    prepended is exactly the case that also wants it gone. What is lost is
+    iTunes' `iTunSMPB` gapless padding; mpg123 takes gapless from the Xing/LAME
+    header inside the first AUDIO frame, which survives. The view also retires
+    the `#ifdef _WIN32` `sf_wchar_open` split: QFile speaks UTF-16 on Windows,
+    so one code path now serves non-ASCII sample paths everywhere.
+
+    **The view must outlive the `SNDFILE`** — libsndfile calls back into it for
+    every read and seek, including from inside `sf_close`.
 
 Known debt: the hand-rolled fast path is 16-bit-PCM-WAV only and scans the
 first 8 KiB for the data chunk (naive RIFF walk) — everything else, including
