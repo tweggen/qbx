@@ -15,7 +15,6 @@
 
 class SProject;
 class QAction;
-class QActionGroup;
 class QLabel;
 class QToolBar;
 class SRecordingProgressDialog;
@@ -390,7 +389,6 @@ protected slots:
     void onRecordTriggered();
     void onRecordingFinished();
 
-    void audioDeviceSelected( QAction * );
     void runTestSequence();
     void runVolumeBurst();
     void runTestRender();
@@ -435,7 +433,6 @@ private:
     void buildStatusBar();
     void newProject();
     void closeProject();
-    void buildAudioMenu();
     void buildPaletteToolbar();
 
     void createDocksToolbars();
@@ -500,9 +497,7 @@ private:
 
     QMenu *qFileMenu_;
     QMenu *qRecentMenu_;        // File -> Open Recent submenu
-    QMenu *qAudioMenu_;
     QMenu *qTestMenu_;
-    QActionGroup *deviceGroup_;
 
     QAction *actStop_, *actPlay_, *actRecord_, *actGotoStart_;
     // Shift+Space (item o) and End (item j) — window-wide shortcuts with no

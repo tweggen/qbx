@@ -5,7 +5,6 @@
 #include <QDebug>
 #include <qmessagebox.h>
 #include <qaction.h>
-#include <QActionGroup>
 #include <QCursor>
 #include <QMenu>
 #include <qtoolbar.h>
@@ -1168,8 +1167,6 @@ SMainWindow::SMainWindow()
                          this, SLOT( showOptionsDialog() ) );
     menuBar()->addMenu( editMenu );
 
-    buildAudioMenu();
-
     buildPaletteToolbar();
 
     qTestMenu_ = new QMenu( "&Test", this );
@@ -1324,7 +1321,7 @@ SMainWindow::SMainWindow()
     QAction *actMedia = qDockMediaBrowser_->toggleViewAction();
     actMedia->setText( tr( "&Media browser" ) );
     viewMenu->addAction( actMedia );
-    menuBar()->insertMenu( qAudioMenu_->menuAction(), viewMenu );
+    menuBar()->insertMenu( qTestMenu_->menuAction(), viewMenu );
 
     // F2 (default) opens the clip properties panel. There is no keybinding UI,
     // so the sequence is read once from SSettings — making it a DEFAULT rather
@@ -1398,56 +1395,6 @@ void SMainWindow::onStatusModeChanged( const QString &mode )
 {
     if( !modeLabel_ ) return;
     modeLabel_->setText( mode );
-}
-
-void SMainWindow::buildAudioMenu()
-{
-    qAudioMenu_ = new QMenu( "&Audio", this );
-    QMenu *devMenu = qAudioMenu_->addMenu( "Output &Device" );
-
-    deviceGroup_ = new QActionGroup( this );
-    deviceGroup_->setExclusive( true );
-
-    auto spk = SApplication::app().getSpeaker();
-    const std::string current = spk->outputDevice();
-    std::vector<audio::AudioDeviceInfo> devs = spk->outputDevices();
-
-    auto addDevice = [&]( const QString &label, const QString &id ) {
-        QAction *a = devMenu->addAction( label );
-        a->setCheckable( true );
-        a->setData( id );
-        a->setChecked( id.toStdString() == current );
-        deviceGroup_->addAction( a );
-    };
-
-    if( devs.empty() ) {
-        // Backend offers no enumeration (e.g. NullBackend): just the default.
-        addDevice( "System default", "default" );
-    } else {
-        for( const audio::AudioDeviceInfo &d : devs )
-            addDevice( QString::fromStdString( d.name ),
-                       QString::fromStdString( d.id ) );
-    }
-
-    // If the saved device is gone, fall back to checking the first entry.
-    if( !deviceGroup_->checkedAction() && !deviceGroup_->actions().isEmpty() )
-        deviceGroup_->actions().first()->setChecked( true );
-
-    connect( deviceGroup_, &QActionGroup::triggered,
-             this, &SMainWindow::audioDeviceSelected );
-
-    menuBar()->addMenu( qAudioMenu_ );
-}
-
-void SMainWindow::audioDeviceSelected( QAction *a )
-{
-    if( !a ) return;
-    const QString id = a->data().toString();
-    SApplication::app().getSpeaker()->setOutputDevice( id.toStdString() );
-    SSettings::instance().setAudioDeviceId( id );
-    if( SApplication::app().isPlaying() )
-        statusBar()->showMessage(
-            "Audio device change takes effect on the next Play.", 4000 );
 }
 
 void SMainWindow::runTestSequence()
