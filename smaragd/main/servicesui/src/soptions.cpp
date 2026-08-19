@@ -58,10 +58,14 @@ QVariant SOpt::def( const QString &key )
     if( key == MidiRecordQuantize ) return QStringLiteral( "off" );
     // Transport polish (proposal 21 L5). Both bar counts are 0 because a
     // count-in or a pre-roll nobody asked for delays every take; the click
-    // level is a comfortable -6 dBFS accent with the beat 6 dB under it.
-    if( key == MetronomeLevel ) return 0.5;
-    if( key == CountInBars )    return 0;
-    if( key == PreRollBars )    return 0;
+    // level is a comfortable -6 dBFS accent, with the ordinary beat at 0.7 of
+    // it (twmetronome.h's "2 kHz square / 1 kHz square, 1.0 / 0.7"). Click
+    // while recording defaults ON so the metronome behaves exactly as before
+    // this option existed.
+    if( key == MetronomeLevel )      return 0.5;
+    if( key == CountInBars )         return 0;
+    if( key == PreRollBars )         return 0;
+    if( key == ClickWhileRecording ) return true;
     // Media browser (proposal 38 gate 2). "local" is the only source the MVP
     // registers, so remembering it is the honest default rather than an empty
     // string the combo would have to interpret. The mask is Audio (1) --

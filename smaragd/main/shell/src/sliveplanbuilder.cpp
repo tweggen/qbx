@@ -33,13 +33,21 @@ bool isMidiInput( const STrack *t )
 }
 
 bool metronomeWanted( bool metronomeOn, bool playing, bool recording,
-                      bool countIn )
+                      bool countIn, bool clickWhileRecording )
 {
     // THE COUNT-IN IS NOT CONDITIONAL ON THE METRONOME SWITCH. A count-in with
     // no click is a silent wait, which is not a feature anybody asked for; the
     // click is what a count-in IS. Cubase / Logic / REAPER all behave this way.
     if( countIn ) return true;
-    return metronomeOn && ( playing || recording );
+    if( !metronomeOn ) return false;
+    // WHILE RECORDING, `clickWhileRecording` is the sole authority - not
+    // `playing || recording`, because recording implies the transport is
+    // running and an `||` would make the "Click while recording" checkbox
+    // able to silence the take but never able to silence a plain click that
+    // just happens to sound "while recording" too. Ordinary playback (not
+    // recording) is unaffected either way.
+    if( recording ) return clickWhileRecording;
+    return playing;
 }
 
 

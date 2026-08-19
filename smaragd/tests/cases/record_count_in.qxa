@@ -94,7 +94,7 @@
                              threshold="0.05" window="64" minGapFrames="4800"
                              count="8"
                              intervalFrames="24000" toleranceFrames="1024"
-                             accentEvery="4" accentRatio="1.5"
+                             accentEvery="4" accentRatio="1.3"
                              silenceMaxRms="0.01"/>
 
     <set-count-in bars="0"/>

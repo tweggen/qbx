@@ -45,15 +45,21 @@ struct twMetronomeConfig {
 
     // Linear amplitude of an ordinary beat, and of the accented one (beat 1 of
     // a bar). Both are absolute, not a ratio, so a case can assert the accent
-    // ladder without knowing an internal multiplier.
-    float beatLevel   = 0.25f;
-    float accentLevel = 0.50f;
+    // ladder without knowing an internal multiplier. The RATIO between them is
+    // 1.0 / 0.7 by spec: `SLiveMonitor::ensureMetronome` sets accentLevel from
+    // `SOpt::MetronomeLevel` directly and beatLevel to 0.7 of it, so these two
+    // defaults are what a caller gets who builds a twMetronomeConfig without
+    // going through the app (a unit test, `metronome_test`).
+    float beatLevel   = 0.7f;
+    float accentLevel = 1.0f;
 
-    // The two pitches, and how long a click lasts. 20 ms is short enough that
-    // two beats at 300 BPM (200 ms apart) are unambiguously separate events
-    // and long enough to be audible on a small speaker.
+    // The two pitches, and how long a click lasts. Downbeat 2 kHz, every other
+    // beat 1 kHz - the two are far enough apart to tell the accent by EAR, not
+    // just by level. 20 ms is short enough that two beats at 300 BPM (200 ms
+    // apart) are unambiguously separate events and long enough to be audible
+    // on a small speaker.
     double beatHz    = 1000.0;
-    double accentHz  = 1500.0;
+    double accentHz  = 2000.0;
     double clickMs   = 20.0;
 
     // Project frame of bar 1, beat 1. Zero for every project today; the field

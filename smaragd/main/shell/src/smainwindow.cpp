@@ -6,6 +6,7 @@
 #include <qmessagebox.h>
 #include <qaction.h>
 #include <QActionGroup>
+#include <QCursor>
 #include <QMenu>
 #include <qtoolbar.h>
 #include <QDockWidget>
@@ -1831,6 +1832,19 @@ void SMainWindow::buildPaletteToolbar()
     actMetronome_  = addToggle( "M", "Metronome",    Qt::Key_M, SLOT( toggleMetronome() ) );
     actCycle_      = addToggle( "C", "Cycle",        Qt::Key_C, SLOT( toggleCycle() ) );
 
+    // The metronome's RIGHT-CLICK menu: "Click while recording" and "Count in
+    // while recording" (proposal 21 L5 follow-up). addGridAction() builds a
+    // QToolButton the caller never sees, so the widget - not the QAction,
+    // which has no context-menu policy of its own - has to be looked up
+    // afterwards, the same way qArm_/qAuto_ in ssmvmixercontrol.cpp wire theirs.
+    actMetronome_->setToolTip( actMetronome_->toolTip()
+                               + "\n(Right-click for click/count-in options)" );
+    if( QWidget *btn = qTBPalette_->widgetForGridAction( actMetronome_ ) ) {
+        btn->setContextMenuPolicy( Qt::CustomContextMenu );
+        QObject::connect( btn, SIGNAL( customContextMenuRequested( const QPoint& ) ),
+                          this, SLOT( showMetronomeContextMenu() ) );
+    }
+
     addToolBar( Qt::TopToolBarArea, qTBPalette_ );
 
     // Track grouping toolbar. These act on the arranger's last-clicked track
@@ -1938,6 +1952,69 @@ void SMainWindow::toggleGrid()
 void SMainWindow::toggleMetronome()
 {
     SApplication::app().submitAction( new SMetronomeAction( SToggleSettingAction::Toggle ) );
+}
+
+// The metronome button's RIGHT-CLICK menu. Both items write a per-USER
+// preference through SSettings directly, NOT an SAction: like
+// set-count-in/set-pre-roll and the click level, these are not undoable - a
+// preference does not belong on the arrangement's undo stack (soptions.h).
+void SMainWindow::showMetronomeContextMenu()
+{
+    QMenu menu;
+
+    // "CLICK WHILE RECORDING" - SOpt::ClickWhileRecording. Distinct from the
+    // metronome switch itself (SProjectProps::Metronome, the "M" button this
+    // menu hangs off): unchecking this silences the click for the DURATION OF
+    // A TAKE specifically, while plain playback keeps clicking exactly as
+    // before (sliveplanbuilder.cpp's metronomeWanted).
+    QAction *click = menu.addAction( QStringLiteral( "Click while recording" ) );
+    click->setCheckable( true );
+    click->setChecked( SSettings::instance()
+        .value( SOpt::ClickWhileRecording,
+                SOpt::def( SOpt::ClickWhileRecording ) ).toBool() );
+    click->setToolTip( QStringLiteral(
+        "Whether the beat click sounds while a take is actually recording, "
+        "independent of the metronome switch and of plain playback." ) );
+    QObject::connect( click, &QAction::triggered, this, []( bool checked ) {
+        SSettings::instance().setValue( SOpt::ClickWhileRecording, checked );
+        // A per-user setting raises no propertyChanged the way the project's
+        // own Metronome switch does (sapplication.cpp), so a live lane already
+        // up would not otherwise see this until its next unrelated rebuild.
+        SApplication::app().liveLanesChanged();
+    } );
+
+    // "COUNT IN WHILE RECORDING" - a convenience on/off toggle over the SAME
+    // SOpt::CountInBars the Options dialog's spinbox edits (0..8 bars, 0 =
+    // off - soptions.h). A second enable flag was considered and rejected:
+    // the spinbox already treats 0 as "off" everywhere it is read
+    // (sliveplanbuilder's countIn gate, SApplication's preamble), so a second
+    // flag could only disagree with it. Unchecking stashes the current bar
+    // count in metronomeLastCountInBars_ and writes 0; checking restores it,
+    // or falls back to 2 bars (record_count_in.qxa's own count-in) if nothing
+    // was stashed this session yet.
+    const int countIn = SSettings::instance()
+        .value( SOpt::CountInBars, SOpt::def( SOpt::CountInBars ) ).toInt();
+    QAction *ci = menu.addAction( QStringLiteral( "Count in while recording" ) );
+    ci->setCheckable( true );
+    ci->setChecked( countIn > 0 );
+    ci->setToolTip( QStringLiteral(
+        "On/off for the count-in bar count (Edit -> Options -> Audio); "
+        "unchecking writes 0 bars, checking restores the last count." ) );
+    QObject::connect( ci, &QAction::triggered, this, [this]( bool checked ) {
+        if( checked ) {
+            const int bars = metronomeLastCountInBars_ > 0
+                                 ? metronomeLastCountInBars_ : 2;
+            SSettings::instance().setValue( SOpt::CountInBars, bars );
+        } else {
+            const int cur = SSettings::instance()
+                .value( SOpt::CountInBars, SOpt::def( SOpt::CountInBars ) )
+                .toInt();
+            if( cur > 0 ) metronomeLastCountInBars_ = cur;
+            SSettings::instance().setValue( SOpt::CountInBars, 0 );
+        }
+    } );
+
+    menu.exec( QCursor::pos() );
 }
 
 void SMainWindow::toggleCycle()

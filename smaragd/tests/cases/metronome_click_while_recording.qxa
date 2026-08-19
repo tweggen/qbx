@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L5 follow-up (the metronome context menu's "Click while
+  recording" item). `SOpt::ClickWhileRecording`
+  (main/servicesui/include/app/servicesui/soptions.h) gates the beat click
+  DURING AN ACTUAL TAKE, independent of both the metronome switch itself and
+  of plain playback (main/shell/src/sliveplanbuilder.cpp's metronomeWanted).
+
+  Env, set on the CTest entry (see smaragd/CMakeLists.txt): RUN_SERIAL,
+  SMARAGD_CAPTURE_SPEED=1, SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800 - the same paced input the L3b
+  record four and record_count_in/record_pre_roll use, because this case
+  records too: `record-start` with no count-in and no pre-roll takes the
+  transport straight from STOPPED into RECORDING, so the whole captured window
+  is "recording" and nothing here has to separate a pre-roll prefix from the
+  take the way record_count_in does.
+
+  THE CLOSED FORM. 120 BPM, 4/4, 48 kHz, same grid metronome_click.qxa uses:
+
+      beat = 24000 frames,  bar = 96000 frames = 2 s
+
+  TAKE 1 records with the project's metronome ON and
+  `metronome/clickWhileRecording` left at its DEFAULT (on) - the click behaves
+  exactly as it did before this option existed, which is what "default"
+  has to mean for an option added to existing behaviour.
+
+  TAKE 2 sets `metronome/clickWhileRecording=false` and expects ZERO clicks
+  over the same kind of recording, on a SECOND track so the two takes cannot
+  collide - while the project's own metronome switch is left ON throughout.
+  That is the whole point of the case: the second take is silent because of
+  the NEW option, not because the metronome itself was ever turned off, which
+  is what tells this apart from `metronome_click`'s existing on/off phases.
+
+  TRACK 0 IS MUTED BEFORE TAKE 2. Its own take-1 clip (the position-encoded
+  fixture's content) is otherwise still part of the mix during take 2's
+  recording, same as any other already-placed clip on an unmuted track - and
+  a "zero clicks" assertion over the OUTPUT capture cannot tell that content
+  apart from a click. Found the hard way: the first version of this case left
+  track 0 unmuted and failed with 40 phantom "onsets" at a uniform 0.5 peak,
+  spaced ~4800 frames apart - the fixture's own block boundaries, not a click.
+
+  This case OWNS `metronome/clickWhileRecording`, a per-user preference like
+  every other key `set-option` writes in this suite, and puts it back to its
+  default (on) at the end.
+-->
+<SActionScript version="1" name="metronome_click_while_recording">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+    <metronome-enable/>
+
+    <!-- Monitoring off: this case is about the CLICK in the OUTPUT capture,
+         not the armed input - a monitored input would put the
+         position-encoded fixture into the same capture, which is
+         monitor_through_chain's job. -->
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:file:1"/>
+    <set-track-input trackPath="1" input="audio:file:1"/>
+
+    <!-- TAKE 1: metronome/clickWhileRecording at its default (on). ......... -->
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <record-start/>
+    <wait-ms ms="4200"/>
+    <record-stop/>
+    <dump-playback-capture filename="click_on.wav" minFrames="96000"/>
+    <assert-metronome-clicks filename="click_on.wav" channel="0"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             minCount="5" maxCount="12"
+                             intervalFrames="24000" toleranceFrames="1024"
+                             silenceMaxRms="0.01"/>
+    <arm-track trackPath="0" armed="0"/>
+    <!-- See the header: track 0's own clip must not sound during take 2. -->
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <!-- TAKE 2: metronome/clickWhileRecording=false. The project's own
+         metronome switch stays ON - only the take goes silent. ............. -->
+    <set-option key="metronome/clickWhileRecording" value="false"/>
+    <arm-track trackPath="1" armed="1"/>
+    <set-locator position="0"/>
+    <record-start/>
+    <wait-ms ms="4200"/>
+    <record-stop/>
+    <dump-playback-capture filename="click_off.wav" minFrames="96000"/>
+    <assert-metronome-clicks filename="click_off.wav" channel="0"
+                             threshold="0.05" window="64" count="0"/>
+
+    <!-- This case OWNS metronome/clickWhileRecording; put it back. ......... -->
+    <set-option key="metronome/clickWhileRecording" value="true"/>
+    <metronome-disable/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

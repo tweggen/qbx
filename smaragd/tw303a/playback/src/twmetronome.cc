@@ -58,9 +58,16 @@ twMetronomeSource::twMetronomeSource( const twMetronomeConfig &cfg )
     buildClick_( beatWave_,   cfg_.beatHz,   cfg_.beatLevel );
 }
 
-// A decaying sine, rendered ONCE. Precomputing it is what makes the click
-// identical however a block boundary falls across it, and what makes pull()
-// allocation-free and free of transcendental calls on the pump thread.
+// A decaying SQUARE wave, rendered ONCE. Precomputing it is what makes the
+// click identical however a block boundary falls across it, and what makes
+// pull() allocation-free and free of transcendental calls on the pump thread.
+//
+// Square, not sine: the tone spec calls for a hard on/off wave rather than a
+// smooth one, at the two frequencies (2 kHz downbeat, 1 kHz every other beat)
+// and the 1.0/0.7 amplitude ratio the accent test asserts. `std::sin` is still
+// what PHASES the square - `sin(w*i) >= 0` is one period-accurate square wave,
+// cheaper than a fmod-based phase accumulator and exact at the same sample
+// rate the sine version was.
 void twMetronomeSource::buildClick_( std::vector<float> &dst, double hz,
                                      float level ) const
 {
@@ -72,7 +79,8 @@ void twMetronomeSource::buildClick_( std::vector<float> &dst, double hz,
     const double tau = (double) clickFrames_ / 6.9077552789821;   // ln(1000)
     for( std::size_t i = 0; i < clickFrames_; ++i ) {
         const double env = std::exp( -(double) i / tau );
-        dst[i] = (float) ( level * env * std::sin( w * (double) i ) );
+        const double sq  = std::sin( w * (double) i ) >= 0.0 ? 1.0 : -1.0;
+        dst[i] = (float) ( level * env * sq );
     }
 }
 
