@@ -42,10 +42,16 @@
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "pluginterfaces/vst/ivstpluginterfacesupport.h"
 
+// twEditorGesture: the phase a recorded edit carries. The editor ABI is
+// format-neutral and public, and this private backend header quotes it rather
+// than inventing a second Begin/Change/End enum that would have to be mapped.
+#include "tw/plugins/twplugineditor.h"
+
 #include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -263,9 +269,66 @@ public:
     bool takeEditFlag() { return edited_.exchange( false, std::memory_order_acq_rel ); }
     bool takeRestartFlag() { return restart_.exchange( false, std::memory_order_acq_rel ); }
 
+    // --- what the plugin's own GUI actually did (proposal 33 M2) -------------
+    //
+    // Until M2 this class took (id, value) and THREW BOTH AWAY — the parameters
+    // of performEdit were literally unnamed — leaving a bare "something changed"
+    // bit that nothing ever read. That was survivable only while no native
+    // editor existed: a knob turned in the plugin's own UI produced a flag with
+    // no id, no value and no reader, so the sound could not follow it.
+    //
+    // The queue is a plain vector under a plain mutex, NOT a lock-free ring, and
+    // that is a considered choice: these are UI-rate events (a drag is tens per
+    // second, not thousands), the audio thread never touches this object, and a
+    // ring would need a fixed capacity whose overflow policy would silently drop
+    // the END of a gesture — the one event that must never be lost, because it
+    // is what closes an undo entry and an automation punch-in.
+    //
+    // The VST3 spec says IComponentHandler is called on the UI thread; real
+    // plugins are not uniformly careful about that, so the lock is also what
+    // makes a misbehaving one merely slow instead of a data race.
+    //
+    // AND THE LOCK IS SAFE EVEN THEN, which is the part worth checking rather
+    // than assuming: the worst case is a plugin calling performEdit from inside
+    // process(), and in this engine process() NEVER runs on the RT audio
+    // callback — twRtThreadGuard refuses a freeze on that thread outright, and
+    // the RT path only reads ready pages (proposal 19). So such a call lands on
+    // a freeze worker or the live pump, where a short uncontended mutex is
+    // ordinary. There is no path by which this lock can be taken on the audio
+    // callback, and that is a property of the engine's design rather than of
+    // plugins behaving.
+    struct Edit {
+        std::uint32_t                     id    = 0;
+        double                            value = 0.0;   // normalized [0,1]
+        twEditorGesture                   phase = twEditorGesture::Change;
+    };
+
+    // Hand over everything since the last call and clear. Main thread.
+    std::vector<Edit> takeEdits();
+
+    // restartComponent's flags, which used to be discarded outright
+    // (`(void)flags;`). kParamValuesChanged and kLatencyChanged mean different
+    // things to the host and were indistinguishable; the backend needs them
+    // separated to decide between "re-read the values" and "re-read everything".
+    Steinberg::int32 takeRestartFlags()
+    { return restartFlags_.exchange( 0, std::memory_order_acq_rel ); }
+
 private:
+    void record_( Steinberg::Vst::ParamID id, double value, twEditorGesture phase );
+
     std::atomic<bool> edited_{ false };
     std::atomic<bool> restart_{ false };
+
+    std::mutex          editMutex_;
+    std::vector<Edit>   edits_;
+    std::atomic<Steinberg::int32> restartFlags_{ 0 };
+
+    // A drag that outlives its reader — the host stopped draining, or a plugin
+    // streams continuous values with no end in sight — must not grow without
+    // bound. Dropping the OLDEST intermediate value is safe in a way dropping
+    // the newest is not: the newest is the current position of the control, and
+    // Begin/End are never dropped (see the .cc).
+    static constexpr std::size_t kMaxPendingEdits = 4096;
 };
 
 // --- IParameterChanges --------------------------------------------------------
