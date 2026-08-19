@@ -211,7 +211,8 @@ class twPluginEditor {
     virtual ~twPluginEditor();                 // MUST detach(); before the plugin dies
     virtual twEditorCaps caps() const = 0;
     virtual twEditorApi  api()  const = 0;
-    virtual bool attach( const twEditorHandle &parent ) = 0;   // false => sliders
+    virtual bool attach( const twEditorHandle &parent ) = 0;   // embedded
+    virtual bool attachFloating( const twEditorHandle & );     // D1; transient parent
     virtual void detach() = 0;                                 // idempotent
     virtual twEditorSize size() const = 0;
     virtual twEditorSize constrain( twEditorSize ) const;
@@ -370,14 +371,19 @@ PoC already de-risked, before any second format or platform is attempted.
 | **M1** | The ABI: `twplugineditor.h` (✅ written), `twPlugin::createEditor()`, `twRtThreadGuard::Kind::Main` | compiles; `check_layering`; no format type in any public header |
 | **M2** | **The VST3 parameter path** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket gestures, a drained queue, `restartComponent` flags kept. **Watch a real knob move real audio.** | `twtestvst3` fixture emits an edit on command; `plugins_test` asserts the queue |
 | **M3** | VST3 `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI | headless: `createEditor` → `attach` into an offscreen HWND → `poll` |
-| **M4** | The Qt host window (`main/pluginui/src/spluginnativeeditor.{h,cpp}`), lifetime, fallback, **and §10's ownership fix** | qxa case; the strip's track-switch behaviour |
+| **M4** | The Qt host window (`main/pluginui/src/spluginnativeeditor.{h,cpp}`), lifetime, fallback, **§10's ownership fix**, D2 persistence | qxa case; the strip's track-switch behaviour; `editorOpen` round-trips and opens no window headlessly |
 | **M5** | Edits → `SSetPluginParamAction` + `SAutomationRecorder` punch-in; DualMono fan-out | undo of a native gesture; `pluginui/CONTRACT.md` inv. 9 rewritten |
-| **M6** | CLAP: `extGui_`, the `clap.gui` host extension (all four callbacks), floating fallback | `twtestclap` gains a GUI entry point |
+| **M6** | CLAP: `extGui_`, the `clap.gui` host extension (all four callbacks), **D1 floating fallback + `set_transient`** | `twtestclap` gains a GUI entry point |
 | **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
 | **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |
 
 M0's code is in the branch. M1's header is in the branch. Everything from M2 is
 unwritten.
+
+**M4 and M5 land together.** D3 removed the slider list as an alternative entry
+point, so between a shipped M4 and a shipped M5 there would be no undoable way
+to change a parameter on any plugin that has its own GUI. They may be developed
+as two milestones; they may not be merged as two.
 
 ---
 
@@ -472,12 +478,88 @@ implies N+1 will.
 
 ---
 
-## 13. Open questions for the requester
+## 13. Decisions (requester, 2026-08-19)
 
-1. **Floating windows.** CLAP can let a plugin own its own top-level window. Do
-   we offer it as a fallback when embedding fails, or refuse and use sliders?
-2. **Window state persistence.** Should an open editor's position/size, or the
-   fact it was open, be saved with the project?
-3. **Generic editor alongside.** Keep a way to reach the slider list even when a
-   native GUI exists (a right-click item)? It is the only way to see a parameter
-   the plugin's own GUI does not expose, and the only undo-safe path until M5.
+The three open questions are settled. Each carries a consequence worth stating
+next to it, and the third one moves a milestone.
+
+### D1 — Offer a FLOATING window when embedding fails
+
+The fallback order is **embedded → floating → generic sliders**, and the middle
+rung is CLAP-only: `clap_plugin_gui::create(p, api, is_floating)` is the only
+place in any of the three formats where a plugin owns its own top-level window.
+VST3 and AU have no such concept, so for those two the order stays
+embedded → sliders. `twEditorCaps::floating` already exists in the ABI for
+exactly this.
+
+Three asymmetries a floating window brings, none of them optional:
+
+- **The host does not own the window**, so there is no `QDialog` to close, no
+  `closeEvent`, and no Qt geometry. Closing is `hide()` + `destroy()`, and the
+  user closing it arrives as `clap_host_gui::closed` → `twEditorFeedback::
+  closeRequested` — which is why that field is in the ABI rather than being
+  inferred from a widget.
+- **`set_transient` is mandatory, not decorative.** Without it the plugin's
+  window does not stay above the app, does not minimise with it, and can be
+  lost behind the main window with no way back. The host passes its own
+  top-level handle.
+- **Sizing is the plugin's business.** `caps().resizable` still reports what the
+  plugin says, but the host must not try to drive it: there is no container to
+  resize.
+
+The registry in §10 still tracks a floating editor and still destroys it on
+`slot::destroyed` and on `pluginReloaded`. What changes is only that teardown
+runs through the editor rather than through a widget.
+
+### D2 — Persist the editor across sessions, SPLIT by what actually travels
+
+Persisted, and deliberately in two different places, because the two halves have
+different portability:
+
+| What | Where | Why |
+|---|---|---|
+| **Whether the editor was open** | the **project** (`<SPluginSlot editorOpen='true'>`) | "this project opens with the synth's editor up" is a property of the arrangement and is meaningful on any machine |
+| **Window position and size** | **`SSettings`, per user, keyed by plugin uid** | a window at x=2400 is off screen on a laptop; monitor layout is machine-local and must not travel in a `.qxp` |
+
+This is the same split the tree already makes for `midiOutPort` (proposal 37
+P7): the portable NAME goes in the project, the machine-local id goes in
+`SSettings` under `midi/portId/<name>`. Same shape, same reason. It is also the
+lesson proposal 38 paid for in T11 — an app-config path serialised into a `.qxp`
+means nothing on the next machine.
+
+Two failure modes that must be handled rather than discovered:
+
+- **A restored geometry may be entirely off screen** (monitor unplugged since
+  the last session). Clamp onto an available `QScreen` before showing; never
+  restore a position blind.
+- **Restoring `editorOpen` must not open a window in a headless run.** Every
+  qxa case runs under `QT_QPA_PLATFORM=offscreen`, and the testkit builds a
+  never-shown strip (`spluginuitestactions.cpp:39-44`). Restoration is
+  suppressed under `--test-case`, in the same place and for the same reason
+  §10's "never create a native window eagerly" rule already applies. A case that
+  wants to assert the flag round-trips reads the model, not a window.
+
+`editorOpen` is written only when true, keeping every existing project file and
+both render goldens byte-unchanged — the discipline `SObject::serialize()`
+already follows for automation lanes.
+
+### D3 — The generic slider editor is NOT reachable when a native GUI exists
+
+The Edit button opens the native editor when there is one and the slider list
+otherwise. No second entry point, no right-click alternative.
+
+**This makes M5 a hard prerequisite for shipping M4, not a follow-up**, and that
+is the one scheduling consequence of these three answers. The reasoning is
+short: until M5 routes plugin gestures through `SSetPluginParamAction`, a native
+edit is not undoable and not automatable. While the slider list stays reachable
+that is survivable, because the undo-safe path still exists next to it. Remove
+it, and for any plugin with a native GUI there is **no undo-safe path at all** —
+the user's only way to change a parameter is one that silently cannot be undone.
+M4 and M5 therefore land together or not at all; the milestone table below is
+updated to say so.
+
+Accepted cost, named: **a parameter the plugin's own GUI does not expose becomes
+unreachable.** Some plugins hide parameters from their editor while still
+declaring them. Automation is unaffected — a `param:` lane is created from the
+arranger and names itself through `SPluginSlot::paramRows()`, which reads the
+plugin's declared list rather than its GUI.

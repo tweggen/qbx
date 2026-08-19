@@ -199,10 +199,25 @@ public:
     // produce it must fall back to the generic parameter editor.
     virtual twEditorApi api() const = 0;
 
-    // Parent the plugin's UI into the host's window. False means the host must
-    // fall back to the generic parameter editor — never a hard failure, because
-    // "this plugin's GUI would not embed" must not cost the user the plugin.
+    // Parent the plugin's UI into the host's window. False is not a hard
+    // failure: the host falls back, in order, to attachFloating() and then to
+    // the generic parameter editor. "This plugin's GUI would not embed" must
+    // not cost the user the plugin.
     virtual bool attach( const twEditorHandle &parent ) = 0;
+
+    // The D1 middle rung: let the plugin own a top-level window of its own.
+    // Only ever called when caps().floating, which today means CLAP alone —
+    // VST3 and AU have no floating concept and keep the default.
+    //
+    // The handle is a TRANSIENT PARENT, not a container: the plugin's window is
+    // its own, and this is what keeps it above the app, minimising with it and
+    // impossible to lose behind it (CLAP set_transient). Passing an invalid
+    // handle is allowed and merely gives up that relationship.
+    //
+    // There is no host widget here, so a floating editor reports the user
+    // closing it through twEditorFeedback::closeRequested — there is no
+    // closeEvent to observe — and the host must not attempt setSize() on it.
+    virtual bool attachFloating( const twEditorHandle & ) { return false; }
 
     // Idempotent, and safe to call on a never-attached editor.
     virtual void detach() = 0;
