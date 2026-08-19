@@ -63,6 +63,7 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     // The tree item order and the stack order must MATCH: currentItemChanged
     // maps by top-level index, nothing else.
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Mouse navigation" ) ) );
+    tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Event Editor" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Audio" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "MIDI" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Log" ) ) );
@@ -70,12 +71,13 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Media" ) ) );
 
     stack_ = new QStackedWidget;
-    stack_->addWidget( buildMousePage() );   // index 0
-    stack_->addWidget( buildAudioPage() );   // index 1
-    stack_->addWidget( buildMidiPage() );    // index 2
-    stack_->addWidget( buildLogPage() );     // index 3
-    stack_->addWidget( buildPluginsPage() ); // index 4
-    stack_->addWidget( buildMediaPage() );   // index 5
+    stack_->addWidget( buildMousePage() );        // index 0
+    stack_->addWidget( buildEventEditorPage() );  // index 1
+    stack_->addWidget( buildAudioPage() );        // index 2
+    stack_->addWidget( buildMidiPage() );         // index 3
+    stack_->addWidget( buildLogPage() );          // index 4
+    stack_->addWidget( buildPluginsPage() );      // index 5
+    stack_->addWidget( buildMediaPage() );        // index 6
 
     QObject::connect( tree_, &QTreeWidget::currentItemChanged,
                       this, [this]( QTreeWidgetItem *cur, QTreeWidgetItem * ) {
@@ -99,6 +101,7 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
 
     // Populate from current settings.
     loadMousePage();
+    loadEventEditorPage();
     loadAudioPage();
     loadMidiPage();
 
@@ -142,6 +145,51 @@ QWidget *SOptionsDialog::buildMousePage()
     form->addRow( QString(), zoomToCursor_ );
     form->addRow( QString(), invertZoom_ );
     form->addRow( QString(), followPlayhead_ );
+
+    return page;
+}
+
+// ------------------------------------------------------------ Event Editor
+
+// The piano roll's own copy of the mouse page above (same four gestures, same
+// sensitivity/zoom-to-cursor/invert-zoom controls, own SOpt namespace so the
+// two views can be tuned independently — SOpt::EventWheelPlain and co.). No
+// "Follow the playhead" here: the event editor has no playhead-follow feature
+// of its own to mirror (its view instead LINKS to the arranger's zoom/scroll,
+// toggled from the dock's own "Link" checkbox, not from Options).
+QWidget *SOptionsDialog::buildEventEditorPage()
+{
+    QWidget *page = new QWidget;
+    QFormLayout *form = new QFormLayout( page );
+
+    form->addRow( new QLabel( "Mouse wheel over the piano roll (note grid, "
+                              "velocity and CC lanes):" ) );
+
+    eventWheelPlain_     = makeWheelActionCombo();
+    eventWheelShift_     = makeWheelActionCombo();
+    eventWheelCtrl_      = makeWheelActionCombo();
+    eventWheelCtrlShift_ = makeWheelActionCombo();
+    form->addRow( "Wheel:", eventWheelPlain_ );
+    form->addRow( "Shift + Wheel:", eventWheelShift_ );
+    form->addRow( "Ctrl + Wheel:", eventWheelCtrl_ );
+    form->addRow( "Ctrl + Shift + Wheel:", eventWheelCtrlShift_ );
+
+    eventWheelSensitivity_ = new QSpinBox;
+    eventWheelSensitivity_->setRange( 10, 500 );
+    eventWheelSensitivity_->setSingleStep( 10 );
+    eventWheelSensitivity_->setSuffix( " %" );
+    eventWheelSensitivity_->setToolTip(
+        "How far one wheel notch travels in the piano roll, for all four "
+        "gestures at once. 100 % is the shipped feel (the same as the "
+        "arranger's default)." );
+    form->addRow( "Wheel sensitivity:", eventWheelSensitivity_ );
+    form->addRow( QString(), new QLabel( "Lower = less sensitive, higher = more "
+                                         "sensitive. 100 % = default." ) );
+
+    eventZoomToCursor_ = new QCheckBox( "Zoom toward the mouse cursor" );
+    eventInvertZoom_   = new QCheckBox( "Invert zoom direction" );
+    form->addRow( QString(), eventZoomToCursor_ );
+    form->addRow( QString(), eventInvertZoom_ );
 
     return page;
 }
@@ -424,6 +472,39 @@ void SOptionsDialog::applyMousePage()
     s.setValue( SOpt::ZoomToCursor,   zoomToCursor_->isChecked() );
     s.setValue( SOpt::InvertZoom,     invertZoom_->isChecked() );
     s.setValue( SOpt::FollowPlayhead, followPlayhead_->isChecked() );
+}
+
+// -------------------------------------------------------- Event Editor page
+
+void SOptionsDialog::loadEventEditorPage()
+{
+    SSettings &s = SSettings::instance();
+    selectByData( eventWheelPlain_,
+        s.value( SOpt::EventWheelPlain, SOpt::def( SOpt::EventWheelPlain ) ) );
+    selectByData( eventWheelShift_,
+        s.value( SOpt::EventWheelShift, SOpt::def( SOpt::EventWheelShift ) ) );
+    selectByData( eventWheelCtrl_,
+        s.value( SOpt::EventWheelCtrl, SOpt::def( SOpt::EventWheelCtrl ) ) );
+    selectByData( eventWheelCtrlShift_,
+        s.value( SOpt::EventWheelCtrlShift, SOpt::def( SOpt::EventWheelCtrlShift ) ) );
+    eventWheelSensitivity_->setValue( s.value( SOpt::EventWheelSensitivityPct,
+        SOpt::def( SOpt::EventWheelSensitivityPct ) ).toInt() );
+    eventZoomToCursor_->setChecked(
+        s.value( SOpt::EventZoomToCursor, SOpt::def( SOpt::EventZoomToCursor ) ).toBool() );
+    eventInvertZoom_->setChecked(
+        s.value( SOpt::EventInvertZoom, SOpt::def( SOpt::EventInvertZoom ) ).toBool() );
+}
+
+void SOptionsDialog::applyEventEditorPage()
+{
+    SSettings &s = SSettings::instance();
+    s.setValue( SOpt::EventWheelPlain,     eventWheelPlain_->currentData() );
+    s.setValue( SOpt::EventWheelShift,     eventWheelShift_->currentData() );
+    s.setValue( SOpt::EventWheelCtrl,      eventWheelCtrl_->currentData() );
+    s.setValue( SOpt::EventWheelCtrlShift, eventWheelCtrlShift_->currentData() );
+    s.setValue( SOpt::EventWheelSensitivityPct, eventWheelSensitivity_->value() );
+    s.setValue( SOpt::EventZoomToCursor,   eventZoomToCursor_->isChecked() );
+    s.setValue( SOpt::EventInvertZoom,     eventInvertZoom_->isChecked() );
 }
 
 // "Lautsprecher (US-16x08) — 48000 Hz". The rate is a per-ENDPOINT Windows
@@ -808,6 +889,7 @@ void SOptionsDialog::applyAudioPage()
 void SOptionsDialog::apply()
 {
     applyMousePage();
+    applyEventEditorPage();
     applyAudioPage();
     applyMidiPage();
     applyLogPage();

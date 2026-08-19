@@ -167,8 +167,14 @@ APP_DEPS = {
     # editor stays independent of the 4000-line arranger. objects/mixer +
     # objects/track are the virtual keyboard's "first event clip on the
     # SELECTED track" fallback.
+    # eventui + servicesui (mouse-wheel pan/zoom follow-up): the piano roll's
+    # own wheel-navigation config reads SOpt (its key NAMES and defaults) and
+    # writes through SSettings, exactly the reasoning the mediabrowser ->
+    # servicesui edge above already gives -- servicesui OWNS the per-user
+    # option table, and a second spelling of a key is how a setting silently
+    # stops round-tripping.
     'eventui':        {'actions', 'model', 'objects/midi', 'objects/mixer',
-                       'objects/track', 'shell'},
+                       'objects/track', 'servicesui', 'shell'},
     # servicesui + actions since proposal 21 L5: `set-count-in` / `set-pre-roll`
     # are registered here because this is the module that OWNS the per-user
     # option table (SOpt) and the only one that may include both it and

@@ -11,6 +11,7 @@
 #include "app/eventui/seventeditorview.h"
 
 class QScrollBar;
+class QWheelEvent;
 
 /**
  * SPianoRollView - the first registered event editor kind ("pianoroll",
@@ -92,6 +93,7 @@ protected:
     void mouseReleaseEvent( QMouseEvent * ) override;
     void keyPressEvent( QKeyEvent * ) override;
     void resizeEvent( QResizeEvent * ) override;
+    void wheelEvent( QWheelEvent * ) override;
 
 private:
     // --- band geometry ----------------------------------------------------
@@ -164,6 +166,30 @@ private:
     /** The length a Draw-tool insert gets, in ticks; 0 = one grid division. */
     qint64        drawDurTicks_ = 0;
     double        drawVelocity_ = 100.0;
+
+    // --- mouse-wheel pan/zoom (matches the arranger's default gesture
+    // mapping; own SOpt::Event* keys, see main/eventui/CONTRACT.md and
+    // main/servicesui's Event Editor options page) ------------------------
+    //
+    // Plain wheel scrolls the key rows (keyScroll_); Shift+wheel pans the
+    // shared SEventTimeAxis; Ctrl and Ctrl+Shift zoom it (horizontal) or the
+    // key-row height (vertical) -- SOpt::WheelAction is reused verbatim, only
+    // the SOpt KEYS and hence the stored mapping are the piano roll's own.
+    void loadWheelConfig();
+    int  wheelActionFor( Qt::KeyboardModifiers mods ) const;
+    bool applyWheel( QWheelEvent *ev );
+
+    int    wheelPlain_ = 0, wheelShift_ = 0, wheelCtrl_ = 0, wheelCtrlShift_ = 0;
+    bool   wheelZoomToCursor_ = true, wheelInvertZoom_ = false;
+    // SOpt::EventWheelSensitivityPct / 100, clamped, plus the derived per-
+    // gesture constants below -- cached rather than recomputed per event
+    // because a wheel event is a hot path (mirrors SMVActualView's own
+    // wheelSensitivity_ cache).
+    double wheelSensitivity_ = 1.0;
+    int    wheelVScrollStep_ = 600;    // angleDelta units per key row
+    double wheelZoomHFactor_ = 1.2;    // px/second multiplier per notch
+    double wheelZoomVFactor_ = 1.5;    // key-row-height multiplier per notch
+    int    wheelVScrollAccum_ = 0;     // accumulated sub-notch vertical delta
 };
 
 #endif // _SPIANOROLLVIEW_H_

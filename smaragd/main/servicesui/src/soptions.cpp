@@ -20,6 +20,16 @@ QVariant SOpt::def( const QString &key )
     if( key == FollowPlayhead ) return true;
     if( key == AudioDeviceId )  return QString();
 
+    // Event editor mouse wheel: same defaults as the arranger's own keys
+    // above, in the piano roll's own namespace (see the keys' comment).
+    if( key == EventWheelPlain )     return (int) ScrollVertical;
+    if( key == EventWheelShift )     return (int) ScrollHorizontal;
+    if( key == EventWheelCtrl )      return (int) ZoomVertical;
+    if( key == EventWheelCtrlShift ) return (int) ZoomHorizontal;
+    if( key == EventZoomToCursor )   return true;
+    if( key == EventInvertZoom )     return false;
+    if( key == EventWheelSensitivityPct ) return 100;
+
     // The console default is the build's, so a Debug build keeps its console
     // without the user configuring anything and a Release build stays quiet.
     if( key == LogConsole )     return SMARAGD_LOG_CONSOLE_DEFAULT ? true : false;
