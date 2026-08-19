@@ -327,3 +327,77 @@ static const bool s_reg_asserttrackselection =
           QStringLiteral( "assert-track-selection" ),
           [] { return new SAssertTrackSelectionAction; } ),
       true );
+
+// --- assert-track-name -------------------------------------------------
+
+static STrack *trackAt( SProject *project, const QString &path )
+{
+    SObject *root = splacements::rootContainer( project );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( path ) );
+    return dynamic_cast<STrack *>( lane );
+}
+
+SApplyResult SAssertTrackNameAction::apply( SProject *project )
+{
+    STrack *track = trackAt( project, trackPath_ );
+    if( !track ) {
+        qWarning() << "assert-track-name: no track at" << trackPath_;
+        return { false, nullptr };
+    }
+    const QString actual = track->getSName();
+
+    if( !name_.isEmpty() && actual != name_ ) {
+        qWarning() << "assert-track-name FAILED: expected" << name_
+                   << "but got" << actual;
+        return { false, nullptr };
+    }
+    if( !prefix_.isEmpty() && !actual.startsWith( prefix_ ) ) {
+        qWarning() << "assert-track-name FAILED: expected prefix" << prefix_
+                   << "but got" << actual;
+        return { false, nullptr };
+    }
+    if( !suffix_.isEmpty() && !actual.endsWith( suffix_ ) ) {
+        qWarning() << "assert-track-name FAILED: expected suffix" << suffix_
+                   << "but got" << actual;
+        return { false, nullptr };
+    }
+    if( !differsFrom_.isEmpty() ) {
+        STrack *other = trackAt( project, differsFrom_ );
+        if( !other ) {
+            qWarning() << "assert-track-name: no track at" << differsFrom_
+                       << "(differsFrom)";
+            return { false, nullptr };
+        }
+        if( actual == other->getSName() ) {
+            qWarning() << "assert-track-name FAILED:" << trackPath_ << "and"
+                       << differsFrom_ << "have the same name" << actual;
+            return { false, nullptr };
+        }
+    }
+    return { true, nullptr };
+}
+
+void SAssertTrackNameAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    if( !name_.isEmpty() )        elem.setAttribute( "name", name_ );
+    if( !prefix_.isEmpty() )      elem.setAttribute( "prefix", prefix_ );
+    if( !suffix_.isEmpty() )      elem.setAttribute( "suffix", suffix_ );
+    if( !differsFrom_.isEmpty() ) elem.setAttribute( "differsFrom", differsFrom_ );
+}
+
+bool SAssertTrackNameAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_   = elem.attribute( "trackPath", "0" );
+    name_        = elem.attribute( "name", "" );
+    prefix_      = elem.attribute( "prefix", "" );
+    suffix_      = elem.attribute( "suffix", "" );
+    differsFrom_ = elem.attribute( "differsFrom", "" );
+    return true;
+}
+
+static const bool s_reg_asserttrackname =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-track-name" ),
+          [] { return new SAssertTrackNameAction; } ),
+      true );

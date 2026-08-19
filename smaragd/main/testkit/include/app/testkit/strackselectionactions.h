@@ -149,4 +149,33 @@ private:
     bool    hasPrimary_ = false;
 };
 
+// assert-track-name — a track's display name (SObject::getSName()).
+//
+//   trackPath = "0"       index-path from the root mixer
+//   name      = ""        exact match; checked only when non-empty
+//   prefix    = ""        name.startsWith(prefix); checked only when non-empty
+//   suffix    = ""        name.endsWith(suffix); checked only when non-empty
+//   differsFrom = ""      another track's index-path; asserts the two names
+//                         are NOT equal (checked only when non-empty)
+//
+// At least one of name/prefix/suffix/differsFrom must be given. Exists for
+// add-track's generated default name: the disambiguation strategy (vary the
+// END of the name before the front — a narrow track-control column shows the
+// front and drops the tail) has no other observable surface, since
+// set-track-name overwrites whatever add-track picked.
+class SAssertTrackNameAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-track-name" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_;
+    QString name_;
+    QString prefix_;
+    QString suffix_;
+    QString differsFrom_;
+};
+
 #endif  // STRACKSELECTIONACTIONS_H

@@ -212,13 +212,29 @@ void SPluginEffectStrip::rebuildUI()
         // so this is a derived appearance, never a second ordering.
         const bool isInstrumentRow = slot->isInstrument();
 
-        // Create a container widget for drag support
+        // Create a container widget for drag support.
+        //
+        // The selector is scoped to THIS widget's objectName (an ID selector),
+        // never a bare "QWidget { ... }" type selector: Qt Style Sheets match a
+        // type selector against every descendant that IS-A that type, so
+        // "QWidget { background: #efecf8; }" here used to paint every child too
+        // — the bypass checkbox, the Edit/Remove buttons, even the name label —
+        // because a QPushButton/QCheckBox/QLabel all derive from QWidget. That
+        // pale near-white background survived on top of whatever palette the
+        // app is using, which is unreadable against light/pale button text on
+        // a dark theme (the very bug this fixes). An ID selector matches only
+        // the widget carrying that objectName, so the row itself keeps its
+        // border/background and every child button falls back to the app's
+        // normal (readable) styling, exactly like the non-instrument rows,
+        // which never set a background at all.
         QWidget *container = new QWidget();
+        container->setObjectName(QStringLiteral("pluginSlotRow"));
         container->setStyleSheet(
             isInstrumentRow
-                ? "QWidget { border: 1px solid #6050a0; border-radius: 2px; "
-                  "padding: 4px; background: #efecf8; }"
-                : "QWidget { border: 1px solid #ccc; border-radius: 2px; padding: 4px; }");
+                ? "QWidget#pluginSlotRow { border: 1px solid #6050a0; "
+                  "border-radius: 2px; padding: 4px; background: #efecf8; }"
+                : "QWidget#pluginSlotRow { border: 1px solid #ccc; "
+                  "border-radius: 2px; padding: 4px; }");
         // Not draggable: nothing may move in front of the instrument and the
         // instrument may not leave slot 0, so reorder-plugin would refuse the
         // drop anyway - better not to offer the grab.
