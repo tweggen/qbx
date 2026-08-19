@@ -126,6 +126,14 @@ SApplyResult SMediaBrowserPathAction::apply( SProject * /*project*/ )
         }
         if( !waitIdle( win, waitMs_ ) ) return { false, nullptr };
     }
+
+    if( !activate_.isEmpty() ) {
+        if( !win->mediaBrowserActivate( activate_ ) ) {
+            qWarning() << "media-browser-path: no row named" << activate_;
+            return { false, nullptr };
+        }
+        if( !waitIdle( win, waitMs_ ) ) return { false, nullptr };
+    }
     return { true, nullptr };
 }
 
@@ -133,16 +141,18 @@ void SMediaBrowserPathAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "path", path_ );
     elem.setAttribute( "expand", expand_ );
+    elem.setAttribute( "activate", activate_ );
     elem.setAttribute( "waitMs", waitMs_ );
 }
 
 bool SMediaBrowserPathAction::readXml( const QDomElement &elem, int )
 {
-    path_   = elem.attribute( "path" );
-    expand_ = elem.attribute( "expand" );
-    waitMs_ = elem.attribute( "waitMs", "2000" ).toInt();
-    if( path_.isEmpty() && expand_.isEmpty() ) {
-        qWarning() << "media-browser-path: needs a path= or an expand=";
+    path_     = elem.attribute( "path" );
+    expand_   = elem.attribute( "expand" );
+    activate_ = elem.attribute( "activate" );
+    waitMs_   = elem.attribute( "waitMs", "2000" ).toInt();
+    if( path_.isEmpty() && expand_.isEmpty() && activate_.isEmpty() ) {
+        qWarning() << "media-browser-path: needs a path=, an expand= or an activate=";
         return false;
     }
     return true;
@@ -490,7 +500,17 @@ SApplyResult SMediaTestConnectionAction::apply( SProject * /*project*/ )
         effectiveUrl = stub->baseUrl().toString();
     }
 
-    const QString result = mgr->testConnection( effectiveUrl, user_, password_ );
+    QString effectiveUser = user_;
+    if( useAccountUrl_ ) {
+        const SMediaAccountInfo info = mgr->account( accountId_ );
+        effectiveUrl  = info.url;
+        effectiveUser = info.user;
+    }
+
+    const QString result =
+        accountId_.isEmpty()
+            ? mgr->testConnection( effectiveUrl, effectiveUser, password_ )
+            : mgr->testAccountConnection( accountId_, effectiveUrl, effectiveUser, password_ );
     if( stub ) stub->stop();
 
     bool ok = true;
@@ -512,6 +532,8 @@ void SMediaTestConnectionAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "user", user_ );
     elem.setAttribute( "password", password_ );
     elem.setAttribute( "useStub", useStub_ );
+    elem.setAttribute( "accountId", accountId_ );
+    elem.setAttribute( "useAccountUrl", useAccountUrl_ ? "1" : "0" );
     elem.setAttribute( "expectContains", expectContains_ );
     elem.setAttribute( "expectAbsent", expectAbsent_ );
 }
@@ -522,8 +544,23 @@ bool SMediaTestConnectionAction::readXml( const QDomElement &elem, int )
     user_           = elem.attribute( "user" );
     password_       = elem.attribute( "password" );
     useStub_        = elem.attribute( "useStub" );
+    accountId_      = elem.attribute( "accountId" );
+    useAccountUrl_  = elem.attribute( "useAccountUrl", "0" ) != QLatin1String( "0" );
     expectContains_ = elem.attribute( "expectContains" );
     expectAbsent_   = elem.attribute( "expectAbsent" );
+
+    // REFUSED at parse time, never silently resolved: both attributes decide
+    // which URL is tested, so a case naming both is a case whose author does
+    // not know which server answered.
+    if( useAccountUrl_ && !useStub_.isEmpty() ) {
+        qWarning() << "media-test-connection: useAccountUrl= and useStub= both pick "
+                      "the URL - name one";
+        return false;
+    }
+    if( useAccountUrl_ && accountId_.isEmpty() ) {
+        qWarning() << "media-test-connection: useAccountUrl= needs an accountId=";
+        return false;
+    }
     return true;
 }
 

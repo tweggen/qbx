@@ -1161,6 +1161,7 @@ void SOptionsDialog::clearMediaForm()
     mediaUrl_->clear();
     mediaUser_->clear();
     mediaPassword_->clear();
+    mediaPassword_->setPlaceholderText( QString() );
     mediaRemember_->setChecked( SApplication::app().mediaAccounts()->canRememberPasswords() );
     mediaTestResultLabel_->clear();
 }
@@ -1174,6 +1175,20 @@ void SOptionsDialog::loadMediaAccountIntoForm( const QString &accountId )
     mediaUrl_->setText( info.url );
     mediaUser_->setText( info.user );
     mediaPassword_->clear();   // never re-populated: the secret is never read back into the UI
+    // ...which leaves an empty box that looks like a missing password. Say
+    // which it is, in the one place the user is looking (Test connection
+    // uses the saved one when this is left alone).
+    switch( info.passwordStatus ) {
+    case SMediaPasswordStatus::Set:
+        mediaPassword_->setPlaceholderText( "(saved - type here only to replace it)" );
+        break;
+    case SMediaPasswordStatus::Undecryptable:
+        mediaPassword_->setPlaceholderText( "(the saved password cannot be read here - re-enter it)" );
+        break;
+    case SMediaPasswordStatus::Unset:
+        mediaPassword_->setPlaceholderText( QString() );
+        break;
+    }
     mediaRemember_->setChecked( info.passwordStatus != SMediaPasswordStatus::Unset );
     mediaRemember_->setEnabled( mgr->canRememberPasswords() );
     mediaTestResultLabel_->clear();
@@ -1250,8 +1265,16 @@ void SOptionsDialog::onMediaTestConnection()
     SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
     mediaTestResultLabel_->setText( "Testing..." );
     QApplication::processEvents();   // paint "Testing..." before the (bounded) blocking call
-    const QString result = mgr->testConnection( mediaUrl_->text().trimmed(),
-                                                mediaUser_->text(), mediaPassword_->text() );
+    // testAccountConnection(), never testConnection(): the field below is
+    // EMPTY after a Save and after picking an account out of the list (the
+    // secret is never read back into the UI -- shell CONTRACT inv. 39), so
+    // the plain call would send an empty password and report a 401 for an
+    // account that browses fine. Empty box + unchanged url/user = test the
+    // SAVED credential.
+    const QString result = mgr->testAccountConnection( mediaAccountId_->text().trimmed(),
+                                                       mediaUrl_->text().trimmed(),
+                                                       mediaUser_->text(),
+                                                       mediaPassword_->text() );
     mediaTestResultLabel_->setText( result );
 }
 

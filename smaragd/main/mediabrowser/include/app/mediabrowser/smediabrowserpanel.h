@@ -104,6 +104,11 @@ public:
     /// Expand the directory row named `name` (the REAL itemExpanded path, so
     /// the lazy listDirectory that a user's click issues is what runs).
     bool expandRowNamed( const QString &name );
+    /// Double-click the row named `name` (the REAL itemDoubleClicked slot).
+    /// A directory row NAVIGATES into it; a file row is a no-op, because a
+    /// file is placed by dragging it, and that is what makes this the same
+    /// gesture whether the row was reached by browsing or by expanding.
+    bool activateRowNamed( const QString &name );
     /// Enter search mode (or, with an empty needle, return to browse at the
     /// same path). `viaDebounce` types into the real line edit and lets the
     /// 250 ms timer fire; otherwise the debounce is flushed at once, which is
@@ -144,6 +149,7 @@ private slots:
     void onRecursiveToggled( bool on );
     void onFilterMenuChanged();
     void onItemExpanded( QTreeWidgetItem *item );
+    void onItemDoubleClicked( QTreeWidgetItem *item, int column );
     void onRetryClicked();
 
     void onEntriesReady( int requestId, const QVector<SMediaEntry> &batch,

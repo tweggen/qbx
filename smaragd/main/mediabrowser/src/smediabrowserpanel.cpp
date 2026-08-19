@@ -20,6 +20,7 @@
 #include <QFontMetrics>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -47,6 +48,10 @@ constexpr int kRoleLoaded = Qt::UserRole + 4;   // a dir whose children arrived
 // The debounce the design names (§B.4). 250 ms is long enough that typing
 // "kick" issues one walk rather than four, and short enough to feel live.
 constexpr int kSearchDebounceMs = 250;
+
+// The Size column holds "12.3 MB" and nothing wider; a name is what the user
+// is reading, so the name column takes every pixel the size column does not.
+constexpr int kSizeColumnWidth = 80;
 
 }   // namespace
 
@@ -231,10 +236,19 @@ void SMediaBrowserPanel::buildUi()
     tree_ = new SMediaBrowserTree( this, this );
     tree_->setColumnCount( 2 );
     tree_->setHeaderLabels( { tr( "Name" ), tr( "Size" ) } );
+    tree_->header()->setStretchLastSection( false );   // or Size eats the dock
+    tree_->header()->setSectionResizeMode( 0, QHeaderView::Stretch );
+    tree_->header()->setSectionResizeMode( 1, QHeaderView::Interactive );   // 80 px is a default, not a cage
+    tree_->setColumnWidth( 1, kSizeColumnWidth );
     tree_->setDragEnabled( true );
     tree_->setDragDropMode( QAbstractItemView::DragOnly );
     tree_->setSelectionMode( QAbstractItemView::SingleSelection );
     tree_->setUniformRowHeights( true );
+    // Double-click NAVIGATES into a directory (onItemDoubleClicked), so it
+    // must not ALSO toggle the expander: the tree is repopulated by the
+    // navigation, and the toggle would issue a lazy listDirectory for a row
+    // that is about to be deleted. The triangle still expands in place.
+    tree_->setExpandsOnDoubleClick( false );
     root->addWidget( tree_, 1 );
 
     footer_ = new QLabel( this );
@@ -263,6 +277,8 @@ void SMediaBrowserPanel::buildUi()
              this, [this]( QAction * ) { onFilterMenuChanged(); } );
     connect( tree_, &QTreeWidget::itemExpanded,
              this, &SMediaBrowserPanel::onItemExpanded );
+    connect( tree_, &QTreeWidget::itemDoubleClicked,
+             this, &SMediaBrowserPanel::onItemDoubleClicked );
     connect( bannerRetry_, &QPushButton::clicked,
              this, &SMediaBrowserPanel::onRetryClicked );
 }
@@ -733,6 +749,40 @@ bool SMediaBrowserPanel::setBrowsePath( const QString &path )
     if( !source_ ) openCurrentSource();
     else refreshRoot();
     return source_ != nullptr;
+}
+
+void SMediaBrowserPanel::onItemDoubleClicked( QTreeWidgetItem *item, int /*column*/ )
+{
+    if( !item ) return;
+    // A FILE is a no-op on purpose: dragging is how a file is placed (§B.5),
+    // and there is no audition in this MVP (§F). Making double-click place a
+    // clip would be a second, invisible placement gesture.
+    if( !item->data( 0, kRoleIsDir ).toBool() ) return;
+
+    const QString path = item->data( 0, kRolePath ).toString();
+    if( path.isEmpty() ) return;   // a source's root has no row of its own
+
+    // setBrowsePath(), not a local assignment: it is the ONE place the path
+    // field, the persisted last-path and the re-listing are kept in step, and
+    // it also leaves search mode -- so a search STARTED from here starts here
+    // (refreshRoot() passes path_ to source_->search()), which is what makes
+    // "recurse" mean "this folder and below" rather than "the whole source".
+    setBrowsePath( path );
+}
+
+bool SMediaBrowserPanel::activateRowNamed( const QString &name )
+{
+    for( QTreeWidgetItem *r : visibleRows() ) {
+        if( r->text( 0 ) != name ) continue;
+        // The REAL SIGNAL, with the REAL row -- not setBrowsePath() with a
+        // path the verb assembled itself, and not the slot called directly
+        // either: both would pass while the double-click was connected to
+        // nothing (testkit CONTRACT inv. 5). Since Qt 5 a signal is a public
+        // member function, so this is the same emission the widget makes.
+        tree_->itemDoubleClicked( r, 0 );
+        return true;
+    }
+    return false;
 }
 
 bool SMediaBrowserPanel::expandRowNamed( const QString &name )

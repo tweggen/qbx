@@ -119,6 +119,29 @@ module starts no thread of its own and touches no other one.
    is Expanding by default, so without the cap `QMainWindow` hands this dock
    all the resize space and pins the arranger at its minimum.
 
+10. **A DOUBLE-CLICK ON A DIRECTORY NAVIGATES; IT DOES NOT EXPAND.**
+   `onItemDoubleClicked` calls `setBrowsePath()` for a directory row and does
+   NOTHING for a file row (a file is placed by dragging — §B.5 — and there is
+   no audition in this MVP, so a second, invisible placement gesture would be
+   a surprise, not a convenience). Two consequences that are the point rather
+   than side effects: the PATH FIELD follows, because `setBrowsePath()` is the
+   one place the field, the persisted `media/lastPath/<source>` and the
+   re-listing are kept in step; and a SEARCH started afterwards starts THERE,
+   because `refreshRoot()` passes `path_` to `source_->search()` — so "recurse"
+   means "this folder and below", not "the whole source".
+   `setExpandsOnDoubleClick(false)` is required, not cosmetic: the tree is
+   repopulated by the navigation, so the default toggle would issue a lazy
+   `listDirectory` for a row about to be deleted. The triangle still expands in
+   place. Gated by `media_browser_browse` items (4a)/(4b), driven through the
+   REAL `itemDoubleClicked` SIGNAL (`activateRowNamed` emits it on the widget),
+   so removing the connection fails the case.
+
+11. **The Size column is 80 px wide and the Name column takes the rest.**
+   `setStretchLastSection(false)` + `Stretch` on column 0 + `Interactive` on
+   column 1: a size reads "12.3 MB" at most, a name is what the user is
+   actually reading, and the dock is 200-360 px wide (inv. 9). Interactive, not
+   Fixed — 80 is a default, not a cage.
+
 ## `describe()` — the format `assert-media-browser` matches
 
 One state line, then one `name,size,dir` triple per row in DEPTH-FIRST tree

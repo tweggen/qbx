@@ -205,13 +205,59 @@ QString SMediaAccountManager::backendDescription() const
 QString SMediaAccountManager::testConnection( const QString &url, const QString &user,
                                               const QString &password, int timeoutMs )
 {
+    return testWithHeader( url, basicHeader( user, password ), timeoutMs );
+}
+
+QString SMediaAccountManager::testAccountConnection( const QString &accountId, const QString &url,
+                                                     const QString &user, const QString &password,
+                                                     int timeoutMs )
+{
+    // A typed password always wins: it is the one thing the user can see, and
+    // testing anything else while a password is on screen would be a lie.
+    if( !password.isEmpty() ) return testConnection( url, user, password, timeoutMs );
+
+    const QString id = accountId.trimmed();
+    if( id.isEmpty() || !accountIds().contains( id ) )
+        return QStringLiteral( "enter the app password to test" );
+
+    const SMediaAccountInfo info = account( id );
+    if( info.url != url.trimmed() || info.user != user )
+        return QStringLiteral( "the URL or username has changed - Save it, or type "
+                               "the app password to test" );
+
+    switch( info.passwordStatus ) {
+    case SMediaPasswordStatus::Unset:
+        // Includes Remember-off accounts: the session password lives in the
+        // registered source's header and deliberately nowhere this method can
+        // reach it, because the only accessor that could hand it back would
+        // be an accessor that hands a credential back (AC 14).
+        return QStringLiteral( "no saved password for this account - type it to test" );
+    case SMediaPasswordStatus::Undecryptable:
+        return QStringLiteral( "the saved password cannot be read on this machine - "
+                               "re-enter it" );
+    case SMediaPasswordStatus::Set:
+        break;
+    }
+
+    // Exactly the header the browser itself would send for this source, so a
+    // green Test and a working browse can never disagree.
+    const QString header = authorizationHeaderFor( kSourcePrefix + id );
+    if( header.isEmpty() )
+        return QStringLiteral( "no usable saved password - re-enter it" );
+
+    return testWithHeader( url, header, timeoutMs ) + QStringLiteral( " (saved password)" );
+}
+
+QString SMediaAccountManager::testWithHeader( const QString &url, const QString &authHeader,
+                                              int timeoutMs )
+{
     const QUrl parsed( url, QUrl::StrictMode );
     const bool validScheme = parsed.scheme() == QLatin1String( "http" )
                             || parsed.scheme() == QLatin1String( "https" );
     if( url.trimmed().isEmpty() || !parsed.isValid() || parsed.host().isEmpty() || !validScheme )
         return QStringLiteral( "invalid URL" );
 
-    SWebDavClient client( parsed, basicHeader( user, password ) );
+    SWebDavClient client( parsed, authHeader );
     QString  result;
     bool     done = false;
     QEventLoop loop;

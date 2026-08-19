@@ -51,7 +51,7 @@ public:
     QString name() const override
     { return QStringLiteral( "media-browser-path" ); }
     QStringList knownAttributes() const override
-    { return { "path", "expand", "waitMs" }; }
+    { return { "path", "expand", "activate", "waitMs" }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -59,6 +59,12 @@ public:
 private:
     QString path_;
     QString expand_;
+    // activate= DOUBLE-CLICKS the named row, through the panel's real
+    // itemDoubleClicked slot: a directory NAVIGATES into it (path field,
+    // persisted last-path and listing all move together), a file is a no-op.
+    // Sequenced after path=/expand= for the same reason expand= is sequenced
+    // after path=: the row has to exist first.
+    QString activate_;
     int     waitMs_ = 2000;
 };
 
@@ -199,7 +205,8 @@ public:
     QString name() const override
     { return QStringLiteral( "media-test-connection" ); }
     QStringList knownAttributes() const override
-    { return { "url", "user", "password", "useStub", "expectContains", "expectAbsent" }; }
+    { return { "url", "user", "password", "useStub", "accountId", "useAccountUrl",
+               "expectContains", "expectAbsent" }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -209,6 +216,14 @@ private:
     QString user_;
     QString password_;
     QString useStub_;
+    // accountId= drives SMediaAccountManager::testAccountConnection() -- what
+    // the BUTTON calls -- instead of the bare testConnection(). With
+    // useAccountUrl="1" the url and user come from the saved account too, so
+    // the verb holds exactly what the dialog's form holds after an account is
+    // selected or saved: url and user filled in, PASSWORD EMPTY. That empty
+    // box is the whole point; it is the state the button is pressed in.
+    QString accountId_;
+    bool    useAccountUrl_ = false;
     QString expectContains_;
     QString expectAbsent_;
 };

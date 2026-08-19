@@ -53,18 +53,27 @@
                        url="https://cloud.invalid.example/remote.php/dav/files/qxauser/"
                        user="qxauser" password="Qxa5bTestSecretZQ9" remember="1"
                        expectOk="1"/>
-    <assert-media-options contains="accounts=1"/>
-    <assert-media-options contains="source=nextcloud:qxatest"/>
-    <assert-media-options contains="user=qxauser"/>
-    <assert-media-options contains="password=set"/>
+    <!-- BY NAME, never accounts=1: this INI is the DEVELOPER'S OWN and may
+         legitimately hold their real Nextcloud accounts (media_webdav_browse
+         says the same and for the same reason). A count here failed the whole
+         case the day someone added a real account in Options - a gate that
+         breaks on a machine that USES the feature is worse than no gate. -->
+    <!-- ONE assertion over the WHOLE account line rather than four substrings:
+         with a real account in the same list, a bare "password=set" would be
+         satisfied by SOMEBODY ELSE'S account and this case would pass while
+         qxatest held nothing. The index is deliberately not spelled (the list
+         is sorted, so a real account moves it). -->
+    <assert-media-options contains="=qxatest url=https://cloud.invalid.example/remote.php/dav/files/qxauser/ user=qxauser password=set source=nextcloud:qxatest"/>
     <assert-settings-file contains="nextcloud\qxatest\passwordScheme=dpapi"/>
     <assert-settings-file contains="nextcloud\qxatest\passwordEnc="/>
     <!-- The plaintext password value is NOWHERE in the file... -->
     <assert-settings-file absent="Qxa5bTestSecretZQ9"/>
-    <!-- ...and no literal "password=" key exists anywhere (passwordScheme=
-         and passwordEnc= do not match this substring: after "password" comes
-         "S" or "E", never "="). -->
-    <assert-settings-file absent="password="/>
+    <!-- ...and no literal "password=" key exists FOR THIS ACCOUNT
+         (passwordScheme= and passwordEnc= do not match this substring: after
+         "password" comes "S" or "E", never "="). Scoped to the qxatest prefix
+         rather than to the whole file, because a developer's own remembered
+         account legitimately has one - what this case owns is its own keys. -->
+    <assert-settings-file absent="nextcloud\qxatest\password="/>
 
     <!-- AC 7 continued: the browser's source combo really offers it - this
          is the REAL SMediaBrowserPanel, through SMediaRegistry, not a
@@ -88,8 +97,8 @@
          plaintext key is removed either way. -->
     <set-option key="media/nextcloud/qxatest/password" value="LegacyPlainPw77"/>
     <assert-settings-file contains="nextcloud\qxatest\password=LegacyPlainPw77"/>
-    <assert-media-options contains="password=set"/>   <!-- triggers rescanForPlaintextMigration() -->
-    <assert-settings-file absent="password="/>
+    <assert-media-options contains="=qxatest url=https://cloud.invalid.example/remote.php/dav/files/qxauser/ user=qxauser password=set source=nextcloud:qxatest"/>   <!-- triggers rescanForPlaintextMigration() -->
+    <assert-settings-file absent="nextcloud\qxatest\password="/>
     <assert-settings-file absent="LegacyPlainPw77"/>
 
     <!-- AC 9: Remember OFF writes nothing password-shaped at all, and SCRUBS
@@ -98,9 +107,9 @@
                        url="https://cloud.invalid.example/remote.php/dav/files/qxauser/"
                        user="qxauser" password="Qxa5bTestSecretZQ9c" remember="0"
                        expectOk="1"/>
-    <assert-media-options contains="password=unset"/>
-    <assert-settings-file absent="passwordScheme"/>
-    <assert-settings-file absent="passwordEnc"/>
+    <assert-media-options contains="=qxatest url=https://cloud.invalid.example/remote.php/dav/files/qxauser/ user=qxauser password=unset source=nextcloud:qxatest"/>
+    <assert-settings-file absent="nextcloud\qxatest\passwordScheme"/>
+    <assert-settings-file absent="nextcloud\qxatest\passwordEnc"/>
     <assert-settings-file absent="Qxa5bTestSecretZQ9c"/>
     <!-- The account is still usable FOR THIS SESSION (a live source is still
          registered with the password just supplied, even though nothing was
