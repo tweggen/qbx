@@ -111,16 +111,24 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
                              const std::vector<const STrack *> &inertlyArmed );
 
 /**
- * Should the click be in the plan right now (proposal 21 L5)?
+ * Should the click be in the plan right now (proposal 21 L5, extended by the
+ * "Click while recording" menu item)?
  *
  * `metronomeOn` is the project's own `SProjectProps::Metronome`; the click is
  * audible while the transport is PLAYING or RECORDING, which is what every
  * reference DAW does - a metronome ticking at a stopped playhead is a bug
  * report, not a feature. `countIn` overrides both: the count-in IS the stopped
  * transport's live lane, ticking down to the record start (design D2).
+ *
+ * `clickWhileRecording` is `SOpt::ClickWhileRecording` (per-user, default on):
+ * while `recording` is true it is the SOLE authority on whether the ordinary
+ * beat click sounds, independent of `playing` (recording implies the
+ * transport is running). Unchecking it silences the click for the take
+ * without touching the metronome switch itself, so plain playback keeps
+ * clicking exactly as before.
  */
 bool metronomeWanted( bool metronomeOn, bool playing, bool recording,
-                      bool countIn );
+                      bool countIn, bool clickWhileRecording );
 
 /// Does this track's `trackInput` name an audio device (the L1b half)?
 bool isAudioInput( const STrack *t );

@@ -59,4 +59,43 @@ private:
     Qt::KeyboardModifiers mods_ = Qt::NoModifier;
 };
 
+/**
+ * Test action: `double-click-clip` - drag-clip-edge's twin for a DOUBLE
+ * click. Lands on the clip BODY and sends the real
+ * press/release/dblclick/release sequence Qt itself delivers, through
+ * SMVActualView::mouseDoubleClickEvent.
+ *
+ * Why this exists: opening the event editor from a double-click is a gesture
+ * with its own handler (an EVENT clip is detected, then
+ * SMainWindow::showEventEditor() is called), and that handler can only be
+ * reached by a real double-click event - a script that called
+ * `assert-event-editor` directly would test the dock, never the gesture that
+ * is supposed to reach it.
+ *
+ * Not undoable itself: opening a dock has nothing to undo. Follow it with
+ * `assert-event-editor` (no `clip=`, so it follows the selection/binding this
+ * gesture left behind) to check what opened.
+ *
+ * XML format:
+ * <double-click-clip track="0" clip="0"/>
+ *
+ * Parameters:
+ * - track: lane row index in the flattened track tree (default 0)
+ * - clip:  index among the lane's real clips, nested lanes skipped (default 0)
+ */
+class SDoubleClickClipAction : public SAction {
+public:
+    SDoubleClickClipAction() = default;
+    SDoubleClickClipAction( int track, int clip );
+
+    QString name() const override { return QStringLiteral("double-click-clip"); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    int track_ = 0;
+    int clip_  = 0;
+};
+
 #endif

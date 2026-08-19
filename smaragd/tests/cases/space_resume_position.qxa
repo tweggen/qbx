@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Space resumes playback from the LAST position the user explicitly NAVIGATED
+  the playhead to; Shift+Space resumes from wherever the locator happens to
+  sit right now (today's, pre-item-o, Space behaviour) (item o).
+
+  press-play/press-stop drive the REAL SMainWindow slots those two shortcuts
+  and the Stop button call (SMainWindow::startPlaying/startPlayingFromCurrent/
+  stopPlaying), not a re-spelling of them — toggle-playback cannot stand in
+  for either, since it drives SAppContext::setPlaybackRunning() straight, an
+  older mechanism with no resume-position distinction at all.
+
+  THE DETERMINISTIC TRICK: rather than depend on exactly where a real-time-
+  paced playback pass happens to leave the locator when stopped, this case
+  manufactures a KNOWN divergence between "current" and "last navigated"
+  using press-stop's OWN documented, pre-existing mechanism - a Stop press
+  while ALREADY stopped resets the locator to 0 (SMainWindow::stopPlaying,
+  the "FIXME: jump to left locator" branch) without moving
+  lastNavigatedLocatorPos_ at all, because that reset is not a navigation.
+  So after `set-locator` (which sets both) followed by `press-stop`, current
+  is a known 0 and last-navigated is the known set-locator value - two
+  DIFFERENT known numbers, with no timing dependency anywhere in the case.
+
+  This also directly gates the investigation item o asked for ("what does
+  Stop currently do to the playhead"): it does NOT reset to the last
+  navigated position, and it does NOT update the navigation record either,
+  a separate mechanism from item o's tracking, deliberately.
+
+  A real playback pass DOES still run after each Space/Shift+Space (via
+  wait-playhead), so the case also proves the resumed position is not just a
+  seek that gets abandoned - the transport actually starts from there.
+-->
+<SActionScript version="1" name="space_resume_position">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0 -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- ================= Space: resume from LAST NAVIGATED ============ -->
+
+    <!-- A user navigation (updates BOTH current and last-navigated). -->
+    <set-locator position="96000"/>
+    <assert-locator position="96000"/>
+
+    <!-- Stop while ALREADY stopped: resets current to 0, leaves
+         last-navigated at 96000 untouched - the divergence the rest of
+         this half of the case depends on. -->
+    <press-stop/>
+    <assert-locator position="0"/>
+
+    <!-- Space: not playing, so this STARTS. fromLastNavigated=true seeks to
+         lastNavigatedLocatorPos_ SYNCHRONOUSLY before playback begins, so
+         the assertion right after the press needs no wait - if Space used
+         the CURRENT position (0) instead, this would read 0, not 96000. -->
+    <press-play shift="0"/>
+    <assert-locator position="96000"/>
+
+    <!-- And it is genuinely PLAYING from there, not just a seek that never
+         ran. -->
+    <wait-playhead minAdvance="4096" timeoutMs="15000"/>
+
+    <!-- Space again, while playing: toggles to a plain stop (no locator
+         move at all - proven by the fact the very next assert-locator in
+         the SHIFT+SPACE half below starts from a fresh, independent 0). -->
+    <press-play shift="0"/>
+
+    <!-- =============== Shift+Space: resume from CURRENT =============== -->
+
+    <!-- A second, different navigation target - if Shift+Space wrongly
+         used lastNavigatedLocatorPos_, the assertions below would read
+         148000 instead of 0. -->
+    <set-locator position="148000"/>
+    <assert-locator position="148000"/>
+
+    <!-- Reset current to 0 again; last-navigated stays 148000. -->
+    <press-stop/>
+    <assert-locator position="0"/>
+
+    <!-- Shift+Space: not playing, so this STARTS too, but fromLastNavigated
+         is FALSE - it must NOT touch the locator, so it stays at the
+         CURRENT position (0), ignoring last-navigated (148000) entirely. -->
+    <press-play shift="1"/>
+    <assert-locator position="0"/>
+
+    <!-- Genuinely playing, from near 0. -->
+    <wait-playhead minAdvance="4096" timeoutMs="15000"/>
+
+    <!-- Clean stop for teardown (toggle-playback, not press-play/press-stop,
+         so this line asserts nothing about item o - it is just cleanup). -->
+    <toggle-playback play="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

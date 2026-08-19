@@ -143,6 +143,8 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/sremovetakeaction.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
     objects/cut/include/app/objects/cut/ssetclipnameaction.h
+    objects/cut/include/app/objects/cut/ssetclippanaction.h
+    objects/cut/include/app/objects/cut/ssetclipvolumeaction.h
     objects/cut/include/app/objects/cut/ssetpitchaction.h
     objects/cut/include/app/objects/cut/ssetformantpreserveaction.h
     objects/cut/include/app/objects/cut/splaceclipaction.h
@@ -164,6 +166,8 @@ set(APP_OBJECTS_FILES
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/sselecttakeaction.cpp
     objects/cut/src/ssetclipnameaction.cpp
+    objects/cut/src/ssetclippanaction.cpp
+    objects/cut/src/ssetclipvolumeaction.cpp
     objects/cut/src/ssetpitchaction.cpp
     objects/cut/src/ssetformantpreserveaction.cpp
     objects/cut/src/splaceclipaction.cpp
@@ -382,6 +386,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sasserttrackchannelsaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertclipwindowaction.h
+    testkit/include/app/testkit/sassertclipmixaction.h
     testkit/include/app/testkit/sassertenvelopeaction.h
     testkit/include/app/testkit/sassertfileidenticalaction.h
     testkit/include/app/testkit/sassertlogaction.h
@@ -401,6 +406,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
+    testkit/include/app/testkit/sclicklaneaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sslipclipaction.h
     testkit/include/app/testkit/stestfilepath.h
@@ -419,6 +425,7 @@ set(APP_UI_FILES
     testkit/src/sasserttrackchannelsaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertclipwindowaction.cpp
+    testkit/src/sassertclipmixaction.cpp
     testkit/src/sassertenvelopeaction.cpp
     testkit/src/sassertfileidenticalaction.cpp
     testkit/src/sassertlogaction.cpp
@@ -426,6 +433,7 @@ set(APP_UI_FILES
     testkit/src/srecordtestactions.cpp
     testkit/src/smidirecordtestactions.cpp
     testkit/src/sassertsourcepositionaction.cpp
+    testkit/src/sclicklaneaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/seventuitestactions.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp
@@ -806,6 +814,20 @@ target_link_libraries(filepathref_test
 )
 add_test(NAME filepathref_test COMMAND filepathref_test)
 set_tests_properties(filepathref_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Media browser Size-column formatting (mediaBrowserFormatSize, task item k):
+# at most 3 significant digits plus an optional k/M/G suffix. Pure string
+# arithmetic over app_ui — no project, no audio and no display — but it links
+# all four layers for the same reason filepathref_test does (app_model is an
+# OBJECT library whose static registrars pull in the rest).
+add_executable(mediabrowser_size_test testkit/src/mediabrowser_size_test.cpp)
+target_link_libraries(mediabrowser_size_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME mediabrowser_size_test COMMAND mediabrowser_size_test)
+set_tests_properties(mediabrowser_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # SSecretStore (proposal 38 GATE 5a, §B.8): store/retrieve/delete round trips,

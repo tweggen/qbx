@@ -74,6 +74,8 @@ private slots:
     void onClearLoop();
     void onClearWarp();
     void onFormantClicked( bool checked );
+    void commitVolume();
+    void commitPan();
     void commitMidiName();
     void commitMidiStartTime();
     void commitMidiDuration();
@@ -143,6 +145,7 @@ private:
     QGroupBox   *clipGroup_      = nullptr;
     QGroupBox   *windowGroup_    = nullptr;
     QGroupBox   *playGroup_      = nullptr;
+    QGroupBox   *mixGroup_       = nullptr;
     QGroupBox   *midiGroup_      = nullptr;
 
     // Source group (read-only, plus the two destructive one-shot buttons).
@@ -162,6 +165,13 @@ private:
     QSpinBox       *loopSpin_    = nullptr;
     QPushButton    *clearLoopButton_ = nullptr;
     QCheckBox      *formantCheck_ = nullptr;
+
+    // Mix group (per-clip volume/pan proposal, item f). Volume is a STATIC dB
+    // trim that composes with the `cut:Gain` automation envelope and IS
+    // applied in the audio path (twTrackMix::ClipEntry::gainScalar). Pan is
+    // model/UI/serialization only — deliberately not wired to any DSP.
+    QDoubleSpinBox *volumeSpin_  = nullptr;
+    QDoubleSpinBox *panSpin_     = nullptr;
 
     // The MIDI page (proposal 37 6.1): the per-clip modifiers plus the one
     // placement property that is not shared with audio, the timebase.

@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QDomElement>
 #include <QDebug>
+#include <QRegularExpression>
 
 // The arranger lives under the main window, and testkit may not include
 // app/timeline (tools/check_layering.py) — so both actions reach it through
@@ -49,6 +50,15 @@ SApplyResult SSetLaneViewAction::apply(SProject * /*project*/)
         qWarning() << "SSetLaneViewAction: no arranger for clipEnvelopes";
         return {false, nullptr};
     }
+    // Horizontal zoom / pan (fix/track-list-polish m). Drives the SAME calls
+    // the zoom buttons/wheel make, so it is also what a save that follows
+    // will persist — unlike every other field on this action.
+    if (secondWidth_ > 0.0 || scrollX_ >= 0) {
+        if (!win->arrangerSetZoomPan(secondWidth_, scrollX_)) {
+            qWarning() << "SSetLaneViewAction: no arranger for secondWidth/scrollX";
+            return {false, nullptr};
+        }
+    }
     return {true, nullptr};   // view state: nothing to undo
 }
 
@@ -68,6 +78,8 @@ void SSetLaneViewAction::writeXml(QDomElement &elem) const
         if (automationSlot_ >= 0) elem.setAttribute("automationSlot", automationSlot_);
     }
     if (clipEnvelopes_ >= 0)   elem.setAttribute("clipEnvelopes", clipEnvelopes_);
+    if (secondWidth_ > 0.0)    elem.setAttribute("secondWidth", secondWidth_);
+    if (scrollX_ >= 0)         elem.setAttribute("scrollX", (qlonglong) scrollX_);
 }
 
 bool SSetLaneViewAction::readXml(const QDomElement &elem, int /*version*/)
@@ -84,6 +96,9 @@ bool SSetLaneViewAction::readXml(const QDomElement &elem, int /*version*/)
                           ? elem.attribute("showAutomation").toInt() : -1;
     clipEnvelopes_    = elem.hasAttribute("clipEnvelopes")
                           ? elem.attribute("clipEnvelopes").toInt() : -1;
+    secondWidth_      = elem.attribute("secondWidth", "0").toDouble();
+    scrollX_          = elem.hasAttribute("scrollX")
+                          ? (qlonglong) elem.attribute("scrollX").toULongLong() : -1;
     if (showAutomation_ >= 0 && automationTarget_.isEmpty()) {
         qWarning() << "SSetLaneViewAction: showAutomation needs automationTarget";
         return false;
@@ -197,5 +212,157 @@ static const bool s_reg_collapsetrack = (
     SActionRegistry::instance().registerType(
         QStringLiteral("collapse-track"),
         []{ return new SCollapseTrackAction; }
+    ), true
+);
+
+// --- assert-lane-view (fix/track-list-polish m) ---------------------------
+
+SApplyResult SAssertLaneViewAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = mainWindow();
+    if (!win) {
+        qWarning() << "SAssertLaneViewAction: no main window";
+        return {false, nullptr};
+    }
+    if (expectCollapsed_ >= 0) {
+        if (trackPath_.isEmpty()) {
+            qWarning() << "SAssertLaneViewAction: collapsed needs trackPath";
+            return {false, nullptr};
+        }
+        const bool got = win->isTrackCollapsed(trackPath_);
+        if (got != (expectCollapsed_ != 0)) {
+            qWarning() << "assert-lane-view FAILED: trackPath" << trackPath_
+                       << "collapsed=" << got << "expected"
+                       << (expectCollapsed_ != 0);
+            return {false, nullptr};
+        }
+    }
+    if (expectSecondWidth_ >= 0.0 || expectScrollX_ >= 0) {
+        const QString view = win->arrangerDescribeView();
+        if (view.isEmpty()) {
+            qWarning() << "SAssertLaneViewAction: no arranger to read"
+                          " secondWidth/scrollX from";
+            return {false, nullptr};
+        }
+        if (expectSecondWidth_ >= 0.0) {
+            const QRegularExpression re(QStringLiteral("secondWidth=([-0-9.]+)"));
+            const QRegularExpressionMatch m = re.match(view);
+            const double got = m.hasMatch() ? m.captured(1).toDouble() : -1.0;
+            if (!m.hasMatch() || qAbs(got - expectSecondWidth_) > 0.01) {
+                qWarning() << "assert-lane-view FAILED: secondWidth=" << got
+                           << "expected" << expectSecondWidth_ << "in" << view;
+                return {false, nullptr};
+            }
+        }
+        if (expectScrollX_ >= 0) {
+            const QRegularExpression re(QStringLiteral("scrollX=([0-9]+)"));
+            const QRegularExpressionMatch m = re.match(view);
+            const qlonglong got = m.hasMatch()
+                ? (qlonglong) m.captured(1).toULongLong() : -1;
+            if (!m.hasMatch() || got != expectScrollX_) {
+                qWarning() << "assert-lane-view FAILED: scrollX=" << got
+                           << "expected" << expectScrollX_ << "in" << view;
+                return {false, nullptr};
+            }
+        }
+    }
+    return {true, nullptr};
+}
+
+void SAssertLaneViewAction::writeXml(QDomElement &elem) const
+{
+    if (!trackPath_.isEmpty()) elem.setAttribute("trackPath", trackPath_);
+    if (expectCollapsed_ >= 0) elem.setAttribute("collapsed", expectCollapsed_);
+    if (expectSecondWidth_ >= 0.0)
+        elem.setAttribute("secondWidth", expectSecondWidth_);
+    if (expectScrollX_ >= 0)
+        elem.setAttribute("scrollX", (qlonglong) expectScrollX_);
+}
+
+bool SAssertLaneViewAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    trackPath_ = elem.attribute("trackPath", "");
+    expectCollapsed_ = elem.hasAttribute("collapsed")
+        ? elem.attribute("collapsed").toInt() : -1;
+    expectSecondWidth_ = elem.hasAttribute("secondWidth")
+        ? elem.attribute("secondWidth").toDouble() : -1.0;
+    expectScrollX_ = elem.hasAttribute("scrollX")
+        ? (qlonglong) elem.attribute("scrollX").toULongLong() : -1;
+    return true;
+}
+
+static const bool s_reg_assertlaneview = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-lane-view"),
+        []{ return new SAssertLaneViewAction; }
+    ), true
+);
+
+// --- assert-scroll-range (fix/track-list-polish l) -------------------------
+
+SApplyResult SAssertScrollRangeAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = mainWindow();
+    if (!win) {
+        qWarning() << "SAssertScrollRangeAction: no main window";
+        return {false, nullptr};
+    }
+    const QString desc = win->arrangerDescribeScrollRange();
+    if (desc.isEmpty()) {
+        qWarning() << "SAssertScrollRangeAction: no arranger, or no rows,"
+                      " to describe";
+        return {false, nullptr};
+    }
+    if (!expectFullyVisible_.isEmpty()) {
+        const bool want = expectFullyVisible_ == QStringLiteral("true");
+        const bool got = desc.contains(QStringLiteral("fullyVisible=true"));
+        if (got != want) {
+            qWarning() << "assert-scroll-range FAILED: expected fullyVisible="
+                       << want << "got" << desc;
+            return {false, nullptr};
+        }
+    }
+    if (expectMaxAtLeast_ >= 0 || expectMaxAtMost_ >= 0) {
+        const QRegularExpression re(QStringLiteral("maxScroll=(-?[0-9]+)"));
+        const QRegularExpressionMatch m = re.match(desc);
+        const int got = m.hasMatch() ? m.captured(1).toInt() : -1;
+        if (expectMaxAtLeast_ >= 0 && got < expectMaxAtLeast_) {
+            qWarning() << "assert-scroll-range FAILED: maxScroll=" << got
+                       << "expected >=" << expectMaxAtLeast_ << "in" << desc;
+            return {false, nullptr};
+        }
+        if (expectMaxAtMost_ >= 0 && got > expectMaxAtMost_) {
+            qWarning() << "assert-scroll-range FAILED: maxScroll=" << got
+                       << "expected <=" << expectMaxAtMost_ << "in" << desc;
+            return {false, nullptr};
+        }
+    }
+    return {true, nullptr};
+}
+
+void SAssertScrollRangeAction::writeXml(QDomElement &elem) const
+{
+    if (!expectFullyVisible_.isEmpty())
+        elem.setAttribute("expectFullyVisible", expectFullyVisible_);
+    if (expectMaxAtLeast_ >= 0)
+        elem.setAttribute("expectMaxAtLeast", expectMaxAtLeast_);
+    if (expectMaxAtMost_ >= 0)
+        elem.setAttribute("expectMaxAtMost", expectMaxAtMost_);
+}
+
+bool SAssertScrollRangeAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    expectFullyVisible_ = elem.attribute("expectFullyVisible", "");
+    expectMaxAtLeast_ = elem.hasAttribute("expectMaxAtLeast")
+        ? elem.attribute("expectMaxAtLeast").toInt() : -1;
+    expectMaxAtMost_ = elem.hasAttribute("expectMaxAtMost")
+        ? elem.attribute("expectMaxAtMost").toInt() : -1;
+    return true;
+}
+
+static const bool s_reg_assertscrollrange = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-scroll-range"),
+        []{ return new SAssertScrollRangeAction; }
     ), true
 );

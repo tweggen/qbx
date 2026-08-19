@@ -11,15 +11,18 @@
 #include "app/model/ssolorules.h"
 #include "app/pluginui/splugineffectstrip.h"
 #include "app/shell/sapplication.h"
+#include "app/shell/smainwindow.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSlider>
 #include <QLabel>
 #include <QGuiApplication>
+#include <QApplication>
 #include <QScreen>
 #include <QPainter>
 #include <QStyle>
 #include <QStyleOption>
+#include <QKeyEvent>
 
 STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     : QWidget(parent)
@@ -72,6 +75,9 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     volumeSlider_->setMinimum(SFADER_MIN);
     volumeSlider_->setMaximum(SFADER_MAX);
     volumeSlider_->setSliderPosition(sDbToFader(0.0));
+    // Home/End must always drive the transport, never this fader (item j) —
+    // see the eventFilter() override below.
+    volumeSlider_->installEventFilter(this);
     volLayout->addWidget(volumeSlider_);
     volumeLabel_ = new QLabel("+0.0 dB");
     volumeLabel_->setMinimumWidth(60);
@@ -109,6 +115,36 @@ void STrackDetailPanel::paintEvent(QPaintEvent *)
     opt.initFrom(this);
     QPainter p(this);
     style()->drawPrimitive(QStyle::PE_Widget, &opt, &p, this);
+}
+
+// Home/End on the fader (item j): QAbstractSlider's own keyPressEvent maps
+// them to "jump to minimum/maximum", so a fader that happens to have keyboard
+// focus would silently steal the transport's go-to-start/-end shortcut.
+// Caught here, BEFORE QSlider's handler ever sees them, and forwarded to the
+// same SMainWindow slots the window-wide shortcuts use — mirrors
+// SSMVMixerControl::eventFilter, which does the same thing for the arranger
+// track head's fader.
+bool STrackDetailPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == volumeSlider_ && event->type() == QEvent::KeyPress) {
+        QKeyEvent *ke = static_cast<QKeyEvent *>(event);
+        if (ke->key() == Qt::Key_Home || ke->key() == Qt::Key_End) {
+            // NOT QApplication::activeWindow() — see
+            // SSMVMixerControl::eventFilter's identical fix: a --test-case
+            // run never shows the window, so nothing is ever "active" under
+            // QT_QPA_PLATFORM=offscreen.
+            SMainWindow *mw = nullptr;
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                if ((mw = qobject_cast<SMainWindow*>(w))) break;
+            }
+            if (mw) {
+                if (ke->key() == Qt::Key_Home) mw->gotoRangeStart();
+                else                           mw->gotoRangeEnd();
+            }
+            return true;   // never let QAbstractSlider touch the fader's value
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 STrackDetailPanel::~STrackDetailPanel() = default;

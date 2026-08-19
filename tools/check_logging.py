@@ -33,6 +33,7 @@ ALLOW_FILES = {
     # PASS/FAIL lines are the program's output, not diagnostics.
     os.path.join("smaragd", "main", "testkit", "src", "action_roundtrip_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "filepathref_test.cpp"),
+    os.path.join("smaragd", "main", "testkit", "src", "mediabrowser_size_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "preview_container_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "preview_envelope_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "project_channels_test.cpp"),

@@ -34,6 +34,7 @@
 #include "app/model/sobjectrenderer.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
+#include "app/model/sclipwindow.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
@@ -91,6 +92,20 @@
 // (Qt::MetaModifier on macOS) is deliberately left to the OS: it is the
 // secondary-click (right-click) key and the accessibility screen-zoom scroll key.
 static inline bool hasPrimaryMod( Qt::KeyboardModifiers m ) { return m & Qt::ControlModifier; }
+
+// QApplication::activeWindow() needs the window to have been ACTIVATED by the
+// window system, which never happens in a headless --test-case run (main.cpp
+// never calls SMainWindow::show()/showMaximized() there) - it would return
+// null and silently no-op the double-click-opens-the-editor gesture below.
+// Same lookup drag-clip-edge and the event-editor test entry points already
+// use for exactly this reason (testkit's local mainWindow() helper).
+static SMainWindow *findMainWindow()
+{
+    for( QWidget *w : QApplication::topLevelWidgets() ) {
+        if( SMainWindow *win = qobject_cast<SMainWindow*>( w ) ) return win;
+    }
+    return nullptr;
+}
 
 // The wheel response AT 100 % SENSITIVITY. SOpt::WheelSensitivityPct scales all
 // four together (see loadWheelConfig); these stay the reference point, so the
@@ -592,20 +607,61 @@ void SStdMixerView::ctDeleteSample()
 {
 }
 
+// Split every clip in the CURRENT SELECTION whose extent strictly contains
+// the split position (start < splitTime < end) — not the last-clicked object.
+// When nothing is selected, fall back to the last-clicked clip (mirrors
+// nudgeClipPitch's fallback, and keeps a plain single-clip click+S working).
+// The split position itself is unchanged: the global locator, exactly as
+// before.
 void SStdMixerView::ctSplitSample()
 {
-    STrack *oldTrack = qContent_->getLastClickTrack();
-    SLink *oldLink = qContent_->getLastClickSLink();
-    if( !oldTrack || !oldLink ) {
+    SApplication &app = SApplication::app();
+    SProject *project = app.getCurrentProject();
+    if( !project ) return;
+
+    offset_t splitTime = app.getGlobalLocatorPos();
+
+    QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    if( paths.isEmpty() ) {
+        STrack *track = qContent_->getLastClickTrack();
+        SLink  *link  = qContent_->getLastClickSLink();
+        if( track && link ) {
+            QList<int> p = strackpath::pathOf( model_, track );
+            p.append( track->indexOfChild( link ) );
+            paths.append( p );
+        }
+    }
+    if( paths.isEmpty() ) {
         qWarning( "ctSplitSample called without object.\n" );
         return;
     }
-    // Through the action so the split (and the implicit ensure-SCut) is undoable.
-    QList<int> clipPath = strackpath::pathOf( model_, oldTrack );
-    clipPath.append( oldTrack->indexOfChild( oldLink ) );
-    offset_t splitTime = SApplication::app().getGlobalLocatorPos();
-    qContent_->resetLastClickSLink();   // the link may be replaced by the split
-    SApplication::app().submitAction( new SSplitClipAction( clipPath, splitTime ) );
+
+    // Each target clip gets its own extent check BEFORE the action runs:
+    // SCompositeAction rolls back the whole macro if any child fails to
+    // apply, so a clip the split position does not strictly fall inside must
+    // never be handed to SSplitClipAction in the first place. The 1-frame
+    // margin on each side matches SSplitClipAction::apply's own guard against
+    // a zero/negligible-length remainder, so a clip that passes here is one
+    // the action will actually accept.
+    SObject *mixer = splacements::rootContainer( project );
+    SCompositeAction *composite = new SCompositeAction;
+    int nTargets = 0;
+    for( const QList<int> &p : paths ) {
+        SLink *lk = splacements::placementAt( mixer, p );
+        if( !lk || lk->getSObject().isPathContainer() ) continue;
+        offset_t startTime = lk->getStartTime();
+        length_t fullDur = lk->getSObject().getDurationBlocking();
+        offset_t inObjOffset = splitTime - startTime;
+        if( inObjOffset <= 1 || inObjOffset >= (offset_t)fullDur - 1 ) continue;
+        composite->append( new SSplitClipAction( p, splitTime ) );
+        ++nTargets;
+    }
+    if( nTargets == 0 ) {
+        delete composite;
+        return;
+    }
+    qContent_->resetLastClickSLink();   // any split link may be replaced
+    app.submitAction( composite );
     qContent_->update();
 }
 
@@ -1015,17 +1071,17 @@ void SStdMixerView::addTrackBelow_( STrack *ref )
 
 /**
  * Add a new track whose parent is the same container as the last visible lane's
- * track (the "track above" the blank space the user double-clicked). Always goes
- * through the undoable SAction system.
+ * track (the "track above" the blank space the user double-clicked or dropped
+ * media onto). Always goes through the undoable SAction system.
  *
  * When that parent is the root mixer the whole gesture is a single
  * SAddTrackAction. When it is a folder track we follow the ctGroupTrack()
  * pattern: append a top-level track, then reparent it under the folder — two
  * SActions wrapped in one undo macro so a single undo reverses the gesture.
  */
-void SStdMixerView::ctAddTrackBelowLast()
+STrack *SStdMixerView::ctAddTrackBelowLast()
 {
-    if( !model_ ) return;
+    if( !model_ ) return nullptr;
 
     // "Track above" = the last lane in the flattened tree; its container is the
     // parent the new track should share. No lanes yet -> append to the mixer.
@@ -1036,7 +1092,10 @@ void SStdMixerView::ctAddTrackBelowLast()
     if( !parentTrack ) {
         // Parent is the root mixer: a plain append is undoable on its own.
         SApplication::app().submitAction( new SAddTrackAction( -1 ) );
-        return;
+        // submitAction drains synchronously (Phase 1), so the new track is
+        // now the last top-level child.
+        return dynamic_cast<STrack*>( strackpath::resolveByPath(
+            model_, QList<int>{ model_->getNTracks() - 1 } ) );
     }
 
     // Nested parent: create at the top level, then move under the folder.
@@ -1046,10 +1105,15 @@ void SStdMixerView::ctAddTrackBelowLast()
     // submitAction drains synchronously (Phase 1), so the new track is now the
     // last top-level track; reparent it under the target folder.
     int newIdx = model_->getNTracks() - 1;
+    STrack *newTrack = dynamic_cast<STrack*>(
+        strackpath::resolveByPath( model_, QList<int>{ newIdx } ) );
     SApplication::app().submitAction( new SReparentTrackAction(
         QList<int>{ newIdx },
         strackpath::pathOf( model_, parentTrack ), -1 ) );
     if( stack ) stack->endMacro();
+    // The reparent moves the SLink, not the STrack — newTrack (pinned across
+    // the move by SReparentTrackAction's addRef) is still the right pointer.
+    return newTrack;
 }
 
 // Catch double-clicks in the blank area of the track-control column (below the
@@ -1340,6 +1404,15 @@ bool SStdMixerView::tkToggleTrackHead( STrack *t, const QString &which, bool on 
     if( !t ) return false;
     for( SSMVMixerControl *mc : *controlArray_ ) {
         if( mc && &mc->getTrack() == t ) return mc->tkClickToggle( which, on );
+    }
+    return false;      // no head for that track (it is inside a collapsed folder)
+}
+
+bool SStdMixerView::tkSendFaderKey( STrack *t, const QString &key )
+{
+    if( !t ) return false;
+    for( SSMVMixerControl *mc : *controlArray_ ) {
+        if( mc && &mc->getTrack() == t ) return mc->tkSendFaderKey( key );
     }
     return false;      // no head for that track (it is inside a collapsed folder)
 }
@@ -1644,11 +1717,14 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
     }
     clipDragArmed_ = false;
 
-    // Reposition the cursor only when this click was NOT consumed by anything
-    // else: no range/take/edge/marker gesture (those returned earlier), no clip
-    // under the cursor (a clip click only selects), and no drag of any kind.
-    // A pure click on empty timeline is the "unconsumed" case that seeks.
-    if( rangeDrag_ == RangeNone && !clipDragArmed_ && lastClickSLink_ == NULL ) {
+    // Reposition the cursor whenever this click was NOT consumed by a gesture
+    // that already returned above (range/take/marker/edge-resize/stretch/
+    // loop/duplicate). That leaves two cases here: a click on empty timeline,
+    // and a plain click on a clip BODY with no meaningful move (the clip-move
+    // branch above already ran and found nothing changed) — both count as a
+    // "click", so both reposition the playhead/cursor to where the user
+    // clicked.
+    if( rangeDrag_ == RangeNone && !clipDragArmed_ ) {
         // Check that the mouse didn't move significantly (within 4 pixels).
         // This distinguishes a click from a small drag (so we don't seek while
         // editing).
@@ -1661,6 +1737,9 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             // playing (see SApplication) — a plain model_->seekTo would only
             // move the component cursors, not the playback position.
             SApplication::app().setGlobalLocatorPos( ofs );
+            // A direct user navigation (item o): Space must resume from HERE
+            // next, not from wherever playback or Stop leaves the locator.
+            SApplication::app().noteUserNavigatedLocator( ofs );
         }
     }
 }
@@ -1850,6 +1929,35 @@ void SMVActualView::loadRangeFromProject()
         rangeEnd_ = rangeStart_ + 4 * barDurationSamples;
         rangeValid_ = true;
     }
+}
+
+// --- zoom / horizontal pan persistence (fix/track-list-polish m) ----------
+// Same shape as saveRangeToProject()/loadRangeFromProject() just above: a
+// generic project property (SProjectProps), read once at construction
+// (the view is rebuilt per project) and written on every change so a save
+// always sees the latest value.
+
+void SMVActualView::saveViewStateToProject()
+{
+    if( !smv_.model_ ) return;
+    SProject &p = smv_.model_->getProject();
+    p.setProp( SProjectProps::TimelineZoomSecondWidth, secondWidth_ );
+    p.setProp( SProjectProps::TimelineScrollX, (qulonglong) upperLeftOffset_ );
+}
+
+void SMVActualView::loadViewStateFromProject()
+{
+    SProject &p = smv_.model_->getProject();
+    secondWidth_ = p.prop( SProjectProps::TimelineZoomSecondWidth, 30.0 ).toDouble();
+    if( secondWidth_ < 0.000001 ) secondWidth_ = 0.000001;   // setSecondWidth's own clamp
+    upperLeftOffset_ = (offset_t) p.prop(
+        SProjectProps::TimelineScrollX, (qulonglong) 0 ).toULongLong();
+    // Keep upperLeftX_ (pixel space) consistent with upperLeftOffset_ (frame
+    // space) exactly the way setSecondWidth() does — the same formula, so a
+    // restored zoom+pan pair maps to the same pixel origin a fresh
+    // setSecondWidth(secondWidth_) would have produced.
+    int srate = p.getSRate();
+    upperLeftX_ = (int) ( ( (double) upperLeftOffset_ ) / srate * secondWidth_ );
 }
 
 void SMVActualView::drawRange( QPainter &p, const QRect &myRect )
@@ -2678,6 +2786,27 @@ void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
     if( ev->button() == Qt::LeftButton && smv_.getModel()
         && tryAddMarkerAt( ev ) )
         return;
+
+    // Double-click on an EVENT (MIDI) clip opens the event editor for it.
+    // tryAddMarkerAt() above already re-resolved lastClickSLink_/
+    // lastClickTrack_ at this exact position (it calls updateLastClickVars()
+    // itself), and Qt's own double-click delivery is press / release /
+    // DBLCLICK / release - the leading press already selected the clip
+    // (the arranger's plain single-click handler), so the editor opens onto
+    // a clip that IS selected by the time it queries the selection.
+    if( ev->button() == Qt::LeftButton && lastClickSLink_ && lastClickTrack_ ) {
+        SObject *obj = &lastClickSLink_->getSObject();
+        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        if( obj->contentKind() == SContentKind::Event ) {
+            QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+            path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+            if( SMainWindow *mw = findMainWindow() )
+                mw->showEventEditor( strackpath::pathToString( path ) );
+            ev->accept();
+            return;
+        }
+    }
+
     if( ev->button() == Qt::LeftButton && smv_.getModel() ) {
         if( ev->pos().y() >= SMV_TIME_RULER_HEIGHT
             && !smv_.rowAt( rowAtViewY( ev->pos().y() ) ) ) {
@@ -2748,6 +2877,12 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         // Detect, on which object we clicked.
         // We know the track,  so now calculate the time.
         if( lastClickTrack_ ) {
+            // A lane click selects its track too, with the SAME
+            // multi-selection semantics the track head already uses
+            // (applyTrackSelectionClick): plain = select only this lane,
+            // Ctrl = toggle, Shift = range-select from the last selected
+            // track. Runs whether or not the click also landed on a clip.
+            smv_.applyTrackSelectionClick( lastClickTrack_, ev->modifiers() );
             if( lastClickSLink_ ) {
                 // From the EVENT, not QGuiApplication::keyboardModifiers().
                 // The live-keyboard read was both less correct (it reports the
@@ -2938,7 +3073,7 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
         // asks the same question (proposal 39 M3.1) and two spellings of "is
         // this a folder" is one more than there should be.
         bool kids = tk->hasChildTracks();
-        bool col = collapsed_.contains( tk );
+        bool col = tk->isCollapsed();
         rows_.append( STrackRow{ tk, lk, container, depth, kids, col } );
         // Take lanes directly below the track's composite lane.
         if( takesExpanded_.contains( tk ) ) {
@@ -3138,8 +3273,10 @@ int SStdMixerView::rowIndexOfTrack( const STrack *t ) const
 void SStdMixerView::toggleTrackCollapsed( STrack *t )
 {
     if( !t ) return;
-    if( collapsed_.contains( t ) ) collapsed_.remove( t );
-    else                           collapsed_.insert( t );
+    // Fold state lives on the track itself now (fix/track-list-polish m), so
+    // this call is a straight flip-and-rebuild rather than a set membership
+    // toggle — and it is what makes the flip visible on the next save.
+    t->setCollapsed( !t->isCollapsed() );
     refreshTrackTree();
 }
 
@@ -3344,7 +3481,7 @@ void SStdMixerView::nTracksChanged()
         if( currValue<0 ) currValue = 0;
         trackSliderMoved( currValue );
     }
-    qScrollVert_->setMaximum( qMax( 0, (int) newNTracks-pageStep ) );
+    qScrollVert_->setMaximum( verticalScrollMaximum( pageStep ) );
 }
 
 void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
@@ -3455,6 +3592,93 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     return true;
 }
 
+bool SStdMixerView::doubleClickClip( int rowIdx, int clipIdx )
+{
+    const STrackRow *row = rowAt( rowIdx );
+    if( !row || !row->track || !qContent_ ) return false;
+
+    // Nested tracks appear in a folder's child list but are lanes, not clips
+    // (same skip as dragClipEdge).
+    SLink *clip = NULL;
+    int n = 0;
+    for( SLink *lk : row->track->childLinks() ) {
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
+        if( n++ == clipIdx ) { clip = lk; break; }
+    }
+    if( !clip || !clip->hasStartTime() || !clip->getSObject().hasDuration() )
+        return false;
+
+    // The clip BODY, clear of the edge grab bands — the only spot a plain
+    // click (and so a double-click) lands as a select/move gesture rather
+    // than a resize.
+    offset_t start = clip->getStartTime();
+    length_t dur   = clip->getSObject().getDuration();
+    int sx = qContent_->getXPosOfOffset( start );
+    int ex = qContent_->getXPosOfOffset( start + (offset_t) dur );
+    int x  = ( sx + ex ) / 2;
+    if( x < 0 ) return false;
+
+    int th = rowHeight( rowIdx );
+    int laneTop = qContent_->laneTop( rowIdx );
+    int y = laneTop + th / 2;
+
+    // Never shown in test mode; grow the canvas so the point is inside it,
+    // exactly as dragClipEdge does.
+    int needed = x + 64;
+    if( qContent_->width() < needed )
+        qContent_->resize( needed, qContent_->height() > y+th ? qContent_->height() : y+th+64 );
+
+    auto send = [&]( QEvent::Type type, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        QPointF local( x, y );
+        QMouseEvent ev( type, local, qContent_->mapToGlobal( QPointF( x, y ) ),
+                        button, buttons, Qt::NoModifier );
+        QApplication::sendEvent( qContent_, &ev );
+    };
+    // Qt's own double-click delivery is press / release / DBLCLICK / release
+    // — the second "press" arrives AS the QEvent::MouseButtonDblClick, never
+    // as a second QEvent::MouseButtonPress. That is exactly why a plain
+    // single click already selects the clip before mouseDoubleClickEvent
+    // ever runs (the selection-follower fix this gesture exercises).
+    send( QEvent::MouseButtonPress,    Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    send( QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
+bool SStdMixerView::clickLane( STrack *t, offset_t time,
+                               Qt::KeyboardModifiers mods )
+{
+    if( !t || !qContent_ ) return false;
+    int rowIdx = rowIndexOfTrack( t );
+    if( rowIdx < 0 ) return false;
+    int x = qContent_->getXPosOfOffset( time );
+    int th = rowHeight( rowIdx );
+    int y = qContent_->laneTop( rowIdx ) + th/2;
+    if( x < 0 || y < 0 ) return false;
+
+    // The window is never shown in test mode; grow the canvas so the click
+    // lands inside it (same reasoning as dragClipEdge / mediaBrowserDrag).
+    if( qContent_->width() < x+64 || qContent_->height() < y+th+64 )
+        qContent_->resize( qMax( qContent_->width(), x+64 ),
+                           qMax( qContent_->height(), y+th+64 ) );
+
+    // Press and release at the SAME point: zero pixel movement, which is what
+    // makes mouseReleaseEvent's CLICK_THRESHOLD check treat this as a click
+    // rather than a drag.
+    auto send = [&]( QEvent::Type type, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        QPointF local( x, y );
+        QMouseEvent ev( type, local, qContent_->mapToGlobal( QPointF( x, y ) ),
+                        button, buttons, mods );
+        QApplication::sendEvent( qContent_, &ev );
+    };
+    send( QEvent::MouseButtonPress,   Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
 // --- test entry points for the lane geometry ----------------------------
 
 void SStdMixerView::tkSetBaseTrackHeight( int h )
@@ -3465,6 +3689,11 @@ void SStdMixerView::tkSetBaseTrackHeight( int h )
 void SStdMixerView::tkSetTopRow( int row )
 {
     qContent_->setTopOffset( row );
+}
+
+int SStdMixerView::tkVerticalScrollMaximum() const
+{
+    return qScrollVert_->maximum();
 }
 
 QString SStdMixerView::tkCheckLaneAlignment() const
@@ -3569,7 +3798,18 @@ void SStdMixerView::recalcPageStep()
     // "how many rows fit" depends on which rows are on screen.
     int vis = visibleRowCountFrom( (int) qContent_->getTopRow() );
     qScrollVert_->setPageStep( vis );
-    qScrollVert_->setMaximum( qMax( 0, rowCount()-vis ) );
+    qScrollVert_->setMaximum( verticalScrollMaximum( vis ) );
+}
+
+// See the header for why this exists (fix/track-list-polish l): a single
+// definition of "how far may qScrollVert_ go" shared by recalcPageStep() and
+// nTracksChanged(), so a track add/remove cannot silently undo the padding a
+// resize just computed.
+int SStdMixerView::verticalScrollMaximum( int vis ) const
+{
+    const int availPx = qContent_ ? qContent_->height() - SMV_TIME_RULER_HEIGHT : 0;
+    const bool overflow = totalRowsHeight() > availPx;
+    return qMax( 0, rowCount() - vis + ( overflow ? 1 : 0 ) );
 }
 
 void SStdMixerView::viewResized()
@@ -3877,9 +4117,14 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     setAcceptDrops(true);
 
     trackHeight_ = 100;      // BASE lane height; per-track scales ride on it
-    secondWidth_ = 30.;
-    upperLeftX_ = upperLeftY_ = 0;
+    upperLeftY_ = 0;
     topRow_ = 0;
+    // Zoom / horizontal pan (fix/track-list-polish m): secondWidth_,
+    // upperLeftOffset_ and upperLeftX_ used to be hard-coded here (30., 0, 0).
+    // loadViewStateFromProject() sets them from what a previous save left in
+    // the project's property dict, falling back to those same numbers when
+    // there is nothing saved (a fresh project, or one written before this).
+    loadViewStateFromProject();
 
     QObject::connect( smv_.model_, SIGNAL( trackInserted( int, STrack & ) ),
                       SLOT( update() ) );
@@ -3905,6 +4150,17 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     QObject::connect( &smv_.model_->getProject(),
                       SIGNAL( captureRevalidated() ),
                       this, SLOT( update() ) );
+
+    // Persist zoom / horizontal pan across save/load (fix/track-list-polish
+    // m). Every path that changes them — the wheel, the zoom buttons, the
+    // scrollbar — funnels through setSecondWidth()/setLeftOffset(), so
+    // hooking their signals here covers all of them without hunting down
+    // each call site, the same way saveRangeToProject() is called from the
+    // one place a range drag ends.
+    QObject::connect( this, &SMVActualView::secondWidthChanged,
+                      this, [this]( double ) { saveViewStateToProject(); } );
+    QObject::connect( this, &SMVActualView::leftOffsetChanged,
+                      this, [this]( offset_t ) { saveViewStateToProject(); } );
 
     // Mouse-wheel navigation config: cache now and refresh whenever the user
     // changes it in the options dialog.
@@ -4164,13 +4420,24 @@ void SMVActualView::dropEvent(QDropEvent *e)
     offset_t timePos = smv_.alignTime(getTimeOf((int)e->position().x()));
     int rowIdx = rowAtViewY( (int) e->position().y() );
 
-    // Get the target track from the row.
+    // Get the target track from the row. A drop on EMPTY canvas space below
+    // the last lane (anywhere !smv_.rowAt(...) resolves, e.g. under the last
+    // track) creates a new track first and places the item on it there — the
+    // same gesture mouseDoubleClickEvent() drives via ctAddTrackBelowLast(),
+    // rather than silently doing nothing as this used to. A drop still over
+    // the time ruler is refused: that is not lane space at all.
     const STrackRow *row = smv_.rowAt(rowIdx);
-    if (!row || !row->track) {
-        return;
+    STrack *track = row ? row->track : nullptr;
+    if (!track) {
+        if ((int) e->position().y() < SMV_TIME_RULER_HEIGHT) {
+            return;
+        }
+        track = smv_.ctAddTrackBelowLast();
+        if (!track) {
+            return;
+        }
     }
 
-    STrack *track = row->track;
     SProject *project = SApplication::app().getCurrentProject();
     if (!project) {
         return;

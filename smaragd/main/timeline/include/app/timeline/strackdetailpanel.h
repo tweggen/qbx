@@ -32,6 +32,11 @@ public:
 protected:
     // A QWidget subclass must draw its own style-sheet background.
     void paintEvent(QPaintEvent *) override;
+    // Watches volumeSlider_ for Home/End (item j): forwarded to the transport
+    // instead of letting QAbstractSlider jump the fader to its min/max. See
+    // SSMVMixerControl::eventFilter, which does the same thing for the
+    // arranger track head's fader.
+    bool eventFilter( QObject *watched, QEvent *event ) override;
 
 private slots:
     // Fader drag -> track volume, through the action system (undoable).

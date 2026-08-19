@@ -22,7 +22,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QLocale>
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
@@ -49,13 +48,53 @@ constexpr int kRoleLoaded = Qt::UserRole + 4;   // a dir whose children arrived
 // "kick" issues one walk rather than four, and short enough to feel live.
 constexpr int kSearchDebounceMs = 250;
 
-QString humanSize( qint64 bytes )
+}   // namespace
+
+// Decimal (1000-based) k/M/G, at most 3 significant digits, no "B" and no
+// prefix letter under 1000 bytes (task §k; no existing convention to match —
+// SExternFileList and SCleanupDialog both use QLocale::formattedDataSize(),
+// which is binary/locale-dependent and spells out "bytes"/"KiB"/etc., not the
+// fixed-width form asked for here). `v` is reduced by repeated /1000 into
+// [1,1000) and the decimal count follows its own digit width (2/1/0) — but
+// ROUNDING a boundary value can itself carry the result across a width it was
+// not computed for, in two different ways, so both are re-checked against
+// what was actually printed rather than trusted from `v` alone:
+//   * across a UNIT boundary — 999.6k must print "1.00M", not "1000k";
+//   * across a DECIMALS boundary within the same unit — 9.999k rounds to
+//     "10.00" at 2 decimals, which is 4 significant digits; it must reprint
+//     at 1 decimal as "10.0k".
+// Each loop iteration below can only move `unit` up (capped at G) or move
+// `decimals` down one step of {2,1,0}, so it always terminates.
+QString mediaBrowserFormatSize( qint64 bytes )
 {
     if( bytes < 0 ) return QString();
-    return QLocale().formattedDataSize( bytes );
-}
+    if( bytes < 1000 ) return QString::number( bytes );
 
-}   // namespace
+    static const char *kUnits[] = { "k", "M", "G" };
+    double v = (double) bytes;
+    int unit = -1;
+    while( v >= 1000.0 && unit < 2 ) {
+        v /= 1000.0;
+        ++unit;
+    }
+
+    for( ;; ) {
+        const int decimals = ( v < 10.0 ) ? 2 : ( v < 100.0 ? 1 : 0 );
+        const QString s = QString::number( v, 'f', decimals );
+        const double rounded = s.toDouble();
+        if( rounded >= 1000.0 && unit < 2 ) {
+            v = rounded / 1000.0;
+            ++unit;
+            continue;
+        }
+        const int neededDecimals = ( rounded < 10.0 ) ? 2 : ( rounded < 100.0 ? 1 : 0 );
+        if( neededDecimals != decimals ) {
+            v = rounded;
+            continue;
+        }
+        return s + QString::fromLatin1( kUnits[unit] );
+    }
+}
 
 // --------------------------------------------------------------------------
 // SMediaBrowserTree
@@ -190,8 +229,8 @@ void SMediaBrowserPanel::buildUi()
     root->addWidget( banner_ );
 
     tree_ = new SMediaBrowserTree( this, this );
-    tree_->setColumnCount( 3 );
-    tree_->setHeaderLabels( { tr( "Name" ), tr( "Size" ), tr( "Modified" ) } );
+    tree_->setColumnCount( 2 );
+    tree_->setHeaderLabels( { tr( "Name" ), tr( "Size" ) } );
     tree_->setDragEnabled( true );
     tree_->setDragDropMode( QAbstractItemView::DragOnly );
     tree_->setSelectionMode( QAbstractItemView::SingleSelection );
@@ -461,10 +500,8 @@ QTreeWidgetItem *SMediaBrowserPanel::makeItem( const SMediaEntry &entry ) const
 {
     QTreeWidgetItem *item = new QTreeWidgetItem;
     item->setText( 0, entry.name );
-    item->setText( 1, entry.isDir ? QString() : humanSize( entry.sizeBytes ) );
-    item->setText( 2, entry.modified.isValid()
-                          ? entry.modified.toString( Qt::ISODate )
-                          : QString() );
+    item->setText( 1, entry.isDir ? QString()
+                                   : mediaBrowserFormatSize( entry.sizeBytes ) );
     item->setData( 0, kRolePath, entry.ref.path );
     item->setData( 0, kRoleIsDir, entry.isDir );
     item->setData( 0, kRoleSize, (qlonglong) entry.sizeBytes );

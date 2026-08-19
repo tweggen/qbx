@@ -105,3 +105,49 @@ static const bool s_reg_dragclipedge = (
         []{ return new SDragClipEdgeAction; }
     ), true
 );
+
+// ----------------------------------------------------------- double-click-clip
+
+SDoubleClickClipAction::SDoubleClickClipAction( int track, int clip )
+    : track_( track ), clip_( clip )
+{
+}
+
+SApplyResult SDoubleClickClipAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = NULL;
+    for( QWidget *w : QApplication::topLevelWidgets() ) {
+        if( ( win = qobject_cast<SMainWindow*>( w ) ) ) break;
+    }
+    if( !win ) {
+        qWarning() << "SDoubleClickClipAction: no main window";
+        return {false, nullptr};
+    }
+    if( !win->doubleClickClip( track_, clip_ ) ) {
+        qWarning() << "SDoubleClickClipAction: no clip at track" << track_
+                   << "index" << clip_;
+        return {false, nullptr};
+    }
+    // Opening a dock has nothing to undo.
+    return {true, nullptr};
+}
+
+void SDoubleClickClipAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "track", track_ );
+    elem.setAttribute( "clip", clip_ );
+}
+
+bool SDoubleClickClipAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    track_ = elem.attribute( "track", "0" ).toInt();
+    clip_  = elem.attribute( "clip", "0" ).toInt();
+    return true;
+}
+
+static const bool s_reg_doubleclickclip = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("double-click-clip"),
+        []{ return new SDoubleClickClipAction; }
+    ), true
+);

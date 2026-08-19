@@ -83,6 +83,20 @@ public:
     // wiring rather than the snapshot taken at project-creation time.
     void rewireSpeaker() override;
     offset_t getGlobalLocatorPos() const override;   // SAppContext (proposal 37 P5)
+    // The last position the user explicitly NAVIGATED the playhead to — a
+    // click on the timeline, "0"/Home (go to range start), End (go to range
+    // end), or the testkit's `set-locator` verb. Deliberately NOT the same
+    // thing as getGlobalLocatorPos(): that one also moves under playback and
+    // under Stop's own "second press returns to 0" convenience, neither of
+    // which is a navigation. Space resumes playback from HERE (item o);
+    // Shift+Space resumes from getGlobalLocatorPos() instead, unchanged.
+    offset_t lastNavigatedLocatorPos() const { return lastNavigatedLocatorPos_; }
+    // Record a direct user navigation of the playhead (see
+    // lastNavigatedLocatorPos above). Called ALONGSIDE setGlobalLocatorPos, at
+    // the few call sites that are genuinely a user picking a position — never
+    // from playback advance, never from Stop's reset-to-0, never from the
+    // count-in/pre-roll or MIDI-record preamble's own internal seeks.
+    void noteUserNavigatedLocator( offset_t pos ) { lastNavigatedLocatorPos_ = pos; }
     // Store the playback position from the REALTIME AUDIO THREAD. This only does
     // an atomic store — it must NOT emit any Qt signal or otherwise touch QObject
     // machinery, because doing so from the raw render std::thread makes Qt adopt
@@ -424,6 +438,9 @@ private:
     std::atomic<std::uint64_t> locatorPublishSeq_{ 0 };
     offset_t lastShownLocator_ = 0;   // last position the UI emitted (main thread only)
     offset_t recordingStartFrame_ = 0; // locator at record start (for the live region)
+    // See lastNavigatedLocatorPos()/noteUserNavigatedLocator() above (item o).
+    // Main-thread only — every call site that updates it already runs there.
+    offset_t lastNavigatedLocatorPos_ = 0;
 
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan

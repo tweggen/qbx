@@ -207,6 +207,13 @@ public:
     // already in the requested state; false for an unknown name.
     bool tkClickToggle( const QString &which, bool on );
 
+    // TEST ENTRY POINT (item j): send a synthetic Home/End key press directly
+    // to the fader (qVolume_), exactly as Qt delivers a real keystroke to a
+    // focused widget — this is what exercises eventFilter()'s Home/End
+    // interception under QT_QPA_PLATFORM=offscreen, where nothing ever really
+    // has OS-level keyboard focus. Returns false for an unknown key name.
+    bool tkSendFaderKey( const QString &key );
+
 private slots:
     // Proposal 34: one metering tick. Reads this track's frozen page at the
     // (already latency-compensated) position and feeds the meter, or decays it.

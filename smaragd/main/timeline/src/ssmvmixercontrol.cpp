@@ -20,6 +20,7 @@
 #include <QToolTip>
 
 #include "app/shell/sapplication.h"
+#include "app/shell/smainwindow.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/smidiinputhub.h"
@@ -147,9 +148,37 @@ void SSMVMixerControl::wheelEvent( QWheelEvent *ev )
  *
  * Also intercept mouse presses on the track label to allow selecting the track
  * from anywhere on the control (d).
+ *
+ * And intercept Home/End on the fader (item j): QAbstractSlider's own
+ * keyPressEvent maps them to "jump to minimum/maximum", so a fader that
+ * happens to have keyboard focus would silently steal the transport's
+ * go-to-start/-end shortcut. Home/End must always drive the transport,
+ * whether or not a fader has focus, so this catches them BEFORE QSlider's
+ * handler ever sees them and forwards to the same SMainWindow slots the
+ * window-wide shortcuts use.
  */
 bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
 {
+    if( watched == qVolume_ && ev->type() == QEvent::KeyPress ) {
+        QKeyEvent *ke = static_cast<QKeyEvent *>( ev );
+        if( ke->key() == Qt::Key_Home || ke->key() == Qt::Key_End ) {
+            // NOT QApplication::activeWindow(): a --test-case run never
+            // shows the window (main.cpp), so nothing is ever "active" under
+            // QT_QPA_PLATFORM=offscreen and that call always returns null
+            // there. topLevelWidgets() is the same lookup every testkit
+            // gesture verb uses (see strackselectionactions.cpp's
+            // mainWindow()) for exactly this reason.
+            SMainWindow *mw = nullptr;
+            for( QWidget *w : QApplication::topLevelWidgets() ) {
+                if( ( mw = qobject_cast<SMainWindow*>( w ) ) ) break;
+            }
+            if( mw ) {
+                if( ke->key() == Qt::Key_Home ) mw->gotoRangeStart();
+                else                            mw->gotoRangeEnd();
+            }
+            return true;   // never let QAbstractSlider touch the fader's value
+        }
+    }
     if( watched == qVolume_ && ev->type() == QEvent::MouseButtonDblClick ) {
         QMouseEvent *me = static_cast<QMouseEvent *>( ev );
         if( me->button() == Qt::LeftButton ) {
@@ -612,18 +641,31 @@ SSMVMixerControl::SSMVMixerControl(
     QFont btnFont = QApplication::font();
     btnFont.setPointSize( 8 );
     btnFont.setBold( true );
+    // The DESELECTED state of these buttons sets no background of its own
+    // (it keeps the plain native button face), so it used to leave the
+    // glyph's colour to whatever the platform/theme default happened to be —
+    // low contrast against that face in practice. A `QPushButton { color:… }`
+    // base rule fixes only the glyph; a `:checked` rule is more specific in
+    // Qt's stylesheet cascade and still wins whenever the button IS engaged,
+    // so the active-state background/colour pairs below are unchanged
+    // (fix/track-list-polish n).
+    static const QString INACTIVE_GLYPH = QStringLiteral(
+        "QPushButton { color:#303030; }" );
+
     qMute_ = new QPushButton( "M", this );
     qMute_->setCheckable( true );
     qMute_->setFixedSize( 20, 20 );
     qMute_->setFont( btnFont );
     qMute_->setToolTip( "Mute" );
-    qMute_->setStyleSheet( "QPushButton:checked { background:#d04040; color:white; }" );
+    qMute_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#d04040; color:white; }" );
     qSolo_ = new QPushButton( "S", this );
     qSolo_->setCheckable( true );
     qSolo_->setFixedSize( 20, 20 );
     qSolo_->setFont( btnFont );
     qSolo_->setToolTip( "Solo" );
-    qSolo_->setStyleSheet( "QPushButton:checked { background:#e0c020; color:black; }" );
+    qSolo_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#e0c020; color:black; }" );
 
     qArm_ = new QPushButton( "R", this );
     qArm_->setCheckable( true );
@@ -631,7 +673,8 @@ SSMVMixerControl::SSMVMixerControl(
     qArm_->setFont( btnFont );
     qArm_->setToolTip( "Arm for Recording / Monitoring\n"
                        "(Right-click for input, channels and monitor mode)" );
-    qArm_->setStyleSheet( "QPushButton:checked { background:#c04040; color:white; }" );
+    qArm_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#c04040; color:white; }" );
     qArm_->setContextMenuPolicy( Qt::CustomContextMenu );
 
     qTakes_ = new QPushButton( "T", this );
@@ -639,14 +682,16 @@ SSMVMixerControl::SSMVMixerControl(
     qTakes_->setFixedSize( 20, 20 );
     qTakes_->setFont( btnFont );
     qTakes_->setToolTip( "Show take lanes (takes stack up when you record over a clip)" );
-    qTakes_->setStyleSheet( "QPushButton:checked { background:#4080c0; color:white; }" );
+    qTakes_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#4080c0; color:white; }" );
 
     qGroup_ = new QPushButton( "G", this );
     qGroup_->setCheckable( true );
     qGroup_->setFixedSize( 20, 20 );
     qGroup_->setFont( btnFont );
     qGroup_->setToolTip( "Edit group: lock this track (and its subtree) together" );
-    qGroup_->setStyleSheet( "QPushButton:checked { background:#40a060; color:white; }" );
+    qGroup_->setStyleSheet( INACTIVE_GLYPH +
+        "QPushButton:checked { background:#40a060; color:white; }" );
 
     // Proposal 37 6.1 - the second pair. Both are FULL-DENSITY ONLY and both
     // additionally require the button column to still fit vertically: five
@@ -1216,6 +1261,21 @@ bool SSMVMixerControl::tkClickToggle( const QString &which, bool on )
     // click() and not setChecked(): the point is to go through the button's
     // own toggled() signal, which is the wire the broadcast hangs off.
     if( b->isChecked() != on ) b->click();
+    return true;
+}
+
+bool SSMVMixerControl::tkSendFaderKey( const QString &key )
+{
+    Qt::Key k = Qt::Key_unknown;
+    if(      key == QStringLiteral( "Home" ) ) k = Qt::Key_Home;
+    else if( key == QStringLiteral( "End" ) )  k = Qt::Key_End;
+    else return false;
+    // QApplication::sendEvent runs the exact same dispatch a real keystroke
+    // would (installed event filters first, then the target's own event()),
+    // so this reaches eventFilter() above precisely as focus + a keystroke
+    // would — without needing real OS-level focus under QT_QPA_PLATFORM=offscreen.
+    QKeyEvent ev( QEvent::KeyPress, k, Qt::NoModifier );
+    QApplication::sendEvent( qVolume_, &ev );
     return true;
 }
 

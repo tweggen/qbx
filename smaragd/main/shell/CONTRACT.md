@@ -621,7 +621,50 @@ than guessed at. The trim floor already distinguishes the two cases
     that shows a plugin's reported latency says so, because the live lane has no
     delay line anywhere: what you hear through it really is late by that much.
 
-## The media layer's hooks (proposal 38 gate 3)
+37. **"CLICK WHILE RECORDING" (`SOpt::ClickWhileRecording`) IS A SECOND GATE ON
+    THE CLICK, NOT A REPLACEMENT FOR THE METRONOME SWITCH** (proposal 21 L5
+    follow-up, the metronome button's right-click menu). `sliveplan::
+    metronomeWanted` reads it fresh on every `SLiveMonitor::refresh()`:
+
+    ```
+    if( countIn )      return true;
+    if( !metronomeOn ) return false;
+    if( recording )    return clickWhileRecording;
+    return playing;
+    ```
+
+    `recording` is checked, not `playing || recording` as before this option
+    existed — recording implies the transport is running, so an `||` would
+    make the checkbox unable to silence a take. Plain playback (not recording)
+    is unaffected by the flag either way, and a count-in still overrides
+    everything (invariant 33 above): it is not "recording" yet — the playhead
+    has not moved.
+
+    Being a per-USER `SSettings` key, not a project property, it raises no
+    `propertyChanged` the way `SProjectProps::Metronome` does (`SApplication`'s
+    ctor wiring) — so the menu's checkbox calls `SApplication::
+    liveLanesChanged()` itself after writing it, the same call the metronome
+    switch's own signal handler makes, or a live lane already up would not see
+    the change until its next unrelated rebuild.
+
+    "Count in while recording", the menu's other item, is deliberately NOT a
+    second SOpt key: it is a convenience on/off toggle over the SAME
+    `SOpt::CountInBars` the Options dialog's spinbox edits, because 0 already
+    means "off" everywhere that key is read (this invariant's `countIn` term
+    included). `SMainWindow` remembers the last non-zero bar count in-memory
+    (`metronomeLastCountInBars_`) so unchecking then rechecking restores it;
+    falling back to 2 bars if nothing was stashed this session is the "or
+    default" the feature was specified with, not an oversight — it is NOT
+    persisted across a restart.
+
+    Gate: `metronome_click_while_recording.qxa` (a take with the flag at its
+    default reads clicks; a second take with it off reads none, while the
+    project's own metronome switch stays ON throughout — the whole point is
+    that the second take is silent because of THIS option). **NOT gated:** the
+    context menu itself — there is no testkit verb for a context menu anywhere
+    in this repo.
+
+## The media layer's two hooks (proposal 38 gate 3)
 
 Three injections, split across two classes because the status bar belongs to
 one of them and the composition root to the other.

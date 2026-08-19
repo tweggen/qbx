@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/track-list-polish (m): fold state and timeline zoom/pan survive a
+  save/load round trip, exactly.
+
+  Both used to be pure view state, reset to their defaults on every load:
+
+    - a track's fold state lived only in SStdMixerView::collapsed_, a
+      QSet<STrack*> pruned to nothing but never written to a project file;
+    - the arranger's horizontal zoom (SMVActualView::secondWidth_) and pan
+      (upperLeftOffset_) were hard-coded to 30.0 / 0 in its constructor.
+
+  Fold state now lives on STrack itself (isCollapsed()/setCollapsed(), a
+  plain serialized attribute) and zoom/pan are a project property pair
+  (SProjectProps::TimelineZoomSecondWidth/TimelineScrollX). Both round-trip
+  through the ordinary save/load path with no bespoke persistence code.
+
+  `assert-lane-view` is the read-back verb this change adds: `collapsed`
+  needs no arranger at all (it reads STrack::isCollapsed() directly), while
+  `secondWidth`/`scrollX` read the arranger's own state.
+-->
+<SActionScript version="1" name="track_list_view_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- A brand-new project (nothing saved yet) still reads the historic
+         hard-coded defaults - the fallback path a project written before
+         this attribute existed takes. -->
+    <assert-lane-view secondWidth="30.0" scrollX="0"/>
+
+    <!-- 0 = folder, 1 = its child, 2 = a plain top-level track. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <!-- Expanded by default. -->
+    <assert-lane-view trackPath="0" collapsed="0"/>
+
+    <collapse-track trackPath="0" collapsed="1"/>
+    <assert-lane-view trackPath="0" collapsed="1"/>
+
+    <!-- Move the view to something the hard-coded defaults are not. -->
+    <set-lane-view secondWidth="45.5" scrollX="123456"/>
+    <assert-lane-view secondWidth="45.5" scrollX="123456"/>
+
+    <save-project path="../../build/track_list_view_roundtrip.qxp"/>
+    <load-project path="../../build/track_list_view_roundtrip.qxp"/>
+
+    <!-- FOLD STATE survived the round trip. -->
+    <assert-lane-view trackPath="0" collapsed="1"/>
+    <!-- ...and the folder's own STRUCTURE is intact underneath it: the
+         reparented child is still resolvable one level down. -->
+    <assert-lane-view trackPath="0,0" collapsed="0"/>
+
+    <!-- ZOOM/PAN survived the round trip, to the exact frame - scrollX is an
+         integer quantity (project frames) and is compared EXACTLY; secondWidth
+         is a double (px/second) and is compared to a small tolerance. -->
+    <assert-lane-view secondWidth="45.5" scrollX="123456"/>
+
+    <!-- The fold is a real ABSOLUTE flip, not a one-way latch: open it again,
+         save, load, and it comes back OPEN. -->
+    <collapse-track trackPath="0" collapsed="0"/>
+    <assert-lane-view trackPath="0" collapsed="0"/>
+    <save-project path="../../build/track_list_view_roundtrip.qxp"/>
+    <load-project path="../../build/track_list_view_roundtrip.qxp"/>
+    <assert-lane-view trackPath="0" collapsed="0"/>
+    <!-- Zoom/pan are unrelated to the fold flip and still hold. -->
+    <assert-lane-view secondWidth="45.5" scrollX="123456"/>
+  </actions>
+
+  <assertions>
+    <!-- Top-level tracks only: 0 = the folder, 2 = the plain track (1 was
+         reparented under 0). -->
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -81,6 +81,54 @@ private:
     bool    nestOnto_  = true;
 };
 
+// fader-key — send Home/End straight to a track head's LIVE fader (item j).
+//
+//   trackPath = "0"       index-path from the root mixer (must have a HEAD)
+//   key       = "Home"    "Home" or "End"
+//
+// The point is that the fader must never react to Home/End itself — they
+// must reach the transport (SMainWindow::gotoRangeStart/gotoRangeEnd) exactly
+// as if the fader had never been focused. See
+// SSMVMixerControl::tkSendFaderKey: it delivers a real QKeyEvent through
+// QApplication::sendEvent, the same dispatch a real keystroke uses, so this
+// exercises SSMVMixerControl::eventFilter's interception rather than a
+// re-spelling of it. Not undoable — like select-track, it drives a UI gesture,
+// not a model edit (the transport move it triggers is asserted separately,
+// e.g. by wait-playhead/assert-source-position).
+class SFaderKeyAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "fader-key" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    QString key_       = QStringLiteral( "Home" );
+};
+
+// assert-track-volume — a track's fader value, in dB.
+//
+//   trackPath = "0"       index-path from the root mixer
+//   volumeDb  = "0"       expected value (SObject::getVolume(), dB)
+//   tolerance = "0.001"
+//
+// Exists to prove a gesture did NOT move a fader — fader-key's whole point
+// (item j) is that Home/End reach the transport and leave the fader alone,
+// which no existing assert verb could state.
+class SAssertTrackVolumeAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-track-volume" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    double  volumeDb_  = 0.0;
+    double  tolerance_ = 0.001;
+};
+
 // assert-track-selection — the mixer's selection, as index-paths.
 //
 //   paths   = "0;1"       SEMICOLON-separated (a path itself is

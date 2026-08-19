@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Per-clip static VOLUME and PAN (per-clip volume/pan proposal, item f):
+  the model/action/serialization story for both, and the audio-path wiring
+  for volume only.
+
+  Fixture: ../test_autosaw.wav, 4 s of a 480 Hz sawtooth whose RMS over any
+  100-aligned window is 0.230956 (tests/tools/gen_auto_fixture.py) — the SAME
+  fixture and single-clip-on-track-0 shape automation_clip_gain.qxa uses, so
+  its already-measured baseline band (0.22403 .. 0.23788 over the first
+  48000 frames) applies here unchanged. A flat, closed-form baseline is what
+  makes "did the level change by exactly this many dB" a computation rather
+  than a listening test.
+
+  What this pins:
+    (a) set-clip-volume actually attenuates the render, by the expected
+        linear factor (10^(dB/20)) — -6.0206 dB is exactly a linear HALF, so
+        the scaled band below is the baseline band cut in half; a right-sign-
+        wrong-scale bug (e.g. the dB value applied as a raw linear multiplier)
+        would miss it by an order of magnitude, not a rounding error;
+    (b) it COMPOSES with a `cut:Gain` automation envelope as a per-frame
+        PRODUCT of linear factors — the same "TRIM SUMS IN dB" rule
+        twGainStage already applies between a track's own static fader and a
+        `self:Volume` lane (mix/CONTRACT.md inv. 21, inv. 26 for this
+        addition specifically): a flat 0.5 envelope AND a further -6.0206 dB
+        static trim must land at 0.25 linear overall (two independent
+        halvings), which an "envelope wins" or "static wins" bug would not
+        produce;
+    (c) set-clip-pan is undoable and round-trips through save/load, but is
+        deliberately NOT audible — a render before/after a pan-only change
+        is BYTE-IDENTICAL, the same discipline the "0 dB does no arithmetic"
+        rule gives volume;
+    (d) both values read back exactly via the new assert-clip-mix verb —
+        including after undo, not just "the action applied without being
+        rejected" (contrast clip_properties_actions.qxa's note on why name/
+        formant have no dedicated value assertion: this property gets one);
+    (e) an old project — no volumeDb/pan ever set — loads at the documented
+        default, 0 dB / center (assert-clip-mix right after add-sample,
+        before anything here has touched either property).
+-->
+<SActionScript version="1" name="clip_volume_pan">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ 0. the default is 0 dB / center =================== -->
+    <assert-clip-mix clip="0,0" expectVolumeDb="0" expectPan="0"/>
+
+    <render filename="cvp_unity.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cvp_unity.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
+
+    <!-- ============ 1. volume actually attenuates the render =========== -->
+    <set-clip-volume clip="0,0" volumeDb="-6.0206"/>
+    <assert-clip-mix clip="0,0" expectVolumeDb="-6.0206" volumeTolerance="1e-4"/>
+
+    <render filename="cvp_half.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cvp_half.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.112015" maxRms="0.11894"/>
+
+    <undo count="1"/>
+    <assert-clip-mix clip="0,0" expectVolumeDb="0" volumeTolerance="1e-6"/>
+    <render filename="cvp_unvolumed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="cvp_unvolumed.wav" expected="cvp_unity.wav"/>
+
+    <!-- ============ 2. composes with cut:Gain as a PRODUCT (dB sum) ==== -->
+    <add-automation-lane owner="0,0" target="cut:Gain" mode="read"/>
+    <add-automation-point owner="0,0" target="cut:Gain"
+                          time="0" value="0.5" curve="step"/>
+    <set-clip-volume clip="0,0" volumeDb="-6.0206"/>
+
+    <render filename="cvp_composed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cvp_composed.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.056008" maxRms="0.05947"/>
+
+    <undo count="1"/>   <!-- the second set-clip-volume -->
+    <undo count="1"/>   <!-- the automation point -->
+    <undo count="1"/>   <!-- the automation lane -->
+    <assert-clip-mix clip="0,0" expectVolumeDb="0" volumeTolerance="1e-6"/>
+    <render filename="cvp_uncomposed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="cvp_uncomposed.wav" expected="cvp_unity.wav"/>
+
+    <!-- ============ 3. pan is undoable, round-trips, and is INAUDIBLE == -->
+    <set-clip-pan clip="0,0" pan="0.75"/>
+    <assert-clip-mix clip="0,0" expectPan="0.75" panTolerance="1e-6"/>
+
+    <render filename="cvp_panned.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- Deliberately NOT wired to DSP: byte-identical to the unpanned render. -->
+    <assert-file-identical actual="cvp_panned.wav" expected="cvp_unity.wav"/>
+
+    <undo count="1"/>
+    <assert-clip-mix clip="0,0" expectPan="0" panTolerance="1e-6"/>
+
+    <!-- ============ 4. both survive save / load ======================== -->
+    <set-clip-volume clip="0,0" volumeDb="-6.0206"/>
+    <set-clip-pan clip="0,0" pan="0.75"/>
+    <save-project path="../../build/clip_volume_pan.qxp"/>
+    <load-project path="../../build/clip_volume_pan.qxp"/>
+
+    <assert-clip-mix clip="0,0" expectVolumeDb="-6.0206" volumeTolerance="1e-4"
+                     expectPan="0.75" panTolerance="1e-6"/>
+
+    <render filename="cvp_reloaded.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cvp_reloaded.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.112015" maxRms="0.11894"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

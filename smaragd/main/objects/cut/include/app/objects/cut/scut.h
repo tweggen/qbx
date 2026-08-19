@@ -431,6 +431,15 @@ private slots:
     // stalled renders (the workers=8 takes_group_broadcast hang).
     void onArrangementChanged();
 
+    // The per-clip static volume (SObject::volume_, dB — see
+    // ssetclipvolumeaction.h). Connected to our OWN volumeChanged in the ctor,
+    // the same self-signal idiom STrack uses for its fader
+    // (onTrackVolumeChanged). Unlike the track fader there is no twGainStage
+    // here to push a scalar into directly: the value is picked up by
+    // STrack::refreshClipGainCurves() the next time it runs, which this
+    // invalidation is what triggers.
+    void onVolumeChanged( double db );
+
     // Trailing edge of the slip-invalidation throttle (see
     // invalidateRenderPathForSlip). Both run on THIS object's thread: the
     // timer is a child QObject, and armSlipInvalidateTimer_ is only ever

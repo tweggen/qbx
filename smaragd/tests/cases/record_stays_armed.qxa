@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L3b / item (e): once a take is placed, the armed track MUST
+  REMAIN ARMED - arm state is untouched by stop/commit. This was broken:
+  SAudioRecorder::commitPlacement_() called track->setArmedForRecording(false)
+  on every armed track at the end of EVERY take (both the "nothing to place"
+  early return and the normal path), so a second record-start with no re-arm
+  in between found no armed tracks and refused outright.
+  SMidiRecorder::commit_() had the identical bug for MIDI-armed tracks.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  THE TEST IS THE OBSERVABLE CONSEQUENCE, not a state-flag read (there is no
+  assert-track-armed verb, and this is a stronger claim than one would be
+  anyway): arm the track ONCE, then record-stop-record-stop TWICE with NO
+  arm-track call between them. If the bug were present, the second
+  record-start would refuse outright ("no armed tracks", logged but not
+  itself asserted) and produce NOTHING, so clip path 0,1 below - which only
+  a SECOND placed take can create - would fail to resolve.
+
+  The two takes land as two SEPARATE clips, not one comped column: each
+  record-start re-anchors its own placement conversion from the engine clock
+  at the moment its capture actually begins, which carries a few thousand
+  frames of real wall-clock jitter run to run (readahead priming, capture
+  thread scheduling) - not exactly reproducible even from the identical
+  locator=0 both takes start at. That is a fact about THIS harness's timing,
+  not about the fix; comping onto one column is already covered elsewhere
+  (record_loop_takes, midi_record_modes) with passes close enough together
+  that they are guaranteed to overlap. It is also why the second take is
+  checked with assert-clip-window (existence only) rather than a second
+  assert-recorded-clip: that verb's placement-identity check always reads
+  the lane's FIRST clip against the recorder's LATEST run, which is a
+  mismatch by construction once the lane holds two independent takes.
+-->
+<SActionScript version="1" name="record_stays_armed">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+
+    <arm-track trackPath="0" armed="1"/>
+
+    <!-- Take 1. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          minDurationFrames="24000"/>
+
+    <!-- Take 2. NO arm-track call here - that absence is the whole point. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <!-- TWO clips on the lane now, produced by two SEPARATE record-start /
+         record-stop cycles with only ONE arm-track call between them - clip
+         0,1 exists only because the track was still armed for the second. -->
+    <assert-clip-window clip="0,0"/>
+    <assert-clip-window clip="0,1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

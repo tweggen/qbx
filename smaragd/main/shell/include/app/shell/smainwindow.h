@@ -57,9 +57,25 @@ public:
     bool arrangerSetLaneView( int laneScaleRow, double laneScale,
                               int toggleTakesRow, int baseTrackHeight,
                               int topRow );
+    // TEST ENTRY POINT (fix/track-list-polish m): drive the horizontal zoom
+    // (`SMVActualView::setSecondWidth`) and/or pan (`setLeftOffset`, project
+    // frames) directly — the same calls the zoom buttons and the wheel make,
+    // which is exactly what triggers a save (SMVActualView's
+    // secondWidthChanged/leftOffsetChanged -> saveViewStateToProject()).
+    // `secondWidth` <= 0 or `scrollX` < 0 leaves that one untouched.
+    bool arrangerSetZoomPan( double secondWidth, qlonglong scrollX );
     // "" when aligned, else a description of the first mismatch. A null
     // QString with no arranger at all is reported as an error by the caller.
     QString arrangerLaneAlignment();
+
+    // TEST ENTRY POINT (fix/track-list-polish l): scroll the vertical
+    // scrollbar to its OWN maximum (the number a real mouse wheel is capped
+    // by — see SStdMixerView::tkVerticalScrollMaximum()'s comment on why
+    // tkSetTopRow(rowCount()-1) would not test this) and report
+    // "maxScroll=<int>|lastRowBottom=<int>|canvasHeight=<int>|fullyVisible=
+    // true|false" — the numeric form of "does the padding let the true last
+    // track end up fully visible". "" when there is no arranger or no rows.
+    QString arrangerDescribeScrollRange();
 
     // TEST ENTRY POINT: build the REAL track head at `headHeight` and return its
     // meter's SLevelMeter::describe() string. Goes through the shell because the
@@ -83,6 +99,12 @@ public:
     // by index-path, so a NESTED lane can be exercised.
     bool groupTrackGesture( const QString &trackPath, bool ungroup );
 
+    // TEST ENTRY POINT: double-click a clip in the arranger through its real
+    // mouse handlers (drag-clip-edge's twin, same routing reason). An EVENT
+    // (MIDI) clip opens the event editor for it, matching the real
+    // mouseDoubleClickEvent; any other clip is a no-op success.
+    bool doubleClickClip( int rowIdx, int clipIdx );
+
     // Testkit: the multi-track selection. selectTrackGesture() is one REAL
     // head click with modifiers (plain / ctrl / shift), so the click semantics
     // themselves are what runs; toggleTrackHead() presses a head's M/S/R
@@ -95,6 +117,24 @@ public:
     // boundary (reorder / pop out), which is the only route to the multi-track
     // move arithmetic in endTrackDrag.
     bool dragTrackHead( const QString &trackPath, int targetRow, bool nestOnto );
+    // ...and a synthetic Home/End key press straight to that lane's LIVE
+    // fader (item j), through the shell for the same reason. `key` is
+    // "Home" or "End"; false for an unknown track path or key name.
+    bool sendFaderKey( const QString &trackPath, const QString &key );
+
+    // TEST ENTRY POINT: a real click (press+release, no move) into a track's
+    // LANE — the clip-drawing area, not the head — at `time`. Runs the same
+    // mouse handlers dragClipEdge does; see SStdMixerView::clickLane. Lands on
+    // a clip if one covers `time`, empty lane space otherwise.
+    bool clickLane( const QString &trackPath, offset_t time,
+                    Qt::KeyboardModifiers mods = Qt::NoModifier );
+
+    // TEST ENTRY POINT: the split command ('s' / "Split object"), unchanged
+    // from what a real keypress or menu click runs — SStdMixerView::
+    // ctSplitSample() is a public slot, so this just calls it. Splits every
+    // clip in the CURRENT SELECTION whose extent strictly contains the
+    // locator, or (selection empty) the last-clicked clip.
+    bool splitSelectionGesture();
 
     // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
@@ -148,6 +188,16 @@ public:
     // free to drift from it. False when the path names no lane.
     bool setTrackCollapsed( const QString &trackPath, bool collapsed );
 
+    // TEST ENTRY POINT (fix/track-list-polish m): read fold state back
+    // without needing the arranger to exist (STrack::isCollapsed() directly),
+    // so a save/load round-trip case can check it before ever opening a view.
+    bool isTrackCollapsed( const QString &trackPath );
+    // TEST ENTRY POINT (fix/track-list-polish m): the arranger's zoom/pan as
+    // "secondWidth=<double>|scrollX=<qulonglong frames>", the same two values
+    // SMVActualView::saveViewStateToProject() persists. "" when there is no
+    // arranger.
+    QString arrangerDescribeView();
+
     // TEST ENTRY POINT (proposal 37 P4): build the REAL track head at
     // `headHeight` and return SSMVMixerControl::describeHead() — the density
     // rules for the instrument "I" and automation "A" buttons, and whether the
@@ -195,6 +245,12 @@ public:
     //                          first when non-empty.
     //   grabEventEditor      — paint the dock into a PNG. Coverage, not oracle.
     //   dragNote             — one REAL press/move/release on the piano roll.
+    //   scrollEventEditorKeys — drives the piano roll's REAL vertical key
+    //                          scrollbar (setValue()), so a case can prove
+    //                          the full 0-127 MIDI range is reachable rather
+    //                          than only asserting the clamp math. Returns
+    //                          the resulting topKey(), or -1 with no piano
+    //                          roll bound (kind mismatch or no clip).
     //   virtualKey           — one virtual-keyboard note at the locator, which
     //                          submits `add-note`. False when there is no event
     //                          clip to write into.
@@ -203,6 +259,7 @@ public:
     bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
                    qint64 toTick, int toKey, const QString &edge,
                    const QString &lane, double toValue );
+    int  scrollEventEditorKeys( const QString &clipPath, int topKey );
     bool virtualKey( int key, double velocity, qint64 durationTicks );
     //   virtualKeyHold / Release — PLAY the virtual keyboard rather than write
     //   into a clip (proposal 21 L2): a note-on / note-off pair on the computer
@@ -234,7 +291,10 @@ public:
     //                            SMVActualView::dropEvent. There is no shortcut
     //                            around the drop handler: a verb that submitted
     //                            add-sample itself would pass while the gesture
-    //                            was broken.
+    //                            was broken. `belowLastTrack` targets the EMPTY
+    //                            canvas space below the last lane instead of a
+    //                            track (trackPath is then ignored — there is no
+    //                            track to resolve yet, that being the point).
     //   describeMediaBrowser   — SMediaBrowserPanel::describe().
     //   mediaBrowserBusy       — is any request the panel displays still live?
     bool mediaBrowserSetSource( const QString &sourceId );
@@ -243,7 +303,8 @@ public:
                              bool viaDebounce );
     bool mediaBrowserSetFilter( const QString &categories );
     bool mediaBrowserDrag( int row, const QString &name,
-                           const QString &trackPath, offset_t timePos );
+                           const QString &trackPath, offset_t timePos,
+                           bool belowLastTrack = false );
     QString describeMediaBrowser() const;
     bool    mediaBrowserBusy() const;
 
@@ -273,6 +334,43 @@ public:
     // focus, so the binding round-trips.
     void showClipProperties();
 
+public slots:
+    // "Go to project start" / "Go to project end" (item j): jump to the time
+    // selection's start/end if one is set, otherwise to frame 0 / the end of
+    // the project's arranged content. Bound to "0"/Home and End respectively.
+    // Public (and slots, for the old-style SIGNAL/SLOT connect below) because
+    // a fader widget's own event filter calls these directly, so Home/End
+    // always drive the transport even while the fader has keyboard focus —
+    // QAbstractSlider's own keyPressEvent would otherwise treat them as
+    // "jump this fader to its minimum/maximum".
+    void gotoRangeStart();
+    void gotoRangeEnd();
+
+    // Space / Shift+Space (item o). Public for the same reason as above: the
+    // `press-play` testkit verb drives these directly to exercise exactly
+    // what the two shortcuts do, since `toggle-playback` bypasses this
+    // resume-position logic entirely (it drives SAppContext::setPlaybackRunning
+    // straight, which is the older, simpler mechanism).
+    void startPlaying();              // resume from the LAST NAVIGATED position
+    void startPlayingFromCurrent();   // resume from the CURRENT position (unchanged)
+    // The real Stop button/shortcut. Public for the same reason, driven by
+    // the `press-stop` testkit verb: pressed while ALREADY stopped it resets
+    // the locator to 0 — a SEPARATE mechanism from item o's "last navigated"
+    // tracking (noteUserNavigatedLocator is deliberately NOT called here), and
+    // exercising the real slot is what proves the two do not interfere.
+    void stopPlaying();
+
+    // Show + raise the event editor dock, ACTIVELY re-querying the current
+    // selection (or binding an explicit clip) rather than trusting only the
+    // reactive arrangementChanged -> refresh() connection: a headless test
+    // run never routes a project through fileNew()/openProjectFile(), so
+    // that connection is never wired there at all, and even in the
+    // interactive app a dock merely toggled visible again must show what is
+    // ALREADY selected rather than wait for a future selection change
+    // (CONTRACT.md inv. 4/9). Public because the arranger's double-click
+    // handler calls it. clipPath empty = follow the current selection.
+    void showEventEditor( const QString &clipPath = QString() );
+
 protected:
     void closeEvent( QCloseEvent *event ) override;
     // Watches the tempo box so Return commits the value and then hands the
@@ -289,9 +387,6 @@ protected slots:
     void fileClose();
     void onRenderTriggered();
 
-    void startPlaying();
-    void stopPlaying();
-    void gotoRangeStart();
     void onRecordTriggered();
     void onRecordingFinished();
 
@@ -316,6 +411,10 @@ protected slots:
     void toggleGrid();
     void toggleMetronome();
     void toggleCycle();
+    // Right-click on the transport toolbar's metronome button: "Click while
+    // recording" (SOpt::ClickWhileRecording) and "Count in while recording"
+    // (a convenience toggle over SOpt::CountInBars - see soptions.h).
+    void showMetronomeContextMenu();
     // Track grouping toolbar -> act on the arranger's last-clicked track.
     void groupTrack();
     void ungroupTrack();
@@ -368,6 +467,11 @@ private:
     // so loop playback follows the project. Called when playback starts and
     // whenever the Cycle flag or the range markers change.
     void syncCyclePlayback();
+    // Shared by startPlaying() (Space) and startPlayingFromCurrent()
+    // (Shift+Space) — item o. fromLastNavigated selects which position a
+    // fresh play start seeks to; the toggle-to-stop branch is identical
+    // either way.
+    void startPlayingFrom_( bool fromLastNavigated );
 
     // Measure and cache audio device latencies on startup if not already known.
     // Shows a modal "Checking audio devices..." dialog to the user.
@@ -401,6 +505,10 @@ private:
     QActionGroup *deviceGroup_;
 
     QAction *actStop_, *actPlay_, *actRecord_, *actGotoStart_;
+    // Shift+Space (item o) and End (item j) — window-wide shortcuts with no
+    // toolbar/menu entry of their own, exactly like actGotoStart_.
+    QAction *actPlayFromCurrent_ = nullptr;
+    QAction *actGotoEnd_ = nullptr;
     QAction *actSaveAs_ = nullptr;      // File->Save as...; disabled with no project
     QToolBar *qTBTransport_;
     // Proposal 34: master level meter, right of the tempo box. Mono today (the
@@ -435,6 +543,14 @@ private:
     bool endpointRateWarningShown_ = false;
     void warnOnEndpointRateMismatch();
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
+    // "Count in while recording" (metronome context menu) is a convenience
+    // on/off toggle over SOpt::CountInBars, whose own spinbox already treats
+    // 0 as "off" (soptions.h). Unchecking stashes the bar count here and
+    // writes 0; checking restores it, or falls back to 2 bars - the smallest
+    // count-in any qxa case (record_count_in) exercises - if nothing was ever
+    // stashed this session. NOT persisted across a restart: that is the
+    // "or default" half of the task's own wording, not an oversight.
+    int metronomeLastCountInBars_ = 2;
     QDockWidget *qDockExternFileList_;
     SExternFileList *externFileList_;
 

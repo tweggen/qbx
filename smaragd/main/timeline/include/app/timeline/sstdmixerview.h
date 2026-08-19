@@ -117,6 +117,11 @@ public:
 
     offset_t getUpperLeftX() const { return (offset_t) upperLeftX_; }
     offset_t getUpperLeftY() const { return (offset_t) upperLeftY_; }
+    // The horizontal pan in PROJECT FRAMES — what fix/track-list-polish (m)
+    // persists (SProjectProps::TimelineScrollX). getUpperLeftX() above is the
+    // derived PIXEL value, which moves with the zoom; this is the value the
+    // save/load round trip is exact about.
+    offset_t getLeftOffset() const { return upperLeftOffset_; }
     offset_t getTimeOf( int x ) const;
     idx_t getLastClickTrackIdx() const { return lastClickTrackIdx_; }
     STrack *getLastClickTrack() const { return lastClickTrack_; }
@@ -249,6 +254,17 @@ private:
     void drawRulerTicks( QPainter &, const QRect &myRect );
     void saveRangeToProject();
     void loadRangeFromProject();
+    // --------------------------------------------------------------------
+
+    // --- zoom / horizontal pan persistence (fix/track-list-polish m) -----
+    // Restores what a previous save left in the project's property dict, or
+    // this widget's own hard-coded defaults when there is nothing saved (a
+    // fresh project, or one written before this existed). Saved on every
+    // change via secondWidthChanged/leftOffsetChanged so every path that
+    // moves them — wheel, the zoom buttons, the scrollbar — is covered
+    // without hunting down each call site.
+    void saveViewStateToProject();
+    void loadViewStateFromProject();
     // --------------------------------------------------------------------
 
     SStdMixerView &smv_;
@@ -487,6 +503,23 @@ public:
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
+    // TEST ENTRY POINT: drive a real double-click on a clip through the
+    // arranger's own mouse handlers (drag-clip-edge's twin). Lands on the
+    // clip BODY, exactly as SMVActualView::mouseDoubleClickEvent expects for
+    // its "open the event editor" branch — an EVENT clip opens it, any other
+    // clip is a no-op success (matches production: nothing else happens).
+    bool doubleClickClip( int rowIdx, int clipIdx );
+    // TEST ENTRY POINT: a single, real click (press+release, no move) into
+    // track `t`'s LANE — the clip-drawing area, as opposed to its head — at
+    // `time`. Lands on whatever is there: a clip if one covers that position
+    // (same as clicking its body), empty lane space otherwise. Exercises the
+    // lane-click track selection and no-drag cursor positioning that live in
+    // SMVActualView::mousePressEvent/mouseReleaseEvent, the same handlers
+    // dragClipEdge drives — this is its "click on the lane itself" twin, and
+    // it is the only route to a lane click that hits no clip at all.
+    bool clickLane( STrack *t, offset_t time,
+                    Qt::KeyboardModifiers mods = Qt::NoModifier );
+
     // TEST ENTRY POINTS for the multi-track selection. A headless run never
     // clicks, and the two things worth covering are exactly the click
     // semantics (plain / Ctrl / Shift) and the BROADCAST from a head's toggle
@@ -495,6 +528,12 @@ public:
     // shape and rationale as drag-clip-edge and group-track.
     bool tkClickTrackHead( STrack *t, Qt::KeyboardModifiers mods );
     bool tkToggleTrackHead( STrack *t, const QString &which, bool on );
+    // Send a synthetic Home/End key press to `t`'s LIVE fader (item j) — the
+    // same widget instance the real arranger draws, found in controlArray_
+    // exactly as tkToggleTrackHead's button does. Exercises
+    // SSMVMixerControl::eventFilter's Home/End interception without needing
+    // real OS-level keyboard focus under QT_QPA_PLATFORM=offscreen.
+    bool tkSendFaderKey( STrack *t, const QString &key );
     // Grip-drag `t`'s head and drop it on a LANE ROW: `nestOnto` drops on the
     // middle of that row (nest into it), otherwise on its top boundary (insert
     // above it; `targetRow` == rowCount() means "past the last lane"). Rows,
@@ -512,6 +551,14 @@ public:
     // "" when every head sits exactly on its lane (same top, same height as
     // the painter uses, full column width), otherwise the first mismatch.
     QString tkCheckLaneAlignment() const;
+    // TEST ENTRY POINT (fix/track-list-polish l): the vertical scrollbar's own
+    // `maximum()`, in row-index units — the number `verticalScrollMaximum()`
+    // computes and the real mouse wheel is capped by. `tkSetTopRow()` above
+    // does NOT reproduce the bug the padding fixes: it clamps only to
+    // `rowCount()-1` and bypasses the scrollbar's maximum entirely, so a case
+    // that wants to test what a wheel scroll can actually reach must read
+    // this number and scroll to IT, not to `rowCount()-1`.
+    int tkVerticalScrollMaximum() const;
     // The automation half of that check (proposal 37 P6), defined in
     // sautomationlane.cpp: every Automation row must still name a lane the
     // model can resolve. A row left behind by a removed lane paints an empty
@@ -544,6 +591,18 @@ public:
     // vertical scrollbar is row-granular, so its page step depends on which
     // rows are on screen once heights differ.
     int visibleRowCountFrom( int firstRow ) const;
+    // The `qScrollVert_` maximum for a given page step `vis` (fix/
+    // track-list-polish l). `visibleRowCountFrom()` can count a row that only
+    // PARTIALLY fits as fully visible whenever the content does not divide
+    // evenly into the viewport, which without correction leaves the true
+    // last row permanently clipped at the bottom with no scroll room left to
+    // reach it. This reserves roughly one track's height of scroll headroom
+    // below the real content whenever it is taller than the viewport (never
+    // when it already fits, so scrolling stays disabled when there is
+    // nothing to scroll for). ONE definition, used by both recalcPageStep()
+    // (a resize/zoom/height-scale change) and nTracksChanged() (a track
+    // added/removed), so the two cannot compute two different answers.
+    int verticalScrollMaximum( int vis ) const;
     // Row containing column-space y, or -1 past the last lane.
     int rowAtLaneY( int y ) const;
 
@@ -555,7 +614,11 @@ public:
     double trackHeightScale( const STrack * ) const;
     void setTrackHeightScale( STrack *, double scale );
     int rowIndexOfTrack( const STrack * ) const;
-    bool isTrackCollapsed( STrack *t ) const { return collapsed_.contains( t ); }
+    // Fold state now lives ON the track (STrack::isCollapsed(), fix/
+    // track-list-polish m) so it survives save/load and needs no pruning of
+    // its own — it dies with the object instead of outliving it in a
+    // view-owned QSet. toggleTrackCollapsed() still owns the row rebuild.
+    bool isTrackCollapsed( STrack *t ) const { return t && t->isCollapsed(); }
     void toggleTrackCollapsed( STrack * );
     // Take lanes (proposal 17 phase 3): per-track expanded state, UI-only.
     // An expanded track shows one extra row per take index below its lane.
@@ -657,9 +720,12 @@ public slots:
     void ctAddTrack();
     // Add a new track whose parent is the same container as the last visible
     // lane's track (the "track above" the blank area). Triggered by a double
-    // click in the blank space below the track heads. Routes through the
-    // undoable SAction system.
-    void ctAddTrackBelowLast();
+    // click in the blank space below the track heads, and by a media-browser
+    // drop landing on that same blank area. Routes through the undoable
+    // SAction system. Returns the new track (still a valid pointer after the
+    // reparent macro, which moves the SLink but never re-creates the STrack),
+    // or NULL if there is no project to add to.
+    STrack *ctAddTrackBelowLast();
     void ctRemoveTrack();
     // Grouping via the right-click menu / toolbar.
     void ctIndentTrack();    // nest the clicked track under its preceding sibling
@@ -818,7 +884,6 @@ private:
     // column space, rowTop_[rowCount()] the total. Rebuilt with rows_ and
     // whenever the base height or a per-track scale changes.
     QVector<int> rowTop_;
-    QSet<STrack*> collapsed_;
     QSet<STrack*> takesExpanded_;   // tracks showing their take lanes
     QHash<const STrack*, double> trackScale_;   // per-track lane height factor
     // The automation UI (proposal 37 P6). Created lazily by automationUi() so

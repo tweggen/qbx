@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 38 gate 2 extension (task item i). Dragging a media item out of the
+  browser and dropping it on EMPTY canvas space - anywhere !SStdMixerView::
+  rowAt(...) resolves, e.g. below the last track's lane, or a project with no
+  tracks at all - creates a new track FIRST and places the item on it at the
+  dropped time position, instead of silently doing nothing (what
+  SMVActualView::dropEvent used to do for a row-less drop).
+
+  `media-browser-drag belowLastTrack="1"` drives the SAME production path
+  dropEvent's own new-track branch takes: SStdMixerView::ctAddTrackBelowLast()
+  - the identical call the double-click-in-blank-space gesture already made
+  (mouseDoubleClickEvent) - followed by the ordinary placement
+  (SAddSampleAction, exactly the on-track drop's own path). `trackPath` is
+  ignored when `belowLastTrack` is set: there is, by definition, no existing
+  track to name yet.
+
+  WHAT IT PINS
+
+  1. A drop into a project with ZERO tracks creates exactly ONE track and
+     places the clip on it, at the requested frame - proven indirectly
+     through assert-clip-window (there is no assert-track-count usable mid-
+     script; it is an <assertions>-only verb), the same idiom
+     media_browser_drag_local.qxa already uses on the CLIP axis ("a second
+     clip would sit at index 1") applied here to the TRACK axis instead.
+  2. A second such drop, with one track already present, creates a SECOND
+     track below it and places the clip THERE - not a second clip on the
+     first track.
+  3. TWO undo steps reverse each gesture (the placement, then the add-track),
+     never merged into one macro: SStdMixerView::ctAddTrackBelowLast() opens
+     its own macro only for the NESTED-parent case (this project has none),
+     and dropEvent's placement is a separate submitAction after it returns -
+     deliberately, because the `media:` (deferred-fetch) branch of the very
+     same handler places its clip ASYNCHRONOUSLY, after this call has already
+     returned, so no macro could span it (see docs/ACTIONS.md).
+
+  OWNERSHIP (design AC 9, trap T6): same four media/* keys
+  media_browser_drag_local.qxa owns; RUN_SERIAL, restored at the end.
+
+  NOT gated here: a drop on the ruler band itself (refused, unlike a row-less
+  drop below the last lane - see dropEvent's own guard), and a nested-folder
+  "track above" parent (ctAddTrackBelowLast()'s own macro-wrapped reparent
+  path is not exercised by an empty project).
+-->
+<SActionScript version="1" name="media_browser_drag_belowlast">
+
+  <setup project="new"/>
+
+  <actions>
+    <media-browser-filter categories="audio"/>
+    <set-option key="media/lastPath/local" value="../media/lib"/>
+    <media-browser-source sourceId="local"/>
+    <assert-media-browser mode="browse" rowCount="3"
+                          contains="kick.wav,768044,0"/>
+
+    <!-- (1) Zero tracks yet: the drop must create the first one and place
+         the clip on it - never do nothing. -->
+    <assert-clip-window clip="0,0" expectReject="true"/>
+    <media-browser-drag name="kick.wav" belowLastTrack="1" timePos="48000"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="192000"/>
+
+    <!-- (2) One track now exists: a second empty-area drop must land on a
+         NEW second track, not add a second clip to the first. -->
+    <assert-clip-window clip="1,0" expectReject="true"/>
+    <media-browser-drag name="kick.wav" belowLastTrack="1" timePos="96000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,0" startTime="96000" duration="192000"/>
+
+    <!-- (3) TWO undos per drop reverse it: the placement, then the track. -->
+    <undo count="1"/>
+    <assert-clip-window clip="1,0" expectReject="true"/>
+    <undo count="1"/>
+    <!-- The second track is gone: what was clip "1,0" now names no track. -->
+    <assert-clip-window clip="1,0" expectReject="true"/>
+    <!-- ...and the first drop's clip is untouched by the second drop's undo. -->
+    <assert-clip-window clip="0,0" startTime="48000" duration="192000"/>
+
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+    <undo count="1"/>
+    <!-- Back to zero tracks: even track 0 now names nothing. -->
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <!-- Restore every key this case owns to its SOpt default (T6). -->
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/local" value=""/>
+    <set-option key="media/categoryMask" value="1"/>
+    <set-option key="media/searchRecursive" value="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

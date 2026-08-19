@@ -93,6 +93,11 @@ int STrack::serializeSelfAttributes( QTextStream &o )
         o << " trackInput='" << trackInput_.toHtmlEscaped() << "'";
     if( monitorMode_ != MonitorMode::Auto )
         o << " monitorMode='" << monitorModeToString( monitorMode_ ) << "'";
+    // Fold state (fix/track-list-polish m), written only when true — the
+    // default (expanded) is what every project saved before this attribute
+    // existed means, so an unfolded track re-serializes byte-identically.
+    if( collapsed_ )
+        o << " collapsed='true'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -1149,7 +1154,11 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     setTrackInput( element.attribute( "trackInput", "" ) );
     setMonitorMode( monitorModeFromString(
         element.attribute( "monitorMode", "auto" ) ) );
-    
+
+    // Fold state (fix/track-list-polish m). Absent = expanded, which is what
+    // every project written before this attribute existed means.
+    setCollapsed( element.attribute( "collapsed", "false" ).startsWith( "true" ) );
+
     return 0;
 }
 
@@ -1594,6 +1603,15 @@ void STrack::refreshClipGainCurves()
         if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
         cpTrackMix_->setClipGainCurve(
             lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
+        // THE PER-CLIP STATIC VOLUME (per-clip volume/pan proposal).
+        // obj->getVolume() is in dB — the same unit twGainStage's own static
+        // scalar uses — so converting to linear here is what makes it compose
+        // with cut:Gain's linear factor as a PRODUCT, i.e. the two sum in dB
+        // (see ClipEntry::gainScalar / twGainStage's own "TRIM SUMS IN dB",
+        // mix/CONTRACT.md inv. 21). Every SObject answers getVolume() at 0 dB
+        // by default, so this is a no-op for every clip that never set one.
+        cpTrackMix_->setClipGainScalar(
+            lk, std::pow( 10.0, obj->getVolume() / 20.0 ) );
     }
 }
 

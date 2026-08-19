@@ -103,11 +103,13 @@ scheduler at all). For invariant 8, the twGainStage block of `mix_test`
 position-determinism, the width-1 path) plus qxa.fader_post_fx and
 qxa.meter_gain_after_probe end-to-end.
 
-Known debt: calcOutputTo allocates buffers per block; per-clip gain/pan not
-yet modeled (track-level only). twTrackMix::setTrackGain and trackGainDb_ are
-dead weight until proposal 37 P5 removes them. twGainStage's mute ramp is
-implemented and unit-tested but UNWIRED — P5's `self:Muted` lane is its caller.
-Pan does not exist.
+Known debt: calcOutputTo allocates buffers per block. twTrackMix::setTrackGain
+and trackGainDb_ are dead weight until proposal 37 P5 removes them.
+twGainStage's mute ramp is implemented and unit-tested but UNWIRED — P5's
+`self:Muted` lane is its caller. Pan does not reach the audio path anywhere
+(a clip's `SObject::pan_` is modeled, serialized and editable — see item 26 —
+but nothing downstream reads it; a full pan implementation needs channel
+roles and a fold law, out of scope here).
 
 ## Automation (proposal 37 P5, design D5 / §4.5)
 

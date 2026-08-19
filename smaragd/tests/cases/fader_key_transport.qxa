@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Home and End must ALWAYS drive the transport, even when a fader has
+  keyboard focus (item j). QAbstractSlider's own keyPressEvent maps Home/End
+  to "jump to minimum/maximum", so nothing but a deliberate interception stops
+  a focused fader from silently eating the app's go-to-start/-end shortcut,
+  and before this fix nothing intercepted it at all (there was no Home/End
+  transport shortcut in the app to interfere with).
+
+  fader-key sends a REAL QKeyEvent straight to the track head's LIVE fader
+  (SSMVMixerControl::qVolume_) via QApplication::sendEvent - the same
+  dispatch a genuine keystroke uses, so this exercises
+  SSMVMixerControl::eventFilter's Home/End interception rather than a
+  re-spelling of it. It needs no OS-level keyboard focus (there is none under
+  QT_QPA_PLATFORM=offscreen), which is why the widget is targeted directly
+  instead of through a synthesized global keypress.
+
+  Two things are asserted after each key: the LOCATOR moved (the transport
+  ran), and the FADER did NOT (assert-track-volume reads the model value
+  QAbstractSlider would otherwise have stomped on).
+
+  NOT gated here: the Track Detail dock's fader (STrackDetailPanel::
+  volumeSlider_) carries the identical eventFilter override (see
+  strackdetailpanel.cpp) but is not wired into a "tk" test entry point, so
+  this case covers only the arranger track head's fader. Also not gated: that
+  OTHER QAbstractSlider-derived widgets (the plugin parameter editor, the
+  render dialog's quality slider) keep their default Home/End behaviour,
+  true by construction, since no eventFilter was installed on either.
+-->
+<SActionScript version="1" name="fader_key_transport">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>            <!-- 0 -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- A non-zero, non-default volume, so a fader move toward either
+         extreme (QAbstractSlider's Home=min / End=max) is unmistakable. -->
+    <set-track-volume trackPath="0" volume="-12"/>
+    <assert-track-volume trackPath="0" volumeDb="-12"/>
+
+    <!-- ===================== Home: go to project start =============== -->
+    <set-locator position="96000"/>
+    <fader-key trackPath="0" key="Home"/>
+    <assert-locator position="0"/>
+    <!-- The fader must be UNTOUCHED - not jumped to its minimum. -->
+    <assert-track-volume trackPath="0" volumeDb="-12"/>
+
+    <!-- ====================== End: go to project end ================== -->
+    <!-- No time selection is set, so End goes to the arrangement's content
+         end: the sawtooth fixture is exactly 192000 frames (4 s @ 48 kHz). -->
+    <fader-key trackPath="0" key="End"/>
+    <assert-locator position="192000"/>
+    <!-- The fader must still be UNTOUCHED - not jumped to its maximum. -->
+    <assert-track-volume trackPath="0" volumeDb="-12"/>
+
+    <!-- Home again, back and forth once more, so the case is not merely
+         "it worked on the very first key". -->
+    <fader-key trackPath="0" key="Home"/>
+    <assert-locator position="0"/>
+    <assert-track-volume trackPath="0" volumeDb="-12"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

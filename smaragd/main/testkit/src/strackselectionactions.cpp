@@ -162,6 +162,77 @@ bool SDragTrackAction::readXml( const QDomElement &elem, int /*version*/ )
     return true;
 }
 
+// --- fader-key ---------------------------------------------------------------
+
+SApplyResult SFaderKeyAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "fader-key: no main window";
+        return { false, nullptr };
+    }
+    if( !win->sendFaderKey( trackPath_, key_ ) ) {
+        qWarning() << "fader-key: no head for" << trackPath_
+                   << "or unknown key" << key_;
+        return { false, nullptr };
+    }
+    // The keystroke reaches the transport (a manual seek); nothing here to
+    // undo, exactly like select-track.
+    return { true, nullptr };
+}
+
+void SFaderKeyAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "key", key_ );
+}
+
+bool SFaderKeyAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    key_       = elem.attribute( "key", "Home" );
+    if( key_ != QStringLiteral( "Home" ) && key_ != QStringLiteral( "End" ) ) {
+        qWarning() << "fader-key: unknown key:" << key_;
+        return false;
+    }
+    return true;
+}
+
+// --- assert-track-volume ------------------------------------------------------
+
+SApplyResult SAssertTrackVolumeAction::apply( SProject *project )
+{
+    SObject *root = splacements::rootContainer( project );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath_ ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) {
+        qWarning() << "assert-track-volume: no track at" << trackPath_;
+        return { false, nullptr };
+    }
+    const double actual = track->getVolume();
+    if( qAbs( actual - volumeDb_ ) > tolerance_ ) {
+        qWarning() << "assert-track-volume FAILED: expected" << volumeDb_
+                   << "dB but got" << actual << "dB (tolerance" << tolerance_ << ")";
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertTrackVolumeAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "volumeDb", QString::number( volumeDb_ ) );
+    elem.setAttribute( "tolerance", QString::number( tolerance_ ) );
+}
+
+bool SAssertTrackVolumeAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    volumeDb_  = elem.attribute( "volumeDb", "0" ).toDouble();
+    tolerance_ = elem.attribute( "tolerance", "0.001" ).toDouble();
+    return true;
+}
+
 // --- assert-track-selection -------------------------------------------------
 
 SApplyResult SAssertTrackSelectionAction::apply( SProject *project )
@@ -237,6 +308,18 @@ static const bool s_reg_dragtrack =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "drag-track" ),
           [] { return new SDragTrackAction; } ),
+      true );
+
+static const bool s_reg_faderkey =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "fader-key" ),
+          [] { return new SFaderKeyAction; } ),
+      true );
+
+static const bool s_reg_asserttrackvolume =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-track-volume" ),
+          [] { return new SAssertTrackVolumeAction; } ),
       true );
 
 static const bool s_reg_asserttrackselection =

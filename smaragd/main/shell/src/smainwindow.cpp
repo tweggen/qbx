@@ -6,6 +6,7 @@
 #include <qmessagebox.h>
 #include <qaction.h>
 #include <QActionGroup>
+#include <QCursor>
 #include <QMenu>
 #include <qtoolbar.h>
 #include <QDockWidget>
@@ -276,6 +277,26 @@ void SMainWindow::showClipProperties()
         clipPropsPanel_->refresh();
         clipPropsPanel_->focusFirstField();
     }
+}
+
+void SMainWindow::showEventEditor( const QString &clipPath )
+{
+    if( !qDockEventEditor_ || !eventEditor_ ) return;
+
+    qDockEventEditor_->show();
+    qDockEventEditor_->raise();       // pulls it out of a tab group
+
+    // Actively re-resolve rather than trust the reactive arrangementChanged
+    // connection alone: it is only wired by attachEventEditor(), which a
+    // headless test run never calls (SActionRunner sets the project straight
+    // on SApplication), and even in the interactive app "open the dock" must
+    // show what is ALREADY selected, not wait for the NEXT selection change.
+    if( !clipPath.isEmpty() )
+        eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    else
+        eventEditor_->refresh();
+
+    if( eventEditor_->view() ) eventEditor_->view()->setFocus( Qt::OtherFocusReason );
 }
 
 void SMainWindow::createDocksToolbars()
@@ -691,21 +712,53 @@ void SMainWindow::postHint( const QString &text, int durationMs )
     statusBar()->showMessage( text, durationMs );
 }
 
+// Space (item o): resume from the LAST NAVIGATED locator position, not from
+// wherever the transport currently sits.
 void SMainWindow::startPlaying()
 {
+    startPlayingFrom_( true );
+}
+
+// Shift+Space (item o): resume from the CURRENT locator position — Space's
+// own behaviour before item o, kept verbatim under the new shortcut.
+void SMainWindow::startPlayingFromCurrent()
+{
+    startPlayingFrom_( false );
+}
+
+void SMainWindow::startPlayingFrom_( bool fromLastNavigated )
+{
     qWarning() << "startPlaying(): Called." << Qt::endl;
-    if( !currentProject_ ) return;
+    // The APP's current project, not this window's: a headless --test-case
+    // run drives SApplication directly and leaves currentProject_ null (the
+    // same reason describeTrackHead/ensureArranger_ read it there) — and the
+    // `press-play` testkit verb (item o) needs this method to actually run.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
     if( SApplication::app().isPlaying() ) {
         qWarning() << "startPlaying(): Ought to stop." << Qt::endl;
-        SApplication::app().getSpeaker()->stopOutput();        
+        SApplication::app().getSpeaker()->stopOutput();
         actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
         SApplication::app().setPlaying( false );
     } else {
         qWarning() << "startPlaying(): Ought to start." << Qt::endl;
         // FIXME: Add myselves as listener of the root component.
-        SObject *root = currentProject_->getRootComponent();
+        SObject *root = proj->getRootComponent();
         if( !root ) return;
         qWarning() << "startPlaying(): Preparing start." << Qt::endl;
+
+        // Space resumes from the last position the user explicitly navigated
+        // to; Shift+Space resumes from wherever the locator happens to sit
+        // right now (today's behaviour, unchanged) — item o. This is a plain
+        // reposition, not itself a navigation: it must NOT update
+        // lastNavigatedLocatorPos_, or a second Space press would chase
+        // wherever playback last left the locator instead of returning to the
+        // spot the user actually picked.
+        if( fromLastNavigated ) {
+            SApplication::app().setGlobalLocatorPos(
+                SApplication::app().lastNavigatedLocatorPos() );
+        }
+
         // NO graph seek here. Play start used to walk the whole model tree
         // seeking every component to the locator; that cascade takes only each
         // component's mutex(), never its cursorMutex_, so it could land between
@@ -735,38 +788,66 @@ void SMainWindow::startPlaying()
         actPlay_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
         SApplication::app().setPlaying( true );
     }
-} 
+}
 
 void SMainWindow::stopPlaying()
 {
-    if( !currentProject_ ) return;
+    // See startPlayingFrom_ above: the APP's project, not this window's.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
     if( SApplication::app().isPlaying() ) {
         SApplication::app().getSpeaker()->stopOutput();
         SApplication::app().setPlaying( false );
     } else {
-        SObject *root = currentProject_->getRootComponent();
+        SObject *root = proj->getRootComponent();
         if( !root ) return;
         // FIXME: Jump to left locator here.
         SApplication::app().setGlobalLocatorPos( 0 );
-        //  currentProject_->getRootComponent().seekTo( 0 );
+        //  proj->getRootComponent().seekTo( 0 );
     }
     actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
 }
 
 // Jump the global position to the start of the time range, if one is set,
-// otherwise to the very beginning (zero).
+// otherwise to the very beginning (zero). Bound to "0" and Home.
 void SMainWindow::gotoRangeStart()
 {
-    if( !currentProject_ ) return;
+    // See startPlayingFrom_ above: the APP's project, not this window's —
+    // needed for the `fader-key` testkit verb (item j) to actually run.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
 
     offset_t pos = 0;
-    if( currentProject_->hasTimeSelection() ) {
-        SProject::TimeRange sel = currentProject_->getTimeSelection();
-        double sampleRate = currentProject_->getSRate();
+    if( proj->hasTimeSelection() ) {
+        SProject::TimeRange sel = proj->getTimeSelection();
+        double sampleRate = proj->getSRate();
         pos = (offset_t)( sel.startSeconds * sampleRate );
     }
 
     SApplication::app().setGlobalLocatorPos( pos );
+    // A direct user navigation (item o): Space must resume from HERE next,
+    // not from wherever playback or Stop happens to leave the locator.
+    SApplication::app().noteUserNavigatedLocator( pos );
+}
+
+// Jump the global position to the end of the time range, if one is set,
+// otherwise to the end of the project's arranged content. Bound to End.
+void SMainWindow::gotoRangeEnd()
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
+
+    offset_t pos;
+    if( proj->hasTimeSelection() ) {
+        SProject::TimeRange sel = proj->getTimeSelection();
+        double sampleRate = proj->getSRate();
+        pos = (offset_t)( sel.endSeconds * sampleRate );
+    } else {
+        pos = (offset_t) proj->getDurationFrames();
+    }
+
+    SApplication::app().setGlobalLocatorPos( pos );
+    SApplication::app().noteUserNavigatedLocator( pos );
 }
 
 // PRE-FLIGHT (main PR #55, kept across proposal 21 L3b): the two endpoints must
@@ -909,6 +990,12 @@ SMainWindow::SMainWindow()
     actPlay_->setShortcut(Qt::Key_Space);
     // actPlay_->setMenuText("Start");
 
+    // Shift+Space (item o): resume from the CURRENT locator position, i.e.
+    // Space's own behaviour before item o. No icon/menu entry of its own —
+    // it is reached only through the shortcut, wired below like actGotoStart_.
+    actPlayFromCurrent_ = new QAction( "Start playing from current position", this );
+    actPlayFromCurrent_->setShortcut( Qt::SHIFT | Qt::Key_Space );
+
     actStop_ = new QAction(
         QIcon( QPixmap( (const char **)stopoff_xpm )),
         "Stop playing",
@@ -917,10 +1004,15 @@ SMainWindow::SMainWindow()
     /*new QAction( "Stop playing", QIcon( QPixmap( "images/player_stop.png" ) ),
                             "Stop", Qt::Key_0, this );*/
 
-    // "0" jumps the global position to the start of the time range
-    // (if one is set), otherwise to zero.
+    // "0" / Home jump the global position to the start of the time range
+    // (if one is set), otherwise to zero (item j).
     actGotoStart_ = new QAction( "Go to range start", this );
-    actGotoStart_->setShortcut( Qt::Key_0 );
+    actGotoStart_->setShortcuts( { QKeySequence( Qt::Key_0 ), QKeySequence( Qt::Key_Home ) } );
+
+    // End jumps to the end of the time range (if one is set), otherwise to
+    // the end of the project's arranged content (item j).
+    actGotoEnd_ = new QAction( "Go to range end", this );
+    actGotoEnd_->setShortcut( Qt::Key_End );
 
     actRecord_ = new QAction(
         QIcon( QPixmap( (const char **)recoff_xpm )),
@@ -1040,11 +1132,17 @@ SMainWindow::SMainWindow()
     QObject::connect( actRecord_, SIGNAL( triggered() ),
                       this, SLOT( onRecordTriggered() ) );
 
-    // Register the goto-start action on the window so its "0" shortcut is
-    // active even though it has no toolbar/menu entry.
+    // Register the goto-start/-end actions and Shift+Space on the window so
+    // their shortcuts are active even though none has a toolbar/menu entry.
     addAction( actGotoStart_ );
     QObject::connect( actGotoStart_, SIGNAL( triggered() ),
                       this, SLOT( gotoRangeStart() ) );
+    addAction( actGotoEnd_ );
+    QObject::connect( actGotoEnd_, SIGNAL( triggered() ),
+                      this, SLOT( gotoRangeEnd() ) );
+    addAction( actPlayFromCurrent_ );
+    QObject::connect( actPlayFromCurrent_, SIGNAL( triggered() ),
+                      this, SLOT( startPlayingFromCurrent() ) );
 
     qFileMenu_ = new QMenu( "&File", this );
     qFileMenu_->setTearOffEnabled(true);
@@ -1831,6 +1929,19 @@ void SMainWindow::buildPaletteToolbar()
     actMetronome_  = addToggle( "M", "Metronome",    Qt::Key_M, SLOT( toggleMetronome() ) );
     actCycle_      = addToggle( "C", "Cycle",        Qt::Key_C, SLOT( toggleCycle() ) );
 
+    // The metronome's RIGHT-CLICK menu: "Click while recording" and "Count in
+    // while recording" (proposal 21 L5 follow-up). addGridAction() builds a
+    // QToolButton the caller never sees, so the widget - not the QAction,
+    // which has no context-menu policy of its own - has to be looked up
+    // afterwards, the same way qArm_/qAuto_ in ssmvmixercontrol.cpp wire theirs.
+    actMetronome_->setToolTip( actMetronome_->toolTip()
+                               + "\n(Right-click for click/count-in options)" );
+    if( QWidget *btn = qTBPalette_->widgetForGridAction( actMetronome_ ) ) {
+        btn->setContextMenuPolicy( Qt::CustomContextMenu );
+        QObject::connect( btn, SIGNAL( customContextMenuRequested( const QPoint& ) ),
+                          this, SLOT( showMetronomeContextMenu() ) );
+    }
+
     addToolBar( Qt::TopToolBarArea, qTBPalette_ );
 
     // Track grouping toolbar. These act on the arranger's last-clicked track
@@ -1940,6 +2051,69 @@ void SMainWindow::toggleMetronome()
     SApplication::app().submitAction( new SMetronomeAction( SToggleSettingAction::Toggle ) );
 }
 
+// The metronome button's RIGHT-CLICK menu. Both items write a per-USER
+// preference through SSettings directly, NOT an SAction: like
+// set-count-in/set-pre-roll and the click level, these are not undoable - a
+// preference does not belong on the arrangement's undo stack (soptions.h).
+void SMainWindow::showMetronomeContextMenu()
+{
+    QMenu menu;
+
+    // "CLICK WHILE RECORDING" - SOpt::ClickWhileRecording. Distinct from the
+    // metronome switch itself (SProjectProps::Metronome, the "M" button this
+    // menu hangs off): unchecking this silences the click for the DURATION OF
+    // A TAKE specifically, while plain playback keeps clicking exactly as
+    // before (sliveplanbuilder.cpp's metronomeWanted).
+    QAction *click = menu.addAction( QStringLiteral( "Click while recording" ) );
+    click->setCheckable( true );
+    click->setChecked( SSettings::instance()
+        .value( SOpt::ClickWhileRecording,
+                SOpt::def( SOpt::ClickWhileRecording ) ).toBool() );
+    click->setToolTip( QStringLiteral(
+        "Whether the beat click sounds while a take is actually recording, "
+        "independent of the metronome switch and of plain playback." ) );
+    QObject::connect( click, &QAction::triggered, this, []( bool checked ) {
+        SSettings::instance().setValue( SOpt::ClickWhileRecording, checked );
+        // A per-user setting raises no propertyChanged the way the project's
+        // own Metronome switch does (sapplication.cpp), so a live lane already
+        // up would not otherwise see this until its next unrelated rebuild.
+        SApplication::app().liveLanesChanged();
+    } );
+
+    // "COUNT IN WHILE RECORDING" - a convenience on/off toggle over the SAME
+    // SOpt::CountInBars the Options dialog's spinbox edits (0..8 bars, 0 =
+    // off - soptions.h). A second enable flag was considered and rejected:
+    // the spinbox already treats 0 as "off" everywhere it is read
+    // (sliveplanbuilder's countIn gate, SApplication's preamble), so a second
+    // flag could only disagree with it. Unchecking stashes the current bar
+    // count in metronomeLastCountInBars_ and writes 0; checking restores it,
+    // or falls back to 2 bars (record_count_in.qxa's own count-in) if nothing
+    // was stashed this session yet.
+    const int countIn = SSettings::instance()
+        .value( SOpt::CountInBars, SOpt::def( SOpt::CountInBars ) ).toInt();
+    QAction *ci = menu.addAction( QStringLiteral( "Count in while recording" ) );
+    ci->setCheckable( true );
+    ci->setChecked( countIn > 0 );
+    ci->setToolTip( QStringLiteral(
+        "On/off for the count-in bar count (Edit -> Options -> Audio); "
+        "unchecking writes 0 bars, checking restores the last count." ) );
+    QObject::connect( ci, &QAction::triggered, this, [this]( bool checked ) {
+        if( checked ) {
+            const int bars = metronomeLastCountInBars_ > 0
+                                 ? metronomeLastCountInBars_ : 2;
+            SSettings::instance().setValue( SOpt::CountInBars, bars );
+        } else {
+            const int cur = SSettings::instance()
+                .value( SOpt::CountInBars, SOpt::def( SOpt::CountInBars ) )
+                .toInt();
+            if( cur > 0 ) metronomeLastCountInBars_ = cur;
+            SSettings::instance().setValue( SOpt::CountInBars, 0 );
+        }
+    } );
+
+    menu.exec( QCursor::pos() );
+}
+
 void SMainWindow::toggleCycle()
 {
     SApplication::app().submitAction( new SCycleAction( SToggleSettingAction::Toggle ) );
@@ -1990,6 +2164,13 @@ bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     SStdMixerView *v = ensureArranger_();
     if( !v ) return false;
     return v->dragClipEdge( rowIdx, clipIdx, grabWhere, dropTime, upperHalf, mods );
+}
+
+bool SMainWindow::doubleClickClip( int rowIdx, int clipIdx )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    return v->doubleClickClip( rowIdx, clipIdx );
 }
 
 bool SMainWindow::groupTrackGesture( const QString &trackPath, bool ungroup )
@@ -2070,7 +2251,8 @@ bool SMainWindow::mediaBrowserBusy() const
 // SStdMixerView::dragClipEdge turns its own arguments into pixels, because the
 // drop handler reads the position off the event and nothing else.
 bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
-                                    const QString &trackPath, offset_t timePos )
+                                    const QString &trackPath, offset_t timePos,
+                                    bool belowLastTrack )
 {
     if( !mediaBrowser_ ) return false;
     SStdMixerView *v = ensureArranger_();
@@ -2078,15 +2260,27 @@ bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
     SMVActualView *canvas = v->contentView();
     if( !canvas ) return false;
 
-    STrack *track = trackAtPath_( trackPath );
-    if( !track ) {
-        qWarning() << "media-browser-drag: no track at path" << trackPath;
-        return false;
-    }
-    const int rowIdx = v->rowIndexOfTrack( track );
-    if( rowIdx < 0 ) {
-        qWarning() << "media-browser-drag: track" << trackPath << "has no lane";
-        return false;
+    // The pixel this drop lands at, and the row height used only to size the
+    // off-screen canvas below. `belowLastTrack` targets the empty canvas space
+    // dropEvent's own "no row here" branch resolves — trackPath names no track
+    // yet, on purpose, so it is not consulted at all in that case.
+    int th, y;
+    if( belowLastTrack ) {
+        th = canvas->getTrackHeight();
+        y  = canvas->lanesBottom() + th / 2;
+    } else {
+        STrack *track = trackAtPath_( trackPath );
+        if( !track ) {
+            qWarning() << "media-browser-drag: no track at path" << trackPath;
+            return false;
+        }
+        const int rowIdx = v->rowIndexOfTrack( track );
+        if( rowIdx < 0 ) {
+            qWarning() << "media-browser-drag: track" << trackPath << "has no lane";
+            return false;
+        }
+        th = v->rowHeight( rowIdx );
+        y  = canvas->laneTop( rowIdx ) + th / 2;
     }
 
     QMimeData *mime = mediaBrowser_->createDragMime( row, name );
@@ -2099,9 +2293,7 @@ bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
         return false;
     }
 
-    const int x  = canvas->getXPosOfOffset( timePos );
-    const int th = v->rowHeight( rowIdx );
-    const int y  = canvas->laneTop( rowIdx ) + th / 2;
+    const int x = canvas->getXPosOfOffset( timePos );
     if( x < 0 || y < 0 ) { delete mime; return false; }
 
     // The window is never shown in a headless run, so the canvas may be smaller
@@ -2147,7 +2339,7 @@ bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
         // dropEvent returns without accepting when it cannot resolve the row,
         // the track or the project.
         qWarning() << "media-browser-drag: the arranger refused the drop at"
-                   << x << y << "(row" << rowIdx << ")";
+                   << x << y << "belowLastTrack=" << belowLastTrack;
         return false;
     }
     return true;
@@ -2181,6 +2373,33 @@ bool SMainWindow::dragTrackHead( const QString &trackPath, int targetRow,
     STrack *track = trackAtPath_( trackPath );
     if( !track ) return false;
     return v->tkDragTrackHead( track, targetRow, nestOnto );
+}
+
+bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkSendFaderKey( track, key );
+}
+
+bool SMainWindow::clickLane( const QString &trackPath, offset_t time,
+                             Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->clickLane( track, time, mods );
+}
+
+bool SMainWindow::splitSelectionGesture()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    v->ctSplitSample();
+    return true;
 }
 
 // Build the REAL head off screen at the given lane geometry. Parentless and
@@ -2448,6 +2667,29 @@ bool SMainWindow::setTrackCollapsed( const QString &trackPath, bool collapsed )
     return true;
 }
 
+// TEST ENTRY POINT (fix/track-list-polish m): read fold state back, the
+// SMVMixerView-side of the same round trip setTrackCollapsed drives. Reads
+// STrack::isCollapsed() directly rather than v->isTrackCollapsed(track) —
+// same value, but this also works with no arranger at all (a loaded project
+// before its view is ever built), which a save/load-only case may want.
+bool SMainWindow::isTrackCollapsed( const QString &trackPath )
+{
+    STrack *track = trackAtPath_( trackPath );
+    return track && track->isCollapsed();
+}
+
+// TEST ENTRY POINT (fix/track-list-polish m): the arranger's zoom/pan, the
+// same two numbers loadViewStateFromProject()/saveViewStateToProject() round
+// trip through the project. "" when there is no arranger.
+QString SMainWindow::arrangerDescribeView()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return QString();
+    return QStringLiteral( "secondWidth=%1|scrollX=%2" )
+        .arg( v->contentView()->getSecondWidth(), 0, 'f', 6 )
+        .arg( (qulonglong) v->contentView()->getLeftOffset() );
+}
+
 // --- proposal 37 P6 test seams -------------------------------------------
 
 bool SMainWindow::grabTrackHead( const QString &path, const QString &trackPath,
@@ -2606,6 +2848,18 @@ bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
                              toValue );
 }
 
+int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )
+{
+    if( !eventEditor_ ) return -1;
+    ensureArranger_();
+    linkEventEditorAxis();
+
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    SPianoRollView *roll = eventEditor_->pianoRoll();
+    if( !roll ) return -1;
+    return roll->tkScrollKeys( topKey );
+}
+
 bool SMainWindow::virtualKey( int key, double velocity, qint64 durationTicks )
 {
     if( !virtualKeys_ ) return false;
@@ -2684,6 +2938,33 @@ QString SMainWindow::arrangerLaneAlignment()
     SStdMixerView *v = ensureArranger_();
     if( !v ) return QStringLiteral( "no arranger view" );
     return v->tkCheckLaneAlignment();
+}
+
+bool SMainWindow::arrangerSetZoomPan( double secondWidth, qlonglong scrollX )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return false;
+    if( secondWidth > 0.0 ) v->contentView()->setSecondWidth( secondWidth );
+    if( scrollX >= 0 )      v->contentView()->setLeftOffset( (offset_t) scrollX );
+    return true;
+}
+
+QString SMainWindow::arrangerDescribeScrollRange()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() || v->rowCount() <= 0 ) return QString();
+    const int maxScroll = v->tkVerticalScrollMaximum();
+    // Scroll exactly as far as the real scrollbar's own maximum allows —
+    // NOT to rowCount()-1, which tkSetTopRow() would happily accept but which
+    // is not what a mouse wheel can actually reach (see the header comment on
+    // tkVerticalScrollMaximum()).
+    v->tkSetTopRow( maxScroll );
+    const int lastRow = v->rowCount() - 1;
+    const int bottom = v->contentView()->laneTop( lastRow ) + v->rowHeight( lastRow );
+    const int canvasHeight = v->contentView()->height();
+    return QStringLiteral( "maxScroll=%1|lastRowBottom=%2|canvasHeight=%3|fullyVisible=%4" )
+        .arg( maxScroll ).arg( bottom ).arg( canvasHeight )
+        .arg( bottom <= canvasHeight ? "true" : "false" );
 }
 
 void SMainWindow::groupTrack()

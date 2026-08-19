@@ -303,6 +303,22 @@ public:
     bool hasChildTracks() const;
 
     /**
+     * UI fold state (fix/track-list-polish m): whether the arranger draws this
+     * folder lane's children collapsed. Purely cosmetic — it changes no audio
+     * and nothing in the render path reads it — but it is a per-TRACK fact,
+     * so it belongs here rather than in a second, view-owned copy that would
+     * have to be pruned by hand whenever a track goes away (the fold set used
+     * to be exactly that: a `QSet<STrack*>` on `SStdMixerView`, kept in sync
+     * only by `pruneUiState()`). Living on the object means it dies with the
+     * object, needs no pruning, and — the point of this change — survives a
+     * save/load round trip for free through the ordinary attribute path.
+     * Written only when true, so every project saved before this exists
+     * loads and re-saves byte-identically.
+     */
+    bool isCollapsed() const { return collapsed_; }
+    void setCollapsed( bool c ) { collapsed_ = c; }
+
+    /**
      * Fill out[0..win.width) with the SUM OF OUR DESCENDANTS' DRAWN ENVELOPES
      * over `win`, and return true; false — writing nothing — when nothing
      * contributed, so the painter draws nothing at all.
@@ -509,7 +525,9 @@ private:
     offset_t deferredDirtyEnd_   = 0;
     int                             midiOutChannel_ = -1;
     int                             midiOutOffsetMs_ = 0;
-    
+    // Fold state (fix/track-list-polish m). See isCollapsed()/setCollapsed().
+    bool                            collapsed_ = false;
+
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;
 
