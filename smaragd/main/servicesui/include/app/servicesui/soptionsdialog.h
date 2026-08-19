@@ -70,18 +70,21 @@ private slots:
 
 private:
     QWidget *buildMousePage();
+    QWidget *buildEventEditorPage();
     QWidget *buildAudioPage();
     QWidget *buildLogPage();
     QWidget *buildMidiPage();
     QWidget *buildPluginsPage();
     QWidget *buildMediaPage();
     void loadMousePage();
+    void loadEventEditorPage();
     void loadAudioPage();
     void loadLogPage();
     void loadMidiPage();
     void loadPluginsPage();
     void loadMediaPage();
     void applyMousePage();
+    void applyEventEditorPage();
     void applyAudioPage();
     void applyLogPage();
     void applyMidiPage();
@@ -110,6 +113,16 @@ private:
     QCheckBox *zoomToCursor_;
     QCheckBox *invertZoom_;
     QCheckBox *followPlayhead_;
+
+    // Event editor (piano roll) mouse-wheel page. Own SOpt namespace, same
+    // shape as the arranger's page above (SOpt::EventWheelPlain and co.).
+    QComboBox *eventWheelPlain_;
+    QComboBox *eventWheelShift_;
+    QComboBox *eventWheelCtrl_;
+    QComboBox *eventWheelCtrlShift_;
+    QSpinBox  *eventWheelSensitivity_;
+    QCheckBox *eventZoomToCursor_;
+    QCheckBox *eventInvertZoom_;
 
     // Audio page.
     QComboBox *audioDevice_;         // Output device

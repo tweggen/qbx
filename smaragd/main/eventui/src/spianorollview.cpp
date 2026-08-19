@@ -10,6 +10,7 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QWheelEvent>
 
 #include "app/eventui/seventtimeaxis.h"
 
@@ -17,7 +18,9 @@
 #include "app/model/sproject.h"
 #include "app/objects/midi/smidicut.h"
 #include "app/objects/midi/smidieventactions.h"
+#include "app/servicesui/soptions.h"
 #include "app/shell/sapplication.h"
+#include "app/shell/ssettings.h"
 
 namespace {
 
@@ -30,6 +33,21 @@ bool isBlackKey( int key )
     default: return false;
     }
 }
+
+// The same predicate SMVActualView::hasPrimaryMod uses (sstdmixerview.cpp) --
+// duplicated rather than shared because the two views do not share a
+// translation unit and eventui may not depend on timeline (CONTRACT). On
+// macOS Qt::ControlModifier IS Command by default, so this one predicate
+// drives the piano roll's zoom gestures with Cmd on macOS and Ctrl elsewhere.
+bool hasPrimaryMod( Qt::KeyboardModifiers m ) { return m & Qt::ControlModifier; }
+
+// The wheel response AT 100 % SENSITIVITY -- byte-for-byte the arranger's own
+// constants (SMV_WHEEL_VSCROLL_STEP / _ZOOM_H_BASE / _ZOOM_V_BASE in
+// sstdmixerview.cpp), so the piano roll's DEFAULT feel matches the arranger's
+// exactly, gesture-for-gesture and notch-for-notch, as asked.
+constexpr int    PR_WHEEL_VSCROLL_STEP = 600;
+constexpr double PR_WHEEL_ZOOM_H_BASE  = 1.2;
+constexpr double PR_WHEEL_ZOOM_V_BASE  = 1.5;
 
 double clampVel( double v )
 {
@@ -68,6 +86,13 @@ SPianoRollView::SPianoRollView( QWidget *parent )
         update();
     } );
     layoutKeyScroll();
+
+    // Mouse-wheel navigation config: cache now, refresh whenever the user
+    // changes it in Options (own SOpt namespace -- see the header comment
+    // and main/servicesui's Event Editor page).
+    loadWheelConfig();
+    connect( &SSettings::instance(), &SSettings::changed,
+             this, [this]( const QString & ) { loadWheelConfig(); } );
 }
 
 SPianoRollView::~SPianoRollView() = default;
@@ -673,6 +698,175 @@ void SPianoRollView::resizeEvent( QResizeEvent *ev )
     QWidget::resizeEvent( ev );
     layoutKeyScroll();
     update();
+}
+
+// ---------------------------------------------------------------------------
+// Mouse-wheel pan/zoom -- matches SMVActualView's default gesture mapping
+// (sstdmixerview.cpp), through the piano roll's own SOpt::Event* keys.
+// ---------------------------------------------------------------------------
+
+void SPianoRollView::loadWheelConfig()
+{
+    SSettings &s = SSettings::instance();
+    wheelPlain_     = s.value( SOpt::EventWheelPlain,
+                               SOpt::def( SOpt::EventWheelPlain ) ).toInt();
+    wheelShift_     = s.value( SOpt::EventWheelShift,
+                               SOpt::def( SOpt::EventWheelShift ) ).toInt();
+    wheelCtrl_      = s.value( SOpt::EventWheelCtrl,
+                               SOpt::def( SOpt::EventWheelCtrl ) ).toInt();
+    wheelCtrlShift_ = s.value( SOpt::EventWheelCtrlShift,
+                               SOpt::def( SOpt::EventWheelCtrlShift ) ).toInt();
+    wheelZoomToCursor_ = s.value( SOpt::EventZoomToCursor,
+                                  SOpt::def( SOpt::EventZoomToCursor ) ).toBool();
+    wheelInvertZoom_   = s.value( SOpt::EventInvertZoom,
+                                  SOpt::def( SOpt::EventInvertZoom ) ).toBool();
+
+    // Clamped exactly as SMVActualView::loadWheelConfig() clamps the
+    // arranger's copy -- a zero or negative factor from a hand-edited INI
+    // would divide the scroll threshold by zero and stall every gesture.
+    int pct = s.value( SOpt::EventWheelSensitivityPct,
+                       SOpt::def( SOpt::EventWheelSensitivityPct ) ).toInt();
+    pct = qBound( 10, pct, 500 );
+    wheelSensitivity_ = pct / 100.0;
+
+    wheelVScrollStep_ = (int) std::lround( PR_WHEEL_VSCROLL_STEP / wheelSensitivity_ );
+    if( wheelVScrollStep_ < 1 ) wheelVScrollStep_ = 1;
+    wheelZoomHFactor_ = ( wheelSensitivity_ == 1.0 )
+                        ? PR_WHEEL_ZOOM_H_BASE
+                        : std::pow( PR_WHEEL_ZOOM_H_BASE, wheelSensitivity_ );
+    wheelZoomVFactor_ = ( wheelSensitivity_ == 1.0 )
+                        ? PR_WHEEL_ZOOM_V_BASE
+                        : std::pow( PR_WHEEL_ZOOM_V_BASE, wheelSensitivity_ );
+    // A sensitivity change carried over from the old threshold means nothing
+    // under the new one -- same reasoning as the arranger's copy.
+    wheelVScrollAccum_ = 0;
+}
+
+int SPianoRollView::wheelActionFor( Qt::KeyboardModifiers mods ) const
+{
+    const bool ctrl  = hasPrimaryMod( mods );
+    const bool shift = mods & Qt::ShiftModifier;
+    if( ctrl && shift ) return wheelCtrlShift_;
+    if( ctrl )          return wheelCtrl_;
+    if( shift )         return wheelShift_;
+    return wheelPlain_;
+}
+
+void SPianoRollView::wheelEvent( QWheelEvent *ev )
+{
+    // SEventEditorView declares no wheelEvent() of its own, so the fallback
+    // for an unconsumed gesture is QWidget's (same call SMVActualView's own
+    // wheelEvent() falls back to).
+    if( !applyWheel( ev ) )
+        QWidget::wheelEvent( ev );
+}
+
+bool SPianoRollView::applyWheel( QWheelEvent *ev )
+{
+    int dy = ev->angleDelta().y();
+    int dx = ev->angleDelta().x();
+
+    // Same trackpad/Magic-Mouse X<->Y swap SMVActualView::applyWheel applies,
+    // for the same physical-mouse modifier combinations on macOS.
+    if( dy == 0 && dx != 0 ) dy = dx;
+
+#ifdef Q_OS_MACOS
+    // Physical-Ctrl+scroll is the OS accessibility "zoom using scroll
+    // gesture" on macOS; leave it alone exactly as the arranger does.
+    if( ev->modifiers() & Qt::MetaModifier ) return false;
+#endif
+
+    if( dy == 0 ) return false;
+    const int dir = ( dy > 0 ) ? +1 : -1;   // +1 = wheel away from the user ("up")
+
+    const int action = wheelActionFor( ev->modifiers() );
+    const QPoint pos = ev->position().toPoint();
+
+    switch( action ) {
+
+    case SOpt::ScrollVertical: {
+        // Accumulate sub-notch deltas and step one key row per
+        // wheelVScrollStep_ units, exactly as the arranger accumulates
+        // before stepping one track lane. +delta = wheel up = reveal higher
+        // keys (the same "toward upper rows" sense the arranger's plain
+        // wheel scrolls tracks in).
+        if( keyScroll_ ) {
+            wheelVScrollAccum_ += dy;
+            const int rows = wheelVScrollAccum_ / wheelVScrollStep_;
+            if( rows != 0 ) {
+                wheelVScrollAccum_ -= rows * wheelVScrollStep_;
+                keyScroll_->setValue( keyScroll_->value() - rows );
+            }
+        }
+        break;
+    }
+
+    case SOpt::ScrollHorizontal: {
+        // Pan the shared time axis by ~1/8 of the visible span per notch,
+        // scaled by sensitivity -- the arranger's own formula, over the axis
+        // instead of SMVActualView's own upperLeftOffset_.
+        if( !axis_ ) return false;
+        const offset_t span = axis_->frameOfX( width() ) - axis_->frameOfX( 0 );
+        offset_t step = (offset_t) ( (double) ( span / 8 ) * wheelSensitivity_ );
+        if( step < 1 ) step = 1;
+        const offset_t cur  = axis_->leftFrame();
+        const offset_t next = ( dir > 0 ) ? ( cur > step ? cur - step : 0 )
+                                          : cur + step;
+        axis_->setLeftFrame( next );
+        break;
+    }
+
+    case SOpt::ZoomHorizontal: {
+        if( !axis_ ) return false;
+        bool in = ( dir > 0 );
+        if( wheelInvertZoom_ ) in = !in;
+        const double newW = axis_->secondWidth()
+                           * ( in ? wheelZoomHFactor_ : 1.0 / wheelZoomHFactor_ );
+        // Zoom-to-cursor only over the note grid / lanes, not the keyboard
+        // column: there is no time under a pointer sitting in KEYS_W, so that
+        // falls back to keeping the left edge -- the same fallback the
+        // arranger uses when the gesture comes from its track-head column
+        // (anchorX < 0 there).
+        if( wheelZoomToCursor_ && pos.x() >= KEYS_W ) {
+            const offset_t t = axis_->frameOfX( pos.x() );   // pre-zoom
+            axis_->setSecondWidth( newW );
+            const double ahead = (double) pos.x() / newW * axis_->sampleRate();
+            const offset_t left = ( (double) t > ahead )
+                                 ? (offset_t) ( (double) t - ahead ) : 0;
+            axis_->setLeftFrame( left );
+        } else {
+            axis_->setSecondWidth( newW );
+        }
+        break;
+    }
+
+    case SOpt::ZoomVertical: {
+        // The arranger zooms track height; the piano roll's vertical analogue
+        // is its own key-row height (CONTRACT "known debt": no zoom of its
+        // own on the vertical axis existed before this).
+        bool in = ( dir > 0 );
+        if( wheelInvertZoom_ ) in = !in;
+        int h = in ? (int) ( keyHeight_ * wheelZoomVFactor_ )
+                   : (int) ( keyHeight_ / wheelZoomVFactor_ );
+        // A gentle sensitivity can round back to keyHeight_ on a small
+        // integer; move a pixel instead, same reasoning as the arranger's
+        // track-height zoom.
+        if( in  && h <= keyHeight_ ) h = keyHeight_ + 1;
+        if( !in && h >= keyHeight_ ) h = keyHeight_ - 1;
+        if( h < 2 )  h = 2;
+        if( h > 40 ) h = 40;
+        keyHeight_ = h;
+        layoutKeyScroll();
+        update();
+        break;
+    }
+
+    case SOpt::None:
+    default:
+        return false;
+    }
+    ev->accept();
+    return true;
 }
 
 // ---------------------------------------------------------------------------

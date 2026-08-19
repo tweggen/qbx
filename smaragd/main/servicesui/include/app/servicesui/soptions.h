@@ -38,6 +38,26 @@ inline constexpr const char *WheelSensitivityPct = "mouse/wheelSensitivityPercen
 inline constexpr const char *FollowPlayhead = "view/followPlayhead";
 inline constexpr const char *AudioDeviceId  = "audio/deviceId";
 
+// EVENT EDITOR (piano roll) mouse wheel. Its own namespace, independent of the
+// arranger's WheelPlain/WheelShift/WheelCtrl/WheelCtrlShift/ZoomToCursor/
+// InvertZoom/WheelSensitivityPct above, so a user who wants a different feel
+// in the two views can set one -- but DEFAULTING to the same four-gesture
+// mapping and the same sensitivity/zoom-to-cursor/invert-zoom values, so
+// nobody's existing install changes feel before they open Options (same
+// reasoning as WheelSensitivityPct's 100 %). `WheelAction` above is reused
+// verbatim: "scroll vertical" means the note-grid's key rows, "scroll
+// horizontal" and "zoom horizontal" mean the shared SEventTimeAxis, and "zoom
+// vertical" means the piano roll's own key-row height (SPianoRollView::
+// keyHeight_). See main/eventui/CONTRACT.md and SPianoRollView::wheelEvent().
+inline constexpr const char *EventWheelPlain     = "eventEditor/mouse/wheelPlain";
+inline constexpr const char *EventWheelShift     = "eventEditor/mouse/wheelShift";
+inline constexpr const char *EventWheelCtrl      = "eventEditor/mouse/wheelCtrl";
+inline constexpr const char *EventWheelCtrlShift = "eventEditor/mouse/wheelCtrlShift";
+inline constexpr const char *EventZoomToCursor   = "eventEditor/mouse/zoomToCursor";
+inline constexpr const char *EventInvertZoom     = "eventEditor/mouse/invertZoom";
+inline constexpr const char *EventWheelSensitivityPct =
+    "eventEditor/mouse/wheelSensitivityPercent";
+
 // Logging (proposal 24). LogConsole's default is the BUILD's default —
 // SMARAGD_LOG_CONSOLE_DEFAULT, on for Debug and off for Release — so a release
 // user opts in and a debug build keeps its console for free. The command line

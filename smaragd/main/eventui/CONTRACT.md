@@ -9,8 +9,10 @@ Public headers: app/eventui/*.h
 
 Depends on (engine): tw/core, tw/graph, **tw/events** (the project's
 `twTempoMap`, and nothing else — this module never touches a page).
-App edges: actions, model, objects/midi, objects/mixer, objects/track, shell
-(per tools/check_layering.py). It sits at the RANK of `pluginui`.
+App edges: actions, model, objects/midi, objects/mixer, objects/track,
+servicesui, shell (per tools/check_layering.py). It sits at the RANK of
+`pluginui`. `servicesui` (mouse-wheel pan/zoom, below) is read-only: `SOpt`
+key names and defaults, never a widget from that module.
 
 **It deliberately does NOT depend on `timeline`.** The editor mirrors the
 arranger's zoom and scroll, but the wiring lives in the SHELL — the one module
@@ -110,14 +112,16 @@ Known debt:
   sets one controller value at the snapped tick through `set-events`; there is
   no line tool, no ramp, no selection. Curve drawing arrives with the
   automation UI (proposal 37 P6), which needs the same gestures.
-- **No ZOOM of its own.** The vertical key height is a FIXED 6 px constant
-  (`SPianoRollView::keyHeight_`, was 8 px) and the horizontal axis is the
-  arranger's. The vertical axis is now SCROLLABLE (a `QScrollBar` over the
-  note-grid band, `SPianoRollView::layoutKeyScroll()`, test-driven by
-  `scroll-event-editor-keys` / `tkScrollKeys`), reaching the full 0-127 range
-  regardless of grid height, but there is still no UI to CHANGE the row
-  height — that is a per-view zoom setting for later, exactly as the
-  horizontal axis already has via `SEventTimeAxis`.
+- **Zoom exists on both axes now, but only through the wheel (mouse-wheel
+  pan/zoom follow-up).** Horizontal zoom goes through the shared
+  `SEventTimeAxis` (invariant 5); vertical zoom changes
+  `SPianoRollView::keyHeight_` (default 6 px, was a FIXED constant before
+  this) the same way the arranger's Ctrl+wheel changes track height. Neither
+  has a dedicated numeric control (a spinbox, a toolbar zoom slider) and
+  neither PERSISTS: a rebuilt `SPianoRollView` (switching editor kind and
+  back) starts `keyHeight_` at the 6 px default again, and the axis is
+  whatever the arranger last pushed if linked. A per-view, persisted zoom
+  setting is still later work.
 - **Nothing sounds.** The editor writes notes; hearing them needs the
   instrument slot (proposal 37 P3b). `virtual-key` therefore inserts rather
   than previews, and there is no note-preview-on-click.
@@ -140,3 +144,23 @@ Known debt:
     or a note sounds forever. Auto-repeat is refused on BOTH edges: X11
     delivers a release before every repeated press, so a repeat read as a
     finger coming off the key would stutter the note.
+
+13. **`SPianoRollView::wheelEvent` matches `SMVActualView::applyWheel`'s
+    default gesture mapping and per-notch feel byte-for-byte** (mouse-wheel
+    pan/zoom follow-up), through the piano roll's OWN `SOpt::Event*` keys
+    (`main/servicesui/soptions.h`) — never the arranger's `SOpt::Wheel*` ones
+    — so the two views can be retuned independently but open with the exact
+    same behaviour. Plain wheel scrolls `keyScroll_` (the note grid's key
+    rows); Shift+wheel pans the shared `SEventTimeAxis`; Ctrl and Ctrl+Shift
+    zoom it (horizontal) or `keyHeight_` (vertical) — `SOpt::WheelAction` and
+    its four values are reused verbatim, only the KEYS differ. The macOS
+    accessibility-zoom early-out (physical Ctrl == `Qt::MetaModifier`) and the
+    trackpad X→Y swap are duplicated from `sstdmixerview.cpp` rather than
+    shared, because `eventui` may not depend on `timeline` (see "App edges"
+    above) — a change to one must be checked against the other by eye.
+    `main/servicesui/src/soptionsdialog.cpp`'s "Event Editor" page is the
+    config UI, built/loaded/applied exactly like the arranger's "Mouse
+    navigation" page. **No headless gate exists for either the gestures or
+    the options page** (no verb drives a synthetic wheel event anywhere in
+    this repo, and no verb builds the Options dialog off screen the way
+    `assert-midi-options` does for the MIDI page) — hand-verified only.
