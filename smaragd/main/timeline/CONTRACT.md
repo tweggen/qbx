@@ -327,6 +327,23 @@ long-term shape.
     construction (the folder's row is drawn by this renderer whether or not its
     children have rows); what the gate closes is the CLAIM, not a suspected bug.
 
+23. **A double-click on an EVENT clip opens the event editor for it**
+    (`SMVActualView::mouseDoubleClickEvent`), through `SMainWindow::
+    showEventEditor()` — never through `app/eventui` directly, which this
+    module may not depend on (same reason `SEventTimeAxis` linking lives in
+    the shell). It relies on Qt's OWN double-click delivery order: press /
+    release / `MouseButtonDblClick` / release — there is no SECOND
+    `QMouseEvent::MouseButtonPress` for the second click, so the leading
+    press (which already ran the ordinary single-click selection handler)
+    is what `lastClickSLink_`/`lastClickTrack_` hold by the time
+    `mouseDoubleClickEvent` checks `contentKind()`. `tryAddMarkerAt()`
+    re-resolves both at the exact double-click position as its own first
+    step, which is why this check does not call `updateLastClickVars()`
+    again — doing so a second time would just repeat what that call
+    already did. Any OTHER clip is a no-op (matches design: only an event
+    clip has an editor to open). Test entry point: `double-click-clip`
+    (`SStdMixerView::doubleClickClip`, `drag-clip-edge`'s twin).
+
 ## The `media:` drop branch (proposal 38 gate 3)
 
 `SMVActualView::dropEvent` has ONE new branch and it is five lines: parse the

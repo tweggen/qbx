@@ -8,6 +8,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QScrollBar>
+#include <QSignalBlocker>
 
 #include "app/eventui/seventtimeaxis.h"
 
@@ -52,6 +54,20 @@ SPianoRollView::SPianoRollView( QWidget *parent )
 {
     setFocusPolicy( Qt::StrongFocus );
     setMinimumHeight( 120 );
+
+    // The note grid's vertical scroll: the full 0-127 MIDI pitch range is
+    // rarely visible at once at a 6 px row height, so it has to be reachable
+    // by scrolling rather than only by refresh()'s auto-centre-on-the-notes
+    // (that still runs first and picks a sensible default, same as before).
+    keyScroll_ = new QScrollBar( Qt::Vertical, this );
+    connect( keyScroll_, &QScrollBar::valueChanged, this, [this]( int v ) {
+        // Value 0 (the scrollbar's own top) shows the HIGHEST keys, so this
+        // is an inversion rather than a direct assignment - see
+        // layoutKeyScroll() for the matching forward mapping.
+        topKey_ = 127 - v;
+        update();
+    } );
+    layoutKeyScroll();
 }
 
 SPianoRollView::~SPianoRollView() = default;
@@ -96,6 +112,25 @@ int SPianoRollView::keyOfY( int y ) const
     if( k < 0 ) k = 0;
     if( k > 127 ) k = 127;
     return k;
+}
+
+void SPianoRollView::layoutKeyScroll()
+{
+    if( !keyScroll_ ) return;
+
+    const int gh = gridHeight();
+    const int scrollW = keyScroll_->sizeHint().width();
+    keyScroll_->setGeometry( width() - scrollW, 0, scrollW, gh );
+
+    const int rows = std::max( 1, gh / keyHeight_ );
+    // Value 0 = topKey_ 127 (the highest keys, at the scrollbar's own top);
+    // value maxV = topKey_ rows-1 (key 0 sits in the bottom row) - the whole
+    // 0..127 range is reachable by construction, whatever gridHeight() is.
+    const int maxV = std::max( 0, 128 - rows );
+    const QSignalBlocker block( keyScroll_ );   // this is a SYNC, not a gesture
+    keyScroll_->setRange( 0, maxV );
+    keyScroll_->setPageStep( rows );
+    keyScroll_->setValue( std::max( 0, std::min( maxV, 127 - topKey_ ) ) );
 }
 
 QString SPianoRollView::NoteId::str() const
@@ -163,6 +198,7 @@ void SPianoRollView::refresh()
             topKey_ = want;
         }
     }
+    layoutKeyScroll();
     update();
 }
 
@@ -170,9 +206,14 @@ QString SPianoRollView::describeExtra() const
 {
     const char *tool = tool_ == Tool::Draw ? "draw"
                      : tool_ == Tool::Erase ? "erase" : "select";
-    return QStringLiteral( "tool=%1|topKey=%2|keyH=%3|ccLanes=%4" )
+    // botKey is the LOWEST key currently visible in the grid - together with
+    // topKey_ it is what a case checks the full 0-127 range against after
+    // scrolling to either end (tkScrollKeys).
+    const int rows = std::max( 1, gridHeight() / keyHeight_ );
+    const int botKey = std::max( 0, topKey_ - ( rows - 1 ) );
+    return QStringLiteral( "tool=%1|topKey=%2|keyH=%3|ccLanes=%4|botKey=%5" )
         .arg( QLatin1String( tool ) ).arg( topKey_ ).arg( keyHeight_ )
-        .arg( ccLanes_.size() );
+        .arg( ccLanes_.size() ).arg( botKey );
 }
 
 void SPianoRollView::addCcLane( int controller )
@@ -180,12 +221,14 @@ void SPianoRollView::addCcLane( int controller )
     if( controller < 0 || controller > 127 ) return;
     if( ccLanes_.contains( controller ) ) return;
     ccLanes_.append( controller );
+    layoutKeyScroll();
     update();
 }
 
 void SPianoRollView::removeCcLane( int controller )
 {
     ccLanes_.removeAll( controller );
+    layoutKeyScroll();
     update();
 }
 
@@ -628,6 +671,7 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
 void SPianoRollView::resizeEvent( QResizeEvent *ev )
 {
     QWidget::resizeEvent( ev );
+    layoutKeyScroll();
     update();
 }
 
@@ -714,6 +758,24 @@ bool SPianoRollView::tkDragNote( qint64 tick, int key, int channel,
 
     tool_ = saved;
     return true;
+}
+
+int SPianoRollView::tkScrollKeys( int topKey )
+{
+    if( !keyScroll_ ) return topKey_;
+
+    const int rows = std::max( 1, gridHeight() / keyHeight_ );
+    const int minTopKey = rows - 1;   // the lowest topKey_ that still shows key 0
+    const int clamped = std::max( minTopKey, std::min( 127, topKey ) );
+    const int maxV = std::max( 0, 128 - rows );
+    const int v = std::max( 0, std::min( maxV, 127 - clamped ) );
+
+    // The REAL scrollbar under test, not a direct topKey_ assignment: this is
+    // the same call a dragged handle makes, so its valueChanged lambda is
+    // what actually moves topKey_ (a no-op setValue, when v already matches,
+    // means topKey_ was already correct - see layoutKeyScroll()).
+    keyScroll_->setValue( v );
+    return topKey_;
 }
 
 // The KIND REGISTRY entry (proposal 37 6.2). A static initializer, which is why

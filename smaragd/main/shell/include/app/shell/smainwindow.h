@@ -83,6 +83,12 @@ public:
     // by index-path, so a NESTED lane can be exercised.
     bool groupTrackGesture( const QString &trackPath, bool ungroup );
 
+    // TEST ENTRY POINT: double-click a clip in the arranger through its real
+    // mouse handlers (drag-clip-edge's twin, same routing reason). An EVENT
+    // (MIDI) clip opens the event editor for it, matching the real
+    // mouseDoubleClickEvent; any other clip is a no-op success.
+    bool doubleClickClip( int rowIdx, int clipIdx );
+
     // Testkit: the multi-track selection. selectTrackGesture() is one REAL
     // head click with modifiers (plain / ctrl / shift), so the click semantics
     // themselves are what runs; toggleTrackHead() presses a head's M/S/R
@@ -195,6 +201,12 @@ public:
     //                          first when non-empty.
     //   grabEventEditor      — paint the dock into a PNG. Coverage, not oracle.
     //   dragNote             — one REAL press/move/release on the piano roll.
+    //   scrollEventEditorKeys — drives the piano roll's REAL vertical key
+    //                          scrollbar (setValue()), so a case can prove
+    //                          the full 0-127 MIDI range is reachable rather
+    //                          than only asserting the clamp math. Returns
+    //                          the resulting topKey(), or -1 with no piano
+    //                          roll bound (kind mismatch or no clip).
     //   virtualKey           — one virtual-keyboard note at the locator, which
     //                          submits `add-note`. False when there is no event
     //                          clip to write into.
@@ -203,6 +215,7 @@ public:
     bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
                    qint64 toTick, int toKey, const QString &edge,
                    const QString &lane, double toValue );
+    int  scrollEventEditorKeys( const QString &clipPath, int topKey );
     bool virtualKey( int key, double velocity, qint64 durationTicks );
     //   virtualKeyHold / Release — PLAY the virtual keyboard rather than write
     //   into a clip (proposal 21 L2): a note-on / note-off pair on the computer
@@ -272,6 +285,17 @@ public:
     // arranger's context menu calls it. Toggles closed when it already has
     // focus, so the binding round-trips.
     void showClipProperties();
+
+    // Show + raise the event editor dock, ACTIVELY re-querying the current
+    // selection (or binding an explicit clip) rather than trusting only the
+    // reactive arrangementChanged -> refresh() connection: a headless test
+    // run never routes a project through fileNew()/openProjectFile(), so
+    // that connection is never wired there at all, and even in the
+    // interactive app a dock merely toggled visible again must show what is
+    // ALREADY selected rather than wait for a future selection change
+    // (CONTRACT.md inv. 4/9). Public because the arranger's double-click
+    // handler calls it. clipPath empty = follow the current selection.
+    void showEventEditor( const QString &clipPath = QString() );
 
 protected:
     void closeEvent( QCloseEvent *event ) override;

@@ -278,6 +278,26 @@ void SMainWindow::showClipProperties()
     }
 }
 
+void SMainWindow::showEventEditor( const QString &clipPath )
+{
+    if( !qDockEventEditor_ || !eventEditor_ ) return;
+
+    qDockEventEditor_->show();
+    qDockEventEditor_->raise();       // pulls it out of a tab group
+
+    // Actively re-resolve rather than trust the reactive arrangementChanged
+    // connection alone: it is only wired by attachEventEditor(), which a
+    // headless test run never calls (SActionRunner sets the project straight
+    // on SApplication), and even in the interactive app "open the dock" must
+    // show what is ALREADY selected, not wait for the NEXT selection change.
+    if( !clipPath.isEmpty() )
+        eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    else
+        eventEditor_->refresh();
+
+    if( eventEditor_->view() ) eventEditor_->view()->setFocus( Qt::OtherFocusReason );
+}
+
 void SMainWindow::createDocksToolbars()
 {
     // Populate the extern file list with the current project's files and assets.
@@ -1992,6 +2012,13 @@ bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     return v->dragClipEdge( rowIdx, clipIdx, grabWhere, dropTime, upperHalf, mods );
 }
 
+bool SMainWindow::doubleClickClip( int rowIdx, int clipIdx )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    return v->doubleClickClip( rowIdx, clipIdx );
+}
+
 bool SMainWindow::groupTrackGesture( const QString &trackPath, bool ungroup )
 {
     SStdMixerView *v = ensureArranger_();
@@ -2604,6 +2631,18 @@ bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
     if( !roll ) return false;
     return roll->tkDragNote( tick, key, channel, toTick, toKey, edge, lane,
                              toValue );
+}
+
+int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )
+{
+    if( !eventEditor_ ) return -1;
+    ensureArranger_();
+    linkEventEditorAxis();
+
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    SPianoRollView *roll = eventEditor_->pianoRoll();
+    if( !roll ) return -1;
+    return roll->tkScrollKeys( topKey );
 }
 
 bool SMainWindow::virtualKey( int key, double velocity, qint64 durationTicks )

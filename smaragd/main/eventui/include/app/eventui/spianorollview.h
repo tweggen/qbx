@@ -10,6 +10,8 @@
 
 #include "app/eventui/seventeditorview.h"
 
+class QScrollBar;
+
 /**
  * SPianoRollView - the first registered event editor kind ("pianoroll",
  * proposal 37 6.2).
@@ -72,6 +74,17 @@ public:
                      int toKey, const QString &edge, const QString &lane,
                      double toValue );
 
+    /**
+     * TEST ENTRY POINT for the vertical key scrollbar - drives the REAL
+     * QScrollBar's setValue() (not a re-spelling of the clamp), so the case
+     * exercises the same code a drag of the scrollbar handle would. `topKey`
+     * is the key requested at the TOP of the grid; it is clamped into the
+     * currently reachable range exactly as a scrollbar drag would clamp at
+     * its ends. Returns the resulting topKey() so a case can assert either
+     * end of the MIDI range (0-127) is actually reachable.
+     */
+    int tkScrollKeys( int topKey );
+
 protected:
     void paintEvent( QPaintEvent * ) override;
     void mousePressEvent( QMouseEvent * ) override;
@@ -95,6 +108,13 @@ private:
 
     int    yOfKey( int key ) const;
     int    keyOfY( int y ) const;
+
+    // Position/resize keyScroll_ over the note-grid band and sync its range
+    // and value to the current geometry (gridHeight()/keyHeight_) and
+    // topKey_. Called whenever either could have changed: resizeEvent(),
+    // addCcLane()/removeCcLane() (they change gridHeight() without a
+    // resize), and refresh() (it can re-centre topKey_).
+    void layoutKeyScroll();
 
     // A note's address, which is what survives a re-resolve (never a pointer).
     struct NoteId {
@@ -133,7 +153,13 @@ private:
     QSet<QString> selected_;
     QList<int>    ccLanes_;
     int           topKey_    = 84;
-    int           keyHeight_ = 8;
+    // FIXED for now (CONTRACT "known debt": no zoom of its own on the
+    // vertical axis yet). Should become a per-view zoom setting later,
+    // exactly as the horizontal axis already is via SEventTimeAxis; until
+    // then this one constant is the only place a taller/shorter key row
+    // would be changed.
+    int           keyHeight_ = 6;
+    QScrollBar   *keyScroll_ = nullptr;   // the note grid's vertical scroll
     int           noteCount_ = 0;
     /** The length a Draw-tool insert gets, in ticks; 0 = one grid division. */
     qint64        drawDurTicks_ = 0;

@@ -42,6 +42,23 @@ Invariants:
    selection CLEARS the editor (`empty=1`) rather than leaving the previous
    MIDI clip on screen: an editor that lags the selection is how a user edits
    the wrong clip.
+
+   That reactive connection is wired exactly ONCE, by
+   `SMainWindow::attachEventEditor()` — which a HEADLESS test run never
+   calls (`SActionRunner` sets the project straight on `SApplication`), and
+   which even the interactive app only wires once a project exists. "Opening"
+   the dock must therefore not rely on it alone: `SEventEditorDock::
+   showEvent()` re-`refresh()`es whenever the dock actually becomes visible
+   (best-effort — a hidden top-level window, which is what a headless run
+   leaves `SMainWindow` as, delivers no `QShowEvent` to a still-docked
+   child), and `SMainWindow::showEventEditor()` — the ACTIVE, TESTABLE half,
+   used by the double-click-opens-the-editor gesture below — always
+   `refresh()`es or `bindClip()`s explicitly rather than trusting either
+   signal. The double-click handler works BECAUSE of Qt's own delivery
+   order: `MouseButtonPress` (which already selects the clip through the
+   arranger's ordinary single-click handler) always precedes
+   `MouseButtonDblClick` — there is no SECOND press event to rely on — so by
+   the time `mouseDoubleClickEvent` asks what is selected, it already is.
 5. **`SEventTimeAxis` is the ONE px↔frame conversion**, and it is
    deliberately the SAME arithmetic as `SMVActualView::getXPosOfOffset` /
    `getTimeOf`, integer truncation included (timeline inv. 4). A "nicer"
@@ -82,17 +99,25 @@ resize / velocity-lane drags, each with an explicit `<undo count="1"/>` and
 the prior assertion, plus the no-clip rejection), `event_editor_dock.qxa`
 (the dock's `describe()`, the selection-follower clear on an audio clip, the
 kind registry, quantize-from-the-toolbar, and PNG grabs of the piano roll and
-the empty state), `action_roundtrip_test` rows for `virtual-key` /
-`drag-note` / `assert-event-editor`.
+the empty state), `event_editor_open.qxa` (double-click on an EVENT clip opens
+the dock through the REAL gesture, the fixed 6 px row height, and the vertical
+key scrollbar reaching both ends of 0-127), `action_roundtrip_test` rows for
+`virtual-key` / `drag-note` / `scroll-event-editor-keys` / `double-click-clip`
+/ `assert-event-editor`.
 
 Known debt:
 - **CC lanes are draw-one-point, not curve editing.** A press in a CC lane
   sets one controller value at the snapped tick through `set-events`; there is
   no line tool, no ramp, no selection. Curve drawing arrives with the
   automation UI (proposal 37 P6), which needs the same gestures.
-- **No zoom of its own.** The vertical key height is fixed (8 px) and the
-  horizontal axis is the arranger's. Unlinking the axis works, but there is no
-  UI to zoom the unlinked axis yet.
+- **No ZOOM of its own.** The vertical key height is a FIXED 6 px constant
+  (`SPianoRollView::keyHeight_`, was 8 px) and the horizontal axis is the
+  arranger's. The vertical axis is now SCROLLABLE (a `QScrollBar` over the
+  note-grid band, `SPianoRollView::layoutKeyScroll()`, test-driven by
+  `scroll-event-editor-keys` / `tkScrollKeys`), reaching the full 0-127 range
+  regardless of grid height, but there is still no UI to CHANGE the row
+  height — that is a per-view zoom setting for later, exactly as the
+  horizontal axis already has via `SEventTimeAxis`.
 - **Nothing sounds.** The editor writes notes; hearing them needs the
   instrument slot (proposal 37 P3b). `virtual-key` therefore inserts rather
   than previews, and there is no note-preview-on-click.
