@@ -122,6 +122,20 @@ public:
     // "Home" or "End"; false for an unknown track path or key name.
     bool sendFaderKey( const QString &trackPath, const QString &key );
 
+    // TEST ENTRY POINT: a real click (press+release, no move) into a track's
+    // LANE — the clip-drawing area, not the head — at `time`. Runs the same
+    // mouse handlers dragClipEdge does; see SStdMixerView::clickLane. Lands on
+    // a clip if one covers `time`, empty lane space otherwise.
+    bool clickLane( const QString &trackPath, offset_t time,
+                    Qt::KeyboardModifiers mods = Qt::NoModifier );
+
+    // TEST ENTRY POINT: the split command ('s' / "Split object"), unchanged
+    // from what a real keypress or menu click runs — SStdMixerView::
+    // ctSplitSample() is a public slot, so this just calls it. Splits every
+    // clip in the CURRENT SELECTION whose extent strictly contains the
+    // locator, or (selection empty) the last-clicked clip.
+    bool splitSelectionGesture();
+
     // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
     // check the geometry maths, but nothing else proves the widget draws. Returns

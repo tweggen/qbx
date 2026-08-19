@@ -406,6 +406,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
+    testkit/include/app/testkit/sclicklaneaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sslipclipaction.h
     testkit/include/app/testkit/stestfilepath.h
@@ -432,6 +433,7 @@ set(APP_UI_FILES
     testkit/src/srecordtestactions.cpp
     testkit/src/smidirecordtestactions.cpp
     testkit/src/sassertsourcepositionaction.cpp
+    testkit/src/sclicklaneaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/seventuitestactions.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp

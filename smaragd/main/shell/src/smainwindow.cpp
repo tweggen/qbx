@@ -2384,6 +2384,24 @@ bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
     return v->tkSendFaderKey( track, key );
 }
 
+bool SMainWindow::clickLane( const QString &trackPath, offset_t time,
+                             Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->clickLane( track, time, mods );
+}
+
+bool SMainWindow::splitSelectionGesture()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    v->ctSplitSample();
+    return true;
+}
+
 // Build the REAL head off screen at the given lane geometry. Parentless and
 // never shown, so no native window appears (a qxa run on Windows uses the real
 // platform plugin). resize() runs the real updateLayout()/applyDensity(), which

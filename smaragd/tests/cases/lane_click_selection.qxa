@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Items (g) and (h): a click on a track's LANE (the clip-drawing area, not
+  its head) selects that track, with the SAME multi-selection semantics the
+  head already uses (SStdMixerView::applyTrackSelectionClick, driven here
+  through click-lane exactly as multitrack_selection.qxa drives it through
+  select-track), and - when the click did not drag - positions the cursor at
+  the click. A click ON A CLIP does both of those PLUS its existing clip
+  selection. Neither breaks a real drag-to-move or a resize-handle drag.
+
+  snap-to-grid-disable keeps the only rounding in this case the view's pixel
+  zoom (as extend_clip_past_content.qxa does for drag-clip-edge); the frame
+  values below (96000, 160000, 48000, 480000, ...) are all multiples of 1600
+  - frames-per-pixel at the arranger's default zoom (30 px/s @ 48 kHz) - so
+  pixel-to-frame-to-pixel is lossless and a cursor-position assertion can be
+  an exact frame rather than a range.
+-->
+<SActionScript version="1" name="lane_click_selection">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+
+    <add-track index="-1"/>            <!-- 0: carries a clip -->
+    <add-track index="-1"/>            <!-- 1: empty lane -->
+    <add-track index="-1"/>            <!-- 2: empty lane -->
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- === (h): a click on EMPTY lane space selects the track, with the
+         SAME semantics select-track drives on the head. === -->
+
+    <set-locator position="999999999"/>
+    <click-lane trackPath="1" time="96000"/>
+    <assert-track-selection paths="1" primary="1"/>
+
+    <!-- === (g): and it positioned the cursor at the click, exactly. === -->
+    <wait-playhead position="96000" timeoutMs="2000"/>
+    <wait-playhead position="96001" timeoutMs="500" expectReject="true"/>
+
+    <!-- Ctrl-click on another empty lane toggles it in. -->
+    <click-lane trackPath="2" time="160000" modifiers="ctrl"/>
+    <assert-track-selection paths="1;2" primary="2"/>
+
+    <!-- Ctrl-click it again removes it; the primary passes to what is left
+         - the exact rule select-track's own case (multitrack_selection)
+         asserts. -->
+    <click-lane trackPath="2" time="160000" modifiers="ctrl"/>
+    <assert-track-selection paths="1" primary="1"/>
+
+    <!-- Shift-click selects the lane RANGE from the anchor (track 1) to
+         track 0 - the flattened order is 0,1,2, so this covers all three. -->
+    <click-lane trackPath="0" time="96000" modifiers="shift"/>
+    <assert-track-selection paths="0;1;2" primary="0"/>
+
+    <!-- === a click ON A CLIP does the same, plus its EXISTING clip-select
+         behaviour, and still positions the cursor. === -->
+    <set-locator position="1"/>
+    <click-lane trackPath="0" time="96000"/>
+    <assert-track-selection paths="0" primary="0"/>
+    <wait-playhead position="96000" timeoutMs="2000"/>
+    <wait-playhead position="96001" timeoutMs="500" expectReject="true"/>
+
+    <!-- The clip itself is selected too (existing behaviour, unchanged): now
+         split-selection (item a, selection-driven) reaches it because it is
+         in the selection and the locator sits inside it. -->
+    <split-selection/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="96000"/>
+
+    <!-- === regression: a REAL drag still moves a clip, and does NOT
+         reposition the cursor to the drop point - only a no-drag click
+         does that. === -->
+    <!-- edge="body" grabs the clip's MIDPOINT, so toTime is where that
+         midpoint lands, not the new startTime: the clip (duration 96000,
+         half 48000) drops with its start at toTime - 48000. -->
+    <set-locator position="1"/>
+    <drag-clip-edge track="0" clip="1" edge="body" toTime="528000"/>
+    <assert-clip-window clip="0,1" startTime="480000" duration="96000"/>
+    <wait-playhead position="480000" timeoutMs="500" expectReject="true"/>
+
+    <!-- === regression: the resize handle still resizes. === -->
+    <drag-clip-edge track="0" clip="0" edge="end" toTime="48000"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

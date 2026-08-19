@@ -509,6 +509,16 @@ public:
     // its "open the event editor" branch — an EVENT clip opens it, any other
     // clip is a no-op success (matches production: nothing else happens).
     bool doubleClickClip( int rowIdx, int clipIdx );
+    // TEST ENTRY POINT: a single, real click (press+release, no move) into
+    // track `t`'s LANE — the clip-drawing area, as opposed to its head — at
+    // `time`. Lands on whatever is there: a clip if one covers that position
+    // (same as clicking its body), empty lane space otherwise. Exercises the
+    // lane-click track selection and no-drag cursor positioning that live in
+    // SMVActualView::mousePressEvent/mouseReleaseEvent, the same handlers
+    // dragClipEdge drives — this is its "click on the lane itself" twin, and
+    // it is the only route to a lane click that hits no clip at all.
+    bool clickLane( STrack *t, offset_t time,
+                    Qt::KeyboardModifiers mods = Qt::NoModifier );
 
     // TEST ENTRY POINTS for the multi-track selection. A headless run never
     // clicks, and the two things worth covering are exactly the click

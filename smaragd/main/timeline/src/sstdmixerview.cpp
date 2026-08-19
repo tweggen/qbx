@@ -607,20 +607,61 @@ void SStdMixerView::ctDeleteSample()
 {
 }
 
+// Split every clip in the CURRENT SELECTION whose extent strictly contains
+// the split position (start < splitTime < end) — not the last-clicked object.
+// When nothing is selected, fall back to the last-clicked clip (mirrors
+// nudgeClipPitch's fallback, and keeps a plain single-clip click+S working).
+// The split position itself is unchanged: the global locator, exactly as
+// before.
 void SStdMixerView::ctSplitSample()
 {
-    STrack *oldTrack = qContent_->getLastClickTrack();
-    SLink *oldLink = qContent_->getLastClickSLink();
-    if( !oldTrack || !oldLink ) {
+    SApplication &app = SApplication::app();
+    SProject *project = app.getCurrentProject();
+    if( !project ) return;
+
+    offset_t splitTime = app.getGlobalLocatorPos();
+
+    QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    if( paths.isEmpty() ) {
+        STrack *track = qContent_->getLastClickTrack();
+        SLink  *link  = qContent_->getLastClickSLink();
+        if( track && link ) {
+            QList<int> p = strackpath::pathOf( model_, track );
+            p.append( track->indexOfChild( link ) );
+            paths.append( p );
+        }
+    }
+    if( paths.isEmpty() ) {
         qWarning( "ctSplitSample called without object.\n" );
         return;
     }
-    // Through the action so the split (and the implicit ensure-SCut) is undoable.
-    QList<int> clipPath = strackpath::pathOf( model_, oldTrack );
-    clipPath.append( oldTrack->indexOfChild( oldLink ) );
-    offset_t splitTime = SApplication::app().getGlobalLocatorPos();
-    qContent_->resetLastClickSLink();   // the link may be replaced by the split
-    SApplication::app().submitAction( new SSplitClipAction( clipPath, splitTime ) );
+
+    // Each target clip gets its own extent check BEFORE the action runs:
+    // SCompositeAction rolls back the whole macro if any child fails to
+    // apply, so a clip the split position does not strictly fall inside must
+    // never be handed to SSplitClipAction in the first place. The 1-frame
+    // margin on each side matches SSplitClipAction::apply's own guard against
+    // a zero/negligible-length remainder, so a clip that passes here is one
+    // the action will actually accept.
+    SObject *mixer = splacements::rootContainer( project );
+    SCompositeAction *composite = new SCompositeAction;
+    int nTargets = 0;
+    for( const QList<int> &p : paths ) {
+        SLink *lk = splacements::placementAt( mixer, p );
+        if( !lk || lk->getSObject().isPathContainer() ) continue;
+        offset_t startTime = lk->getStartTime();
+        length_t fullDur = lk->getSObject().getDurationBlocking();
+        offset_t inObjOffset = splitTime - startTime;
+        if( inObjOffset <= 1 || inObjOffset >= (offset_t)fullDur - 1 ) continue;
+        composite->append( new SSplitClipAction( p, splitTime ) );
+        ++nTargets;
+    }
+    if( nTargets == 0 ) {
+        delete composite;
+        return;
+    }
+    qContent_->resetLastClickSLink();   // any split link may be replaced
+    app.submitAction( composite );
     qContent_->update();
 }
 
@@ -1676,11 +1717,14 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
     }
     clipDragArmed_ = false;
 
-    // Reposition the cursor only when this click was NOT consumed by anything
-    // else: no range/take/edge/marker gesture (those returned earlier), no clip
-    // under the cursor (a clip click only selects), and no drag of any kind.
-    // A pure click on empty timeline is the "unconsumed" case that seeks.
-    if( rangeDrag_ == RangeNone && !clipDragArmed_ && lastClickSLink_ == NULL ) {
+    // Reposition the cursor whenever this click was NOT consumed by a gesture
+    // that already returned above (range/take/marker/edge-resize/stretch/
+    // loop/duplicate). That leaves two cases here: a click on empty timeline,
+    // and a plain click on a clip BODY with no meaningful move (the clip-move
+    // branch above already ran and found nothing changed) — both count as a
+    // "click", so both reposition the playhead/cursor to where the user
+    // clicked.
+    if( rangeDrag_ == RangeNone && !clipDragArmed_ ) {
         // Check that the mouse didn't move significantly (within 4 pixels).
         // This distinguishes a click from a small drag (so we don't seek while
         // editing).
@@ -2833,6 +2877,12 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         // Detect, on which object we clicked.
         // We know the track,  so now calculate the time.
         if( lastClickTrack_ ) {
+            // A lane click selects its track too, with the SAME
+            // multi-selection semantics the track head already uses
+            // (applyTrackSelectionClick): plain = select only this lane,
+            // Ctrl = toggle, Shift = range-select from the last selected
+            // track. Runs whether or not the click also landed on a clip.
+            smv_.applyTrackSelectionClick( lastClickTrack_, ev->modifiers() );
             if( lastClickSLink_ ) {
                 // From the EVENT, not QGuiApplication::keyboardModifiers().
                 // The live-keyboard read was both less correct (it reports the
@@ -3594,6 +3644,38 @@ bool SStdMixerView::doubleClickClip( int rowIdx, int clipIdx )
     send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
     send( QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton );
     send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
+bool SStdMixerView::clickLane( STrack *t, offset_t time,
+                               Qt::KeyboardModifiers mods )
+{
+    if( !t || !qContent_ ) return false;
+    int rowIdx = rowIndexOfTrack( t );
+    if( rowIdx < 0 ) return false;
+    int x = qContent_->getXPosOfOffset( time );
+    int th = rowHeight( rowIdx );
+    int y = qContent_->laneTop( rowIdx ) + th/2;
+    if( x < 0 || y < 0 ) return false;
+
+    // The window is never shown in test mode; grow the canvas so the click
+    // lands inside it (same reasoning as dragClipEdge / mediaBrowserDrag).
+    if( qContent_->width() < x+64 || qContent_->height() < y+th+64 )
+        qContent_->resize( qMax( qContent_->width(), x+64 ),
+                           qMax( qContent_->height(), y+th+64 ) );
+
+    // Press and release at the SAME point: zero pixel movement, which is what
+    // makes mouseReleaseEvent's CLICK_THRESHOLD check treat this as a click
+    // rather than a drag.
+    auto send = [&]( QEvent::Type type, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        QPointF local( x, y );
+        QMouseEvent ev( type, local, qContent_->mapToGlobal( QPointF( x, y ) ),
+                        button, buttons, mods );
+        QApplication::sendEvent( qContent_, &ev );
+    };
+    send( QEvent::MouseButtonPress,   Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton );
     return true;
 }
 
