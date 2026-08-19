@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression for the LOAD path of an instrument's event feed.
+
+  `STrack::syncInstrumentSlot()` is the one place that wires a track's
+  `eventFeed()` into `SPluginSlot::setEventSource()`, and the contract (see
+  `tw303a/plugins/include/tw/plugins/twpluginslotproc.h` and
+  `main/objects/track/CONTRACT.md` inv. 12) says it runs from three places:
+  insert, remove and ADOPT. `STrack::adoptPluginChain()` — the path a
+  `pluginChainId=` attribute takes through `SProjectLoader::deferResolve`,
+  i.e. every project LOADED from disk — used to replicate everything
+  `onPluginSlotInserted` does except that one call. The processor's event
+  source then stayed permanently null: a project with a pre-existing MIDI
+  clip over an instrument loaded fine, looked fine (`hasFeed` was never
+  checked anywhere outside a script built fresh in-session), and rendered or
+  played back SILENT on that track forever — while ARMING the same track for
+  live playing worked, because the live path is a second, independent event
+  source (`twPluginSlotProcessor::setLiveEventSource`) that never goes
+  through `syncInstrumentSlot()` at all. That split symptom (silent on
+  playback, audible live) is what gave the bug away.
+
+  The fixture is loaded rather than built in-session on purpose: every other
+  instrument case (`insert-plugin` + `insert-midi-clip`) goes through
+  `onPluginSlotInserted`, which already calls `syncInstrumentSlot()` and so
+  never exercised `adoptPluginChain()` at all.
+-->
+<SActionScript version="1" name="load_project_instrument_render">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../load_instrument_fixture.qxp"/>
+
+    <!-- The load path itself must leave the slot wired — this is the direct
+         assertion on the bug (hasFeed reads twPluginSlotProcessor::hasEventSource()). -->
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.303" mode="MonoSpread"
+                            state="Active" hasFeed="1"/>
+
+    <render filename="load_project_instrument_render.wav" format="wav"
+            quality="10" durationSec="2.0"/>
+
+    <!-- Two notes, one per second (see the fixture), through tw.native.303 -
+         the same qualitative band instrument_sine_render.qxa uses for this
+         instrument: a filtered saw with a decaying envelope, so rms > 0.05
+         per second rather than a closed form. Before the fix this was
+         exactly 0 in both windows. -->
+    <assert-audio-energy filename="load_project_instrument_render.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+    <assert-audio-energy filename="load_project_instrument_render.wav"
+                         startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

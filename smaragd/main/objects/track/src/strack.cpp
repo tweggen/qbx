@@ -1012,6 +1012,16 @@ void STrack::adoptPluginChain( SPluginChain *chain )
                 cpDspChain_->addPlugin( insert );
         }
     }
+    // Slot 0 may be the instrument — wire the track's event feed into it.
+    // This is the one thing the "do here exactly what onPluginSlotInserted
+    // does" loop above forgot: a project LOADED from disk goes through this
+    // adopt path, never onPluginSlotInserted, so without this call an
+    // instrument's SPluginSlot::setEventSource() is never invoked. Its
+    // default is null, so every previously-recorded event clip on the track
+    // is silent under ordinary playback/render forever after — while live
+    // playing still works, because that goes through the independent
+    // twLiveEventSource path (setLiveEventSource), not through eventFeed().
+    syncInstrumentSlot();
     invalidateRenderPath();
 }
 
