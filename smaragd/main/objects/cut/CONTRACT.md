@@ -276,6 +276,31 @@ which is what makes LOOP RECORDING one call per pass with no new machinery: all
 passes go at the loop start, and this verb's own planner turns pass 2 onto pass
 1's column as a take.
 
+**A COLUMN THAT STARTS BEFORE THE RECORDING IS DROPPED FROM THE PLAN, and
+keeping it in silently threw the take away.** A column can only receive the
+recording as a TAKE when it starts WITH it -- a take is an alternative for the
+SAME window, so an earlier-starting column would need source material from
+before the recording began. The plan loop duly skipped such a column, but the
+collection loop still carried it into `columns`, and the plan loop advanced its
+`cursor` past that column's END, so the column CONSUMED the recording material
+it covered. Cover the whole recording and `cursor` reached `recEnd`, the
+trailing-gap branch never fired, and the composite came out EMPTY -- and an
+EMPTY COMPOSITE APPLIES AS SUCCESS, so the take was discarded with nothing but
+a `qWarning` to show for it. Partial cover lost the take's HEAD the same way.
+
+It is dropped at collection now, so the recording falls through to the same
+trailing-gap branch an empty lane uses and is placed as its own clip,
+OVERLAPPING the older one. That is deliberate: overlapping clips are what the
+lane already holds whenever two takes do not line up, and losing recorded audio
+is not something a recorder may do. The take-STACKING path is untouched -- a
+recording starting exactly with a column still becomes a take on it.
+
+This is what made `qxa.record_stays_armed` fail about 1 run in 15: its two takes
+start a few thousand frames apart, because each record-start re-anchors its own
+placement conversion, so whether take 2 begins just before or just after take 1
+is wall-clock JITTER -- and only the second spelling lost the audio. Gated
+deterministically by `qxa.place_recording_over_earlier_clip`, which drives the
+verb directly with no capture device and no transport at all.
 `STakeStack` gained the rest of the generic take-column seam (proposal 21 L4):
 `windowTakeCount` / `activeWindowTakeIndex` / `insertWindowTake` /
 `removeWindowTake` / `setActiveWindowTake`, and `stakehelpers.cpp` registers
