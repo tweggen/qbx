@@ -100,10 +100,54 @@ public:
         }
     }
 
+    // The UI thread's marker (proposal 33). Unlike the two above this does NOT
+    // change the render policy — the main thread may render, and does, and
+    // nothing about that changes. It exists so a call that is legal only on the
+    // UI thread can SAY SO and be checked, which is what a native plugin editor
+    // needs: CLAP annotates the whole clap_plugin_gui extension [main-thread],
+    // VST3's IPlugView is UI-thread and an AU Cocoa view is AppKit, so calling
+    // any of them from a worker is undefined behaviour that usually looks like a
+    // rare crash on someone else's machine.
+    //
+    // Before this, `Kind::None` covered BOTH an ordinary worker and the Qt main
+    // thread, so there was no way to tell them apart and no positive
+    // "am I on the UI thread?" query anywhere in the engine. Extending this
+    // class rather than adding a second guard is deliberate: the header's own
+    // rule above is "one policy per thread and ONE check", and two guards can
+    // drift. Set once, from SApplication's constructor.
+    static void markMainThread()
+    {
+        if( kind_ == Kind::None ) {
+            kind_ = Kind::Main;
+            ::tw::TwLog::nameThread( "main" );
+        }
+    }
+
     static twRenderPolicy policy() { return policy_; }
     static bool mayRender()        { return policy_ == twRenderPolicy::Any; }
     static bool onRtThread()       { return kind_ == Kind::Rt; }
     static bool onLiveThread()     { return kind_ == Kind::Live; }
+    static bool onMainThread()     { return kind_ == Kind::Main; }
+
+    // Process-wide, mirroring twPluginSlotProcessor::liveOwnedRefusals(): a
+    // main-thread-only entry point reached from elsewhere is COUNTED on every
+    // occurrence and LOGGED ONCE. Never an assert — this build compiles Q_ASSERT
+    // out, and a plugin editor misuse must be diagnosable in a release build
+    // rather than silently absent from it.
+    static std::uint64_t mainThreadRefusals()
+    { return mainRefusals_.load( std::memory_order_relaxed ); }
+
+    static void noteMainThreadRefusal( const char *what )
+    {
+        mainRefusals_.fetch_add( 1, std::memory_order_relaxed );
+        if( !mainReported_.exchange( true ) ) {
+            TW_LOGW( "graph",
+                     "%s called off the MAIN thread — every native plugin editor "
+                     "entry point is UI-thread-only (CLAP [main-thread], VST3 "
+                     "IPlugView, AU Cocoa). Counting; this is logged once.",
+                     what ? what : "a main-thread-only entry point" );
+        }
+    }
 
     // Process-wide, for the exit assertion and the log. Counted on EVERY
     // refusal; logged ONCE, because a violating cascade would otherwise fill
@@ -135,16 +179,23 @@ public:
         liveRefusals_.store( 0, std::memory_order_relaxed );
         liveReports_.store( 0, std::memory_order_relaxed );
         liveReported_.store( false, std::memory_order_relaxed );
+        mainRefusals_.store( 0, std::memory_order_relaxed );
+        mainReported_.store( false, std::memory_order_relaxed );
     }
 
 private:
-    enum class Kind : unsigned char { None, Rt, Live };
+    // Main is listed last so the three existing enumerators keep their values.
+    // Nothing serialises this, but the RT and live markers are read on the audio
+    // path and renumbering them for a UI feature would be a gratuitous risk.
+    enum class Kind : unsigned char { None, Rt, Live, Main };
     inline static thread_local Kind kind_ = Kind::None;
     inline static thread_local twRenderPolicy policy_ = twRenderPolicy::Any;
 
     inline static std::atomic<std::uint64_t> liveRefusals_{ 0 };
     inline static std::atomic<std::uint64_t> liveReports_{ 0 };
     inline static std::atomic<bool>          liveReported_{ false };
+    inline static std::atomic<std::uint64_t> mainRefusals_{ 0 };
+    inline static std::atomic<bool>          mainReported_{ false };
 };
 
 class FreezeContext {

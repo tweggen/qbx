@@ -368,7 +368,7 @@ PoC already de-risked, before any second format or platform is attempted.
 | M | What | Gate |
 |---|---|---|
 | **M0** | ✅ **DONE** — `vst3_probe --view`, GUI IIDs in `twvst3iids.cc`, §4's numbers | 3/3 third-party plugins embed |
-| **M1** | The ABI: `twplugineditor.h` (✅ written), `twPlugin::createEditor()`, `twRtThreadGuard::Kind::Main` | compiles; `check_layering`; no format type in any public header |
+| **M1** | ✅ **DONE** — `twplugineditor.h`, `twPlugin::createEditor()`, `twRtThreadGuard::Kind::Main` + `markMainThread()` from `SApplication`'s ctor | build clean, both static gates clean, 21/21 plugin + live cases green |
 | **M2** | **The VST3 parameter path** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket gestures, a drained queue, `restartComponent` flags kept. **Watch a real knob move real audio.** | `twtestvst3` fixture emits an edit on command; `plugins_test` asserts the queue |
 | **M3** | VST3 `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI | headless: `createEditor` → `attach` into an offscreen HWND → `poll` |
 | **M4** | The Qt host window (`main/pluginui/src/spluginnativeeditor.{h,cpp}`), lifetime, fallback, **§10's ownership fix**, D2 persistence | qxa case; the strip's track-switch behaviour; `editorOpen` round-trips and opens no window headlessly |
@@ -377,8 +377,17 @@ PoC already de-risked, before any second format or platform is attempted.
 | **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
 | **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |
 
-M0's code is in the branch. M1's header is in the branch. Everything from M2 is
-unwritten.
+M0 and M1 are in the branch. Everything from M2 is unwritten.
+
+**One M1 finding worth keeping**, because the opposite was tried first and looks
+right: `twPlugin` must **include** `twplugineditor.h`, not forward-declare
+`twPluginEditor`. `createEditor()` returns a `std::unique_ptr` with an inline
+`return nullptr;` default, and destroying that temporary instantiates
+`default_delete`, which needs a complete type — the forward declaration breaks
+eight translation units, none of which mention editors. The include turned out
+to cost nothing at all: `twplugineditor.h`'s three system includes are a strict
+subset of the ones `twplugin.h` already had, and inv. 4 keeps every format type
+out of it. There was no narrowness to protect.
 
 **M4 and M5 land together.** D3 removed the slider list as an alternative entry
 point, so between a shipped M4 and a shipped M5 there would be no undoable way
