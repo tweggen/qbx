@@ -142,9 +142,10 @@ struct twPagedVocoder::Impl {
     std::vector<int>    peakOf;
     std::vector<uint8_t> locked;
 
-    // ---- W4 formant preservation (only allocated/active when the config
-    // opts in AND pitchRatio != 1) --------------------------------------
+    // ---- W4 formant preservation + independent formant shift (only
+    // allocated/active when the combined envRatio below is != 1) --------
     bool                formantOn = false;
+    double              envRatio  = 1.0;    // combined envelope-warp ratio (see Config::formantRatio)
     uint32_t            envLifter = 0;      // cepstral quefrency cutoff
     int64_t             envFrame  = -1;     // memo: frame wEnv is valid for
     std::vector<double> envRe, envIm;       // N-point cepstral scratch
@@ -317,10 +318,24 @@ struct twPagedVocoder::Impl {
         peakOf.resize( nBins );
         locked.resize( nBins );
 
-        // W4: formant preservation is meaningful only when the pitch stage
-        // runs — with ratio 1 the envelope factor is identically 1, so
-        // skipping keeps every pitch-free path byte-identical to pre-W4.
-        formantOn = cfg.preserveFormants && pitchRatio != 1.0;
+        // W4 + independent formant shift: a single combined envelope-warp
+        // ratio (see Config::formantRatio's derivation). baseFormantRatio is
+        // "where formants would sit without an explicit shift" — pinned (1.0)
+        // under preserveFormants, or following the pitch ratio otherwise (the
+        // historic, pre-shift default). formantRatio then moves them further,
+        // independent of pitch. envRatio == 1.0 exactly reproduces every
+        // pre-existing configuration (formantRatio == 1.0 leaves T ==
+        // baseFormantRatio, so preserveFormants alone gives envRatio ==
+        // pitchRatio — the old formula — and neither flag gives envRatio ==
+        // 1.0, i.e. off, exactly as before): the gate below is therefore a
+        // strict generalization, not a behavior change, for every existing
+        // caller.
+        const double formantRatio =
+            ( cfg.formantRatio > 0.0 ) ? cfg.formantRatio : 1.0;
+        const double baseFormantRatio = cfg.preserveFormants ? 1.0 : pitchRatio;
+        const double formantTarget = baseFormantRatio * formantRatio;
+        envRatio = ( formantTarget != 0.0 ) ? pitchRatio / formantTarget : 1.0;
+        formantOn = ( envRatio != 1.0 );
         if( formantOn ) {
             // Quefrency cutoff ~2.5 ms: smooth enough to erase the harmonic
             // comb of any f0 above ~150 Hz while keeping formant bumps;
@@ -334,11 +349,12 @@ struct twPagedVocoder::Impl {
         }
     }
 
-    // W4: per-bin magnitude factor E(b·ratio)/E(b) for analysis frame f,
-    // where E is the cepstrally-liftered (smooth) envelope of the frame's
-    // mono-fold magnitudes. Memoized on the frame index; a pure function of
-    // (foldMag[f], pitchRatio), so the paged ≡ whole partition property is
-    // preserved. One channel-shared factor keeps the stereo image intact.
+    // W4 + formant shift: per-bin magnitude factor E(b·envRatio)/E(b) for
+    // analysis frame f, where E is the cepstrally-liftered (smooth) envelope
+    // of the frame's mono-fold magnitudes. Memoized on the frame index; a
+    // pure function of (foldMag[f], envRatio), so the paged ≡ whole partition
+    // property is preserved. One channel-shared factor keeps the stereo image
+    // intact.
     void ensureEnv( uint64_t f )
     {
         if( (int64_t) f == envFrame ) return;
@@ -376,7 +392,7 @@ struct twPagedVocoder::Impl {
         // bounded.
         constexpr double kCap = 4.6051701859880914;   // ln(100)
         for( uint32_t b = 0; b < nBins; b++ ) {
-            const double x  = std::min( (double) b * pitchRatio,
+            const double x  = std::min( (double) b * envRatio,
                                         (double) ( nBins - 1 ) );
             const uint32_t x0 = (uint32_t) x;
             const uint32_t x1 = ( x0 + 1 < nBins ) ? x0 + 1 : nBins - 1;
@@ -623,9 +639,13 @@ struct twPagedVocoder::Impl {
     {
         if( len == 0 || inLen == 0 || cfg.channels == 0 ) return;
 
-        if( stretch == 1.0 && pitchRatio == 1.0 && cfg.userMap.empty() ) {
+        if( stretch == 1.0 && pitchRatio == 1.0 && cfg.userMap.empty()
+            && !formantOn ) {
             // Identity: copy through exactly. (A user warp map is NEVER an
-            // identity, whatever the scalar params say — W1.)
+            // identity, whatever the scalar params say — W1. Nor is an
+            // independent formant shift with no stretch/pitch — formantOn can
+            // be true here with pitchRatio == 1.0, in which case renderStretched
+            // still needs to run the envelope-warp step below.)
             for( uint32_t c = 0; c < cfg.channels; c++ ) {
                 float *d = dst + (size_t) c * len;
                 for( uint64_t i = 0; i < len; i++ ) {

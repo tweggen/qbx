@@ -291,6 +291,11 @@ public:
     // W4: opt-in formant preservation for the vocoder pitch stage.
     bool getPreserveFormants() const { return grainParams_.preserveFormants; }
     void setPreserveFormants( bool on );
+    // Formant shift, in cents, independent of pitch/rate: a spectral-envelope
+    // warp the vocoder backend applies regardless of the pitch stage.
+    // Default 0 = no-op. See twGrainParams::formantShiftCents.
+    double getFormantShiftCents() const { return grainParams_.formantShiftCents; }
+    void setFormantShiftCents( double cents );
     const twGrainParams &getGrainParams() const { return grainParams_; }
     void setGrainParams( const twGrainParams & );
 
@@ -349,6 +354,18 @@ public:
     static double clampPitchCents( double cents ) {
         if( cents >  PITCH_CENTS_LIMIT ) return  PITCH_CENTS_LIMIT;
         if( cents < -PITCH_CENTS_LIMIT ) return -PITCH_CENTS_LIMIT;
+        return cents;
+    }
+
+    // Formant-shift limit, in cents: +-12 semitones. A narrower range than
+    // pitch's +-2 octaves — the cepstral envelope estimate the vocoder backend
+    // uses is a coloration filter, not a formant synthesizer, and stops being
+    // musically useful well before pitch does. setFormantShiftCents() and the
+    // set-formant-shift action both clamp to it.
+    static constexpr double FORMANT_SHIFT_CENTS_LIMIT = 1200.0;
+    static double clampFormantShiftCents( double cents ) {
+        if( cents >  FORMANT_SHIFT_CENTS_LIMIT ) return  FORMANT_SHIFT_CENTS_LIMIT;
+        if( cents < -FORMANT_SHIFT_CENTS_LIMIT ) return -FORMANT_SHIFT_CENTS_LIMIT;
         return cents;
     }
 

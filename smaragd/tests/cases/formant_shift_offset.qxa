@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- set-formant-shift: an independent spectral-envelope offset, in cents, applied by the vocoder backend regardless of pitch/stretch. What this pins: (a) ZERO IS A STRICT NO-OP, byte for byte. An explicit `cents="0"` render is compared against a render with no formant-shift action at all — this is the property that protects every existing golden and qxa case, and it is gated as a BYTE comparison, not a tolerance; (b) a non-zero shift changes the rendered bytes (assert-file-identical, expectReject) AND measurably changes the broadband RMS of a mid-clip segment (assert-audio-energy) — the engine actually reads the parameter and does something audible; (c) it composes with set-pitch: a pitch move PLUS a formant shift renders different bytes from the same pitch move alone, so the two knobs are provably independent rather than one silently overriding the other; (d) the offset survives a save/load round trip byte-for-byte (the formant-shift render, taken again after the project was written to disk and read back, is identical to the pre-save render); (e) the clip's length is untouched (a formant shift does not change duration, unlike stretch). Fixture: the 4 s ramped sawtooth (~440 Hz), the same one every grain_pitch_* case uses. DELIBERATELY NOT gated here: whether the shift lands where it should spectrally, or f0 invariance. This repo's testkit has no band-limited/spectral-centroid assert verb, only broadband assert-audio-energy and autocorrelation-based assert-audio-frequency — and the latter was tried here and found UNRELIABLE on this fixture: at +700c it read a "fundamental" of ~659 Hz, matching the formant ratio almost exactly, not a real pitch move. Root cause understood, not a mystery: the cepstral lifter's smoothing width (~200-400 Hz) is close to this fixture's own harmonic spacing (440 Hz), so on DENSE harmonic material the "envelope" it extracts is itself contaminated by the harmonic comb, and warping it can suppress true harmonics while promoting off-harmonic bins into a comb-like structure the naive detector locks onto — a known-shaped risk of the cepstral technique on unsuitable material (the same reason `preserveFormants` defaults OFF and is described as "for vocal/formant-bearing content", and why its own vocoder_test.cc coverage uses a crafted vowel fixture with real formant bumps, never this sawtooth). The spectral-envelope math itself — that it moves the ENVELOPE and not the harmonics — is gated correctly and directly against that vowel fixture (Goertzel comb-centroid at the KNOWN source f0's harmonics) in vocoder_test.cc, which is immune to this artifact because it measures energy AT the true harmonics rather than picking whatever periodicity looks strongest. -->
+<SActionScript version="1" name="formant_shift_offset">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 4 s sawtooth (192000 frames), ~440 Hz -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- (a) zero is a strict no-op -->
+    <render filename="formant_shift_baseline.wav" format="wav" quality="10"/>
+
+    <set-formant-shift clip="0,0" cents="0"/>
+    <render filename="formant_shift_explicit_zero.wav" format="wav"
+            quality="10"/>
+
+    <assert-file-identical actual="formant_shift_explicit_zero.wav"
+                           expected="formant_shift_baseline.wav"/>
+
+    <!-- (b) a non-zero shift changes the rendered bytes AND is audibly
+         measurable: baseline RMS over this segment is ~0.145 (measured), a
+         +700c shift drops it to ~0.071 (measured), the cepstral technique's
+         known de-energising effect (the same reason preserveFormants is
+         opt-in), used here only as a coarse "something changed" signal. -->
+    <set-formant-shift clip="0,0" cents="700"/>
+    <render filename="formant_shift_up.wav" format="wav" quality="10"/>
+
+    <assert-file-identical actual="formant_shift_up.wav"
+                           expected="formant_shift_baseline.wav"
+                           expectReject="true"/>
+
+    <assert-audio-energy filename="formant_shift_baseline.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.10" maxRms="0.20"/>
+    <assert-audio-energy filename="formant_shift_up.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.03" maxRms="0.12"/>
+
+    <!-- (e) length untouched: audio through 192000 -->
+    <assert-audio-length filename="formant_shift_up.wav"
+                         minFrames="192000" maxFrames="192000"/>
+
+    <!-- (c) composes with set-pitch, independently: a pitch move plus a
+         formant shift renders different bytes from the pitch move alone -->
+    <set-formant-shift clip="0,0" cents="0"/>
+    <set-pitch clip="0,0" cents="700"/>
+    <render filename="formant_shift_pitch_only.wav" format="wav"
+            quality="10"/>
+
+    <set-formant-shift clip="0,0" cents="700"/>
+    <render filename="formant_shift_pitch_and_shift.wav" format="wav"
+            quality="10"/>
+
+    <assert-file-identical actual="formant_shift_pitch_and_shift.wav"
+                           expected="formant_shift_pitch_only.wav"
+                           expectReject="true"/>
+
+    <!-- pitch alone still transposes normally (a fifth up, ~440 -> ~660 Hz):
+         the formant-shift fields being present and non-default elsewhere in
+         this script have not disturbed the ordinary pitch path -->
+    <assert-audio-frequency filename="formant_shift_pitch_only.wav"
+                            startFrame="48000" frameCount="24000"
+                            minHz="639" maxHz="682"/>
+
+    <!-- (d) persistence: save/load, re-render, byte-identical -->
+    <set-pitch clip="0,0" cents="0"/>
+    <set-formant-shift clip="0,0" cents="700"/>
+    <render filename="formant_shift_presave.wav" format="wav" quality="10"/>
+
+    <save-project path="../../build/formant_shift_offset.qxp"/>
+    <load-project path="../../build/formant_shift_offset.qxp"/>
+
+    <render filename="formant_shift_postload.wav" format="wav" quality="10"/>
+
+    <assert-file-identical actual="formant_shift_postload.wav"
+                           expected="formant_shift_presave.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

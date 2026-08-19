@@ -79,6 +79,32 @@ public:
         // the OFF path and all pitch-free paths are byte-identical to
         // pre-W4 output.
         bool preserveFormants = false;
+
+        // Independent formant shift (a later, separate feature): a target
+        // spectral-envelope ratio applied REGARDLESS of pitchRatio and
+        // preserveFormants -- the user's own "formant shift in semitones"
+        // knob, not a pitch side-effect. Default 1.0 = no-op (byte-identical
+        // to the pre-existing output whatever pitchRatio/preserveFormants are).
+        //
+        // Composes with preserveFormants by a single combined envelope-warp
+        // ratio (derived once in init(), see envRatio): let
+        //   baseFormantRatio = preserveFormants ? 1.0 : pitchRatio
+        //   T                = baseFormantRatio * formantRatio
+        //   envRatio         = pitchRatio / T
+        // T is "how far the formants end up moving from their source
+        // position, as a ratio" -- 1.0 with preserveFormants and no shift
+        // (formants pinned), pitchRatio with neither (formants follow pitch,
+        // the historic default), and formantRatio on top of either baseline.
+        // wEnv[b] = E(b*envRatio)/E(b) is exactly the W4 formula, generalized
+        // to this one ratio, so every existing preserveFormants-only
+        // configuration (formantRatio == 1.0) reduces to the identical
+        // envRatio == pitchRatio the W4 code always used -- byte-identical.
+        // A pure formant shift (preserveFormants == false, pitchRatio == 1.0)
+        // gives envRatio == 1/formantRatio, independent of pitch entirely, and
+        // runs through the SAME pre-resample envelope step -- it does not
+        // require the pitch stage, so it takes effect even when pitchRatio
+        // == 1.0 (see twPagedVocoder::Impl::render's identity fast path).
+        double formantRatio = 1.0;
     };
 
     twPagedVocoder( const float *const *src, uint64_t inLen,
