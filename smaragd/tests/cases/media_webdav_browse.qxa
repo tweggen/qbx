@@ -77,6 +77,15 @@
      - the wording comes from Qt's own network error string and is not this
      repo's to pin.
 
+  7. "TEST CONNECTION" USES THE SAVED PASSWORD WHEN THE FIELD IS EMPTY, which
+     is the state the button is pressed in every time but the first: the dialog
+     never re-populates the password field, so a plain
+     testConnection(url, user, "") reported 401 for an account browsing fine on
+     the line above. Asserted with its negative control (a server demanding a
+     different credential must still fail), with a typed password still
+     winning, and with the two no-credential answers being SENTENCES rather
+     than a manufactured 401.
+
   WHAT IS NOT PINNED HERE, and it matters more than usual:
 
    * THE STUB IS NOT A NEXTCLOUD SERVER. Plain HTTP: no TLS (so no certificate
@@ -221,6 +230,60 @@
     <media-browser-path path="sub" waitMs="10000"/>
     <assert-media-browser rowCount="2" contains="|banner=0|error="/>
     <assert-media-browser contains="hat.wav,768044,0"/>
+
+    <!-- (7) "TEST CONNECTION" WITH THE PASSWORD FIELD EMPTY, which is the
+         state the button is actually pressed in: the dialog never re-populates
+         that field (shell CONTRACT inv. 39), so it is empty immediately after
+         Save and again whenever an account is picked out of the list. Before
+         this gate the button sent `Basic base64("qxauser:")` and reported a
+         401 for an account that browses perfectly well two lines above.
+
+         remember="1" is what puts the password in SSecretStore at all (the
+         backend is `memory` here - a real store with process lifetime, and it
+         writes no INI key, so this changes nothing about T6 below).
+         useAccountUrl="1" fills url and user from the SAVED account, exactly
+         as selecting the account fills the form. No password= attribute: the
+         empty box IS the case. -->
+    <media-webdav-stub accountId="qxastub" fixtureDir="../media/lib"
+                       user="qxauser" password="qxapass" remember="1"
+                       expectAuth="Basic cXhhdXNlcjpxeGFwYXNz"/>
+    <media-test-connection accountId="qxastub" useAccountUrl="1"
+                           expectContains="200 OK"/>
+    <!-- ...and it SAYS which credential it used, so a green line can never be
+         mistaken for one the user typed. -->
+    <media-test-connection accountId="qxastub" useAccountUrl="1"
+                           expectContains="(saved password)"/>
+
+    <!-- THE NEGATIVE CONTROL, and it is the one that makes the two lines above
+         mean something: the server is told to demand a DIFFERENT credential,
+         so the same empty-box Test must now fail. Without it, a Test that sent
+         no header at all would pass against a stub in a forgiving mood. -->
+    <media-webdav-stub expectAuth="Basic cXhhdXNlcjp3cm9uZw=="/>
+    <media-test-connection accountId="qxastub" useAccountUrl="1"
+                           expectContains="401" expectAbsent="200 OK"/>
+    <media-webdav-stub expectAuth="Basic cXhhdXNlcjpxeGFwYXNz"/>
+
+    <!-- A TYPED password still wins over the saved one - the field is the one
+         thing the user can see, and it is wrong for what is on screen to be
+         ignored. "wrong" is not the saved "qxapass", so this must 401 against
+         a server that is answering fine to the saved credential. -->
+    <media-test-connection accountId="qxastub" useAccountUrl="1" password="wrong"
+                           expectContains="401" expectAbsent="saved password"/>
+
+    <!-- An EDITED url with an empty box has no saved password to test, and
+         says so rather than reporting on the server the user just navigated
+         away from. (url= here is the un-edited spelling's opposite: any URL
+         that is not the account's.) -->
+    <media-test-connection accountId="qxastub"
+                           url="https://cloud.invalid.example/remote.php/dav/files/qxauser/"
+                           user="qxauser"
+                           expectContains="has changed" expectAbsent="401"/>
+
+    <!-- An id that names no account: a sentence, never a manufactured HTTP
+         status the user would read as the server's answer. -->
+    <media-test-connection accountId="no-such-account-qxa" useAccountUrl="1"
+                           expectContains="enter the app password"
+                           expectAbsent="401"/>
 
     <!-- Tear the server down explicitly rather than leaving it to teardown. -->
     <media-webdav-stub action="stop"/>

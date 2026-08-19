@@ -95,6 +95,29 @@ public:
     QString testConnection( const QString &url, const QString &user,
                             const QString &password, int timeoutMs = 5000 );
 
+    // What the "Test connection" BUTTON calls. The dialog never re-populates
+    // the password field (inv. 39: the secret is never read back into the
+    // UI), so an EMPTY box is the NORMAL case for an account that was just
+    // saved or picked out of the list -- and testConnection() would then
+    // send `Basic base64("user:")` and report a 401 for an account that
+    // browses perfectly well. This is the same call with that one fallback:
+    //
+    //   password non-empty  -> tested verbatim, exactly as testConnection()
+    //   password empty      -> the SAVED credential for `accountId`, but
+    //                          ONLY while `url`/`user` still match what was
+    //                          saved. An edited URL has no saved password to
+    //                          test, and saying so is better than reporting
+    //                          on the server the user just navigated away
+    //                          from.
+    //
+    // Every no-credential outcome returns a sentence naming what to do, not
+    // an HTTP status -- a 401 the app manufactured itself is indistinguishable
+    // from one the server sent, and that is exactly the confusion this
+    // method exists to remove. NEVER returns the password or the header.
+    QString testAccountConnection( const QString &accountId, const QString &url,
+                                   const QString &user, const QString &password,
+                                   int timeoutMs = 5000 );
+
     // smedia::CredentialProvider. Empty when no usable credential is held
     // for `sourceId` ("nextcloud:<accountId>") -- an unknown source, an
     // un-remembered session-only password this process instance never
@@ -114,6 +137,11 @@ public:
 
 private:
     static QString secretKey( const QString &accountId );
+    // The PROPFIND both test entry points share: one bounded local event
+    // loop, one already-built Authorization header (so no caller has to
+    // decide twice how a credential becomes a header).
+    QString        testWithHeader( const QString &url, const QString &authHeader,
+                                   int timeoutMs );
     QString        basicHeader( const QString &user, const QString &password ) const;
     void           registerSourceWithPassword( const QString &accountId, const QString &user,
                                                const QString &url, const QString &password );

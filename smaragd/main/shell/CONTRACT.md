@@ -735,6 +735,23 @@ change rather than the only one.
     to build the `Authorization` header for the source it registers, and
     nowhere else holds onto it past that call.
 
+39a. **"Test connection" with an EMPTY password field tests the SAVED
+    credential** — `SOptionsDialog::onMediaTestConnection()` calls
+    `testAccountConnection()`, never the bare `testConnection()`. Inv. 39 is
+    what makes this necessary rather than convenient: the field is empty
+    immediately after a Save and again whenever an account is picked out of the
+    list, so the bare call sends `Basic base64("user:")` and reports a **401
+    for an account that browses perfectly well** — a status the user reads as
+    the server's answer, which is exactly the wrong diagnosis. The fallback
+    fires only while `url`/`user` still match the saved account (an edited URL
+    has no saved password to test), uses the SAME header
+    `authorizationHeaderFor()` gives the browser (so a green Test and a working
+    browse cannot disagree), and announces itself as `(saved password)`. Every
+    no-credential outcome is a SENTENCE naming what to do, never a manufactured
+    HTTP status. A typed password always wins — it is the one thing on screen.
+    Gated by `media_webdav_browse` item (7), with the wrong-credential negative
+    control that stops it passing on a server that ignores the header.
+
 40. **Remember OFF SCRUBS, it does not merely skip.** `setAccount()` calls
     `SSecretStore::remove()` whenever `remember` is false OR the resolved
     backend cannot persist — never only when there was nothing to remove —

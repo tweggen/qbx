@@ -103,6 +103,53 @@
                           contains="hat.wav,768044,0"/>
     <assert-media-browser absent="kick.wav"/>
 
+    <!-- (4a) A DOUBLE-CLICK ON A DIRECTORY NAVIGATES INTO IT. Not an expand:
+         the tree collapses to that one directory's worth of rows and THE PATH
+         FIELD FOLLOWS, which is what the next assertion block depends on.
+         Driven through the panel's real itemDoubleClicked slot (testkit
+         CONTRACT inv. 5) - a verb calling setBrowsePath() with a path it
+         assembled itself would pass while the double-click was wired to
+         nothing. -->
+    <media-browser-path path="../media/lib"/>
+    <assert-media-browser rowCount="3"/>
+    <media-browser-path activate="sub"/>
+    <assert-media-browser mode="browse" rowCount="2" contains="hat.wav,768044,0"/>
+    <assert-media-browser contains="deep,-1,1"/>
+    <assert-media-browser absent="kick.wav"/>
+    <assert-media-browser contains="/sub|"/>   <!-- the path field moved with it -->
+
+    <!-- ...and again one level deeper, so it is NAVIGATION rather than a
+         one-shot that only works from a source's root. -->
+    <media-browser-path activate="deep"/>
+    <assert-media-browser rowCount="1" contains="tom.wav,768044,0"/>
+    <assert-media-browser contains="/sub/deep|"/>
+
+    <!-- A FILE row is a NO-OP. Dragging is how a file is placed (§B.5) and
+         there is no audition in this MVP (§F), so double-click must not become
+         a second, invisible placement gesture: nothing moves, banner included. -->
+    <media-browser-path activate="tom.wav"/>
+    <assert-media-browser mode="browse" rowCount="1" contains="tom.wav,768044,0"/>
+    <assert-media-browser contains="/sub/deep|"/>
+    <assert-media-browser contains="|banner=0|error="/>
+
+    <!-- (4b) ...AND "recurse" THEN MEANS THAT FOLDER. The same needle that
+         finds four .wav files from the library root finds only the two under
+         `sub`. BOTH halves are asserted on purpose: a search that had quietly
+         gone on walking from the source root would pass the first line and
+         fail the second, and a search that had stopped recursing at all would
+         do the opposite. -->
+    <media-browser-path path="../media/lib"/>
+    <media-browser-search needle="a" recursive="1"/>
+    <assert-media-browser mode="search" rowCount="4"/>
+    <media-browser-search needle=""/>
+    <media-browser-path activate="sub"/>
+    <media-browser-search needle="a" recursive="1"/>
+    <assert-media-browser mode="search" rowCount="2"/>
+    <assert-media-browser contains="hat.wav,768044,0"/>
+    <assert-media-browser contains="tom.wav,768044,0"/>
+    <assert-media-browser absent="kick.wav"/>
+    <media-browser-search needle=""/>
+
     <!-- (5) An unreachable path is a BANNER, not an empty folder. The error
          text comes from the provider, so the assertion is on the banner flag
          plus the substring the walker writes. -->

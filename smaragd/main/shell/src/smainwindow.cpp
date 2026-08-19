@@ -2164,6 +2164,12 @@ bool SMainWindow::mediaBrowserSetPath( const QString &path,
     return mediaBrowser_->expandRowNamed( expandRow );
 }
 
+bool SMainWindow::mediaBrowserActivate( const QString &rowName )
+{
+    if( !mediaBrowser_ ) return false;
+    return mediaBrowser_->activateRowNamed( rowName );
+}
+
 bool SMainWindow::mediaBrowserSearch( const QString &needle, bool recursive,
                                       bool viaDebounce )
 {

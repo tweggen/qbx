@@ -281,6 +281,9 @@ public:
     //   mediaBrowserSetSource  — select a source by id and OPEN it.
     //   mediaBrowserSetPath    — set the browse root, optionally EXPANDING one
     //                            directory row through the real itemExpanded.
+    //   mediaBrowserActivate   — DOUBLE-CLICK a row by name, through the real
+    //                            itemDoubleClicked slot: a directory navigates
+    //                            into itself, a file is a no-op.
     //   mediaBrowserSearch     — enter (or, with an empty needle, leave) search
     //                            mode. `viaDebounce` lets the real 250 ms timer
     //                            fire instead of flushing it.
@@ -298,6 +301,7 @@ public:
     //   mediaBrowserBusy       — is any request the panel displays still live?
     bool mediaBrowserSetSource( const QString &sourceId );
     bool mediaBrowserSetPath( const QString &path, const QString &expandRow );
+    bool mediaBrowserActivate( const QString &rowName );
     bool mediaBrowserSearch( const QString &needle, bool recursive,
                              bool viaDebounce );
     bool mediaBrowserSetFilter( const QString &categories );
