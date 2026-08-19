@@ -4,6 +4,7 @@
 #include "app/objects/track/strack.h"
 #include "app/pluginui/spluginbrowserdialog.h"
 #include "app/pluginui/spluginparamereditor.h"
+#include "app/pluginui/spluginnativeeditor.h"
 #include "app/shell/sapplication.h"
 #include "app/model/sproject.h"
 #include "app/model/splacements.h"
@@ -533,6 +534,21 @@ SPluginParamEditor *SPluginEffectStrip::ensureParamEditor(int slotIndex,
 
 void SPluginEffectStrip::openParamEditor(int slotIndex)
 {
+    // THE FALLBACK CHAIN (proposal 33, decision D3). A plugin with its own GUI
+    // opens that and ONLY that: the slider list is not reachable alongside it,
+    // which is why every native edit has to be undoable (M5) before this branch
+    // may ship. Anything that cannot embed — no editor, a plugin that refuses
+    // our window, an X11 run loop we do not provide yet — falls through to the
+    // generic editor, which is a complete substitute and not an error state.
+    if( pluginChain_ ) {
+        if( SPluginSlot *slot = pluginChain_->getSlotAt( slotIndex ) ) {
+            const QString trackPath = trackPathString();
+            if( !trackPath.isEmpty() &&
+                SPluginNativeEditor::openFor( slot, trackPath, slotIndex, this ) )
+                return;
+        }
+    }
+
     ensureParamEditor(slotIndex, /*showWindow=*/true);
 }
 
