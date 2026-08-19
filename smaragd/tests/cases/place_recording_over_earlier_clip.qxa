@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  place-recording must never DISCARD a take. This gates the planner branch for
+  "the lane already holds a column that started BEFORE this recording did",
+  driving the verb directly, so the whole case is arithmetic: no capture device,
+  no transport, no wall-clock jitter anywhere in it.
+
+  The bug: such a column cannot receive the recording as a take (a take is an
+  alternative for the SAME window, so an earlier-starting column would need
+  source material from before the recording began), so the plan loop skipped
+  it; but it still advanced the planner's cursor past its own end, and so
+  CONSUMED the recording material it covered. Cover the whole recording and the
+  composite came out EMPTY, and an empty composite applies as SUCCESS, so the
+  take vanished with only a qWarning to show for it.
+
+  That is what made qxa.record_stays_armed fail about 1 run in 15: its two
+  takes start a few thousand frames apart, because each record-start re-anchors
+  its own placement conversion, so whether take 2 begins just before or just
+  after take 1 is wall-clock jitter, and only the second spelling lost the
+  audio. That case reaches this branch by accident; this one reaches it on
+  purpose and on every run.
+
+  test_sawtooth.wav is 4 s at 48 kHz = 192000 frames, which is what makes every
+  number below a closed form.
+-->
+<SActionScript version="1" name="place_recording_over_earlier_clip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- The pre-existing column: [0, 192000). -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+
+    <!-- (1) TOTAL cover. The recording [48000, 144000) lies wholly inside the
+         column above, so the buggy planner produced an empty composite and
+         placed NOTHING. The take must survive, at its own start and its own
+         full length. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000"/>
+    <assert-clip-window clip="0,1" startTime="48000" duration="96000"/>
+
+    <!-- (2) PARTIAL cover. The recording [96000, 288000) runs off the end of
+         the column. The buggy planner placed only the uncovered tail, at
+         192000 for 96000 frames, dropping the first half of the take. The
+         whole take must be placed, from where it actually started. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="96000"/>
+    <assert-clip-window clip="0,2" startTime="96000" duration="192000"/>
+
+    <!-- (3) THE TAKE-STACKING PATH IS UNTOUCHED, which is the half of this
+         that a "just place it as a clip" fix would break. A recording starting
+         exactly WITH an existing column still becomes a TAKE on it: column 0,1
+         starts at 48000 and is 96000 long, so this recording covers it
+         exactly. The observable is that NO fourth clip appears - had the take
+         become a clip, 0,3 would resolve. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000"/>
+    <assert-clip-window clip="0,1" startTime="48000" duration="96000"/>
+    <assert-clip-window clip="0,3" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -74,10 +74,37 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
         const length_t d = lk->getSObject().getDurationBlocking();
         if( d == 0 || s + (offset_t)d <= recStart || s >= recEnd ) continue;
         if( s < recStart ) {
-            // A column already running at the recording start is left alone
-            // ("as applicable"); its span still consumes recording material.
-            qWarning( "place-recording: column at %lld predates the "
-                      "recording start, skipped", (long long)s );
+            // A column ALREADY RUNNING at the recording start is left alone,
+            // and is dropped from the plan entirely rather than kept in it.
+            //
+            // IT USED TO BE KEPT, AND THAT SILENTLY THREW THE TAKE AWAY. A
+            // column can only receive the recording as a TAKE when it starts
+            // WITH it (a take is an alternative for the same window, so an
+            // earlier-starting column would need source material from before
+            // the recording began), and the plan loop below duly skips it --
+            // but it still advanced `cursor` past the column's end, so the
+            // column CONSUMED the recording material it covered. When such a
+            // column covers the whole recording, cursor reached recEnd, the
+            // trailing-gap branch did not fire, and the composite came out
+            // EMPTY. An empty composite applies as SUCCESS, so the take was
+            // discarded with nothing but this warning to show for it.
+            //
+            // That is not a corner: two takes recorded from the same locator
+            // land a few thousand frames apart (each record-start re-anchors
+            // its own placement conversion), so whether take 2 begins just
+            // before or just after take 1 is wall-clock jitter -- and only the
+            // second spelling lost the audio. qxa.record_stays_armed failed
+            // that way in roughly 1 run in 15.
+            //
+            // Dropping it makes the recording fall through to the SAME
+            // trailing-gap branch an empty lane uses, so the take is placed as
+            // its own clip, overlapping the older one. Overlapping clips are
+            // what the lane already holds whenever two takes do not line up;
+            // losing recorded audio is not something a recorder may do.
+            qWarning( "place-recording: column at %lld predates the recording "
+                      "start; it keeps its span and the take is placed over it",
+                      (long long)s );
+            continue;
         }
         columns.append( { s, d, QList<int>() } );
         columns.last().path = trackPath_;
@@ -92,6 +119,9 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     offset_t cursor = recStart;
     for( const Column &col : columns ) {
         const offset_t colEnd = col.start + (offset_t)col.dur;
+        // Always true now: the collection loop drops a column that starts
+        // before recStart instead of carrying it into the plan. Kept as the
+        // statement of what a column in here means.
         if( col.start >= recStart ) {
             if( col.start > cursor ) {
                 composite.append( new SPlaceClipAction(
