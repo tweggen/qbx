@@ -5,16 +5,19 @@
 #include <QAbstractSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -72,6 +75,22 @@ SClipPropertiesPanel::SClipPropertiesPanel( QWidget *parent )
     // cascades into every child.
     buildUi();
     refresh();
+
+    // ESC closes the panel, but ONLY when it is floating (undocked). A docked
+    // panel must not close on Escape — a user mid-edit on a field who taps
+    // Escape to abandon a typed value would otherwise lose the whole dock,
+    // which is surprising and has no undo. WidgetWithChildrenShortcut so it
+    // fires regardless of which field inside currently has focus (a plain
+    // keyPressEvent override would not: several child widgets, e.g. combo
+    // boxes and spin boxes, consume Escape themselves before it would ever
+    // bubble up to this widget).
+    QShortcut *escShortcut = new QShortcut( QKeySequence( Qt::Key_Escape ), this );
+    escShortcut->setContext( Qt::WidgetWithChildrenShortcut );
+    connect( escShortcut, &QShortcut::activated, this, [this] {
+        if( QDockWidget *dock = qobject_cast<QDockWidget*>( parentWidget() ) ) {
+            if( dock->isFloating() ) dock->close();
+        }
+    } );
 }
 
 SClipPropertiesPanel::~SClipPropertiesPanel() = default;
