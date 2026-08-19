@@ -90,7 +90,7 @@ public:
     // Re-attack whatever is held, at offset 0 of the next collect, and report
     // it in the block's chase set. The app asks for this exactly where it asks
     // the pump for a reposition (design D2's "ONE explicit reposition").
-    void requestChase();
+    void requestChase() const override;
     // Release everything held, at offset 0 of the next collect. The disarm
     // flush of design D4.
     void requestAllNotesOff();

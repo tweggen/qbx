@@ -415,6 +415,57 @@ private:
     std::int32_t id_;
 };
 
+// A LIVE source, which is a different animal from OneNoteSource above and the
+// difference is the whole point of the reposition test below: its note is NOT a
+// function of position. A performer is holding a key; the only record of that is
+// this object's own state. It emits the note-on once, then nothing — exactly
+// like twLiveEventSource, whose held table is private to it — and re-states the
+// held note only when the consumer asks through requestChase().
+class HeldLiveSource : public twEventSource {
+public:
+    HeldLiveSource(std::int16_t key, std::int32_t id) : key_(key), id_(id) {}
+
+    void collect(std::int64_t, std::int64_t, twEventBlock &out) const override
+    {
+        out.clear();
+        if (!attacked_ || chaseReq_) {
+            attacked_ = true;
+            chaseReq_ = false;
+            twEvent e;
+            e.time     = 0;
+            e.kind     = twEventKind::NoteOn;
+            e.channel  = 0;
+            e.key      = key_;
+            e.noteId   = id_;
+            e.value    = 100.0;
+            e.duration = 0;
+            out.events.push_back(e);
+            ++attacks_;
+        }
+        // The held table, restated every block the way the real source does.
+        twHeldNote h;
+        h.channel  = 0;
+        h.key      = key_;
+        h.noteId   = id_;
+        h.velocity = 100.0;
+        h.start    = 0;
+        h.duration = 0;
+        out.chase.notes.push_back(h);
+        out.sortEvents();
+    }
+
+    void requestChase() const override { chaseReq_ = true; }
+
+    int attacks() const { return attacks_; }
+
+private:
+    std::int16_t              key_;
+    std::int32_t              id_;
+    mutable bool              attacked_ = false;
+    mutable bool              chaseReq_ = false;
+    mutable int               attacks_  = 0;
+};
+
 int main()
 {
     tw303aEnvironment env;
@@ -1929,6 +1980,72 @@ int main()
               "L1a AC4: after setLiveOwned(false) the same call renders normally");
         CHECK(twPluginSlotProcessor::liveOwnedRefusals() == before + 1,
               "L1a AC4: ...and nothing further is counted");
+    }
+
+    // --- a REPOSITION must not silence a live HELD note -------------------
+    //
+    // The bug this pins: on any position discontinuity the instrument path
+    // calls resetInstances_nolock(), which kills every voice — including the
+    // note the performer is holding down. The pre-roll that follows restores
+    // what the SEQUENCED feed was sounding, because that is a function of
+    // position; a LIVE note is not, so it stayed dead until the key was
+    // released and pressed again.
+    //
+    // Heard as: while RECORDING, every note played on a MIDI keyboard is cut
+    // off a moment after it starts. Only while recording, because a STOPPED
+    // pump runs a virtual counter that never repositions while a running one
+    // follows the engine clock and repositions whenever it falls behind — which
+    // a machine busy capturing, writing a WAV and freezing pages does often.
+    {
+        printf("\n=== live: a reposition must not silence a HELD live note ===\n");
+
+        twPluginDescriptor sineDesc;
+        sineDesc.format = "clap";
+        sineDesc.uid    = "tw.test.clap.sine";
+        sineDesc.path   = TW_TESTCLAP_PATH;
+
+        auto live = std::make_shared<HeldLiveSource>(67, 7);
+        auto proc = std::make_shared<twPluginSlotProcessor>(
+            env, [sineDesc] { return pluginRegistry().instantiate(sineDesc); },
+            twPluginIoLayout{ 0, 2 });
+        proc->setChannelCount(2);
+        proc->setLiveOwned(true);
+        proc->setLiveEventSource(live);
+
+        constexpr length_t BLOCK = 512;
+        std::vector<float> oA(BLOCK, 0.0f), oB(BLOCK, 0.0f);
+        float *outs[2] = { oA.data(), oB.data() };
+
+        auto renderAt = [&](offset_t pos) -> float {
+            std::fill(oA.begin(), oA.end(), 0.0f);
+            std::fill(oB.begin(), oB.end(), 0.0f);
+            float peak = 0.0f;
+            // The pump's own marker: a live-owned processor answers SILENCE to
+            // any other thread (AC4 above), so measuring from one would measure
+            // the guard rather than the note.
+            std::thread th([&] {
+                twRtThreadGuard::markLiveThread();
+                proc->render(nullptr, outs, BLOCK, pos, /*positional=*/true,
+                             (int)env.getSRate());
+            });
+            th.join();
+            for (length_t i = 0; i < BLOCK; ++i)
+                peak = std::max(peak, std::fabs(oA[i]));
+            return peak;
+        };
+
+        const float p0 = renderAt(0);                 // the attack
+        const float p1 = renderAt(BLOCK);             // contiguous: still held
+        const float p2 = renderAt(BLOCK * 100);       // DISCONTINUOUS: reposition
+
+        CHECK(p0 > 0.01f, "live: the held note sounds on its first block");
+        CHECK(p1 > 0.01f, "live: ...and on a contiguous one");
+        CHECK(p2 > 0.01f,
+              "live: ...and SURVIVES a reposition (regression: it was silenced "
+              "by the reset and never re-attacked)");
+        CHECK(live->attacks() == 2,
+              "live: the source is asked to re-state the note EXACTLY once — on "
+              "the reposition, not on every block");
     }
 #else
     printf("\n  note 21 L1a AC2/AC4 SKIPPED (built without the CLAP fixture)\n");
