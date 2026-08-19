@@ -92,6 +92,12 @@ namespace {
 
 int gWarnings = 0;
 
+// --- run-time flags (declared here because ComponentHandler reads gTrace) ----
+bool gWantView    = false;  // --view : walk the native editor
+bool gShow        = false;  // --show : make the window VISIBLE and pump for real
+bool gTrace       = false;  // print every component-handler callback as it lands
+int  gShowSeconds = 30;     // how long --show keeps the window up
+
 void warn( const char *fmt, ... )
 {
     std::printf( "    ! " );
@@ -396,23 +402,60 @@ public:
         return resolve( _iid, obj, Vst::IComponentHandler::iid );
     }
 
-    tresult PLUGIN_API beginEdit( Vst::ParamID ) override   { ++edits; return kResultOk; }
-    tresult PLUGIN_API performEdit( Vst::ParamID, Vst::ParamValue ) override
+    // The three gestures are counted SEPARATELY and their payloads printed,
+    // because proposal 33 §2 turns on exactly this: the production backend's
+    // performEdit (twvst3host.cc:304-311) takes ParamID and ParamValue and
+    // DISCARDS them both, so the host cannot know which parameter moved or to
+    // what. This handler keeps them, which is the only way to find out whether
+    // a real plugin's GUI actually delivers them — and whether beginEdit /
+    // endEdit really bracket a drag, which is what makes one gesture one undo
+    // entry and one automation punch-in.
+    tresult PLUGIN_API beginEdit( Vst::ParamID id ) override
     {
         ++edits;
+        ++begins;
+        if( gTrace ) std::printf( "    edit   : beginEdit   id=%u\n", (unsigned)id );
         return kResultOk;
     }
-    tresult PLUGIN_API endEdit( Vst::ParamID ) override     { ++edits; return kResultOk; }
+
+    tresult PLUGIN_API performEdit( Vst::ParamID id, Vst::ParamValue v ) override
+    {
+        ++edits;
+        ++performs;
+        lastId    = id;
+        lastValue = v;
+        if( gTrace ) std::printf( "    edit   : performEdit id=%u value=%.6f\n", (unsigned)id, v );
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API endEdit( Vst::ParamID id ) override
+    {
+        ++edits;
+        ++ends;
+        if( gTrace ) std::printf( "    edit   : endEdit     id=%u\n", (unsigned)id );
+        return kResultOk;
+    }
+
     tresult PLUGIN_API restartComponent( int32 flags ) override
     {
         lastRestartFlags = flags;
         ++restarts;
+        // The production backend discards these flags entirely
+        // (twvst3host.cc:322, `(void)flags;`), so kLatencyChanged,
+        // kParamValuesChanged and kReloadComponent are indistinguishable there.
+        // Printing them here is how we learn which ones real plugins send.
+        if( gTrace ) std::printf( "    edit   : restartComponent flags=0x%x\n", (unsigned)flags );
         return kResultOk;
     }
 
-    int   edits            = 0;
-    int   restarts         = 0;
-    int32 lastRestartFlags = 0;
+    int             edits            = 0;
+    int             begins           = 0;
+    int             performs         = 0;
+    int             ends             = 0;
+    int             restarts         = 0;
+    int32           lastRestartFlags = 0;
+    Vst::ParamID    lastId           = 0;
+    Vst::ParamValue lastValue        = 0.0;
 };
 
 // --- module loading -----------------------------------------------------------
@@ -642,10 +685,9 @@ private:
 // A plugin that only paints on WM_PAINT simply never gets one, which does not
 // affect a single call below.
 
-bool gWantView = false;
-
 #if defined( _WIN32 )
-// One hidden container per view, destroyed with it. A class registered once.
+// One container per view, destroyed with it. A class registered once.
+// Hidden by default; --show makes it a real visible window (see runShowLoop).
 HWND makeHostWindow()
 {
     static bool registered = false;
@@ -662,11 +704,61 @@ HWND makeHostWindow()
         }
         registered = true;
     }
-    HWND h = CreateWindowExW( 0, kClass, L"vst3_probe", WS_POPUP,
-                              0, 0, 800, 600,
+    // --show gives a real framed window the user can see, move and close;
+    // otherwise a bare WS_POPUP that is never shown. Both are equally valid
+    // parents as far as attached() is concerned — the difference is only
+    // whether a human can look at the result.
+    const DWORD style = gShow ? ( WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX )
+                              : WS_POPUP;
+    HWND h = CreateWindowExW( 0, kClass, L"vst3_probe — plugin editor", style,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
                               nullptr, nullptr, GetModuleHandleW( nullptr ), nullptr );
     if( !h ) warn( "CreateWindowExW failed (%lu)", (unsigned long)GetLastError() );
     return h;
+}
+
+// Size the frame so its CLIENT area is exactly the plugin's reported size.
+// IPlugView sizes are PHYSICAL PIXELS on Windows (iplugview.h:98-100) and a
+// window's outer rect includes the caption and borders, so handing the plugin's
+// number straight to MoveWindow crops the GUI by the frame — the commonest
+// visible symptom of getting this wrong.
+void fitClientTo( HWND h, int w, int h_px )
+{
+    RECT r{ 0, 0, w, h_px };
+    AdjustWindowRectEx( &r, (DWORD)GetWindowLongPtrW( h, GWL_STYLE ), FALSE,
+                        (DWORD)GetWindowLongPtrW( h, GWL_EXSTYLE ) );
+    SetWindowPos( h, nullptr, 0, 0, r.right - r.left, r.bottom - r.top,
+                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE );
+}
+
+// The real-life test. Shows the window and runs an ACTUAL message loop, so the
+// plugin paints, takes mouse and keyboard, and — the point of the exercise —
+// reports parameter edits back through IComponentHandler while a human turns a
+// knob. Ends when the user closes the window or the budget expires.
+void runShowLoop( HWND host, ComponentHandler &handler, int seconds )
+{
+    ShowWindow( host, SW_SHOWNORMAL );
+    UpdateWindow( host );
+    SetForegroundWindow( host );
+
+    std::printf( "    show   : window is up for up to %d s — TURN A KNOB, then close it\n",
+                 seconds );
+    std::fflush( stdout );
+
+    const DWORD deadline = GetTickCount() + (DWORD)( seconds * 1000 );
+    MSG msg;
+    while( IsWindow( host ) && GetTickCount() < deadline ) {
+        while( PeekMessageW( &msg, nullptr, 0, 0, PM_REMOVE ) ) {
+            if( msg.message == WM_QUIT ) return;
+            TranslateMessage( &msg );
+            DispatchMessageW( &msg );
+        }
+        Sleep( 10 );
+        std::fflush( stdout );
+    }
+
+    std::printf( "    show   : closed after %d begin / %d perform / %d end\n",
+                 handler.begins, handler.performs, handler.ends );
 }
 
 // A plugin's view may post to itself during attached(); a host that never pumps
@@ -684,7 +776,7 @@ void pumpMessages( int iterations )
 
 // Returns false only on a hard ABI failure (a call that should have worked and
 // did not). "This plugin has no editor" is a legitimate, reported outcome.
-bool probeView( Vst::IEditController *controller )
+bool probeView( Vst::IEditController *controller, ComponentHandler &handler )
 {
     if( !controller ) {
         std::printf( "    view   : no controller — nothing to ask for a view\n" );
@@ -804,6 +896,27 @@ bool probeView( Vst::IEditController *controller )
         std::printf( "    view   : IPlugFrame::resizeView called %d time(s)%s\n",
                      frame.resizes,
                      frame.resizes ? "  [REVERSE GUI ABI CONFIRMED]" : "" );
+
+        // --- the real-life test (proposal 33 §4, the one gap a human closes) --
+        if( gShow ) {
+            ViewRect cur{};
+            if( view->getSize( &cur ) == kResultOk && cur.getWidth() > 0 )
+                fitClientTo( host, cur.getWidth(), cur.getHeight() );
+
+            const int before = handler.edits;
+            runShowLoop( host, handler, gShowSeconds );
+
+            if( handler.edits == before ) {
+                std::printf( "    show   : NO component-handler traffic at all\n" );
+            } else {
+                std::printf( "    show   : last edit id=%u value=%.6f\n",
+                             (unsigned)handler.lastId, handler.lastValue );
+                std::printf( "    show   : %s\n",
+                             ( handler.begins > 0 && handler.ends > 0 )
+                                 ? "GESTURES ARE BRACKETED — begin/end usable as a punch-in"
+                                 : "values arrive but NOT bracketed — no gesture to punch in on" );
+            }
+        }
     }
 
     // Teardown order matters: removed() BEFORE release(), and the frame must
@@ -1100,7 +1213,7 @@ bool probeClass( IPluginFactory *factory, const PClassInfo &ci, HostApp &host,
     // AFTER process() and BEFORE teardown, on purpose: a real host opens an
     // editor on a plugin that is already set up and possibly running, and a view
     // must be gone before setComponentHandler(nullptr).
-    if( gWantView && !probeView( controller ) ) ok = false;
+    if( gWantView && !probeView( controller, handler ) ) ok = false;
 
     // --- teardown ------------------------------------------------------------
     //
@@ -1198,9 +1311,10 @@ int probeOne( const std::string &path )
         if( probeClass( factory, ci, host, handler ) ) ++good;
     }
 
-    std::printf( "  host   : %d createInstance request(s), %d component-handler edit(s), "
-                 "%d restart(s)\n",
-                 host.createInstanceRequests, handler.edits, handler.restarts );
+    std::printf( "  host   : %d createInstance request(s), %d component-handler edit(s) "
+                 "(%d begin / %d perform / %d end), %d restart(s)\n",
+                 host.createInstanceRequests, handler.edits,
+                 handler.begins, handler.performs, handler.ends, handler.restarts );
 
     if( f2 ) f2->release();
     if( f3 ) f3->release();
@@ -1228,23 +1342,45 @@ int main( int argc, char **argv )
 
     int firstPath = 1;
     for( ; firstPath < argc; ++firstPath ) {
-        if( std::strcmp( argv[firstPath], "--view" ) == 0 ) gWantView = true;
-        else break;
+        const char *a = argv[firstPath];
+        if( std::strcmp( a, "--view" ) == 0 )        gWantView = true;
+        else if( std::strcmp( a, "--trace" ) == 0 )  gTrace = true;
+        else if( std::strcmp( a, "--show" ) == 0 ) {
+            // --show implies --view (there is nothing to show otherwise) and
+            // --trace (the point is watching the callbacks land live).
+            gShow = gWantView = gTrace = true;
+        } else if( std::strncmp( a, "--seconds=", 10 ) == 0 ) {
+            gShowSeconds = std::atoi( a + 10 );
+            if( gShowSeconds < 1 )   gShowSeconds = 1;
+            if( gShowSeconds > 600 ) gShowSeconds = 600;
+        } else break;
     }
 
     if( firstPath >= argc ) {
-        std::printf( "usage: %s [--view] <plugin.vst3> [more.vst3 ...]\n",
+        std::printf( "usage: %s [--view] [--show] [--trace] [--seconds=N] "
+                     "<plugin.vst3> [more.vst3 ...]\n",
                      argc > 0 ? argv[0] : "vst3_probe" );
         std::printf( "\n"
                      "Proposal 08 M6 ABI gate: loads an MSVC-built VST3 from this\n"
                      "MinGW-built host and walks it through instantiate -> initialize ->\n"
                      "buses -> params -> state -> process -> teardown.\n"
                      "\n"
-                     "  --view   also walk the NATIVE EDITOR (proposal 33): createView ->\n"
-                     "           setFrame -> attached() into a real off-screen HWND ->\n"
-                     "           getSize/canResize/onSize -> removed -> release, reporting\n"
-                     "           whether the plugin created a child window and whether it\n"
-                     "           called IPlugFrame::resizeView back into us.\n" );
+                     "  --view       also walk the NATIVE EDITOR (proposal 33): createView ->\n"
+                     "               setFrame -> attached() into a real off-screen HWND ->\n"
+                     "               getSize/canResize/onSize -> removed -> release, reporting\n"
+                     "               whether the plugin created a child window and whether it\n"
+                     "               called IPlugFrame::resizeView back into us.\n"
+                     "\n"
+                     "  --show       THE REAL-LIFE TEST. Implies --view and --trace. Makes the\n"
+                     "               host window VISIBLE, sizes its client area to the plugin's\n"
+                     "               reported size and runs a real message loop, so the GUI\n"
+                     "               paints and takes input. Turn a knob: every beginEdit /\n"
+                     "               performEdit / endEdit is printed with its ParamID and\n"
+                     "               value. That is the one thing no headless run can measure,\n"
+                     "               and proposal 33 M2 depends on the answer.\n"
+                     "\n"
+                     "  --trace      print component-handler callbacks as they arrive.\n"
+                     "  --seconds=N  how long --show stays up (default 30, max 600).\n" );
         return 2;
     }
 
