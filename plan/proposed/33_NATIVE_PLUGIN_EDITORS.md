@@ -90,7 +90,9 @@ things fall out for free, one of which is an open debt:
   on a worker thread, at freeze time … so the app's slider is the gesture."
   VST3 `beginEdit`/`endEdit` and CLAP `gui`-driven edits arrive **on the main
   thread, at gesture time** — which is exactly what `SAutomationRecorder` wants
-  and has never been offered.
+  and has never been offered. **Read §4.1 before designing on that**: the phases
+  are real and useful, but measurement shows they are not reliably drag
+  boundaries, so they are a punch-in cue rather than an undo boundary.
 
 ---
 
@@ -156,17 +158,80 @@ installed on this machine.
 5. **HiDPI is offered by everything.** All three answered
    `IPlugViewContentScaleSupport`; none refused `setContentScaleFactor(1.0)`.
 
-**What it does NOT establish, and must not be read as establishing:**
+### 4.1 The knob HAS now been turned (`--show`, Dexed, 2026-08-19)
+
+The gap above was closed the same day. `vst3_probe --show` makes the host window
+visible, sizes its client area to the plugin's reported size and runs a real
+message loop; a human turned a knob. Two results, and the second one **changes a
+design decision**.
+
+**The GUI paints.** Dexed's complete interface — six operator panels, the
+algorithm matrix, the keyboard — renders inside a window our MinGW build owns.
+Embedding is real, not merely an `HWND` that exists.
+
+**Gestures arrive, with id and value, and are bracketed:**
+
+```
+edit : beginEdit   id=1367747436
+edit : performEdit id=1367747436 value=0.030303
+edit : endEdit     id=1367747436
+edit : beginEdit   id=1367747436
+edit : performEdit id=1367747436 value=0.060606
+edit : endEdit     id=1367747436
+edit : beginEdit   id=1367747436
+edit : performEdit id=1367747436 value=0.080808
+```
+
+So §2 fact (1) is confirmed from the outside: VST3 really does hand the host a
+`ParamID` and a normalized value, and the pre-M2 backend really was throwing
+exactly that away. The value domain is normalized `[0,1]`, matching
+`set-plugin-param` and `param:` lanes with no conversion.
+
+**But look at the SHAPE, because it is not the shape the design assumed.**
+Every single value is wrapped in its **own complete** `begin → perform → end`.
+One drag of one knob produced three separate gestures, not one gesture with
+three values in it.
+
+> **`beginEdit`/`endEdit` are NOT drag boundaries.** A host that turned one
+> gesture into one undo entry — which is exactly what §2.1 and M5 proposed —
+> would produce **one undo entry per mouse-move step**: the thirty-entries-a-
+> second problem the design set out to avoid, arrived at by the mechanism
+> chosen to avoid it.
+
+The fix is already in the tree and needs no new machinery:
+`SSetPluginParamAction` has `mergeKey()` / `mergeWith()`
+(`ssetpluginparamaction.cpp:111-134`), which exist precisely to coalesce a
+slider drag into one undo entry. **M5 must coalesce by `(slot, paramId)` through
+that existing merge, and treat `begin`/`end` as HINTS — a punch-in cue and a
+"the user let go" cue — never as the authoritative undo boundary.** The ABI
+keeps carrying the phases, because a plugin that *does* span a drag (the ratio
+tells us which) can then be honoured exactly; what changes is that the host may
+not depend on it.
+
+`--show` now reports the ratio and names which of the two shapes it saw, so this
+is a measurement anyone can repeat per plugin rather than a fact about Dexed.
+
+**Also measured:** `restartComponent flags=0x4` = `kParamValuesChanged`, sent
+during setup. The pre-M2 backend's `(void)flags;` made that indistinguishable
+from a `kReloadComponent`, which would have meant re-reading the whole plugin
+instead of just its values. The probe now decodes the flags by name.
+
+**What is STILL not established, and must not be read as established:**
 
 - **Host-driven resize is untested against a real plugin** — all three report
   `canResize -> no`, so `checkSizeConstraint`/`onSize` ran only on the ones that
   declined. A resizable plugin (Surge XT, Vital) is needed and is not installed
   here.
-- **No parameter edit was ever observed**, because nobody turned a knob: the
-  handler counted **0 edits** on every run. §2's entire argument is from code
-  reading, and the first thing M2 must do is watch `performEdit` fire.
-- **Nothing was rendered to the screen.** The window is `WS_POPUP` and hidden;
-  paint, focus, keyboard and mouse are all untested.
+- **One plugin's gesture shape is not every plugin's.** Dexed is JUCE-hosted and
+  brackets per value; a plugin that spans a drag would report a ratio well above
+  1 and is equally legal. The host must handle both, which is why §4.1's rule is
+  "coalesce, and treat the phases as hints" rather than "ignore the phases".
+- **Focus and keyboard are untested.** The GUI paints and takes the mouse;
+  nothing has typed into a plugin, and nothing has checked that our shortcuts do
+  not eat a keystroke the plugin wanted (or the reverse).
+- **Audio was never heard to follow a knob.** The probe has no audio device: it
+  proves the host is *told*, not that the sound changes. That closes only when
+  M2's queue is routed to the DSP.
 - **macOS and Linux are untouched.** The probe compiles the non-Windows branch
   to a stub that says so.
 - One box, one compiler, three plugins, all built with the same vendor SDK
@@ -372,7 +437,7 @@ PoC already de-risked, before any second format or platform is attempted.
 | **M2** | **The VST3 parameter path** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket gestures, a drained queue, `restartComponent` flags kept. **Watch a real knob move real audio.** | `twtestvst3` fixture emits an edit on command; `plugins_test` asserts the queue |
 | **M3** | VST3 `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI | headless: `createEditor` → `attach` into an offscreen HWND → `poll` |
 | **M4** | The Qt host window (`main/pluginui/src/spluginnativeeditor.{h,cpp}`), lifetime, fallback, **§10's ownership fix**, D2 persistence | qxa case; the strip's track-switch behaviour; `editorOpen` round-trips and opens no window headlessly |
-| **M5** | Edits → `SSetPluginParamAction` + `SAutomationRecorder` punch-in; DualMono fan-out | undo of a native gesture; `pluginui/CONTRACT.md` inv. 9 rewritten |
+| **M5** | Edits → `SSetPluginParamAction` **coalesced by (slot,paramId) via the existing `mergeWith()`** (§4.1 — the phases are hints, not undo boundaries) + `SAutomationRecorder` punch-in; DualMono fan-out | ONE undo entry for a whole knob drag, measured against a plugin that brackets per value; `pluginui/CONTRACT.md` inv. 9 rewritten |
 | **M6** | CLAP: `extGui_`, the `clap.gui` host extension (all four callbacks), **D1 floating fallback + `set_transient`** | `twtestclap` gains a GUI entry point |
 | **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
 | **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |

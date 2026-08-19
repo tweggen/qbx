@@ -440,11 +440,18 @@ public:
     {
         lastRestartFlags = flags;
         ++restarts;
-        // The production backend discards these flags entirely
-        // (twvst3host.cc:322, `(void)flags;`), so kLatencyChanged,
-        // kParamValuesChanged and kReloadComponent are indistinguishable there.
-        // Printing them here is how we learn which ones real plugins send.
-        if( gTrace ) std::printf( "    edit   : restartComponent flags=0x%x\n", (unsigned)flags );
+        // Decoded, because a bare 0x4 tells nobody anything. Measured on Dexed:
+        // it sends kParamValuesChanged during setup, which the pre-M2 backend
+        // could not distinguish from a kReloadComponent — the body was
+        // `(void)flags;`.
+        if( gTrace )
+            std::printf( "    edit   : restartComponent flags=0x%x%s%s%s%s%s\n",
+                         (unsigned)flags,
+                         ( flags & Vst::kReloadComponent )    ? " kReloadComponent"    : "",
+                         ( flags & Vst::kIoChanged )          ? " kIoChanged"          : "",
+                         ( flags & Vst::kParamValuesChanged ) ? " kParamValuesChanged" : "",
+                         ( flags & Vst::kLatencyChanged )     ? " kLatencyChanged"     : "",
+                         ( flags & Vst::kParamTitlesChanged ) ? " kParamTitlesChanged" : "" );
         return kResultOk;
     }
 
@@ -911,10 +918,27 @@ bool probeView( Vst::IEditController *controller, ComponentHandler &handler )
             } else {
                 std::printf( "    show   : last edit id=%u value=%.6f\n",
                              (unsigned)handler.lastId, handler.lastValue );
-                std::printf( "    show   : %s\n",
-                             ( handler.begins > 0 && handler.ends > 0 )
-                                 ? "GESTURES ARE BRACKETED — begin/end usable as a punch-in"
-                                 : "values arrive but NOT bracketed — no gesture to punch in on" );
+
+                // WHAT SHAPE the brackets have decides how the host must
+                // coalesce, and the two shapes want opposite things — so report
+                // the ratio rather than a bare "bracketed: yes".
+                if( handler.begins == 0 ) {
+                    std::printf( "    show   : values arrive UNBRACKETED — no gesture to "
+                                 "punch in on; the host must infer one\n" );
+                } else {
+                    const double perGesture =
+                        (double)handler.performs / (double)handler.begins;
+                    std::printf( "    show   : %d gesture(s), %.2f performEdit per gesture\n",
+                                 handler.begins, perGesture );
+                    if( perGesture <= 1.5 )
+                        std::printf( "    show   : ONE GESTURE PER VALUE — begin/end are NOT "
+                                     "drag boundaries. A host that made one undo entry per\n"
+                                     "             gesture would make one per mouse step; it "
+                                     "must coalesce by (slot,param) instead.\n" );
+                    else
+                        std::printf( "    show   : gestures SPAN a drag — begin/end are usable "
+                                     "as undo and punch-in boundaries directly\n" );
+                }
             }
         }
     }
