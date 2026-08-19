@@ -215,10 +215,13 @@ SApplyResult SMediaBrowserDragAction::apply( SProject * /*project*/ )
 {
     SMainWindow *win = mainWindow();
     if( !win ) { qWarning() << "media-browser-drag: no main window"; return { false, nullptr }; }
-    if( !win->mediaBrowserDrag( row_, name_, trackPath_, (offset_t) timePos_ ) )
+    if( !win->mediaBrowserDrag( row_, name_, trackPath_, (offset_t) timePos_,
+                               belowLastTrack_ ) )
         return { false, nullptr };
-    // The drop submits its own SAddSampleAction; undoing THAT is what reverses
-    // the gesture, which is why this verb has no inverse of its own.
+    // The drop submits its own SAddSampleAction (and, for belowLastTrack, an
+    // add-track ahead of it, as a SEPARATE undo step — see
+    // SStdMixerView::ctAddTrackBelowLast); undoing THOSE is what reverses the
+    // gesture, which is why this verb has no inverse of its own.
     return { true, nullptr };
 }
 
@@ -228,14 +231,16 @@ void SMediaBrowserDragAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "name", name_ );
     elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "timePos", QString::number( timePos_ ) );
+    if( belowLastTrack_ ) elem.setAttribute( "belowLastTrack", "1" );
 }
 
 bool SMediaBrowserDragAction::readXml( const QDomElement &elem, int )
 {
-    row_       = elem.attribute( "row", "-1" ).toInt();
-    name_      = elem.attribute( "name" );
-    trackPath_ = elem.attribute( "trackPath", "0" );
-    timePos_   = elem.attribute( "timePos", "0" ).toLongLong();
+    row_            = elem.attribute( "row", "-1" ).toInt();
+    name_           = elem.attribute( "name" );
+    trackPath_      = elem.attribute( "trackPath", "0" );
+    timePos_        = elem.attribute( "timePos", "0" ).toLongLong();
+    belowLastTrack_ = elem.attribute( "belowLastTrack", "0" ).toInt() != 0;
     if( row_ < 0 && name_.isEmpty() ) {
         qWarning() << "media-browser-drag: needs a row= or a name=";
         return false;

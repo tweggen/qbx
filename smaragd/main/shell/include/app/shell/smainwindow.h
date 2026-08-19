@@ -238,7 +238,10 @@ public:
     //                            SMVActualView::dropEvent. There is no shortcut
     //                            around the drop handler: a verb that submitted
     //                            add-sample itself would pass while the gesture
-    //                            was broken.
+    //                            was broken. `belowLastTrack` targets the EMPTY
+    //                            canvas space below the last lane instead of a
+    //                            track (trackPath is then ignored — there is no
+    //                            track to resolve yet, that being the point).
     //   describeMediaBrowser   — SMediaBrowserPanel::describe().
     //   mediaBrowserBusy       — is any request the panel displays still live?
     bool mediaBrowserSetSource( const QString &sourceId );
@@ -247,7 +250,8 @@ public:
                              bool viaDebounce );
     bool mediaBrowserSetFilter( const QString &categories );
     bool mediaBrowserDrag( int row, const QString &name,
-                           const QString &trackPath, offset_t timePos );
+                           const QString &trackPath, offset_t timePos,
+                           bool belowLastTrack = false );
     QString describeMediaBrowser() const;
     bool    mediaBrowserBusy() const;
 

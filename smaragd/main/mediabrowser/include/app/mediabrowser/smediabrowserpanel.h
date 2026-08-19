@@ -56,6 +56,14 @@ class SLocalMediaSource;
 class SMediaSource;
 class SMediaBrowserPanel;
 
+// A compact byte-size spelling: at most 3 significant digits, plus an
+// optional decimal (1000-based, §k) k/M/G unit-prefix suffix — never "B", and
+// never a prefix letter under 1000 bytes. `bytes < 0` (the panel's own
+// "unknown", e.g. a directory row) is the empty string, matching the size
+// column's existing convention. Free so `mediabrowser_size_test` can gate it
+// without building the whole panel widget.
+QString mediaBrowserFormatSize( qint64 bytes );
+
 // The tree, subclassed for ONE reason: QTreeWidget::startDrag is protected and
 // builds its own item MIME, and this dock must emit exactly the payload the
 // arranger's drop handler already understands ("file:<abspath>",

@@ -814,6 +814,20 @@ add_test(NAME filepathref_test COMMAND filepathref_test)
 set_tests_properties(filepathref_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Media browser Size-column formatting (mediaBrowserFormatSize, task item k):
+# at most 3 significant digits plus an optional k/M/G suffix. Pure string
+# arithmetic over app_ui — no project, no audio and no display — but it links
+# all four layers for the same reason filepathref_test does (app_model is an
+# OBJECT library whose static registrars pull in the rest).
+add_executable(mediabrowser_size_test testkit/src/mediabrowser_size_test.cpp)
+target_link_libraries(mediabrowser_size_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME mediabrowser_size_test COMMAND mediabrowser_size_test)
+set_tests_properties(mediabrowser_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # SSecretStore (proposal 38 GATE 5a, §B.8): store/retrieve/delete round trips,
 # byte-exact non-ASCII+NUL secrets, the ciphertext-not-plaintext + DPAPI-salts
 # checks, the `none`/`memory` no-INI-write checks, and the Undecryptable

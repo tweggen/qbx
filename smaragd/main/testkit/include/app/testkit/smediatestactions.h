@@ -107,25 +107,29 @@ private:
 // and hand it to the REAL SMVActualView::dropEvent at the pixel that names
 // (trackPath, timePos). A DIRECTORY row is refused, so a case asserting that
 // pairs this with expectReject="true".
-//   row       = "-1"   depth-first row index, matching describe()
-//   name      = ""     ...or the first row with this name (wins over `row`)
-//   trackPath = "0"
-//   timePos   = "0"
+//   row            = "-1"   depth-first row index, matching describe()
+//   name           = ""     ...or the first row with this name (wins over `row`)
+//   trackPath      = "0"
+//   timePos        = "0"
+//   belowLastTrack = "0"    target the EMPTY canvas space below the last lane
+//                           instead of a track (trackPath is then ignored) —
+//                           the drop handler's own new-track gesture.
 class SMediaBrowserDragAction : public SAction {
 public:
     QString name() const override
     { return QStringLiteral( "media-browser-drag" ); }
     QStringList knownAttributes() const override
-    { return { "row", "name", "trackPath", "timePos" }; }
+    { return { "row", "name", "trackPath", "timePos", "belowLastTrack" }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
     QString  name_;
-    QString  trackPath_ = QStringLiteral( "0" );
-    int      row_       = -1;
-    qint64   timePos_   = 0;
+    QString  trackPath_      = QStringLiteral( "0" );
+    int      row_            = -1;
+    qint64   timePos_        = 0;
+    bool     belowLastTrack_ = false;
 };
 
 // --------------------------------------------------------------------------

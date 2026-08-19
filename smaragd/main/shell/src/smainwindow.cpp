@@ -2224,7 +2224,8 @@ bool SMainWindow::mediaBrowserBusy() const
 // SStdMixerView::dragClipEdge turns its own arguments into pixels, because the
 // drop handler reads the position off the event and nothing else.
 bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
-                                    const QString &trackPath, offset_t timePos )
+                                    const QString &trackPath, offset_t timePos,
+                                    bool belowLastTrack )
 {
     if( !mediaBrowser_ ) return false;
     SStdMixerView *v = ensureArranger_();
@@ -2232,15 +2233,27 @@ bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
     SMVActualView *canvas = v->contentView();
     if( !canvas ) return false;
 
-    STrack *track = trackAtPath_( trackPath );
-    if( !track ) {
-        qWarning() << "media-browser-drag: no track at path" << trackPath;
-        return false;
-    }
-    const int rowIdx = v->rowIndexOfTrack( track );
-    if( rowIdx < 0 ) {
-        qWarning() << "media-browser-drag: track" << trackPath << "has no lane";
-        return false;
+    // The pixel this drop lands at, and the row height used only to size the
+    // off-screen canvas below. `belowLastTrack` targets the empty canvas space
+    // dropEvent's own "no row here" branch resolves — trackPath names no track
+    // yet, on purpose, so it is not consulted at all in that case.
+    int th, y;
+    if( belowLastTrack ) {
+        th = canvas->getTrackHeight();
+        y  = canvas->lanesBottom() + th / 2;
+    } else {
+        STrack *track = trackAtPath_( trackPath );
+        if( !track ) {
+            qWarning() << "media-browser-drag: no track at path" << trackPath;
+            return false;
+        }
+        const int rowIdx = v->rowIndexOfTrack( track );
+        if( rowIdx < 0 ) {
+            qWarning() << "media-browser-drag: track" << trackPath << "has no lane";
+            return false;
+        }
+        th = v->rowHeight( rowIdx );
+        y  = canvas->laneTop( rowIdx ) + th / 2;
     }
 
     QMimeData *mime = mediaBrowser_->createDragMime( row, name );
@@ -2253,9 +2266,7 @@ bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
         return false;
     }
 
-    const int x  = canvas->getXPosOfOffset( timePos );
-    const int th = v->rowHeight( rowIdx );
-    const int y  = canvas->laneTop( rowIdx ) + th / 2;
+    const int x = canvas->getXPosOfOffset( timePos );
     if( x < 0 || y < 0 ) { delete mime; return false; }
 
     // The window is never shown in a headless run, so the canvas may be smaller
@@ -2301,7 +2312,7 @@ bool SMainWindow::mediaBrowserDrag( int row, const QString &name,
         // dropEvent returns without accepting when it cannot resolve the row,
         // the track or the project.
         qWarning() << "media-browser-drag: the arranger refused the drop at"
-                   << x << y << "(row" << rowIdx << ")";
+                   << x << y << "belowLastTrack=" << belowLastTrack;
         return false;
     }
     return true;
