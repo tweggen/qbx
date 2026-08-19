@@ -54,6 +54,13 @@
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 
+// The PRODUCTION backend, for --production (proposal 33 M3). The rest of this
+// file deliberately hand-rolls everything; this mode deliberately does not,
+// because the point of it is to exercise OUR class rather than the plugin's.
+#include "tw/plugins/twplugin.h"
+#include "tw/plugins/twplugineditor.h"
+#include "twvst3module.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
@@ -96,6 +103,7 @@ int gWarnings = 0;
 bool gWantView    = false;  // --view : walk the native editor
 bool gShow        = false;  // --show : make the window VISIBLE and pump for real
 bool gTrace       = false;  // print every component-handler callback as it lands
+bool gProduction  = false;  // --production : drive twVst3Editor, not raw COM
 int  gShowSeconds = 30;     // how long --show keeps the window up
 
 void warn( const char *fmt, ... )
@@ -962,6 +970,155 @@ bool probeView( Vst::IEditController *controller, ComponentHandler &handler )
     return ok;
 }
 
+// --- the PRODUCTION path (proposal 33 M3, --production) -----------------------
+//
+// Everything above drives raw COM, which is right for an ABI gate and wrong for
+// gating OUR code: it proves the plugin works, not that twVst3Editor does. This
+// mode goes through the real backend instead — createVst3Plugin() ->
+// twPlugin::createEditor() -> twVst3Editor::attach()/poll() — so the class the
+// app will use is the class under test.
+//
+// With --show it is the end-to-end check: turn a knob in the plugin's own GUI
+// and watch poll() report it, having already pushed it to the mirror and the
+// DSP ring on the way through.
+bool probeProduction( const std::string &path )
+{
+    // The engine's own namespace. The rest of this file lives in Steinberg's.
+    using namespace audio;
+
+    // Same setup the raw-COM pass uses; spelled out because kRate/kBlock are
+    // declared below, with the pass that owns them.
+    constexpr std::uint32_t kProdRate  = 48000;
+    constexpr std::uint32_t kProdBlock = 512;
+
+    std::printf( "  --- production path (twVst3Editor) ---\n" );
+
+    std::unique_ptr<twPlugin> plugin = createVst3Plugin( path, /*uid=*/"" );
+    if( !plugin ) {
+        warn( "createVst3Plugin() returned null" );
+        return false;
+    }
+    std::printf( "    prod   : instantiated, %zu param(s), nativeEditor=%s\n",
+                 plugin->paramCount(),
+                 plugin->supportsNativeEditor() ? "yes" : "no" );
+
+    // prepare() before an editor, as the app does: a slot is set up when the
+    // chain is built and the user opens the GUI later.
+    plugin->prepare( kProdRate, kProdBlock );
+
+    std::unique_ptr<twPluginEditor> ed = plugin->createEditor();
+    if( !ed ) {
+        std::printf( "    prod   : createEditor() -> null%s\n",
+                     plugin->supportsNativeEditor()
+                         ? "  [!! supportsNativeEditor() said yes]" : " (no editor)" );
+        return plugin->supportsNativeEditor() ? false : true;
+    }
+
+    const twEditorCaps c = ed->caps();
+    std::printf( "    prod   : caps embeddable=%d floating=%d resizable=%d scalable=%d "
+                 "needsRunLoop=%d\n",
+                 c.embeddable, c.floating, c.resizable, c.scalable, c.needsRunLoop );
+
+    // A second editor on one instance must be refused, not handed out.
+    if( std::unique_ptr<twPluginEditor> dup = plugin->createEditor() ) {
+        warn( "a SECOND editor was created on one instance — must be refused" );
+        return false;
+    }
+    std::printf( "    prod   : second createEditor() correctly refused\n" );
+
+#if defined( _WIN32 )
+    HWND host = makeHostWindow();
+    if( !host ) return false;
+
+    const twEditorHandle h{ twEditorApi::Win32Hwnd, (void *)host };
+    if( !ed->attach( h ) ) {
+        warn( "twVst3Editor::attach() failed" );
+        DestroyWindow( host );
+        return false;
+    }
+    const twEditorSize sz = ed->size();
+    std::printf( "    prod   : attach OK, size %dx%d\n", sz.width, sz.height );
+
+    // A wrong-API handle must be refused rather than handed to the plugin.
+    // Already attached, so this returns false for two reasons; the point is only
+    // that it does not crash and does not tell a Windows plugin it has an NSView.
+    {
+        const twEditorHandle bad{ twEditorApi::MacNSView, (void *)host };
+        if( ed->attach( bad ) ) warn( "attach() accepted a MacNSView handle on Windows" );
+    }
+
+    if( gShow ) {
+        const twEditorSize s0 = ed->size();
+        if( s0.valid() ) fitClientTo( host, s0.width, s0.height );
+
+        ShowWindow( host, SW_SHOWNORMAL );
+        UpdateWindow( host );
+        SetForegroundWindow( host );
+        std::printf( "    prod   : window up for up to %d s — TURN A KNOB "
+                     "(poll() is draining at ~30 Hz)\n", gShowSeconds );
+        std::fflush( stdout );
+
+        int totalEdits = 0, begins = 0, ends = 0, resizes = 0;
+        const DWORD deadline = GetTickCount() + (DWORD)( gShowSeconds * 1000 );
+        MSG msg;
+        while( IsWindow( host ) && GetTickCount() < deadline ) {
+            while( PeekMessageW( &msg, nullptr, 0, 0, PM_REMOVE ) ) {
+                if( msg.message == WM_QUIT ) break;
+                TranslateMessage( &msg );
+                DispatchMessageW( &msg );
+            }
+
+            // The app's ~30 Hz editor tick, in miniature.
+            twEditorFeedback fb = ed->poll();
+            for( const auto &e : fb.edits ) {
+                ++totalEdits;
+                if( e.phase == twEditorGesture::Begin ) ++begins;
+                if( e.phase == twEditorGesture::End )   ++ends;
+                if( e.phase == twEditorGesture::Change ) {
+                    // Read the value BACK through the plugin: this is the whole
+                    // claim of M2. If getParam() disagrees with what the GUI
+                    // reported, the mirror was not updated and the DSP ring did
+                    // not get it either — the knob would move and the audio
+                    // would not follow.
+                    const double readBack = plugin->getParam( e.paramId );
+                    std::printf( "    prod   : edit id=%u gui=%.6f getParam=%.6f%s\n",
+                                 (unsigned)e.paramId, e.value, readBack,
+                                 ( std::fabs( readBack - e.value ) < 1e-9 )
+                                     ? "  [MIRROR AGREES]" : "  [!! MIRROR DISAGREES]" );
+                }
+            }
+            if( fb.resized ) {
+                ++resizes;
+                std::printf( "    prod   : poll reported resize -> %dx%d\n",
+                             fb.newSize.width, fb.newSize.height );
+                fitClientTo( host, fb.newSize.width, fb.newSize.height );
+                ed->setSize( fb.newSize );
+            }
+            if( fb.restartRequested )
+                std::printf( "    prod   : poll reported restartRequested\n" );
+
+            Sleep( 30 );
+            std::fflush( stdout );
+        }
+        std::printf( "    prod   : %d edit(s) through poll() — %d begin, %d end, "
+                     "%d resize\n", totalEdits, begins, ends, resizes );
+    }
+
+    ed->detach();
+    ed.reset();          // must destroy the editor BEFORE the plugin
+    DestroyWindow( host );
+    pumpMessages( 2 );
+#else
+    std::printf( "    prod   : attach not exercised on this platform\n" );
+    ed.reset();
+#endif
+
+    std::printf( "    prod   : editor destroyed before plugin (contract order)\n" );
+    plugin.reset();
+    std::printf( "    prod   : plugin destroyed cleanly\n" );
+    return true;
+}
+
 // --- the actual probe ---------------------------------------------------------
 
 constexpr int32 kBlock = 512;
@@ -1343,8 +1500,18 @@ int probeOne( const std::string &path )
     if( f2 ) f2->release();
     if( f3 ) f3->release();
 
+    // The production pass runs AFTER the raw-COM one and loads the module a
+    // second time through the real loader. That is deliberate: twVst3Module
+    // interns by path, so this also exercises the intern/refcount path the app
+    // hits when two slots host the same plugin.
+    if( gProduction && !probeProduction( path ) ) good = -1;
+
     if( effects == 0 ) {
         std::printf( "  RESULT : loaded, but no audio-effect class\n" );
+        return 1;
+    }
+    if( good < 0 ) {
+        std::printf( "  RESULT : the production editor path FAILED\n" );
         return 1;
     }
     std::printf( "  RESULT : %d/%d audio-effect class(es) survived the full lifecycle\n",
@@ -1369,6 +1536,7 @@ int main( int argc, char **argv )
         const char *a = argv[firstPath];
         if( std::strcmp( a, "--view" ) == 0 )        gWantView = true;
         else if( std::strcmp( a, "--trace" ) == 0 )  gTrace = true;
+        else if( std::strcmp( a, "--production" ) == 0 ) gProduction = true;
         else if( std::strcmp( a, "--show" ) == 0 ) {
             // --show implies --view (there is nothing to show otherwise) and
             // --trace (the point is watching the callbacks land live).
@@ -1402,6 +1570,14 @@ int main( int argc, char **argv )
                      "               performEdit / endEdit is printed with its ParamID and\n"
                      "               value. That is the one thing no headless run can measure,\n"
                      "               and proposal 33 M2 depends on the answer.\n"
+                     "\n"
+                     "  --production drive the REAL backend instead of raw COM:\n"
+                     "               createVst3Plugin -> twPlugin::createEditor ->\n"
+                     "               twVst3Editor attach/poll/detach. Everything else in\n"
+                     "               this tool tests the PLUGIN; this tests OUR class.\n"
+                     "               With --show it reads each edit back through\n"
+                     "               getParam() to prove the mirror and the DSP ring got\n"
+                     "               it — the whole claim of proposal 33 M2.\n"
                      "\n"
                      "  --trace      print component-handler callbacks as they arrive.\n"
                      "  --seconds=N  how long --show stays up (default 30, max 600).\n" );

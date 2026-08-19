@@ -434,15 +434,33 @@ PoC already de-risked, before any second format or platform is attempted.
 |---|---|---|
 | **M0** | ✅ **DONE** — `vst3_probe --view`, GUI IIDs in `twvst3iids.cc`, §4's numbers | 3/3 third-party plugins embed |
 | **M1** | ✅ **DONE** — `twplugineditor.h`, `twPlugin::createEditor()`, `twRtThreadGuard::Kind::Main` + `markMainThread()` from `SApplication`'s ctor | build clean, both static gates clean, 21/21 plugin + live cases green |
-| **M2** | **The VST3 parameter path** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket gestures, a drained queue, `restartComponent` flags kept. **Watch a real knob move real audio.** | `twtestvst3` fixture emits an edit on command; `plugins_test` asserts the queue |
-| **M3** | VST3 `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI | headless: `createEditor` → `attach` into an offscreen HWND → `poll` |
+| **M2** | ✅ **DONE** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket, a drained queue, `restartComponent` flags kept, `applyGuiEdit()` → mirror + DSP ring | `--production --show` reads each edit back through `getParam()`; §4.1 |
+| **M3** | ✅ **DONE** — `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI, `createEditor()` wired | `vst3_probe --production`: 3/3 real plugins attach and tear down clean, fixture correctly yields null |
 | **M4** | The Qt host window (`main/pluginui/src/spluginnativeeditor.{h,cpp}`), lifetime, fallback, **§10's ownership fix**, D2 persistence | qxa case; the strip's track-switch behaviour; `editorOpen` round-trips and opens no window headlessly |
 | **M5** | Edits → `SSetPluginParamAction` **coalesced by (slot,paramId) via the existing `mergeWith()`** (§4.1 — the phases are hints, not undo boundaries) + `SAutomationRecorder` punch-in; DualMono fan-out | ONE undo entry for a whole knob drag, measured against a plugin that brackets per value; `pluginui/CONTRACT.md` inv. 9 rewritten |
 | **M6** | CLAP: `extGui_`, the `clap.gui` host extension (all four callbacks), **D1 floating fallback + `set_transient`** | `twtestclap` gains a GUI entry point |
 | **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
 | **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |
 
-M0 and M1 are in the branch. Everything from M2 is unwritten.
+M0–M3 are in the branch. **Everything from M4 — the Qt window, and therefore
+anything a user can click — is unwritten.**
+
+`vst3_probe --production` is what gates M2 and M3, and it exists because the
+rest of the probe deliberately hand-rolls raw COM: that proves the PLUGIN works,
+not that `twVst3Editor` does. The production mode drives
+`createVst3Plugin → twPlugin::createEditor → attach/poll/detach` instead, so the
+class the app will use is the class under test. Measured, all four cases:
+
+| Module | params | caps (embed/float/resize/scale) | 2nd editor | attach | teardown |
+|---|---|---|---|---|---|
+| Dexed | 2238 | 1 / 0 / 0 / 1 | refused | 866×674 | clean |
+| NassauEQ | 22 | 1 / 0 / 0 / 1 | refused | 720×340 | clean |
+| Mangrove | 16 | 1 / 0 / 0 / 1 | refused | 640×400 | clean |
+| `twtestvst3` | 1 | — | — | — | `createEditor() → null` |
+
+The fixture row is the one that matters most: `supportsNativeEditor()` is false,
+`createEditor()` returns null, and that is the branch the FX strip will take to
+fall back to the generic slider editor. It is exercised on every run.
 
 **One M1 finding worth keeping**, because the opposite was tried first and looks
 right: `twPlugin` must **include** `twplugineditor.h`, not forward-declare

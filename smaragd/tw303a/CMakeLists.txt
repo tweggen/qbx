@@ -349,6 +349,8 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
         plugins/src/twvst3module.h
         plugins/src/twvst3module.cc
         plugins/src/twvst3plugin.cc
+        plugins/src/twvst3editor.h
+        plugins/src/twvst3editor.cc
         plugins/src/twvst3iids.cc
         ${TW_VST3_SDK_SOURCES}
     )
