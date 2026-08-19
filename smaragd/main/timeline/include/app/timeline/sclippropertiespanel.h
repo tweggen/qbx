@@ -70,6 +70,7 @@ private slots:
     void commitSlip();
     void commitStretch();
     void commitPitch();
+    void commitFormantShift();
     void commitLoopLength();
     void onClearLoop();
     void onClearWarp();
@@ -165,6 +166,10 @@ private:
     QSpinBox       *loopSpin_    = nullptr;
     QPushButton    *clearLoopButton_ = nullptr;
     QCheckBox      *formantCheck_ = nullptr;
+    // Formant shift, independent of pitch/rate — shown directly in semitones
+    // (the model stores cents; SCut::clampFormantShiftCents is the shared
+    // limit). A separate control from Pitch, not a modifier of it.
+    QDoubleSpinBox *formantShiftSpin_ = nullptr;
 
     // Mix group (per-clip volume/pan proposal, item f). Volume is a STATIC dB
     // trim that composes with the `cut:Gain` automation envelope and IS

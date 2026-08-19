@@ -160,15 +160,19 @@ constexpr uint32_t    F0Version = 2;
  * vocoder baked in; 0 = none. Warps built before/after the onsets sidecar
  * exists occupy different keys — availability never aliases bytes),
  * uint64 anchorsHash (v3: W1 warp-marker fingerprint; 0 = none),
- * uint8 preserveFormants (v4: the W4 opt-in flag).
+ * uint8 preserveFormants (v4: the W4 opt-in flag),
+ * float64 formantShiftCents (v6: the independent formant-shift offset;
+ * 0 = no-op).
  */
 constexpr const char *WarpPcm        = "warp.pcm";
-constexpr uint32_t    WarpPcmVersion = 5;   // v5: W5 pitch-stage rewrite
-// (integer-offset sinc tables + four-lane tap reduction) — same params,
-// different bytes, so v4 caches must orphan. v4: + uint8 preserveFormants
-// (W4 opt-in — changes output bytes whenever the pitch stage runs). v3
-// added uint64 anchorsHash (W1 warp-marker fingerprint; 0 = no anchors);
-// v2 added onsetsHash.
+constexpr uint32_t    WarpPcmVersion = 6;   // v6: + float64 formantShiftCents
+// (independent formant shift — changes output bytes whenever it is
+// non-zero, whether or not the pitch stage runs). v5 was the W5 pitch-stage
+// rewrite (integer-offset sinc tables + four-lane tap reduction) — same
+// params, different bytes, so v4 caches must orphan. v4: + uint8
+// preserveFormants (W4 opt-in — changes output bytes whenever the pitch
+// stage runs). v3 added uint64 anchorsHash (W1 warp-marker fingerprint;
+// 0 = no anchors); v2 added onsetsHash.
 
 } // namespace twAspect
 

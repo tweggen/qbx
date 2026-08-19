@@ -34,6 +34,7 @@
 #include "app/objects/cut/ssetclippanaction.h"
 #include "app/objects/cut/ssetclipvolumeaction.h"
 #include "app/objects/cut/ssetformantpreserveaction.h"
+#include "app/objects/cut/ssetformantshiftaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
 #include "app/objects/cut/stakestack.h"
 
@@ -201,6 +202,19 @@ void SClipPropertiesPanel::buildUi()
         tr( "Vocoder formant preservation; audible only on transposed clips" ) );
     playForm->addRow( QString(), formantCheck_ );
 
+    formantShiftSpin_ = new QDoubleSpinBox( playGroup );
+    formantShiftSpin_->setDecimals( 2 );
+    formantShiftSpin_->setRange( -SCut::FORMANT_SHIFT_CENTS_LIMIT / 100.0,
+                                  SCut::FORMANT_SHIFT_CENTS_LIMIT / 100.0 );
+    formantShiftSpin_->setSingleStep( 0.5 );
+    formantShiftSpin_->setSuffix( tr( " st" ) );
+    formantShiftSpin_->setGroupSeparatorShown( false );
+    formantShiftSpin_->setToolTip(
+        tr( "Formant shift, in semitones, independent of Pitch and Stretch. "
+            "0 = unchanged; the vocoder backend warps the spectral envelope "
+            "by this offset whether or not the clip is transposed." ) );
+    playForm->addRow( tr( "Formant shift (st):" ), formantShiftSpin_ );
+
     formLayout->addWidget( playGroup );
 
     // --- Mix (per-clip volume/pan) ------------------------------------------
@@ -327,6 +341,11 @@ void SClipPropertiesPanel::buildUi()
     // interaction, so a refresh can never re-trigger a commit.
     connect( formantCheck_, &QCheckBox::clicked,
              this, &SClipPropertiesPanel::onFormantClicked );
+
+    connect( formantShiftSpin_, &QDoubleSpinBox::textChanged,
+             this, [this]{ markEdited( formantShiftSpin_ ); } );
+    connect( formantShiftSpin_, &QDoubleSpinBox::editingFinished,
+             this, &SClipPropertiesPanel::commitFormantShift );
 
     connect( volumeSpin_, &QDoubleSpinBox::textChanged,
              this, [this]{ markEdited( volumeSpin_ ); } );
@@ -563,6 +582,7 @@ void SClipPropertiesPanel::refresh()
     QList<qint64> starts, durations, slips, pitches, loops;
     QList<double> stretches;
     QList<bool>   formants;
+    QList<double> formantShifts;
     QList<double> volumes, pans;
     bool anyLoop = false;
     for( const ClipRef &c : clips ) {
@@ -576,6 +596,7 @@ void SClipPropertiesPanel::refresh()
         loops      << loop;
         if( loop > 0 ) anyLoop = true;
         formants   << c.cut->getPreserveFormants();
+        formantShifts << c.cut->getFormantShiftCents() / 100.0;   // cents -> semitones
         volumes    << c.cut->getVolume();
         pans       << c.cut->getPan();
     }
@@ -594,6 +615,7 @@ void SClipPropertiesPanel::refresh()
     showValues( pitchSpin_,    pitches );
     showValues( loopSpin_,     loops );
     showValues( formantCheck_, formants );
+    showValues( formantShiftSpin_, formantShifts );
     showValues( volumeSpin_,   volumes );
     showValues( panSpin_,      pans );
 
@@ -613,7 +635,7 @@ void SClipPropertiesPanel::focusFirstField()
     // First ENABLED editable field, in visual order.
     QList<QWidget*> order{ nameEdit_, startSpin_, durationSpin_, slipSpin_,
                            stretchSpin_, pitchSpin_, loopSpin_, formantCheck_,
-                           volumeSpin_, panSpin_ };
+                           formantShiftSpin_, volumeSpin_, panSpin_ };
     // isVisibleTo(): the panel itself may not be mapped yet when the dock hands
     // us focus, but the form's own show/hide state is already correct.
     if( !scroll_->isVisibleTo( this ) ) return;
@@ -761,6 +783,26 @@ void SClipPropertiesPanel::commitPitch()
         // that changes nothing.
         if( cents == c.cut->getPitchCents() ) continue;
         composite->append( new SSetPitchAction( c.path, cents ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::commitFormantShift()
+{
+    if( updating_ ) return;
+    if( !consumeEdited( formantShiftSpin_ ) ) return;
+    if( formantShiftSpin_->text().trimmed().isEmpty() ) return;
+
+    // The field shows semitones; the model (and the action) store cents.
+    const double cents = SCut::clampFormantShiftCents(
+        formantShiftSpin_->value() * 100.0 );
+
+    SCompositeAction *composite = new SCompositeAction;
+    for( const ClipRef &c : collectClips() ) {
+        // Already at the clamped value: submitting would push an undo step
+        // that changes nothing.
+        if( cents == c.cut->getFormantShiftCents() ) continue;
+        composite->append( new SSetFormantShiftAction( c.path, cents ) );
     }
     submitComposite( composite );
 }
