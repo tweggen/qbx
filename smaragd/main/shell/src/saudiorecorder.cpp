@@ -444,8 +444,12 @@ void SAudioRecorder::commitPlacement_()
         lastPassCount_ = 0;
         TW_LOGW( "shell", "[REC] nothing to place (captured %lld, trimmed %lld)",
                  (long long) total, (long long) trimmed_ );
-        for( Armed &a : armed_ )
-            if( a.track ) a.track->setArmedForRecording( false );
+        // Arm state is untouched (item e): a take placing nothing is not a
+        // reason to disarm the track the user still has armed. The growing
+        // clip is already gone (removeGrowingClips_() above), which is what
+        // clears the "recording in progress" visual — the head's translucent
+        // overlay is gated on SApplication::isRecordingActive(), already
+        // false by the time stop() reaches here, not on arm state.
         armed_.clear();
         return;
     }
@@ -511,8 +515,12 @@ void SAudioRecorder::commitPlacement_()
     }
     if( undo ) undo->endMacro();
 
-    for( Armed &a : armed_ )
-        if( a.track ) a.track->setArmedForRecording( false );
+    // Arm state is deliberately untouched (item e): the armed track(s) stay
+    // armed after a take is placed, ready for the next one. The
+    // "recording in progress" visual (the head's translucent overlay,
+    // SMVActualView::paintEvent) is already gone by the time we get here —
+    // it is gated on SApplication::isRecordingActive(), which stop() cleared
+    // at its very top, not on the arm flag this used to also clear.
 
     TW_LOGI( "shell", "[REC] placed %u segment(s) x %u track(s) from frame %lld "
                       "(captured %lld, trimmed %lld)",

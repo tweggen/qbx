@@ -486,8 +486,11 @@ void SMidiRecorder::commit_()
     lastPassCount_  = passes;
     lastTracks_     = (int) armed_.size();
 
-    for( const Armed &a : armed_ )
-        if( a.track ) a.track->setArmedForRecording( false );
+    // Arm state is deliberately untouched (item e, mirrors SAudioRecorder):
+    // the armed track(s) stay armed once the take is placed, ready for the
+    // next one. There is no growing-clip visual on the MIDI side to clear —
+    // an event clip is placed only at the stop — so nothing else here needs
+    // to change.
 }
 
 QString SMidiRecorder::describe() const

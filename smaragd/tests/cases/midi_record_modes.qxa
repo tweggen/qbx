@@ -116,6 +116,13 @@
     <undo/>
     <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
 
+    <!-- Track 0 stays armed after a take is placed (item e / proposal 21
+         L3b): arm state is no longer touched by record-stop. Phase 4 below
+         is about track 1 alone, so disarm track 0 explicitly here - the
+         same thing the record button leaves to the user, not to the
+         recorder. -->
+    <arm-track trackPath="0" armed="0"/>
+
     <!-- ================== 4. input quantise =========================== -->
     <!--
       A SECOND, empty track, so the pass becomes a fresh clip and the grid is

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The split command ('s' / "Split object", SStdMixerView::ctSplitSample) must
+  split every item in the CURRENT SELECTION whose extent strictly contains the
+  split position (start < splitTime < end), not merely the last-CLICKED clip,
+  and it must do nothing to a selected-but-non-containing clip or an
+  unselected clip - even one that DOES contain the split position and even
+  one that was the LAST thing clicked.
+
+  Fixture: four tracks, each with one 4 s (192000-frame) sawtooth clip.
+    track 0: clip at 0        (contains locator 96000)       - SELECTED
+    track 1: clip at 0        (contains locator 96000)       - SELECTED
+    track 2: clip at 300000   (does NOT contain 96000)        - unselected
+    track 3: clip at 0        (contains 96000, but NOT selected, and it is
+                                deliberately made the LAST CLICKED clip too -
+                                the regression this case exists to catch)
+
+  Phase 2 checks the fallback: with the selection EMPTY, the split acts on
+  the last-clicked clip (unchanged from before this fix) - click-lane on
+  track 2's clip, then clear the selection it set, then split.
+-->
+<SActionScript version="1" name="split_selection">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="300000"/>
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Make track 3's clip the LAST CLICKED one - a click also selects the
+         track and the clip (items g/h), which is why the explicit
+         set-selection right after this is what actually decides the split
+         target. If split-selection were still last-click-driven, track 3
+         would split instead of (or as well as) tracks 0/1. -->
+    <click-lane trackPath="3" time="96000"/>
+
+    <!-- The real (CLIP) selection for phase 1: tracks 0 and 1's clips only.
+         This is app.getCurrentSelectionPaths() / SLink-based selection, the
+         same one nudgeClipPitch reads - distinct from the per-TRACK
+         selection item (h) also touches, which is not under test here. -->
+    <set-selection paths="0,0|1,0"/>
+
+    <set-locator position="96000"/>
+    <split-selection/>
+
+    <!-- Selected AND containing the locator: split into head+tail. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="96000"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="1,1" startTime="96000" duration="96000"/>
+
+    <!-- Not selected, and does not contain the locator: untouched. -->
+    <assert-clip-window clip="2,0" startTime="300000" duration="192000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <!-- Contains the locator, was the last-clicked clip, but is NOT in the
+         selection: must be left alone - selection-driven, not
+         last-click-driven. -->
+    <assert-clip-window clip="3,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="3,1" expectReject="true"/>
+
+    <!-- ============ phase 2: selection empty, last-click fallback ======= -->
+    <!-- Click track 2's clip now, then clear the selection that click made,
+         leaving lastClickSLink_ pointed at 2,0 with nothing selected. -->
+    <click-lane trackPath="2" time="396000"/>
+    <clear-selection/>
+
+    <set-locator position="396000"/>
+    <split-selection/>
+
+    <assert-clip-window clip="2,0" startTime="300000" duration="96000"/>
+    <assert-clip-window clip="2,1" startTime="396000" duration="96000"/>
+
+    <!-- Nothing else moved in phase 2. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="3,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="3,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="4"/>
+  </assertions>
+
+</SActionScript>

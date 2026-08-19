@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L4 (= 37 P8b) / item (e): once a MIDI take is placed, the armed
+  track MUST REMAIN ARMED. SMidiRecorder::commit_() called
+  track->setArmedForRecording(false) on every armed track at the end of every
+  take, mirroring the audio recorder's identical bug - see record_stays_armed
+  for the audio half and the fuller explanation.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL. No
+  SMARAGD_AUDIO_INPUT_BACKEND - a MIDI-armed track has no audio input at all.
+
+  Unlike audio recording, a MIDI take's clip starts EXACTLY at the locator
+  (SMidiRecorder::commit_()'s passPlacement() returns recordStart_ verbatim,
+  not a jittery host-time mapping), so two takes begun from the SAME locator
+  land on the SAME column deterministically: take 2 becomes take 1 of ONE
+  clip. That is what makes an exact takes="2" possible here, unlike
+  record_stays_armed's audio counterpart which lands as two separate clips.
+
+  THE TEST IS THE OBSERVABLE CONSEQUENCE, not a state-flag read (there is no
+  assert-track-armed verb): arm the track ONCE, then record-stop-record-stop
+  TWICE with NO arm-track call between them. If the bug were present the
+  second record-start would refuse outright ("no armed tracks", logged but
+  not itself asserted), and the take count below would stay at 1.
+-->
+<SActionScript version="1" name="midi_record_stays_armed">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <set-locator position="24000"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <!-- Take 1. -->
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="48000"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <assert-midi-recorded trackPath="0" clips="1" takes="1" passes="1"
+                          notes="4" startFrame="24000" startTolerance="4096"/>
+
+    <!-- Take 2. NO arm-track call here - that absence is the whole point. -->
+    <set-locator position="24000"/>
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="48000"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <!-- ONE column, TWO takes: the second pass happened at all only because
+         the track was still armed. -->
+    <assert-midi-recorded trackPath="0" clips="1" takes="2" passes="1"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -196,6 +196,8 @@ const Fixture kFixtures[] = {
       "<drag-track trackPath='1,0' targetRow='2' mode='before'/>" },
     { "assert-track-selection",
       "<assert-track-selection paths='0;1,0' primary='1,0'/>" },
+    { "click-lane",
+      "<click-lane trackPath='1,0' time='48000' modifiers='ctrl+shift'/>" },
 
     // --- the event-clip verbs (proposal 37 P1) ------------------------------
     // Two-level paths throughout, for the reason above. `duration` here is in
