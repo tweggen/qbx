@@ -67,6 +67,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -1070,22 +1071,36 @@ bool probeProduction( const std::string &path )
 
             // The app's ~30 Hz editor tick, in miniature.
             twEditorFeedback fb = ed->poll();
+
+            // THE CHECK IS PER BATCH, NOT PER EDIT, and the first version of it
+            // was wrong in a way worth recording. poll() applies EVERY edit in
+            // the batch to the mirror before it returns, so by the time we walk
+            // fb.edits the mirror already holds the LAST value. Comparing an
+            // earlier edit against it compares against the future, and a fast
+            // drag — two moves of one knob inside one 30 ms poll — reported a
+            // bogus mismatch on the first of each pair:
+            //
+            //     gui=0.672 getParam=0.668  [!! DISAGREES]
+            //     gui=0.668 getParam=0.668  [AGREES]        <- the next edit
+            //
+            // Last-value-wins is exactly what the mirror SHOULD do. So the
+            // assertion is: for each parameter touched in this batch, getParam()
+            // equals the LAST Change reported for it.
+            std::map<std::uint32_t, double> lastOf;
             for( const auto &e : fb.edits ) {
                 ++totalEdits;
                 if( e.phase == twEditorGesture::Begin ) ++begins;
                 if( e.phase == twEditorGesture::End )   ++ends;
-                if( e.phase == twEditorGesture::Change ) {
-                    // Read the value BACK through the plugin: this is the whole
-                    // claim of M2. If getParam() disagrees with what the GUI
-                    // reported, the mirror was not updated and the DSP ring did
-                    // not get it either — the knob would move and the audio
-                    // would not follow.
-                    const double readBack = plugin->getParam( e.paramId );
-                    std::printf( "    prod   : edit id=%u gui=%.6f getParam=%.6f%s\n",
-                                 (unsigned)e.paramId, e.value, readBack,
-                                 ( std::fabs( readBack - e.value ) < 1e-9 )
-                                     ? "  [MIRROR AGREES]" : "  [!! MIRROR DISAGREES]" );
-                }
+                if( e.phase == twEditorGesture::Change ) lastOf[e.paramId] = e.value;
+            }
+            for( const auto &kv : lastOf ) {
+                const double readBack = plugin->getParam( kv.first );
+                const bool   agrees   = std::fabs( readBack - kv.second ) < 1e-9;
+                std::printf( "    prod   : id=%u last-in-batch=%.6f getParam=%.6f%s\n",
+                             (unsigned)kv.first, kv.second, readBack,
+                             agrees ? "  [MIRROR AGREES]"
+                                    : "  [!! MIRROR DISAGREES — real defect]" );
+                if( !agrees ) warn( "mirror did not take the GUI's value" );
             }
             if( fb.resized ) {
                 ++resizes;

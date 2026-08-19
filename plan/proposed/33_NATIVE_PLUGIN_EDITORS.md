@@ -210,6 +210,44 @@ not depend on it.
 
 `--show` now reports the ratio and names which of the two shapes it saw, so this
 is a measurement anyone can repeat per plugin rather than a fact about Dexed.
+**Reproduced across two independent runs** (29 begin / 29 perform / 29 end
+through raw COM; 13 / 13 / 13 through the production editor) — the shape is
+stable, not a one-off.
+
+### 4.2 A POLL BATCH CAN HOLD SEVERAL MOVES OF ONE KNOB
+
+Found by the production gate crying wolf, and worth keeping because it decides
+how M5 must read a batch. The first version of `--production --show` compared
+every reported edit against `getParam()` and flagged this:
+
+```
+gui=0.672000 getParam=0.668000  [!! MIRROR DISAGREES]
+gui=0.668000 getParam=0.668000  [MIRROR AGREES]        <- the very next edit
+```
+
+Not a defect. `poll()` applies the **whole batch** to the mirror before
+returning, so walking the returned list afterwards compares an earlier edit
+against a mirror that already holds the later one. A drag simply moves the knob
+more than once inside a 30 ms poll. Last-value-wins is exactly what the mirror
+should do; the assertion was wrong and now checks the **last Change per
+parameter per batch**, which is the only form that can distinguish a real
+failure from a fast hand.
+
+Two consequences that outlive the harness bug:
+
+- **The host must coalesce per batch as well as across batches.** M5's
+  `(slot, paramId)` merge already subsumes this, but a naive implementation that
+  submitted one `SSetPluginParamAction` per reported edit would submit several
+  per poll, not one per gesture — the §4.1 problem again, one layer down.
+- **The DSP deliberately gets EVERY intermediate value, not the coalesced one.**
+  `poll()` pushes each Change to the ring as it goes. That is what makes a drag
+  sound continuous; coalescing there would make it steppy. Model-side coalescing
+  and DSP-side completeness are different requirements and the split is on
+  purpose.
+
+Also confirmed end to end in the same run: `poll reported resize -> 866x674`, so
+the `IPlugFrame` → `takePending()` → host path works through the production
+class and not only through the spike's hand-rolled frame.
 
 **Also measured:** `restartComponent flags=0x4` = `kParamValuesChanged`, sent
 during setup. The pre-M2 backend's `(void)flags;` made that indistinguishable
