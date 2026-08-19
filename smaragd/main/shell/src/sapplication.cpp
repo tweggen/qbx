@@ -94,13 +94,23 @@ void SApplication::setCurrentProject( SProject *cp )
     // section 3). It is a project PROPERTY, so the only signal it raises is
     // propertyChanged; one connection here turns it into the same
     // liveLanesChanged() every arm verb calls. UniqueConnection because
-    // setCurrentProject runs again after a load.
+    // setCurrentProject runs again after a load — and it MUST be a real
+    // pointer-to-member-function for that flag to do anything at all (see
+    // onProjectPropertyChangedForLive()'s comment: a lambda here made
+    // Qt::UniqueConnection silently refuse the connection, so nothing ever
+    // watched the property and toggling the metronome off mid-playback did
+    // not stop the click).
     if( cp )
         connect( cp, &SProject::propertyChanged, this,
-                 [this]( const QString &key, const QVariant & ) {
-                     if( key == QLatin1String( SProjectProps::Metronome ) )
-                         liveLanesChanged();
-                 }, Qt::UniqueConnection );
+                 &SApplication::onProjectPropertyChangedForLive,
+                 Qt::UniqueConnection );
+}
+
+void SApplication::onProjectPropertyChangedForLive( const QString &key,
+                                                     const QVariant & )
+{
+    if( key == QLatin1String( SProjectProps::Metronome ) )
+        liveLanesChanged();
 }
 
 void SApplication::rewireSpeaker()

@@ -463,7 +463,7 @@ endforeach()
 # above describes (the click is produced by the pump and consumed by the RT
 # callback, and the measurement is the capture backend's recording), so
 # RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out.
-foreach(_met metronome_click metronome_render_identity)
+foreach(_met metronome_click metronome_render_identity metronome_toggle_during_playback)
     if(TEST qxa.${_met})
         set_tests_properties(qxa.${_met} PROPERTIES
             RUN_SERIAL TRUE
