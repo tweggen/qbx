@@ -296,30 +296,77 @@ tresult PLUGIN_API twVst3ComponentHandler::queryInterface( const TUID _iid, void
     return resolveOne( _iid, obj, Vst::IComponentHandler::iid );
 }
 
-tresult PLUGIN_API twVst3ComponentHandler::beginEdit( Vst::ParamID )
+// The three gesture callbacks all funnel here (proposal 33 M2). RECORDING, not
+// acting: this can arrive on the plugin's own UI thread, and this repo has
+// already paid for reaching into graph state from a non-main thread. The
+// backend drains where it is safe to act.
+void twVst3ComponentHandler::record_( Vst::ParamID id, double value,
+                                      twEditorGesture phase )
 {
-    return kResultOk;
-}
+    std::lock_guard<std::mutex> lock( editMutex_ );
 
-tresult PLUGIN_API twVst3ComponentHandler::performEdit( Vst::ParamID, Vst::ParamValue )
-{
-    // Flag only. This can arrive on the plugin's own UI thread, and this repo has
-    // already paid for reaching into graph state from a non-main thread; the
-    // backend picks the flag up where it is safe to act on it.
+    if( edits_.size() >= kMaxPendingEdits ) {
+        // Nobody is draining, or the plugin is streaming values faster than the
+        // 30 Hz poll. Drop the oldest CHANGE and keep every Begin and End: an
+        // intermediate position of a knob is worth nothing once a newer one
+        // exists, whereas losing an End leaves an undo entry and an automation
+        // punch-in open forever. Scanning from the front is O(n) on a path that
+        // only runs when something is already pathological.
+        auto victim = std::find_if( edits_.begin(), edits_.end(),
+                                    []( const Edit &e ) {
+                                        return e.phase == twEditorGesture::Change;
+                                    } );
+        if( victim != edits_.end() ) edits_.erase( victim );
+        else                         edits_.erase( edits_.begin() );
+    }
+
+    edits_.push_back( Edit{ (std::uint32_t)id, value, phase } );
     edited_.store( true, std::memory_order_release );
+}
+
+std::vector<twVst3ComponentHandler::Edit> twVst3ComponentHandler::takeEdits()
+{
+    std::lock_guard<std::mutex> lock( editMutex_ );
+    std::vector<Edit> out;
+    out.swap( edits_ );
+    return out;
+}
+
+tresult PLUGIN_API twVst3ComponentHandler::beginEdit( Vst::ParamID id )
+{
+    // The value is deliberately not read here. VST3 gives beginEdit no value,
+    // and querying the controller for one would be a call INTO the plugin from
+    // inside its own callback — re-entrancy some plugins do not survive. The
+    // first performEdit carries it.
+    record_( id, 0.0, twEditorGesture::Begin );
     return kResultOk;
 }
 
-tresult PLUGIN_API twVst3ComponentHandler::endEdit( Vst::ParamID )
+tresult PLUGIN_API twVst3ComponentHandler::performEdit( Vst::ParamID id,
+                                                        Vst::ParamValue v )
 {
+    // Both arguments used to be DISCARDED here, which is why a native editor
+    // could never have been audible: the host learned that something changed
+    // and never what. `v` is VST3-normalized [0,1], which is already the
+    // host-facing domain twPlugin::setParam() and `param:` automation lanes
+    // speak, so no conversion belongs on this path.
+    record_( id, (double)v, twEditorGesture::Change );
+    return kResultOk;
+}
+
+tresult PLUGIN_API twVst3ComponentHandler::endEdit( Vst::ParamID id )
+{
+    record_( id, 0.0, twEditorGesture::End );
     return kResultOk;
 }
 
 tresult PLUGIN_API twVst3ComponentHandler::restartComponent( int32 flags )
 {
-    // kLatencyChanged / kParamValuesChanged / kReloadComponent all land here.
-    // Recorded, never acted on from this thread.
-    (void)flags;
+    // kLatencyChanged / kParamValuesChanged / kReloadComponent all land here and
+    // used to be indistinguishable — the body was `(void)flags;`. They are OR-ed
+    // rather than replaced, so two restarts between drains do not lose the first
+    // one's reason. Recorded, never acted on from this thread.
+    restartFlags_.fetch_or( flags, std::memory_order_acq_rel );
     restart_.store( true, std::memory_order_release );
     return kResultOk;
 }

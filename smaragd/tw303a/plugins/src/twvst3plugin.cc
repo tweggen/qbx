@@ -30,6 +30,7 @@
 // either way, and automation is normalized at every other layer too.
 
 #include "twvst3host.h"
+#include "twvst3editor.h"
 #include "twvst3module.h"
 
 #include "tw/core/twlog.h"
@@ -171,6 +172,7 @@ public:
 
     std::uint32_t reportedLatency() const override;
     bool supportsNativeEditor() const override { return hasGui_; }
+    std::unique_ptr<twPluginEditor> createEditor() override;   // proposal 33 M3
 
     twPluginCapabilities capabilities() const override { return caps_; }
     std::size_t          audioOutBusCount() const override { return outBusShape_.size(); }
@@ -205,6 +207,11 @@ private:
     };
 
     void pushEdit( std::uint32_t id, double v );
+    void applyGuiEdit( std::uint32_t id, double v );   // main thread; proposal 33
+
+    // Counted, not owned: the app owns the editor. Only so teardown can report
+    // the contract violation of outliving one.
+    std::atomic<int> liveEditors_{ 0 };
     void drainEditsIntoChanges();      // fills paramChanges_
 
     std::shared_ptr<twVst3Module> module_;
@@ -419,6 +426,21 @@ void twVst3Plugin::teardown()
     {
         std::lock_guard<std::mutex> lock( hostMutex_ );
         deactivate();
+    }
+
+    // A live editor at this point is an APP BUG, not something to paper over:
+    // the contract (twplugineditor.h) is that the editor is destroyed before the
+    // plugin that produced it, and the app enforces it by closing the window on
+    // slot::destroyed and on pluginReloaded. We cannot destroy it from here —
+    // the app owns the unique_ptr — so the honest thing is to say so loudly.
+    // The view it holds is about to reference a released controller and, once
+    // module_ drops below, an unloaded DSO.
+    if( liveEditors_.load( std::memory_order_acquire ) != 0 ) {
+        TW_LOGE( "plugins",
+                 "VST3 plugin torn down with %d native editor(s) still open — the "
+                 "editor must be destroyed BEFORE the plugin (proposal 33). The "
+                 "view now points at a released controller.",
+                 liveEditors_.load( std::memory_order_relaxed ) );
     }
 
     // Documented order. Getting it wrong leaks the DSO or crashes on exit.
@@ -878,6 +900,66 @@ void twVst3Plugin::setParam( std::uint32_t id, double v )
     // the ring is for — but without it a native editor and
     // getParamStringByValue would disagree with the audio.
     if( controller_ ) controller_->setParamNormalized( (Vst::ParamID)id, v );
+}
+
+std::unique_ptr<twPluginEditor> twVst3Plugin::createEditor()
+{
+    if( !controller_ ) return nullptr;
+
+    // ONE editor per instance. A second view on one controller is legal in the
+    // spec and a lifetime problem in practice — two frames, two attach states,
+    // and nothing to say which one teardown is waiting for.
+    if( liveEditors_.load( std::memory_order_acquire ) != 0 ) {
+        TW_LOGW( "plugins", "VST3: an editor is already open on this instance" );
+        return nullptr;
+    }
+
+    // The probe at init() created a view and released it purely to answer
+    // supportsNativeEditor(). This is a SECOND createView, which is what every
+    // host does and which that probe has already shown these plugins tolerate.
+    IPlugView *view = controller_->createView( Vst::ViewType::kEditor );
+    if( !view ) return nullptr;
+
+    liveEditors_.fetch_add( 1, std::memory_order_acq_rel );
+
+    // The callback is what makes a GUI knob audible: mirror + ring, no
+    // controller write-back (see applyGuiEdit). Capturing `this` is safe for
+    // exactly as long as the contract above holds — the editor must not outlive
+    // the plugin — and teardown reports it loudly when it does not.
+    auto ed = std::make_unique<twVst3Editor>(
+        view, handler_.get(),
+        [this]( std::uint32_t id, double v ) { applyGuiEdit( id, v ); },
+        [this]() { liveEditors_.fetch_sub( 1, std::memory_order_acq_rel ); } );
+
+    return ed;
+}
+
+void twVst3Plugin::applyGuiEdit( std::uint32_t id, double v )
+{
+    // An edit that ORIGINATED IN THE PLUGIN'S OWN GUI (proposal 33 M2). It is
+    // setParam() minus the controller write, and that omission is the whole
+    // point: the controller already holds this value — its GUI is what produced
+    // it — so writing it back would be a call INTO the plugin from inside the
+    // handling of its own callback. Some plugins re-enter, some fight the host
+    // for the value and the knob visibly jitters, and neither is necessary.
+    //
+    // What DOES have to happen is the other two thirds: the mirror, so
+    // getParam() and every host-side reader agree with the plugin, and the ring,
+    // because ProcessData::inputParameterChanges is the ONLY route to the
+    // processor (plugins/CONTRACT.md:365-375). Without the ring the knob moves
+    // and the audio does not — which is exactly the bug this milestone exists
+    // to remove.
+    std::size_t idx = params_.size();
+    for( std::size_t i = 0; i < params_.size(); ++i ) {
+        if( params_[i].id == id ) { idx = i; break; }
+    }
+    if( idx == params_.size() ) return;   // a parameter we never enumerated
+
+    if( v < 0.0 ) v = 0.0;
+    if( v > 1.0 ) v = 1.0;
+
+    mirror_[idx].store( v, std::memory_order_release );
+    pushEdit( id, v );
 }
 
 void twVst3Plugin::pushEdit( std::uint32_t id, double v )

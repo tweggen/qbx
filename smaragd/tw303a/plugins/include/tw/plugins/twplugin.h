@@ -2,6 +2,7 @@
 #define _TWPLUGIN_H_
 
 #include "tw/plugins/twpluginevents.h"
+#include "tw/plugins/twplugineditor.h"
 
 #include <cstdint>
 #include <memory>
@@ -21,6 +22,18 @@ struct twPluginParamInfo {
     double        minValue, maxValue, defaultValue;
     bool          isStepped = false;
 };
+
+// twplugineditor.h is INCLUDED, not forward-declared, and the reason is worth
+// recording because the opposite was tried first: createEditor() returns a
+// std::unique_ptr<twPluginEditor> with an inline `return nullptr;` default, and
+// destroying that temporary instantiates default_delete, which needs a COMPLETE
+// type. A forward declaration fails to compile in every TU that includes this
+// header — eight of them, none of which mention editors.
+//
+// The include costs nothing measurable: twplugineditor.h pulls <cstdint>,
+// <memory> and <vector>, all three of which this header already had, and it
+// carries no Qt, no platform header and — by plugins/CONTRACT.md inv. 4 — no
+// format type. There was no narrowness to protect.
 
 // Host-facing plugin interface. Deliberately narrow; format-specific behavior
 // (native editor, note input) lives behind capability-queried extension interfaces.
@@ -58,7 +71,32 @@ public:
     virtual std::uint32_t reportedLatency() const { return 0; }
 
     // Capabilities — keep the core narrow; query for the rest.
+    //
+    // supportsNativeEditor() stays the CHEAP PROBE: the FX strip asks it to
+    // decide which editor to open, without instantiating anything.
     virtual bool supportsNativeEditor() const { return false; }
+
+    // The plugin's OWN user interface (proposal 33). Null means "no native
+    // editor" — the placeholder, every GUI-less plugin, and any backend that
+    // has not implemented one — and the host then falls back to the generic
+    // parameter editor. Never a hard failure.
+    //
+    // UI/MAIN THREAD ONLY, and the returned object is main-thread-only in every
+    // method (all three formats require it: CLAP annotates clap_plugin_gui
+    // [main-thread], VST3's IPlugView is UI-thread, an AU Cocoa view is AppKit).
+    //
+    // The editor is a SEPARATE object with an INDEPENDENT lifetime rather than
+    // more virtuals here, which is what keeps this interface narrow and what
+    // makes reloadPlugin() clean: destroy the editor, ask the NEW instance for a
+    // fresh one, never re-initialise in place on a dangling this. It must be
+    // destroyed BEFORE the twPlugin that produced it — every format requires the
+    // view to die before the instance.
+    //
+    // Under DualMono a slot holds N instances (twpluginslotproc.cc:484-491) and
+    // only instances_[0] gets an editor. Every parameter change the editor
+    // reports must therefore be replayed onto the others, which is what routing
+    // it through SSetPluginParamAction buys — see proposal 33 §2.
+    virtual std::unique_ptr<twPluginEditor> createEditor() { return nullptr; }
 
     // Kept as a FORWARDER for one release (proposal 37 §5.1). New code asks
     // capabilities(); a backend overrides capabilities() and gets this for

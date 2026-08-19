@@ -6,6 +6,7 @@
 #include <QStandardPaths>
 
 #include "tw/graph/tw303aenv.h"
+#include "tw/graph/tw_freeze_context.h"
 #include "tw/core/twlog.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twpluginsearchpaths.h"
@@ -618,6 +619,14 @@ SApplication::SApplication( int &argc, char **argv )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );
+
+    // Proposal 33 M1. The one place in the process that is unambiguously the Qt
+    // main thread: QApplication's own constructor runs on it by definition.
+    // Marking it here — rather than at the first editor call, which would mark
+    // whichever thread happened to get there first — is what makes
+    // twRtThreadGuard::onMainThread() mean something. It does NOT change the
+    // render policy: the main thread may render, and still does.
+    twRtThreadGuard::markMainThread();
 
     singleton_ = this;
     // ~30 Hz playhead poll: the audio thread stores its position lock-free; this

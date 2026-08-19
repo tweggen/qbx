@@ -321,9 +321,11 @@ set(APP_UI_FILES
     # --- app/pluginui
     pluginui/include/app/pluginui/spluginbrowserdialog.h
     pluginui/include/app/pluginui/splugineffectstrip.h
+    pluginui/include/app/pluginui/spluginnativeeditor.h
     pluginui/include/app/pluginui/spluginparamereditor.h
     pluginui/src/spluginbrowserdialog.cpp
     pluginui/src/splugineffectstrip.cpp
+    pluginui/src/spluginnativeeditor.cpp
     pluginui/src/spluginparamereditor.cpp
     # --- app/servicesui
     servicesui/include/app/servicesui/scleanupdialog.h
