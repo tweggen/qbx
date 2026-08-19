@@ -520,12 +520,14 @@ const Fixture kFixtures[] = {
       " accountCount='1'/>" },
     { "assert-settings-file",
       "<assert-settings-file contains='foo' absent='bar'/>" },
-    // GATE 5c. Every attribute is written unconditionally, so the fixture
-    // declares all eight -- including the two whose defaults are non-empty.
+    // GATE 5c, + gate 6's expectAuth. Every attribute is written
+    // unconditionally, so the fixture declares all nine -- including the two
+    // whose defaults are non-empty.
     { "media-webdav-stub",
       "<media-webdav-stub action='start' fixtureDir='../media/lib'"
       " accountId='qxastub' user='qxauser' password='qxapass' remember='0'"
-      " fault='401' faultPath='protected'/>" },
+      " fault='401' faultPath='protected'"
+      " expectAuth='Basic cXhhdXNlcjpxeGFwYXNz'/>" },
 
     { "assert-clip-window",
       "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"

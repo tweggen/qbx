@@ -361,9 +361,10 @@ long-term shape.
 
 ## The `media:` drop branch (proposal 38 gate 3)
 
-`SMVActualView::dropEvent` has ONE new branch and it is five lines: parse the
-`media:` payload into an `SMediaRef` and call `smediadrop::placeWhenLocal`.
-Everything under it belongs to `app/media`. Two things are contractual:
+23. **`SMVActualView::dropEvent` has ONE new branch and it is five lines:**
+parse the `media:` payload into an `SMediaRef` and call
+`smediadrop::placeWhenLocal`. Everything under it belongs to `app/media`. Two
+things are contractual:
 
 - **The `file:` and `asset:` branches are byte-unchanged.** That is what keeps
   every existing placement path — Insert sample, an OS file drop, the resources

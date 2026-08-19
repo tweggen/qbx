@@ -84,13 +84,13 @@ Invariants:
 
 
 7. **Docks are created in the CONSTRUCTOR, with a stable objectName**, or
-   `restoreWindowLayout()` cannot restore them (inv. 4). There are now six:
+   `restoreWindowLayout()` cannot restore them (inv. 4). There are now SEVEN:
    `dock_extern_file_list`, `dock_track_detail`, `dock_log`,
    `dock_clip_properties`, and — since proposal 37 P4 —
    `dock_event_editor` (bottom, tabified with the Log) and
    `dock_virtual_keyboard` (bottom, tabified with the editor), and — since
    proposal 38 gate 2 — `dock_media_browser` (LEFT, beside the resources
-   dock), which makes SEVEN. All of the later ones start hidden; the View menu
+   dock). All of the later ones start hidden; the View menu
    carries their toggles (Ctrl+Shift+E for the editor; the media browser has no
    shortcut). Constructing the media browser CONTACTS NOTHING — a media source
    is registered, which does no I/O, and opened only when it is SELECTED — so a
@@ -666,9 +666,11 @@ than guessed at. The trim floor already distinguishes the two cases
 
 ## The media layer's two hooks (proposal 38 gate 3)
 
+Three injections, split across two classes because the status bar belongs to
+one of them and the composition root to the other.
 `SApplication::initMediaLayer()`, called from the ctor beside
-`initPluginRegistry()`, does two things `app/media` cannot do for itself — and
-in both cases the reason is that `app/media` is **app_core**:
+`initPluginRegistry()`, does the first two — and in both cases the reason is
+that `app/media` is **app_core**:
 
 1. **The cache's ROOT and CAP.** `<configDir>/mediacache` and
    `SOpt::MediaCacheCapMB` both live behind `SSettings`, which app_core cannot
@@ -683,6 +685,16 @@ in both cases the reason is that `app/media` is **app_core**:
    (trap T18) — and submits the same `add-sample` the `file:` branch does. An
    empty path means the track is no longer in the tree, and the only safe answer
    to that is to place nothing.
+
+**THE DESIGN'S OWN SKETCH OF THIS CALL COULD NEVER HAVE COMPILED**, and it is
+worth knowing why rather than rediscovering it. Proposal 38 §B.5 printed the
+arranger's new branch as `smediadrop::placeWhenLocal( ref, trackId, timePos,
+this )` — a `QWidget*` handed into a module whose contract forbids widgets, to
+a function that would then construct an `SAddSampleAction`: a class declared in
+app_objects, one LAYER ABOVE the app_core module the function lives in, so the
+include does not even resolve. Neither half is a `check_layering.py` entry
+anybody could have added. The hooks are what the shape actually is; the
+proposal has been corrected.
 
 `SMainWindow`'s ctor installs the third piece, `setStatusHook`, because that is
 where the status bar is: `app/media` owns no widget by contract, so "fetching
@@ -739,3 +751,82 @@ change rather than the only one.
     the composition root that owns a REAL, persistent `SSecretStore` has to
     hand it a `QSettings` explicitly, and that `QSettings` cannot be
     `SSettings`'s private member (there is no accessor for it, on purpose).
+
+## The secret store (proposal 38 GATE 5a)
+
+`SSecretStore` (`app/shell/ssecretstore.h`) is where a password lives. It sits
+beside `SSettings` rather than inside it for one reason that governs everything
+below: **`SSettings` is the INI, and a secret must never be in the INI in a
+form anyone can read.**
+
+42. **A SECRET NEVER GOES INTO `smaragd.ini` IN PLAIN TEXT, AND THERE IS NO
+    WEAK TIER.** Five backends, chosen at build time by platform and
+    overridable at run time: `dpapi` (Windows, `CryptProtectData` with
+    `CRYPTPROTECT_UI_FORBIDDEN`, user-scoped, ciphertext base64 in the INI),
+    `keychain` (macOS login keychain, `kSecClassGenericPassword`, service
+    `com.smaragd.media` — not in the INI at all), `libsecret` (Linux Secret
+    Service, `TW_HAVE_LIBSECRET`, optional), `none` (nowhere: "Remember" is
+    DISABLED and the password is session-only), and `memory` (a
+    process-lifetime map, the test backend). There is deliberately no
+    encrypt-it-ourselves fallback — this tree links no cipher, and a scheme
+    that would have to document itself as protecting nothing is a checkbox
+    rather than a control (§B.8). A real backend that fails at RUNTIME (a
+    locked keychain, a Secret Service that is not running) degrades to `none`'s
+    behaviour with a reason, never silently to something weaker.
+
+43. **THE SCHEME TAG IS LOAD-BEARING: a blob is decrypted only through the
+    backend NAMED AT THE KEY, never the instance's currently-selected one.** A
+    DPAPI blob is user- and machine-bound by design, so an INI copied to
+    another machine, another account, or a roamed `%APPDATA%` **cannot**
+    decrypt — and must fail READABLY. It reports `Result::Undecryptable`, the
+    accounts page says "re-enter the password for this account", and **nothing
+    is sent to the server**. Without the tag the same situation is a garbage
+    credential in an `Authorization` header and a 401 nobody can explain.
+
+44. **A SECRET NEVER APPEARS IN A LOG, A `describe()`, AN EXCEPTION OR A URL.**
+    Every diagnostic names the KEY and the SCHEME, never the value;
+    `describeMediaPage()` reports `password=set|unset|undecryptable` and never
+    a length or a prefix. The gate asserts the absence of the password **AND
+    its base64 spelling** — a Basic header leaks `base64(user:password)`, not
+    the password, so a case grepping only for the literal would pass with the
+    credential sitting in the log in plain sight. It must NOT assert `"Basic "`
+    absent: that forbids the correctly redacted line
+    (`Authorization: Basic <redacted>`) and every sentence containing the word,
+    which would force redaction to erase the scheme name to satisfy its own
+    gate. `media_secret_redaction` is the case.
+
+45. **A SECRET NEVER ENTERS A `.qxp`.** An account is machine-local
+    configuration, like a device id. Nothing in proposal 38 touches the project
+    file, and this class only ever reaches the `QSettings` it was handed and
+    the platform store.
+
+46. **`SMARAGD_SECRET_BACKEND=dpapi|keychain|libsecret|none|memory` overrides
+    ahead of the platform choice, and `memory` is the `--test-case` default.**
+    It mirrors `SMARAGD_AUDIO_BACKEND` / `SMARAGD_MIDI_BACKEND` exactly, and it
+    is read ONCE per process — which is why `media_options_no_store` needs its
+    own CTest entry to see the `none` behaviour rather than switching mid
+    script. Two reasons for the default, and the second is the sharper one: a
+    headless suite must not write into the developer's real keychain or Secret
+    Service, and on macOS a keychain access from a background test can BLOCK ON
+    A UI PROMPT NOBODY CAN SEE — the `qoffscreen` failure mode again, a case
+    burning its whole timeout at ~0 % CPU. `memory` is a REAL store with
+    process lifetime, because the options-page cases need one that round-trips.
+
+47. **INSTANTIATION NEVER REACHES FOR `SSettings::instance()`** — the caller
+    passes its own `QSettings*`. That is what lets `secret_store_test` point
+    the class at a private temp-file INI and run un-`RUN_SERIAL` beside the qxa
+    suite without ever touching a real credential, and it is why inv. 41's
+    second `QSettings` instance exists.
+
+**What this does NOT buy, stated plainly because a credential store that
+oversells itself is worse than one that does not.** Nothing here changes what
+goes over the WIRE: HTTP Basic sends the password to the server on every
+request, TLS is what protects that, and the app password is what limits the
+blast radius — encryption at rest and encryption in transit are different
+problems and only the first is solved. The plaintext is a `QString` in RAM
+while an account is open, and Qt strings are implicitly shared, so there is no
+honest way to zero them; the window is bounded by fetching at open and
+releasing when the last source for the account closes, and no more than that is
+claimed. And whether DPAPI, Keychain and libsecret actually resist an attacker
+is **their** business — this proposal gates the plumbing and the failure modes,
+not the cryptography.

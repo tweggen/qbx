@@ -41,10 +41,25 @@ browses a remote source in a headless gate.
 
 **What that does NOT mean:** the server on the other end is
 `main/testkit`'s `SWebDavStub`. Plain HTTP, no TLS, no redirects, no rate
-limiting, no `WWW-Authenticate` challenge and no real authentication at all
-(it never inspects the `Authorization` header it is sent), one canonical
-PROPFIND dialect. Everything gated is OUR half of the conversation; a real
-Nextcloud server stays the manual runbook's job (§C.6, gate 6).
+limiting, no `WWW-Authenticate` challenge, one canonical PROPFIND dialect.
+Everything gated is OUR half of the conversation; a real Nextcloud server
+stays the manual runbook's job (`docs/MEDIA_BROWSER_MANUAL_GATE.md`).
+
+**THE CREDENTIAL IS CHECKED, since gate 6, and it was not before.** Gate 5c
+shipped a stub that never inspected the `Authorization` header it was sent, so
+the chain `SSecretStore` -> `smedia::CredentialProvider` -> `SWebDavClient`'s
+header -> the wire was EXERCISED end to end and never VERIFIED: those same
+files would have been served just as happily for an empty or malformed header,
+and "the credential path works" was an assumption inside a suite whose whole
+purpose is to remove assumptions. `SWebDavStub::setExpectedAuthorization()`
+(driven by `media-webdav-stub expectAuth=`) now answers **401** to any request
+whose header is not byte-for-byte the value the case wrote down, ahead of any
+injected fault. `qxa.media_webdav_browse` sets it to `Basic
+cXhhdXNlcjpxeGFwYXNz` for every PROPFIND it makes and carries the negative
+control — a wrong password is a banner, not a silent pass — without which a
+stub that ignored the setting would pass every row count in the file. It is
+still an exact string compare against one value, and nothing like a real
+server's authentication.
 
 Depends on (engine): tw/core, tw/graph (the base every app module gets).
 `tw/core/twlog.h` is the only one actually used. It must NEVER grow an edge to
@@ -395,8 +410,12 @@ timing. Same instinct as `twtestclap`.
 `ctest -R media_source_test` (gate 1, local provider),
 `ctest -R media_cache_test` (gate 3, the cache and the project copy, including
 the four-process AC 8 check that this binary drives by re-execing itself),
-`ctest -R webdav_source_test` (gate 4, WebDAV connector), and the qxa case
-`media_drop_deferred` (gate 3 end to end, through the REAL drop handler). The local fixture
+`ctest -R webdav_source_test` (gate 4, WebDAV connector), and the qxa cases
+`media_drop_deferred` (gate 3 end to end, through the REAL drop handler),
+`media_webdav_browse` and `media_webdav_drop` (gate 5c: the dock browsing a
+REAL registered WebDAV source over a real TCP socket, and a drop out of it
+whose rendered audio is asserted). Every media qxa case is `RUN_SERIAL` and
+declares in its header which `media/*` keys it OWNS. The local fixture
 tree is committed at `smaragd/tests/media/` and its shape is what makes every
 count a closed form:
 
@@ -449,8 +468,11 @@ Gate 3's, first:
   local provider only -- `SWebDavClient::cancel()` has no equivalent gap, it
   `abort()`s a real `QNetworkReply`).
 - `truncatedCount` is a lower bound (inv. 4).
-- No provider is registered anywhere yet — gate 2 mounts the dock and gate 5
-  the accounts. `SMediaRegistry` is exercised only by `media_source_test`.
+- ~~No provider is registered anywhere yet.~~ **Closed by gates 2 and 5b**:
+  the dock registers the local source at construction and
+  `SMediaAccountManager` registers one `SWebDavMediaSource` per persisted
+  Nextcloud account. `SMediaRegistry` is now exercised by the qxa cases as
+  well as by `media_source_test`.
 - The `kMaxSearchEntries` / `kMaxSearchDepth` truncation paths are NOT gated by
   gate 1's local provider: reaching either needs 5000 files or a 13-deep tree
   built at run time, and neither is worth the seconds it costs there. Gate 4

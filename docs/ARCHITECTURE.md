@@ -53,7 +53,8 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 
-14 module directories with `app/<module>/…` includes, built as FOUR
+**17 modules** (the table below; `objects/` holds five of them) with
+`app/<module>/…` includes, built as FOUR
 layered OBJECT libraries (OBJECT is load-bearing: actions and the loader/
 editor/extern-file registries self-register via static initializers, which
 a STATIC lib would drop):
@@ -61,13 +62,28 @@ a STATIC lib would drop):
     app_model < app_core < app_objects < app_ui
     (model)     (actions,     (objects/cut,   (timeline, pluginui,
                 persistence,   wave, midi,     eventui, servicesui,
-                selection)     track, mixer)   shell, testkit)
+                selection,     track, mixer)   shell, testkit,
+                media)                         mediabrowser)
 
 The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
 only its own include dirs and links only the lower layers plus its declared
 engine modules — a cross-layer include (model→actions, core→objects,
 anything below the UI→shell) fails to compile. The core modules reach the
 application only through `app/model/sappcontext.h`.
+
+**What the layer boundary does NOT enforce, verified rather than assumed:** it
+does not stop a WIDGET include. `app_model` links `Qt::Widgets` **PUBLIC** and
+`app_core` links `app_model` PUBLIC, so every Qt widget header is available at
+every layer — indeed `SExternFileList` is a `QTreeWidget` in the LOWEST one.
+What is enforced is the `app/<module>/…` include GRAPH. So `app/media`'s "no
+widget in a provider" rule is a contract plus a grep (proposal 38 §B.1, gate 1
+AC 11), not a compiler error, and a subagent told otherwise gets no error at
+all.
+
+`Qt6::Network` and `Qt6::Concurrent` are linked on **app_core** (for
+`app/media`) and therefore propagate upward. That is the one impurity in the
+module story and it is accepted: layers, not modules, are the CMake targets.
+
 Diagnostics: every module logs through `TW_LOG*` (`tw/core/twlog.h`) or the
 `syslog()` shim, both of which land in the one `TwLog` ring that feeds the
 console tee, the rotating file, and the in-app log dock. Nothing writes to
@@ -86,6 +102,7 @@ minimal.
 | Module | One-liner | Contract |
 |---|---|---|
 | app/model | SObject/SLink/SProject document tree | main/model/CONTRACT.md |
+| app/media | media SOURCES (local FS, Nextcloud/WebDAV), the fetch cache, the `media:` drop helper. **No widget, ever** | main/media/CONTRACT.md |
 | app/objects/cut | clip window (SCut) + renderer + window actions | main/objects/cut/CONTRACT.md |
 | app/objects/midi | event clip (SMidiSequence/SMidiCut) + renderer + event verbs | main/objects/midi/CONTRACT.md |
 | app/objects/wave | sample object + renderer + sample actions; the GROWING recording content (proposal 21 L3b) | main/objects/wave/CONTRACT.md |
@@ -95,10 +112,11 @@ minimal.
 | app/persistence | project load/save | main/persistence/CONTRACT.md |
 | app/selection | selection state + actions | main/selection/CONTRACT.md |
 | app/timeline | the arrangement canvas + chrome | main/timeline/CONTRACT.md |
+| app/mediabrowser | the Media Browser DOCK and nothing else — source picker, tree, filter, search, drag out | main/mediabrowser/CONTRACT.md |
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |
 | app/eventui | event editor (piano roll) + virtual keyboard | main/eventui/CONTRACT.md |
 | app/servicesui | render/record/options dialogs | main/servicesui/CONTRACT.md |
-| app/shell | SApplication, SMainWindow, main() — composition root; the live monitor, the MIDI-out pump and the AUDIO RECORDER | main/shell/CONTRACT.md |
+| app/shell | SApplication, SMainWindow, main() — composition root; the live monitor, the MIDI-out pump, the AUDIO RECORDER, `SSecretStore` and the Nextcloud accounts model | main/shell/CONTRACT.md |
 | app/testkit | qxa runner, audio assertions | main/testkit/CONTRACT.md |
 
 ## Cross-module protocols (read these before touching audio paths)
@@ -107,7 +125,12 @@ minimal.
 - `docs/contracts/FREEZE_PROTOCOL.md` — random-access page rendering.
 - `docs/contracts/THREADING.md` — thread inventory; the no-Qt-off-main rule.
 - `docs/contracts/CLIP_MODEL.md` — SLink/SCut/ClipEntry and their sync.
-- `docs/ACTIONS.md` — all 41 action verbs with attributes (the scripting API).
+- `docs/ACTIONS.md` — every action verb with its attributes (the scripting
+  API). It is a hand-maintained mirror of the registry, so treat a verb that
+  is missing from it as an omission in the DOC, not as proof the verb is gone.
+- `docs/MEDIA_BROWSER_MANUAL_GATE.md` — the manual runbook for the parts of
+  the media browser no headless gate can reach (a real Nextcloud server, TLS,
+  the credential store on real hardware).
 
 ## Working agreement (humans and AIs)
 

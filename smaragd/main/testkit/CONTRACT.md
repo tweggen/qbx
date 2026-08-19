@@ -894,11 +894,41 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
 44. **THE STUB IS NOT A NEXTCLOUD SERVER, and neither case may be read as
     saying otherwise.** Plain HTTP: no TLS (so no certificate validation and no
     TLS-error surfacing), no redirects, no rate limiting, no
-    `WWW-Authenticate` challenge, and NO REAL AUTHENTICATION AT ALL — it never
-    inspects the `Authorization` header it is sent, so nothing in gate 5c proves
-    a credential reached the wire in a form a server would accept. One canonical
-    PROPFIND dialect, not Nextcloud's. What is gated is OUR half of the
-    conversation; a real server is the manual runbook's job (§C.6, gate 6).
+    `WWW-Authenticate` challenge, one canonical PROPFIND dialect, not
+    Nextcloud's. What is gated is OUR half of the conversation; a real server is
+    the manual runbook's job (`docs/MEDIA_BROWSER_MANUAL_GATE.md`).
+
+44a. **`expectAuth=` IS THE ONE THING IT DOES CHECK, and gate 6 added it because
+    gate 5c's own PR body named the hole.** Until then the stub never inspected
+    the `Authorization` header it was sent, so the credential chain
+    `SSecretStore` -> `smedia::CredentialProvider` -> `SWebDavClient`'s header
+    -> the wire was EXERCISED end to end and never VERIFIED — those files would
+    have been served just as happily for an empty or malformed header, which
+    made "the credential path works" an assumption inside a suite built to
+    remove assumptions. `SWebDavStub::setExpectedAuthorization()` takes a FULL
+    HEADER VALUE, the same spelling `SWebDavClient::setAuthorizationHeader()`
+    takes, and answers **401** to anything that is not byte-for-byte equal —
+    **ahead of `fault=`**, because a real server rejects a credential before it
+    dispatches a method, and **not sticky**, exactly as `fault=` is not: one
+    invocation states the server's whole state.
+
+    Three properties of how it is USED, all load-bearing. The expected value is
+    a **base64 LITERAL written in the case** (`Basic cXhhdXNlcjpxeGFwYXNz`),
+    never derived here from `user=`/`password=` — deriving it would be a second
+    implementation of `SMediaAccountManager::basicHeader()` checking itself,
+    whereas a literal makes a green browse a statement about the BYTES on the
+    wire. `media_webdav_browse` carries a **NEGATIVE CONTROL** (the server is
+    told to demand base64(`qxauser:wrong`) while the account still holds
+    `qxapass`; the browse must come back as a banner with zero rows), without
+    which a stub that silently ignored the setting would pass every row count in
+    that file — measured: neutering the compare fails the case at exactly that
+    assertion, and nowhere else. And `media_webdav_drop` deliberately does NOT
+    set it: one case carrying the credential proof is enough, and a second copy
+    of the literal is only a second place to keep in step.
+
+    It remains an exact string compare against one value. It is not a
+    `WWW-Authenticate` challenge, not a realm, not a token lifetime, and not
+    Nextcloud's app-password semantics.
 
 45. **Both cases are `RUN_SERIAL` and own their keys** — `media/lastSourceId`,
     `media/lastPath/nextcloud:qxastub`, `media/categoryMask`,

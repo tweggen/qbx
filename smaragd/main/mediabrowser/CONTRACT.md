@@ -94,7 +94,18 @@ module starts no thread of its own and touches no other one.
    test something other than the shipping code. The consequence is the one
    `midi_options_page` already carries — every qxa case that drives this panel
    is `RUN_SERIAL`, declares in its header that it OWNS those keys, and
-   restores them, so `smaragd.ini` comes back byte-identical.
+   restores them, so `smaragd.ini` comes back with identical CONTENT.
+
+   **CONTENT, not md5, and the distinction is not pedantry.** Gate 2 measured
+   it: `QSettings` rewrites the whole file from its own in-memory map and does
+   not promise to preserve section ORDER across processes, so the md5 of
+   `smaragd.ini` can legitimately move while every key in it is exactly as it
+   was — observed on `midi_options_page` alone, with no media case in the run.
+   What holds is content identity plus the OWNERSHIP CONVENTION (one declared
+   owner per key, `RUN_SERIAL`), and it is the convention rather than any
+   locking that a future case must not quietly break: a case that READS a key
+   another case owns is racing it, and `RUN_SERIAL` on the writer is what would
+   have to be noticed.
 
 8. **THE SUFFIX FILTER IS SOURCE STATE, and `smedia::kAudio` is its only
    source of truth.** One dock control governs browse and search alike; the
