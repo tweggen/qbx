@@ -9,6 +9,7 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
+class QShowEvent;
 class QToolButton;
 class QVBoxLayout;
 
@@ -76,6 +77,20 @@ public:
 public slots:
     /** Re-resolve the selection and rebind. Cheap and idempotent. */
     void refresh();
+
+protected:
+    /**
+     * ACTIVELY re-query the selection whenever this dock actually becomes
+     * visible - toggled open from the View menu, raised from a tab group, or
+     * shown for the first time - rather than relying only on the reactive
+     * arrangementChanged -> refresh() connection SMainWindow wires. That
+     * connection is set up once, by SMainWindow::attachEventEditor(); a dock
+     * that is merely SHOWN again had no reason to have missed any selection
+     * change in between, but this is the defensive half of that argument
+     * (SMainWindow::showEventEditor() is the ACTIVE half every production
+     * "open" gesture goes through).
+     */
+    void showEvent( QShowEvent *event ) override;
 
 private slots:
     void onToolChanged();

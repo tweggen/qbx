@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -252,6 +253,12 @@ void SEventEditorDock::refresh()
     if( ruler_ ) ruler_->update();
 
     updating_ = false;
+}
+
+void SEventEditorDock::showEvent( QShowEvent *event )
+{
+    QWidget::showEvent( event );
+    refresh();
 }
 
 // ---------------------------------------------------------------------------

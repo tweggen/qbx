@@ -34,6 +34,7 @@
 #include "app/model/sobjectrenderer.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
+#include "app/model/sclipwindow.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
@@ -91,6 +92,20 @@
 // (Qt::MetaModifier on macOS) is deliberately left to the OS: it is the
 // secondary-click (right-click) key and the accessibility screen-zoom scroll key.
 static inline bool hasPrimaryMod( Qt::KeyboardModifiers m ) { return m & Qt::ControlModifier; }
+
+// QApplication::activeWindow() needs the window to have been ACTIVATED by the
+// window system, which never happens in a headless --test-case run (main.cpp
+// never calls SMainWindow::show()/showMaximized() there) - it would return
+// null and silently no-op the double-click-opens-the-editor gesture below.
+// Same lookup drag-clip-edge and the event-editor test entry points already
+// use for exactly this reason (testkit's local mainWindow() helper).
+static SMainWindow *findMainWindow()
+{
+    for( QWidget *w : QApplication::topLevelWidgets() ) {
+        if( SMainWindow *win = qobject_cast<SMainWindow*>( w ) ) return win;
+    }
+    return nullptr;
+}
 
 // The wheel response AT 100 % SENSITIVITY. SOpt::WheelSensitivityPct scales all
 // four together (see loadWheelConfig); these stay the reference point, so the
@@ -2698,6 +2713,27 @@ void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
     if( ev->button() == Qt::LeftButton && smv_.getModel()
         && tryAddMarkerAt( ev ) )
         return;
+
+    // Double-click on an EVENT (MIDI) clip opens the event editor for it.
+    // tryAddMarkerAt() above already re-resolved lastClickSLink_/
+    // lastClickTrack_ at this exact position (it calls updateLastClickVars()
+    // itself), and Qt's own double-click delivery is press / release /
+    // DBLCLICK / release - the leading press already selected the clip
+    // (the arranger's plain single-click handler), so the editor opens onto
+    // a clip that IS selected by the time it queries the selection.
+    if( ev->button() == Qt::LeftButton && lastClickSLink_ && lastClickTrack_ ) {
+        SObject *obj = &lastClickSLink_->getSObject();
+        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        if( obj->contentKind() == SContentKind::Event ) {
+            QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+            path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+            if( SMainWindow *mw = findMainWindow() )
+                mw->showEventEditor( strackpath::pathToString( path ) );
+            ev->accept();
+            return;
+        }
+    }
+
     if( ev->button() == Qt::LeftButton && smv_.getModel() ) {
         if( ev->pos().y() >= SMV_TIME_RULER_HEIGHT
             && !smv_.rowAt( rowAtViewY( ev->pos().y() ) ) ) {
@@ -3472,6 +3508,61 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     send( QEvent::MouseButtonPress,   x0, Qt::LeftButton, Qt::LeftButton );
     send( QEvent::MouseMove,          x1, Qt::NoButton,   Qt::LeftButton );
     send( QEvent::MouseButtonRelease, x1, Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
+bool SStdMixerView::doubleClickClip( int rowIdx, int clipIdx )
+{
+    const STrackRow *row = rowAt( rowIdx );
+    if( !row || !row->track || !qContent_ ) return false;
+
+    // Nested tracks appear in a folder's child list but are lanes, not clips
+    // (same skip as dragClipEdge).
+    SLink *clip = NULL;
+    int n = 0;
+    for( SLink *lk : row->track->childLinks() ) {
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
+        if( n++ == clipIdx ) { clip = lk; break; }
+    }
+    if( !clip || !clip->hasStartTime() || !clip->getSObject().hasDuration() )
+        return false;
+
+    // The clip BODY, clear of the edge grab bands — the only spot a plain
+    // click (and so a double-click) lands as a select/move gesture rather
+    // than a resize.
+    offset_t start = clip->getStartTime();
+    length_t dur   = clip->getSObject().getDuration();
+    int sx = qContent_->getXPosOfOffset( start );
+    int ex = qContent_->getXPosOfOffset( start + (offset_t) dur );
+    int x  = ( sx + ex ) / 2;
+    if( x < 0 ) return false;
+
+    int th = rowHeight( rowIdx );
+    int laneTop = qContent_->laneTop( rowIdx );
+    int y = laneTop + th / 2;
+
+    // Never shown in test mode; grow the canvas so the point is inside it,
+    // exactly as dragClipEdge does.
+    int needed = x + 64;
+    if( qContent_->width() < needed )
+        qContent_->resize( needed, qContent_->height() > y+th ? qContent_->height() : y+th+64 );
+
+    auto send = [&]( QEvent::Type type, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        QPointF local( x, y );
+        QMouseEvent ev( type, local, qContent_->mapToGlobal( QPointF( x, y ) ),
+                        button, buttons, Qt::NoModifier );
+        QApplication::sendEvent( qContent_, &ev );
+    };
+    // Qt's own double-click delivery is press / release / DBLCLICK / release
+    // — the second "press" arrives AS the QEvent::MouseButtonDblClick, never
+    // as a second QEvent::MouseButtonPress. That is exactly why a plain
+    // single click already selects the clip before mouseDoubleClickEvent
+    // ever runs (the selection-follower fix this gesture exercises).
+    send( QEvent::MouseButtonPress,    Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    send( QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
     return true;
 }
 

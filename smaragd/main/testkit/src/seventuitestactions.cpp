@@ -171,6 +171,37 @@ bool SDragNoteAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+// ---------------------------------------------------- scroll-event-editor-keys
+
+SApplyResult SScrollEventEditorKeysAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "scroll-event-editor-keys: no main window";
+        return { false, nullptr };
+    }
+    const int result = win->scrollEventEditorKeys( clip_, topKey_ );
+    if( result < 0 ) {
+        qWarning() << "scroll-event-editor-keys: no piano roll bound"
+                      " (clip" << clip_ << ")";
+        return { false, nullptr };
+    }
+    return { true, nullptr };   // a scroll position is view state, not undoable
+}
+
+void SScrollEventEditorKeysAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "topKey", topKey_ );
+}
+
+bool SScrollEventEditorKeysAction::readXml( const QDomElement &elem, int )
+{
+    clip_   = elem.attribute( "clip" );
+    topKey_ = elem.attribute( "topKey", "0" ).toInt();
+    return true;
+}
+
 // ------------------------------------------------------- assert-event-editor
 
 QStringList SAssertEventEditorAction::knownAttributes() const
@@ -341,6 +372,12 @@ static const bool s_reg_dragnote =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "drag-note" ),
           [] { return new SDragNoteAction; } ),
+      true );
+
+static const bool s_reg_scrolleventeditorkeys =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "scroll-event-editor-keys" ),
+          [] { return new SScrollEventEditorKeysAction; } ),
       true );
 
 static const bool s_reg_asserteventeditor =

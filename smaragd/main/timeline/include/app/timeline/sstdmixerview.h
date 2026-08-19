@@ -487,6 +487,13 @@ public:
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
+    // TEST ENTRY POINT: drive a real double-click on a clip through the
+    // arranger's own mouse handlers (drag-clip-edge's twin). Lands on the
+    // clip BODY, exactly as SMVActualView::mouseDoubleClickEvent expects for
+    // its "open the event editor" branch — an EVENT clip opens it, any other
+    // clip is a no-op success (matches production: nothing else happens).
+    bool doubleClickClip( int rowIdx, int clipIdx );
+
     // TEST ENTRY POINTS for the multi-track selection. A headless run never
     // clicks, and the two things worth covering are exactly the click
     // semantics (plain / Ctrl / Shift) and the BROADCAST from a head's toggle

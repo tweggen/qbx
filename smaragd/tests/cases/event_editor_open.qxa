@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Two related event-editor gap fixes (b and c from the fix list):
+
+    (b) the piano roll's key rows are now a FIXED 6 px (was 8 px -
+        SPianoRollView::keyHeight_), and the note grid is vertically
+        SCROLLABLE through a real QScrollBar (SPianoRollView::
+        layoutKeyScroll()) rather than only auto-centred on whatever notes
+        happen to be in the clip. `scroll-event-editor-keys` drives that REAL
+        scrollbar (SPianoRollView::tkScrollKeys), so this proves the widget
+        reaches both ends of the 0-127 MIDI range, not just that a clamp
+        formula would.
+
+    (c) double-clicking an EVENT (MIDI) clip in the arranger now opens the
+        event editor FOR THAT CLIP - a gesture that did not exist at all
+        before this fix (SMVActualView::mouseDoubleClickEvent ->
+        SMainWindow::showEventEditor()). `double-click-clip` drives the REAL
+        press/release/dblclick/release sequence through the arranger's own
+        handler, exactly as drag-clip-edge does for a drag.
+
+  What is NOT separately provable here: SEventEditorDock::showEvent() and
+  SMainWindow::showEventEditor()'s ACTIVE refresh()/bindClip() (as opposed to
+  relying only on the reactive SProject::arrangementChanged connection) are
+  both defensive/production fixes for the "opening the dock must show what is
+  ALREADY selected" half of (c) - but a headless run never shows SMainWindow
+  at all (main.cpp only calls showMaximized() for an interactive run-actions
+  session, never for a test-case one) and never wires that reactive connection
+  either (SActionRunner sets the project straight on SApplication, so
+  SMainWindow::attachEventEditor() is never called). Every `assert-event-editor`
+  with no `clip=` has therefore ALWAYS actively re-queried the selection
+  through describeEventEditor()'s own bindClip(empty)->refresh() call, with or
+  without this fix - see main/eventui/CONTRACT.md invariant 4 for the full
+  argument. The double-click case below is what actually changes behaviour.
+-->
+<SActionScript version="1" name="event_editor_open">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Notes"/>
+    <add-note clip="0,0" tick="0" dur="960" key="60" velocity="100" channel="0"/>
+
+    <!-- ============================ b) row height ========================= -->
+    <assert-event-editor clip="0,0" kind="pianoroll" contains="keyH=6"/>
+
+    <!-- ======================= b) the vertical scroll ====================== -->
+    <!-- Scroll to the very bottom of the MIDI range: key 0 must become
+         reachable (botKey=0), whatever the grid height happens to be. -->
+    <scroll-event-editor-keys clip="0,0" topKey="0"/>
+    <assert-event-editor kind="pianoroll" contains="botKey=0"/>
+    <!-- Scroll past the top (out of range, clamped at the top): key 127 must
+         become reachable (topKey=127) - the other end of the same range. -->
+    <scroll-event-editor-keys clip="0,0" topKey="200"/>
+    <assert-event-editor kind="pianoroll" contains="topKey=127"/>
+
+    <!-- =================== c) double-click opens the editor ================ -->
+    <!-- A second track with an unrelated AUDIO clip, selected so the dock is
+         NOT already bound to track 0's MIDI clip when the double-click
+         happens - "empty=1" is the same selection-follower clear
+         event_editor_dock.qxa already gates. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-selection paths="1,0"/>
+    <assert-event-editor kind="pianoroll" contains="empty=1"/>
+
+    <!-- The gesture itself: a REAL press/release/dblclick/release on the
+         EVENT clip. It selects the clip (the leading press already does
+         that, exactly as a plain single click would) AND opens/binds the
+         event editor for it - the dock must show it WITHOUT any further
+         selection change or explicit `clip=` in the assertion below. -->
+    <double-click-clip track="0" clip="0"/>
+    <assert-event-editor kind="pianoroll" contains="notes=1" absent="empty=1"
+                         grabPng="event_editor_double_click.png"/>
+
+    <!-- A non-EVENT clip's double-click is still a REAL gesture: it selects
+         the clip like any plain click does (drag-clip-edge's press already
+         does this too), and the verb reports success. It just never reaches
+         the event-editor branch (contentKind() != Event), which is why
+         re-querying the selection afterwards correctly reports `empty=1` -
+         that is the selection-follower behaviour event_editor_dock.qxa
+         already gates, not this gesture's. -->
+    <double-click-clip track="1" clip="0"/>
+    <assert-event-editor kind="pianoroll" contains="empty=1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -110,6 +110,44 @@ private:
 };
 
 /**
+ * `scroll-event-editor-keys` - drives the piano roll's REAL vertical key
+ * scrollbar (SPianoRollView::tkScrollKeys -> QScrollBar::setValue), so a case
+ * can prove the full 0-127 MIDI pitch range is actually reachable through the
+ * widget under test, not merely through the clamp arithmetic in isolation.
+ *
+ * `topKey` is the key requested at the TOP of the grid; it is clamped into
+ * the currently reachable range exactly as dragging the scrollbar handle to
+ * either end would clamp. Follow with `assert-event-editor` (no `clip=`, so
+ * it re-binds to whatever this call left selected/bound) and check its
+ * `topKey=`/`botKey=` fields - `botKey=0` after `topKey="0"` and
+ * `topKey=127` after `topKey="200"` (out of range, clamped at the top) is
+ * what proves the full range.
+ *
+ * Not undoable: a scroll position is view state, exactly like the arranger's
+ * own zoom/scroll.
+ *
+ * XML format:
+ * <scroll-event-editor-keys clip="0,0" topKey="0"/>
+ */
+class SScrollEventEditorKeysAction : public SAction
+{
+public:
+    SScrollEventEditorKeysAction() = default;
+
+    QString name() const override
+    { return QStringLiteral( "scroll-event-editor-keys" ); }
+    QStringList knownAttributes() const override
+    { return { QStringLiteral( "clip" ), QStringLiteral( "topKey" ) }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString clip_;
+    int     topKey_ = 0;
+};
+
+/**
  * `assert-event-editor` - what the REAL dock, built in the main window and
  * never shown, reports for a clip.
  *
