@@ -147,7 +147,11 @@ void SCut::rebuildReader( const SCutSnapshot &snap )
                   && builtGrain_.warpAnchors == snap.grainParams.warpAnchors
                   // W4: the formant flag changes vocoder output bytes.
                   && builtGrain_.preserveFormants
-                         == snap.grainParams.preserveFormants );
+                         == snap.grainParams.preserveFormants
+                  // Formant shift changes vocoder output bytes too, whether
+                  // or not the pitch stage runs — same reasoning as pitchCents.
+                  && builtGrain_.formantShiftCents
+                         == snap.grainParams.formantShiftCents );
             bool sameLoop = !needLoop
                 || ( builtLoopStart_ == snap.startOffset
                   && builtLoopLength_ == snap.loopLength );
@@ -1145,6 +1149,19 @@ void SCut::setPreserveFormants( bool on )
     setGrainParams( p );  // Pass modified copy
 }
 
+void SCut::setFormantShiftCents( double cents )
+{
+    twGrainParams p;
+    {
+        std::lock_guard<std::mutex> lock(mutex());  // Read under lock
+        p = grainParams_;  // Snapshot params
+    }
+    // Clamp outside the lock, same discipline as setPitchCents(): every entry
+    // point (the model setter, the action) clamps identically.
+    p.formantShiftCents = clampFormantShiftCents( cents );
+    setGrainParams( p );  // Pass modified copy
+}
+
 SCut::~SCut()
 {
     // FIRST, before tearing down any member: retire from the revalidator. The
@@ -1328,6 +1345,11 @@ int SCut::serializeSelfAttributes( QTextStream &o )
     if( grainParams_.preserveFormants )
         o << " preserveFormants='1'";
 
+    // Formant shift, written only when non-zero (same convention; a 0-cents
+    // file is byte-identical to a build before this feature existed).
+    if( grainParams_.formantShiftCents != 0.0 )
+        o << " formantShiftCents='" << grainParams_.formantShiftCents << "'";
+
     // Grain parameters stored as time (milliseconds) for rate independence.
     // Default 48kHz: 2048 frames ≈ 42.67 ms, 512 frames ≈ 10.67 ms
     int srate = 48000;  // default fallback
@@ -1414,6 +1436,10 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     // W4: formant preservation flag (absent = OFF, the pre-W4 behavior).
     grainParams_.preserveFormants =
         element.attribute( "preserveFormants", "0" ) == "1";
+
+    // Formant shift, in cents (absent = 0, the pre-existing behavior).
+    grainParams_.formantShiftCents =
+        element.attribute( "formantShiftCents", "0.0" ).toDouble();
 
     int srate = 48000;  // default fallback
     if( parent() ) srate = getProject().getSRate();

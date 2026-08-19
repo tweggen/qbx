@@ -43,10 +43,19 @@ struct twGrainParams
     // strict no-op when pitchCents == 0.
     bool preserveFormants = false;
 
+    // Formant shift, in cents, INDEPENDENT of pitchCents/stretch: a spectral-
+    // envelope warp applied by the vocoder backend regardless of whether the
+    // pitch stage runs. Default 0 = no-op (byte-identical output; ignored by
+    // the non-vocoder backend). Positive raises the formants (brighter/
+    // smaller-sounding), negative lowers them (darker/larger-sounding). See
+    // twPagedVocoder::Config::formantRatio for the derivation.
+    double formantShiftCents = 0.0;
+
     // True when the transform is a no-op, so callers can skip the grain stage
     // entirely (passthrough) and pay nothing for an unstretched clip.
     bool isIdentity() const {
         return stretch == Fraction(1) && pitchCents == 0.0
+            && formantShiftCents == 0.0
             && warpAnchors.empty();
     }
 };

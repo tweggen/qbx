@@ -67,11 +67,11 @@ void warpParamsBlob( uint8_t backend, int rate, idx_t channels,
                      const Fraction &stretchFrac, double pitchCents,
                      length_t grainSize, length_t crossfade,
                      uint64_t onsetsHash, uint64_t anchorsHash,
-                     bool preserveFormants,
+                     bool preserveFormants, double formantShiftCents,
                      std::vector<uint8_t> &out )
 {
     out.clear();
-    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 8 + 8 + 1 );
+    out.reserve( 1 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 8 + 8 + 1 + 8 );
     auto put32 = [&]( uint32_t v ) {
         for( int i = 0; i < 4; i++ ) out.push_back( (uint8_t)( v >> ( 8 * i ) ) );
     };
@@ -98,6 +98,11 @@ void warpParamsBlob( uint8_t backend, int rate, idx_t channels,
     // W4: the formant-preservation flag changes output bytes whenever the
     // pitch stage runs, so it is key material (v4 of the blob).
     out.push_back( preserveFormants ? 1 : 0 );
+    // Independent formant shift: changes output bytes whenever it is
+    // non-zero, regardless of pitch/stretch, so it is key material (v6).
+    uint64_t formantCentsBits;
+    memcpy( &formantCentsBits, &formantShiftCents, sizeof( formantCentsBits ) );
+    put64( formantCentsBits );
 }
 
 } // namespace
@@ -143,6 +148,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     double   stretch = stretchFrac.approxDouble();
     if( stretch < 1e-6 ) stretch = 1e-6;
     double   r       = pow( 2.0, p.pitchCents / 1200.0 );   // pitch ratio
+    double   fr      = pow( 2.0, p.formantShiftCents / 1200.0 );  // formant ratio (independent of r)
 
     // Proposal 28 W1: THE conversion authority. No anchors -> pure scalar,
     // bit-identical to the historic floor(inLen*stretch) (twwarpmap_test
@@ -246,6 +252,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
             vc.channels    = (uint32_t) channels_;
             vc.userMap     = userMapInternal;
             vc.preserveFormants = p.preserveFormants;   // W4 opt-in
+            vc.formantRatio = fr;                       // independent formant shift
             stream_->voc.reset( new twPagedVocoder(
                 stream_->chans.data(), (uint64_t) inLen, vc, stretch, r,
                 onsetPos.empty() ? nullptr : onsetPos.data(),
@@ -267,7 +274,8 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
     if( warpCacheable ) {
         warpParamsBlob( (uint8_t) backend, rate_, channels_, stretchFrac,
                         p.pitchCents, p.grainSize, p.crossfade, onsetsHash,
-                        anchorsHash, p.preserveFormants, warpParams );
+                        anchorsHash, p.preserveFormants, p.formantShiftCents,
+                        warpParams );
         warpParamsHash = twSidecarStore::hashParams( warpParams.data(),
                                                      warpParams.size() );
         auto reader = twSidecarStore::instance().load(
@@ -309,6 +317,7 @@ twGrainSource::twGrainSource( const twRandomSource &src, const twGrainParams &p 
         vc.channels    = (uint32_t) channels_;
         vc.userMap     = userMapInternal;
         vc.preserveFormants = p.preserveFormants;   // W4 opt-in
+        vc.formantRatio = fr;                       // independent formant shift
         twPagedVocoder::warpOffline( inPtr.data(), (uint64_t) inLen,
                                      data_.data(), (uint64_t) nFrames_,
                                      vc, stretch, r,

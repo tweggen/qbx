@@ -404,6 +404,171 @@ int main()
         }
     }
 
+    // ======================================================================
+    // Independent formant shift (a later, separate feature): a target
+    // spectral-envelope ratio applied regardless of pitchRatio/preserveFormants.
+    // Reuses the vowel fixture and helpers built inside the W4 block above —
+    // this is intentionally the same block scope.
+    // ======================================================================
+    {
+        const double   f0    = 130.0;
+        const uint64_t vn    = 2 * 48000;
+        auto envAt = []( double f ) -> double {
+            auto bump = []( double f, double c, double w ) {
+                const double d = ( f - c ) / w;
+                return std::exp( -0.5 * d * d );
+            };
+            const double rolloff = 200.0 / std::max( f, 200.0 );
+            return rolloff * ( 0.15 + 3.0 * bump( f, 700.0, 150.0 ) );
+        };
+        std::vector<float> vow( (size_t) vn, 0.0f );
+        for( int h = 1; h * f0 < 3000.0; h++ ) {
+            const double a = envAt( h * f0 );
+            for( uint64_t i = 0; i < vn; i++ )
+                vow[(size_t) i] += (float) ( a * 0.12
+                    * std::sin( 2.0 * 3.14159265358979323846
+                                * ( h * f0 ) * (double) i / 48000.0 ) );
+        }
+        const float *vchans[1] = { vow.data() };
+
+        auto goertzel = []( const std::vector<float> &x, uint64_t start,
+                            uint64_t len, double f ) -> double {
+            const double w = 2.0 * 3.14159265358979323846 * f / 48000.0;
+            const double c = 2.0 * std::cos( w );
+            double s0 = 0.0, s1 = 0.0, s2 = 0.0;
+            for( uint64_t i = 0; i < len; i++ ) {
+                const double hw = 0.5 - 0.5 * std::cos(
+                    2.0 * 3.14159265358979323846 * (double) i / (double) ( len - 1 ) );
+                s0 = hw * (double) x[(size_t) ( start + i )] + c * s1 - s2;
+                s2 = s1; s1 = s0;
+            }
+            return std::sqrt( std::max( 0.0,
+                s1 * s1 + s2 * s2 - c * s1 * s2 ) );
+        };
+        auto combCentroid = [&]( const std::vector<float> &x, uint64_t start,
+                                 uint64_t len, double fb ) -> double {
+            double num = 0.0, den = 0.0;
+            for( int h = 1; h * fb < 2400.0; h++ ) {
+                const double f = h * fb;
+                if( f < 200.0 ) continue;
+                const double m = goertzel( x, start, len, f );
+                num += m * m * f;
+                den += m * m;
+            }
+            return ( den > 0.0 ) ? num / den : 0.0;
+        };
+
+        twPagedVocoder::Config base;
+        base.rate     = 48000;
+        base.channels = 1;
+
+        const uint64_t mStart = vn / 4, mLen = 16384;
+        const double cSrc = combCentroid( vow, mStart, mLen, f0 );
+
+        // ---- Zero-offset is a strict no-op, at every pitch ratio -----------
+        // formantRatio == 1.0 (the default) must be byte-identical to a
+        // Config with no formant fields touched at all — the property every
+        // existing golden and qxa case depends on.
+        for( double pr : { 1.0, 2.0, 0.5 } ) {
+            twPagedVocoder::Config withDefault = base;   // formantRatio == 1.0
+            twPagedVocoder::Config explicitOne = base;
+            explicitOne.formantRatio = 1.0;
+            const uint64_t outLen = vn;
+            std::vector<float> a( (size_t) outLen, 0.0f );
+            std::vector<float> b( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, a.data(), outLen,
+                                         withDefault, 1.0, pr, nullptr, 0 );
+            twPagedVocoder::warpOffline( vchans, vn, b.data(), outLen,
+                                         explicitOne, 1.0, pr, nullptr, 0 );
+            CHECK( std::memcmp( a.data(), b.data(),
+                                a.size() * sizeof( float ) ) == 0,
+                   "formantRatio == 1.0 (default) is byte-identical to an "
+                   "explicit 1.0, at pitch ratio " + std::to_string( pr ) );
+        }
+
+        // ---- Independent of pitch: a pure formant shift at pitchRatio == 1,
+        // stretch == 1 (no time-domain change requested at all) still moves
+        // the envelope. This is the case the top-of-render identity fast path
+        // must NOT take when a shift is active. ----------------------------
+        {
+            twPagedVocoder::Config shifted = base;
+            shifted.formantRatio = 1.5;   // ~+7 semitones of formant shift
+            const uint64_t outLen = vn;
+            std::vector<float> shiftedOut( (size_t) outLen, 0.0f );
+            std::vector<float> flatOut( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, shiftedOut.data(), outLen,
+                                         shifted, 1.0, 1.0, nullptr, 0 );
+            twPagedVocoder::warpOffline( vchans, vn, flatOut.data(), outLen,
+                                         base, 1.0, 1.0, nullptr, 0 );
+            CHECK( std::memcmp( shiftedOut.data(), flatOut.data(),
+                                shiftedOut.size() * sizeof( float ) ) != 0,
+                   "a formant shift changes the rendered bytes even with no "
+                   "stretch/pitch change requested" );
+
+            const double cShift = combCentroid( shiftedOut, mStart, mLen, f0 );
+            std::cout << "  formant shift (pitch=1, ratio=1.5): centroid src="
+                      << cSrc << " shifted=" << cShift << "\n";
+            CHECK( cShift > cSrc + 150.0,
+                   "formant shift ratio 1.5 at pitchRatio 1.0: envelope "
+                   "centroid moved UP, independent of pitch" );
+        }
+        {
+            twPagedVocoder::Config shifted = base;
+            shifted.formantRatio = 1.0 / 1.5;   // ~-7 semitones
+            const uint64_t outLen = vn;
+            std::vector<float> shiftedOut( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, shiftedOut.data(), outLen,
+                                         shifted, 1.0, 1.0, nullptr, 0 );
+            const double cShift = combCentroid( shiftedOut, mStart, mLen, f0 );
+            std::cout << "  formant shift (pitch=1, ratio=1/1.5): centroid src="
+                      << cSrc << " shifted=" << cShift << "\n";
+            CHECK( cShift < cSrc - 100.0,
+                   "formant shift ratio 1/1.5 at pitchRatio 1.0: envelope "
+                   "centroid moved DOWN, independent of pitch" );
+        }
+
+        // ---- Independent of preserveFormants: with preserveFormants ON and
+        // pitchRatio == 1 (a no-op baseline for W4 alone), a formant shift
+        // must still move the envelope — the two knobs are orthogonal. ------
+        {
+            twPagedVocoder::Config shifted = base;
+            shifted.preserveFormants = true;
+            shifted.formantRatio     = 1.5;
+            const uint64_t outLen = vn;
+            std::vector<float> shiftedOut( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, shiftedOut.data(), outLen,
+                                         shifted, 1.0, 1.0, nullptr, 0 );
+            const double cShift = combCentroid( shiftedOut, mStart, mLen, f0 );
+            CHECK( cShift > cSrc + 150.0,
+                   "formant shift is independent of preserveFormants at "
+                   "pitchRatio == 1.0" );
+        }
+
+        // ---- Partition property holds with a formant shift active (no
+        // pitch/stretch): fresh-instance paged == whole. --------------------
+        {
+            twPagedVocoder::Config shifted = base;
+            shifted.formantRatio = 1.5;
+            const uint64_t outLen = vn;
+            std::vector<float> whole( (size_t) outLen, 0.0f );
+            twPagedVocoder::warpOffline( vchans, vn, whole.data(), outLen,
+                                         shifted, 1.0, 1.0, nullptr, 0 );
+            std::vector<float> paged( (size_t) outLen, 0.0f );
+            const std::vector<uint64_t> cuts = makeCuts( outLen, 0xC3C3C3u );
+            for( size_t i = 0; i + 1 < cuts.size(); i++ ) {
+                const uint64_t a = cuts[i], b = cuts[i + 1];
+                std::vector<float> w( (size_t) ( b - a ), 0.0f );
+                twPagedVocoder v( vchans, vn, shifted, 1.0, 1.0, nullptr, 0 );
+                v.render( a, b - a, w.data() );
+                std::memcpy( paged.data() + a, w.data(),
+                             (size_t) ( b - a ) * sizeof( float ) );
+            }
+            CHECK( std::memcmp( whole.data(), paged.data(),
+                                whole.size() * sizeof( float ) ) == 0,
+                   "formant shift: paged (fresh instances) == whole" );
+        }
+    }
+
     if( g_fails == 0 )
         std::cout << "\nAll vocoder tests passed.\n";
     else
