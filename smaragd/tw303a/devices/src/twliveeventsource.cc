@@ -44,7 +44,7 @@ void twLiveEventSource::setSampleRate( int rate )
     if( rate > 0 ) rate_.store( rate, std::memory_order_relaxed );
 }
 
-void twLiveEventSource::requestChase()
+void twLiveEventSource::requestChase() const
 {
     chaseReq_.store( true, std::memory_order_release );
 }

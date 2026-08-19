@@ -1098,6 +1098,31 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
             // there is nothing behind this position to rebuild.
             if( !liveOwned_ || liveTx_.feedEnabled )
                 preRoll_nolock( startPos, sampleRate );
+
+            // AND THE LIVE HALF, which the pre-roll above cannot rebuild.
+            //
+            // resetInstances_nolock() has just silenced EVERY voice, including
+            // the note the performer is holding down right now. The pre-roll
+            // restores what the SEQUENCED feed was sounding, because it can:
+            // that material is a function of position. A live note is not. It
+            // exists only in the live source's own held table, so unless the
+            // source is asked to re-state it, the key stays down and the sound
+            // is gone until the user lifts and presses again.
+            //
+            // Heard as: while RECORDING, every note played on a MIDI keyboard
+            // is cut off a block or two after it starts. Only while recording,
+            // because a STOPPED pump runs a virtual counter that never
+            // repositions, while a running one follows the engine clock and
+            // repositions whenever it falls behind — which a machine busy
+            // capturing, writing a WAV and freezing pages does often.
+            //
+            // requestChase() makes the next collect emit the held notes as
+            // note-ons at offset 0, which is the SAME mechanism design D4 uses
+            // at live start. It is asked of the live source ALONE: re-issuing
+            // the merged chase here would double every sequenced note the
+            // pre-roll just rebuilt.
+            if( liveOwned_ && liveEvents_ )
+                liveEvents_->requestChase();
         }
         lastEnd_     = startPos + (offset_t)len;
         haveLastEnd_ = true;

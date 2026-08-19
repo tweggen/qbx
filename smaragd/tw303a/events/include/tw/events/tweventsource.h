@@ -60,6 +60,17 @@ public:
     // Clears `out` and fills it. Never blocks on a render, never allocates a
     // page, never demands anything: an event source is model data (D1).
     virtual void collect(int64_t startPos, int64_t len, twEventBlock &out) const = 0;
+
+    // "Re-state what you are holding, at offset 0 of the next block you are
+    // collected for." A no-op for a source whose material is POSITIONAL — a
+    // sequenced clip re-derives everything from startPos, so there is nothing
+    // to restate. It matters only for a LIVE source, whose held notes exist
+    // solely in its own table: a consumer that resets its DSP has just thrown
+    // those voices away and cannot rebuild them from position alone.
+    //
+    // const because a source is model data to its consumer and the request is
+    // one atomic flag (proposal 33 follow-up / proposal 21 D4).
+    virtual void requestChase() const {}
 };
 
 // ---------------------------------------------------------------------------
