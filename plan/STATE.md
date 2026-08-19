@@ -14905,3 +14905,234 @@ detecting a mixed-device session and saying so, as the endpoint sample-rate
 mismatch already is — is now MORE reachable than when the brief was written,
 because this dialog already knows both device ids and already refuses when they
 differ. That refusal is, in effect, the first mixed-device warning in the app.
+
+## 2026-08-18 — Proposal 38 EXECUTED: the media browser, all six gates
+
+A dockable media browser beside the arranger: pick a data source (the local
+file system, or a Nextcloud/WebDAV account), browse its tree or search it
+incrementally, filter by media type, and drag a file onto the timeline.
+Design: `plan/proposed/38_MEDIA_BROWSER.md` (§I is the execution record).
+
+**Eight PRs, in the order they landed:** #70 the design, #72 gate 1 (the source
+ABI and the local provider), #73 gate 5a (`SSecretStore`), #77 gate 4 (the
+WebDAV connector and the in-process stub), #78 gate 2 (the dock), #79 gate 3
+(the cache, the `media:` payload, deferred placement), #80 gate 5b (accounts +
+the Options → Media page), #82 gate 5c (the end-to-end WebDAV cases), and this
+one for gate 6. Plus **#81**, which is not proposal 38's work — see the last
+section.
+
+Note the order: **5a landed before 2, 3 and 4.** The secret store has no
+dependency on the dock, and building it early meant gate 5b had somewhere to
+put a password on the day it needed one.
+
+### What shipped
+
+Two new modules and two new shell services.
+
+- **`main/media`** (app_core, **no widget ever**): `SMediaRef`/`SMediaEntry`,
+  the `SMediaSource` ABI, the registry, `SLocalMediaSource`, `SWebDavClient` +
+  `SWebDavMediaSource`, `SMediaCache`, and `smediadrop` — what a `media:` drop
+  MEANS.
+- **`main/mediabrowser`** (app_ui): the dock, and nothing else. It is the
+  SEVENTH `QDockWidget`, created in `SMainWindow`'s ctor with
+  `objectName="dock_media_browser"` so `restoreState()` can place it, hidden on
+  first run.
+- **`SSecretStore`** and **`SMediaAccountManager`** in `main/shell`.
+
+`Qt6::Network` and `Qt6::Concurrent` are the first of either in this tree; both
+ship in qtbase, so neither cost a dependency or any vcpkg work. They are linked
+on **app_core** and therefore propagate upward — the one impurity in the module
+story, accepted because layers, not modules, are the CMake targets.
+
+### The three sentences the feature is built on
+
+1. **Placement is always `add-sample` over a LOCAL path; the media layer's job
+   ends at producing that path.** A local row emits `file:<abspath>` — byte for
+   byte what `SExternFileList` has always emitted and `SMVActualView::dropEvent`
+   has always accepted — so **gate 2 shipped drag-to-timeline without changing
+   one line of the 4000-line arranger**. A remote row emits `media:<uri>` and
+   the arranger's one new branch is five lines.
+2. **A cache path in a saved project is not portable**, so a dropped remote
+   file is copied into `<projectdir>/media/` and the clip references THAT
+   (sanitised for Windows, a collision becoming `name (2).ext` and never an
+   overwrite). An unsaved project gets the cache path and a loud warning.
+3. **Results are dropped by REQUEST ID, never by winning a cancel race**, and
+   the cross-thread hand-back is a worker `QObject`'s SIGNAL rather than
+   `invokeMethod` on a raw pointer — Qt drops a queued emission to a dead
+   receiver under its own mutex, which is the only mechanism here that is safe
+   against a source deleted mid-walk.
+
+### Credentials: encrypted at rest, and no weak tier
+
+`SSecretStore` picks a backend by platform — `dpapi` / `keychain` /
+`libsecret` / `none` / `memory` — and there is deliberately **no
+encrypt-it-ourselves fallback**: this tree links no cipher, and a scheme that
+would have to document itself as protecting nothing is a checkbox rather than a
+control. A platform without a real store says so, disables **Remember**, and
+keeps the password for the session only.
+
+The **scheme tag is load-bearing**: a blob is decrypted only through the
+backend named at the key, so an INI carried to another machine reports
+`undecryptable` and **sends nothing** rather than putting garbage into an
+`Authorization` header. `SMARAGD_SECRET_BACKEND=…` overrides ahead of the
+platform choice and **`memory` is the `--test-case` default** — partly so a
+headless suite never writes into the developer's real keychain, and mostly
+because on macOS a keychain access from a background test can block on a UI
+prompt nobody can see, which is the `qoffscreen` failure mode again.
+
+### What each gate found that the design did not predict
+
+- **Gate 4 — the stub earned its keep twice on the first day.** It caught
+  `QUrl::setPath()` **double-encoding an already-encoded path**, and
+  `Qt::RFC2822Date` **rejecting RFC 1123's literal `GMT`** — which is exactly
+  what Nextcloud sends, so the Modified column would have been blank against
+  every real server. Neither is a bug in our logic; both are Qt behaving as
+  documented while the design assumed otherwise.
+- **Gate 3 — two concurrent deferred placements land in FETCH-COMPLETION
+  ORDER, not drop order.** Asserted the other way, the case failed **4 runs in
+  10**. There is no ordering guarantee in the design and there should not be
+  one; the case asserts the SET.
+- **Gate 5b caught itself shipping a VACUOUS gate, and reverted it.** An
+  `assert-settings-file section=` filter had been added to scope a check to one
+  account. `QSettings::IniFormat` brackets only the FIRST `/`-separated
+  component as a `[group]`, so a "[section]" scope can never match below the
+  top group and **every scoped assertion would have passed while checking
+  nothing.** The attribute went; cases now write the disk-spelled prefix
+  (`nextcloud\qxatest\`) themselves.
+- **Gate 5c found `docs/ACTIONS.md` still documenting that reverted
+  attribute** — a doc row outliving its code by exactly one PR.
+- **Gate 6 found the WebDAV stub had never inspected the `Authorization`
+  header** — `grep -c Authorization main/testkit/src/swebdavstub.cpp` was **0**,
+  and gate 5c's own PR body had named it. So the chain `SSecretStore` ->
+  `smedia::CredentialProvider` -> `SWebDavClient`'s header -> the wire was
+  EXERCISED end to end and never VERIFIED: the stub would have served those
+  same files just as happily for an empty or malformed header, which made "the
+  credential path works" an assumption inside a suite whose whole purpose is to
+  remove assumptions.
+
+  Closed minimally. `SWebDavStub::setExpectedAuthorization()` takes a FULL
+  HEADER VALUE (the same spelling `SWebDavClient::setAuthorizationHeader()`
+  takes) and answers **401** through the existing fault machinery to anything
+  that is not byte-for-byte equal, **ahead of any injected fault** — a real
+  server rejects a credential before it dispatches a method.
+  `media-webdav-stub expectAuth=` carries it, not sticky, exactly as `fault=`
+  is not. `media_webdav_browse` demands the base64 **LITERAL**
+  (`Basic cXhhdXNlcjpxeGFwYXNz`) for every PROPFIND it makes — deriving it from
+  `user=`/`password=` would only be a second copy of
+  `SMediaAccountManager::basicHeader()` checking itself — and carries a
+  NEGATIVE CONTROL: the server demands base64("qxauser:wrong") while the
+  account still holds "qxapass", and the browse must come back as a banner with
+  zero rows.
+
+  **Measured rather than argued:** neutering the compare to `if( false && … )`
+  fails the case at exactly that assertion (`banner=0|…rows=2` where 1/0 was
+  demanded) and nowhere else. Restored, `media_webdav_browse` is **20/20 by
+  exit code**.
+
+### Four things CLAUDE.md and the proposal had WRONG, corrected at gate 6
+
+1. **§B.5's printed `placeWhenLocal` call could never have compiled.** It
+   passed a `QWidget *` into `main/media`, which forbids widgets, and called
+   `SAddSampleAction`, which is **app_objects — one LAYER above app_core, where
+   `main/media` lives**. No `check_layering.py` edit could have made either
+   legal. What was built is two HOOKS: `SApplication::initMediaLayer()`
+   installs the placement one, `SMainWindow`'s ctor the status one, mirroring
+   how the shell already injects the plugin scan cache's path.
+2. **CLAUDE.md said the app builds as "ONE OBJECT library (`smaragd_app`)".**
+   It has been **four** since Phase 6 — `app_model < app_core < app_objects <
+   app_ui` — and an agent reading that line goes looking for a structure that
+   does not exist. Related and now stated in both CLAUDE.md and
+   `docs/ARCHITECTURE.md`: **the layer boundary does not stop a WIDGET
+   include.** `app_model` links `Qt::Widgets` PUBLIC and each layer links the
+   one below it PUBLIC, so every widget header is reachable everywhere —
+   `SExternFileList` is a `QTreeWidget` in the lowest layer. What is enforced is
+   the `app/<module>/…` include GRAPH; "no widget in `app/media`" is a contract
+   plus a grep.
+3. **CLAUDE.md's test-count baseline was a month stale** (`174 registered / 171
+   run`, dated 2026-08-17, from before proposal 21 L2-L5, 35, 38 and 39 landed
+   their cases). Re-measured: see below.
+4. **CLAUDE.md's `smaragd.ini` claim overclaimed.** "Why `-j` is safe" said each
+   case "restores its key, so the file comes back **byte-identical** (md5
+   unchanged, verified across a full run)". Gate 2 measured `midi_options_page`
+   ALONE, with no other case in the run: **content identical, md5 changed.**
+   `QSettings` rewrites the whole file from its in-memory map and does not
+   promise to preserve section ORDER across processes. What holds is **content
+   identity plus the ownership convention**, and nothing may gate on that
+   file's md5.
+
+### The suite, re-measured
+
+**220 registered / 217 run / 3 Not Run (Disabled)** — the disabled three are
+the macOS-only `au_*` trio — 100 % passing in all four modes, on the usual box
+(16 logical cores, 16 GB), nothing else of consequence running:
+
+| Mode | Wall clock | Speedup |
+|---|---|---|
+| serial | 329 s | 1.00× |
+| `-j2` | 239 s | 1.38× |
+| `-j4` | 203 s | 1.62× |
+| `-j8` | 182 s | 1.81× |
+
+**The speedup collapsed from 2.9× at `-j4` and it is NOT a regression — it is
+`RUN_SERIAL`.** The suite grew from 171 to 217 running tests and **41 of them
+now carry it**: proposal 21's live/monitor/record/metronome cases, 37's
+MIDI-out cases and 38's nine media cases, each for a good reason (a wall-clock
+latency bound, or ownership of a key in the shared INI). CTest runs a
+`RUN_SERIAL` test alone within the invocation, so those 41 are a floor. Measured
+directly: **the 41 take 155 s at `-j8`, 85 % of the whole `-j8` run's 182 s**;
+the other 176 take 27 seconds. The number to watch from here is the
+`RUN_SERIAL` count, not the core count.
+
+### Documentation, and one file that was quietly broken
+
+`main/media/CONTRACT.md` and `main/mediabrowser/CONTRACT.md` were written by
+their own gates; gate 6 verified rather than rewrote them, correcting only the
+credential claim and `mediabrowser` inv. 7's byte-identity overclaim.
+`main/timeline/CONTRACT.md`'s `media:` section became numbered **invariant 23**.
+`main/shell/CONTRACT.md` gained **`SSecretStore` invariants 42-47** — the one
+real gap: the store's five rules existed only in its own header and had never
+been lifted into a CONTRACT. It also had its "There are now six … which makes
+SEVEN" dock sentence and its "two hooks" heading (which described three)
+repaired. `docs/ARCHITECTURE.md` gained both modules, the corrected module
+count and the widget-include note.
+
+`docs/ACTIONS.md` was audited verb by verb against the real `readXml()`
+implementations: **14 of the 15 new verbs matched name for name and default for
+default**, and the fifteenth needed only gate 6's own new `expectAuth`. That
+audit also turned up two pre-existing defects, repaired on the way past: **a
+bare blank line INSIDE the table**, which silently ended it after row 41 so
+that 117 rows — including twelve of the fifteen media verbs — rendered as
+pipe-soup rather than as a table, and a **duplicated, stale
+`assert-render-policy` row** straddling the break, whose two copies disagreed.
+
+### The manual runbook is PENDING, and says so
+
+`docs/MEDIA_BROWSER_MANUAL_GATE.md` — twelve numbered steps against a real
+Nextcloud server, with a results table left blank. It covers exactly what no
+headless gate can reach: TLS against a real certificate (the stub is plain
+HTTP, so **no line of TLS handling has ever been executed by any gate**), a
+real app password, a real server's PROPFIND dialect, a ≥ 2000-entry directory,
+a ≥ 100 MB download with progress and cancel, a self-signed certificate, names
+that are legal on WebDAV and illegal on Windows, the dock's geometry across a
+restart, and the credential store on real hardware — including an INI carried
+to a second machine reporting `undecryptable` and sending nothing.
+
+It landed with the feature rather than after it, exactly as
+`docs/ASIO_WINDOWS_GATE.md` did for proposal 35 Phase 1. **Running it is the
+author's step.** Two paragraphs of it are also a first COMPILE: the macOS
+Keychain and Linux libsecret backends are written and **have never been built**
+— this box is Windows/MinGW.
+
+### A bug on `main` that this work uncovered, and its shape (PR #81)
+
+`record_offset_zero` was failing on `main` for a reason unrelated to proposal
+38. The recording offset is keyed by input-device **NAME**; this box's INI holds
+`inputDeviceId=asio:{…}`, so the case's `.../default` key was never read. Take 1
+asserted **0** — which is also exactly what a failed lookup returns.
+
+**So the gate passed under the very fault it existed to catch**, for as long as
+the lookup happened to succeed. That is the shape worth remembering: an
+assertion whose expected value coincides with the failure value is not an
+assertion. The fix rejected a `"default"` fallback, on the grounds that lending
+one device's physical latency correction to another is worse than the zero it
+would replace.

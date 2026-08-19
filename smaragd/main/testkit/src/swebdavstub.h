@@ -82,6 +82,28 @@ public:
     // "d".
     void setNamespacePrefix( const QString &prefix );
 
+    // THE EXPECTED `Authorization` HEADER VALUE, in full ("Basic <base64>",
+    // or a "Bearer <token>" when §B.8a's Login Flow v2 lands) -- the same
+    // spelling SWebDavClient::setAuthorizationHeader() takes, deliberately,
+    // so what a case writes down here is byte-for-byte what has to appear on
+    // the wire.
+    //
+    // Empty (the default) means NO CHECK, which is what every gate-4 unit
+    // test and the drop case rely on. When it is set, any request whose
+    // Authorization header does not match EXACTLY is answered 401 through the
+    // existing fault machinery, ahead of any injected fault -- a real server
+    // rejects a credential before it dispatches a method.
+    //
+    // WHY THIS EXISTS. Gate 5c shipped without it and its own PR body named
+    // the hole: the credential chain SSecretStore -> smedia::CredentialProvider
+    // -> SWebDavClient's header -> the wire was EXERCISED end to end and never
+    // VERIFIED, because the stub would have served those same files just as
+    // happily for an empty or malformed header. A browse that succeeds against
+    // a stub that checks is a proof; against a stub that does not, it is an
+    // assumption.
+    void setExpectedAuthorization( const QString &headerValue );
+    QString expectedAuthorization() const { return expectedAuth_; }
+
     // An artificial delay (ms) before a PROPFIND/GET starts answering, and
     // the number of GET body chunks a fixture is split into. Both widen the
     // window in which several requests are genuinely concurrent / a
@@ -114,7 +136,8 @@ private:
     void onReadyRead( Conn *conn );
     void onDisconnected( Conn *conn );
 
-    void handleRequest( Conn *conn, const QString &method, const QString &rawPath );
+    void handleRequest( Conn *conn, const QString &method, const QString &rawPath,
+                        const QString &authorization );
     void writeResponseFor( Conn *conn, const QString &method, const QString &path, Fault fault );
     void respondPropfind( Conn *conn, const QString &path );
     void startGetResponse( Conn *conn, const QString &path, bool closeMidBody );
@@ -139,6 +162,7 @@ private:
     QHash<QString, Fault>                     faults_;  // normalised path -> fault
 
     QString namespacePrefix_ = QStringLiteral( "d" );
+    QString expectedAuth_;      // empty: the header is not inspected at all
     int     responseDelayMs_ = 0;
     int     getChunkCount_   = 1;
 
