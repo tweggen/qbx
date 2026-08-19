@@ -1,7 +1,11 @@
 #include "app/pluginui/spluginnativeeditor.h"
 
+#include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
+#include "app/model/sproject.h"
+#include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
+#include "app/objects/track/strack.h"
 #include "app/objects/track/ssetpluginparamaction.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/sautomationrecorder.h"
@@ -72,9 +76,9 @@ audio::twEditorHandle handleOf( QWidget *w )
 
 // --- construction -------------------------------------------------------------
 
-SPluginNativeEditor::SPluginNativeEditor( SPluginSlot *slot, const QString &trackPath,
-                                          int slotIndex, QWidget *parent )
-    : QDialog( parent ), slot_( slot ), trackPath_( trackPath ), slotIndex_( slotIndex )
+SPluginNativeEditor::SPluginNativeEditor( STrack *track, SPluginSlot *slot,
+                                          QWidget *parent )
+    : QDialog( parent ), track_( track ), slot_( slot )
 {
     setAttribute( Qt::WA_DeleteOnClose );
     setWindowTitle( slot_ ? slot_->getDescriptor().name.c_str() : "Plugin" );
@@ -135,23 +139,15 @@ bool SPluginNativeEditor::isAvailableFor( SPluginSlot *slot )
     return p && p->supportsNativeEditor();
 }
 
-void SPluginNativeEditor::repointSlotIndex( SPluginSlot *slot, int slotIndex )
-{
-    if( SPluginNativeEditor *w = registry().value( slot ).data() )
-        w->slotIndex_ = slotIndex;
-}
-
-SPluginNativeEditor *SPluginNativeEditor::openFor( SPluginSlot *slot,
-                                                   const QString &trackPath,
-                                                   int slotIndex,
+SPluginNativeEditor *SPluginNativeEditor::openFor( STrack *track, SPluginSlot *slot,
                                                    QWidget *parentForPosition )
 {
-    if( !slot || trackPath.isEmpty() ) return nullptr;
+    if( !track || !slot ) return nullptr;
 
     // Already open: raise it rather than making a second one. Two views on one
-    // instance is a lifetime problem the backend refuses anyway.
+    // instance is a lifetime problem the backend refuses anyway. Nothing to
+    // re-point here — the address is derived at every commit.
     if( SPluginNativeEditor *existing = registry().value( slot ).data() ) {
-        existing->slotIndex_ = slotIndex;
         existing->show();
         existing->raise();
         existing->activateWindow();
@@ -160,7 +156,7 @@ SPluginNativeEditor *SPluginNativeEditor::openFor( SPluginSlot *slot,
 
     if( !isAvailableFor( slot ) ) return nullptr;
 
-    auto *w = new SPluginNativeEditor( slot, trackPath, slotIndex, parentForPosition );
+    auto *w = new SPluginNativeEditor( track, slot, parentForPosition );
     if( !w->attachPlugin() ) {
         // Not a failure the user should see as an error: the generic editor is a
         // complete fallback and the caller opens it next.
@@ -300,6 +296,35 @@ void SPluginNativeEditor::onPoll()
     }
 }
 
+// --- the model address, derived ------------------------------------------------
+//
+// Both of these are the strip's own logic, and deliberately so: an edit from a
+// native window must address the model exactly as the same edit from the strip
+// would. Neither result is stored.
+
+QString SPluginNativeEditor::currentTrackPath() const
+{
+    if( !track_ ) return QString();
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) return QString();
+    SObject *root = splacements::rootContainer( project );
+    if( !root ) return QString();
+    // pathOf() answers {} for "the root itself" as well as "not found"; a track
+    // is never the root, so an empty path here means the track has left the
+    // project and there is nothing to address.
+    return strackpath::pathToString( strackpath::pathOf( root, track_ ) );
+}
+
+int SPluginNativeEditor::currentSlotIndex() const
+{
+    if( !track_ || !slot_ ) return -1;
+    SPluginChain *chain = track_->getPluginChain();
+    if( !chain ) return -1;
+    for( int i = 0; i < chain->getSlotCount(); ++i )
+        if( chain->getSlotAt( i ) == slot_.data() ) return i;
+    return -1;   // removed from the chain while the window was up
+}
+
 void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value, bool gestureEnd )
 {
     if( !slot_ ) return;
@@ -331,10 +356,20 @@ void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value, bool g
     // 1. A Touch/Latch/Write pass takes the value instead — the punch-in that
     // pluginui/CONTRACT.md inv. 9 records as impossible ("there is no native
     // plugin editor to raise one"). It is possible now, and this is it.
+    // THE ADDRESS IS DERIVED HERE, at the moment of the commit, and never
+    // cached. Removing a slot above this one renumbers it and moving the track
+    // renumbers the path, both while this window is up; a stale pair would
+    // commit the knob to a DIFFERENT PLUGIN. Empty/-1 means the track or the
+    // slot is gone, and the honest answer is to drop the edit: the model has
+    // nowhere to put it, and the window is about to close anyway.
+    const QString trackPath = currentTrackPath();
+    const int     slotIndex = currentSlotIndex();
+    if( trackPath.isEmpty() || slotIndex < 0 ) return;
+
     SAutomationRecorder::Target t;
-    t.ownerPath = strackpath::stringToPath( trackPath_ );
+    t.ownerPath = strackpath::stringToPath( trackPath );
     t.target    = QStringLiteral( "param:%1" ).arg( paramId );
-    t.slotIndex = slotIndex_;
+    t.slotIndex = slotIndex;
 
     SApplication &app = SApplication::app();
     if( app.isPlaying() &&
@@ -346,7 +381,7 @@ void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value, bool g
     // 2. Otherwise the ordinary undoable verb, exactly as the app's own slider
     // submits it. Consecutive edits to one parameter collapse into one undo
     // entry through SSetPluginParamAction::mergeWith().
-    app.submitAction( new SSetPluginParamAction( trackPath_, slotIndex_, paramId, value ) );
+    app.submitAction( new SSetPluginParamAction( trackPath, slotIndex, paramId, value ) );
 
     if( gestureEnd ) app.automationRecorder().releaseControl();
 }

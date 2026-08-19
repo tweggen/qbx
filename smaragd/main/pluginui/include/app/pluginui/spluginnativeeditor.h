@@ -29,6 +29,7 @@
 class QTimer;
 class QWidget;
 class SPluginSlot;
+class STrack;
 
 class SPluginNativeEditor : public QDialog {
     Q_OBJECT
@@ -36,21 +37,27 @@ class SPluginNativeEditor : public QDialog {
 public:
     // Returns nullptr when this slot has no native editor, or when one could not
     // be attached — the caller then falls back to the generic slider editor.
-    // `trackPath` and `slotIndex` are how an edit addresses the model; they are
-    // the same two values SPluginParamEditor uses.
-    static SPluginNativeEditor *openFor( SPluginSlot *slot,
-                                         const QString &trackPath,
-                                         int slotIndex,
+    //
+    // It takes the TRACK and the SLOT, not a track path and a slot index, and
+    // that is the fix for a whole class of bug rather than a style choice. An
+    // edit addresses the model as (trackPath, slotIndex); both are POSITIONS,
+    // and both move under a window that outlives the strip. Removing a slot
+    // above this one renumbers it; moving the track in the arranger renumbers
+    // the path. A cached pair goes silently stale and the next knob turn is
+    // committed to a DIFFERENT PLUGIN.
+    //
+    // The generic editor is re-pointed on every rebuildUI() for exactly this
+    // reason (splugineffectstrip.cpp, CONTRACT inv. 7). A native window has no
+    // rebuild to hang that on, so it derives both addresses FRESH at every
+    // commit instead of being told when they moved. Nothing to keep in step,
+    // and nothing to forget to call.
+    static SPluginNativeEditor *openFor( STrack *track,
+                                         SPluginSlot *slot,
                                          QWidget *parentForPosition );
 
     // True if this slot has a native editor available at all. Cheap: it asks
     // twPlugin::supportsNativeEditor() and instantiates nothing.
     static bool isAvailableFor( SPluginSlot *slot );
-
-    // The FX strip is rebuilt on every track switch and on every chain edit, so
-    // an open window's slot index can go stale. Same re-point the generic editor
-    // gets in SPluginEffectStrip::rebuildUI().
-    static void repointSlotIndex( SPluginSlot *slot, int slotIndex );
 
     ~SPluginNativeEditor() override;
 
@@ -62,16 +69,20 @@ private slots:
     void onPoll();
 
 private:
-    SPluginNativeEditor( SPluginSlot *slot, const QString &trackPath,
-                         int slotIndex, QWidget *parent );
+    SPluginNativeEditor( STrack *track, SPluginSlot *slot, QWidget *parent );
 
     bool attachPlugin();
     void applyEdit( std::uint32_t paramId, double value, bool gestureEnd );
     void resizeToPlugin( audio::twEditorSize physical );
 
-    SPluginSlot                     *slot_ = nullptr;
-    QString                          trackPath_;
-    int                              slotIndex_ = 0;
+    // The model address, DERIVED, never cached. Both return an empty/-1 "cannot
+    // address this any more", which is a real state: the track can be deleted
+    // or the slot removed while the window is up.
+    QString currentTrackPath() const;
+    int     currentSlotIndex() const;
+
+    QPointer<STrack>                 track_;
+    QPointer<SPluginSlot>            slot_;
     QWidget                         *container_ = nullptr;
     QTimer                          *pollTimer_ = nullptr;
     std::unique_ptr<audio::twPluginEditor> editor_;

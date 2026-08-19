@@ -73,10 +73,23 @@ Invariants:
    to `set-plugin-param`** (proposal 37 P6). `onParamSliderChanged` offers the
    value to `SApplication::automationRecorder()` first and returns if it was
    taken; the whole pass then lands as ONE `set-automation-points` when the
-   control is released or the transport stops. Its release is also the PUNCH-IN
-   signal: a plugin's own `ParamGestureBegin/End` reaches the host only inside
-   `process()`, on a worker thread, at freeze time, and there is no native
-   editor to raise one (proposal 33 M3) — so the app's slider is the gesture.
+   control is released or the transport stops. Its release is also a PUNCH-IN
+   signal — and **since proposal 33 M5 it is no longer the only one.** A native
+   plugin editor raises the other: `SPluginNativeEditor::applyEdit` offers every
+   value the plugin's own GUI reports to the same recorder, first, exactly as
+   the slider does. (What is still unreachable is the gesture stream inside
+   `process()`: `ParamGestureBegin/End` arrives on a worker thread at freeze
+   time and nothing consumes it. The editor's gestures come from
+   `IComponentHandler` on the MAIN thread instead, which is why they are usable
+   and those are not.)
+
+   **A native editor's phases are HINTS, not undo boundaries** (proposal 33
+   §4.1, measured): Dexed brackets every single value in its own
+   `beginEdit`/`performEdit`/`endEdit`, so one drag is dozens of gestures. One
+   undo entry per gesture would be one per mouse step. Coalescing is by
+   `(track, slot, paramId)` through `SSetPluginParamAction::mergeWith()`, and
+   the poll batch is coalesced per parameter before anything is submitted
+   (§4.2 — a batch can hold several moves of one knob).
    While a Read-family `param:` lane exists the slider DISPLAYS the curve at
    the position being heard (pumped from `SApplication::meterTick`), except on
    a control that is being recorded, which must show the hand and not the
@@ -137,9 +150,30 @@ about an instrument is DERIVED from `slot->getDescriptor().isInstrument` and
   time and gated it (`assert-track-head contains="I=1"` in
   `qxa.instrument_slot_rules`).
 
-Known debt: no per-plugin editor plugins — generic sliders only, on a fixed
-1000-tick normalization, and no native `clap_plugin_gui` / `IPlugView`
-embedding (a deliberate deferral of proposal 08). The drop handler's
+Native editors: a VST3 plugin's OWN GUI opens embedded in
+`SPluginNativeEditor` (proposal 33 M4), and the generic slider list is the
+FALLBACK, not an alternative — it is what opens when there is no native editor,
+when `createEditor()` returns null, when `attach()` is refused, or when the
+plugin needs an X11 run loop we do not provide. There is deliberately no second
+entry point to the sliders while a native GUI exists (decision D3), which is
+why every native edit has to be undoable.
+
+**The window is NOT owned by the strip**, and must not become so:
+`STrackDetailPanel::rebuildUI()` deletes the strip on every track switch, so a
+window parented to it would vanish when the user clicks another lane. It lives
+in a module-level registry keyed by `SPluginSlot*`. For the same reason it does
+not cache `(trackPath, slotIndex)`: both are positions that move under a window
+that outlives the strip, so they are DERIVED at every commit. Inv. 7's
+re-pointing is the generic editor's answer to the same problem; a native window
+has no rebuild to hang it on.
+
+Known debt: generic sliders are still a fixed 1000-tick normalization; **CLAP
+and AudioUnit have no native editor yet** (proposal 33 M6/M7 — every CLAP
+plugin takes the slider fallback today), and neither does Linux/X11 (M8). An
+editor's open state and geometry are not persisted (D2). Nothing headless
+exercises the window itself: `winId()` under `QT_QPA_PLATFORM=offscreen` is not
+a real native handle, so the embed path is hand-verification only and what the
+qxa suite gates is the FALLBACK DECISION. The drop handler's
 `dragSourceIndex_` is never assigned by any drag START — `startDragFromPlugin()`
 was declared and never defined — so drag-to-reorder cannot fire today even
 though `reorder-plugin` behind it is tested; that is pre-existing and untouched

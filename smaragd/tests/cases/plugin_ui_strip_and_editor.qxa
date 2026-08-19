@@ -69,6 +69,15 @@
          a non-zero value: plugin delay compensation is out of scope. -->
     <assert-plugin-strip trackIndex="0" slotIndex="0" contains="latency=0"/>
 
+    <!-- THE FALLBACK DECISION (proposal 33 D3). The slider list is not
+         reachable alongside a native GUI, so which editor a double-click opens
+         is the only thing standing between a plugin that misreports an editor
+         and a user with no way to edit it at all. A CLAP plugin has no native
+         editor today (M6 is unwritten), so an Active CLAP slot must resolve to
+         the GENERIC editor - and if M6 ever makes it resolve to "native"
+         without the window working, this line is what says so. -->
+    <assert-plugin-editor-kind trackIndex="0" slotIndex="0" expect="generic"/>
+
     <!-- 2. Drive the editor's slider. The value LABEL must show the plugin's own
          value-to-text (the fixture formats value*100 as an integer), proving units
          / formatted values reach the screen and not just a raw number. -->
@@ -111,6 +120,11 @@
          Missing slot's settings is its stored state chunk. -->
     <plugin-editor-set-param trackIndex="0" slotIndex="1" paramId="0" value="1.0"
                              expectReject="true"/>
+
+    <!-- A Missing slot offers NEITHER editor: no native GUI to embed and no
+         parameters to list. The strip disables its Edit button for the same
+         reason, and the reject probe above is the other half of it. -->
+    <assert-plugin-editor-kind trackIndex="0" slotIndex="1" expect="none"/>
 
     <!-- And the missing slot is transparent, so the audible level is still the
          Active slot's 1.0 gain. -->

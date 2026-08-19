@@ -318,6 +318,62 @@ bool SAssertInstrumentSlotAction::readXml( const QDomElement &elem, int /*versio
     return true;
 }
 
+SApplyResult SAssertPluginEditorKindAction::apply( SProject *project )
+{
+    auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
+                                      : makeStripAt( project, trackPath_ );
+    if( !strip ) {
+        qWarning() << "assert-plugin-editor-kind: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
+        return { false, nullptr };
+    }
+
+    if( expect_ != QLatin1String( "native" ) &&
+        expect_ != QLatin1String( "generic" ) &&
+        expect_ != QLatin1String( "none" ) ) {
+        qWarning() << "assert-plugin-editor-kind: expect must be one of "
+                      "native|generic|none, got" << expect_;
+        return { false, nullptr };
+    }
+
+    const QString kind = strip->editorKindFor( slotIndex_ );
+    if( kind != expect_ ) {
+        qWarning() << "assert-plugin-editor-kind FAILED: slot" << slotIndex_
+                   << "would open" << kind << "expected" << expect_;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertPluginEditorKindAction::writeXml( QDomElement &elem ) const
+{
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "trackIndex", trackIndex_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "expect", expect_ );
+}
+
+bool SAssertPluginEditorKindAction::readXml( const QDomElement &elem, int )
+{
+    trackPath_  = elem.attribute( "trackPath" );
+    trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
+    slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
+    expect_     = elem.attribute( "expect" );
+    // Deliberately NOT rejected here when empty. readXml must accept whatever
+    // writeXml produced, including a default-constructed action -- that round
+    // trip is itself a gate (action_roundtrip_test). A missing or misspelt
+    // `expect` is a SCRIPT error, so it is caught in apply() where it can be
+    // reported against the three legal values instead of as a parse failure.
+    return true;
+}
+
+static const bool s_reg_assertplugineditorkind =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-plugin-editor-kind" ),
+          [] { return new SAssertPluginEditorKindAction; } ),
+      true );
+
 static const bool s_reg_assertinstrumentslot =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "assert-instrument-slot" ),
