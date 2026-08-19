@@ -1,12 +1,14 @@
 #include "app/testkit/stransporttestactions.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
+#include "app/shell/smainwindow.h"
 #include "app/actions/sactionhistory.h"
 #include "app/model/sproject.h"
 #include "app/model/slink.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sobjectpath.h"
+#include <QApplication>
 #include <QCoreApplication>
 #include <QDomElement>
 #include <QElapsedTimer>
@@ -20,7 +22,11 @@ SApplyResult SSetLocatorAction::apply(SProject *project)
     if (!project) {
         return {false, nullptr};
     }
+    // The scripted stand-in for a user clicking the ruler/timeline to seek —
+    // a direct navigation (item o), so it updates lastNavigatedLocatorPos_
+    // exactly as sstdmixerview.cpp's real click handler does.
     SApplication::app().setGlobalLocatorPos((offset_t)position_);
+    SApplication::app().noteUserNavigatedLocator((offset_t)position_);
     return {true, nullptr};
 }
 
@@ -46,6 +52,40 @@ static const bool s_reg_set_locator = (
 // button submits it), so it moved to
 // main/objects/track/src/ssettrackmuteaction.cpp next to set-track-solo. Its
 // XML is unchanged, index form included, so the committed cases are untouched.
+
+// -------------------------------------------------------------- assert-locator
+
+SApplyResult SAssertLocatorAction::apply(SProject *project)
+{
+    if (!project) {
+        return {false, nullptr};
+    }
+    const offset_t actual = SApplication::app().getGlobalLocatorPos();
+    if ((offset_t)position_ != actual) {
+        qWarning() << "assert-locator FAILED: expected" << (qulonglong)position_
+                   << "but the locator is at" << (qulonglong)actual;
+        return {false, nullptr};
+    }
+    return {true, nullptr};
+}
+
+void SAssertLocatorAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("position", QString::number(position_));
+}
+
+bool SAssertLocatorAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    position_ = elem.attribute("position", "0").toULongLong();
+    return true;
+}
+
+static const bool s_reg_assert_locator = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-locator"),
+        []{ return new SAssertLocatorAction; }
+    ), true
+);
 
 // -------------------------------------------------------------- wait-playhead
 
@@ -197,5 +237,80 @@ static const bool s_reg_redo = (
     SActionRegistry::instance().registerType(
         QStringLiteral("redo"),
         []{ return new SRedoAction; }
+    ), true
+);
+
+// -------------------------------------------------------------- press-play
+
+// Drives the REAL Space / Shift+Space handlers (item o), not a re-spelling of
+// them, exactly as `undo`/`redo` above drive the real undo stack — see the
+// header comment for why `toggle-playback` cannot stand in for this.
+SApplyResult SPressPlayAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = nullptr;
+    for (QWidget *w : QApplication::topLevelWidgets()) {
+        if ((win = qobject_cast<SMainWindow *>(w))) break;
+    }
+    if (!win) {
+        qWarning() << "press-play: no main window";
+        return {false, nullptr};
+    }
+    if (shift_) win->startPlayingFromCurrent();
+    else        win->startPlaying();
+    // Not undoable: transport state is transient, like toggle-playback.
+    return {true, nullptr};
+}
+
+void SPressPlayAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("shift", shift_ ? "1" : "0");
+}
+
+bool SPressPlayAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    const QString s = elem.attribute("shift", "0");
+    shift_ = (s == "1" || s == "true");
+    return true;
+}
+
+static const bool s_reg_pressplay = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("press-play"),
+        []{ return new SPressPlayAction; }
+    ), true
+);
+
+// -------------------------------------------------------------- press-stop
+
+// Drives the REAL Stop button/shortcut — see the header comment for why it
+// matters that this is stopPlaying() itself and not toggle-playback.
+SApplyResult SPressStopAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = nullptr;
+    for (QWidget *w : QApplication::topLevelWidgets()) {
+        if ((win = qobject_cast<SMainWindow *>(w))) break;
+    }
+    if (!win) {
+        qWarning() << "press-stop: no main window";
+        return {false, nullptr};
+    }
+    win->stopPlaying();
+    // Not undoable: transport state is transient, like toggle-playback.
+    return {true, nullptr};
+}
+
+void SPressStopAction::writeXml(QDomElement & /*elem*/) const
+{
+}
+
+bool SPressStopAction::readXml(const QDomElement & /*elem*/, int /*version*/)
+{
+    return true;
+}
+
+static const bool s_reg_pressstop = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("press-stop"),
+        []{ return new SPressStopAction; }
     ), true
 );

@@ -495,6 +495,12 @@ public:
     // shape and rationale as drag-clip-edge and group-track.
     bool tkClickTrackHead( STrack *t, Qt::KeyboardModifiers mods );
     bool tkToggleTrackHead( STrack *t, const QString &which, bool on );
+    // Send a synthetic Home/End key press to `t`'s LIVE fader (item j) — the
+    // same widget instance the real arranger draws, found in controlArray_
+    // exactly as tkToggleTrackHead's button does. Exercises
+    // SSMVMixerControl::eventFilter's Home/End interception without needing
+    // real OS-level keyboard focus under QT_QPA_PLATFORM=offscreen.
+    bool tkSendFaderKey( STrack *t, const QString &key );
     // Grip-drag `t`'s head and drop it on a LANE ROW: `nestOnto` drops on the
     // middle of that row (nest into it), otherwise on its top boundary (insert
     // above it; `targetRow` == rowCount() means "past the last lane"). Rows,
