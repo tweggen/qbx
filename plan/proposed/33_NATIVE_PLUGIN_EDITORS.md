@@ -474,14 +474,14 @@ PoC already de-risked, before any second format or platform is attempted.
 | **M1** | ✅ **DONE** — `twplugineditor.h`, `twPlugin::createEditor()`, `twRtThreadGuard::Kind::Main` + `markMainThread()` from `SApplication`'s ctor | build clean, both static gates clean, 21/21 plugin + live cases green |
 | **M2** | ✅ **DONE** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket, a drained queue, `restartComponent` flags kept, `applyGuiEdit()` → mirror + DSP ring | `--production --show` reads each edit back through `getParam()`; §4.1 |
 | **M3** | ✅ **DONE** — `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI, `createEditor()` wired | `vst3_probe --production`: 3/3 real plugins attach and tear down clean, fixture correctly yields null |
-| **M4** | The Qt host window (`main/pluginui/src/spluginnativeeditor.{h,cpp}`), lifetime, fallback, **§10's ownership fix**, D2 persistence | qxa case; the strip's track-switch behaviour; `editorOpen` round-trips and opens no window headlessly |
-| **M5** | Edits → `SSetPluginParamAction` **coalesced by (slot,paramId) via the existing `mergeWith()`** (§4.1 — the phases are hints, not undo boundaries) + `SAutomationRecorder` punch-in; DualMono fan-out | ONE undo entry for a whole knob drag, measured against a plugin that brackets per value; `pluginui/CONTRACT.md` inv. 9 rewritten |
+| **M4** | ✅ **DONE** (persistence excepted) — `SPluginNativeEditor`, the shell-level registry, the fallback chain, §10 ownership. **D2 persistence is NOT implemented.** | `assert-plugin-editor-kind` gates the fallback DECISION; the window itself is hand-verified (winId() offscreen is not a real handle) |
+| **M5** | ✅ **DONE** — per-batch coalescing (§4.2) then `SSetPluginParamAction` merged by (track,slot,param); `SAutomationRecorder` punch-in; DualMono fan-out via the action; echo guard | `pluginui/CONTRACT.md` inv. 9 rewritten; undo of a native gesture is hand-verified |
 | **M6** | CLAP: `extGui_`, the `clap.gui` host extension (all four callbacks), **D1 floating fallback + `set_transient`** | `twtestclap` gains a GUI entry point |
 | **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
 | **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |
 
-M0–M3 are in the branch. **Everything from M4 — the Qt window, and therefore
-anything a user can click — is unwritten.**
+M0–M5 are merged (PRs #96, #98). **What remains is D2 persistence, then CLAP
+(M6), macOS (M7) and Linux (M8).**
 
 `vst3_probe --production` is what gates M2 and M3, and it exists because the
 rest of the probe deliberately hand-rolls raw COM: that proves the PLUGIN works,

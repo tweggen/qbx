@@ -69,6 +69,15 @@ public:
     // Drive the parameter editor for `slotIndex` the way a user drag does, WITHOUT
     // showing a window (a qxa run on Windows uses the real platform plugin, and a
     // test must never pop a dialog onto the user's screen or steal focus).
+    // WHICH editor openParamEditor() would open for this slot, without opening
+    // anything: "native", "generic", or "none". The fallback decision is the
+    // whole safety story of proposal 33 decision D3 — the slider list is not
+    // reachable alongside a native GUI, so a plugin that starts reporting a
+    // native editor it cannot actually embed would cost the user the editor
+    // entirely. Being able to assert the decision is what stops that being
+    // discovered by a user.
+    QString editorKindFor( int slotIndex );
+
     bool editorSetParam( int slotIndex, std::uint32_t paramId, double value );
 
     // Headless readback for a qxa case: the text the editor's value label DISPLAYS

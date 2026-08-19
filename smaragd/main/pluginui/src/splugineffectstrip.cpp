@@ -540,16 +540,37 @@ void SPluginEffectStrip::openParamEditor(int slotIndex)
     // may ship. Anything that cannot embed — no editor, a plugin that refuses
     // our window, an X11 run loop we do not provide yet — falls through to the
     // generic editor, which is a complete substitute and not an error state.
-    if( pluginChain_ ) {
+    if( pluginChain_ && track_ ) {
         if( SPluginSlot *slot = pluginChain_->getSlotAt( slotIndex ) ) {
-            const QString trackPath = trackPathString();
-            if( !trackPath.isEmpty() &&
-                SPluginNativeEditor::openFor( slot, trackPath, slotIndex, this ) )
+            // The TRACK and the SLOT, not a path and an index: the window
+            // outlives this strip and derives its own address at every commit
+            // (see SPluginNativeEditor::openFor).
+            if( SPluginNativeEditor::openFor( track_, slot, this ) )
                 return;
         }
     }
 
     ensureParamEditor(slotIndex, /*showWindow=*/true);
+}
+
+QString SPluginEffectStrip::editorKindFor( int slotIndex )
+{
+    if( !pluginChain_ ) return QStringLiteral( "none" );
+    SPluginSlot *slot = pluginChain_->getSlotAt( slotIndex );
+    if( !slot ) return QStringLiteral( "none" );
+    if( trackPathString().isEmpty() ) return QStringLiteral( "none" );
+
+    // The SAME predicate openParamEditor() branches on, called rather than
+    // restated: a second copy of the rule could drift from the one that runs.
+    if( track_ && SPluginNativeEditor::isAvailableFor( slot ) )
+        return QStringLiteral( "native" );
+
+    // A non-Active slot has no parameters to show either; the strip disables
+    // its Edit button for exactly that reason.
+    if( slot->getSlotState() != audio::twPluginSlotState::Active )
+        return QStringLiteral( "none" );
+
+    return QStringLiteral( "generic" );
 }
 
 bool SPluginEffectStrip::editorSetParam(int slotIndex, std::uint32_t paramId,

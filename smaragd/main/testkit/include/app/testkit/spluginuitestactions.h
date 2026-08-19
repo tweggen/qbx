@@ -45,6 +45,37 @@ private:
     QString absent_;
 };
 
+// assert-plugin-editor-kind — WHICH editor a double-click would open for a
+// slot, without opening anything: "native" (the plugin's own GUI), "generic"
+// (the slider list) or "none".
+//
+// This gates proposal 33 decision D3's safety property. The slider list is NOT
+// reachable alongside a native GUI, so the fallback decision is the only thing
+// standing between a plugin that misreports an editor and a user with no way
+// to edit it at all. The window itself cannot be gated headlessly — winId()
+// under QT_QPA_PLATFORM=offscreen is not a real native handle — so the
+// DECISION is what a script can and must assert.
+//   trackPath  = ""      index-path; empty = use trackIndex
+//   trackIndex = "0"
+//   slotIndex  = "0"
+//   expect     = ""      required: "native" | "generic" | "none"
+class SAssertPluginEditorKindAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "assert-plugin-editor-kind" );
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_;
+    int     trackIndex_ = 0;
+    int     slotIndex_  = 0;
+    QString expect_;
+};
+
 // plugin-editor-set-param — drive the parameter editor's slider the way a user
 // drag does, so the resulting set-plugin-param action (and its audible effect)
 // is what the render measures.
