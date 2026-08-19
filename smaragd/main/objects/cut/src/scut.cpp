@@ -1210,6 +1210,13 @@ SClipWindow *SCut::cloneWindowOver( SProject *project ) const
     // (design §3.3 - "travels with the window: every placement / take / asset
     // of it").
     copy->copyAutomationFrom( *this );
+    // The per-clip STATIC volume/pan (SObject::volume_/pan_) are per-take
+    // properties, same as pitch/formant preservation — but unlike those two
+    // they do not live inside twGrainParams, so setGrainParamsRaw() above does
+    // not carry them. Without this, split-clip/duplicate-clip/add-take would
+    // silently reset a trimmed or panned clip back to unity on every copy.
+    copy->setVolume( getVolume() );
+    copy->setPan( getPan() );
     return copy;
 }
 
@@ -1261,6 +1268,24 @@ SCut::SCut( SProject *parentProject, SObject &content )
         QObject::connect( parentProject, SIGNAL( arrangementChanged() ),
                           this, SLOT( onArrangementChanged() ) );
     }
+
+    // The per-clip static volume (see onVolumeChanged / ssetclipvolumeaction.h).
+    // Self-connected the same way STrack wires its own fader
+    // (volumeChanged -> onTrackVolumeChanged) in strack.cpp.
+    QObject::connect( this, SIGNAL( volumeChanged( double ) ),
+                      this, SLOT( onVolumeChanged( double ) ) );
+}
+
+void SCut::onVolumeChanged( double /*db*/ )
+{
+    // THE PER-CLIP STATIC VOLUME (proposal: per-clip volume/pan, item f).
+    // Reaches the mix through STrack::refreshClipGainCurves(), which every
+    // ancestor's bumpRenderChainEpochRange() (the funnel this walk drives)
+    // already calls unconditionally — the same mechanism a `cut:Gain`
+    // automation edit uses (mix/CONTRACT.md inv. 23). Not throttled like the
+    // SLIP-only edits (invariant 6): a volume edit is a single dialog commit,
+    // never a per-mouse-move drag.
+    invalidateRenderPathRange( 0, (offset_t) getDurationBlocking() );
 }
 
 void SCut::onArrangementChanged()

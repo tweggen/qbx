@@ -211,6 +211,40 @@ reach EXACTLY zero — which is what a fade-out is. The consumer is
 PLACEMENT-SCOPE envelopes (per-`SLink`) are deliberately deferred until proposal
 32 gives links identity: an `SLink` has no id to hang one on today.
 
+## Per-clip static volume and pan (per-clip volume/pan proposal, item f)
+
+**Volume and pan reuse the generic `SObject::volume_`/`pan_` fields** — every
+`SObject`, including every `SCut`, has already carried these (getter/setter,
+signals, `Q_PROPERTY`, unconditional serialization) since long before this
+slice; only `STrack` gave them meaning (its fader, in `twGainStage`). Nothing
+here adds new storage — `set-clip-volume` / `set-clip-pan`
+(`ssetclipvolumeaction.{h,cc}`, `ssetclippanaction.{h,cc}`) just give a clip's
+existing fields an undoable entry point, mirroring `set-pitch` /
+`set-formant-preserve` exactly (ABSOLUTE value, per-TAKE on a stack, edit-group
+`broadcast`). Backward compatibility is therefore automatic: every project
+file already round-trips a `volume='0' pan='0'` attribute on every `SCut`
+element (`SObject::serializeSelfAttributes`/`readPreChildrenAttributes`), so
+there is no format version to bump and no old-file default to invent.
+
+**Volume IS applied in the audio path; pan is NOT.** `SCut::setVolume()`
+override wires the clip's own `volumeChanged` to `invalidateRenderPathRange`
+(self-connected in the ctor, the same idiom `STrack` uses for its own fader —
+`volumeChanged -> onTrackVolumeChanged`), which reaches
+`STrack::refreshClipGainCurves()` through the existing
+`bumpRenderChainEpochRange` funnel — the SAME funnel a `cut:Gain` automation
+edit already drives. That function now pushes BOTH the automation curve and a
+linear `gainScalar` (the dB value converted once) into
+`twTrackMix::ClipEntry`, and the mix loop multiplies the two per frame — see
+`tw303a/mix/CONTRACT.md` inv. 26. `SObject::setPan()` is called directly with
+no override and no invalidation: nothing downstream reads a clip's pan, by
+design (see `tw303a/mix/CONTRACT.md` "Known debt").
+
+**`cloneWindowOver()` copies both explicitly.** They are per-take properties
+like pitch/formant, but unlike those two they are not part of `twGrainParams`,
+so `setGrainParamsRaw()` does not carry them — without an explicit
+`setVolume()`/`setPan()` call, split-clip/duplicate-clip/add-take would
+silently reset a trimmed or panned clip back to unity on every copy.
+
 ## A cut over a LIVE RECORDING (proposal 21 L3b)
 
 `SCut::isLiveRecording()` forwards its content's answer, so the predicate holds

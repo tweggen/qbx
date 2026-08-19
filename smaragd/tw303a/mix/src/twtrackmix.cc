@@ -285,6 +285,19 @@ void twTrackMix::setClipGainCurve( const void *key,
     }
 }
 
+// THE PER-CLIP STATIC VOLUME. Same protocol as setClipGainCurve: swap under
+// mutex(), read once per clip per page into a local in the freeze loop below
+// (THREADING rule 2).
+void twTrackMix::setClipGainScalar( const void *key, double linear )
+{
+    std::lock_guard<std::mutex> lock( mutex() );
+    for( ClipEntry &c : clips_ ) {
+        if( c.key != key ) continue;
+        c.gainScalar = linear;
+        return;
+    }
+}
+
 // Proposal 36 B4. A twTrackMix caches no pages of its own (freezePage allocates
 // a fresh page every call and never enters it into outputPages_), so widening
 // costs nothing here — but every page it has already HANDED OUT is now the wrong
@@ -591,6 +604,12 @@ length_t twTrackMix::freezePage_nolock(
         // the CHILD's page before it is summed. Read ONCE into a local: the
         // model may swap the entry's curve while this page renders.
         //
+        // THE PER-CLIP STATIC VOLUME (per-clip volume/pan proposal) composes
+        // with it as a per-frame PRODUCT of linear factors — the same "TRIM
+        // SUMS IN dB" rule twGainStage applies between its own static scalar
+        // and a `self:Volume` curve (mix/CONTRACT.md inv. 21). gainScalar is
+        // read once into a local for the same reason as gainCurve.
+        //
         // It scales into a SCRATCH buffer rather than the child's page, which is
         // not a micro-optimisation: childPage is handed straight back as
         // clip.previousPage (the child's DSP-state predecessor) and may be a
@@ -600,18 +619,22 @@ length_t twTrackMix::freezePage_nolock(
         // the curve is evaluated in the clip's OWN domain and therefore trims,
         // slips and loops with the clip.
         const std::shared_ptr<const twAutomationCurve> gainCurve = clip.gainCurve;
+        const double gainScalar = clip.gainScalar;
+        const bool hasGain = gainCurve || gainScalar != 1.0;
 
         const idx_t nCh = (idx_t) page->channels();
         for( idx_t c = 0; c < nCh; ++c ) {
             const idx_t srcCh = twPageClampChannel( *childPage, c );
             IOVector childVec = IOVector::CreateForPageOutput( childPage, srcCh );
-            if( gainCurve && framesToMix > 0 ) {
+            if( hasGain && framesToMix > 0 ) {
                 if( (offset_t) clipGainScratch_.size() < framesToMix )
                     clipGainScratch_.resize( (std::size_t) framesToMix );
                 const sample_t *src = childPage->channelPtr( srcCh );
                 for( offset_t i = 0; i < framesToMix; ++i ) {
+                    const double envelope =
+                        gainCurve ? gainCurve->valueAt( childPos + i ) : 1.0;
                     clipGainScratch_[(std::size_t) i] =
-                        src[i] * (sample_t) gainCurve->valueAt( childPos + i );
+                        src[i] * (sample_t) ( gainScalar * envelope );
                 }
                 childVec = IOVector::CreateFromBuffer( clipGainScratch_.data(),
                                                        (length_t) framesToMix );

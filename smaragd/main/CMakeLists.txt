@@ -143,6 +143,8 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/sremovetakeaction.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
     objects/cut/include/app/objects/cut/ssetclipnameaction.h
+    objects/cut/include/app/objects/cut/ssetclippanaction.h
+    objects/cut/include/app/objects/cut/ssetclipvolumeaction.h
     objects/cut/include/app/objects/cut/ssetpitchaction.h
     objects/cut/include/app/objects/cut/ssetformantpreserveaction.h
     objects/cut/include/app/objects/cut/splaceclipaction.h
@@ -164,6 +166,8 @@ set(APP_OBJECTS_FILES
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/sselecttakeaction.cpp
     objects/cut/src/ssetclipnameaction.cpp
+    objects/cut/src/ssetclippanaction.cpp
+    objects/cut/src/ssetclipvolumeaction.cpp
     objects/cut/src/ssetpitchaction.cpp
     objects/cut/src/ssetformantpreserveaction.cpp
     objects/cut/src/splaceclipaction.cpp
@@ -382,6 +386,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sasserttrackchannelsaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertclipwindowaction.h
+    testkit/include/app/testkit/sassertclipmixaction.h
     testkit/include/app/testkit/sassertenvelopeaction.h
     testkit/include/app/testkit/sassertfileidenticalaction.h
     testkit/include/app/testkit/sassertlogaction.h
@@ -419,6 +424,7 @@ set(APP_UI_FILES
     testkit/src/sasserttrackchannelsaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertclipwindowaction.cpp
+    testkit/src/sassertclipmixaction.cpp
     testkit/src/sassertenvelopeaction.cpp
     testkit/src/sassertfileidenticalaction.cpp
     testkit/src/sassertlogaction.cpp

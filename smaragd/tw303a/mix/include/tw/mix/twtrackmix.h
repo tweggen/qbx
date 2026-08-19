@@ -57,6 +57,17 @@ struct ClipEntry {
     // with the clip and travels with the WINDOW across placements and takes.
     // Null is the untouched path: no arithmetic, no copy.
     std::shared_ptr<const twAutomationCurve> gainCurve;
+
+    // THE PER-CLIP STATIC VOLUME (per-clip volume/pan proposal). A LINEAR
+    // amplitude factor — the clip's own dB trim (SObject::volume_) converted
+    // once by STrack::refreshClipGainCurves(), the same funnel that pushes
+    // gainCurve. Composed with it as a per-frame PRODUCT, which is exactly
+    // what "the two sum in dB" means in linear terms (mix/CONTRACT.md inv. 21
+    // makes the identical argument for twGainStage's static scalar against a
+    // `self:Volume` curve). 1.0 (0 dB) is the untouched value: together with a
+    // null gainCurve it keeps the pre-existing null-curve fast path exact, so
+    // an unedited project's render is unchanged byte-for-byte.
+    double gainScalar{ 1.0 };
 };
 
 // State snapshot for page boundary continuity
@@ -129,6 +140,13 @@ public:
     // null curve restores the untouched path.
     void setClipGainCurve( const void *key,
                            std::shared_ptr<const twAutomationCurve> curve );
+
+    // Set one clip entry's STATIC linear gain scalar (see ClipEntry::
+    // gainScalar). 1.0 is the untouched/no-op value. Swapped under mutex()
+    // exactly like setClipGainCurve — no invalidation here, the caller
+    // (STrack::refreshClipGainCurves(), reached through the same
+    // invalidateRenderPathRange walk a volume edit already triggers) owns that.
+    void setClipGainScalar( const void *key, double linear );
 
     // THE PRE-FX FADER IS GONE (proposal 37 P5, design D5). setTrackGain() and
     // trackGainDb_ were forced to 0 dB by P3a and are DELETED here: the fader is

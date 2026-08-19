@@ -31,6 +31,8 @@
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/sresizeclipaction.h"
 #include "app/objects/cut/ssetclipnameaction.h"
+#include "app/objects/cut/ssetclippanaction.h"
+#include "app/objects/cut/ssetclipvolumeaction.h"
 #include "app/objects/cut/ssetformantpreserveaction.h"
 #include "app/objects/cut/ssetpitchaction.h"
 #include "app/objects/cut/stakestack.h"
@@ -201,6 +203,37 @@ void SClipPropertiesPanel::buildUi()
 
     formLayout->addWidget( playGroup );
 
+    // --- Mix (per-clip volume/pan) ------------------------------------------
+    // Volume is a STATIC dB trim, applied in the audio path (composed with the
+    // `cut:Gain` automation envelope — see ssetclipvolumeaction.h). Pan is
+    // model/serialization/UI only; nothing downstream reads it yet.
+    QGroupBox *mixGroup = mixGroup_ = new QGroupBox( tr( "Mix" ), form );
+    QFormLayout *mixForm = new QFormLayout( mixGroup );
+
+    volumeSpin_ = new QDoubleSpinBox( mixGroup );
+    volumeSpin_->setDecimals( 2 );
+    volumeSpin_->setRange( SSetClipVolumeAction::VOLUME_MIN_DB,
+                           SSetClipVolumeAction::VOLUME_MAX_DB );
+    volumeSpin_->setSingleStep( 0.5 );
+    volumeSpin_->setSuffix( tr( " dB" ) );
+    volumeSpin_->setGroupSeparatorShown( false );
+    volumeSpin_->setToolTip(
+        tr( "Static clip volume trim, in dB. Sums with the clip's cut:Gain "
+            "automation envelope (a dB sum is a product of linear factors)." ) );
+    mixForm->addRow( tr( "Volume:" ), volumeSpin_ );
+
+    panSpin_ = new QDoubleSpinBox( mixGroup );
+    panSpin_->setDecimals( 2 );
+    panSpin_->setRange( -1.0, 1.0 );
+    panSpin_->setSingleStep( 0.1 );
+    panSpin_->setGroupSeparatorShown( false );
+    panSpin_->setToolTip(
+        tr( "-1 = full left, 0 = center, +1 = full right. Model/UI only — "
+            "not yet wired into the audio path." ) );
+    mixForm->addRow( tr( "Pan:" ), panSpin_ );
+
+    formLayout->addWidget( mixGroup );
+
     // --- MIDI clip (proposal 37 P1) ----------------------------------------
     // Shown INSTEAD of the four audio groups when the selection is event
     // material. The window itself (length, slip, loop, rate) is edited through
@@ -294,6 +327,15 @@ void SClipPropertiesPanel::buildUi()
     // interaction, so a refresh can never re-trigger a commit.
     connect( formantCheck_, &QCheckBox::clicked,
              this, &SClipPropertiesPanel::onFormantClicked );
+
+    connect( volumeSpin_, &QDoubleSpinBox::textChanged,
+             this, [this]{ markEdited( volumeSpin_ ); } );
+    connect( volumeSpin_, &QDoubleSpinBox::editingFinished,
+             this, &SClipPropertiesPanel::commitVolume );
+    connect( panSpin_, &QDoubleSpinBox::textChanged,
+             this, [this]{ markEdited( panSpin_ ); } );
+    connect( panSpin_, &QDoubleSpinBox::editingFinished,
+             this, &SClipPropertiesPanel::commitPan );
 
     connect( midiNameEdit_, &QLineEdit::textEdited,
              this, [this]{ markEdited( midiNameEdit_ ); } );
@@ -465,6 +507,7 @@ void SClipPropertiesPanel::refresh()
     clipGroup_->setVisible( true );
     windowGroup_->setVisible( true );
     playGroup_->setVisible( true );
+    mixGroup_->setVisible( true );
     midiGroup_->setVisible( false );
 
     const bool single = ( clips.size() == 1 );
@@ -520,6 +563,7 @@ void SClipPropertiesPanel::refresh()
     QList<qint64> starts, durations, slips, pitches, loops;
     QList<double> stretches;
     QList<bool>   formants;
+    QList<double> volumes, pans;
     bool anyLoop = false;
     for( const ClipRef &c : clips ) {
         names      << c.cut->getSName();
@@ -532,6 +576,8 @@ void SClipPropertiesPanel::refresh()
         loops      << loop;
         if( loop > 0 ) anyLoop = true;
         formants   << c.cut->getPreserveFormants();
+        volumes    << c.cut->getVolume();
+        pans       << c.cut->getPan();
     }
 
     // Name and start time are IDENTITY, not shared quantities: setting them
@@ -548,6 +594,8 @@ void SClipPropertiesPanel::refresh()
     showValues( pitchSpin_,    pitches );
     showValues( loopSpin_,     loops );
     showValues( formantCheck_, formants );
+    showValues( volumeSpin_,   volumes );
+    showValues( panSpin_,      pans );
 
     // The semitone readout mirrors the pitch field, including its blank state.
     bool pitchSame = allEqual( pitches );
@@ -564,7 +612,8 @@ void SClipPropertiesPanel::focusFirstField()
 {
     // First ENABLED editable field, in visual order.
     QList<QWidget*> order{ nameEdit_, startSpin_, durationSpin_, slipSpin_,
-                           stretchSpin_, pitchSpin_, loopSpin_, formantCheck_ };
+                           stretchSpin_, pitchSpin_, loopSpin_, formantCheck_,
+                           volumeSpin_, panSpin_ };
     // isVisibleTo(): the panel itself may not be mapped yet when the dock hands
     // us focus, but the form's own show/hide state is already correct.
     if( !scroll_->isVisibleTo( this ) ) return;
@@ -794,6 +843,38 @@ void SClipPropertiesPanel::onFormantClicked( bool )
     submitComposite( composite );
 }
 
+void SClipPropertiesPanel::commitVolume()
+{
+    if( updating_ ) return;
+    if( !consumeEdited( volumeSpin_ ) ) return;
+    if( volumeSpin_->text().trimmed().isEmpty() ) return;
+
+    const double db = SSetClipVolumeAction::clampVolumeDb( volumeSpin_->value() );
+
+    SCompositeAction *composite = new SCompositeAction;
+    for( const ClipRef &c : collectClips() ) {
+        if( db == c.cut->getVolume() ) continue;
+        composite->append( new SSetClipVolumeAction( c.path, db ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::commitPan()
+{
+    if( updating_ ) return;
+    if( !consumeEdited( panSpin_ ) ) return;
+    if( panSpin_->text().trimmed().isEmpty() ) return;
+
+    const double pan = panSpin_->value();
+
+    SCompositeAction *composite = new SCompositeAction;
+    for( const ClipRef &c : collectClips() ) {
+        if( pan == c.cut->getPan() ) continue;
+        composite->append( new SSetClipPanAction( c.path, pan ) );
+    }
+    submitComposite( composite );
+}
+
 // ---------------------------------------------------------------------------
 // The MIDI page (proposal 37 P1)
 // ---------------------------------------------------------------------------
@@ -837,6 +918,7 @@ void SClipPropertiesPanel::refreshMidi( const QList<MidiClipRef> &clips )
     clipGroup_->setVisible( false );
     windowGroup_->setVisible( false );
     playGroup_->setVisible( false );
+    mixGroup_->setVisible( false );
     midiGroup_->setVisible( true );
 
     const bool single = ( clips.size() == 1 );
