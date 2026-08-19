@@ -1,275 +1,483 @@
-# Proposal 33: Native Plugin Editor GUIs (DRAFT)
+# Proposal 33 v2: Native Plugin Editor GUIs
 
-Follows proposal 08 (plugin hosting). Closes the "Native plugin editor windows"
-deferral listed in `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` §Known deferrals and
-`smaragd/main/pluginui/CONTRACT.md` known debt.
+**Status: DRAFT — v2 supersedes the v1 draft in place.** v1 was written before
+anything had been measured; v2 keeps its layering decision and its milestone
+spine, replaces its risk ranking with numbers from a PoC that has now run, and
+adds the half v1 missed entirely (§5).
 
-## Context
-
-Smaragd hosts CLAP, VST3 and AudioUnit effect plugins (proposal 08, M0–M8 done),
-but the only editor UI is a **generic parameter-slider dialog** (`SPluginParamEditor`).
-Native plugin editor windows are an explicit deferral in
-`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` (§Known deferrals) and in
-`smaragd/main/pluginui/CONTRACT.md` known debt.
-
-Today the state is **detection-only**: every backend reports
-`twPlugin::supportsNativeEditor()` but nothing creates, attaches, sizes or hosts a
-view. There is no view interface on `twPlugin`, no `IPlugFrame`/`IRunLoop`, no
-`clap_host_gui`, and no CocoaUI loader.
-
-**Goal:** let a user double-click a plugin slot and see the plugin's *own* GUI,
-embedded in a host window, resizable both ways, with edits made in the native UI
-actually becoming audible.
-
-**Scope decisions (confirmed with user):**
-- **VST3 vertical slice first** (proves the pattern; most commercial plugins), then
-  CLAP, then AudioUnit.
-- **All three platforms**: Win11 (HWND), macOS (NSView), Linux (X11 — including a
-  VST3 `IRunLoop` host object; Wayland is XWayland-only, native `IWaylandFrame`
-  deferred).
-
-## Design principle
-
-**Host-parents-plugin.** The Qt app creates a native window (`QWidget` with
-`Qt::WA_NativeWindow`), takes its native handle via `winId()` (HWND / `NSView*` /
-X11 `Window`), and hands *that* to the plugin as its parent. The plugin renders
-into our window; we size our container to its reported size and honor its resize
-requests. This is the robust cross-toolkit route (JUCE/Ardour do the same) and
-avoids the focus/reparent quirks of `QWindow::fromWinId + createWindowContainer`.
-
-**Layering / ABI:** the native handle crosses app→engine as an **opaque `void*` +
-enum** — no Qt type enters the engine, no `pluginterfaces/*` type leaves
-`plugins/src/`. `check_layering.py:126` already allows `pluginui → tw/plugins`, so
-no `APP_ENG` edit is needed.
+Closes the "Native plugin editor windows" deferral in
+`plan/todo/08_PLUGIN_HOSTING_EXECUTION.md` §Known deferrals,
+`smaragd/main/pluginui/CONTRACT.md` known debt, and the "no native editor to
+raise a gesture" caveat in `pluginui/CONTRACT.md` inv. 9.
 
 ---
 
-## M1 — Format-neutral editor interface (engine)
+## 1. What this is
 
-New public header **`smaragd/tw303a/plugins/include/tw/plugins/twplugineditor.h`**,
-containing **no** Steinberg/CLAP/AU types.
+Let a user open a plugin's **own** interface — the thing they mean by "open the
+plugin" — embedded in a host window, for **instruments and effects alike**,
+across **VST3, CLAP and AudioUnit** on **Windows 11, macOS and Linux/X11**.
 
-**Decision: a separate `twPluginEditor` object returned by a query, NOT new
-virtuals on `twPlugin`.** Rationale: `twPlugin` stays narrow (the null placeholder
-and every non-GUI plugin carry zero editor weight); the editor has an independent
-lifetime, which makes `reloadPlugin()` clean (destroy editor → ask new instance for
-a fresh one, never re-init in-place on a dangling `this`); and it keeps
-`std::function` resize/edit plumbing and `void*` handles off the core ABI that
-crosses into `app/objects/track`.
+Today the only editor is `SPluginParamEditor`: a scrolling column of generic
+sliders on a fixed 1000-tick normalization. That is a reasonable fallback and a
+poor primary. The measurement that settles how poor:
+
+> **Dexed — a real, installed, third-party VST3 — exposes 2 238 parameters.**
+> `vst3_probe` prints them. The generic editor renders that as 2 238 sliders in
+> a `QScrollArea`, in plugin-declaration order, labelled with the plugin's own
+> terse names (`MASTER TUNE ADJ`, `OSC KEY SYNC`). It is not a usable way to
+> operate an FM synth, and no amount of polishing the slider list makes it one.
+
+### 1.1 The state before this proposal
+
+**Detection-only, and the detection is unread.** All three backends implement
+`twPlugin::supportsNativeEditor()` — `twvst3plugin.cc:173`, `twclapplugin.cc:139`,
+`twauplugin.cc:99` — and **nothing in the app has ever read it**. The single
+reader in the whole tree is `clap_probe.cc:65`, printing `yes`/`no`.
+
+The VST3 backend goes further and already creates a view, at
+`twvst3plugin.cc:396-403`, purely to answer the bool — then releases it. There
+is no view interface on `twPlugin`, no `IPlugFrame`, no `clap_host_gui`, no
+CocoaUI loader, and no native-window code anywhere in `main/` (a repo-wide grep
+for `WA_NativeWindow`, `createWindowContainer`, `QWindow::fromWinId` and
+`winId()` returns **nothing**). This is greenfield.
+
+---
+
+## 2. THE OBVIOUS DESIGN IS WRONG, AND IT IS WRONG ABOUT WHICH HALF IS HARD
+
+The obvious reading of this feature is *"put the plugin's window inside one of
+ours."* That framing survives contact with reality for about a day — the PoC in
+§4 did exactly that, against three real commercial plugins, and it worked on the
+first run.
+
+**A native editor is not a window feature. It is a PARAMETER-FLOW feature.**
+
+When a user turns a knob in the plugin's own GUI, the plugin changes its own
+state and tells the host *afterwards*. That is a model mutation entering the app
+from outside the action system, and every mechanism this codebase relies on to
+make a parameter change audible, undoable, automatable and correct under
+multi-instance mapping is downstream of the action it just bypassed. Concretely,
+in the tree as it stands today:
+
+| # | Fact | Consequence for a naive implementation |
+|---|---|---|
+| 1 | **`twVst3ComponentHandler::performEdit(ParamID, ParamValue)` discards BOTH arguments** (`twvst3host.cc:304-311`; both parameters are unnamed) and sets a bare `edited_` flag | The host never learns *which* parameter moved or *to what* |
+| 2 | **Nothing drains `edited_` or `restart_`.** `takeEditFlag()`/`takeRestartFlag()` (`twvst3host.h:263-264`) have **zero call sites** in the entire repo | Even the bare "something changed" signal is write-only dead state |
+| 3 | **`IEditController::setParamNormalized` never reaches the DSP.** A VST3 parameter reaches audio only as `ProcessData::inputParameterChanges` (`plugins/CONTRACT.md:365-375`) | The knob moves on screen and **the sound does not change** |
+| 4 | **CLAP offers no host GUI extension at all.** `hostGetExtension` (`twclapplugin.cc:305-320`) answers exactly three extensions and `nullptr` for everything else, including `clap.gui` | A CLAP plugin cannot request a resize, a show, a hide, or report a closed window |
+| 5 | **CLAP's `request_flush` / `params_rescan` set atomics nobody reads** (`twclapplugin.cc:337`, `:350`) | Same hole as (2), in the second format |
+| 6 | **A slot may hold N plugin INSTANCES.** `DualMono` instantiates one per channel (`twpluginslotproc.cc:484-491`); the editor can only attach to `instances_[0]` | Instance 0's GUI edits desync channels 1..N−1 — *the plugin sounds different on different channels* |
+| 7 | **A parameter edit is inaudible without `SPluginSlot::notifyPluginEdited()`** (`pluginui/CONTRACT.md` inv. 6): it bumps the param epoch and emits `audioInvalidated()`, which `STrack` turns into `invalidateRenderPath()` | Frozen pages above the slot keep serving the old audio |
+
+So the work is **≈20 % window plumbing and ≈80 % making a plugin's self-edit a
+first-class citizen of the model.** v1 ranked its risks as Linux `IRunLoop` >
+macOS NSView > MinGW/MSVC ABI, and named the parameter path nowhere. That
+ranking is now inverted by measurement: the ABI risk is retired (§4), and the
+parameter path is the whole proposal.
+
+### 2.1 The upside of taking it seriously
+
+Route the plugin's own gestures through the existing action system and three
+things fall out for free, one of which is an open debt:
+
+- **Native GUI edits become UNDOABLE** — v1 explicitly conceded this as "a
+  documented non-undoable gap". It does not have to be one.
+- **DualMono fan-out is automatic**, because `SSetPluginParamAction` already
+  broadcasts to every instance (`ssetpluginparamaction.cpp:79-81`).
+- **`pluginui/CONTRACT.md` inv. 9's punch-in debt closes.** It records that "a
+  plugin's own `ParamGestureBegin/End` reaches the host only inside `process()`,
+  on a worker thread, at freeze time … so the app's slider is the gesture."
+  VST3 `beginEdit`/`endEdit` and CLAP `gui`-driven edits arrive **on the main
+  thread, at gesture time** — which is exactly what `SAutomationRecorder` wants
+  and has never been offered.
+
+---
+
+## 3. Goals and non-goals
+
+**Goals.** Open a plugin's own GUI, embedded, resizable where the plugin allows
+it, HiDPI-correct, for instruments and effects, on all three platforms and all
+three formats; make edits made inside it audible, undoable and automatable;
+degrade to the generic slider editor whenever any of that is unavailable.
+
+**Non-goals, named so they are not silently assumed:**
+
+- **Out-of-process GUI hosting.** A plugin GUI that crashes takes the app with
+  it. Bitwig-style sandboxing is a proposal of its own; scanning is already
+  isolated (`smaragd_pluginprobe`), running is not, and this changes neither.
+- **Plugin delay compensation.** Out of scope since proposal 37 P9 and still
+  out of scope; every mount that shows a latency says so.
+- **Native Wayland.** `iwaylandframe.h` is vendored and unused; Linux is
+  X11/XWayland, stated rather than discovered.
+- **A custom-drawn editor of our own** per plugin. The generic slider editor
+  remains the fallback and is not being replaced.
+- **VST2, LV2.** No backend exists for either.
+
+---
+
+## 4. PoC FINDINGS — measured, on this box, 2026-08-19
+
+The v1 draft called the MinGW-host ↔ MSVC-plugin `IPlugView` seam its
+"riskiest VST3 unknown … unproven". It is now proven. `vst3_probe` gained a
+`--view` step (`plugins/tools/vst3_probe.cc`) that creates a real off-screen
+`HWND` (`WS_POPUP`, never shown), walks
+`createView → setFrame → attached → getSize/canResize/onSize → removed → release`,
+and reports whether the plugin created a child window inside ours and whether it
+called `IPlugFrame::resizeView` back into our vtable.
+
+Build: Qt 6 bundled MinGW g++, x86_64. Plugins: MSVC-built, third-party,
+installed on this machine.
+
+| Plugin | Shape | Params | `attached()` | Child HWND | Size | `canResize` | ScaleSupport | `resizeView` |
+|---|---|---|---|---|---|---|---|---|
+| **Dexed** (instrument) | split ctrl | 2238 | **OK** | **yes** | 866×674 | no | yes | **1 ×** |
+| **NassauEQ** (effect) | single comp | 22 | **OK** | **yes** | 720×340 | no | yes | 0 |
+| **Mangrove** (effect) | single comp | — | **OK** | **yes** | 640×400 | no | yes | 0 |
+| `twtestvst3` Gain / Sine | in-repo fixture | 1 / — | — | — | — | — | — | — |
+
+**What this establishes:**
+
+1. **The GUI ABI crosses the MinGW/MSVC boundary in both directions.** Not just
+   a `kResultOk` return — a **real child `HWND` of the measured size exists
+   inside our window** in all three cases. `attached()` returning OK and the GUI
+   actually being embedded are different claims, and the probe separates them
+   deliberately.
+2. **The reverse leg works.** Dexed called `IPlugFrame::resizeView` **from
+   inside `attached()`**, which our frame answered and forwarded to `onSize`.
+3. **`setFrame` MUST precede `attached()`, and that is now a measured rule
+   rather than a stylistic preference.** Dexed's only resize request arrives
+   during `attached()`; with the frame installed afterwards it would have been
+   silently dropped — no error, no log, just a plugin sized wrong forever.
+4. **The negative control holds.** Both `twtestvst3` classes return `nullptr`
+   from `createView`, so the "plugin has no editor → fall back to sliders" path
+   is exercised by the fixture, and (per §9) will stay exercisable after the
+   fixture grows a view on one class only.
+5. **HiDPI is offered by everything.** All three answered
+   `IPlugViewContentScaleSupport`; none refused `setContentScaleFactor(1.0)`.
+
+**What it does NOT establish, and must not be read as establishing:**
+
+- **Host-driven resize is untested against a real plugin** — all three report
+  `canResize -> no`, so `checkSizeConstraint`/`onSize` ran only on the ones that
+  declined. A resizable plugin (Surge XT, Vital) is needed and is not installed
+  here.
+- **No parameter edit was ever observed**, because nobody turned a knob: the
+  handler counted **0 edits** on every run. §2's entire argument is from code
+  reading, and the first thing M2 must do is watch `performEdit` fire.
+- **Nothing was rendered to the screen.** The window is `WS_POPUP` and hidden;
+  paint, focus, keyboard and mouse are all untested.
+- **macOS and Linux are untouched.** The probe compiles the non-Windows branch
+  to a stub that says so.
+- One box, one compiler, three plugins, all built with the same vendor SDK
+  version. That is a data point, not a survey.
+
+---
+
+## 5. The interface
+
+New public header **`tw303a/plugins/include/tw/plugins/twplugineditor.h`**
+— written, and in the branch. It contains **no** Steinberg, CLAP, AppKit or Qt
+type, because `plugins/CONTRACT.md` inv. 4 forbids a public header whose shape
+changes with `TW_HAVE_VST3` / `TW_HAVE_CLAP` / `TW_HAVE_AU` (ODR/ABI skew
+between `tw_plugins` and its consumers).
+
+**A separate `twPluginEditor` object, obtained by a query — not new virtuals on
+`twPlugin`.** `twPlugin` stays narrow, as its own comment demands ("format-specific
+behavior (native editor, note input) lives behind capability-queried extension
+interfaces", `twplugin.h:25-26`); the null placeholder and every GUI-less plugin
+carry zero editor weight; and the editor gets an independent lifetime, which is
+what makes `reloadPlugin()` clean — destroy the editor, ask the *new* instance
+for a fresh one, never re-initialise in place on a dangling `this`.
 
 ```cpp
-namespace audio {
-enum class twEditorPlatform { HWND, NSView, X11 };  // void* is HWND / NSView* / (Window)uintptr_t
-struct twEditorSize { int width = 0, height = 0; };
+enum class twEditorApi : std::uint8_t { None, Win32Hwnd, MacNSView, X11Window };
+struct twEditorHandle { twEditorApi api; void *handle; bool valid() const; };
+struct twEditorSize   { int width, height; bool valid() const; };
+
+struct twEditorCaps { bool embeddable, floating, resizable, scalable, needsRunLoop; };
+
+enum class twEditorGesture : std::uint8_t { Begin, Change, End };
+struct twEditorParamEdit { std::uint32_t paramId; double value; twEditorGesture phase; };
+
+struct twEditorFeedback {          // drained by poll(), cleared as it is filled
+    bool resized;  twEditorSize newSize;   // coalesced: last size only
+    bool restartRequested;                 // param list / IO / latency changed
+    bool closeRequested;                   // plugin asked to be hidden
+    std::vector<twEditorParamEdit> edits;  // ordered, gesture-bracketed
+};
 
 class twPluginEditor {
-public:
-    virtual ~twPluginEditor() = default;                 // detaches
-    virtual twEditorPlatform platform() const = 0;
-    virtual bool attach( void *parent ) = 0;             // false => host falls back to sliders
-    virtual void detach() = 0;                            // idempotent
-    virtual twEditorSize size() const = 0;               // preferred size, valid post-attach
-    virtual bool setScale( double s ) { (void)s; return false; }
-    virtual bool canResize() const { return false; }
-    virtual twEditorSize constrainSize( twEditorSize p ) { return p; }  // VST3 checkSizeConstraint
-    virtual bool setSize( twEditorSize s ) { (void)s; return false; }   // host-driven (onSize)
-    using ResizeCb = std::function<void(twEditorSize)>;
-    virtual void setResizeCallback( ResizeCb cb ) = 0;   // plugin-initiated resize (UI thread)
-    virtual bool pollEdited()  = 0;                       // main-thread drain of "plugin changed its own params"
-    virtual bool pollRestart() { return false; }          // plugin asked for restart / param-list rescan
+    virtual ~twPluginEditor();                 // MUST detach(); before the plugin dies
+    virtual twEditorCaps caps() const = 0;
+    virtual twEditorApi  api()  const = 0;
+    virtual bool attach( const twEditorHandle &parent ) = 0;   // false => sliders
+    virtual void detach() = 0;                                 // idempotent
+    virtual twEditorSize size() const = 0;
+    virtual twEditorSize constrain( twEditorSize ) const;
+    virtual bool setSize( twEditorSize );
+    virtual bool setScale( double );
+    virtual twEditorFeedback poll() = 0;       // main thread, ~30 Hz, never blocks
+    virtual void setRunLoopSink( twEditorRunLoopSink * );      // X11 only
+    virtual void onFdReady( int );
+    virtual void onTimer( std::uint64_t );
 };
-}
 ```
 
-Add exactly one virtual to **`twplugin.h`** (forward-declare `class twPluginEditor;`,
-keep the narrow include set):
+plus exactly one defaulted virtual on `twPlugin` (forward-declaring the class,
+keeping the narrow include set):
 
 ```cpp
-virtual std::unique_ptr<twPluginEditor> createEditor() { return nullptr; } // UI thread only
+virtual std::unique_ptr<twPluginEditor> createEditor() { return nullptr; }  // UI thread
 ```
 
 `supportsNativeEditor()` stays as the cheap probe the FX strip uses to decide
-*which* editor to open. `pollEdited()` is a **poll**, not a push, because plugins
-fire edits from their own UI thread — reaching Qt from there is the hazard
-`twvst3host.h` already documents (atomic flag set by plugin thread, drained by main
-thread).
+*which* editor to open, so no existing caller changes.
+
+### 5.1 Three decisions inside that header worth defending
+
+**`twEditorSize` is always PHYSICAL PIXELS.** Imposed by this ABI, not
+inherited. The VST3 SDK states the asymmetry outright
+(`pluginterfaces/gui/iplugview.h:98-100`):
+
+> on macOS (`kPlatformTypeNSView`), the coordinates are expressed in **logical
+> units** …, whereas on Windows (`kPlatformTypeHWND`) and Linux
+> (`kPlatformTypeX11EmbedWindowID`), the coordinates are expressed in **physical
+> units (pixels)**.
+
+A host that passes both through unconverted embeds correctly at 100 % on every
+platform and is wrong by the scale factor on a Retina Mac — the classic
+embedding bug, and one that never appears on the developer's own monitor. One
+rule, converted in the macOS backend, divided by `devicePixelRatio` once in the
+Qt widget.
+
+**Feedback is POLLED, never pushed.** Plugins fire edits from their own UI
+thread, and this codebase's hardest-won rule is that a non-Qt thread must never
+reach Qt — Qt adopts the thread and deadlocks the join at teardown (CLAUDE.md,
+"No Qt on audio thread"; `twclapplugin.cc:273-276` states the engine-side twin).
+The backend records; a main-thread `QTimer` drains.
+
+**Gestures are in the ABI, not just values.** `Begin`/`Change`/`End` is what
+lets one gesture become one undo entry and one automation punch-in. A
+value-only stream could not distinguish a drag from thirty separate edits.
 
 ---
 
-## M2 — VST3 backend (the vertical slice)
+## 6. Threading and lifetime
 
-New unit **`smaragd/tw303a/plugins/src/twvst3editor.{h,cc}`** implementing
-`twPluginEditor` over a **retained** `IPlugView`. New host objects in
-**`twvst3host.{h,cc}`**: `twVst3PlugFrame`, and Linux-only `twVst3RunLoop`.
+Every method on every type in the header is **main-thread only**, and all three
+formats independently require it (CLAP annotates `clap_plugin_gui`
+`[main-thread]`; VST3's `IPlugView` is UI-thread; an AU Cocoa view is AppKit).
 
-1. **Retain the view.** Today `twvst3plugin.cc:362-365` does
-   `createView(kEditor)→release` purely to set `hasGui_`. Add
-   `twVst3Plugin::createEditor()` that retains the `IPlugView*` and wraps it in
-   `twVst3Editor` (guard against a second editor per instance).
-2. **`twVst3Editor`** maps the interface onto the view:
-   - `attach(parent)`: `view_->setFrame(&frame_)` then
-     `view_->attached(parent, platformType())`.
-   - `platformType()`: `kPlatformTypeHWND` (Win) / `kPlatformTypeNSView` (mac) /
-     `kPlatformTypeX11EmbedWindowID` (Linux); mirrored by `platform()`.
-   - `size()`←`getSize`; `canResize()`←`canResize`;
-     `constrainSize()`←`checkSizeConstraint`; `setSize()`←`onSize`;
-     `setScale()`← `IPlugViewContentScaleSupport::setContentScaleFactor`.
-   - `detach()`: `setFrame(nullptr); removed();` (idempotent).
-   - `pollEdited()` forwards the existing `twVst3ComponentHandler` `edited_` flag
-     (set in `performEdit`, `twvst3host.h:262`) — this is the Inv-6 wire.
-3. **`twVst3PlugFrame`** (borrowed-refcount, like existing host objects):
-   `resizeView(view, rect)` stashes size + invokes the `ResizeCb` on the main
-   thread. On **Linux**, its `queryInterface` also returns the `IRunLoop*`.
-4. **Linux `twVst3RunLoop`**: implements
-   `register/unregisterEventHandler(IEventHandler*, fd)` and
-   `register/unregisterTimer(ITimerHandler*, ms)` as a pure registry — it does
-   **not** own a loop. The Qt bridge (M3) drives it. Comment that Wayland relies on
-   XWayland + Qt xcb; native `iwaylandframe.h` is future work.
-5. **IIDs in `twvst3iids.cc`** (the SDK ships none — a missing one is a link-time
-   undefined symbol at first reference): `DEF_CLASS_IID` for `IPlugView`,
-   `IPlugFrame`, `IPlugViewContentScaleSupport`, and Linux-guarded `Linux::IRunLoop`,
-   `Linux::IEventHandler`, `Linux::ITimerHandler`. GUI headers
-   (`pluginterfaces/gui/iplugview.h`, `iplugviewcontentscalesupport.h`) are already
-   vendored/mirrored.
+**There is no main-thread guard in this engine.** `twRtThreadGuard`
+(`tw/graph/tw_freeze_context.h:74-148`) distinguishes `Rt` / `Live` / none — an
+ordinary worker and the Qt main thread are both `Kind::None`. M1 adds
+`Kind::Main` + `markMainThread()` / `onMainThread()` to that existing class
+rather than introducing a second guard that can drift from it (its own comment:
+"Hence one policy per thread and ONE check"), keeping the POD-`thread_local`
+discipline that MinGW's heap corruption bug forces. Editor entry points assert
+on it and bump a process-wide refusal counter, mirroring
+`twPluginSlotProcessor::liveOwnedRefusals()`.
 
-**Riskiest VST3 unknown:** the app is MinGW, plugins are MSVC DLLs. `vst3_probe`
-already proved the COM vtable ABI for the *audio* interfaces; `IPlugView`/
-`IPlugFrame` are the same shape, so risk is moderate — but a MinGW-Qt `winId()` HWND
-handed to `attached()` on an MSVC plugin is the specific thing to smoke-test first.
+**Teardown order is the sharp edge**, and it differs per format only in the
+detail. Universally: `detach()` → release the view → destroy the editor →
+*then* the plugin may die.
 
----
+- **VST3**: the view must be `removed()` and released **before**
+  `controller_->setComponentHandler(nullptr)` at `twvst3plugin.cc:433`, i.e. a
+  new step at the very top of `teardown()`. `module_.reset()` at `:448` unloads
+  the DSO; a leaked view is a use-after-unload.
+- **CLAP**: `gui->destroy()` must precede `plugin_->destroy()`
+  (`twclapplugin.cc:598-607`) **and must be on the main thread** — while
+  `~twClapPlugin` today may run from whichever thread rebuilds the slot
+  (`twpluginslotproc.cc:394` clears `instances_` under `mutex_`). **This is the
+  single biggest lifetime hazard in the proposal**: the app must guarantee the
+  editor is gone before any rebuild can start, and M1's main-thread assert is
+  what makes a violation loud instead of a rare crash on a user's machine.
+- **AU**: the Cocoa view must be released before `AudioComponentInstanceDispose`
+  (`twauplugin.cc:228-237`).
 
-## M3 — Qt host window (app/pluginui)
-
-New module-private widget **`smaragd/main/pluginui/src/spluginnativeeditor.{h,cpp}`**
-(`.cpp`, never `.mm`) owning the native container and the `twPluginEditor` lifetime.
-
-- Reuse the slot-keyed pattern from `splugineffectstrip.cpp:349` (`ensureParamEditor`).
-  Add a sibling map `QHash<SPluginSlot*, QPointer<QDialog>> nativeEditors_`.
-- Inner container `QWidget` gets `setAttribute(Qt::WA_NativeWindow)`; take
-  `container->winId()` (HWND / `reinterpret_cast<NSView*>(winId())` / X11 `Window`).
-- `showEvent`: `editor->setResizeCallback(...)`, `editor->attach(handle)`, size
-  container to `editor->size()`. `closeEvent`/dtor: `editor->detach()` **then**
-  destroy the editor (Steinberg `removed()` must precede release).
-- **Resize both ways:** plugin→host via `ResizeCb` (resize the dialog); host→plugin
-  only if `canResize()` — intercept `resizeEvent`, run `constrainSize()` then
-  `setSize()`.
-- **Inv 6 (central hazard):** a `QTimer` (~30 ms) while open calls
-  `editor->pollEdited()`; if true, resolve the slot and call
-  `SPluginSlot::notifyPluginEdited()` (bumps epoch, invalidates upward, emits
-  `paramsChanged`). `pollRestart()` → param re-read. **Documented gap:** a native
-  edit bypasses `SSetPluginParamAction`, so it is **not undoable** — call this out in
-  code comments and a new `pluginui/CONTRACT.md` invariant. The slider editor stays
-  the undoable path.
-- **Lifecycle (Inv 5/7), wired like the existing editor:** close on
-  `slot::destroyed` (`splugineffectstrip.cpp:376`); on `SPluginSlot::pluginReloaded`
-  (`:292`) `detach()` + destroy + recreate from the new `livePlugin()` (old
-  `IPlugView` controller is now dangling); re-point on `rebuildUI()` (`:296-304`).
-- **Branch point** in `ensureParamEditor`/`openParamEditor`: when
-  `livePlugin()->supportsNativeEditor()` and the backend supports embedding, open the
-  native window; if `createEditor()` returns null or `attach()` fails, **fall back to
-  the slider editor**. Reach the instance via
-  `slot->getProcessor()->plugin()` (bus-0 representative, matching
-  `spluginparamereditor.cpp:59-66`).
-- **Linux IRunLoop bridge lives here:** the widget builds `QSocketNotifier`s (per
-  registered fd → `IEventHandler::onFDIsSet`) and `QTimer`s
-  (→ `ITimerHandler::onTimer`) from the `twVst3RunLoop` registration list. The
-  engine-side run-loop object stays Qt-free.
+**Instance rebuilds invalidate an open editor.** `setFactory()` /
+`setChannelCount()` destroy and recreate every `twPlugin` (`plugins/CONTRACT.md`
+inv. 18). The app closes the native window on `SPluginSlot::pluginReloaded` and
+re-creates it from the new instance, exactly as `SPluginParamEditor::onPluginReloaded`
+already rebuilds its sliders.
 
 ---
 
-## M4 — CLAP (after VST3 proven)
+## 7. Format mapping
 
-- `twClapPlugin::createEditor()`: store `extGui_ = get_extension(CLAP_EXT_GUI)`
-  (today `twclapplugin.cc:306` only tests presence).
-- **Offer `clap_host_gui`:** `hostGetExtension` (`twclapplugin.cc:186-191`) returns
-  nullptr for everything — add a `CLAP_EXT_GUI` branch returning a static
-  `clap_host_gui_t` with `resize_hints_changed`, `request_resize` (atomic size+flag
-  drained by the M3 timer), `request_show`, `request_hide`.
-- `attach()`: `gui->create(plugin, api, /*floating=*/false)` with api =
-  `CLAP_WINDOW_API_WIN32`/`COCOA`/`X11`, then `set_scale`/`get_size`/`can_resize`/
-  `set_parent(clap_window{...handle})`/`show`. `detach()`: `hide(); destroy()`.
-- Edit hazard: offer `clap_host_params` / act on `request_flush` (drop-today at
-  `twclapplugin.cc:228`) to set the edited flag → same `pollEdited()` path.
+One column per format; the interface is the same in each.
 
-## M5 — AudioUnit (macOS only, after CLAP)
+| `twPluginEditor` | VST3 | CLAP | AudioUnit |
+|---|---|---|---|
+| `createEditor()` | `controller_->createView(kEditor)`, **retained** (today `twvst3plugin.cc:400` creates and releases) | cache `extGui_ = get_extension(CLAP_EXT_GUI)` (today `twclapplugin.cc:564` tests presence and drops the pointer) | `kAudioUnitProperty_CocoaUI` → `AudioUnitCocoaViewInfo` → factory bundle → `AUCocoaUIBase` (today `twauplugin.cc:404-411` only calls `GetPropertyInfo`) |
+| `attach(parent)` | `setFrame(&frame_)` **then** `attached(h, kPlatformType*)` — order measured, §4.3 | `create(p, api, floating=false)` → `set_scale` → `set_parent` → `show` | `[(NSView*)parent addSubview:auView]` |
+| `detach()` | `setFrame(nullptr); removed();` | `hide(); destroy();` | `[auView removeFromSuperview]` |
+| `size()` | `getSize` (physical px) | `get_size` | `[view frame]` × scale → physical |
+| `resizable` / `setSize` | `canResize` / `checkSizeConstraint` + `onSize` | `can_resize` / `adjust_size` + `set_size` | `NSView` autoresize |
+| `scalable` / `setScale` | `IPlugViewContentScaleSupport` | `gui->set_scale` | n/a (AppKit handles it) |
+| `floating` | never | `create(..., floating=true)` — the only format with the concept | never |
+| **edits → `poll()`** | `IComponentHandler::begin/perform/endEdit` — **must start carrying `(id,value)`** | `clap_host_params::rescan` + a `clap.gui` host ext | `AudioUnitAddPropertyListener` / parameter listener |
+| **resize ← plugin** | `IPlugFrame::resizeView` | `clap_host_gui::request_resize` | view frame notification |
+| run loop | X11 `Linux::IRunLoop` | X11 fd/timer via host ext | n/a |
 
-- `twauplugin.cc` is plain C and cannot touch AppKit. Add a sibling Obj-C++ file
-  **`smaragd/tw303a/plugins/src/twaupluginview.mm`** exposing a C-callable factory:
-  read `kAudioUnitProperty_CocoaUI` (extend `readGui`, `twauplugin.cc:268-275`) →
-  `AudioUnitCocoaViewInfo` → load the factory bundle → instantiate the `NSView` via
-  `AUCocoaUIBase` → wrap in `twAuEditor : twPluginEditor` (`platform()==NSView`,
-  `attach()` does `[(NSView*)parent addSubview:auView]`).
-- Edit hazard: `AudioUnitAddPropertyListener` / parameter listener sets the atomic
-  flag → `pollEdited()`.
-- macOS-only compile; `platform()` always `NSView`.
+**CLAP's host-side extension must be implemented before it is advertised.**
+`twclapplugin.cc:307-309` states the rule the backend already lives by:
+"Claiming an extension we answer with nothing useful is how a plugin ends up in
+a state the host never leaves." `clap.gui` gets added to `hostGetExtension` in
+the same commit that implements all four of its callbacks, never before. The
+same discipline applies to VST3's `isPlugInterfaceSupported` whitelist
+(`twvst3host.cc:224-246`), which must not name `IPlugFrame` until the frame
+exists — some plugins branch on that answer during `initialize()`.
 
 ---
 
-## Build / layering / threading
+## 8. Platform mapping
 
-- **CMake `smaragd/tw303a/CMakeLists.txt`:** add `twvst3editor.{h,cc}` to
-  `tw_plugins` sources; VST3 GUI headers already mirrored (the `file(COPY … gui …)`
-  step). Linux: `find_package(X11)` + link `X11` under the existing `SMARAGD_LINUX`
-  block (next to `dl`). AU (M5): add `twaupluginview.mm` to the `TW_HAVE_AU` block,
-  link `Cocoa`/`AppKit` (mirror `coreaudio_input.mm`). No new submodule.
-- **Layering:** no `APP_ENG` edit (`pluginui → tw/plugins` already allowed,
-  `check_layering.py:126`). Keep the AU `.mm` in the **engine** tree (its `.mm` is
-  scanned) and the Qt native-editor widget as **`.cpp`** in the app tree (the app
-  walk skips `.mm`). Verify no `app/*` header enters `twvst3editor` and no
-  `pluginterfaces/*` enters any `plugins/include/` header.
-- **Threading invariants** (write into `twplugineditor.h` + a new
-  `pluginui/CONTRACT.md` invariant): every `twPluginEditor` method is UI/main-thread
-  only; plugin-thread edit/restart signals are atomic flags drained by the host
-  `QTimer` (never call Qt/graph from a plugin callback); `notifyPluginEdited()` is
-  the mandatory Inv-6 wire and is a documented non-undoable gap; teardown order is
-  `detach()` → release view → destroy editor, and recreate on `pluginReloaded`.
+| | Windows 11 | macOS | Linux / X11 |
+|---|---|---|---|
+| Handle | `HWND` from `QWidget::winId()` | `NSView*` from `winId()` | X11 `Window` from `winId()` |
+| Container | `QWidget` + `Qt::WA_NativeWindow` | same | same |
+| Size units | physical px | **logical** → converted in backend | physical px |
+| Run loop | Qt pumps; nothing extra | Qt pumps; nothing extra | **`IRunLoop` bridge required** |
+| Risk | **retired by §4** | untested; layer-backed views can render blank or steal first responder | untested; highest remaining risk |
+| Wayland | — | — | XWayland only, by design |
 
-## Verification
+**Host-parents-plugin**, via `QWidget` with `Qt::WA_NativeWindow` and `winId()`
+— not `QWindow::fromWinId` + `createWindowContainer`, which has focus and
+reparenting quirks. JUCE and Ardour both do it this way, and §4 confirms it
+works.
 
-Native windows are hard to fully automate; combine a headless seam with manual passes.
+**The Linux run loop is now the riskiest thing in the proposal.** A VST3 plugin
+on X11 gets no event loop of its own; it registers fds and timers through
+`IRunLoop` and expects callbacks. The engine keeps a **registry only**
+(`twEditorRunLoopSink`, already in the header) and stays Qt-free; the app
+bridges each registration to a `QSocketNotifier` or `QTimer`. A plugin that
+repaints only on `onFDIsSet` freezes solid if that bridge is wrong, and nothing
+in this repo has ever exercised it.
 
-1. `python tools/check_layering.py` and `tools/check_logging.py` — clean.
-2. **Headless gate (most valuable):** extend the in-repo fixture
-   `plugins/tests/twtestvst3.cpp` with a minimal `IEditController::createView` /
-   `IPlugView`. Add a testkit verb (mirroring the `editorSetParam` /
-   `showWindow=false` trick at `splugineffectstrip.cpp:391`) that calls
-   `createEditor()`, `attach()` into an **offscreen** `QWidget` (never shown), and
-   asserts non-null + `size()>0` + that driving a param makes `pollEdited()` fire
-   `notifyPluginEdited()`. Runs on CI.
-3. `ctest -R "plugins_test|plugins_scan_test"` and the plugin qxa cases stay green
-   (the editor path must not perturb the audio/serialization layers).
-4. **Manual, per platform** (needs a real installed VST3, e.g. Surge XT / Vital):
-   double-click a slot → native GUI appears embedded → move a knob in the native UI →
-   hear the change (Inv-6) → resize both ways → `reloadPlugin` while open → close →
-   remove slot while open. Specifically:
-   - **Win11:** MinGW app ↔ MSVC-plugin HWND embed + resize (riskiest VST3 ABI point).
-   - **macOS:** NSView-into-QWidget — verify focus/first-responder and Retina scale
-     (classic failure: layer-backed AppKit view renders blank or steals focus).
-   - **Linux/X11:** fd-driven `IRunLoop` repaint works (a plugin that repaints only on
-     `onFDIsSet` freezes if the `QSocketNotifier` bridge is wrong); verify under
-     XWayland too.
+---
 
-## Riskiest unknowns (ranked)
+## 9. Milestones
 
-1. **Linux `IRunLoop` ↔ Qt** — no existing code exercises this; a wrong
-   `QSocketNotifier` bridge = frozen plugin GUI.
-2. **macOS NSView-in-QWidget** — layer-backed views inside Qt's native window can
-   render blank / steal first responder.
-3. **MinGW ↔ MSVC `IPlugView` vtable** — de-risked for audio by `vst3_probe`, but
-   `attached(HWND)` across the toolchain split is unproven.
-4. **Wayland** — XWayland-only by design; native `IWaylandFrame` deferred.
+Ordered so the parameter path (§2, the hard half) is proven on the format the
+PoC already de-risked, before any second format or platform is attempted.
 
-## Critical files
+| M | What | Gate |
+|---|---|---|
+| **M0** | ✅ **DONE** — `vst3_probe --view`, GUI IIDs in `twvst3iids.cc`, §4's numbers | 3/3 third-party plugins embed |
+| **M1** | The ABI: `twplugineditor.h` (✅ written), `twPlugin::createEditor()`, `twRtThreadGuard::Kind::Main` | compiles; `check_layering`; no format type in any public header |
+| **M2** | **The VST3 parameter path** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket gestures, a drained queue, `restartComponent` flags kept. **Watch a real knob move real audio.** | `twtestvst3` fixture emits an edit on command; `plugins_test` asserts the queue |
+| **M3** | VST3 `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI | headless: `createEditor` → `attach` into an offscreen HWND → `poll` |
+| **M4** | The Qt host window (`main/pluginui/src/spluginnativeeditor.{h,cpp}`), lifetime, fallback, **and §10's ownership fix** | qxa case; the strip's track-switch behaviour |
+| **M5** | Edits → `SSetPluginParamAction` + `SAutomationRecorder` punch-in; DualMono fan-out | undo of a native gesture; `pluginui/CONTRACT.md` inv. 9 rewritten |
+| **M6** | CLAP: `extGui_`, the `clap.gui` host extension (all four callbacks), floating fallback | `twtestclap` gains a GUI entry point |
+| **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
+| **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |
 
-- `smaragd/tw303a/plugins/include/tw/plugins/twplugin.h` — add `createEditor()`, fwd-declare `twPluginEditor`
-- **new** `smaragd/tw303a/plugins/include/tw/plugins/twplugineditor.h` — the interface
-- **new** `smaragd/tw303a/plugins/src/twvst3editor.{h,cc}` — VST3 `twPluginEditor`
-- `smaragd/tw303a/plugins/src/twvst3host.{h,cc}` — `twVst3PlugFrame`, Linux `twVst3RunLoop`
-- `smaragd/tw303a/plugins/src/twvst3iids.cc` — IID defs for the GUI interfaces
-- `smaragd/tw303a/plugins/src/twvst3plugin.cc:362` — retain view in `createEditor()`
-- **new** `smaragd/main/pluginui/src/spluginnativeeditor.{h,cpp}` — Qt host window
-- `smaragd/main/pluginui/src/splugineffectstrip.cpp:349` — native-editor branch + lifecycle
-- `smaragd/main/objects/track/src/spluginslot.cpp` — `notifyPluginEdited()` is the Inv-6 endpoint
-- M4/M5 new: `plugins/src/twclapplugin.cc` (clap_host_gui), `plugins/src/twaupluginview.mm`
-- Build: `smaragd/tw303a/CMakeLists.txt`; docs: `smaragd/main/pluginui/CONTRACT.md`, `plan/todo/08_PLUGIN_HOSTING_EXECUTION.md`
+M0's code is in the branch. M1's header is in the branch. Everything from M2 is
+unwritten.
+
+---
+
+## 10. The app half, and a constraint v1 missed
+
+**`STrackDetailPanel::rebuildUI()` deletes the whole FX strip on every track
+switch** (`strackdetailpanel.cpp:162`, `delete pluginStrip_;`), and
+`SPluginEffectStrip::ensureParamEditor` parents its editor dialogs to the strip
+(`splugineffectstrip.cpp:509`, `new QDialog(this)`). So **every open editor
+window is destroyed when the user selects another track.**
+
+That is tolerable for a slider list. It is not tolerable for a native GUI: every
+DAW keeps plugin windows open across selection changes, and a user who loses
+their synth's editor by clicking a different lane will read it as a crash.
+Native editor windows therefore need an owner that outlives the strip — the
+shell — with the strip merely *requesting* one. The registry keeps
+`splugineffectstrip.cpp`'s proven shape (keyed by `SPluginSlot*`, `QPointer`,
+`WA_DeleteOnClose`, closed on `slot::destroyed`, re-pointed on `rebuildUI()`)
+and simply moves up a layer.
+
+Two more app-side rules, both from existing precedent:
+
+- **Never create a native window eagerly.** The testkit builds a **parentless,
+  never-shown** strip (`spluginuitestactions.cpp:39-44`), and every qxa case
+  runs under `QT_QPA_PLATFORM=offscreen`. Follow the existing
+  `showWindow=false` split (`splugineffectstrip.cpp:539-546`) or the suite starts
+  opening plugin GUIs.
+- **The model layer must not grow a widget factory.**
+  `SPluginSlot::getDetailEditWidget()` deliberately returns nullptr
+  (`spluginslot.cpp:263-273`) because `objects/track` is `app_objects` and
+  `pluginui` is `app_ui`. The slot exposes the plugin; the window lives in
+  `pluginui`. `check_layering.py:269` already permits `pluginui → tw/plugins`,
+  so **no layering edit is needed.**
+
+---
+
+## 11. Verification
+
+Native windows resist automation, so the strategy is a real headless seam plus
+an honest manual runbook — the shape `docs/ASIO_WINDOWS_GATE.md` and
+`docs/MEDIA_BROWSER_MANUAL_GATE.md` already established.
+
+**Headless (CI-able, and the valuable part).** Extend `twtestvst3.cpp` with a
+minimal `TestView : IPlugView` on **`TestGain` only** (`:414`), leaving
+`TestSineController::createView` (`:605`) returning `nullptr`. That asymmetry is
+deliberate: one plugin with an editor and one without, single-component and
+split, covering both branches. The fixture needs `DEF_CLASS_IID(IPlugView)` in
+its **own** block (`:56-68`) — a module and its host do not share IID
+definitions. A view that records `attached()` and succeeds **without creating a
+real window** keeps the gate runnable where there is no display. Add a testkit
+verb that opens the editor into an offscreen `QWidget`, asserts non-null +
+`size() > 0`, drives a parameter from the fixture and asserts that `poll()`
+reports it and that `notifyPluginEdited()` fired.
+
+**Existing gates that must stay green**, unchanged: `plugins_test`,
+`plugins_scan_test`, every `plugin_*.qxa` case, and both render goldens. This
+feature must not perturb one byte of audio — an editor that is never opened must
+cost nothing.
+
+**Manual, per platform** (needs a real installed plugin, and for resize
+specifically one that *is* resizable — Surge XT or Vital; nothing installed here
+qualifies): open → knob moves audio → **undo restores it** → resize both ways →
+`reloadPlugin` while open → switch tracks while open (§10) → remove the slot
+while open → close.
+
+**What will NOT be gated, stated up front:** pixels of any plugin's GUI; focus
+and keyboard routing; real-plugin resize behaviour; crash isolation (there is
+none); macOS Retina scaling and Linux `IRunLoop` (manual only, and per §4 both
+platforms are currently at zero coverage); and any claim that N plugins working
+implies N+1 will.
+
+---
+
+## 12. Critical files
+
+| File | Change |
+|---|---|
+| `tw303a/plugins/include/tw/plugins/twplugineditor.h` | **new — written** |
+| `tw303a/plugins/include/tw/plugins/twplugin.h` | `+createEditor()`, fwd-decl |
+| `tw303a/plugins/src/twvst3iids.cc` | **done** — `IPlugView`/`IPlugFrame`/`IPlugViewContentScaleSupport` (root `Steinberg` ns, **not** `Vst::`) |
+| `tw303a/plugins/tools/vst3_probe.cc` | **done** — `--view` |
+| `tw303a/plugins/src/twvst3host.{h,cc}` | `twVst3PlugFrame`; `performEdit` must carry `(id,value)`; `IPlugFrame` into the support whitelist |
+| `tw303a/plugins/src/twvst3editor.{h,cc}` | new — VST3 backend |
+| `tw303a/plugins/src/twvst3plugin.cc` | retain the view; release it at the top of `teardown()` |
+| `tw303a/plugins/src/twclapplugin.cc` | `extGui_`; `clap.gui` host ext; main-thread `gui->destroy` before `plugin_->destroy` |
+| `tw303a/plugins/src/twaupluginview.mm` | new — macOS only |
+| `tw303a/graph/include/tw/graph/tw_freeze_context.h` | `Kind::Main` |
+| `main/pluginui/src/spluginnativeeditor.{h,cpp}` | new — Qt host window |
+| `main/pluginui/src/splugineffectstrip.cpp` | native branch + fallback |
+| `main/shell/` | the window registry (§10) |
+| `tw303a/CMakeLists.txt` | **no change for VST3 GUI** — `gui` is already mirrored at `:314`. AU needs `.mm` + AppKit; Linux needs X11 |
+
+---
+
+## 13. Open questions for the requester
+
+1. **Floating windows.** CLAP can let a plugin own its own top-level window. Do
+   we offer it as a fallback when embedding fails, or refuse and use sliders?
+2. **Window state persistence.** Should an open editor's position/size, or the
+   fact it was open, be saved with the project?
+3. **Generic editor alongside.** Keep a way to reach the slider list even when a
+   native GUI exists (a right-click item)? It is the only way to see a parameter
+   the plugin's own GUI does not expose, and the only undo-safe path until M5.

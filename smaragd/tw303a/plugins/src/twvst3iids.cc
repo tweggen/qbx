@@ -37,6 +37,8 @@
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstnoteexpression.h"
+#include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 
 namespace Steinberg {
 
@@ -72,5 +74,21 @@ DEF_CLASS_IID( Vst::IParamValueQueue )
 DEF_CLASS_IID( Vst::IEventList )
 DEF_CLASS_IID( Vst::IMidiMapping )
 DEF_CLASS_IID( Vst::INoteExpressionController )
+
+// --- native editor GUI (proposal 33) ----------------------------------------
+// NOTE THE NAMESPACE: unlike every entry above, these live in the ROOT Steinberg
+// namespace, not in Vst::. Spelling one of them `Vst::IPlugView` compiles (the
+// name resolves outward) and then defines the IID of a DIFFERENT symbol than the
+// one `queryInterface` compares against, which is a link error at best and a
+// silent kNoInterface at worst.
+//
+// IPlugView is ours to query on the controller; IPlugFrame is the reverse leg —
+// the PLUGIN queries it on the frame we hand to setFrame(), so a missing
+// definition here makes every plugin-initiated resize fail. The content-scale
+// interface is the HiDPI leg on Windows, where IPlugView coordinates are
+// PHYSICAL pixels (iplugview.h:98-100).
+DEF_CLASS_IID( IPlugView )
+DEF_CLASS_IID( IPlugFrame )
+DEF_CLASS_IID( IPlugViewContentScaleSupport )
 
 }  // namespace Steinberg

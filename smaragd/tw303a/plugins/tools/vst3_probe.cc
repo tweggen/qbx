@@ -51,6 +51,8 @@
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstpluginterfacesupport.h"
 #include "pluginterfaces/vst/vstspeaker.h"
+#include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -307,6 +309,43 @@ public:
         (void)_iid;
         return kResultFalse;
     }
+};
+
+// --- IPlugFrame: the reverse leg of the GUI ABI (proposal 33 PoC) -------------
+//
+// The whole reason the view step exists. createView()/attached() prove that WE
+// can call INTO the plugin's view vtable; resizeView() is the only thing that
+// proves the plugin can call back OUT into a GUI vtable of ours, and that is the
+// half a one-directional test would miss — exactly the argument question 3 at
+// the top of this file makes for IBStream and IComponentHandler.
+//
+// On Linux a real host must also answer IRunLoop here or an X11 plugin never
+// repaints. This spike is Windows-first and says so rather than pretending.
+class PlugFrame : public HostObject<IPlugFrame> {
+public:
+    tresult PLUGIN_API queryInterface( const TUID _iid, void **obj ) override
+    {
+        return resolve( _iid, obj, IPlugFrame::iid );
+    }
+
+    tresult PLUGIN_API resizeView( IPlugView *view, ViewRect *rect ) override
+    {
+        if( !rect ) return kInvalidArgument;
+        ++resizes;
+        lastW = rect->getWidth();
+        lastH = rect->getHeight();
+        std::printf( "    view   : plugin requested resize -> %dx%d (IPlugFrame CALLED BACK)\n",
+                     lastW, lastH );
+        // A real host resizes its container and then tells the view it happened.
+        // Accepting the plugin's own number unchanged is the honest spike
+        // behaviour: it is what a host that always grants the request would do.
+        if( view ) view->onSize( rect );
+        return kResultOk;
+    }
+
+    int resizes = 0;
+    int lastW   = 0;
+    int lastH   = 0;
 };
 
 class HostApp : public HostObject<Vst::IHostApplication> {
@@ -589,6 +628,203 @@ private:
     bool            inited_   = false;
 };
 
+// --- the native editor view (proposal 33 PoC, --view) -------------------------
+//
+// The GUI half of the ABI question, and the one proposal 33 named as its
+// riskiest VST3 unknown: a MinGW-built host hands an HWND it owns to an
+// MSVC-built plugin's IPlugView::attached(). vst3_probe already proved the
+// AUDIO interfaces cross that boundary; IPlugView is the same COM shape, but
+// "the same shape" is a prediction until something runs it.
+//
+// Deliberately off screen. WS_POPUP with no WS_VISIBLE gives a real, valid HWND
+// with a real window station and message queue — everything attached() needs —
+// without a window appearing on the user's desktop during an unattended sweep.
+// A plugin that only paints on WM_PAINT simply never gets one, which does not
+// affect a single call below.
+
+bool gWantView = false;
+
+#if defined( _WIN32 )
+// One hidden container per view, destroyed with it. A class registered once.
+HWND makeHostWindow()
+{
+    static bool registered = false;
+    static const wchar_t *kClass = L"SmaragdVst3ProbeHost";
+    if( !registered ) {
+        WNDCLASSEXW wc{};
+        wc.cbSize        = sizeof( wc );
+        wc.lpfnWndProc   = DefWindowProcW;
+        wc.hInstance     = GetModuleHandleW( nullptr );
+        wc.lpszClassName = kClass;
+        if( !RegisterClassExW( &wc ) ) {
+            warn( "RegisterClassExW failed (%lu)", (unsigned long)GetLastError() );
+            return nullptr;
+        }
+        registered = true;
+    }
+    HWND h = CreateWindowExW( 0, kClass, L"vst3_probe", WS_POPUP,
+                              0, 0, 800, 600,
+                              nullptr, nullptr, GetModuleHandleW( nullptr ), nullptr );
+    if( !h ) warn( "CreateWindowExW failed (%lu)", (unsigned long)GetLastError() );
+    return h;
+}
+
+// A plugin's view may post to itself during attached(); a host that never pumps
+// can leave it half-constructed. Bounded, because a spike must not hang.
+void pumpMessages( int iterations )
+{
+    MSG msg;
+    for( int i = 0; i < iterations; ++i )
+        while( PeekMessageW( &msg, nullptr, 0, 0, PM_REMOVE ) ) {
+            TranslateMessage( &msg );
+            DispatchMessageW( &msg );
+        }
+}
+#endif
+
+// Returns false only on a hard ABI failure (a call that should have worked and
+// did not). "This plugin has no editor" is a legitimate, reported outcome.
+bool probeView( Vst::IEditController *controller )
+{
+    if( !controller ) {
+        std::printf( "    view   : no controller — nothing to ask for a view\n" );
+        return true;
+    }
+
+    IPlugView *view = controller->createView( Vst::ViewType::kEditor );
+    if( !view ) {
+        std::printf( "    view   : createView(kEditor) -> null (plugin has no editor)\n" );
+        return true;
+    }
+    std::printf( "    view   : createView(kEditor) -> %p\n", (void *)view );
+
+    bool ok = true;
+
+#if defined( _WIN32 )
+    const FIDString kPlatform = kPlatformTypeHWND;
+    const char     *kPlatName = "HWND";
+#elif defined( __APPLE__ )
+    const FIDString kPlatform = kPlatformTypeNSView;
+    const char     *kPlatName = "NSView";
+#else
+    const FIDString kPlatform = kPlatformTypeX11EmbedWindowID;
+    const char     *kPlatName = "X11EmbedWindowID";
+#endif
+
+    const tresult supported = view->isPlatformTypeSupported( kPlatform );
+    std::printf( "    view   : isPlatformTypeSupported(%s) -> %s\n", kPlatName,
+                 supported == kResultTrue ? "yes" : "NO" );
+
+    // Size BEFORE attach. Many plugins answer here; some only after attached().
+    ViewRect r0{};
+    const tresult gs0 = view->getSize( &r0 );
+    std::printf( "    view   : getSize (pre-attach)  -> %s %dx%d\n",
+                 gs0 == kResultOk ? "ok" : "FAILED", r0.getWidth(), r0.getHeight() );
+
+    std::printf( "    view   : canResize -> %s\n",
+                 view->canResize() == kResultTrue ? "yes" : "no" );
+
+    // The content-scale leg (HiDPI). Optional; a plugin that does not implement
+    // it is not a failure, it just wants physical pixels at scale 1.
+    IPlugViewContentScaleSupport *scale = nullptr;
+    if( view->queryInterface( IPlugViewContentScaleSupport::iid, (void **)&scale ) == kResultOk
+        && scale ) {
+        const tresult sr = scale->setContentScaleFactor( 1.0f );
+        std::printf( "    view   : IPlugViewContentScaleSupport -> yes, setScale(1.0) %s\n",
+                     sr == kResultOk ? "ok" : "refused" );
+        scale->release();
+    } else {
+        std::printf( "    view   : IPlugViewContentScaleSupport -> not offered\n" );
+    }
+
+    // setFrame BEFORE attached(): the plugin may call resizeView from inside
+    // attached(), and a null frame at that moment silently loses the request.
+    PlugFrame frame;
+    const tresult sf = view->setFrame( &frame );
+    std::printf( "    view   : setFrame -> %s\n",
+                 sf == kResultOk ? "ok" : ( sf == kNotImplemented ? "kNotImplemented" : "FAILED" ) );
+
+    if( supported != kResultTrue ) {
+        std::printf( "    view   : platform unsupported — not attaching\n" );
+        view->setFrame( nullptr );
+        view->release();
+        return ok;
+    }
+
+#if defined( _WIN32 )
+    HWND host = makeHostWindow();
+    if( !host ) {
+        view->setFrame( nullptr );
+        view->release();
+        return false;
+    }
+
+    // THE MEASUREMENT. A MinGW HWND into an MSVC plugin's attached().
+    const tresult at = view->attached( (void *)host, kPlatform );
+    std::printf( "    view   : attached(HWND %p) -> %s\n", (void *)host,
+                 at == kResultOk ? "OK" : "FAILED" );
+    if( at != kResultOk ) {
+        warn( "attached() refused the host window — SUSPECT GUI ABI or platform type" );
+        ok = false;
+    } else {
+        pumpMessages( 4 );
+
+        ViewRect r1{};
+        if( view->getSize( &r1 ) == kResultOk )
+            std::printf( "    view   : getSize (post-attach) -> %dx%d\n",
+                         r1.getWidth(), r1.getHeight() );
+
+        // Did the plugin actually create a child window inside ours? This is the
+        // difference between "attached() returned kResultOk" and "the GUI is
+        // really in our window", and only the second one is worth anything.
+        HWND child = GetWindow( host, GW_CHILD );
+        if( child ) {
+            RECT cr{};
+            GetWindowRect( child, &cr );
+            std::printf( "    view   : child HWND %p created, %ldx%ld  [EMBEDDING CONFIRMED]\n",
+                         (void *)child, cr.right - cr.left, cr.bottom - cr.top );
+        } else {
+            std::printf( "    view   : no child HWND — plugin drew into ours directly, "
+                         "or deferred creation\n" );
+        }
+
+        // Host-driven resize, only where the plugin allows it.
+        if( view->canResize() == kResultTrue && r1.getWidth() > 0 ) {
+            ViewRect want{ 0, 0, r1.getWidth() + 40, r1.getHeight() + 40 };
+            const tresult cs = view->checkSizeConstraint( &want );
+            std::printf( "    view   : checkSizeConstraint(%dx%d) -> %s, gives %dx%d\n",
+                         r1.getWidth() + 40, r1.getHeight() + 40,
+                         cs == kResultTrue ? "ok" : "adjusted",
+                         want.getWidth(), want.getHeight() );
+            const tresult os = view->onSize( &want );
+            std::printf( "    view   : onSize -> %s\n", os == kResultOk ? "ok" : "refused" );
+            pumpMessages( 2 );
+        }
+
+        std::printf( "    view   : IPlugFrame::resizeView called %d time(s)%s\n",
+                     frame.resizes,
+                     frame.resizes ? "  [REVERSE GUI ABI CONFIRMED]" : "" );
+    }
+
+    // Teardown order matters: removed() BEFORE release(), and the frame must
+    // outlive both. Getting this wrong is a crash inside the plugin, not a
+    // return code, which is precisely why the spike does it before the backend.
+    const tresult rm = view->removed();
+    std::printf( "    view   : removed -> %s\n", rm == kResultOk ? "ok" : "FAILED" );
+    view->setFrame( nullptr );
+    view->release();
+    DestroyWindow( host );
+    pumpMessages( 2 );
+#else
+    std::printf( "    view   : attach not implemented in this spike on this platform\n" );
+    view->setFrame( nullptr );
+    view->release();
+#endif
+
+    std::printf( "    view   : survived create -> attach -> resize -> removed -> release\n" );
+    return ok;
+}
+
 // --- the actual probe ---------------------------------------------------------
 
 constexpr int32 kBlock = 512;
@@ -859,6 +1095,13 @@ bool probeClass( IPluginFactory *factory, const PClassInfo &ci, HostApp &host,
         }
     }
 
+    // --- native editor (proposal 33 PoC) --------------------------------------
+    //
+    // AFTER process() and BEFORE teardown, on purpose: a real host opens an
+    // editor on a plugin that is already set up and possibly running, and a view
+    // must be gone before setComponentHandler(nullptr).
+    if( gWantView && !probeView( controller ) ) ok = false;
+
     // --- teardown ------------------------------------------------------------
     //
     // In the documented order. Getting it wrong is how a host leaks a DSO or
@@ -983,18 +1226,30 @@ int main( int argc, char **argv )
                   | SEM_NOOPENFILEERRORBOX );
 #endif
 
-    if( argc < 2 ) {
-        std::printf( "usage: %s <plugin.vst3> [more.vst3 ...]\n",
+    int firstPath = 1;
+    for( ; firstPath < argc; ++firstPath ) {
+        if( std::strcmp( argv[firstPath], "--view" ) == 0 ) gWantView = true;
+        else break;
+    }
+
+    if( firstPath >= argc ) {
+        std::printf( "usage: %s [--view] <plugin.vst3> [more.vst3 ...]\n",
                      argc > 0 ? argv[0] : "vst3_probe" );
         std::printf( "\n"
                      "Proposal 08 M6 ABI gate: loads an MSVC-built VST3 from this\n"
                      "MinGW-built host and walks it through instantiate -> initialize ->\n"
-                     "buses -> params -> state -> process -> teardown.\n" );
+                     "buses -> params -> state -> process -> teardown.\n"
+                     "\n"
+                     "  --view   also walk the NATIVE EDITOR (proposal 33): createView ->\n"
+                     "           setFrame -> attached() into a real off-screen HWND ->\n"
+                     "           getSize/canResize/onSize -> removed -> release, reporting\n"
+                     "           whether the plugin created a child window and whether it\n"
+                     "           called IPlugFrame::resizeView back into us.\n" );
         return 2;
     }
 
     int rc = 0;
-    for( int i = 1; i < argc; ++i ) {
+    for( int i = firstPath; i < argc; ++i ) {
         rc |= probeOne( argv[i] );
         std::printf( "\n" );
     }
