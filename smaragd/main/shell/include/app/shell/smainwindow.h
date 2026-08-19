@@ -316,6 +316,10 @@ protected slots:
     void toggleGrid();
     void toggleMetronome();
     void toggleCycle();
+    // Right-click on the transport toolbar's metronome button: "Click while
+    // recording" (SOpt::ClickWhileRecording) and "Count in while recording"
+    // (a convenience toggle over SOpt::CountInBars - see soptions.h).
+    void showMetronomeContextMenu();
     // Track grouping toolbar -> act on the arranger's last-clicked track.
     void groupTrack();
     void ungroupTrack();
@@ -435,6 +439,14 @@ private:
     bool endpointRateWarningShown_ = false;
     void warnOnEndpointRateMismatch();
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
+    // "Count in while recording" (metronome context menu) is a convenience
+    // on/off toggle over SOpt::CountInBars, whose own spinbox already treats
+    // 0 as "off" (soptions.h). Unchecking stashes the bar count here and
+    // writes 0; checking restores it, or falls back to 2 bars - the smallest
+    // count-in any qxa case (record_count_in) exercises - if nothing was ever
+    // stashed this session. NOT persisted across a restart: that is the
+    // "or default" half of the task's own wording, not an oversight.
+    int metronomeLastCountInBars_ = 2;
     QDockWidget *qDockExternFileList_;
     SExternFileList *externFileList_;
 

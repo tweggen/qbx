@@ -30,6 +30,17 @@ public:
     void addGridAction(QAction *action);
 
     /**
+     * The QToolButton addGridAction() built for `action`, or null.
+     *
+     * Unlike QToolBar::widgetForAction(), which only knows about widgets added
+     * through the toolbar's own action list, a grid button lives inside
+     * containerWidget_'s QGridLayout - so a caller that needs the WIDGET (to
+     * give it a context-menu policy, for instance; a QAction has none of its
+     * own) has to ask here instead.
+     */
+    QWidget *widgetForGridAction(QAction *action) const;
+
+    /**
      * Set the number of columns in the grid.
      * Default is 7 (like Reaper).
      */

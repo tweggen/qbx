@@ -1442,35 +1442,49 @@ exclusion can be forgotten.
 | **The click stops before the transport starts; the LANE stops after** (`muteCountIn`) | Both were paid for by a failing gate. The click first, because the transport start repositions the pump back to the locator and would re-render the count-in's first beat (measured: a fifth, accented click). The lane last, because dropping the last lane calls `closeLive()`, the transport start re-opens the device, and the capture backend clears its recording at device start — taking the count-in with it. |
 | **A live lane coming up on a STOPPED→PLAYING transition costs ONE REPOSITION, and it is AUDIBLE on a click** | Design D2, measured from the outside for the first time here: the pump starts at the locator while the engine clock is still invalid, the frozen lane primes and publishes, the pump repositions onto the publication and the consumer drops the abandoned run. At workers=1 the beat at frame 0 came out EARLY in **1 run in 50** and was swallowed in the other 49, with a **~5087-frame (106 ms) hole** after it either way; the steady grid is then exact to 5 frames. A monitored INPUT pays the same cost and simply has no onset to make it audible. `metronome_click` therefore measures from **1 s in** — anchoring on a click that may or may not have survived the abandoned run made the case a coin flip (49/50) on the box rather than a gate on the grid. |
 | **The FIRST click of a live-lane session is attenuated by construction** | It sits inside the RT's 2–3 ms fade-in ramp: measured **0.2109** against a full **0.4720**. `assert-metronome-clicks` therefore excludes onset 0 from the accent comparison and searches the accent PHASE — capture frame 0 is the DEVICE start, so which beat the first summed entry carries is the box's business. Its POSITION is still the grid anchor. |
-| The **accent ratio is exactly 2** by construction | `SOpt::MetronomeLevel` is the ACCENTED level and an ordinary beat is half of it, so a gate can assert the ladder in closed form (measured 2.0584 through the onset detector). |
+| The click is a **2 kHz / 1 kHz SQUARE wave**, and the **accent ratio is exactly 1/0.7 ≈ 1.4286** by construction | `twmetronome.h`'s tone spec: the downbeat is a 2 kHz square at relative amplitude 1.0, every other beat a 1 kHz square at 0.7 — two frequencies so the accent is audible by EAR, not just by level. `SOpt::MetronomeLevel` is the ACCENTED (downbeat) level and an ordinary beat is 0.7 of it, so a gate can assert the ladder in closed form. Square, not the original decaying sine — the wave shape changed with the ratio, both in the same follow-up. |
+| **"Click while recording" is a SEPARATE gate from the metronome switch** (`SOpt::ClickWhileRecording`, default ON) | `sliveplanbuilder.cpp`'s `metronomeWanted`: while `recording` is true this flag is the SOLE authority on the click, independent of `playing` — recording implies the transport is running, so an `||` would make the checkbox unable to silence a take. Plain playback (not recording) is unaffected either way. Reachable from the transport toolbar's metronome button's RIGHT-CLICK menu, alongside a "Count in while recording" item that is a convenience on/off toggle over the SAME `SOpt::CountInBars` the Options spinbox edits (0 = off), not a second flag. |
 | `outputLatencyFramesProject()` is `meterLatencyFrames()` **without** the "only while playing" gate | The gate belongs to the COMPENSATION — shifting a position nobody is playing is meaningless — not to the READOUT, which must show a number the moment a device opens, including when ARMING opens it with the transport stopped. |
 | **PDC is out of scope** (proposal 37 P9), and every mount that shows a latency says so | The live lane has no delay line anywhere: the pump renders block-wise straight into the ring, so a latency-reporting plugin monitored live is heard late by exactly the badge's number. The row tooltip, the chain footer and the transport readout all state it. |
 
 **Verbs:** `metronome-toggle/-enable/-disable` are AUDIBLE now (they were a
 state-only stub); `set-count-in` / `set-pre-roll` (0..8 bars, per-user, NOT
 undoable — a preference does not belong on the arrangement's undo stack).
-`SOpt::MetronomeLevel` / `CountInBars` / `PreRollBars`, all on Edit → Options →
-Audio beside the recording offset. Whether the metronome is ON stays a PROJECT
-property: it travels with the arrangement.
+`SOpt::MetronomeLevel` / `CountInBars` / `PreRollBars` / `ClickWhileRecording`,
+all on Edit → Options → Audio beside the recording offset except the last,
+which lives only on the metronome button's right-click menu (there is no verb
+that builds the Audio page off screen the way `assert-midi-options` builds the
+MIDI one, so nothing exercises the Options-page controls headlessly — see
+"NOT gated" below). Whether the metronome is ON stays a PROJECT property: it
+travels with the arrangement.
 
 Gates: the qxa cases `metronome_click`, `metronome_render_identity`,
-`record_count_in`, `record_pre_roll` (all `RUN_SERIAL` at
-`SMARAGD_CAPTURE_SPEED=1`; the two record cases take the L3b paced `file:` input
-so `compensationFrames="-5824"` is the same closed form there), the new
-`assert-metronome-clicks` verb, `plugin_ui_strip_and_editor` (`latency=0`) and
-`action_roundtrip_test`. Measured: click grid errors **0, −5, 0, 0, 0, −5**
+`record_count_in`, `record_pre_roll`, `metronome_click_while_recording` (all
+`RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1`; the record cases take the L3b paced
+`file:` input so `compensationFrames="-5824"` is the same closed form there),
+the `assert-metronome-clicks` verb, `plugin_ui_strip_and_editor` (`latency=0`)
+and `action_roundtrip_test`. Measured: click grid errors **0, −5, 0, 0, 0, −5**
 frames over playback measured from 1 s in (worst |5| against 1024) and
 **−33 … −38** through a count-in (worst |38|); inter-click RMS **exactly 0.000000**; metronome
 OFF ⇒ **0** clicks; the render **byte-identical** with the click on and off;
 count-in placement **96000 exactly**, `comp=-5824`, `trim=9921`; pre-roll
-placement 89895 for a record start at 96256 (`trim=0`).
+placement 89895 for a record start at 96256 (`trim=0`); accent ratio through
+the onset detector **≈1.4286** against the 1.3 asserted (room for the window,
+the same margin the old ratio-of-2 case kept against 1.5); with
+`ClickWhileRecording=false` the take is silent while the project's own
+metronome switch stays ON throughout.
 
 **NOT gated:** real device latency numbers (the readout reports what the driver
 claims, and no headless run can check the physics), the readout's and the
 badge's pixels, plugin delay compensation (not implemented), a count-in or
 pre-roll longer than 2 bars, the two knobs COMBINED in one take (implemented and
 reachable, no case), the Options page's three new controls (no verb builds the
-Audio page off screen the way `assert-midi-options` builds the MIDI one), and
+Audio page off screen the way `assert-midi-options` builds the MIDI one), the
+metronome button's RIGHT-CLICK MENU ITSELF — there is no testkit verb for a
+context menu anywhere in this repo, so `metronome_click_while_recording` gates
+the SOpt key's audible effect and `metronomeWanted`'s logic, never the menu, its
+checkbox states, or the "Count in while recording" convenience toggle's
+stash/restore of the last bar count (hand-verified only), and
 **the first second of a live-lane playback run** — the transient above is
 measured and recorded, not asserted. A render taken WHILE a click lane is up is
 not reachable from a script either (the click sounds only while the transport

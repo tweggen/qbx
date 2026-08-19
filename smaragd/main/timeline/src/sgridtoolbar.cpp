@@ -61,6 +61,15 @@ void SGridToolbar::addGridAction(QAction *action)
     }
 }
 
+QWidget *SGridToolbar::widgetForGridAction(QAction *action) const
+{
+    if (!action || !containerWidget_) return nullptr;
+    const QList<QToolButton*> buttons = containerWidget_->findChildren<QToolButton*>();
+    for (QToolButton *b : buttons)
+        if (b->defaultAction() == action) return b;
+    return nullptr;
+}
+
 void SGridToolbar::setColumns(int cols)
 {
     columns_ = (cols > 0) ? cols : 7;

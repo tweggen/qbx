@@ -115,16 +115,34 @@ inline constexpr const char *MidiRecordQuantize = "midi/recordQuantize";
 // PROJECT property (`SProjectProps::Metronome`) and stays one - it travels with
 // the arrangement and is on the transport bar.
 //
-//   MetronomeLevel   linear amplitude of the ACCENTED click, 0..1. An ordinary
-//                    beat is half of it, so the accent ratio is exactly 2 and a
-//                    case can assert the ladder in closed form.
-//   CountInBars      bars of click BEFORE the record position, 0..8. Default 0:
-//                    a count-in nobody asked for delays every take.
-//   PreRollBars      bars the transport ROLLS before the record position, 0..8,
-//                    with recording beginning at the locator. Default 0.
-inline constexpr const char *MetronomeLevel = "metronome/level";
-inline constexpr const char *CountInBars    = "transport/countInBars";
-inline constexpr const char *PreRollBars    = "transport/preRollBars";
+//   MetronomeLevel      linear amplitude of the ACCENTED click, 0..1. An
+//                       ordinary beat is 0.7 of it (the "1 kHz square, relative
+//                       amplitude 0.7" beside the downbeat's "2 kHz square,
+//                       relative amplitude 1.0" - twmetronome.h), so a case can
+//                       assert the ladder in closed form.
+//   CountInBars         bars of click BEFORE the record position, 0..8.
+//                       Default 0: a count-in nobody asked for delays every
+//                       take. The transport toolbar's metronome context menu's
+//                       "Count in while recording" checkbox is a convenience
+//                       on/off toggle over THIS SAME key (0 = unchecked), not
+//                       a second flag - the spinbox already treats 0 as "off"
+//                       everywhere else it is read.
+//   PreRollBars         bars the transport ROLLS before the record position,
+//                       0..8, with recording beginning at the locator.
+//                       Default 0.
+//   ClickWhileRecording whether the beat click sounds WHILE RECORDING
+//                       specifically, independent of the metronome switch and
+//                       of plain playback. Default ON (unchanged behaviour):
+//                       unchecking it via the metronome context menu silences
+//                       the click for the take without touching
+//                       `SProjectProps::Metronome` (`sliveplanbuilder.h`'s
+//                       `metronomeWanted`). A count-in is NOT affected - it is
+//                       not "recording" yet (the playhead has not moved) and
+//                       overrides both knobs by design.
+inline constexpr const char *MetronomeLevel       = "metronome/level";
+inline constexpr const char *CountInBars          = "transport/countInBars";
+inline constexpr const char *PreRollBars          = "transport/preRollBars";
+inline constexpr const char *ClickWhileRecording  = "metronome/clickWhileRecording";
 
 // MEDIA BROWSER (proposal 38 gate 2, design §B.4). Per-user and machine-local
 // for the reason every path in this table is: where this person keeps their

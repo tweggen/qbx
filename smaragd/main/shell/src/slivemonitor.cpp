@@ -484,8 +484,10 @@ std::shared_ptr<twLiveInputSource> SLiveMonitor::ensureMetronome( bool want )
                                SOpt::def( SOpt::MetronomeLevel ) ).toDouble();
     if( !( level > 0.0 ) ) level = 0.0;
     if( level > 1.0 )      level = 1.0;
+    // The downbeat (2 kHz square) is relative amplitude 1.0; every other beat
+    // (1 kHz square) is 0.7 of it - twmetronome.h's tone spec.
     cfg.accentLevel = (float) level;
-    cfg.beatLevel   = (float) ( level * 0.5 );
+    cfg.beatLevel   = (float) ( level * 0.7 );
     if( countInActive_ ) {
         // THE COUNT-IN GRID IS ANCHORED AT THE RECORD POSITION and counts N
         // bars forward from it, over the stopped lane's ordinary virtual
@@ -637,8 +639,12 @@ void SLiveMonitor::refresh()
     // A LIVE LANE EXISTS IFF armed u monitor u metronome (design D9). The
     // metronome owns no track, so it joins as a FLAG and leaves the whole
     // arm/disarm protocol below untouched.
+    const bool clickWhileRecording = SSettings::instance()
+        .value( SOpt::ClickWhileRecording,
+                SOpt::def( SOpt::ClickWhileRecording ) ).toBool();
     want.metronome = sliveplan::metronomeWanted(
-        metronomeEnabled(), playing, app_->isRecordingActive(), countInActive_ );
+        metronomeEnabled(), playing, app_->isRecordingActive(), countInActive_,
+        clickWhileRecording );
 
     const bool sameSet = ( want.ordered == current_.ordered )
                          && ( want.sources == current_.sources )
