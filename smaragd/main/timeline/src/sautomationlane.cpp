@@ -773,15 +773,18 @@ SAutomationLaneUi &SStdMixerView::automationUi()
 // ONE pruning walk for EVERY per-track UI-state set (proposal 30 section E.5).
 // The sets are keyed by STrack*, and a removed track leaves a dangling key that
 // a later track allocated at the same address would inherit - a new lane that
-// mysteriously remembers a deleted one's fold state. Walking the model once and
-// pruning all four sets together is what keeps them from drifting apart.
+// mysteriously remembers a deleted one's state. Walking the model once and
+// pruning all of them together is what keeps them from drifting apart.
+//
+// The FOLD set used to be pruned here too. Fix/track-list-polish (m) moved
+// fold state onto STrack itself (STrack::isCollapsed()) so it can be saved
+// with the project; being an ordinary object attribute, it dies with the
+// object automatically and needs no pruning walk of its own.
 void SStdMixerView::pruneUiState()
 {
     QSet<const STrack *> live;
     collectTracks( model_, live );
 
-    for( auto it = collapsed_.begin(); it != collapsed_.end(); )
-        if( live.contains( *it ) ) ++it; else it = collapsed_.erase( it );
     for( auto it = takesExpanded_.begin(); it != takesExpanded_.end(); )
         if( live.contains( *it ) ) ++it; else it = takesExpanded_.erase( it );
     for( auto it = trackScale_.begin(); it != trackScale_.end(); )

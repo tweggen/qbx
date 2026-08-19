@@ -117,6 +117,11 @@ public:
 
     offset_t getUpperLeftX() const { return (offset_t) upperLeftX_; }
     offset_t getUpperLeftY() const { return (offset_t) upperLeftY_; }
+    // The horizontal pan in PROJECT FRAMES — what fix/track-list-polish (m)
+    // persists (SProjectProps::TimelineScrollX). getUpperLeftX() above is the
+    // derived PIXEL value, which moves with the zoom; this is the value the
+    // save/load round trip is exact about.
+    offset_t getLeftOffset() const { return upperLeftOffset_; }
     offset_t getTimeOf( int x ) const;
     idx_t getLastClickTrackIdx() const { return lastClickTrackIdx_; }
     STrack *getLastClickTrack() const { return lastClickTrack_; }
@@ -249,6 +254,17 @@ private:
     void drawRulerTicks( QPainter &, const QRect &myRect );
     void saveRangeToProject();
     void loadRangeFromProject();
+    // --------------------------------------------------------------------
+
+    // --- zoom / horizontal pan persistence (fix/track-list-polish m) -----
+    // Restores what a previous save left in the project's property dict, or
+    // this widget's own hard-coded defaults when there is nothing saved (a
+    // fresh project, or one written before this existed). Saved on every
+    // change via secondWidthChanged/leftOffsetChanged so every path that
+    // moves them — wheel, the zoom buttons, the scrollbar — is covered
+    // without hunting down each call site.
+    void saveViewStateToProject();
+    void loadViewStateFromProject();
     // --------------------------------------------------------------------
 
     SStdMixerView &smv_;
@@ -512,6 +528,14 @@ public:
     // "" when every head sits exactly on its lane (same top, same height as
     // the painter uses, full column width), otherwise the first mismatch.
     QString tkCheckLaneAlignment() const;
+    // TEST ENTRY POINT (fix/track-list-polish l): the vertical scrollbar's own
+    // `maximum()`, in row-index units — the number `verticalScrollMaximum()`
+    // computes and the real mouse wheel is capped by. `tkSetTopRow()` above
+    // does NOT reproduce the bug the padding fixes: it clamps only to
+    // `rowCount()-1` and bypasses the scrollbar's maximum entirely, so a case
+    // that wants to test what a wheel scroll can actually reach must read
+    // this number and scroll to IT, not to `rowCount()-1`.
+    int tkVerticalScrollMaximum() const;
     // The automation half of that check (proposal 37 P6), defined in
     // sautomationlane.cpp: every Automation row must still name a lane the
     // model can resolve. A row left behind by a removed lane paints an empty
@@ -544,6 +568,18 @@ public:
     // vertical scrollbar is row-granular, so its page step depends on which
     // rows are on screen once heights differ.
     int visibleRowCountFrom( int firstRow ) const;
+    // The `qScrollVert_` maximum for a given page step `vis` (fix/
+    // track-list-polish l). `visibleRowCountFrom()` can count a row that only
+    // PARTIALLY fits as fully visible whenever the content does not divide
+    // evenly into the viewport, which without correction leaves the true
+    // last row permanently clipped at the bottom with no scroll room left to
+    // reach it. This reserves roughly one track's height of scroll headroom
+    // below the real content whenever it is taller than the viewport (never
+    // when it already fits, so scrolling stays disabled when there is
+    // nothing to scroll for). ONE definition, used by both recalcPageStep()
+    // (a resize/zoom/height-scale change) and nTracksChanged() (a track
+    // added/removed), so the two cannot compute two different answers.
+    int verticalScrollMaximum( int vis ) const;
     // Row containing column-space y, or -1 past the last lane.
     int rowAtLaneY( int y ) const;
 
@@ -555,7 +591,11 @@ public:
     double trackHeightScale( const STrack * ) const;
     void setTrackHeightScale( STrack *, double scale );
     int rowIndexOfTrack( const STrack * ) const;
-    bool isTrackCollapsed( STrack *t ) const { return collapsed_.contains( t ); }
+    // Fold state now lives ON the track (STrack::isCollapsed(), fix/
+    // track-list-polish m) so it survives save/load and needs no pruning of
+    // its own — it dies with the object instead of outliving it in a
+    // view-owned QSet. toggleTrackCollapsed() still owns the row rebuild.
+    bool isTrackCollapsed( STrack *t ) const { return t && t->isCollapsed(); }
     void toggleTrackCollapsed( STrack * );
     // Take lanes (proposal 17 phase 3): per-track expanded state, UI-only.
     // An expanded track shows one extra row per take index below its lane.
@@ -818,7 +858,6 @@ private:
     // column space, rowTop_[rowCount()] the total. Rebuilt with rows_ and
     // whenever the base height or a per-track scale changes.
     QVector<int> rowTop_;
-    QSet<STrack*> collapsed_;
     QSet<STrack*> takesExpanded_;   // tracks showing their take lanes
     QHash<const STrack*, double> trackScale_;   // per-track lane height factor
     // The automation UI (proposal 37 P6). Created lazily by automationUi() so

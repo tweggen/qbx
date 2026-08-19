@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/track-list-polish (l): a mouse-wheel scroll must be able to bring the
+  TRUE LAST track fully into view.
+
+  THE BUG. Vertical scrolling is row-granular: SStdMixerView::rowCount()-vis
+  used to be the whole story for the scrollbar's `maximum()`, where `vis` is
+  SStdMixerView::visibleRowCountFrom() - "how many rows are visible from a
+  given top row". That function counts a row that only PARTIALLY fits inside
+  the viewport as fully "visible" (its loop stops the moment the remaining
+  height goes non-positive, AFTER charging that row's full height), so
+  whenever the total row height does not divide evenly into the viewport
+  height, the computed maximum can land exactly at the content's own bottom
+  edge - with no scroll room left to bring the true last row's remaining
+  pixels into view. Six 100px rows (600px of content) in a viewport whose
+  lane band is not a multiple of 100px hits exactly this: the counting loop
+  consumes the whole viewport DURING the sixth row, so `vis` comes out equal
+  to `rowCount`, and the old `maximum = rowCount - vis` is 0 - no scrolling
+  at all, even though the sixth row is only partially inside the viewport.
+
+  THE FIX reserves roughly one track's height of extra scroll headroom
+  whenever the real content is taller than the viewport (SStdMixerView::
+  verticalScrollMaximum(), used by both recalcPageStep() and
+  nTracksChanged() so a track add/remove cannot silently undo it). This is
+  scroll RANGE only: no row is added, nothing is drawn, and it is not a drop
+  target (that is item (i), handled elsewhere).
+
+  THE NUMERIC GATE. `assert-scroll-range` scrolls the vertical scrollbar to
+  its own `maximum()` - the number a real mouse wheel is capped by, per
+  SStdMixerView::tkVerticalScrollMaximum() - and reports whether the true
+  last row ends up fully visible. Deliberately not `set-lane-view
+  topRow=<rowCount-1>`: that call clamps only to rowCount()-1 and bypasses
+  the scrollbar's maximum() entirely, so it cannot see this bug at all.
+
+  THE VIEWPORT SIZE is forced through `assert-lane-alignment`'s own
+  `grabWidth`/`grabHeight` (the same resize-then-layout-activate trick
+  `grabArrangerLanes` uses elsewhere), which is also a free alignment check
+  on six equal-height lanes. The requested height and the resulting canvas
+  height are NOT the same number (the surrounding chrome absorbs some of
+  it), so the two viewport sizes below are chosen by MEASURED effect
+  (`canvasHeight=` in the report) rather than by arithmetic on the request:
+  a small height that leaves the six lanes overflowing it, and a height
+  an order of magnitude larger than 600px of content so there is no doubt
+  it fits however the chrome maps. The resize only happens when `grabPng`
+  is given — an `assert-lane-alignment` with no grab args (as below, after
+  the scroll) deliberately does NOT re-resize, so the geometry the scroll
+  was measured against is not disturbed by checking it.
+-->
+<SActionScript version="1" name="track_list_scroll_padding">
+
+  <setup project="new"/>
+
+  <actions>
+    <grid-disable/>
+
+    <!-- Six equal 100px lanes (the default base track height) - total
+         content 600px. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- ===== THE BUG'S OWN SHAPE: overflow that is NOT an exact multiple ===
+         A small requested height leaves a lane band well short of the six
+         lanes' 600px (measured: canvasHeight=579, i.e. a 563px lane band -
+         not a multiple of the 100px lane height, so the sixth row is only
+         partially inside it before any fix). -->
+    <assert-lane-alignment grabPng="scroll_pad_overflow.png"
+                           grabWidth="900" grabHeight="546"/>
+
+    <!-- There IS scroll room (the old maximum here was exactly 0), and
+         scrolling to the scrollbar's own maximum brings the true last row
+         fully into view - the whole point of the padding. -->
+    <assert-scroll-range expectMaxAtLeast="1" expectFullyVisible="true"/>
+
+    <!-- Heads still sit exactly on their lanes after the scroll - the
+         padding is scroll range only and must not have disturbed the
+         geometry every OTHER assertion here depends on. This does NOT
+         re-resize (no grab args), so it checks the same geometry the scroll
+         above was measured against. -->
+    <assert-lane-alignment/>
+
+    <!-- ===== THE NEGATIVE CONTROL: content that already fits =============
+         A height an order of magnitude past 600px of content, so it fits
+         comfortably however the surrounding chrome maps the request.
+         Scrolling must stay DISABLED - the fix must not manufacture scroll
+         room nobody needs, and the top row must not move.
+
+         Reset the scroll to the top FIRST: visibleRowCountFrom() (and so
+         verticalScrollMaximum()) measures "how many rows fit" from the
+         CURRENT top row, and the run above left it scrolled to row 1 - from
+         there, with a huge viewport, only 5 of the 6 rows are even
+         countable, which would manufacture exactly the same maxScroll=1
+         this control means to rule out, for a reason that has nothing to do
+         with the fix under test. A resize (which recomputes the maximum)
+         always follows a real top-row change in production, through the
+         same recalcPageStep() this measures. -->
+    <set-lane-view topRow="0"/>
+    <assert-lane-alignment grabPng="scroll_pad_fits.png"
+                           grabWidth="900" grabHeight="4000"/>
+    <assert-scroll-range expectMaxAtMost="0" expectFullyVisible="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="6"/>
+  </assertions>
+
+</SActionScript>

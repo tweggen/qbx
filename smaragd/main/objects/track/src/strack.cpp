@@ -93,6 +93,11 @@ int STrack::serializeSelfAttributes( QTextStream &o )
         o << " trackInput='" << trackInput_.toHtmlEscaped() << "'";
     if( monitorMode_ != MonitorMode::Auto )
         o << " monitorMode='" << monitorModeToString( monitorMode_ ) << "'";
+    // Fold state (fix/track-list-polish m), written only when true — the
+    // default (expanded) is what every project saved before this attribute
+    // existed means, so an unfolded track re-serializes byte-identically.
+    if( collapsed_ )
+        o << " collapsed='true'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -1149,7 +1154,11 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     setTrackInput( element.attribute( "trackInput", "" ) );
     setMonitorMode( monitorModeFromString(
         element.attribute( "monitorMode", "auto" ) ) );
-    
+
+    // Fold state (fix/track-list-polish m). Absent = expanded, which is what
+    // every project written before this attribute existed means.
+    setCollapsed( element.attribute( "collapsed", "false" ).startsWith( "true" ) );
+
     return 0;
 }
 

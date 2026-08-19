@@ -404,15 +404,26 @@ const Fixture kFixtures[] = {
       "<automation-write-tick owner='0' target='param:1' slotIndex='2'"
       " value='0.5' time='24000' release='1'/>" },
     // set-lane-view writes each half only when it was asked for, and the
-    // automation half needs its three attributes together.
+    // automation half needs its three attributes together. secondWidth/
+    // scrollX (fix/track-list-polish m) are written only when > 0 / >= 0.
     { "set-lane-view",
       "<set-lane-view trackHeight='140' topRow='2' laneScaleRow='0'"
       " laneScale='2.5' toggleTakesRow='1' automationTrack='0,1'"
       " automationTarget='param:3' automationSlot='2' showAutomation='1'"
-      " clipEnvelopes='1'/>" },
+      " clipEnvelopes='1' secondWidth='45.5' scrollX='123456'/>" },
     { "assert-lane-alignment",
       "<assert-lane-alignment grabPng='lanes.png' grabWidth='900'"
       " grabHeight='700'/>" },
+    // fix/track-list-polish (m): every attribute is written only when it was
+    // given (collapsed >= 0, secondWidth >= 0, scrollX >= 0), so the fixture
+    // gives all three.
+    { "assert-lane-view",
+      "<assert-lane-view trackPath='0,1' collapsed='1' secondWidth='45.5'"
+      " scrollX='123456'/>" },
+    // fix/track-list-polish (l): both bounds are written only when >= 0.
+    { "assert-scroll-range",
+      "<assert-scroll-range expectFullyVisible='true' expectMaxAtLeast='1'"
+      " expectMaxAtMost='4'/>" },
     // --- the folder-sum preview verbs (proposal 39) -------------------------
     // assert-envelope writes trackPath / snapshot / compareTo only when set,
     // and the childSum half of it is unreachable from a default instance.

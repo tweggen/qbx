@@ -194,6 +194,8 @@ How to test: render_split_slip_offset.qxa (move-clip across tracks +
 removeClip), render_sawtooth_with_effects.qxa (reparent),
 test_track_*.qxa (UI), plugin_slot_roundtrip.qxa + plugin_missing_placeholder.qxa
 (the slot/chain round trip and the missing-plugin placeholder);
+track_list_view_roundtrip.qxa (inv. 24 — fold state is a plain STrack
+attribute now, and survives save/load exactly);
 mc_track_width.qxa (the track root really carries N distinct channels, and the
 master is their sum), mc_width_change.qxa (2 -> 8 -> 2 including the undo
 direction), mc_legacy_pull_wide.qxa (the same, with SMARAGD_REVAL_WORKERS=0 so
@@ -389,3 +391,17 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     preview already built. The exact answer (this track's own `getPreview()`,
     which really is the summed output) goes through `requestPage()` and is
     therefore unusable here; see `main/timeline/CONTRACT.md` inv. 22.
+
+24. **FOLD STATE IS A PLAIN SERIALIZED ATTRIBUTE ON `STrack`** (fix/
+    track-list-polish m), `isCollapsed()`/`setCollapsed()`, written as
+    `collapsed='true'` only when true — same non-default-only rule as
+    `midiOutPort`/`trackInput`/`monitorMode` above, so every project saved
+    before this attribute existed re-serializes byte-identically. It used to
+    live only in a view-owned `QSet<STrack*>` on `SStdMixerView`
+    (`main/timeline/CONTRACT.md` inv. 18's "fold set"), which meant it reset
+    to expanded on every load and needed its own entry in `pruneUiState()`'s
+    per-track pruning walk to avoid a dangling key when a track was removed.
+    Neither is true any more: being an ordinary object attribute, it survives
+    save/load for free and dies with the object automatically. It changes no
+    audio and nothing in the render path reads it — purely a UI fact that
+    happens to be worth remembering across a reload.

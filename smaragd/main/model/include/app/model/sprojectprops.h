@@ -24,6 +24,16 @@ inline constexpr char RangeValid[]  = "rangeValid";   // bool
 inline constexpr char RangeStart[]  = "rangeStart";   // qulonglong (offset_t)
 inline constexpr char RangeEnd[]    = "rangeEnd";     // qulonglong (offset_t)
 
+// Timeline view state (the arranger canvas), fix/track-list-polish (m).
+// Persisted so re-opening a project restores the zoom/pan the user left it
+// at instead of resetting to the hard-coded defaults every load. Read/written
+// by SMVActualView::loadViewStateFromProject()/saveViewStateToProject().
+inline constexpr char TimelineZoomSecondWidth[] = "timelineZoomSecondWidth";
+    // double: horizontal zoom, pixels per second (SMVActualView::secondWidth_)
+inline constexpr char TimelineScrollX[] = "timelineScrollX";
+    // qulonglong (offset_t): horizontal scroll position, project frames
+    // (SMVActualView::upperLeftOffset_)
+
 // Values a brand-new project starts with.
 inline QVariantMap defaults()
 {
@@ -36,6 +46,8 @@ inline QVariantMap defaults()
     m[RangeValid]  = false;
     m[RangeStart]  = (qulonglong) 0;
     m[RangeEnd]    = (qulonglong) 0;
+    m[TimelineZoomSecondWidth] = 30.0;
+    m[TimelineScrollX]         = (qulonglong) 0;
     return m;
 }
 
