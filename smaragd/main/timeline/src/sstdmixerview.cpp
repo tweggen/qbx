@@ -1015,17 +1015,17 @@ void SStdMixerView::addTrackBelow_( STrack *ref )
 
 /**
  * Add a new track whose parent is the same container as the last visible lane's
- * track (the "track above" the blank space the user double-clicked). Always goes
- * through the undoable SAction system.
+ * track (the "track above" the blank space the user double-clicked or dropped
+ * media onto). Always goes through the undoable SAction system.
  *
  * When that parent is the root mixer the whole gesture is a single
  * SAddTrackAction. When it is a folder track we follow the ctGroupTrack()
  * pattern: append a top-level track, then reparent it under the folder — two
  * SActions wrapped in one undo macro so a single undo reverses the gesture.
  */
-void SStdMixerView::ctAddTrackBelowLast()
+STrack *SStdMixerView::ctAddTrackBelowLast()
 {
-    if( !model_ ) return;
+    if( !model_ ) return nullptr;
 
     // "Track above" = the last lane in the flattened tree; its container is the
     // parent the new track should share. No lanes yet -> append to the mixer.
@@ -1036,7 +1036,10 @@ void SStdMixerView::ctAddTrackBelowLast()
     if( !parentTrack ) {
         // Parent is the root mixer: a plain append is undoable on its own.
         SApplication::app().submitAction( new SAddTrackAction( -1 ) );
-        return;
+        // submitAction drains synchronously (Phase 1), so the new track is
+        // now the last top-level child.
+        return dynamic_cast<STrack*>( strackpath::resolveByPath(
+            model_, QList<int>{ model_->getNTracks() - 1 } ) );
     }
 
     // Nested parent: create at the top level, then move under the folder.
@@ -1046,10 +1049,15 @@ void SStdMixerView::ctAddTrackBelowLast()
     // submitAction drains synchronously (Phase 1), so the new track is now the
     // last top-level track; reparent it under the target folder.
     int newIdx = model_->getNTracks() - 1;
+    STrack *newTrack = dynamic_cast<STrack*>(
+        strackpath::resolveByPath( model_, QList<int>{ newIdx } ) );
     SApplication::app().submitAction( new SReparentTrackAction(
         QList<int>{ newIdx },
         strackpath::pathOf( model_, parentTrack ), -1 ) );
     if( stack ) stack->endMacro();
+    // The reparent moves the SLink, not the STrack — newTrack (pinned across
+    // the move by SReparentTrackAction's addRef) is still the right pointer.
+    return newTrack;
 }
 
 // Catch double-clicks in the blank area of the track-control column (below the
@@ -4164,13 +4172,24 @@ void SMVActualView::dropEvent(QDropEvent *e)
     offset_t timePos = smv_.alignTime(getTimeOf((int)e->position().x()));
     int rowIdx = rowAtViewY( (int) e->position().y() );
 
-    // Get the target track from the row.
+    // Get the target track from the row. A drop on EMPTY canvas space below
+    // the last lane (anywhere !smv_.rowAt(...) resolves, e.g. under the last
+    // track) creates a new track first and places the item on it there — the
+    // same gesture mouseDoubleClickEvent() drives via ctAddTrackBelowLast(),
+    // rather than silently doing nothing as this used to. A drop still over
+    // the time ruler is refused: that is not lane space at all.
     const STrackRow *row = smv_.rowAt(rowIdx);
-    if (!row || !row->track) {
-        return;
+    STrack *track = row ? row->track : nullptr;
+    if (!track) {
+        if ((int) e->position().y() < SMV_TIME_RULER_HEIGHT) {
+            return;
+        }
+        track = smv_.ctAddTrackBelowLast();
+        if (!track) {
+            return;
+        }
     }
 
-    STrack *track = row->track;
     SProject *project = SApplication::app().getCurrentProject();
     if (!project) {
         return;

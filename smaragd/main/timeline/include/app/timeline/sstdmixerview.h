@@ -657,9 +657,12 @@ public slots:
     void ctAddTrack();
     // Add a new track whose parent is the same container as the last visible
     // lane's track (the "track above" the blank area). Triggered by a double
-    // click in the blank space below the track heads. Routes through the
-    // undoable SAction system.
-    void ctAddTrackBelowLast();
+    // click in the blank space below the track heads, and by a media-browser
+    // drop landing on that same blank area. Routes through the undoable
+    // SAction system. Returns the new track (still a valid pointer after the
+    // reparent macro, which moves the SLink but never re-creates the STrack),
+    // or NULL if there is no project to add to.
+    STrack *ctAddTrackBelowLast();
     void ctRemoveTrack();
     // Grouping via the right-click menu / toolbar.
     void ctIndentTrack();    // nest the clicked track under its preceding sibling

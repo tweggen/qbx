@@ -265,7 +265,7 @@ endif()
 # rather than sleeping, so RUN_SERIAL here is about the shared INI and nothing
 # else.
 foreach(_media media_browser_browse media_browser_search
-                media_browser_drag_local)
+                media_browser_drag_local media_browser_drag_belowlast)
     if(TEST qxa.${_media})
         set_tests_properties(qxa.${_media} PROPERTIES RUN_SERIAL TRUE)
     endif()
