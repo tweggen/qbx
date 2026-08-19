@@ -310,6 +310,29 @@ public:
     QString testOutputDir() const override;
     bool ensureOutputDirExists() const override;
 
+    // Set by main.cpp before the window exists, from --test-case. The ONLY
+    // consumer today is notifyAudioOutputUnavailable() below: a headless run
+    // must never pop the "audio device unavailable" dialog (there is nobody
+    // to click it, so it would burn the whole CTest timeout — the qoffscreen
+    // failure mode again). Guarding at the SOURCE, rather than at every place
+    // that might one day connect to audioOutputDeviceFailed(), is what keeps
+    // that true regardless of how many listeners the signal grows.
+    void setTestCaseMode( bool v ) { testCaseMode_ = v; }
+    bool isTestCaseMode() const { return testCaseMode_; }
+
+    // A CONFIGURED, expected-to-work output device failed to open (either the
+    // interactive startup probe or a failed Play). Logs always; emits
+    // audioOutputDeviceFailed() at most ONCE per session — and never at all
+    // under --test-case — so a user who keeps hitting the same unavailable
+    // device is not nagged on every attempt. The notice resets when the user
+    // picks a different device in Options (see SOptionsDialog::applyAudioPage,
+    // clearAudioOutputFailureNotice below), giving the new choice its own
+    // first chance.
+    void notifyAudioOutputUnavailable();
+    // Give the next audio-output failure its own chance to notify (called
+    // when the user changes the output device selection in Options).
+    void clearAudioOutputFailureNotice() { audioDeviceFailureNotified_ = false; }
+
     // --- plugin discovery (proposal 08 M2) ---------------------------------
     // Push the persisted search paths into the engine registry. Called at
     // startup and whenever the options dialog changes the list.
@@ -362,6 +385,13 @@ signals:
     // Meters should return to the floor and clear their clip latch. Emitted when
     // the transport starts.
     void meterReset();
+
+    // A CONFIGURED, expected-to-work output device could not be opened — see
+    // notifyAudioOutputUnavailable(). Interactive-only by construction: the
+    // emitter checks isTestCaseMode() before emitting, so nothing under
+    // --test-case ever reaches a listener. SMainWindow is the one listener,
+    // showing a dialog that offers Options → Audio.
+    void audioOutputDeviceFailed();
 
 public slots:
     // Set the status/mode line. Emits statusModeChanged only when it changes.
@@ -469,6 +499,10 @@ private:
     SProject *currentProject_;
     QString statusMode_;
     QString testOutputDir_;        // directory for test artifacts (screenshots, renders)
+    bool testCaseMode_ = false;    // set from --test-case before the window exists
+    // See notifyAudioOutputUnavailable(): at most one dialog per session per
+    // device choice.
+    bool audioDeviceFailureNotified_ = false;
 };
 
 #endif

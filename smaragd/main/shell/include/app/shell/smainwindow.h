@@ -40,6 +40,16 @@ public:
     // any. Leaves an empty workspace when there is nothing to restore.
     void openMostRecent();
 
+    // Startup: a non-invasive open/close probe of the CONFIGURED output
+    // device (twSpeaker::probeOutputDevice()), run once the window is up.
+    // Called ONLY from main.cpp's interactive branch — never under
+    // --test-case or --run-actions, so a headless run never reaches the
+    // dialog this can trigger (SApplication::notifyAudioOutputUnavailable()
+    // is itself also guarded on isTestCaseMode(), belt and suspenders). A
+    // failure falls back to "no output" (see twSpeaker::startOutput()'s
+    // contract) and reports through the same path a failed Play uses.
+    void checkAudioOutputAtStartup();
+
     // TEST ENTRY POINT: forward a clip-edge drag to the arranger, which runs it
     // through its real mouse handlers. Lives here because the testkit module may
     // not include app/timeline (see tools/check_layering.py); shell may.
@@ -541,6 +551,12 @@ private:
     // legitimately decide to record anyway.
     bool endpointRateWarningShown_ = false;
     void warnOnEndpointRateMismatch();
+    // SApplication::audioOutputDeviceFailed() — shows the "audio device
+    // unavailable" dialog with a shortcut into Options → Audio.
+    void onAudioOutputDeviceFailed();
+    // Shared by showOptionsDialog() (page 0) and onAudioOutputDeviceFailed()
+    // (the Audio page, index 1 — see SOptionsDialog's tree/stack order).
+    void openOptionsDialogAt( int pageIndex );
     QAction *actSnapToGrid_, *actGrid_, *actMetronome_, *actCycle_;
     // "Count in while recording" (metronome context menu) is a convenience
     // on/off toggle over SOpt::CountInBars, whose own spinbox already treats

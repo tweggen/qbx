@@ -64,17 +64,17 @@ void twSpeaker::releaseEngine()
     dying.reset();
 }
 
-void twSpeaker::startOutput()
+bool twSpeaker::startOutput()
 {
     // Phase 1: Check and transition state atomically
     {
         std::lock_guard<std::mutex> lock(mutex());
-        if (isPlaying_) return;
+        if (isPlaying_) return true;
 
         OutputState curState = outputState_.load(std::memory_order_relaxed);
         if (curState != OutputState::STOPPED) {
             TWSPK_LOG( "already starting or playing (state=%d)", (int)curState );
-            return;
+            return true;
         }
 
         TWSPK_LOG( "ENTER - backend=%p, outputDeviceId=%s",
@@ -98,7 +98,7 @@ void twSpeaker::startOutput()
     if (ensureDeviceOpen(graphRate) != 0) {
         std::lock_guard<std::mutex> lock(mutex());
         outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
-        return;
+        return false;
     }
     if (deviceWasOpen)
         TWSPK_LOG( "device already OPEN (live lane) — attaching the frozen lane "
@@ -122,7 +122,7 @@ void twSpeaker::startOutput()
             std::lock_guard<std::mutex> lock(mutex());
             outputState_.store(OutputState::STOPPED, std::memory_order_relaxed);
         }
-        return;
+        return false;
     }
 
     // Phase 3: Create engine. Destroy the old one first, outside engineMutex_ —
@@ -220,6 +220,7 @@ void twSpeaker::startOutput()
     }
 
     TWSPK_LOG( "transitioned to BUFFERING; background task monitoring readahead" );
+    return true;
 }
 
 void twSpeaker::stopOutput()
@@ -487,6 +488,32 @@ std::vector<audio::AudioDeviceInfo> twSpeaker::outputDevices() const
 // ============================================================================
 // THE LIVE LANE (proposal 21 L1a, design D5)
 // ============================================================================
+
+bool twSpeaker::probeOutputDevice()
+{
+    // Already proven: the live lane or a previous Play already has the device
+    // open. No I/O, and — deliberately — no interaction with outputState_: a
+    // probe must never look like a Play attempt to anything watching that
+    // state machine.
+    if (deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN)
+        return true;
+
+    std::uint32_t graphRate = (std::uint32_t) env.getSRate();
+    if (!pInputPlugs_.empty() && pInputPlugs_[0] != nullptr)
+        graphRate = pInputPlugs_[0]->getFormat().sampleRate;
+
+    TWSPK_LOG( "probeOutputDevice: calling openDevice with rate=%u, "
+               "outputDeviceId=%s", graphRate, outputDeviceId_.c_str() );
+    if (backend_->openDevice(outputDeviceId_, graphRate) != 0) {
+        TWSPK_LOG( "probeOutputDevice: openDevice FAILED for '%s'",
+                   outputDeviceId_.c_str() );
+        return false;
+    }
+    backend_->closeDevice();
+    TWSPK_LOG( "probeOutputDevice: openDevice/closeDevice succeeded for '%s'",
+               outputDeviceId_.c_str() );
+    return true;
+}
 
 int twSpeaker::ensureDeviceOpen(std::uint32_t rate)
 {

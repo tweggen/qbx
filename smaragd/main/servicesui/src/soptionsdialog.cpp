@@ -52,7 +52,7 @@ static void selectByData( QComboBox *c, const QVariant &data )
     if( i >= 0 ) c->setCurrentIndex( i );
 }
 
-SOptionsDialog::SOptionsDialog( QWidget *parent )
+SOptionsDialog::SOptionsDialog( QWidget *parent, int initialPage )
     : QDialog( parent )
 {
     setWindowTitle( "Options" );
@@ -102,7 +102,9 @@ SOptionsDialog::SOptionsDialog( QWidget *parent )
     loadAudioPage();
     loadMidiPage();
 
-    tree_->setCurrentItem( tree_->topLevelItem( 0 ) );
+    if( initialPage < 0 || initialPage >= tree_->topLevelItemCount() )
+        initialPage = 0;
+    tree_->setCurrentItem( tree_->topLevelItem( initialPage ) );
     resize( 520, 320 );
 }
 
@@ -748,6 +750,14 @@ void SOptionsDialog::applyAudioPage()
     QString id = audioDevice_->currentData().toString();
     if( !id.isEmpty() ) {
         if( auto spk = SApplication::app().getSpeaker() ) {
+            // A genuinely different choice gets its own first chance at the
+            // "audio device unavailable" dialog — see
+            // SApplication::notifyAudioOutputUnavailable(). Applying the page
+            // with the SAME device re-selected must not reset it, or a user
+            // stuck on a still-broken device could re-trigger the dialog by
+            // opening and closing Options with no actual change.
+            if( QString::fromStdString( spk->outputDevice() ) != id )
+                SApplication::app().clearAudioOutputFailureNotice();
             spk->setOutputDevice( id.toStdString() );
         }
         SSettings::instance().setAudioDeviceId( id );

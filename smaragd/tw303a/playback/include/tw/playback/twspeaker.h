@@ -301,9 +301,33 @@ public:
     // THE FROZEN LANE. Unchanged in every respect except one: when the device is
     // already OPEN (the live lane opened it), it ATTACHES rather than re-opening
     // — and the engine it mints is published under the running callback.
-    void startOutput();
+    //
+    // Returns true when playback actually started (or was already
+    // starting/running — idempotent calls are not a failure), false when the
+    // CONFIGURED device could not be opened. On false, no engine was created
+    // and outputState_/isPlaying() are exactly as they were before the call —
+    // this is the "fall back to no output" contract callers rely on: nothing
+    // is blocked, nothing crashes, playback simply did not start. The caller
+    // decides what a failed start MEANS for the UI (see SMainWindow's Play
+    // handler and SApplication::setPlaybackRunning).
+    bool startOutput();
     // Stops the FROZEN LANE. Closes the device only when the live lane is OFF.
     void stopOutput();
+
+    // Non-invasive check: open the CONFIGURED output device and immediately
+    // close it again, touching none of the state machine above (no
+    // deviceState_/outputState_ transition, no callback registration, no
+    // engine). Mirrors the Options dialog's input-device probe pattern
+    // (loadAudioPage()). Meant for an interactive startup check — "will the
+    // device Play is about to use actually open?" — run BEFORE the user ever
+    // presses Play, so a stale/unplugged configured device can be reported
+    // once, up front, rather than only discovered on first use. A real
+    // startOutput() afterwards makes its own attempt exactly as before; this
+    // never opens the device for real.
+    //
+    // Returns true immediately (no I/O) when the device is already open
+    // (a live lane or a previous Play already proved it works).
+    bool probeOutputDevice();
 
     // --- the live lane (proposal 21 L1a, design D5) -------------------------
 

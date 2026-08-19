@@ -24,6 +24,7 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QPushButton>
 
 #include <iostream>
 
@@ -571,6 +572,43 @@ void SMainWindow::openMostRecent()
     updateRecentMenu();
 }
 
+void SMainWindow::checkAudioOutputAtStartup()
+{
+    auto spk = SApplication::app().getSpeaker();
+    if( !spk ) return;
+    if( !spk->probeOutputDevice() ) {
+        // Falls back to "no output": nothing here opens a device, starts
+        // playback, or otherwise changes what Play will try next — the
+        // report is purely informational, exactly like a failed Play.
+        SApplication::app().notifyAudioOutputUnavailable();
+    }
+}
+
+void SMainWindow::onAudioOutputDeviceFailed()
+{
+    QMessageBox box( this );
+    box.setIcon( QMessageBox::Warning );
+    box.setWindowTitle( "Audio Output Unavailable" );
+    box.setText( "The configured audio output device could not be opened." );
+    box.setInformativeText(
+        "Smaragd will keep running with no audio output. Pick a different "
+        "device in Audio Options, or reconnect the interface and try Play "
+        "again." );
+    QPushButton *openBtn = box.addButton( "Open Audio Options...",
+                                          QMessageBox::AcceptRole );
+    box.addButton( QMessageBox::Ok );
+    box.setDefaultButton( openBtn );
+    box.exec();
+    if( box.clickedButton() == openBtn )
+        openOptionsDialogAt( 1 );   // 1 = the Audio page (SOptionsDialog's tree order)
+}
+
+void SMainWindow::openOptionsDialogAt( int pageIndex )
+{
+    SOptionsDialog dlg( this, pageIndex );
+    dlg.exec();   // pages write to SSettings on OK/Apply; live UI reacts to changed()
+}
+
 void SMainWindow::fileExit()
 {
     ::exit( 0 );
@@ -782,10 +820,21 @@ void SMainWindow::startPlayingFrom_( bool fromLastNavigated )
         SApplication::app().beginRun( SApplication::app().getGlobalLocatorPos() );
 
         qWarning() << "startPlaying(): About to call getSpeaker()->startOutput()" << Qt::endl;
-        SApplication::app().getSpeaker()->startOutput();
+        const bool started = SApplication::app().getSpeaker()->startOutput();
         qWarning() << "startPlaying(): After getSpeaker()->startOutput()" << Qt::endl;
-        actPlay_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
-        SApplication::app().setPlaying( true );
+        // FALL BACK TO NO OUTPUT on a failed open (task: "audio interface
+        // unavailable"): only claim isPlaying, and only flip the icon to
+        // "on", when the device actually started. The old code did both
+        // unconditionally, so a stale/unplugged configured device left the
+        // transport LOOKING like it was running — icon on, isPlaying true —
+        // while nothing was pulling from the graph at all: no crash, but a
+        // silently broken, confusing state rather than an honest "stopped".
+        if( started ) {
+            actPlay_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
+            SApplication::app().setPlaying( true );
+        } else {
+            SApplication::app().notifyAudioOutputUnavailable();
+        }
     }
 }
 
@@ -1084,6 +1133,11 @@ SMainWindow::SMainWindow()
                       } );
     QObject::connect( &SApplication::app(), &SApplication::meterReset,
                       qMasterMeter_, &SLevelMeter::resetMeter );
+
+    // A configured, expected-to-work output device failed to open (startup
+    // probe or a failed Play) — see SApplication::notifyAudioOutputUnavailable.
+    QObject::connect( &SApplication::app(), &SApplication::audioOutputDeviceFailed,
+                      this, &SMainWindow::onAudioOutputDeviceFailed );
 
     // THE LATENCY READOUT (proposal 21 L5, design D5's "latency honesty").
     // Refreshed off meterTick because that is the one main-thread tick that
@@ -2962,8 +3016,7 @@ void SMainWindow::redo()
 
 void SMainWindow::showOptionsDialog()
 {
-    SOptionsDialog dlg( this );
-    dlg.exec();   // pages write to SSettings on OK/Apply; live UI reacts to changed()
+    openOptionsDialogAt( 0 );
 }
 
 void SMainWindow::showCleanupDialog()

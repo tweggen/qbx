@@ -940,12 +940,38 @@ void SApplication::setPlaybackRunning( bool play )
         // engine's pre-readahead seekTo(locator) + startReadahead() on THIS
         // thread - so the barrier precedes the readahead's first demand (D4).
         beginRun( getGlobalLocatorPos() );
-        t3Speaker_->startOutput();
-        setPlaying( true );
+        // FALL BACK TO NO OUTPUT on a failed open: only claim isPlaying when
+        // the device actually started. A caller that flipped isPlaying_
+        // regardless is exactly the bug this guards against — the transport
+        // would then look like it is running while nothing is being pulled
+        // from the graph at all. notifyAudioOutputUnavailable() is a no-op
+        // under --test-case, so this reaches no dialog from any testkit
+        // action (toggle-playback, recording) — it only logs.
+        if( t3Speaker_->startOutput() ) {
+            setPlaying( true );
+        } else {
+            notifyAudioOutputUnavailable();
+        }
     } else {
         t3Speaker_->stopOutput();
         setPlaying( false );
     }
+}
+
+void SApplication::notifyAudioOutputUnavailable()
+{
+    TW_LOGW( "ui.shell",
+             "audio output device '%s' could not be opened; falling back to "
+             "no output (silent)",
+             t3Speaker_ ? t3Speaker_->outputDevice().c_str() : "?" );
+
+    // Interactive only (see isTestCaseMode()'s doc comment) and at most once
+    // per session per device choice: a user who keeps pressing Play against
+    // the same unavailable device must not be nagged on every attempt, and a
+    // headless --test-case run must never see a modal nobody can dismiss.
+    if( testCaseMode_ || audioDeviceFailureNotified_ ) return;
+    audioDeviceFailureNotified_ = true;
+    emit audioOutputDeviceFailed();
 }
 
 bool SApplication::isRecordingActive() const
