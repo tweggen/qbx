@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 21 L5 follow-up. Regression for "deactivating the click while
+  playback is running does not actually deactivate it".
+
+  metronome_click.qxa toggles the metronome ONLY while the transport is
+  STOPPED (metronome-enable/-disable both happen between two separate
+  play/stop runs), so it never exercises a toggle-OFF that lands while the
+  transport is ALREADY PLAYING. This case does exactly that: one continuous
+  playback run, metronome ON for the first half, `<metronome-disable/>` fired
+  mid-run with the transport still rolling, then the SAME run continues and is
+  captured in ONE file - so a click that keeps sounding after the toggle
+  cannot hide behind a stop/restart that would have rebuilt the live plan
+  anyway.
+
+  Env, set on the CTest entry (see smaragd/CMakeLists.txt): RUN_SERIAL and
+  SMARAGD_CAPTURE_SPEED=1, same as metronome_click.qxa - the click is produced
+  by the PUMP and consumed by the RT callback, and the measurement is the
+  audio capture backend's own recording of what the device was handed.
+
+  No SMARAGD_AUDIO_INPUT_BACKEND: a metronome-only lane has no audio input.
+
+  THE CLOSED FORM (same project as metronome_click.qxa): 120 BPM, 4/4, 48 kHz,
+  so beat = 24000 frames = 0.5 s and bar = 96000 frames = 2 s.
+
+  THE WINDOWS. The first second is skipped for the same reason
+  metronome_click.qxa skips it: a live lane coming up on a STOPPED->PLAYING
+  transition costs one reposition (design D2) and the first ~5087 frames are
+  unreliable. From frame 48000 (1 s in) the ON phase runs for ~4.2 s of wall
+  clock before `<metronome-disable/>` fires; that gives the same 5-12 click
+  budget metronome_click.qxa's Phase A asserts, with a loose maxCount here
+  because a bug that keeps clicking past the toggle would inflate this count
+  too rather than only failing the second assertion. The REAL gate is the
+  second assertion: from frame 288000 (6 s in - comfortably past the toggle,
+  which lands at roughly 4.2-4.8 s once device-open and wait-playhead slack
+  are included) to the end of the ~9 s capture, expecting ZERO clicks. That
+  window is picked to give a good margin on both sides: it must land after the
+  live-plan rebuild the toggle triggers (which is synchronous, on the order of
+  a device buffer) and it must still leave several seconds of tail before the
+  transport stops, so a click that kept sounding would produce several more
+  onsets in it, not zero or one that could be dismissed as a boundary
+  artefact.
+-->
+<SActionScript version="1" name="metronome_toggle_during_playback">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- One empty track, silent project: everything in the capture is either
+         the click or nothing. -->
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+
+    <metronome-enable/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <assert-input-meter trackPath="0" contains="metronome=on"/>
+
+    <!-- PHASE A: metronome ON while playing. ................................ -->
+    <wait-ms ms="4200"/>
+
+    <!-- THE TOGGLE, WHILE STILL PLAYING - never stopped, never restarted. .... -->
+    <metronome-disable/>
+    <assert-input-meter trackPath="0" contains="metronome=off"/>
+
+    <!-- PHASE B: metronome OFF, same run, transport never stopped. ........... -->
+    <wait-ms ms="4200"/>
+
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="toggle_mid_playback.wav" minFrames="350000"/>
+
+    <!-- Sanity: the ON phase actually produced clicks (else the "zero clicks
+         afterwards" assertion below would be trivially true because nothing
+         ever clicked at all). No tight maxCount here - see the header. -->
+    <assert-metronome-clicks filename="toggle_mid_playback.wav" channel="0"
+                             startFrame="48000"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             minCount="3"/>
+
+    <!-- THE GATE: from comfortably after the toggle to the end of the
+         recording, the click must be silent - not "quieter", not "eventually
+         stops", silent from the very next block. -->
+    <assert-metronome-clicks filename="toggle_mid_playback.wav" channel="0"
+                             startFrame="288000"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             count="0"/>
+
+    <!-- A metronome-only lane live-owns nothing at all. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

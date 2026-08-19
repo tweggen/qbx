@@ -430,6 +430,17 @@ private:
     // app state it has no business duplicating.
     friend class SLiveMonitor;
     void initPluginRegistry();
+    // THE METRONOME SWITCH IS A PLAN-REBUILD TRIGGER (proposal 21 L5). A real
+    // pointer-to-member-function slot, not a lambda: Qt::UniqueConnection is
+    // silently a NO-OP for a functor/lambda connection (it logs "unique
+    // connections require a pointer to member function of a QObject
+    // subclass" and makes NO connection at all, not even the first one), so
+    // the lambda this used to be left the metronome property watched by
+    // NOTHING - toggling it off mid-playback changed the project property
+    // but never reached SLiveMonitor::refresh(), and the click kept sounding
+    // until the next unrelated live-plan rebuild (e.g. a transport stop).
+    // See setCurrentProject() for the connect() call.
+    void onProjectPropertyChangedForLive( const QString &key, const QVariant &value );
     // Proposal 38 gate 3: the media cache's root/cap and smediadrop's
     // placement hook. See the definition for why the hook exists at all.
     void initMediaLayer();
