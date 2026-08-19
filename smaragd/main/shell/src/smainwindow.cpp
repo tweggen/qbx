@@ -692,21 +692,53 @@ void SMainWindow::postHint( const QString &text, int durationMs )
     statusBar()->showMessage( text, durationMs );
 }
 
+// Space (item o): resume from the LAST NAVIGATED locator position, not from
+// wherever the transport currently sits.
 void SMainWindow::startPlaying()
 {
+    startPlayingFrom_( true );
+}
+
+// Shift+Space (item o): resume from the CURRENT locator position — Space's
+// own behaviour before item o, kept verbatim under the new shortcut.
+void SMainWindow::startPlayingFromCurrent()
+{
+    startPlayingFrom_( false );
+}
+
+void SMainWindow::startPlayingFrom_( bool fromLastNavigated )
+{
     qWarning() << "startPlaying(): Called." << Qt::endl;
-    if( !currentProject_ ) return;
+    // The APP's current project, not this window's: a headless --test-case
+    // run drives SApplication directly and leaves currentProject_ null (the
+    // same reason describeTrackHead/ensureArranger_ read it there) — and the
+    // `press-play` testkit verb (item o) needs this method to actually run.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
     if( SApplication::app().isPlaying() ) {
         qWarning() << "startPlaying(): Ought to stop." << Qt::endl;
-        SApplication::app().getSpeaker()->stopOutput();        
+        SApplication::app().getSpeaker()->stopOutput();
         actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
         SApplication::app().setPlaying( false );
     } else {
         qWarning() << "startPlaying(): Ought to start." << Qt::endl;
         // FIXME: Add myselves as listener of the root component.
-        SObject *root = currentProject_->getRootComponent();
+        SObject *root = proj->getRootComponent();
         if( !root ) return;
         qWarning() << "startPlaying(): Preparing start." << Qt::endl;
+
+        // Space resumes from the last position the user explicitly navigated
+        // to; Shift+Space resumes from wherever the locator happens to sit
+        // right now (today's behaviour, unchanged) — item o. This is a plain
+        // reposition, not itself a navigation: it must NOT update
+        // lastNavigatedLocatorPos_, or a second Space press would chase
+        // wherever playback last left the locator instead of returning to the
+        // spot the user actually picked.
+        if( fromLastNavigated ) {
+            SApplication::app().setGlobalLocatorPos(
+                SApplication::app().lastNavigatedLocatorPos() );
+        }
+
         // NO graph seek here. Play start used to walk the whole model tree
         // seeking every component to the locator; that cascade takes only each
         // component's mutex(), never its cursorMutex_, so it could land between
@@ -736,38 +768,66 @@ void SMainWindow::startPlaying()
         actPlay_->setIcon( QIcon( QPixmap( (const char **)playon_xpm ) ) );
         SApplication::app().setPlaying( true );
     }
-} 
+}
 
 void SMainWindow::stopPlaying()
 {
-    if( !currentProject_ ) return;
+    // See startPlayingFrom_ above: the APP's project, not this window's.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
     if( SApplication::app().isPlaying() ) {
         SApplication::app().getSpeaker()->stopOutput();
         SApplication::app().setPlaying( false );
     } else {
-        SObject *root = currentProject_->getRootComponent();
+        SObject *root = proj->getRootComponent();
         if( !root ) return;
         // FIXME: Jump to left locator here.
         SApplication::app().setGlobalLocatorPos( 0 );
-        //  currentProject_->getRootComponent().seekTo( 0 );
+        //  proj->getRootComponent().seekTo( 0 );
     }
     actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
 }
 
 // Jump the global position to the start of the time range, if one is set,
-// otherwise to the very beginning (zero).
+// otherwise to the very beginning (zero). Bound to "0" and Home.
 void SMainWindow::gotoRangeStart()
 {
-    if( !currentProject_ ) return;
+    // See startPlayingFrom_ above: the APP's project, not this window's —
+    // needed for the `fader-key` testkit verb (item j) to actually run.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
 
     offset_t pos = 0;
-    if( currentProject_->hasTimeSelection() ) {
-        SProject::TimeRange sel = currentProject_->getTimeSelection();
-        double sampleRate = currentProject_->getSRate();
+    if( proj->hasTimeSelection() ) {
+        SProject::TimeRange sel = proj->getTimeSelection();
+        double sampleRate = proj->getSRate();
         pos = (offset_t)( sel.startSeconds * sampleRate );
     }
 
     SApplication::app().setGlobalLocatorPos( pos );
+    // A direct user navigation (item o): Space must resume from HERE next,
+    // not from wherever playback or Stop happens to leave the locator.
+    SApplication::app().noteUserNavigatedLocator( pos );
+}
+
+// Jump the global position to the end of the time range, if one is set,
+// otherwise to the end of the project's arranged content. Bound to End.
+void SMainWindow::gotoRangeEnd()
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
+
+    offset_t pos;
+    if( proj->hasTimeSelection() ) {
+        SProject::TimeRange sel = proj->getTimeSelection();
+        double sampleRate = proj->getSRate();
+        pos = (offset_t)( sel.endSeconds * sampleRate );
+    } else {
+        pos = (offset_t) proj->getDurationFrames();
+    }
+
+    SApplication::app().setGlobalLocatorPos( pos );
+    SApplication::app().noteUserNavigatedLocator( pos );
 }
 
 // PRE-FLIGHT (main PR #55, kept across proposal 21 L3b): the two endpoints must
@@ -910,6 +970,12 @@ SMainWindow::SMainWindow()
     actPlay_->setShortcut(Qt::Key_Space);
     // actPlay_->setMenuText("Start");
 
+    // Shift+Space (item o): resume from the CURRENT locator position, i.e.
+    // Space's own behaviour before item o. No icon/menu entry of its own —
+    // it is reached only through the shortcut, wired below like actGotoStart_.
+    actPlayFromCurrent_ = new QAction( "Start playing from current position", this );
+    actPlayFromCurrent_->setShortcut( Qt::SHIFT | Qt::Key_Space );
+
     actStop_ = new QAction(
         QIcon( QPixmap( (const char **)stopoff_xpm )),
         "Stop playing",
@@ -918,10 +984,15 @@ SMainWindow::SMainWindow()
     /*new QAction( "Stop playing", QIcon( QPixmap( "images/player_stop.png" ) ),
                             "Stop", Qt::Key_0, this );*/
 
-    // "0" jumps the global position to the start of the time range
-    // (if one is set), otherwise to zero.
+    // "0" / Home jump the global position to the start of the time range
+    // (if one is set), otherwise to zero (item j).
     actGotoStart_ = new QAction( "Go to range start", this );
-    actGotoStart_->setShortcut( Qt::Key_0 );
+    actGotoStart_->setShortcuts( { QKeySequence( Qt::Key_0 ), QKeySequence( Qt::Key_Home ) } );
+
+    // End jumps to the end of the time range (if one is set), otherwise to
+    // the end of the project's arranged content (item j).
+    actGotoEnd_ = new QAction( "Go to range end", this );
+    actGotoEnd_->setShortcut( Qt::Key_End );
 
     actRecord_ = new QAction(
         QIcon( QPixmap( (const char **)recoff_xpm )),
@@ -1041,11 +1112,17 @@ SMainWindow::SMainWindow()
     QObject::connect( actRecord_, SIGNAL( triggered() ),
                       this, SLOT( onRecordTriggered() ) );
 
-    // Register the goto-start action on the window so its "0" shortcut is
-    // active even though it has no toolbar/menu entry.
+    // Register the goto-start/-end actions and Shift+Space on the window so
+    // their shortcuts are active even though none has a toolbar/menu entry.
     addAction( actGotoStart_ );
     QObject::connect( actGotoStart_, SIGNAL( triggered() ),
                       this, SLOT( gotoRangeStart() ) );
+    addAction( actGotoEnd_ );
+    QObject::connect( actGotoEnd_, SIGNAL( triggered() ),
+                      this, SLOT( gotoRangeEnd() ) );
+    addAction( actPlayFromCurrent_ );
+    QObject::connect( actPlayFromCurrent_, SIGNAL( triggered() ),
+                      this, SLOT( startPlayingFromCurrent() ) );
 
     qFileMenu_ = new QMenu( "&File", this );
     qFileMenu_->setTearOffEnabled(true);
@@ -2258,6 +2335,15 @@ bool SMainWindow::dragTrackHead( const QString &trackPath, int targetRow,
     STrack *track = trackAtPath_( trackPath );
     if( !track ) return false;
     return v->tkDragTrackHead( track, targetRow, nestOnto );
+}
+
+bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkSendFaderKey( track, key );
 }
 
 // Build the REAL head off screen at the given lane geometry. Parentless and

@@ -20,6 +20,7 @@
 #include <QToolTip>
 
 #include "app/shell/sapplication.h"
+#include "app/shell/smainwindow.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/smidiinputhub.h"
@@ -147,9 +148,37 @@ void SSMVMixerControl::wheelEvent( QWheelEvent *ev )
  *
  * Also intercept mouse presses on the track label to allow selecting the track
  * from anywhere on the control (d).
+ *
+ * And intercept Home/End on the fader (item j): QAbstractSlider's own
+ * keyPressEvent maps them to "jump to minimum/maximum", so a fader that
+ * happens to have keyboard focus would silently steal the transport's
+ * go-to-start/-end shortcut. Home/End must always drive the transport,
+ * whether or not a fader has focus, so this catches them BEFORE QSlider's
+ * handler ever sees them and forwards to the same SMainWindow slots the
+ * window-wide shortcuts use.
  */
 bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
 {
+    if( watched == qVolume_ && ev->type() == QEvent::KeyPress ) {
+        QKeyEvent *ke = static_cast<QKeyEvent *>( ev );
+        if( ke->key() == Qt::Key_Home || ke->key() == Qt::Key_End ) {
+            // NOT QApplication::activeWindow(): a --test-case run never
+            // shows the window (main.cpp), so nothing is ever "active" under
+            // QT_QPA_PLATFORM=offscreen and that call always returns null
+            // there. topLevelWidgets() is the same lookup every testkit
+            // gesture verb uses (see strackselectionactions.cpp's
+            // mainWindow()) for exactly this reason.
+            SMainWindow *mw = nullptr;
+            for( QWidget *w : QApplication::topLevelWidgets() ) {
+                if( ( mw = qobject_cast<SMainWindow*>( w ) ) ) break;
+            }
+            if( mw ) {
+                if( ke->key() == Qt::Key_Home ) mw->gotoRangeStart();
+                else                            mw->gotoRangeEnd();
+            }
+            return true;   // never let QAbstractSlider touch the fader's value
+        }
+    }
     if( watched == qVolume_ && ev->type() == QEvent::MouseButtonDblClick ) {
         QMouseEvent *me = static_cast<QMouseEvent *>( ev );
         if( me->button() == Qt::LeftButton ) {
@@ -1216,6 +1245,21 @@ bool SSMVMixerControl::tkClickToggle( const QString &which, bool on )
     // click() and not setChecked(): the point is to go through the button's
     // own toggled() signal, which is the wire the broadcast hangs off.
     if( b->isChecked() != on ) b->click();
+    return true;
+}
+
+bool SSMVMixerControl::tkSendFaderKey( const QString &key )
+{
+    Qt::Key k = Qt::Key_unknown;
+    if(      key == QStringLiteral( "Home" ) ) k = Qt::Key_Home;
+    else if( key == QStringLiteral( "End" ) )  k = Qt::Key_End;
+    else return false;
+    // QApplication::sendEvent runs the exact same dispatch a real keystroke
+    // would (installed event filters first, then the target's own event()),
+    // so this reaches eventFilter() above precisely as focus + a keystroke
+    // would — without needing real OS-level focus under QT_QPA_PLATFORM=offscreen.
+    QKeyEvent ev( QEvent::KeyPress, k, Qt::NoModifier );
+    QApplication::sendEvent( qVolume_, &ev );
     return true;
 }
 

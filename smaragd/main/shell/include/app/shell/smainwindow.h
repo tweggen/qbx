@@ -95,6 +95,10 @@ public:
     // boundary (reorder / pop out), which is the only route to the multi-track
     // move arithmetic in endTrackDrag.
     bool dragTrackHead( const QString &trackPath, int targetRow, bool nestOnto );
+    // ...and a synthetic Home/End key press straight to that lane's LIVE
+    // fader (item j), through the shell for the same reason. `key` is
+    // "Home" or "End"; false for an unknown track path or key name.
+    bool sendFaderKey( const QString &trackPath, const QString &key );
 
     // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
@@ -273,6 +277,32 @@ public:
     // focus, so the binding round-trips.
     void showClipProperties();
 
+public slots:
+    // "Go to project start" / "Go to project end" (item j): jump to the time
+    // selection's start/end if one is set, otherwise to frame 0 / the end of
+    // the project's arranged content. Bound to "0"/Home and End respectively.
+    // Public (and slots, for the old-style SIGNAL/SLOT connect below) because
+    // a fader widget's own event filter calls these directly, so Home/End
+    // always drive the transport even while the fader has keyboard focus —
+    // QAbstractSlider's own keyPressEvent would otherwise treat them as
+    // "jump this fader to its minimum/maximum".
+    void gotoRangeStart();
+    void gotoRangeEnd();
+
+    // Space / Shift+Space (item o). Public for the same reason as above: the
+    // `press-play` testkit verb drives these directly to exercise exactly
+    // what the two shortcuts do, since `toggle-playback` bypasses this
+    // resume-position logic entirely (it drives SAppContext::setPlaybackRunning
+    // straight, which is the older, simpler mechanism).
+    void startPlaying();              // resume from the LAST NAVIGATED position
+    void startPlayingFromCurrent();   // resume from the CURRENT position (unchanged)
+    // The real Stop button/shortcut. Public for the same reason, driven by
+    // the `press-stop` testkit verb: pressed while ALREADY stopped it resets
+    // the locator to 0 — a SEPARATE mechanism from item o's "last navigated"
+    // tracking (noteUserNavigatedLocator is deliberately NOT called here), and
+    // exercising the real slot is what proves the two do not interfere.
+    void stopPlaying();
+
 protected:
     void closeEvent( QCloseEvent *event ) override;
     // Watches the tempo box so Return commits the value and then hands the
@@ -289,9 +319,6 @@ protected slots:
     void fileClose();
     void onRenderTriggered();
 
-    void startPlaying();
-    void stopPlaying();
-    void gotoRangeStart();
     void onRecordTriggered();
     void onRecordingFinished();
 
@@ -372,6 +399,11 @@ private:
     // so loop playback follows the project. Called when playback starts and
     // whenever the Cycle flag or the range markers change.
     void syncCyclePlayback();
+    // Shared by startPlaying() (Space) and startPlayingFromCurrent()
+    // (Shift+Space) — item o. fromLastNavigated selects which position a
+    // fresh play start seeks to; the toggle-to-stop branch is identical
+    // either way.
+    void startPlayingFrom_( bool fromLastNavigated );
 
     // Measure and cache audio device latencies on startup if not already known.
     // Shows a modal "Checking audio devices..." dialog to the user.
@@ -405,6 +437,10 @@ private:
     QActionGroup *deviceGroup_;
 
     QAction *actStop_, *actPlay_, *actRecord_, *actGotoStart_;
+    // Shift+Space (item o) and End (item j) — window-wide shortcuts with no
+    // toolbar/menu entry of their own, exactly like actGotoStart_.
+    QAction *actPlayFromCurrent_ = nullptr;
+    QAction *actGotoEnd_ = nullptr;
     QAction *actSaveAs_ = nullptr;      // File->Save as...; disabled with no project
     QToolBar *qTBTransport_;
     // Proposal 34: master level meter, right of the tempo box. Mono today (the

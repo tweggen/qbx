@@ -1344,6 +1344,15 @@ bool SStdMixerView::tkToggleTrackHead( STrack *t, const QString &which, bool on 
     return false;      // no head for that track (it is inside a collapsed folder)
 }
 
+bool SStdMixerView::tkSendFaderKey( STrack *t, const QString &key )
+{
+    if( !t ) return false;
+    for( SSMVMixerControl *mc : *controlArray_ ) {
+        if( mc && &mc->getTrack() == t ) return mc->tkSendFaderKey( key );
+    }
+    return false;      // no head for that track (it is inside a collapsed folder)
+}
+
 bool SStdMixerView::tkDragTrackHead( STrack *t, int targetRow, bool nestOnto )
 {
     if( !t ) return false;
@@ -1661,6 +1670,9 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             // playing (see SApplication) — a plain model_->seekTo would only
             // move the component cursors, not the playback position.
             SApplication::app().setGlobalLocatorPos( ofs );
+            // A direct user navigation (item o): Space must resume from HERE
+            // next, not from wherever playback or Stop leaves the locator.
+            SApplication::app().noteUserNavigatedLocator( ofs );
         }
     }
 }
