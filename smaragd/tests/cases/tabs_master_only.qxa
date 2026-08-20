@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 M8: the central widget is a TAB SHELL, and with only the master
+  tab open the app behaves exactly as it did before the shell existed.
+
+  That "exactly as before" is not asserted here, and cannot be: it is asserted
+  by the OTHER 247 tests in this suite, every one of which reaches the arranger
+  through SMainWindow::ensureArranger_() and would fail if the shell had
+  changed what that returns. This case adds only what the suite cannot see:
+  that a shell exists at all, that the master is tab 0, and that it survives a
+  project round trip.
+
+  How much the suite is worth as that gate was measured rather than assumed:
+  the first version of this change read SMainWindow::currentProject_ inside the
+  new installer, which is NULL for the whole of a headless ==test-case run
+  (SActionRunner sets the project on SApplication instead), so ensureArranger_
+  returned null and 34 UI cases SEGFAULTED. Nothing in this file would have
+  caught that; the suite caught it on the first run.
+-->
+<SActionScript version="1" name="tabs_master_only">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <assert-tab-set names="Arrangement" active="Arrangement"/>
+
+    <!-- The arranger still works through the shell: a gesture, and the model
+         change it makes, both go through the active tab's view. -->
+    <assert-track-count arrangement="" count="1"/>
+    <add-track index="-1"/>
+    <assert-track-count arrangement="" count="2"/>
+    <assert-tab-set names="Arrangement"/>
+
+    <!-- A save/load swaps the project under the shell. The master tab must be
+         rebuilt, not duplicated or left pointing at the dead project. -->
+    <save-project path="../../build/test-output/tabs_master_only/tabs.qxp"/>
+    <load-project path="../../build/test-output/tabs_master_only/tabs.qxp"/>
+    <assert-tab-set names="Arrangement" active="Arrangement"/>
+    <assert-track-count arrangement="" count="2"/>
+
+    <!-- And the render path is untouched by any of it. -->
+    <render filename="tabs.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="tabs.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+  </actions>
+
+</SActionScript>

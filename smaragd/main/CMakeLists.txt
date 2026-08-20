@@ -368,6 +368,7 @@ set(APP_UI_FILES
     shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smidirecorder.h
     shell/include/app/shell/splayheadclock.h
+    shell/include/app/shell/sviewtabs.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssecretstore.h
     shell/include/app/shell/ssettings.h
@@ -381,6 +382,7 @@ set(APP_UI_FILES
     shell/src/smidiinputhub.cpp
     shell/src/smidioutpump.cpp
     shell/src/smidirecorder.cpp
+    shell/src/sviewtabs.cpp
     shell/src/smainwindow.cpp
     shell/src/ssecretstore.cpp
     shell/src/ssecretstorebackend.h
@@ -423,6 +425,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sslipclipaction.h
     testkit/include/app/testkit/stestfilepath.h
+    testkit/include/app/testkit/stabtestactions.h
     testkit/include/app/testkit/strackselectionactions.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/src/sactionrunner.cpp
@@ -465,6 +468,7 @@ set(APP_UI_FILES
     testkit/src/ssidecartestactions.cpp
     testkit/src/sslipclipaction.cpp
     testkit/src/stestfilepath.cpp
+    testkit/src/stabtestactions.cpp
     testkit/src/sarrangementtestactions.cpp
     testkit/src/strackselectionactions.cpp
     testkit/src/stransporttestactions.cpp
