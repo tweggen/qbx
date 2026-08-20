@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Alt-dragging a TAKE LANE clip's body must slip that TAKE's content, not
+  move the whole clip — and it must target the take actually under the
+  pointer, which need not be the active/comped one. Companion to
+  slip_past_data.qxa: the same clip geometry (a 4 s clip at 0) and the
+  same drag (body midpoint -> toTime=192000, i.e. drag right by 2 s), so
+  the resulting -2 s slip and its RMS windows are numerically identical,
+  copied from that case rather than re-derived.
+
+  Before the fix, this drag either did nothing (the take-lane press was
+  wholly consumed by the click-to-comp gesture, "take lanes host no other
+  gestures yet") or, worse, leaked into whatever gesture flags a PRIOR
+  composite-lane drag had left set, moving the STACK's own placement
+  instead of slipping the take's content.
+
+  Fixture: 4 s ramped sawtooth, seconds at .067 / .176 / .291 / .405.
+-->
+<SActionScript version="1" name="take_lane_slip">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- take 0: the original 4 s clip. take 1: an identical copy, appended
+         and auto-activated (decision 1) — both start unslipped. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+
+    <!-- Expand take lanes: row 0 = composite, row 1 = take 0's lane,
+         row 2 = take 1's lane (proposal 17 phase 3 row order). -->
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- Alt-drag TAKE 0's row, the one that is NOT active/comped, by 2 s.
+         Same gesture as slip_past_data.qxa (body grab, toTime at the
+         clip's own end). -->
+    <drag-clip-edge track="1" clip="0" edge="body" toTime="192000"
+                    half="lower" modifiers="alt"/>
+
+    <!-- Take 1 (still active, never touched by the drag) must render the
+         ORIGINAL unslipped material — proves the drag targeted take 0's
+         content alone, not the stack's placement or the other take. -->
+    <render filename="take_lane_slip_active.wav" format="wav" quality="10"
+           durationSec="4.5"/>
+    <assert-audio-energy filename="take_lane_slip_active.wav"
+                         startFrame="4000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="take_lane_slip_active.wav"
+                         startFrame="52000" frameCount="40000"
+                         minRms="0.160" maxRms="0.195"/>
+
+    <!-- Comp to take 0: the SLIPPED material — silence, then the source's
+         first two seconds, exactly slip_past_data.qxa's pattern. -->
+    <select-take clip="0,0" take="0"/>
+    <render filename="take_lane_slip_take0.wav" format="wav" quality="10"
+           durationSec="4.5"/>
+    <assert-audio-energy filename="take_lane_slip_take0.wav"
+                         startFrame="4000" frameCount="80000"
+                         minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="take_lane_slip_take0.wav"
+                         startFrame="100000" frameCount="40000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="take_lane_slip_take0.wav"
+                         startFrame="148000" frameCount="40000"
+                         minRms="0.160" maxRms="0.195"/>
+
+    <!-- The STACK's own placement is untouched: position and length stay
+         put. Only the take's content offset moved — the "moves the clip,
+         not the sample" bug this case guards against. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

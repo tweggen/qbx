@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A click on a TAKE LANE row must set the general clip SELECTION to the
+  take STACK's own link — never a specific take, and never leaving the
+  selection untouched — so a subsequent selection-driven command acts on
+  the column just clicked rather than on whatever was selected before.
+  Split ('s' / ctSplitSample, driven here through split-selection) is the
+  command that surfaced it. Mirrors split_selection.qxa's regression
+  shape, but for the take-lane click path specifically.
+
+  Before the fix, a take-lane click only submitted SSelectTakeAction (the
+  comping gesture) and never touched the selection, so split-selection
+  kept acting on whatever was selected before — here, track 0's clip,
+  clicked first to set up exactly that stale state.
+
+  Fixture: track 0 has one plain 4 s clip (the "stale selection" target);
+  track 1 has a 2-take stack. Clicking track 1's take-0 lane must move the
+  selection there, so split-selection splits BOTH takes on track 1 and
+  leaves track 0's clip untouched.
+-->
+<SActionScript version="1" name="take_lane_click_split">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+
+    <!-- Stale selection: track 0's clip, from an ordinary composite-lane
+         click — exactly what must NOT still be the split target below. -->
+    <click-lane trackPath="0" time="96000"/>
+
+    <!-- Expand track 1's take lanes: row 0 = track 0 composite, row 1 =
+         track 1 composite, row 2 = track 1's take-0 lane, row 3 = take-1. -->
+    <set-lane-view toggleTakesRow="1"/>
+
+    <!-- Plain click (no Alt) on take 0's lane row: activates that take
+         (the comping gesture) AND must move the selection onto the STACK. -->
+    <drag-clip-edge track="2" clip="0" edge="body" toTime="48000"/>
+
+    <set-locator position="96000"/>
+    <split-selection/>
+
+    <!-- Track 1's stack: BOTH takes split at the locator — proves the
+         click selected the whole column, and split-clip's existing
+         take-stack handling (it was already correct) reached it. -->
+    <assert-clip-window clip="1,0" take="0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="1,1" take="0" startTime="96000" duration="96000"/>
+    <assert-clip-window clip="1,0" take="1" startTime="0" duration="96000"/>
+    <assert-clip-window clip="1,1" take="1" startTime="96000" duration="96000"/>
+
+    <!-- Track 0's clip, selected before the take-lane click: untouched —
+         the click must have replaced it as the split target. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

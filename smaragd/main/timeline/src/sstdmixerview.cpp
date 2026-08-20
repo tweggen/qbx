@@ -1648,7 +1648,19 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         && ( lastClickedStart_ || lastClickedEnd_ || clipDragIsSlip_
              || clipDragIsStretch_ || clipDragIsLoop_ || clipDragIsLoopMarker_
              || clipDragIsLoopStart_ ) ) {
-        SCut *cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+        // Take-lane slip: lastClickSLink_ is still the take STACK's own link
+        // (path/position identity); the cut actually edited is the take under
+        // the pointer. Every other edge gesture is composite-lane only, so
+        // clipDragTakeIndex_ is -1 for all of them.
+        SCut *cut = nullptr;
+        if( clipDragTakeIndex_ >= 0 ) {
+            STakeStack *stack = dynamic_cast<STakeStack*>(
+                &lastClickSLink_->getSObject() );
+            SClipWindow *take = stack ? stack->takeAt( clipDragTakeIndex_ ) : nullptr;
+            cut = take ? dynamic_cast<SCut*>( &take->asObject() ) : nullptr;
+        } else {
+            cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+        }
         if( cut ) {
             offset_t newStart   = lastClickSLink_->getStartTime();
             Fraction newAnchor  = cut->getSrcStart();
@@ -1684,13 +1696,14 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
                 clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
                 SApplication::app().submitAction(
                     new SResizeClipAction( clipPath, newStart, newAnchor, newDur,
-                                           newLoop, newStretch ) );
+                                           newLoop, newStretch, clipDragTakeIndex_ ) );
                 update();
             }
         }
         clipDragArmed_ = false;
         clipDragIsSlip_ = clipDragIsStretch_ = clipDragIsLoop_ = false;
         clipDragIsLoopMarker_ = clipDragIsLoopStart_ = false;
+        clipDragTakeIndex_ = -1;
         return;
     }
 
@@ -2285,8 +2298,25 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Alt-drag the BODY: slide the content under the clip (change the
                 // cut's start offset). Position and length stay put; dragging
                 // right reveals earlier content.
-                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                SCut *cut = nullptr;
+                if( clipDragTakeIndex_ >= 0 ) {
+                    // Take-lane slip: lastClickSLink_ is the take STACK's outer
+                    // link (kept for position/geometry only — never fed to
+                    // ensureSCut, which would misread the stack as "not an SCut
+                    // yet" and replace the stack's own link with a bogus one).
+                    // The object actually being slipped is the take under the
+                    // pointer, resolved fresh every move in case a concurrent
+                    // edit removed it.
+                    STakeStack *stack = dynamic_cast<STakeStack*>(
+                        &lastClickSLink_->getSObject() );
+                    SClipWindow *take =
+                        stack ? stack->takeAt( clipDragTakeIndex_ ) : nullptr;
+                    cut = take ? dynamic_cast<SCut*>( &take->asObject() ) : nullptr;
+                    if( !cut ) return;
+                } else {
+                    lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
+                    cut = (SCut *)&(lastClickSLink_->getSObject());
+                }
                 length_t contentLen = cut->getContent().hasDuration()
                                       ? (length_t) cut->getContent().getDuration() : -1;
                 length_t d = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
@@ -2822,6 +2852,7 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
     qWarning( "mousePressEvent() called button=%d.\n",
 	      ev->button() );
     updateLastClickVars( ev->pos() );
+    clipDragTakeIndex_ = -1;   // reset; the take-lane branch below may re-arm it
 
     // The top ruler band hosts the time-range selector.
     if( ev->pos().y() < SMV_TIME_RULER_HEIGHT ) {
@@ -2847,15 +2878,59 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
     }
 
     // Take-lane rows: a left click on a take ACTIVATES it — the comping
-    // gesture (proposal 17 phase 3, undoable select-take). Take lanes host no
-    // other gestures yet, so the click is consumed either way.
+    // gesture (proposal 17 phase 3, undoable select-take). Alt held on the
+    // clip BODY instead arms a SLIP drag against the take actually under the
+    // pointer, which need not be the active/comped one — SResizeClipAction's
+    // `take` parameter already exists for exactly this ("the slip syncs to
+    // the CORRESPONDING take", decision 3), only the gesture to reach it was
+    // missing. Everything else (move/stretch/loop) is still unclaimed here.
     if( ev->buttons() & Qt::LeftButton ) {
         const STrackRow *clickRow = smv_.rowAt( lastClickTrackIdx_ );
         if( clickRow && clickRow->takeRow >= 0 ) {
             if( lastClickSLink_ ) {
                 STakeStack *stack = dynamic_cast<STakeStack*>(
                     &lastClickSLink_->getSObject() );
-                if( stack && stack->takeAt( clickRow->takeRow ) ) {
+                SClipWindow *take =
+                    stack ? stack->takeAt( clickRow->takeRow ) : nullptr;
+                if( stack && take ) {
+                    // The click also selects the STACK's own link (never a
+                    // single take — a stack is one clip on the timeline; only
+                    // WHICH take sounds is per-lane), mirroring the composite
+                    // lane's own-clip selection. Without this, whatever was
+                    // selected before this click (or nothing) stayed the
+                    // selection, so pressing 's' to split acted on that stale
+                    // target instead of the column just clicked.
+                    Qt::KeyboardModifiers modifiers = ev->modifiers();
+                    switch( modifiers & Qt::ShiftModifier ) {
+                    case Qt::ShiftModifier:
+                        SApplication::app().submitToggleSelectionAction( lastClickSLink_ );
+                        break;
+                    default:
+                        SApplication::app().submitSetSelectionAction( lastClickSLink_ );
+                        break;
+                    }
+                    bool onBorder = lastClickedStart_ || lastClickedEnd_;
+                    bool alt = modifiers & Qt::AltModifier;
+                    SCut *takeCut = dynamic_cast<SCut*>( &take->asObject() );
+                    if( takeCut && alt && !onBorder && lastClickLoopMarker_ == 0 ) {
+                        clipDragArmed_        = true;
+                        clipDragIsDuplicate_  = false;
+                        clipDragIsLoopMarker_ = false;
+                        clipDragIsSlip_       = true;
+                        clipDragIsStretch_    = false;
+                        clipDragIsLoop_       = false;
+                        clipDragIsLoopStart_  = false;
+                        clipDragTakeIndex_    = clickRow->takeRow;
+                        clipDragTrack0_       = clickRow->track;
+                        clipDragStart0_       = lastClickSLink_->getStartTime();
+                        clipResizeOffset0_ = (offset_t) takeCut->getStartOffset().frames();
+                        clipSrcStart0_     = takeCut->getSrcStart();
+                        clipLoopLen0_      = takeCut->getLoopLength().frames();
+                        clipStretch0_      = takeCut->getStretchExact();
+                        lastClickDuration_ = stack->getDuration();
+                        update();
+                        return;
+                    }
                     QList<int> path =
                         strackpath::pathOf( smv_.getModel(), clickRow->track );
                     path.append(
