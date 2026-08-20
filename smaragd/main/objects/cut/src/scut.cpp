@@ -1323,6 +1323,17 @@ int SCut::serializeSelfAttributes( QTextStream &o )
 
     // srcStart is the exact, authoritative anchor; startOffset is the
     // derived warped-domain value kept for older builds reading this file.
+    // The registered asset NAME, when this cut is one (see
+    // readPostChildrenAttributes). Written only when registered, so a plain
+    // clip's element is unchanged.
+    if( SProject *proj = getProjectSafe() ) {
+        const QString assetName = proj->assetNameOf( this );
+        if( !assetName.isEmpty() )
+            o << " assetName='"
+              << assetName.toHtmlEscaped().replace( QLatin1Char(0x27),
+                                                    QLatin1String("&apos;") )
+              << "'";
+    }
     o << " srcStart='" << QString::fromStdString(srcStart_.toString()) << "'"
       << " startOffset='" << QString::fromStdString(Fraction(getStartOffset().frames(), 1).toString()) << "'"
       << " cutDuration='" << QString::fromStdString(cutDurationFrac.toString()) << "'"
@@ -1366,6 +1377,21 @@ int SCut::serializeSelfAttributes( QTextStream &o )
 int SCut::readPostChildrenAttributes( QDomElement &element )
 {
     SObject::readPostChildrenAttributes( element );
+
+    // A registered ASSET re-registers itself here (proposal 09 M1). The gap
+    // this closes predates tabs: SProject::registerAsset() had exactly ONE
+    // call site (SCreateAssetAction) and NOTHING in main/persistence, so an
+    // asset's NAME never survived a save -- the body did, because a placement
+    // links it, but the registry entry did not, and with it went
+    // assetNameOf()'s ability to tell "this clip IS the asset" from "this clip
+    // merely windows the same container". Absent on every file written before
+    // this, so it is inert for existing projects.
+    const QString assetName = element.attribute( "assetName" );
+    if( !assetName.isEmpty() ) {
+        SProject *proj = getProjectSafe();
+        if( proj && !proj->hasAsset( assetName ) )
+            proj->registerAsset( assetName, this );
+    }
 
     // Note: Invalidation is suppressed during project load via SProject::disableInvalidation(),
     // so calling setStartOffset() is safe - it won't trigger invalidation chains.

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  NOT REGISTERED. This directory is not covered by the tests/cases/*.qxa glob
+  (the same convention tests/cases/xproc/ uses), because this case is RACY:
+  measured 3 PASS / 3 FAIL over six runs on an idle box, and racy at
+  SMARAGD_REVAL_WORKERS=1 as well as 8, so it is not the worker pool.
+
+  It is kept here because it is the gate for the SECOND HALF of proposal 09 M0,
+  which is not implemented. See that milestone: the first half (invalidate from
+  every registered arrangement root) IS implemented and is what makes this case
+  pass at all — before it, nothing was bumped and the case failed every time.
+  What remains is that a render does not WAIT for an invalidated container
+  capture to be rebuilt, so the render and the rebuild race.
+
+  Register it (move it up one directory) once that is fixed, and expect it to
+  fail deterministically on the binary before the fix.
+  ============================================================================
+-->
+<!--
+  Proposal 09 M0: an edit made INSIDE a detached arrangement must reach what the
+  arrangement's asset placement plays.
+
+  This is the gate for the invalidation walk. SObject::invalidateRenderPath()
+  walks DOWN from a root and bumps the content epoch of every chain that
+  CONTAINS the edited object; the epoch is the only staleness signal the page
+  cache has, so a chain that is never bumped keeps serving its first frozen
+  page forever. Before M0 the walk started at the MASTER root alone.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramping 0 -> 0.8, so each source
+  second has its own RMS: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405.
+
+  Shape:
+    - "Drums" is a detached arrangement holding ONE track with the sawtooth
+      at 0. It is summed into no master bus (D8).
+    - An asset windows Drums over [0,4s) and is placed on master lane 0 at 0.
+    - The render therefore carries exactly Drums' output.
+    - Then a SECOND copy of the sawtooth is added inside Drums at 0, doubling
+      the amplitude. A correct invalidation makes the second render louder;
+      a stale one reproduces the first render exactly.
+
+  The doubling is deliberately large (a factor of 2 = +6 dB) so the assertion
+  cannot be satisfied by rounding, and the "unchanged" failure mode is an exact
+  match against the pre-edit band rather than a near miss.
+
+  The asserted seconds are sec0 and sec1 ONLY, and that is not arbitrary: the
+  ramp reaches 0.8, so two copies of sec3 sum to 1.6 and CLIP in a 16-bit PCM
+  render (measured: 0.721 where an unclipped double would be 0.81). Asserting a
+  clipped second would make the band a statement about the clipper rather than
+  about invalidation.
+-->
+<SActionScript version="1" name="arrangement_edit_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Master lane 0: nothing of its own; it only carries the asset. -->
+    <add-track index="-1"/>
+
+    <!-- The detached arrangement, and one lane inside it. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <assert-arrangements names="Drums" trackCounts="1"/>
+    <assert-track-count arrangement="Drums" count="1"/>
+    <assert-track-count arrangement="" count="1"/>
+
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The asset windows the WHOLE arrangement root ("Drums:" = the root
+         itself, empty index path) over its first 4 seconds. -->
+    <create-asset container="Drums:" startOffset="0" duration="192000"
+                  assetName="DrumsAsset"/>
+    <place-asset assetName="DrumsAsset" trackPath="0" timePos="0"/>
+
+    <render filename="arr_edit_before.wav" format="wav" quality="10"
+            durationSec="4"/>
+
+    <!-- Baseline: one sawtooth, so the ramp ladder as-is. -->
+    <assert-audio-energy filename="arr_edit_before.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+    <assert-audio-energy filename="arr_edit_before.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+
+    <!-- THE EDIT: a second identical clip inside the arrangement, on its own
+         lane, at the same position. Two identical sawtooths sum to double
+         amplitude. -->
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+
+    <render filename="arr_edit_after.wav" format="wav" quality="10"
+            durationSec="4"/>
+
+    <!-- The whole point. Doubled amplitude => doubled RMS, per second.
+         A stale capture reproduces the baseline bands above and fails here. -->
+    <assert-audio-energy filename="arr_edit_after.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.33" maxRms="0.38"/>
+    <assert-audio-energy filename="arr_edit_after.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.12" maxRms="0.16"/>
+  </actions>
+
+</SActionScript>

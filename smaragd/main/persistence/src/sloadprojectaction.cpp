@@ -30,6 +30,12 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
     // would race with the UI thread still deserializing objects.
     // When enableInvalidation() is called, worker threads will begin
     // recomputing all loaded cuts.
+    // A load REPLACES the project, but it loads INTO this same SProject
+    // object, so anything held in a by-name registry rather than in the object
+    // tree has to be dropped explicitly or it is inherited by the document
+    // being opened (proposal 09 M1).
+    project->clearArrangements();
+
     project->disableInvalidation();
 
     if (loader.createObjects(*project) != 0) {
