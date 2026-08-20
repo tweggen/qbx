@@ -603,6 +603,29 @@ private:
     // leaves the older value and is correctly detected as stale.
     std::atomic<uint64_t> captureContentEpoch_{ 0 };
 
+    // How many times in a row we have rebuilt this capture WITHOUT the stamp
+    // converging, and the bound on it.
+    //
+    // THIS BOUND IS LOAD-BEARING AND ITS ABSENCE HUNG THE APP. The check above
+    // assumes a rebuild eventually produces a capture whose stamp matches the
+    // content's current epoch. For a CONTAINER capture that assumption is
+    // false: buildCapture_ freezes the container's pages, and doing so can
+    // perturb the very epoch it stamps against -- so every rebuild came out
+    // stale, ensureReader() invalidated again, and each invalidateCapture()
+    // scheduled a Preview/Playback revalidation whose completion repainted the
+    // arranger, which called ensureReader() again. Measured in the field as an
+    // uninterrupted stream of "[PREVIEW] recompute" for one object with the UI
+    // thread stuck in SCutRendererInline::draw.
+    //
+    // Past the bound we ACCEPT the capture we have and say so once. That is a
+    // strictly better failure than spinning, and it is not a new one: it is the
+    // pre-stamp behaviour (a capture that heals on the next real edit), which
+    // is the same bargain proposal 16 already makes for playback when it serves
+    // a stale page rather than stalling.
+    static const int kMaxCaptureRebuildAttempts = 2;
+    std::atomic<int> captureRebuildAttempts_{ 0 };
+    std::atomic<bool> captureStaleReported_{ false };
+
     // The content's current render-chain epoch, or 0 when the content has no
     // root component (a leaf sample). 0 == 0 makes the check inert for
     // sample-backed and grained captures, which are invalidated explicitly by
