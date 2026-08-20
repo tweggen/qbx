@@ -79,7 +79,7 @@ void SMoveTrackAction::writeXml(QDomElement &elem) const
 
 bool SMoveTrackAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    sourcePath_ = stringToPath(elem.attribute("source"));
+    sourcePath_ = parseInto( pathRoot_, elem.attribute("source") );
     toIndex_ = elem.attribute("toIndex", "-1").toInt();
     return true;
 }

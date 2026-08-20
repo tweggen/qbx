@@ -144,8 +144,8 @@ void SReparentTrackAction::writeXml(QDomElement &elem) const
 
 bool SReparentTrackAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    sourcePath_ = stringToPath(elem.attribute("source"));
-    destParentPath_ = stringToPath(elem.attribute("destParent"));
+    sourcePath_ = parseInto( pathRoot_, elem.attribute("source") );
+    destParentPath_ = parseInto( pathRoot_, elem.attribute("destParent") );
     destIndex_ = elem.attribute("destIndex", "-1").toInt();
     return true;
 }

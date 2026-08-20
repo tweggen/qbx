@@ -2184,6 +2184,22 @@ SViewTabs *SMainWindow::ensureViewShell()
     return viewTabs_;
 }
 
+
+// A path handed to one of the gesture entry points below may carry its own root
+// qualifier ("Drums:0"); with none, it means the root the ACTIVE arranger
+// edits. Resolving it against the project's MASTER while handing the result to
+// an arrangement's view is exactly the mismatch proposal 09 D21 exists to
+// prevent -- and it is the shape that made assert-clip-window read the wrong
+// clip for three sessions.
+static SObject *sGestureRoot( SProject *proj, SStdMixerView *v,
+                              const QString &spec, QList<int> &idxOut )
+{
+    const strackpath::QualifiedPath q = strackpath::parseQualified( spec );
+    idxOut = q.idx;
+    const QString name = ( q.root.isEmpty() && v ) ? v->rootName() : q.root;
+    return splacements::rootNamed( proj, name );
+}
+
 SStdMixerView *SMainWindow::ensureArranger_()
 {
     // The ACTIVE tab's arranger (proposal 09 §2). With only the master open --
@@ -2222,8 +2238,9 @@ bool SMainWindow::groupTrackGesture( const QString &trackPath, bool ungroup )
     SStdMixerView *v = ensureArranger_();
     if( !v ) return false;
     SProject *proj = SApplication::app().getCurrentProject();
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    QList<int> idx_;
+    SObject *root = sGestureRoot( proj, v, trackPath, idx_ );
+    SObject *lane = splacements::laneAt( root, idx_ );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return false;
     return v->groupGesture( track, ungroup );
@@ -2234,9 +2251,26 @@ bool SMainWindow::groupTrackGesture( const QString &trackPath, bool ungroup )
 static STrack *trackAtPath_( const QString &trackPath )
 {
     SProject *proj = SApplication::app().getCurrentProject();
-    SObject *root = splacements::rootContainer( proj );
+    // Same rule as sGestureRoot: a qualifier in the text wins, otherwise the
+    // root the ACTIVE arranger edits (proposal 09 D21). This helper takes no
+    // view argument, so it asks the shell for the active one.
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath );
+    QString name_ = q_.root;
+    if( name_.isEmpty() ) {
+        for( QWidget *w : QApplication::topLevelWidgets() ) {
+            if( SMainWindow *win = qobject_cast<SMainWindow *>( w ) ) {
+                if( SViewTabs *tabs = win->viewTabs() ) {
+                    if( SStdMixerView *av =
+                            dynamic_cast<SStdMixerView *>( tabs->activeEditor() ) )
+                        name_ = av->rootName();
+                }
+                break;
+            }
+        }
+    }
+    SObject *root = splacements::rootNamed( proj, name_ );
     if( !root ) return nullptr;
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    SObject *lane = splacements::laneAt( root, q_.idx );
     return dynamic_cast<STrack *>( lane );
 }
 
@@ -2481,8 +2515,9 @@ QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeigh
     // Path-addressed: the old top-level scan could not describe a nested lane's
     // head at all, so the density rules and the audibility rule had no coverage
     // there.
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    QList<int> idx_;
+    SObject *root = sGestureRoot( proj, v, trackPath, idx_ );
+    SObject *lane = splacements::laneAt( root, idx_ );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return QString();
 
@@ -2504,8 +2539,9 @@ QString SMainWindow::describeTrackHead( const QString &trackPath,
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
 
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    QList<int> idx_;
+    SObject *root = sGestureRoot( proj, v, trackPath, idx_ );
+    SObject *lane = splacements::laneAt( root, idx_ );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return QString();
 
@@ -2532,10 +2568,10 @@ bool SMainWindow::collectClipEnvelope( const QString &clipPath, offset_t start,
     // describeTrackHead reads it there).
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
-    SObject *mixer = splacements::rootContainer( proj );
+    QList<int> idx_;
+    SObject *mixer = sGestureRoot( proj, ensureArranger_(), clipPath, idx_ );
     if( !mixer ) return false;
-    SLink *link = splacements::placementAt(
-        mixer, strackpath::stringToPath( clipPath ) );
+    SLink *link = splacements::placementAt( mixer, idx_ );
     if( !link ) return false;
 
     // Through the RENDERER, never through the concrete object type: the canvas
@@ -2770,8 +2806,9 @@ bool SMainWindow::grabTrackHead( const QString &trackPath, const QString &path,
     if( !v ) return false;
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    QList<int> idx_;
+    SObject *root = sGestureRoot( proj, v, trackPath, idx_ );
+    SObject *lane = splacements::laneAt( root, idx_ );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return false;
 

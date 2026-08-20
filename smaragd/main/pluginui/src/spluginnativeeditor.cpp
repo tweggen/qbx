@@ -552,7 +552,13 @@ void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value,
     if( trackPath.isEmpty() || slotIndex < 0 ) return;
 
     SAutomationRecorder::Target t;
-    t.ownerPath = strackpath::stringToPath( trackPath );
+    // A qualified owner path names its own root; the recorder's Target
+    // carries it (proposal 09 §3) so the pass commits in that arrangement.
+    {
+        const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath );
+        t.ownerPath = q_.idx;
+        t.pathRoot  = q_.root;
+    }
     t.target    = QStringLiteral( "param:%1" ).arg( paramId );
     t.slotIndex = slotIndex;
 

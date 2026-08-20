@@ -7,6 +7,7 @@
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/strackpath.h"
+#include "app/model/splacements.h"
 
 // Shared resolution for the five plugin actions (proposal 08 M3/M5).
 //
@@ -23,10 +24,14 @@ namespace spluginaction {
 inline SPluginChain *chainFor( SProject *project, const QString &trackPath )
 {
     if( !project ) return nullptr;
-    SObject *root = project->getRootComponent();
+    // A qualified trackPath ("Drums:0") names its own root (proposal 09 D21);
+    // a bare one means the master, which is what every caller written before
+    // arrangements existed passes.
+    const strackpath::QualifiedPath q = strackpath::parseQualified( trackPath );
+    SObject *root = splacements::rootNamed( project, q.root );
     if( !root ) return nullptr;
     STrack *track = dynamic_cast<STrack *>(
-        strackpath::resolveByPath( root, strackpath::stringToPath( trackPath ) ) );
+        strackpath::resolveByPath( root, q.idx ) );
     return track ? track->getPluginChain() : nullptr;
 }
 
