@@ -1,6 +1,7 @@
 #include "app/shell/sviewtabs.h"
 #include "tw/core/twlog.h"
 #include <QTabBar>
+#include <QSize>
 
 SViewTabs::SViewTabs( QWidget *parent )
     : QTabWidget( parent )
@@ -111,6 +112,21 @@ QWidget *SViewTabs::openFor( SObject *root, const QString &label )
              this, &SViewTabs::onRootDestroyed, Qt::UniqueConnection );
 
     setCurrentIndex( idx );
+
+    // GIVE THE NEW PAGE A GEOMETRY NOW, rather than waiting for the layout.
+    // A .qxa script runs its actions back to back without returning to the
+    // event loop, so a page added mid-script is never resized -- and every
+    // arranger gesture is PIXEL-BASED (getXPosOfOffset), so in a zero-sized
+    // view a drag computes meaningless coordinates and lands nowhere. The
+    // master tab does not show this because it is the central widget and was
+    // laid out when the window was.
+    if( QWidget *ref = masterEditor() ) {
+        if( ref != editor && ref->width() > 0 && ref->height() > 0 )
+            editor->setGeometry( ref->geometry() );
+    }
+    if( editor->width() <= 0 || editor->height() <= 0 )
+        editor->resize( size().isEmpty() ? QSize( 1200, 800 ) : size() );
+
     return editor;
 }
 

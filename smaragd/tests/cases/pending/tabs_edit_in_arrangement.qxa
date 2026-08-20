@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  NOT REGISTERED, AND CURRENTLY FAILING. This directory is not covered by the
+  tests/cases/*.qxa glob (the same convention tests/cases/xproc/ uses).
+
+  WHAT WORKS: the tab opens, dedups, activates and closes; the submit funnel
+  roots correctly (verified by instrumentation: the drag made with the Drums
+  tab active submits resize-clip with pathRoot "Drums", and the one made with
+  the master tab active submits with an empty root).
+
+  WHAT DOES NOT: the gesture itself does not land. drag-clip-edge synthesises
+  REAL mouse events at coordinates computed by getXPosOfOffset() on the view's
+  content widget, and a tab page added mid-script is never laid out -- a .qxa
+  runs its actions back to back without returning to the event loop, so the new
+  page has no geometry and the synthesised coordinates are meaningless.
+  Copying the master editor's geometry at openFor() did not fix it, which
+  suggests the master editor has no useful geometry in a headless run either
+  and that master-tab gestures work for a different reason. That is the open
+  question; it is a TEST-HARNESS problem rather than a product one, but until
+  it is answered there is no headless gate for "a gesture in an arrangement tab
+  edits that arrangement".
+
+  Register it (move it up one directory) once a tab page can be given a real
+  layout in a script.
+  ============================================================================
+-->
+<SActionScript version="1" name="tabs_edit_in_arrangement">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterLane"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="DrumLane"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- One tab so far. -->
+    <assert-tab-set names="Arrangement" active="Arrangement"/>
+
+    <!-- Open the arrangement in its own tab, and make it the active one. -->
+    <open-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+
+    <!-- Opening it TWICE focuses the one tab rather than spawning a second
+         editor that would fight the first over the same model. -->
+    <open-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+
+    <!-- A REAL ARRANGER GESTURE, with the Drums tab active: drag the clip's
+         right edge. It must resize the clip in DRUMS. -->
+    <assert-clip-window clip="Drums:0,0" duration="192000"/>
+    <assert-clip-window clip="0,0" duration="192000"/>
+    <drag-clip-edge track="0" clip="0" edge="end" toTime="96000"/>
+    <assert-clip-window clip="Drums:0,0" duration="192000" expectReject="true"/>
+    <assert-clip-window clip="0,0" duration="192000"/>
+
+    <!-- ...and its UNDO lands in Drums too, not in the master. -->
+    <undo/>
+    <assert-clip-window clip="Drums:0,0" duration="192000"/>
+    <assert-clip-window clip="0,0" duration="192000"/>
+
+    <!-- Back on the master tab, the same gesture edits the MASTER. -->
+    <activate-tab name="Arrangement"/>
+    <assert-tab-set names="Arrangement,Drums" active="Arrangement"/>
+    <drag-clip-edge track="0" clip="0" edge="end" toTime="96000"/>
+    <assert-clip-window clip="0,0" duration="192000" expectReject="true"/>
+    <assert-clip-window clip="Drums:0,0" duration="192000"/>
+    <undo/>
+    <assert-clip-window clip="0,0" duration="192000"/>
+
+    <!-- Closing a tab destroys the VIEW and nothing else. -->
+    <close-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement" active="Arrangement"/>
+    <assert-arrangements names="Drums" trackCounts="1"/>
+    <assert-track-name trackPath="Drums:0" name="DrumLane"/>
+  </actions>
+
+</SActionScript>

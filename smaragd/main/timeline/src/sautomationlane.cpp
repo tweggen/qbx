@@ -1,6 +1,7 @@
 #include "sautomationlane.h"
 
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/ssubmit.h"
 #include "app/timeline/sfadercurve.h"
 
 #include "app/model/slink.h"
@@ -478,7 +479,7 @@ bool SAutomationLaneUi::press( SMVActualView &view, int rowIdx,
     // and Shift is the marquee, so the delete takes the remaining modifier.
     if( idx >= 0 && primary ) {
         const std::vector<SAutomationPoint> pts = h.lane->points();
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SRemoveAutomationPointAction( h.ownerPath, h.ref.target,
                                               pts[idx].frame, pts[idx].value,
                                               h.ref.slotIndex, h.take ) );
@@ -518,7 +519,7 @@ bool SAutomationLaneUi::press( SMVActualView &view, int rowIdx,
         const int span = h.rect.height() - 1;
         const double v = h.scale.fromNorm(
             span > 0 ? ( h.rect.bottom() - pos.y() ) / (double) span : 0.0 );
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SAddAutomationPointAction( h.ownerPath, h.ref.target, rel, v,
                                            h.scale.stepped ? twCurveShape::Step
                                                            : twCurveShape::Linear,
@@ -609,7 +610,7 @@ bool SAutomationLaneUi::release( SMVActualView &view, const QPoint &pos )
                                                          : twCurveShape::Exp;
         p.tension = dragTension_;
         std::vector<SAutomationPoint> one{ p };
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetAutomationPointsAction( dragOwnerPath_, dragRef_.target,
                                             dragFromTime_, dragFromTime_ + 1,
                                             std::move( one ), dragRef_.slotIndex,
@@ -619,7 +620,7 @@ bool SAutomationLaneUi::release( SMVActualView &view, const QPoint &pos )
     }
 
     if( dragToTime_ != dragFromTime_ || dragToValue_ != dragFromValue_ ) {
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SMoveAutomationPointAction( dragOwnerPath_, dragRef_.target,
                                             dragFromTime_, dragFromValue_,
                                             dragToTime_, dragToValue_,
@@ -646,7 +647,7 @@ bool SAutomationLaneUi::deleteSelection()
         if( selected_.contains( (qint64) p.frame ) ) continue;
         keep.push_back( p );
     }
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SSetAutomationPointsAction( dragOwnerPath_, dragRef_.target,
                                         (offset_t) lo, (offset_t) hi + 1,
                                         std::move( keep ), dragRef_.slotIndex,

@@ -291,6 +291,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/sgridtoolbar.h
     timeline/include/app/timeline/sobjecttreeview.h
     timeline/include/app/timeline/ssmvmixercontrol.h
+    timeline/include/app/timeline/ssubmit.h
     timeline/include/app/timeline/sstdmixerview.h
     timeline/include/app/timeline/strackdetailpanel.h
     timeline/include/app/timeline/sfadercurve.h
@@ -303,6 +304,7 @@ set(APP_UI_FILES
     timeline/src/sgridtoolbar.cpp
     timeline/src/sobjecttreeview.cpp
     timeline/src/ssmvmixercontrol.cpp
+    timeline/src/ssubmit.cpp
     timeline/src/sstdmixerview.cpp
     timeline/src/strackdetailpanel.cpp
     timeline/src/slevelmeter.cpp
@@ -425,6 +427,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sslipclipaction.h
     testkit/include/app/testkit/stestfilepath.h
+    testkit/include/app/testkit/sarrangementtabactions.h
     testkit/include/app/testkit/stabtestactions.h
     testkit/include/app/testkit/strackselectionactions.h
     testkit/include/app/testkit/stransporttestactions.h
@@ -468,6 +471,7 @@ set(APP_UI_FILES
     testkit/src/ssidecartestactions.cpp
     testkit/src/sslipclipaction.cpp
     testkit/src/stestfilepath.cpp
+    testkit/src/sarrangementtabactions.cpp
     testkit/src/stabtestactions.cpp
     testkit/src/sarrangementtestactions.cpp
     testkit/src/strackselectionactions.cpp

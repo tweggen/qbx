@@ -1,4 +1,5 @@
 #include "app/timeline/strackdetailpanel.h"
+#include "app/timeline/ssubmit.h"
 #include "app/timeline/sfadercurve.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/objects/track/strack.h"
@@ -209,7 +210,7 @@ void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)
     const QList<int> trackPath =
         root ? strackpath::pathOf(root, currentTrack_) : QList<int>();
     if (!trackPath.isEmpty()) {
-        SApplication::app().submitAction(new SSetTrackVolumeAction(trackPath, dB));
+        stimeline::submitActive(new SSetTrackVolumeAction(trackPath, dB));
     } else {
         currentTrack_->setVolume(dB);
         if (SProject *p = SApplication::app().getCurrentProject())

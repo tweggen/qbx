@@ -29,6 +29,7 @@
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/ssubmit.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/sfadercurve.h"
 #include "app/objects/track/strack.h"
@@ -115,7 +116,7 @@ void SSMVMixerControl::applyVolume_( double newVolume )
             && SApplication::app().automationRecorder().writeTick(
                    t, newVolume, SApplication::app().getGlobalLocatorPos() ) )
             return;
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetTrackVolumeAction( trackPath, newVolume ) );
     } else {
         tk_.setVolume( newVolume );
@@ -410,7 +411,7 @@ void SSMVMixerControl::muteToggled( bool on )
     if( macro ) stack->beginMacro( QStringLiteral( "Mute tracks" ) );
     for( STrack *t : targets ) {
         if( t->isMuted() == on ) continue;      // nothing to undo for this one
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetTrackMuteAction( strackpath::pathOf( mixer, t ), on ) );
     }
     if( macro ) stack->endMacro();
@@ -426,7 +427,7 @@ void SSMVMixerControl::soloToggled( bool on )
     if( macro ) stack->beginMacro( QStringLiteral( "Solo tracks" ) );
     for( STrack *t : targets ) {
         if( t->isSolo() == on ) continue;
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetTrackSoloAction( strackpath::pathOf( mixer, t ), on ) );
     }
     if( macro ) stack->endMacro();
@@ -481,7 +482,7 @@ void SSMVMixerControl::groupToggled( bool /*checked*/ )
     const bool macro = assignments.size() > 1 && stack;
     if( macro ) stack->beginMacro( QStringLiteral( "Edit group" ) );
     for( const auto &a : assignments )
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetEditGroupAction( a.first, a.second ) );
     if( macro ) stack->endMacro();
 }
@@ -526,7 +527,7 @@ void SSMVMixerControl::armToggled( bool on )
     if( macro ) stack->beginMacro( QStringLiteral( "Arm tracks" ) );
     for( STrack *t : targets ) {
         if( t->isArmedForRecording() == on ) continue;
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SArmTrackAction( strackpath::pathOf( mixer, t ), on ) );
     }
     if( macro ) stack->endMacro();
@@ -559,7 +560,7 @@ void SSMVMixerControl::commitTrackName()
         qTrkLabel_->setText( tk_.getSName() );
         return;
     }
-    SApplication::app().submitAction( new SSetTrackNameAction( path, typed ) );
+    stimeline::submitActive( new SSetTrackNameAction( path, typed ) );
 }
 
 SSMVMixerControl::~SSMVMixerControl()
@@ -1055,7 +1056,7 @@ void SSMVMixerControl::setTrackInputSpec_( const QString &spec )
     const bool macro = targets.size() > 1 && stack;
     if( macro ) stack->beginMacro( QStringLiteral( "Set track input" ) );
     for( STrack *t : targets )
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetTrackInputAction( strackpath::pathOf( mixer, t ), spec ) );
     if( macro ) stack->endMacro();
     refreshArmTooltip_();
@@ -1071,7 +1072,7 @@ void SSMVMixerControl::setMonitorMode_( STrack::MonitorMode mode )
     if( macro ) stack->beginMacro( QStringLiteral( "Set monitor mode" ) );
     for( STrack *t : targets ) {
         if( t->getMonitorMode() == mode ) continue;
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetMonitorModeAction( strackpath::pathOf( mixer, t ), mode ) );
     }
     if( macro ) stack->endMacro();
@@ -1616,7 +1617,7 @@ void SSMVMixerControl::setTrackAutomationMode( SAutomationMode m )
     if( lanes.isEmpty() ) {
         // Nothing to set a mode ON. Create the lane the head's own control
         // writes to, so the button is never a silent no-op.
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SAddAutomationLaneAction( trackPath,
                                           QStringLiteral( "self:Volume" ), m,
                                           -1, -1,
@@ -1631,7 +1632,7 @@ void SSMVMixerControl::setTrackAutomationMode( SAutomationMode m )
     const bool macro = ( lanes.size() > 1 ) && stack;
     if( macro ) stack->beginMacro( QStringLiteral( "Automation mode" ) );
     for( const LaneAddr &a : lanes )
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetAutomationModeAction( trackPath, a.target, m,
                                           a.slotIndex, -1 ) );
     if( macro ) stack->endMacro();
