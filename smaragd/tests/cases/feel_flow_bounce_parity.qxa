@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M1b, AC 1/2/6. The track-scoped bounce (a
+  background audio::RenderSession over STrack::getRootComponent(), writing
+  a float32-fed 16-bit-PCM WAV via the SAME writer machinery a `render` uses)
+  is byte-identical to a plain `render` of the SAME single-track project.
+
+  Fixture: a ONE-TRACK project holding ../groove/a_offset15.wav (the M1
+  fixture, ~16.2 s mono 48 kHz) — a single track sidesteps the "solo the
+  track" question entirely: with nothing else in the mix and the master a
+  unity sum + identity rewire (SStdMixer's own doc), the project's summed
+  render and the track's own root-component bounce differ by NOTHING.
+
+  Determinism barrier: NOT taken. The bounce runs with nothing playing (no
+  transport, no live lane) and the fixture has no instrument, so
+  SApplication::beginRun()'s instrument-continuity reset — which the ORDINARY
+  `render` verb takes and the bounce deliberately does NOT (design section
+  4.3: the bounce must not ride SApplication::startRender()) — has nothing to
+  reset either way. Recorded per the AC, not asserted: this project has zero
+  instrument tracks, so it cannot exercise the question either way.
+-->
+<SActionScript version="1" name="feel_flow_bounce_parity">
+
+  <setup project="new"/>
+
+  <actions>
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- The bounce produced a real result (M1's own aspect gate, reused as
+         evidence the bounce actually ran and was not a silent no-op). -->
+    <assert-groove-aspect aspect="groove.res" expectExists="true"
+                          minRecords="1500" maxRecords="1650"/>
+    <assert-groove-aspect aspect="groove.ev" expectExists="true"
+                          minRecords="100"
+                          deltaMuHighLowMs="15.0" deltaMuTolMs="4.0"/>
+
+    <!-- durationSec left at its default (-1 = project duration), so this
+         render and the bounce cover the SAME span: both read
+         SProject::getDurationSeconds() off the same one-clip arrangement. -->
+    <render filename="parity_render.wav"/>
+
+    <!-- The bounce file: <testOutputDir>/bounce/track_0.wav, named by the
+         track's INDEX PATH (sfeelflowbounce.cpp), resolved by
+         assert-file-identical's relative-path rule (stestfilepath.h) as
+         <testOutputDir>/bounce/track_0.wav. -->
+    <assert-file-identical actual="bounce/track_0.wav"
+                           expected="parity_render.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

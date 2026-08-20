@@ -257,8 +257,21 @@ void RenderSession::renderThreadMain() {
                 // of any length at five page positions' worth of cache.
                 static constexpr uint64_t KEEP_PAGES_BEHIND = 4;
                 if (pageStartPos > (offset_t)(KEEP_PAGES_BEHIND * PAGE_FRAMES)) {
-                    twComponent::releaseOldPagesGlobally(
-                        pageStartPos - (offset_t)(KEEP_PAGES_BEHIND * PAGE_FRAMES) );
+                    const offset_t keepAfter =
+                        pageStartPos - (offset_t)(KEEP_PAGES_BEHIND * PAGE_FRAMES);
+                    // Proposal 40 M1b AC 3: a bounce prunes only ITS OWN
+                    // track's chain, never the global walk — the global walk
+                    // would prune a concurrently PLAYING graph's page trail
+                    // at the bouncer's (unrelated) position. Empty scope
+                    // (every non-bounce caller, including plain export) is
+                    // the unchanged global behaviour.
+                    if (!pruneScope_.empty()) {
+                        for (auto &w : pruneScope_) {
+                            if (auto c = w.lock()) c->releaseOldPages(keepAfter);
+                        }
+                    } else {
+                        twComponent::releaseOldPagesGlobally(keepAfter);
+                    }
                 }
             }
 

@@ -688,9 +688,81 @@ never retroactively.
      (RUN_SERIAL, capture backend: monitor stays up, zero
      `liveOwnedRefusals`, no device reopen) — plus layering/logging,
      targeted ctest, count reconciliation.
+
+  **M1 + M1b EXECUTED 2026-08-20.** All ACs green. M1 measured: Δμ
+  through the full aspect path = 17.0536 ms (matches §11.2's M0 value),
+  1622 res / 635 ev records over `a_offset15`, params-hash sensitivity
+  and version-orphan gated in `sidecar_test` §7. M1b measured: bounce vs
+  plain render **byte-identical (3,113,852 bytes)**; staleness all four
+  transitions; a bounce fired mid-monitoring completed in **18 ms** with
+  monitored RMS steady (0.115478 vs 0.115470 target), zero refusals, one
+  never-reopened capture; residency bounded (25 pages after bounce 1,
+  +6 not +12 after bounce 2). Engine shape: `RenderSession::
+  setPruneScope()` — empty keeps the export path byte-unchanged, so the
+  bounce IS the render loop with per-chain pruning. Two finds paid for
+  by measurement: the AC's "four chain components" missed a FIFTH cache
+  (`twPluginChain` forwards to its last insert — every slot's insert is
+  now in the prune scope), and **per-clip reader components are not
+  pruned** — harmless on the fixtures, unbounded over a multi-minute
+  track; documented in `sfeelflowbounce.h`, an M2-adjacent follow-up.
+  One declared layering edge: `objects/track` → `render`/`sidecar`/
+  `sources`, documented in `check_layering.py`. Suite: **256 registered
+  = 253 run (all green) + 3 disabled**.
 - **M2 — heatmap overlay + UI cache + pixel gate.** `qxa.groove_heatmap`
   via `assert-lane-overlay`'s discipline (the overlay colour relation), plus
   an `assert-groove` verb reading `describe()` numbers off the aspect.
+
+  **M2 ACs (kickoff 2026-08-20):**
+  1. **Read path**: `feelFlowForUi()` on the track's bounce holder — the
+     `onsetsForUi()` pattern verbatim (atomically-swapped shared_ptr
+     slot, ONE `loadAny()` on first paint, MISS caches empty, job
+     completion forces one reload). The paint path never blocks, demands,
+     or touches the store beyond that one cached read (timeline CONTRACT
+     inv. 1).
+  2. **Paint slot correction to §4.4** (found at kickoff): the
+     "right after `drawChildSumOverlay`" slot paints BEHIND clip bodies —
+     invisible on exactly the clip-covered lanes the feature targets.
+     The heatmap is instead a **bottom band** (a documented fraction of
+     the lane height, ~20 %) drawn AFTER the clip loop, per-column tint
+     from the compliance scalar, at partial alpha, with luminance
+     strictly between `laneFillColor()` and the clip body — the relation
+     `assert-lane-overlay` measures. Timeline position → aspect hop by
+     placement arithmetic only; **no warp map anywhere in the paint
+     path**.
+  3. **Visibility rule**: the band paints only when a FRESH track
+     analysis exists (stale or absent ⇒ nothing paints); repaint rides
+     `captureRevalidated()` so the band appears on job completion with
+     no manual poke.
+  4. qxa `feel_flow_heatmap`: `expectOverlay=false` before analysis;
+     analyze → `expectOverlay=true` with a `minPixels` floor and the
+     colour relations asserted (+ PNG grab); a staling edit ⇒
+     `expectOverlay=false` again. Registered, count reconciled (+1).
+  5. One new invariant line each in `main/timeline/CONTRACT.md` (the
+     band's read-only, no-demand, stale-paints-nothing rule) and
+     `main/objects/track/CONTRACT.md` (the holder's UI-cache
+     discipline).
+  6. Gates: `./build.sh`; the qxa case; `qxa.folder_sum_preview` and
+     `qxa.envelope_*` still green (the band shares the canvas gate
+     machinery); layering/logging clean; full targeted ctest.
+
+  **M2 EXECUTED 2026-08-20.** All ACs green; suite **257 registered =
+  254 run (all green) + 3 disabled**. The band is drawn last in
+  `draw()`, bottom `max(2, laneHeight/5)` rows; `sFeelFlowTint()`
+  interpolates channel-wise between `laneFillColor()` and the clip-body
+  grey, so the luminance relation holds BY CONSTRUCTION for every fill
+  state; compliance modulates mix (25–55 %) and alpha (90–210), low
+  compliance = hotter. Measured: **8779 overlay pixels fresh vs an
+  1131-pixel intrinsic noise floor** (a clip's own waveform paint emits
+  pixels in the overlay luminance range — byte-identical count before
+  analysis and after the staling edit). Two verb extensions forced by
+  that measurement, both default-off and byte-neutral for existing
+  callers: `assert-lane-overlay bandOnly=` (scope the scan to the
+  band's rows) and `maxPixels=` (name the noise floor explicitly —
+  a literal zero is unreachable on a clip-covered lane, the same hazard
+  `folder_sum_preview`'s "NOT gated" note records); the exact staleness
+  BOOLEAN is gated separately via `assert-groove-aspect stale=`.
+  Invariants: `main/timeline/CONTRACT.md` inv. 25,
+  `main/objects/track/CONTRACT.md` inv. 25.
 - **M3 — tuning panel + trained mode + verbs** (`groove-analyze`,
   `set-groove-param`, learn-from-selection; trained state in the project
   file, `action_roundtrip_test` joins).

@@ -262,7 +262,21 @@ APP_ENG = {
     'objects/midi':   _ENG_BASE | {'events'},
     # objects/track + events since proposal 37 P1: STrack owns the per-track
     # twEventClipSet and the twEventMerge feed (3.2.1).
-    'objects/track':  _ENG_BASE | {'events', 'mix', 'plugins', 'schedule'},
+    # objects/track + render + sidecar + sources since proposal 40 M1b:
+    # SFeelFlowTrackBounce is a track-owned holder (not an SObject — the same
+    # standing as an automation lane) that runs a background audio::
+    # RenderSession bounce of the track's own root component (render), reads
+    # the resulting WAV back with a bare twSampleSource rather than an
+    # SPlainWave so the bounce never joins the project's extern-file list
+    # (sources), and writes the groove.res/groove.ev aspects straight to
+    # twSidecarStore (sidecar) — the same store objects/wave already reaches,
+    # granted here too because the holder needs STrack's own chain
+    # components (trackMixComponent()/pluginChainComponent()/
+    # gainStageComponent()) for AC 3's per-chain pruning scope, and objects/
+    # wave may not depend on objects/track (the wave<cut<track<mixer DAG runs
+    # the other way).
+    'objects/track':  _ENG_BASE | {'events', 'mix', 'plugins', 'render',
+                                   'schedule', 'sidecar', 'sources'},
     'objects/mixer':  _ENG_BASE | {'mix', 'schedule'},
     'actions':        _ENG_BASE | {'render'},
     # media reaches NO engine module beyond the base every app module gets --

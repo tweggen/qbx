@@ -28,6 +28,7 @@
 #include "app/objects/track/strackrndrinline.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
+#include "app/objects/track/sfeelflowbounce.h"
 #include "app/persistence/sprojectloader.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 
@@ -440,6 +441,38 @@ length_t STrack::getDuration() const
 std::shared_ptr<twComponent> STrack::getRootComponent()
 {
     return std::static_pointer_cast<twComponent>(cpRewire_);
+}
+
+// --- Feel Flow track bounce (proposal 40 M1b) ------------------------------
+
+void STrack::startFeelFlowBounce()
+{
+    if( !feelFlowBounce_ )
+        feelFlowBounce_ = std::make_unique<SFeelFlowTrackBounce>( this );
+    feelFlowBounce_->start();
+}
+
+bool STrack::isFeelFlowBouncing() const
+{
+    return feelFlowBounce_ && feelFlowBounce_->isBouncing();
+}
+
+bool STrack::feelFlowHasResult() const
+{
+    return feelFlowBounce_ && feelFlowBounce_->hasResult();
+}
+
+bool STrack::feelFlowStale() const
+{
+    // No bounce ever started: not "fresh", not meaningfully "stale" either,
+    // but callers that ask before ever bouncing should get the safe answer.
+    return !feelFlowBounce_ || feelFlowBounce_->isStale();
+}
+
+std::shared_ptr<const SFeelFlowUiData> STrack::feelFlowForUi() const
+{
+    if( !feelFlowBounce_ ) return nullptr;   // never bounced: no holder yet
+    return feelFlowBounce_->feelFlowForUi();
 }
 
 int STrack::seekTo( offset_t ofs )
@@ -1037,6 +1070,16 @@ QList<SLink *> STrack::ownedRefLinks() const
 
 STrack::~STrack()
 {
+    // FIRST, and explicitly: SFeelFlowTrackBounce's own destructor joins any
+    // in-flight bounce render (see sfeelflowbounce.h/.cpp), which is only
+    // safe to do while this track's SProject and CaptureRevalidator are
+    // still alive — true here, because ~SProject() deletes its tracks from
+    // its own destructor BODY, before its revalidator_ member is torn down.
+    // Letting this destruct as an ordinary member (after cpRewire_ etc. are
+    // already reset below) would risk the completion callback reading a
+    // half-torn-down track.
+    feelFlowBounce_.reset();
+
     DTOR_DEL( inlineRenderer_ );
     // Our reference to the plugin chain (see the member's declaration). The chain
     // object itself is a Qt child of the project and is destroyed with it.

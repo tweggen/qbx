@@ -147,6 +147,38 @@ private:
  *                  Coverage, never an oracle
  * - contains:      optional substring of the report line, for a claim this
  *                  verb has no dedicated attribute for
+ * - bandOnly:       "false" (default) scans the WHOLE lane strip, exactly as
+ *                  before proposal 40 M2 — every existing caller is
+ *                  byte-for-byte unaffected. "true" restricts the y-scan to
+ *                  the BOTTOM `max(2, laneHeight/5)` rows only — the exact
+ *                  same integer formula, over the exact same rect
+ *                  (laneTop()+1 .. +laneHeight()-2), that
+ *                  STrackRendererInline::drawFeelFlowBand uses for its own
+ *                  band (proposal 40 M2).
+ * - maxPixels:     ceiling for the "expectOverlay=false" case, default -1
+ *                  (unset, meaning the ceiling is exactly 0 -- the ORIGINAL
+ *                  behaviour, unchanged for every existing caller). Added
+ *                  alongside `bandOnly` for the same reason: a lane holding
+ *                  a CLIP is not a clean background for this verb even
+ *                  OUTSIDE any real overlay. Measured on a real fixture, a
+ *                  freshly-added, never-analyzed clip already contributes
+ *                  ~1100-1200 pixels in the "strictly between fill and clip
+ *                  body" luminance range -- the clip's own waveform paint
+ *                  (its anti-aliased line edges), present EVEN WHEN
+ *                  `bandOnly="true"` scopes the scan to the exact rows a
+ *                  feel-flow band would occupy, because a waveform's peaks
+ *                  and troughs reach the bottom of the clip rect as often
+ *                  as the top. folder_sum_preview.qxa's own "NOT gated" note
+ *                  names the same hazard and works around it by using only
+ *                  CLIP-FREE lanes for its expectOverlay="false" controls;
+ *                  proposal 40's feature cannot do that, because its entire
+ *                  subject IS a clip-covered lane. `maxPixels` lets a case
+ *                  state the intrinsic noise floor explicitly (measured,
+ *                  with margin) rather than pretending the classifier can
+ *                  reach a literal zero over real waveform content, while
+ *                  still catching a genuine leak of feel-flow band pixels
+ *                  (measured: ~1100 baseline noise vs ~8800 when the band is
+ *                  actually fresh -- an 8x gap, nowhere near the ceiling).
  */
 class SAssertLaneOverlayAction : public SAction
 {
@@ -159,7 +191,8 @@ public:
         return { QStringLiteral( "trackPath" ),  QStringLiteral( "expectOverlay" ),
                  QStringLiteral( "minPixels" ),  QStringLiteral( "grabWidth" ),
                  QStringLiteral( "grabHeight" ), QStringLiteral( "grabPng" ),
-                 QStringLiteral( "contains" ) };
+                 QStringLiteral( "contains" ),   QStringLiteral( "bandOnly" ),
+                 QStringLiteral( "maxPixels" ) };
     }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -173,6 +206,8 @@ private:
     int     grabHeight_    = 0;
     QString grabPng_;
     QString contains_;
+    bool    bandOnly_      = false;
+    int     maxPixels_     = -1;   // -1 = unset -> ceiling is exactly 0 (old behaviour)
 };
 
 #endif // SASSERTENVELOPEACTION_H

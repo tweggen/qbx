@@ -195,8 +195,20 @@ public:
     // from an image rather than eyeballed. Returns a describe()-style line, or
     // an empty string when the track/row cannot be resolved. See
     // main/testkit/CONTRACT.md ("assert-lane-overlay").
+    //
+    // `bandOnly` (proposal 40 M2, default false = unchanged behaviour):
+    // restricts the y-scan to the bottom max(2, laneHeight/5) rows of the
+    // lane rect -- the same formula STrackRendererInline::drawFeelFlowBand
+    // uses for its own band, over the SAME rect this function already reads
+    // (laneTop()+1 .. +laneHeight()-2), so the scanned rows are exactly the
+    // band's own rows. Needed because a CLIP-covered lane is not a clean
+    // background for this verb even outside any overlay: a clip's own
+    // waveform paint lands pixels in the "strictly between fill and clip
+    // body" luminance range across the WHOLE lane, which the feel-flow
+    // heatmap's own subject (a lane that always holds a clip) cannot avoid
+    // the way proposal 39's clip-free negative controls did.
     QString describeLaneOverlay( const QString &trackPath, int w, int h,
-                                 const QString &pngPath );
+                                 const QString &pngPath, bool bandOnly = false );
 
     // TEST ENTRY POINT (proposal 39 M3a): fold a folder lane SHUT, or open it
     // again. ABSOLUTE, never a toggle - a script that says what it wants is

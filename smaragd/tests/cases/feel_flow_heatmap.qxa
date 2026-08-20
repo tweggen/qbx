@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M2 — the LANE HEATMAP, the pixel gate.
+
+  A track-level groove analysis (M1/M1b: STrack::startFeelFlowBounce()) shows
+  up on the arranger as a bottom band on the track's OWN lane, tinted per
+  column from the "groove.res" compliance scalar. This is the AC 4 case:
+  false (never analyzed) then analyze then true (with a minPixels floor and
+  the colour relations, plus a PNG grab) then a staling edit then false again.
+
+  THE SLOT CORRECTION (kickoff AC 2). The design's v2 text said "right after
+  drawChildSumOverlay", i.e. BEHIND the clip loop, which paints the band
+  invisible on exactly the clip-covered lanes this feature targets (a clip
+  fills its rect with QColor(160,160,160) and would paint straight over
+  anything drawn earlier). The band is instead drawn LAST, after every clip,
+  as a ~20%-of-lane-height strip along the bottom
+  (STrackRendererInline::drawFeelFlowBand). This case's single track carries
+  ONE clip spanning nearly the whole visible width, so it is the one
+  configuration that would have caught the wrong slot outright: an
+  expectOverlay="true" assertion over a lane covered edge-to-edge by a clip
+  body PASSES on the corrected code and would have measured 0 overlay pixels
+  on the v2 slot.
+
+  THE COLOUR RELATION (assert-lane-overlay's own gate, proposal 39's
+  discipline, D4): every band pixel must be strictly LIGHTER than the lane
+  fill and strictly DARKER than the clip body grey. sFeelFlowTint()
+  (strackrndrinline.cpp) gets this BY CONSTRUCTION rather than by picking
+  numbers: it linearly interpolates every channel between the lane's own
+  fill colour and the fixed clip-body grey, and Rec.601 luminance is a
+  LINEAR function of the channels, so a mixing fraction strictly inside
+  (0,1) always lands strictly between the two luminances, whatever this
+  track's fill colour happens to be, and whichever of the two backgrounds
+  (bare lane fill beyond the clip, or the clip body itself) a given column's
+  alpha-blended pixel actually composites over. Compliance modulates BOTH
+  the mixing fraction and the alpha (low compliance = bolder, closer to the
+  clip grey, reads "hotter"; high compliance = fainter, closer to the fill),
+  and the two never fight.
+
+  THE HOP DOMAIN (AC 2's "placement arithmetic only, no warp map"). The
+  bounce is a whole-project render starting at project frame 0
+  (sfeelflowbounce.cpp), so a "groove.res" hop's frame position IS a
+  track-timeline frame, and STrackRendererInline::drawFeelFlowBand divides
+  ctx.getTimeOf(x) by hopFrames directly, no clip-relative offset, no
+  sourceToWarpedExact, anywhere in the paint path. The fixture
+  (../groove/a_offset15.wav, the same one feel_flow_bounce_stale.qxa uses)
+  is ~778452 frames (~16.2 s @ 48 kHz); the default arranger zoom is
+  30 px/second (SStdMixerView::secondWidth_), so a 900 px grab shows a 30 s
+  window and the whole clip, plus material AFTER the clip's own extent,
+  which is exactly where hop >= nHops and the band correctly stops.
+
+  THE STALING EDIT is set-track-volume, deliberately NOT the insert-plugin
+  feel_flow_bounce_stale.qxa uses: a second, independent path to the same
+  content-epoch bump (STrack::onTrackVolumeChanged -> invalidateRenderPath(),
+  which is what feeds twGainStage, downstream of which sits the root
+  component the bounce reads and STrack::feelFlowStale() checks).
+
+  WHY THE "FALSE" ASSERTIONS USE maxPixels, NOT A LITERAL ZERO. Measured on
+  this exact fixture: a freshly-added, never-analyzed clip already
+  contributes ~1100-1200 pixels in the "strictly between fill and clip body"
+  luminance range, EVEN with bandOnly="true" scoping the scan to the bottom
+  fifth of the lane (a waveform's troughs reach the bottom of the clip rect
+  as often as the top), the clip's own waveform paint, found empirically
+  while writing this case, not a defect in the feel-flow band. It is
+  UNCHANGED by staling: 1131 pixels both before the first analysis and after
+  the staling edit, byte-identical in the log. So the negative assertions
+  name that noise floor explicitly (with margin) via `maxPixels`
+  (sassertenvelopeaction.h's own doc has the full measurement) rather than
+  asserting a zero the classifier cannot honestly reach over real waveform
+  content, the same hazard folder_sum_preview.qxa's "NOT gated" note
+  already named for a CLIP as a negative control, worked around there by
+  using only clip-free lanes, which this feature's own subject cannot be.
+  The gap between the noise floor (~1131) and the fresh band (~8779, 8x
+  higher) is what actually carries the "nothing paints when stale or absent"
+  claim; assert-groove-aspect's `stale=` attribute gates the exact boolean
+  (STrack::feelFlowStale()) the paint code branches on.
+-->
+<SActionScript version="1" name="feel_flow_heatmap">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The grid crosses every lane and would land in the pixel histogram as
+         chrome; the overlay gate wants a clean band (proposal 39's own
+         convention for assert-lane-overlay). -->
+    <grid-disable/>
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <!-- ============ AC 4 (1/3): never analyzed -> NOTHING paints ========= -->
+    <!-- STrack::feelFlowStale() is true (no bounce ever completed, the safe
+         answer per sfeelflowbounce.h's own doc) whether or not a holder even
+         exists yet, so the band contributes NOTHING beyond the clip's own
+         intrinsic waveform noise (measured ~1131 px, see the header note);
+         maxPixels names that floor with margin. -->
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         expectOverlay="false" bandOnly="true" maxPixels="2500"/>
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="1"
+                          expectExists="false"/>
+
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- Sanity: the analysis actually produced data before asking the paint
+         path to show it (fresh, in-bounds record count, feel_flow_bounce_
+         stale.qxa's own bracket). -->
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="0"
+                          expectExists="true" minRecords="1500" maxRecords="1650"/>
+
+    <!-- ========= AC 4 (2/3): fresh -> the band paints, in-relation ======= -->
+    <!-- Only wait-analysis stands between the analyze and this assertion
+         (AC 3: repaint rides captureRevalidated() with no manual poke, the
+         same notifyCaptureRevalidated() the analysis job's completion
+         already queues for the badge). minPixels=2500 sits ABOVE the
+         measured noise floor's ceiling, so this genuinely proves the band
+         itself, not the clip's own waveform. -->
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         minPixels="2500" bandOnly="true"
+                         grabPng="feel_flow_heatmap.png"/>
+
+    <!-- =========== AC 4 (3/3): a staling edit -> NOTHING again =========== -->
+    <set-track-volume trackPath="0" volume="-6"/>
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="1"
+                          expectExists="true"/>
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         expectOverlay="false" bandOnly="true" maxPixels="2500"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

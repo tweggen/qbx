@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "tw/sinks/audio_file_writer.h"
 #include "tw/playback/audio_engine.h"
@@ -60,6 +61,21 @@ public:
     // scheduler itself. Null (default) keeps the legacy sequential pull.
     void setScheduler(CaptureRevalidator *scheduler) { scheduler_ = scheduler; }
 
+    // Proposal 40 M1b, AC 3: BOUNCE MODE for the per-page pruning. Empty
+    // (default) keeps the export path's existing behaviour byte- and
+    // behaviour-unchanged — the page-boundary release below still calls
+    // twComponent::releaseOldPagesGlobally(), which prunes EVERY live
+    // component in the process. A non-empty scope switches to per-component
+    // twComponent::releaseOldPages() over exactly these components instead:
+    // the global walk would prune a concurrently PLAYING graph's page trail
+    // at the BOUNCER's position, which is a graph the bounce has no business
+    // touching. Held as weak_ptr because the bounce does not own the track's
+    // chain components; a component that outlived the bounce's caller is
+    // simply skipped (lock() returns null) rather than kept alive by this.
+    void setPruneScope(std::vector<std::weak_ptr<twComponent>> scope) {
+        pruneScope_ = std::move(scope);
+    }
+
     // Request cancellation. Safe to call from any thread.
     void requestCancel();
 
@@ -95,6 +111,7 @@ private:
     std::unique_ptr<AudioFileWriter> writer_;
     std::unique_ptr<FileSink> fileSink_;        // Buffered output with futures
     CaptureRevalidator *scheduler_ = nullptr;   // Stage 4: borrowed, optional
+    std::vector<std::weak_ptr<twComponent>> pruneScope_;   // M1b bounce mode
 };
 
 }  // namespace audio
