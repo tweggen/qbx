@@ -342,6 +342,13 @@ private:
     bool clipDragIsSlip_ = false;
     bool clipDragIsStretch_ = false;
     bool clipDragIsLoop_ = false;
+    // Take-lane slip (proposal 17 UI gap): -1 = the drag targets lastClickSLink_'s
+    // own SObject directly (the ordinary composite-lane case). >= 0 = the drag was
+    // armed by an Alt-click on a TAKE LANE row; lastClickSLink_ stays the take
+    // STACK's outer link (position/duration/path all still come from it), but the
+    // SCut actually being slipped is stack->takeAt(clipDragTakeIndex_) — the take
+    // under the pointer, which need not be the active/comped one.
+    int clipDragTakeIndex_ = -1;
     // W2 warp-marker drag (proposal 28): armed by a press in the marker
     // strip (top pixels of a clip) near a handle; the drag mutates live via
     // SCut::setWarpAnchors, release reverts to the press snapshot and

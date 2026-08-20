@@ -342,7 +342,33 @@ long-term shape.
     construction (the folder's row is drawn by this renderer whether or not its
     children have rows); what the gate closes is the CLAIM, not a suspected bug.
 
-23. **A double-click on an EVENT clip opens the event editor for it**
+23. **A take-lane click SELECTS THE STACK, and Alt on the body slips the TAKE
+    UNDER THE POINTER, not the active one.** A plain click still submits
+    `SSelectTakeAction` (the comping gesture, proposal 17 phase 3) — but it
+    ALSO calls the same `submitSetSelectionAction`/`submitToggleSelectionAction`
+    the composite lane's own click does, on `lastClickSLink_` (the take
+    STACK's own outer link — a stack is one clip on the timeline; only WHICH
+    take sounds is per-lane, so there is no such thing as "select take row 2"
+    in the general selection). Skipping this left whatever was selected
+    before the click (or nothing) as the selection, so a keyboard command
+    aimed at "the clip I just clicked" — split (`s`) being the one that
+    surfaced it — silently acted on a stale, unrelated target instead.
+    `SSplitClipAction` was ALREADY stack-aware (it splits every take when
+    handed the stack's own path); only the click was failing to point at it.
+    Alt-drag on a take-lane clip body arms a slip exactly like the composite
+    lane's, with one difference: `clipDragTakeIndex_` (-1 outside a take
+    lane) records WHICH take was under the pointer, so the live drag and the
+    release's `SResizeClipAction` (its `take` parameter existed since phase 4
+    for edit-group broadcast, and needed no change) edit that take's `SCut`
+    while `lastClickSLink_` stays the stack's link throughout — for position,
+    path and repaint-rect purposes only. `lastClickSLink_` must NEVER be
+    fed to `ensureSCut()` while `clipDragTakeIndex_ >= 0`: it wraps an
+    `STakeStack`, not (yet) an `SCut`, and `ensureSCut` treats "not an SCut"
+    as "wrap it in a new one" — which would silently replace the stack's own
+    link with a bogus `SCut(project, *stack)` and orphan every take in it.
+    Move/stretch/loop gestures are still unclaimed on a take-lane row.
+
+24. **A double-click on an EVENT clip opens the event editor for it**
     (`SMVActualView::mouseDoubleClickEvent`), through `SMainWindow::
     showEventEditor()` — never through `app/eventui` directly, which this
     module may not depend on (same reason `SEventTimeAxis` linking lives in
