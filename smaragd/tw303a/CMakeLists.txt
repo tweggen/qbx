@@ -634,9 +634,11 @@ tw_module(sidecar
         sidecar/include/tw/sidecar/twsidecarstore.h
         sidecar/include/tw/sidecar/twaspects.h
         sidecar/include/tw/sidecar/twanalyzers.h
+        sidecar/include/tw/sidecar/twgroove.h
         sidecar/src/twqaf.cc
         sidecar/src/twsidecarstore.cc
         sidecar/src/twanalyzers.cc
+        sidecar/src/twgroove.cc
     DEPS tw_core)
 
 # --- Audio file format libraries (sinks only) -----------------------------------
@@ -1116,6 +1118,7 @@ tw_module_test(wide_graph_test              schedule/tests/wide_graph_test.cc   
 target_include_directories(wide_graph_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/graph/tests)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
 tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
+tw_module_test(groove_test                  sidecar/tests/groove_test.cc                tw_sidecar)
 # tw_schedule + tw_pages are named EXPLICITLY (playback already depends on both,
 # so this is a link-line fact, not a new module edge — check_layering.py's DAG is
 # unchanged): the position-coded case constructs a CapturePagePool and a
