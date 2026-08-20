@@ -38,6 +38,30 @@ inline SObject *laneAt( SObject *root, const QList<int> &path )
     return ( obj && obj->isPathContainer() ) ? obj : nullptr;
 }
 
+// --- Root-qualified resolution (proposal 09 D21) ----------------------------
+//
+// The root a qualified path names: the MASTER when the qualifier is empty, the
+// named arrangement otherwise. An UNKNOWN name yields null and NEVER falls back
+// to the master -- that refusal is the safety property the whole scheme buys,
+// and a fallback would reintroduce exactly the silent wrong-tree edit it exists
+// to prevent.
+inline SObject *rootNamed( SProject *project, const QString &rootName )
+{
+    if( !project ) return nullptr;
+    if( rootName.isEmpty() ) return project->getRootComponent();
+    return project->arrangement( rootName );
+}
+
+// Resolve a qualified spec ("Drums:0,1", or "0,1" for the master) to a lane.
+// Null for an unknown root, a dangling path, or a non-container target.
+inline SObject *laneAtQualified( SProject *project, const QString &spec )
+{
+    const strackpath::QualifiedPath q = strackpath::parseQualified( spec );
+    SObject *root = rootNamed( project, q.root );
+    if( !root ) return nullptr;
+    return laneAt( root, q.idx );
+}
+
 // Resolve a clip PLACEMENT: `path` addresses a child link of a lane
 // (last index = link index within the lane). Null for dangling paths or
 // when the addressed child is itself a lane (a nested track, not a clip).

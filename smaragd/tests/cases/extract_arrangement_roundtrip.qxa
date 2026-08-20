@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 M6 AC 6.7: an extracted project survives save/load, and the
+  render after the round trip is BYTE-IDENTICAL to the render before it.
+
+  This is the gate that would catch the arrangement root being garbage-collected
+  on load (it hangs off no SLink in the master tree, so only the registry pin
+  keeps it alive), the asset losing its registry entry, or the placement
+  resolving to something else.
+
+  A byte compare is legitimate here because both renders go through exactly the
+  same graph: root, window, placement and capture are all supposed to come back
+  identical. Anything that does not is a defect, not a tolerance.
+
+  This case OWNS build/test-output/.../ext_roundtrip.qxp.
+-->
+<SActionScript version="1" name="extract_arrangement_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="192000"/>
+    <add-sample trackIndex="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-track-name trackPath="2" name="Keep"/>
+
+    <!-- Window [0,4s) over the first two tracks; the clip at 4 s on track 1
+         falls outside and becomes a snippet. -->
+    <extract-arrangement trackPaths="0;1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <assert-arrangements names="Drums" trackCounts="2"/>
+    <assert-track-count arrangement="" count="2"/>
+
+    <render filename="rt_before.wav" format="wav" quality="10" durationSec="8"/>
+
+    <save-project path="../../build/test-output/extract_arrangement_roundtrip/ext_roundtrip.qxp"/>
+    <load-project path="../../build/test-output/extract_arrangement_roundtrip/ext_roundtrip.qxp"/>
+
+    <!-- The arrangement, its lanes, the master shape and the names all return. -->
+    <assert-arrangements names="Drums" trackCounts="2"/>
+    <assert-track-count arrangement="" count="2"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+    <assert-track-name trackPath="0" name="Drums"/>
+    <assert-track-name trackPath="1" name="Keep"/>
+
+    <render filename="rt_after.wav" format="wav" quality="10" durationSec="8"/>
+    <assert-file-identical actual="rt_after.wav" expected="rt_before.wav"/>
+  </actions>
+
+</SActionScript>

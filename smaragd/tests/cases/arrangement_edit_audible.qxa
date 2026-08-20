@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 M0: an edit made INSIDE a detached arrangement must reach what the
+  arrangement's asset placement plays.
+
+  This is the gate for the invalidation walk. SObject::invalidateRenderPath()
+  walks DOWN from a root and bumps the content epoch of every chain that
+  CONTAINS the edited object; the epoch is the only staleness signal the page
+  cache has, so a chain that is never bumped keeps serving its first frozen
+  page forever. Before M0 the walk started at the MASTER root alone.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramping 0 -> 0.8, so each source
+  second has its own RMS: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405.
+
+  HISTORY, because this case took two fixes and the first one alone made it
+  FLAKY rather than green:
+
+    1. SObject::invalidateRenderPath[Range]() walked down from the MASTER root
+       only, so nothing under a detached arrangement was bumped at all — not
+       even its own epoch. The case failed EVERY run.
+    2. With that fixed it measured 3 PASS / 3 FAIL, and racy at
+       SMARAGD_REVAL_WORKERS=1 as well as 8. The container capture is rebuilt
+       on a revalidator worker while the edit bumps the content epoch on the
+       main thread; a rebuild that starts a few hundred microseconds early
+       reads the PRE-EDIT pages, publishes them and sets readerTried_, after
+       which ensureReader() hands out the stale snapshot until some later edit
+       invalidates again. SCut::captureContentEpoch_ closes it by making a
+       stamp mismatch a MISS.
+
+  Shape:
+    - "Drums" is a detached arrangement holding ONE track with the sawtooth
+      at 0. It is summed into no master bus (D8).
+    - An asset windows Drums over [0,4s) and is placed on master lane 0 at 0.
+    - The render therefore carries exactly Drums' output.
+    - Then a SECOND copy of the sawtooth is added inside Drums at 0, doubling
+      the amplitude. A correct invalidation makes the second render louder;
+      a stale one reproduces the first render exactly.
+
+  The doubling is deliberately large (a factor of 2 = +6 dB) so the assertion
+  cannot be satisfied by rounding, and the "unchanged" failure mode is an exact
+  match against the pre-edit band rather than a near miss.
+
+  THE CASE RUNS THE EDIT FOUR TIMES, and that is not padding. The failure it
+  guards is a RACE, so one edit detects it only some of the time; four
+  independent edit/render pairs raise the detection rate to what is measured in
+  the header of the commit that added them. A single-stage version of this case
+  measured 4 failures in 12 runs against the broken binary.
+
+  Only SEC0 is asserted past stage 2, and that is not arbitrary either: the
+  ramp reaches 0.8, so four copies of sec1 peak at 1.6 and CLIP in a 16-bit PCM
+  render. Sec0's ramp is 0 -> 0.2, so even four copies peak at 0.8 and the
+  closed form survives. Asserting a clipped second would make the band a
+  statement about the clipper rather than about invalidation.
+-->
+<SActionScript version="1" name="arrangement_edit_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Master lane 0: nothing of its own; it only carries the asset. -->
+    <add-track index="-1"/>
+
+    <!-- The detached arrangement, and one lane inside it. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <assert-arrangements names="Drums" trackCounts="1"/>
+    <assert-track-count arrangement="Drums" count="1"/>
+    <assert-track-count arrangement="" count="1"/>
+
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The asset windows the WHOLE arrangement root ("Drums:" = the root
+         itself, empty index path) over its first 4 seconds. -->
+    <create-asset container="Drums:" startOffset="0" duration="192000"
+                  assetName="DrumsAsset"/>
+    <place-asset assetName="DrumsAsset" trackPath="0" timePos="0"/>
+
+    <!-- STAGE 1: one copy. The ramp ladder as authored. -->
+    <render filename="arr_edit_1.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="arr_edit_1.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="arr_edit_1.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+
+    <!-- STAGE 2: a second identical clip INSIDE the arrangement, on its own
+         lane, at the same position. Two identical sawtooths sum to double
+         amplitude, so every band doubles. -->
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+    <render filename="arr_edit_2.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="arr_edit_2.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.12" maxRms="0.16"/>
+    <assert-audio-energy filename="arr_edit_2.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.33" maxRms="0.38"/>
+
+    <!-- STAGE 3: three copies. Sec0 only from here (see the header). -->
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-track-count arrangement="Drums" count="3"/>
+    <render filename="arr_edit_3.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="arr_edit_3.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.185" maxRms="0.215"/>
+
+    <!-- STAGE 4: four copies. -->
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:3" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-track-count arrangement="Drums" count="4"/>
+    <render filename="arr_edit_4.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="arr_edit_4.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.250" maxRms="0.285"/>
+  </actions>
+
+</SActionScript>

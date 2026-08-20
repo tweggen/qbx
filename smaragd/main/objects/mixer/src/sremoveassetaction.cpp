@@ -31,12 +31,38 @@ SApplyResult SRemoveAssetAction::apply( SProject *project )
     SAction *inverse = nullptr;
     SCut *cut = dynamic_cast<SCut *>( body );
     if( cut ) {
-        SObject *root = project->getRootComponent();
-        QList<int> containerPath = pathOf( root, &cut->getContent() );
+        SObject &content = cut->getContent();
+        // WHICH ROOT the content lives under (proposal 09 D17). This used to
+        // be `pathOf( project->getRootComponent(), &content )` unconditionally
+        // — and for a content object under a detached ARRANGEMENT root that
+        // walk finds nothing and returns the EMPTY path, which does not mean
+        // "not found": it means THE ROOT ITSELF. So the inverse of removing an
+        // arrangement's asset was an asset windowing the ENTIRE MASTER, built
+        // silently, on undo.
+        //
+        // Ask the registry first. A registered root addresses itself as
+        // "<name>:" with an empty index path, which is exactly the spelling
+        // create-asset now parses.
+        QString containerRoot = project->arrangementNameOf( &content );
+        QList<int> containerPath;
+        if( containerRoot.isEmpty() ) {
+            SObject *master = project->getRootComponent();
+            if( &content != master ) {
+                containerPath = pathOf( master, &content );
+                // Still empty => genuinely unreachable. REFUSE to build an
+                // inverse rather than build one that means the master.
+                if( containerPath.isEmpty() ) {
+                    return { false, nullptr };
+                }
+            }
+        } else {
+            // Registered arrangement root: the empty path IS the address.
+        }
         inverse = new SCreateAssetAction( containerPath,
                                           (offset_t) cut->getStartOffset().frames(),
                                           cut->getDurationBlocking(),   // edit path (P19)
-                                          assetName_ );
+                                          assetName_,
+                                          containerRoot );
     }
 
     project->unregisterAsset( assetName_ );

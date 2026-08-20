@@ -1,5 +1,7 @@
 #include "app/objects/mixer/splaceassetaction.h"
 #include "app/model/splacements.h"
+#include "app/model/sarrangements.h"
+#include "tw/core/twlog.h"
 #include "app/objects/mixer/sremoveassetplacementaction.h"
 #include "app/objects/track/strackpath.h"
 #include "app/model/sproject.h"
@@ -25,13 +27,17 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = splacements::rootContainer( project );
+    // The destination lane may be in the master or in a named ARRANGEMENT
+    // (proposal 09 D21): "1" is the master's 2nd lane, "Drums:0" the Drums
+    // arrangement's 1st. An unknown name is refused, never resolved against
+    // the master.
+    SObject *root = splacements::rootNamed( project, destRoot_ );
     SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
     }
 
-    // Resolve the destination track via path from the root mixer.
+    // Resolve the destination track via path from that root.
     SObject *trackObj = resolveByPath(root, trackPath_);
     if (!trackObj) {
         return {false, nullptr};
@@ -62,6 +68,17 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
                 return {false, nullptr};   // dropping into the asset's own subtree
             }
         }
+    }
+
+    // The whole-graph guard (proposal 09 D11), IN ADDITION to the two above
+    // rather than instead of them: those are correct for an in-place asset and
+    // are cheaper, but neither can see a cycle that leaves the tree it started
+    // in -- "arrangement A places an asset of B, B places an asset of A" -- and
+    // detached arrangement roots make that shape reachable for the first time.
+    if (sarrangements::placementWouldCycle(assetBody, track)) {
+        TW_LOGW("cut", "place-asset: refused, placing '%s' here would close a "
+                       "reference cycle", assetName_.toUtf8().constData());
+        return {false, nullptr};
     }
 
     // No pin is taken here. registerAsset() already holds one reference for the
@@ -97,14 +114,18 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
 void SPlaceAssetAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("assetName", assetName_);
-    elem.setAttribute("trackPath", pathToString(trackPath_));
+    elem.setAttribute("trackPath", qualifiedToString(destRoot_, trackPath_));
     elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
 }
 
 bool SPlaceAssetAction::readXml(const QDomElement &elem, int /*version*/)
 {
     assetName_ = elem.attribute("assetName", "");
-    trackPath_ = stringToPath(elem.attribute("trackPath", ""));
+    {
+        const QualifiedPath q = parseQualified( elem.attribute("trackPath", "") );
+        destRoot_  = q.root;
+        trackPath_ = q.idx;
+    }
     // Preserve precision for large offset_t values by checking denominator
     Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());
     if (frac.denominator == 1) {

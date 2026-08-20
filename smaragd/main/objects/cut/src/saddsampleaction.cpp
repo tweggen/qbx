@@ -31,7 +31,9 @@ SApplyResult SAddSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = splacements::rootContainer( project );
+    // The addressed root (proposal 09 D21): whatever qualifier the trackPath
+    // carried, else the `arrangement` attribute, else the master.
+    SObject *root = splacements::rootNamed( project, arrangement_ );
     if (!root || !root->isPathContainer()) {
         return {false, nullptr};
     }
@@ -117,9 +119,21 @@ bool SAddSampleAction::readXml(const QDomElement &elem, int /*version*/)
     // Sniff the spelling rather than key off formatVersion(): pre-existing .qxa
     // scripts carry no version attribute, and `trackIndex` is exactly a
     // one-element path.
-    trackPath_ = elem.hasAttribute("trackPath")
-        ? strackpath::stringToPath( elem.attribute("trackPath") )
-        : QList<int>{ elem.attribute("trackIndex", "0").toInt() };
+    if (elem.hasAttribute("trackPath")) {
+        // A qualified spelling ("Drums:0,1") carries its own root; a bare
+        // "0,1" still means the master, which is what keeps every existing
+        // case unchanged.
+        const strackpath::QualifiedPath q =
+            strackpath::parseQualified( elem.attribute("trackPath") );
+        trackPath_   = q.idx;
+        arrangement_ = q.root;
+    } else {
+        trackPath_ = QList<int>{ elem.attribute("trackIndex", "0").toInt() };
+    }
+    // The index spelling has no place to put a qualifier, so it takes one as
+    // its own attribute.
+    if (arrangement_.isEmpty())
+        arrangement_ = elem.attribute("arrangement");
     filePath_ = elem.attribute("filePath", "");
     // Preserve precision for large offset_t values by checking denominator
     Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());

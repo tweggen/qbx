@@ -633,6 +633,20 @@ SLink *SStdMixer::instantiateFromDomElement(
         childNode = childNode.nextSibling();
     }
                 
+    // A named ARRANGEMENT root re-registers itself HERE, during instantiation
+    // (proposal 09 D3). Not from a deferResolve, and the difference is the
+    // whole point: registerArrangement() takes a REFERENCE, and this root
+    // hangs off no SLink in the master tree, so anything later than "the
+    // moment it exists" races ~SProjectLoader dropping the handle links --
+    // after which the refcount is zero and the object is gone (by
+    // deleteLater(), so it does not even look like a crash).
+    //
+    // The attribute is absent on every mixer written before this, and on the
+    // master root always, so this is inert for existing files.
+    const QString arrName = element.attribute( "arrangementName" );
+    if( !arrName.isEmpty() )
+        projectLoader.getProject().registerArrangement( arrName, mixer );
+
     // Construct with parent=NULL, then setParent (slink.h rule): the parent's
     // childEvent must never see a half-constructed SLink.
     SLink *mixerLink = new SLink( *mixer, NULL );

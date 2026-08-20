@@ -43,6 +43,11 @@ public:
 
 private:
     QList<int> trackPath_ = { 0 };
+    // The root trackPath_ is relative to: empty == the master, a name == that
+    // arrangement (proposal 09 D21). Parsed out of a qualified trackPath
+    // ("Drums:0"), or taken from the `arrangement` attribute when the legacy
+    // trackIndex spelling is used.
+    QString    arrangement_;
     QString filePath_;
     offset_t timePos_ = 0;
 

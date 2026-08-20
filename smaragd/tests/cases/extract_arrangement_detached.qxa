@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 M6: extract-arrangement moves the named tracks OUT of the master
+  and puts one asset clip where they were.
+
+  THIS CASE PROVES D8 — that the extracted tracks really leave the master sum —
+  and it is built so that nothing else can satisfy it. The asset is placed at
+  8 s rather than back at 0, so:
+
+    [0,4s)   must be SILENT. The two tracks used to play there. If the
+             arrangement root were still summed into the master (an accidental
+             insertTrack into the wrong mixer, say) their audio would still be
+             heard here and this assertion fails.
+    [8,12s)  must carry the ladder. This is the placement, and it is the only
+             route the audio has left.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramping 0 -> 0.8, so each source
+  second has its own RMS: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405.
+  TWO tracks carry it, so every band is doubled: 0.133 / 0.353 / 0.582 / 0.810.
+  Sec3 doubled peaks at 1.6 and CLIPS, so only sec0..sec2 are asserted.
+
+  durationSec is passed EXPLICITLY, and that is load-bearing rather than
+  tidiness: SProject::getDurationFrames() measures the MASTER root, and after
+  an extraction the master's contribution is one clip of the window's length.
+  A whole-project render would stop at 12 s here only by luck of the placement.
+-->
+<SActionScript version="1" name="extract_arrangement_detached">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Baseline: both tracks audible in the master, at 0. -->
+    <render filename="ext_before.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="ext_before.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.33" maxRms="0.38"/>
+
+    <!-- Extract BOTH tracks over their whole 4 s, and place the asset at 8 s. -->
+    <extract-arrangement trackPaths="0;1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="384000"/>
+
+    <!-- The master lost two lanes and gained exactly one. -->
+    <assert-track-count arrangement="" count="1"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+    <assert-arrangements names="Drums" trackCounts="2"/>
+    <assert-track-name trackPath="0" name="Drums"/>
+
+    <render filename="ext_after.wav" format="wav" quality="10" durationSec="12"/>
+
+    <!-- [0,4s): SILENT. The tracks left the master sum (D8). -->
+    <assert-audio-energy filename="ext_after.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="ext_after.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="ext_after.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- [8,12s): the placement, carrying the doubled ladder. -->
+    <assert-audio-energy filename="ext_after.wav"
+                         startFrame="384000" frameCount="48000"
+                         minRms="0.115" maxRms="0.150"/>
+    <assert-audio-energy filename="ext_after.wav"
+                         startFrame="432000" frameCount="48000"
+                         minRms="0.33" maxRms="0.38"/>
+    <assert-audio-energy filename="ext_after.wav"
+                         startFrame="480000" frameCount="48000"
+                         minRms="0.55" maxRms="0.61"/>
+  </actions>
+
+</SActionScript>

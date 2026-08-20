@@ -1,6 +1,7 @@
 
 #include <qobject.h>
 #include <QDebug>
+#include <algorithm>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -435,6 +436,69 @@ QList<QString> SProject::assetNames() const
     return assetDict_.keys();
 }
 
+// --- Arrangement registry (proposal 09 D3) --------------------------------
+//
+// Mirrors the asset registry above, including the pin, for the reason given in
+// the header: an arrangement root hangs off no SLink in the master tree, so the
+// reference taken here is the only thing that keeps it alive across a load.
+
+void SProject::registerArrangement( const QString &name, SObject *root )
+{
+    if( !root || name.isEmpty() ) return;
+    if( arrangementDict_.contains( name ) ) {
+        qWarning() << QString( "SProject::registerArrangement: name already in "
+                               "use: \"%1\"." ).arg( name );
+        return;
+    }
+    arrangementDict_.insert( name, root );
+    root->addRef();                  // pin: survives with zero placements
+    emit arrangementRegistered( name, *root );
+}
+
+void SProject::unregisterArrangement( const QString &name )
+{
+    SObject *root = arrangementDict_.take( name );
+    if( !root ) return;
+    emit arrangementUnregistered( name );   // listeners drop their row first
+    root->removeRef();                      // may reach 0 -> deleteLater
+}
+
+SObject *SProject::arrangement( const QString &name ) const
+{
+    return arrangementDict_.value( name );
+}
+
+bool SProject::hasArrangement( const QString &name ) const
+{
+    return arrangementDict_.contains( name );
+}
+
+QString SProject::arrangementNameOf( const SObject *root ) const
+{
+    if( !root ) return QString();
+    for( auto it = arrangementDict_.constBegin();
+         it != arrangementDict_.constEnd(); ++it ) {
+        if( it.value() == root ) return it.key();
+    }
+    return QString();
+}
+
+void SProject::clearArrangements()
+{
+    const QList<QString> names = arrangementDict_.keys();
+    for( const QString &n : names ) unregisterArrangement( n );
+}
+
+QList<QString> SProject::arrangementNames() const
+{
+    QList<QString> names = arrangementDict_.keys();
+    // Deterministic order: a QHash iterates arbitrarily, and both the
+    // serializer's ordering and assert-arrangements' output would otherwise
+    // vary run to run.
+    std::sort( names.begin(), names.end() );
+    return names;
+}
+
 static SProject::ExternFileFactory &externFileFactory()
 {
     static SProject::ExternFileFactory factory = nullptr;
@@ -533,6 +597,18 @@ SProject::~SProject()
         assetDict_.clear();
         for( SObject *body : bodies ) {
             if( body ) body->removeRef();
+        }
+    }
+
+    // The arrangement pins go the same way, and for the same reason: held here
+    // they make a whole detached root look permanently referenced, so the
+    // cascade below would skip it and the survivor pass would hard-delete it
+    // with live SLinks (the assets windowing it) still pointing at it.
+    {
+        const QList<SObject*> roots = arrangementDict_.values();
+        arrangementDict_.clear();
+        for( SObject *root : roots ) {
+            if( root ) root->removeRef();
         }
     }
 

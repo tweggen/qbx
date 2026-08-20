@@ -581,6 +581,34 @@ private:
     // Atomic: ensureReader() reads it outside mutex() (Phase 2b).
     std::atomic<bool> readerTried_;
 
+    // The CONTENT EPOCH the current capture was built from, and 0 when there is
+    // no capture or the content is not container-backed (proposal 09 M0, second
+    // half).
+    //
+    // WHY A STAMP AND NOT AN ORDERING. A container capture is rebuilt on a
+    // revalidator worker while the edit that invalidated it bumps the content
+    // epoch on the main thread, and the two RACE: measured, a rebuild that
+    // starts a few hundred microseconds before the bump lands reads the
+    // PRE-EDIT pages, publishes them, and sets readerTried_ -- after which
+    // ensureReader() returns immediately and the stale snapshot is what the
+    // next render hears. It then sticks until some LATER edit invalidates
+    // again. Failure rate measured at 3-in-6 on an idle box, at
+    // SMARAGD_REVAL_WORKERS=1 as well as 8, so it is not the worker pool.
+    //
+    // Stamping makes the staleness self-healing under ANY ordering rather than
+    // forcing one: a capture whose stamp no longer matches its content is a
+    // MISS and is rebuilt on the next access, exactly as a frozen page whose
+    // width no longer matches its producer is a miss (proposal 36 4.5). The
+    // stamp is taken BEFORE the freeze loop, so a content change DURING a build
+    // leaves the older value and is correctly detected as stale.
+    std::atomic<uint64_t> captureContentEpoch_{ 0 };
+
+    // The content's current render-chain epoch, or 0 when the content has no
+    // root component (a leaf sample). 0 == 0 makes the check inert for
+    // sample-backed and grained captures, which are invalidated explicitly by
+    // their own window/grain edits and have no container epoch to track.
+    uint64_t contentEpochForCapture_() const;
+
     // Proposal 27 M1: desired readiness of this clip's reader (see
     // setRenderGateReady()); applied to every newly built reader.
     std::atomic<bool> renderGateReady_{true};

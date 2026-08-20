@@ -25,6 +25,9 @@ public:
 
 private:
     QString assetName_;
+    // Which ROOT trackPath_ addresses: empty == the master, a name == that
+    // arrangement (proposal 09 D21). Serialized inside the qualified trackPath.
+    QString    destRoot_;
     QList<int> trackPath_;
     offset_t timePos_ = 0;
 };

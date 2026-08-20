@@ -17,6 +17,7 @@
 
 set(APP_MODEL_FILES
     # --- app/model
+    model/include/app/model/sarrangements.h
     model/include/app/model/sappcontext.h
     model/include/app/model/sautomationlane.h
     model/include/app/model/sclipwindow.h
@@ -255,9 +256,13 @@ set(APP_OBJECTS_FILES
     objects/track/src/strackrndrinline.cpp
     # --- app/objects/mixer
     objects/mixer/include/app/objects/mixer/saddtrackaction.h
+    objects/mixer/include/app/objects/mixer/sdissolvearrangementaction.h
+    objects/mixer/include/app/objects/mixer/sextractarrangementaction.h
+    objects/mixer/include/app/objects/mixer/screatearrangementaction.h
     objects/mixer/include/app/objects/mixer/screateassetaction.h
     objects/mixer/include/app/objects/mixer/smovetrackaction.h
     objects/mixer/include/app/objects/mixer/splaceassetaction.h
+    objects/mixer/include/app/objects/mixer/sremovearrangementaction.h
     objects/mixer/include/app/objects/mixer/sremoveassetaction.h
     objects/mixer/include/app/objects/mixer/sremoveassetplacementaction.h
     objects/mixer/include/app/objects/mixer/sremovetrackaction.h
@@ -265,9 +270,13 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/srestoretrackaction.h
     objects/mixer/include/app/objects/mixer/sstdmixer.h
     objects/mixer/src/saddtrackaction.cpp
+    objects/mixer/src/sdissolvearrangementaction.cpp
+    objects/mixer/src/sextractarrangementaction.cpp
+    objects/mixer/src/screatearrangementaction.cpp
     objects/mixer/src/screateassetaction.cpp
     objects/mixer/src/smovetrackaction.cpp
     objects/mixer/src/splaceassetaction.cpp
+    objects/mixer/src/sremovearrangementaction.cpp
     objects/mixer/src/sremoveassetaction.cpp
     objects/mixer/src/sremoveassetplacementaction.cpp
     objects/mixer/src/sremovetrackaction.cpp
@@ -456,6 +465,7 @@ set(APP_UI_FILES
     testkit/src/ssidecartestactions.cpp
     testkit/src/sslipclipaction.cpp
     testkit/src/stestfilepath.cpp
+    testkit/src/sarrangementtestactions.cpp
     testkit/src/strackselectionactions.cpp
     testkit/src/stransporttestactions.cpp
     # proposal 38 gate 4: the WebDAV stub server. Deliberately NOT under

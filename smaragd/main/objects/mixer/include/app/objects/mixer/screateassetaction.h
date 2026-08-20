@@ -20,14 +20,23 @@ public:
     SCreateAssetAction() = default;
     SCreateAssetAction( const QList<int> &containerPath,
                         offset_t startOffset, length_t duration,
-                        const QString &assetName = QString() );
+                        const QString &assetName = QString(),
+                        const QString &containerRoot = QString() );
 
     QString name() const override { return QStringLiteral("create-asset"); }
+    QStringList knownAttributes() const override
+    { return { QStringLiteral("container"), QStringLiteral("startOffset"),
+               QStringLiteral("duration"), QStringLiteral("assetName") }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
+    // Which ROOT containerPath_ is relative to: empty == the master, a name ==
+    // that arrangement (proposal 09 D21). Serialized as one qualified
+    // `container` attribute ("Drums:1"), so a master-rooted asset writes
+    // exactly what it always wrote.
+    QString    containerRoot_;
     QList<int> containerPath_;
     offset_t   startOffset_ = 0;
     length_t   duration_    = 0;

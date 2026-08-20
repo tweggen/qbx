@@ -419,6 +419,26 @@ const Fixture kFixtures[] = {
     // fix/track-list-polish (m): every attribute is written only when it was
     // given (collapsed >= 0, secondWidth >= 0, scrollX >= 0), so the fixture
     // gives all three.
+    // Proposal 09: the arrangement verbs. extract-arrangement writes placeAt
+    // only when >= 0 and snippets only when OFF, so the fixture gives both.
+    { "create-arrangement",   "<create-arrangement name='Drums'/>" },
+    { "remove-arrangement",   "<remove-arrangement name='Drums'/>" },
+    { "extract-arrangement",
+      "<extract-arrangement trackPaths='0;2,1' rangeStart='48000'"
+      " rangeEnd='192000' name='Drums' window='range' placeAt='96000'"
+      " snippets='0'/>" },
+    { "dissolve-arrangement",
+      "<dissolve-arrangement name='Drums' restorePlan='@0;1@2'/>" },
+    { "assert-arrangements",
+      "<assert-arrangements names='Bass,Drums' trackCounts='1,2'/>" },
+    // The root-qualified spellings (D21): a qualifier must survive the round
+    // trip, and a BARE path must come back bare -- that second half is what
+    // keeps every pre-existing case and project file byte-unchanged.
+    { "create-asset",
+      "<create-asset container='Drums:1' startOffset='0' duration='96000'"
+      " assetName='Section'/>" },
+    { "place-asset",
+      "<place-asset assetName='Section' trackPath='Drums:0' timePos='0'/>" },
     { "assert-lane-view",
       "<assert-lane-view trackPath='0,1' collapsed='1' secondWidth='45.5'"
       " scrollX='123456'/>" },

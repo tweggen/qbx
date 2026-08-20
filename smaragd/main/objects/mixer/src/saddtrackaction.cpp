@@ -1,6 +1,7 @@
 #include "app/objects/mixer/saddtrackaction.h"
 #include "app/objects/mixer/sremovetrackaction.h"
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sappcontext.h"
@@ -48,8 +49,8 @@ static QString generateTrackName()
     return name;
 }
 
-SAddTrackAction::SAddTrackAction(int index)
-    : index_(index)
+SAddTrackAction::SAddTrackAction(int index, const QString &arrangement)
+    : index_(index), arrangement_(arrangement)
 {
 }
 
@@ -59,8 +60,10 @@ SApplyResult SAddTrackAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // Get the root SStdMixer.
-    SObject *root = project->getRootComponent();
+    // The addressed root: the master, or a named arrangement (D21). An
+    // unknown name is REFUSED rather than resolved against the master -- see
+    // splacements::rootNamed.
+    SObject *root = splacements::rootNamed(project, arrangement_);
     SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
     if (!mixer) {
         return {false, nullptr};
@@ -88,6 +91,10 @@ SApplyResult SAddTrackAction::apply(SProject *project)
 
     // Create inverse action: remove at the same index. add-track always appends
     // at the MIXER's top level, so a one-element path is the whole address.
+    // NOTE: the inverse is master-rooted until remove-track learns the
+    // qualifier (M2). Undo of an arrangement-side add-track is therefore not
+    // yet exact -- and this is why M2 migrates the whole verb set rather than
+    // the two verbs a gate happens to need.
     SAction *inverse = new SRemoveTrackAction(QList<int>{ actualIndex });
 
     return {true, inverse};
@@ -96,11 +103,13 @@ SApplyResult SAddTrackAction::apply(SProject *project)
 void SAddTrackAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("index", index_);
+    if (!arrangement_.isEmpty()) elem.setAttribute("arrangement", arrangement_);
 }
 
 bool SAddTrackAction::readXml(const QDomElement &elem, int /*version*/)
 {
     index_ = elem.attribute("index", "-1").toInt();
+    arrangement_ = elem.attribute("arrangement");
     return true;
 }
 

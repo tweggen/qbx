@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 M1: a named ARRANGEMENT is a second summing root that survives a
+  save/load round trip WITH ZERO PLACEMENTS.
+
+  The zero-placement part is the whole point, and it is what the registry pin
+  exists for. An arrangement root hangs off no SLink in the master tree, so
+  nothing in a loaded document references it: ~SProjectLoader deletes the
+  loader's handle links, the refcount reaches zero and the object is collected
+  — by deleteLater(), so the failure does not even look like a crash, it looks
+  like the arrangement was never there. SStdMixer::instantiateFromDomElement
+  therefore re-registers (and re-pins) DURING instantiation, not from a
+  deferResolve.
+
+  Also gates that the two registry verbs are exact mutual inverses, and that
+  the tracks and clips inside an arrangement round-trip with it.
+
+  This case OWNS the project file build/test-output/.../arr_roundtrip.qxp.
+-->
+<SActionScript version="1" name="arrangement_create_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <assert-arrangements names=""/>
+
+    <create-arrangement name="Drums"/>
+    <assert-arrangements names="Drums" trackCounts="0"/>
+
+    <!-- Undo/redo of the registry verbs themselves. -->
+    <undo/>
+    <assert-arrangements names=""/>
+    <redo/>
+    <assert-arrangements names="Drums" trackCounts="0"/>
+
+    <!-- Populate it: two lanes, one with audio. -->
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-arrangements names="Drums" trackCounts="2"/>
+    <assert-track-count arrangement="" count="1"/>
+
+    <!-- A second arrangement, to prove the registry is not a singleton. -->
+    <create-arrangement name="Bass"/>
+    <assert-arrangements names="Bass,Drums" trackCounts="0,2"/>
+
+    <!-- THE ROUND TRIP, with NOTHING placing either arrangement. -->
+    <save-project path="../../build/test-output/arrangement_create_roundtrip/arr_roundtrip.qxp"/>
+    <load-project path="../../build/test-output/arrangement_create_roundtrip/arr_roundtrip.qxp"/>
+
+    <assert-arrangements names="Bass,Drums" trackCounts="0,2"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+    <assert-track-count arrangement="Bass" count="0"/>
+    <assert-track-count arrangement="" count="1"/>
+  </actions>
+
+</SActionScript>

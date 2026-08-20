@@ -50,6 +50,51 @@ inline QList<int> stringToPath( const QString &s )
     return out;
 }
 
+// --- Root-qualified paths (proposal 09 D21) ---------------------------------
+//
+// A project has more than one summing root: the MASTER, plus any number of
+// named ARRANGEMENTs (SProject's arrangement registry). An index path alone
+// cannot say which of them it addresses -- and index {0} usually exists in all
+// of them, so an unqualified path resolved against the wrong root SUCCEEDS and
+// edits the wrong tree. That is silent corruption, not a failed action, which
+// is why the root travels WITH the path rather than as ambient state.
+//
+//   "Drums:0,1"   the 2nd child of Drums' 1st lane
+//   "0,1"         the same address in the MASTER -- the existing spelling,
+//                 unchanged, which is what keeps every project file, every
+//                 .qxa case and both goldens byte-identical
+//   "Drums:"      the Drums root itself (the empty path)
+//
+// The separator is ':' because a path is digits and commas and can never
+// contain one. An arrangement NAME could, in principle; parsing splits on the
+// FIRST colon and a name containing one is rejected at registration rather than
+// escaped here.
+struct QualifiedPath {
+    QString    root;   // empty == the master root
+    QList<int> idx;
+};
+
+inline QualifiedPath parseQualified( const QString &spec )
+{
+    QualifiedPath q;
+    const int colon = spec.indexOf( QLatin1Char(':') );
+    if( colon < 0 ) {
+        q.idx = stringToPath( spec );
+        return q;
+    }
+    q.root = spec.left( colon );
+    q.idx  = stringToPath( spec.mid( colon + 1 ) );
+    return q;
+}
+
+// Inverse of parseQualified. A master-rooted path writes NO qualifier, so
+// nothing that was written before this reads or writes differently.
+inline QString qualifiedToString( const QString &root, const QList<int> &idx )
+{
+    const QString p = pathToString( idx );
+    return root.isEmpty() ? p : ( root + QLatin1Char(':') + p );
+}
+
 inline bool findPathRec( SObject *cur, SObject *target, QList<int> &acc )
 {
     int i = 0;

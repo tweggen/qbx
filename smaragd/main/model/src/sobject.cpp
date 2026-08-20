@@ -169,6 +169,20 @@ int SObject::serializeSelfAttributes( QTextStream &o )
           << sName_.toHtmlEscaped().replace( QLatin1Char('\''),
                                              QLatin1String("&apos;") )
           << "'";
+    // A registered ARRANGEMENT root names itself (proposal 09 D3). Written
+    // here rather than in the mixer slice so any future root type inherits it,
+    // and written ONLY when the object is registered -- the master root never
+    // is, so every project file saved before this, and both committed goldens,
+    // stay byte-unchanged. The name is user-typed, so it escapes exactly as
+    // sName does.
+    if( SProject *proj = getProjectSafe() ) {
+        const QString arrName = proj->arrangementNameOf( this );
+        if( !arrName.isEmpty() )
+            o << " arrangementName='"
+              << arrName.toHtmlEscaped().replace( QLatin1Char(0x27),
+                                                  QLatin1String("&apos;") )
+              << "'";
+    }
     return 0;
 }
 
@@ -985,17 +999,50 @@ bool SObject::invalidateRenderChainsContaining(SObject *target)
     return contains;
 }
 
+// Every root an edit might live under: the project's MASTER root, plus every
+// registered ARRANGEMENT root (proposal 09 D13).
+//
+// THIS IS NOT A CONVENIENCE. Before it, both entry points below walked down
+// from the master alone, and `invalidateRenderChainsContaining` bumps only the
+// chains that CONTAIN the target — so for an object under a detached
+// arrangement the walk found nothing, returned false, and bumped NOTHING. Not
+// the arrangement's pages, not the asset capture windowing it, and not even the
+// edited object's own epoch, because the fallback below is guarded on "there is
+// no root at all", not on "not found". The content epoch is the only staleness
+// signal the page cache has, so the first freeze of a position was correct and
+// every edit after it was silently and permanently ignored: no log line, no
+// rejected action, and an SCut capture that early-returns while a snapshot
+// exists (SCut::buildCapture_) then plays that first snapshot forever.
+//
+// Only mute/solo/volume escaped, through notifyDependentsChanged()'s four
+// property-setter callers — which made the failure DIAGONAL, and therefore
+// worse than a uniform one: it looked like it worked until you moved a clip.
+static QList<SObject *> invalidationRootsOf( SProject *project )
+{
+    QList<SObject *> roots;
+    if (!project) return roots;
+    if (SObject *master = project->getRootComponent()) roots.append(master);
+    for (SObject *arr : project->arrangements()) {
+        if (arr && !roots.contains(arr)) roots.append(arr);
+    }
+    return roots;
+}
+
 void SObject::invalidateRenderPath()
 {
     SProject *project = getProjectSafe();
-    SObject *root = project ? project->getRootComponent() : nullptr;
-    if (root) {
-        root->invalidateRenderChainsContaining(this);
-    } else {
-        // Not (yet) reachable from a project root — e.g. during construction
-        // or teardown. Our own caches are all we can reach; when this object
-        // is later linked into the tree, the container's child-added path
-        // invalidates the ancestors.
+    const QList<SObject *> roots = invalidationRootsOf(project);
+    bool found = false;
+    for (SObject *root : roots) {
+        if (root->invalidateRenderChainsContaining(this)) found = true;
+    }
+    if (!found) {
+        // Not reachable from ANY root — during construction or teardown, or an
+        // object whose container is not registered. Our own caches are all we
+        // can reach; when this object is later linked into a tree, the
+        // container's child-added path invalidates the ancestors. Reaching
+        // here used to be indistinguishable from "no project at all", which is
+        // precisely how the detached case became silent.
         bumpRenderChainEpoch();
     }
 }
@@ -1056,11 +1103,17 @@ void SObject::invalidateRenderPathRange( offset_t start, offset_t end )
 {
     if (end <= start) return;
     SProject *project = getProjectSafe();
-    SObject *root = project ? project->getRootComponent() : nullptr;
-    if (root) {
+    const QList<SObject *> roots = invalidationRootsOf(project);
+    bool found = false;
+    for (SObject *root : roots) {
+        // Each root gets its OWN range accumulator: the list is the walk's
+        // per-branch scratch, and sharing it across two disjoint trees would
+        // carry one root's mapped ranges into the other's.
         QList<SDirtyRange> ranges;
-        root->invalidateRenderChainsContainingRange(this, start, end, ranges);
-    } else {
+        if (root->invalidateRenderChainsContainingRange(this, start, end, ranges))
+            found = true;
+    }
+    if (!found) {
         bumpRenderChainEpoch();
     }
 }

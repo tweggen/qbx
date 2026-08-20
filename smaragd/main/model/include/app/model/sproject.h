@@ -223,6 +223,38 @@ public:
     // that merely windows the same container" (undo rebuilds a cut).
     QString assetNameOf( const SObject *body ) const;
 
+    // --- Arrangement registry (proposal 09 D3) ---------------------------
+    // An ARRANGEMENT is a named summing root that is NOT the project's master
+    // root: its output reaches the master only through an asset placed over it
+    // (D8), so it is heard exactly once and can never be placed inside its own
+    // container. Today the object is always an SStdMixer, but the registry is
+    // typed to SObject on purpose -- app/model may not depend on the mixer
+    // slice, and D2 defers a second root TYPE rather than forbidding one.
+    //
+    // The pin is the whole point. An arrangement is reachable from no SLink in
+    // the master tree, so without a reference held HERE it is a top-level
+    // object nothing owns: ~SProjectLoader drops the loader's handle links and
+    // the refcount reaches zero (see registerArrangement). That is the same
+    // discipline registerAsset() uses, for a stronger reason.
+    void registerArrangement( const QString &name, SObject *root );
+    void unregisterArrangement( const QString &name );
+    SObject *arrangement( const QString &name ) const;
+    bool hasArrangement( const QString &name ) const;
+    QList<QString> arrangementNames() const;
+    // Reverse lookup: the registered name of a ROOT, or empty when the object
+    // is not a registered arrangement. This is what the serializer asks (so a
+    // master root writes no attribute and every existing file stays
+    // byte-unchanged) and what a path descriptor resolves against (D21).
+    QString arrangementNameOf( const SObject *root ) const;
+    // Drop every arrangement, releasing the registry's pins. Called before a
+    // LOAD: SLoadProjectAction loads INTO the existing SProject rather than
+    // constructing a fresh one, so without this the arrangements of the
+    // project being replaced survive into the one being opened — they would be
+    // merged, and (worse for a gate) an assertion about the loaded document
+    // would be satisfied by the registry entries of the previous one.
+    void clearArrangements();
+    const QHash<QString,SObject*> &arrangements() const { return arrangementDict_; }
+
     // Fire arrangementChanged(). Called from the action chokepoint after every
     // applied action so cached renders (asset captures) invalidate transparently
     // on any edit. Coarse by design (every action, not just arrangement edits);
@@ -268,6 +300,8 @@ signals:
     void fileNameChanged( const QString & );
     void assetAdded( const QString &name, SObject &body );
     void assetRemoved( const QString &name );
+    void arrangementRegistered( const QString &name, SObject &root );
+    void arrangementUnregistered( const QString &name );
     // Any applied action; consumers that cache rendered audio drop their cache.
     void arrangementChanged();
     // An async capture revalidation landed (preview/metadata fresh); views
@@ -322,6 +356,7 @@ private:
 
     QHash<QString,SExternFile*> externFileDict_;
     QHash<QString,SObject*> assetDict_;
+    QHash<QString,SObject*> arrangementDict_;
 
     bool isPartialLoad_ = false;  // True if load failed partway through
 
