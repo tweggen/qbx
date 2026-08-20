@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 D21: TWO EDITS IN TWO ROOTS NEVER MERGE INTO ONE UNDO ENTRY.
+
+  A mergeKey is built from a PATH, and index {0} exists in every root. So a
+  fader drag on track {0} of the master and one on track {0} of Drums produced
+  the SAME key; QUndoStack merged them, and the surviving command carried ONE
+  captured root = one undo then restored the wrong root's value and left the
+  other fader where the drag had put it.
+
+  This was unreachable until a second tab could exist, which is why it was
+  recorded rather than fixed at the time. Both halves are closed now: every
+  mergeKey that names a path is root-qualified, and SActionUndoCommand refuses
+  a merge across roots as a backstop for the key that gets added later and
+  forgets.
+
+  The case asserts the pair that only a NON-merge can satisfy: after two drags
+  and ONE undo, exactly one of the two faders has moved back and the other has
+  not. Merged, one undo reverts both (or reverts the wrong one) and the pair
+  cannot hold.
+-->
+<SActionScript version="1" name="merge_across_roots">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+
+    <!-- Both lanes are index 0 in their own root: the confusable shape. -->
+    <assert-track-volume trackPath="0" volumeDb="0.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="0.0" tolerance="0.01"/>
+
+    <!-- Two consecutive volume edits, same index, different roots. Same verb,
+         so they are exactly the pair that used to coalesce. -->
+    <set-track-volume trackPath="0" volume="-6.0"/>
+    <set-track-volume trackPath="Drums:0" volume="-12.0"/>
+    <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="-12.0" tolerance="0.01"/>
+
+    <!-- ONE undo. It must revert the LAST edit only = Drums back to 0 dB, the
+         master still at -6. If the two had merged, one undo would take both. -->
+    <undo/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="0.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
+
+    <!-- A second undo reverts the other one. Two edits, two entries. -->
+    <undo/>
+    <assert-track-volume trackPath="0" volumeDb="0.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="0.0" tolerance="0.01"/>
+
+    <!-- And redo walks back up in the same two steps. -->
+    <redo/>
+    <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="0.0" tolerance="0.01"/>
+    <redo/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="-12.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
+
+    <!-- The CONTROL: two edits on the SAME lane in the SAME root still merge,
+         which is what the coalescing is for. Two drags, ONE undo entry. -->
+    <set-track-volume trackPath="0" volume="-3.0"/>
+    <set-track-volume trackPath="0" volume="-4.0"/>
+    <assert-track-volume trackPath="0" volumeDb="-4.0" tolerance="0.01"/>
+    <undo/>
+    <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
+  </actions>
+
+</SActionScript>

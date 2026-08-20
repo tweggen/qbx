@@ -116,7 +116,12 @@ QString SSetPluginParamAction::mergeKey() const
     // Same slot AND same parameter -> same key, so one slider drag collapses to
     // one undo entry. A different parameter must NOT merge: the inverse only
     // carries one (paramId, oldValue) pair.
-    return QStringLiteral( "set-plugin-param:%1:%2:%3" )
+    // The ROOT is part of the key (proposal 09 D21): trackPath_ is text, and
+    // slot 0 param 0 of track {0} exists in every arrangement, so without it
+    // two different plugins' drags merge into one undo entry that then
+    // restores the wrong one.
+    return QStringLiteral( "set-plugin-param:%1:%2:%3:%4" )
+        .arg( pathRoot_ )
         .arg( trackPath_ )
         .arg( slotIndex_ )
         .arg( paramId_ );

@@ -306,7 +306,9 @@ bool SSetNotesAction::readXml( const QDomElement &elem, int )
 
 QString SSetNotesAction::mergeKey() const
 {
-    return QStringLiteral( "set-notes:" ) + pathToString( clipPath_ )
+    // Root-qualified for the reason set-plugin-param's key is: clip {0,0}
+    // exists in every root (proposal 09 D21).
+    return QStringLiteral( "set-notes:" ) + qualifiedToString( pathRoot_, clipPath_ )
          + ":" + QString::number( take_ );
 }
 
