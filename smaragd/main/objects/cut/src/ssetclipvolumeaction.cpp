@@ -45,7 +45,7 @@ SApplyResult SSetClipVolumeAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -90,7 +90,7 @@ SApplyResult SSetClipVolumeAction::apply( SProject *project )
 
 void SSetClipVolumeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "volumeDb", QString::number( volumeDb_ ) );
     elem.setAttribute( "take", take_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
@@ -98,7 +98,7 @@ void SSetClipVolumeAction::writeXml( QDomElement &elem ) const
 
 bool SSetClipVolumeAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_  = stringToPath( elem.attribute( "clip" ) );
+    clipPath_  = parseInto( pathRoot_, elem.attribute( "clip" ) );
     volumeDb_  = clampVolumeDb( elem.attribute( "volumeDb", "0" ).toDouble() );
     take_      = elem.attribute( "take", "-1" ).toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;

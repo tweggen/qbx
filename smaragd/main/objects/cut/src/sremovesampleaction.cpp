@@ -24,7 +24,7 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     if (!root || !root->isPathContainer()) {
         return {false, nullptr};
     }
@@ -111,7 +111,7 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
 
 void SRemoveSampleAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("trackPath", strackpath::pathToString(trackPath_));
+    elem.setAttribute("trackPath", strackpath::qualifiedToString( pathRoot_, trackPath_ ));
     elem.setAttribute("clipIndex", clipIndex_);
     elem.setAttribute("filePath", filePath_);
     elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
@@ -123,7 +123,7 @@ bool SRemoveSampleAction::readXml(const QDomElement &elem, int /*version*/)
     // scripts carry no version attribute, and `trackIndex` is exactly a
     // one-element path.
     trackPath_ = elem.hasAttribute("trackPath")
-        ? strackpath::stringToPath( elem.attribute("trackPath") )
+        ? strackpath::parseInto( pathRoot_, elem.attribute("trackPath") )
         : QList<int>{ elem.attribute("trackIndex", "0").toInt() };
     clipIndex_ = elem.attribute("clipIndex", "0").toInt();
     filePath_ = elem.attribute("filePath", "");

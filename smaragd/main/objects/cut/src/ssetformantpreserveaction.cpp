@@ -42,7 +42,7 @@ SApplyResult SSetFormantPreserveAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -87,7 +87,7 @@ SApplyResult SSetFormantPreserveAction::apply( SProject *project )
 
 void SSetFormantPreserveAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "on", on_ ? 1 : 0 );
     elem.setAttribute( "take", take_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
@@ -95,7 +95,7 @@ void SSetFormantPreserveAction::writeXml( QDomElement &elem ) const
 
 bool SSetFormantPreserveAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_  = stringToPath( elem.attribute( "clip" ) );
+    clipPath_  = parseInto( pathRoot_, elem.attribute( "clip" ) );
     on_        = elem.attribute( "on", "0" ).toInt() != 0;
     take_      = elem.attribute( "take", "-1" ).toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;

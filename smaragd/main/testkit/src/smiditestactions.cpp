@@ -82,7 +82,7 @@ SApplyResult SAssertMidiEventsAction::apply( SProject *project )
 
     if( scope_.compare( "feed", Qt::CaseInsensitive ) == 0 ) {
         STrack *track = dynamic_cast<STrack *>( splacements::laneAt(
-            splacements::rootContainer( project ), stringToPath( trackPath_ ) ) );
+            splacements::rootNamed( project, pathRoot_ ), stringToPath( trackPath_ ) ) );
         if( !track ) {
             qWarning() << "assert-midi-events: no track at" << trackPath_;
             return { false, nullptr };
@@ -102,8 +102,7 @@ SApplyResult SAssertMidiEventsAction::apply( SProject *project )
                    .arg( trackPath_ ).arg( (qlonglong) startFrame_ )
                    .arg( (qlonglong) ( startFrame_ + len ) );
     } else {
-        smidiactions::ClipRef ref = smidiactions::resolveClip(
-            project, stringToPath( clip_ ), take_ );
+        smidiactions::ClipRef ref = smidiactions::resolveClip( project, pathRoot_, stringToPath( clip_ ), take_ );
         if( !ref.valid() ) {
             qWarning() << "assert-midi-events: no MIDI clip at" << clip_;
             return { false, nullptr };

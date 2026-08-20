@@ -22,7 +22,7 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
     if (!project || firstPath_.isEmpty() || secondPath_.isEmpty()) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if (!mixer) {
         return {false, nullptr};
     }
@@ -59,8 +59,8 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
 
 void SUnsplitClipAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("first", pathToString(firstPath_));
-    elem.setAttribute("second", pathToString(secondPath_));
+    elem.setAttribute("first", qualifiedToString( pathRoot_, firstPath_ ));
+    elem.setAttribute("second", qualifiedToString( pathRoot_, secondPath_ ));
     elem.setAttribute("restoreDuration", QString::fromStdString(Fraction(restoreDuration_, 1).toString()));
     elem.setAttribute("inObjOffset", QString::fromStdString(Fraction(inObjOffset_, 1).toString()));
 }

@@ -37,10 +37,10 @@ SInsertMidiClipAction::SInsertMidiClipAction( const QList<int> &trackPath,
 SApplyResult SInsertMidiClipAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( mixer, trackPath_ );
     if( !lane ) {
-        qWarning() << "insert-midi-clip: no lane at" << pathToString( trackPath_ );
+        qWarning() << "insert-midi-clip: no lane at" << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
 
@@ -82,7 +82,7 @@ SApplyResult SInsertMidiClipAction::apply( SProject *project )
 
 void SInsertMidiClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "timePos", QString::fromStdString(
                            Fraction( (int64_t) timePos_, 1 ).toString() ) );
     elem.setAttribute( "duration", QString::number( durationTicks_ ) );
@@ -91,7 +91,7 @@ void SInsertMidiClipAction::writeXml( QDomElement &elem ) const
 
 bool SInsertMidiClipAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     timePos_ = (offset_t) parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();
     durationTicks_ = elem.attribute( "duration", "0" ).toLongLong();
@@ -122,7 +122,7 @@ SRemoveMidiClipAction::SRemoveMidiClipAction( const QList<int> &clipPath,
 SApplyResult SRemoveMidiClipAction::apply( SProject *project )
 {
     if( !project || clipPath_.isEmpty() ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = mixer ? splacements::placementAt( mixer, clipPath_ ) : nullptr;
     if( !link ) return { false, nullptr };
     delete link;   // the cut becomes unreferenced -> deleteLater
@@ -133,8 +133,8 @@ SApplyResult SRemoveMidiClipAction::apply( SProject *project )
 
 void SRemoveMidiClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
 }
 
 bool SRemoveMidiClipAction::readXml( const QDomElement &, int )
@@ -168,9 +168,9 @@ SApplyResult SSetMidiCutAction::apply( SProject *project )
             return composite.apply( project );
         }
     }
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
-        qWarning() << "set-midi-cut: no MIDI clip at" << pathToString( clipPath_ );
+        qWarning() << "set-midi-cut: no MIDI clip at" << qualifiedToString( pathRoot_, clipPath_ );
         return { false, nullptr };
     }
     SAction *inverse = new SSetMidiCutAction(
@@ -184,7 +184,7 @@ SApplyResult SSetMidiCutAction::apply( SProject *project )
 
 void SSetMidiCutAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "transpose", transpose_ );
     elem.setAttribute( "velocityScale", QString::number( velocityScale_ ) );
     elem.setAttribute( "channel", channel_ );
@@ -194,7 +194,7 @@ void SSetMidiCutAction::writeXml( QDomElement &elem ) const
 
 bool SSetMidiCutAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     transpose_ = elem.attribute( "transpose", "0" ).toInt();
     velocityScale_ = elem.attribute( "velocityScale", "1" ).toDouble();
     channel_ = elem.attribute( "channel", "-1" ).toInt();
@@ -297,10 +297,10 @@ SSetLinkTimebaseAction::SSetLinkTimebaseAction( const QList<int> &clipPath,
 SApplyResult SSetLinkTimebaseAction::apply( SProject *project )
 {
     if( !project || clipPath_.isEmpty() ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = mixer ? splacements::placementAt( mixer, clipPath_ ) : nullptr;
     if( !link ) {
-        qWarning() << "set-link-timebase: no clip at" << pathToString( clipPath_ );
+        qWarning() << "set-link-timebase: no clip at" << qualifiedToString( pathRoot_, clipPath_ );
         return { false, nullptr };
     }
     const QString before =
@@ -320,13 +320,13 @@ SApplyResult SSetLinkTimebaseAction::apply( SProject *project )
 
 void SSetLinkTimebaseAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "timebase", timebase_ );
 }
 
 bool SSetLinkTimebaseAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     timebase_ = elem.attribute( "timebase", "beats" );
     return true;
 }

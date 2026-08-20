@@ -36,7 +36,7 @@ SApplyResult SSplitClipAction::apply(SProject *project)
             return composite.apply(project);
         }
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if (!mixer) {
         return {false, nullptr};
     }
@@ -160,14 +160,14 @@ SApplyResult SSplitClipAction::apply(SProject *project)
 
 void SSplitClipAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("clip", pathToString(clipPath_));
+    elem.setAttribute("clip", qualifiedToString( pathRoot_, clipPath_ ));
     elem.setAttribute("splitTime", QString::fromStdString(Fraction(splitTime_, 1).toString()));
     elem.setAttribute("broadcast", broadcast_ ? 1 : 0);
 }
 
 bool SSplitClipAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    clipPath_ = stringToPath(elem.attribute("clip"));
+    clipPath_ = parseInto( pathRoot_, elem.attribute("clip") );
     splitTime_ = (offset_t)parseFractionOrDouble(elem.attribute("splitTime", "0").toStdString()).toDouble();
     broadcast_ = elem.attribute("broadcast", "1").toInt() != 0;
     return true;

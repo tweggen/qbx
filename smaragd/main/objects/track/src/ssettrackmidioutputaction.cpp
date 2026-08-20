@@ -21,12 +21,12 @@ SSetTrackMidiOutputAction::SSetTrackMidiOutputAction(
 SApplyResult SSetTrackMidiOutputAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     STrack *track = dynamic_cast<STrack *>(
         splacements::laneAt( mixer, trackPath_ ) );
     if( !track ) {
         qWarning() << "set-track-midi-output: no track at"
-                   << pathToString( trackPath_ );
+                   << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
     if( channel_ < -1 || channel_ > 15 ) {
@@ -53,7 +53,7 @@ SApplyResult SSetTrackMidiOutputAction::apply( SProject *project )
 
 void SSetTrackMidiOutputAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "port", port_ );
     elem.setAttribute( "channel", QString::number( channel_ ) );
     elem.setAttribute( "offsetMs", QString::number( offsetMs_ ) );
@@ -61,7 +61,7 @@ void SSetTrackMidiOutputAction::writeXml( QDomElement &elem ) const
 
 bool SSetTrackMidiOutputAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     port_      = elem.attribute( "port", "" );
     channel_   = elem.attribute( "channel", "-1" ).toInt();
     offsetMs_  = elem.attribute( "offsetMs", "0" ).toInt();

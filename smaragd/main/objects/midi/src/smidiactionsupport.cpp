@@ -12,11 +12,12 @@
 
 namespace smidiactions {
 
-ClipRef resolveClip( SProject *project, const QList<int> &clipPath, int take )
+ClipRef resolveClip( SProject *project, const QString &pathRoot_,
+                     const QList<int> &clipPath, int take )
 {
     ClipRef out;
     if( !project || clipPath.isEmpty() ) return out;
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = mixer ? splacements::placementAt( mixer, clipPath ) : nullptr;
     if( !link ) return out;
     out.link = link;

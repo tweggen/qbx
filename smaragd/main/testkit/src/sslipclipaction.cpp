@@ -21,16 +21,16 @@ SApplyResult SSlipClipAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *mixer = splacements::rootContainer(project);
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = mixer ? splacements::placementAt(mixer, clipPath_) : nullptr;
     if (!link) {
-        qWarning() << "slip-clip: no clip at path" << pathToString(clipPath_);
+        qWarning() << "slip-clip: no clip at path" << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
     SCut *cut = dynamic_cast<SCut *>(&link->getSObject());
     if (!cut) {
         qWarning() << "slip-clip: target is not an SCut at path"
-                   << pathToString(clipPath_);
+                   << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
 
@@ -45,7 +45,7 @@ SApplyResult SSlipClipAction::apply(SProject *project)
 
 void SSlipClipAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("clip", pathToString(clipPath_));
+    elem.setAttribute("clip", qualifiedToString( pathRoot_, clipPath_ ));
     if (hasStartOffset_)
         elem.setAttribute("startOffset", QString::fromStdString(
                               Fraction(startOffset_, 1).toString()));
@@ -59,7 +59,7 @@ void SSlipClipAction::writeXml(QDomElement &elem) const
 
 bool SSlipClipAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    clipPath_ = stringToPath(elem.attribute("clip"));
+    clipPath_ = parseInto( pathRoot_, elem.attribute("clip") );
     if (clipPath_.isEmpty()) {
         qWarning() << "slip-clip::readXml: missing or empty clip path";
         return false;

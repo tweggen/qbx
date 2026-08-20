@@ -62,7 +62,7 @@ SSetEventsAction::SSetEventsAction( const QList<int> &clipPath,
 
 SApplyResult SSetEventsAction::apply( SProject *project )
 {
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
         qWarning() << "set-events: no MIDI clip at" << pathToString( clipPath_ );
         return { false, nullptr };
@@ -121,7 +121,7 @@ SApplyResult SAddNoteAction::apply( SProject *project )
                 }, out ) )
             return out;
     }
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
         qWarning() << "add-note: no MIDI clip at" << pathToString( clipPath_ );
         return { false, nullptr };
@@ -198,7 +198,7 @@ SApplyResult SRemoveNoteAction::apply( SProject *project )
                 }, out ) )
             return out;
     }
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
         qWarning() << "remove-note: no MIDI clip at" << pathToString( clipPath_ );
         return { false, nullptr };
@@ -273,7 +273,7 @@ SApplyResult SSetNotesAction::apply( SProject *project )
                 }, out ) )
             return out;
     }
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
         qWarning() << "set-notes: no MIDI clip at" << pathToString( clipPath_ );
         return { false, nullptr };
@@ -340,7 +340,7 @@ QStringList SAddEventAction::knownAttributes() const
 
 SApplyResult SAddEventAction::apply( SProject *project )
 {
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
         qWarning() << "add-event: no MIDI clip at" << pathToString( clipPath_ );
         return { false, nullptr };
@@ -415,7 +415,7 @@ QStringList SRemoveEventAction::knownAttributes() const
 
 SApplyResult SRemoveEventAction::apply( SProject *project )
 {
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
         qWarning() << "remove-event: no MIDI clip at" << pathToString( clipPath_ );
         return { false, nullptr };
@@ -516,7 +516,7 @@ SApplyResult SQuantizeNotesAction::apply( SProject *project )
                 }, out ) )
             return out;
     }
-    ClipRef ref = smidiactions::resolveClip( project, clipPath_, take_ );
+    ClipRef ref = smidiactions::resolveClip( project, pathRoot_, clipPath_, take_ );
     if( !ref.valid() ) {
         qWarning() << "quantize-notes: no MIDI clip at" << pathToString( clipPath_ );
         return { false, nullptr };

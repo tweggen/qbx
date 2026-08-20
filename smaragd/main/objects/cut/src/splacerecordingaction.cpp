@@ -28,7 +28,7 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     if( !project || filePath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( mixer, trackPath_ );
     if( !lane ) {
         return {false, nullptr};
@@ -147,7 +147,7 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
 
 void SPlaceRecordingAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "filePath", filePath_ );
     elem.setAttribute( "timePos", QString::fromStdString(
                            Fraction( timePos_, 1 ).toString() ) );
@@ -163,7 +163,7 @@ void SPlaceRecordingAction::writeXml( QDomElement &elem ) const
 
 bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     filePath_ = elem.attribute( "filePath", "" );
     timePos_ = (offset_t)parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();

@@ -34,7 +34,7 @@ void SActionHistory::submit(SAction *forward, bool skipHistory)
         // Apply directly without adding to history (for undo/redo operations).
         // Don't delete the action: it's owned by the undo command and will be deleted
         // when the undo command is destroyed. Just apply it and discard the inverse.
-        SApplyResult result = forward->apply(project);
+        SApplyResult result = applyPropagatingRoot(forward, project);
         if (result.applied) {
             project->notifyArrangementChanged();   // invalidate cached renders
         }
@@ -60,7 +60,7 @@ void SActionHistory::drain_()
     quint64 id;
     SAction *action;
     while ((action = queue_->dequeue(&id)) != nullptr) {
-        SApplyResult result = action->apply(project);
+        SApplyResult result = applyPropagatingRoot(action, project);
 
         if (result.applied) {
             project->notifyArrangementChanged();   // invalidate cached renders

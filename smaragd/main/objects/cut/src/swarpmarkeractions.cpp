@@ -15,11 +15,12 @@ using namespace strackpath;
 namespace {
 
 // Resolve the addressed SCut (nullptr on failure, logged).
-SCut *resolveCut( SProject *project, const QList<int> &clipPath,
+SCut *resolveCut( SProject *project, const QString &pathRoot_,
+                  const QList<int> &clipPath,
                   const char *verb )
 {
     if( !project || clipPath.isEmpty() ) return nullptr;
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = splacements::placementAt( mixer, clipPath );
     if( !link ) {
         qWarning() << verb << ": no clip at path" << pathToString( clipPath );
@@ -52,7 +53,7 @@ SAddWarpMarkerAction::SAddWarpMarkerAction( const QList<int> &clipPath,
 
 SApplyResult SAddWarpMarkerAction::apply( SProject *project )
 {
-    SCut *cut = resolveCut( project, clipPath_, "add-warp-marker" );
+    SCut *cut = resolveCut( project, pathRoot_, clipPath_, "add-warp-marker" );
     if( !cut ) return { false, nullptr };
 
     std::vector<twWarpAnchor> anchors = cut->getGrainParams().warpAnchors;
@@ -78,14 +79,14 @@ SApplyResult SAddWarpMarkerAction::apply( SProject *project )
 
 void SAddWarpMarkerAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "src", QString::number( src_ ) );
     elem.setAttribute( "warped", QString::number( warped_ ) );
 }
 
 bool SAddWarpMarkerAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     src_      = elem.attribute( "src", "0" ).toLongLong();
     warped_   = elem.attribute( "warped", "0" ).toLongLong();
     return true;
@@ -107,7 +108,7 @@ SMoveWarpMarkerAction::SMoveWarpMarkerAction( const QList<int> &clipPath,
 
 SApplyResult SMoveWarpMarkerAction::apply( SProject *project )
 {
-    SCut *cut = resolveCut( project, clipPath_, "move-warp-marker" );
+    SCut *cut = resolveCut( project, pathRoot_, clipPath_, "move-warp-marker" );
     if( !cut ) return { false, nullptr };
 
     std::vector<twWarpAnchor> anchors = cut->getGrainParams().warpAnchors;
@@ -133,14 +134,14 @@ SApplyResult SMoveWarpMarkerAction::apply( SProject *project )
 
 void SMoveWarpMarkerAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "src", QString::number( src_ ) );
     elem.setAttribute( "newWarped", QString::number( newWarped_ ) );
 }
 
 bool SMoveWarpMarkerAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_  = stringToPath( elem.attribute( "clip" ) );
+    clipPath_  = parseInto( pathRoot_, elem.attribute( "clip" ) );
     src_       = elem.attribute( "src", "0" ).toLongLong();
     newWarped_ = elem.attribute( "newWarped", "0" ).toLongLong();
     return true;
@@ -162,7 +163,7 @@ SDeleteWarpMarkerAction::SDeleteWarpMarkerAction( const QList<int> &clipPath,
 
 SApplyResult SDeleteWarpMarkerAction::apply( SProject *project )
 {
-    SCut *cut = resolveCut( project, clipPath_, "delete-warp-marker" );
+    SCut *cut = resolveCut( project, pathRoot_, clipPath_, "delete-warp-marker" );
     if( !cut ) return { false, nullptr };
 
     std::vector<twWarpAnchor> anchors = cut->getGrainParams().warpAnchors;
@@ -185,13 +186,13 @@ SApplyResult SDeleteWarpMarkerAction::apply( SProject *project )
 
 void SDeleteWarpMarkerAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "src", QString::number( src_ ) );
 }
 
 bool SDeleteWarpMarkerAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     src_      = elem.attribute( "src", "0" ).toLongLong();
     return true;
 }

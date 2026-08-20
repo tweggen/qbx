@@ -29,7 +29,7 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() || filePath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -99,7 +99,7 @@ SApplyResult SAddTakeAction::apply( SProject *project )
 
 void SAddTakeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "filePath", filePath_ );
     elem.setAttribute( "startOffset", QString::fromStdString(
                            Fraction( startOffset_, 1 ).toString() ) );
@@ -111,7 +111,7 @@ void SAddTakeAction::writeXml( QDomElement &elem ) const
 
 bool SAddTakeAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     filePath_ = elem.attribute( "filePath", "" );
     startOffset_ = (offset_t)parseFractionOrDouble(
         elem.attribute( "startOffset", "0" ).toStdString() ).toDouble();

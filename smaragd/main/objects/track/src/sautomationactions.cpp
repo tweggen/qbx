@@ -33,15 +33,22 @@ offset_t parseFrames( const QString &s, offset_t dflt )
 
 // ---------------------------------------------------------------- resolution
 
+QString sautomation::rootNameOf( SProject *project, SObject *root )
+{
+    if( !project || !root ) return QString();
+    return project->arrangementNameOf( root );
+}
+
 sautomation::OwnerRef sautomation::resolveOwner(
-    SProject *project, const QList<int> &ownerPath, const QString &target,
+    SProject *project, const QString &pathRoot_,
+    const QList<int> &ownerPath, const QString &target,
     int slotIndex, int take )
 {
     OwnerRef out;
     out.ref = SParamRef::parse( target );
     if( !out.ref.isValid() ) return out;
 
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     if( !root ) { out.ref = SParamRef(); return out; }
 
     switch( out.ref.space ) {
@@ -177,10 +184,11 @@ void writeCommon( QDomElement &elem, const QList<int> &ownerPath,
     if( take >= 0 )      elem.setAttribute( "take", take );
 }
 
-void readCommon( const QDomElement &elem, QList<int> &ownerPath,
+void readCommon( const QDomElement &elem, QString &pathRoot_,
+                 QList<int> &ownerPath,
                  QString &target, int &slotIndex, int &take )
 {
-    ownerPath = stringToPath( elem.attribute( "owner" ) );
+    ownerPath = parseInto( pathRoot_, elem.attribute( "owner" ) );
     target    = elem.attribute( "target" );
     slotIndex = elem.attribute( "slotIndex", "-1" ).toInt();
     take      = elem.attribute( "take", "-1" ).toInt();
@@ -212,7 +220,7 @@ SAddAutomationLaneAction::SAddAutomationLaneAction(
 SApplyResult SAddAutomationLaneAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) return { false, nullptr };
 
     SAutomationLane *existing = o.owner->automationLane( target_ );
@@ -254,7 +262,7 @@ void SAddAutomationLaneAction::writeXml( QDomElement &elem ) const
 
 bool SAddAutomationLaneAction::readXml( const QDomElement &elem, int )
 {
-    readCommon( elem, ownerPath_, target_, slotIndex_, take_ );
+    readCommon( elem, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     mode_      = sAutomationModeFromString( elem.attribute( "mode", "trim" ) );
     paramName_ = elem.attribute( "name" );
     points_    = sautomation::readPointChildren( elem );
@@ -277,7 +285,7 @@ SRemoveAutomationLaneAction::SRemoveAutomationLaneAction(
 SApplyResult SRemoveAutomationLaneAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) return { false, nullptr };
 
     SAutomationLane *lane = o.owner->automationLane( target_ );
@@ -311,7 +319,7 @@ void SRemoveAutomationLaneAction::writeXml( QDomElement &elem ) const
 
 bool SRemoveAutomationLaneAction::readXml( const QDomElement &elem, int )
 {
-    readCommon( elem, ownerPath_, target_, slotIndex_, take_ );
+    readCommon( elem, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     return true;
 }
 
@@ -333,7 +341,7 @@ SSetAutomationModeAction::SSetAutomationModeAction(
 SApplyResult SSetAutomationModeAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) return { false, nullptr };
 
     SAutomationLane *lane = o.owner->automationLane( target_ );
@@ -359,7 +367,7 @@ void SSetAutomationModeAction::writeXml( QDomElement &elem ) const
 
 bool SSetAutomationModeAction::readXml( const QDomElement &elem, int )
 {
-    readCommon( elem, ownerPath_, target_, slotIndex_, take_ );
+    readCommon( elem, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     mode_ = sAutomationModeFromString( elem.attribute( "mode", "trim" ) );
     return true;
 }
@@ -382,7 +390,7 @@ SAddAutomationPointAction::SAddAutomationPointAction(
 SApplyResult SAddAutomationPointAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) return { false, nullptr };
 
     SAutomationLane *lane = o.owner->ensureAutomationLane( target_ );
@@ -430,7 +438,7 @@ void SAddAutomationPointAction::writeXml( QDomElement &elem ) const
 
 bool SAddAutomationPointAction::readXml( const QDomElement &elem, int )
 {
-    readCommon( elem, ownerPath_, target_, slotIndex_, take_ );
+    readCommon( elem, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     time_    = parseFrames( elem.attribute( "time", "0" ), 0 );
     value_   = elem.attribute( "value", "0" ).toDouble();
     shape_   = SAutomationLane::shapeFromString( elem.attribute( "curve", "linear" ) );
@@ -455,7 +463,7 @@ SRemoveAutomationPointAction::SRemoveAutomationPointAction(
 SApplyResult SRemoveAutomationPointAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) return { false, nullptr };
 
     SAutomationLane *lane = o.owner->automationLane( target_ );
@@ -496,7 +504,7 @@ void SRemoveAutomationPointAction::writeXml( QDomElement &elem ) const
 
 bool SRemoveAutomationPointAction::readXml( const QDomElement &elem, int )
 {
-    readCommon( elem, ownerPath_, target_, slotIndex_, take_ );
+    readCommon( elem, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     time_       = parseFrames( elem.attribute( "time", "0" ), 0 );
     matchValue_ = elem.hasAttribute( "value" );
     value_      = elem.attribute( "value", "0" ).toDouble();
@@ -520,7 +528,7 @@ SMoveAutomationPointAction::SMoveAutomationPointAction(
 SApplyResult SMoveAutomationPointAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) return { false, nullptr };
 
     SAutomationLane *lane = o.owner->automationLane( target_ );
@@ -570,7 +578,7 @@ void SMoveAutomationPointAction::writeXml( QDomElement &elem ) const
 
 bool SMoveAutomationPointAction::readXml( const QDomElement &elem, int )
 {
-    readCommon( elem, ownerPath_, target_, slotIndex_, take_ );
+    readCommon( elem, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     time_       = parseFrames( elem.attribute( "time", "0" ), 0 );
     matchValue_ = elem.hasAttribute( "value" );
     value_      = elem.attribute( "value", "0" ).toDouble();
@@ -590,7 +598,7 @@ QString SMoveAutomationPointAction::mergeKey() const
     // A DRAG of one point is one undo step. Keyed on where the point STARTED,
     // which is what the successive events of a drag share.
     return QStringLiteral( "move-automation-point:%1:%2:%3:%4" )
-        .arg( pathToString( ownerPath_ ) ).arg( slotIndex_ )
+        .arg( qualifiedToString( pathRoot_, ownerPath_ ) ).arg( slotIndex_ )
         .arg( target_ ).arg( (qlonglong) time_ );
 }
 
@@ -622,7 +630,7 @@ SSetAutomationPointsAction::SSetAutomationPointsAction(
 SApplyResult SSetAutomationPointsAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) return { false, nullptr };
 
     SAutomationLane *lane = o.owner->ensureAutomationLane( target_ );
@@ -672,7 +680,7 @@ void SSetAutomationPointsAction::writeXml( QDomElement &elem ) const
 
 bool SSetAutomationPointsAction::readXml( const QDomElement &elem, int )
 {
-    readCommon( elem, ownerPath_, target_, slotIndex_, take_ );
+    readCommon( elem, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     from_   = parseFrames( elem.attribute( "from", "0" ), 0 );
     to_     = parseFrames( elem.attribute( "to", "-1" ), -1 );
     points_ = sautomation::readPointChildren( elem );
@@ -690,7 +698,7 @@ QString SSetAutomationPointsAction::mergeKey() const
     // both issue a stream of these; without coalescing a single gesture would
     // become hundreds of undo steps.
     return QStringLiteral( "set-automation-points:%1:%2:%3" )
-        .arg( pathToString( ownerPath_ ) ).arg( slotIndex_ ).arg( target_ );
+        .arg( qualifiedToString( pathRoot_, ownerPath_ ) ).arg( slotIndex_ ).arg( target_ );
 }
 
 bool SSetAutomationPointsAction::mergeWith( const SAction *later )

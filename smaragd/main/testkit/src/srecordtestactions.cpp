@@ -74,10 +74,10 @@ QStringList SAssertRecordedClipAction::knownAttributes() const
 SApplyResult SAssertRecordedClipAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SObject *lane  = splacements::laneAt( mixer, trackPath_ );
     if( !lane ) {
-        qWarning() << "assert-recorded-clip: no lane at" << pathToString( trackPath_ );
+        qWarning() << "assert-recorded-clip: no lane at" << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
 
@@ -305,7 +305,7 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
 
 void SAssertRecordedClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     if( clips_ != kUnset )   elem.setAttribute( "clips", QString::number( clips_ ) );
     if( takes_ != kUnset )   elem.setAttribute( "takes", QString::number( takes_ ) );
     if( minTakes_ != kUnset )
@@ -346,7 +346,7 @@ void SAssertRecordedClipAction::writeXml( QDomElement &elem ) const
 
 bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     clips_             = elem.attribute( "clips", "-1" ).toLongLong();
     takes_             = elem.attribute( "takes", "-1" ).toLongLong();
     minTakes_          = elem.attribute( "minTakes", "-1" ).toLongLong();

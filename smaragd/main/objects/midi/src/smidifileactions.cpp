@@ -73,9 +73,9 @@ QString resolveInputPath( SProject *project, const QString &given )
 }
 
 /** Does the project have any placed material yet? Decides the tempo policy. */
-bool projectIsEmpty( SProject *project )
+bool projectIsEmpty( SProject *project, const QString &pathRoot_ )
 {
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     if( !root ) return true;
     for( SLink *lk : root->childLinks() ) {
         if( !lk ) continue;
@@ -164,7 +164,7 @@ SApplyResult SImportMidiFileAction::apply( SProject *project )
     const bool merged = ( mode_.compare( "merged", Qt::CaseInsensitive ) == 0 );
 
     if( firstBpm > 0.0 ) {
-        if( projectIsEmpty( project ) ) {
+        if( projectIsEmpty( project, pathRoot_ ) ) {
             composite->append( new SSetTempoAction( firstBpm ) );
         } else if( qAbs( firstBpm - project->getBPMTempo() ) > 1e-9 ) {
             qWarning() << "import-midi-file:" << path << "declares"
@@ -201,7 +201,7 @@ SApplyResult SImportMidiFileAction::apply( SProject *project )
     // import is one atomic undo step - tracks included. That means the paths
     // have to be computed rather than resolved: add-track appends, so the i-th
     // new lane lands at (current root child count + i).
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     const int laneBase = mixer ? mixer->childCount() : 0;
     for( size_t i = 0; i < imported.size(); ++i ) {
         QList<int> lanePath;
@@ -214,7 +214,7 @@ SApplyResult SImportMidiFileAction::apply( SProject *project )
             lanePath = trackPath_;
             if( !splacements::laneAt( mixer, lanePath ) ) {
                 qWarning() << "import-midi-file: no lane at"
-                           << pathToString( trackPath_ );
+                           << qualifiedToString( pathRoot_, trackPath_ );
                 delete composite;
                 return { false, nullptr };
             }
@@ -232,7 +232,7 @@ SApplyResult SImportMidiFileAction::apply( SProject *project )
 
 void SImportMidiFileAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "filePath", filePath_ );
     elem.setAttribute( "timePos", QString::fromStdString(
                            Fraction( (int64_t) timePos_, 1 ).toString() ) );
@@ -242,7 +242,7 @@ void SImportMidiFileAction::writeXml( QDomElement &elem ) const
 
 bool SImportMidiFileAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     filePath_ = elem.attribute( "filePath", "" );
     timePos_ = (offset_t) parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();
@@ -303,13 +303,13 @@ SApplyResult SExportMidiFileAction::apply( SProject *project )
     file.format = type_;
     file.ppq = SMidiSequence::DEFAULT_PPQ;
 
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( hasClip_ ) {
         smidiactions::ClipRef ref =
-            smidiactions::resolveClip( project, clipPath_ );
+            smidiactions::resolveClip( project, pathRoot_, clipPath_ );
         if( !ref.valid() ) {
             qWarning() << "export-midi-file: no MIDI clip at"
-                       << pathToString( clipPath_ );
+                       << qualifiedToString( pathRoot_, clipPath_ );
             return { false, nullptr };
         }
         twSmfTrack tr;
@@ -358,8 +358,8 @@ SApplyResult SExportMidiFileAction::apply( SProject *project )
 void SExportMidiFileAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "filePath", filePath_ );
-    if( hasClip_ )  elem.setAttribute( "clip", pathToString( clipPath_ ) );
-    if( hasTrack_ ) elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    if( hasClip_ )  elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
+    if( hasTrack_ ) elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "type", type_ );
 }
 
@@ -368,8 +368,8 @@ bool SExportMidiFileAction::readXml( const QDomElement &elem, int )
     filePath_ = elem.attribute( "filePath", "" );
     hasClip_ = elem.hasAttribute( "clip" );
     hasTrack_ = elem.hasAttribute( "trackPath" );
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     type_ = elem.attribute( "type", "1" ).toInt();
     return true;
 }

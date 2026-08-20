@@ -41,7 +41,7 @@ SApplyResult SSetClipPanAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -86,7 +86,7 @@ SApplyResult SSetClipPanAction::apply( SProject *project )
 
 void SSetClipPanAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "pan", QString::number( pan_ ) );
     elem.setAttribute( "take", take_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
@@ -94,7 +94,7 @@ void SSetClipPanAction::writeXml( QDomElement &elem ) const
 
 bool SSetClipPanAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_  = stringToPath( elem.attribute( "clip" ) );
+    clipPath_  = parseInto( pathRoot_, elem.attribute( "clip" ) );
     pan_       = elem.attribute( "pan", "0" ).toDouble();
     take_      = elem.attribute( "take", "-1" ).toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;

@@ -25,7 +25,7 @@ SApplyResult SRemoveAssetPlacementAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
@@ -62,7 +62,7 @@ SApplyResult SRemoveAssetPlacementAction::apply(SProject *project)
 void SRemoveAssetPlacementAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("assetName", assetName_);
-    elem.setAttribute("trackPath", pathToString(trackPath_));
+    elem.setAttribute("trackPath", qualifiedToString( pathRoot_, trackPath_ ));
     elem.setAttribute("clipIdx", clipIdx_);
     elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
 }
@@ -70,7 +70,7 @@ void SRemoveAssetPlacementAction::writeXml(QDomElement &elem) const
 bool SRemoveAssetPlacementAction::readXml(const QDomElement &elem, int /*version*/)
 {
     assetName_ = elem.attribute("assetName", "");
-    trackPath_ = stringToPath(elem.attribute("trackPath"));
+    trackPath_ = parseInto( pathRoot_, elem.attribute("trackPath") );
     clipIdx_ = elem.attribute("clipIdx", "0").toInt();
     Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());
     timePos_ = ( frac.denominator == 1 ) ? (offset_t) frac.numerator

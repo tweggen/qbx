@@ -202,8 +202,12 @@ bool SFaderKeyAction::readXml( const QDomElement &elem, int /*version*/ )
 
 SApplyResult SAssertTrackVolumeAction::apply( SProject *project )
 {
-    SObject *root = splacements::rootContainer( project );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath_ ) );
+    // The path text may carry its own root qualifier ("Drums:0"); an
+    // explicit pathRoot_ is the fallback for the bare spelling.
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath_ );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    SObject *lane = splacements::laneAt( root, q_.idx );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) {
         qWarning() << "assert-track-volume: no track at" << trackPath_;
@@ -237,7 +241,7 @@ bool SAssertTrackVolumeAction::readXml( const QDomElement &elem, int /*version*/
 
 SApplyResult SAssertTrackSelectionAction::apply( SProject *project )
 {
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SStdMixer *mixer = dynamic_cast<SStdMixer *>( root );
     if( !mixer ) {
         qWarning() << "assert-track-selection: no root mixer";
@@ -330,16 +334,21 @@ static const bool s_reg_asserttrackselection =
 
 // --- assert-track-name -------------------------------------------------
 
-static STrack *trackAt( SProject *project, const QString &path )
+static STrack *trackAt( SProject *project, const QString &pathRoot_,
+                        const QString &path )
 {
-    SObject *root = splacements::rootContainer( project );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( path ) );
+    // The path text may carry its own root qualifier ("Drums:0"); an
+    // explicit pathRoot_ is the fallback for the bare spelling.
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( path );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    SObject *lane = splacements::laneAt( root, q_.idx );
     return dynamic_cast<STrack *>( lane );
 }
 
 SApplyResult SAssertTrackNameAction::apply( SProject *project )
 {
-    STrack *track = trackAt( project, trackPath_ );
+    STrack *track = trackAt( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "assert-track-name: no track at" << trackPath_;
         return { false, nullptr };
@@ -362,7 +371,7 @@ SApplyResult SAssertTrackNameAction::apply( SProject *project )
         return { false, nullptr };
     }
     if( !differsFrom_.isEmpty() ) {
-        STrack *other = trackAt( project, differsFrom_ );
+        STrack *other = trackAt( project, pathRoot_, differsFrom_ );
         if( !other ) {
             qWarning() << "assert-track-name: no track at" << differsFrom_
                        << "(differsFrom)";

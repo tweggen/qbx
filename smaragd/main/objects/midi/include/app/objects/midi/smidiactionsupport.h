@@ -34,8 +34,8 @@ struct ClipRef {
  * this slice never names STakeStack - a stack is homogeneous by contentKind,
  * so a MIDI clip's stack yields MIDI takes or nothing.
  */
-ClipRef resolveClip( SProject *project, const QList<int> &clipPath,
-                     int take = -1 );
+ClipRef resolveClip( SProject *project, const QString &pathRoot,
+                     const QList<int> &clipPath, int take = -1 );
 
 /** A `<n tick= dur= key= velocity= channel= releaseVelocity= m=/>` child. */
 SEvent readNoteChild( const class QDomElement &el );

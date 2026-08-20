@@ -17,7 +17,7 @@ using namespace strackpath;
 SApplyResult SAssertClipMixAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = mixer ? splacements::placementAt( mixer, stringToPath( clip_ ) )
                         : nullptr;
     if( !link ) {

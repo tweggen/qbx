@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 D21 / M8b: a path carries the ROOT it addresses, so an edit made
+  in an arrangement lands in that arrangement, and its UNDO lands there too.
+
+  WHY THIS IS THE DANGEROUS CASE. Index {0} exists in every root. An
+  unqualified path resolved against the wrong one does not fail, it SUCCEEDS
+  and edits the wrong tree; and the same is true of an inverse that does not
+  inherit its forward action's root. So every assertion below is a PAIR: what
+  changed in the arrangement, AND what did not change in the master. A verb
+  that ignored its qualifier would satisfy neither half.
+
+  The master and the arrangement are given deliberately CONFUSABLE shapes: both
+  have a lane at index 0, both have a clip on it, and the two lanes differ only
+  in name and fader. That is the configuration in which a mis-rooted edit is
+  invisible unless something checks the other side.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramp 0 => 0.8.
+-->
+<SActionScript version="1" name="arrangement_verbs_scoped">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterLane"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="DrumLane"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The confusable baseline: index 0 in both roots, one clip each. -->
+    <assert-track-name trackPath="0" name="MasterLane"/>
+    <assert-track-count arrangement="" count="1"/>
+    <assert-track-count arrangement="Drums" count="1"/>
+
+    <!-- ==== a NAME edit, qualified ==================================== -->
+    <set-track-name trackPath="Drums:0" name="Renamed"/>
+    <assert-track-name trackPath="Drums:0" name="Renamed"/>
+    <assert-track-name trackPath="0" name="MasterLane"/>
+    <undo/>
+    <assert-track-name trackPath="Drums:0" name="DrumLane"/>
+    <assert-track-name trackPath="0" name="MasterLane"/>
+
+    <!-- ==== a VOLUME edit, qualified. The inverse carries a path, so this
+         is the one that fails outright if an inverse does not inherit the
+         root: undo would restore the MASTER lane's fader instead. ======= -->
+    <set-track-volume trackPath="Drums:0" volume="-12.0"/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="-12.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="0" volumeDb="0.0" tolerance="0.01"/>
+    <undo/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="0.0" tolerance="0.01"/>
+    <assert-track-volume trackPath="0" volumeDb="0.0" tolerance="0.01"/>
+
+    <!-- ==== a MUTE edit, qualified ==================================== -->
+    <set-track-mute trackPath="Drums:0" muted="1"/>
+    <undo/>
+
+    <!-- ==== a STRUCTURAL edit: add a lane inside the arrangement ======= -->
+    <add-track arrangement="Drums" index="-1"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+    <assert-track-count arrangement="" count="1"/>
+
+    <!-- ==== and the audio still says the same thing =================== -->
+    <!-- The arrangement is heard only through an asset, so the master render
+         is the master lane ALONE: one sawtooth, not two. If any edit above
+         had landed in the master, or if the arrangement had been summed into
+         it, this band would be doubled. -->
+    <render filename="scoped.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="scoped.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+
+    <!-- The master lane is still the one with the sample on it, at unity. -->
+    <assert-track-name trackPath="0" name="MasterLane"/>
+    <assert-track-volume trackPath="0" volumeDb="0.0" tolerance="0.01"/>
+
+    <!-- ==== an unknown root is REFUSED, never resolved against the master.
+         That refusal is the safety property the qualifier buys. ========= -->
+    <set-track-name trackPath="Nope:0" name="Boom" expectReject="true"/>
+    <set-track-volume trackPath="Nope:0" volume="-3.0" expectReject="true"/>
+    <assert-track-name trackPath="0" name="MasterLane"/>
+    <assert-track-volume trackPath="0" volumeDb="0.0" tolerance="0.01"/>
+  </actions>
+
+</SActionScript>

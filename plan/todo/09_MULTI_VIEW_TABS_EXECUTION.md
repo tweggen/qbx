@@ -20,7 +20,10 @@ each*.
 > mis-rooted action SUCCEEDS. So:
 >
 > - **M8a (done): the tab shell, master only.** Zero UX change.
-> - **M8b (next): the D21 verb migration** — every path-taking action accepts a
+> - **M8b (done): the D21 verb migration** — every path-taking action and
+>   testkit verb resolves against its own root, and an INVERSE inherits it at
+>   the two apply funnels rather than at 83 construction sites.
+> - ~~**M8b (next): the D21 verb migration**~~ — every path-taking action accepts a
 >   qualified path, and the arranger submits its own root. Mechanical and
 >   compiler-assisted, but it is the whole verb set.
 > - **M8c: arrangement tabs + the extraction gesture**, safe once M8b lands.

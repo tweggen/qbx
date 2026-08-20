@@ -26,7 +26,7 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -83,14 +83,14 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
 
 void SRemoveTakeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "take", takeIndex_ );
     elem.setAttribute( "thenActivate", thenActivate_ );
 }
 
 bool SRemoveTakeAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     takeIndex_ = elem.attribute( "take", "0" ).toInt();
     thenActivate_ = elem.attribute( "thenActivate", "-2" ).toInt();
     return true;

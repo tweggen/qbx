@@ -53,10 +53,56 @@ public:
     // the mechanism.
     virtual QStringList knownAttributes() const { return {}; }
 
+    // --- The ROOT this action's paths address (proposal 09 D21) -----------
+    //
+    // A project has more than one summing root: the MASTER, plus any number of
+    // named ARRANGEMENTs. An index path alone cannot say which one it means,
+    // and index {0} usually exists in ALL of them -- so a path resolved
+    // against the wrong root SUCCEEDS and edits the wrong tree. That is silent
+    // corruption, not a failed action, which is why the root travels WITH the
+    // action rather than as ambient state.
+    //
+    // Empty == the master, which is what every action written before this
+    // means and what a bare "0,1" still parses to. It lives on the BASE
+    // because every path-taking action needs exactly one of them and because
+    // an INVERSE must inherit its forward action's root -- a rule a checker
+    // can then enforce in one place (tools/check_pathroot.py).
+    const QString &pathRoot() const { return pathRoot_; }
+    void setPathRoot( const QString &root ) { pathRoot_ = root; }
+
     // Coalescing at enqueue time: same mergeKey() + successful mergeWith()
     // collapses two consecutive actions before the engine sees either.
+    //
+    // NOTE (D21): a merge key is a PATH, and two faders at index {0} in two
+    // different roots have the same one. Implementations that build a key from
+    // a path must include pathRoot() or the two merge into one undo entry that
+    // then restores the wrong root's value.
     virtual QString mergeKey() const { return QString(); }
     virtual bool mergeWith(const SAction * /*later*/) { return false; }
+
+protected:
+    QString pathRoot_;      // see pathRoot(); empty == the master root
 };
+
+
+// Apply `a` and hand its INVERSE the same path root (proposal 09 D21).
+//
+// AN INVERSE ACTS ON THE SAME OBJECTS AS ITS FORWARD ACTION, so it addresses
+// the same root -- always, with no exception any action gets to opt out of.
+// Doing it HERE rather than at each `new S…Action(…)` is not a shortcut: there
+// are 83 such sites across 36 files, every one of them constructs its inverse
+// with a bare index path, and a single one forgotten is an undo that silently
+// edits the MASTER instead of the arrangement the edit was made in. A funnel
+// cannot be forgotten.
+//
+// Both funnels call this: SActionHistory (submit/undo/redo) and
+// SCompositeAction (its members, whose inverses never reach the history
+// individually).
+inline SApplyResult applyPropagatingRoot( SAction *a, SProject *project )
+{
+    SApplyResult r = a->apply( project );
+    if( r.inverse ) r.inverse->setPathRoot( a->pathRoot() );
+    return r;
+}
 
 #endif // SACTION_H

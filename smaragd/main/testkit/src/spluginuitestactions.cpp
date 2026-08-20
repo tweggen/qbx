@@ -47,10 +47,15 @@ std::unique_ptr<SPluginEffectStrip> makeStrip( SProject *project, int trackIndex
     return std::make_unique<SPluginEffectStrip>( track, nullptr );
 }
 
-STrack *trackAtPath( SProject *project, const QString &trackPath )
+STrack *trackAtPath( SProject *project, const QString &pathRoot_,
+                     const QString &trackPath )
 {
-    SObject *root = splacements::rootContainer( project );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    // The path text may carry its own root qualifier ("Drums:0"); an
+    // explicit pathRoot_ is the fallback for the bare spelling.
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    SObject *lane = splacements::laneAt( root, q_.idx );
     return dynamic_cast<STrack *>( lane );
 }
 
@@ -81,10 +86,15 @@ const char *slotStateName( audio::twPluginSlotState st )
 
 // Path-addressed variant: the only way to reach a track nested in a folder.
 std::unique_ptr<SPluginEffectStrip> makeStripAt( SProject *project,
+                                                 const QString &pathRoot_,
                                                  const QString &trackPath )
 {
-    SObject *root = splacements::rootContainer( project );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    // The path text may carry its own root qualifier ("Drums:0"); an
+    // explicit pathRoot_ is the fallback for the bare spelling.
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    SObject *lane = splacements::laneAt( root, q_.idx );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) return nullptr;
     return std::make_unique<SPluginEffectStrip>( track, nullptr );
@@ -95,7 +105,7 @@ std::unique_ptr<SPluginEffectStrip> makeStripAt( SProject *project,
 SApplyResult SAssertPluginStripAction::apply( SProject *project )
 {
     auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
-                                      : makeStripAt( project, trackPath_ );
+                                      : makeStripAt( project, pathRoot_, trackPath_ );
     if( !strip ) {
         qWarning() << "assert-plugin-strip: no track"
                    << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
@@ -154,7 +164,7 @@ bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/
 SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
 {
     auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
-                                      : makeStripAt( project, trackPath_ );
+                                      : makeStripAt( project, pathRoot_, trackPath_ );
     if( !strip ) {
         qWarning() << "plugin-editor-set-param: no track"
                    << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
@@ -216,7 +226,7 @@ bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
 SApplyResult SAssertInstrumentSlotAction::apply( SProject *project )
 {
     STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
-                                         : trackAtPath( project, trackPath_ );
+                                         : trackAtPath( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "assert-instrument-slot: no track"
                    << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
@@ -325,7 +335,7 @@ bool SAssertInstrumentSlotAction::readXml( const QDomElement &elem, int /*versio
 SApplyResult SAssertPluginEditorKindAction::apply( SProject *project )
 {
     auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
-                                      : makeStripAt( project, trackPath_ );
+                                      : makeStripAt( project, pathRoot_, trackPath_ );
     if( !strip ) {
         qWarning() << "assert-plugin-editor-kind: no track"
                    << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
@@ -375,7 +385,7 @@ bool SAssertPluginEditorKindAction::readXml( const QDomElement &elem, int )
 SApplyResult SPluginNativeEditorAction::apply( SProject *project )
 {
     STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
-                                         : trackAtPath( project, trackPath_ );
+                                         : trackAtPath( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "plugin-native-editor: no track"
                    << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )

@@ -39,7 +39,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
         if( targets.size() > 1 ) {
             int t = take_;
             if( t < 0 ) {
-                SObject *mixer = splacements::rootContainer( project );
+                SObject *mixer = splacements::rootNamed( project, pathRoot_ );
                 if( SLink *anchor = splacements::placementAt( mixer, clipPath_ ) ) {
                     if( STakeStack *stack = dynamic_cast<STakeStack*>(
                             &anchor->getSObject() ) )
@@ -55,7 +55,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
             return composite.apply( project );
         }
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -136,7 +136,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
 
 void SResizeClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "startTime", QString::fromStdString( Fraction(startTime_, 1).toString() ) );
     elem.setAttribute( "srcStart", QString::fromStdString( srcStart_.toString() ) );
     elem.setAttribute( "duration", QString::fromStdString( Fraction(duration_, 1).toString() ) );
@@ -154,7 +154,7 @@ void SResizeClipAction::writeXml( QDomElement &elem ) const
 
 bool SResizeClipAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    clipPath_    = stringToPath( elem.attribute( "clip" ) );
+    clipPath_    = parseInto( pathRoot_, elem.attribute( "clip" ) );
     startTime_   = (offset_t) parseFractionOrDouble( elem.attribute( "startTime", "0" ).toStdString() ).toDouble();
     duration_    = (length_t) parseFractionOrDouble( elem.attribute( "duration", "0" ).toStdString() ).toDouble();
     loopLength_  = (length_t) parseFractionOrDouble( elem.attribute( "loopLength", "0" ).toStdString() ).toDouble();

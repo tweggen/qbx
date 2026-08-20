@@ -340,11 +340,11 @@ SApplyResult SAssertInputMeterAction::apply( SProject *project )
 
     STrack *track = nullptr;
     if( project ) {
-        SObject *mixer = splacements::rootContainer( project );
+        SObject *mixer = splacements::rootNamed( project, pathRoot_ );
         track = dynamic_cast<STrack *>( splacements::laneAt( mixer, trackPath_ ) );
     }
     if( !track ) {
-        qWarning() << "assert-input-meter: no track at" << pathToString( trackPath_ );
+        qWarning() << "assert-input-meter: no track at" << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
 
@@ -373,7 +373,7 @@ SApplyResult SAssertInputMeterAction::apply( SProject *project )
 
 void SAssertInputMeterAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     if( minPeak_ >= 0.0 ) elem.setAttribute( "minPeak", QString::number( minPeak_ ) );
     if( maxPeak_ >= 0.0 ) elem.setAttribute( "maxPeak", QString::number( maxPeak_ ) );
     if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
@@ -381,7 +381,7 @@ void SAssertInputMeterAction::writeXml( QDomElement &elem ) const
 
 bool SAssertInputMeterAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     minPeak_   = elem.attribute( "minPeak", "-1" ).toDouble();
     maxPeak_   = elem.attribute( "maxPeak", "-1" ).toDouble();
     contains_  = elem.attribute( "contains", "" );

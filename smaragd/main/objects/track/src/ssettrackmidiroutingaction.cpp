@@ -20,12 +20,12 @@ SSetTrackMidiRoutingAction::SSetTrackMidiRoutingAction(
 SApplyResult SSetTrackMidiRoutingAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     STrack *track = dynamic_cast<STrack *>(
         splacements::laneAt( mixer, trackPath_ ) );
     if( !track ) {
         qWarning() << "set-track-midi-routing: no track at"
-                   << pathToString( trackPath_ );
+                   << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
     bool ok = false;
@@ -43,13 +43,13 @@ SApplyResult SSetTrackMidiRoutingAction::apply( SProject *project )
 
 void SSetTrackMidiRoutingAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "routing", routing_ );
 }
 
 bool SSetTrackMidiRoutingAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     routing_ = elem.attribute( "routing", "auto" );
     return true;
 }

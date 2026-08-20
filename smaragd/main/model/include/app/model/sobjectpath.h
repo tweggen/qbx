@@ -95,6 +95,18 @@ inline QString qualifiedToString( const QString &root, const QList<int> &idx )
     return root.isEmpty() ? p : ( root + QLatin1Char(':') + p );
 }
 
+// Parse a possibly-qualified spec, recording its root in `rootInOut` when the
+// spec carries one. Actions that address SEVERAL paths call this once per
+// attribute and share one root member: the first qualifier wins, which is
+// right because an action addressing two roots at once is not an edit, it is
+// an extract-arrangement.
+inline QList<int> parseInto( QString &rootInOut, const QString &spec )
+{
+    const QualifiedPath q = parseQualified( spec );
+    if( !q.root.isEmpty() && rootInOut.isEmpty() ) rootInOut = q.root;
+    return q.idx;
+}
+
 inline bool findPathRec( SObject *cur, SObject *target, QList<int> &acc )
 {
     int i = 0;

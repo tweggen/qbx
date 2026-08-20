@@ -30,7 +30,7 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
         QList<QList<int>> targets =
             seditgroups::expandClipPaths( project, clipPath_ );
         if( targets.size() > 1 ) {
-            SObject *root = splacements::rootContainer( project );
+            SObject *root = splacements::rootNamed( project, pathRoot_ );
             SCompositeAction composite;
             for( const QList<int> &p : targets ) {
                 SLink *lk = splacements::placementAt( root, p );
@@ -45,7 +45,7 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
             return {false, nullptr};
         }
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = splacements::placementAt( mixer, clipPath_ );
     if( !link ) {
         return {false, nullptr};
@@ -67,14 +67,14 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
 
 void SSelectTakeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "take", takeIndex_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
 }
 
 bool SSelectTakeAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     takeIndex_ = elem.attribute( "take", "-1" ).toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;
     return true;

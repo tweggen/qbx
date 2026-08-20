@@ -18,7 +18,7 @@ SApplyResult SSetEditGroupAction::apply( SProject *project )
     if( !project || group_ < 0 ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( mixer, trackPath_ );
     if( !lane ) {
         return {false, nullptr};
@@ -31,13 +31,13 @@ SApplyResult SSetEditGroupAction::apply( SProject *project )
 
 void SSetEditGroupAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "group", group_ );
 }
 
 bool SSetEditGroupAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     group_ = elem.attribute( "group", "0" ).toInt();
     return true;
 }
