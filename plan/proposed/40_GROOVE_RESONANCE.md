@@ -548,6 +548,14 @@ implementation can be delegated to agents; M0's ACs are its gate list below,
 and every later milestone gets its AC list written at its own kickoff,
 never retroactively.
 
+> **M0 EXECUTED 2026-08-20** (branch `feat/40-feel-flow`) — measured results
+> in §11. Headline: the pendulum core EARNS ITS COMPLEXITY (decisively
+> better than the baseline on fixtures d, e, g, h; equal on b, i; behind
+> only on c before the σ fix, tied after). 8 of 11 AC groups green for the
+> pendulum; the three failures are diagnosed, not mysterious, and two of
+> them question the FIXTURE more than the model (§11.3). The warp-nudge
+> listening spike ran and surfaced a finding that reshapes M4 (§11.4).
+
 - **M0 — model spike, no UI, no aspect.** TWO estimators side by side: the
   pendulum core (§3) and a deliberately dumb BASELINE (band-region onset
   picking + a local pulse fit + median/MAD residual statistics). The user
@@ -746,3 +754,124 @@ Nothing in the review overturned a requester decision. Finding 5.3 ("the
 dumb baseline may BE v1") stands as a live, honest outcome of M0 rather
 than a rejection of the model: the surfaces are estimator-agnostic, so the
 question is settled by measurement, not by taste.
+
+## 11. M0 execution findings (2026-08-20)
+
+What was built: `tw/sidecar/twgroove.h` / `src/twgroove.cc` (front end +
+both estimators, pure C++17, no Qt/threads, in `tw_sidecar`),
+`sidecar/tests/groove_test.cc` (ctest target `groove_test`),
+`tests/tools/gen_groove_fixture.py` + 12 fixture WAVs and their
+ground-truth `manifest.json` under `tests/groove/` (blind self-verify
+26/26). Every free parameter is documented in the params structs.
+
+### 11.1 The front end held its ACs — after a SECOND closed-form skew
+
+The §3.1 group-delay compensation works as designed: per-region calibration
+spread **0.938 ms** against the 1.0 ms bound, with the negative control
+(compensation disabled) failing at **6.78 ms** — the gate was watched
+failing. But implementation surfaced a second, independent 1/b-shaped skew
+the review did not predict: the event picker fires on the flux
+(the envelope's DERIVATIVE), whose peak provably precedes the envelope
+peak by `√3/(2π·b)` for the 4-stage gammatone shape — up to ~9 ms at
+40–130 Hz, the same low-late signature as the group delay itself. Both
+corrections are closed-form, both applied, both permanent (trap 8 now
+covers the pair). Offset recovery through the front end alone: **+15.985
+ms** for a constructed +15 ms (in-code stimuli). Determinism: byte-identical
+across runs.
+
+### 11.2 The estimator A/B — the pendulum earns its keep
+
+Both estimators (dumb baseline: autocorrelation tatum + windowed robust
+local fit + median/MAD; pendulum: two-pass ensemble per §3.2/§4.2) run on
+every fixture. Final AC table (pendulum / baseline):
+
+| Fixture | AC | pendulum | baseline |
+|---|---|---|---|
+| a0 calibration spread ≤1 ms | **FAIL 4.53 ms** | FAIL 4.67 ms | see §11.3 |
+| a Δμ = +15±1 ms | **FAIL +17.05** | FAIL +11.90 | see §11.3 |
+| b σ monotone; white-12 ∈ [6,18] | **PASS 7.20** | PASS 9.49 | |
+| c ramp σ ≤3 ms | **PASS 0.31** | PASS 0.18 | drift-free σ, §11.5 |
+| d 2-bar ratio ≥1.5 | **PASS 1.65** | n/a | |
+| e sweep-vs-static (falsification) | **PASS 3/3** (σ 0.011/0.015, Δμ 3.52) | FAIL (σ_static 10.5, Δμ 115.4) | |
+| f bimodality modes 0/+20±3 | flag fires, modes **FAIL −78/+82** | flag fires, FAIL −113/+116 | see §11.3 |
+| g wash σ bound | **PASS 0.21** | FAIL 49.2 | |
+| h dip / re-lock ≤2 bars / σ ratio | **PASS** (re-lock 0.75 s) | partial n/a | |
+| i trained phantom μ ≤2 ms | **PASS 0.15** | PASS 0.24 | |
+
+The requester's falsification fixture (e, swept vs static kick) is the
+decisive row: the baseline's onset-style picking fails it three ways; the
+band-field pendulum passes all three — the no-separation front end doing
+exactly what refinement 3 predicted. Everything byte-deterministic across
+process runs.
+
+### 11.3 The three remaining failures are DIAGNOSED, and two indict the fixture
+
+- **a0/a**: the fixtures' compound clicks (80 Hz/30 ms + 4 kHz/10 ms +
+  noise) conflate CALIBRATION with the stimulus's own envelope shape — a
+  30 ms low burst is not an impulse, and its perceptual timing genuinely
+  differs from its construction time (that is P-center physics, §2.3, not
+  estimator error; the front end's own envelope-matched in-code stimuli
+  pass at 0.94 ms). A per-region amplitude bleed gate (12 dB, implemented,
+  documented) measurably does NOT fire here — within a region every event
+  has identical amplitude, because the same click repeats every beat; the
+  bleed is cross-region and uniform. **DECIDE**: re-cut a0/a with
+  envelope-matched bursts so they measure calibration alone (and add a
+  separate, assertion-free P-center measurement fixture), or accept ±5 ms
+  as the honest bound for compound-stimulus region timing.
+- **f**: an OCTAVE ERROR in period recovery — X (300 Hz) and Y (350 Hz)
+  alternate, so autocorrelation prefers 2× the true pulse (measured
+  0.500001 s vs 0.250 s), and the mode centers inflate downstream.
+  Preferring smaller lags fixes f but broke i's tatum precision when
+  tried — the two needs are in tension; a real resolution (multi-hypothesis
+  or GCD-based period selection) is M0 follow-up work, recorded, not
+  forced.
+- **Baseline-only failures (e, g)** stand as the measured argument that
+  the pendulum's shared dynamics earn their cost over per-window refits.
+
+### 11.4 The warp-nudge listening spike — one finding reshapes M4
+
+Run against the MAIN checkout's binary with existing verbs (no M0 code in
+the loop), ±10 ms `add-warp-marker` nudges on the swept/static kick
+fixture. Nudges land within ~1–2 ms of intent; edits are provably local
+(regions outside the nudges byte-identical between nudged and control);
+the only nudge artifact found is a quiet pre-transient dulling (−9/−10 dB
+in a region 25–50 dB under the hit) on nudge-EARLIER swept kicks. **But:
+placing ANY warp marker routes the whole clip through the vocoder path,
+and the identity-anchor control render differs from the plain render at
+difference-RMS −2 dB relative to signal (corr 0.688).** The honest A/B for
+M4 is therefore nudged-vs-control, and the M4 UX must treat "first marker
+on a virgin clip" as a MODE CHANGE (the clip's sound changes once,
+globally), not a local edit. Listening files are staged for the requester;
+the human verdict on both deltas is still owed. Not swept: other nudge
+magnitudes, spacings, real drum material.
+
+### 11.5 Two implementation findings worth more than their bug reports
+
+- **Forward-Euler was silently unstable** at tatum-rate ω with dt = 5 ms:
+  per-step growth 1.0029 DESPITE damping, compounding to ~3.7×10⁹ over
+  38 s. The exact exponential-integrator step for the linear term fixed
+  it, and with it most of the pendulum's early nonsense (h's re-lock,
+  e's μ). Any future oscillator work here uses the closed-form step,
+  never Euler.
+- **σ is drift-relative by definition** (§3.3 said it; the code now does
+  it): σ = robust spread of (residual − local drift-window median). A
+  tempo ramp's slowly-moving mean is μ-drift, not jitter; conflating them
+  cost the pendulum AC c until redefined. Fixture b confirmed the
+  redefinition does not weaken the white-jitter gate.
+
+Also fixed en route, all general: a window-anchor rounding tie that biased
+the baseline by exactly T/2 on grid-aligned material; IOI-histogram tatum
+recovery displaced by wash (autocorrelation of summed flux is now
+primary); a hard-coded bar=8·tatum assumption (bar-scale units now seed
+from the ~2 Hz body-resonance anchor); DC bias from half-wave-rectified
+flux inflating slow-unit resonance (mean-removed drive, bar units only —
+applying it to the reference unit broke ramp tracking, measured and
+reverted).
+
+### 11.6 Still owed from the M0 list
+
+The REAL drum-recording measurement (no such material is in-tree — needs a
+take from the requester), the human listening verdict on the spike files,
+and the a0/a fixture DECIDE above. The M0 exit questions themselves are
+answered: the readouts are stable enough to be worth a UI, and the
+pendulum core has earned its complexity on measurement.

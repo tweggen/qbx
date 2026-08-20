@@ -4,6 +4,8 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <functional>
+#include <utility>
 
 // Groove analysis front end (proposal 40 M0). Pure, deterministic, single-
 // threaded: no threads, no rand(), fixed iteration order. NORMATIVE per
@@ -454,4 +456,518 @@ std::vector<float> twGrooveDebugBandEnvelopeRaw( const float *const *chans, uint
     if( !compensateGroupDelay )
         return raw;
     return delayCompensate( raw, nFrames, fs, spec );
+}
+
+// =============================================================================
+// Baseline estimator (M0 section 6 spec). See twgroove.h for the algorithm
+// summary; this is the normative implementation.
+// =============================================================================
+
+namespace {
+
+double medianOf( std::vector<double> v )
+{
+    if( v.empty() )
+        return 0.0;
+    std::sort( v.begin(), v.end() );
+    const size_t n = v.size();
+    return ( n % 2 == 1 ) ? v[n / 2] : 0.5 * ( v[n / 2 - 1] + v[n / 2] );
+}
+
+// 1.4826 * median(|x - median(x)|) -- the standard consistent-for-Gaussian
+// scale estimator (matches "sigma" for a normal distribution).
+double madSigma( const std::vector<double> &v, double med )
+{
+    if( v.size() < 2 )
+        return 0.0;
+    std::vector<double> dev;
+    dev.reserve( v.size() );
+    for( double x : v )
+        dev.push_back( std::fabs( x - med ) );
+    return 1.4826 * medianOf( dev );
+}
+
+// Wrap x into (-half, half].
+double wrapSigned( double x, double half )
+{
+    double y = std::fmod( x + half, 2.0 * half );
+    if( y < 0.0 )
+        y += 2.0 * half;
+    return y - half;
+}
+
+// One (near-simultaneous-event) cluster, used for tatum recovery: several
+// regions firing on the same nominal beat collapse to one cluster time (the
+// mean of member positions) so the IOI histogram is not swamped by ~0 ms
+// same-beat gaps between regions.
+std::vector<double> clusterEventTimesSec( const std::vector<twGrooveEvent> &events,
+                                          double rate, double coincidenceMs )
+{
+    std::vector<double> out;
+    if( events.empty() )
+        return out;
+    // events is already sorted ascending by posFrames (twGrooveField's
+    // contract), but events here is a COPY reference sorted by the caller
+    // via posFrames -- confirm by using as given (front end guarantees it).
+    double sumT = 0.0;
+    int    n    = 0;
+    double lastT = events[0].posFrames / rate;
+    for( size_t i = 0; i < events.size(); i++ ) {
+        const double t = events[i].posFrames / rate;
+        if( n > 0 && ( t - lastT ) * 1000.0 > coincidenceMs ) {
+            out.push_back( sumT / (double)n );
+            sumT = 0.0;
+            n    = 0;
+        }
+        sumT += t;
+        n++;
+        lastT = t;
+    }
+    if( n > 0 )
+        out.push_back( sumT / (double)n );
+    return out;
+}
+
+// Step 1, FALLBACK method: recover the tatum period from an ascending list of
+// cluster times via an IOI histogram (twGrooveBaselineParams doc). Used only
+// when the autocorrelation above cannot run (field too short for the
+// candidate lag range).
+double recoverTatumPeriodSec( const std::vector<double> &clusterTimesSec,
+                              const twGrooveBaselineParams &p )
+{
+    if( clusterTimesSec.size() < 2 )
+        return 0.0;
+
+    std::vector<double> ioisSec;
+    ioisSec.reserve( clusterTimesSec.size() );
+    for( size_t i = 1; i < clusterTimesSec.size(); i++ ) {
+        const double dt = clusterTimesSec[i] - clusterTimesSec[i - 1];
+        if( dt >= p.minTatumSec && dt <= p.maxTatumSec )
+            ioisSec.push_back( dt );
+    }
+    if( ioisSec.size() < 2 )
+        return 0.0;
+
+    const double binSec = p.tatumHistBinMs / 1000.0;
+    const int    nBins  = (int)std::ceil( ( p.maxTatumSec - p.minTatumSec ) / binSec ) + 1;
+    std::vector<int> hist( (size_t)std::max( 1, nBins ), 0 );
+    for( double v : ioisSec ) {
+        int b = (int)( ( v - p.minTatumSec ) / binSec );
+        if( b < 0 ) b = 0;
+        if( b >= (int)hist.size() ) b = (int)hist.size() - 1;
+        hist[(size_t)b]++;
+    }
+    int bestBin = 0, bestCount = -1;
+    for( size_t b = 0; b < hist.size(); b++ )
+        if( hist[b] > bestCount ) { bestCount = hist[b]; bestBin = (int)b; }
+    const double binCenterSec = p.minTatumSec + ( (double)bestBin + 0.5 ) * binSec;
+
+    const double bandSec = p.tatumRefineBandMs / 1000.0;
+    double sum = 0.0;
+    int    n   = 0;
+    for( double v : ioisSec ) {
+        if( std::fabs( v - binCenterSec ) <= bandSec ) { sum += v; n++; }
+    }
+    if( n == 0 )
+        return binCenterSec;
+    return sum / (double)n;
+}
+
+// One local-window pulse fit: t_e ~= phase0 + tatumLocal * round((t_e -
+// idxAnchor)/tatumSeed). Ordinary least squares over (index, t), one outlier
+// rejection pass. Returns false (fit left default) if fewer than 2 events
+// survive rejection.
+//
+// idxAnchor is the window's FIRST event time, deliberately NOT its arithmetic
+// mean (found the hard way on the AC(a0) fixture, whose windows are exact
+// multiples of a whole number of tatums): the mean of an EVEN count of
+// evenly-spaced points is always exactly halfway between two grid points, so
+// (t-mean)/tatumSeed lands on an exact x.5 for every point in the window, and
+// std::round's "round half away from zero" then maps the two halves of the
+// window to indices that JUMP by 2 at the window's own midpoint (skipping
+// index 0) instead of stepping by 1 -- a discontinuity no single line can
+// fit, and the LSQ compromise came out biased by exactly half a tatum period
+// (measured: a window's phase0 landing at +0.125 s on a 0.25 s tatum). The
+// first event's OWN time is never an artificial midpoint, so anchoring there
+// makes every offset (t_e - idxAnchor)/tatumSeed land near a true INTEGER for
+// both synthetic-exact and real-noisy material, and the tie case cannot arise.
+struct WindowFit {
+    double centerSec  = 0.0;
+    double phase0Sec   = 0.0;
+    double tatumSec    = 0.0;
+    bool   valid       = false;
+};
+
+bool fitWindow( const std::vector<double> &timesInWindowSec, double tatumSeed,
+               double windowCenterSec, double outlierRejectMs, WindowFit &out )
+{
+    if( timesInWindowSec.size() < 2 || tatumSeed <= 0.0 )
+        return false;
+
+    const double idxAnchor = timesInWindowSec.front();
+
+    auto lsqFit = [&]( const std::vector<double> &ts, double &phase0, double &tatum ) -> bool {
+        // index_e = round((t_e - idxAnchor)/tatumSeed); fit t = phase0 + tatum*index.
+        double sumI = 0.0, sumT = 0.0, sumII = 0.0, sumIT = 0.0;
+        int    n    = 0;
+        for( double t : ts ) {
+            const double idx = std::round( ( t - idxAnchor ) / tatumSeed );
+            sumI += idx; sumT += t; sumII += idx * idx; sumIT += idx * t;
+            n++;
+        }
+        if( n < 2 )
+            return false;
+        const double meanI = sumI / (double)n;
+        const double meanTT = sumT / (double)n;
+        const double covIT  = sumIT / (double)n - meanI * meanTT;
+        const double varI    = sumII / (double)n - meanI * meanI;
+        if( varI <= 1e-12 ) {
+            // All events landed on the SAME index (a degenerate/too-narrow
+            // window) -- fall back to the seed period, phase at the mean.
+            tatum  = tatumSeed;
+            phase0 = meanTT - meanI * tatum;
+            return true;
+        }
+        tatum  = covIT / varI;
+        phase0 = meanTT - meanI * tatum;
+        return true;
+    };
+
+    double phase0 = 0.0, tatum = tatumSeed;
+    if( !lsqFit( timesInWindowSec, phase0, tatum ) )
+        return false;
+    if( tatum <= 0.0 )
+        return false;
+
+    std::vector<double> survivors;
+    survivors.reserve( timesInWindowSec.size() );
+    for( double t : timesInWindowSec ) {
+        const double idx       = std::round( ( t - idxAnchor ) / tatumSeed );
+        const double predicted = phase0 + tatum * idx;
+        const double residMs   = ( t - predicted ) * 1000.0;
+        if( std::fabs( residMs ) <= outlierRejectMs )
+            survivors.push_back( t );
+    }
+    if( survivors.size() < 2 )
+        survivors = timesInWindowSec;   // rejection ate everything -- keep the raw fit rather than fail
+
+    double phase0b = phase0, tatumb = tatum;
+    lsqFit( survivors, phase0b, tatumb );
+    if( tatumb <= 0.0 )
+        return false;
+
+    out.centerSec = windowCenterSec;
+    out.phase0Sec = phase0b;
+    out.tatumSec  = tatumb;
+    out.valid     = true;
+    return true;
+}
+
+} // namespace
+
+// Public: autocorrelation of the summed region flux over an arbitrary lag
+// range. See twgroove.h's doc -- this is the primitive twGrooveBaselineAnalyze
+// uses internally for tatum recovery (PRIMARY method, replacing a pure IOI
+// histogram: measured on AC (g)'s wash fixture, a continuous broadband
+// texture triples the picked EVENT count, and every extra pick injects a
+// spurious inter-onset interval into a histogram -- the histogram's peak bin
+// moved from the true 250 ms tatum to 115 ms, corrupting every downstream
+// residual. The autocorrelation is computed over the CONTINUOUS flux field
+// rather than over picked events, so a wash's own texture -- which has no
+// strong periodic structure at the tatum's own lag -- does not inject
+// discrete false candidates the way it injects false events), and is exposed
+// publicly because twgroovependulum.cc needs a SECOND instance of it at a
+// slower lag range to seed its bar-scale units (see twgroove.h's doc on this
+// function for why a fixed tatum-multiple is not safe to assume).
+double twGrooveRecoverPeriodByAutocorrelation( const twGrooveField &field,
+                                               double minPeriodSec, double maxPeriodSec )
+{
+    if( field.nHops == 0 || field.rate == 0 || field.hopFrames == 0 )
+        return 0.0;
+    if( !( minPeriodSec > 0.0 ) || !( maxPeriodSec > minPeriodSec ) )
+        return 0.0;
+    const uint32_t nRegions = (uint32_t)field.regionLowHz.size();
+    if( nRegions == 0 || field.regionFlux.size() < (size_t)nRegions * (size_t)field.nHops )
+        return 0.0;
+
+    std::vector<double> drive( field.nHops, 0.0 );
+    for( uint32_t r = 0; r < nRegions; r++ ) {
+        const float *flux = &field.regionFlux[(size_t)r * (size_t)field.nHops];
+        for( uint32_t k = 0; k < field.nHops; k++ ) drive[k] += (double)flux[k];
+    }
+    double mean = 0.0;
+    for( double v : drive ) mean += v;
+    mean /= (double)drive.size();
+    for( double &v : drive ) v -= mean;
+
+    const double hopSec = (double)field.hopFrames / (double)field.rate;
+    const int minLag = std::max( 1, (int)std::round( minPeriodSec / hopSec ) );
+    const int maxLag = std::min( (int)field.nHops - 1, (int)std::round( maxPeriodSec / hopSec ) );
+    if( maxLag <= minLag )
+        return 0.0;
+
+    // Raw (unnormalized) sum -- tried normalizing by the per-lag overlap
+    // count (the "unbiased" estimator) and it corrupted the fine TATUM
+    // search: the shrinking overlap at large lag inflates that estimate's
+    // own variance, and on fixture (a0) it picked a noisy large-lag peak
+    // over the true, well-conditioned 0.25 s one (recovered 0.5 s instead).
+    // Normalizing by the fixed total length changes nothing (a constant
+    // divisor cannot change which lag is the argmax) so it is not tried.
+    auto autocorrAt = [&]( int lag ) -> double {
+        double s = 0.0;
+        for( uint32_t k = 0; (int)k + lag < (int)field.nHops; k++ ) s += drive[k] * drive[k + (uint32_t)lag];
+        return s;
+    };
+
+    // The plain global argmax (not a "first strong peak" search): tried that
+    // as an octave/harmonic-error guard while this function was still also
+    // used for the M0 ensemble's bar-scale seeding, and it measurably hurt
+    // the ONE caller left after that seeding moved to a fixed absolute
+    // anchor (twGroovePendulumParams::defaultBarPeriodSec's doc) -- the
+    // fine-grained TATUM search, where AC (i)'s 2 ms bound is tight enough
+    // that trading the sharpest peak for "first past 75% of it" measurably
+    // moved the recovered tatum on a short (16 s) slice and turned a passing
+    // phantom-shift measurement into a 10+ ms one.
+    int    bestLag = -1;
+    double bestVal = -1e300;
+    for( int lag = minLag; lag <= maxLag; lag++ ) {
+        const double v = autocorrAt( lag );
+        if( v > bestVal ) { bestVal = v; bestLag = lag; }
+    }
+    if( bestLag < 0 )
+        return 0.0;
+
+    const double y0 = ( bestLag > minLag ) ? autocorrAt( bestLag - 1 ) : bestVal;
+    const double y1 = bestVal;
+    const double y2 = ( bestLag < maxLag ) ? autocorrAt( bestLag + 1 ) : bestVal;
+    const double denom = y0 - 2.0 * y1 + y2;
+    double       delta = ( std::fabs( denom ) > 1e-12 ) ? 0.5 * ( y0 - y2 ) / denom : 0.0;
+    if( delta > 0.5 ) delta = 0.5;
+    if( delta < -0.5 ) delta = -0.5;
+    return ( (double)bestLag + delta ) * hopSec;
+}
+
+// Public: shared per-region pooling for BOTH estimators (twgroove.h's doc).
+// Bleed gate, then mu/drift/LOCAL-median sigma/bimodality -- see
+// twGrooveRegionStats' doc for the exact definitions.
+twGrooveResidualReport twGroovePoolRegionStats(
+    const std::vector<std::vector<twGrooveScoredEvent>> &eventsByRegion,
+    double totalSec, const twGrooveStatsParams &stats )
+{
+    const uint32_t nRegions = (uint32_t)eventsByRegion.size();
+    twGrooveResidualReport report;
+    report.perRegion.assign( nRegions, twGrooveRegionStats{} );
+
+    for( uint32_t r = 0; r < nRegions; r++ ) {
+        // --- Bleed gate: reference level = median amplitude of the top
+        // (loudest) half of this region's OWN events, sorted descending.
+        // Events more than bleedGateDb below it are dropped BEFORE anything
+        // else is computed -- see twGrooveStatsParams::bleedGateDb's doc. ---
+        std::vector<twGrooveScoredEvent> gated;
+        {
+            const std::vector<twGrooveScoredEvent> &raw = eventsByRegion[r];
+            if( !raw.empty() ) {
+                std::vector<float> ampsDesc;
+                ampsDesc.reserve( raw.size() );
+                for( const auto &e : raw ) ampsDesc.push_back( e.amp );
+                std::sort( ampsDesc.begin(), ampsDesc.end(), std::greater<float>() );
+                const size_t topHalfN = std::max<size_t>( 1, ampsDesc.size() / 2 );
+                std::vector<float> topHalf( ampsDesc.begin(), ampsDesc.begin() + (long)topHalfN );
+                std::sort( topHalf.begin(), topHalf.end() );
+                const float refLevel = topHalf[topHalf.size() / 2];   // median of the top half
+
+                if( refLevel > 0.0f ) {
+                    const double thresholdLinear =
+                        (double)refLevel * std::pow( 10.0, -stats.bleedGateDb / 20.0 );
+                    for( const auto &e : raw )
+                        if( (double)e.amp >= thresholdLinear )
+                            gated.push_back( e );
+                } else {
+                    gated = raw;   // degenerate (all-zero amplitude) -- gate is a no-op
+                }
+            }
+        }
+
+        twGrooveRegionStats &out = report.perRegion[r];
+        if( gated.empty() )
+            continue;   // ALL bleed (or no events at all) -- correctly hasData=false
+        out.hasData = true;
+        out.nEvents = (int)gated.size();
+
+        std::vector<double> res;
+        res.reserve( gated.size() );
+        for( const auto &e : gated ) res.push_back( e.residualMs );
+        out.muMs = medianOf( res );
+
+        // --- Bimodality: on the RAW (gated) residuals, never detrended --
+        // a stable two-cluster split is a different phenomenon from local
+        // drift (twGrooveRegionStats' own doc). ---
+        {
+            double lo = res[0], hi = res[0];
+            for( double v : res ) { lo = std::min( lo, v ); hi = std::max( hi, v ); }
+            const double span  = std::max( 1e-6, hi - lo );
+            const double binMs = 2.0;
+            const int    nBins = (int)std::ceil( span / binMs ) + 1;
+            std::vector<int> hist( (size_t)std::max( 1, nBins ), 0 );
+            for( double v : res ) {
+                int b = (int)( ( v - lo ) / binMs );
+                if( b < 0 ) b = 0;
+                if( b >= (int)hist.size() ) b = (int)hist.size() - 1;
+                hist[(size_t)b]++;
+            }
+            int peakA = -1, peakB = -1, cA = -1, cB = -1;
+            for( int b = 0; b < (int)hist.size(); b++ ) {
+                if( hist[b] > cA ) { cB = cA; peakB = peakA; cA = hist[b]; peakA = b; }
+                else if( hist[b] > cB ) { cB = hist[b]; peakB = b; }
+            }
+            if( peakA >= 0 && peakB >= 0 ) {
+                const double centerA = lo + ( (double)peakA + 0.5 ) * binMs;
+                const double centerB = lo + ( (double)peakB + 0.5 ) * binMs;
+                if( std::fabs( centerA - centerB ) >= stats.bimodalMinGapMs ) {
+                    double sumA = 0.0, sumB = 0.0; int nA = 0, nB = 0;
+                    for( double v : res ) {
+                        if( std::fabs( v - centerA ) <= std::fabs( v - centerB ) ) { sumA += v; nA++; }
+                        else { sumB += v; nB++; }
+                    }
+                    const double fracA = (double)nA / (double)res.size();
+                    const double fracB = (double)nB / (double)res.size();
+                    if( fracA >= stats.bimodalMinFrac && fracB >= stats.bimodalMinFrac ) {
+                        out.bimodal = true;
+                        out.modeAMs = ( nA > 0 ) ? sumA / (double)nA : centerA;
+                        out.modeBMs = ( nB > 0 ) ? sumB / (double)nB : centerB;
+                        if( out.modeAMs > out.modeBMs ) std::swap( out.modeAMs, out.modeBMs );
+                    }
+                }
+            }
+        }
+
+        // --- Windowed drift trace (on the gated residuals). ---
+        if( stats.driftStepSec > 0.0 && stats.driftWindowSec > 0.0 ) {
+            for( double wStart = 0.0; wStart < totalSec; wStart += stats.driftStepSec ) {
+                const double wEnd = std::min( wStart + stats.driftWindowSec, totalSec );
+                std::vector<double> inWin;
+                for( const auto &e : gated )
+                    if( e.tSec >= wStart && e.tSec < wEnd )
+                        inWin.push_back( e.residualMs );
+                if( !inWin.empty() )
+                    out.drift.push_back( { wStart + 0.5 * ( wEnd - wStart ), medianOf( inWin ) } );
+                if( wEnd >= totalSec )
+                    break;
+            }
+        }
+
+        // --- sigma: spread around the LOCAL (drift-trace) median, not the
+        // global one (twGrooveRegionStats::sigmaMs's doc). Falls back to the
+        // global-median MAD when fewer than 2 drift windows exist. ---
+        if( out.drift.size() >= 2 ) {
+            std::vector<double> detrended;
+            detrended.reserve( gated.size() );
+            for( const auto &e : gated ) {
+                size_t bestIdx = 0;
+                double bestD   = 1e18;
+                for( size_t i = 0; i < out.drift.size(); i++ ) {
+                    const double d = std::fabs( out.drift[i].tSec - e.tSec );
+                    if( d < bestD ) { bestD = d; bestIdx = i; }
+                }
+                detrended.push_back( e.residualMs - out.drift[bestIdx].muMs );
+            }
+            // Spread around ZERO, not re-centered: each value is already
+            // relative to its OWN local window's median, so a second
+            // centering would just re-introduce a global bias the local
+            // detrend was built to remove.
+            out.sigmaMs = madSigma( detrended, 0.0 );
+        } else {
+            out.sigmaMs = madSigma( res, out.muMs );
+        }
+    }
+
+    return report;
+}
+
+twGrooveBaselineResult twGrooveBaselineAnalyze( const twGrooveField &field,
+                                                const twGrooveBaselineParams &p )
+{
+    twGrooveBaselineResult result;
+    if( field.events.empty() || field.nHops == 0 || field.rate == 0 )
+        return result;
+
+    const double rate = (double)field.rate;
+    const double totalSec = (double)field.nHops * (double)field.hopFrames / rate;
+
+    // --- Step 1: tatum period. Autocorrelation of the summed region flux is
+    // PRIMARY (see twGrooveRecoverPeriodByAutocorrelation's doc for why);
+    // the IOI histogram over the merged (clustered) event train is the
+    // FALLBACK for material too short to cover the candidate lag range. ---
+    const std::vector<double> clusterTimesSec =
+        clusterEventTimesSec( field.events, rate, p.coincidenceMs );
+    result.tatumPeriodSec =
+        twGrooveRecoverPeriodByAutocorrelation( field, p.minTatumSec, p.maxTatumSec );
+    if( result.tatumPeriodSec <= 0.0 )
+        result.tatumPeriodSec = recoverTatumPeriodSec( clusterTimesSec, p );
+    if( result.tatumPeriodSec <= 0.0 )
+        return result;   // no usable pulse -- honest empty result, not a guess
+
+    // --- Step 2: sliding-window local pulse fits over the CLUSTER train. ---
+    // (Fitting the clusters, not the raw per-region events, keeps one fit per
+    // beat rather than letting a beat with more populated regions outvote a
+    // beat with fewer in the least-squares sum.)
+    std::vector<WindowFit> windows;
+    if( p.stepSec > 0.0 && p.windowSec > 0.0 ) {
+        for( double wStart = 0.0; wStart < totalSec; wStart += p.stepSec ) {
+            const double wEnd = std::min( wStart + p.windowSec, totalSec );
+            std::vector<double> inWindow;
+            for( double t : clusterTimesSec )
+                if( t >= wStart && t < wEnd )
+                    inWindow.push_back( t );
+            WindowFit fit;
+            if( fitWindow( inWindow, result.tatumPeriodSec, wStart + 0.5 * ( wEnd - wStart ),
+                           p.outlierRejectMs, fit ) )
+                windows.push_back( fit );
+            if( wEnd >= totalSec )
+                break;
+        }
+    }
+    if( windows.empty() ) {
+        // Degenerate (very short material, or nothing survived a fit): fall
+        // back to ONE global fit over every cluster time.
+        WindowFit fit;
+        if( fitWindow( clusterTimesSec, result.tatumPeriodSec, 0.5 * totalSec,
+                       p.outlierRejectMs, fit ) )
+            windows.push_back( fit );
+        else
+            return result;
+    }
+
+    auto nearestWindow = [&]( double tSec ) -> const WindowFit & {
+        size_t best = 0;
+        double bestD = 1e18;
+        for( size_t i = 0; i < windows.size(); i++ ) {
+            const double d = std::fabs( windows[i].centerSec - tSec );
+            if( d < bestD ) { bestD = d; best = i; }
+        }
+        return windows[best];
+    };
+
+    // --- Step 3: per-event residual against the nearest window's fit, ------
+    // scored (with amplitude) per region, then pooled by the SHARED function
+    // (bleed gate, mu, drift, local-median sigma, bimodality -- twgroove.h's
+    // twGroovePoolRegionStats doc).
+    const uint32_t nRegions = (uint32_t)( field.regionLowHz.size() );
+    std::vector<std::vector<twGrooveScoredEvent>> eventsByRegion( nRegions );
+
+    for( const twGrooveEvent &ev : field.events ) {
+        if( ev.region >= nRegions )
+            continue;
+        const double t = ev.posFrames / rate;
+        const WindowFit &w = nearestWindow( t );
+        if( !w.valid || w.tatumSec <= 0.0 )
+            continue;
+        const double idx       = std::round( ( t - w.phase0Sec ) / w.tatumSec );
+        const double predicted = w.phase0Sec + w.tatumSec * idx;
+        const double residMs   = wrapSigned( ( t - predicted ) * 1000.0, w.tatumSec * 500.0 );
+        eventsByRegion[ev.region].push_back( { t, residMs, ev.amp } );
+    }
+
+    result.residuals = twGroovePoolRegionStats( eventsByRegion, totalSec, p.stats );
+    return result;
 }
