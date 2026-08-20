@@ -215,6 +215,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/seteditgroupaction.h
     objects/track/include/app/objects/track/smoveclipaction.h
     objects/track/include/app/objects/track/spluginactionsupport.h
+    objects/track/include/app/objects/track/sfeelflowbounce.h
     objects/track/include/app/objects/track/spluginchain.h
     objects/track/include/app/objects/track/spluginslot.h
     objects/track/include/app/objects/track/sremovepluginaction.h
@@ -237,6 +238,7 @@ set(APP_OBJECTS_FILES
     objects/track/src/sinsertpluginaction.cpp
     objects/track/src/sinstrumenttracks.cpp
     objects/track/src/smoveclipaction.cpp
+    objects/track/src/sfeelflowbounce.cpp
     objects/track/src/spluginchain.cpp
     objects/track/src/spluginslot.cpp
     objects/track/src/sremovepluginaction.cpp

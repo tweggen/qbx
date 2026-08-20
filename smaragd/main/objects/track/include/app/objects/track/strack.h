@@ -16,6 +16,7 @@ class SObjectRenderer;
 class STrackRendererInline;
 class SPluginChain;
 class SPluginSlot;
+class SFeelFlowTrackBounce;
 class twTrackMix;
 class twRewire;
 class twGainStage;
@@ -291,6 +292,34 @@ public:
     void adoptPluginChain( SPluginChain *chain );
     virtual int seekTo( offset_t ofs ) override;
 
+    // --- Feel Flow track bounce (proposal 40 M1b, section 4.3) ------------
+
+    /**
+     * Starts (or restarts) a background bounce+groove-analysis pass over
+     * this track's own root component (post-FX, post-gain, pre-summing —
+     * getRootComponent()), covering the whole project duration. Lazily
+     * creates the holder (sfeelflowbounce.h). No-op, logged, when the
+     * sidecar store is disabled or the project has no revalidator
+     * (SMARAGD_REVAL_WORKERS=0); a no-op when a bounce for this track is
+     * already running. Never blocks — the render and the analysis job that
+     * follows it both run off the calling thread.
+     */
+    void startFeelFlowBounce();
+
+    // True while a bounce (or the analysis job that follows it) for this
+    // track is in flight. Lock-free badge read, mirroring
+    // SPlainWave::isAnalyzingGroove().
+    bool isFeelFlowBouncing() const;
+
+    // True once a bounce has completed at least once for this track.
+    bool feelFlowHasResult() const;
+
+    // True when this track's chain has changed (its root component's
+    // content epoch has moved) since the START of the last successful
+    // bounce, or no bounce has ever completed — never silently reports a
+    // result that no longer matches the chain (proposal 40 section 4.3).
+    bool feelFlowStale() const;
+
     // --- the folder-sum preview (proposal 39 M3, design D3) ---------------
 
     /**
@@ -491,6 +520,14 @@ private:
     // It used to be a scalar inside twTrackMix, i.e. PRE-FX (design F6).
     std::shared_ptr<twGainStage> cpGainStage_;      // ONE, channels_ wide
     std::shared_ptr<twRewire> cpRewire_;            // the track's ROOT component
+    // Proposal 40 M1b: lazily created on the first startFeelFlowBounce().
+    // Not an SObject/SLink — derived data with no independent project
+    // existence, like an automation lane, and its destructor JOINS any
+    // in-flight bounce (see sfeelflowbounce.h) before the rest of ~STrack
+    // runs, which is what keeps the analysis job's captured SProject/
+    // CaptureRevalidator pointers valid: ~SProject deletes tracks from its
+    // own destructor BODY, before its revalidator_ member is torn down.
+    std::unique_ptr<SFeelFlowTrackBounce> feelFlowBounce_;
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
     // Our REFERENCE to that chain, not a child link (a chain is not an SLink
     // child of a track — SObject::childEvent only accepts SLinks, and a chain in

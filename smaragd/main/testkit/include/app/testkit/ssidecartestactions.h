@@ -15,8 +15,12 @@
 //
 //   <wait-analysis timeoutMs="15000"/>
 //       Pumps the event loop until the project's revalidator has drained its
-//       job queue (analysis lane included) AND no SPlainWave in the project is
-//       still analyzing. Rejects on timeout. With the revalidator disabled
+//       job queue (analysis lane included), no SPlainWave in the project is
+//       still analyzing, AND (proposal 40 M1b) no track in the project tree
+//       is still bouncing (STrack::isFeelFlowBouncing()) — the bounce render
+//       itself is not a queued revalidator job (it runs on its own thread),
+//       so without this a script could race past a bounce still in flight.
+//       Rejects on timeout. With the revalidator disabled
 //       (SMARAGD_REVAL_WORKERS=0) nothing is ever pending — passes at once.
 //
 //   <set-render-gate clip="0,0" ready="false"/>
@@ -41,18 +45,29 @@
 //       check. Fails if the clip is missing / not an SCut / any check fails.
 //
 //   <feel-flow-analyze clip="0,0"/>
-//       Proposal 40 "Feel Flow" M1. Resolves the SCut at clip (same
-//       addressing as set-render-gate), requires its content to be an
-//       SPlainWave, and calls SPlainWave::enqueueGrooveAnalysis() — the OPT-IN
-//       groove analysis job (groove.res / groove.ev, never scheduled by
-//       add-sample on its own). Fails if the clip is missing, not an SCut, or
-//       its content is not a plain wave. Non-undoable: analysis is not an
-//       edit to the arrangement.
+//   <feel-flow-analyze target="track" trackPath="0"/>
+//       Proposal 40 "Feel Flow" M1 / M1b. Default target="clip": resolves
+//       the SCut at clip (same addressing as set-render-gate), requires its
+//       content to be an SPlainWave, and calls
+//       SPlainWave::enqueueGrooveAnalysis() — the OPT-IN groove analysis job
+//       (groove.res / groove.ev, never scheduled by add-sample on its own).
+//       Fails if the clip is missing, not an SCut, or its content is not a
+//       plain wave.
+//       target="track" (M1b): resolves the STrack at trackPath (same
+//       addressing as arm-track/set-track-volume) and calls
+//       STrack::startFeelFlowBounce() — background-bounces the track's own
+//       post-FX root component over the whole project duration
+//       (sfeelflowbounce.h) and, on completion, analyzes the bounce exactly
+//       as the clip path does. Fails if the track is missing or not an
+//       STrack. Pair with wait-analysis before reading the sidecars either
+//       way — it now also drains any in-flight track bounce. Non-undoable:
+//       scheduling a background analysis is not an edit to the arrangement.
 //
 //   <assert-groove-aspect aspect="groove.res|groove.ev" minRecords="-1"
 //                         maxRecords="-1" expectExists="true"
-//                         deltaMuHighLowMs="-1" deltaMuTolMs="-1"/>
-//       Proposal 40 M1. Globs <testOutputDir>/sidecars for the newest
+//                         deltaMuHighLowMs="-1" deltaMuTolMs="-1"
+//                         trackPath="" stale="-1"/>
+//       Proposal 40 M1 / M1b. Globs <testOutputDir>/sidecars for the newest
 //       *.<aspect>.*.qaf (same newest-file convention as assert-sidecar) and
 //       asserts presence and record count like assert-sidecar, PLUS aspect-
 //       specific structural checks decoded via tw/sidecar/twgrooveaspect.h:
@@ -73,6 +88,12 @@
 //           mu), and |deltaMu - deltaMuHighLowMs| must be <= deltaMuTolMs
 //           (default 0.0 when the target is given but no tolerance is).
 //       Fails if expectExists and none is found, or any check fails.
+//       trackPath (M1b): when given, resolves the STrack at that path
+//       (same addressing as feel-flow-analyze target="track") and, when
+//       stale is also given (0 or 1, -1 = don't check), asserts
+//       STrack::feelFlowStale() equals it. Independent of the QAF glob
+//       above — a track's staleness is a property of the HOLDER, not of any
+//       file on disk.
 //
 // All are transient/test-support actions: not undoable themselves.
 
@@ -163,6 +184,11 @@ public:
 
 private:
     QList<int> clipPath_;
+    // Proposal 40 M1b: "clip" (default) or "track". target="track" reads
+    // trackPath_ instead of clipPath_ and bounces STrack::startFeelFlowBounce()
+    // rather than resolving a clip's SPlainWave.
+    QString    target_ = QStringLiteral("clip");
+    QString    trackPath_;
 };
 
 // ------------------------------------------------------ assert-groove-aspect
@@ -184,6 +210,10 @@ private:
     bool    hasDeltaMu_ = false;
     double  deltaMuHighLowMs_ = 0.0;
     double  deltaMuTolMs_ = 0.0;
+    // Proposal 40 M1b: optional track-staleness check, independent of the
+    // QAF glob above.
+    QString trackPath_;             // empty = don't check staleness
+    int     stale_ = -1;            // -1 = don't check, else 0/1
 };
 
 #endif // SSIDECARTESTACTIONS_H

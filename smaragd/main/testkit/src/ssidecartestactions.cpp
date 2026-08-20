@@ -8,6 +8,8 @@
 #include "app/model/sobjectpath.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
+#include "app/objects/track/strack.h"
+#include "app/objects/track/strackpath.h"
 
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/sidecar/twsidecarstore.h"
@@ -27,6 +29,36 @@
 #include <vector>
 
 using namespace strackpath;
+
+namespace {
+
+// Proposal 40 M1b: same track addressing (index-path from the root mixer)
+// spluginuitestactions.cpp's own trackAtPath uses, kept as a small local
+// duplicate rather than a shared refactor — the same call this file already
+// makes twice below for two different reasons (starting a bounce, asserting
+// staleness).
+STrack *feelFlowTrackAt( SProject *project, const QString &trackPath )
+{
+    SObject *root = splacements::rootContainer( project );
+    SObject *lane = splacements::laneAt( root, stringToPath( trackPath ) );
+    return dynamic_cast<STrack *>( lane );
+}
+
+// Recursive tree walk for wait-analysis's M1b extension: true if ANY track
+// under `node` (node itself included when it is a track) is still bouncing.
+bool anyTrackBouncing( SObject *node )
+{
+    if( !node ) return false;
+    if( STrack *t = dynamic_cast<STrack *>( node ) ) {
+        if( t->isFeelFlowBouncing() ) return true;
+    }
+    for( SLink *lk : node->childLinks() ) {
+        if( anyTrackBouncing( &lk->getSObject() ) ) return true;
+    }
+    return false;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------- sidecar-root
 
@@ -93,6 +125,13 @@ SApplyResult SWaitAnalysisAction::apply(SProject *project)
                     break;
                 }
             }
+        }
+        if (!pending) {
+            // Proposal 40 M1b: a track bounce runs on ITS OWN thread, not a
+            // queued revalidator job, so jobsQueued()==0 above does not mean
+            // "no bounce in flight" — only that no ANALYSIS job is queued
+            // yet (the bounce schedules one only on completion).
+            pending = anyTrackBouncing(splacements::rootContainer(project));
         }
 
         if (!pending) {
@@ -369,8 +408,26 @@ static const bool s_reg_assert_warp_anchor = (
 
 SApplyResult SFeelFlowAnalyzeAction::apply(SProject *project)
 {
-    if (!project || clipPath_.isEmpty()) {
-        qWarning() << "feel-flow-analyze: no project or empty clip path";
+    if (!project) {
+        qWarning() << "feel-flow-analyze: no project";
+        return {false, nullptr};
+    }
+
+    if (target_ == QStringLiteral("track")) {
+        STrack *track = feelFlowTrackAt(project, trackPath_);
+        if (!track) {
+            qWarning() << "feel-flow-analyze: no track at path" << trackPath_;
+            return {false, nullptr};
+        }
+        track->startFeelFlowBounce();
+        qDebug() << "feel-flow-analyze: track" << trackPath_ << "bounce scheduled";
+        // Non-undoable: scheduling a background bounce+analysis is not an
+        // edit to the arrangement (mirrors the clip-target path below).
+        return {true, nullptr};
+    }
+
+    if (clipPath_.isEmpty()) {
+        qWarning() << "feel-flow-analyze: empty clip path";
         return {false, nullptr};
     }
 
@@ -404,11 +461,23 @@ SApplyResult SFeelFlowAnalyzeAction::apply(SProject *project)
 
 void SFeelFlowAnalyzeAction::writeXml(QDomElement &elem) const
 {
+    if (target_ == QStringLiteral("track")) {
+        elem.setAttribute("target", "track");
+        elem.setAttribute("trackPath", trackPath_);
+        return;
+    }
+    // target="clip" is the implicit default (never written) so every
+    // existing case and golden round-trips byte-unchanged.
     elem.setAttribute("clip", pathToString(clipPath_));
 }
 
 bool SFeelFlowAnalyzeAction::readXml(const QDomElement &elem, int /*version*/)
 {
+    target_ = elem.attribute("target", "clip");
+    if (target_ == QStringLiteral("track")) {
+        trackPath_ = elem.attribute("trackPath");
+        return true;
+    }
     clipPath_ = stringToPath(elem.attribute("clip"));
     return true;
 }
@@ -475,11 +544,34 @@ void lowHighRegions(const twGrooveResidualReport &r, int &lowOut, int &highOut)
 
 } // namespace
 
-SApplyResult SAssertGrooveAspectAction::apply(SProject * /*project*/)
+SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
 {
     if (aspect_.isEmpty()) {
         qWarning() << "assert-groove-aspect: missing aspect";
         return {false, nullptr};
+    }
+
+    // Proposal 40 M1b: a track's staleness is a property of the HOLDER, not
+    // of any file on disk — checked independently of the QAF glob below.
+    if (!trackPath_.isEmpty() && stale_ >= 0) {
+        if (!project) {
+            qWarning() << "assert-groove-aspect: no project (trackPath given)";
+            return {false, nullptr};
+        }
+        STrack *track = feelFlowTrackAt(project, trackPath_);
+        if (!track) {
+            qWarning() << "assert-groove-aspect: no track at path" << trackPath_;
+            return {false, nullptr};
+        }
+        const bool isStale = track->feelFlowStale();
+        const bool wantStale = (stale_ != 0);
+        if (isStale != wantStale) {
+            qWarning() << "assert-groove-aspect: track" << trackPath_
+                       << "feelFlowStale()=" << isStale << "expected" << wantStale;
+            return {false, nullptr};
+        }
+        qDebug() << "assert-groove-aspect: track" << trackPath_
+                 << "feelFlowStale()=" << isStale << "OK";
     }
 
     SApplication &app = SApplication::app();
@@ -631,6 +723,12 @@ void SAssertGrooveAspectAction::writeXml(QDomElement &elem) const
         elem.setAttribute("deltaMuHighLowMs", QString::number(deltaMuHighLowMs_));
         elem.setAttribute("deltaMuTolMs", QString::number(deltaMuTolMs_));
     }
+    // Proposal 40 M1b: written only when used, so every M1-era case and
+    // golden round-trips byte-unchanged.
+    if (!trackPath_.isEmpty()) {
+        elem.setAttribute("trackPath", trackPath_);
+        elem.setAttribute("stale", QString::number(stale_));
+    }
 }
 
 bool SAssertGrooveAspectAction::readXml(const QDomElement &elem, int /*version*/)
@@ -642,6 +740,8 @@ bool SAssertGrooveAspectAction::readXml(const QDomElement &elem, int /*version*/
     hasDeltaMu_ = elem.hasAttribute("deltaMuHighLowMs");
     deltaMuHighLowMs_ = elem.attribute("deltaMuHighLowMs", "0").toDouble();
     deltaMuTolMs_ = elem.attribute("deltaMuTolMs", "0").toDouble();
+    trackPath_ = elem.attribute("trackPath", "");
+    stale_ = elem.attribute("stale", "-1").toInt();
     return true;
 }
 

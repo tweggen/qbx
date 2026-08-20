@@ -410,7 +410,7 @@ endif()
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
 foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
-              render_while_armed)
+              render_while_armed feel_flow_bounce_while_monitoring)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE

@@ -688,6 +688,26 @@ never retroactively.
      (RUN_SERIAL, capture backend: monitor stays up, zero
      `liveOwnedRefusals`, no device reopen) — plus layering/logging,
      targeted ctest, count reconciliation.
+
+  **M1 + M1b EXECUTED 2026-08-20.** All ACs green. M1 measured: Δμ
+  through the full aspect path = 17.0536 ms (matches §11.2's M0 value),
+  1622 res / 635 ev records over `a_offset15`, params-hash sensitivity
+  and version-orphan gated in `sidecar_test` §7. M1b measured: bounce vs
+  plain render **byte-identical (3,113,852 bytes)**; staleness all four
+  transitions; a bounce fired mid-monitoring completed in **18 ms** with
+  monitored RMS steady (0.115478 vs 0.115470 target), zero refusals, one
+  never-reopened capture; residency bounded (25 pages after bounce 1,
+  +6 not +12 after bounce 2). Engine shape: `RenderSession::
+  setPruneScope()` — empty keeps the export path byte-unchanged, so the
+  bounce IS the render loop with per-chain pruning. Two finds paid for
+  by measurement: the AC's "four chain components" missed a FIFTH cache
+  (`twPluginChain` forwards to its last insert — every slot's insert is
+  now in the prune scope), and **per-clip reader components are not
+  pruned** — harmless on the fixtures, unbounded over a multi-minute
+  track; documented in `sfeelflowbounce.h`, an M2-adjacent follow-up.
+  One declared layering edge: `objects/track` → `render`/`sidecar`/
+  `sources`, documented in `check_layering.py`. Suite: **256 registered
+  = 253 run (all green) + 3 disabled**.
 - **M2 — heatmap overlay + UI cache + pixel gate.** `qxa.groove_heatmap`
   via `assert-lane-overlay`'s discipline (the overlay colour relation), plus
   an `assert-groove` verb reading `describe()` numbers off the aspect.

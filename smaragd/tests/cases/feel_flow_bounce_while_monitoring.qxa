@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M1b, AC 3/7. A track bounce runs on ITS OWN
+  background thread, demanding pages through the SAME CaptureRevalidator a
+  monitoring session's readahead already shares, and touches nothing on the
+  live-monitoring path (SLiveMonitor, the live plan, the device) at all.
+  Starting one mid-session must not glitch, gap or reopen the monitored
+  input.
+
+  This case runs with SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav
+  and SMARAGD_CAPTURE_SPEED=1 (set on the CTest entry, mirroring
+  monitor_through_chain.qxa's own env). Track 0 is armed and monitored
+  through one gain insert for the WHOLE case — a single, uninterrupted device
+  session — while track 1 (never armed, never part of the live closure) is
+  bounced+analyzed in the middle of it.
+
+  THE CLOSED FORM (identical to monitor_through_chain.qxa): test_autosaw.wav
+  is a 480 Hz sawtooth of amplitude 0.4, period exactly 100 frames, RMS
+  0.4/sqrt(3) = 0.230940 with no window-length error. Through
+  tw.test.clap.gain at 0.5 that is 0.115470; the +-3% band is
+  [0.11201, 0.11893].
+
+  WHAT "NO DEVICE REOPEN" MEANS HERE: dump-playback-capture dumps the ONE
+  cumulative recording since device start (proposal 21 testkit rule 1 —
+  a reopen CLEARS it). Asserting the SAME RMS band on an EARLY window (safely
+  before the bounce is even started) and a LATE one (safely after
+  wait-analysis reports it complete) inside a SINGLE dump, taken from a
+  session that was never re-armed in between, is the empirical signal: a
+  reopen would either reset frame 0 (breaking the early window's math against
+  what dump-playback-capture reports) or interrupt the input in a way an RMS
+  window would show. No dedicated device-open-count verb exists in this repo
+  (checked before writing this case), so this is the strongest signal
+  available, not a direct counter assertion.
+-->
+<SActionScript version="1" name="feel_flow_bounce_while_monitoring">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: the armed/monitored one, one gain insert (as
+         monitor_through_chain.qxa's PHASE A). -->
+    <add-track index="-1"/>
+    <!-- Track 1: never armed — the bounce target. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.5"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+
+    <sidecar-root/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="2100"/>
+
+    <!-- Fire the bounce+analyze of TRACK 1 mid-session; wait-analysis
+         drains both halves (the render thread AND the scheduled groove-
+         analysis job) while monitoring keeps running on its own threads. -->
+    <feel-flow-analyze target="track" trackPath="1"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- Keep monitoring going comfortably past the bounce's completion. -->
+    <wait-ms ms="2000"/>
+
+    <dump-playback-capture filename="mon_bounce.wav" minFrames="180000"/>
+
+    <!-- EARLY window: entirely inside the priming wait, well before the
+         bounce could plausibly have started. -->
+    <assert-audio-energy filename="mon_bounce.wav" startFrame="48000" frameCount="24000"
+                         channel="0" minRms="0.11201" maxRms="0.11893"/>
+    <!-- LATE window: after wait-analysis reported the bounce complete AND a
+         further 2 s of monitoring. -->
+    <assert-audio-energy filename="mon_bounce.wav" startFrame="168000" frameCount="24000"
+                         channel="0" minRms="0.11201" maxRms="0.11893"/>
+
+    <!-- The bounce genuinely ran and produced a fresh result. -->
+    <assert-groove-aspect aspect="groove.res" trackPath="1" stale="0"
+                          expectExists="true" minRecords="1500" maxRecords="1650"/>
+
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- AC7: nobody rendered where they were not allowed to, and the
+         live-owned exclusion was never disturbed by the bounce. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

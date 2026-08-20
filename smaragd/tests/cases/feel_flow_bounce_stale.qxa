@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M1b, AC 4/5. Staleness is the
+  SCut::contentEpochForCapture_ pattern verbatim: the track root's content
+  epoch is snapshotted at the START of the bounce, and STrack::feelFlowStale()
+  is a plain READ comparing it against the CURRENT epoch — nothing bumps one.
+  A stale result must never be silently served as fresh.
+
+  Sequence: bounce+analyze -> fresh -> insert a plugin on the track (an edit
+  to its chain, which bumps the root component's content epoch) -> stale ->
+  re-bounce+analyze -> fresh again. The fixture (../groove/a_offset15.wav) is
+  the same M1 one feel_flow_analyze.qxa and feel_flow_bounce_parity.qxa use,
+  and is already MULTI-PAGE (~778452 frames / 65536-frame page = ~12 pages).
+
+  Doubles as AC 5's residency gate: report-page-memory (proposal 36's own
+  verb, GLOBAL process-wide counters) brackets both bounces. Bounded means
+  "does not keep growing bounce over bounce" — the same reading B9 used for
+  the render loop's own prune. The SECOND bounce runs with a plugin now in
+  the chain (the insert-plugin below), which is what measured the fifth
+  cache report-page-memory itself found: a twPluginChain forwards its cache
+  to its LAST INSERT rather than holding pages itself, so an inserted
+  plugin's own twPluginInsert is a per-track cache the sfeelflowbounce.h
+  doc's original four-component enumeration missed — now in the prune scope
+  too (sfeelflowbounce.cpp). What this does NOT cover, measured and left as
+  a documented gap: a per-clip READER component's pages (twSampleReader) are
+  not reachable from STrack the way the chain components are, so a bounce
+  never prunes them — harmless over this ~12-page fixture (its whole page
+  set stays resident for the run), unbounded over a much longer track.
+-->
+<SActionScript version="1" name="feel_flow_bounce_stale">
+
+  <setup project="new"/>
+
+  <actions>
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <!-- Never bounced yet: feelFlowStale() must be TRUE (no bounce ever
+         completed is the safe answer, per STrack::feelFlowStale()'s doc). -->
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="1"
+                          expectExists="false"/>
+
+    <report-page-memory label="baseline"/>
+
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- Fresh: the bounce that just completed matches the current chain. -->
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="0"
+                          expectExists="true" minRecords="1500" maxRecords="1650"/>
+
+    <!-- AC 5: bounded after ONE bounce of a multi-page track. -->
+    <report-page-memory label="after_bounce_1" maxPages="500"/>
+
+    <!-- Edit the track's chain: an insert bumps the root component's
+         content epoch, whether or not the plugin's default settings would
+         change one audible sample. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- Stale: the chain moved since the bounce started. The sidecar file
+         from before is still on disk (never deleted by an edit) and must
+         NEVER be silently served as fresh. -->
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="1"
+                          expectExists="true"/>
+
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- Fresh again, over the POST-insert chain. -->
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="0"
+                          expectExists="true" minRecords="1500" maxRecords="1650"/>
+
+    <!-- AC 5: bounded after a SECOND bounce too — same bound as after the
+         first, which is what "does not keep growing" means here. -->
+    <report-page-memory label="after_bounce_2" maxPages="500"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

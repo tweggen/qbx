@@ -54,6 +54,19 @@ public:
     void setRoot( const std::string &utf8Path );
     bool enabled() const;
 
+    // The configured root (empty when disabled). Proposal 40 M1b: the
+    // track-bounce holder places its own machine-local derived WAVs BESIDE
+    // this root (a sibling "bounce" directory, never inside it — the bounce
+    // files are not QAF sidecars), so it needs to read the same
+    // relocate/off knob this store already resolved rather than re-deriving
+    // it from the environment a second time. Callers must still check
+    // enabled() first: an empty path here means "disabled", not "root is
+    // literally empty".
+    std::filesystem::path rootPath() const {
+        std::lock_guard<std::mutex> lock( mutex_ );
+        return root_;
+    }
+
     void     setSizeCapBytes( uint64_t cap ); // default 2 GiB
     uint64_t sizeCapBytes() const;
 
