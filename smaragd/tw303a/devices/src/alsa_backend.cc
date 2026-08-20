@@ -4,6 +4,7 @@
 #include "tw/core/twsyslog.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <string>
@@ -118,16 +119,50 @@ std::vector<AudioDeviceInfo> ALSABackend::enumerateDevices() const
     // Always offer the system default first.
     devices.push_back({ "default", "System default" });
 
+    // A "card" is not a single PCM device -- 'hw:<card>' alone means
+    // 'hw:<card>,0', which is a real device on some cards and a dead end on
+    // others (an HDA card's HDMI outputs are commonly device 3 / device 7,
+    // never 0; opening 'hw:1' on such a card fails with ENOENT). Walk each
+    // card's own device list, exactly as `aplay -l` does, and filter to the
+    // ones that actually offer a PLAYBACK substream.
     int card = -1;
     while (snd_card_next(&card) == 0 && card >= 0) {
         char *cardName = nullptr;
-        if (snd_card_get_name(card, &cardName) == 0 && cardName) {
-            AudioDeviceInfo d;
-            d.id   = "hw:" + std::to_string(card);
-            d.name = cardName;
-            devices.push_back(d);
+        if (snd_card_get_name(card, &cardName) != 0 || !cardName) continue;
+
+        const std::string ctlName = "hw:" + std::to_string(card);
+        snd_ctl_t *ctl = nullptr;
+        if (snd_ctl_open(&ctl, ctlName.c_str(), 0) < 0) {
+            syslog(LOG_WARNING,
+                   "ALSABackend::enumerateDevices: snd_ctl_open(%s) failed, skipping card",
+                   ctlName.c_str());
             free(cardName);
+            continue;
         }
+
+        int device = -1;
+        while (snd_ctl_pcm_next_device(ctl, &device) == 0 && device >= 0) {
+            snd_pcm_info_t *info;
+            snd_pcm_info_alloca(&info);
+            snd_pcm_info_set_device(info, device);
+            snd_pcm_info_set_subdevice(info, 0);
+            snd_pcm_info_set_stream(info, SND_PCM_STREAM_PLAYBACK);
+            // No playback substream at this device index (e.g. a
+            // capture-only device) -- not selectable as an output, skip it.
+            if (snd_ctl_pcm_info(ctl, info) < 0) continue;
+
+            AudioDeviceInfo d;
+            d.id = "hw:" + std::to_string(card) + "," + std::to_string(device);
+            d.name = cardName;
+            const char *pcmName = snd_pcm_info_get_name(info);
+            if (pcmName && *pcmName) {
+                d.name += ", ";
+                d.name += pcmName;
+            }
+            devices.push_back(d);
+        }
+        snd_ctl_close(ctl);
+        free(cardName);
     }
     return devices;
 }
@@ -143,38 +178,33 @@ int ALSABackend::startOutput()
         return rc;
     }
 
-    // Pre-fill two periods so the ring buffer has data before we start.
-    writeChunk_(2 * config_.periodFrames);
-
-    rc = snd_async_add_pcm_handler(&asyncHandle_, pcm_,
-                                   &ALSABackend::asyncCallbackStatic_, this);
-    if (rc < 0) {
-        syslog(LOG_ERR, "ALSABackend::startOutput: snd_async_add_pcm_handler: %s",
-               snd_strerror(rc));
-        return rc;
-    }
-
-    rc = snd_pcm_start(pcm_);
-    if (rc < 0) {
-        syslog(LOG_ERR, "ALSABackend::startOutput: snd_pcm_start: %s",
-               snd_strerror(rc));
-        snd_async_del_handler(asyncHandle_);
-        asyncHandle_ = nullptr;
-        return rc;
-    }
-
+    // No explicit snd_pcm_start(): writing enough frames to reach the
+    // device's start_threshold (default == buffer size for a playback
+    // stream) starts it automatically, which is what ioThreadFunc_'s first
+    // few writes do. That sidesteps a real ordering hazard the old prefill-
+    // then-explicit-start sequence had -- see the ioThreadFunc_ comment.
+    stopRequested_.store(false, std::memory_order_relaxed);
     running_ = true;
+    ioThread_ = std::thread(&ALSABackend::ioThreadFunc_, this);
     return 0;
 }
 
 int ALSABackend::stopOutput()
 {
     if (!running_) return 0;
-    if (pcm_)         snd_pcm_drop(pcm_);
-    if (asyncHandle_) {
-        snd_async_del_handler(asyncHandle_);
-        asyncHandle_ = nullptr;
-    }
+
+    // Signal and join FIRST, so pcm_ is touched by exactly one thread at a
+    // time -- the ALSA handle has no internal locking of its own, and
+    // snd_pcm_drop() from the caller's thread while ioThreadFunc_ might still
+    // be inside snd_pcm_writei() on the SAME handle is a real data race, not
+    // a documented "safe to interrupt from another thread" pattern (that
+    // pattern relies on the caller itself being the one blocked, e.g. from a
+    // signal handler on its own stack). ioThreadFunc_ writes in small
+    // (period-sized) chunks and checks stopRequested_ between them, so the
+    // join is bounded by roughly one chunk's worth of blocking time.
+    stopRequested_.store(true, std::memory_order_relaxed);
+    if (ioThread_.joinable()) ioThread_.join();
+    if (pcm_) snd_pcm_drop(pcm_);
     running_ = false;
     return 0;
 }
@@ -231,75 +261,90 @@ int ALSABackend::setBufferSize(uint32_t frameCount)
     return 0;
 }
 
-void ALSABackend::asyncCallbackStatic_(snd_async_handler_t *handler)
+// A stock desktop's "default" ALSA PCM does not name a hardware device at
+// all -- on Ubuntu it resolves through pipewire-alsa's (or, before that,
+// pulseaudio's) userspace PCM plugin, so the actual mixing/routing is owned
+// by the session's sound server rather than the kernel driver. That plugin
+// implements ordinary blocking/non-blocking I/O but NOT the RT-signal async
+// notification snd_async_add_pcm_handler() needs: opening 'default' and
+// calling it returned -ENOSYS ("Function not implemented") every time,
+// so no audio was ever produced on a stock install, only on a raw hw:N
+// device where a real kernel driver backs the signal.
+//
+// The fix is to not need RT signals at all: a small dedicated thread that
+// blocks in snd_pcm_writei() is the standard, portable way to drive ALSA
+// (it's what aplay(1) itself does), and it works identically over hw:,
+// dmix, and the pipewire/pulse plugin.
+//
+// It also closes a second, independent bug this design's callback shape
+// invited: pullSamples_() must request EXACTLY the number of frames about
+// to be written to the device, never more. The render callback's `frames`
+// argument is a CONSUME count -- the engine's playhead advances by exactly
+// that many frames per call (twSpeaker::renderCallbackBody /
+// AudioEngine::pullBlock) -- so a backend that pulls a full buffer's worth
+// but only ever writes a smaller "available space" chunk of it (the old
+// asyncCallback_ / avail_update shape) throws away already-consumed frames
+// and skips the timeline forward on every single write. Chunking pull and
+// write together, one-for-one, is what avoids that.
+void ALSABackend::ioThreadFunc_()
 {
-    auto *self = static_cast<ALSABackend *>(
-        snd_async_handler_get_callback_private(handler));
-    if (self) self->asyncCallback_();
-}
+    const std::size_t chunk = std::max<std::size_t>(
+        1, std::min<std::size_t>(config_.periodFrames, config_.bufferFrames));
 
-void ALSABackend::asyncCallback_()
-{
-    snd_pcm_sframes_t avail = snd_pcm_avail_update(pcm_);
-    if (avail < 0) {
-        if (avail == -EPIPE) {
-            syslog(LOG_WARNING, "ALSABackend: xrun, recovering");
-            snd_pcm_prepare(pcm_);
-        }
-        return;
+    while (!stopRequested_.load(std::memory_order_relaxed)) {
+        pullSamples_(chunk);
+        writeChunk_(chunk);
     }
-    writeChunk_(static_cast<snd_pcm_uframes_t>(avail));
 }
 
-std::size_t ALSABackend::pullSamples_()
+std::size_t ALSABackend::pullSamples_(std::size_t framesWanted)
 {
     if (!callback_) {
-        std::fill(floatBuffer_.begin(), floatBuffer_.end(), 0.0f);
-        return config_.bufferFrames;
+        std::fill_n(floatBuffer_.begin(), framesWanted * config_.channels, 0.0f);
+        return framesWanted;
     }
     std::size_t framesProduced =
-        callback_(floatBuffer_.data(), config_.bufferFrames, config_.channels);
-    if (framesProduced < config_.bufferFrames) {
+        callback_(floatBuffer_.data(), framesWanted, config_.channels);
+    if (framesProduced < framesWanted) {
         std::fill(floatBuffer_.begin() + framesProduced * config_.channels,
-                  floatBuffer_.end(), 0.0f);
+                  floatBuffer_.begin() + framesWanted * config_.channels, 0.0f);
     }
-    return config_.bufferFrames;
+    return framesWanted;
 }
 
-void ALSABackend::writeChunk_(snd_pcm_uframes_t chunkSize)
+void ALSABackend::writeChunk_(std::size_t frameCount)
 {
-    if (!pcm_ || chunkSize == 0) return;
+    if (!pcm_ || frameCount == 0) return;
 
-    snd_pcm_uframes_t remaining = chunkSize;
-    while (remaining > 0) {
-        snd_pcm_uframes_t framesNow = std::min<snd_pcm_uframes_t>(
-            remaining, config_.bufferFrames);
+    // Interleaved N-channel float -> S16_LE, via the shared converter.
+    twFormat srcFmt;
+    srcFmt.sampleType = twSampleType::Float32;
+    srcFmt.channels   = static_cast<std::uint16_t>(config_.channels);
+    twFormat dstFmt = srcFmt;
+    dstFmt.sampleType = twSampleType::Int16;
+    twConvertFrames(srcFmt, floatBuffer_.data(), dstFmt, shortBuffer_.data(),
+                    static_cast<length_t>(frameCount));
 
-        pullSamples_();
-        // Interleaved N-channel float → S16_LE, via the shared converter
-        // (replaces the former hand-rolled clip loop).
-        twFormat srcFmt;
-        srcFmt.sampleType = twSampleType::Float32;
-        srcFmt.channels   = static_cast<std::uint16_t>(config_.channels);
-        twFormat dstFmt = srcFmt;
-        dstFmt.sampleType = twSampleType::Int16;
-        twConvertFrames(srcFmt, floatBuffer_.data(), dstFmt, shortBuffer_.data(),
-                        static_cast<length_t>(framesNow));
+    std::size_t offset = 0;
+    while (offset < frameCount) {
+        if (stopRequested_.load(std::memory_order_relaxed)) return;
 
-        snd_pcm_sframes_t written =
-            snd_pcm_writei(pcm_, shortBuffer_.data(), framesNow);
+        snd_pcm_sframes_t written = snd_pcm_writei(
+            pcm_, shortBuffer_.data() + offset * config_.channels,
+            frameCount - offset);
         if (written < 0) {
             if (written == -EPIPE) {
-                syslog(LOG_WARNING, "ALSABackend: write xrun, recovering");
+                syslog(LOG_WARNING, "ALSABackend: xrun, recovering");
                 snd_pcm_prepare(pcm_);
                 continue;
             }
+            if (written == -EAGAIN) continue;
             syslog(LOG_ERR, "ALSABackend::writeChunk_: snd_pcm_writei: %s",
                    snd_strerror(static_cast<int>(written)));
             return;
         }
         if (written == 0) return;
-        remaining -= static_cast<snd_pcm_uframes_t>(written);
+        offset += static_cast<std::size_t>(written);
     }
 }
 
