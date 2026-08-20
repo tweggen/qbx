@@ -50,7 +50,7 @@ bool SToggleSelectionAction::readXml(const QDomElement &elem, int /*version*/)
 
     const QStringList pathStrs = pathsStr.split("|", Qt::SkipEmptyParts);
     for (const QString &ps : pathStrs) {
-        paths_ << strackpath::stringToPath(ps);
+        paths_ << strackpath::parseInto( pathRoot_, ps );
     }
     return true;
 }

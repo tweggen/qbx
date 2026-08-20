@@ -44,7 +44,7 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     }
 
     // Parse the track path (format: "/mixer/N" where N is track index)
-    auto path = strackpath::stringToPath(trackPath_);
+    auto path = strackpath::parseInto( pathRoot_, trackPath_ );
     SObject *root = project->getRootComponent();
     SObject *trackObj = strackpath::resolveByPath(root, path);
     STrack *track = dynamic_cast<STrack*>(trackObj);

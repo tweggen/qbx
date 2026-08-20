@@ -15,9 +15,13 @@ using namespace strackpath;
 SApplyResult SAssertClipWindowAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
+    // PARSE FIRST: parseInto() is what SETS pathRoot_ from a qualified
+    // text path, so resolving the root before it runs reads an empty
+    // root and silently addresses the MASTER.
+    const QList<int> idx_ = parseInto( pathRoot_, clip_ );
     SObject *mixer = splacements::rootNamed( project, pathRoot_ );
-    SLink *link = mixer ? splacements::placementAt( mixer, stringToPath( clip_ ) )
-                        : nullptr;
+    SLink *link = mixer ? splacements::placementAt( mixer, idx_ )
+    : nullptr;
     if( !link ) {
         qWarning() << "assert-clip-window: no clip at" << clip_;
         return { false, nullptr };
