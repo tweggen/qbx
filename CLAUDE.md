@@ -1820,7 +1820,7 @@ Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
 `plugin_remove_restores_param`, `plugin_ui_strip_and_editor`,
 `plugin_native_editor`, `render_sawtooth_with_effects`.
 
-### Native plugin editors (proposal 33 — M0..M6 executed; CLAP landed 2026-08-20)
+### Native plugin editors (proposal 33 — M0..M6 + D2 executed; CLAP and persistence landed 2026-08-20)
 
 A **VST3 or CLAP** plugin's own GUI opens in `SPluginNativeEditor`, a top-level
 window owned by a module-level registry keyed by slot (never by the FX strip,
@@ -1845,18 +1845,24 @@ FLOW.
 | The out-event capture is gated on `liveEditors_` | With no window open, not one instruction of it runs on the render path — which is what keeps every golden unchanged. |
 | **D1's floating rung is a real outcome, CLAP only** | If `attach()` refuses and `caps().floating`, the plugin owns its own top-level window and our `QDialog` is never shown — it stays alive as the poll pump and the registry entry. The transient parent is the APPLICATION window; an invisible one keeps nothing above anything. |
 | The window is gated headlessly **only because the fixture has no window** | `tw.test.clap.gui` + `openFor( …, showWindow = false )`. A qxa run uses the REAL platform plugin (the suite does not set `QT_QPA_PLATFORM=offscreen`), so a shown dialog would land on the developer's desktop mid-suite. |
+| **D2 persistence splits by what actually travels** | WHETHER the editor was open goes in the PROJECT (`<SPluginSlot editorOpen='true'>`, written only when true so no existing file or golden moved); WHERE the window was goes in `SSettings` keyed `<format>:<uid>`, because monitor layout is machine-local. Same split, same reason, as proposal 37 P7's portable `midiOutPort` NAME against `midi/portId/<name>`. Neither is an action: opening a window is not an edit to the arrangement. |
+| A restored geometry is **clamped onto a live `QScreen`**, and the SIZE is restored only when `caps().resizable` | Unplug the second monitor and a blindly restored window comes back at x=2400 — off screen, unreachable, and on Windows not even reported. And a fixed-size editor has exactly one correct size (the one it reported at attach); forcing a remembered one on it clips its own drawing silently. `clampOntoAScreen()` is a public static precisely so it can be gated. |
+| `restoreOpenEditors()` is a **no-op in a `--test-case` run**, and is called from the END of `SMainWindow::openProject()` | Same desktop-pollution reason as the row above. That call site is the one place that happens once per load with every dock already built, which is why `shell -> pluginui` is a DECLARED edge in `check_layering.py` — it shortens the existing `shell -> timeline -> pluginui -> shell` cycle rather than adding a new class of problem. |
 
-Gates: `plugins_test`'s editor section (28 checks, both delivery routes) and
+Gates: `plugins_test`'s editor section (28 checks, both delivery routes),
 `qxa.plugin_native_editor` (the "native" fallback answer, the plugin's own knob
 reaching the render at exactly 2.5x, ONE undo entry that restores the level, and
-the window closing before teardown), plus `qxa.plugin_ui_strip_and_editor` for
-the other two fallback answers. **NOT gated:** whether a real plugin's GUI draws
-inside our container (hand-verified: Dexed, NassauEQ, Mangrove on Win11);
-keyboard and focus routing; host-driven resize (every installed VST3 reports
-`canResize=no`); DPI on a scaled monitor; **D2 persistence, which the requester
-asked for and is not implemented**; AudioUnit (M7) and Linux/X11 (M8 — VST3
-there needs `IRunLoop`; CLAP does not, so `caps().needsRunLoop` is false in that
-backend on every platform).
+the window closing before teardown), `qxa.plugin_editor_persistence` (D2's
+project half, including the suppressed post-load restore),
+`plugin_editor_geometry_test` (D2's off-screen clamp) and
+`qxa.plugin_ui_strip_and_editor` for the other two fallback answers.
+**NOT gated:** whether a real plugin's GUI draws inside our container
+(hand-verified: Dexed, NassauEQ, Mangrove on Win11); keyboard and focus routing;
+host-driven resize (every installed VST3 reports `canResize=no`); DPI on a
+scaled monitor; a real restore putting a real window back where it was (the
+headless case opens with `showWindow = false`, so nothing is ever mapped);
+AudioUnit (M7) and Linux/X11 (M8 — VST3 there needs `IRunLoop`; CLAP does not,
+so `caps().needsRunLoop` is false in that backend on every platform).
 
 **The mono-sink gap is CLOSED (proposal 36 B5).** It was recorded here for
 five milestones: the graph carried N channels but `RenderSession` and

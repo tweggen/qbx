@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_editor_persistence">
+
+  <!-- Proposal 33 D2 - a project saved with a plugin editor open opens with it
+       open again.
+
+       THE SPLIT IS THE DESIGN, and it is the same one proposal 37 P7 made for
+       MIDI ports:
+
+         WHETHER the editor was open  ->  the project (<SPluginSlot
+                                          editorOpen='true'>), because "this
+                                          project opens with the synth's editor
+                                          up" means the same thing on any
+                                          machine;
+         WHERE the window was         ->  SSettings, per user, keyed by plugin
+                                          uid, because monitor layout is
+                                          machine-local and a window restored
+                                          at x=2400 on a laptop is a window
+                                          nobody can reach.
+
+       This case gates the FIRST half. The second half is
+       plugin_editor_geometry_test, which pins the off-screen clamp - the part
+       that cannot be reproduced by hand without unplugging a monitor.
+
+       What is being gated:
+
+       1. The flag starts false, and OPENING the editor sets it. It is not an
+          action and leaves no undo entry: opening a window is not an edit to
+          the arrangement.
+
+       2. It SURVIVES a save and a load. `editorOpen` is written only when
+          true, which is what keeps every project file saved before D2 - and
+          both render goldens - byte-unchanged; the `editorOpen=0` assertions
+          below are therefore also asserting an ABSENT attribute.
+
+       3. CLOSING the editor clears it, so a project saved after the user
+          closed the window does not re-open it.
+
+       4. THE RESTORE WALK IS A NO-OP IN A TEST-CASE RUN, and step 6 drives the
+          real `SPluginNativeEditor::restoreOpenEditors()` to prove it. This is
+          not tidiness: a qxa run uses the REAL platform plugin (the suite does
+          not set QT_QPA_PLATFORM=offscreen), so an unguarded restore would put
+          plugin windows on the developer's desktop in the middle of a suite.
+
+       5. A headless run writes NO editor geometry into the shared smaragd.ini.
+          The window is opened with showWindow = false and so was never mapped;
+          storing its geometry would overwrite the developer's real remembered
+          position with a rectangle no user ever chose. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gui"
+                   name="Smaragd Test GUI" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- 1. Nothing is open, so nothing is flagged. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="editorOpen=0"/>
+
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="editorOpen=1"/>
+
+    <!-- 2. Save WHILE it is open, then take it down. -->
+    <save-project path="../../build/plugin_editor_persistence.qxp"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+
+    <!-- 3. ...and closing cleared the flag on the live model. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="editorOpen=0"/>
+
+    <load-project path="../../build/plugin_editor_persistence.qxp"/>
+
+    <!-- 2 (cont.) The saved project remembers it. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="0"
+                         contains="name=Smaragd Test GUI|state=Active"/>
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="editorOpen=1"/>
+
+    <!-- 4. The real post-load walk, and it must open NOTHING here. Remove the
+         isTestCaseMode() guard and this line fails with the editor open. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="restore" expectOpen="0"/>
+
+    <!-- ...and the flag is still what the file said: a suppressed restore must
+         not look like a user closing the window. -->
+    <assert-plugin-strip trackIndex="0" slotIndex="0" contains="editorOpen=1"/>
+
+    <!-- 5. Nothing of ours reached the user's INI. -->
+    <assert-settings-file absent="editorGeometry"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -1,3 +1,4 @@
+#include <QRect>
 #include "app/shell/ssettings.h"
 #include "app/servicesui/soptions.h"
 
@@ -100,6 +101,25 @@ void SSettings::setMidiPortId( const QString &portName, const QString &deviceId 
 {
     if( portName.isEmpty() ) return;
     setValue( "midi/portId/" + portName, deviceId );
+}
+
+QRect SSettings::pluginEditorGeometry( const QString &pluginKey ) const
+{
+    if( pluginKey.isEmpty() ) return QRect();
+    const QVariant v = value( "pluginui/editorGeometry/" + pluginKey );
+    if( !v.isValid() ) return QRect();
+    const QRect r = v.toRect();
+    // A stored rect with no extent is not a geometry, it is a corrupt key. Do
+    // not hand it on as one: the caller cannot tell it from "never stored" and
+    // would resize a window to nothing.
+    return ( r.width() > 0 && r.height() > 0 ) ? r : QRect();
+}
+
+void SSettings::setPluginEditorGeometry( const QString &pluginKey, const QRect &r )
+{
+    if( pluginKey.isEmpty() ) return;
+    if( r.width() <= 0 || r.height() <= 0 ) return;
+    setValue( "pluginui/editorGeometry/" + pluginKey, r );
 }
 
 QString SSettings::midiInputPortId( const QString &portName ) const

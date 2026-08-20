@@ -291,6 +291,9 @@ int SPluginSlot::readPreChildrenAttributes( QDomElement &element )
     if( element.hasAttribute( "bypassed" ) )
         bypass_ = element.attribute( "bypassed" ) == "true";
 
+    if( element.hasAttribute( "editorOpen" ) )
+        editorOpen_ = element.attribute( "editorOpen" ) == "true";
+
     // Read the opaque state chunk (base64 encoded in child <state> element)
     QDomElement stateElem = element.firstChildElement( "state" );
     if( !stateElem.isNull() ) {
@@ -334,6 +337,12 @@ int SPluginSlot::serializeSelfAttributes( QTextStream &o )
     o << " nIn='" << descriptor_.io.audioInputs << "'";
     o << " nOut='" << descriptor_.io.audioOutputs << "'";
     o << " isInstrument='" << (descriptor_.isInstrument ? "true" : "false") << "'";
+    // WRITTEN ONLY WHEN TRUE, which is what keeps every project file saved
+    // before proposal 33 D2 — and both render goldens — byte-unchanged. The
+    // same discipline SObject::serialize() already follows for automation
+    // lanes.
+    if( editorOpen_ )
+        o << " editorOpen='true'";
     return 0;
 }
 

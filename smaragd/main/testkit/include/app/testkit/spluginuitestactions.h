@@ -92,7 +92,11 @@ private:
 //   trackPath  = ""      index-path; empty = use trackIndex
 //   trackIndex = "0"
 //   slotIndex  = "0"
-//   action     = "open"  "open" | "close"
+//   action     = "open"  "open" | "close" | "assert" | "restore"
+//                        `assert` touches nothing and only checks expectOpen;
+//                        `restore` drives the D2 post-load walk, which is a
+//                        NO-OP under --test-case, so `expectOpen="0"` after it
+//                        is what asserts that guard held.
 //   expectOpen = "1"     what isOpenFor() must say afterwards
 class SPluginNativeEditorAction : public SAction {
 public:

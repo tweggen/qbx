@@ -15248,3 +15248,98 @@ assertion); **D2 persistence, which the requester asked for and is still not
 implemented**; AudioUnit (M7); and Linux/X11 (M8 — VST3 there needs `IRunLoop`,
 CLAP does not, so `caps().needsRunLoop` is false in the CLAP backend on every
 platform).
+
+---
+
+## 2026-08-20 — Proposal 33 D2: the editor's open state and its geometry persist
+
+The last of the three decisions the requester made on 2026-08-19 that was still
+unimplemented. Branch `feat/33-d2-editor-persistence`, off `main` at 86e2f20
+(PR #100).
+
+### What was built, and the split that is the design
+
+| What | Where | Why |
+|---|---|---|
+| WHETHER the editor was open | the PROJECT, `<SPluginSlot editorOpen='true'>` | "this project opens with the synth's editor up" means the same thing on any machine |
+| WHERE the window was | `SSettings`, per user, keyed `<format>:<uid>` | monitor layout is machine-local; a window at x=2400 restored on a laptop is a window nobody can reach |
+
+The same split, and the same reason, as proposal 37 P7's portable `midiOutPort`
+NAME against the machine-local `midi/portId/<name>`. `editorOpen` is written
+ONLY when true, so every project file saved before today — and both render
+goldens — are byte-unchanged. Neither half is an action: opening a window is not
+an edit to the arrangement, and an undo stack that has to be walked past a
+window-open entry to reach a real edit is worse than a flag that is not
+undoable.
+
+### The claim in D2 that was wrong
+
+D2 says *"Every qxa case runs under `QT_QPA_PLATFORM=offscreen`"*. **It does
+not** — only the C++ ctest entries set that; the qxa entries run against the
+real platform plugin. The suppression rule D2 asks for is still right, and the
+real reason is stronger than the one it gives: an unguarded restore would put
+REAL PLUGIN WINDOWS on the developer's desktop in the middle of a suite run,
+rather than merely creating a window in a headless process.
+
+### Two decisions inside the geometry half
+
+* **Keyed by PLUGIN, not by slot.** One remembered window size per plugin,
+  wherever it is inserted. A user who has sized Dexed to suit their screen means
+  it for Dexed; per-slot geometry would also have to answer what happens when
+  the slot is removed and re-added.
+* **The POSITION is always restored; the SIZE only when `caps().resizable`.** A
+  fixed-size editor has exactly one correct size — the one it reported at attach
+  — and forcing a remembered one on it clips its own drawing, silently, for the
+  rest of the session. Every VST3 installed on this box reports `canResize=no`,
+  so that is the common path rather than the exotic one.
+
+### Where the restore is called from, and the layering edge it cost
+
+The END of `SMainWindow::openProject()`: the one place that happens once per
+load and where every dock, the track detail panel and the central widget already
+exist. That is a `shell -> pluginui` include, which `check_layering.py` refused
+until it was DECLARED with its reason. It closes a two-module cycle with the
+existing `pluginui -> shell` edge — but that shortens the existing
+`shell -> timeline -> pluginui -> shell` cycle rather than creating a new class
+of problem, and the file's own header already records UI+shell as the one
+remaining cyclic group. A hook (the `smediadrop::setPlacementHook` pattern) was
+considered and rejected: the direction is the other way round here — the shell
+is CALLING into the UI slice, not injecting into it — so a `std::function`
+installed at static-init time to express one call would be indirection with
+nothing behind it.
+
+### Gates
+
+* `plugin_editor_geometry_test` (new ctest) — the off-screen clamp. It is a pure
+  static for exactly this reason: the failure it prevents cannot be reproduced
+  by hand without physically unplugging a monitor. Five cases, every expectation
+  derived from the runtime screen rather than hard-coded: a rect inside the
+  screen is untouched; one 2000 px to the right keeps its size and lands with
+  its right edge on the screen's; one at negative coordinates lands on the
+  origin; an oversize rect is shrunk to fit; an invalid rect stays invalid.
+* `qxa.plugin_editor_persistence` (new case) — the flag starts false, opening
+  sets it, it survives save+load, closing clears it, the real post-load walk
+  opens NOTHING, and a headless run leaves no `editorGeometry` key in the shared
+  `smaragd.ini`. **Watched failing**: with the `isTestCaseMode()` guard removed
+  it reports `after "restore" the slot's native editor is open expected closed`.
+* `describeSlot()` gained `|editorOpen=0|1`, APPENDED after `|latency=` for the
+  same reason `latency=` was itself appended last — the proposal-08 M5 cases
+  assert contiguous spans of that string.
+
+**NOT gated:** a real restore putting a real window back where it was (the
+headless case opens with `showWindow = false`, so nothing is ever mapped, and
+`saveGeometryToSettings()` deliberately refuses to write for an unmapped
+window); the multi-monitor case against actual hardware; and what happens when
+the plugin is MISSING on the machine the project is loaded on — the flag is
+deliberately LEFT AS THE FILE HAD IT rather than cleared, so the setting is not
+lost to a temporary condition, but nothing exercises that path.
+
+Suite: **244 registered / 241 run / 3 Not Run (Disabled)**, green at `-j4` in
+228 s. One unexplained failure on the FIRST `-j4` run —
+`qxa.instrument_locate_continuity`, whose chase-continuity window read RMS
+**0.4823** against the [0.5401, 0.5735] band — in a case that touches nothing
+this branch changed. 6/6 in isolation afterwards and green in a second full
+`-j4` run. It is a playback-capture case (`toggle-playback` →
+`dump-playback-capture`) carrying no `RUN_SERIAL`, and that first run followed
+a rebuild, so a plugin rescan was re-probing six modules while it measured.
+Recorded as load-sensitive, not explained.

@@ -199,10 +199,22 @@ APP_DEPS = {
     # implementing what `media` only declares the seam for). `APP_DEPS` is NOT
     # transitive, so `shell` needs its own edge here even though `mediabrowser`
     # already has one.
+    # shell + pluginui since proposal 33 D2: a project saved with plugin
+    # editors open must open with them open, and that restore is ONCE PER LOAD
+    # -- so its only honest home is the end of SMainWindow::openProject(),
+    # after every dock and the central widget exist. It is a direct call and
+    # not a hook, unlike smediadrop's, because the direction is the other way
+    # round: the shell is CALLING into the UI slice, not injecting into it, and
+    # a std::function installed at static-init time to express one call would
+    # be indirection with nothing behind it. This does close a two-module cycle
+    # with the `pluginui -> shell` edge below, and that is a shortening of the
+    # existing `shell -> timeline -> pluginui -> shell` cycle rather than a new
+    # class of problem -- see the UI+shell note at the top of this file.
     'shell':          {'actions', 'eventui', 'media', 'mediabrowser', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
                        'objects/track', 'objects/wave', 'persistence',
-                       'selection', 'servicesui', 'testkit', 'timeline'},
+                       'pluginui', 'selection', 'servicesui', 'testkit',
+                       'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
     # testkit + pluginui since proposal 08 M5: assert-plugin-strip and

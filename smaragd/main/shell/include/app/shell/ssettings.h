@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QString>
 #include <QStringList>
+#include <QRect>
 #include <QVariant>
 #include <QByteArray>
 
@@ -92,6 +93,27 @@ public:
     // them; P8 opens them). Machine-local ids, like the audio input device.
     QStringList midiInputPortIds() const;
     void        setMidiInputPortIds( const QStringList &ids );
+
+    // --- native plugin editor geometry (proposal 33 D2) --------------------
+    //
+    // The window's position and size, per PLUGIN, per user. Deliberately NOT in
+    // the project: monitor layout is machine-local, and a window at x=2400
+    // restored on a laptop is a window nobody can reach. WHETHER the editor was
+    // open does travel, in `<SPluginSlot editorOpen='true'>` — the same split,
+    // and the same reason, as the portable midiOutPort NAME against the
+    // machine-local midi/portId/<name> above.
+    //
+    // The key is `<format>:<uid>`, so one plugin's window is the same size
+    // wherever it is inserted. That is a DECISION, not an oversight: a user who
+    // has sized Dexed to suit their screen means it for Dexed, not for one slot
+    // on one track, and per-slot geometry would also have to answer what
+    // happens when the slot is removed and re-added.
+    //
+    // An empty/invalid QRect means "never stored"; the caller then uses the
+    // plugin's own preferred size. A STORED rect is still not trusted blindly —
+    // see SPluginNativeEditor, which clamps onto a live QScreen before showing.
+    QRect pluginEditorGeometry( const QString &pluginKey ) const;
+    void  setPluginEditorGeometry( const QString &pluginKey, const QRect &r );
 
     // Last-used directory for a file dialog, keyed by a context string
     // ("project", "sample", ...). Returns `fallback` when nothing is stored.

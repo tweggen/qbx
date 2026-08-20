@@ -1,6 +1,7 @@
 #include "app/pluginui/spluginnativeeditor.h"
 
 #include "app/model/splacements.h"
+#include "app/model/slink.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/sproject.h"
 #include "app/objects/track/spluginchain.h"
@@ -9,6 +10,7 @@
 #include "app/objects/track/ssetpluginparamaction.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/sautomationrecorder.h"
+#include "app/shell/ssettings.h"
 #include "tw/core/twlog.h"
 #include "tw/plugins/twplugin.h"
 #include "tw/plugins/twpluginslotproc.h"
@@ -150,6 +152,122 @@ void SPluginNativeEditor::closeFor( SPluginSlot *slot )
         w->close();
 }
 
+namespace {
+
+// Every track in the project, depth first. A folder's children are tracks in
+// their own right and can hold plugins of their own.
+void collectTracks( SObject *node, QList<STrack *> &out )
+{
+    if( !node ) return;
+    for( SLink *lk : node->childLinks() ) {
+        if( !lk ) continue;
+        if( STrack *t = dynamic_cast<STrack *>( &lk->getSObject() ) ) {
+            out.append( t );
+            collectTracks( t, out );   // folders nest
+        }
+    }
+}
+
+}  // namespace
+
+// See the header for why this is public and static.
+QRect SPluginNativeEditor::clampOntoAScreen( const QRect &want )
+{
+    if( want.width() <= 0 || want.height() <= 0 ) return QRect();
+
+    // The screen the window's own centre lands on, which is the one the user
+    // last had it on. screenAt() answers null for a point on no screen at all -
+    // exactly the unplugged case - and the primary is then the honest fallback.
+    const QScreen *scr = QGuiApplication::screenAt( want.center() );
+    if( !scr ) scr = QGuiApplication::primaryScreen();
+    if( !scr ) return want;   // no screens at all: nothing to clamp against
+
+    const QRect avail = scr->availableGeometry();
+    QRect       r     = want;
+
+    // Never grow a window past the screen; a plugin that asked for 1600x1200 on
+    // a 1366x768 laptop is better clipped by us than by the window manager.
+    r.setWidth( qMin( r.width(), avail.width() ) );
+    r.setHeight( qMin( r.height(), avail.height() ) );
+
+    if( r.right() > avail.right() )   r.moveRight( avail.right() );
+    if( r.bottom() > avail.bottom() ) r.moveBottom( avail.bottom() );
+    if( r.left() < avail.left() )     r.moveLeft( avail.left() );
+    if( r.top() < avail.top() )       r.moveTop( avail.top() );
+    return r;
+}
+
+QString SPluginNativeEditor::pluginKey() const
+{
+    if( !slot_ ) return QString();
+    const audio::twPluginDescriptor &d = slot_->getDescriptor();
+    if( d.uid.empty() ) return QString();
+    return QString::fromStdString( d.format ) + QStringLiteral( ":" ) +
+           QString::fromStdString( d.uid );
+}
+
+void SPluginNativeEditor::restoreGeometryFromSettings()
+{
+    if( floating_ ) return;   // the plugin owns that window, not us
+    const QString key = pluginKey();
+    if( key.isEmpty() ) return;
+
+    const QRect stored = SSettings::instance().pluginEditorGeometry( key );
+    if( !stored.isValid() ) return;
+
+    const QRect r = clampOntoAScreen( stored );
+    if( !r.isValid() ) return;
+
+    // POSITION ALWAYS; SIZE ONLY IF THE PLUGIN CAN BE RESIZED. A fixed-size
+    // editor has one correct size - the one it just told us in attachPlugin() -
+    // and forcing a remembered one on it would clip its own drawing, silently,
+    // for the rest of the session. Every VST3 installed on this box reports
+    // canResize=no, so this is the common path rather than the exotic one.
+    applyingResize_ = true;
+    if( editor_ && editor_->caps().resizable )
+        setGeometry( r );
+    else
+        move( r.topLeft() );
+    applyingResize_ = false;
+}
+
+void SPluginNativeEditor::saveGeometryToSettings() const
+{
+    // Only a window that was really on screen has a geometry worth keeping. A
+    // headless open (showWindow = false) and a floating editor both have none,
+    // and storing theirs would overwrite the user's real position.
+    if( !shown_ || floating_ ) return;
+    const QString key = pluginKey();
+    if( key.isEmpty() ) return;
+    SSettings::instance().setPluginEditorGeometry( key, geometry() );
+}
+
+void SPluginNativeEditor::restoreOpenEditors( SProject *project,
+                                              QWidget *parentForPosition )
+{
+    if( !project ) return;
+    // See the header: a qxa run uses the real platform plugin, so this would put
+    // plugin windows on the developer's screen mid-suite.
+    if( SApplication::app().isTestCaseMode() ) return;
+
+    QList<STrack *> tracks;
+    collectTracks( splacements::rootContainer( project ), tracks );
+
+    for( STrack *t : tracks ) {
+        SPluginChain *chain = t ? t->getPluginChain() : nullptr;
+        if( !chain ) continue;
+        for( int i = 0; i < chain->getSlotCount(); ++i ) {
+            SPluginSlot *slot = chain->getSlotAt( i );
+            if( !slot || !slot->getEditorOpen() ) continue;
+            // openFor() re-asserts the flag on success. On FAILURE it is left
+            // exactly as the file had it, on purpose: the plugin may be missing
+            // on this machine and back on the next one, and silently clearing
+            // the flag would lose the user's setting to a temporary condition.
+            SPluginNativeEditor::openFor( t, slot, parentForPosition );
+        }
+    }
+}
+
 SPluginNativeEditor *SPluginNativeEditor::openFor( STrack *track, SPluginSlot *slot,
                                                    QWidget *parentForPosition,
                                                    bool showWindow )
@@ -181,12 +299,25 @@ SPluginNativeEditor *SPluginNativeEditor::openFor( STrack *track, SPluginSlot *s
     }
 
     registry().insert( slot, w );
+
+    // D2: the flag travels in the project, so a save from here on says the
+    // editor was open. Set BEFORE the show, so it is right even when the window
+    // is opened headlessly and never mapped at all.
+    slot->setEditorOpen( true );
+
+    // ...and the geometry comes from SSettings, per user, clamped. After the
+    // attach, because attachPlugin() has just sized the container to what the
+    // plugin asked for, and this is allowed to override the position on top of
+    // that.
+    w->restoreGeometryFromSettings();
+
     // A floating editor has no content of ours to show; the plugin has already
     // put its own window on screen. This object stays alive, unshown, as the
     // poll pump and the registry entry.
     if( showWindow && !w->isFloating() ) {
         w->show();
         w->raise();
+        w->shown_ = true;
     }
     return w;
 }
@@ -449,6 +580,17 @@ void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value,
 
 void SPluginNativeEditor::closeEvent( QCloseEvent *e )
 {
+    // D2, and in this order: the geometry belongs to the window and must be read
+    // while it still has one; the flag belongs to the project.
+    saveGeometryToSettings();
+    // slot_ is a QPointer and this path is also reached FROM its destruction
+    // (the destroyed -> close connection), so it can legitimately be null.
+    //
+    // A close driven by pluginReloaded clears the flag too. That is deliberate:
+    // the window really is gone, and a project that claimed otherwise would
+    // re-open an editor the user never asked for on the next load.
+    if( slot_ ) slot_->setEditorOpen( false );
+
     if( pollTimer_ ) pollTimer_->stop();
     if( editor_ ) {
         editor_->detach();

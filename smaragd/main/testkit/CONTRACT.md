@@ -978,3 +978,18 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     the dialogs are `WA_DeleteOnClose` and `close()` only POSTS the deletion —
     without that drain `expectOpen="0"` would mean "it has been asked to go"
     rather than "it is gone".
+
+49. **`plugin-native-editor action="restore"` DRIVES THE REAL POST-LOAD WALK,
+    and its whole point is that it must do nothing.** Proposal 33 D2 re-opens
+    every editor a loaded project says was open, and that walk is suppressed in
+    a `--test-case` run for a reason stronger than tidiness: a qxa run uses the
+    real platform plugin, so an unguarded restore would put plugin windows on
+    the developer's desktop in the middle of a suite. `expectOpen="0"` after a
+    `restore` is what asserts the guard held — verified by removing it, which
+    fails the case at exactly that line.
+
+50. **The `editorOpen` flag is asserted through `assert-plugin-strip`, never
+    through a window.** `describeSlot()` appends `|editorOpen=0|1` AFTER
+    `|latency=`, for the same reason `latency=` was itself appended last: the
+    proposal-08 M5 cases assert contiguous SPANS of that string and a field
+    inserted among them would break assertions about something else entirely.

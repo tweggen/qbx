@@ -474,14 +474,49 @@ PoC already de-risked, before any second format or platform is attempted.
 | **M1** | ✅ **DONE** — `twplugineditor.h`, `twPlugin::createEditor()`, `twRtThreadGuard::Kind::Main` + `markMainThread()` from `SApplication`'s ctor | build clean, both static gates clean, 21/21 plugin + live cases green |
 | **M2** | ✅ **DONE** — `performEdit` carries `(id,value)`, `begin/endEdit` bracket, a drained queue, `restartComponent` flags kept, `applyGuiEdit()` → mirror + DSP ring | `--production --show` reads each edit back through `getParam()`; §4.1 |
 | **M3** | ✅ **DONE** — `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI, `createEditor()` wired | `vst3_probe --production`: 3/3 real plugins attach and tear down clean, fixture correctly yields null |
-| **M4** | ✅ **DONE** (persistence excepted) — `SPluginNativeEditor`, the shell-level registry, the fallback chain, §10 ownership. **D2 persistence is NOT implemented.** | `assert-plugin-editor-kind` gates the fallback DECISION; the window itself is hand-verified (winId() offscreen is not a real handle) |
+| **M4** | ✅ **DONE** — `SPluginNativeEditor`, the shell-level registry, the fallback chain, §10 ownership. **D2 persistence landed separately, 2026-08-20; see §9.2.** | `assert-plugin-editor-kind` gates the fallback DECISION; the window itself is hand-verified (winId() offscreen is not a real handle) |
 | **M5** | ✅ **DONE** — per-batch coalescing (§4.2) then `SSetPluginParamAction` merged by (track,slot,param); `SAutomationRecorder` punch-in; DualMono fan-out via the action; echo guard | `pluginui/CONTRACT.md` inv. 9 rewritten; undo of a native gesture is hand-verified |
 | **M6** | ✅ **DONE** — `twClapEditor`, `extGui_`, the `clap.gui` host extension (all five callbacks), the `guiMutex_` non-concurrency rule, the main-thread `request_flush` service, **D1 floating fallback + `set_transient`**; `twEditorParamEdit::previousValue` and the M5 undo fix it forced | `tw.test.clap.gui` (a WINDOWLESS clap.gui fixture) + 28 checks in `plugins_test` + `qxa.plugin_native_editor` |
 | **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
 | **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |
 
-M0–M5 are merged (PRs #96, #98); M6 is this branch. **What remains is D2
-persistence, then macOS (M7) and Linux (M8).**
+M0–M6 are merged (PRs #96, #98, #100) and D2 persistence followed on
+2026-08-20. **What remains is macOS (M7) and Linux (M8).**
+
+### 9.2 D2 persistence, and the one claim in D2 that was wrong
+
+Executed 2026-08-20, exactly as the D2 table specifies: `editorOpen` in the
+project, geometry in `SSettings` keyed `<format>:<uid>`, a clamp onto a live
+`QScreen` before showing, restoration suppressed in a test run.
+
+Three things worth recording:
+
+* **D2 says "every qxa case runs under `QT_QPA_PLATFORM=offscreen`". That is
+  FALSE** — only the C++ tests set it; the qxa CTest entries do not, and run
+  against the real platform plugin. The suppression rule D2 asks for is right,
+  but the reason is stronger than the one given: an unguarded restore would put
+  real plugin windows on the developer's desktop in the middle of a suite, not
+  merely create a window in a headless process.
+* **The geometry is keyed by PLUGIN, not by slot.** One remembered window size
+  per plugin, wherever it is inserted. A user who has sized Dexed to suit their
+  screen means it for Dexed; per-slot geometry would also have to answer what
+  happens when the slot is removed and re-added.
+* **The SIZE is restored only when `caps().resizable`; the POSITION always is.**
+  A fixed-size editor has exactly one correct size — the one it reported at
+  attach — and forcing a remembered one on it clips its own drawing silently.
+  Every VST3 installed on this box reports `canResize=no`, so that is the common
+  path, not the exotic one.
+
+The restore is called from the END of `SMainWindow::openProject()`, the one
+place that happens once per load and where every dock already exists. That adds
+a DECLARED `shell -> pluginui` edge in `tools/check_layering.py`, which shortens
+the existing `shell -> timeline -> pluginui -> shell` cycle rather than creating
+a new class of problem.
+
+Gates: `qxa.plugin_editor_persistence` (the project half, including the
+suppressed restore — watched failing with the guard removed) and
+`plugin_editor_geometry_test` (the clamp, which cannot be reproduced by hand
+without unplugging a monitor).
 
 ### 9.1 What M6 found, and it is not what §2 predicted for CLAP
 
