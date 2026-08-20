@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_native_editor">
+
+  <!-- Proposal 33 M6, the APP half — and the first gate this feature has ever
+       had above the engine ABI.
+
+       WHAT MAKES IT POSSIBLE. Everything in proposal 33 above twPluginEditor
+       was ungated because a plugin GUI needs a window, and a qxa run uses the
+       REAL platform plugin (the suite does not set QT_QPA_PLATFORM=offscreen),
+       so a case that opened one would put a dialog on the developer's desktop
+       in the middle of the suite. `tw.test.clap.gui` removes the window from
+       the question: it implements clap.gui and CREATES NOTHING — create() and
+       set_parent() succeed and allocate no window at all — so the whole
+       PARAMETER FLOW can be driven with no display, which is the part of M6
+       that can actually be wrong. The verb opens the editor with
+       showWindow = false; the attach, the container's native handle, the 30 Hz
+       poll timer and every action it submits are the production ones.
+
+       The fixture stands in for a user turning a knob: its gui->show() sets
+       Gain to 2.5 INTERNALLY (as a real plugin does — its DSP follows its own
+       GUI without asking the host) and then calls
+       clap_host_params->request_flush, which is the only route a CLAP edit has
+       out of the plugin while nothing is rendering.
+
+       What is being gated:
+
+       1. THE FALLBACK DECISION. A CLAP plugin WITH a native editor must now
+          resolve to "native" — proposal 33 D3's "the slider list is not
+          reachable alongside a native GUI" is only safe if that decision is
+          right. plugin_ui_strip_and_editor asserts the other two answers
+          ("generic" for a CLAP with no GUI, "none" for a Missing slot); this
+          is the third.
+
+       2. THE EDIT IS AUDIBLE. The knob the plugin turned reaches the DSP and
+          the render. Gain 2.5 on tw.test.clap.gui (out = in * gain) takes the
+          first second of ../test_sawtooth.wav from 0.0667 to 0.1666 - measured,
+          and exactly 2.5x. Nothing in the script sets that parameter: the
+          plugin did.
+
+       3. THE EDIT IS ONE UNDO ENTRY, and undoing it puts the level back. This
+          is proposal 33 M5's central claim, it had no gate at all, AND IT WAS
+          BROKEN: SSetPluginParamAction::apply() built its inverse from
+          getParam(), but a native-editor edit has already reached the plugin by
+          the time the app hears about it (poll() writes the mirror and the DSP
+          on its way through, which is what makes a knob audible whatever the
+          host does). The baseline was therefore the NEW value, the inverse
+          restored what it had just set, and undo was a silent no-op. Watched
+          failing here before the fix: this render read 0.1666 - the gained
+          level - where it now reads 0.0667. The pre-edit value now travels
+          with the edit (twEditorParamEdit::previousValue).
+
+       4. The window closes, and the plugin is not torn down with an editor
+          still open (which the backend reports as an error). -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gui"
+                   name="Smaragd Test GUI" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- 1. The fallback decision, now that a CLAP can answer "native". -->
+    <assert-plugin-editor-kind trackIndex="0" slotIndex="0" expect="native"/>
+
+    <!-- The unity baseline, before any window exists. -->
+    <render filename="pne_base.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="pne_base.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.074"/>
+
+    <!-- 2. Open the plugin's own interface. The fixture turns its Gain knob to
+         2.5 on show() and asks the host to flush; the 30 Hz poll is what
+         collects it, so the wait is doing real work, not padding. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"/>
+    <wait-ms ms="250"/>
+
+    <render filename="pne_gui_gain.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="pne_gui_gain.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.155" maxRms="0.180"/>
+
+    <!-- 3. ONE undo entry for the gesture, and it restores the level. -->
+    <undo count="1"/>
+
+    <render filename="pne_undone.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="pne_undone.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.074"/>
+
+    <!-- 4. Take the window down. An editor alive when its plugin is destroyed
+         is a contract violation the CLAP backend logs as an error. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

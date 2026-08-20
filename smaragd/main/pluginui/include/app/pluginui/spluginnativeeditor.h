@@ -51,15 +51,37 @@ public:
     // rebuild to hang that on, so it derives both addresses FRESH at every
     // commit instead of being told when they moved. Nothing to keep in step,
     // and nothing to forget to call.
+    //
+    // showWindow = false opens and attaches WITHOUT putting anything on screen,
+    // which is what a headless gate needs: a qxa run uses the REAL platform
+    // plugin (the suite does not set QT_QPA_PLATFORM=offscreen), so a shown
+    // dialog would appear on the developer's desktop mid-suite. The container's
+    // native handle exists either way -- winId() creates it whether the window
+    // is visible or not -- so the plugin is genuinely attached. Same precedent,
+    // and the same spelling, as
+    // SPluginEffectStrip::ensureParamEditor( slotIndex, showWindow ).
     static SPluginNativeEditor *openFor( STrack *track,
                                          SPluginSlot *slot,
-                                         QWidget *parentForPosition );
+                                         QWidget *parentForPosition,
+                                         bool showWindow = true );
+
+    // For the testkit, and for anything that has to take a window down without
+    // owning it. The registry is module-private; these are the only way in.
+    static bool isOpenFor( SPluginSlot *slot );
+    static void closeFor( SPluginSlot *slot );
 
     // True if this slot has a native editor available at all. Cheap: it asks
     // twPlugin::supportsNativeEditor() and instantiates nothing.
     static bool isAvailableFor( SPluginSlot *slot );
 
     ~SPluginNativeEditor() override;
+
+    // D1's middle rung: the plugin owns a top-level window of its own and this
+    // dialog is never shown. It stays alive purely as the poll pump and the
+    // registry entry — there is nothing to put inside it, so showing it would
+    // put an empty rectangle on screen beside the plugin's real window.
+    // CLAP only; VST3 and AU have no floating concept.
+    bool isFloating() const { return floating_; }
 
 protected:
     void closeEvent( QCloseEvent *e ) override;
@@ -72,7 +94,8 @@ private:
     SPluginNativeEditor( STrack *track, SPluginSlot *slot, QWidget *parent );
 
     bool attachPlugin();
-    void applyEdit( std::uint32_t paramId, double value, bool gestureEnd );
+    void applyEdit( std::uint32_t paramId, double value, double previousValue,
+                    bool gestureEnd );
     void resizeToPlugin( audio::twEditorSize physical );
 
     // The model address, DERIVED, never cached. Both return an empty/-1 "cannot
@@ -87,6 +110,7 @@ private:
     QTimer                          *pollTimer_ = nullptr;
     std::unique_ptr<audio::twPluginEditor> editor_;
     bool                             applyingResize_ = false;
+    bool                             floating_       = false;
 
     // The last value committed per parameter, for the echo guard in applyEdit().
     std::map<std::uint32_t, double>  lastCommitted_;

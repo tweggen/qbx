@@ -101,6 +101,11 @@ How to test:
   change the rendered level, and each undoes (invariants 3 and 6).
 - `qxa.plugin_remove_restores_param` — undoing a removal restores the plugin's
   PARAMETERS, not just the slot.
+- `qxa.plugin_native_editor` — the native editor END TO END with no display:
+  the "native" answer from `editorKindFor()`, the plugin's own knob reaching the
+  render (0.0667 -> 0.1666, exactly 2.5x, set by nobody in the script), ONE undo
+  entry that actually restores the level, and the window closing before the
+  plugin is torn down. Watched failing before the `previousValue` fix.
 - `qxa.plugin_ui_strip_and_editor` — the two testkit verbs
   `assert-plugin-strip` / `plugin-editor-set-param` build the real
   SPluginEffectStrip and SPluginParamEditor off screen (never shown: a qxa run
@@ -150,13 +155,34 @@ about an instrument is DERIVED from `slot->getDescriptor().isInstrument` and
   time and gated it (`assert-track-head contains="I=1"` in
   `qxa.instrument_slot_rules`).
 
-Native editors: a VST3 plugin's OWN GUI opens embedded in
-`SPluginNativeEditor` (proposal 33 M4), and the generic slider list is the
+Native editors: a **VST3 or CLAP** plugin's OWN GUI opens embedded in
+`SPluginNativeEditor` (proposal 33 M4/M6), and the generic slider list is the
 FALLBACK, not an alternative — it is what opens when there is no native editor,
 when `createEditor()` returns null, when `attach()` is refused, or when the
 plugin needs an X11 run loop we do not provide. There is deliberately no second
 entry point to the sliders while a native GUI exists (decision D3), which is
 why every native edit has to be undoable.
+
+**THE PRE-EDIT VALUE TRAVELS WITH THE EDIT, and skipping it makes undo a
+silent no-op.** `twPluginEditor::poll()` applies each Change to the mirror and
+the DSP on its way through — that is what makes a plugin's own knob audible
+whatever the host does — so by the time `applyEdit()` runs, `getParam()` already
+returns the NEW value. `SSetPluginParamAction::apply()`'s ordinary baseline is
+exactly that call, so its inverse restored the value it had just set. Shipped in
+M5, caught by `qxa.plugin_native_editor` (the undo render read the GAINED level),
+fixed by `twEditorParamEdit::previousValue` plus
+`SSetPluginParamAction::setPreviousValue()`. The native editor is the ONLY caller
+of that setter and must stay so: every other edit reaches the plugin THROUGH the
+action.
+
+**A floating editor is a real outcome, not an error path** (decision D1, CLAP
+only). When `attach()` refuses, `attachFloating()` is offered before the generic
+fallback: the plugin owns a top-level window of its own and this `QDialog` is
+never shown — it stays alive purely as the poll pump and the registry entry, so
+`openFor()`, the already-open branch and `resizeToPlugin()` all check
+`isFloating()`. The transient parent handed to `set_transient` is the
+APPLICATION window, not this dialog: an invisible parent keeps nothing above
+anything. VST3 and AU have no floating form and never take this rung.
 
 **The window is NOT owned by the strip**, and must not become so:
 `STrackDetailPanel::rebuildUI()` deletes the strip on every track switch, so a
@@ -167,13 +193,18 @@ that outlives the strip, so they are DERIVED at every commit. Inv. 7's
 re-pointing is the generic editor's answer to the same problem; a native window
 has no rebuild to hang it on.
 
-Known debt: generic sliders are still a fixed 1000-tick normalization; **CLAP
-and AudioUnit have no native editor yet** (proposal 33 M6/M7 — every CLAP
-plugin takes the slider fallback today), and neither does Linux/X11 (M8). An
-editor's open state and geometry are not persisted (D2). Nothing headless
-exercises the window itself: `winId()` under `QT_QPA_PLATFORM=offscreen` is not
-a real native handle, so the embed path is hand-verification only and what the
-qxa suite gates is the FALLBACK DECISION. The drop handler's
+Known debt: generic sliders are still a fixed 1000-tick normalization;
+**AudioUnit has no native editor yet** (proposal 33 M7) and neither does
+Linux/X11 (M8 — VST3 there needs `IRunLoop`, which the app must bridge to
+`QSocketNotifier`/`QTimer`; CLAP on X11 does not, so `caps().needsRunLoop` is
+false in that backend on every platform). An editor's open state and geometry
+are not persisted (D2). **What is gated headlessly is the parameter FLOW, not
+the window**: `qxa.plugin_native_editor` drives a real `SPluginNativeEditor`
+against `tw.test.clap.gui`, a fixture that implements `clap.gui` and creates no
+window at all, with `showWindow = false` so nothing reaches the screen (a qxa
+run uses the real platform plugin). Whether a real plugin's GUI actually draws
+inside our container — and keyboard/focus routing, host-driven resize, and DPI
+on a scaled monitor — remains hand-verification only. The drop handler's
 `dragSourceIndex_` is never assigned by any drag START — `startDragFromPlugin()`
 was declared and never defined — so drag-to-reorder cannot fire today even
 though `reorder-plugin` behind it is tested; that is pre-existing and untouched

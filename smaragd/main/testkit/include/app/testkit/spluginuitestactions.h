@@ -52,9 +52,9 @@ private:
 // This gates proposal 33 decision D3's safety property. The slider list is NOT
 // reachable alongside a native GUI, so the fallback decision is the only thing
 // standing between a plugin that misreports an editor and a user with no way
-// to edit it at all. The window itself cannot be gated headlessly — winId()
-// under QT_QPA_PLATFORM=offscreen is not a real native handle — so the
-// DECISION is what a script can and must assert.
+// to edit it at all. This verb asserts the DECISION and opens nothing;
+// plugin-native-editor below is what drives a real editor, against a fixture
+// that has a clap.gui and creates no window.
 //   trackPath  = ""      index-path; empty = use trackIndex
 //   trackIndex = "0"
 //   slotIndex  = "0"
@@ -74,6 +74,42 @@ private:
     int     trackIndex_ = 0;
     int     slotIndex_  = 0;
     QString expect_;
+};
+
+// plugin-native-editor — open or close the PLUGIN'S OWN window (proposal 33
+// M4/M6), the thing a double-click opens when a plugin has a native editor.
+//
+// This is the only verb that drives the app half of proposal 33 at all, and
+// what makes it possible is a fixture that has a clap.gui and CREATES NO
+// WINDOW (tw.test.clap.gui). The window is opened with showWindow = false, so
+// nothing appears on screen — a qxa run uses the real platform plugin, not
+// offscreen — while the container's native handle, the attach, the 30 Hz poll
+// and every commit it makes are the production ones.
+//
+// A case that opens one MUST close it: an editor still alive when its plugin is
+// torn down is a contract violation the backend reports as an error, and in a
+// real session it is a window pointing into an unloaded DSO.
+//   trackPath  = ""      index-path; empty = use trackIndex
+//   trackIndex = "0"
+//   slotIndex  = "0"
+//   action     = "open"  "open" | "close"
+//   expectOpen = "1"     what isOpenFor() must say afterwards
+class SPluginNativeEditorAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "plugin-native-editor" );
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_;
+    int     trackIndex_ = 0;
+    int     slotIndex_  = 0;
+    QString action_     = QStringLiteral( "open" );
+    int     expectOpen_ = 1;
 };
 
 // plugin-editor-set-param — drive the parameter editor's slider the way a user

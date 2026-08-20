@@ -11,12 +11,13 @@
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * FOUR entry points:
+ * FIVE entry points:
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
  *   tw.test.clap.sine         0 in / stereo + aux out INSTRUMENT   (37 P2)
  *   tw.test.clap.arp          note in / note out      (37 P2)
+ *   tw.test.clap.gui          gain + a WINDOWLESS clap.gui          (33 M6)
  *
  * --- tw.test.clap.gain -------------------------------------------------------
  *
@@ -135,8 +136,10 @@
 #define TW_TESTCLAP_SKEW_ID "tw.test.clap.stereoskew"
 #define TW_TESTCLAP_SINE_ID "tw.test.clap.sine"
 #define TW_TESTCLAP_ARP_ID  "tw.test.clap.arp"
+#define TW_TESTCLAP_GUI_ID  "tw.test.clap.gui"
 
-/* Which of the four this instance is. */
+/* Which behaviour this instance has. tw.test.clap.gui shares GAIN's, and is
+ * told apart by hasGui rather than by a kind of its own. */
 enum tw_kind { TW_KIND_GAIN = 0, TW_KIND_SKEW = 1, TW_KIND_SINE = 2, TW_KIND_ARP = 3 };
 
 #define TW_SINE_VOICES 16
@@ -195,6 +198,41 @@ static const clap_plugin_descriptor_t s_desc_sine = {
    .features     = s_features_inst,
 };
 
+/* tw.test.clap.gui (proposal 33 M6) - the gain fixture with a clap.gui
+ * extension bolted on. It is a SEPARATE ENTRY POINT rather than a flag on
+ * tw.test.clap.gain precisely because supportsNativeEditor() is observable:
+ * giving gain a GUI would flip qxa.plugin_ui_strip_and_editor's fallback
+ * assertion from "generic" to "native" and make a headless run try to open a
+ * window.
+ *
+ * IT CREATES NO WINDOW. create() allocates nothing and set_parent() accepts
+ * any handle, which is what lets the whole parameter path be gated with no
+ * window system at all - the substance of M6 is where a GUI edit GOES, not
+ * where it is drawn. Two triggers stand in for a user turning a knob:
+ *
+ *   show()          -> queues Begin/2.5/End on param 0 and asks the host to
+ *                      flush. This is the route a real plugin uses while
+ *                      nothing is rendering, and the one that does not work
+ *                      unless the host services request_flush.
+ *   set_size(w,h)   -> queues Begin/0.75/End on param 0 WITHOUT asking for a
+ *                      flush, so it can only come out through process().
+ *
+ * show() also calls host_gui->request_resize(300, 200), so the resize half of
+ * twEditorFeedback has a closed form too.
+ */
+static const clap_plugin_descriptor_t s_desc_gui = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_GUI_ID,
+   .name         = "Smaragd Test GUI",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: gain with a windowless clap.gui extension",
+   .features     = s_features,
+};
+
 static const clap_plugin_descriptor_t s_desc_arp = {
    .clap_version = CLAP_VERSION_INIT,
    .id           = TW_TESTCLAP_ARP_ID,
@@ -248,6 +286,19 @@ typedef struct {
    int16_t  arpOffChan;
    int32_t  arpOffId;
    int32_t  arpNextId;
+
+   /* gui (proposal 33 M6) */
+   int      hasGui;
+   int      guiCreated;
+   int      guiFloating;
+   int      guiShown;
+   int      guiParented;
+   double   guiScale;
+   uint32_t guiW, guiH;
+   /* A queued "the user turned a knob" gesture: emitted, in full, by the next
+    * flush() or process(). 0 = nothing queued. */
+   int      guiPendingEdit;
+   double   guiPendingValue;
 } tw_testclap_t;
 
 /* ---------------------------------------------------------------- params */
@@ -380,11 +431,48 @@ static void tc_apply_events( tw_testclap_t *self, const clap_input_events_t *in 
    }
 }
 
+/* Emit the queued GUI gesture into out_events, bracketed the way a real plugin
+ * brackets a knob drag. Called from BOTH routes a plugin has - flush() and
+ * process() - because that is the whole point of the fixture. */
+static void tc_gui_emit_pending( tw_testclap_t *self, const clap_output_events_t *out )
+{
+   if( !self->guiPendingEdit || !out || !out->try_push )
+      return;
+   self->guiPendingEdit = 0;
+
+   clap_event_param_gesture_t g;
+   memset( &g, 0, sizeof( g ) );
+   g.header.size     = sizeof( g );
+   g.header.time     = 0;
+   g.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+   g.header.type     = CLAP_EVENT_PARAM_GESTURE_BEGIN;
+   g.param_id        = 0;
+   out->try_push( out, &g.header );
+
+   clap_event_param_value_t v;
+   memset( &v, 0, sizeof( v ) );
+   v.header.size     = sizeof( v );
+   v.header.time     = 0;
+   v.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+   v.header.type     = CLAP_EVENT_PARAM_VALUE;
+   v.param_id        = 0;
+   v.note_id         = -1;
+   v.port_index      = -1;
+   v.channel         = -1;
+   v.key             = -1;
+   v.value           = self->guiPendingValue;
+   out->try_push( out, &v.header );
+
+   g.header.type = CLAP_EVENT_PARAM_GESTURE_END;
+   out->try_push( out, &g.header );
+}
+
 static void tc_params_flush( const clap_plugin_t *p, const clap_input_events_t *in,
                              const clap_output_events_t *out )
 {
-   (void)out;
-   tc_apply_events( (tw_testclap_t *)p->plugin_data, in );
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   tc_apply_events( self, in );
+   tc_gui_emit_pending( self, out );
 }
 
 static const clap_plugin_params_t s_params = {
@@ -1067,6 +1155,10 @@ static clap_process_status tc_process( const clap_plugin_t *p, const clap_proces
    if( proc->frames_count > self->maxFrames )
       return CLAP_PROCESS_ERROR;
 
+   /* The second route a GUI edit can leave by. Nothing is emitted unless a
+    * gesture is queued, so the effect kinds are bit-for-bit unchanged. */
+   tc_gui_emit_pending( self, proc->out_events );
+
    if( self->kind == TW_KIND_SINE )
       return tc_process_sine( self, proc );
    if( self->kind == TW_KIND_ARP )
@@ -1074,9 +1166,206 @@ static clap_process_status tc_process( const clap_plugin_t *p, const clap_proces
    return tc_process_effect( self, proc );
 }
 
+/* ------------------------------------------------------------------- gui */
+
+/* The api this build embeds with. The fixture claims exactly one, so a host
+ * that offers a handle tagged for a different platform is refused rather than
+ * silently accepted. */
+#if defined( _WIN32 )
+#define TW_GUI_API CLAP_WINDOW_API_WIN32
+#elif defined( __APPLE__ )
+#define TW_GUI_API CLAP_WINDOW_API_COCOA
+#else
+#define TW_GUI_API CLAP_WINDOW_API_X11
+#endif
+
+static bool tc_gui_is_api_supported( const clap_plugin_t *p, const char *api,
+                                     bool is_floating )
+{
+   (void)p;
+   /* Both forms, so the D1 floating rung has something to exercise. */
+   (void)is_floating;
+   return api && !strcmp( api, TW_GUI_API );
+}
+
+static bool tc_gui_get_preferred_api( const clap_plugin_t *p, const char **api,
+                                      bool *is_floating )
+{
+   (void)p;
+   if( !api || !is_floating )
+      return false;
+   *api         = TW_GUI_API;
+   *is_floating = false;
+   return true;
+}
+
+static bool tc_gui_create( const clap_plugin_t *p, const char *api, bool is_floating )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   if( !self->hasGui || self->guiCreated )
+      return false;
+   if( !api || strcmp( api, TW_GUI_API ) )
+      return false;
+   self->guiCreated  = 1;
+   self->guiFloating = is_floating ? 1 : 0;
+   self->guiParented = 0;
+   self->guiShown    = 0;
+   self->guiW        = 320;
+   self->guiH        = 240;
+   return true;
+}
+
+static void tc_gui_destroy( const clap_plugin_t *p )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   self->guiCreated = 0;
+   self->guiShown   = 0;
+}
+
+static bool tc_gui_set_scale( const clap_plugin_t *p, double scale )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   self->guiScale = scale;
+   return true;
+}
+
+static bool tc_gui_get_size( const clap_plugin_t *p, uint32_t *w, uint32_t *h )
+{
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( !self->guiCreated || !w || !h )
+      return false;
+   *w = self->guiW;
+   *h = self->guiH;
+   return true;
+}
+
+static bool tc_gui_can_resize( const clap_plugin_t *p )
+{
+   (void)p;
+   return true;
+}
+
+static bool tc_gui_get_resize_hints( const clap_plugin_t *p, clap_gui_resize_hints_t *hints )
+{
+   (void)p;
+   (void)hints;
+   return false;
+}
+
+/* Rounds DOWN to a multiple of 16, minimum 16. A closed form, so a host test
+ * can tell "constrain() asked the plugin" from "constrain() passed the value
+ * through". */
+static bool tc_gui_adjust_size( const clap_plugin_t *p, uint32_t *w, uint32_t *h )
+{
+   (void)p;
+   if( !w || !h )
+      return false;
+   *w = ( *w / 16 ) * 16;
+   *h = ( *h / 16 ) * 16;
+   if( *w < 16 ) *w = 16;
+   if( *h < 16 ) *h = 16;
+   return true;
+}
+
+static bool tc_gui_set_size( const clap_plugin_t *p, uint32_t w, uint32_t h )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   if( !self->guiCreated || self->guiFloating )
+      return false;
+   self->guiW = w;
+   self->guiH = h;
+   /* A knob move with NO request_flush: it can only reach the host through
+    * process(), which is the second of the two routes M6 has to cover. */
+   self->guiPendingEdit  = 1;
+   self->guiPendingValue = 0.75;
+   return true;
+}
+
+static bool tc_gui_set_parent( const clap_plugin_t *p, const clap_window_t *win )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   if( !self->guiCreated || self->guiFloating || !win )
+      return false;
+   if( !win->api || strcmp( win->api, TW_GUI_API ) )
+      return false;
+   /* No SetParent, no XReparentWindow: there is no window. Recording that the
+    * host got this far is the assertion. */
+   self->guiParented = 1;
+   return true;
+}
+
+static bool tc_gui_set_transient( const clap_plugin_t *p, const clap_window_t *win )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   if( !self->guiCreated || !self->guiFloating )
+      return false;
+   self->guiParented = win ? 1 : 0;
+   return true;
+}
+
+static void tc_gui_suggest_title( const clap_plugin_t *p, const char *title )
+{
+   (void)p;
+   (void)title;
+}
+
+static bool tc_gui_show( const clap_plugin_t *p )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   if( !self->guiCreated )
+      return false;
+   self->guiShown = 1;
+
+   /* Stand in for the user turning the Gain knob. The value is applied
+    * INTERNALLY first, exactly as a real plugin does - its DSP follows its own
+    * GUI without asking the host - and only then offered to the host. */
+   self->gain            = 2.5;
+   self->guiPendingEdit  = 1;
+   self->guiPendingValue = 2.5;
+
+   if( self->host && self->host->get_extension ) {
+      const clap_host_params_t *hp =
+         (const clap_host_params_t *)self->host->get_extension( self->host, CLAP_EXT_PARAMS );
+      if( hp && hp->request_flush )
+         hp->request_flush( self->host );
+
+      const clap_host_gui_t *hg =
+         (const clap_host_gui_t *)self->host->get_extension( self->host, CLAP_EXT_GUI );
+      if( hg && hg->request_resize )
+         hg->request_resize( self->host, 300, 200 );
+   }
+   return true;
+}
+
+static bool tc_gui_hide( const clap_plugin_t *p )
+{
+   tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+   self->guiShown = 0;
+   return true;
+}
+
+static const clap_plugin_gui_t s_gui = {
+   .is_api_supported  = tc_gui_is_api_supported,
+   .get_preferred_api = tc_gui_get_preferred_api,
+   .create            = tc_gui_create,
+   .destroy           = tc_gui_destroy,
+   .set_scale         = tc_gui_set_scale,
+   .get_size          = tc_gui_get_size,
+   .can_resize        = tc_gui_can_resize,
+   .get_resize_hints  = tc_gui_get_resize_hints,
+   .adjust_size       = tc_gui_adjust_size,
+   .set_size          = tc_gui_set_size,
+   .set_parent        = tc_gui_set_parent,
+   .set_transient     = tc_gui_set_transient,
+   .suggest_title     = tc_gui_suggest_title,
+   .show              = tc_gui_show,
+   .hide              = tc_gui_hide,
+};
+
 static const void *tc_get_extension( const clap_plugin_t *p, const char *id )
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( !strcmp( id, CLAP_EXT_GUI ) && self->hasGui )                      return &s_gui;
    if( !strcmp( id, CLAP_EXT_AUDIO_PORTS ) && self->kind != TW_KIND_ARP ) return &s_ports;
    if( !strcmp( id, CLAP_EXT_PARAMS ) && self->kind != TW_KIND_ARP )      return &s_params;
    if( !strcmp( id, CLAP_EXT_STATE ) && self->kind != TW_KIND_ARP )       return &s_state;
@@ -1098,7 +1387,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 4;
+   return 5;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1109,6 +1398,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 1 ) return &s_desc_skew;
    if( index == 2 ) return &s_desc_sine;
    if( index == 3 ) return &s_desc_arp;
+   if( index == 4 ) return &s_desc_gui;
    return NULL;
 }
 
@@ -1126,6 +1416,10 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    else if( !strcmp( id, TW_TESTCLAP_SKEW_ID ) ) { kind = TW_KIND_SKEW; desc = &s_desc_skew; }
    else if( !strcmp( id, TW_TESTCLAP_SINE_ID ) ) { kind = TW_KIND_SINE; desc = &s_desc_sine; }
    else if( !strcmp( id, TW_TESTCLAP_ARP_ID ) )  { kind = TW_KIND_ARP;  desc = &s_desc_arp; }
+   /* GUI behaves as GAIN in every respect that is not the gui extension - same
+    * params, same ports, same DSP - so it reuses the kind rather than adding a
+    * fifth branch to every switch in the file. hasGui is the only difference. */
+   else if( !strcmp( id, TW_TESTCLAP_GUI_ID ) )  { kind = TW_KIND_GAIN; desc = &s_desc_gui; }
    else                                          { return NULL; }
 
    tw_testclap_t *self = (tw_testclap_t *)calloc( 1, sizeof( tw_testclap_t ) );
@@ -1141,6 +1435,8 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    self->maxFrames  = 0;
    self->sampleRate = 48000.0;
    self->active     = 0;
+   self->hasGui     = !strcmp( id, TW_TESTCLAP_GUI_ID );
+   self->guiScale   = 1.0;
 
    self->base.desc            = desc;
    self->base.plugin_data     = self;

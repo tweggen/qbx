@@ -48,7 +48,9 @@ public:
     // A callback rather than a twVst3Plugin* because that class is TU-local to
     // twvst3plugin.cc — it has no header at all — and giving it one purely so
     // the editor could name it would be a bigger change than the feature.
-    using ApplyFn = std::function<void( std::uint32_t id, double value )>;
+    // Returns what the parameter held BEFORE the write — the host needs it and
+    // cannot recover it (twplugineditor.h, twEditorParamEdit::previousValue).
+    using ApplyFn = std::function<double( std::uint32_t id, double value )>;
 
     // Run at destruction, after the view is released. The plugin uses it to drop
     // its live-editor count, which is what lets teardown report an editor that

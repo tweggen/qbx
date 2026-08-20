@@ -1764,7 +1764,7 @@ force-clear — which is exactly why `.vst3` stayed unreported until M6.
 ### Testing without installing anything
 
 `plugins/tests/twtestclap.c` is a real CLAP module built from this repo as
-`twtestclap.clap` and copied next to the binary. Four entry points:
+`twtestclap.clap` and copied next to the binary. Five entry points:
 `tw.test.clap.gain` (`out = in * gain`, plus a "report block size" mode that
 writes the frame count it actually saw, plus — since proposal 37 P2 — a
 `Clip Threshold` at **param id 2** that hard-clips AFTER the gain, which is the
@@ -1779,8 +1779,15 @@ EXACT, plus — since 2026-08-17 — a **`Stereo Skew` at param id 3**, stepped 
 golden and no pre-existing assertion moved; on, channels 1.. of the main bus are
 at HALF amplitude, which is the closed form that makes an instrument's channel
 relation assertable from a FILE at all — identical outputs cannot distinguish a
-wide sink from one duplicating channel 0); and `tw.test.clap.arp` (note in/out on a fixed 4096-frame grid, so its
-output count has a closed form).
+wide sink from one duplicating channel 0); `tw.test.clap.arp` (note in/out on a fixed 4096-frame grid, so its
+output count has a closed form); and — since proposal 33 M6 —
+`tw.test.clap.gui`, the gain fixture with a **windowless** `clap.gui`: it claims
+the platform's embedding api, `create()` allocates nothing and `set_parent()`
+accepts any handle, so the whole native-editor PARAMETER PATH is gateable with
+no display. It is a separate entry point precisely because
+`supportsNativeEditor()` is observable — giving `gain` a GUI would flip
+`plugin_ui_strip_and_editor`'s fallback assertion and make a headless run try to
+open a window.
 
 `plugins/tests/twtestvst3.cpp` is the VST3 counterpart, built as
 `twtestvst3.vst3`. It is C++ because VST3's ABI *is* a C++ vtable, and it links
@@ -1811,7 +1818,45 @@ Gates: `ctest -R "plugins_test|plugins_scan_test"` and the qxa cases
 `plugin_stereo_chain`, `plugin_remove_and_undo`, `plugin_slot_roundtrip`,
 `plugin_missing_placeholder`, `plugin_bypass_and_param`,
 `plugin_remove_restores_param`, `plugin_ui_strip_and_editor`,
-`render_sawtooth_with_effects`.
+`plugin_native_editor`, `render_sawtooth_with_effects`.
+
+### Native plugin editors (proposal 33 — M0..M6 executed; CLAP landed 2026-08-20)
+
+A **VST3 or CLAP** plugin's own GUI opens in `SPluginNativeEditor`, a top-level
+window owned by a module-level registry keyed by slot (never by the FX strip,
+which `STrackDetailPanel::rebuildUI()` deletes on every track switch). The
+generic slider list is the FALLBACK and is deliberately not reachable alongside
+a native GUI (decision D3), which is why every native edit has to be undoable.
+Design and the measurements: `plan/proposed/33_NATIVE_PLUGIN_EDITORS.md`.
+Invariants: `tw303a/plugins/CONTRACT.md` 48-51, `main/pluginui/CONTRACT.md`,
+`main/testkit/CONTRACT.md` 46-48.
+
+**Read this before touching it — the obvious design is wrong about WHICH HALF IS
+HARD.** Proposal 33 v1 ranked the windowing as the risk; the window embedded on
+the first try on Win11, and every real defect since has been in the PARAMETER
+FLOW.
+
+| Thing to know | Why |
+|---|---|
+| **A GUI edit's PRE-EDIT value travels WITH the edit** (`twEditorParamEdit::previousValue`) | `poll()` applies each Change to the mirror and the DSP on its way through — that is what makes a knob audible whatever the host does — so `getParam()` afterwards returns the NEW value and an undo entry built from it restores what it just set. That shipped in M5 and was silent; `qxa.plugin_native_editor` caught it. `SSetPluginParamAction::setPreviousValue()` has exactly one caller and must keep exactly one. |
+| **CLAP is the MIRROR IMAGE of VST3, not a second copy of it** | VST3: `performEdit` on the UI thread, the DSP has NOT followed, the host must push the ring. CLAP: `out_events` on a worker thread, the DSP HAS followed (one instance), the host owes only the mirror. |
+| **When nothing renders, a CLAP edit leaves the plugin ONLY through `params->flush()`** | The plugin calls `clap_host_params->request_flush`; if the host does not service it, a knob turned with the transport stopped never reaches the model. `guiMutex_` is what makes that call legal — CLAP forbids `flush()` concurrent with `process()`, and this engine has no audio callback to schedule it on. `process()` locks unconditionally; the 30 Hz drain uses `try_lock`. |
+| The five `clap_host_gui` callbacks touch **only atomics** | They are `[thread-safe]` and the main thread holds `guiMutex_` while inside calls that can answer with one of them. A non-recursive mutex there is a deadlock. |
+| The out-event capture is gated on `liveEditors_` | With no window open, not one instruction of it runs on the render path — which is what keeps every golden unchanged. |
+| **D1's floating rung is a real outcome, CLAP only** | If `attach()` refuses and `caps().floating`, the plugin owns its own top-level window and our `QDialog` is never shown — it stays alive as the poll pump and the registry entry. The transient parent is the APPLICATION window; an invisible one keeps nothing above anything. |
+| The window is gated headlessly **only because the fixture has no window** | `tw.test.clap.gui` + `openFor( …, showWindow = false )`. A qxa run uses the REAL platform plugin (the suite does not set `QT_QPA_PLATFORM=offscreen`), so a shown dialog would land on the developer's desktop mid-suite. |
+
+Gates: `plugins_test`'s editor section (28 checks, both delivery routes) and
+`qxa.plugin_native_editor` (the "native" fallback answer, the plugin's own knob
+reaching the render at exactly 2.5x, ONE undo entry that restores the level, and
+the window closing before teardown), plus `qxa.plugin_ui_strip_and_editor` for
+the other two fallback answers. **NOT gated:** whether a real plugin's GUI draws
+inside our container (hand-verified: Dexed, NassauEQ, Mangrove on Win11);
+keyboard and focus routing; host-driven resize (every installed VST3 reports
+`canResize=no`); DPI on a scaled monitor; **D2 persistence, which the requester
+asked for and is not implemented**; AudioUnit (M7) and Linux/X11 (M8 — VST3
+there needs `IRunLoop`; CLAP does not, so `caps().needsRunLoop` is false in that
+backend on every platform).
 
 **The mono-sink gap is CLOSED (proposal 36 B5).** It was recorded here for
 five milestones: the graph carried N channels but `RenderSession` and

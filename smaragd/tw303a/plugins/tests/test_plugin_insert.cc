@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <future>
 #include <iostream>
 #include <thread>
@@ -722,6 +723,150 @@ static int testConcurrentSlotFreeze()
 // The real CLAP load path, against the in-repo fixture module (twtestclap.c).
 // This is the M1 gate: LoadLibrary/dlopen -> clap_entry -> factory ->
 // activate/start_processing -> process -> parameter events -> state blob.
+#ifdef TW_TESTCLAP_PATH
+// --- proposal 33 M6: the CLAP native editor, with no window system ----------
+//
+// Everything here runs against tw.test.clap.gui, a fixture that implements
+// clap.gui and CREATES NO WINDOW (see twtestclap.c). That is deliberate and it
+// is what makes the gate worth having: the substance of M6 is not where a GUI
+// is drawn, it is whether an edit the plugin's own interface made reaches the
+// host — and CLAP has TWO routes for that, only one of which works while
+// something is rendering.
+static void testClapEditor()
+{
+    std::cout << "=== CLAP native editor (proposal 33 M6) ===" << std::endl;
+
+    tw303aEnvironment env;
+    auto             &registry = pluginRegistry();
+
+    twPluginDescriptor plain;
+    plain.format = "clap";
+    plain.uid    = "tw.test.clap.gain";
+    plain.path   = TW_TESTCLAP_PATH;
+    if( std::unique_ptr<twPlugin> p = registry.instantiate( plain ) ) {
+        // The CONTROL, and the reason the GUI fixture is a separate entry point:
+        // a plugin with no clap.gui must keep reporting that it has none, or the
+        // app would open an empty window instead of the slider list.
+        check( !p->supportsNativeEditor(),
+               "the plain gain fixture reports NO native editor" );
+        check( p->createEditor() == nullptr,
+               "...and createEditor() on it returns nothing" );
+    }
+
+    twPluginDescriptor d;
+    d.format = "clap";
+    d.uid    = "tw.test.clap.gui";
+    d.path   = TW_TESTCLAP_PATH;
+    d.name   = "Smaragd Test GUI";
+    std::unique_ptr<twPlugin> plugin = registry.instantiate( d );
+    if( !check( plugin != nullptr, "the module exports tw.test.clap.gui" ) )
+        return;
+
+    check( plugin->supportsNativeEditor(), "it reports a native editor" );
+    plugin->prepare( 48000, twPluginInsert::kChunkFrames );
+
+    std::unique_ptr<twPluginEditor> ed = plugin->createEditor();
+    if( !check( ed != nullptr, "createEditor() yields one" ) )
+        return;
+
+    {
+        // ONE editor per instance: gui.h's create()/destroy() take no handle, so
+        // a second one could not tell the two windows apart.
+        std::unique_ptr<twPluginEditor> second = plugin->createEditor();
+        check( second == nullptr, "a SECOND editor on the same instance is refused" );
+    }
+
+    const twEditorCaps caps = ed->caps();
+    check( caps.embeddable, "the fixture's api is supported embedded" );
+    check( caps.floating, "...and floating, so the D1 fallback has a rung" );
+    check( !caps.needsRunLoop,
+           "CLAP declares no run loop on any platform (unlike VST3 on X11)" );
+
+    // A handle that is a plain integer. The fixture never dereferences it — it
+    // has no window — which is exactly why the whole parameter path below can be
+    // gated with QT_QPA_PLATFORM=offscreen and no display at all.
+    twEditorHandle h;
+    h.api    = ed->api();
+    h.handle = reinterpret_cast<void *>( (std::uintptr_t)0x1234 );
+
+    {
+        // The api tag is checked, not assumed: a handle from another platform
+        // must be refused rather than passed to set_parent as a void*.
+        twEditorHandle wrong = h;
+        wrong.api = ( h.api == twEditorApi::Win32Hwnd ) ? twEditorApi::X11Window
+                                                        : twEditorApi::Win32Hwnd;
+        check( !ed->attach( wrong ), "attach() refuses a handle tagged for another api" );
+    }
+
+    if( !check( ed->attach( h ), "attach() embeds into the host handle" ) )
+        return;
+
+    check( ed->caps().resizable,
+           "can_resize() is read AFTER create(), so resizable is known post-attach" );
+    const twEditorSize sz = ed->size();
+    check( sz.width == 320 && sz.height == 240, "size() is the fixture's 320x240" );
+    const twEditorSize adj = ed->constrain( twEditorSize{ 300, 200 } );
+    check( adj.width == 288 && adj.height == 192,
+           "constrain() goes through adjust_size (300x200 -> 288x192)" );
+
+    // --- ROUTE 1: params->flush(), which is the ONLY way out while nothing
+    // renders. The fixture's show() turned the Gain knob to 2.5 and called
+    // clap_host_params->request_flush; a host that does not service that
+    // request never learns about the edit at all.
+    {
+        twEditorFeedback fb = ed->poll();
+        check( fb.edits.size() == 3,
+               "poll() collects the plugin's own gesture: begin, value, end" );
+        if( fb.edits.size() == 3 ) {
+            check( fb.edits[0].phase == twEditorGesture::Begin, "...bracketed by a Begin" );
+            check( fb.edits[1].phase == twEditorGesture::Change &&
+                       fb.edits[1].paramId == 0 && nearly( fb.edits[1].value, 2.5 ),
+                   "...carrying param 0 at the value the GUI set" );
+            check( fb.edits[2].phase == twEditorGesture::End, "...and closed by an End" );
+        }
+        check( nearly( plugin->getParam( 0 ), 2.5 ),
+               "the MIRROR followed, so getParam() agrees with the plugin" );
+        check( fb.resized && fb.newSize.width == 300 && fb.newSize.height == 200,
+               "clap_host_gui->request_resize reached the host, coalesced" );
+        check( !fb.restartRequested, "nothing asked for a restart" );
+
+        check( ed->poll().empty(), "a second poll reports nothing twice" );
+    }
+
+    // --- ROUTE 2: process(). set_size queues an edit and deliberately does NOT
+    // request a flush, so it can only come out through a render — which is what
+    // happens for every GUI move made while the transport is rolling.
+    {
+        check( ed->setSize( twEditorSize{ 400, 300 } ), "setSize() reaches set_size" );
+        check( ed->poll().edits.empty(),
+               "with no flush requested, a poll alone carries nothing out" );
+
+        const std::uint32_t n = 64;
+        std::vector<float>  inA( n, 1.0f ), inB( n, 1.0f ), outA( n ), outB( n );
+        const float *ins[2]  = { inA.data(), inB.data() };
+        float       *outs[2] = { outA.data(), outB.data() };
+        plugin->process( ins, outs, n );
+
+        twEditorFeedback fb = ed->poll();
+        check( fb.edits.size() == 3, "...and a render carries the whole gesture out" );
+        if( fb.edits.size() == 3 )
+            check( nearly( fb.edits[1].value, 0.75 ), "...with set_size's value" );
+        check( nearly( plugin->getParam( 0 ), 0.75 ), "the mirror followed that one too" );
+    }
+
+    // --- the lifetime contract. The count has to come back to zero, or the
+    // plugin's teardown would report an editor that outlived it (and, in the
+    // app, a window pointing at an unloaded DSO).
+    ed->detach();
+    ed.reset();
+    {
+        std::unique_ptr<twPluginEditor> again = plugin->createEditor();
+        check( again != nullptr,
+               "destroying the editor frees the instance for a new one" );
+    }
+}
+#endif
+
 static int testClapBackend()
 {
     std::cout << "=== CLAP backend (" << TW_TESTCLAP_PATH << ") ===" << std::endl;
@@ -2034,6 +2179,7 @@ int testPluginInsert()
     testGeneratorSlot();
 #ifdef TW_TESTCLAP_PATH
     testClapBackend();
+    testClapEditor();
 #else
     std::cout << "=== CLAP backend: SKIPPED (built without TW_HAVE_CLAP) ===" << std::endl;
 #endif

@@ -15136,3 +15136,115 @@ assertion whose expected value coincides with the failure value is not an
 assertion. The fix rejected a `"default"` fallback, on the grounds that lending
 one device's physical latency correction to another is worse than the zero it
 would replace.
+
+---
+
+## 2026-08-20 — Proposal 33 M6: CLAP native editors, and the M5 undo bug they exposed
+
+A CLAP plugin's own GUI now opens in `SPluginNativeEditor`, alongside VST3's.
+Branch `feat/33-m6-clap-editors`, off `main` at e7a307f (PR #98).
+
+### What was built
+
+* `twClapEditor` (`plugins/src/twclapeditor.{h,cc}`) — the `clap_plugin_gui`
+  half of `twPluginEditor`, following gui.h's own flowchart: `is_api_supported`
+  at construction, `create` → `can_resize` → `set_parent` → `show` on attach,
+  `adjust_size`/`set_size`/`set_scale` for geometry, and `hide` + `destroy` on
+  detach — with `destroy` still run, and `hide` skipped, when the plugin has
+  already destroyed its own GUI (`closed(was_destroyed=true)` carries an
+  obligation, not just news).
+* `twClapPlugin` gains `extGui_`, the five-callback `clap_host_gui` extension,
+  a GUI-edit capture in `outEventsTryPush`, `createEditor()` and `guiDrain()`.
+* **D1's floating rung is wired.** When `attach()` refuses and the plugin offers
+  a floating form, `attachFloating()` is tried before the generic fallback; the
+  `QDialog` then never shows and lives only as the poll pump and registry entry,
+  and `set_transient` gets the APPLICATION window (an invisible parent keeps
+  nothing above anything).
+* `tw.test.clap.gui` — a fifth entry point in `twtestclap.c`: the gain fixture
+  with a **windowless** `clap.gui`.
+
+### The finding: CLAP is the MIRROR IMAGE of VST3, and it needs a lock
+
+Proposal 33 §2 says the hard half is the parameter path. M6 confirms it a second
+time, and the CLAP shape is the opposite of VST3's:
+
+* VST3 delivers a GUI edit as `performEdit` on the UI thread, and the DSP has
+  NOT followed — the host must push `inputParameterChanges`.
+* CLAP delivers it in `clap_process::out_events`, on whatever thread called
+  `process()`, and the DSP HAS followed (the GUI and the DSP are one instance).
+  The host owes only the mirror.
+
+But when nothing is rendering there is no `process()`, so the plugin calls
+`clap_host_params->request_flush` and **the host must call `params->flush()` or
+the edit never leaves the plugin** — with the transport stopped, which is the
+commonest case there is. CLAP annotates `flush()` `[active ? audio-thread :
+main-thread]`, and this engine has no regular audio callback for a plugin (pages
+freeze on demand, on workers) while an instance stays ACTIVE from the first
+`prepare()` to teardown, so that schedule is not one the host can keep. The
+substantive rule the spec states is *"must not be called concurrently to
+`process()`"*, and `guiMutex_` supplies exactly that: `process()` locks
+unconditionally, `guiDrain()` uses `try_lock` and comes back on the next 30 Hz
+tick. A worker waits at most one `flush()`; the GUI never waits.
+
+Measured negative control: with the flush service disabled, `plugins_test` fails
+at exactly *"poll() collects the plugin's own gesture"* and *"the MIRROR
+followed"*, and nowhere else.
+
+### The bug M6 caught in shipped M5 code
+
+`SSetPluginParamAction::apply()` builds its inverse from `getParam()`. But
+`twPluginEditor::poll()` has ALREADY written the mirror and the DSP by the time
+the app hears about the edit — that is the whole point, so a knob is audible
+whatever the host does — so the baseline was the NEW value and **undo of a
+native-editor gesture restored the value it had just set**. Silently, on VST3 as
+well as CLAP, since PR #96.
+
+`twEditorParamEdit::previousValue` now carries the baseline out of the backend,
+read one instruction before the mirror is overwritten, and
+`SSetPluginParamAction::setPreviousValue()` takes it. Watched failing:
+`qxa.plugin_native_editor`'s undo render read **0.1666** — the gained level —
+where it now reads **0.0667**.
+
+**The shape worth remembering**: a host that applies an edit for immediacy has
+destroyed the only copy of the value its own undo needs. The fix is not to stop
+applying it; it is to make the pre-edit value part of the edit.
+
+### Why M6 is gateable headlessly and M4 was not
+
+The M4 row said the window cannot be tested because `winId()` under offscreen is
+not a real handle. True of a REAL plugin GUI; irrelevant to the parameter path.
+`tw.test.clap.gui` implements `clap.gui` and creates NO window — `create()`
+allocates nothing, `set_parent()` accepts any handle — and
+`SPluginNativeEditor::openFor( …, showWindow = false )` keeps our own dialog off
+the screen, which matters because a qxa run uses the real platform plugin (the
+suite does not set `QT_QPA_PLATFORM=offscreen`).
+
+The fixture stands in for a knob turn twice, by the two different routes, on
+purpose: `show()` sets Gain to 2.5 and requests a flush; `set_size()` queues an
+edit and requests NO flush, so only a `process()` can carry it. A host that
+services one and not the other fails half the section.
+
+### Gates
+
+`plugins_test`'s new editor section (28 checks) and `qxa.plugin_native_editor`
+(the "native" fallback answer, the plugin's own knob reaching the render at
+exactly 2.5x, ONE undo entry that restores the level, and the window closing
+before teardown), plus the new `plugin-native-editor` verb and
+`action_roundtrip_test`. Full suite: **240 registered / 237 run / 3 Not Run
+(Disabled)**, green at `-j4` in 229 s.
+
+One unexplained SEGFAULT in `qxa.record_stays_armed` on the FIRST `-j4` run, in
+a case that mentions no plugin at all; 17/17 in isolation afterwards and green
+in a second full `-j4` run. Recorded, not explained — it is the same shape as
+the two crash flakes CLAUDE.md already lists.
+
+**NOT gated:** whether a real plugin's GUI draws inside our container (hand
+verification only: Dexed, NassauEQ and Mangrove on Win11 through VST3);
+keyboard and focus routing; host-driven resize (every installed VST3 reports
+`canResize=no`); DPI on a scaled monitor; the D1 floating path against a real
+CLAP that refuses embedding (the fixture offers both forms, and the embedded
+one always wins, so the floating branch is exercised only by the caps
+assertion); **D2 persistence, which the requester asked for and is still not
+implemented**; AudioUnit (M7); and Linux/X11 (M8 — VST3 there needs `IRunLoop`,
+CLAP does not, so `caps().needsRunLoop` is false in the CLAP backend on every
+platform).

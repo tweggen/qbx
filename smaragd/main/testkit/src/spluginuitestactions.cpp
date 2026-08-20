@@ -16,6 +16,10 @@
 // though it would compile.
 #include "app/objects/track/spluginslot.h"
 #include "app/pluginui/splugineffectstrip.h"
+#include "app/pluginui/spluginnativeeditor.h"
+
+#include <QCoreApplication>
+#include <QEvent>
 
 #include <QDebug>
 #include <QDomElement>
@@ -367,6 +371,73 @@ bool SAssertPluginEditorKindAction::readXml( const QDomElement &elem, int )
     // reported against the three legal values instead of as a parse failure.
     return true;
 }
+
+SApplyResult SPluginNativeEditorAction::apply( SProject *project )
+{
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+                                         : trackAtPath( project, trackPath_ );
+    if( !track ) {
+        qWarning() << "plugin-native-editor: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
+        return { false, nullptr };
+    }
+    SPluginChain *chain = track->getPluginChain();
+    SPluginSlot  *slot  = chain ? chain->getSlotAt( slotIndex_ ) : nullptr;
+    if( !slot ) {
+        qWarning() << "plugin-native-editor: no slot" << slotIndex_;
+        return { false, nullptr };
+    }
+
+    if( action_ == QLatin1String( "open" ) ) {
+        // showWindow = false: see the header. The attach is real; only the
+        // mapping of our container onto the screen is skipped.
+        SPluginNativeEditor::openFor( track, slot, nullptr, /*showWindow=*/false );
+    } else if( action_ == QLatin1String( "close" ) ) {
+        SPluginNativeEditor::closeFor( slot );
+        // The dialogs are WA_DeleteOnClose, so close() only POSTS the deletion.
+        // Draining exactly that event here is what makes the check below mean
+        // "it is gone" rather than "it has been asked to go".
+        QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
+    } else {
+        qWarning() << "plugin-native-editor: action must be open|close, got" << action_;
+        return { false, nullptr };
+    }
+
+    const bool open = SPluginNativeEditor::isOpenFor( slot );
+    if( open != ( expectOpen_ != 0 ) ) {
+        qWarning() << "plugin-native-editor FAILED: after" << action_
+                   << "the slot's native editor is" << ( open ? "open" : "closed" )
+                   << "expected" << ( expectOpen_ ? "open" : "closed" );
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SPluginNativeEditorAction::writeXml( QDomElement &elem ) const
+{
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "trackIndex", trackIndex_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "action", action_ );
+    elem.setAttribute( "expectOpen", expectOpen_ );
+}
+
+bool SPluginNativeEditorAction::readXml( const QDomElement &elem, int )
+{
+    trackPath_  = elem.attribute( "trackPath" );
+    trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
+    slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
+    action_     = elem.attribute( "action", "open" );
+    expectOpen_ = elem.attribute( "expectOpen", "1" ).toInt();
+    return true;
+}
+
+static const bool s_reg_pluginnativeeditor =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "plugin-native-editor" ),
+          [] { return new SPluginNativeEditorAction; } ),
+      true );
 
 static const bool s_reg_assertplugineditorkind =
     ( SActionRegistry::instance().registerType(

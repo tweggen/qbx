@@ -476,12 +476,56 @@ PoC already de-risked, before any second format or platform is attempted.
 | **M3** | ✅ **DONE** — `twVst3Editor` + `twVst3PlugFrame` behind the M1 ABI, `createEditor()` wired | `vst3_probe --production`: 3/3 real plugins attach and tear down clean, fixture correctly yields null |
 | **M4** | ✅ **DONE** (persistence excepted) — `SPluginNativeEditor`, the shell-level registry, the fallback chain, §10 ownership. **D2 persistence is NOT implemented.** | `assert-plugin-editor-kind` gates the fallback DECISION; the window itself is hand-verified (winId() offscreen is not a real handle) |
 | **M5** | ✅ **DONE** — per-batch coalescing (§4.2) then `SSetPluginParamAction` merged by (track,slot,param); `SAutomationRecorder` punch-in; DualMono fan-out via the action; echo guard | `pluginui/CONTRACT.md` inv. 9 rewritten; undo of a native gesture is hand-verified |
-| **M6** | CLAP: `extGui_`, the `clap.gui` host extension (all four callbacks), **D1 floating fallback + `set_transient`** | `twtestclap` gains a GUI entry point |
+| **M6** | ✅ **DONE** — `twClapEditor`, `extGui_`, the `clap.gui` host extension (all five callbacks), the `guiMutex_` non-concurrency rule, the main-thread `request_flush` service, **D1 floating fallback + `set_transient`**; `twEditorParamEdit::previousValue` and the M5 undo fix it forced | `tw.test.clap.gui` (a WINDOWLESS clap.gui fixture) + 28 checks in `plugins_test` + `qxa.plugin_native_editor` |
 | **M7** | macOS: `twaupluginview.mm` (AU) + NSView for VST3/CLAP; the logical→physical conversion | manual, on a Retina Mac |
 | **M8** | Linux/X11: `IRunLoop` + the `QSocketNotifier`/`QTimer` bridge | manual, incl. under XWayland |
 
-M0–M5 are merged (PRs #96, #98). **What remains is D2 persistence, then CLAP
-(M6), macOS (M7) and Linux (M8).**
+M0–M5 are merged (PRs #96, #98); M6 is this branch. **What remains is D2
+persistence, then macOS (M7) and Linux (M8).**
+
+### 9.1 What M6 found, and it is not what §2 predicted for CLAP
+
+§2 says the hard half is the parameter path, and M6 confirms it a second time —
+but the CLAP failure mode is the MIRROR IMAGE of VST3's, and neither is a
+windowing problem.
+
+* **VST3** delivers a GUI edit as `performEdit`, a UI-thread callback, and the
+  edit has NOT reached the DSP (controller and processor are separate). The host
+  must push it.
+* **CLAP** delivers it in `clap_process::out_events` — on whatever thread called
+  `process()` — and the edit HAS already reached the DSP, because the GUI and
+  the DSP are one instance. The host only owes the mirror. But when nothing is
+  rendering there is no `process()`, so the plugin calls
+  `clap_host_params->request_flush` and **the host must call `params->flush()`
+  or the edit never leaves the plugin at all** — with the transport stopped,
+  which is the commonest case there is.
+
+That last requirement collides with CLAP's own `[active ? audio-thread]`
+annotation on `flush()`, because this engine has no regular audio callback for a
+plugin (pages freeze on demand, on workers) and keeps an instance ACTIVE from
+the first `prepare()` until teardown. The substantive rule the spec states is
+"must not be called concurrently to `process()`", and `twClapPlugin::guiMutex_`
+supplies exactly that: `process()` locks unconditionally, the 30 Hz drain uses
+`try_lock`. Recorded as `plugins/CONTRACT.md` inv. 49.
+
+**And M6 caught a shipped M5 bug.** `SSetPluginParamAction::apply()` builds its
+inverse from `getParam()`, but `twPluginEditor::poll()` has already written the
+mirror by then — so a native-editor gesture's undo restored the value it had
+just set, silently, on VST3 as well as CLAP. `twEditorParamEdit::previousValue`
+now carries the baseline out of the backend, one instruction before the mirror
+is overwritten, and `SSetPluginParamAction::setPreviousValue()` takes it. Seen
+failing: `qxa.plugin_native_editor`'s undo render read 0.1666 (the gained level)
+where it now reads 0.0667.
+
+**Why M6 is gateable headlessly and M4 was not.** The claim in the M4 row —
+that the window cannot be tested because `winId()` under offscreen is not a real
+handle — is true of a REAL plugin GUI and irrelevant to the parameter path.
+`tw.test.clap.gui` implements `clap.gui` and creates NO window: `create()`
+allocates nothing, `set_parent()` accepts any handle. With
+`openFor( …, showWindow = false )` the whole app half — attach, the 30 Hz poll,
+the coalescing, the commit, the undo entry — runs against the production classes
+with nothing on screen. What is still hand-verified is whether a real plugin
+DRAWS in our container, plus keyboard/focus, host-driven resize and DPI.
 
 `vst3_probe --production` is what gates M2 and M3, and it exists because the
 rest of the probe deliberately hand-rolls raw COM: that proves the PLUGIN works,

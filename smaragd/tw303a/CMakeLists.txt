@@ -239,6 +239,8 @@ if(EXISTS ${TW_CLAP_DIR}/include/clap/clap.h)
         plugins/src/twclapmodule.h
         plugins/src/twclapmodule.cc
         plugins/src/twclapplugin.cc
+        plugins/src/twclapeditor.h
+        plugins/src/twclapeditor.cc
     )
     target_include_directories(tw_plugins PRIVATE ${TW_CLAP_DIR}/include)
     target_compile_definitions(tw_plugins PRIVATE TW_HAVE_CLAP=1)
