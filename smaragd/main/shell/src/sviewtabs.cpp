@@ -2,6 +2,7 @@
 #include "tw/core/twlog.h"
 #include <QTabBar>
 #include <QSize>
+#include <QLayout>
 
 SViewTabs::SViewTabs( QWidget *parent )
     : QTabWidget( parent )
@@ -120,12 +121,18 @@ QWidget *SViewTabs::openFor( SObject *root, const QString &label )
     // view a drag computes meaningless coordinates and lands nowhere. The
     // master tab does not show this because it is the central widget and was
     // laid out when the window was.
+    QSize want = size();
     if( QWidget *ref = masterEditor() ) {
-        if( ref != editor && ref->width() > 0 && ref->height() > 0 )
-            editor->setGeometry( ref->geometry() );
+        if( ref != editor && !ref->size().isEmpty() ) want = ref->size();
     }
-    if( editor->width() <= 0 || editor->height() <= 0 )
-        editor->resize( size().isEmpty() ? QSize( 1200, 800 ) : size() );
+    if( want.isEmpty() ) want = QSize( 1200, 800 );
+    editor->resize( want );
+    // resize() alone only SCHEDULES the layout; the children -- and the
+    // arranger's canvas is a child -- are still unsized until it runs, and a
+    // .qxa never returns to the event loop for it to run in. activate() does
+    // it now. This mirrors what the headless widget gates in SMainWindow
+    // already do by hand ("resize() runs the real updateLayout()").
+    if( QLayout *l = editor->layout() ) l->activate();
 
     return editor;
 }
