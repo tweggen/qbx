@@ -15333,3 +15333,13 @@ window); the multi-monitor case against actual hardware; and what happens when
 the plugin is MISSING on the machine the project is loaded on — the flag is
 deliberately LEFT AS THE FILE HAD IT rather than cleared, so the setting is not
 lost to a temporary condition, but nothing exercises that path.
+
+Suite: **244 registered / 241 run / 3 Not Run (Disabled)**, green at `-j4` in
+228 s. One unexplained failure on the FIRST `-j4` run —
+`qxa.instrument_locate_continuity`, whose chase-continuity window read RMS
+**0.4823** against the [0.5401, 0.5735] band — in a case that touches nothing
+this branch changed. 6/6 in isolation afterwards and green in a second full
+`-j4` run. It is a playback-capture case (`toggle-playback` →
+`dump-playback-capture`) carrying no `RUN_SERIAL`, and that first run followed
+a rebuild, so a plugin rescan was re-probing six modules while it measured.
+Recorded as load-sensitive, not explained.
