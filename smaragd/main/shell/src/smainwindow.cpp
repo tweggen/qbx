@@ -2573,7 +2573,7 @@ int sLuminance( QRgb c )
 }  // namespace
 
 QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h,
-                                          const QString &pngPath )
+                                          const QString &pngPath, bool bandOnly )
 {
     SStdMixerView *v = ensureArranger_();
     if( !v || !v->contentView() ) return QString();
@@ -2623,12 +2623,25 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
     // time grid is off, which is why this verb asks for `grid-disable`.
     const QRgb playhead = QColor( 30, 200, 30 ).rgb() | 0xff000000u;
 
+    // Proposal 40 M2's `bandOnly`: scope the SCAN (never the grab, never the
+    // out-of-bounds check above, which still needs the whole lane) to the
+    // bottom band -- the exact same integer formula
+    // STrackRendererInline::drawFeelFlowBand uses over the exact same rect,
+    // so "the rows this verb measures" and "the rows the band paints" are
+    // identical, not merely close.
+    int scanTop = top, scanH = lh;
+    if( bandOnly ) {
+        const int bandHeight = qMax( 2, lh / 5 );
+        scanTop = top + lh - bandHeight;
+        scanH   = bandHeight;
+    }
+
     int fillPixels = 0, overlayPixels = 0, darkerThanFill = 0;
     int lighterThanClip = 0, clipBodyPixels = 0, playheadPixels = 0;
     int otherPixels = 0;
     int overlayLumMin = 255, overlayLumMax = 0;
     QRgb overlaySample = 0;
-    for( int y = top; y < top + lh; ++y ) {
+    for( int y = scanTop; y < scanTop + scanH; ++y ) {
         for( int x = 0; x < img.width(); ++x ) {
             const QRgb c = img.pixel( x, y ) | 0xff000000u;
             if( c == ( fill.rgb() | 0xff000000u ) ) { ++fillPixels; continue; }
@@ -2652,7 +2665,7 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
                     " overlayPixels=%7 overlayLum=%8..%9 overlaySample=#%10"
                     " fillPixels=%11 darkerThanFill=%12 lighterThanClip=%13"
                     " clipBodyPixels=%14 playheadPixels=%15 otherPixels=%16" )
-        .arg( row ).arg( top ).arg( lh )
+        .arg( row ).arg( scanTop ).arg( scanH )
         .arg( (uint) ( fill.rgb() & 0xffffff ), 6, 16, QChar( '0' ) )
         .arg( lumFill ).arg( lumClip )
         .arg( overlayPixels ).arg( overlayLumMin ).arg( overlayLumMax )

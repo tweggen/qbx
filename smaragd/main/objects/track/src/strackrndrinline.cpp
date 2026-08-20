@@ -7,6 +7,7 @@
 #include "app/model/slink.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sproject.h"
+#include "app/objects/track/sfeelflowbounce.h"   // SFeelFlowUiData
 #include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/strackrndrinline.h"
 
@@ -85,6 +86,89 @@ static void drawChildSumOverlay( QPainter &p, const QRect &visibRect,
         const int y1 = top + ( ( 127 - mn ) * height ) / 256;
         const int y2 = top + ( ( 127 - mx ) * height ) / 256;
         p.drawLine( i + tl, y1, i + tl, y2 );
+    }
+}
+
+// --- proposal 40 "Feel Flow" M2: the compliance heatmap band --------------
+//
+// Per-column tint for the compliance heatmap (design section 4.4, kickoff
+// AC 2). The two endpoints of the interpolation are THIS track's own current
+// fill colour (laneFillColor(), already selection/mute/solo/arm-aware) and
+// the clip body's fixed grey QColor(160,160,160) -- the same pair
+// drawChildSumOverlay's colour is derived from above. That choice makes the
+// relation assert-lane-overlay measures (strictly lighter than the fill,
+// strictly darker than the clip body) hold BY CONSTRUCTION rather than by
+// eyeballing a palette: every channel is interpolated identically, and
+// Rec.601 luminance is a LINEAR function of the channels, so the mixed
+// colour's luminance is exactly the same linear interpolation of the two
+// endpoints' luminances. For any mixing fraction strictly inside (0,1) the
+// result is therefore strictly between the two -- whatever this particular
+// track's fill colour happens to be. `tPercent` is kept well inside (0,100)
+// (25..55, i.e. never closer than 20 to either end) purely as an extra
+// margin against a dark/light STrackColorModifier state pushing the fill
+// unusually close to the clip grey; the core guarantee does not need it.
+//
+// Mapping (a relation, not a palette -- proposal 39's own discipline, D4):
+//  - LOW compliance -> closer to the clip grey (higher tPercent, higher
+//    alpha): bolder and more saturated relative to the lane -- reads as
+//    "hot"/flagged, a section fighting its own established feel;
+//  - HIGH compliance -> closer to the fill (lower tPercent, lower alpha):
+//    fainter -- reads as settled, consistent with the track's own groove.
+// Alpha and tPercent move together so the two cues never disagree.
+static QColor sFeelFlowTint( const QColor &fill, float compliance )
+{
+    compliance = qBound( 0.0f, compliance, 1.0f );
+    const QColor clipBody( 160, 160, 160 );
+    const int tPercent = 55 - (int) ( 30.0f * compliance );   // 55 (low) .. 25 (high)
+    const int r = fill.red()   + ( ( clipBody.red()   - fill.red()   ) * tPercent ) / 100;
+    const int g = fill.green() + ( ( clipBody.green() - fill.green() ) * tPercent ) / 100;
+    const int b = fill.blue()  + ( ( clipBody.blue()  - fill.blue()  ) * tPercent ) / 100;
+    QColor tint( qBound( 0, r, 255 ), qBound( 0, g, 255 ), qBound( 0, b, 255 ) );
+    tint.setAlpha( 90 + (int) ( 120.0f * ( 1.0f - compliance ) ) );  // 210 (low) .. 90 (high)
+    return tint;
+}
+
+// Drawn AFTER the clip loop, unlike the folder-sum overlay above, which is
+// deliberately BEHIND clips (D4's own rationale there: a folder's own clips
+// must stay on top of its child-sum hint). The heatmap targets exactly the
+// clip-covered lanes this feature is about, so the "right after
+// drawChildSumOverlay" slot the design's v2 text originally named would have
+// painted every column invisible under a clip body -- found at kickoff,
+// corrected here (section 4.4, AC 2): a bottom band, ~20% of the lane
+// height, drawn LAST so it sits visibly on top of everything else.
+//
+// Visibility rule (AC 3): a missing OR stale track analysis paints NOTHING
+// -- two cheap reads (feelFlowStale(), the atomically-cached
+// feelFlowForUi()), never a demand, never a block (timeline CONTRACT inv. 1;
+// feelFlowForUi()'s own doc covers the one bounded sidecar read its FIRST
+// call after a fresh result may do, mirroring onsetsForUi()).
+//
+// Timeline frame -> hop index is PLACEMENT ARITHMETIC ONLY: the bounce is a
+// whole-project render starting at project frame 0
+// (sfeelflowbounce.h/.cpp's RenderParams), so its hop grid already sits in
+// the SAME frame domain ctx.getTimeOf() returns here -- no warp map, no
+// clip-relative mapping, anywhere in this function.
+static void drawFeelFlowBand( QPainter &p, const QRect &visibRect,
+                              SRenderContext &ctx, STrack &track,
+                              const QColor &finalColor )
+{
+    if( visibRect.width() < 1 || visibRect.height() < 2 ) return;
+    if( track.feelFlowStale() ) return;
+    std::shared_ptr<const SFeelFlowUiData> ui = track.feelFlowForUi();
+    if( !ui || ui->hopFrames == 0 || ui->compliance.empty() ) return;
+
+    const int bandHeight = qMax( 2, visibRect.height() / 5 );   // ~20%
+    const int bandTop    = visibRect.bottom() - bandHeight + 1;
+    const int x0         = visibRect.left();
+    const size_t nHops   = ui->compliance.size();
+
+    for( int i = 0; i < visibRect.width(); ++i ) {
+        const offset_t frame = ctx.getTimeOf( x0 + i );
+        if( frame < 0 ) continue;               // before the project start
+        const uint64_t hop = (uint64_t) frame / (uint64_t) ui->hopFrames;
+        if( hop >= nHops ) continue;             // past the analyzed material
+        p.setPen( sFeelFlowTint( finalColor, ui->compliance[hop] ) );
+        p.drawLine( x0 + i, bandTop, x0 + i, visibRect.bottom() );
     }
 }
 
@@ -176,10 +260,15 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         // Draw the number of links into the upper right.
         {            
             p.setPen( QColor( 0,0,0 ) );
-            p.drawText( vr, Qt::AlignTop|Qt::AlignRight, 
+            p.drawText( vr, Qt::AlignTop|Qt::AlignRight,
                         QString::number( lk->getSObject().getNReferences() ) );
         }
     }
+
+    // Proposal 40 M2: the compliance heatmap band, drawn LAST -- see
+    // drawFeelFlowBand()'s doc for why it cannot share the folder-sum
+    // overlay's earlier slot.
+    drawFeelFlowBand( p, visibRect, ctx, getTrack(), finalColor );
 }
 
 /**

@@ -385,6 +385,22 @@ long-term shape.
     clip has an editor to open). Test entry point: `double-click-clip`
     (`SStdMixerView::doubleClickClip`, `drag-clip-edge`'s twin).
 
+25. **The Feel Flow compliance heatmap is a bottom band, drawn AFTER the clip
+    loop, read-only and never a demand** (proposal 40 M2,
+    `STrackRendererInline::drawFeelFlowBand`). It is deliberately NOT in the
+    slot proposal 39's folder-sum overlay uses (right after the lane fill,
+    before the clips): that slot is BEHIND every clip body and would paint
+    the band invisible on exactly the clip-covered lanes this feature
+    targets. A missing OR stale track analysis (`STrack::feelFlowStale()`)
+    paints NOTHING — checked with two cheap reads per repaint (`feelFlowStale()`,
+    the atomically-cached `STrack::feelFlowForUi()`), never a block, never a
+    demand (inv. 1), mirroring `SPlainWave::onsetsForUi()`'s discipline: the
+    one bounded sidecar read a cache MISS may do happens on the FIRST paint
+    after a fresh result only. Timeline frame -> "groove.res" hop index is
+    PLACEMENT ARITHMETIC ONLY (one integer divide by `hopFrames`) because the
+    M1b bounce is a whole-project render anchored at project frame 0 — no
+    warp map, no clip-relative offset, anywhere in the paint path.
+
 ## The `media:` drop branch (proposal 38 gate 3)
 
 23. **`SMVActualView::dropEvent` has ONE new branch and it is five lines:**

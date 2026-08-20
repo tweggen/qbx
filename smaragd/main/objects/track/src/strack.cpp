@@ -469,6 +469,12 @@ bool STrack::feelFlowStale() const
     return !feelFlowBounce_ || feelFlowBounce_->isStale();
 }
 
+std::shared_ptr<const SFeelFlowUiData> STrack::feelFlowForUi() const
+{
+    if( !feelFlowBounce_ ) return nullptr;   // never bounced: no holder yet
+    return feelFlowBounce_->feelFlowForUi();
+}
+
 int STrack::seekTo( offset_t ofs )
 {
     // seek(): app model -> engine component, an EXTERNAL seek (see

@@ -35,7 +35,8 @@
 namespace fs = std::filesystem;
 
 SFeelFlowTrackBounce::SFeelFlowTrackBounce( STrack *track )
-    : track_( track )
+    : track_( track ),
+      uiCache_( std::make_shared<UiSlot>() )
 {
 }
 
@@ -242,6 +243,14 @@ void SFeelFlowTrackBounce::start()
                                 // content -- skip the heavy pass, but this
                                 // IS a fresh, successful bounce: refresh the
                                 // epoch snapshot so isStale() reflects it.
+                                // The content hash write (M2) is BEFORE
+                                // haveResult_'s release store for the same
+                                // reason epochAtBounce_'s is: haveResult_ is
+                                // what publishes both to feelFlowForUi().
+                                self->contentHashLo_.store(
+                                    content.lo, std::memory_order_relaxed );
+                                self->contentHashHi_.store(
+                                    content.hi, std::memory_order_relaxed );
                                 self->epochAtBounce_.store(
                                     epochAtStart, std::memory_order_release );
                                 self->haveResult_.store(
@@ -287,6 +296,10 @@ void SFeelFlowTrackBounce::start()
                                         qi, built.evPayload.data(),
                                         (uint64_t) built.evPayload.size() );
 
+                                    self->contentHashLo_.store(
+                                        content.lo, std::memory_order_relaxed );
+                                    self->contentHashHi_.store(
+                                        content.hi, std::memory_order_relaxed );
                                     self->epochAtBounce_.store(
                                         epochAtStart, std::memory_order_release );
                                     self->haveResult_.store(
@@ -300,6 +313,16 @@ void SFeelFlowTrackBounce::start()
                     }
                 }
 
+                // Proposal 40 M2: force exactly one UI-cache reload on the
+                // next feelFlowForUi() call -- the onsetsForUi() completion
+                // discipline verbatim (splainwave.cpp). Unconditional: even
+                // a failed/unanalyzable bounce may have left a STALE cached
+                // result behind (this holder's previous, now-superseded
+                // success), and a decode failure must not leave the old
+                // content's compliance data on screen.
+                std::atomic_store( &self->uiCache_->ptr,
+                                   std::shared_ptr<const SFeelFlowUiData>() );
+
                 bouncingFlag->store( false, std::memory_order_release );
                 QMetaObject::invokeMethod( project, "notifyCaptureRevalidated",
                                            Qt::QueuedConnection );
@@ -311,4 +334,53 @@ void SFeelFlowTrackBounce::start()
                  session_->errorMessage() );
         bouncing_->store( false, std::memory_order_release );
     }
+}
+
+std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() const
+{
+    if( !uiCache_ ) return nullptr;                 // pre-ctor defensive
+    if( auto cached = std::atomic_load( &uiCache_->ptr ) )
+        return cached;                              // hit (possibly empty)
+
+    // First call (or post-analysis invalidation): read the "groove.res"
+    // sidecar ONCE. A miss (never bounced, decode failure, or the payload's
+    // geometry does not check out) caches an EMPTY result so a repaint never
+    // re-hits the store.
+    auto fresh = std::make_shared<SFeelFlowUiData>();
+    if( haveResult_.load( std::memory_order_acquire ) ) {
+        twContentHash content;
+        content.lo = contentHashLo_.load( std::memory_order_relaxed );
+        content.hi = contentHashHi_.load( std::memory_order_relaxed );
+        if( !content.isNull() ) {
+            // Params-AGNOSTIC (loadAny), mirroring SPlainWave::onsetsForUi():
+            // this is a UI reader, not the job that chose the analysis
+            // params, and M1/M1b ship no per-clip/per-track tuning yet.
+            std::unique_ptr<twQafReader> reader =
+                twSidecarStore::instance().loadAny(
+                    content, twAspect::GrooveRes, twAspect::GrooveResVersion );
+            if( reader && reader->info().recordStride >= 4
+                && reader->info().recordCount > 0 ) {
+                // nUnits is not in the QAF header (twaspects.h's "groove.res"
+                // doc) -- derive it from this file's own geometry, the same
+                // computation assert-groove-aspect makes.
+                const uint32_t nUnits =
+                    (uint32_t)( reader->info().recordStride / 4 - 1 );
+                std::vector<uint8_t> payload;
+                if( reader->readAllPayload( payload ) ) {
+                    const std::vector<twGrooveResRecord> decoded =
+                        twGrooveDecodeResPayload( payload.data(), payload.size(),
+                                                  nUnits );
+                    fresh->compliance.reserve( decoded.size() );
+                    for( const twGrooveResRecord &rec : decoded )
+                        fresh->compliance.push_back( rec.compliance );
+                    if( !decoded.empty() )
+                        fresh->hopFrames = (uint32_t) reader->info().hopFrames;
+                }
+            }
+        }
+    }
+
+    auto published = std::shared_ptr<const SFeelFlowUiData>( std::move( fresh ) );
+    std::atomic_store( &uiCache_->ptr, published );
+    return published;
 }

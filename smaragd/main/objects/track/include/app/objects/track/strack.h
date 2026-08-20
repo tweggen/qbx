@@ -17,6 +17,7 @@ class STrackRendererInline;
 class SPluginChain;
 class SPluginSlot;
 class SFeelFlowTrackBounce;
+struct SFeelFlowUiData;
 class twTrackMix;
 class twRewire;
 class twGainStage;
@@ -319,6 +320,16 @@ public:
     // bounce, or no bounce has ever completed — never silently reports a
     // result that no longer matches the chain (proposal 40 section 4.3).
     bool feelFlowStale() const;
+
+    // Proposal 40 M2: the compliance heatmap's UI-cache read, forwarded to
+    // the holder (SFeelFlowTrackBounce::feelFlowForUi() -- see its doc for
+    // the onsetsForUi() discipline). Returns nullptr ONLY when no bounce has
+    // EVER been started for this track (the holder itself does not exist
+    // yet); once a holder exists this always returns a non-null result,
+    // possibly empty (hopFrames == 0). Freshness is a SEPARATE question,
+    // deliberately not folded in here -- a painter checks feelFlowStale()
+    // itself, exactly as it already does for the badge.
+    std::shared_ptr<const SFeelFlowUiData> feelFlowForUi() const;
 
     // --- the folder-sum preview (proposal 39 M3, design D3) ---------------
 

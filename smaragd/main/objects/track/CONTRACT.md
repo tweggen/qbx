@@ -405,3 +405,19 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     save/load for free and dies with the object automatically. It changes no
     audio and nothing in the render path reads it — purely a UI fact that
     happens to be worth remembering across a reload.
+
+## Feel Flow (proposal 40 M2)
+
+25. **`SFeelFlowTrackBounce::feelFlowForUi()` is an atomically-swapped
+    shared_ptr UI cache, the `SPlainWave::onsetsForUi()` pattern verbatim**
+    (`main/objects/wave/CONTRACT.md`). The FIRST call after a fresh,
+    successful bounce does ONE `twSidecarStore::loadAny()` (never a demand);
+    a MISS or "no bounce yet" caches an EMPTY result so a repaint never
+    re-hits the store; the analysis job's completion resets the slot to null,
+    forcing exactly one reload — whether that job succeeded, found nothing
+    analyzable, or the content was already valid and only the epoch snapshot
+    moved. `STrack::feelFlowForUi()` forwards to the holder and returns
+    nullptr ONLY when no bounce has ever been started (the holder itself does
+    not exist yet); freshness is a SEPARATE question, deliberately not folded
+    in — a caller (the lane painter, `main/timeline/CONTRACT.md` inv. 25)
+    checks `feelFlowStale()` itself.

@@ -252,7 +252,7 @@ SApplyResult SAssertLaneOverlayAction::apply( SProject * )
     }
 
     const QString rep = win->describeLaneOverlay( trackPath_, grabWidth_,
-                                                  grabHeight_, png );
+                                                  grabHeight_, png, bandOnly_ );
     if( rep.isEmpty() ) {
         qWarning() << "assert-lane-overlay FAILED: no lane at" << trackPath_
                    << "(or the canvas could not be grabbed)";
@@ -294,11 +294,21 @@ SApplyResult SAssertLaneOverlayAction::apply( SProject * )
                        << "lighterThanClip" << lighter << "|" << rep;
             return { false, nullptr };
         }
-    } else if( overlay > 0 ) {
-        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
-                   << "- expected NO overlay, found" << overlay
-                   << "pixels |" << rep;
-        return { false, nullptr };
+    } else {
+        // Default ceiling is exactly 0 -- byte-for-byte the ORIGINAL
+        // behaviour of this branch (proposal 39 M3.10) when maxPixels_ is
+        // unset. maxPixels_ (proposal 40 M2) lets a case name an intrinsic
+        // noise floor explicitly instead of pretending the classifier can
+        // reach a literal zero over real waveform content -- see this
+        // action's own header doc for the measurement that forced it.
+        const long long ceiling = maxPixels_ >= 0 ? maxPixels_ : 0;
+        if( overlay > ceiling ) {
+            qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                       << "- expected at most" << ceiling
+                       << "overlay pixels, found" << overlay
+                       << "pixels |" << rep;
+            return { false, nullptr };
+        }
     }
 
     if( !contains_.isEmpty() && !rep.contains( contains_ ) ) {
@@ -318,6 +328,11 @@ void SAssertLaneOverlayAction::writeXml( QDomElement &elem ) const
     if( grabHeight_ > 0 )      elem.setAttribute( "grabHeight", grabHeight_ );
     if( !grabPng_.isEmpty() )  elem.setAttribute( "grabPng", grabPng_ );
     if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    // Written only when true / set, mirroring every other "default off" flag
+    // in this file — every case predating proposal 40 M2 round-trips
+    // byte-unchanged.
+    if( bandOnly_ )            elem.setAttribute( "bandOnly", "true" );
+    if( maxPixels_ >= 0 )      elem.setAttribute( "maxPixels", maxPixels_ );
 }
 
 bool SAssertLaneOverlayAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -329,6 +344,8 @@ bool SAssertLaneOverlayAction::readXml( const QDomElement &elem, int /*version*/
     grabHeight_    = elem.attribute( "grabHeight", "0" ).toInt();
     grabPng_       = elem.attribute( "grabPng" );
     contains_      = elem.attribute( "contains" );
+    bandOnly_      = elem.attribute( "bandOnly", "false" ) == "true";
+    maxPixels_     = elem.attribute( "maxPixels", "-1" ).toInt();
     return true;
 }
 

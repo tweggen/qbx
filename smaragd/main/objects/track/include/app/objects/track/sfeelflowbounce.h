@@ -5,10 +5,28 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "tw/render/render_session.h"
 
 class STrack;
+
+/**
+ * Proposal 40 "Feel Flow" M2 -- the lane-overlay UI read: per-hop compliance
+ * scalars (the LAST field of each decoded "groove.res" record,
+ * tw/sidecar/twgrooveaspect.h) plus the hop length in analyzed-wave frames.
+ *
+ * Because M1b's bounce is a whole-project render starting at PROJECT FRAME 0
+ * (params.startTimeSec = 0.0, never re-anchored -- see start() below), the
+ * bounce's own frame domain IS the track-timeline frame domain the arranger
+ * already draws in, so a caller maps a timeline position straight onto an
+ * index with one integer divide (design section 4.4: "placement arithmetic
+ * only -- no warp map anywhere in the paint path").
+ */
+struct SFeelFlowUiData {
+    std::vector<float> compliance;     // per hop, each in [0,1]
+    uint32_t             hopFrames = 0;  // 0 == "no data" (paint nothing)
+};
 
 // Proposal 40 "Feel Flow" M1b — the internal-bounce consumer for a TRACK's
 // post-FX signal (design section 4.3, plan/proposed/40_GROOVE_RESONANCE.md).
@@ -90,6 +108,27 @@ public:
     // completed.
     bool isStale() const;
 
+    // Proposal 40 M2: the SPlainWave::onsetsForUi() pattern verbatim (see
+    // that method's doc, splainwave.h) -- an atomically-swapped shared_ptr
+    // slot, read lock-free. The FIRST call after a fresh, successful bounce
+    // does one twSidecarStore::loadAny() (never a demand, never a freeze);
+    // a MISS or a "no bounce yet" caches an EMPTY result (hopFrames == 0)
+    // so a repaint never re-hits the store. The analysis job's completion
+    // (sfeelflowbounce.cpp) resets the slot to null, which forces exactly
+    // one reload on the next call -- whether that job succeeded, found
+    // nothing analyzable, or the content was already valid and only the
+    // epoch snapshot moved.
+    //
+    // Params-AGNOSTIC (twSidecarStore::loadAny), mirroring onsetsForUi():
+    // this is a UI reader, not the job that chose the analysis params, and
+    // M1/M1b ship no per-clip/per-track tuning yet (that is M3's
+    // set-groove-param). Never null; a caller distinguishes "no data" from
+    // "data" by hopFrames == 0 / compliance.empty(), exactly as it already
+    // checks isStale() separately -- this accessor does NOT consult
+    // isStale() itself, so the painter's own visibility rule stays the
+    // single place that decision is made.
+    std::shared_ptr<const SFeelFlowUiData> feelFlowForUi() const;
+
 private:
     STrack *track_;   // not owned; this holder is owned BY the track
     std::unique_ptr<audio::RenderSession> session_;
@@ -97,6 +136,18 @@ private:
     std::atomic<bool> haveResult_{ false };
     std::atomic<uint64_t> epochAtBounce_{ 0 };
     std::string bouncePath_;
+
+    // Proposal 40 M2: the content hash of the last successful bounce, needed
+    // to key the sidecar lookup feelFlowForUi() makes. Written (relaxed)
+    // BEFORE haveResult_'s release store and read (relaxed) AFTER its
+    // acquire load in feelFlowForUi() -- haveResult_ is what actually
+    // publishes these two words, exactly as it already publishes
+    // epochAtBounce_ for isStale().
+    std::atomic<uint64_t> contentHashLo_{ 0 };
+    std::atomic<uint64_t> contentHashHi_{ 0 };
+
+    struct UiSlot { std::shared_ptr<const SFeelFlowUiData> ptr; };
+    std::shared_ptr<UiSlot> uiCache_;
 };
 
 #endif // SFEELFLOWBOUNCE_H
