@@ -15,6 +15,8 @@ source "$SCRIPT_DIR/_env.sh"
 detect_platform
 resolve_qt_path "$1"
 setup_toolchain
+check_linux_prereqs
+pick_generator
 ensure_submodules
 ensure_render_deps
 setup_extra_cmake_args
@@ -41,7 +43,7 @@ fi
 # launches without Qt on PATH. Override with AUTO_DEPLOY_QT=OFF in the env for
 # faster iteration when you run with Qt already on PATH.
 echo "Configuring CMake..."
-cmake -B build -G Ninja \
+cmake -B build "${CMAKE_GENERATOR_ARGS[@]}" \
     -DCMAKE_PREFIX_PATH="$QT_PATH" \
     -DAUTO_DEPLOY_QT="${AUTO_DEPLOY_QT:-ON}" \
     "${CMAKE_EXTRA_ARGS[@]}"

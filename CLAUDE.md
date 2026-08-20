@@ -232,8 +232,12 @@ logic lives in `_env.sh`, sourced by both):
 ./build.sh   [QT_PATH]   # incremental build (auto-configures if build/ is missing)
 ```
 
-`QT_PATH` is the Qt prefix (e.g. `/c/Qt/6.11.1/mingw_64`, `$HOME/Qt/6.11.1/macos`);
-omit it to auto-detect. On Windows the scripts add Qt's bundled MinGW/Ninja to
+`QT_PATH` is the Qt prefix (e.g. `/c/Qt/6.11.1/mingw_64`, `$HOME/Qt/6.11.1/macos`,
+or `/usr` for a distro Qt); omit it to auto-detect — including a **Debian/Ubuntu
+`qt6-base-dev`**, whose prefix is `/usr` and whose tools are named `qmake6` /
+`qtpaths6`, so neither `~/Qt` nor a plain `qmake` exists to find it.
+`docs/BUILD.md` has the one `apt install` line for the Linux prerequisites, and
+`./rebuild.sh` prints it for whatever it cannot find. On Windows the scripts add Qt's bundled MinGW/Ninja to
 PATH (the compiler lives in `<QtRoot>/Tools`, *outside* the Qt prefix) and wire
 up vcpkg (`-DCMAKE_TOOLCHAIN_FILE` + `x64-mingw-dynamic` triplet) for the render
 deps automatically. `AUTO_DEPLOY_QT` defaults ON, so `windeployqt` copies the Qt

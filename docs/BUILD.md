@@ -17,8 +17,11 @@ toolchain for you:
 ```
 
 `QT_PATH` is the Qt prefix (e.g. `/c/Qt/6.11.1/mingw_64`,
-`$HOME/Qt/6.11.1/macos`, `$HOME/Qt/6.11.1/gcc_64`). If omitted, it is guessed
-per platform; you can also point at any kit explicitly.
+`$HOME/Qt/6.11.1/macos`, `$HOME/Qt/6.11.1/gcc_64`, or `/usr` for a distro Qt).
+If omitted it is detected, in this order: the Qt installer's layout
+(`~/Qt/6.x/<kit>`, `C:/Qt/...`, Homebrew's keg), then `qmake6`/`qtpaths6`/
+`qmake` on PATH, then a system `Qt6Config.cmake` under `/usr`, `/usr/local` or
+`/opt/qt6*`. You can also point at any kit explicitly.
 
 What the scripts handle automatically (logic lives in `_env.sh`, sourced by
 both):
@@ -42,37 +45,94 @@ directly or need a generator the scripts don't use (e.g. MSVC, Xcode).
 | Tool          | Version  | Notes                                                                  |
 |---------------|----------|------------------------------------------------------------------------|
 | CMake         | >= 3.16  | The build system. Verified with 4.3.3.                                 |
-| Qt            | Qt6 or Qt5 | `Core`, `Widgets`, `Xml` components. CMake prefers Qt6 if both are present. |
+| Qt            | Qt6 (Qt5 nominally) | `Core`, `Gui`, `Widgets`, `Xml`, `Network`, `Concurrent`. CMake prefers Qt6 if both are present; only Qt6 is tested. |
 | C++ toolchain | C++17    | GCC, Clang, MSVC, or MinGW. Verified with MinGW 13.1.                  |
 | libsndfile    | (any)    | Audio file I/O (WAV export). Required on all platforms.                |
-| libvorbis     | (any)    | Ogg Vorbis audio codec (OGG export). Required on all platforms.        |
+| libvorbis + libogg | (any) | Ogg Vorbis audio codec (OGG export). Required on all platforms.   |
+| pkg-config    | (any)    | macOS/Linux only: how the render deps are located. Windows uses vcpkg. |
 
 Per-platform audio dependencies are listed below.
 
 ## Linux
 
+### 1. Install the prerequisites
+
+Debian / Ubuntu — this is the whole list, and it is the same line `_env.sh`'s
+`apt_packages_line()` prints when something is missing (keep the two in step):
+
+```bash
+sudo apt install build-essential cmake ninja-build pkg-config git qt6-base-dev \
+                 libsndfile1-dev libogg-dev libvorbis-dev libasound2-dev
+```
+
+Optional: `libsecret-1-dev` — the libsecret backend of `SSecretStore` (proposal
+38). Without it the credential store falls back to `none`, which means
+"Remember" is disabled in the media browser's account dialog; nothing else
+changes.
+
+| Package | Why it is needed |
+|---|---|
+| `build-essential` | g++ and the C++17 toolchain. |
+| `cmake` (>= 3.16) | The build system. |
+| `ninja-build` | The generator the scripts prefer. **Not strictly required** — without it they fall back to CMake's default generator and say so. |
+| `pkg-config` | How `tw303a/CMakeLists.txt` finds sndfile/ogg/vorbis on Linux (`pkg_check_modules(... REQUIRED ...)`). Configure fails without it even when the libraries are installed. |
+| `git` | Fetches the CLAP/VST3 submodules under `smaragd/third_party/`. Without them the build succeeds but **silently drops plugin hosting**, which disables the `plugin_*` qxa cases. |
+| `qt6-base-dev` | Qt 6 `Core` `Gui` `Widgets` `Xml` `Network` `Concurrent`. It also depends on the `qmake6` package, which puts `qmake6`/`qtpaths6` on PATH — that is how the scripts locate Qt with no `QT_PATH` argument (see below). |
+| `libsndfile1-dev` | Audio file I/O: WAV export, and general sample import (MP3/FLAC/AIFF/Ogg/Opus). |
+| `libogg-dev`, `libvorbis-dev` | Ogg Vorbis export. Both are separate `find_package`/`pkg_check_modules` calls; `libvorbis-dev` does not pull `libogg-dev`'s headers in on every release. |
+| `libasound2-dev` | ALSA — `ENABLE_ALSA` defaults **ON** on Linux, and it carries the MIDI half too (the ALSA sequencer, proposal 37 P7a). |
+
+Verified on Ubuntu (development branch) with Qt 6.10.2. Names on other
+distributions — **not verified on this repo's boxes**, so treat them as a
+starting point:
+
+- **Fedora / RHEL:** `gcc-c++ cmake ninja-build pkgconf-pkg-config git
+  qt6-qtbase-devel libsndfile-devel libogg-devel libvorbis-devel
+  alsa-lib-devel` (optional `libsecret-devel`)
+- **Arch:** `base-devel cmake ninja git qt6-base libsndfile libogg libvorbis
+  alsa-lib` (optional `libsecret`)
+- **openSUSE:** `gcc-c++ cmake ninja pkg-config git qt6-base-devel
+  libsndfile-devel libogg-devel libvorbis-devel alsa-devel`
+
+### 2. Build
+
+```bash
+./rebuild.sh          # from the repo root; no QT_PATH needed
+```
+
+The distro Qt is found automatically: its prefix is `/usr` and its CMake
+package lives under `/usr/lib/<arch>/cmake/Qt6`, which is neither `~/Qt` nor a
+Qt-installer "kit" directory — so `_env.sh` asks `qmake6`/`qtpaths6` for the
+prefix, and failing that scans for a system `Qt6Config.cmake`. An official Qt
+installer kit still wins when it is present and can always be forced
+explicitly:
+
+```bash
+./rebuild.sh "$HOME/Qt/6.11.1/gcc_64"
+```
+
+If a prerequisite is missing, `./rebuild.sh` prints the `apt install` line for
+exactly what it could not find before CMake gets a chance to fail.
+
+Driving CMake directly, if you prefer:
+
 ```bash
 cd smaragd
-cmake -B build -DENABLE_ALSA=ON
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH=/usr -DENABLE_ALSA=ON
 cmake --build build -j
 ./build/bin/smaragd
 ```
 
-Required dev packages on Debian/Ubuntu:
+### Status
 
-```bash
-sudo apt install build-essential cmake qtbase5-dev libqt5xml5 libasound2-dev \
-                 libsndfile1-dev libvorbis-dev
-```
-
-On other distributions, install equivalents:
-- **Fedora/RHEL:** `libsndfile-devel vorbis-devel`
-- **Arch:** `libsndfile libvorbis`
+**Linux is under-tested.** The ALSA backend has not been exercised since the
+module refactor (xrun recovery was added blind), and every timing figure quoted
+in `CLAUDE.md` and `plan/STATE.md` was measured on the Windows box. Expect to
+be the first to run the qxa suite here.
 
 Other backends (PipeWire, PulseAudio, JACK) are stubbed in the CMake but their
-runtime implementations are not yet wired up — see Phase 2 of the
-modernization plan. Enable with `-DENABLE_PIPEWIRE=ON`, etc., once the backends
-land.
+runtime implementations are not yet wired up. Enable with
+`-DENABLE_PIPEWIRE=ON`, etc., once the backends land.
 
 ## macOS
 
