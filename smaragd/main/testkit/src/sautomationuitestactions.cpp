@@ -105,7 +105,7 @@ void SDragAutomationPointAction::writeXml( QDomElement &elem ) const
 
 bool SDragAutomationPointAction::readXml( const QDomElement &elem, int )
 {
-    ownerPath_ = stringToPath( elem.attribute( "owner" ) );
+    ownerPath_ = parseInto( pathRoot_, elem.attribute( "owner" ) );
     target_    = elem.attribute( "target" );
     slotIndex_ = elem.attribute( "slotIndex", "-1" ).toInt();
     take_      = elem.attribute( "take", "-1" ).toInt();
@@ -145,8 +145,7 @@ SApplyResult SAutomationWriteTickAction::apply( SProject *project )
         qWarning() << "automation-write-tick: no target";
         return { false, nullptr };
     }
-    sautomation::OwnerRef o = sautomation::resolveOwner(
-        project, ownerPath_, target_, slotIndex_, take_ );
+    sautomation::OwnerRef o = sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) {
         qWarning() << "automation-write-tick: cannot resolve owner"
                    << pathToString( ownerPath_ ) << "for target" << target_;
@@ -201,7 +200,7 @@ void SAutomationWriteTickAction::writeXml( QDomElement &elem ) const
 
 bool SAutomationWriteTickAction::readXml( const QDomElement &elem, int )
 {
-    ownerPath_ = stringToPath( elem.attribute( "owner" ) );
+    ownerPath_ = parseInto( pathRoot_, elem.attribute( "owner" ) );
     target_    = elem.attribute( "target" );
     slotIndex_ = elem.attribute( "slotIndex", "-1" ).toInt();
     take_      = elem.attribute( "take", "-1" ).toInt();

@@ -21,7 +21,7 @@ SApplyResult SRestoreContainerClipAction::apply( SProject *project )
     if( !project ) {
         return {false, nullptr};
     }
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( root, lanePath_ );
     if( !lane ) {
         return {false, nullptr};

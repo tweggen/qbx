@@ -10,9 +10,10 @@ using namespace strackpath;
 
 // Resolve the addressed lane: path form first (it reaches nested lanes), then
 // the legacy top-level index. Same helper shape as set-track-mute.
-static SObject *laneFor( SProject *project, const QList<int> &path, int index )
+static SObject *laneFor( SProject *project, const QString &pathRoot_,
+                         const QList<int> &path, int index )
 {
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) return nullptr;
     if( !path.isEmpty() ) return splacements::laneAt( mixer, path );
     if( index < 0 || index >= mixer->childCount() ) return nullptr;
@@ -21,11 +22,11 @@ static SObject *laneFor( SProject *project, const QList<int> &path, int index )
 
 SApplyResult SSetTrackNameAction::apply( SProject *project )
 {
-    SObject *lane = laneFor( project, trackPath_, trackIndex_ );
+    SObject *lane = laneFor( project, pathRoot_, trackPath_, trackIndex_ );
     if( !lane ) {
         qWarning() << "set-track-name: no track at"
                    << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
-                                             : pathToString( trackPath_ ) );
+                                             : qualifiedToString( pathRoot_, trackPath_ ) );
         return {false, nullptr};
     }
 
@@ -46,7 +47,7 @@ SApplyResult SSetTrackNameAction::apply( SProject *project )
 void SSetTrackNameAction::writeXml( QDomElement &elem ) const
 {
     if( !trackPath_.isEmpty() ) {
-        elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+        elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     } else {
         elem.setAttribute( "trackIndex", QString::number( trackIndex_ ) );
     }
@@ -56,7 +57,7 @@ void SSetTrackNameAction::writeXml( QDomElement &elem ) const
 bool SSetTrackNameAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     name_ = elem.attribute( "name" );
     return true;
 }

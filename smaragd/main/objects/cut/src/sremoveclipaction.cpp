@@ -23,7 +23,7 @@ SApplyResult SRemoveClipAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -46,9 +46,9 @@ SApplyResult SRemoveClipAction::apply( SProject *project )
 
 void SRemoveClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
-    elem.setAttribute( "source", pathToString( sourceClipPath_ ) );
-    elem.setAttribute( "destTrack", pathToString( destTrackPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
+    elem.setAttribute( "source", qualifiedToString( pathRoot_, sourceClipPath_ ) );
+    elem.setAttribute( "destTrack", qualifiedToString( pathRoot_, destTrackPath_ ) );
     elem.setAttribute( "startTime", QString::fromStdString( Fraction(startTime_, 1).toString() ) );
 }
 

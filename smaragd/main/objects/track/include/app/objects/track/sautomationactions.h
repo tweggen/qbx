@@ -41,7 +41,14 @@ struct OwnerRef {
 };
 
 /// `slotIndex` < 0 = not a slot; `take` < 0 = the ACTIVE take of a stack.
-OwnerRef resolveOwner( SProject *project, const QList<int> &ownerPath,
+// The registered arrangement name a container belongs to, or empty for the
+// master -- i.e. the qualifier that matches paths minted against `root`
+// (proposal 09 D21). A UI that mints paths against its own view root must pass
+// this, or its edits resolve in the master.
+QString rootNameOf( SProject *project, SObject *root );
+
+OwnerRef resolveOwner( SProject *project, const QString &pathRoot,
+                       const QList<int> &ownerPath,
                        const QString &target, int slotIndex, int take );
 
 /// The invalidation range an edit at `frame` produces on `lane`, already

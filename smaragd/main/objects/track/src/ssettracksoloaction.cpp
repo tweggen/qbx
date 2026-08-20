@@ -14,7 +14,7 @@ SSetTrackSoloAction::SSetTrackSoloAction( const QList<int> &trackPath, bool solo
 
 SApplyResult SSetTrackSoloAction::apply( SProject *project )
 {
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( mixer, trackPath_ );
     if( !lane ) {
         return {false, nullptr};
@@ -31,13 +31,13 @@ SApplyResult SSetTrackSoloAction::apply( SProject *project )
 
 void SSetTrackSoloAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "solo", solo_ ? "1" : "0" );
 }
 
 bool SSetTrackSoloAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     // "1"/"0" is set-track-mute's spelling; "true" is accepted so a
     // hand-written element in either house style works.
     const QString v = elem.attribute( "solo", "0" );

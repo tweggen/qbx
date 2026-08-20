@@ -42,9 +42,10 @@ double diffRmsOver( const sample_t *a, const sample_t *b, uint32_t n )
     return std::sqrt( s / (double) n );
 }
 
-STrack *laneAtPath( SProject *project, const QList<int> &path )
+STrack *laneAtPath( SProject *project, const QString &pathRoot_,
+                    const QList<int> &path )
 {
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     if( !root ) return nullptr;
     SObject *lane = splacements::laneAt( root, path );
     return dynamic_cast<STrack *>( lane );
@@ -89,16 +90,16 @@ SApplyResult SAssertTrackChannelsAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
 
-    STrack *track = laneAtPath( project, trackPath_ );
+    STrack *track = laneAtPath( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "assert-track-channels: no track at path"
-                   << pathToString( trackPath_ );
+                   << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
 
     std::shared_ptr<twComponent> tap = track->getRootComponent();
     if( !tap ) {
-        qWarning() << "assert-track-channels: track" << pathToString( trackPath_ )
+        qWarning() << "assert-track-channels: track" << qualifiedToString( pathRoot_, trackPath_ )
                    << "has no root component";
         return { false, nullptr };
     }
@@ -114,14 +115,14 @@ SApplyResult SAssertTrackChannelsAction::apply( SProject *project )
     if( !page || page->validAspects.load() == 0 || page->validFrames == 0 ) {
         qWarning() << "assert-track-channels: no frozen page at"
                    << (qlonglong) pageStart << "for track"
-                   << pathToString( trackPath_ ) << "(driver" << driver_ << ")";
+                   << qualifiedToString( pathRoot_, trackPath_ ) << "(driver" << driver_ << ")";
         return { false, nullptr };
     }
 
     const int nCh = (int) page->channels();
     const QString where =
         QString( "track %1 @ %2 (page %3, driver %4): %5 channels, %6 valid frames" )
-            .arg( pathToString( trackPath_ ) ).arg( (qlonglong) position_ )
+            .arg( qualifiedToString( pathRoot_, trackPath_ ) ).arg( (qlonglong) position_ )
             .arg( (qlonglong) pageStart ).arg( driver_ )
             .arg( nCh ).arg( page->validFrames );
 
@@ -182,7 +183,7 @@ SApplyResult SAssertTrackChannelsAction::apply( SProject *project )
 
 void SAssertTrackChannelsAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "position", QString::number( (qlonglong) position_ ) );
     elem.setAttribute( "expectChannels", QString::number( expectChannels_ ) );
     elem.setAttribute( "channelA", QString::number( channelA_ ) );
@@ -197,7 +198,7 @@ void SAssertTrackChannelsAction::writeXml( QDomElement &elem ) const
 
 bool SAssertTrackChannelsAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    trackPath_      = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_      = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     position_       = elem.attribute( "position", "0" ).toLongLong();
     expectChannels_ = elem.attribute( "expectChannels", "0" ).toInt();
     channelA_       = elem.attribute( "channelA", "0" ).toInt();
@@ -222,7 +223,7 @@ SApplyResult SAssertMasterSumsAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
 
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SStdMixer *mixer = dynamic_cast<SStdMixer *>( root );
     if( !mixer ) {
         qWarning() << "assert-master-sums: the project root is not an SStdMixer";

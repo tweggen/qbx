@@ -45,7 +45,7 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
     if( !project || sourceClipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -81,15 +81,15 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
 
 void SDuplicateClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "source", pathToString( sourceClipPath_ ) );
-    elem.setAttribute( "destTrack", pathToString( destTrackPath_ ) );
+    elem.setAttribute( "source", qualifiedToString( pathRoot_, sourceClipPath_ ) );
+    elem.setAttribute( "destTrack", qualifiedToString( pathRoot_, destTrackPath_ ) );
     elem.setAttribute( "startTime", QString::fromStdString( Fraction(startTime_, 1).toString() ) );
 }
 
 bool SDuplicateClipAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    sourceClipPath_ = stringToPath( elem.attribute( "source" ) );
-    destTrackPath_  = stringToPath( elem.attribute( "destTrack" ) );
+    sourceClipPath_ = parseInto( pathRoot_, elem.attribute( "source" ) );
+    destTrackPath_  = parseInto( pathRoot_, elem.attribute( "destTrack" ) );
     startTime_      = (offset_t) parseFractionOrDouble( elem.attribute( "startTime", "0" ).toStdString() ).toDouble();
     return true;
 }

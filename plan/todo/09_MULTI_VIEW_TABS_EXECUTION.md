@@ -6,19 +6,31 @@ decisions (D1–D19) live. That document holds the *design and the challenges*;
 this one holds *the milestone order, the acceptance criteria, and the gate for
 each*.
 
-> **Status (2026-08-20): M0, M1, M5 (the cycle guard), M6 (extract) and M7
-> (dissolve) are COMPLETE** on `feat/QBX-arr-m1-arrangement-registry` — the
-> whole HEADLESS half of the requester's use case works and is gated.
-> **M2/M3/M4 are RETIRED by D21** (paths carry their root; there is no ambient
-> edit root to seam, police or capture). What remains is UI: M8 (the tab shell
-> and the extraction gesture), M9 (`<render>` follows the addressed root),
-> M10 (local audition) and M11 (persist open tabs).
+> **Status (2026-08-20): M0, M1, M5, M6, M7 and the SHELL half of M8 are
+> COMPLETE.** The headless half of the use case works and is gated; the central
+> widget is now a tab shell with the master as tab 0.
+> **M2/M3/M4 are RETIRED by D21** (paths carry their root).
 >
-> Verbs that exist today: `create-arrangement`, `remove-arrangement`,
-> `extract-arrangement`, `dissolve-arrangement`, `assert-arrangements`, and a
-> root-aware in-sequence `assert-track-count`. `add-track`, `add-sample`,
-> `create-asset` and `place-asset` take root-qualified addresses.
+> **THE REMAINING WORK IS RE-ORDERED, and it is worth knowing why.** Arrangement
+> TABS are not shipped with the shell, because an arrangement tab is only safe
+> to edit in once every path-taking verb carries its root. The arranger mints
+> paths at **32 sites** feeding **20 distinct action types** (and the track head
+> and detail panel add more), and a PARTIAL migration is not a partial feature —
+> it is a partial silent corruption, since index {0} exists in every tree and a
+> mis-rooted action SUCCEEDS. So:
 >
+> - **M8a (done): the tab shell, master only.** Zero UX change.
+> - **M8b (done): the D21 verb migration** — every path-taking action and
+>   testkit verb resolves against its own root, and an INVERSE inherits it at
+>   the two apply funnels rather than at 83 construction sites.
+> - ~~**M8b (next): the D21 verb migration**~~ — every path-taking action accepts a
+>   qualified path, and the arranger submits its own root. Mechanical and
+>   compiler-assisted, but it is the whole verb set.
+> - **M8c: arrangement tabs + the extraction gesture**, safe once M8b lands.
+>
+> M9 (`<render>` follows the addressed root), M10 (local audition) and M11
+> (persist open tabs) are unchanged.
+
 > **This plan has been through one adversarial review (2026-08-20) and every
 > correction is folded in.** Five of its findings were independently re-verified
 > against the code before being accepted. Two things an agent must know before

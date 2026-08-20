@@ -15,7 +15,7 @@ SApplyResult SCompositeAction::apply( SProject *project )
 {
     QList<SAction *> inverses;
     for( SAction *child : children_ ) {
-        SApplyResult r = child->apply( project );
+        SApplyResult r = applyPropagatingRoot( child, project );
         if( !r.applied ) {
             // Roll back what we already did (reverse order, best effort).
             for( int i = inverses.size() - 1; i >= 0; --i ) {

@@ -19,7 +19,7 @@ SAutomationMode SAutomationRecorder::modeOf( const Target &t )
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return SAutomationMode::Off;
     sautomation::OwnerRef o = sautomation::resolveOwner(
-        proj, t.ownerPath, t.target, t.slotIndex, t.take );
+        proj, t.pathRoot, t.ownerPath, t.target, t.slotIndex, t.take );
     if( !o.valid() ) return SAutomationMode::Off;
     SAutomationLane *lane = o.owner->automationLane( t.target );
     return lane ? lane->mode() : SAutomationMode::Off;

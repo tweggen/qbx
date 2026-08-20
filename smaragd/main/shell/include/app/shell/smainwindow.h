@@ -33,6 +33,17 @@ class SMainWindow
 {
     Q_OBJECT
 public:
+
+    // The view shell (proposal 09 §2). Public so the testkit can assert the
+    // tab set without reaching through the central widget by cast.
+    class SViewTabs *viewTabs() const { return viewTabs_; }
+
+    // The shell, BUILDING it if this is the first thing to ask. The shell is
+    // created lazily with the master editor, so a script that has not yet
+    // touched the arranger has none -- the same laziness ensureArranger_()
+    // exists for, exposed because assert-tab-set asks about the shell itself
+    // rather than about a view inside it.
+    class SViewTabs *ensureViewShell();
     SMainWindow();
     virtual ~SMainWindow();
 
@@ -443,6 +454,8 @@ private:
     // The arranger for the current project, creating it if the headless test
     // path has not gone through openProject(). NULL when there is no project.
     class SStdMixerView *ensureArranger_();
+    // Build the master editor and install it as tab 0 (proposal 09 §2).
+    void installMasterEditor_();
     // Build the status bar and its permanent widgets (mode indicator, …).
     void buildStatusBar();
     void newProject();
@@ -506,6 +519,10 @@ private:
     bool promptSaveUnsavedChanges();
 
     SProject *currentProject_;
+    // The view shell (proposal 09). projectRootWidget_ IS this widget now --
+    // kept under its old name because the repaint/focus reach-throughs in this
+    // file do not care which widget it is, only the casts did.
+    class SViewTabs *viewTabs_ = nullptr;
     QWidget *projectRootWidget_;
     QString currentFilePath_;   // empty = never saved/loaded (untitled)
 

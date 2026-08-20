@@ -53,13 +53,17 @@ public:
     /// space, plus `slotIndex` for a `param:` lane).
     struct Target {
         QList<int> ownerPath;
+        // The root ownerPath is relative to (proposal 09 D21): empty == the
+        // master. A pass recorded in an arrangement must commit there.
+        QString    pathRoot;
         QString    target;
         int        slotIndex = -1;
         int        take = -1;
 
         bool operator==( const Target &o ) const
         {
-            return ownerPath == o.ownerPath && target == o.target
+            return ownerPath == o.ownerPath && pathRoot == o.pathRoot
+                && target == o.target
                 && slotIndex == o.slotIndex && take == o.take;
         }
     };

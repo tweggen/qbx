@@ -16,7 +16,7 @@ using namespace strackpath;
 SApplyResult SAssertAutomationValueAction::apply( SProject *project )
 {
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( project, ownerPath_, target_, slotIndex_, take_ );
+        sautomation::resolveOwner( project, pathRoot_, ownerPath_, target_, slotIndex_, take_ );
     if( !o.valid() ) {
         qWarning() << "assert-automation-value: cannot resolve owner"
                    << pathToString( ownerPath_ ) << "slot" << slotIndex_
@@ -70,7 +70,7 @@ void SAssertAutomationValueAction::writeXml( QDomElement &elem ) const
 
 bool SAssertAutomationValueAction::readXml( const QDomElement &elem, int )
 {
-    ownerPath_  = stringToPath( elem.attribute( "owner" ) );
+    ownerPath_ = parseInto( pathRoot_, elem.attribute( "owner" ) );
     target_     = elem.attribute( "target" );
     time_       = (offset_t) parseFractionOrDouble(
                       elem.attribute( "time", "0" ).toStdString() ).toDouble();

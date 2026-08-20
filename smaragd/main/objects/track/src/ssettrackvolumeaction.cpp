@@ -37,7 +37,7 @@ static SApplyResult redirectToReadLane( SProject *project, const QList<int> &pat
 
 SApplyResult SSetTrackVolumeAction::apply(SProject *project)
 {
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     // Path-addressed, so a track nested inside a folder resolves as readily as
     // a top-level one.
     SObject *lane = splacements::laneAt( mixer, trackPath_ );
@@ -71,7 +71,7 @@ QString SSetTrackVolumeAction::mergeKey() const
     // a bare index would collide across folders (top-level track 0 and the
     // first child of a folder both being "0"), merging two different faders'
     // drags into one undo step.
-    return QStringLiteral("set-track-volume:%1").arg(pathToString(trackPath_));
+    return QStringLiteral("set-track-volume:%1").arg(qualifiedToString( pathRoot_, trackPath_ ));
 }
 
 bool SSetTrackVolumeAction::mergeWith(const SAction *later)
@@ -88,7 +88,7 @@ bool SSetTrackVolumeAction::mergeWith(const SAction *later)
 
 void SSetTrackVolumeAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("trackPath", pathToString(trackPath_));
+    elem.setAttribute("trackPath", qualifiedToString( pathRoot_, trackPath_ ));
     elem.setAttribute("volume", QString::number(newVolume_));
 }
 
@@ -98,7 +98,7 @@ bool SSetTrackVolumeAction::readXml(const QDomElement &elem, int /*version*/)
     // scripts carry no version attribute, and `trackIndex` is exactly a
     // one-element path.
     trackPath_ = elem.hasAttribute("trackPath")
-        ? stringToPath( elem.attribute("trackPath") )
+        ? parseInto( pathRoot_, elem.attribute("trackPath") )
         : QList<int>{ elem.attribute("trackIndex", "0").toInt() };
     newVolume_ = elem.attribute("volume", "0").toDouble();
     return true;

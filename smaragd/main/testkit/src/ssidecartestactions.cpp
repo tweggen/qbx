@@ -131,35 +131,35 @@ SApplyResult SSetRenderGateAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *mixer = splacements::rootContainer(project);
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = splacements::placementAt(mixer, clipPath_);
     if (!link) {
-        qWarning() << "set-render-gate: no clip at path" << pathToString(clipPath_);
+        qWarning() << "set-render-gate: no clip at path" << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
 
     SCut *cut = dynamic_cast<SCut*>(&link->getSObject());
     if (!cut) {
         qWarning() << "set-render-gate: target is not an SCut at path"
-                   << pathToString(clipPath_);
+                   << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
 
     cut->setRenderGateReady(ready_);
-    qDebug() << "set-render-gate: clip" << pathToString(clipPath_)
+    qDebug() << "set-render-gate: clip" << qualifiedToString( pathRoot_, clipPath_ )
              << "ready=" << ready_;
     return {true, nullptr};
 }
 
 void SSetRenderGateAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("clip", pathToString(clipPath_));
+    elem.setAttribute("clip", qualifiedToString( pathRoot_, clipPath_ ));
     elem.setAttribute("ready", ready_ ? "true" : "false");
 }
 
 bool SSetRenderGateAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    clipPath_ = stringToPath(elem.attribute("clip"));
+    clipPath_ = parseInto( pathRoot_, elem.attribute("clip") );
     ready_ = elem.attribute("ready", "true") == "true";
     return true;
 }
@@ -290,16 +290,16 @@ SApplyResult SAssertWarpAnchorAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *mixer = splacements::rootContainer(project);
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = splacements::placementAt(mixer, clipPath_);
     if (!link) {
-        qWarning() << "assert-warp-anchor: no clip at path" << pathToString(clipPath_);
+        qWarning() << "assert-warp-anchor: no clip at path" << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
     SCut *cut = dynamic_cast<SCut*>(&link->getSObject());
     if (!cut) {
         qWarning() << "assert-warp-anchor: target is not an SCut at path"
-                   << pathToString(clipPath_);
+                   << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
 
@@ -327,14 +327,14 @@ SApplyResult SAssertWarpAnchorAction::apply(SProject *project)
         }
     }
 
-    qDebug() << "assert-warp-anchor: clip" << pathToString(clipPath_)
+    qDebug() << "assert-warp-anchor: clip" << qualifiedToString( pathRoot_, clipPath_ )
              << "OK (" << (qulonglong)anchors.size() << "anchors)";
     return {true, nullptr};
 }
 
 void SAssertWarpAnchorAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("clip", pathToString(clipPath_));
+    elem.setAttribute("clip", qualifiedToString( pathRoot_, clipPath_ ));
     if (hasSrc_) elem.setAttribute("src", QString::number(src_));
     elem.setAttribute("warped", QString::number(warped_));
     elem.setAttribute("count", QString::number(count_));
@@ -342,7 +342,7 @@ void SAssertWarpAnchorAction::writeXml(QDomElement &elem) const
 
 bool SAssertWarpAnchorAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    clipPath_ = stringToPath(elem.attribute("clip"));
+    clipPath_ = parseInto( pathRoot_, elem.attribute("clip") );
     hasSrc_   = elem.hasAttribute("src");
     src_      = elem.attribute("src", "0").toLongLong();
     warped_   = elem.attribute("warped", "-1").toLongLong();

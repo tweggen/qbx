@@ -23,7 +23,7 @@ SApplyResult SPlaceClipAction::apply( SProject *project )
     if( !project || filePath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( mixer, trackPath_ );
     if( !lane ) {
         return {false, nullptr};
@@ -59,7 +59,7 @@ SApplyResult SPlaceClipAction::apply( SProject *project )
 
 void SPlaceClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "filePath", filePath_ );
     elem.setAttribute( "timePos", QString::fromStdString(
                            Fraction( timePos_, 1 ).toString() ) );
@@ -71,7 +71,7 @@ void SPlaceClipAction::writeXml( QDomElement &elem ) const
 
 bool SPlaceClipAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     filePath_ = elem.attribute( "filePath", "" );
     timePos_ = (offset_t)parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();
@@ -106,7 +106,7 @@ SApplyResult SUnplaceClipAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = splacements::placementAt( mixer, clipPath_ );
     if( !link ) {
         return {false, nullptr};
@@ -120,8 +120,8 @@ SApplyResult SUnplaceClipAction::apply( SProject *project )
 
 void SUnplaceClipAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "filePath", filePath_ );
 }
 

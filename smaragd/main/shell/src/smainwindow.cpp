@@ -32,6 +32,7 @@
 #include "app/shell/saudiorecorder.h"
 #include "app/timeline/sgridtoolbar.h"
 #include "app/shell/smainwindow.h"
+#include "app/shell/sviewtabs.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
 #include "app/objects/midi/smidiclipactions.h"
@@ -232,7 +233,7 @@ void SMainWindow::linkEventEditorAxis()
 {
     if( !eventEditor_ ) return;
     SEventTimeAxis *axis = eventEditor_->timeAxis();
-    SStdMixerView *v = dynamic_cast<SStdMixerView *>( projectRootWidget_ );
+    SStdMixerView *v = ensureArranger_();
     if( !axis || !v ) return;
 
     SMVActualView *content = v->contentView();
@@ -422,11 +423,8 @@ void SMainWindow::fileNew()
     currentProject_->setRootComponent( new SStdMixer( currentProject_ ) );    
     // Find out the main widget.
     // We do have a root component here as we assigned it before.
-    projectRootWidget_ = currentProject_->getRootComponent()->getDetailEditWidget( this );
+    installMasterEditor_();
     linkEventEditorAxis();
-
-    setCentralWidget( projectRootWidget_ );
-    projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
     attachClipProperties();
@@ -497,11 +495,8 @@ bool SMainWindow::openProjectFile( const QString &fileName )
 
     // Find out the main widget.
     // We do have a root component here as we assigned it before.
-    projectRootWidget_ = currentProject_->getRootComponent()->getDetailEditWidget( this );
+    installMasterEditor_();
     linkEventEditorAxis();
-
-    setCentralWidget( projectRootWidget_ );
-    projectRootWidget_->show();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
     attachClipProperties();
@@ -2154,16 +2149,56 @@ bool SMainWindow::eventFilter( QObject *watched, QEvent *event )
 // SActionRunner sets it straight on SApplication — so the arranger does not
 // exist yet. Build it the same way openProject() does; later test entry points
 // in the same script then share this one view (and its zoom/scroll).
+// Build the master editor and install it as tab 0 of the view shell
+// (proposal 09 §2). One place, so the three call sites that used to assign
+// projectRootWidget_ and call setCentralWidget cannot drift apart.
+void SMainWindow::installMasterEditor_()
+{
+    // The project is NOT always this window's own: a headless --test-case run
+    // never opens one through the window -- SActionRunner sets it straight on
+    // SApplication -- so currentProject_ stays null for the whole run. Reading
+    // only currentProject_ here made this a no-op in every such run, so
+    // ensureArranger_() returned null and 34 UI cases segfaulted on the first
+    // dereference. That is exactly the ordering ensureArranger_ was written to
+    // handle, and its own comment says so.
+    SProject *proj = currentProject_ ? currentProject_
+                                     : SApplication::app().getCurrentProject();
+    if( !proj || !proj->getRootComponent() ) return;
+    if( !viewTabs_ ) {
+        viewTabs_ = new SViewTabs( this );
+        setCentralWidget( viewTabs_ );
+    }
+    QWidget *editor = proj->getRootComponent()->getDetailEditWidget( this );
+    viewTabs_->setMasterEditor( proj->getRootComponent(), editor,
+                                tr( "Arrangement" ) );
+    // projectRootWidget_ stays the widget the rest of this file pokes for
+    // repaints and focus; it is now the SHELL rather than the arranger, which
+    // is why every cast to SStdMixerView* had to move to ensureArranger_().
+    projectRootWidget_ = viewTabs_;
+    viewTabs_->show();
+}
+
+SViewTabs *SMainWindow::ensureViewShell()
+{
+    if( !viewTabs_ ) installMasterEditor_();
+    return viewTabs_;
+}
+
 SStdMixerView *SMainWindow::ensureArranger_()
 {
-    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
-    if( v ) return v;
+    // The ACTIVE tab's arranger (proposal 09 §2). With only the master open --
+    // which is every case today -- this is the same widget it always was.
+    if( viewTabs_ ) {
+        if( SStdMixerView *v =
+                dynamic_cast<SStdMixerView*>( viewTabs_->activeEditor() ) )
+            return v;
+    }
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj || !proj->getRootComponent() ) return NULL;
-    projectRootWidget_ = proj->getRootComponent()->getDetailEditWidget( this );
-    setCentralWidget( projectRootWidget_ );
+    installMasterEditor_();
     linkEventEditorAxis();
-    return dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+    return viewTabs_
+        ? dynamic_cast<SStdMixerView*>( viewTabs_->activeEditor() ) : NULL;
 }
 
 bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
@@ -2984,13 +3019,13 @@ QString SMainWindow::arrangerDescribeScrollRange()
 
 void SMainWindow::groupTrack()
 {
-    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+    SStdMixerView *v = ensureArranger_();
     if( v ) v->ctGroupTrack();
 }
 
 void SMainWindow::ungroupTrack()
 {
-    SStdMixerView *v = dynamic_cast<SStdMixerView*>( projectRootWidget_ );
+    SStdMixerView *v = ensureArranger_();
     if( v ) v->ctUngroupTrack();
 }
 

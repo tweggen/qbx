@@ -42,7 +42,7 @@ SApplyResult SRemoveTrackAction::apply(SProject *project)
     if (!project || trackPath_.isEmpty()) {
         return {false, nullptr};          // the root is not removable
     }
-    SObject *root = splacements::rootContainer(project);
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SStdMixer *rootMixer = dynamic_cast<SStdMixer*>(root);
     if (!rootMixer) {
         return {false, nullptr};
@@ -105,7 +105,7 @@ SApplyResult SRemoveTrackAction::apply(SProject *project)
 
 void SRemoveTrackAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("trackPath", strackpath::pathToString(trackPath_));
+    elem.setAttribute("trackPath", strackpath::qualifiedToString( pathRoot_, trackPath_ ));
 }
 
 bool SRemoveTrackAction::readXml(const QDomElement &elem, int /*version*/)
@@ -113,7 +113,7 @@ bool SRemoveTrackAction::readXml(const QDomElement &elem, int /*version*/)
     // Sniff the spelling: pre-existing scripts carry no version attribute, and
     // the legacy `index` is exactly a one-element path.
     trackPath_ = elem.hasAttribute("trackPath")
-        ? strackpath::stringToPath( elem.attribute("trackPath") )
+        ? strackpath::parseInto( pathRoot_, elem.attribute("trackPath") )
         : QList<int>{ elem.attribute("index", "0").toInt() };
     return true;
 }

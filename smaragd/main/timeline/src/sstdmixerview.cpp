@@ -29,6 +29,7 @@
 #include "app/shell/smainwindow.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/ssubmit.h"
 #include "app/timeline/strackheaderresizer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sobjectrenderer.h"
@@ -591,14 +592,14 @@ void SStdMixerView::ctRemoveSample()
     qContent_->resetLastClickSLink();
 
     if( !assetName.isEmpty() ) {
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SRemoveAssetPlacementAction( assetName, trackPath, clipIdx, timePos )
         );
         return;
     }
 
     // Submit the removal action (proper undo/redo support)
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SRemoveSampleAction(trackPath, clipIdx, filePath, timePos)
     );
 }
@@ -661,7 +662,7 @@ void SStdMixerView::ctSplitSample()
         return;
     }
     qContent_->resetLastClickSLink();   // any split link may be replaced
-    app.submitAction( composite );
+    stimeline::submitActive( composite );
     qContent_->update();
 }
 
@@ -727,7 +728,7 @@ void SStdMixerView::nudgeClipPitch( double cents )
         return;
     }
 
-    app.submitAction( composite );
+    stimeline::submitActive( composite );
 
     QString msg = ( nTargets == 1 )
         ? QString( "Clip pitch: %1%2 cents (%3%4 st)" )
@@ -1037,7 +1038,7 @@ void SStdMixerView::addTrackBelow_( STrack *ref )
                                    : QList<int>();
     if( refPath.isEmpty() ) {
         // No reference, or one that is not in the tree: append, as before.
-        SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+        stimeline::submitActive( new SAddTrackAction( -1 ) );
         return;
     }
 
@@ -1049,7 +1050,7 @@ void SStdMixerView::addTrackBelow_( STrack *ref )
         // index, but the root mixer holds nothing except tracks, so the two
         // coincide there — which is what lets this be one action instead of a
         // macro. (ctGroupTrack() leans on the same identity.)
-        SApplication::app().submitAction( new SAddTrackAction( slot + 1 ) );
+        stimeline::submitActive( new SAddTrackAction( slot + 1 ) );
         return;
     }
 
@@ -1059,12 +1060,12 @@ void SStdMixerView::addTrackBelow_( STrack *ref )
     // pattern.
     QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
     if( stack ) stack->beginMacro( "Add track" );
-    SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+    stimeline::submitActive( new SAddTrackAction( -1 ) );
     // submitAction drains synchronously (Phase 1), so the new track is now the
     // last top-level one. An APPEND at the top level shifts no existing index,
     // so parentPath and slot are still the ones we measured.
     const int newIdx = model_->getNTracks() - 1;
-    SApplication::app().submitAction( new SReparentTrackAction(
+    stimeline::submitActive( new SReparentTrackAction(
         QList<int>{ newIdx }, parentPath, slot + 1 ) );
     if( stack ) stack->endMacro();
 }
@@ -1091,7 +1092,7 @@ STrack *SStdMixerView::ctAddTrackBelowLast()
 
     if( !parentTrack ) {
         // Parent is the root mixer: a plain append is undoable on its own.
-        SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+        stimeline::submitActive( new SAddTrackAction( -1 ) );
         // submitAction drains synchronously (Phase 1), so the new track is
         // now the last top-level child.
         return dynamic_cast<STrack*>( strackpath::resolveByPath(
@@ -1101,13 +1102,13 @@ STrack *SStdMixerView::ctAddTrackBelowLast()
     // Nested parent: create at the top level, then move under the folder.
     QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
     if( stack ) stack->beginMacro( "Add track" );
-    SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+    stimeline::submitActive( new SAddTrackAction( -1 ) );
     // submitAction drains synchronously (Phase 1), so the new track is now the
     // last top-level track; reparent it under the target folder.
     int newIdx = model_->getNTracks() - 1;
     STrack *newTrack = dynamic_cast<STrack*>(
         strackpath::resolveByPath( model_, QList<int>{ newIdx } ) );
-    SApplication::app().submitAction( new SReparentTrackAction(
+    stimeline::submitActive( new SReparentTrackAction(
         QList<int>{ newIdx },
         strackpath::pathOf( model_, parentTrack ), -1 ) );
     if( stack ) stack->endMacro();
@@ -1187,7 +1188,7 @@ void SStdMixerView::ctRemoveTrack()
         const QList<int> path = strackpath::pathOf( model_, targets.at( i ) );
         if( path.isEmpty() ) continue;      // not in this project's tree
         // Through the action so it is undoable (the track + subtree is restorable).
-        SApplication::app().submitAction( new SRemoveTrackAction( path ) );
+        stimeline::submitActive( new SRemoveTrackAction( path ) );
     }
     if( macro ) stack->endMacro();
     // Nothing that was removed may stay selected.
@@ -1225,7 +1226,7 @@ bool SStdMixerView::indentOne_( STrack *t, const QList<STrack*> &alsoMoving )
         break;
     }
     if( !prevSibling ) return false;             // nothing to nest under
-    SApplication::app().submitAction( new SReparentTrackAction(
+    stimeline::submitActive( new SReparentTrackAction(
         strackpath::pathOf( model_, t ),
         strackpath::pathOf( model_, prevSibling ), -1 ) );
     return true;
@@ -1262,7 +1263,7 @@ bool SStdMixerView::outdentOne_( STrack *t )
     int pri = rowIndexOfTrack( parentTrack );
     SObject *grand = (pri>=0) ? rowAt( pri )->parent : (SObject*)model_;
     int dstIndex = grand->indexOfChildObject( *parentTrack ) + 1;  // just after parent
-    SApplication::app().submitAction( new SReparentTrackAction(
+    stimeline::submitActive( new SReparentTrackAction(
         strackpath::pathOf( model_, t ),
         strackpath::pathOf( model_, grand ), dstIndex ) );
     return true;
@@ -1307,7 +1308,7 @@ void SStdMixerView::ctGroupTrack()
     if( parentPath.isEmpty() ) {
         // The block is top-level: create the folder directly in its slot. (This
         // is the only case the gesture used to handle at all.)
-        SApplication::app().submitAction( new SAddTrackAction( ti ) );
+        stimeline::submitActive( new SAddTrackAction( ti ) );
     } else {
         // NESTED. add-track can only append at the MIXER's top level, and
         // SReparentTrackAction refuses a same-container move (that is
@@ -1315,9 +1316,9 @@ void SStdMixerView::ctGroupTrack()
         // cannot be slid there afterwards if it starts as a sibling. Create it
         // top-level, then move it INTO the parent at the target's slot (a real
         // cross-container reparent), which pushes the targets down by one.
-        SApplication::app().submitAction( new SAddTrackAction( -1 ) );
+        stimeline::submitActive( new SAddTrackAction( -1 ) );
         const int folderTop = model_->getNTracks() - 1;   // append landed last
-        SApplication::app().submitAction( new SReparentTrackAction(
+        stimeline::submitActive( new SReparentTrackAction(
             QList<int>{ folderTop }, parentPath, ti ) );
     }
     // Resolve the folder BY POINTER from here on: every reparent below shifts
@@ -1329,7 +1330,7 @@ void SStdMixerView::ctGroupTrack()
         for( STrack *t : targets ) {
             const QList<int> src = strackpath::pathOf( model_, t );
             if( src.isEmpty() ) continue;
-            SApplication::app().submitAction( new SReparentTrackAction(
+            stimeline::submitActive( new SReparentTrackAction(
                 src, strackpath::pathOf( model_, folder ), -1 ) );
         }
     }
@@ -1379,7 +1380,7 @@ void SStdMixerView::ungroupOne_( STrack *t )
     // synchronously, so pathOf() below re-reads the tree after the previous move.
     int insertAt = ti;
     for( STrack *k : kids ) {
-        SApplication::app().submitAction( new SReparentTrackAction(
+        stimeline::submitActive( new SReparentTrackAction(
             strackpath::pathOf( model_, k ), parentPath, insertAt ) );
         ++insertAt;
     }
@@ -1387,7 +1388,7 @@ void SStdMixerView::ungroupOne_( STrack *t )
     // child reparents undo back into it).
     const QList<int> fPath = strackpath::pathOf( model_, t );
     if( !fPath.isEmpty() ) {
-        SApplication::app().submitAction( new SRemoveTrackAction( fPath ) );
+        stimeline::submitActive( new SRemoveTrackAction( fPath ) );
     }
     if( stack ) stack->endMacro();
 }
@@ -1630,7 +1631,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         if( macro ) stack->beginMacro( QStringLiteral("Duplicate clips") );
         for( const Fin &f : fins ) {
             if( !f.src.isEmpty() && !f.dest.isEmpty() )
-                SApplication::app().submitAction(
+                stimeline::submitActive(
                     new SDuplicateClipAction( f.src, f.dest, f.start ) );
         }
         if( macro ) stack->endMacro();
@@ -1694,7 +1695,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
                                 WarpedLen( clipLoopLen0_ ), clipStretch0_ );
                 QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
                 clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
-                SApplication::app().submitAction(
+                stimeline::submitActive(
                     new SResizeClipAction( clipPath, newStart, newAnchor, newDur,
                                            newLoop, newStretch, clipDragTakeIndex_ ) );
                 update();
@@ -1723,7 +1724,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             QList<int> clipPath = strackpath::pathOf( smv_.getModel(), clipDragTrack0_ );
             clipPath.append( clipDragTrack0_->indexOfChild( link ) );
             QList<int> destTrackPath = strackpath::pathOf( smv_.getModel(), destTrack );
-            SApplication::app().submitAction(
+            stimeline::submitActive(
                 new SMoveClipAction( clipPath, destTrackPath, newStart ) );
             update();
         }
@@ -2108,7 +2109,7 @@ void SMVActualView::ctRangeSetBPM()
         // write (proposal 37 D2). It also re-derives every beats-timebase
         // link, which a bare project write would silently skip, and it is
         // what puts a tempo change on the undo stack at all.
-        SApplication::app().submitAction( new SSetTempoAction( newTempo ) );
+        stimeline::submitActive( new SSetTempoAction( newTempo ) );
     }
 }
 
@@ -2135,7 +2136,7 @@ void SMVActualView::ctCreateAssetFromTrack()
     if( t1 <= t0 ) return;
     const QList<int> containerPath =
         strackpath::pathOf( smv_.model_, lastClickTrack_ );
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SCreateAssetAction( containerPath, t0, (length_t)( t1 - t0 ) ) );
 }
 
@@ -2645,7 +2646,7 @@ static bool ensureStartPin( SCut *cut, SStdMixerView &smv,
     if( w0 <= 0 ) return false;
     QList<int> path = strackpath::pathOf( smv.getModel(), track );
     path.append( track->indexOfChild( link ) );
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SAddWarpMarkerAction( path, s0, w0 ) );
     return true;
 }
@@ -2694,7 +2695,7 @@ bool SMVActualView::tryBeginMarkerDrag( QMouseEvent *ev )
         if( hasPrimaryMod( ev->modifiers() ) ) {
             // Primary-modifier click on a handle (⌘ on macOS, Ctrl elsewhere):
             // delete the marker (undoable).
-            SApplication::app().submitAction(
+            stimeline::submitActive(
                 new SDeleteWarpMarkerAction( path, a.src ) );
             return true;
         }
@@ -2765,7 +2766,7 @@ void SMVActualView::finishMarkerDrag()
 
     QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
     path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SMoveWarpMarkerAction( path, markerDragSrc_, finalWarped ) );
     update();
 }
@@ -2804,7 +2805,7 @@ bool SMVActualView::tryAddMarkerAt( QMouseEvent *ev )
 
     QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
     path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SAddWarpMarkerAction( path, src, warped ) );
     update();
     return true;
@@ -2935,7 +2936,7 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         strackpath::pathOf( smv_.getModel(), clickRow->track );
                     path.append(
                         clickRow->track->indexOfChild( lastClickSLink_ ) );
-                    SApplication::app().submitAction(
+                    stimeline::submitActive(
                         new SSelectTakeAction( path, clickRow->takeRow ) );
                     update();
                 }
@@ -3191,6 +3192,13 @@ void SStdMixerView::onArrangementChangedRows()
         layoutControlColumn();
     }
     qContent_->update();
+}
+
+QString SStdMixerView::rootName() const
+{
+    if( !model_ ) return QString();
+    SProject *proj = model_->getProjectSafe();
+    return proj ? proj->arrangementNameOf( model_ ) : QString();
 }
 
 void SStdMixerView::rebuildRows()
@@ -3510,7 +3518,7 @@ void SStdMixerView::endTrackDrag( int yInControlBox )
             // reparent; SReparentTrackAction refuses a same-container move).
             if( (SObject*)onto == curParent ) continue;
             // Otherwise nest under it (the action also guards cycles).
-            SApplication::app().submitAction( new SReparentTrackAction(
+            stimeline::submitActive( new SReparentTrackAction(
                 strackpath::pathOf( model_, t ),
                 strackpath::pathOf( model_, onto ), -1 ) );
         }
@@ -3531,14 +3539,14 @@ void SStdMixerView::endTrackDrag( int yInControlBox )
             if( target<0 ) target = 0;
             if( target>=nTop ) target = nTop-1;
             if( target!=fromTop )
-                SApplication::app().submitAction(
+                stimeline::submitActive(
                     new SMoveTrackAction( QList<int>{ fromTop }, target ) );
             slot = target + 1;      // the next one goes just below this one
         } else {
             int target = slot;
             if( target<0 ) target = 0;
             if( target>nTop ) target = nTop;
-            SApplication::app().submitAction( new SReparentTrackAction(
+            stimeline::submitActive( new SReparentTrackAction(
                 strackpath::pathOf( model_, t ), QList<int>{}, target ) );
             slot = target + 1;
         }
@@ -4559,7 +4567,7 @@ void SMVActualView::dropEvent(QDropEvent *e)
             update();
             return;
         }
-        SApplication::app().submitAction(new SPlaceAssetAction(assetName, trackPath, timePos));
+        stimeline::submitActive(new SPlaceAssetAction(assetName, trackPath, timePos));
     } else if (payload.startsWith(QStringLiteral("file:"))) {
         QString filePath = payload.mid(5);
         // For file drops, use SAddSampleAction (same as Insert Sample dialog).
@@ -4567,7 +4575,7 @@ void SMVActualView::dropEvent(QDropEvent *e)
         // drop onto a track nested in a folder lands too. This was
         // mixer->indexOfChildObject(), which only sees top-level children and
         // made a drop onto a grouped lane a silent no-op.
-        SApplication::app().submitAction(new SAddSampleAction(trackPath, filePath, timePos));
+        stimeline::submitActive(new SAddSampleAction(trackPath, filePath, timePos));
     } else if (payload.startsWith(QStringLiteral("media:"))) {
         // A REMOTE row out of the media browser (proposal 38 §B.5). Everything
         // under this line is app/media's: get a local path, then submit the

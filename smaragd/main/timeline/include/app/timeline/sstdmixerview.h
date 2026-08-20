@@ -477,6 +477,14 @@ public:
     SStdMixer *getModel() const
         { return model_; }
 
+    /**
+     * The ARRANGEMENT this view edits, by name, or empty for the master
+     * (proposal 09 D21). Every action this view submits carries it, so a
+     * gesture made in an arrangement tab resolves in that arrangement -- and
+     * so does its undo. See stimeline::submitActive().
+     */
+    QString rootName() const;
+
     STimeGridSpec getTimeGridSpec() const { return timeGridSpec_; }
 
     // The time-axis canvas. Exposed for the SHELL only (proposal 37 P4): the

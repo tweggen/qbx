@@ -37,10 +37,15 @@ SMainWindow *mainWindow()
 // meter had no automated coverage at all — uncomfortable, because the meters
 // consume the mute/solo audibility rule, which is precisely what nesting
 // changes.
-STrack *laneAtPath( SProject *project, const QString &path )
+STrack *laneAtPath( SProject *project, const QString &pathRoot_,
+                    const QString &path )
 {
-    SObject *root = splacements::rootContainer( project );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( path ) );
+    // The path text may carry its own root qualifier ("Drums:0"); an
+    // explicit pathRoot_ is the fallback for the bare spelling.
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( path );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    SObject *lane = splacements::laneAt( root, q_.idx );
     return dynamic_cast<STrack *>( lane );
 }
 
@@ -54,7 +59,7 @@ QString SAssertMeterAction::effectivePath() const
 SApplyResult SAssertMeterAction::apply( SProject *project )
 {
     const QString lanePath = effectivePath();
-    STrack *track = laneAtPath( project, lanePath );
+    STrack *track = laneAtPath( project, pathRoot_, lanePath );
     if( !track ) {
         qWarning() << "assert-meter: no track" << lanePath;
         return { false, nullptr };

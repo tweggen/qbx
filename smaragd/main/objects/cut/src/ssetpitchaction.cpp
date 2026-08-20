@@ -45,7 +45,7 @@ SApplyResult SSetPitchAction::apply( SProject *project )
     if( !project || clipPath_.isEmpty() ) {
         return {false, nullptr};
     }
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
         return {false, nullptr};
     }
@@ -95,7 +95,7 @@ SApplyResult SSetPitchAction::apply( SProject *project )
 
 void SSetPitchAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "cents", QString::number( cents_ ) );
     elem.setAttribute( "take", take_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
@@ -103,7 +103,7 @@ void SSetPitchAction::writeXml( QDomElement &elem ) const
 
 bool SSetPitchAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    clipPath_  = stringToPath( elem.attribute( "clip" ) );
+    clipPath_  = parseInto( pathRoot_, elem.attribute( "clip" ) );
     cents_     = elem.attribute( "cents", "0" ).toDouble();
     take_      = elem.attribute( "take", "-1" ).toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;

@@ -17,10 +17,15 @@ namespace {
 // The instrument, resolved from the TRACK rather than from the chain: "slot 0
 // carries isInstrument" is STrack::instrumentSlot()'s definition and there must
 // not be a second spelling of it.
-bool instrumentAt0( SProject *project, const QString &trackPath )
+bool instrumentAt0( SProject *project, const QString &pathRoot_,
+                    const QString &trackPath )
 {
-    SObject *root = splacements::rootContainer( project );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    // The path text may carry its own root qualifier ("Drums:0"); an
+    // explicit pathRoot_ is the fallback for the bare spelling.
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    SObject *lane = splacements::laneAt( root, q_.idx );
     STrack  *track = dynamic_cast<STrack *>( lane );
     return track && track->instrumentSlot() != nullptr;
 }
@@ -55,7 +60,7 @@ SApplyResult SReorderPluginAction::apply( SProject *project )
     // cannot move out of slot 0 (design D3). Both are the same refusal: the
     // instrument's role and its position are one fact, and a chain whose slot 0
     // is an effect fed by nothing would simply be silent.
-    if( ( fromIndex_ == 0 || toIndex_ == 0 ) && instrumentAt0( project, trackPath_ ) ) {
+    if( ( fromIndex_ == 0 || toIndex_ == 0 ) && instrumentAt0( project, pathRoot_, trackPath_ ) ) {
         qWarning() << "reorder-plugin: slot 0 of track" << trackPath_
                    << "is an instrument; it cannot be moved and nothing may move"
                       " in front of it";

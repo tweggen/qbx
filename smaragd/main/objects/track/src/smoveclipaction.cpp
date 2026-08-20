@@ -26,7 +26,7 @@ SApplyResult SMoveClipAction::apply(SProject *project)
     if (!project || clipPath_.isEmpty()) {
         return {false, nullptr};
     }
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
@@ -88,16 +88,16 @@ SApplyResult SMoveClipAction::apply(SProject *project)
 
 void SMoveClipAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("clip", pathToString(clipPath_));
-    elem.setAttribute("destTrack", pathToString(destTrackPath_));
+    elem.setAttribute("clip", qualifiedToString( pathRoot_, clipPath_ ));
+    elem.setAttribute("destTrack", qualifiedToString( pathRoot_, destTrackPath_ ));
     elem.setAttribute("startTime", QString::fromStdString(Fraction(newStartTime_, 1).toString()));
     elem.setAttribute("broadcast", broadcast_ ? 1 : 0);
 }
 
 bool SMoveClipAction::readXml(const QDomElement &elem, int /*version*/)
 {
-    clipPath_ = stringToPath(elem.attribute("clip"));
-    destTrackPath_ = stringToPath(elem.attribute("destTrack"));
+    clipPath_ = parseInto( pathRoot_, elem.attribute("clip") );
+    destTrackPath_ = parseInto( pathRoot_, elem.attribute("destTrack") );
     newStartTime_ = (offset_t)parseFractionOrDouble(elem.attribute("startTime", "0").toStdString()).toDouble();
     broadcast_ = elem.attribute("broadcast", "1").toInt() != 0;
     return true;

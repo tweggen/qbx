@@ -1,4 +1,5 @@
 #include "app/timeline/sclippropertiespanel.h"
+#include "app/timeline/ssubmit.h"
 
 #include <limits>
 
@@ -680,7 +681,7 @@ void SClipPropertiesPanel::focusFirstField()
 
 void SClipPropertiesPanel::submitComposite( SCompositeAction *composite )
 {
-    if( composite->count() > 0 ) SApplication::app().submitAction( composite );
+    if( composite->count() > 0 ) stimeline::submitActive( composite );
     else delete composite;
 }
 
@@ -694,7 +695,7 @@ void SClipPropertiesPanel::commitName()
 
     const QString name = nameEdit_->text();
     if( name == clips.first().cut->getSName() ) return;
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SSetClipNameAction( clips.first().path, name ) );
 }
 
@@ -713,7 +714,7 @@ void SClipPropertiesPanel::commitStartTime()
 
     // The whole window goes through in one action; every value except the one
     // being edited is read off the clip and passed through unchanged.
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SResizeClipAction( c.path, (offset_t) start, c.cut->getSrcStart(),
                                c.cut->getDurationBlocking(),
                                (length_t) c.cut->getLoopLength().frames(),

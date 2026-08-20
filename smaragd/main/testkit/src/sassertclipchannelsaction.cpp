@@ -48,17 +48,17 @@ SApplyResult SAssertClipChannelsAction::apply( SProject *project )
         return { false, nullptr };
     }
 
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = mixer ? splacements::placementAt( mixer, clipPath_ ) : nullptr;
     if( !link ) {
         qWarning() << "assert-clip-channels: no clip at path"
-                   << pathToString( clipPath_ );
+                   << qualifiedToString( pathRoot_, clipPath_ );
         return { false, nullptr };
     }
     SCut *cut = dynamic_cast<SCut *>( &link->getSObject() );
     if( !cut ) {
         qWarning() << "assert-clip-channels: target is not an SCut at path"
-                   << pathToString( clipPath_ );
+                   << qualifiedToString( pathRoot_, clipPath_ );
         return { false, nullptr };
     }
 
@@ -68,7 +68,7 @@ SApplyResult SAssertClipChannelsAction::apply( SProject *project )
     // what makes AC B3.2 about the chain rather than about the reader.
     twResolvedClip r = cut->resolveClip( (offset_t) position_ );
     if( !r.component ) {
-        qWarning() << "assert-clip-channels: clip" << pathToString( clipPath_ )
+        qWarning() << "assert-clip-channels: clip" << qualifiedToString( pathRoot_, clipPath_ )
                    << "resolves to no component at" << (qlonglong) position_;
         return { false, nullptr };
     }
@@ -93,7 +93,7 @@ SApplyResult SAssertClipChannelsAction::apply( SProject *project )
     std::shared_ptr<twOutputPage> page = r.component->getPageIfExists( pageStart );
     if( !page || page->validAspects.load() == 0 || page->validFrames == 0 ) {
         qWarning() << "assert-clip-channels: no frozen page at" << (qlonglong) pageStart
-                   << "for clip" << pathToString( clipPath_ )
+                   << "for clip" << qualifiedToString( pathRoot_, clipPath_ )
                    << "(clip-relative" << (qlonglong) position_
                    << "-> component" << (qlonglong) r.mappedPos << ")";
         return { false, nullptr };
@@ -103,7 +103,7 @@ SApplyResult SAssertClipChannelsAction::apply( SProject *project )
     const QString where =
         QString( "clip %1 @ %2 (component pos %3, page %4): %5 channels, "
                  "%6 valid frames" )
-            .arg( pathToString( clipPath_ ) ).arg( (qlonglong) position_ )
+            .arg( qualifiedToString( pathRoot_, clipPath_ ) ).arg( (qlonglong) position_ )
             .arg( (qlonglong) r.mappedPos ).arg( (qlonglong) pageStart )
             .arg( nCh ).arg( page->validFrames );
 
@@ -161,7 +161,7 @@ SApplyResult SAssertClipChannelsAction::apply( SProject *project )
 
 void SAssertClipChannelsAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "position", QString::number( (qlonglong) position_ ) );
     elem.setAttribute( "expectChannels", QString::number( expectChannels_ ) );
     elem.setAttribute( "channelA", QString::number( channelA_ ) );
@@ -177,7 +177,7 @@ bool SAssertClipChannelsAction::readXml( const QDomElement &elem, int /*version*
     // An empty path is reported by apply(), not here: a readXml that fails makes
     // the action undeserializable and breaks the round-trip audit, which feeds
     // every verb a DEFAULT instance through write->read->write.
-    clipPath_       = stringToPath( elem.attribute( "clip" ) );
+    clipPath_       = parseInto( pathRoot_, elem.attribute( "clip" ) );
     position_       = elem.attribute( "position", "0" ).toLongLong();
     expectChannels_ = elem.attribute( "expectChannels", "0" ).toInt();
     channelA_       = elem.attribute( "channelA", "0" ).toInt();

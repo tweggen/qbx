@@ -1,6 +1,7 @@
 #include "sautomationlane.h"
 
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/ssubmit.h"
 #include "app/timeline/sfadercurve.h"
 
 #include "app/model/slink.h"
@@ -199,8 +200,7 @@ SAutomationLaneUi::resolveRow( const STrackRow &row, const QRect &laneRect ) con
     SStdMixer *mixer = view_.getModel();
     if( !proj || !mixer || !row.track || row.autoTarget.isEmpty() ) return h;
     h.ownerPath = strackpath::pathOf( mixer, row.track );
-    sautomation::OwnerRef o = sautomation::resolveOwner(
-        proj, h.ownerPath, row.autoTarget, row.autoSlotIndex, -1 );
+    sautomation::OwnerRef o = sautomation::resolveOwner( proj, sautomation::rootNameOf( proj, mixer ), h.ownerPath, row.autoTarget, row.autoSlotIndex, -1 );
     if( !o.valid() ) return h;
     h.owner = o.owner;
     h.lane  = o.owner->automationLane( row.autoTarget );
@@ -383,8 +383,7 @@ SAutomationLaneUi::resolveClipEnvelope( SMVActualView &view, int rowIdx,
     h.ownerPath.append( idx );
     h.ref.target = QStringLiteral( "cut:Gain" );
     h.ref.slotIndex = -1;
-    sautomation::OwnerRef o = sautomation::resolveOwner(
-        proj, h.ownerPath, h.ref.target, -1, -1 );
+    sautomation::OwnerRef o = sautomation::resolveOwner( proj, sautomation::rootNameOf( proj, mixer ), h.ownerPath, h.ref.target, -1, -1 );
     if( !o.valid() ) return h;
     h.owner = o.owner;
     h.lane  = o.owner->ensureAutomationLane( h.ref.target );
@@ -480,7 +479,7 @@ bool SAutomationLaneUi::press( SMVActualView &view, int rowIdx,
     // and Shift is the marquee, so the delete takes the remaining modifier.
     if( idx >= 0 && primary ) {
         const std::vector<SAutomationPoint> pts = h.lane->points();
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SRemoveAutomationPointAction( h.ownerPath, h.ref.target,
                                               pts[idx].frame, pts[idx].value,
                                               h.ref.slotIndex, h.take ) );
@@ -520,7 +519,7 @@ bool SAutomationLaneUi::press( SMVActualView &view, int rowIdx,
         const int span = h.rect.height() - 1;
         const double v = h.scale.fromNorm(
             span > 0 ? ( h.rect.bottom() - pos.y() ) / (double) span : 0.0 );
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SAddAutomationPointAction( h.ownerPath, h.ref.target, rel, v,
                                            h.scale.stepped ? twCurveShape::Step
                                                            : twCurveShape::Linear,
@@ -611,7 +610,7 @@ bool SAutomationLaneUi::release( SMVActualView &view, const QPoint &pos )
                                                          : twCurveShape::Exp;
         p.tension = dragTension_;
         std::vector<SAutomationPoint> one{ p };
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SSetAutomationPointsAction( dragOwnerPath_, dragRef_.target,
                                             dragFromTime_, dragFromTime_ + 1,
                                             std::move( one ), dragRef_.slotIndex,
@@ -621,7 +620,7 @@ bool SAutomationLaneUi::release( SMVActualView &view, const QPoint &pos )
     }
 
     if( dragToTime_ != dragFromTime_ || dragToValue_ != dragFromValue_ ) {
-        SApplication::app().submitAction(
+        stimeline::submitActive(
             new SMoveAutomationPointAction( dragOwnerPath_, dragRef_.target,
                                             dragFromTime_, dragFromValue_,
                                             dragToTime_, dragToValue_,
@@ -648,7 +647,7 @@ bool SAutomationLaneUi::deleteSelection()
         if( selected_.contains( (qint64) p.frame ) ) continue;
         keep.push_back( p );
     }
-    SApplication::app().submitAction(
+    stimeline::submitActive(
         new SSetAutomationPointsAction( dragOwnerPath_, dragRef_.target,
                                         (offset_t) lo, (offset_t) hi + 1,
                                         std::move( keep ), dragRef_.slotIndex,
@@ -671,7 +670,7 @@ bool SAutomationLaneUi::tkDrag( const QList<int> &ownerPath, const QString &targ
     if( !canvas || !proj || !mixer ) return false;
 
     sautomation::OwnerRef o =
-        sautomation::resolveOwner( proj, ownerPath, target, slotIndex, take );
+        sautomation::resolveOwner( proj, sautomation::rootNameOf( proj, mixer ), ownerPath, target, slotIndex, take );
     if( !o.valid() ) return false;
     const SAutoValueScale scale = sAutoScaleFor( target, o.owner );
     const SParamRef ref = SParamRef::parse( target );
@@ -862,8 +861,7 @@ QString SStdMixerView::checkAutomationRows() const
             return QString( "row %1: automation lane with no target" ).arg( i );
 
         const QList<int> path = strackpath::pathOf( model_, r.track );
-        sautomation::OwnerRef o = sautomation::resolveOwner(
-            proj, path, r.autoTarget, r.autoSlotIndex, -1 );
+        sautomation::OwnerRef o = sautomation::resolveOwner( proj, sautomation::rootNameOf( proj, model_ ), path, r.autoTarget, r.autoSlotIndex, -1 );
         if( !o.valid() )
             return QString( "row %1: automation lane '%2' (slot %3) on track "
                             "'%4' resolves to no owner" )

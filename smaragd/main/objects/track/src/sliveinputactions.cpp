@@ -14,10 +14,11 @@ using namespace strackpath;
 
 namespace {
 
-STrack *resolveTrack( SProject *project, const QList<int> &path, const char *verb )
+STrack *resolveTrack( SProject *project, const QString &pathRoot_,
+                      const QList<int> &path, const char *verb )
 {
     if( !project ) return nullptr;
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     STrack  *track = dynamic_cast<STrack *>( splacements::laneAt( mixer, path ) );
     if( !track )
         qWarning() << verb << ": no track at" << pathToString( path );
@@ -35,7 +36,7 @@ SArmTrackAction::SArmTrackAction( const QList<int> &trackPath, bool armed )
 
 SApplyResult SArmTrackAction::apply( SProject *project )
 {
-    STrack *track = resolveTrack( project, trackPath_, "arm-track" );
+    STrack *track = resolveTrack( project, pathRoot_, trackPath_, "arm-track" );
     if( !track ) return { false, nullptr };
 
     SAction *inverse = new SArmTrackAction( trackPath_, track->isArmedForRecording() );
@@ -48,13 +49,13 @@ SApplyResult SArmTrackAction::apply( SProject *project )
 
 void SArmTrackAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "armed", armed_ ? "1" : "0" );
 }
 
 bool SArmTrackAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     const QString a = elem.attribute( "armed", "0" );
     armed_ = ( a == "1" || a.compare( "true", Qt::CaseInsensitive ) == 0 );
     return true;
@@ -70,7 +71,7 @@ SSetTrackInputAction::SSetTrackInputAction( const QList<int> &trackPath,
 
 SApplyResult SSetTrackInputAction::apply( SProject *project )
 {
-    STrack *track = resolveTrack( project, trackPath_, "set-track-input" );
+    STrack *track = resolveTrack( project, pathRoot_, trackPath_, "set-track-input" );
     if( !track ) return { false, nullptr };
 
     // The spelling is validated but never NORMALISED: an unknown scheme is
@@ -96,13 +97,13 @@ SApplyResult SSetTrackInputAction::apply( SProject *project )
 
 void SSetTrackInputAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "input", input_ );
 }
 
 bool SSetTrackInputAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     input_     = elem.attribute( "input", "" );
     return true;
 }
@@ -117,7 +118,7 @@ SSetMonitorModeAction::SSetMonitorModeAction( const QList<int> &trackPath,
 
 SApplyResult SSetMonitorModeAction::apply( SProject *project )
 {
-    STrack *track = resolveTrack( project, trackPath_, "set-monitor-mode" );
+    STrack *track = resolveTrack( project, pathRoot_, trackPath_, "set-monitor-mode" );
     if( !track ) return { false, nullptr };
 
     SAction *inverse = new SSetMonitorModeAction( trackPath_, track->getMonitorMode() );
@@ -128,13 +129,13 @@ SApplyResult SSetMonitorModeAction::apply( SProject *project )
 
 void SSetMonitorModeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "mode", STrack::monitorModeToString( mode_ ) );
 }
 
 bool SSetMonitorModeAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     bool ok = false;
     const STrack::MonitorMode m =
         STrack::monitorModeFromString( elem.attribute( "mode", "auto" ), &ok );

@@ -20,7 +20,7 @@ SApplyResult SRestoreTrackAction::apply(SProject *project)
     if (!project || !owner_) {
         return {false, nullptr};
     }
-    SObject *root = splacements::rootContainer(project);
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SStdMixer *rootMixer = dynamic_cast<SStdMixer*>(root);
     if (!rootMixer) {
         return {false, nullptr};
@@ -75,7 +75,7 @@ void SRestoreTrackAction::writeXml(QDomElement &elem) const
 {
     // Never serialized standalone (created live as a remove's inverse); record
     // the address for completeness.
-    elem.setAttribute("parentPath", strackpath::pathToString(parentPath_));
+    elem.setAttribute("parentPath", strackpath::qualifiedToString( pathRoot_, parentPath_ ));
     elem.setAttribute("index", index_);
 }
 

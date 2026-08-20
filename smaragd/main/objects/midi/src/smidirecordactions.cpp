@@ -105,7 +105,7 @@ SAddMidiTakeAction::SAddMidiTakeAction( const QList<int> &clipPath,
 SApplyResult SAddMidiTakeAction::apply( SProject *project )
 {
     if( !project || clipPath_.isEmpty() ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) return { false, nullptr };
 
     QList<int> lanePath = clipPath_;
@@ -113,7 +113,7 @@ SApplyResult SAddMidiTakeAction::apply( SProject *project )
     SObject   *lane = splacements::laneAt( mixer, lanePath );
     SLink     *link = lane ? lane->childAt( idx ) : nullptr;
     if( !link || link->getSObject().isPathContainer() ) {
-        qWarning() << "add-midi-take: no clip at" << pathToString( clipPath_ );
+        qWarning() << "add-midi-take: no clip at" << qualifiedToString( pathRoot_, clipPath_ );
         return { false, nullptr };
     }
 
@@ -125,13 +125,13 @@ SApplyResult SAddMidiTakeAction::apply( SProject *project )
     if( link->getSObject().windowTakeCount() == 0 ) {
         if( link->getSObject().contentKind() != SContentKind::Event ) {
             qWarning() << "add-midi-take: the clip at"
-                       << pathToString( clipPath_ ) << "is not an event clip";
+                       << qualifiedToString( pathRoot_, clipPath_ ) << "is not an event clip";
             return { false, nullptr };
         }
         link = SClipWindow::wrapIntoTakeColumn( project, lane, link );
         if( !link || link->getSObject().windowTakeCount() == 0 ) {
             qWarning() << "add-midi-take: could not wrap"
-                       << pathToString( clipPath_ ) << "into a take column";
+                       << qualifiedToString( pathRoot_, clipPath_ ) << "into a take column";
             return { false, nullptr };
         }
     }
@@ -181,7 +181,7 @@ SApplyResult SAddMidiTakeAction::apply( SProject *project )
 
 void SAddMidiTakeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( clipPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
     elem.setAttribute( "index", index_ );
     elem.setAttribute( "activate", activate_ ? 1 : 0 );
     elem.setAttribute( "name", takeName_ );
@@ -191,7 +191,7 @@ void SAddMidiTakeAction::writeXml( QDomElement &elem ) const
 
 bool SAddMidiTakeAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_    = stringToPath( elem.attribute( "clip" ) );
+    clipPath_    = parseInto( pathRoot_, elem.attribute( "clip" ) );
     index_       = elem.attribute( "index", "-1" ).toInt();
     activate_    = elem.attribute( "activate", "1" ).toInt() != 0;
     takeName_    = elem.attribute( "name", "" );
@@ -219,7 +219,7 @@ SRemoveMidiTakeAction::SRemoveMidiTakeAction( const QList<int> &columnPath,
 SApplyResult SRemoveMidiTakeAction::apply( SProject *project )
 {
     if( !project || columnPath_.isEmpty() ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) return { false, nullptr };
 
     QList<int> lanePath = columnPath_;
@@ -268,7 +268,7 @@ SApplyResult SRemoveMidiTakeAction::apply( SProject *project )
 
 void SRemoveMidiTakeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "clip", pathToString( columnPath_ ) );
+    elem.setAttribute( "clip", qualifiedToString( pathRoot_, columnPath_ ) );
     elem.setAttribute( "take", takeIndex_ );
     elem.setAttribute( "thenActivate", thenActivate_ );
 }
@@ -302,11 +302,11 @@ bool SPlaceMidiRecordingAction::isKnownMode( const QString &mode )
 SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SObject *lane  = splacements::laneAt( mixer, trackPath_ );
     if( !lane ) {
         qWarning() << "place-midi-recording: no lane at"
-                   << pathToString( trackPath_ );
+                   << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
     const QString mode = isKnownMode( mode_ ) ? mode_
@@ -382,7 +382,7 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
             // verbatim, whichever mode was used.
             std::vector<SEvent> merged;
             smidiactions::ClipRef ref =
-                smidiactions::resolveClip( project, clipPath, -1 );
+                smidiactions::resolveClip( project, pathRoot_, clipPath, -1 );
             if( !ref.valid() ) {
                 qWarning() << "place-midi-recording: the column at"
                            << pathToString( clipPath )
@@ -421,7 +421,7 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
 
 void SPlaceMidiRecordingAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "timePos", QString::fromStdString(
                            Fraction( (int64_t) timePos_, 1 ).toString() ) );
     elem.setAttribute( "durationTicks", QString::number( durationTicks_ ) );
@@ -433,7 +433,7 @@ void SPlaceMidiRecordingAction::writeXml( QDomElement &elem ) const
 
 bool SPlaceMidiRecordingAction::readXml( const QDomElement &elem, int )
 {
-    trackPath_     = stringToPath( elem.attribute( "trackPath" ) );
+    trackPath_     = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     timePos_       = (offset_t) parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();
     durationTicks_ = elem.attribute( "durationTicks", "0" ).toLongLong();
