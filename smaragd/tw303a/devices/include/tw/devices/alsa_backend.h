@@ -6,6 +6,8 @@
 #define ALSA_PCM_NEW_HW_PARAMS_API
 #include <alsa/asoundlib.h>
 
+#include <atomic>
+#include <thread>
 #include <vector>
 
 namespace audio {
@@ -38,13 +40,23 @@ public:
     const char *name() const override { return "alsa"; }
 
 private:
-    static void asyncCallbackStatic_(snd_async_handler_t *handler);
-    void        asyncCallback_();
-    void        writeChunk_(snd_pcm_uframes_t chunkSize);
-    std::size_t pullSamples_();
+    // Blocking-write I/O pump, run on its own thread while running_. See the
+    // long comment on the .cc definition for why this replaced the earlier
+    // snd_async_add_pcm_handler design.
+    void        ioThreadFunc_();
+    // Pulls exactly `framesWanted` frames from the render callback into
+    // floatBuffer_ (silence-padded on a short return). Never pulls more than
+    // it is about to hand to the device -- see ioThreadFunc_.
+    std::size_t pullSamples_(std::size_t framesWanted);
+    // Converts the first `frameCount` frames of floatBuffer_ and writes them
+    // to the device, retrying on a partial write / recovering on an xrun,
+    // until every frame is written (or an unrecoverable error occurs).
+    void        writeChunk_(std::size_t frameCount);
 
     snd_pcm_t           *pcm_           = nullptr;
-    snd_async_handler_t *asyncHandle_   = nullptr;
+
+    std::thread          ioThread_;
+    std::atomic<bool>    stopRequested_{false};
 
     AudioConfig          config_;
     RenderCallback       callback_;
