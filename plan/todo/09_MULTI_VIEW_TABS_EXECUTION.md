@@ -6,22 +6,20 @@ decisions (D1–D19) live. That document holds the *design and the challenges*;
 this one holds *the milestone order, the acceptance criteria, and the gate for
 each*.
 
-> **Status (2026-08-20): M1 and M0's first half are IMPLEMENTED** (branch
-> `feat/QBX-arr-m1-arrangement-registry`). M0's second half and M2..M11 are open.
+> **Status (2026-08-20): M0 and M1 are COMPLETE** (branch
+> `feat/QBX-arr-m1-arrangement-registry`). M2..M11 are open.
 >
 > **This plan has been through one adversarial review (2026-08-20) and every
 > correction is folded in.** Five of its findings were independently re-verified
 > against the code before being accepted. Two things an agent must know before
 > reading further:
 >
-> - **M0 is a verified defect, not a risk** — but its exact shape was
->   established by MEASUREMENT on 2026-08-20 and is narrower than the review
->   claimed. A *placed* arrangement is reachable from the master walk (an
->   `SCut`'s content link is a child link), an in-place asset is unaffected
->   (3/3 deterministic), and what remains after the first-half fix is a RACE.
->   Read M0's measured note before touching it.
-> - **M1 + the first half of M0 are IMPLEMENTED** on
->   `feat/QBX-arr-m1-arrangement-registry`. Everything from M2 on is open.
+> - **M0 and M1 are DONE.** M0 turned out to be two defects, not one, and both
+>   descriptions in the first draft of this plan were wrong in ways only
+>   measurement caught — read its note before touching invalidation or the
+>   container capture.
+> - **Everything from M2 on is open**, and M2 (the `editRoot` seam) has been
+>   RETIRED by D21: paths carry their root. See §14 of the proposal.
 > - **`assert-track-count` cannot carry the gates an earlier draft of this plan
 >   gave it.** It is an end-of-script `<assertions>` kind, it reads `equals=`
 >   not `count=`, and it is master-rooted. M1 must build a real verb first. Any
@@ -124,42 +122,50 @@ byte-identical** (so it can never gate a channel claim; use `tests/test_stereo.w
 
 ## M0 — Cross-root invalidation (**BLOCKING; verified defect**)
 
-> **MEASURED 2026-08-20, and the severity claim below was WRONG in one
-> important way.** The first half of M0 is implemented and behaves as
-> predicted. But three things were established by running code rather than by
-> reading it, and they change what M0 is:
+> **M0 IS COMPLETE (2026-08-20). Both halves are implemented and gated**, and
+> what was measured differs from what was read — twice. Record for whoever
+> touches invalidation next:
 >
 > 1. **An `SCut`'s content link IS a child link** (`scut.cpp:1253-1254`
->    `setParent(this)`, and `SObject::childEvent` at `:864-871` appends any
+>    `setParent(this)`; `SObject::childEvent` `:864-871` appends any
 >    `qobject_cast`-able `SLink` to `childOrder_`). So
 >    `invalidateRenderChainsContaining` — which iterates `childLinks()`
 >    unconditionally, unlike `findPathRec`, which skips non-containers —
->    **descends THROUGH a placement into its content.** A *placed* arrangement
->    is therefore reachable from the master walk after all.
-> 2. **The in-place asset case is not affected at all.** A control case (an
->    asset over a muted master track, edited, re-rendered) passes **3/3
->    deterministically**. The defect is arrangement-specific, which is the
->    opposite of the review's "every structural edit, everywhere" reading.
-> 3. **The remaining defect is a RACE, not a missing bump.** With the fix in,
->    the arrangement case measures **3 PASS / 3 FAIL** over six runs on an idle
->    box, and is racy at `SMARAGD_REVAL_WORKERS=1` as well as 8 — so it is not
->    the worker pool. The render does not WAIT for the invalidated container
->    capture to be rebuilt. Without the fix it failed every time, so the fix is
->    necessary and insufficient.
+>    **descends THROUGH a placement into its content**. A *placed* arrangement
+>    is reachable from the master walk after all, and an in-place asset is
+>    unaffected entirely (control case: 3/3 deterministic). The review's "every
+>    structural edit, everywhere, silently inaudible" was too broad.
+> 2. **The first fix was necessary and insufficient.** Walking every registered
+>    root took the case from failing every run to failing 3-in-6. What remained
+>    was a genuine RACE, and it is worth knowing its shape because nothing in
+>    the code suggests it: **the container capture is rebuilt on a revalidator
+>    worker while the edit bumps the content epoch on the main thread.** A
+>    rebuild that starts a few hundred microseconds early reads the PRE-EDIT
+>    pages, publishes them, and sets `readerTried_` — after which
+>    `ensureReader()` returns immediately and the stale snapshot is what the
+>    next render hears, until some later edit happens to invalidate again.
+>    Caught by logging the epoch and a sample value inside the capture loop: the
+>    passing runs build at epoch 6, the failing ones at epoch 4 with the epoch-6
+>    build arriving *after* the render.
+> 3. **Two wrong theories were tested and discarded before that**, both cheaply,
+>    both by experiment rather than argument: `everHadCapture_` gating
+>    `onArrangementChanged` (removing the gate left it just as racy), and a
+>    queued-connection delay (the connect is direct).
 >
-> **M0 therefore has two halves.** The first is done; the second — making a
-> render observe a pending container-capture rebuild — is unimplemented, and its
-> gate sits unregistered at `tests/cases/pending/arrangement_edit_audible.qxa`.
-> Nothing that depends on *hearing* an arrangement edit (M6 AC 6.8, M10) is
-> reliable until it lands.
+> **The fix is a STAMP, not an ordering** (`SCut::captureContentEpoch_`): a
+> capture records the content epoch it was built from, and a mismatch is a MISS
+> that rebuilds on next access. That makes it self-healing under any ordering
+> instead of forcing one — the same discipline as proposal 36 §4.5's width
+> check on a cached page. Measured: **20/20 green fixed** (and 5/5 at each of
+> `SMARAGD_REVAL_WORKERS` 1/4/8/16), **6 failures in 12 runs broken**.
+>
+> **The gate is PROBABILISTIC and says so.** `arrangement_edit_audible.qxa`
+> runs four independent edit/render pairs precisely to raise detection; one
+> pair detected 4-in-12, four pairs detect 6-in-12. It cannot be made
+> deterministic without test-only sequencing hooks in production code, which
+> was judged the worse trade.
 
-
-> Every structural edit inside a detached arrangement is **completely and
-> permanently inaudible**. Same failure class `CLAUDE.md` records for a plugin
-> edit that skips `notifyPluginEdited()`, same structural reason: **a root-down
-> walk never reaches the object.**
-
-### The mechanism
+## The mechanism
 
 `invalidateRenderPath()` (`sobject.cpp:987-1000`) and `invalidateRenderPathRange()`
 (`:1053-1066`) both walk down from `project->getRootComponent()` and bump the

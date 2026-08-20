@@ -68,6 +68,17 @@ SCutSnapshot SCut::getSnapshotBlocking() const
     return buildSnapshot_nolock();
 }
 
+uint64_t SCut::contentEpochForCapture_() const
+{
+    if( !content_ ) return 0;
+    // getRootComponent() is non-const on SObject; the read itself is const in
+    // effect (contentEpochNow() is an atomic load).
+    SObject &c = const_cast<SCut *>( this )->content_->getSObject();
+    if( c.getRandomSource() ) return 0;      // leaf sample: no container epoch
+    std::shared_ptr<twComponent> rootComp = c.getRootComponent();
+    return rootComp ? (uint64_t) rootComp->contentEpochNow() : 0;
+}
+
 void SCut::ensureReader()
 {
     // Same rule as buildCapture_ (proposal 21 L3b): a live recording has no
@@ -77,7 +88,14 @@ void SCut::ensureReader()
     // ends, and the WAV-backed cut that replaces it then is an ordinary one
     // with an ordinary reader.
     if( isLiveRecording() ) return;
-    if( readerTried_ ) return;
+    if( readerTried_ ) {
+        // A capture built from pages the content has since moved past is a
+        // MISS, not a cache hit -- see captureContentEpoch_ in the header for
+        // the race this closes. Rebuild rather than hand out stale audio.
+        const uint64_t now = contentEpochForCapture_();
+        if( now == 0 || now == captureContentEpoch_.load() ) return;
+        invalidateCapture();       // clears capture_, pages and readerTried_
+    }
     // Blocking snapshot (Phase 2b): build from the CURRENT window params. With
     // the try-lock getSnapshot(), a second concurrent first-build (two broadcast
     // tracks sharing this SCut) could fail the try-lock and build from the
@@ -329,6 +347,7 @@ void SCut::buildCapture_()
     }
 
     SObject &c = content_->getSObject();
+    uint64_t pendingCaptureEpoch = 0;   // see captureContentEpoch_
     // Blocking: a capture built from a stale window would be stamped valid with
     // wrong extents (same stale try-lock class; the worker holds no object lock
     // here — dispatchRecomputation runs outside CS1 — so no self-deadlock).
@@ -412,6 +431,12 @@ void SCut::buildCapture_()
         // (reset() + seekTo(page->startPosition)) for every page it renders,
         // under the component's own cursorMutex_.
         std::shared_ptr<twComponent> rootComp = c.getRootComponent();
+
+        // Stamp BEFORE freezing (see captureContentEpoch_): a content change
+        // that lands during the loop below leaves the OLDER value here, so the
+        // capture we are about to publish is correctly seen as stale by the
+        // next reader instead of being trusted.
+        pendingCaptureEpoch = rootComp ? (uint64_t) rootComp->contentEpochNow() : 0;
 
         // The container's DECLARED width is what the pages it is about to freeze
         // will carry (twComponent::freezePage allocates at getOutputChannels()),
@@ -554,6 +579,7 @@ void SCut::buildCapture_()
             std::move( buf ), captureLen, captureChannels, env.getSRate() );
         std::lock_guard<std::mutex> lock( mutex() );
         capture_ = newCapture;
+        captureContentEpoch_.store( pendingCaptureEpoch );
     }
     // Arms onArrangementChanged() (the connect itself lives in the ctor: this
     // function runs on the revalidator worker, where Qt calls are banned).
@@ -570,6 +596,7 @@ void SCut::invalidateCapture()
         currentPage_.reset();
         nextPage_.reset();
         capture_.reset();  // Also clear the old capture_ cache (Phase 5e integration)
+        captureContentEpoch_.store( 0 );
         // Peaks are derived from capture_; a rebuilt capture must not be drawn
         // through the old envelope.
         if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }

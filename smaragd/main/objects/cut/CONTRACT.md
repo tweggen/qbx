@@ -314,3 +314,44 @@ rank and must not depend on it, can build a column of EVENT takes
 still refuses a window whose `contentKind()` differs from the takes already in
 the column, so no column can end up playing audio or notes depending on which
 lane is active.
+
+## A container capture carries the epoch it was built from (proposal 09 M0)
+
+`SCut::captureContentEpoch_` records the content's render-chain epoch at the
+moment `buildCapture_` starts freezing, and `ensureReader()` treats a capture
+whose stamp no longer matches the content's current epoch as a **MISS** — it
+drops it and rebuilds, rather than handing out the snapshot.
+
+**This is not belt-and-braces over the existing invalidation; it closes a race
+that invalidation cannot close on its own.** A container capture is rebuilt on a
+revalidator worker, while the edit that should invalidate it bumps the content
+epoch on the main thread. The two race, and the losing order is silent: a
+rebuild that begins a few hundred microseconds before the bump lands reads the
+**pre-edit** pages, publishes them, and sets `readerTried_` — after which
+`ensureReader()` returns immediately and every subsequent render hears the stale
+snapshot until some *later* edit happens to invalidate again. Measured at **6
+failures in 12 runs** on an idle box, and racy at `SMARAGD_REVAL_WORKERS=1` as
+well as 8, so it is not the worker pool.
+
+Three consequences worth keeping:
+
+- **The stamp is taken BEFORE the freeze loop, never after.** A content change
+  that lands *during* a build then leaves the older value on the published
+  capture, which is exactly what makes the next reader treat it as stale. Taking
+  it afterwards would stamp a capture built from mixed content as current.
+- **It is inert for leaf-backed cuts.** `contentEpochForCapture_()` returns 0
+  when the content has a random source, and `0 == 0` compares equal, so
+  sample-backed and grained captures — which are invalidated explicitly by their
+  own window and grain edits, and have no container epoch to track — take
+  exactly the path they always took.
+- **A stamp, not an ordering.** The alternative (make the render wait for
+  pending revalidation) forces a global barrier to fix a local staleness
+  question, and would still be wrong the moment anything else rebuilt a capture.
+  A mismatch that self-heals on next access is the same discipline proposal 36
+  §4.5 applies to a cached page whose width no longer matches its producer.
+
+Gate: `arrangement_edit_audible.qxa`, which is **probabilistic and says so** —
+it runs four independent edit/render pairs to raise detection (one pair caught
+the broken binary 4 times in 12; four pairs catch it 6 times in 12). 20/20 green
+with the fix, and 5/5 at each of `SMARAGD_REVAL_WORKERS` 1/4/8/16. It cannot be
+made deterministic without test-only sequencing hooks in production code.
