@@ -17,6 +17,7 @@
 
 set(APP_MODEL_FILES
     # --- app/model
+    model/include/app/model/sarrangements.h
     model/include/app/model/sappcontext.h
     model/include/app/model/sautomationlane.h
     model/include/app/model/sclipwindow.h
@@ -255,6 +256,8 @@ set(APP_OBJECTS_FILES
     objects/track/src/strackrndrinline.cpp
     # --- app/objects/mixer
     objects/mixer/include/app/objects/mixer/saddtrackaction.h
+    objects/mixer/include/app/objects/mixer/sdissolvearrangementaction.h
+    objects/mixer/include/app/objects/mixer/sextractarrangementaction.h
     objects/mixer/include/app/objects/mixer/screatearrangementaction.h
     objects/mixer/include/app/objects/mixer/screateassetaction.h
     objects/mixer/include/app/objects/mixer/smovetrackaction.h
@@ -267,6 +270,8 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/srestoretrackaction.h
     objects/mixer/include/app/objects/mixer/sstdmixer.h
     objects/mixer/src/saddtrackaction.cpp
+    objects/mixer/src/sdissolvearrangementaction.cpp
+    objects/mixer/src/sextractarrangementaction.cpp
     objects/mixer/src/screatearrangementaction.cpp
     objects/mixer/src/screateassetaction.cpp
     objects/mixer/src/smovetrackaction.cpp

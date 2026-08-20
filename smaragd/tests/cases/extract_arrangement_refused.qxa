@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 M5/M6: what extract-arrangement and place-asset REFUSE, and that
+  each refusal is a rejected action with a log line rather than a crash, a hang
+  or a half-extracted project.
+
+  The cycle case (D11) is the one worth reading. Two detached arrangements, each
+  windowed by an asset:
+
+      A holds a lane;  asset "assetA" windows A
+      B holds a lane;  asset "assetB" windows B
+
+  Placing assetB onto a lane INSIDE A is fine - A now contains B. Placing
+  assetA onto a lane inside B would close the loop A -> B -> A, and the live
+  pull would recurse forever. strackpath::isSelfOrDescendant cannot see this:
+  it walks STrack children within ONE root, and this cycle leaves the tree it
+  starts in. sarrangements::reaches walks the whole graph - through child links
+  AND content links, which are the same thing here - and catches it.
+
+  Every refusal below is marked expectReject="true", so the case FAILS if any of
+  them starts succeeding.
+-->
+<SActionScript version="1" name="extract_arrangement_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- An EMPTY range is refused. -->
+    <extract-arrangement trackPaths="0" rangeStart="96000" rangeEnd="96000"
+                         name="Empty" expectReject="true"/>
+    <!-- ...and nothing was half-done: the master still has both lanes and no
+         arrangement was left behind. -->
+    <assert-track-count arrangement="" count="2"/>
+    <assert-arrangements names=""/>
+
+    <!-- A path that is not a track is refused. -->
+    <extract-arrangement trackPaths="7" rangeStart="0" rangeEnd="96000"
+                         name="Nope" expectReject="true"/>
+    <assert-arrangements names=""/>
+
+    <!-- A real extraction, so the name is taken. -->
+    <extract-arrangement trackPaths="0" rangeStart="0" rangeEnd="192000"
+                         name="Taken" window="range" placeAt="0"/>
+    <assert-arrangements names="Taken" trackCounts="1"/>
+
+    <!-- The same name again is refused. -->
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="96000"
+                         name="Taken" expectReject="true"/>
+    <assert-arrangements names="Taken" trackCounts="1"/>
+
+    <!-- remove-arrangement is refused while an asset windows the root. -->
+    <remove-arrangement name="Taken" expectReject="true"/>
+    <assert-arrangements names="Taken" trackCounts="1"/>
+
+    <!-- ==== the cycle guard (D11) ======================================== -->
+    <create-arrangement name="A"/>
+    <add-track arrangement="A" index="-1"/>
+    <create-arrangement name="B"/>
+    <add-track arrangement="B" index="-1"/>
+    <create-asset container="A:" startOffset="0" duration="96000" assetName="assetA"/>
+    <create-asset container="B:" startOffset="0" duration="96000" assetName="assetB"/>
+
+    <!-- A contains B: allowed. -->
+    <place-asset assetName="assetB" trackPath="A:0" timePos="0"/>
+
+    <!-- B containing A would close A -> B -> A: REFUSED. -->
+    <place-asset assetName="assetA" trackPath="B:0" timePos="0" expectReject="true"/>
+
+    <!-- And an asset may not be placed inside the arrangement it windows. -->
+    <place-asset assetName="assetA" trackPath="A:0" timePos="0" expectReject="true"/>
+
+    <!-- An unknown arrangement name is refused, never resolved against the
+         master - the safety property the qualified path buys (D21). -->
+    <place-asset assetName="assetB" trackPath="Nonexistent:0" timePos="0"
+                 expectReject="true"/>
+    <add-track arrangement="Nonexistent" index="-1" expectReject="true"/>
+
+    <!-- The project is still coherent after all of that. -->
+    <assert-arrangements names="A,B,Taken" trackCounts="1,1,1"/>
+  </actions>
+
+</SActionScript>

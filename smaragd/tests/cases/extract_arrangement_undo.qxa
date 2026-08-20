@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 M6/M7: ONE undo restores the project exactly, and
+  dissolve-arrangement does the same thing on purpose.
+
+  The audio gate here is a BYTE compare (assert-file-identical) rather than an
+  RMS band, and it can be, because both sides of it are the SAME graph: the
+  render before the extraction and the render after undoing it go through no
+  capture, no window and no placement. That is a stronger statement than any
+  tolerance, and it is what catches a track that came back at the wrong index,
+  with the wrong gain, or with a clip slipped.
+
+  It also gates the SHAPE: the master's lane count and the names of lanes 0 and
+  1 must come back, and the arrangement and its assets must be gone from the
+  registries entirely.
+
+  Track 1 is deliberately given a NON-UNITY volume and a name of its own, so a
+  restore that puts the tracks back in the wrong ORDER changes the render (the
+  two lanes are then no longer interchangeable) instead of being invisible.
+-->
+<SActionScript version="1" name="extract_arrangement_undo">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Kick"/>
+    <set-track-name trackPath="1" name="Snare"/>
+    <set-track-name trackPath="2" name="Bass"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="96000"/>
+    <add-sample trackIndex="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-track-volume trackPath="1" volume="-6.0"/>
+
+    <render filename="und_before.wav" format="wav" quality="10" durationSec="8"/>
+
+    <!-- Extract the middle two, leaving Bass behind. -->
+    <extract-arrangement trackPaths="0;1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <assert-track-count arrangement="" count="2"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+    <assert-track-name trackPath="0" name="Drums"/>
+    <assert-track-name trackPath="1" name="Bass"/>
+
+    <!-- ONE undo. -->
+    <undo/>
+
+    <assert-track-count arrangement="" count="3"/>
+    <assert-arrangements names=""/>
+    <assert-track-name trackPath="0" name="Kick"/>
+    <assert-track-name trackPath="1" name="Snare"/>
+    <assert-track-name trackPath="2" name="Bass"/>
+    <assert-track-volume trackPath="1" volumeDb="-6.0" tolerance="0.01"/>
+
+    <render filename="und_after.wav" format="wav" quality="10" durationSec="8"/>
+    <assert-file-identical actual="und_after.wav" expected="und_before.wav"/>
+
+    <!-- REDO re-extracts identically. -->
+    <redo/>
+    <assert-track-count arrangement="" count="2"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+    <assert-arrangements names="Drums" trackCounts="2"/>
+
+    <!-- And dissolve-arrangement, invoked directly, does what undo did. -->
+    <dissolve-arrangement name="Drums"/>
+    <assert-track-count arrangement="" count="3"/>
+    <assert-arrangements names=""/>
+    <assert-track-name trackPath="0" name="Kick"/>
+    <assert-track-name trackPath="1" name="Snare"/>
+    <assert-track-name trackPath="2" name="Bass"/>
+
+    <render filename="und_dissolved.wav" format="wav" quality="10" durationSec="8"/>
+    <assert-file-identical actual="und_dissolved.wav" expected="und_before.wav"/>
+  </actions>
+
+</SActionScript>

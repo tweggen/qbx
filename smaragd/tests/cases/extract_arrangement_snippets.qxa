@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 D20: material outside the extraction window is not lost and is not
+  placed. It becomes SNIPPETS - one named, UNPLACED asset per contiguous span of
+  real material outside the window - which sit in the resource list as patches
+  the user may or may not drop onto the timeline.
+
+  The shape here is deliberately GAPPED, because a gap is what separates
+  "snippets" from "a head and a tail". Track 0 carries three copies of the
+  4 s sawtooth, at 0 s, 8 s and 16 s:
+
+      |====A====|         |====B====|         |====C====|
+      0         4         8        12        16        20   (seconds)
+
+  Extracting with the window [8,12) keeps B and leaves A and C outside, with a
+  gap between them that holds nothing. A blind head/tail pair would produce ONE
+  span [0,8) and ONE [12,20), each half silence. The real walk produces exactly
+  two spans matching A and C.
+
+  What is asserted:
+    - the primary asset plus exactly TWO snippets are registered;
+    - NOTHING was placed for them, and the AUDIO is what asserts that rather
+      than a clip count: the render is SILENT where A and C used to play. Had
+      the extraction placed the snippets back at their own positions, those
+      two regions would sound. (There is no assert-clip-count verb in this
+      repo and none was invented for this.)
+    - each snippet, when the user does place it, plays the material it names.
+      Snippet 1 is A (source seconds 0..4, RMS ladder 0.067/0.176/0.291/0.405)
+      and snippet 2 is C. A and C are the SAME audio, so to tell the two
+      snippets apart the case places snippet 2 and asserts it is NOT silent at
+      a position where the primary asset is silent.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramp 0 -> 0.8.
+-->
+<SActionScript version="1" name="extract_arrangement_snippets">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="384000"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="768000"/>
+
+    <!-- Window [8,12) keeps the middle copy; the outer two fall outside. -->
+    <extract-arrangement trackPaths="0" rangeStart="384000" rangeEnd="576000"
+                         name="Mid" window="range" placeAt="384000"/>
+
+    <!-- The primary asset and exactly two snippets. -->
+    <assert-arrangements names="Mid" trackCounts="1"/>
+    <assert-track-count arrangement="" count="1"/>
+    <assert-track-count arrangement="Mid" count="1"/>
+
+    <!-- The primary placement plays the MIDDLE copy at 8 s, and the positions
+         the outer copies used to occupy are silent. -->
+    <render filename="snip_primary.wav" format="wav" quality="10" durationSec="20"/>
+    <assert-audio-energy filename="snip_primary.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <assert-audio-energy filename="snip_primary.wav"
+                         startFrame="432000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+    <assert-audio-energy filename="snip_primary.wav"
+                         startFrame="816000" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- Now USE a snippet, which is the whole point of registering them: place
+         snippet 2 (the copy at 16 s) at 0 s on a new lane. It must sound. -->
+    <add-track index="-1"/>
+    <place-asset assetName="Mid snippet 2" trackPath="1" timePos="0"/>
+    <render filename="snip_placed.wav" format="wav" quality="10" durationSec="20"/>
+
+    <!-- Second 1 of the placement = source sec1 of the copy that used to be
+         at 16 s. Silent in snip_primary.wav, audible now. -->
+    <assert-audio-energy filename="snip_placed.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+    <!-- And the primary placement is untouched by any of it. -->
+    <assert-audio-energy filename="snip_placed.wav"
+                         startFrame="432000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+  </actions>
+
+</SActionScript>

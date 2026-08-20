@@ -6,8 +6,18 @@ decisions (D1–D19) live. That document holds the *design and the challenges*;
 this one holds *the milestone order, the acceptance criteria, and the gate for
 each*.
 
-> **Status (2026-08-20): M0 and M1 are COMPLETE** (branch
-> `feat/QBX-arr-m1-arrangement-registry`). M2..M11 are open.
+> **Status (2026-08-20): M0, M1, M5 (the cycle guard), M6 (extract) and M7
+> (dissolve) are COMPLETE** on `feat/QBX-arr-m1-arrangement-registry` — the
+> whole HEADLESS half of the requester's use case works and is gated.
+> **M2/M3/M4 are RETIRED by D21** (paths carry their root; there is no ambient
+> edit root to seam, police or capture). What remains is UI: M8 (the tab shell
+> and the extraction gesture), M9 (`<render>` follows the addressed root),
+> M10 (local audition) and M11 (persist open tabs).
+>
+> Verbs that exist today: `create-arrangement`, `remove-arrangement`,
+> `extract-arrangement`, `dissolve-arrangement`, `assert-arrangements`, and a
+> root-aware in-sequence `assert-track-count`. `add-track`, `add-sample`,
+> `create-asset` and `place-asset` take root-qualified addresses.
 >
 > **This plan has been through one adversarial review (2026-08-20) and every
 > correction is folded in.** Five of its findings were independently re-verified
