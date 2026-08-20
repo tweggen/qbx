@@ -450,7 +450,14 @@ QString SPluginEffectStrip::describeSlot(int slotIndex) const
         // APPENDED AT THE END on purpose (proposal 21 L5): the M5 cases assert
         // contiguous spans of the fields above, and a field inserted among them
         // would break assertions that are about something else entirely.
-        + QStringLiteral("|latency=%1").arg(pw.slot->reportedLatencyFrames());
+        + QStringLiteral("|latency=%1").arg(pw.slot->reportedLatencyFrames())
+        // APPENDED AFTER latency=, for the same reason latency= was appended
+        // after everything else (proposal 33 D2): the M5 cases assert
+        // contiguous spans of the fields above and a field inserted among them
+        // would break assertions about something else entirely. Model state,
+        // like latency= and unlike every field before it - the flag lives in
+        // the project and the row does not draw it.
+        + QStringLiteral("|editorOpen=%1").arg(pw.slot->getEditorOpen() ? 1 : 0);
 }
 
 // THE CHAIN TOTAL (proposal 21 L5). A plain sum: every insert is in series, so

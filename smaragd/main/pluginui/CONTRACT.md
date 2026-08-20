@@ -101,6 +101,13 @@ How to test:
   change the rendered level, and each undoes (invariants 3 and 6).
 - `qxa.plugin_remove_restores_param` — undoing a removal restores the plugin's
   PARAMETERS, not just the slot.
+- `qxa.plugin_editor_persistence` — D2's project half: the flag starts false,
+  opening sets it, it survives save+load, closing clears it, and the real
+  post-load walk opens NOTHING in a test-case run (watched failing with the
+  guard removed). Also asserts that a headless run leaves no
+  `editorGeometry` key in the shared `smaragd.ini`.
+- `plugin_editor_geometry_test` — D2's SSettings half: the off-screen clamp,
+  which cannot be reproduced by hand without unplugging a monitor.
 - `qxa.plugin_native_editor` — the native editor END TO END with no display:
   the "native" answer from `editorKindFor()`, the plugin's own knob reaching the
   render (0.0667 -> 0.1666, exactly 2.5x, set by nobody in the script), ONE undo
@@ -184,6 +191,38 @@ never shown — it stays alive purely as the poll pump and the registry entry, s
 APPLICATION window, not this dialog: an invisible parent keeps nothing above
 anything. VST3 and AU have no floating form and never take this rung.
 
+**THE EDITOR'S OPEN STATE AND ITS GEOMETRY ARE PERSISTED IN DIFFERENT PLACES,
+and that split is the design** (decision D2). WHETHER the editor was open goes
+in the PROJECT (`<SPluginSlot editorOpen='true'>`), because "this project opens
+with the synth's editor up" means the same thing on any machine. WHERE the
+window was goes in `SSettings`, per user, keyed `<format>:<uid>`, because
+monitor layout is machine-local and a window at x=2400 restored on a laptop is
+a window nobody can reach. It is the same split, and the same reason, as
+proposal 37 P7's portable `midiOutPort` NAME against the machine-local
+`midi/portId/<name>`.
+
+Four consequences a change must preserve:
+
+- **`editorOpen` is written only when true**, so every project file saved before
+  D2 — and both render goldens — stay byte-unchanged. Same discipline
+  `SObject::serialize()` already follows for automation lanes.
+- **It is NOT an action.** Opening a window is not an edit to the arrangement,
+  and an undo stack that has to be walked past a window-open entry to reach a
+  real edit is worse than a project flag that is not undoable.
+- **A restored geometry is never trusted blindly.** `clampOntoAScreen()` is a
+  pure static (hence gateable: `plugin_editor_geometry_test`) and keeps the SIZE
+  while moving the position only as far as it takes to land on an available
+  `QScreen`. The size is restored ONLY when `caps().resizable` — a fixed-size
+  editor has one correct size, the one it just reported, and forcing a
+  remembered one on it clips its own drawing silently.
+- **`restoreOpenEditors()` does nothing in a `--test-case` run.** A qxa run uses
+  the REAL platform plugin (the suite does not set `QT_QPA_PLATFORM=offscreen`),
+  so an unguarded restore would put plugin windows on the developer's desktop
+  mid-suite. A case asserts the flag through the MODEL, never through a window.
+  It is called from the END of `SMainWindow::openProject()` — the one place that
+  happens once per load and where every dock already exists — which is why
+  `shell -> pluginui` is a declared edge in `tools/check_layering.py`.
+
 **The window is NOT owned by the strip**, and must not become so:
 `STrackDetailPanel::rebuildUI()` deletes the strip on every track switch, so a
 window parented to it would vanish when the user clicks another lane. It lives
@@ -197,9 +236,9 @@ Known debt: generic sliders are still a fixed 1000-tick normalization;
 **AudioUnit has no native editor yet** (proposal 33 M7) and neither does
 Linux/X11 (M8 — VST3 there needs `IRunLoop`, which the app must bridge to
 `QSocketNotifier`/`QTimer`; CLAP on X11 does not, so `caps().needsRunLoop` is
-false in that backend on every platform). An editor's open state and geometry
-are not persisted (D2). **What is gated headlessly is the parameter FLOW, not
-the window**: `qxa.plugin_native_editor` drives a real `SPluginNativeEditor`
+false in that backend on every platform). D2 persistence IS implemented (see
+above); what it does NOT do is remember a per-SLOT geometry, only a per-plugin
+one. **What is gated headlessly is the parameter FLOW, not the window**: `qxa.plugin_native_editor` drives a real `SPluginNativeEditor`
 against `tw.test.clap.gui`, a fixture that implements `clap.gui` and creates no
 window at all, with `showWindow = false` so nothing reaches the screen (a qxa
 run uses the real platform plugin). Whether a real plugin's GUI actually draws

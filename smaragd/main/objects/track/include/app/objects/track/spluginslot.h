@@ -140,6 +140,22 @@ public:
     void setBypass( bool bypass );
     bool getBypass() const { return bypass_; }
 
+    // Whether this slot's NATIVE EDITOR was open when the project was saved
+    // (proposal 33 D2). It travels in the .qxp because "this project opens with
+    // the synth's editor up" is a property of the arrangement and means the
+    // same thing on any machine; the window's POSITION AND SIZE deliberately do
+    // NOT — they live in SSettings, per user, keyed by plugin uid, because a
+    // window at x=2400 is off screen on a laptop. Same split, and the same
+    // reason, as proposal 37 P7's portable `midiOutPort` name against the
+    // machine-local `midi/portId/<name>`.
+    //
+    // Written by SPluginNativeEditor and by nothing else. It is NOT an action:
+    // opening a window is not an edit to the arrangement, and an undo stack
+    // that has to be walked past a window-open entry to reach a real edit is
+    // worse than a project flag that is not undoable.
+    void setEditorOpen( bool open ) { editorOpen_ = open; }
+    bool getEditorOpen() const { return editorOpen_; }
+
     // State persistence. saveState() reads the LIVE plugin only when the slot is
     // Active; for a Missing/Unsupported slot it hands back the stored blob
     // verbatim, which is what keeps a user's settings across opening the project
@@ -249,6 +265,7 @@ private:
     std::shared_ptr<audio::twPluginInsert>        insert_;   // ONE, N channels wide
     int  channels_ = 0;
     bool bypass_ = false;
+    bool editorOpen_ = false;
     std::vector<std::uint8_t> savedState_;  // opaque plugin state chunk
 };
 

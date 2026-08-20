@@ -18,6 +18,7 @@
 #include <QDialog>
 #include <QHash>
 #include <QPointer>
+#include <QRect>
 #include <QString>
 
 #include <cstdint>
@@ -29,6 +30,7 @@
 class QTimer;
 class QWidget;
 class SPluginSlot;
+class SProject;
 class STrack;
 
 class SPluginNativeEditor : public QDialog {
@@ -70,6 +72,31 @@ public:
     static bool isOpenFor( SPluginSlot *slot );
     static void closeFor( SPluginSlot *slot );
 
+    // D2: re-open every editor a loaded project says was open. Called once,
+    // after a load has finished and the UI exists.
+    //
+    // IT DOES NOTHING UNDER --test-case, and that is load-bearing rather than
+    // tidy. A qxa run uses the REAL platform plugin — the suite does not set
+    // QT_QPA_PLATFORM=offscreen, whatever proposal 33 D2 says — so restoring an
+    // editor would put real plugin windows on the developer's desktop in the
+    // middle of a suite. A case that wants to assert the flag round-trips reads
+    // the MODEL (SPluginSlot::getEditorOpen), never a window.
+    static void restoreOpenEditors( SProject *project, QWidget *parentForPosition );
+
+    // Put a remembered rectangle somewhere the user can actually reach.
+    //
+    // PUBLIC AND STATIC so it can be gated (`plugin_editor_geometry_test`): the
+    // failure it prevents — a window restored at x=2400 after the second
+    // monitor was unplugged, off screen, unreachable, and on Windows not even
+    // reported as a problem — cannot be reproduced by hand without physically
+    // unplugging a monitor. It is a pure function of the rect and the current
+    // screens, which is what makes that possible.
+    //
+    // The rule is the weakest one that fixes it: keep the SIZE (shrinking only
+    // when it exceeds the screen), and move the position only as far as it
+    // takes to get the window inside an available screen.
+    static QRect clampOntoAScreen( const QRect &want );
+
     // True if this slot has a native editor available at all. Cheap: it asks
     // twPlugin::supportsNativeEditor() and instantiates nothing.
     static bool isAvailableFor( SPluginSlot *slot );
@@ -94,6 +121,12 @@ private:
     SPluginNativeEditor( STrack *track, SPluginSlot *slot, QWidget *parent );
 
     bool attachPlugin();
+
+    // `<format>:<uid>` — the SSettings key the geometry hangs on. One plugin,
+    // one remembered window size, wherever it is inserted.
+    QString pluginKey() const;
+    void    restoreGeometryFromSettings();
+    void    saveGeometryToSettings() const;
     void applyEdit( std::uint32_t paramId, double value, double previousValue,
                     bool gestureEnd );
     void resizeToPlugin( audio::twEditorSize physical );
@@ -111,6 +144,11 @@ private:
     std::unique_ptr<audio::twPluginEditor> editor_;
     bool                             applyingResize_ = false;
     bool                             floating_       = false;
+    // Whether this window was ever actually mapped. A headless open
+    // (showWindow = false) and a floating editor both have no geometry of ours
+    // worth storing, and writing one would overwrite the user's real position
+    // with a default-constructed rectangle.
+    bool                             shown_          = false;
 
     // The last value committed per parameter, for the echo guard in applyEdit().
     std::map<std::uint32_t, double>  lastCommitted_;

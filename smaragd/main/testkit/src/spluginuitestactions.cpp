@@ -393,6 +393,16 @@ SApplyResult SPluginNativeEditorAction::apply( SProject *project )
         // showWindow = false: see the header. The attach is real; only the
         // mapping of our container onto the screen is skipped.
         SPluginNativeEditor::openFor( track, slot, nullptr, /*showWindow=*/false );
+    } else if( action_ == QLatin1String( "assert" ) ) {
+        // Opens and closes nothing; the expectOpen check below is the whole
+        // verb. It exists so a case can say "and NOTHING opened" about a step
+        // that was supposed to be inert.
+    } else if( action_ == QLatin1String( "restore" ) ) {
+        // Proposal 33 D2. Drives the real post-load walk, which is a NO-OP
+        // under --test-case: a qxa run uses the real platform plugin, so a
+        // restored editor would put a plugin window on the developer's screen
+        // mid-suite. `expectOpen="0"` is what asserts the guard held.
+        SPluginNativeEditor::restoreOpenEditors( project, nullptr );
     } else if( action_ == QLatin1String( "close" ) ) {
         SPluginNativeEditor::closeFor( slot );
         // The dialogs are WA_DeleteOnClose, so close() only POSTS the deletion.
@@ -400,7 +410,8 @@ SApplyResult SPluginNativeEditorAction::apply( SProject *project )
         // "it is gone" rather than "it has been asked to go".
         QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
     } else {
-        qWarning() << "plugin-native-editor: action must be open|close, got" << action_;
+        qWarning() << "plugin-native-editor: action must be "
+                      "open|close|assert|restore, got" << action_;
         return { false, nullptr };
     }
 

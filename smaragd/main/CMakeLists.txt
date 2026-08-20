@@ -834,6 +834,23 @@ add_test(NAME mediabrowser_size_test COMMAND mediabrowser_size_test)
 set_tests_properties(mediabrowser_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# SPluginNativeEditor::clampOntoAScreen (proposal 33 D2). A remembered editor
+# geometry restored blind is the classic multi-monitor bug -- the window comes
+# back on a screen that is no longer plugged in, off screen, unreachable, and on
+# Windows not even reported. That cannot be reproduced by hand without
+# unplugging a monitor, so the clamp is a pure function of (rect, screens) and
+# this pins it. Needs a QGuiApplication for QScreen, hence offscreen; links all
+# four layers for the reason mediabrowser_size_test does.
+add_executable(plugin_editor_geometry_test
+    pluginui/tests/plugin_editor_geometry_test.cpp)
+target_link_libraries(plugin_editor_geometry_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME plugin_editor_geometry_test COMMAND plugin_editor_geometry_test)
+set_tests_properties(plugin_editor_geometry_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # SSecretStore (proposal 38 GATE 5a, §B.8): store/retrieve/delete round trips,
 # byte-exact non-ASCII+NUL secrets, the ciphertext-not-plaintext + DPAPI-salts
 # checks, the `none`/`memory` no-INI-write checks, and the Undecryptable

@@ -38,6 +38,7 @@
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
 #include "app/shell/ssettings.h"
+#include "app/pluginui/spluginnativeeditor.h"
 #include "app/servicesui/srecordingprogress.h"
 #include "app/servicesui/slogview.h"
 #include "app/servicesui/soptions.h"
@@ -512,6 +513,13 @@ bool SMainWindow::openProjectFile( const QString &fileName )
 
     SSettings::instance().addRecentProject( fileName );
     updateRecentMenu();
+
+    // Proposal 33 D2: a project that was saved with plugin editors open opens
+    // with them open. LAST, deliberately - every dock, the track detail panel
+    // and the central widget exist by now, so a restored editor is stacked over
+    // a finished window rather than over a half-built one. It is a no-op under
+    // --test-case (see SPluginNativeEditor::restoreOpenEditors).
+    SPluginNativeEditor::restoreOpenEditors( currentProject_, this );
     return true;
 }
 
