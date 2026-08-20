@@ -27,4 +27,24 @@ private:
     bool    namesGiven_ = false;
 };
 
+// <assert-selection paths="Drums:0,0;Drums:0,1"/>
+//
+// The ACTIVE root's selection, as root-qualified index paths, SEMICOLON
+// separated (a single path is already comma separated). An empty `paths`
+// asserts the active root has nothing selected.
+//
+// It reads the ACTIVE list deliberately: proposal 09 §3's property is that the
+// active tab's selection is the app-wide one, so a case switches tabs and
+// asserts what the app would now act on.
+class SAssertSelectionAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-selection" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override { return { QStringLiteral("paths") }; }
+private:
+    QString paths_;
+};
+
 #endif  // STABTESTACTIONS_H

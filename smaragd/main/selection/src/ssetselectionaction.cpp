@@ -18,7 +18,7 @@ SApplyResult SSetSelectionAction::apply(SProject *project)
     SAppContext &app = SAppContext::get();
 
     // Snapshot current selection for inverse
-    QList<QList<int>> priorPaths = app.getCurrentSelectionPaths();
+    QList<QList<int>> priorPaths = app.getCurrentSelectionPathsFor( pathRoot_ );
 
     // Validate all paths before applying
     SObject *root = project->getRootComponent();
@@ -32,7 +32,7 @@ SApplyResult SSetSelectionAction::apply(SProject *project)
     }
 
     // Apply: update selection
-    app.setSelectionFromPaths(paths_);
+    app.setSelectionFromPathsFor(paths_, pathRoot_ );
 
     // Inverse: restore prior selection
     SAction *inverse = new SSetSelectionAction(priorPaths);

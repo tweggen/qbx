@@ -12,10 +12,10 @@ SApplyResult SClearSelectionAction::apply(SProject *project)
     SAppContext &app = SAppContext::get();
 
     // Snapshot current selection for inverse
-    QList<QList<int>> priorPaths = app.getCurrentSelectionPaths();
+    QList<QList<int>> priorPaths = app.getCurrentSelectionPathsFor( pathRoot_ );
 
     // Apply: clear selection
-    app.setSelectionFromPaths(QList<QList<int>>());
+    app.setSelectionFromPathsFor( QList<QList<int>>(), pathRoot_ );
 
     // Inverse: create a set-selection action via registry with prior paths
     SAction *inverse = SActionRegistry::instance().create(QStringLiteral("set-selection"));

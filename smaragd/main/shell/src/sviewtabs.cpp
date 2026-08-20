@@ -1,4 +1,6 @@
 #include "app/shell/sviewtabs.h"
+#include "app/shell/sapplication.h"
+#include "app/model/sproject.h"
 #include "tw/core/twlog.h"
 #include <QTabBar>
 #include <QSize>
@@ -158,7 +160,18 @@ void SViewTabs::onTabCloseRequested( int index )
 
 void SViewTabs::onCurrentChanged( int /*index*/ )
 {
-    emit activeRootChanged( activeRoot() );
+    // The active tab PUBLISHES itself as the selection context (proposal 09
+    // §3). Every reader of SApplication's selection -- the menus, the delete
+    // key, the transport -- then sees this tab's clips and no other tab's.
+    SObject *root = activeRoot();
+    QString name;
+    if( root ) {
+        if( SProject *proj = root->getProjectSafe() )
+            name = proj->arrangementNameOf( root );
+    }
+    SApplication::app().setActiveSelectionRoot( name );
+
+    emit activeRootChanged( root );
 }
 
 void SViewTabs::onRootDestroyed( QObject *obj )

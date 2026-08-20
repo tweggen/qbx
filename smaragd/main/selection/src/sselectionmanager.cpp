@@ -1,33 +1,36 @@
 #include "app/selection/sselectionmanager.h"
+#include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/model/sobjectpath.h"
 
-QList<QList<int>> SSelectionManager::linksToPaths(const SSelectionList &links, SProject *project) const
+QList<QList<int>> SSelectionManager::linksToPaths(const SSelectionList &links, SProject *project,
+                                              const QString &root) const
 {
     QList<QList<int>> paths;
     if (!project) return paths;
 
-    SObject *root = project->getRootComponent();
-    if (!root) return paths;
+    SObject *rootObj = splacements::rootNamed( project, root );
+    if (!rootObj) return paths;
 
     for (SLink *link : links) {
         if (!link) continue;
-        QList<int> path = strackpath::pathOf(root, &link->getSObject());
+        QList<int> path = strackpath::pathOf(rootObj, &link->getSObject());
         paths.append(path);
     }
     return paths;
 }
 
-SSelectionList SSelectionManager::pathsToLinks(const QList<QList<int>> &paths, SProject *project) const
+SSelectionList SSelectionManager::pathsToLinks(const QList<QList<int>> &paths, SProject *project,
+                                           const QString &root) const
 {
     SSelectionList links;
     if (!project) return links;
 
-    SObject *root = project->getRootComponent();
-    if (!root) return links;
+    SObject *rootObj = splacements::rootNamed( project, root );
+    if (!rootObj) return links;
 
     for (const QList<int> &path : paths) {
-        SObject *obj = strackpath::resolveByPath(root, path);
+        SObject *obj = strackpath::resolveByPath(rootObj, path);
         if (!obj) {
             links.append(nullptr);  // Keep nulls in place to preserve order
             continue;
@@ -43,7 +46,7 @@ SSelectionList SSelectionManager::pathsToLinks(const QList<QList<int>> &paths, S
 
         // Get parent and find the link to obj
         QList<int> parentPath = path.mid(0, path.size() - 1);
-        SObject *parent = strackpath::resolveByPath(root, parentPath);
+        SObject *parent = strackpath::resolveByPath(rootObj, parentPath);
         if (!parent) {
             links.append(nullptr);
             continue;
@@ -56,10 +59,11 @@ SSelectionList SSelectionManager::pathsToLinks(const QList<QList<int>> &paths, S
     return links;
 }
 
-bool SSelectionManager::isPathValid(const QList<int> &path, SProject *project) const
+bool SSelectionManager::isPathValid(const QList<int> &path, SProject *project,
+                                  const QString &root) const
 {
     if (!project) return false;
-    SObject *root = project->getRootComponent();
-    if (!root) return false;
-    return strackpath::resolveByPath(root, path) != nullptr;
+    SObject *rootObj = splacements::rootNamed( project, root );
+    if (!rootObj) return false;
+    return strackpath::resolveByPath(rootObj, path) != nullptr;
 }

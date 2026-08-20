@@ -190,6 +190,44 @@ const SSelectionList &SApplication::getSelectionList() const
     return *selectionList_;
 }
 
+// Point selectionList_ / currentSelectedSLink_ at `root`'s entry, creating it
+// on first use. Everything else in this file reads those two, so switching the
+// active tab switches what every menu, the transport and the delete key see --
+// which is the whole of proposal 09 §3.
+void SApplication::setActiveSelectionRoot( const QString &root )
+{
+    if( activeSelectionRoot_ == root && selectionList_ ) return;
+    activeSelectionRoot_ = root;
+    SSelectionEntry &e = selections_[ root ];
+    selectionList_ = &e.list;
+    currentSelectedSLink_ = e.current;
+}
+
+const SSelectionList &SApplication::selectionListFor( const QString &root ) const
+{
+    static const SSelectionList empty;
+    auto it = selections_.constFind( root );
+    return it == selections_.constEnd() ? empty : it->list;
+}
+
+void SApplication::addSelectedSLink( SLink *lk, const QString &root )
+{
+    const QString keep = activeSelectionRoot_;
+    setActiveSelectionRoot( root );
+    addSelectedSLink( lk );
+    selections_[ root ].current = currentSelectedSLink_;
+    setActiveSelectionRoot( keep );
+}
+
+void SApplication::clearSelection( const QString &root )
+{
+    const QString keep = activeSelectionRoot_;
+    setActiveSelectionRoot( root );
+    clearSelection();
+    selections_[ root ].current = currentSelectedSLink_;
+    setActiveSelectionRoot( keep );
+}
+
 bool SApplication::isSelectionEmpty() const
 {
     return selectionList_->count()==0;
@@ -216,6 +254,7 @@ void SApplication::addSelectedSLink( SLink *lk )
     selectionList_->append( lk );    
     QObject::connect( lk, SIGNAL( destroyed() ), 
                       this, SLOT( unselectSLink() ) );    
+    selections_[ activeSelectionRoot_ ].current = currentSelectedSLink_;
 }
 
 /**
@@ -233,6 +272,7 @@ void SApplication::unselectSLink( SLink *lk )
         } else {
             currentSelectedSLink_ = NULL;
         }
+        selections_[ activeSelectionRoot_ ].current = currentSelectedSLink_;
     }
 }
 
@@ -245,6 +285,7 @@ void SApplication::clearSelection()
     while( selectionList_->count() ) {
         unselectSLink( selectionList_->first() );
     }
+    selections_[ activeSelectionRoot_ ].current = NULL;
 }
 
 /**
@@ -671,7 +712,9 @@ SApplication::SApplication( int &argc, char **argv )
     // The MIDI half of a record start (proposal 21 L4). After the input hub,
     // whose recorder SINKS it acquires, and destroyed before it.
     midiRecorder_.reset( new SMidiRecorder( this ) );
-    selectionList_ = new SSelectionList();
+    // The MASTER's entry, and the active one until a tab says otherwise.
+    activeSelectionRoot_ = QString();
+    selectionList_ = &selections_[ activeSelectionRoot_ ].list;
     t3Env_ = new tw303aEnvironment;
     t3Env_->setBufferSize( 4096 );
     SAppContext::setInstance( this );        // core modules reach us only via this
@@ -771,7 +814,7 @@ SApplication::~SApplication()
     DTOR_DEL( actionHistory_ );
     t3Speaker_.reset();
     DTOR_DEL( t3Env_ );
-    DTOR_DEL( selectionList_ );
+    selectionList_ = nullptr;      // owned by selections_, never new'd
 }
 
 SActionHistory *SApplication::actionHistory() const
@@ -1224,6 +1267,23 @@ void SApplication::setSelectionFromPaths(const QList<QList<int>> &paths)
 {
     clearSelection();
     addSelectionFromPaths(paths);
+}
+
+void SApplication::setSelectionFromPathsFor(const QList<QList<int>> &paths,
+                                            const QString &root)
+{
+    clearSelection( root );
+    SSelectionManager mgr;
+    SSelectionList links = mgr.pathsToLinks( paths, currentProject_, root );
+    for( SLink *link : links ) {
+        if( link ) addSelectedSLink( link, root );
+    }
+}
+
+QList<QList<int>> SApplication::getCurrentSelectionPathsFor(const QString &root) const
+{
+    SSelectionManager mgr;
+    return mgr.linksToPaths( selectionListFor( root ), currentProject_, root );
 }
 
 void SApplication::addSelectionFromPaths(const QList<QList<int>> &paths)
