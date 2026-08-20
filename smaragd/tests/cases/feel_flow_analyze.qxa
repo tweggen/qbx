@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M1: the aspects (groove.res / groove.ev) + analyzer
+  (twGrooveBuildAspectPayloads) + OPT-IN background job
+  (SPlainWave::enqueueGrooveAnalysis) + badge on a plain SOURCE wave — the
+  cheap "bounce == source" path M1 keeps permanently (M1b's internal-bounce
+  consumer is later work). Groove analysis is never scheduled by add-sample
+  on its own; feel-flow-analyze is the opt-in.
+
+  Fixture: ../groove/a_offset15.wav (the M0 fixture corpus's own AC (a) case,
+  tests/groove/manifest.json) — 16 s, 120 BPM 8th-grid, mono 48 kHz. The LOW
+  voice sits exactly on the grid; the HIGH voice is +15.0 ms late, stable
+  every beat. Ground truth: deltaMuHighMinusLowMs = +15.0.
+
+  Bound rationale (plan/proposed/40_GROOVE_RESONANCE.md section 11.2): the
+  pendulum's OWN measured delta-mu on this exact fixture is +17.05 ms —
+  outside the +/-1 ms STRICT AC(a) band groove_test.cc gates, but inside the
+  +/-4 ms KNOWN-OPEN TRACKING band that same case also asserts. This case
+  reuses the tracking band, not the strict one — it exercises the aspect
+  packaging (M1's job), not a re-litigation of M0's own estimator accuracy.
+-->
+<SActionScript version="1" name="feel_flow_analyze">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Hermetic store: sidecars land under this case's test-output dir. -->
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <!-- OPT-IN: add-sample alone must not have scheduled a groove job. -->
+    <assert-groove-aspect aspect="groove.res" expectExists="false"/>
+    <assert-groove-aspect aspect="groove.ev" expectExists="false"/>
+
+    <feel-flow-analyze clip="0,0"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- groove.res: one record per 10 ms hop over ~16.2 s of audio, every
+         per-unit power sample and the compliance scalar in [0,1] (AC 1). -->
+    <assert-groove-aspect aspect="groove.res" expectExists="true"
+                          minRecords="1500" maxRecords="1650"/>
+
+    <!-- groove.ev: >= 100 records (~64 low + ~64 high clicks over 16 s at
+         the 8th-grid period), ascending by pos, and the reconstructed
+         delta-mu(high-low) within the M0 tracking band of +15.0 ms. -->
+    <assert-groove-aspect aspect="groove.ev" expectExists="true"
+                          minRecords="100"
+                          deltaMuHighLowMs="15.0" deltaMuTolMs="4.0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

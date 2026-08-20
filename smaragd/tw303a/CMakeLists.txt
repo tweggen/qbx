@@ -634,9 +634,15 @@ tw_module(sidecar
         sidecar/include/tw/sidecar/twsidecarstore.h
         sidecar/include/tw/sidecar/twaspects.h
         sidecar/include/tw/sidecar/twanalyzers.h
+        sidecar/include/tw/sidecar/twgroove.h
+        sidecar/include/tw/sidecar/twgroovependulum.h
+        sidecar/include/tw/sidecar/twgrooveaspect.h
         sidecar/src/twqaf.cc
         sidecar/src/twsidecarstore.cc
         sidecar/src/twanalyzers.cc
+        sidecar/src/twgroove.cc
+        sidecar/src/twgroovependulum.cc
+        sidecar/src/twgrooveaspect.cc
     DEPS tw_core)
 
 # --- Audio file format libraries (sinks only) -----------------------------------
@@ -1116,6 +1122,19 @@ tw_module_test(wide_graph_test              schedule/tests/wide_graph_test.cc   
 target_include_directories(wide_graph_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/graph/tests)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
 tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
+tw_module_test(groove_test                  sidecar/tests/groove_test.cc                tw_sidecar)
+# The M0 fixture corpus (proposal 40) is read from the source tree, not
+# copied -- the test only reads the committed WAVs and manifest.json.
+target_compile_definitions(groove_test PRIVATE
+    TW_GROOVE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/groove")
+# The pendulum core integrates a 5-unit ensemble over whole-file envelope
+# streams (up to 64 s at 200 Hz) for 12 fixtures under BOTH estimators; -O3
+# keeps this test's wall clock reasonable the same way sidecar/CMakeLists.txt
+# already does for the vocoder analysis path (see the -O3 note beside
+# tw_sidecar above).
+if(NOT MSVC)
+    target_compile_options(groove_test PRIVATE -O2)
+endif()
 # tw_schedule + tw_pages are named EXPLICITLY (playback already depends on both,
 # so this is a link-line fact, not a new module edge — check_layering.py's DAG is
 # unchanged): the position-coded case constructs a CapturePagePool and a
