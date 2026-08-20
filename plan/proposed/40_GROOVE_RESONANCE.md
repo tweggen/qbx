@@ -600,12 +600,94 @@ never retroactively.
   bounce ≡ source, i.e. a raw drum print on an empty chain). Gate:
   determinism (same input → byte-identical payload within a build), store
   round-trip, version-orphan behaviour, `SMARAGD_SIDECAR_DIR=off` identity.
+
+  **M1 ACs (kickoff 2026-08-20):**
+  1. `twAspect` gains `GrooveRes`/`GrooveResVersion=1` (id `groove.res`)
+     and `GrooveEv`/`GrooveEvVersion=1` (id `groove.ev`) with normative
+     payload doc comments. `groove.res`: hopFrames = rate/100, record =
+     `float32[nUnits+1]` LE (per-unit normalized resonance power + one
+     compliance scalar in [0,1]). `groove.ev`: 20-byte packed LE records
+     `{uint64 pos, float32 residualMs, float32 confidence, uint16 region,
+     uint16 flags}`, ascending, positions in analyzed-wave frames.
+  2. The params blob serializes every ANALYSIS-SIDE parameter (front end,
+     ensemble, stats) in a stable binary layout; changing any one changes
+     `hashParams` (asserted for at least two representative params).
+  3. A pure wrapper produces both payloads from planar float input;
+     ctest gates: encode→store→load→decode round trip byte-identical;
+     byte-determinism across two runs; a file with a stale aspectVersion
+     is orphaned on sight (deleted, reported as MISS), mirroring
+     `sidecar_test`'s preview-v1 gate.
+  4. `SPlainWave::enqueueGrooveAnalysis()` — OPT-IN (never called from
+     `setWave`), the `analyzing_`-badge/closure-lifetime/
+     `notifyCaptureRevalidated` discipline copied from
+     `enqueueAnalysis()`; bails cleanly and logs when the revalidator is
+     absent or the store is disabled (the `onsets` precedent — the §4.1
+     "identical minus speed" ideal is deferred to the milestone that
+     needs an in-memory path, recorded here).
+  5. Verbs: `feel-flow-analyze` (non-undoable — analysis is not an edit
+     to the arrangement) resolving a clip path to its wave and
+     scheduling the job, and `assert-groove-aspect` (presence, record
+     counts, a residual statistic and the compliance range against
+     bounds), following the proposal-27 sidecar-verb wait pattern.
+  6. qxa case `feel_flow_analyze.qxa` over the committed
+     `tests/groove/a_offset15.wav`: analyze → both aspects present →
+     asserted values in closed-form bounds; registered via the normal
+     glob (re-configure is load-bearing).
+  7. Gates: `./build.sh`; `groove_test` (still green, default mode);
+     the new ctest gates; `action_roundtrip_test` unaffected;
+     `check_layering.py` / `check_logging.py` clean; count reconciliation
+     for the new qxa entry.
 - **M1b — the internal-bounce consumer** (§4.3: background
   `requestGraphPages` demand, edge assembly, epoch-observed staleness).
   Gate: the bounce is byte-identical to a `RenderSession` render of the
   same track; an edit in the chain visibly stales the analysis and never
   silently serves the old one; activation during a live-monitoring session
   interrupts nothing.
+
+  **M1b ACs (kickoff 2026-08-20, grounded in the seam scout):**
+  1. **The bounce is a `RenderSession`-shaped loop WITHOUT the app-level
+     wrappers.** The scout confirmed `pauseBackground()`, the live-lane
+     suspend and the render watchdog are `SApplication::startRender`'s
+     calls, not the session's — a `BounceSession` (tw303a/render) reuses
+     the per-page loop (single-page demand → wait → `requestPage` with
+     the `prevPage` chain — the shape that survives the non-caching-
+     component hazard) on ITS OWN thread (never blocking a shared
+     revalidator worker in `GraphDemand::wait`), writing float32 via the
+     existing writer machinery.
+  2. **Bytes → file → `setWave`, the recording path's precedent.** No
+     in-memory wave ctor exists (`twSampleSource` is file-only, and the
+     content hash is over DECODED planar bytes) — the bounce lands as a
+     WAV in machine-local derived data beside the sidecar store; the
+     analysis holder loads it by path, so hashing, sidecar keying and the
+     UI-cache pattern are all unchanged. `SMARAGD_SIDECAR_DIR=off` ⇒ the
+     bounce path logs and no-ops cleanly (the onsets precedent; §4.1's
+     "identical minus speed" ideal stays deferred and recorded).
+  3. **Per-chain pruning, never the global walk.**
+     `releaseOldPagesGlobally` would prune a concurrently PLAYING graph's
+     trail at the bouncer's position — the bounce calls the per-component
+     `releaseOldPages(keepAfterPos)` (first production caller; gated
+     today only by `graph_test`) on the bounced track's own four chain
+     components, keeping the ≥4-page predecessor margin. Gate: bounded
+     residency after a long bounce AND an untouched readahead during
+     concurrent playback.
+  4. **Staleness = the `SCut::contentEpochForCapture_` pattern verbatim**:
+     snapshot `getRootComponent()->contentEpochNow()` at bounce; epoch
+     moved ⇒ stale, reported via the badge/describe, never silently
+     served. One counter suffices for a whole-track bounce (range edits
+     still bump it).
+  5. `feel-flow-analyze` gains `target=track`: bounce, then analyze the
+     bounce file; aspects keyed by ITS content hash; positions in the
+     aspect are track-timeline frames by construction.
+  6. Byte-parity gate: on an idle project, the bounce file equals a
+     `render` of the same solo track at the same format byte-for-byte
+     (`cmp`), which also inherits the determinism-barrier question — if
+     parity needs `beginRun()`, take it only when nothing is playing and
+     record that.
+  7. qxa gates: `feel_flow_bounce_parity`, `feel_flow_bounce_stale`
+     (edit → stale → re-analyze), `feel_flow_bounce_while_monitoring`
+     (RUN_SERIAL, capture backend: monitor stays up, zero
+     `liveOwnedRefusals`, no device reopen) — plus layering/logging,
+     targeted ctest, count reconciliation.
 - **M2 — heatmap overlay + UI cache + pixel gate.** `qxa.groove_heatmap`
   via `assert-lane-overlay`'s discipline (the overlay colour relation), plus
   an `assert-groove` verb reading `describe()` numbers off the aspect.

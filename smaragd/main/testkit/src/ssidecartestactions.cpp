@@ -12,6 +12,7 @@
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sidecar/twqaf.h"
+#include "tw/sidecar/twgrooveaspect.h"
 
 #include <QCoreApplication>
 #include <QDomElement>
@@ -19,9 +20,11 @@
 #include <QThread>
 #include <QDebug>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <vector>
 
 using namespace strackpath;
 
@@ -80,7 +83,12 @@ SApplyResult SWaitAnalysisAction::apply(SProject *project)
         if (!pending) {
             for (SExternFile *ef : project->externFiles().values()) {
                 SPlainWave *pw = dynamic_cast<SPlainWave*>(ef);
-                if (pw && pw->isAnalyzing()) {
+                // isAnalyzingGroove() (proposal 40 M1) is a SEPARATE badge
+                // from isAnalyzing() — the groove job is its own opt-in
+                // background pass, not folded into the onsets/loudness/f0
+                // one — so both must be drained before this verb reports
+                // "no jobs pending".
+                if (pw && (pw->isAnalyzing() || pw->isAnalyzingGroove())) {
                     pending = true;
                     break;
                 }
@@ -354,5 +362,292 @@ static const bool s_reg_assert_warp_anchor = (
     SActionRegistry::instance().registerType(
         QStringLiteral("assert-warp-anchor"),
         []{ return new SAssertWarpAnchorAction; }
+    ), true
+);
+
+// ------------------------------------------------------------ feel-flow-analyze
+
+SApplyResult SFeelFlowAnalyzeAction::apply(SProject *project)
+{
+    if (!project || clipPath_.isEmpty()) {
+        qWarning() << "feel-flow-analyze: no project or empty clip path";
+        return {false, nullptr};
+    }
+
+    SObject *mixer = splacements::rootContainer(project);
+    SLink *link = splacements::placementAt(mixer, clipPath_);
+    if (!link) {
+        qWarning() << "feel-flow-analyze: no clip at path" << pathToString(clipPath_);
+        return {false, nullptr};
+    }
+
+    SCut *cut = dynamic_cast<SCut*>(&link->getSObject());
+    if (!cut) {
+        qWarning() << "feel-flow-analyze: target is not an SCut at path"
+                   << pathToString(clipPath_);
+        return {false, nullptr};
+    }
+
+    SPlainWave *wave = dynamic_cast<SPlainWave*>(&cut->getContent());
+    if (!wave) {
+        qWarning() << "feel-flow-analyze: clip content at path"
+                   << pathToString(clipPath_) << "is not a plain wave";
+        return {false, nullptr};
+    }
+
+    wave->enqueueGrooveAnalysis();
+    qDebug() << "feel-flow-analyze: clip" << pathToString(clipPath_) << "scheduled";
+    // Non-undoable: scheduling a background analysis is not an edit to the
+    // arrangement (mirrors sidecar-root / wait-analysis above).
+    return {true, nullptr};
+}
+
+void SFeelFlowAnalyzeAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("clip", pathToString(clipPath_));
+}
+
+bool SFeelFlowAnalyzeAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    clipPath_ = stringToPath(elem.attribute("clip"));
+    return true;
+}
+
+static const bool s_reg_feel_flow_analyze = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("feel-flow-analyze"),
+        []{ return new SFeelFlowAnalyzeAction; }
+    ), true
+);
+
+// --------------------------------------------------------- assert-groove-aspect
+
+namespace {
+
+// Same newest-file convention as SAssertSidecarAction::apply above, kept as
+// a separate (small, duplicated) helper rather than a shared refactor of
+// that action's body — this verb's failure/found reporting differs enough
+// (aspect-specific structural checks follow) that sharing the control flow
+// was not worth risking that existing, gated action's behavior.
+bool findNewestGrooveQaf(const std::filesystem::path &root, const QString &aspect,
+                        std::filesystem::path &out)
+{
+    const std::string needle = "." + aspect.toStdString() + ".";
+    bool found = false;
+    std::filesystem::file_time_type newestTime{};
+
+    std::error_code ec;
+    if (!std::filesystem::exists(root, ec)) return false;
+    for (std::filesystem::recursive_directory_iterator
+             it(root, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec)) continue;
+        const std::string fn = it->path().filename().string();
+        if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".qaf") continue;
+        if (fn.find(needle) == std::string::npos) continue;
+
+        const auto t = std::filesystem::last_write_time(it->path(), ec);
+        if (ec) continue;
+        if (!found || t > newestTime) {
+            out = it->path();
+            newestTime = t;
+            found = true;
+        }
+    }
+    return found;
+}
+
+// Same pick as groove_test.cc's own fx::lowHighRegions: "low" is the region
+// whose muMs sits closest to zero, "high" is the region with the most
+// POSITIVE muMs — a structural pick off the data, never a hardcoded region
+// index (the front end's region count/edges are an analysis-side param).
+void lowHighRegions(const twGrooveResidualReport &r, int &lowOut, int &highOut)
+{
+    lowOut = -1; highOut = -1;
+    double bestLowAbsMu = 1e18, bestHighMu = -1e18;
+    for (size_t i = 0; i < r.perRegion.size(); i++) {
+        if (!r.perRegion[i].hasData) continue;
+        const double mu = r.perRegion[i].muMs;
+        if (std::fabs(mu) < bestLowAbsMu) { bestLowAbsMu = std::fabs(mu); lowOut = (int)i; }
+        if (mu > bestHighMu) { bestHighMu = mu; highOut = (int)i; }
+    }
+}
+
+} // namespace
+
+SApplyResult SAssertGrooveAspectAction::apply(SProject * /*project*/)
+{
+    if (aspect_.isEmpty()) {
+        qWarning() << "assert-groove-aspect: missing aspect";
+        return {false, nullptr};
+    }
+
+    SApplication &app = SApplication::app();
+    QString outputDir = app.testOutputDir();
+    if (outputDir.isEmpty()) {
+        qWarning() << "assert-groove-aspect: no test output directory configured";
+        return {false, nullptr};
+    }
+
+    const std::filesystem::path root = (outputDir + "/sidecars").toStdString();
+    std::filesystem::path newest;
+    if (!findNewestGrooveQaf(root, aspect_, newest)) {
+        if (expectExists_) {
+            qWarning() << "assert-groove-aspect: no" << aspect_
+                       << "sidecar under" << QString::fromStdString(root.string());
+            return {false, nullptr};
+        }
+        qDebug() << "assert-groove-aspect: no" << aspect_
+                 << "sidecar (expectExists=false, OK)";
+        return {true, nullptr};
+    }
+
+    twQafReader reader;
+    if (!reader.open(newest)) {
+        qWarning() << "assert-groove-aspect: failed to open"
+                   << QString::fromStdString(newest.string());
+        return {false, nullptr};
+    }
+    const twQafInfo &info = reader.info();
+    const uint64_t recordCount = info.recordCount;
+    if (minRecords_ >= 0 && (int64_t)recordCount < minRecords_) {
+        qWarning() << "assert-groove-aspect:" << aspect_ << "recordCount"
+                   << (qulonglong)recordCount << "below min" << (qlonglong)minRecords_;
+        return {false, nullptr};
+    }
+    if (maxRecords_ >= 0 && (int64_t)recordCount > maxRecords_) {
+        qWarning() << "assert-groove-aspect:" << aspect_ << "recordCount"
+                   << (qulonglong)recordCount << "above max" << (qlonglong)maxRecords_;
+        return {false, nullptr};
+    }
+
+    std::vector<uint8_t> payload;
+    if (!reader.readAllPayload(payload)) {
+        qWarning() << "assert-groove-aspect: readAllPayload failed for"
+                   << QString::fromStdString(newest.string());
+        return {false, nullptr};
+    }
+
+    if (aspect_ == QStringLiteral("groove.res")) {
+        // nUnits is not in the QAF header (twaspects.h's "groove.res" doc):
+        // derive it from this file's own geometry.
+        const uint32_t nUnits = recordCount > 0
+            ? (uint32_t)( info.recordStride / 4 - 1 )
+            : 0;
+        std::vector<twGrooveResRecord> decoded =
+            twGrooveDecodeResPayload(payload.data(), payload.size(), nUnits);
+        if (decoded.size() != recordCount) {
+            qWarning() << "assert-groove-aspect: groove.res decode mismatch — got"
+                       << (qulonglong)decoded.size() << "records, header says"
+                       << (qulonglong)recordCount;
+            return {false, nullptr};
+        }
+        for (const twGrooveResRecord &rec : decoded) {
+            for (float p : rec.unitPower) {
+                if (!(p >= 0.0f && p <= 1.0f)) {
+                    qWarning() << "assert-groove-aspect: groove.res per-unit power"
+                               << p << "outside [0,1]";
+                    return {false, nullptr};
+                }
+            }
+            if (!(rec.compliance >= 0.0f && rec.compliance <= 1.0f)) {
+                qWarning() << "assert-groove-aspect: groove.res compliance"
+                           << rec.compliance << "outside [0,1]";
+                return {false, nullptr};
+            }
+        }
+    } else if (aspect_ == QStringLiteral("groove.ev")) {
+        std::vector<twGrooveEvRecord> decoded =
+            twGrooveDecodeEvPayload(payload.data(), payload.size());
+        if (decoded.size() != recordCount) {
+            qWarning() << "assert-groove-aspect: groove.ev decode mismatch — got"
+                       << (qulonglong)decoded.size() << "records, header says"
+                       << (qulonglong)recordCount;
+            return {false, nullptr};
+        }
+        uint64_t lastPos = 0;
+        for (size_t i = 0; i < decoded.size(); i++) {
+            if (i > 0 && decoded[i].pos < lastPos) {
+                qWarning() << "assert-groove-aspect: groove.ev records not ascending by pos"
+                           << "at index" << (qulonglong)i;
+                return {false, nullptr};
+            }
+            lastPos = decoded[i].pos;
+        }
+
+        if (hasDeltaMu_) {
+            uint16_t maxRegion = 0;
+            for (const twGrooveEvRecord &e : decoded)
+                maxRegion = std::max(maxRegion, e.region);
+            std::vector<std::vector<twGrooveScoredEvent>> byRegion(
+                (size_t)maxRegion + 1);
+            const double rate = info.sourceRate > 0 ? (double)info.sourceRate : 48000.0;
+            for (const twGrooveEvRecord &e : decoded)
+                // amp uniform (this aspect carries no per-event amplitude —
+                // see the header doc): equal amps mean the bleed gate never
+                // fires, matching what M0 itself measured on this fixture
+                // set (twGrooveStatsParams::bleedGateDb's doc).
+                byRegion[e.region].push_back({ (double)e.pos / rate, (double)e.residualMs, 1.0f });
+            const double totalSec = info.sourceFrames > 0
+                ? (double)info.sourceFrames / rate
+                : 0.0;
+            twGrooveResidualReport report =
+                twGroovePoolRegionStats(byRegion, totalSec, twGrooveStatsParams{});
+            int lo = -1, hi = -1;
+            lowHighRegions(report, lo, hi);
+            if (lo < 0 || hi < 0 || lo == hi) {
+                qWarning() << "assert-groove-aspect: groove.ev — could not find distinct"
+                           << "low/high regions to measure deltaMu";
+                return {false, nullptr};
+            }
+            const double deltaMu = report.perRegion[hi].muMs - report.perRegion[lo].muMs;
+            const double diff = std::fabs(deltaMu - deltaMuHighLowMs_);
+            qDebug() << "assert-groove-aspect: groove.ev deltaMu(high-low)=" << deltaMu
+                     << "target=" << deltaMuHighLowMs_ << "tol=" << deltaMuTolMs_;
+            if (diff > deltaMuTolMs_) {
+                qWarning() << "assert-groove-aspect: groove.ev deltaMu(high-low)=" << deltaMu
+                           << "outside" << deltaMuHighLowMs_ << "+/-" << deltaMuTolMs_;
+                return {false, nullptr};
+            }
+        }
+    } else {
+        qWarning() << "assert-groove-aspect: unknown aspect" << aspect_
+                   << "(expected groove.res or groove.ev)";
+        return {false, nullptr};
+    }
+
+    qDebug() << "assert-groove-aspect:" << aspect_ << "recordCount" << (qulonglong)recordCount
+             << "OK (" << QString::fromStdString(newest.filename().string()) << ")";
+    return {true, nullptr};
+}
+
+void SAssertGrooveAspectAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("aspect", aspect_);
+    elem.setAttribute("minRecords", QString::number(minRecords_));
+    elem.setAttribute("maxRecords", QString::number(maxRecords_));
+    elem.setAttribute("expectExists", expectExists_ ? "true" : "false");
+    if (hasDeltaMu_) {
+        elem.setAttribute("deltaMuHighLowMs", QString::number(deltaMuHighLowMs_));
+        elem.setAttribute("deltaMuTolMs", QString::number(deltaMuTolMs_));
+    }
+}
+
+bool SAssertGrooveAspectAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    aspect_ = elem.attribute("aspect", "");
+    minRecords_ = elem.attribute("minRecords", "-1").toLongLong();
+    maxRecords_ = elem.attribute("maxRecords", "-1").toLongLong();
+    expectExists_ = elem.attribute("expectExists", "true") == "true";
+    hasDeltaMu_ = elem.hasAttribute("deltaMuHighLowMs");
+    deltaMuHighLowMs_ = elem.attribute("deltaMuHighLowMs", "0").toDouble();
+    deltaMuTolMs_ = elem.attribute("deltaMuTolMs", "0").toDouble();
+    return true;
+}
+
+static const bool s_reg_assert_groove_aspect = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-groove-aspect"),
+        []{ return new SAssertGrooveAspectAction; }
     ), true
 );

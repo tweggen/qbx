@@ -14,9 +14,11 @@
 #include "tw/sidecar/twqaf.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sidecar/twaspects.h"
+#include "tw/sidecar/twgrooveaspect.h"
 #include "tw/core/twcontenthash.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -628,6 +630,200 @@ static void section6_pathFor( const fs::path &pidDir ) {
 }
 
 // ===========================================================================
+// Section 7 — proposal 40 "Feel Flow" M1: groove.res / groove.ev aspects
+// (twGrooveBuildAspectPayloads, tw/sidecar/twgrooveaspect.h). AC 3's ctest
+// gates: encode->store->load->decode round trip byte-identical, byte-
+// determinism across two runs, a stale aspectVersion orphans on sight —
+// mirroring section4_store's preview-v1 gate above.
+// ===========================================================================
+
+// A short, deterministic click train — 6 Hz-ish decaying-sine bursts every
+// 0.5 s over 4 s at 48 kHz mono. Not a perceptual fixture (tests/groove/*.wav
+// plus groove_test.cc own that job); this one exists only to give the
+// front end/pendulum enough periodic structure to recover a tatum
+// deterministically, so the encoder's payloads are non-trivial rather than
+// exercising only the honest-empty path.
+static std::vector<float> grooveClickTrain( uint32_t rate, double totalSec,
+                                            double periodSec ) {
+    constexpr double kPi      = 3.14159265358979323846;
+    constexpr double freqHz   = 200.0;
+    constexpr double decaySec = 0.05;
+    const uint64_t   n        = (uint64_t)( totalSec * rate );
+    std::vector<float> buf( n, 0.0f );
+    for ( double t0 = 0.0; t0 < totalSec; t0 += periodSec ) {
+        const uint64_t start = (uint64_t)( t0 * rate );
+        const uint64_t burstLen = (uint64_t)( decaySec * 6.0 * rate );
+        for ( uint64_t i = 0; i < burstLen && start + i < n; i++ ) {
+            const double t = (double)i / (double)rate;
+            buf[start + i] += (float)( std::sin( 2.0 * kPi * freqHz * t ) *
+                                       std::exp( -t / decaySec ) );
+        }
+    }
+    return buf;
+}
+
+static void section7_groove( const fs::path &pidDir ) {
+    std::cout << "== Section 7: groove.res / groove.ev aspects (proposal 40 M1) ==\n";
+
+    const uint32_t     rate = 48000;
+    std::vector<float> mono = grooveClickTrain( rate, 4.0, 0.5 );
+    const float        *chans[1] = { mono.data() };
+
+    twGrooveAnalysisParams params;   // defaults
+    std::vector<uint8_t>   paramsBlob;
+    params.serialize( paramsBlob );
+    CHECK( !paramsBlob.empty(), "groove params blob is non-empty" );
+
+    twGrooveAspectPayloads built =
+        twGrooveBuildAspectPayloads( chans, 1, mono.size(), rate, params );
+    CHECK( built.nUnits > 0,
+          "AC3: a periodic click train recovers a lock (nUnits>0, not the honest-empty path)" );
+    CHECK( built.resRecordCount > 0, "AC3: groove.res has records" );
+    CHECK( built.resPayload.size() ==
+              built.resRecordCount * (uint64_t)( built.nUnits + 1 ) * 4,
+          "AC3: groove.res payload size == recordCount*(nUnits+1)*4" );
+    CHECK( built.evPayload.size() == built.evRecordCount * 20,
+          "AC3: groove.ev payload size == recordCount*20" );
+
+    // --------------------------------------------------------- determinism
+    {
+        twGrooveAspectPayloads built2 =
+            twGrooveBuildAspectPayloads( chans, 1, mono.size(), rate, params );
+        CHECK( built2.resPayload == built.resPayload,
+              "AC3: groove.res bytes are byte-deterministic across two runs" );
+        CHECK( built2.evPayload == built.evPayload,
+              "AC3: groove.ev bytes are byte-deterministic across two runs" );
+        std::vector<uint8_t> paramsBlob2;
+        params.serialize( paramsBlob2 );
+        CHECK( paramsBlob2 == paramsBlob, "AC2: params blob serialize() is deterministic" );
+    }
+
+    // ---------------------------------------------- AC2: two representative
+    // params move hashParams (front-end AND pendulum fields).
+    {
+        twGrooveAnalysisParams p2 = params;
+        p2.frontEnd.nBands += 1;
+        std::vector<uint8_t> blob2;
+        p2.serialize( blob2 );
+        CHECK( blob2 != paramsBlob, "AC2: frontEnd.nBands is key material (blob differs)" );
+        CHECK( twSidecarStore::hashParams( blob2.data(), blob2.size() ) !=
+                  twSidecarStore::hashParams( paramsBlob.data(), paramsBlob.size() ),
+              "AC2: frontEnd.nBands changes hashParams" );
+
+        twGrooveAnalysisParams p3 = params;
+        p3.pendulum.confidenceFloor += 0.01;
+        std::vector<uint8_t> blob3;
+        p3.serialize( blob3 );
+        CHECK( blob3 != paramsBlob, "AC2: pendulum.confidenceFloor is key material (blob differs)" );
+        CHECK( twSidecarStore::hashParams( blob3.data(), blob3.size() ) !=
+                  twSidecarStore::hashParams( paramsBlob.data(), paramsBlob.size() ),
+              "AC2: pendulum.confidenceFloor changes hashParams" );
+    }
+
+    // ------------------------------------------------------ store round trip
+    fs::path root = pidDir / "groove";
+    g_cleanup.add( root );
+    twSidecarStore store;
+    store.setRoot( root.string() );
+    CHECK( store.enabled(), "AC3: groove store enabled after setRoot" );
+
+    const twContentHash content = hashOfInt( 0x67005Eu );
+    const uint64_t      ph =
+        twSidecarStore::hashParams( paramsBlob.data(), paramsBlob.size() );
+
+    twQafInfo resInfo;
+    resInfo.aspectId      = twAspect::GrooveRes;
+    resInfo.aspectVersion = twAspect::GrooveResVersion;
+    resInfo.contentHash   = content;
+    resInfo.sourceRate    = rate;
+    resInfo.channels      = 1;
+    resInfo.sourceFrames  = mono.size();
+    resInfo.recordStride  = (uint64_t)( built.nUnits + 1 ) * 4;
+    resInfo.recordCount   = built.resRecordCount;
+    resInfo.hopFrames     = built.hopFrames;
+    resInfo.params        = paramsBlob;
+    CHECK( store.store( resInfo, built.resPayload.data(), built.resPayload.size() ),
+          "AC3: groove.res store() succeeds" );
+
+    twQafInfo evInfo    = resInfo;
+    evInfo.aspectId      = twAspect::GrooveEv;
+    evInfo.aspectVersion = twAspect::GrooveEvVersion;
+    evInfo.recordStride  = 20;
+    evInfo.recordCount   = built.evRecordCount;
+    evInfo.hopFrames     = 0;
+    CHECK( store.store( evInfo, built.evPayload.data(), built.evPayload.size() ),
+          "AC3: groove.ev store() succeeds" );
+
+    // load -> decode -> compare byte-identical, then a structural decode check.
+    {
+        auto rd = store.load( content, twAspect::GrooveRes,
+                              twAspect::GrooveResVersion, ph );
+        CHECK( rd && rd->isOpen(), "AC3: groove.res load() hit" );
+        if ( rd ) {
+            std::vector<uint8_t> got;
+            CHECK( rd->readAllPayload( got ), "AC3: groove.res readAllPayload succeeds" );
+            CHECK( got == built.resPayload, "AC3: groove.res round-trip byte-identical" );
+            std::vector<twGrooveResRecord> decoded =
+                twGrooveDecodeResPayload( got.data(), got.size(), built.nUnits );
+            CHECK( decoded.size() == built.resRecordCount,
+                  "AC3: groove.res decode record count matches encoder" );
+            for ( const twGrooveResRecord &r : decoded ) {
+                for ( float p : r.unitPower )
+                    CHECK( p >= 0.0f && p <= 1.0f, "AC1: per-unit resonance power in [0,1]" );
+                CHECK( r.compliance >= 0.0f && r.compliance <= 1.0f,
+                      "AC1: compliance scalar in [0,1]" );
+            }
+        }
+    }
+    {
+        auto rd = store.load( content, twAspect::GrooveEv,
+                              twAspect::GrooveEvVersion, ph );
+        CHECK( rd && rd->isOpen(), "AC3: groove.ev load() hit" );
+        if ( rd ) {
+            std::vector<uint8_t> got;
+            CHECK( rd->readAllPayload( got ), "AC3: groove.ev readAllPayload succeeds" );
+            CHECK( got == built.evPayload, "AC3: groove.ev round-trip byte-identical" );
+            std::vector<twGrooveEvRecord> decoded =
+                twGrooveDecodeEvPayload( got.data(), got.size() );
+            CHECK( decoded.size() == built.evRecordCount,
+                  "AC3: groove.ev decode record count matches encoder" );
+            uint64_t lastPos = 0;
+            bool     first   = true;
+            for ( const twGrooveEvRecord &e : decoded ) {
+                if ( !first )
+                    CHECK( e.pos >= lastPos, "AC1: groove.ev records ascending by pos" );
+                first   = false;
+                lastPos = e.pos;
+            }
+        }
+    }
+
+    // ------------------------------------------------------- version orphan
+    // Mirrors section4_store's preview-v1 gate above: a file with a stale
+    // aspectVersion is deleted on sight (MISS + orphan), never adopted.
+    {
+        fs::path onDisk = store.pathFor( content, twAspect::GrooveRes, ph );
+        CHECK( fs::exists( onDisk ), "version-orphan precondition: groove.res file present" );
+        auto rd = store.load( content, twAspect::GrooveRes,
+                              twAspect::GrooveResVersion + 1, ph );
+        CHECK( rd == nullptr, "AC3: groove.res MISSES on a stale aspectVersion" );
+        CHECK( !fs::exists( onDisk ), "AC3: ...and is orphaned (deleted) on sight" );
+
+        CHECK( store.store( resInfo, built.resPayload.data(), built.resPayload.size() ),
+              "AC3: re-store after orphaning succeeds" );
+        CHECK( fs::exists( onDisk ), "AC3: file exists again after re-store" );
+    }
+    {
+        fs::path onDisk = store.pathFor( content, twAspect::GrooveEv, ph );
+        CHECK( fs::exists( onDisk ), "version-orphan precondition: groove.ev file present" );
+        auto rd = store.load( content, twAspect::GrooveEv,
+                              twAspect::GrooveEvVersion + 1, ph );
+        CHECK( rd == nullptr, "AC3: groove.ev MISSES on a stale aspectVersion" );
+        CHECK( !fs::exists( onDisk ), "AC3: ...and is orphaned (deleted) on sight" );
+    }
+}
+
+// ===========================================================================
 // main
 // ===========================================================================
 int main() {
@@ -646,6 +842,7 @@ int main() {
     section4_store( pidDir );
     section5_eviction( pidDir );
     section6_pathFor( pidDir );
+    section7_groove( pidDir );
 
     if ( g_fails == 0 )
         std::cout << "\nAll sidecar tests passed.\n";

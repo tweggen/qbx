@@ -161,6 +161,26 @@ struct twGrooveCounterTension {
                                           // (section 3.5: a loudness confound)
 };
 
+/**
+ * One pass-2 event, scored against the frozen reference (proposal 40 M1:
+ * the RAW material twGroovePoolRegionStats consumes, exposed here so an
+ * aspect-payload builder can emit "groove.ev" records without re-deriving
+ * pass 2 -- a second implementation of the scoring loop would risk drifting
+ * from the one twGroovePendulumAnalyze already runs). Purely additive: this
+ * struct and twGroovePendulumResult::scoredEvents record values ALREADY
+ * computed by the existing pass-2 loop; nothing about residuals/confidence/
+ * counterTension/unitMeanR changes.  Ascending by posFrames, merged across
+ * every region -- the same order twGrooveField::events itself keeps, since
+ * pass 2 iterates field.events once, in order, and appends here exactly
+ * when it also appends to the (region-pooled) eventsByRegion list.
+ */
+struct twGrooveScoredEventRecord {
+    double   posFrames  = 0.0;
+    double   residualMs = 0.0;
+    float    amp        = 0.0f;
+    uint16_t region      = 0;
+};
+
 struct twGroovePendulumResult {
     double                                       tatumPeriodSec = 0.0;
     twGrooveResidualReport                       residuals;          // pass 2, vs frozen reference
@@ -168,6 +188,7 @@ struct twGroovePendulumResult {
     std::vector<twGroovePendulumUnitTrajectory>   unitTrajectories;   // pass 1, one per unit
     std::vector<twGrooveCounterTension>           counterTension;     // one per unit
     std::vector<double>                           unitMeanR;          // one per unit: time-mean |z|^2
+    std::vector<twGrooveScoredEventRecord>        scoredEvents;       // pass 2, RAW per-event (M1)
     uint32_t                                      hopFrames = 0;
     uint32_t                                      rate      = 0;
 };

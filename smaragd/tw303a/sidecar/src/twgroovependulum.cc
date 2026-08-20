@@ -312,6 +312,9 @@ twGroovePendulumResult twGroovePendulumAnalyze( const twGrooveField &field,
         const double localPeriodSec = 2.0 * kPi / omegaAtEvent;
         const double residMs        = residPhase / ( 2.0 * kPi ) * localPeriodSec * 1000.0;
         eventsByRegion[ev.region].push_back( { ev.posFrames / rate, residMs, ev.amp } );
+        // M1 packaging (proposal 40): the same residMs/region also recorded
+        // RAW, before region pooling -- see twGrooveScoredEventRecord's doc.
+        result.scoredEvents.push_back( { ev.posFrames, residMs, ev.amp, ev.region } );
     }
 
     const double totalSec = (double)field.nHops * (double)field.hopFrames / rate;

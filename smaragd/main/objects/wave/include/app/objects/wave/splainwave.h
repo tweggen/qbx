@@ -86,6 +86,24 @@ public:
     // finished wiring the slot (defensive).
     std::shared_ptr<const UiOnsets> onsetsForUi() const;
 
+    // Proposal 40 "Feel Flow" M1: OPT-IN groove analysis (groove.res /
+    // groove.ev, tw/sidecar/twaspects.h) for this wave's content. Never
+    // called from setWave() — unlike enqueueAnalysis()'s onsets/loudness/f0,
+    // this one costs a full pendulum-ensemble pass and is meaningful only on
+    // drum/rhythmic material, so a caller (the feel-flow-analyze verb; a
+    // later Track Detail toggle, M3) opts a clip in explicitly. Same
+    // closure-lifetime discipline as enqueueAnalysis(): no-op when the
+    // revalidator or the store is disabled, both aspects already validate,
+    // or this wave has no content yet.
+    void enqueueGrooveAnalysis();
+
+    // Mirrors isAnalyzing() — true while a background groove-analysis job
+    // for this wave's content is queued or running. A SEPARATE badge from
+    // isAnalyzing(): groove analysis is a distinct, opt-in job with its own
+    // lifetime, not folded into the always-on onsets/loudness/f0 pass.
+    bool isAnalyzingGroove() const {
+        return analyzingGroove_ && analyzingGroove_->load( std::memory_order_acquire );
+    }
 
 protected:
     virtual int serializeSelfAttributes( QTextStream &o );
@@ -111,6 +129,9 @@ private:
     QString fileName_;
     SPlainWaveRendererInline *inlineRenderer_;
     std::shared_ptr<std::atomic<bool>> analyzing_;
+    // Proposal 40 M1: the groove-analysis job's own badge (see
+    // enqueueGrooveAnalysis()/isAnalyzingGroove()).
+    std::shared_ptr<std::atomic<bool>> analyzingGroove_;
 
     // W2 UI onset cache. The SLOT is heap-allocated and shared with the
     // analysis-job closure by shared_ptr (analysis-lane lifetime rule: a wave

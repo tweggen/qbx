@@ -174,6 +174,95 @@ constexpr uint32_t    WarpPcmVersion = 6;   // v6: + float64 formantShiftCents
 // stage runs). v3 added uint64 anchorsHash (W1 warp-marker fingerprint;
 // 0 = no anchors); v2 added onsetsHash.
 
+/**
+ * "groove.res" — proposal 40 "Feel Flow" M1: the per-hop resonance-power
+ * heatmap backbone (design section 3.3, "resonance power ... the heatmap
+ * backbone"). Produced by twGrooveBuildAspectPayloads
+ * (tw/sidecar/twgrooveaspect.h) from the pendulum ensemble
+ * (tw/sidecar/twgroovependulum.h) run over the ANALYZED wave — M1: the plain
+ * source wave itself (bounce == source is the cheap path M1 permanently
+ * keeps); M1b's internal-bounce consumer points the same encoder at a
+ * different signal without changing this payload's shape.
+ *
+ * hopFrames = rate/100 (10 ms — "loudness"'s convention). This is a FIXED
+ * aspect-level hop, independent of the pendulum's own internal envelope-rate
+ * hop grid (twGrooveFrontEndParams::envRateHz, 200 Hz by default): the
+ * encoder linearly interpolates the pendulum's per-hop trajectories onto
+ * this grid.
+ *
+ * Record: float32[nUnits+1] LE, one record per hop —
+ *   [0 .. nUnits)  per-unit NORMALIZED resonance power,
+ *                  magnitude(hop)^2 / (that unit's own peak magnitude^2
+ *                  over the whole run), each in [0,1]. Unit order matches
+ *                  the ensemble order in the params blob
+ *                  (twGrooveAnalysisParams::pendulum.ensemble).
+ *   [nUnits]       the compliance scalar, in [0,1]. M1's packaging choice:
+ *                  the pendulum's own confidence readout
+ *                  (twGroovePendulumResult::confidence — the reference
+ *                  unit's driven resonance, normalized by ITS OWN peak). A
+ *                  full section 3.3 JND-weighted compliance SCORE across
+ *                  band regions (sigma penalty, band-region weighting) is
+ *                  out of scope for M1's packaging job and is later work.
+ * recordStride = (nUnits+1)*4, recordCount = ceil(sourceFrames / hopFrames).
+ *
+ * nUnits is NOT in the header — only in the params blob and (redundantly,
+ * for a reader that has only the QAF header) derivable as
+ * payloadLen / recordCount / 4 - 1.
+ *
+ * Header sourceRate/channels/sourceFrames = the analyzed wave's native
+ * geometry (M1: the source wave's).
+ *
+ * Params blob v1: twGrooveAnalysisParams::serialize
+ * (tw/sidecar/twgrooveaspect.h) — every analysis-side free parameter (front
+ * end, ensemble/pendulum, stats pooling), LE, field order normative.
+ * Changing any default mints a new store key. SHARED with "groove.ev" —
+ * both aspects are always produced together, from one analysis run, keyed
+ * by the same params hash.
+ */
+constexpr const char *GrooveRes        = "groove.res";
+constexpr uint32_t    GrooveResVersion = 1;
+
+/**
+ * "groove.ev" — proposal 40 M1: per-event scored residuals (design section
+ * 3.3, "per-event residual — against ONE common reference phase"), the
+ * pass-2 output of the pendulum ensemble, before region pooling.
+ *
+ * Record: PACKED 20-byte LE { uint64 pos, float32 residualMs,
+ * float32 confidence, uint16 region, uint16 flags }, ascending by pos.
+ *   pos         the event's frame position on the ANALYZED wave (M1: the
+ *               source wave), rounded to the nearest frame — the front
+ *               end's own event position is sub-frame via parabolic
+ *               interpolation (twgroove.h step 7).
+ *   residualMs  the signed residual in ms against the entrained reference
+ *               phase (twGrooveScoredEvent::residualMs, the exact value
+ *               region pooling consumes). Design section 3.3's gauge-
+ *               freedom rider applies: meaningful ACROSS bands/over time,
+ *               not at an absolute zero.
+ *   confidence  the ensemble's overall confidence readout
+ *               (twGroovePendulumResult::confidence), nearest-hop sampled
+ *               at the event's position — NOT a per-event quantity in the
+ *               section 3.3 model, but the run's own drive state at that
+ *               instant.
+ *   region      index into the front end's declared band-region partition
+ *               (twGrooveField::regionLowHz/regionHighHz) — an analysis-
+ *               side parameter, part of the params blob.
+ *   flags       0 in M1 (reserved for a later per-event bimodality/fusion-
+ *               ceiling flag, design section 3.3's AC (f) rider; not
+ *               implemented here).
+ * recordStride = 20, recordCount = number of scored events (may be 0 — a
+ * silent or unanalyzable file is a valid, distinct result, not an error).
+ * hopFrames = 0 (n/a — event positions are irregular, matching "onsets"'
+ * convention).
+ *
+ * Header sourceRate/channels/sourceFrames = the analyzed wave's native
+ * geometry.
+ *
+ * Params blob v1: SHARED with "groove.res" (see above) — same
+ * twGrooveAnalysisParams key, same hash.
+ */
+constexpr const char *GrooveEv        = "groove.ev";
+constexpr uint32_t    GrooveEvVersion = 1;
+
 } // namespace twAspect
 
 #endif

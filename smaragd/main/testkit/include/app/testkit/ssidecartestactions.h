@@ -40,6 +40,40 @@
 //       pins its warped value (-1 = existence only). `src` absent = count-only
 //       check. Fails if the clip is missing / not an SCut / any check fails.
 //
+//   <feel-flow-analyze clip="0,0"/>
+//       Proposal 40 "Feel Flow" M1. Resolves the SCut at clip (same
+//       addressing as set-render-gate), requires its content to be an
+//       SPlainWave, and calls SPlainWave::enqueueGrooveAnalysis() — the OPT-IN
+//       groove analysis job (groove.res / groove.ev, never scheduled by
+//       add-sample on its own). Fails if the clip is missing, not an SCut, or
+//       its content is not a plain wave. Non-undoable: analysis is not an
+//       edit to the arrangement.
+//
+//   <assert-groove-aspect aspect="groove.res|groove.ev" minRecords="-1"
+//                         maxRecords="-1" expectExists="true"
+//                         deltaMuHighLowMs="-1" deltaMuTolMs="-1"/>
+//       Proposal 40 M1. Globs <testOutputDir>/sidecars for the newest
+//       *.<aspect>.*.qaf (same newest-file convention as assert-sidecar) and
+//       asserts presence and record count like assert-sidecar, PLUS aspect-
+//       specific structural checks decoded via tw/sidecar/twgrooveaspect.h:
+//         groove.res — every per-unit power sample and the compliance
+//           scalar of every record lie in [0,1] (AC 1's payload contract;
+//           unconditional, not attribute-gated). nUnits is derived from the
+//           file's own geometry (recordStride/4 - 1).
+//         groove.ev — records are ascending by pos (AC 1); when
+//           deltaMuHighLowMs is given (>=0 or explicitly present), the
+//           records are grouped by region and pooled through the SAME
+//           twGroovePoolRegionStats the pendulum core itself uses (a real
+//           per-event amplitude is not carried in this aspect's payload, so
+//           pooling reconstructs each event at a uniform amp=1 — the bleed
+//           gate this disables is measured, on this fixture set, to fire
+//           zero times regardless, see twaspects.h/twgroove.h), the
+//           low/high regions are picked the same way groove_test.cc's own
+//           lowHighRegions helper does (closest-to-zero mu / most-positive
+//           mu), and |deltaMu - deltaMuHighLowMs| must be <= deltaMuTolMs
+//           (default 0.0 when the target is given but no tolerance is).
+//       Fails if expectExists and none is found, or any check fails.
+//
 // All are transient/test-support actions: not undoable themselves.
 
 class SSidecarRootAction : public SAction {
@@ -113,6 +147,43 @@ private:
     int64_t    src_    = 0;       // source-domain anchor position
     int64_t    warped_ = -1;      // -1 = existence only (don't pin the value)
     int64_t    count_  = -1;      // -1 = don't check the anchor count
+};
+
+// -------------------------------------------------------- feel-flow-analyze
+
+class SFeelFlowAnalyzeAction : public SAction {
+public:
+    SFeelFlowAnalyzeAction() = default;
+    explicit SFeelFlowAnalyzeAction(const QList<int> &clipPath) : clipPath_(clipPath) {}
+
+    QString name() const override { return QStringLiteral("feel-flow-analyze"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QList<int> clipPath_;
+};
+
+// ------------------------------------------------------ assert-groove-aspect
+
+class SAssertGrooveAspectAction : public SAction {
+public:
+    SAssertGrooveAspectAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-groove-aspect"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString aspect_;
+    int64_t minRecords_ = -1;
+    int64_t maxRecords_ = -1;
+    bool    expectExists_ = true;
+    bool    hasDeltaMu_ = false;
+    double  deltaMuHighLowMs_ = 0.0;
+    double  deltaMuTolMs_ = 0.0;
 };
 
 #endif // SSIDECARTESTACTIONS_H

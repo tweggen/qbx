@@ -17,6 +17,7 @@
 #include "tw/graph/twcomponent.h"
 #include "tw/sidecar/twanalyzers.h"
 #include "tw/sidecar/twaspects.h"
+#include "tw/sidecar/twgrooveaspect.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sources/twrandomsource.h"
 #include "tw/sources/twsamplesource.h"
@@ -363,6 +364,100 @@ void SPlainWave::enqueueAnalysis()
                                    std::shared_ptr<const UiOnsets>() );
             // Queued to the UI thread: badge repaint via the existing
             // captureRevalidated() -> update() connection.
+            QMetaObject::invokeMethod( project, "notifyCaptureRevalidated",
+                                       Qt::QueuedConnection );
+        } );
+}
+
+void SPlainWave::enqueueGrooveAnalysis()
+{
+    // Proposal 40 "Feel Flow" M1: OPT-IN, never called from setWave() (see
+    // the header doc). Otherwise the SAME discipline as enqueueAnalysis():
+    // params derived from the SOURCE rate, version-aware load-first (both
+    // aspects already valid -> no job), a shared_ptr-owned closure, the
+    // analyzingGroove_ badge, and a queued notifyCaptureRevalidated() at
+    // completion for the UI-thread repaint.
+    SProject *project = qobject_cast<SProject *>( parent() );
+    if( !project ) return;
+    CaptureRevalidator *reval = project->getRevalidator();
+    if( !reval ) return;                        // SMARAGD_REVAL_WORKERS=0
+    if( !twSidecarStore::instance().enabled() ) return;
+    twSampleSource *src = cpWave_ ? cpWave_->sampleSource() : nullptr;
+    if( !src ) return;
+    const twContentHash content = src->contentHash();
+    if( content.isNull() ) return;
+
+    // M1 permanently keeps bounce == source for a plain wave: the ANALYZED
+    // wave here IS the source (M1b's internal-bounce consumer, proposal 40
+    // section 4.3, points the same encoder at a different signal without
+    // touching this function). Every analysis-side parameter (front end,
+    // ensemble/pendulum, stats) is the default twGrooveAnalysisParams{} —
+    // M1 ships no per-clip tuning; that is M3 (set-groove-param).
+    twGrooveAnalysisParams gp;
+    std::vector<uint8_t> gpBlob;
+    gp.serialize( gpBlob );
+    const uint64_t gpHash =
+        twSidecarStore::hashParams( gpBlob.data(), gpBlob.size() );
+
+    const bool haveRes = twSidecarStore::instance().load(
+        content, twAspect::GrooveRes, twAspect::GrooveResVersion, gpHash ) != nullptr;
+    const bool haveEv = twSidecarStore::instance().load(
+        content, twAspect::GrooveEv, twAspect::GrooveEvVersion, gpHash ) != nullptr;
+    if( haveRes && haveEv ) return;
+
+    if( !analyzingGroove_ )
+        analyzingGroove_ = std::make_shared<std::atomic<bool>>( false );
+    analyzingGroove_->store( true, std::memory_order_release );
+
+    // The closure OWNS everything it touches (analysis-lane lifetime rule,
+    // identical to enqueueAnalysis() above).
+    std::shared_ptr<twWavInput> wav = cpWave_;
+    std::shared_ptr<std::atomic<bool>> flag = analyzingGroove_;
+    reval->scheduleAnalysisJob(
+        [wav, flag, project, content, gp, gpBlob]() {
+            twSampleSource *s = wav->sampleSource();
+            if( s ) {
+                const uint32_t nCh = (uint32_t) s->channels();
+                const uint64_t n   = (uint64_t) s->length();
+                const uint32_t rate = (uint32_t) s->sampleRate();
+                std::vector<const float *> chans( nCh );
+                for( uint32_t c = 0; c < nCh; c++ )
+                    chans[c] = s->channelData( (idx_t) c );
+
+                const twGrooveAspectPayloads built =
+                    twGrooveBuildAspectPayloads( chans.data(), nCh, n, rate, gp );
+                // Honest-empty (twGrooveBuildAspectPayloads' own rule): an
+                // unanalyzable file (no recoverable tatum) stores NOTHING —
+                // a caller sees a MISS on both aspects and can retry later,
+                // rather than caching a permanently-empty "result".
+                if( built.nUnits > 0 ) {
+                    twQafInfo qi;
+                    qi.contentHash  = content;
+                    qi.sourceRate   = rate;
+                    qi.channels     = nCh;
+                    qi.sourceFrames = n;
+                    qi.params       = gpBlob;
+
+                    qi.aspectId      = twAspect::GrooveRes;
+                    qi.aspectVersion = twAspect::GrooveResVersion;
+                    qi.recordStride  = (uint64_t)( built.nUnits + 1 ) * 4;
+                    qi.recordCount   = built.resRecordCount;
+                    qi.hopFrames     = built.hopFrames;
+                    twSidecarStore::instance().store(
+                        qi, built.resPayload.data(),
+                        (uint64_t) built.resPayload.size() );
+
+                    qi.aspectId      = twAspect::GrooveEv;
+                    qi.aspectVersion = twAspect::GrooveEvVersion;
+                    qi.recordStride  = 20;
+                    qi.recordCount   = built.evRecordCount;
+                    qi.hopFrames     = 0;
+                    twSidecarStore::instance().store(
+                        qi, built.evPayload.data(),
+                        (uint64_t) built.evPayload.size() );
+                }
+            }
+            flag->store( false, std::memory_order_release );
             QMetaObject::invokeMethod( project, "notifyCaptureRevalidated",
                                        Qt::QueuedConnection );
         } );
