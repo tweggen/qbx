@@ -1,6 +1,8 @@
 #include "app/testkit/stabtestactions.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/smainwindow.h"
+#include "app/shell/sapplication.h"
+#include "app/model/sobjectpath.h"
 #include "app/shell/sviewtabs.h"
 #include <QApplication>
 #include <QDebug>
@@ -66,9 +68,49 @@ bool SAssertTabSetAction::readXml( const QDomElement &elem, int /*version*/ )
     return true;
 }
 
+// --- assert-selection -------------------------------------------------------
+
+SApplyResult SAssertSelectionAction::apply( SProject *project )
+{
+    if( !project ) return { false, nullptr };
+    SApplication &app = SApplication::app();
+    const QString root = app.activeSelectionRoot();
+
+    QStringList actual;
+    for( const QList<int> &p : app.getCurrentSelectionPathsFor( root ) )
+        actual << strackpath::qualifiedToString( root, p );
+    actual.sort();
+
+    QStringList expected = paths_.split( ';', Qt::SkipEmptyParts );
+    for( QString &e : expected ) e = e.trimmed();
+    expected.sort();
+
+    if( expected != actual ) {
+        qWarning() << "assert-selection FAILED: active root"
+                   << ( root.isEmpty() ? QStringLiteral( "<master>" ) : root )
+                   << "has" << actual << "expected" << expected;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertSelectionAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "paths", paths_ );
+}
+
+bool SAssertSelectionAction::readXml( const QDomElement &elem, int )
+{
+    paths_ = elem.attribute( "paths" );
+    return true;
+}
+
 static const bool s_reg_tabtest = (
     SActionRegistry::instance().registerType(
         QStringLiteral("assert-tab-set"),
         []{ return new SAssertTabSetAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-selection"),
+        []{ return new SAssertSelectionAction; } ),
     true
 );

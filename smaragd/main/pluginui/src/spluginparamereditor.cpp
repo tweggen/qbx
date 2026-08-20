@@ -179,7 +179,13 @@ void SPluginParamEditor::onParamSliderChanged( int sliderIndex )
     // End reaches the host only inside process(), on a worker thread, at freeze
     // time - and there is no native plugin editor to emit one (proposal 33 M3).
     SAutomationRecorder::Target t;
-    t.ownerPath = strackpath::stringToPath( trackPath_ );
+    // A qualified owner path names its own root; the recorder's Target
+    // carries it (proposal 09 §3) so the pass commits in that arrangement.
+    {
+        const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath_ );
+        t.ownerPath = q_.idx;
+        t.pathRoot  = q_.root;
+    }
     t.target = QStringLiteral( "param:%1" ).arg( info.id );
     t.slotIndex = slotIndex_;
     if( SApplication::app().isPlaying()
@@ -262,7 +268,13 @@ void SPluginParamEditor::onMeterTick( offset_t pos, qint64 /*nowMs*/,
     if( !plugin ) return;
 
     SAutomationRecorder::Target t;
-    t.ownerPath = strackpath::stringToPath( trackPath_ );
+    // A qualified owner path names its own root; the recorder's Target
+    // carries it (proposal 09 §3) so the pass commits in that arrangement.
+    {
+        const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath_ );
+        t.ownerPath = q_.idx;
+        t.pathRoot  = q_.root;
+    }
     t.slotIndex = slotIndex_;
 
     bool any = false;

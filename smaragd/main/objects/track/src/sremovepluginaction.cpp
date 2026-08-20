@@ -28,7 +28,7 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     }
 
     // Parse the track path
-    auto path = strackpath::stringToPath(trackPath_);
+    auto path = strackpath::parseInto( pathRoot_, trackPath_ );
     SObject *root = project->getRootComponent();
     SObject *trackObj = strackpath::resolveByPath(root, path);
     STrack *track = dynamic_cast<STrack*>(trackObj);

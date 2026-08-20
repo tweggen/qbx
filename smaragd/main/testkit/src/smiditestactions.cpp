@@ -81,8 +81,12 @@ SApplyResult SAssertMidiEventsAction::apply( SProject *project )
     QString what;
 
     if( scope_.compare( "feed", Qt::CaseInsensitive ) == 0 ) {
+        // PARSE FIRST: parseInto() is what SETS pathRoot_ from a qualified text
+        // path; C++ does not order the two arguments, so resolving the root in
+        // the same call can read it before the parse and address the MASTER.
+        const QList<int> idx_ = parseInto( pathRoot_, trackPath_ );
         STrack *track = dynamic_cast<STrack *>( splacements::laneAt(
-            splacements::rootNamed( project, pathRoot_ ), stringToPath( trackPath_ ) ) );
+            splacements::rootNamed( project, pathRoot_ ), idx_ ) );
         if( !track ) {
             qWarning() << "assert-midi-events: no track at" << trackPath_;
             return { false, nullptr };
@@ -102,7 +106,7 @@ SApplyResult SAssertMidiEventsAction::apply( SProject *project )
                    .arg( trackPath_ ).arg( (qlonglong) startFrame_ )
                    .arg( (qlonglong) ( startFrame_ + len ) );
     } else {
-        smidiactions::ClipRef ref = smidiactions::resolveClip( project, pathRoot_, stringToPath( clip_ ), take_ );
+        smidiactions::ClipRef ref = smidiactions::resolveClip( project, pathRoot_, parseInto( pathRoot_, clip_ ), take_ );
         if( !ref.valid() ) {
             qWarning() << "assert-midi-events: no MIDI clip at" << clip_;
             return { false, nullptr };

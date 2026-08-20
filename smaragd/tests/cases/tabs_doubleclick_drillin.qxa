@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09: DOUBLE-CLICKING AN ASSET CLIP DRILLS INTO IT (requester,
+  2026-08-20). The arrangement it windows comes to the front, or opens if its
+  tab was closed.
+
+  This is the other half of "creating an asset always makes an arrangement".
+  Without it the arrangement is reachable only from the resources dock and the
+  clip on the timeline is a dead end.
+
+  The gate drives the REAL handler (double-click-clip synthesises the mouse
+  events), and it checks all three states: opens when there is no tab, FRONTS
+  when there is one behind the master, and re-opens after the tab was closed.
+
+  The negative control matters as much: double-clicking an ORDINARY clip must
+  NOT open a tab. arrangementNameOf() is what decides, so a cut over a plain
+  folder track is not an asset clip.
+-->
+<SActionScript version="1" name="tabs_doubleclick_drillin">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Extract track 1; its asset clip lands on the new master lane. -->
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <assert-arrangements names="Drums" trackCounts="1"/>
+    <assert-track-count arrangement="" count="2"/>
+
+    <!-- The extraction itself does not open a tab; the gesture does. -->
+    <close-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement" active="Arrangement"/>
+
+    <!-- Which master lane carries the asset? The extraction put the new lane
+         where the topmost extracted track was, i.e. index 1. -->
+    <assert-track-name trackPath="1" name="Drums"/>
+
+    <!-- DOUBLE-CLICK THE ASSET CLIP: the tab opens and comes to the front. -->
+    <double-click-clip track="1" clip="0"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+
+    <!-- Back to the master, then double-click again: it FRONTS the existing
+         tab rather than opening a second one for the same root. -->
+    <activate-tab name="Arrangement"/>
+    <assert-tab-set names="Arrangement,Drums" active="Arrangement"/>
+    <double-click-clip track="1" clip="0"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+
+    <!-- Close it, and the gesture RE-OPENS it. -->
+    <close-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement" active="Arrangement"/>
+    <double-click-clip track="1" clip="0"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+
+    <!-- NEGATIVE CONTROL: an ordinary clip opens nothing. Track 0 still holds
+         its own sample and is not an asset. -->
+    <activate-tab name="Arrangement"/>
+    <double-click-clip track="0" clip="0"/>
+    <assert-tab-set names="Arrangement,Drums" active="Arrangement"/>
+  </actions>
+
+</SActionScript>

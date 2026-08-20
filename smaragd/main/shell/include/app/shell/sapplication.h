@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QString>
+#include <QHash>
 //#include <qptrlist.h>
 
 class tw303aEnvironment;
@@ -58,12 +59,41 @@ public:
     tw303aEnvironment *get303aEnvironment() const override;
 
     SLink *getCurrentSelectedSLink() const;
+
+    // --- Selection is PER EDITOR ROOT (proposal 09 §3) --------------------
+    //
+    // One global selection was wrong the moment two arrangers could be on
+    // screen: selecting a clip in the drums tab must not be deleted by a menu
+    // action driven from the master tab. The selection is therefore kept per
+    // ROOT -- keyed by arrangement name, empty for the master -- and the
+    // ACTIVE tab's list is the app-wide one every existing reader sees, which
+    // is exactly what §3 specifies ("the active tab publishes itself as the
+    // current selection context").
+    //
+    // Per ROOT rather than per VIEW, and the two are the same thing here: the
+    // shell dedups by root identity, so one root has at most one view. Keying
+    // on the root means the storage needs no view pointer and survives a tab
+    // being closed and reopened -- closing a tab destroys a view, and losing
+    // the selection with it would be a second surprise.
+    void setActiveSelectionRoot( const QString &root );
+    const QString &activeSelectionRoot() const { return activeSelectionRoot_; }
+
+    // Root-explicit forms. The selection ACTIONS use these with the root they
+    // carry (D21), so a scripted set-selection over "Drums:0,0" lands in
+    // Drums' list whichever tab happens to be active. The bare forms above
+    // mean the active root and are what the UI uses.
+    void addSelectedSLink( SLink *lk, const QString &root );
+    void clearSelection( const QString &root );
+    const SSelectionList &selectionListFor( const QString &root ) const;
     bool isSelectionEmpty() const;
     bool isSLinkSelected( SLink * ) const override;
     const SSelectionList &getSelectionList() const;
 
     // Path-based selection methods (for action-backed operations)
     void setSelectionFromPaths(const QList<QList<int>> &paths) override;
+    void setSelectionFromPathsFor(const QList<QList<int>> &paths,
+                                  const QString &root) override;
+    QList<QList<int>> getCurrentSelectionPathsFor(const QString &root) const override;
     void addSelectionFromPaths(const QList<QList<int>> &paths) override;
     void removeSelectionFromPaths(const QList<QList<int>> &paths) override;
     void toggleSelectionFromPaths(const QList<QList<int>> &paths) override;
@@ -455,6 +485,15 @@ private:
     static constexpr int METER_TAIL_TICKS = 240;   // ~8 s at 33 ms
 
     static SApplication *singleton_;
+    // Per-root selection (see setActiveSelectionRoot). selectionList_ /
+    // currentSelectedSLink_ below are the ACTIVE root's entry, kept as
+    // pointers into the map so every existing reader is unchanged.
+    struct SSelectionEntry {
+        SSelectionList list;
+        SLink         *current = nullptr;
+    };
+    QHash<QString, SSelectionEntry> selections_;
+    QString activeSelectionRoot_;
     SSelectionList *selectionList_;
     tw303aEnvironment *t3Env_;
     std::shared_ptr<twSpeaker> t3Speaker_;

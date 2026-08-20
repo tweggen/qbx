@@ -1,35 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ============================================================================
-  NOT REGISTERED, AND CURRENTLY FAILING. This directory is not covered by the
-  tests/cases/*.qxa glob (the same convention tests/cases/xproc/ uses).
+  Proposal 09 M8c: an arrangement opens in a TAB, and a gesture made in that tab
+  edits that arrangement.
 
-  WHAT WORKS: the tab opens, dedups, activates and closes; and the submit
-  funnel roots correctly, which is the whole of M8b doing its job. Verified by
-  instrumentation: the drag made with the Drums tab active submits resize-clip
-  with pathRoot "Drums", and the one made with the master tab active submits
-  with an empty root.
+  THIS IS THE CASE THE MILESTONE EXISTS FOR. M8b made every path carry its root;
+  this drives the ARRANGER itself, through the real mouse handlers
+  (drag-clip-edge), with an arrangement tab active, and asserts the edit landed
+  in the arrangement and NOT in the master.
 
-  WHAT DOES NOT: the Drums-side drag submits, correctly rooted, and the clip is
-  not resized.
+  IT WAS PARKED, FAILING, FOR A WHILE, AND THE REASON IS WORTH KEEPING: the
+  product code was right the whole time and THE GATE WAS LYING. Two theories
+  were tested and refuted first = that a tab page added mid-script is never laid
+  out (measured: both views compute identical coordinates, sx=0 ex=120 x0=119
+  x1=60, on identical 300x150 views), and that its layout needed activating.
+  The actual fault was in assert-clip-window: it kept its path as TEXT and
+  converted it with stringToPath(), which splits on commas =
+  stringToPath("Drums:0,0") yields (0,0) because "Drums:0".toInt() is 0. So the
+  ASSERTION read the master while the EDIT correctly went to Drums.
 
-  TWO HYPOTHESES WERE TESTED AND BOTH ARE WRONG. It is NOT a layout problem.
-  The first guess was that a tab page added mid-script is never laid out (a
-  .qxa runs its actions back to back without returning to the event loop), so
-  the pixel math would be meaningless; giving the new page the master's
-  geometry did not help, and neither did activating its layout synchronously.
-  MEASURED, both views compute IDENTICAL coordinates:
+  A second bug fell out of fixing that: parseInto() is what SETS the root from a
+  qualified text path, so resolving the root BEFORE calling it reads an empty
+  root and addresses the master anyway. Three sites had that ordering.
 
-      root=""      viewSize=300x150 canvas=150x112 sx=0 ex=120 x0=119 x1=60
-      root="Drums" viewSize=300x150 canvas=150x112 sx=0 ex=120 x0=119 x1=60
+  The lesson is the one this repo keeps relearning: a gate that disagrees with
+  the code is not automatically evidence about the code.
 
-  So the gesture geometry is the same on both sides and the master one works.
-  Whatever differs is AFTER the synthesised mouse events - in the Drums view's
-  handling of them, or in what resize-clip resolves once it has them. That is
-  where the next look should start; do not re-test the layout theory.
-
-  Register it (move it up one directory) once that is answered.
-  ============================================================================
+  The two roots are given confusable shapes on purpose: a lane at index 0 in
+  each, one clip each, differing only in name. The drag is PIXEL-QUANTISED, so
+  its exact result is not assertable; what IS exact is the pairing = the clip on
+  the OTHER side untouched at 192000, and the clip on THIS side no longer
+  192000, expressed as an assertion marked expectReject.
 -->
 <SActionScript version="1" name="tabs_edit_in_arrangement">
 

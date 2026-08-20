@@ -30,6 +30,7 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/timeline/sstdmixerview.h"
 #include "app/timeline/ssubmit.h"
+#include "app/shell/sviewtabs.h"
 #include "app/timeline/strackheaderresizer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sobjectrenderer.h"
@@ -60,6 +61,7 @@
 #include "app/objects/cut/sduplicateclipaction.h"
 #include "app/objects/cut/sresizeclipaction.h"
 #include "app/objects/mixer/screateassetaction.h"
+#include "app/objects/mixer/sextractarrangementaction.h"
 #include "app/objects/mixer/splaceassetaction.h"
 #include "app/objects/cut/saddsampleaction.h"
 #include "app/objects/cut/sremovesampleaction.h"
@@ -2123,21 +2125,55 @@ void SMVActualView::ctRangeClear()
 
 void SMVActualView::ctCreateAssetFromTrack()
 {
-    // Feature (b): turn the right-clicked track + the ruler range into a reusable
-    // live asset — an SCut windowing THAT track (vertical scope = the track and
-    // its children), horizontal scope = the range. Scoping to a track (rather
-    // than the whole mixer) is what lets a placement land on a sibling lane
-    // without a self-reference cycle; placing it back inside the source track is
-    // refused by the guard in SPlaceAssetAction. See
-    // plan/proposed/05_TRACK_GROUPING_AND_LIVE_ASSETS.md feature (b) / §2.7.
-    if( !rangeValid_ || !lastClickTrack_ ) return;
+    // CREATING AN ASSET ALWAYS MAKES AN ARRANGEMENT (requester, 2026-08-20).
+    // The old behaviour windowed the clicked track IN PLACE and left it in the
+    // master, so the same audio was then heard twice -- once where it lived and
+    // once at the placement -- and the asset had no home of its own to edit in.
+    // Extraction moves the selected tracks OUT into an arrangement of their own
+    // and puts one clip where they were, so the material is heard exactly once
+    // and double-clicking that clip drills into it.
+    //
+    // It acts on the SELECTION, not on lastClickTrack_ alone. That was the one
+    // track operation in this file that did not: every other one uses
+    // pruneNestedTargets( selectionTargets( ... ) ), and "make an asset from
+    // these four lanes" is the normal case rather than the exotic one.
+    if( !rangeValid_ || !lastClickTrack_ || !smv_.model_ ) return;
     offset_t t0 = getRangeStart();
     offset_t t1 = getRangeEnd();
     if( t1 <= t0 ) return;
-    const QList<int> containerPath =
-        strackpath::pathOf( smv_.model_, lastClickTrack_ );
-    stimeline::submitActive(
-        new SCreateAssetAction( containerPath, t0, (length_t)( t1 - t0 ) ) );
+
+    const QList<STrack *> targets =
+        SStdMixerView::pruneNestedTargets( smv_.selectionTargets( lastClickTrack_ ) );
+    if( targets.isEmpty() ) return;
+
+    QStringList paths;
+    for( STrack *t : targets )
+        paths << strackpath::pathToString( strackpath::pathOf( smv_.model_, t ) );
+
+    // The name is ASKED FOR, prefilled with the one the action would generate,
+    // because it becomes the TAB LABEL and a tab called "Arrangement 3" is not
+    // worth having. Same dialog shape as ctRangeSetBPM. The prompt names the
+    // destructive half explicitly -- the tracks MOVE -- because that is the
+    // part a user cannot undo by looking at the result.
+    SProject &proj = smv_.model_->getProject();
+    QString suggestion;
+    for( int n = 1; ; ++n ) {
+        suggestion = QString( "Arrangement %1" ).arg( n );
+        if( !proj.hasArrangement( suggestion ) && !proj.hasAsset( suggestion ) )
+            break;
+    }
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        &smv_, tr( "Create asset from range" ),
+        tr( "%1 track(s) will MOVE into a new arrangement of their own, and one "
+            "clip windowing the selected range takes their place.\n\nName:" )
+            .arg( targets.size() ),
+        QLineEdit::Normal, suggestion, &ok );
+    if( !ok || name.trimmed().isEmpty() ) return;
+
+    stimeline::submitActive( new SExtractArrangementAction(
+        paths.join( ';' ), t0, t1, name.trimmed(),
+        QStringLiteral( "range" ), t0 ) );
 }
 
 // Set the mouse cursor to telegraph the clip-edit gesture under the pointer,
@@ -2817,6 +2853,33 @@ void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
     if( ev->button() == Qt::LeftButton && smv_.getModel()
         && tryAddMarkerAt( ev ) )
         return;
+
+    // Double-click on an ASSET clip drills INTO it: the arrangement it windows
+    // comes to the front, or opens if its tab was closed (proposal 09 §2, the
+    // drill-in gesture). This is the other half of "creating an asset always
+    // makes an arrangement" -- without it the arrangement is reachable only
+    // from the resources dock, and the clip on the timeline is a dead end.
+    //
+    // The clip's OBJECT is the asset body itself (place-asset links the body,
+    // not a copy), so the arrangement is one hop through its content -- and
+    // arrangementNameOf() is what decides, so a cut over an ordinary folder
+    // track is NOT an asset clip and falls through to the branches below.
+    if( ev->button() == Qt::LeftButton && lastClickSLink_ && smv_.getModel() ) {
+        if( SCut *cut = dynamic_cast<SCut *>( &lastClickSLink_->getSObject() ) ) {
+            if( SProject *proj = smv_.getModel()->getProjectSafe() ) {
+                const QString arrName =
+                    proj->arrangementNameOf( &cut->getContent() );
+                if( !arrName.isEmpty() ) {
+                    if( SMainWindow *mw = findMainWindow() ) {
+                        if( SViewTabs *tabs = mw->ensureViewShell() )
+                            tabs->openFor( &cut->getContent(), arrName );
+                    }
+                    ev->accept();
+                    return;
+                }
+            }
+        }
+    }
 
     // Double-click on an EVENT (MIDI) clip opens the event editor for it.
     // tryAddMarkerAt() above already re-resolved lastClickSLink_/

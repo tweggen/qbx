@@ -42,6 +42,18 @@ public:
     // Selection state (lives with the app until it grows its own service)
     virtual bool isSLinkSelected( SLink * ) const = 0;
     virtual void setSelectionFromPaths( const QList<QList<int>> &paths ) = 0;
+
+    // Root-carrying variants (proposal 09 D21 / §3). A selection ACTION knows
+    // which root its paths address and must write into THAT root's list --
+    // otherwise a scripted set-selection over "Drums:0,0" lands in whichever
+    // tab happens to be active. Non-pure and defaulting to the active-root
+    // forms, so an implementation with no notion of roots (the test stub) is
+    // unaffected.
+    virtual void setSelectionFromPathsFor( const QList<QList<int>> &paths,
+                                           const QString &root )
+    { (void) root; setSelectionFromPaths( paths ); }
+    virtual QList<QList<int>> getCurrentSelectionPathsFor( const QString &root ) const
+    { (void) root; return getCurrentSelectionPaths(); }
     virtual void addSelectionFromPaths( const QList<QList<int>> &paths ) = 0;
     virtual void removeSelectionFromPaths( const QList<QList<int>> &paths ) = 0;
     virtual void toggleSelectionFromPaths( const QList<QList<int>> &paths ) = 0;

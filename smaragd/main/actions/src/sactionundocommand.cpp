@@ -68,5 +68,17 @@ bool SActionUndoCommand::mergeWith(const QUndoCommand *other)
         return false;
     }
 
+    // NEVER MERGE ACROSS ROOTS (proposal 09 D21). A mergeKey is built from a
+    // PATH, and index {0} exists in every root -- so two faders at the same
+    // index in two different arrangements can produce the same key. The
+    // surviving command carries ONE captured root, so the merge would fold two
+    // edits in different trees into one undo entry that then restores the wrong
+    // one. Every key that names a path is root-qualified individually, and this
+    // is the backstop for the one that is added later and forgets: a guard here
+    // cannot be forgotten, a key can.
+    if (forward_->pathRoot() != cmd->forward_->pathRoot()) {
+        return false;
+    }
+
     return forward_->mergeWith(cmd->forward_);
 }

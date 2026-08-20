@@ -832,7 +832,7 @@ bool SStdMixerView::dragAutomationPoint( const QString &owner, const QString &ta
                                          double toValue,
                                          Qt::KeyboardModifiers mods )
 {
-    return automationUi().tkDrag( strackpath::stringToPath( owner ), target,
+    return automationUi().tkDrag( strackpath::parseQualified( owner ).idx, target,
                                   slotIndex, take, time, value, toTime, toValue,
                                   mods );
 }

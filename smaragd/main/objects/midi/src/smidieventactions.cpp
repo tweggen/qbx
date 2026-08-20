@@ -79,7 +79,7 @@ void SSetEventsAction::writeXml( QDomElement &elem ) const
 
 bool SSetEventsAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     take_ = elem.attribute( "take", "-1" ).toInt();
     events_ = smidiactions::readEventChildren( elem );
     return true;
@@ -154,7 +154,7 @@ void SAddNoteAction::writeXml( QDomElement &elem ) const
 
 bool SAddNoteAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     tick_ = elem.attribute( "tick", "0" ).toLongLong();
     dur_ = elem.attribute( "dur", "480" ).toLongLong();
     key_ = elem.attribute( "key", "60" ).toInt();
@@ -233,7 +233,7 @@ void SRemoveNoteAction::writeXml( QDomElement &elem ) const
 
 bool SRemoveNoteAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     tick_ = elem.attribute( "tick", "0" ).toLongLong();
     key_ = elem.attribute( "key", "-1" ).toInt();
     channel_ = elem.attribute( "channel", "-1" ).toInt();
@@ -297,7 +297,7 @@ void SSetNotesAction::writeXml( QDomElement &elem ) const
 
 bool SSetNotesAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     take_ = elem.attribute( "take", "-1" ).toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;
     notes_ = smidiactions::readEventChildren( elem );
@@ -306,7 +306,9 @@ bool SSetNotesAction::readXml( const QDomElement &elem, int )
 
 QString SSetNotesAction::mergeKey() const
 {
-    return QStringLiteral( "set-notes:" ) + pathToString( clipPath_ )
+    // Root-qualified for the reason set-plugin-param's key is: clip {0,0}
+    // exists in every root (proposal 09 D21).
+    return QStringLiteral( "set-notes:" ) + qualifiedToString( pathRoot_, clipPath_ )
          + ":" + QString::number( take_ );
 }
 
@@ -369,7 +371,7 @@ void SAddEventAction::writeXml( QDomElement &elem ) const
 
 bool SAddEventAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     event_ = SEvent();
     quint32 meta = 0;
     const QString kind = elem.attribute( "kind", "cc" );
@@ -455,7 +457,7 @@ void SRemoveEventAction::writeXml( QDomElement &elem ) const
 
 bool SRemoveEventAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     kind_ = elem.attribute( "kind", "" );
     tick_ = elem.attribute( "tick", "0" ).toLongLong();
     channel_ = elem.attribute( "channel", "-1" ).toInt();
@@ -554,7 +556,7 @@ void SQuantizeNotesAction::writeXml( QDomElement &elem ) const
 
 bool SQuantizeNotesAction::readXml( const QDomElement &elem, int )
 {
-    clipPath_ = stringToPath( elem.attribute( "clip" ) );
+    clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
     grid_ = elem.attribute( "grid", "1/16" );
     strength_ = elem.attribute( "strength", "1.0" ).toDouble();
     swing_ = elem.attribute( "swing", "0" ).toDouble();
