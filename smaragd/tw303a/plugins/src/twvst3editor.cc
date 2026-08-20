@@ -219,9 +219,14 @@ twEditorFeedback twVst3Editor::poll()
     // is merged here — merging in the engine would destroy the information the
     // host needs to decide.
     for( const auto &e : handler_->takeEdits() ) {
+        twEditorParamEdit out;
+        out.paramId       = e.id;
+        out.value         = e.value;
+        out.phase         = e.phase;
+        out.previousValue = e.value;
         if( e.phase == twEditorGesture::Change && apply_ )
-            apply_( e.id, e.value );
-        fb.edits.push_back( twEditorParamEdit{ e.id, e.value, e.phase } );
+            out.previousValue = apply_( e.id, e.value );
+        fb.edits.push_back( out );
     }
 
     // 2. A resize the plugin asked for, coalesced to the last one.

@@ -207,7 +207,8 @@ private:
     };
 
     void pushEdit( std::uint32_t id, double v );
-    void applyGuiEdit( std::uint32_t id, double v );   // main thread; proposal 33
+    // Returns the value the mirror held BEFORE the write. Main thread; proposal 33.
+    double applyGuiEdit( std::uint32_t id, double v );
 
     // Counted, not owned: the app owns the editor. Only so teardown can report
     // the contract violation of outliving one.
@@ -928,13 +929,13 @@ std::unique_ptr<twPluginEditor> twVst3Plugin::createEditor()
     // the plugin — and teardown reports it loudly when it does not.
     auto ed = std::make_unique<twVst3Editor>(
         view, handler_.get(),
-        [this]( std::uint32_t id, double v ) { applyGuiEdit( id, v ); },
+        [this]( std::uint32_t id, double v ) { return applyGuiEdit( id, v ); },
         [this]() { liveEditors_.fetch_sub( 1, std::memory_order_acq_rel ); } );
 
     return ed;
 }
 
-void twVst3Plugin::applyGuiEdit( std::uint32_t id, double v )
+double twVst3Plugin::applyGuiEdit( std::uint32_t id, double v )
 {
     // An edit that ORIGINATED IN THE PLUGIN'S OWN GUI (proposal 33 M2). It is
     // setParam() minus the controller write, and that omission is the whole
@@ -953,13 +954,17 @@ void twVst3Plugin::applyGuiEdit( std::uint32_t id, double v )
     for( std::size_t i = 0; i < params_.size(); ++i ) {
         if( params_[i].id == id ) { idx = i; break; }
     }
-    if( idx == params_.size() ) return;   // a parameter we never enumerated
+    if( idx == params_.size() ) return v;   // a parameter we never enumerated
 
     if( v < 0.0 ) v = 0.0;
     if( v > 1.0 ) v = 1.0;
 
+    // READ BEFORE WRITE: the caller's undo entry depends on it, and this load
+    // is the last moment the old value exists anywhere.
+    const double prev = mirror_[idx].load( std::memory_order_acquire );
     mirror_[idx].store( v, std::memory_order_release );
     pushEdit( id, v );
+    return prev;
 }
 
 void twVst3Plugin::pushEdit( std::uint32_t id, double v )

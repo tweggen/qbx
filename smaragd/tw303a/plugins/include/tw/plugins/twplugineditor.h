@@ -126,6 +126,20 @@ struct twEditorParamEdit
                                     // same domain twPlugin::setParam() takes
                                     // (normalized [0,1] for VST3).
     twEditorGesture phase   = twEditorGesture::Change;
+
+    // What the parameter held IMMEDIATELY BEFORE this edit, in the same domain.
+    // Meaningful only on a Change.
+    //
+    // It is here because the host cannot recover it afterwards, and a host that
+    // tries gets a silently broken undo. poll() applies each Change to the
+    // mirror and the DSP on its way through — that is what makes a plugin's own
+    // knob audible without the host doing anything — so by the time the host
+    // builds its undoable verb, getParam() ALREADY RETURNS THE NEW VALUE and
+    // the verb's inverse would restore the value it was asked to set. That bug
+    // shipped in proposal 33 M5 and is what qxa.plugin_native_editor caught.
+    // The backend knows the answer for free: it is the mirror, read one
+    // instruction before it is overwritten.
+    double previousValue = 0.0;
 };
 
 // Everything the plugin has asked for since the previous poll(). Returned by

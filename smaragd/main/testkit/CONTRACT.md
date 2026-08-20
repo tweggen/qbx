@@ -946,3 +946,35 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     into its own output directory, for the reason `SMARAGD_SIDECAR_DIR` exists,
     and because its "a repeat drop does not re-fetch" claim would otherwise be
     measuring a hit inherited from a previous run.
+
+## The native plugin editor (proposal 33 M6)
+
+46. **`plugin-native-editor` OPENS A REAL `SPluginNativeEditor` AND NOTHING
+    REACHES THE SCREEN.** The verb calls `openFor( …, showWindow = false )`, so
+    the container's native handle, the attach, the 30 Hz poll timer and every
+    action the window commits are the production ones while our own dialog is
+    never mapped. That matters more here than for the other widget verbs: a qxa
+    run uses the REAL platform plugin — the suite does not set
+    `QT_QPA_PLATFORM=offscreen` — so a shown dialog would land on the
+    developer's desktop in the middle of the suite.
+
+47. **THE FIXTURE, NOT THE PLATFORM, IS WHAT MAKES THIS GATEABLE.**
+    `tw.test.clap.gui` implements `clap.gui` and CREATES NO WINDOW: `create()`
+    allocates nothing and `set_parent()` accepts any handle. So the PARAMETER
+    FLOW — the part of proposal 33 that can actually be wrong — is exercised
+    with no display, while what a real plugin's GUI does inside our container
+    stays hand-verification only. The fixture stands in for a user turning a
+    knob twice, deliberately by two different routes: `show()` sets Gain to 2.5
+    internally and calls `clap_host_params->request_flush` (the only route out
+    while nothing renders), `set_size()` queues an edit and requests NO flush
+    (so only a `process()` can carry it). A change that services one route and
+    not the other passes half of `plugins_test`'s editor section and fails the
+    other half.
+
+48. **A CASE THAT OPENS AN EDITOR MUST CLOSE IT.** An editor alive when its
+    plugin is torn down is a contract violation both backends report as an
+    error, and in a real session it is a window pointing into an unloaded DSO.
+    The verb's `close` drains `QEvent::DeferredDelete` before checking, because
+    the dialogs are `WA_DeleteOnClose` and `close()` only POSTS the deletion —
+    without that drain `expectOpen="0"` would mean "it has been asked to go"
+    rather than "it is gone".

@@ -71,7 +71,10 @@ SApplyResult SSetPluginParamAction::apply( SProject *project )
         if( v > info.maxValue ) v = info.maxValue;
     }
 
-    const double oldValue = p0->getParam( paramId_ );
+    // The baseline the inverse is built from. Normally the plugin itself —
+    // but a native-editor edit arrives with the plugin already moved, so it
+    // supplies its own (see setPreviousValue).
+    const double oldValue = hasPrevious_ ? previous_ : p0->getParam( paramId_ );
 
     // EVERY instance: the dual-mono mapping (a 1->1 plugin on N buses) runs N
     // independent plugins, and they must stay in lockstep or the buses drift

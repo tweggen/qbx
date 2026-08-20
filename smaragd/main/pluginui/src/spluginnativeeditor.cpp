@@ -139,8 +139,20 @@ bool SPluginNativeEditor::isAvailableFor( SPluginSlot *slot )
     return p && p->supportsNativeEditor();
 }
 
+bool SPluginNativeEditor::isOpenFor( SPluginSlot *slot )
+{
+    return registry().value( slot ).data() != nullptr;
+}
+
+void SPluginNativeEditor::closeFor( SPluginSlot *slot )
+{
+    if( SPluginNativeEditor *w = registry().value( slot ).data() )
+        w->close();
+}
+
 SPluginNativeEditor *SPluginNativeEditor::openFor( STrack *track, SPluginSlot *slot,
-                                                   QWidget *parentForPosition )
+                                                   QWidget *parentForPosition,
+                                                   bool showWindow )
 {
     if( !track || !slot ) return nullptr;
 
@@ -148,9 +160,13 @@ SPluginNativeEditor *SPluginNativeEditor::openFor( STrack *track, SPluginSlot *s
     // instance is a lifetime problem the backend refuses anyway. Nothing to
     // re-point here — the address is derived at every commit.
     if( SPluginNativeEditor *existing = registry().value( slot ).data() ) {
-        existing->show();
-        existing->raise();
-        existing->activateWindow();
+        // A floating editor's window is the PLUGIN's, so there is nothing here
+        // to raise; showing this one would put an empty rectangle beside it.
+        if( !existing->isFloating() ) {
+            existing->show();
+            existing->raise();
+            existing->activateWindow();
+        }
         return existing;
     }
 
@@ -165,8 +181,13 @@ SPluginNativeEditor *SPluginNativeEditor::openFor( STrack *track, SPluginSlot *s
     }
 
     registry().insert( slot, w );
-    w->show();
-    w->raise();
+    // A floating editor has no content of ours to show; the plugin has already
+    // put its own window on screen. This object stays alive, unshown, as the
+    // poll pump and the registry entry.
+    if( showWindow && !w->isFloating() ) {
+        w->show();
+        w->raise();
+    }
     return w;
 }
 
@@ -199,14 +220,33 @@ bool SPluginNativeEditor::attachPlugin()
         editor_->setScale( devicePixelRatioF() );
 
     const audio::twEditorHandle h = handleOf( container_ );
-    if( !h.valid() || !editor_->attach( h ) ) {
-        editor_.reset();
-        return false;
+    if( h.valid() && editor_->attach( h ) ) {
+        resizeToPlugin( editor_->size() );
+        pollTimer_->start();
+        return true;
     }
 
-    resizeToPlugin( editor_->size() );
-    pollTimer_->start();
-    return true;
+    // D1: OFFER THE FLOATING FORM WHEN EMBEDDING FAILS, before giving up on the
+    // plugin's own interface altogether. CLAP is the only format that has one —
+    // gui.h names it as "sometimes the only option due to technical
+    // limitations" — and a plugin that declares it usually means it. The
+    // transient parent is the APPLICATION window rather than this dialog:
+    // ours is never shown, and a plugin window kept above an invisible parent
+    // is a plugin window with nothing keeping it above the app.
+    if( editor_->caps().floating ) {
+        QWidget *top = parentWidget() ? parentWidget()->window() : nullptr;
+        if( editor_->attachFloating( handleOf( top ) ) ) {
+            floating_ = true;
+            TW_LOGI( "pluginui",
+                     "native editor: embedding refused, using the plugin's own "
+                     "floating window" );
+            pollTimer_->start();
+            return true;
+        }
+    }
+
+    editor_.reset();
+    return false;
 }
 
 // --- geometry -----------------------------------------------------------------
@@ -214,6 +254,10 @@ bool SPluginNativeEditor::attachPlugin()
 void SPluginNativeEditor::resizeToPlugin( audio::twEditorSize physical )
 {
     if( !physical.valid() ) return;
+    // Nothing of ours has that size: the plugin owns its floating window and
+    // sizes it itself. Resizing this hidden dialog would be a no-op with a
+    // layout pass attached.
+    if( floating_ ) return;
 
     // THE ONE CONVERSION. twEditorSize is PHYSICAL PIXELS by ABI fiat
     // (twplugineditor.h), because VST3 coordinates are physical on Windows and
@@ -268,13 +312,22 @@ void SPluginNativeEditor::onPoll()
     // intermediates have already reached the DSP inside poll(), which is what
     // keeps the drag sounding continuous.
     std::map<std::uint32_t, double> lastOf;
+    // ...and the value the parameter held before the FIRST of them, which is
+    // the only correct baseline for the undo entry. It cannot be read back
+    // afterwards: poll() has already moved the plugin (twplugineditor.h,
+    // twEditorParamEdit::previousValue).
+    std::map<std::uint32_t, double> firstPrevOf;
     bool sawGestureEnd = false;
     for( const auto &e : fb.edits ) {
-        if( e.phase == audio::twEditorGesture::Change ) lastOf[e.paramId] = e.value;
+        if( e.phase == audio::twEditorGesture::Change ) {
+            if( lastOf.find( e.paramId ) == lastOf.end() )
+                firstPrevOf[e.paramId] = e.previousValue;
+            lastOf[e.paramId] = e.value;
+        }
         if( e.phase == audio::twEditorGesture::End )    sawGestureEnd = true;
     }
     for( const auto &kv : lastOf )
-        applyEdit( kv.first, kv.second, sawGestureEnd );
+        applyEdit( kv.first, kv.second, firstPrevOf[kv.first], sawGestureEnd );
 
     if( sawGestureEnd && lastOf.empty() ) {
         // An End with no value of its own still ends a recording gesture.
@@ -325,7 +378,8 @@ int SPluginNativeEditor::currentSlotIndex() const
     return -1;   // removed from the chain while the window was up
 }
 
-void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value, bool gestureEnd )
+void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value,
+                                     double previousValue, bool gestureEnd )
 {
     if( !slot_ ) return;
 
@@ -381,7 +435,12 @@ void SPluginNativeEditor::applyEdit( std::uint32_t paramId, double value, bool g
     // 2. Otherwise the ordinary undoable verb, exactly as the app's own slider
     // submits it. Consecutive edits to one parameter collapse into one undo
     // entry through SSetPluginParamAction::mergeWith().
-    app.submitAction( new SSetPluginParamAction( trackPath, slotIndex, paramId, value ) );
+    // THE BASELINE TRAVELS WITH THE EDIT. Left to itself the action reads
+    // getParam(), which poll() already moved to `value` — the inverse would
+    // then restore the new value and undo would do nothing at all.
+    auto *act = new SSetPluginParamAction( trackPath, slotIndex, paramId, value );
+    act->setPreviousValue( previousValue );
+    app.submitAction( act );
 
     if( gestureEnd ) app.automationRecorder().releaseControl();
 }

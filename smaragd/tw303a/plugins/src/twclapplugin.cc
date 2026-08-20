@@ -43,6 +43,8 @@
 
 #include "twclapmodule.h"
 
+#include "twclapeditor.h"
+
 #include "tw/core/twlog.h"
 
 #include <algorithm>
@@ -137,6 +139,7 @@ public:
 
     std::uint32_t reportedLatency() const override;
     bool supportsNativeEditor() const override { return hasGui_; }
+    std::unique_ptr<twPluginEditor> createEditor() override;   // proposal 33 M6
 
     twPluginCapabilities capabilities() const override { return caps_; }
     std::size_t          audioOutBusCount() const override { return outPortChans_.size(); }
@@ -174,6 +177,23 @@ private:
     static void          hostParamsRequestFlush( const clap_host_t * );
     static void          hostTailChanged( const clap_host_t * );
 
+    // clap.gui (proposal 33 M6). Every one of these is annotated [thread-safe]
+    // in gui.h, which is exactly why they only touch ATOMICS: the plugin may
+    // call request_resize from a worker while the host is polling, and taking
+    // guiMutex_ here would deadlock against the main thread, which already
+    // holds it while it is inside a call the plugin can answer with one of
+    // these.
+    static void hostGuiResizeHintsChanged( const clap_host_t * );
+    static bool hostGuiRequestResize( const clap_host_t *, std::uint32_t, std::uint32_t );
+    static bool hostGuiRequestShow( const clap_host_t * );
+    static bool hostGuiRequestHide( const clap_host_t * );
+    static void hostGuiClosed( const clap_host_t *, bool wasDestroyed );
+
+    // Everything the plugin's GUI has asked for since the previous call, and
+    // the main-thread params->flush() that collects it when nothing is
+    // rendering. Main thread only; called by twClapEditor::poll().
+    twEditorFeedback guiDrain( bool &guiWasDestroyed );
+
     // --- event plumbing ----------------------------------------------------
     struct ParamEdit {
         std::uint32_t id;
@@ -207,12 +227,14 @@ private:
     const clap_plugin_latency_t     *extLatency_    = nullptr;
     const clap_plugin_note_ports_t  *extNotePorts_  = nullptr;
     const clap_plugin_tail_t        *extTail_       = nullptr;
+    const clap_plugin_gui_t         *extGui_        = nullptr;
 
     // Host extensions we vend. Static-lifetime vtables: the plugin may keep the
     // pointer for as long as it lives, so they must not be members that move.
     static const clap_host_note_ports_t s_hostNotePorts;
     static const clap_host_params_t     s_hostParams;
     static const clap_host_tail_t       s_hostTail;
+    static const clap_host_gui_t        s_hostGui;
 
     twPluginIoLayout io_{};
     std::string      uid_, path_;
@@ -283,6 +305,48 @@ private:
     std::atomic<bool> restartRequested_{ false };
     std::atomic<bool> processRequested_{ false };
     std::atomic<bool> callbackRequested_{ false };
+
+    // --- native editor (proposal 33 M6) ------------------------------------
+    //
+    // THE LOCK, and why process() takes one at all. CLAP states of
+    // params->flush(): "This method must not be called concurrently to
+    // clap_plugin->process()", and annotates it [active ? audio-thread :
+    // main-thread]. Our engine has no regular audio callback for a plugin — a
+    // page is frozen on demand, on a revalidation worker — so "call it from the
+    // audio thread" is not a schedule the host can keep, and an instance stays
+    // ACTIVE from the first prepare() until teardown. Leaving it at that would
+    // mean a knob turned with the transport stopped never reaches the model,
+    // which is the commonest case there is.
+    //
+    // guiMutex_ supplies the property the spec actually asks for —
+    // non-concurrency — instead of the thread it suggests as the usual way to
+    // get it. process() takes it unconditionally; the main thread takes it with
+    // try_lock and simply comes back on the next 30 Hz tick, so a worker never
+    // waits longer than one flush() call and the GUI never waits at all.
+    //
+    // It is taken UNCONDITIONALLY rather than only while a window is open,
+    // because "is a window open" cannot be tested without a race against a
+    // process() already in flight. Uncontended, it costs a few tens of
+    // nanoseconds once per chunk of up to 4096 frames.
+    mutable std::mutex guiMutex_;
+
+    // Written by outEventsTryPush() — i.e. from inside a plugin call that
+    // already holds guiMutex_ — and drained by guiDrain() under the same lock.
+    // A vector rather than a ring for the reason the VST3 handler gives: a
+    // ring's overflow policy would have to be allowed to drop an End, and an
+    // unmatched Begin leaves an automation punch-in open forever.
+    std::vector<twEditorParamEdit> guiEdits_;
+
+    // Counted, not owned: the app owns the editor. Only so teardown can report
+    // the contract violation of outliving one — and so the out-event capture
+    // above can stay switched off, and the pre-M6 path byte-identical, while no
+    // window is open.
+    std::atomic<int>  liveEditors_{ 0 };
+    std::atomic<bool> guiFlushWanted_{ false };
+    std::atomic<bool> guiResizePending_{ false };
+    std::atomic<std::uint32_t> guiResizeW_{ 0 }, guiResizeH_{ 0 };
+    std::atomic<bool> guiCloseRequested_{ false };
+    std::atomic<bool> guiDestroyedByPlugin_{ false };
 };
 
 // --- host vtable ------------------------------------------------------------
@@ -302,6 +366,14 @@ const clap_host_tail_t twClapPlugin::s_hostTail = {
     &twClapPlugin::hostTailChanged,
 };
 
+const clap_host_gui_t twClapPlugin::s_hostGui = {
+    &twClapPlugin::hostGuiResizeHintsChanged,
+    &twClapPlugin::hostGuiRequestResize,
+    &twClapPlugin::hostGuiRequestShow,
+    &twClapPlugin::hostGuiRequestHide,
+    &twClapPlugin::hostGuiClosed,
+};
+
 const void *twClapPlugin::hostGetExtension( const clap_host_t *, const char *id )
 {
     // Only what we genuinely implement (proposal 37 §5.2). Claiming an
@@ -316,6 +388,12 @@ const void *twClapPlugin::hostGetExtension( const clap_host_t *, const char *id 
         return &s_hostParams;
     if( std::strcmp( id, CLAP_EXT_TAIL ) == 0 )
         return &s_hostTail;
+    // clap.gui is vended UNCONDITIONALLY, not only while a window is open: a
+    // plugin caches host extension pointers at init() (the spec allows it to,
+    // and most do), so answering "no" now and "yes" later would leave it
+    // permanently unable to request a resize or report that it closed itself.
+    if( std::strcmp( id, CLAP_EXT_GUI ) == 0 )
+        return &s_hostGui;
     return nullptr;
 }
 
@@ -352,8 +430,84 @@ void twClapPlugin::hostParamsRequestFlush( const clap_host_t *h )
     // "Please call params.flush() soon." setParam() already flushes when the
     // plugin is inactive and queues an event when it is active, so the honest
     // response is to note it; a flush from THIS thread could race process().
-    if( h && h->host_data )
-        ( (twClapPlugin *)h->host_data )->callbackRequested_.store( true, std::memory_order_release );
+    //
+    // Since M6 there is one caller that DOES act on it: guiDrain(), on the main
+    // thread and under guiMutex_. That is how a knob turned in a plugin's own
+    // window reaches the host while nothing is rendering — see guiMutex_'s
+    // comment for why the lock, and not the annotated thread, is the guarantee.
+    if( h && h->host_data ) {
+        twClapPlugin *self = (twClapPlugin *)h->host_data;
+        self->callbackRequested_.store( true, std::memory_order_release );
+        self->guiFlushWanted_.store( true, std::memory_order_release );
+    }
+}
+
+// --- clap.gui host half (proposal 33 M6) ------------------------------------
+//
+// All five RECORD and nothing else, exactly as the request_* callbacks above
+// do. They are [thread-safe] by annotation, so they may not take guiMutex_ —
+// the main thread holds it while it is inside a plugin call that can answer
+// with one of these, and std::mutex is not recursive.
+
+void twClapPlugin::hostGuiResizeHintsChanged( const clap_host_t * )
+{
+    // We do not cache resize hints — constrain() asks adjust_size() at the
+    // moment of a drag — so there is nothing to invalidate.
+}
+
+bool twClapPlugin::hostGuiRequestResize( const clap_host_t *h, std::uint32_t w,
+                                         std::uint32_t hgt )
+{
+    if( !h || !h->host_data || w == 0 || hgt == 0 )
+        return false;
+    twClapPlugin *self = (twClapPlugin *)h->host_data;
+    if( self->liveEditors_.load( std::memory_order_acquire ) == 0 )
+        return false;   // nobody is holding a window to resize
+    // Coalesced to the LAST request, like the VST3 frame's: an intermediate
+    // size is never worth a repaint. Width and height are two stores rather
+    // than one, so a reader could in principle see a mixed pair — it cannot
+    // here, because the only writer is the plugin's GUI thread and the flag is
+    // stored last with release ordering, after both.
+    self->guiResizeW_.store( w, std::memory_order_relaxed );
+    self->guiResizeH_.store( hgt, std::memory_order_relaxed );
+    self->guiResizePending_.store( true, std::memory_order_release );
+    // TRUE means "accepted, and the host will not call set_size()", which is
+    // exactly what happens: the poll resizes our container and the plugin sees
+    // the result. Returning false would make a plugin that CAN resize refuse to
+    // grow at all.
+    return true;
+}
+
+bool twClapPlugin::hostGuiRequestShow( const clap_host_t *h )
+{
+    // The window is already shown for as long as an editor exists, and creating
+    // one from here is not something this layer can do — the app owns windows.
+    // Answering honestly is better than a true that changes nothing.
+    return h && h->host_data &&
+           ( (twClapPlugin *)h->host_data )->liveEditors_.load( std::memory_order_acquire ) != 0;
+}
+
+bool twClapPlugin::hostGuiRequestHide( const clap_host_t *h )
+{
+    if( !h || !h->host_data ) return false;
+    twClapPlugin *self = (twClapPlugin *)h->host_data;
+    if( self->liveEditors_.load( std::memory_order_acquire ) == 0 )
+        return false;
+    self->guiCloseRequested_.store( true, std::memory_order_release );
+    return true;
+}
+
+void twClapPlugin::hostGuiClosed( const clap_host_t *h, bool wasDestroyed )
+{
+    if( !h || !h->host_data ) return;
+    twClapPlugin *self = (twClapPlugin *)h->host_data;
+    // was_destroyed carries an OBLIGATION, not just news: gui.h requires the
+    // host to call gui->destroy() to acknowledge it, and requires it not to
+    // hide() a window that is already gone. twClapEditor::detach() needs both
+    // facts, and this flag is how it gets them.
+    if( wasDestroyed )
+        self->guiDestroyedByPlugin_.store( true, std::memory_order_release );
+    self->guiCloseRequested_.store( true, std::memory_order_release );
 }
 
 void twClapPlugin::hostTailChanged( const clap_host_t * )
@@ -411,9 +565,64 @@ bool twClapPlugin::outEventsTryPush( const clap_output_events_t *list,
     if( !list || !h )
         return true;
     twClapPlugin *self = (twClapPlugin *)list->ctx;
-    if( !self || !self->curEventsOut_ )
+    if( !self )
         return true;
     if( h->space_id != CLAP_CORE_EVENT_SPACE_ID )
+        return true;
+
+    // NATIVE EDITOR CAPTURE (proposal 33 M6), and it runs BEFORE the twEventOut
+    // branch below because it is not the same feature: this is how a knob the
+    // user turned in the plugin's OWN window reaches the host, and it has to
+    // work on the legacy process() overload — which supplies no twEventOut at
+    // all — as well as on params->flush(), which supplies none either.
+    //
+    // Gated on liveEditors_ so that with no window open not one instruction of
+    // this exists on the render path, which is what keeps every golden and
+    // every pre-M6 measurement exactly as it was.
+    //
+    // No lock: every caller of out_events is inside process() or flush(), and
+    // both of those hold guiMutex_ for their whole duration.
+    if( self->liveEditors_.load( std::memory_order_acquire ) != 0 ) {
+        switch( h->type ) {
+        case CLAP_EVENT_PARAM_VALUE: {
+            const clap_event_param_value_t *p = (const clap_event_param_value_t *)h;
+            // THE MIRROR, and it is the only thing the host has to DO. Unlike
+            // VST3 there is no controller to write back to and no ring to push:
+            // the GUI and the DSP are one instance, so the audio has already
+            // followed. All that is missing is for getParam() to agree.
+            double prev = p->value;
+            for( std::size_t i = 0; i < self->params_.size(); ++i ) {
+                if( self->params_[i].id == (std::uint32_t)p->param_id ) {
+                    // READ BEFORE WRITE. This one load is the host's only
+                    // chance at the pre-edit value; see twplugineditor.h.
+                    prev = self->mirror_[i].load( std::memory_order_acquire );
+                    self->mirror_[i].store( p->value, std::memory_order_release );
+                    break;
+                }
+            }
+            twEditorParamEdit e;
+            e.paramId       = (std::uint32_t)p->param_id;
+            e.value         = p->value;
+            e.phase         = twEditorGesture::Change;
+            e.previousValue = prev;
+            self->guiEdits_.push_back( e );
+            break;
+        }
+        case CLAP_EVENT_PARAM_GESTURE_BEGIN:
+        case CLAP_EVENT_PARAM_GESTURE_END: {
+            const clap_event_param_gesture_t *g = (const clap_event_param_gesture_t *)h;
+            self->guiEdits_.push_back( twEditorParamEdit{
+                (std::uint32_t)g->param_id, 0.0,
+                h->type == CLAP_EVENT_PARAM_GESTURE_BEGIN ? twEditorGesture::Begin
+                                                          : twEditorGesture::End } );
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    if( !self->curEventsOut_ )
         return true;
 
     twEvent e;
@@ -561,7 +770,9 @@ bool twClapPlugin::init( const std::string &path, const std::string &uid )
             plugin_->get_extension( plugin_, CLAP_EXT_NOTE_PORTS );
         extTail_ = (const clap_plugin_tail_t *)
             plugin_->get_extension( plugin_, CLAP_EXT_TAIL );
-        hasGui_ = plugin_->get_extension( plugin_, CLAP_EXT_GUI ) != nullptr;
+        extGui_ = (const clap_plugin_gui_t *)
+            plugin_->get_extension( plugin_, CLAP_EXT_GUI );
+        hasGui_ = extGui_ != nullptr;
     }
 
     readPortLayout();
@@ -597,6 +808,20 @@ bool twClapPlugin::init( const std::string &path, const std::string &uid )
 
 twClapPlugin::~twClapPlugin()
 {
+    // A live editor at this point is an APP BUG, not something to paper over:
+    // the contract (twplugineditor.h) is that the editor is destroyed before the
+    // plugin that produced it, and the app enforces it by closing the window on
+    // slot::destroyed and on pluginReloaded. We cannot destroy it from here —
+    // the app owns the unique_ptr — so the honest thing is to say so loudly. Its
+    // gui_ pointer is about to reference a destroyed instance and, once module_
+    // drops below, an unloaded DSO.
+    if( liveEditors_.load( std::memory_order_acquire ) != 0 ) {
+        TW_LOGE( "plugins",
+                 "[clap] plugin torn down with %d native editor(s) still open — the "
+                 "editor must be destroyed BEFORE the plugin (proposal 33).",
+                 liveEditors_.load( std::memory_order_relaxed ) );
+    }
+
     {
         std::lock_guard<std::mutex> lock( hostMutex_ );
         deactivate();
@@ -936,6 +1161,84 @@ void twClapPlugin::setParam( std::uint32_t id, double v )
     }
 }
 
+// --- native editor (proposal 33 M6) -----------------------------------------
+
+std::unique_ptr<twPluginEditor> twClapPlugin::createEditor()
+{
+    if( !plugin_ || !extGui_ )
+        return nullptr;
+
+    // ONE editor per instance. gui.h has no notion of a second view, and the
+    // whole extension is stated in terms of "the" GUI: create()/destroy() take
+    // no handle, so two editors could not tell each other's windows apart.
+    if( liveEditors_.load( std::memory_order_acquire ) != 0 ) {
+        TW_LOGW( "plugins", "[clap] an editor is already open on this instance" );
+        return nullptr;
+    }
+
+    liveEditors_.fetch_add( 1, std::memory_order_acq_rel );
+
+    // Anything the plugin queued before this moment is not a user gesture — it
+    // is setup traffic from a flush we did while no window existed — so the
+    // queue starts empty. Under guiMutex_ because a worker may be inside
+    // process() right now.
+    {
+        std::lock_guard<std::mutex> lk( guiMutex_ );
+        guiEdits_.clear();
+    }
+    guiResizePending_.store( false, std::memory_order_release );
+    guiCloseRequested_.store( false, std::memory_order_release );
+    guiDestroyedByPlugin_.store( false, std::memory_order_release );
+
+    // Capturing `this` is safe for exactly as long as the contract above holds
+    // — the editor must not outlive the plugin — and the destructor reports it
+    // loudly when it does not.
+    return std::make_unique<twClapEditor>(
+        plugin_, extGui_, uid_,
+        [this]( bool &destroyed ) { return guiDrain( destroyed ); },
+        [this]() { liveEditors_.fetch_sub( 1, std::memory_order_acq_rel ); } );
+}
+
+twEditorFeedback twClapPlugin::guiDrain( bool &guiWasDestroyed )
+{
+    twEditorFeedback fb;
+
+    // The atomics first, and outside the lock: they are recorded by callbacks
+    // that may not take it, and none of them depends on the flush below.
+    guiWasDestroyed = guiDestroyedByPlugin_.exchange( false, std::memory_order_acq_rel );
+    fb.closeRequested = guiCloseRequested_.exchange( false, std::memory_order_acq_rel );
+    if( guiResizePending_.exchange( false, std::memory_order_acq_rel ) ) {
+        fb.resized = true;
+        fb.newSize = twEditorSize{ (int)guiResizeW_.load( std::memory_order_relaxed ),
+                                   (int)guiResizeH_.load( std::memory_order_relaxed ) };
+    }
+    if( restartRequested_.exchange( false, std::memory_order_acq_rel ) )
+        fb.restartRequested = true;
+
+    // try_lock, never lock: a render may be in flight, and a GUI poll that
+    // blocked on it would freeze the plugin's window for the length of a page
+    // freeze. Coming back in 33 ms costs nothing — the edits are still queued.
+    std::unique_lock<std::mutex> lk( guiMutex_, std::try_to_lock );
+    if( !lk.owns_lock() )
+        return fb;
+
+    // THE FLUSH. This is what makes a CLAP knob work with the transport
+    // stopped: nothing is calling process(), so out_events has no other way
+    // out of the plugin. Only when the plugin asked (clap_host_params->
+    // request_flush), which is the protocol, and only while a window is open.
+    if( guiFlushWanted_.exchange( false, std::memory_order_acq_rel ) &&
+        extParams_ && extParams_->flush ) {
+        // Our own pending host->plugin edits ride along; they would otherwise
+        // wait for a render too. drainEditsIntoEvents() fills events_/
+        // eventPtrs_, which process() also uses — hence the same lock.
+        drainEditsIntoEvents();
+        extParams_->flush( plugin_, &inEvents_, &outEvents_ );
+    }
+
+    fb.edits.swap( guiEdits_ );
+    return fb;
+}
+
 void twClapPlugin::pushEdit( std::uint32_t id, double v )
 {
     const std::uint32_t w = ringWrite_.load( std::memory_order_relaxed );
@@ -1251,6 +1554,12 @@ void twClapPlugin::process( const float *const *in, float *const *const *outBuse
         passThrough();
         return;
     }
+
+    // NON-CONCURRENCY WITH params->flush(), which CLAP requires and which this
+    // engine cannot supply by scheduling — see guiMutex_'s declaration. Held
+    // for the whole call, so outEventsTryPush() (which the plugin calls from
+    // inside process()) can append to guiEdits_ without a lock of its own.
+    std::lock_guard<std::mutex> guiLock( guiMutex_ );
 
     drainEditsIntoEvents();
     appendHostEvents( hostEvents, nframes );

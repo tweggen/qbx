@@ -72,10 +72,12 @@
     <!-- THE FALLBACK DECISION (proposal 33 D3). The slider list is not
          reachable alongside a native GUI, so which editor a double-click opens
          is the only thing standing between a plugin that misreports an editor
-         and a user with no way to edit it at all. A CLAP plugin has no native
-         editor today (M6 is unwritten), so an Active CLAP slot must resolve to
-         the GENERIC editor - and if M6 ever makes it resolve to "native"
-         without the window working, this line is what says so. -->
+         and a user with no way to edit it at all. tw.test.clap.stereoskew has no
+         clap.gui, so this Active CLAP slot must resolve to the GENERIC editor.
+         Since proposal 33 M6 a CLAP plugin CAN answer "native"; that third
+         answer is gated by plugin_native_editor over the tw.test.clap.gui
+         fixture, and this line is what says so if the wrong plugins start
+         claiming it. -->
     <assert-plugin-editor-kind trackIndex="0" slotIndex="0" expect="generic"/>
 
     <!-- 2. Drive the editor's slider. The value LABEL must show the plugin's own

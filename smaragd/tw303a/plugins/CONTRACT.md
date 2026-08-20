@@ -960,3 +960,65 @@ Known debt:
         value for the whole chunk. No `setParamCurves` change is needed to
         express "held", and a one-frame window cannot contain a breakpoint or a
         ramp point, so the constancy is by construction.
+
+## Native editors (proposal 33)
+
+`twPluginEditor` (`tw/plugins/twplugineditor.h`) is the format-neutral ABI a
+plugin's OWN interface crosses. `twVst3Editor` (M3) and `twClapEditor` (M6)
+implement it; both live in `plugins/src/` for the reason invariant 4 gives — a
+public header naming `IPlugView` or `clap_plugin_gui_t` would change shape with
+`TW_HAVE_VST3` / `TW_HAVE_CLAP` and give this library and its consumers
+different views of the same type.
+
+48. **A GUI EDIT'S PRE-EDIT VALUE IS PART OF THE EDIT.**
+    `twEditorParamEdit::previousValue` is filled by the backend one instruction
+    before it overwrites the mirror, because that is the last moment the old
+    value exists anywhere. `poll()` applies each Change to the mirror and the
+    DSP on its way through — the whole point, so a knob is audible whatever the
+    host does — which means a host that asks `getParam()` afterwards gets the
+    NEW value and builds an inverse that restores what it just set. Undo becomes
+    a silent no-op. That shipped in M5 and `qxa.plugin_native_editor` caught it.
+
+49. **CLAP EDITS ARRIVE THROUGH `out_events`, ON WHATEVER THREAD CALLED
+    `process()`, AND `guiMutex_` IS WHAT MAKES THE OTHER ROUTE LEGAL.** Unlike
+    VST3's `performEdit` (a UI-thread callback), a CLAP plugin reports a GUI
+    edit as `CLAP_EVENT_PARAM_VALUE` / `PARAM_GESTURE_BEGIN` / `_END` in
+    `clap_process::out_events`, i.e. from a revalidation worker — or, when
+    nothing is rendering, only after the host answers
+    `clap_host_params->request_flush` by calling `params->flush()`.
+
+    CLAP forbids `flush()` concurrent with `process()` and annotates it
+    `[active ? audio-thread : main-thread]`. This engine freezes pages on demand
+    on worker threads and keeps an instance ACTIVE from the first `prepare()`
+    until teardown, so "call it from the audio thread" is not a schedule the
+    host can keep — and without the flush, a knob turned with the transport
+    stopped (the commonest case there is) never reaches the model at all.
+    `twClapPlugin::guiMutex_` supplies the property the spec actually asks for,
+    non-concurrency, instead of the thread it suggests as the usual way to get
+    it: `process()` takes it unconditionally, `guiDrain()` takes it with
+    `try_lock` and comes back on the next 30 Hz tick. A worker therefore waits
+    at most one `flush()` call and the GUI never waits at all. It is taken
+    unconditionally rather than only while a window is open because "is a window
+    open" cannot be tested without racing a `process()` already in flight.
+
+    Consequences a change must preserve: `outEventsTryPush()` appends to
+    `guiEdits_` with NO lock of its own (its callers already hold `guiMutex_`),
+    and the five `clap_host_gui` callbacks touch ONLY atomics — they are
+    `[thread-safe]` by annotation and the main thread holds `guiMutex_` while
+    inside calls that can answer with one of them, so taking it there would
+    deadlock on a non-recursive mutex.
+
+50. **THE OUT-EVENT CAPTURE IS GATED ON `liveEditors_`.** With no window open,
+    not one instruction of it runs on the render path — which is what keeps
+    every golden and every pre-M6 measurement exactly as it was. The same
+    counter is what lets the destructor report the contract violation of an
+    editor outliving its plugin, and what refuses a second editor on one
+    instance (`clap_plugin_gui` has no notion of two views: `create()` and
+    `destroy()` take no handle).
+
+51. **A CLAP EDITOR NEEDS NO MIRROR-TO-DSP PUSH, AND MUST NOT MAKE ONE.** The
+    GUI and the DSP are ONE instance, so the audio has already followed; all the
+    host owes is the mirror, so `getParam()` does not disagree with what is
+    playing. VST3 is the opposite case — controller and processor are separate
+    and `inputParameterChanges` is the only route — which is why
+    `twVst3Plugin::applyGuiEdit` pushes the ring and the CLAP path does not.
