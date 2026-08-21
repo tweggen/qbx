@@ -61,7 +61,7 @@ SApplyResult SMoveClipAction::apply(SProject *project)
         return {false, nullptr};
     }
     SLink *link = srcTrack->childAt(clipIdx);
-    if (!link || (link->getSObject().isPathContainer())) {
+    if (!link || (link->getSObject().isLane())) {
         return {false, nullptr};        // missing, or it's a track lane not a clip
     }
 

@@ -58,7 +58,7 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
         return {false, nullptr};
     }
     SLink *srcLink = srcTrack->childAt( srcIdx );
-    if( !srcLink || (srcLink->getSObject().isPathContainer() ) ) {
+    if( !srcLink || (srcLink->getSObject().isLane() ) ) {
         return {false, nullptr};   // missing, or a nested track lane (not a clip)
     }
 

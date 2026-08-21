@@ -88,7 +88,7 @@ inline bool findRec( SProject *project, SObject *obj, offset_t pos,
             if( !lk ) continue;
             SObject &child = lk->getSObject();
             const offset_t rel = pos - lk->getStartTime();
-            if( child.isPathContainer() ) {
+            if( child.isLane() ) {
                 // A lane or a folder: no end, so no span test. Its own start
                 // time still shifts the domain.
                 found = findRec( project, &child, rel, wanted,

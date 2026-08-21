@@ -321,7 +321,7 @@ void SMidiOutPump::collectTracks( SObject *node, bool anySolo,
         for( SLink *lk : cur->childLinks() ) {
             if( !lk ) continue;
             SObject *child = &lk->getSObject();
-            if( !child->isPathContainer() ) continue;
+            if( !child->isLane() ) continue;
             STrack *track = dynamic_cast<STrack *>( child );
             if( track ) {
                 // A muted or solo-excluded track sends nothing, by the same

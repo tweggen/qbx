@@ -728,7 +728,7 @@ void SStdMixerView::ctSplitSample()
     int nTargets = 0;
     for( const QList<int> &p : paths ) {
         SLink *lk = splacements::placementAt( mixer, p );
-        if( !lk || lk->getSObject().isPathContainer() ) continue;
+        if( !lk || lk->getSObject().isLane() ) continue;
         offset_t startTime = lk->getStartTime();
         length_t fullDur = lk->getSObject().getDurationBlocking();
         offset_t inObjOffset = splitTime - startTime;

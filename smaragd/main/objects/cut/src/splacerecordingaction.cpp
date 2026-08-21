@@ -68,7 +68,7 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     QList<Column> columns;
     for( int i = 0; i < lane->childCount(); ++i ) {
         SLink *lk = lane->childAt( i );
-        if( !lk || lk->getSObject().isPathContainer() ) continue;  // sub-track
+        if( !lk || lk->getSObject().isLane() ) continue;  // sub-track
         if( !lk->getSObject().hasDuration() ) continue;
         const offset_t s = lk->getStartTime();
         const length_t d = lk->getSObject().getDurationBlocking();

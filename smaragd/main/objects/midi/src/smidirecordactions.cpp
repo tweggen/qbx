@@ -62,7 +62,7 @@ std::vector<Column> eventColumns( SObject *lane, offset_t from, offset_t to )
     if( !lane ) return out;
     for( int i = 0; i < lane->childCount(); ++i ) {
         SLink *lk = lane->childAt( i );
-        if( !lk || lk->getSObject().isPathContainer() ) continue;   // sub-track
+        if( !lk || lk->getSObject().isLane() ) continue;   // sub-track
         SObject &obj = lk->getSObject();
         if( !obj.hasDuration() ) continue;
         if( obj.contentKind() != SContentKind::Event ) continue;
@@ -112,7 +112,7 @@ SApplyResult SAddMidiTakeAction::apply( SProject *project )
     const int  idx  = lanePath.takeLast();
     SObject   *lane = splacements::laneAt( mixer, lanePath );
     SLink     *link = lane ? lane->childAt( idx ) : nullptr;
-    if( !link || link->getSObject().isPathContainer() ) {
+    if( !link || link->getSObject().isLane() ) {
         qWarning() << "add-midi-take: no clip at" << qualifiedToString( pathRoot_, clipPath_ );
         return { false, nullptr };
     }

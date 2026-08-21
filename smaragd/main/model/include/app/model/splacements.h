@@ -14,7 +14,9 @@
  * I may place clips on" — every operation that followed (childAt,
  * indexOfChild, childCount, setParent, setVolume, …) is plain SObject/SLink
  * API. Those casts were the objects-slice cycle. Lane-ness is expressed by
- * SObject::isPathContainer() (STrack and SStdMixer return true), so this
+ * SObject::isLane() (STrack and SStdMixer return true; proposal 41 D3 split
+ * it from isPathContainer(), which merely scopes generic path descent — a
+ * fragment answers the latter true and this one false), so this
  * header names no concrete types and lives in the model.
  *
  * Actions that genuinely mutate the mixer's lane LIST (insertTrack,
@@ -35,7 +37,7 @@ inline SObject *rootContainer( SProject *project )
 inline SObject *laneAt( SObject *root, const QList<int> &path )
 {
     SObject *obj = strackpath::resolveByPath( root, path );
-    return ( obj && obj->isPathContainer() ) ? obj : nullptr;
+    return ( obj && obj->isLane() ) ? obj : nullptr;
 }
 
 // --- Root-qualified resolution (proposal 09 D21) ----------------------------
@@ -72,7 +74,7 @@ inline SLink *placementAt( SObject *root, const QList<int> &path )
     int idx = lanePath.takeLast();
     SObject *lane = laneAt( root, lanePath );
     SLink *lk = lane ? lane->childAt( idx ) : nullptr;
-    if( !lk || lk->getSObject().isPathContainer() ) return nullptr;
+    if( !lk || lk->getSObject().isLane() ) return nullptr;
     return lk;
 }
 

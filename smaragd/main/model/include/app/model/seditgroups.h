@@ -29,7 +29,7 @@ inline void membersOf( SObject *root, int id, QList<SObject *> &out )
     if( !root || id == 0 ) return;
     for( SLink *lk : root->childLinks() ) {
         SObject &o = lk->getSObject();
-        if( !o.isPathContainer() ) continue;
+        if( !o.isLane() ) continue;
         if( o.getEditGroup() == id ) out.append( &o );
         membersOf( &o, id, out );
     }
@@ -41,7 +41,7 @@ inline void collectSubtreeLanes( SObject *lane, QList<SObject *> &out )
     if( !lane ) return;
     out.append( lane );
     for( SLink *lk : lane->childLinks() ) {
-        if( lk->getSObject().isPathContainer() )
+        if( lk->getSObject().isLane() )
             collectSubtreeLanes( &lk->getSObject(), out );
     }
 }
@@ -53,7 +53,7 @@ inline int maxEditGroupId( SObject *root )
     if( !root ) return 0;
     for( SLink *lk : root->childLinks() ) {
         SObject &o = lk->getSObject();
-        if( o.isPathContainer() ) {
+        if( o.isLane() ) {
             if( o.getEditGroup() > maxId ) maxId = o.getEditGroup();
             int sub = maxEditGroupId( &o );
             if( sub > maxId ) maxId = sub;
@@ -67,7 +67,7 @@ inline SLink *correspondingClip( SObject *lane, offset_t startTime,
                                  length_t duration )
 {
     for( SLink *lk : lane->childLinks() ) {
-        if( lk->getSObject().isPathContainer() ) continue;
+        if( lk->getSObject().isLane() ) continue;
         if( !lk->getSObject().hasDuration() ) continue;
         if( lk->getStartTime() == startTime
             && lk->getSObject().getDuration() == duration )
@@ -93,7 +93,7 @@ inline QList<QList<int>> expandClipPaths( SProject *project,
     int idx = lanePath.takeLast();
     SObject *lane = splacements::laneAt( root, lanePath );
     SLink *anchor = lane ? lane->childAt( idx ) : nullptr;
-    if( !lane || !anchor || anchor->getSObject().isPathContainer() ) return out;
+    if( !lane || !anchor || anchor->getSObject().isLane() ) return out;
     const int group = lane->getEditGroup();
     if( group == 0 ) return out;
 

@@ -37,7 +37,7 @@ void collectMaterial( SObject *container, QList<Span> &out )
     for( SLink *lk : container->childLinks() ) {
         if( !lk ) continue;
         SObject &child = lk->getSObject();
-        if( child.isPathContainer() ) {          // a nested lane: recurse
+        if( child.isLane() ) {          // a nested lane: recurse
             collectMaterial( &child, out );
             continue;
         }
@@ -215,7 +215,7 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
                     parent = container; ownLink = lk; return true;
                 }
                 SObject &child = lk->getSObject();
-                if( child.isPathContainer() && findLink( &child ) ) return true;
+                if( child.isLane() && findLink( &child ) ) return true;
             }
             return false;
         };

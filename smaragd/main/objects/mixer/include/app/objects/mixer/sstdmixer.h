@@ -70,6 +70,9 @@ public:
     // The mixer holds lanes; path search and the placement service treat it
     // as a container (see SObject::isPathContainer).
     virtual bool isPathContainer() const override { return true; }
+    // The root mixer is itself a lane (proposal 41 D3): it carries solo,
+    // mute and edit-group state exactly as a track does.
+    virtual bool isLane() const override { return true; }
     // Generic view of the selected track (see SObject::activeLane).
     virtual SObject *activeLane() const override;
     virtual SLink *getTrackAt( int idx );

@@ -67,7 +67,7 @@ void walk( SObject *node, STrack *parentTrack, int depth, TreeInfo &info )
     for( SLink *lk : node->childLinks() ) {
         if( !lk ) continue;
         SObject *child = &lk->getSObject();
-        if( !child->isPathContainer() ) continue;
+        if( !child->isLane() ) continue;
         STrack *t = dynamic_cast<STrack *>( child );
         if( t ) {
             info.parent[t] = parentTrack;

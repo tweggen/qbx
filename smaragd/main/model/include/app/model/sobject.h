@@ -213,12 +213,45 @@ public:
     { (void) clipRel; (void) out; return false; }
 
     /**
-     * True for containers the index-path search may descend into (track
-     * lanes). Path RESOLUTION follows explicit indices and needs no flag;
-     * this only scopes the reverse search (pathOf) exactly as the historical
-     * dynamic_cast<STrack*> did. STrack returns true.
+     * True for containers the index-path search may descend into (proposal
+     * 41 D3: PATH DESCENT, not lane-ness). Path RESOLUTION follows explicit
+     * indices and needs no flag; this only scopes the reverse search
+     * (pathOf) exactly as the historical dynamic_cast<STrack*> did, and it
+     * is also the general "may this be windowed as an asset / does this
+     * childLink hold a nested container rather than a leaf clip" test used
+     * throughout objects/track, objects/cut and objects/mixer.
+     *
+     * Until proposal 41 M1 every override of this was ALSO a lane (STrack,
+     * SStdMixer), so callers that actually wanted "is this a lane" (solo,
+     * mute, edit groups, arm, the active-lane map) read this flag too, and
+     * the two meanings agreed by accident. M1 introduces the first
+     * container that is NOT a lane (SLaneFragment: a path container with no
+     * track identity — no fader, no inserts, no instrument, no solo, no
+     * arm), so the accident stops holding. Lane STATE lives on isLane()
+     * below; this flag stays purely about tree descent / "is this a
+     * container, not a leaf". A lane answers both true; a fragment answers
+     * this one true and isLane() false.
      */
     virtual bool isPathContainer() const { return false; }
+
+    /**
+     * True for objects that carry LANE state: solo, mute, edit-group
+     * membership, arm-for-recording, and the active-lane / playhead-map
+     * entries that key off a lane rather than off any path container
+     * (proposal 41 D3). Every lane is a path container (it must be
+     * descended into to resolve its own children's paths), but not every
+     * path container is a lane — a fragment (proposal 41 M1) holds clip
+     * links and answers isPathContainer() true, yet has no track identity
+     * at all, so it must never be consulted for solo/mute/edit-group/arm:
+     * doing so would let a fragment-internal flag darken lanes across the
+     * whole project the fragment happens to be placed into.
+     *
+     * Defaults false. STrack and SStdMixer override it true, exactly as
+     * they override isPathContainer() true — the two happened to answer
+     * identically before proposal 41 and are now two separate questions
+     * asked for two separate reasons.
+     */
+    virtual bool isLane() const { return false; }
 
     /**
      * The kind of material this object carries (proposal 37 D8b). Audio by

@@ -1761,7 +1761,7 @@ void STrack::refreshClipGainCurves()
     for( SLink *lk : childLinks() ) {
         if( !lk || !lk->hasStartTime() ) continue;
         SObject *obj = &lk->getSObject();
-        if( obj->isPathContainer() ) continue;          // a nested lane, not a clip
+        if( obj->isLane() ) continue;          // a nested lane, not a clip
         if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
         cpTrackMix_->setClipGainCurve(
             lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );

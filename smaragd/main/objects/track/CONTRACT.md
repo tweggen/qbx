@@ -177,9 +177,12 @@ Invariants (normative detail: CLIP_MODEL.md):
 14. **The RUN BARRIER finds its instrument tracks by WALKING, not by a
    registry** (proposal 37 P3c). `sinstruments::collectInstrumentTracks(root,
    out)` (`app/objects/track/sinstrumenttracks.h`) is a depth-first walk of the
-   LANE tree — `isPathContainer()` only, exactly as `ssolo`'s walks do, so a
-   folder track's own instrument and a leaf's are both found. It lives here and
-   not in the shell because it is a fact about how a track tree is shaped.
+   LANE tree — `isLane()` only (proposal 41 D3 split lane-state from the more
+   general `isPathContainer()`), exactly as `ssolo`'s walks do, so a
+   folder track's own instrument and a leaf's are both found, and a fragment
+   (which is a path container but never a lane) is never descended into. It
+   lives here and not in the shell because it is a fact about how a track
+   tree is shaped.
    Deliberately not a maintained list: a registry would have to be kept in step
    with insert/remove/reorder-plugin, the undo of each, track add/remove/
    reparent and project load — nine places, every one of them a chance to hand

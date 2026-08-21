@@ -20,7 +20,23 @@ sobjectpath.h (generic index-path helpers; SObject::isPathContainer scopes
 the reverse search exactly as the old STrack cast did), and splacements.h
 (the placement service: rootContainer/laneAt/placementAt — the generic
 resolution+validation that action code uses instead of STrack/SStdMixer
-casts; lane-ness is isPathContainer, the active lane is activeLane).
+casts; lane-ness is isLane(), the active lane is activeLane).
+
+**isPathContainer() vs isLane() (proposal 41 D3, split in M0).** Two
+questions that agreed by accident because, until M1, the only two overrides
+(STrack, SStdMixer) answered both true. `isPathContainer()` is PATH DESCENT
+only — "does the index-path search / the placement service descend into me,
+and may I be windowed as an asset" — and stays the predicate `sobjectpath.h`
+and the asset-creation actions use. `isLane()` is LANE STATE — "do I carry
+solo, mute, edit-group membership and arm-for-recording" — and is what
+`ssolorules.h`, `seditgroups.h`, `splayheadmap.h`, `splacements.h`'s
+`laneAt`/`placementAt`, and every action that resolves a clip placement
+(walking a lane's childLinks to tell a nested lane from a leaf clip) now
+consult instead. Proposal 41 M1's `SLaneFragment` is the first type to
+answer them differently: a path container (it may be windowed and its
+children path-resolved) that is emphatically not a lane (no fader, no
+inserts, no instrument, no solo, no arm) — see `plan/proposed/
+41_LANE_FRAGMENTS.md` D3.
 volumeDbSnapshot() is the thread-safe volume read (it holds volumeMutex_,
 which a bare getVolume() does not). Proposal 39 M2 left it with NO CALLER —
 it deleted the paint-time fader multiply from drawObjectWaveform — and kept

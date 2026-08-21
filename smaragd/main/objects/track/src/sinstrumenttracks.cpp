@@ -16,7 +16,7 @@ void collectRec( SObject *node, std::vector<STrack *> &out )
         SObject *child = &lk->getSObject();
         // Lanes only. A clip carries no plugin chain and a take stack is not a
         // lane, so descending into them would only cost time.
-        if( !child->isPathContainer() ) continue;
+        if( !child->isLane() ) continue;
         if( STrack *tr = dynamic_cast<STrack *>( child ) ) {
             if( tr->instrumentSlot() ) out.push_back( tr );
         }

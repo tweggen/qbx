@@ -457,6 +457,10 @@ public:
 
     // Path search may descend into track lanes (see SObject::isPathContainer).
     virtual bool isPathContainer() const override { return true; }
+    // A track IS a lane (proposal 41 D3): it carries solo, mute, edit-group
+    // membership and arm state, unlike a fragment (isPathContainer() true,
+    // isLane() false).
+    virtual bool isLane() const override { return true; }
     virtual bool hasDuration() const override;
     virtual length_t getDuration() const override;
 
