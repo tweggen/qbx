@@ -91,9 +91,20 @@ The alternative (share the fragment, give each placement its own cut) yields N
 windows that can quietly drift apart, N captures, and no well-defined notion of
 "the same". Rejected.
 
-**Consequence: the escape hatch must exist.** `make-unique` clones the cut and
-repoints one link. Without it the fill-here-and-there case forces the user out
-of the feature entirely.
+**Sharing is the INVARIANT and is never broken.** One asset, N placements, edit
+any and all change — the Unix hard-link model, and the entire point of the
+feature. Nothing in this proposal un-shares an asset.
+
+**A variation is therefore a NEW ASSET, not an un-shared placement.** The
+timeline gesture ("Duplicate asset here") is a convenience that MINTS a new
+asset — deep-copying the fragment, since D2 owns the fragment through its cut —
+and repoints THAT ONE placement to it. The original asset and every other
+placement are untouched, because they were never the thing being edited.
+
+Read the other way round it is a defect: "make this placement unique" implies
+an asset whose instances can diverge, which is exactly what an asset is not.
+The implementation is the same deep copy either way; the mental model is not,
+and it is the mental model that decides what the next verb does.
 
 ### D3. `isPathContainer()` currently means two things and must be split
 
@@ -182,7 +193,7 @@ for one slot.
 | Verb | Means |
 |---|---|
 | **Pack** / **Unpack** | same-lane clips ⇄ a fragment in the asset bin, placed by reference. THIS PROPOSAL. |
-| **Make Unique** | clone the cut, repoint one placement (D2). THIS PROPOSAL. |
+| **Duplicate asset here** | mint a NEW asset (deep-copying the fragment) and repoint ONE placement to it; the original and its other placements are untouched (D2). Never "un-share". THIS PROPOSAL. |
 | **Group** | folder track. Existing meaning — untouched. |
 | **Package** | tracks → arrangement + asset (`extract-arrangement`). Existing. |
 | **Glue** | the destructive commit: audio renders to a WAV, events merge into one sequence, sources consumed. **NOT this proposal** — see non-goals. |
@@ -357,14 +368,18 @@ reconciled registered/run/skipped count, and **byte-identical goldens**
   original lane at their original times).
 - **AC2.3** Placing the asset a second time yields a second `SLink` to the
   **same** cut; editing a child clip is visible through both placements.
-- **AC2.4** `make-unique` clones the cut, repoints one placement, and leaves the
-  other placements sharing the original.
+- **AC2.4** `duplicate-asset-here` mints a NEW asset with a DEEP-COPIED
+  fragment, repoints exactly one placement to it, and leaves the original asset
+  and all its other placements untouched and still sharing.
+- **AC2.4b** Sharing is never broken: editing a child clip of an asset placed
+  three times is visible through all three, before AND after an unrelated
+  placement has been duplicated away.
 - **AC2.5** A selection spanning two lanes is REFUSED with a message naming the
   lanes (D8).
 - **AC2.6** The cycle guard refuses a placement that would close a reference
   cycle.
 - **Gate:** qxa `fragment_pack_roundtrip`, `fragment_place_reuse`,
-  `fragment_make_unique`, `fragment_pack_multilane_refused`;
+  `fragment_duplicate_asset`, `fragment_pack_multilane_refused`;
   `action_roundtrip_test`; `docs/ACTIONS.md` rows for all three verbs.
 
 ### M3 — Event bubbling through a placement
