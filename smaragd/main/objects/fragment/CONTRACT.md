@@ -53,3 +53,50 @@ placement rather than emptying it out from under a sibling.
 Gate: `ctest -R "fragment_test|action_roundtrip_test"` plus the qxa cases
 `fragment_pack_roundtrip`, `fragment_place_reuse`, `fragment_duplicate_asset`,
 `fragment_pack_multilane_refused`.
+
+**M2b (addressing inside a fragment) — executed.** D3a's gap: `resize-clip`,
+`set-clip-volume` and every other clip verb could not reach a clip already
+packed into a fragment, because they all resolve through
+`splacements::placementAt()`, which required the clip's immediate parent to
+answer `isLane()` — a fragment answers that false by design. This module gets
+NO new code from M2b (the fix is entirely in `model` and one caller in
+`objects/cut`): `splacements.h` gains `containerAt()` (uses
+`isPathContainer()`, the strictly wider predicate) and `placementAt()` now
+resolves the clip's PARENT through it, while `laneAt()` — the placement
+DESTINATION resolver `place-clip`/`pack-clips`'s own lane check use — stays
+untouched, so a clip still cannot be moved into or out of a fragment
+(`unpack-clips` remains the only way out). `splacements::rootNamed()` also
+gains an asset-name fallback: `<AssetName>:<idx>` addresses the fragment's own
+children (`SClipWindow::of(asset)->windowContent()`, filtered to a non-lane
+path container so a container asset over a plain track gains no second name),
+tried only after the arrangement dict misses so an arrangement always wins a
+name collision.
+
+**The invalidation trap this module actually had**, found empirically (a
+model-only assertion would have missed it): `SObject::invalidateRenderPathRange`
+*does* reach a clip nested in a fragment — the fragment's registered `SCut`'s
+content link is an ordinary parented `SLink` and the walk descends into it
+like any other child, so bumping the epoch on every ancestor, through EVERY
+placement, already worked. What did not exist was the fragment's half of
+`STrack::refreshClipGainCurves()`: a track re-pulls each DIRECT child's
+`getVolume()`/`cut:Gain` curve into its OWN `twTrackMix`'s clip entries every
+time its render-chain epoch bumps, and `SLaneFragment` had no such method at
+all — its `bumpRenderChainEpoch[Range]()` overrides only bumped
+`cpTrackMix_`'s page cache. A resize (which restructures the mix's clip entry
+via `insertClip`/`updateClip` directly) therefore already worked through every
+placement; `set-clip-volume` on a fragment-nested clip changed the model and
+invalidated every placement's pages, and then rendered **exactly the
+pre-edit audio anyway**, because nothing had ever told the fragment's
+`twTrackMix` the new gain existed. Fixed by giving `SLaneFragment` its own
+`refreshClipGainCurves()` (same shape, same call sites in the epoch-bump
+overrides) — the missing half of the STrack precedent, not a reachability
+fix.
+
+Gate (added): the qxa case `fragment_nested_edit_reaches_all_placements`
+(`resize-clip` and `set-clip-volume` on `Riff:0`/`Riff:1`, both addressed by
+asset-name qualifier, both audible through TWO independent placements —
+gated on rendered RMS, not model state) and `fragment_test`'s
+`testAssetNameAddressing` (the resolver contract: `laneAt()` unchanged,
+`containerAt()`/`rootNamed()`/`placementAt()` reach a fragment's children,
+arrangement wins a name collision, an asset over a plain lane gains no second
+name).

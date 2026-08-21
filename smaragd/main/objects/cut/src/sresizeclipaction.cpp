@@ -59,13 +59,11 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     if( !mixer ) {
         return {false, nullptr};
     }
-    QList<int> trackPath = clipPath_;
-    int idx = trackPath.takeLast();
-    SObject *track = splacements::laneAt( mixer, trackPath );
-    if( !track ) {
-        return {false, nullptr};
-    }
-    SLink *link = track->childAt( idx );
+    // Proposal 41 M2b: resolve through placementAt(), not an inline
+    // laneAt()+childAt() duplicate of it -- the inline form used to require
+    // the clip's immediate parent to be a LANE, which is exactly what kept
+    // resize-clip from reaching a clip already packed into a fragment.
+    SLink *link = splacements::placementAt( mixer, clipPath_ );
     if( !link ) {
         return {false, nullptr};
     }

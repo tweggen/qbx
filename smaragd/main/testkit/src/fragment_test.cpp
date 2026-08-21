@@ -325,6 +325,79 @@ void testCutWindowsFragmentLikeTrack( SProject &project )
            "exactly as it does for an existing track/mixer (screateassetaction)" );
 }
 
+// --- Proposal 41 M2b: containerAt() split + asset-name addressing --------
+//
+// splacements::laneAt() stays exactly as strict as it always was (AC2b.1);
+// the new containerAt() is what widens the CLIP-parent resolution, and
+// rootNamed() is extended so an asset name resolves to its FRAGMENT content
+// (never a plain container-asset's track/mixer, which already has a name of
+// its own). All at the model level, no rendering — the audible-through-every-
+// -placement claim (AC2b.3) is the qxa case
+// fragment_nested_edit_reaches_all_placements.qxa; this is the resolver
+// contract underneath it.
+void testAssetNameAddressing( SProject &project )
+{
+    tw303aEnvironment *env = SAppContext::get().get303aEnvironment();
+
+    // A fragment asset "Riff", two children — the same shape pack-clips
+    // builds (spackclipsaction.cpp), assembled by hand here so this stays a
+    // pure model-level test with no action registry involved.
+    SLaneFragment *fragment = new SLaneFragment( &project );
+    FixtureClip *a = new FixtureClip( *env, 0.1f, 2000 );
+    SLink *linkA = placeChild( a, 0, fragment );
+    FixtureClip *b = new FixtureClip( *env, 0.1f, 2000 );
+    placeChild( b, 3000, fragment );
+
+    SCut *riffCut = new SCut( &project, *fragment );
+    riffCut->setSName( "Riff" );
+    project.registerAsset( "Riff", riffCut );
+
+    // --- AC2b.1: laneAt() is UNCHANGED -------------------------------------
+    check( splacements::laneAt( fragment, QList<int>{} ) == nullptr,
+           "AC2b.1: laneAt() still refuses a fragment directly" );
+    check( splacements::containerAt( fragment, QList<int>{} ) == fragment,
+           "...but containerAt() accepts it (isPathContainer(), not isLane())" );
+
+    // --- AC2b.2: "Riff:0"/"Riff:1" address the fragment's own children -----
+    SObject *riffRoot = splacements::rootNamed( &project, "Riff" );
+    check( riffRoot == fragment,
+           "AC2b.2: rootNamed() resolves an asset name to its windowed "
+           "FRAGMENT content, not the registered SCut itself" );
+    SLink *lk0 = splacements::placementAt( riffRoot, QList<int>{ 0 } );
+    check( lk0 == linkA,
+           "AC2b.2: \"Riff:0\" (root=Riff, path={0}) addresses the fragment's "
+           "FIRST packed clip" );
+
+    // --- Arrangements WIN a name collision ---------------------------------
+    // Raw `new`, not a unique_ptr (testCutWindowsFragmentLikeTrack's rule,
+    // above): `trackCut` below holds a REFERENCE (its content_ link) to
+    // `lane`, and a unique_ptr's synchronous delete at scope exit would free
+    // it out from under that reference. Both are left for `project` (their
+    // real QObject parent) to reap, as everywhere else in this file.
+    SStdMixer *arrangementRoot = new SStdMixer( &project );
+    project.registerArrangement( "Riff", arrangementRoot );
+    check( splacements::rootNamed( &project, "Riff" ) == arrangementRoot,
+           "AC2b.2: an ARRANGEMENT named \"Riff\" wins the collision over the "
+           "asset of the same name — every path that already resolved keeps "
+           "its meaning" );
+    project.unregisterArrangement( "Riff" );
+    check( splacements::rootNamed( &project, "Riff" ) == fragment,
+           "...and reverts to the asset once the arrangement is gone (proves "
+           "the fallback, rather than the arrangement dict, is what matched)" );
+
+    // --- An asset over a plain LANE gains no second name -------------------
+    STrack *lane = new STrack( &project );
+    FixtureClip *c = new FixtureClip( *env, 0.1f, 500 );
+    placeChild( c, 0, lane );
+    SCut *trackCut = new SCut( &project, *lane );
+    trackCut->setSName( "TrackAsset" );
+    project.registerAsset( "TrackAsset", trackCut );
+    check( splacements::rootNamed( &project, "TrackAsset" ) == nullptr,
+           "AC2b.2: an asset windowing a plain lane (STrack, isLane()==true) "
+           "gains NO second name — that lane is already addressable by "
+           "itself, and the fragment-only fallback must not fire for it" );
+}
+
 // --- AC1.3 -----------------------------------------------------------------
 
 void testSerializeRoundTrip()
@@ -448,6 +521,7 @@ int main( int argc, char **argv )
         testUnitySumAndNoOwnProcessing( *p );
         testLaneStateNeverLeaksFromFragment( *p );
         testCutWindowsFragmentLikeTrack( *p );
+        testAssetNameAddressing( *p );
     }
 
     testSerializeRoundTrip();

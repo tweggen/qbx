@@ -135,6 +135,19 @@ public:
     // moment it reached here — exactly the STrack/SStdMixer override these
     // mirror, minus the plugin chain / gain stage / rewire a fragment has
     // none of (D1).
+    //
+    // Proposal 41 M2b: ALSO the seam refreshClipGainCurves() covers on a
+    // track. The walk above correctly bumps THIS object's own epoch when a
+    // clip nested inside it changes — that part already worked — but bumping
+    // the epoch only tells the twTrackMix's PAGES to go stale; it does not,
+    // by itself, re-read a child's getVolume()/cut:Gain into the CLIP ENTRY
+    // twTrackMix actually applies gain through (ClipEntry::gainScalar /
+    // ::gainCurve). STrack::bumpRenderChainEpoch[Range]() re-pulls every
+    // direct child's gain for exactly this reason; a fragment is the same
+    // kind of twTrackMix owner and needs the same pull, or a clip's volume
+    // (or cut:Gain envelope) inside a fragment is audible nowhere, through
+    // any placement, no matter how correctly the invalidation walk reaches
+    // it.
     void bumpRenderChainEpoch() override;
     void bumpRenderChainEpochRange( offset_t start, offset_t end ) override;
 
@@ -157,6 +170,17 @@ private slots:
 
 private:
     void checkDurationChanged();
+
+    // Mirrors STrack::refreshClipGainCurves() (strack.cpp) — same reasoning,
+    // same shape, over THIS fragment's own DIRECT children instead of a
+    // track's. Pulls each audio child's static getVolume() (dB, converted to
+    // the linear scalar ClipEntry::gainScalar wants — every SObject answers
+    // 0 dB by default, so this is a no-op for a clip that never set one) and
+    // its cut:Gain automation curve (proposal 41's non-goals: "cut:Gain on a
+    // child clip's own window travels with that window, unchanged" — that
+    // sentence is only true if something pulls it into the CONTAINER that
+    // actually owns the twTrackMix, exactly as it is for a track).
+    void refreshClipGainCurves();
 
     std::shared_ptr<twTrackMix> cpTrackMix_;
     mutable length_t lastDuration_;

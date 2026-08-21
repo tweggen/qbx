@@ -1,6 +1,8 @@
 #include "app/objects/fragment/slanefragment.h"
 
 #include "app/model/sappcontext.h"
+#include "app/model/sautomationlane.h"
+#include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
 #include "app/persistence/sprojectloader.h"
@@ -9,6 +11,8 @@
 #include "tw/mix/twtrackmix.h"
 
 #include <QDomElement>
+
+#include <cmath>
 
 SLaneFragment::SLaneFragment( SProject *project )
     : SObject( project ),
@@ -89,12 +93,36 @@ SObjectRenderer *SLaneFragment::getInlineRenderer()
 
 void SLaneFragment::bumpRenderChainEpoch()
 {
+    refreshClipGainCurves();
     if( cpTrackMix_ ) cpTrackMix_->bumpContentEpoch();
 }
 
 void SLaneFragment::bumpRenderChainEpochRange( offset_t start, offset_t end )
 {
+    refreshClipGainCurves();
     if( cpTrackMix_ ) cpTrackMix_->invalidatePagesInRange( start, end );
+}
+
+// Mirrors STrack::refreshClipGainCurves() (strack.cpp) exactly, over this
+// fragment's own children instead of a track's — see the class header for
+// why this exists at all (proposal 41 M2b: bumping the epoch alone stales
+// PAGES, it does not re-pull a child's gain into the CLIP ENTRY twTrackMix
+// applies gain through).
+void SLaneFragment::refreshClipGainCurves()
+{
+    if( !cpTrackMix_ ) return;
+    for( SLink *lk : childLinks() ) {
+        if( !lk || !lk->hasStartTime() ) continue;
+        SObject *obj = &lk->getSObject();
+        if( obj->isLane() ) continue;           // never true for a fragment
+                                                  // child, kept for parity
+        if( obj->contentKind() == SContentKind::Event ) continue;  // M3
+        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        cpTrackMix_->setClipGainCurve(
+            lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
+        cpTrackMix_->setClipGainScalar(
+            lk, std::pow( 10.0, obj->getVolume() / 20.0 ) );
+    }
 }
 
 void SLaneFragment::checkDurationChanged()

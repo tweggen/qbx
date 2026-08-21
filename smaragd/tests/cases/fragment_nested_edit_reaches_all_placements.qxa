@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M2b: a clip PACKED INSIDE a fragment is addressable and
+  editable, and the edit is AUDIBLE THROUGH EVERY PLACEMENT of the asset -
+  not merely visible in the model.
+
+  Two things this case exists to prove, together:
+
+    1. ADDRESSING (D3a's gap, closed): "Riff:0" / "Riff:1" name the fragment
+       asset "Riff" as a ROOT QUALIFIER (splacements::rootNamed extended to
+       resolve an asset name to its windowed FRAGMENT content, proposal 41
+       M2b) and then address the fragment's OWN children by index - the
+       same shape "Drums:0" already has for an arrangement. Before M2b no
+       clip verb could resolve a path through a fragment at all
+       (splacements::placementAt required the clip's immediate parent to be
+       a LANE; a fragment answers isLane() false by design, D3).
+
+    2. THE INVALIDATION TRAP: a fragment hangs off its registered SCut, which
+       is owned by the asset list, not by any track - so an edit reaching a
+       clip nested inside it must be shown to reach the RENDERED OUTPUT of
+       EVERY track holding a placement of that asset, not just be present in
+       the model (a model-only assertion would pass even if the render never
+       noticed). Two DIFFERENT verbs are used deliberately - resize-clip
+       (window truncation -> silence) and set-clip-volume (a gain scale) -
+       so this is not one verb's invalidation path working by accident.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8, proven per-second
+  RMS bands (fragment_pack_roundtrip.qxa): sec0 [0.05,0.085],
+  sec1 [0.16,0.19].
+-->
+<SActionScript version="1" name="fragment_nested_edit_reaches_all_placements">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Riff:0 = the sawtooth at fragment-relative 0; Riff:1 = the sawtooth
+         at fragment-relative 200000 (same shape as fragment_pack_roundtrip /
+         fragment_place_reuse). -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="200000"/>
+    <pack-clips clips="0,0;0,1" name="Riff"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="392000"/>
+
+    <!-- A second, independent placement of the SAME asset on a different
+         lane - this is what "every placement" means below. -->
+    <place-asset assetName="Riff" trackPath="1" timePos="500000"/>
+    <assert-clip-window clip="1,0" startTime="500000" duration="392000"/>
+
+    <!-- Addressing proof: "Riff:0"/"Riff:1" resolve to the SAME two clips
+         "0,0's window" and unpacking would restore - read their windows by
+         the asset-qualified path and by the ordinary placement-relative path
+         and check they agree (both describe the one shared fragment). -->
+    <assert-clip-window clip="Riff:0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="Riff:1" startTime="200000" duration="192000"/>
+
+    <render filename="fne_pre.wav" format="wav" quality="10"/>
+    <!-- Baseline: Riff:1's own sec1, at ITS OWN start, through BOTH
+         placements (base 0 and base 500000; Riff:1 sits at fragment-relative
+         200000, so its sec1 is at base+248000). Loosely bounded - this only
+         needs to show "something plays here", the tight proof is the
+         POST-edit assertions below. -->
+    <assert-audio-energy filename="fne_pre.wav"
+                         startFrame="248000" frameCount="48000"
+                         minRms="0.05" maxRms="0.5"/>
+    <assert-audio-energy filename="fne_pre.wav"
+                         startFrame="748000" frameCount="48000"
+                         minRms="0.05" maxRms="0.5"/>
+    <!-- Riff:0's own sec2 (frames [96000,144000) of its content), at ITS OWN
+         start, through both placements - this is the region resize-clip
+         below will truncate away. -->
+    <assert-audio-energy filename="fne_pre.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.5"/>
+    <assert-audio-energy filename="fne_pre.wav"
+                         startFrame="596000" frameCount="48000"
+                         minRms="0.05" maxRms="0.5"/>
+
+    <!-- ======================= EDIT 1: resize-clip =====================
+         Shrink Riff:0's window to 96000 frames (its own sec0+sec1 only).
+         Everything from its own frame 96000 to Riff:1's own start (200000)
+         is now a GAP - silence - in the fragment's local timeline, and
+         that gap is what plays at base+96000..200000 in EVERY placement. -->
+    <resize-clip clip="Riff:0" startTime="0" startOffset="0"
+                 duration="96000" loopLength="0" stretch="1.0"/>
+    <assert-clip-window clip="Riff:0" duration="96000"/>
+    <!-- The OUTER placements are untouched in the MODEL (Riff:1 is still the
+         longer child, so the fragment's own extent is unchanged) - the
+         point being gated is the RENDER, not this. -->
+    <assert-clip-window clip="0,0" duration="392000"/>
+    <assert-clip-window clip="1,0" duration="392000"/>
+
+    <render filename="fne_post1.wav" format="wav" quality="10"/>
+    <!-- Silent through BOTH placements: the region that used to be Riff:0's
+         sec2 is now past its shrunk window and before Riff:1's start. -->
+    <assert-audio-energy filename="fne_post1.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="fne_post1.wav"
+                         startFrame="596000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+    <!-- Riff:1 (untouched by this edit) still sounds, through both. -->
+    <assert-audio-energy filename="fne_post1.wav"
+                         startFrame="248000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+    <assert-audio-energy filename="fne_post1.wav"
+                         startFrame="748000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+
+    <!-- ==================== EDIT 2: set-clip-volume =====================
+         -6 dB (linear 0.501187) on Riff:1 - a DIFFERENT verb, mutating a
+         property rather than the window, so the invalidation path being
+         gated is not one verb's alone. -->
+    <set-clip-volume clip="Riff:1" volumeDb="-6"/>
+
+    <render filename="fne_post2.wav" format="wav" quality="10"/>
+    <!-- Riff:1's sec1 halved in amplitude, through BOTH placements. -->
+    <assert-audio-energy filename="fne_post2.wav"
+                         startFrame="248000" frameCount="48000"
+                         minRms="0.078" maxRms="0.097"/>
+    <assert-audio-energy filename="fne_post2.wav"
+                         startFrame="748000" frameCount="48000"
+                         minRms="0.078" maxRms="0.097"/>
+    <!-- The resize from EDIT 1 is still in effect through both, too -
+         the two edits compose rather than one clobbering the other's
+         invalidation. -->
+    <assert-audio-energy filename="fne_post2.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="fne_post2.wav"
+                         startFrame="596000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
