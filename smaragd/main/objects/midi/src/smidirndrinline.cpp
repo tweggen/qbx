@@ -2,6 +2,7 @@
 
 #include <QPainter>
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 
 #include "app/model/slink.h"
@@ -25,20 +26,20 @@ const QColor kMetaColor( 200, 190, 110 );
  * skipped rather than clamped, which is what makes a split clip's head and
  * tail draw the two halves of a straddling note correctly.
  */
-void paintSeq( QPainter &p, SRenderContext &ctx, const twEventSeq &seq,
-               offset_t originFrame, offset_t firstFrame, offset_t lastFrame )
+/**
+ * The PRESENT pitch range of `[firstFrame, lastFrame)`, so a clip of a few
+ * notes uses the full lane height.
+ *
+ * Resolved ONCE per draw and handed to every paintSeq call, never recomputed
+ * per call. A looping clip's LAST repetition is usually a partial segment, so
+ * a range derived per repetition would give it a different vertical scale and
+ * the tail of the loop would draw its notes at other heights than the
+ * repetitions before it.
+ */
+void keyRangeOf( const twEventSeq &seq, offset_t firstFrame, offset_t lastFrame,
+                 int &lowKey, int &highKey )
 {
-    const QRect visib = ctx.getVisibRect();
-    if( visib.width() <= 0 || visib.height() <= 0 ) return;
-
-    const offset_t tLeft  = ctx.getTimeOf( visib.left() );
-    const offset_t tRight = ctx.getTimeOf( visib.right() + 1 );
-    const double span = (double) ( tRight - tLeft );
-    if( !( span > 0.0 ) ) return;
-    const double pxPerFrame = visib.width() / span;
-
-    // The PRESENT pitch range, so a clip of a few notes uses the full height.
-    int lowKey = 127, highKey = 0;
+    lowKey = 127; highKey = 0;
     bool anyNote = false;
     for( const twEvent &e : seq.events() ) {
         if( e.kind != twEventKind::NoteOn || e.key < 0 ) continue;
@@ -52,6 +53,21 @@ void paintSeq( QPainter &p, SRenderContext &ctx, const twEventSeq &seq,
         const int mid = ( highKey + lowKey ) / 2;
         lowKey = mid - 6; highKey = mid + 6;
     }
+}
+
+void paintSeq( QPainter &p, SRenderContext &ctx, const twEventSeq &seq,
+               offset_t originFrame, offset_t firstFrame, offset_t lastFrame,
+               int lowKey, int highKey )
+{
+    const QRect visib = ctx.getVisibRect();
+    if( visib.width() <= 0 || visib.height() <= 0 ) return;
+
+    const offset_t tLeft  = ctx.getTimeOf( visib.left() );
+    const offset_t tRight = ctx.getTimeOf( visib.right() + 1 );
+    const double span = (double) ( tRight - tLeft );
+    if( !( span > 0.0 ) ) return;
+    const double pxPerFrame = visib.width() / span;
+
     const int keySpan = highKey - lowKey;
     const int top = visib.top() + 2, bottom = visib.bottom() - 1;
     const int usable = std::max( 4, bottom - top );
@@ -142,11 +158,62 @@ void SMidiCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     QPainter &p = ctx.getPainter();
     const offset_t clipStart = lk.getStartTime();
     const offset_t first = snap.startOffsetFrames;
-    const offset_t last  = snap.startOffsetFrames + snap.durationFrames;
+    const length_t dur   = snap.durationFrames;
+    const length_t loop  = snap.loopFrames;
+
+    // A LOOPING window draws its segment once per repetition, under exactly
+    // the law resolveEventClip() gives the audio path: twEventLoopMap maps a
+    // clip position p to sequence position (startOffset + p mod loopFrames),
+    // so repetition k occupies [clipStart + k*loop, ... ) and reads the SAME
+    // segment [startOffset, startOffset + loop) of the sequence.
+    //
+    // Drawing the table once over the whole window - which is what this did -
+    // is only correct when there is no loop: the notes exist solely in the
+    // first segment, so every repetition after the first came out BLANK while
+    // sounding perfectly. The loop condition is the same one resolveEventClip
+    // tests, so the picture cannot disagree with the ear about whether this
+    // clip loops at all.
+    const bool looping = ( loop > 0 && loop < dur );
+
+    // The pitch range is taken over the SEGMENT THAT IS ACTUALLY REPEATED and
+    // shared by every repetition (see keyRangeOf).
+    int lowKey = 0, highKey = 0;
+    keyRangeOf( *snap.framesSeq, first,
+                first + ( looping ? loop : dur ), lowKey, highKey );
+
     // The sequence's zero is the CONTENT's zero, so the origin that maps a
     // sequence position onto the timeline is (clip start - slip).
-    paintSeq( p, ctx, *snap.framesSeq, clipStart - snap.startOffsetFrames,
-              first, last );
+    if( !looping ) {
+        paintSeq( p, ctx, *snap.framesSeq, clipStart - first,
+                  first, first + dur, lowKey, highKey );
+    } else {
+        // Only the repetitions the visible rect can reach. A long clip over a
+        // short loop is thousands of them, and each one is a full pass over
+        // the event table -- a scroll must not pay for the ones off screen.
+        const QRect visib = ctx.getVisibRect();
+        const int64_t tLeft  = (int64_t) ctx.getTimeOf( visib.left() );
+        const int64_t tRight = (int64_t) ctx.getTimeOf( visib.right() + 1 );
+        auto floorDiv = []( int64_t a, int64_t b ) {
+            const int64_t q = a / b;
+            return ( a % b != 0 && ( ( a < 0 ) != ( b < 0 ) ) ) ? q - 1 : q;
+        };
+        int64_t kFrom = floorDiv( tLeft - (int64_t) clipStart, (int64_t) loop );
+        int64_t kTo   = floorDiv( tRight - (int64_t) clipStart, (int64_t) loop );
+        const int64_t kLast = ( (int64_t) dur - 1 ) / (int64_t) loop;
+        if( kFrom < 0 ) kFrom = 0;
+        if( kTo > kLast ) kTo = kLast;
+        for( int64_t k = kFrom; k <= kTo; ++k ) {
+            // The last repetition is normally PARTIAL: the window ends where
+            // it ends, mid-segment, and a note crossing that edge is clipped
+            // by paintSeq exactly as one crossing a split is.
+            const length_t segLen =
+                std::min<length_t>( loop, dur - (length_t) ( k * (int64_t) loop ) );
+            if( segLen <= 0 ) break;
+            paintSeq( p, ctx, *snap.framesSeq,
+                      clipStart + (offset_t) ( k * (int64_t) loop ) - first,
+                      first, first + segLen, lowKey, highKey );
+        }
+    }
 
     if( !c.getSName().isEmpty() ) {
         p.save();
