@@ -65,10 +65,32 @@ sudo apt install build-essential cmake ninja-build pkg-config git qt6-base-dev \
                  libsndfile1-dev libogg-dev libvorbis-dev libasound2-dev
 ```
 
-Optional: `libsecret-1-dev` — the libsecret backend of `SSecretStore` (proposal
-38). Without it the credential store falls back to `none`, which means
-"Remember" is disabled in the media browser's account dialog; nothing else
-changes.
+Optional — the libsecret backend of `SSecretStore` (proposal 38):
+
+```bash
+sudo apt install libsecret-1-dev
+```
+
+It is deliberately NOT in the line above, which is the REQUIRED list and is
+mirrored by `_env.sh`'s `apt_packages_line()` ("nothing here is optional").
+Without it the credential store falls back to `none`, which means "Remember"
+is disabled in the media browser's account dialog; nothing else changes, and
+the build succeeds either way.
+
+**Installing it is a CONFIGURE-time change, so re-configure afterwards** —
+`./rebuild.sh`, or `cmake` over an existing `build/`. CMake probes
+`libsecret-1` with `pkg_check_modules` once, at configure time
+(`main/CMakeLists.txt`), so an incremental `./build.sh` after the install
+will NOT pick it up and the backend stays `none`. `./rebuild.sh` prints which
+backend it settled on.
+
+Worth knowing before you rely on it: as of 2026-08-21 the libsecret and macOS
+Keychain backends have **never been compiled or executed by anything** — this
+repo's regular box is Windows/MinGW, and CMake says as much when it does find
+libsecret ("UNTESTED on the Windows box this gate was built on"). The build
+plumbing is complete; what is missing is that nobody has installed the package.
+If you do, `ctest -R secret_store_test` is the thing to run, and its output
+names the backend it is testing. See CLAUDE.md's *Known Issues & Gaps*.
 
 | Package | Why it is needed |
 |---|---|
