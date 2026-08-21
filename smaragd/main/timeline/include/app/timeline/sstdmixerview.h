@@ -200,6 +200,13 @@ protected slots:
     void ctShowClipProperties();
 
 protected:
+    // Proposal 41 D14 (M6): "the cap is announced" -- whenever a clip's tag
+    // chip draws less than the full name (the 12-char cap, further pixel
+    // elision, or no text at all), hovering the clip must reveal the full
+    // name. The canvas paints clips as rects, not widgets, so there is no
+    // per-clip QWidget::setToolTip() to hang this off; overriding event()
+    // for QEvent::ToolTip is Qt's own answer to exactly that (see the .cpp).
+    bool event( QEvent * ) override;
     virtual void paintEvent( QPaintEvent * );
     virtual void mousePressEvent( QMouseEvent * );
     virtual void mouseDoubleClickEvent( QMouseEvent * );

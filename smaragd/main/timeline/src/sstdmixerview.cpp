@@ -22,6 +22,7 @@
 #include <QMainWindow>
 #include <QStatusBar>
 #include <QApplication>
+#include <QToolTip>
 
 #include "tw/sources/twwavinput.h"
 #include "tw/playback/twspeaker.h"
@@ -33,6 +34,7 @@
 #include "app/shell/sviewtabs.h"
 #include "app/timeline/strackheaderresizer.h"
 #include "app/objects/track/strack.h"
+#include "app/objects/track/strackrndrinline.h"
 #include "app/model/sobjectrenderer.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
@@ -2350,6 +2352,59 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
     else setCursor( QCursor( shape ) );
 
     SApplication::app().setStatusMode( mode );
+}
+
+// Proposal 41 D14 (M6): the tag chip's density ladder ANNOUNCES its own cap
+// (the level meter's describe()/tooltip precedent) -- whenever a clip draws
+// less than its true full name, hovering it must reveal that name. The
+// canvas paints clips as rects into ONE QPainter, not as per-clip QWidgets,
+// so there is no setToolTip() to hang this off; Qt's own answer for a
+// position-dependent tooltip on a plain widget is to override event() for
+// QEvent::ToolTip (QWidget::event's docs). The clip lookup reuses the SAME
+// hit test the cursor/status-bar code above already uses
+// (rowAtViewY + STrack::getTopMostSLinkAt) -- a read-only lookup for a
+// tooltip, not the tag-as-drag-handle hit-test order proposal 41 D15/M7
+// specifies (that governs which clip a PRESS lands on; this only decides
+// what text to show under the pointer). The width/text decision recomputes
+// STrackRendererInline::tagFullText()/tagDensityText() -- the SAME shared
+// functions draw() calls -- against the clip's own painted rect
+// (getSLinkVisibRect, the same rect repaint invalidation already uses), so
+// this can never disagree with what is actually on screen without caching
+// anything.
+bool SMVActualView::event( QEvent *ev )
+{
+    if( ev->type() != QEvent::ToolTip ) return QWidget::event( ev );
+
+    QHelpEvent *he = static_cast<QHelpEvent *>( ev );
+    const QPoint pos = he->pos();
+    if( pos.y() >= SMV_TIME_RULER_HEIGHT ) {
+        const int rowIdx = rowAtViewY( pos.y() );
+        const STrackRow *row = smv_.rowAt( rowIdx );
+        STrack *track = row ? row->track : nullptr;
+        SLink *clip = track ? track->getTopMostSLinkAt( getTimeOf( pos.x() ) )
+                             : nullptr;
+        if( clip && clip->hasStartTime()
+            && !dynamic_cast<STrack *>( &clip->getSObject() ) ) {
+            const QString fullName =
+                STrackRendererInline::tagFullText( clip->getSObject() );
+            if( !fullName.isEmpty() ) {
+                const QRect vr = getSLinkVisibRect( rowIdx, *clip );
+                QFont f = QGuiApplication::font();   // matches the tag's
+                f.setPointSize( 7 );                 // own font exactly
+                const QFontMetrics fm( f );
+                bool cut = false;
+                STrackRendererInline::tagDensityText(
+                    fullName, fm, vr.width() - 2 * 3, &cut );
+                if( cut ) {
+                    QToolTip::showText( he->globalPos(), fullName, this );
+                    return true;
+                }
+            }
+        }
+    }
+    QToolTip::hideText();
+    ev->ignore();
+    return true;
 }
 
 /**

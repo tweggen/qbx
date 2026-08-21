@@ -1,12 +1,18 @@
 #include <stdio.h>
 #include <qpainter.h>
 #include <qobject.h>
+#include <QFileInfo>
+#include <QFont>
+#include <QFontMetrics>
+#include <QGuiApplication>
 #include <QVarLengthArray>
 
 #include <algorithm>
 #include <vector>
 
 #include "app/model/sappcontext.h"
+#include "app/model/sclipwindow.h"
+#include "app/model/sexternfile.h"
 #include "app/model/slink.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sproject.h"
@@ -34,6 +40,62 @@ QColor STrackRendererInline::laneFillColor( STrack &track )
     // Apply track state modifiers (muted, solo, armed for recording)
     STrackColorModifier mod = STrackColorModifier::fromTrackState( track );
     return mod.apply( baseColor );
+}
+
+// THE TAG CHIP (proposal 41 D12-D14, M6) -- see the header doc for the
+// contract. The three statics below are the shared decision between the
+// clip loop's chip drawing (further down in draw()) and the pixel gate
+// (preview_envelope_test.cpp section 7).
+
+QColor STrackRendererInline::tagChipColor( const QColor &laneFill )
+{
+    // Strictly DARKER than the fill it derives from -- see the header doc
+    // for the measured luminance ranges this holds over.
+    return laneFill.darker( 160 );
+}
+
+QString STrackRendererInline::tagDensityText( const QString &fullName,
+    const QFontMetrics &fm, int availTextWidthPx, bool *cut )
+{
+    if( cut ) *cut = false;
+    if( fullName.isEmpty() ) return QString();
+    if( availTextWidthPx < 1 ) {
+        if( cut ) *cut = true;
+        return QString();
+    }
+
+    // D12: cap at kTagMaxChars BEFORE any pixel fitting -- a cap on the
+    // identifying text itself, independent of how much room the clip has.
+    QString capped = fullName;
+    if( capped.length() > kTagMaxChars )
+        capped = capped.left( kTagMaxChars - 1 ) + QChar( 0x2026 );   // "..."
+    if( cut && capped != fullName ) *cut = true;
+
+    if( fm.horizontalAdvance( capped ) <= availTextWidthPx ) return capped;
+
+    // ELIDED: fewer characters than the cap, plus an ellipsis, iff at least
+    // one character plus the ellipsis fits -- Qt's own elidedText already
+    // refuses (returns "") when it does not, which is exactly the next rung
+    // down the ladder (CHIP ONLY -- the caller's business, not this
+    // function's: it has no notion of a chip, only of text).
+    const QString elided = fm.elidedText( capped, Qt::ElideRight, availTextWidthPx );
+    if( cut && !elided.isEmpty() ) *cut = true;
+    return elided;
+}
+
+QString STrackRendererInline::tagFullText( SObject &clipObject )
+{
+    if( SClipWindow *win = SClipWindow::of( &clipObject ) ) {
+        if( SExternFile *xf = dynamic_cast<SExternFile *>( &win->windowContent() ) ) {
+            const QString fn = xf->getFileName();
+            if( !fn.isEmpty() ) return QFileInfo( fn ).fileName();
+        }
+    }
+    // Container-backed (asset/fragment) or anything else with no file
+    // behind it: the clip's own name -- exactly what the old bottom-right
+    // label read for a container-backed SCut (cut.getSName()), generalised
+    // to whatever window kind is windowing it.
+    return clipObject.getSName();
 }
 
 // THE FOLDER-SUM OVERLAY (proposal 39 M3, design D4).
@@ -362,10 +424,79 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
             rndr->draw( *lk, myctx );
         }
         // Draw the number of links into the upper right.
-        {            
+        {
             p.setPen( QColor( 0,0,0 ) );
             p.drawText( vr, Qt::AlignTop|Qt::AlignRight,
                         QString::number( lk->getSObject().getNReferences() ) );
+        }
+
+        // D12-D14 (proposal 41 M6): THE TAG CHIP. One solid opaque chip,
+        // bottom-left corner of `vr` -- the same inset rect the content,
+        // the warp markers, the pitch badge and the gain envelope
+        // (SCutRendererInline) already draw into, so the tag lines up with
+        // everything else drawn on this clip. Bottom because warp markers
+        // own the top edge; left because D11's paint order guarantees that
+        // corner is never covered except at an exact start-time tie, which
+        // the childIndex tiebreak above makes deterministic rather than
+        // flaky. It REPLACES the old bottom-right container-asset label
+        // (SCutRendererInline used to draw cut.getSName() there) -- one
+        // mechanism, two text sources (tagFullText: the fragment/asset name
+        // for a container-backed clip, the file name for a plain one).
+        {
+            const QString fullName = tagFullText( lk->getSObject() );
+            const int kTagPadX = 3;
+            const int kTagPadY = 1;
+            const int kTagMinChipW = 6;    // "chip only": still reads as a mark
+            const int kTagMinHeightPx = 8; // lane too short: draw nothing at all
+            if( !fullName.isEmpty() && vr.height() >= kTagMinHeightPx
+                && vr.width() >= 1 ) {
+                // Taken from the APPLICATION font, not the painter, so the
+                // drawn chip and any independently-computed geometry (the
+                // hover tooltip's cut decision, the pixel gate) always
+                // agree on the size — scutLoopHandleRect's own reasoning
+                // for the identical choice.
+                QFont tagFont = QGuiApplication::font();
+                tagFont.setPointSize( 7 );   // matches scutLoopHandleRect's
+                                              // "one character high"
+                QFontMetrics fm( tagFont );
+                const int chipH = qMin( vr.height(),
+                    qMax( fm.height() + 2 * kTagPadY, kTagMinHeightPx ) );
+                const int chipTop = vr.bottom() - chipH + 1;
+                const QColor chipColor = tagChipColor( finalColor );
+
+                const QString drawn = tagDensityText( fullName, fm,
+                    vr.width() - 2 * kTagPadX, nullptr );
+                int chipW = 0;
+                if( !drawn.isEmpty() ) {
+                    chipW = qMin( vr.width(),
+                                 fm.horizontalAdvance( drawn ) + 2 * kTagPadX );
+                } else if( vr.width() >= kTagMinChipW ) {
+                    chipW = qMin( kTagMinChipW, vr.width() );   // CHIP ONLY
+                }
+                // else: NOTHING -- not even the chip fits.
+
+                if( chipW >= 1 ) {
+                    const QRect chipRect( vr.left(), chipTop, chipW, chipH );
+                    p.fillRect( chipRect, chipColor );
+                    if( !drawn.isEmpty() ) {
+                        QFont oldFont = p.font();
+                        p.setFont( tagFont );
+                        p.setPen( QColor( 255, 255, 255 ) );
+                        p.drawText( chipRect.adjusted( kTagPadX, 0, -kTagPadX, 0 ),
+                                   Qt::AlignVCenter | Qt::AlignLeft, drawn );
+                        p.setFont( oldFont );
+                    }
+                }
+                // D14: "the cap is announced" -- whenever what is drawn is
+                // not the true full name (the 12-char cap, further pixel
+                // elision, or the chip-only/nothing rungs where drawn is
+                // empty), the full name belongs on a tooltip. The canvas
+                // has no per-clip widget to hang a QToolTip off, so that is
+                // wired at the arranger's own QEvent::ToolTip handler
+                // (SMVActualView::event), which recomputes the identical
+                // answer through tagFullText()/tagDensityText() rather than
+                // needing this draw to cache anything.
+            }
         }
     }
 

@@ -53,6 +53,8 @@
 // No project, no audio device, no display.
 
 #include "app/model/sappcontext.h"
+#include "app/model/sclipwindow.h"
+#include "app/model/sexternfile.h"
 #include "app/model/sobject.h"
 #include "app/model/sobjectrenderer.h"
 #include "app/model/slink.h"
@@ -69,11 +71,13 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QFontMetrics>
 #include <QImage>
 #include <QPainter>
 #include <QRect>
 
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -853,6 +857,438 @@ int main( int argc, char **argv )
             // so the fix is a CLIP, not a suppression of L altogether.
             check( columnHasColor( img, 350, QColor( 0, 0, 255 ) ),
                    "...and L's OWN material still paints where it exists" );
+        }
+    }
+
+    // ===== 7. PROPOSAL 41 M6 — THE TAG CHIP (D12-D14)
+    //
+    // AC6.1 (a tag exists, the old bottom-right container label is gone),
+    // AC6.2 (D11's occlusion invariant, including the equal-start
+    // tiebreak) and AC6.4 (the colour RELATION, across every
+    // STrackColorModifier state) all have to be PIXEL gates (trap 6,
+    // mirroring M5's own finding in section 6 above): a script-level check
+    // through collectEnvelope, or through the pure tagDensityText()/
+    // tagChipColor() functions alone, cannot see whether draw() actually
+    // CALLS them, still less in what order or at what position. So —
+    // exactly as section 6 does — this paints a REAL STrack with REAL
+    // SLink children off screen via the actual
+    // STrackRendererInline::draw() and recovers the chip's colour and
+    // extent from the rendered QImage by exact-RGB search: fillRect() is
+    // opaque and NOT antialiased, so an exact match is sound for the chip
+    // itself (this section deliberately never searches for TEXT pixels,
+    // which are antialiased and would need a fuzzy, unreliable match —
+    // the chip's measured WIDTH is what tells full/elided/chip-only/
+    // nothing apart, and that is exact geometry).
+    //
+    // Verified to FAIL on the pre-fix code (git stash of the M6 diff to
+    // strackrndrinline.{h,cpp} and scutrndrinline.cpp, rebuilt, rerun):
+    // every check in this section failed — there was no chip to find at
+    // all, and the old bottom-right container label was still there. See
+    // the PR body for the exact before/after run.
+    {
+        // A minimal clip content object: just enough SObject to be a
+        // windowed clip (hasDuration/getDuration) and carry an identifying
+        // SName — the tag's SECOND text source (D12), the fallback every
+        // clip that is neither a SClipWindow nor file-backed still gets.
+        class TagFixtureObject : public SObject {
+        public:
+            explicit TagFixtureObject( length_t duration )
+                : SObject( nullptr ), duration_( duration ) {}
+            std::shared_ptr<twComponent> getRootComponent() override { return nullptr; }
+            bool     hasDuration() const override { return true; }
+            length_t getDuration() const override { return duration_; }
+            QWidget *getDetailEditWidget( QWidget * ) override { return nullptr; }
+            QWidget *getInlineEditWidget( QWidget * ) override { return nullptr; }
+            SObjectRenderer *getInlineRenderer() override { return nullptr; }
+        private:
+            length_t duration_;
+        };
+
+        // A minimal SClipWindow (D12's CONTAINER-BACKED text source): the
+        // tag reads the WINDOW's own name via SClipWindow::windowContent(),
+        // never a concrete SCut/SMidiCut/SLaneFragment — objects/track may
+        // not depend on any of those (tools/check_layering.py), which is
+        // exactly what tagFullText() has to get right and this fixture
+        // exists to prove. Every method besides asObject()/windowContent()
+        // is unreachable from tagFullText() and is a stub for that reason.
+        class TagWindowFixture : public SObject, public SClipWindow {
+        public:
+            TagWindowFixture( SObject &content )
+                : SObject( nullptr ), content_( content ) {}
+            SObject &asObject() override { return *this; }
+            SObject &windowContent() const override { return content_; }
+            length_t duration() const override { return content_.getDuration(); }
+            length_t durationBlocking() const override { return duration(); }
+            length_t loopLength() const override { return 0; }
+            offset_t startOffset() const override { return 0; }
+            Fraction stretchOrRate() const override { return Fraction( 1 ); }
+            Fraction contentAnchorExact() const override { return Fraction( 0 ); }
+            Fraction timelineToSourceExact( const Fraction &rel ) const override
+            { return rel; }
+            void setDurationFromTimeline( length_t ) override {}
+            void setStartOffsetFromTimeline( offset_t ) override {}
+            void setWindowFromTimeline( offset_t, length_t, length_t,
+                                       const Fraction & ) override {}
+            void setWindowExact( const Fraction &, length_t, length_t,
+                                 const Fraction & ) override {}
+            void setContentAnchorExact( const Fraction & ) override {}
+            SClipWindow *cloneWindowOver( SProject * ) const override { return nullptr; }
+            std::shared_ptr<twComponent> getRootComponent() override { return nullptr; }
+            bool     hasDuration() const override { return true; }
+            length_t getDuration() const override { return content_.getDuration(); }
+            QWidget *getDetailEditWidget( QWidget * ) override { return nullptr; }
+            QWidget *getInlineEditWidget( QWidget * ) override { return nullptr; }
+            SObjectRenderer *getInlineRenderer() override { return nullptr; }
+        private:
+            SObject &content_;
+        };
+
+        // A minimal SExternFile (D12's FIRST text source: the FILE name).
+        class TagFileFixture : public SExternFile {
+        public:
+            TagFileFixture( const QString &path, length_t duration )
+                : SExternFile( nullptr ), path_( path ), duration_( duration ) {}
+            QString getFileName() const override { return path_; }
+            std::shared_ptr<twComponent> getRootComponent() override { return nullptr; }
+            bool     hasDuration() const override { return true; }
+            length_t getDuration() const override { return duration_; }
+            QWidget *getDetailEditWidget( QWidget * ) override { return nullptr; }
+            QWidget *getInlineEditWidget( QWidget * ) override { return nullptr; }
+            SObjectRenderer *getInlineRenderer() override { return nullptr; }
+        private:
+            QString  path_;
+            length_t duration_;
+        };
+
+        // Same stub app context as section 6, and for the same reason
+        // (STrack::setChannels reaches tw303aEnvironment; see its comment
+        // there for the bufferSize(4096) crash fix).
+        class StubAppContext : public SAppContext {
+        public:
+            StubAppContext() { env_.setBufferSize( 4096 ); }
+            SProject *getCurrentProject() const override { return nullptr; }
+            tw303aEnvironment *get303aEnvironment() const override { return &env_; }
+            void rewireSpeaker() override {}
+            bool isSLinkSelected( SLink * ) const override { return false; }
+            void setSelectionFromPaths( const QList<QList<int>> & ) override {}
+            void addSelectionFromPaths( const QList<QList<int>> & ) override {}
+            void removeSelectionFromPaths( const QList<QList<int>> & ) override {}
+            void toggleSelectionFromPaths( const QList<QList<int>> & ) override {}
+            QList<QList<int>> getCurrentSelectionPaths() const override { return {}; }
+            QString testOutputDir() const override { return QString(); }
+            bool ensureOutputDirExists() const override { return false; }
+            void startRender( const audio::RenderParams & ) override {}
+            bool isRenderingActive() const override { return false; }
+            void setPlaybackRunning( bool ) override {}
+            offset_t getGlobalLocatorPos() const override { return 0; }
+        private:
+            mutable tw303aEnvironment env_;
+        };
+
+        StubAppContext ctx;
+        SAppContext::setInstance( &ctx );
+
+        std::unique_ptr<SProject> project( new SProject );
+        project->setChannels( 1 );
+
+        auto paintTrack = []( STrack &track, int w, int h ) {
+            QImage img( w, h, QImage::Format_RGB32 );
+            img.fill( QColor( 0, 0, 0 ) );
+            QPainter painter( &img );
+            FlatContext rc( painter, 0, 0, 1.0 );
+            rc.setVisibRect( QRect( 0, 0, w, h ) );
+            STrackRendererInline rndr( track );
+            SLink dummySelf( track, nullptr );   // draw()'s 1st arg is unused
+            rndr.draw( dummySelf, rc );
+            return img;
+        };
+        // Exact-colour search: fillRect() is opaque and not antialiased, so
+        // an exact RGB match locates the chip precisely.
+        auto columnHasExact = []( const QImage &img, int x, QColor c ) {
+            for( int y = 0; y < img.height(); ++y )
+                if( ( img.pixel( x, y ) & 0x00ffffff ) == ( c.rgb() & 0x00ffffff ) )
+                    return true;
+            return false;
+        };
+        // The chip's own measured horizontal extent within [xa,xb) — read
+        // back independently of anything this test computed, exactly what
+        // section 6's columnHasColor generalises to "how wide", not just
+        // "present".
+        auto chipWidth = [&]( const QImage &img, int xa, int xb, QColor c ) {
+            int lo = -1, hi = -1;
+            for( int x = xa; x < xb; ++x ) {
+                if( !columnHasExact( img, x, c ) ) continue;
+                if( lo < 0 ) lo = x;
+                hi = x + 1;
+            }
+            return ( lo < 0 ) ? 0 : ( hi - lo );
+        };
+
+        // --- 7d (checked first, no paint needed). AC6.1/D12: the tag's
+        // TWO text sources, resolved through the type-agnostic
+        // SClipWindow/SExternFile interfaces rather than any concrete
+        // SCut/SMidiCut/SLaneFragment — the whole reason tagFullText()
+        // exists rather than a dynamic_cast<SCut*> in objects/track, which
+        // may not depend on objects/cut (tools/check_layering.py).
+        {
+            // The WINDOW is what the paint loop passes tagFullText() -- it is
+            // lk->getSObject(), an SCut over the file, never the file itself.
+            // Handing it the bare SExternFile makes SClipWindow::of() answer
+            // null and the function correctly falls through to getSName(),
+            // which is what this check used to assert against and fail.
+            TagFileFixture file( QStringLiteral( "/some/dir/MyFile.wav" ), 100 );
+            TagWindowFixture fileClip( file );
+            check( STrackRendererInline::tagFullText( fileClip )
+                      == QStringLiteral( "MyFile.wav" ),
+                   "D12 source 1: a plain sample-backed clip's tag is the "
+                   "FILE name (basename only, directory stripped)" );
+
+            TagFixtureObject windowContent( 100 );
+            TagWindowFixture asset( windowContent );
+            asset.setSName( QStringLiteral( "Gappy" ) );
+            check( STrackRendererInline::tagFullText( asset )
+                      == QStringLiteral( "Gappy" ),
+                   "D12 source 2: a container-backed clip's (asset or "
+                   "fragment) tag is the WINDOW's own name — exactly what "
+                   "the old bottom-right label read as cut.getSName()" );
+
+            TagFixtureObject noNameFallback( 100 );
+            check( STrackRendererInline::tagFullText( noNameFallback )
+                      == QString( SObject::DEFAULT_SNAME ),
+                   "…and anything that is neither a file nor explicitly "
+                   "named falls back to its own (default) SName, never "
+                   "crashes or returns empty" );
+        }
+
+        // --- 7a. AC6.4: the colour RELATION across every
+        // STrackColorModifier state, tied to the ACTUAL painted pixel —
+        // not merely to tagChipColor()/laneFillColor() in isolation, which
+        // could hold even if draw() painted something else entirely.
+        {
+            std::unique_ptr<STrack> track( new STrack( project.get() ) );
+            TagFixtureObject *obj = new TagFixtureObject( 300 );
+            obj->setSName( QStringLiteral( "Kick" ) );
+            SLink *lk = new SLink( *obj, nullptr );
+            lk->setStartTime( 0 );
+            lk->setParent( track.get() );
+
+            const int lumBody = qGray( QColor( 160, 160, 160 ).rgb() );
+            struct State { bool muted, solo, armed; const char *label; };
+            const State states[] = {
+                { false, false, false, "default" },
+                { true,  false, false, "muted" },
+                { false, true,  false, "solo" },
+                { false, false, true,  "armed" },
+                { true,  true,  false, "muted+solo" },
+                { true,  false, true,  "muted+armed" },
+                { false, true,  true,  "solo+armed" },
+                { true,  true,  true,  "muted+solo+armed" },
+            };
+            for( const State &s : states ) {
+                track->setMuted( s.muted );
+                track->setSolo( s.solo );
+                track->setArmedForRecording( s.armed );
+
+                const QColor fill = STrackRendererInline::laneFillColor( *track );
+                const QColor chip = STrackRendererInline::tagChipColor( fill );
+                const int lumFill = qGray( fill.rgb() );
+                const int lumChip = qGray( chip.rgb() );
+
+                char what[192];
+                std::snprintf( what, sizeof( what ),
+                    "AC6.4 [%s]: tag chip colour is strictly DARKER than "
+                    "the lane fill it derives from (%d < %d)",
+                    s.label, lumChip, lumFill );
+                check( lumChip < lumFill, what );
+                std::snprintf( what, sizeof( what ),
+                    "AC6.4 [%s]: ...and darker than the fixed clip-body "
+                    "grey (%d < %d), which is what makes white chip text "
+                    "readable on it", s.label, lumChip, lumBody );
+                check( lumChip < lumBody, what );
+
+                QImage img = paintTrack( *track, 200, 100 );
+                std::snprintf( what, sizeof( what ),
+                    "AC6.4 [%s]: the PAINTED chip uses exactly the derived "
+                    "colour (trap 6 — the relation alone does not prove "
+                    "draw() used it)", s.label );
+                check( columnHasExact( img, 3, chip ), what );
+            }
+            track->setMuted( false );
+            track->setSolo( false );
+            track->setArmedForRecording( false );
+            lk->setParent( nullptr );
+        }
+
+        // --- 7b. AC6.1 + AC6.2: a tag exists, and D11's occlusion
+        // invariant holds for overlapping placements with DIFFERENT start
+        // times — a clip's tag sits at ITS OWN left edge, which a
+        // later-starting clip (on top, per D11) can never reach because it
+        // paints nothing left of ITS OWN start.
+        {
+            std::unique_ptr<STrack> track( new STrack( project.get() ) );
+
+            TagFixtureObject *p = new TagFixtureObject( 300 );
+            p->setSName( QStringLiteral( "AlphaClip" ) );
+            SLink *pLink = new SLink( *p, nullptr );
+            pLink->setStartTime( 0 );
+            pLink->setParent( track.get() );
+
+            TagFixtureObject *q = new TagFixtureObject( 300 );
+            q->setSName( QStringLiteral( "BetaClip" ) );
+            SLink *qLink = new SLink( *q, nullptr );
+            qLink->setStartTime( 150 );        // starts LATER -> on top (D11)
+            qLink->setParent( track.get() );
+
+            const QColor fill = STrackRendererInline::laneFillColor( *track );
+            const QColor chip = STrackRendererInline::tagChipColor( fill );
+            QImage img = paintTrack( *track, 500, 100 );
+
+            check( columnHasExact( img, 1, chip ),
+                   "AC6.1: a plain clip carries a tag chip at its "
+                   "bottom-left corner" );
+            check( columnHasExact( img, 151, chip ),
+                   "AC6.2: the LATER clip (on top per D11) also carries "
+                   "its own tag, at ITS OWN left edge" );
+            check( columnHasExact( img, 1, chip ),
+                   "AC6.2: ...and the EARLIER clip's tag (fully underneath "
+                   "the later one everywhere from x=150 on) still survives "
+                   "at ITS OWN corner, left of x=150" );
+        }
+
+        // --- 7b continued: THE EQUAL-START TIEBREAK. D11 itself says an
+        // exact start-time tie "is the only case that can hide a [tag]" —
+        // the tiebreak (child index) exists to make WHICH one is hidden
+        // DETERMINISTIC, not to make both survive, which is physically
+        // impossible once both share the identical left edge and the
+        // winner paints its own opaque chip over it. What is gated here is
+        // exactly that: (startTime, childIndex) — never insertion order
+        // read some other way, never the allocator's addresses — decides,
+        // reproducibly, which clip's tag is left standing.
+        {
+            std::unique_ptr<STrack> track( new STrack( project.get() ) );
+
+            TagFixtureObject *loser = new TagFixtureObject( 300 );
+            loser->setSName( QStringLiteral( "LoserClip" ) );
+            SLink *loserLink = new SLink( *loser, nullptr );
+            loserLink->setStartTime( 200 );
+            loserLink->setParent( track.get() );          // child 0
+
+            TagFixtureObject *winner = new TagFixtureObject( 300 );
+            winner->setSName( QStringLiteral( "WinnerClip" ) );
+            SLink *winnerLink = new SLink( *winner, nullptr );
+            winnerLink->setStartTime( 200 );               // TIED with loser
+            winnerLink->setParent( track.get() );          // child 1 -> wins
+
+            check( track->indexOfChild( loserLink ) == 0
+                      && track->indexOfChild( winnerLink ) == 1,
+                   "AC6.2 tiebreak fixture: loser is child 0, winner is "
+                   "child 1, identical start times" );
+
+            const QColor fill = STrackRendererInline::laneFillColor( *track );
+            const QColor chip = STrackRendererInline::tagChipColor( fill );
+            QImage img = paintTrack( *track, 600, 100 );
+
+            check( columnHasExact( img, 201, chip ),
+                   "AC6.2 tiebreak: the higher-childIndex clip's tag "
+                   "survives at the tied corner, deterministically per "
+                   "D11's (startTime, childIndex) order" );
+        }
+
+        // --- 7c. AC6.3: the density ladder at four widths, and D14's
+        // "the cap is announced" tooltip flag — checked against the SAME
+        // shared functions draw() calls (tagDensityText/kTagMaxChars), and
+        // tied to the ACTUAL painted chip WIDTH so a wiring bug (draw()
+        // forgetting to call tagDensityText at all) cannot pass silently.
+        {
+            const QString longName =
+                QStringLiteral( "VeryLongClipNameHere" );   // 21 chars > 12
+            check( longName.length() > STrackRendererInline::kTagMaxChars,
+                   "AC6.3 fixture: the name exceeds the 12-char cap" );
+
+            QFont tagFont = QGuiApplication::font();   // matches draw()'s own
+            tagFont.setPointSize( 7 );                 // font exactly
+            const QFontMetrics fm( tagFont );
+            const int kTagPadX = 3;   // must match strackrndrinline.cpp
+
+            auto widthFor = []( std::unique_ptr<STrack> &track, length_t dur,
+                                const QString &name ) {
+                TagFixtureObject *obj = new TagFixtureObject( dur );
+                obj->setSName( name );
+                SLink *lk = new SLink( *obj, nullptr );
+                lk->setStartTime( 0 );
+                lk->setParent( track.get() );
+            };
+
+            struct Rung {
+                length_t    duration;
+                const char *label;
+            };
+            // Chosen so vr.width() (== duration - 2, the 1px inset each
+            // side, spp=1.0 makes pixels and frames coincide) lands in each
+            // rung: FULL needs plenty of room for the 12-char cap; ELIDED a
+            // little room, enough for one character plus an ellipsis but
+            // not the whole cap; CHIP ONLY exactly the fixed minimum chip
+            // width (6, matching strackrndrinline.cpp's kTagMinChipW) and
+            // no more; NOTHING less than that.
+            const Rung rungs[] = {
+                { 250, "full" }, { 40, "elided" }, { 8, "chip-only" },
+                { 4, "nothing" },
+            };
+
+            int prevWidth = -1;
+            for( const Rung &r : rungs ) {
+                std::unique_ptr<STrack> track( new STrack( project.get() ) );
+                widthFor( track, r.duration, longName );
+
+                const QColor fill = STrackRendererInline::laneFillColor( *track );
+                const QColor chip = STrackRendererInline::tagChipColor( fill );
+                QImage img = paintTrack( *track, 300, 100 );
+                const int measured = chipWidth( img, 0, 300, chip );
+
+                const int vrWidth = (int) r.duration - 2;
+                bool cut = false;
+                const QString drawn = STrackRendererInline::tagDensityText(
+                    longName, fm, vrWidth - 2 * kTagPadX, &cut );
+
+                char what[192];
+                if( vrWidth >= 6 && drawn.isEmpty() ) {
+                    // CHIP ONLY: the fixed minimum, no text.
+                    std::snprintf( what, sizeof( what ),
+                        "AC6.3 [%s]: chip-only rung paints the fixed "
+                        "minimum width (measured %d)", r.label, measured );
+                    check( measured == qMin( 6, vrWidth ), what );
+                } else if( vrWidth < 6 ) {
+                    std::snprintf( what, sizeof( what ),
+                        "AC6.3 [%s]: NOTHING is painted (too narrow even "
+                        "for the chip; measured %d)", r.label, measured );
+                    check( measured == 0, what );
+                } else {
+                    const int expected =
+                        fm.horizontalAdvance( drawn ) + 2 * kTagPadX;
+                    std::snprintf( what, sizeof( what ),
+                        "AC6.3 [%s]: text-bearing chip width matches the "
+                        "shared tagDensityText() decision exactly "
+                        "(measured %d, expected %d, text \"%s\")",
+                        r.label, measured, expected, qPrintable( drawn ) );
+                    check( measured == expected, what );
+                }
+
+                std::snprintf( what, sizeof( what ),
+                    "AC6.3 [%s]: the tooltip's `cut` flag is set whenever "
+                    "the drawn text is not the true full name (here: "
+                    "always, since the name exceeds the 12-char cap)",
+                    r.label );
+                check( cut, what );
+
+                if( prevWidth >= 0 && measured > 0 ) {
+                    std::snprintf( what, sizeof( what ),
+                        "AC6.3: rung \"%s\" is no WIDER than the previous "
+                        "rung (%d <= %d) — the ladder narrows monotonically",
+                        r.label, measured, prevWidth );
+                    check( measured <= prevWidth, what );
+                }
+                if( measured > 0 ) prevWidth = measured;
+            }
         }
     }
 
