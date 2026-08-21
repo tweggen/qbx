@@ -140,6 +140,18 @@ worded assumed the opposite.** It is the exact trade D3 makes: the predicate
 that stops a fragment's internal flags darkening lanes across the project is
 the same predicate every clip verb uses to decide what it may address.
 
+**A CORRECTION recorded by M2b:** the natural guess about WHY this would be
+hard — that a fragment hangs off the asset list outside the root walk, so an
+edit inside one would invalidate nothing — is FALSE. An `SCut`'s content link
+is an ordinary parented `SLink` (`scut.cpp:1346-1347`), so the generic
+recursive walk descends into a fragment exactly as into any other child, and
+invalidation reached every placement with no fix at all. What WAS broken sat
+one layer further on and only showed in rendered audio: `set-clip-volume` on a
+fragment-nested clip invalidated correctly and then rendered BYTE-IDENTICAL
+output, because `STrack::refreshClipGainCurves()` — which pulls a child's gain
+into its owning `twTrackMix` — had no `SLaneFragment` equivalent. A model-state
+assertion passes there. Only rendered output catches it.
+
 It is a GAP, not a defect in D3 — the answer is the *edit-inside* affordance the
 asset route was chosen for in the first place (open the asset, so the fragment
 becomes the addressing root and its children are reachable relative to it,
@@ -151,6 +163,22 @@ editable in place.
 What M2 DID gate is sharing at the CUT's own window — "edit any placement and
 all change", D2's actual invariant — which is a weaker statement than AC2.3's
 original wording and is recorded as such in M2's ACs.
+
+**Deletion cascades, and that is INTENDED (decided 2026-08-21).** M2b's audit
+found that widening `placementAt()` also lets `unplace-clip` and
+`remove-midi-clip` reach a clip inside a fragment. Those DELETE a child link
+rather than mutate a property, so they were flagged rather than silently
+adopted. The decision is to keep them: a deletion is a shared edit like any
+other, it cascades to every placement, and that is D2's invariant working
+rather than an exception to it. Removing a clip from an asset removes it
+everywhere the asset is placed — the same thing "edit any and all change"
+means for every other edit.
+
+Still true, and worth knowing: **`unpack-clips` remains the only way to move
+material OUT of a fragment.** `move-clip`/`place-clip` resolve their
+DESTINATION through `laneAt()`, which stays strict, so a clip can be deleted
+from a fragment but never relocated into or out of one. NOT GATED: no case
+exercises the deletion path inside a fragment.
 
 **M2b (NEW, unscheduled): addressing inside a fragment.** Extend clip-verb
 addressing to descend through a non-lane path container. It needs its own audit
