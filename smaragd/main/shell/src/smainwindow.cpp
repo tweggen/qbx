@@ -40,6 +40,8 @@
 #include "app/objects/midi/smidiclipactions.h"
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
+#include "app/selection/sselectionmanager.h"
+#include "app/selection/ssetselectionaction.h"
 #include "app/shell/ssettings.h"
 #include "app/pluginui/spluginnativeeditor.h"
 #include "app/servicesui/srecordingprogress.h"
@@ -1250,6 +1252,12 @@ SMainWindow::SMainWindow()
     editMenu->addAction( "&Undo", Qt::CTRL | Qt::Key_Z, this, SLOT( undo() ) );
     editMenu->addAction( "&Redo", Qt::CTRL | Qt::SHIFT | Qt::Key_Z, this, SLOT( redo() ) );
     editMenu->addSeparator();
+    // AC-a3: QKeySequence::SelectAll is Ctrl-A / Cmd-A. See
+    // selectAllInActiveArranger()'s own comment for why a focused piano roll
+    // or QLineEdit is unaffected by this shortcut existing.
+    editMenu->addAction( "Select &All", QKeySequence::SelectAll,
+                         this, SLOT( selectAllInActiveArranger() ) );
+    editMenu->addSeparator();
     editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
                          this, SLOT( showOptionsDialog() ) );
     menuBar()->addMenu( editMenu );
@@ -2266,6 +2274,25 @@ SStdMixerView *SMainWindow::ensureArranger_()
         ? dynamic_cast<SStdMixerView*>( viewTabs_->activeEditor() ) : NULL;
 }
 
+// AC-a3: Ctrl/Cmd-A's default answer. Every clip on every lane of the ACTIVE
+// arranger's own root becomes selected, as ONE undoable action — an
+// arrangement tab and the master keep independent selections (proposal 09
+// §3), so this reads v->rootName() rather than assuming the master.
+void SMainWindow::selectAllInActiveArranger()
+{
+    SStdMixerView *v = ensureArranger_();
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !v || !proj ) return;
+    SObject *root = splacements::rootNamed( proj, v->rootName() );
+    if( !root ) return;
+
+    SSelectionManager mgr;
+    QList<QList<int>> paths = mgr.allClipPaths( root );
+    SAction *action = new SSetSelectionAction( paths );
+    action->setPathRoot( v->rootName() );
+    SApplication::app().submitAction( action );
+}
+
 // See the header comment. Runs the tail openProjectFile() runs after a
 // successful load (build the central widget, wire the docks, title the
 // window) without the load itself -- the project already exists and is
@@ -2550,6 +2577,39 @@ bool SMainWindow::clickLane( const QString &trackPath, offset_t time,
     STrack *track = trackAtPath_( trackPath );
     if( !track ) return false;
     return v->clickLane( track, time, mods );
+}
+
+bool SMainWindow::wheelScrollArranger( int deltaY, Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    return v->wheelScroll( deltaY, mods );
+}
+
+bool SMainWindow::sendSelectAllShortcut()
+{
+    QWidget *focus = QApplication::focusWidget();
+    if( focus ) {
+        // Qt's own precedence: a ShortcutOverride reaches the focus widget
+        // BEFORE a WindowShortcut-context QAction is even considered. Accept
+        // it there (a piano roll, a QLineEdit) and the ordinary KeyPress goes
+        // to the SAME widget instead of anywhere else.
+        QKeyEvent overrideEv( QEvent::ShortcutOverride, Qt::Key_A,
+                              Qt::ControlModifier );
+        QApplication::sendEvent( focus, &overrideEv );
+        if( overrideEv.isAccepted() ) {
+            QKeyEvent press( QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier );
+            QApplication::sendEvent( focus, &press );
+            QKeyEvent release( QEvent::KeyRelease, Qt::Key_A,
+                               Qt::ControlModifier );
+            QApplication::sendEvent( focus, &release );
+            return true;
+        }
+    }
+    // Nothing claimed the override: the window's own default, exactly what a
+    // real keystroke falls through to.
+    selectAllInActiveArranger();
+    return true;
 }
 
 bool SMainWindow::splitSelectionGesture()
@@ -3114,7 +3174,7 @@ bool SMainWindow::grabEventEditor( const QString &path, int w, int h )
 bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
                             int channel, qint64 toTick, int toKey,
                             const QString &edge, const QString &lane,
-                            double toValue )
+                            double toValue, Qt::KeyboardModifiers mods )
 {
     if( !eventEditor_ ) return false;
     // The axis must exist before a gesture can be expressed in pixels; the
@@ -3126,7 +3186,7 @@ bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return false;
     return roll->tkDragNote( tick, key, channel, toTick, toKey, edge, lane,
-                             toValue );
+                             toValue, mods );
 }
 
 int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )

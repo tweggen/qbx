@@ -314,7 +314,7 @@ void SPianoRollView::paintEvent( QPaintEvent * )
     // --- notes (the DRAG PREVIEW, when one is live) -----------------------
     std::vector<SEvent> notes = notesOf( r );
     if( drag_.kind == DragKind::Move || drag_.kind == DragKind::Resize
-        || drag_.kind == DragKind::Velocity )
+        || drag_.kind == DragKind::Velocity || drag_.kind == DragKind::Copy )
         notes = previewNotes( r, notes );
 
     for( const SEvent &e : notes ) {
@@ -429,13 +429,25 @@ void SPianoRollView::mousePressEvent( QMouseEvent *ev )
         if( idx >= 0 ) {
             const SEvent &e = notes[ (size_t) idx ];
             const QString id = idStr( e );
-            if( ev->modifiers() & Qt::ControlModifier ) {
-                if( selected_.contains( id ) ) selected_.remove( id );
-                else                           selected_.insert( id );
-            } else if( !selected_.contains( id ) ) {
-                selectOnly( id );
+            // AC-a2: Ctrl on a note BODY (not an edge — that stays a plain
+            // resize) arms a COPY drag instead of toggling the selection
+            // immediately. The toggle is deferred to commitDrag(), which
+            // checks whether the pointer ever crossed Qt's own drag
+            // threshold: a Ctrl press that never moves is still a plain
+            // toggle, exactly as before this gesture existed (regression:
+            // piano_roll_edits.qxa never itself presses Ctrl, but the plain
+            // click path below must keep working unchanged for it).
+            if( hasPrimaryMod( ev->modifiers() ) && !onEdge ) {
+                drag_.kind = DragKind::Copy;
+            } else {
+                if( ev->modifiers() & Qt::ControlModifier ) {
+                    if( selected_.contains( id ) ) selected_.remove( id );
+                    else                           selected_.insert( id );
+                } else if( !selected_.contains( id ) ) {
+                    selectOnly( id );
+                }
+                drag_.kind = onEdge ? DragKind::Resize : DragKind::Move;
             }
-            drag_.kind      = onEdge ? DragKind::Resize : DragKind::Move;
             drag_.anchor    = id;
             drag_.pressTick = tickOfX( r, pos.x() - KEYS_W );
             drag_.pressKey  = keyOfY( pos.y() );
@@ -559,6 +571,31 @@ std::vector<SEvent> SPianoRollView::previewNotes(
                                   : idStr( e ) == drag_.anchor ) ) continue;
             e.value = drag_.value;
         }
+    } else if( drag_.kind == DragKind::Copy ) {
+        // AC-a2: same delta math as Move, but the ORIGINALS in `out` are left
+        // untouched and a NEW SEvent is appended per dragged note — `out`
+        // already contains the originals (it started life as a copy of
+        // `notes`), so this only ever grows the table, never mutates it.
+        const qint64 dRaw = tickOfX( r, drag_.cur.x() - KEYS_W )
+                          - tickOfX( r, drag_.press.x() - KEYS_W );
+        qint64 newTick = snapTick( r, anchorTick + dRaw );
+        if( newTick < 0 ) newTick = 0;
+        const qint64 dTick = newTick - anchorTick;
+        const int dKey = keyOfY( drag_.cur.y() ) - keyOfY( drag_.press.y() );
+        for( const SEvent &e : notes ) {
+            if( !( wholeSelection ? selected_.contains( idStr( e ) )
+                                  : idStr( e ) == drag_.anchor ) ) continue;
+            SEvent c = e;
+            c.t   = std::max<qint64>( 0, e.t + dTick );
+            c.key = std::min( 127, std::max( 0, e.key + dKey ) );
+            // A copy landing back on its own source address is a legitimate
+            // no-op (e.g. a Ctrl-drag that crossed the pixel threshold but
+            // snapped back to where it started): refuse it rather than
+            // producing a second note at an address idStr() cannot tell
+            // apart from the original.
+            if( c.t == e.t && c.key == e.key ) continue;
+            out.push_back( c );
+        }
     }
     std::sort( out.begin(), out.end() );
     return out;
@@ -607,6 +644,44 @@ void SPianoRollView::commitDrag()
                 new SSetEventsAction( clipPath_, events, -1 ) );
         }
         drag_ = Drag();
+        update();
+        return;
+    }
+
+    if( kind == DragKind::Copy ) {
+        // AC-a2: a Ctrl press that never crossed Qt's own drag threshold is a
+        // plain TOGGLE, not a copy — exactly what this note's Ctrl-click did
+        // before this gesture existed. Only a real drag commits anything.
+        const QPoint delta = drag_.cur - drag_.press;
+        if( delta.manhattanLength() < QApplication::startDragDistance() ) {
+            const QString anchor = drag_.anchor;
+            drag_ = Drag();
+            if( selected_.contains( anchor ) ) selected_.remove( anchor );
+            else                               selected_.insert( anchor );
+            update();
+            return;
+        }
+
+        // drag_ is still live here (previewNotes() reads press/cur/anchor
+        // off it), exactly as the shared Move/Resize/Velocity path below
+        // reads it before clearing.
+        const std::vector<SEvent> notes = notesOf( r );
+        const std::vector<SEvent> next = previewNotes( r, notes );
+        drag_ = Drag();
+
+        if( !sameNotes( next, notes ) ) {
+            // Select exactly the NEW addresses — the copies, never the
+            // originals — by diffing `next` against the BEFORE table.
+            QSet<QString> before;
+            for( const SEvent &e : notes ) before.insert( idStr( e ) );
+            QSet<QString> keep;
+            for( const SEvent &e : next ) {
+                const QString id = idStr( e );
+                if( !before.contains( id ) ) keep.insert( id );
+            }
+            selected_ = keep;
+            commitNotes( r, next );
+        }
         update();
         return;
     }
@@ -670,6 +745,22 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
     // the shell's shortcuts alive while the editor holds focus.
     const Resolved r = resolve();
     const qint64 g = r.valid() ? gridTicks( r ) : 0;
+
+    // AC-a3: Ctrl/Cmd-A selects every note of the BOUND CLIP. event() below
+    // is what routes the keystroke here instead of into the shell's "Select
+    // All" QAction (which would select clips, not notes) — this handler is
+    // reached only once that ShortcutOverride has already won. View state
+    // only (like every other selection change in this file); nothing to undo.
+    if( ev->key() == Qt::Key_A && hasPrimaryMod( ev->modifiers() ) ) {
+        if( r.valid() ) {
+            selected_.clear();
+            for( const SEvent &e : notesOf( r ) ) selected_.insert( idStr( e ) );
+            update();
+        }
+        ev->accept();
+        return;
+    }
+
     switch( ev->key() ) {
     case Qt::Key_Left:   nudgeSelection( -( g > 0 ? g : 240 ), 0 ); break;
     case Qt::Key_Right:  nudgeSelection(  ( g > 0 ? g : 240 ), 0 ); break;
@@ -691,6 +782,23 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
         return;
     }
     ev->accept();
+}
+
+bool SPianoRollView::event( QEvent *ev )
+{
+    // See the header comment: accepting Ctrl/Cmd-A's ShortcutOverride here is
+    // what stops the shell's window-level "Select All" QAction from firing
+    // instead of keyPressEvent() while this view has focus. Every other key
+    // (Space included) is left alone, so the shell's shortcuts stay reachable
+    // exactly as they were.
+    if( ev->type() == QEvent::ShortcutOverride ) {
+        QKeyEvent *ke = static_cast<QKeyEvent*>( ev );
+        if( ke->key() == Qt::Key_A && hasPrimaryMod( ke->modifiers() ) ) {
+            ev->accept();
+            return true;
+        }
+    }
+    return SEventEditorView::event( ev );
 }
 
 void SPianoRollView::resizeEvent( QResizeEvent *ev )
@@ -875,7 +983,8 @@ bool SPianoRollView::applyWheel( QWheelEvent *ev )
 
 bool SPianoRollView::tkDragNote( qint64 tick, int key, int channel,
                                  qint64 toTick, int toKey, const QString &edge,
-                                 const QString &lane, double toValue )
+                                 const QString &lane, double toValue,
+                                 Qt::KeyboardModifiers mods )
 {
     const Resolved r = resolve();
     if( !r.valid() || !axis_ ) return false;
@@ -943,7 +1052,7 @@ bool SPianoRollView::tkDragNote( qint64 tick, int key, int channel,
                      Qt::MouseButtons buttons ) {
         const QPointF local( x, y );
         QMouseEvent ev( type, local, mapToGlobal( local ), button, buttons,
-                        Qt::NoModifier );
+                        mods );
         QApplication::sendEvent( this, &ev );
     };
     send( QEvent::MouseButtonPress,   x0, y0, Qt::LeftButton, Qt::LeftButton );

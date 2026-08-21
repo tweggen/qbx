@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC-g1: a manual horizontal scroll suspends playhead-following for 5 seconds
+  (SMVActualView::FOLLOW_HOLD_MS). This is a WALL-CLOCK case (RUN_SERIAL,
+  real-time playback via the capture backend — no SMARAGD_CAPTURE_SPEED
+  override, since the hold itself is measured against a real QElapsedTimer).
+
+  `wheel-scroll` is a new minimal testkit verb (main/testkit/src/
+  sclicklaneaction.cpp): it sends a REAL QWheelEvent to the arranger canvas,
+  through SMainWindow::wheelScrollArranger -> SStdMixerView::wheelScroll,
+  landing in the actual wheelEvent()/applyWheel() path — including
+  armFollowHold() — rather than a re-spelling of "pan the view"
+  (set-lane-view's scrollX= bypasses every arm point ON PURPOSE, so a case
+  using it could not tell the hold apart from doing nothing at all).
+
+  THE GEOMETRY IS MEASURED, NOT GUESSED, and that is worth recording plainly:
+  the canvas is never SHOWN in a headless run, and `assert-lane-alignment
+  grabWidth="800"` resizes the WINDOW to fit an 800px canvas but the canvas
+  itself lands at a narrower width once the layout subtracts the track-control
+  column, scrollbar and margins — an internal-only detail with no verb that
+  reports it directly. What IS deterministic (confirmed by running this
+  exact setup repeatedly before committing it) is the single wheel-scroll's
+  RESULT: secondWidth=1000, one Shift+wheel notch (deltaY=-600, which is
+  ScrollHorizontal's default binding — see SOpt::WheelShift) always lands
+  scrollX at EXACTLY 2580. That number is this case's closed form; the 800px
+  request is only what makes it reproducible run to run, not a number this
+  case computes independently.
+
+  WHY THE HOLD IS ACTUALLY BEING TESTED, not just "nothing moved because
+  nothing would have anyway": at scrollX=2580 and secondWidth=1000, the
+  playhead crosses followLocator's 80% forward-edge trigger at roughly frame
+  19000 — under half a second of real playback — so during either wait-ms
+  window below the transport crosses it many times over. Without the hold,
+  ordinary follow would have re-paged long before either check runs.
+-->
+<SActionScript version="1" name="follow_scroll_hold">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- One empty track: proposal 09 - the MASTER root's playhead is always
+         "sounding" regardless of content (localPlayhead() takes the early
+         return for an empty root name), so followLocator needs no audible
+         material to be exercised. -->
+    <add-track index="-1"/>
+
+    <set-lane-view secondWidth="1000"/>
+    <!-- Forces the never-shown canvas to a known, reproducible size (see the
+         header) — a free lane-alignment check comes along with it. -->
+    <assert-lane-alignment grabPng="follow_hold_canvas.png"
+                           grabWidth="800" grabHeight="200"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+
+    <!-- A REAL wheel notch, Shift+wheel = Pan under the default mapping
+         (SOpt::WheelShift). This ARMS the 5 s hold. -->
+    <wheel-scroll deltaY="-600" modifiers="shift"/>
+    <assert-lane-view scrollX="2580"/>
+
+    <!-- Well inside the hold window: the transport has had ~2 s to cross the
+         forward edge repeatedly, and the view must not have moved. -->
+    <wait-ms ms="2000"/>
+    <assert-lane-view scrollX="2580"/>
+
+    <!-- ~7 s since the scroll, 2 s past the 5 s hold with margin: follow has
+         resumed and re-paged AT LEAST once, so the view is no longer sitting
+         at the held position. -->
+    <wait-ms ms="5000"/>
+    <assert-lane-view scrollX="2580" expectReject="true"/>
+
+    <toggle-playback play="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
