@@ -24,7 +24,16 @@ class tw303aEnvironment
 private:
     QList<std::shared_ptr<twComponent> > listModules;
 
-    length_t bufferSize;
+    // Default-initialised, NOT left indeterminate. The constructor sets
+    // sampleRate and candidateRates_ and historically did NOT set this, so
+    // getBufferSize() before the first setBufferSize() was an indeterminate
+    // read. The app masked it (sapplication.cpp sets 4096 during startup), but
+    // any minimal fixture that builds a twMixer hits it on the ctor chain
+    // twMixer::twMixer -> setBufferSize( env.getBufferSize() ), where a
+    // garbage size reaches calloc, returns null and throws. 4096 is the value
+    // the app itself uses, so a default-constructed environment now agrees
+    // with a running one instead of being undefined.
+    length_t bufferSize = 4096;
     int sampleRate;
     // The standard "magnet" rates the negotiator builds its candidate domain D
     // from (proposal 04 §3a). Configurable and persisted with the project.
