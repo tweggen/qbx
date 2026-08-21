@@ -81,6 +81,42 @@ int cmdInputs()
     return 0;
 }
 
+// OPEN one input device and report the two channel counts that are NOT the
+// same number. `getConfig().channels` is the width of the stream AS OPENED —
+// on ASIO the demand-driven, grow-only set, which is input 0 alone until
+// something asks for more — while `deviceInputChannels()` is what the
+// interface HAS. A channel PICKER must be sized from the second: sized from
+// the first, a 16-input interface offers exactly one channel forever.
+//
+// Rate 0 on purpose: a non-zero preferredRate makes an ASIO driver SET its
+// rate, and this is only counting channels.
+int cmdInOpen(const std::string &id)
+{
+    auto in = audio::createAudioInput();
+    if (!in) { std::printf("createAudioInput() returned nothing\n"); return 1; }
+
+    std::printf("=== inopen %s\n", id.c_str());
+    if (in->openDevice(id, 0) != 0) {
+        std::printf("  FAILED: openDevice — %s\n", in->errorMessage());
+        return 1;
+    }
+    std::printf("  routed : %s\n", in->backendName());
+
+    const audio::AudioInputConfig &c = in->getConfig();
+    std::printf("  config : %u Hz, %u frames/buffer, %s, in latency %u frames\n",
+                c.sampleRate, c.bufferFrames, fmtName(c.sampleType),
+                c.inputLatencyFrames);
+    std::printf("  stream : %u ch  (the set currently OPEN)\n", c.channels);
+    std::printf("  device : %u ch  (what the interface HAS — what a picker uses)\n",
+                in->deviceInputChannels());
+    if (in->deviceInputChannels() > c.channels)
+        std::printf("  note   : the two differ, which is normal on ASIO — the stream "
+                    "grows as channels are armed\n");
+
+    in->closeDevice();
+    return 0;
+}
+
 // Phase 5: the driver's own control panel. Opens the device first, because
 // a panel belongs to an INSTANTIATED driver rather than to a CLSID, then
 // blocks until the window is closed and reports whether the driver moved
@@ -661,6 +697,7 @@ int main(int argc, char **argv)
     if (av.empty()) {
         std::printf("usage: audio_backend_probe list\n"
                     "       audio_backend_probe inputs\n"
+                    "       audio_backend_probe inopen  <device-id>\n"
                     "       audio_backend_probe panel   <device-id>\n"
                     "       audio_backend_probe loopback <device-id> [in-channel]\n"
                     "       audio_backend_probe open <device-id> [--rate=N]\n"
@@ -694,6 +731,8 @@ int main(int argc, char **argv)
         rc = cmdPanel(av[1]);
     } else if (av[0] == "inputs") {
         rc = cmdInputs();
+    } else if (av[0] == "inopen" && av.size() >= 2) {
+        rc = cmdInOpen(av[1]);
     } else if (av[0] == "duplex" && av.size() >= 2) {
         int seconds = 3;
         if (av.size() >= 3) {

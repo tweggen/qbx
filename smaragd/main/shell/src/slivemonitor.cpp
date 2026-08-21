@@ -173,22 +173,34 @@ bool SLiveMonitor::ensureInput( STrack *track )
 
 bool SLiveMonitor::ensureBridge( const QString &want, std::uint64_t channelMask )
 {
+    bool reopenForChannels = false;
     if( bridge_ && bridge_->isRunning() && inputDeviceId_ == want ) {
-        bridge_->setLiveEnabled( true );
-        // The device is already open, so a NEW channel cannot be added without
-        // stopping the driver — the backend records it and applies it at the
-        // next start rather than gapping what is playing. Already-open
-        // channels, which is the common case, cost nothing.
-        if( channelMask ) bridge_->requestInputChannels( channelMask );
-        return true;
+        const std::uint64_t union_ = openChannelMask_ | channelMask;
+        if( channelMask == 0 || union_ == openChannelMask_ ) {
+            // Already open and already covers every bit asked for — the
+            // common case once a session is warm. Nothing to do.
+            bridge_->setLiveEnabled( true );
+            return true;
+        }
+        // A bit this bridge has never been asked for. `requestInputChannels`
+        // alone would just DEFER on ASIO (its driver is running, and growing
+        // its channel set needs disposeBuffers+createBuffers, which needs it
+        // stopped) — and nothing forces that stop within one continuous
+        // session, so the deferred grow could sit forever and the new
+        // channel would silently never arrive. Reopen the bridge itself, with
+        // the UNION of every mask asked for so far, so the selection takes
+        // effect now rather than waiting for a start that may never come.
+        reopenForChannels = true;
+        channelMask = union_;
     }
     if( bridge_ ) {
         if( bridgeHolds_ > 0 ) {
-            // A take is running on the device that is open. Changing devices
-            // mid-recording would throw the take away; keep what we have and
-            // say so.
-            TW_LOGW( "shell", "[LIVE] input device change to '%s' deferred: a "
-                              "recording holds '%s'",
+            // A take is running on the device that is open. Reopening it —
+            // whether for a device change or a wider channel set — would
+            // throw the take away; keep what we have and say so.
+            TW_LOGW( "shell", "[LIVE] input %s to '%s' deferred: a recording "
+                              "holds '%s'",
+                     reopenForChannels ? "channel mask change" : "device change",
                      want.toStdString().c_str(),
                      inputDeviceId_.toStdString().c_str() );
             return true;
@@ -219,8 +231,9 @@ bool SLiveMonitor::ensureBridge( const QString &want, std::uint64_t channelMask 
                  want.toStdString().c_str(), br->errorMessage() );
         return false;
     }
-    bridge_        = std::move( br );
-    inputDeviceId_ = want;
+    bridge_          = std::move( br );
+    inputDeviceId_   = want;
+    openChannelMask_ = channelMask;
     TW_LOGI( "shell", "[LIVE] input open: device='%s' %u ch @ %u Hz -> %u Hz, "
                       "reported latency %u frames",
              want.toStdString().c_str(), bridge_->inputChannels(),
@@ -235,6 +248,7 @@ void SLiveMonitor::closeBridge()
     bridge_->stop();
     bridge_.reset();
     inputDeviceId_.clear();
+    openChannelMask_ = 0;
 }
 
 audio::CaptureBridge *SLiveMonitor::acquireBridge( const QString &deviceId )

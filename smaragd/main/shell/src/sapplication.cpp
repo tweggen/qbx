@@ -5,6 +5,8 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 
+#include <memory>
+
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/tw_freeze_context.h"
 #include "tw/core/twlog.h"
@@ -12,6 +14,7 @@
 #include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/devices/audio_backend.h"
+#include "tw/devices/audio_input.h"
 #include "tw/devices/keyboard_midi.h"
 #include "tw/playback/twspeaker.h"
 #include "tw/schedule/capture_revalidator.h"
@@ -726,6 +729,33 @@ SApplication::SApplication( int &argc, char **argv )
     // Restore the audio output device chosen in a previous session.
     QString devId = SSettings::instance().audioDeviceId();
     if( !devId.isEmpty() ) t3Speaker_->setOutputDevice( devId.toStdString() );
+
+    // If the currently selected INPUT device's channel count is not cached
+    // yet — an ASIO driver reports channels=0 from listDevices() alone (no
+    // driver loaded to ask it) until something opens it once — probe it here,
+    // at startup, rather than leaving the arm button's channel menu showing
+    // only "All Channels" until the user happens to visit Options -> Audio.
+    // `createAudioInput()` already honours SMARAGD_AUDIO_INPUT_BACKEND, which
+    // main.cpp defaults to "null" for a --test-case run, so this is a no-op
+    // under the headless suite exactly the way the Options page's own probe
+    // is (main/servicesui/src/soptionsdialog.cpp, onAudioInputDeviceSelected).
+    QString inDevId = SSettings::instance().audioInputDeviceId();
+    if( !inDevId.isEmpty() && inDevId != QStringLiteral( "default" )
+            && SSettings::instance().audioInputChannelCount( inDevId ) == 0 ) {
+        std::unique_ptr<audio::AudioInput> inProbe = audio::createAudioInput();
+        // Rate 0 == "no preference": this probe is counting channels, and
+        // asking for a rate would make an ASIO driver SET it (AsioDevice's
+        // acquire calls setSampleRate for any non-zero preferredRate).
+        if( inProbe && inProbe->openDevice( inDevId.toStdString(), 0 ) == 0 ) {
+            // deviceInputChannels(), never getConfig().channels — the latter
+            // is the width as OPENED, which on ASIO is one channel until
+            // something demands more, and a picker sized from it offers
+            // exactly one channel forever.
+            const uint32_t inChannels = inProbe->deviceInputChannels();
+            if( inChannels > 0 )
+                SSettings::instance().setAudioInputChannelCount( inDevId, inChannels );
+        }
+    }
 
     // Proposal 27: app-global derived-data sidecar store (content-addressed,
     // safe to delete wholesale). SMARAGD_SIDECAR_DIR=off disables it,

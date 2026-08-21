@@ -863,26 +863,19 @@ SSMVMixerControl::SSMVMixerControl(
 // its own verb because it is the thing a performer changes most often.
 void SSMVMixerControl::showChannelMenu()
 {
-    // Get the selected input device from settings
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) {
         qWarning( "No project available" );
         return;
     }
 
-    QString inDeviceId = SSettings::instance().audioInputDeviceId();
-
-    // Create a temporary audio input to query channel count
+    // Enumerating devices needs no OPEN device — `listDevices()` is documented
+    // to work on a never-opened instance (WASAPIInput::listDevices() stands up
+    // its own temporary enumerator). Opening one here just to size a menu would
+    // be exactly the driver-splash-screen cost `listDevices()` exists to avoid.
     std::unique_ptr<audio::AudioInput> input = audio::createAudioInput();
-    if( !input || input->openDevice( inDeviceId.toStdString(), 48000 ) != 0 ) {
-        qWarning( "Failed to open input device for channel enumeration" );
-        return;
-    }
-
-    const audio::AudioInputConfig &config = input->getConfig();
-    uint32_t numChannels = config.channels;
-    if( numChannels == 0 ) {
-        qWarning( "Input device has no channels" );
+    if( !input ) {
+        qWarning( "No audio input backend available" );
         return;
     }
 
@@ -909,8 +902,54 @@ void SSMVMixerControl::showChannelMenu()
         }
     }
 
+    // Picking a device AND its channel(s) in one click is two verbs under the
+    // hood — `setTrackInput_` (the device+mask spec) and `setRecordingChannels`
+    // (the model's own recordingChannels_, which also re-writes the same mask
+    // back onto trackInput once the device is set) — batched into one undo
+    // entry so a single menu click is a single Ctrl+Z.
+    QUndoStack *undoStack = SApplication::app().actionHistory()->undoStack();
+    auto pickDeviceChannels = [this, undoStack]
+            ( const QString &device, unsigned trackMask, uint32_t recordingMask ) {
+        if( undoStack ) undoStack->beginMacro( QStringLiteral( "Set track input" ) );
+        setTrackInput_( device, trackMask );
+        setRecordingChannels( recordingMask );
+        if( undoStack ) undoStack->endMacro();
+    };
+
+    // Fills in one device's Mono/Stereo groups once its channel count is
+    // KNOWN — either a WASAPI endpoint (its mix format is free to read) or an
+    // ASIO device the Options page has already probed and cached (below).
+    auto buildMonoStereo = [this, pickDeviceChannels]
+            ( QMenu *monoMenu, QMenu *stereoMenu, const QString &id,
+              uint32_t chCount, bool isCurrentDevice, uint32_t currentSelection ) {
+        for( uint32_t ch = 0; ch < chCount; ++ch ) {
+            QAction *chAction = monoMenu->addAction( QString::number( ch + 1 ) );
+            chAction->setCheckable( true );
+            chAction->setChecked( isCurrentDevice && currentSelection == (1U << ch) );
+            connect( chAction, &QAction::triggered, this, [pickDeviceChannels, id, ch]() {
+                pickDeviceChannels( id, 1U << ch, 1U << ch );
+            } );
+        }
+        // Every ADJACENT pair (1+2, 2+3, 3+4, ..., n-1+n), not just the
+        // non-overlapping ones — a stereo source is not necessarily wired to
+        // the odd/even boundary.
+        for( uint32_t pair = 0; pair + 1 < chCount; ++pair ) {
+            QString label = QStringLiteral( "%1+%2" ).arg( pair + 1 ).arg( pair + 2 );
+            QAction *pairAction = stereoMenu->addAction( label );
+            pairAction->setCheckable( true );
+            uint32_t pairMask = (1U << pair) | (1U << (pair + 1));
+            pairAction->setChecked( isCurrentDevice && currentSelection == pairMask );
+            connect( pairAction, &QAction::triggered, this, [pickDeviceChannels, id, pairMask]() {
+                pickDeviceChannels( id, pairMask, pairMask );
+            } );
+        }
+    };
+
     // --- THE INPUT DEVICE. "None" is a real choice and the default: a track
-    //     with no input is not a monitoring source however it is armed.
+    //     with no input is not a monitoring source however it is armed. Every
+    //     other device is its OWN submenu — "All Channels" plus Mono/Stereo
+    //     groups sized from THAT DEVICE'S OWN reported channel count, never
+    //     from whatever device happens to be open elsewhere.
     {
         QMenu *dev = menu.addMenu( QStringLiteral( "Input device" ) );
         QAction *none = dev->addAction( QStringLiteral( "None" ) );
@@ -923,14 +962,37 @@ void SSMVMixerControl::showChannelMenu()
         for( const audio::AudioInputDeviceInfo &d : input->listDevices() ) {
             const QString id   = QString::fromStdString( d.id );
             const QString name = QString::fromStdString( d.name );
-            QAction *a = dev->addAction( name.isEmpty() ? id : name );
-            a->setCheckable( true );
-            a->setChecked( tk_.hasTrackInput() && current == id );
-            connect( a, &QAction::triggered, this, [this, id]() {
-                unsigned mask = tk_.trackInputChannelMask();
-                if( mask == 0u ) mask = 1u;
-                setTrackInput_( id, mask );
+            const bool isCurrentDevice = tk_.hasTrackInput() && current == id;
+
+            QMenu *devMenu = dev->addMenu( name.isEmpty() ? id : name );
+
+            QAction *allAct = devMenu->addAction( QStringLiteral( "All Channels" ) );
+            allAct->setCheckable( true );
+            allAct->setChecked( isCurrentDevice && currentSelection == 0 );
+            connect( allAct, &QAction::triggered, this, [pickDeviceChannels, id]() {
+                pickDeviceChannels( id, 1u, 0u );
             } );
+
+            devMenu->addSeparator();
+            QMenu *monoMenu   = devMenu->addMenu( QStringLiteral( "Mono" ) );
+            QMenu *stereoMenu = devMenu->addMenu( QStringLiteral( "Stereo" ) );
+
+            // channels==0 from listDevices() means "not known without opening"
+            // (ASIO, proposal 35) — and THIS MENU MUST NEVER OPEN A DRIVER
+            // ITSELF: it can pop up mid-session, during playback or a take,
+            // where a driver open is unwelcome. Edit -> Options -> Audio is
+            // the deliberate "configure this device" gesture that probes an
+            // ASIO device once and caches the result; fall back to that cache.
+            uint32_t chCount = d.channels;
+            if( chCount == 0 ) chCount = SSettings::instance().audioInputChannelCount( id );
+            if( chCount > 0 ) {
+                buildMonoStereo( monoMenu, stereoMenu, id, chCount,
+                                  isCurrentDevice, currentSelection );
+            } else {
+                QAction *hint = monoMenu->addAction(
+                    QStringLiteral( "Channel count unknown — open in Options → Audio" ) );
+                hint->setEnabled( false );
+            }
         }
 
         // --- THE COMPUTER KEYBOARD, plus every MIDI port this machine offers
@@ -978,56 +1040,6 @@ void SSMVMixerControl::showChannelMenu()
                 } );
             }
         }
-    }
-    menu.addSeparator();
-
-    // "All Channels" option
-    QAction *allChannelsAction = menu.addAction( "All Channels" );
-    allChannelsAction->setCheckable( true );
-    allChannelsAction->setChecked( currentSelection == 0 );
-    connect( allChannelsAction, &QAction::triggered, this, [this]() {
-        setRecordingChannels( 0 );
-    });
-
-    menu.addSeparator();
-
-    // Individual channels
-    for( uint32_t ch = 0; ch < numChannels; ++ch ) {
-        QString label = QString( "Channel %1" ).arg( ch + 1 );
-        QAction *chAction = menu.addAction( label );
-        chAction->setCheckable( true );
-        chAction->setChecked( (currentSelection & (1U << ch)) != 0 );
-        connect( chAction, &QAction::triggered, this, [this, ch]() {
-            uint32_t channels = tk_.getRecordingChannels();
-            if( channels == 0 ) {
-                // "All" mode: switch to single channel
-                channels = (1U << ch);
-            } else {
-                // Toggle this channel. Un-checking the LAST one would land on
-                // mask 0, which does not mean "record nothing" — it means
-                // "record every input the interface has". Refuse instead:
-                // "All Channels" is its own menu entry and has to be chosen
-                // deliberately.
-                uint32_t toggled = channels ^ (1U << ch);
-                if( toggled == 0 ) return;
-                channels = toggled;
-            }
-            setRecordingChannels( channels );
-        });
-    }
-
-    menu.addSeparator();
-
-    // Stereo pairs (1-2, 3-4, 5-6, etc.)
-    for( uint32_t pair = 0; pair + 1 < numChannels; pair += 2 ) {
-        QString label = QString( "Stereo %1-%2" ).arg( pair + 1 ).arg( pair + 2 );
-        QAction *pairAction = menu.addAction( label );
-        pairAction->setCheckable( true );
-        uint32_t pairMask = (1U << pair) | (1U << (pair + 1));
-        pairAction->setChecked( currentSelection == pairMask );
-        connect( pairAction, &QAction::triggered, this, [this, pairMask]() {
-            setRecordingChannels( pairMask );
-        });
     }
 
     // Show menu at cursor position

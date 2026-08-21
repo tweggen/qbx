@@ -205,6 +205,16 @@ void SSettings::setAudioInputLatencyFrames( const QString &deviceId, uint32_t fr
     setValue( "audio/inputLatency/" + deviceId, frames );
 }
 
+uint32_t SSettings::audioInputChannelCount( const QString &deviceId ) const
+{
+    return value( "audio/inputDeviceChannels/" + deviceId, 0u ).toUInt();
+}
+
+void SSettings::setAudioInputChannelCount( const QString &deviceId, uint32_t channels )
+{
+    setValue( "audio/inputDeviceChannels/" + deviceId, channels );
+}
+
 QString SSettings::lastDir( const QString &context, const QString &fallback ) const
 {
     return value( "paths/" + context, fallback ).toString();

@@ -320,6 +320,14 @@ private:
 
     std::unique_ptr<audio::CaptureBridge> bridge_;
     QString                              inputDeviceId_;
+    // The union of every channel bit any arm has asked for on the currently
+    // open bridge. `AsioDevice::requestInputChannels()` defers a grow to "the
+    // next start" while the driver is running, and nothing forces that start
+    // within one continuous monitoring/recording session — so `ensureBridge`
+    // tracks this to notice when a NEW bit is asked for and reopens the
+    // bridge itself rather than silently waiting for a start that may never
+    // come. 0 while no bridge is open.
+    std::uint64_t                        openChannelMask_ = 0;
     int                                  bridgeHolds_ = 0;   // recording holds
     std::vector<std::shared_ptr<SLiveAudioInputSource> > sources_;
     std::unique_ptr<LiveGraphPump>       pump_;

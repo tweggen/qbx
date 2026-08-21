@@ -117,6 +117,10 @@ void AsioInput::refreshConfig_()
     config_.bufferFrames       = out.bufferFrames;
     config_.sampleType         = twSampleType::Float32;
     config_.channels           = device_->inputStreamChannels();
+    // What the DRIVER has, as against the demand-driven set we opened above.
+    // The two differ on every ASIO device — nobody having asked yet means
+    // input 0 alone (createBuffers_) — and a channel PICKER needs this one.
+    config_.deviceChannels     = (std::uint32_t) device_->info().inputChannels;
     config_.inputLatencyFrames = device_->inputLatencyFrames();
 }
 

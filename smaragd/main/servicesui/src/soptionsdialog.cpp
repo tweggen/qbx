@@ -211,6 +211,8 @@ QWidget *SOptionsDialog::buildAudioPage()
     audioInputDevice_ = new QComboBox;
     form->addRow( "Input device:", audioInputDevice_ );
     form->addRow( new QLabel( "Device selection is used when recording starts." ) );
+    connect( audioInputDevice_, QOverload<int>::of( &QComboBox::currentIndexChanged ),
+             this, &SOptionsDialog::onAudioInputDeviceSelected );
 
     inputLatencyLabel_ = new QLabel;
     form->addRow( "Input latency:", inputLatencyLabel_ );
@@ -559,10 +561,19 @@ void SOptionsDialog::loadAudioPage()
             for( const audio::AudioInputDeviceInfo &d : probe->listDevices() ) {
                 const QString id   = QString::fromStdString( d.id );
                 if( id.isEmpty() || id == QStringLiteral( "default" ) ) continue;
+                // channels==0 (an ASIO entry — no driver loaded to ask it) may
+                // already be known from a PAST probe (onAudioInputDeviceSelected
+                // below); use that cached count for the label so a reopened
+                // dialog does not look like it forgot.
+                uint32_t channels = d.channels;
+                if( channels == 0 )
+                    channels = SSettings::instance().audioInputChannelCount( id );
                 QString label = sDeviceLabel( d.name, d.sampleRate );
-                if( d.channels > 0 )
-                    label = QStringLiteral( "%1 (%2 ch)" ).arg( label ).arg( d.channels );
+                if( channels > 0 )
+                    label = QStringLiteral( "%1 (%2 ch)" ).arg( label ).arg( channels );
                 audioInputDevice_->addItem( label, id );
+                audioInputDevice_->setItemData(
+                    audioInputDevice_->count() - 1, channels, Qt::UserRole + 1 );
             }
         }
     }
@@ -788,6 +799,41 @@ void SOptionsDialog::onMeasureLoopback()
         if( recordingOffsetMs_ )
             recordingOffsetMs_->setValue( (int) qRound( offerMs ) );
     }
+}
+
+void SOptionsDialog::onAudioInputDeviceSelected( int index )
+{
+    if( index < 0 || !audioInputDevice_ ) return;
+    // Already known — either a WASAPI endpoint (listDevices() reads its mix
+    // format for free) or an ASIO device this dialog probed before. Nothing to
+    // open.
+    if( audioInputDevice_->itemData( index, Qt::UserRole + 1 ).toUInt() > 0 ) return;
+
+    const QString id = audioInputDevice_->currentData().toString();
+    if( id.isEmpty() || id == QStringLiteral( "default" ) ) return;
+
+    // Opening an ASIO driver just to learn its channel count can briefly
+    // block (driver init, occasionally a splash screen) — acceptable HERE,
+    // a deliberate "configure this device" gesture in a modal settings
+    // dialog, and never from the arm button's context menu, which can appear
+    // mid-session during playback or recording.
+    QApplication::setOverrideCursor( Qt::WaitCursor );
+    std::unique_ptr<audio::AudioInput> probe = audio::createAudioInput();
+    uint32_t channels = 0;
+    // Rate 0 == "no preference": this is counting channels, and a non-zero
+    // preferredRate makes an ASIO driver SET its rate. deviceInputChannels()
+    // rather than getConfig().channels, which is the width as OPENED — one
+    // channel on ASIO until something demands more.
+    if( probe && probe->openDevice( id.toStdString(), 0 ) == 0 )
+        channels = probe->deviceInputChannels();
+    QApplication::restoreOverrideCursor();
+    if( channels == 0 ) return;   // driver refused to open; leave it unmarked
+
+    SSettings::instance().setAudioInputChannelCount( id, channels );
+    audioInputDevice_->setItemData( index, channels, Qt::UserRole + 1 );
+    audioInputDevice_->setItemText( index,
+        QStringLiteral( "%1 (%2 ch)" ).arg( audioInputDevice_->itemText( index ) )
+                                       .arg( channels ) );
 }
 
 void SOptionsDialog::onOpenDriverPanel()
