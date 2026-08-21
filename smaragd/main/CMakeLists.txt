@@ -282,6 +282,10 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/sreparenttrackaction.h
     objects/mixer/include/app/objects/mixer/srestoretrackaction.h
     objects/mixer/include/app/objects/mixer/sstdmixer.h
+    # --- pack-clips / unpack-clips / duplicate-asset-here (proposal 41 M2)
+    objects/mixer/include/app/objects/mixer/spackclipsaction.h
+    objects/mixer/include/app/objects/mixer/sunpackclipsaction.h
+    objects/mixer/include/app/objects/mixer/sduplicateassethereaction.h
     objects/mixer/src/saddtrackaction.cpp
     objects/mixer/src/sdissolvearrangementaction.cpp
     objects/mixer/src/sextractarrangementaction.cpp
@@ -296,6 +300,9 @@ set(APP_OBJECTS_FILES
     objects/mixer/src/sreparenttrackaction.cpp
     objects/mixer/src/srestoretrackaction.cpp
     objects/mixer/src/sstdmixer.cpp
+    objects/mixer/src/spackclipsaction.cpp
+    objects/mixer/src/sunpackclipsaction.cpp
+    objects/mixer/src/sduplicateassethereaction.cpp
 )
 
 set(APP_UI_FILES

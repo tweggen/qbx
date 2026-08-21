@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M2, AC2.4 + AC2.4b: duplicate-asset-here mints a NEW asset with
+  a DEEP-COPIED fragment and repoints exactly ONE placement to it; the
+  original asset and its OTHER placements are left untouched and still
+  sharing - BEFORE and AFTER the duplication, gated as a real assertion
+  rather than assumed (AC2.4b is explicit that this is the gate that proves
+  the invariant).
+
+  Three placements of one fragment asset "Riff" (A, B, C, on three lanes).
+  As in fragment_place_reuse.qxa, "editing a child clip" is exercised at the
+  shared cut's own window (resize-clip) - no verb yet addresses a clip
+  literally nested inside a fragment; see that case's header for why.
+
+    1. Edit through A (resize-clip). Assert A, B, C ALL show it - three-way
+       sharing, "before".
+    2. duplicate-asset-here on B: mints "Riff copy", repoints B to it.
+    3. Edit through C (a DIFFERENT placement than the one used in step 1, and
+       NOT the one just duplicated away). Assert A and C show it; assert B
+       does NOT - sharing survives the duplication for the UNTOUCHED
+       placements ("after"), and the copy is genuinely independent (AC2.4).
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8; sec2 ~0.291.
+-->
+<SActionScript version="1" name="fragment_duplicate_asset">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="200000"/>
+    <pack-clips clips="0,0;0,1" name="Riff"/>
+
+    <!-- A = lane 0 (from pack), B = lane 1, C = lane 2: three placements of
+         the SAME registered cut. -->
+    <place-asset assetName="Riff" trackPath="1" timePos="500000"/>
+    <place-asset assetName="Riff" trackPath="2" timePos="900000"/>
+
+    <assert-clip-window clip="0,0" duration="392000"/>
+    <assert-clip-window clip="1,0" duration="392000"/>
+    <assert-clip-window clip="2,0" duration="392000"/>
+
+    <!-- 1. Edit through A. -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="150000" loopLength="0" stretch="1.0"/>
+
+    <!-- Visible through ALL THREE - "before". -->
+    <assert-clip-window clip="0,0" duration="150000"/>
+    <assert-clip-window clip="1,0" duration="150000"/>
+    <assert-clip-window clip="2,0" duration="150000"/>
+
+    <!-- 2. Mint a copy from B; repoint ONLY B. A and C are untouched. -->
+    <duplicate-asset-here clip="1,0" name="Riff copy"/>
+
+    <assert-clip-window clip="0,0" duration="150000"/>
+    <assert-clip-window clip="1,0" duration="150000"/>
+    <assert-clip-window clip="2,0" duration="150000"/>
+
+    <!-- 3. Edit through C - a DIFFERENT placement than step 1 used, and not
+         the one just duplicated away. -->
+    <resize-clip clip="2,0" startTime="900000" startOffset="0"
+                 duration="100000" loopLength="0" stretch="1.0"/>
+
+    <!-- A and C: still sharing "Riff" - "after". -->
+    <assert-clip-window clip="0,0" duration="100000"/>
+    <assert-clip-window clip="2,0" duration="100000"/>
+    <!-- B: unaffected - it is a DIFFERENT asset now (AC2.4's independence). -->
+    <assert-clip-window clip="1,0" duration="150000"/>
+
+    <render filename="dup_post.wav" format="wav" quality="10"/>
+    <!-- A: silent past its new 100000-frame window (well inside the file;
+         C, at 900000+100000=1000000, is what ends it). -->
+    <assert-audio-energy filename="dup_post.wav"
+                         startFrame="104000" frameCount="4000"
+                         minRms="0.0" maxRms="0.0005"/>
+    <!-- C's own window now ends exactly at the file's end (900000+100000 =
+         1000000, nothing else in the project extends past it), so the
+         equivalent "silent past the window" proof for C is the file's own
+         LENGTH, not a read past its end (which the runner rejects). -->
+    <assert-audio-length filename="dup_post.wav"
+                         minFrames="1000000" maxFrames="1000000"/>
+    <!-- B: still audible at 120000 frames in (its window is still 150000) -
+         proof the copy plays independently of A/C's later edit. -->
+    <assert-audio-energy filename="dup_post.wav"
+                         startFrame="620000" frameCount="4000"
+                         minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

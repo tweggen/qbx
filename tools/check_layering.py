@@ -129,12 +129,24 @@ APP_DEPS = {
     # declared as its own module rather than folded into either neighbour.
     # {'actions', 'model', 'persistence'} matches objects/track's shape; M1
     # itself uses only 'model' (SLaneFragment names no SAction and does its
-    # own loader registration through app/persistence), 'actions' is here
-    # ahead of M2's pack-clips/unpack-clips verbs, which will live in this
-    # module.
+    # own loader registration through app/persistence). M2's pack-clips /
+    # unpack-clips / duplicate-asset-here verbs turned out NOT to belong here
+    # after all (the 'actions' entry below predates that finding and is now
+    # unused slack, left alone rather than narrowed): they construct an SCut
+    # over the fragment they just built, and objects/fragment must stay OUT of
+    # objects/cut's deps (the dependency runs cut -> fragment, never the
+    # reverse — see this module's CONTRACT.md). Building an SCut from inside
+    # objects/fragment would reverse that. slanefragment.h's class comment had
+    # already named the fix: the verbs' natural home is objects/mixer, which
+    # already depends on objects/cut for SCreateAssetAction/SPlaceAssetAction
+    # — hence the new objects/mixer -> objects/fragment edge below instead.
     'objects/fragment': {'actions', 'model', 'persistence'},
-    'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
-                       'persistence'},
+    # objects/fragment added (proposal 41 M2): pack-clips/unpack-clips build a
+    # new SLaneFragment and duplicate-asset-here deep-copies one; both need
+    # the type. See the objects/fragment entry above for why the verbs live
+    # here and not there.
+    'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/fragment',
+                       'objects/track', 'persistence'},
     'actions':        {'model'},
     # media (proposal 38 gate 1) is the media-browser's SOURCE layer: the
     # provider ABI, the local walk, and later the cache and the WebDAV client.

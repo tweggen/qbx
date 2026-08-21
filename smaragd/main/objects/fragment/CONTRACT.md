@@ -37,4 +37,19 @@ See `plan/proposed/41_LANE_FRAGMENTS.md` for the design (D1-D15) and the
 milestone list. `main/model/CONTRACT.md`'s `isPathContainer()` vs `isLane()`
 section (proposal 41 D3) is the load-bearing prerequisite reading.
 
-Gate: `ctest -R fragment_test`.
+**M2 (pack-clips / unpack-clips / duplicate-asset-here) — executed.** The
+three verbs live in `objects/mixer` (`spackclipsaction.{h,cpp}`,
+`sunpackclipsaction.{h,cpp}`, `sduplicateassethereaction.{h,cpp}`), NOT here:
+`check_layering.py`'s `objects/fragment` entry still names no edge to
+`objects/cut`, and minting the registered `SCut` a pack or a duplicate needs
+is exactly the thing this module may not do (see the dependency note above).
+`objects/mixer` gained the `objects/fragment` edge instead — it already
+depended on `objects/cut` for `create-asset`/`place-asset`, so it is the
+natural home `slanefragment.h`'s class comment already named. `SObject`
+gained a public `refCount()` (model/CONTRACT.md territory, not this module's)
+so `unpack-clips` can refuse when a fragment's asset has more than one
+placement rather than emptying it out from under a sibling.
+
+Gate: `ctest -R "fragment_test|action_roundtrip_test"` plus the qxa cases
+`fragment_pack_roundtrip`, `fragment_place_reuse`, `fragment_duplicate_asset`,
+`fragment_pack_multilane_refused`.

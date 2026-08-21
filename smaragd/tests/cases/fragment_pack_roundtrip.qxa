@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M2, AC2.1 + AC2.2: pack-clips packs a same-lane selection into
+  ONE SLaneFragment + ONE registered SCut + ONE placement where the material
+  was, in ONE undo step; unpack-clips is its exact inverse.
+
+  Three whole-file placements of test_sawtooth.wav on one lane, spaced past
+  its own 4 s length so they never overlap. Packing them must:
+    - leave EXACTLY one clip on the lane, at the group's own start (0) and
+      of length covering the last clip's end (592000 = 400000 + 192000);
+    - not move a single sample of audio (same RMS at the same absolute
+      positions before and after);
+    - be ONE undo step (<undo count="1"/> puts the three clips back exactly).
+
+  unpack-clips is then exercised directly (not only via undo) to gate AC2.2's
+  "exact inverse" wording literally: original lane, original times.
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8, unique RMS per
+  source second: sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405.
+-->
+<SActionScript version="1" name="fragment_pack_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="200000"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="400000"/>
+
+    <render filename="pack_pre.wav" format="wav" quality="10"/>
+    <!-- Each clip's own sec0/sec1, at its own absolute start. -->
+    <assert-audio-energy filename="pack_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="pack_pre.wav"
+                         startFrame="200000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="pack_pre.wav"
+                         startFrame="400000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="pack_pre.wav"
+                         startFrame="448000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+
+    <!-- AC2.1: one same-lane selection, one undo step. -->
+    <pack-clips clips="0,0;0,1;0,2" name="Riff"/>
+
+    <assert-track-count count="1"/>
+    <!-- One placement where the material was: start 0, covering all three. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="592000"/>
+    <!-- No second/third clip left on the lane. -->
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <render filename="pack_post.wav" format="wav" quality="10"/>
+    <!-- Identical audio at the identical absolute positions - packing moved
+         no sample. -->
+    <assert-audio-energy filename="pack_post.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="pack_post.wav"
+                         startFrame="200000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="pack_post.wav"
+                         startFrame="400000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="pack_post.wav"
+                         startFrame="448000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+
+    <!-- AC2.2: unpack-clips is the EXACT inverse - original lane, original
+         times, called directly (not only via undo). -->
+    <unpack-clips clip="0,0"/>
+
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" startTime="200000" duration="192000"/>
+    <assert-clip-window clip="0,2" startTime="400000" duration="192000"/>
+
+    <render filename="unpack_post.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="unpack_post.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="unpack_post.wav"
+                         startFrame="400000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- pack-clips again, THIS time proving the ONE-UNDO-STEP claim via
+         <undo count="1"/> rather than the explicit inverse verb. -->
+    <pack-clips clips="0,0;0,1;0,2" name="Riff2"/>
+    <assert-track-count count="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="592000"/>
+
+    <undo count="1"/>
+
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" startTime="200000" duration="192000"/>
+    <assert-clip-window clip="0,2" startTime="400000" duration="192000"/>
+
+    <render filename="undo_post.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="undo_post.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="undo_post.wav"
+                         startFrame="400000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

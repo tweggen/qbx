@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M2, AC2.3: placing a lane-fragment asset a second time yields a
+  second SLink to the SAME registered SCut, so editing it through EITHER
+  placement is visible through BOTH.
+
+  A script cannot yet address a clip literally nested INSIDE a fragment -
+  every existing clip verb (resize-clip, set-clip-volume, ...) resolves
+  through splacements::placementAt(), which requires the clip's immediate
+  parent to be a LANE (isLane()==true, proposal 41 D3), and a fragment
+  deliberately answers that false (it carries no lane state). Extending that
+  resolution to descend through a fragment is out of scope for M2 - it is
+  the same "what verb reaches this" question proposal 41's own non-goals list
+  leaves for later work (per-placement windows, D2, are the closest relative
+  and are explicitly out).
+
+  What IS addressable, and IS exactly D2's invariant ("one asset, N
+  placements, edit any and all change"), is the shared SCut's own window:
+  resize-clip on ONE placement's path mutates the cut both placements are
+  SLinks to, so reading the OTHER placement's window (a DIFFERENT SLink, the
+  SAME target SCut) must show the identical edit. That is what this case
+  gates, plus the audible consequence (the shortened window truncates BOTH
+  placements' audio identically).
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramps 0 -> 0.8; sec0 ~0.067,
+  sec1 ~0.176.
+-->
+<SActionScript version="1" name="fragment_place_reuse">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="200000"/>
+
+    <!-- AC2.1's machinery, reused as setup: one fragment asset "Riff" of
+         both clips, placed where they were. -->
+    <pack-clips clips="0,0;0,1" name="Riff"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="392000"/>
+
+    <!-- AC2.3: place it a SECOND time, on a different lane. -->
+    <place-asset assetName="Riff" trackPath="1" timePos="500000"/>
+    <assert-clip-window clip="1,0" startTime="500000" duration="392000"/>
+
+    <render filename="reuse_pre.wav" format="wav" quality="10"/>
+    <!-- Both placements sound the SAME content at their own starts. -->
+    <assert-audio-energy filename="reuse_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="reuse_pre.wav"
+                         startFrame="500000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- Edit the SHARED cut through placement 0's path only. -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0"
+                 duration="150000" loopLength="0" stretch="1.0"/>
+
+    <!-- Visible through BOTH placements - same SCut, two SLinks. -->
+    <assert-clip-window clip="0,0" duration="150000"/>
+    <assert-clip-window clip="1,0" duration="150000"/>
+
+    <render filename="reuse_post.wav" format="wav" quality="10"/>
+    <!-- The truncation is audible identically at BOTH positions: what used
+         to be clip 1's sec0 (0.05-0.085) at [200000+150000-48000..] is now
+         past the shortened window and silent. 150000 frames from EACH
+         placement's own start is well inside clip 0's span (sec1, ~0.176)
+         but past the point where clip 1 used to begin (200000) - so a
+         reader reading clip 1's own content there would show ~0.176 too
+         (both clips are the same file), which is why the SILENCE just past
+         150000 frames from each start is the discriminating measurement:
+         it proves the WINDOW shrank, not merely "still playing something". -->
+    <assert-audio-energy filename="reuse_post.wav"
+                         startFrame="152000" frameCount="4000"
+                         minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="reuse_post.wav"
+                         startFrame="500000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <!-- B's own window now ends at 650000 (500000+150000), which is also the
+         END OF THE FILE (nothing else in the project extends past it), so
+         the equivalent "silent past the window" proof for B is the file's
+         own LENGTH, not a read past its end (which the runner rejects). -->
+    <assert-audio-length filename="reuse_post.wav"
+                         minFrames="650000" maxFrames="650000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

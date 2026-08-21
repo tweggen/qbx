@@ -700,6 +700,17 @@ public slots:
      */
     void invalidateRenderPath();
 
+    /**
+     * How many SLinks (plus any explicit pin, e.g. SProject::registerAsset's
+     * addRef()) currently reference this object — main-thread read of the
+     * same counter addRef()/removeRef() maintain (proposal 41 M2). A
+     * registered asset's body sits at 1 with no placement; a lane-fragment
+     * unpack refuses unless it reads exactly 2 (the registry pin plus the
+     * ONE placement being unpacked), so unpacking can never empty a fragment
+     * out from under a SECOND placement still sharing it (D2's invariant).
+     */
+    int refCount() const { return nRefs_; }
+
     // --- Range-scoped variant (proposal 18 Phase 5) -------------------------
     // Plain methods, not slots (moc must not see the struct declaration).
 public:
