@@ -143,6 +143,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/saddtakeaction.h
     objects/cut/include/app/objects/cut/sremovetakeaction.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
+    objects/cut/include/app/objects/cut/ssetclipeventchannelaction.h
     objects/cut/include/app/objects/cut/ssetclipnameaction.h
     objects/cut/include/app/objects/cut/ssetclippanaction.h
     objects/cut/include/app/objects/cut/ssetclipvolumeaction.h
@@ -167,6 +168,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/sremovetakeaction.cpp
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/sselecttakeaction.cpp
+    objects/cut/src/ssetclipeventchannelaction.cpp
     objects/cut/src/ssetclipnameaction.cpp
     objects/cut/src/ssetclippanaction.cpp
     objects/cut/src/ssetclipvolumeaction.cpp
@@ -619,7 +621,7 @@ set(_smaragd_have_libsecret FALSE)
 if(SMARAGD_LINUX)
     find_package(PkgConfig)
     if(PkgConfig_FOUND)
-        pkg_check_modules(LIBSECRET libsecret-1)
+        pkg_check_modules(LIBSECRET IMPORTED_TARGET libsecret-1)
         if(LIBSECRET_FOUND)
             set(_smaragd_have_libsecret TRUE)
         endif()

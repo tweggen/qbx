@@ -321,10 +321,12 @@ APP_ENG = {
                                    'schedule', 'sidecar', 'sources'},
     # objects/fragment + mix (proposal 41 M1): SLaneFragment's root component
     # is ONE twTrackMix at unity (D1) — the minimal engine set that actually
-    # compiles. No events (the residual event feed is M3), no plugins/render/
-    # sidecar/sources — a fragment has no inserts, no bounce, nothing to
-    # persist to the sidecar store, and no random source of its own.
-    'objects/fragment': _ENG_BASE | {'mix'},
+    # compiles. events ADDED proposal 41 M3: the fragment's own eventClips_
+    # (a twEventClipSet, same type STrack's own uses) and resolveEventFeed()'s
+    # flattened twEventSeq. Still no plugins/render/sidecar/sources — a
+    # fragment has no inserts, no bounce, nothing to persist to the sidecar
+    # store, and no random source of its own.
+    'objects/fragment': _ENG_BASE | {'mix', 'events'},
     'objects/mixer':  _ENG_BASE | {'mix', 'schedule'},
     'actions':        _ENG_BASE | {'render'},
     # media reaches NO engine module beyond the base every app module gets --

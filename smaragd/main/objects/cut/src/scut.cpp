@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <vector>
 #include <chrono>
+#include <limits>
 
 #include <QDebug>
 #include <QTimer>
@@ -88,6 +89,11 @@ void SCut::ensureReader()
     // ends, and the WAV-backed cut that replaces it then is an ordinary one
     // with an ordinary reader.
     if( isLiveRecording() ) return;
+    // Proposal 41 D7/M4, same shape: a pure-event fragment has no random
+    // source and no audio to grain/vocode a reader over — its content is
+    // heard only through the residual event feed (resolveEventFeed()), never
+    // through a reader.
+    if( isPureEventContent() ) return;
     if( readerTried_ ) {
         // A capture built from pages the content has since moved past is a
         // MISS, not a cache hit -- see captureContentEpoch_ in the header for
@@ -354,6 +360,14 @@ void SCut::buildCapture_()
     // multi-second take. The growing clip draws from
     // SRecordingContent::getPreview and needs no capture at all.
     if( isLiveRecording() ) return;
+    // A PURE-EVENT FRAGMENT is never captured either (proposal 41 D7/M4): it
+    // has no random source, so the container branch below would render its
+    // twTrackMix — GUARANTEED SILENCE, since a pure-event fragment sums no
+    // audio children — at tens of milliseconds of UI-thread cost for nothing
+    // anything ever plays back. A MIXED fragment (some audio children too)
+    // is NOT pure-event and falls through to the ordinary container path
+    // below, capturing exactly the audio it actually sums.
+    if( isPureEventContent() ) return;
     // Serialize concurrent builders: the UI thread (rebuildReader) and the
     // revalidator worker (revalPrepPreview) may both arrive here. The render
     // below can take tens of milliseconds, so this is a dedicated mutex — the
@@ -742,6 +756,15 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
     // will not be one, and asking for one would build it.
     if( isLiveRecording() )
         return getContent().getPreview( dest, start, length, nProbes );
+
+    // A PURE-EVENT FRAGMENT (proposal 41 D7/M4) has no random source and no
+    // capture ever built (buildCapture_ short-circuits above) — the same
+    // "container-backed, no live preview" answer the no-capture path below
+    // gives, returned directly so we never call getContent().getPreview()
+    // and risk it falling into the container branch's requestPage() (a
+    // DEMANDED FREEZE, forbidden on this thread — main/timeline/CONTRACT.md
+    // inv. 1).
+    if( isPureEventContent() ) return -1;
 
     // Try async capture first (non-blocking, may be stale or invalid)
     // If not ready, fall back to live content preview (sample-backed cuts only)
@@ -1255,6 +1278,59 @@ void SCut::setFormantShiftCents( double cents )
     setGrainParams( p );  // Pass modified copy
 }
 
+// Proposal 41 D4/M3: the placement's own contribution to a track's residual
+// event feed. Never names a concrete content type — only the base-class
+// virtuals (resolveEventFeed(), getStretchExact()) — because objects/cut may
+// not depend on objects/fragment (CONTRACT.md, check_layering.py): the whole
+// point of routing this through SObject is that it works for a fragment
+// windowed here today and for whatever else answers resolveEventFeed()
+// tomorrow, with SCut none the wiser.
+twEventClipResolved SCut::resolveEventFeed( offset_t )
+{
+    twEventClipResolved out;
+
+    SObject &c = getContent();
+    twEventClipResolved contentResolved = c.resolveEventFeed( 0 );
+    if( !contentResolved.seq || contentResolved.seq->empty() ) return out;
+
+    // D5: a rate != 1 on an event-exporting cut is REFUSED, not approximated.
+    // POSITION_DOMAINS rule 7 — the tick/frame conversion for this material
+    // already happened exactly once, inside the content's own window(s); a
+    // second, frame-domain stretch applied HERE would make the part stop
+    // following tempo (the Ardour <= 6 defect the tick-native model exists to
+    // avoid). The edit surface (SResizeClipAction) refuses the EDIT before it
+    // ever reaches this state; this is the belt to that suspenders, so a rate
+    // set through any other path is still silent rather than wrong.
+    if( getStretchExact() != Fraction( 1 ) ) {
+        TW_LOGW( "cut", "resolveEventFeed: refusing non-unity rate %s on "
+                        "event-exporting cut '%s' -- the fragment's events "
+                        "are NOT exported while this clip is stretched",
+                 getStretchExact().toString().c_str(),
+                 getSName().toUtf8().constData() );
+        return out;
+    }
+
+    // D6's channel remap is applied by the CALLER (STrack::trackChildWasAdded's
+    // resolveFn), keyed off the SLINK that placed us — never here. The same
+    // shared SCut (D2) can be placed on several tracks at once, each wanting
+    // a DIFFERENT remap, and a Cut has no way to know which placement is
+    // asking; the SLink does.
+    out.seq = contentResolved.seq;
+
+    // Our OWN window (slip/loop), exactly as SMidiCut::resolveEventClip
+    // applies its window over its content-relative sequence. Rate is pinned
+    // to 1 above, so the warped and source domains coincide and these frame
+    // values need no further scaling.
+    const offset_t startOffsetFrames = getStartOffset().frames();
+    const length_t loopFrames = getLoopLength().frames();
+    const length_t durFrames  = getDurationBlocking();
+    if( loopFrames > 0 && loopFrames < durFrames )
+        out.map = twEventLoopMap( startOffsetFrames, loopFrames );
+    else
+        out.map = twEventSlipMap( startOffsetFrames );
+    return out;
+}
+
 SCut::~SCut()
 {
     // FIRST, before tearing down any member: retire from the revalidator. The
@@ -1743,6 +1819,13 @@ void SCut::invalidateAspects(uint32_t aspects)
     // the WAV-backed cut that replaces it at stop is an ordinary one and is
     // invalidated normally.
     if (isLiveRecording()) return;
+
+    // A PURE-EVENT FRAGMENT (proposal 41 D7/M4) has nothing derivable to
+    // cache either — buildCapture_ never builds one, ensureReader never
+    // builds a reader, and getPreview never reads a page — so scheduling a
+    // Preview/Playback/Metadata recomputation here would be pure overhead
+    // for a job that can only ever find nothing to do.
+    if (isPureEventContent()) return;
 
     // During project loading, invalidation is suppressed (all pages invalid anyway).
     // When enableInvalidation() is called, a full recomputation pass will begin.

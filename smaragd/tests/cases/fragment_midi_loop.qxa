@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M3, AC3.4: window gating is non-destructive and synthesises the
+  note-off at the window end; a looping placement re-emits per iteration
+  without duplicates.
+
+  A fragment ("LoopFrag") is packed from one 0.25 s note inside a 0.5 s clip
+  (960 ticks @ 120 BPM / 48 kHz = 24000 frames). The PLACEMENT (the SCut
+  windowing the fragment - addressable normally, D3a: only a fragment's
+  CHILDREN are not) is then resized to loop that 24000-frame segment across a
+  96000-frame window - four iterations. This reuses the SAME twEventClipSet
+  machinery a plain SMidiCut's own loop already runs through (D4's
+  eventClips_ dual-insertion): the note-off is synthesised at each
+  iteration's own boundary, never baked into the fragment's stored content
+  (which stays a single 0.25 s note, unpack-clips's exact inverse untouched
+  by anything this placement's window does).
+-->
+<SActionScript version="1" name="fragment_midi_loop">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="960" name="Loop"/>
+    <add-note clip="0,0" tick="0" dur="480" key="60" velocity="100" channel="0"/>
+
+    <pack-clips clips="0,0" name="LoopFrag"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="24000"/>
+
+    <!-- Loop the 24000-frame fragment across a 96000-frame window: four
+         iterations, no slip, no stretch (D5: rate stays 1). -->
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="96000"
+                loopLength="24000" stretch="1.0"/>
+
+    <!-- The whole window: exactly four notes, not one (a non-looping read of
+         a 24000-frame source) and not five-plus (a duplicate at a loop seam). -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="4"
+                        startFrame="0" frameCount="96000"/>
+
+    <!-- Each iteration is isolated to its OWN quarter: the note-off is
+         synthesised at the iteration boundary, so it never bleeds into the
+         next slice. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        startFrame="0" frameCount="24000"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        startFrame="24000" frameCount="24000"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        startFrame="48000" frameCount="24000"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        startFrame="72000" frameCount="24000"/>
+
+    <!-- Non-destructive: the placement's window covers 96000 frames, but the
+         fragment's own content is still the ORIGINAL 24000-frame, one-note
+         clip - unpack-clips (D3a's "write-once but shareable" gesture)
+         restores exactly that, unaffected by the looped window. -->
+    <unpack-clips clip="0,0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="24000"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        startFrame="0" frameCount="24000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

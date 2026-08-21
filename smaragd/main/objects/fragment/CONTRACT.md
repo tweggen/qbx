@@ -53,3 +53,30 @@ placement rather than emptying it out from under a sibling.
 Gate: `ctest -R "fragment_test|action_roundtrip_test"` plus the qxa cases
 `fragment_pack_roundtrip`, `fragment_place_reuse`, `fragment_duplicate_asset`,
 `fragment_pack_multilane_refused`.
+
+**M3 (event bubbling) / M4 (no silent capture) — executed.** `SLaneFragment`
+gained its OWN `twEventClipSet eventClips_`, one entry per Event-kind child
+(same key-by-`SLink*`, same window/note-off/loop machinery STrack's own set
+already runs), and overrides `SObject::resolveEventFeed()` to flatten it into
+ONE immutable `twEventSeq` snapshot on every call — no dirty-flag cache, since
+a fragment's children are write-once past M2's pack-clips (D3a) and this
+mirrors `STrack::eventFeed()`'s own "rebuilt on every read" discipline. The
+windowing `SCut` (`objects/cut`) wraps that flattened, content-relative
+sequence with ITS OWN slip/loop map — never naming `SLaneFragment`, only the
+base-class virtual, because `objects/cut` may not depend on this module (see
+the dependency note above: cut -> fragment is the CONCEPTUAL direction, not a
+declared `check_layering.py` edge) — and refuses (D5) rather than
+double-converts a non-unity rate. `STrack::trackChildWasAdded` DUAL-inserts a
+residual-exporting placement into both `cpTrackMix_` (its audio sum) and its
+OWN `eventClips_` (the residual feed), keyed by the same `SLink*`; a container
+asset (an `STrack`/`SStdMixer` placed elsewhere) answers `resolveEventFeed()`
+with nothing because neither overrides it (D4, "exports nothing" is free, not
+a special case). `isPureEventContent()` (true iff no audio-content child was
+ever inserted into `cpTrackMix_`) short-circuits all four of `SCut`'s
+UI-thread capture paths (`buildCapture_`, `ensureReader`, `invalidateAspects`,
+`getPreview`) over a pure-event fragment, mirroring the `isLiveRecording()`
+precedent one for one.
+
+Gate: `ctest -R "fragment_test|action_roundtrip_test"` plus the qxa cases
+`fragment_midi_feed`, `fragment_midi_no_double_trigger`,
+`fragment_midi_channel_remap`, `fragment_midi_loop`, `fragment_rate_refused`.

@@ -15,6 +15,7 @@
 #include "tw/core/twdomains.h"
 #include "tw/core/twtimemap.h"
 #include "tw/pages/capture_page_pool.h"
+#include "tw/events/tweventclipset.h"
 
 class SProject;
 class QWidget;
@@ -155,6 +156,25 @@ public:
     /// actually owns and not only for the content behind it.
     bool isLiveRecording() const override
     { return content_ && content_->getSObject().isLiveRecording(); }
+
+    /// Proposal 41 D7/M4, same shape as isLiveRecording() above: a window
+    /// over a pure-event fragment IS pure-event content, so buildCapture_ /
+    /// ensureReader / invalidateAspects / getPreview see the short-circuit
+    /// through the CUT they actually own, not only through the fragment.
+    bool isPureEventContent() const override
+    { return content_ && content_->getSObject().isPureEventContent(); }
+
+    /// Proposal 41 D4/M3: THE residual event feed reaching a track through
+    /// this placement — our window's slip/loop map applied over whatever the
+    /// content underneath reports through its OWN resolveEventFeed(). Never
+    /// names SLaneFragment (objects/cut may not depend on objects/fragment,
+    /// CONTRACT.md / check_layering.py — the whole point of the base-class
+    /// virtual is that this works for ANY content, known or not). Refuses a
+    /// non-unity rate (D5) rather than double-converting it: the tick/frame
+    /// conversion already happened exactly once, inside the content's own
+    /// window(s); a second, frame-domain stretch here would stop the part
+    /// following tempo.
+    twEventClipResolved resolveEventFeed( offset_t clipPos ) override;
 
     SObject &getContent() const { return content_->getSObject(); }
     WarpedPos getLoopStart() const;
@@ -588,6 +608,7 @@ private:
     WarpedLen loopLength_;
     ClipLen   cutDuration_;
     twGrainParams grainParams_;
+
 
     SCutRendererInline *inlineRenderer_;
     // Atomic: ensureReader() reads it outside mutex() (Phase 2b).

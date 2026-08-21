@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "app/model/sobject.h"
+#include "tw/events/tweventclipset.h"
 
 class SProjectLoader;
 class QDomElement;
@@ -82,17 +83,25 @@ class twTrackMix;
  * project it happens to be placed into would be exactly the kind of accident
  * D3 exists to prevent.
  *
- * M1 SCOPE. This class holds clip links and sums them at unity through a
- * twTrackMix — nothing else. Residual event-feed bubbling (D4), the pure-
- * event silent-capture short-circuit (D7) and the rate-refusal rule (D5) are
- * proposal 41 M3/M4; pack-clips/unpack-clips and the "duplicate asset here"
- * deep-copy gesture (M2) and the visual model (Part B, M5-M7) are later
- * milestones. An event-kind child link is
- * therefore accepted as an ordinary child (it persists and round-trips) but
- * is deliberately NOT inserted into the twTrackMix — there is nothing yet
- * that consumes an event feed out of a fragment, and inserting one as an
- * audio clip entry would ask twTrackMix to freeze a component that does not
- * exist (SObject::getRootComponent() returns null for event content).
+ * M1 SCOPE was: this class holds clip links and sums them at unity through a
+ * twTrackMix — nothing else. An event-kind child link was accepted as an
+ * ordinary child (it persists and round-trips) but was NOT inserted into the
+ * twTrackMix — inserting one as an audio clip entry would ask twTrackMix to
+ * freeze a component that does not exist (SObject::getRootComponent()
+ * returns null for event content).
+ *
+ * M3 ADDS the residual event feed (D4): an Event-kind child now goes into
+ * ITS OWN twEventClipSet (`eventClips_`, mirroring STrack's own — same
+ * key-by-SLink*, same window/note-off/loop machinery, minus the track
+ * bubbling a fragment cannot have, D8). resolveEventFeed() flattens that set
+ * into ONE immutable snapshot on every call (no dirty-flag cache, matching
+ * the "rebuilt on every read" discipline STrack::eventFeed() already uses —
+ * a fragment's children are write-once past M2's pack-clips anyway, D3a), so
+ * the OUTER SCut windowing this fragment can wrap it with its OWN slip/loop
+ * map and, per D5, refuse a non-unity rate rather than double-convert it.
+ * M4 adds isPureEventContent() (D7): true while this fragment sums no AUDIO
+ * children, so SCut::buildCapture_ skips a UI-thread render that is
+ * guaranteed silence.
  */
 class SLaneFragment : public SObject
 {
@@ -138,12 +147,27 @@ public:
     void bumpRenderChainEpoch() override;
     void bumpRenderChainEpochRange( offset_t start, offset_t end ) override;
 
+    // Proposal 41 D4/M3: the residual feed of every Event-kind child,
+    // flattened into one snapshot. clipPos is unused (see the base class
+    // doc) — the returned map is always identity: THIS object's own zero is
+    // the flattened sequence's zero, and any slip/loop/channel remap is the
+    // WINDOW's job (the SCut that windows this fragment applies its own map
+    // on top, exactly as SMidiCut's window sits above SMidiSequence's
+    // content-relative table).
+    twEventClipResolved resolveEventFeed( offset_t clipPos ) override;
+
+    // Proposal 41 D7/M4: true while this fragment has no AUDIO-content
+    // children (empty, or event-only) — its twTrackMix sum is silence, and
+    // SCut::buildCapture_ must not render that silence on the UI thread.
+    bool isPureEventContent() const override { return audioChildCount_ == 0; }
+
 private slots:
     // Mirrors STrack's trackChildWasAdded/Removed/Moved/DurationChanged
-    // (strack.cpp), stripped of everything a fragment does not have: no
-    // event clip set (M3), no live-recording short-circuit (a fragment
-    // cannot be armed), no nested-track mute/solo forwarding (D8 — a
-    // fragment is single-lane by construction and holds clips, not lanes).
+    // (strack.cpp), routing an Event-kind child into eventClips_ and an
+    // audio-kind one into cpTrackMix_ (M3) — stripped of what a fragment
+    // does not have: no live-recording short-circuit (a fragment cannot be
+    // armed), no nested-track mute/solo forwarding (D8 — a fragment is
+    // single-lane by construction and holds clips, not lanes).
     void fragmentChildWasAdded( SLink &child );
     void fragmentChildWasRemoved( SLink &child );
     void fragmentChildWasMoved( offset_t newTime );
@@ -161,6 +185,19 @@ private:
     std::shared_ptr<twTrackMix> cpTrackMix_;
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;
+
+    // Proposal 41 M3: this fragment's OWN event clip set, one entry per
+    // Event-kind child link (key = SLink*, exactly as STrack's eventClips_).
+    // Gives window gating, synthesised note-offs and loop tiling for every
+    // child FOR FREE — the same tested twEventClipSet code SMidiCut's own
+    // placement already runs through.
+    twEventClipSet eventClips_;
+
+    // Proposal 41 M4: how many of our children are audio-content (inserted
+    // into cpTrackMix_). Kept as a counter rather than asking twTrackMix
+    // (which has no clip-count accessor) — incremented/decremented exactly
+    // where cpTrackMix_->insertClip/removeClip are called below.
+    int audioChildCount_ = 0;
 };
 
 #endif

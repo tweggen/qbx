@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M3, AC3.2 (D4): a CONTAINER asset whose container has its own
+  instrument exports NOTHING through STrack::eventFeed()'s residual-feed
+  check - it already rendered its events into audio, so exporting them too
+  would trigger the part twice. This is the regression M3's new "second
+  source class" check in trackChildWasAdded had to not introduce: it must
+  fire ONLY for a fragment (D1: no track identity, so its whole feed is
+  residual), and never for a container asset windowing a real STrack (which
+  has an instrument, a fader, everything a fragment deliberately lacks).
+
+  Track 0 is a normal track: one instrument, one MIDI clip (960-tick / 0.5 s
+  note). create-asset (a PRE-existing feature, unrelated to fragments)
+  windows track 0 itself as a container asset. Placing that asset on track 1
+  must add NOTHING to track 1's own event feed.
+
+  Track 1 is MUTED after the placement deliberately: a container asset
+  legitimately REPLAYS track 0's own already-rendered audio when placed
+  elsewhere and unmuted (that is what a container asset IS, D1's "Why"
+  section, and it predates this proposal) - an unmuted before/after
+  comparison would therefore differ for a completely ordinary, CORRECT
+  reason unrelated to MIDI bubbling, and a naive byte-identical assertion
+  there would be testing the wrong thing. Muting isolates the ONE claim
+  AC3.2 actually makes: with track 1 contributing no audio of its own,
+  track 0's own note must still be heard EXACTLY once - not zero times (the
+  fader would have proven that anyway) and not twice (which only a leaked
+  residual feed reaching some instrument could cause).
+-->
+<SActionScript version="1" name="fragment_midi_no_double_trigger">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="1920" name="Riff"/>
+    <add-note clip="0,0" tick="0" dur="960" key="60" velocity="100" channel="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <render filename="frag_nodouble_before.wav" format="wav" quality="10"
+           durationSec="1.0"/>
+    <!-- The note is 960 ticks = 24000 frames (half the clip's own
+         1920-tick/48000-frame window) - measure over its OWN span. -->
+    <assert-audio-frequency filename="frag_nodouble_before.wav"
+                            startFrame="0" frameCount="24000" channel="0"
+                            minHz="260.626" maxHz="262.626"/>
+    <assert-audio-energy filename="frag_nodouble_before.wav"
+                         startFrame="0" frameCount="24000" channel="0"
+                         minRms="0.54007" maxRms="0.57347"/>
+
+    <!-- A CONTAINER asset (existing feature, predates proposal 41): windows
+         track 0 itself - fader, inserts, instrument and all. -->
+    <create-asset container="0" startOffset="0" duration="48000"
+                  assetName="Container"/>
+
+    <!-- Placed on a SECOND track that has no instrument of its own, then
+         MUTED (see the header) so its own legitimate audio replay of track
+         0's material does not confound the MIDI-bubbling claim. -->
+    <add-track index="-1"/>
+    <place-asset assetName="Container" trackPath="1" timePos="0"/>
+    <set-track-mute trackPath="1" muted="1"/>
+
+    <!-- AC3.2, the direct model claim: nothing bubbles from the container
+         placement into track 1's own event feed. -->
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="0"
+                        startFrame="0" frameCount="48000"/>
+
+    <!-- ...and the audio is UNCHANGED: track 0's note is heard exactly
+         once, not twice - byte-identical to the baseline now that track 1
+         contributes no audio of its own. -->
+    <render filename="frag_nodouble_after.wav" format="wav" quality="10"
+           durationSec="1.0"/>
+    <assert-file-identical actual="frag_nodouble_after.wav"
+                           expected="frag_nodouble_before.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
