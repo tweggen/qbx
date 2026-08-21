@@ -45,13 +45,28 @@ int WASAPIInput::openDevice(const std::string &deviceId, std::uint32_t preferred
 
     HRESULT hr;
 
-    // Initialize COM
+    // Initialize COM. RPC_E_CHANGED_MODE IS NOT A FAILURE HERE, and treating
+    // it as one made a WASAPI input impossible to open from the GUI at all:
+    // Qt's platform plugin OleInitializes the main thread as an STA, every
+    // open runs on that thread, and asking for MTA there answers
+    // RPC_E_CHANGED_MODE — so "Failed to initialize COM" was reported for a
+    // perfectly good device. The enumerator and the client below do not care
+    // which apartment they are called from; listDevices() below has always
+    // said so in as many words, and WASAPIBackend (the OUTPUT half) has
+    // always had this exact branch. The input half simply never got it.
+    //
+    // comInitialized_ gates the CoUninitialize() in closeDeviceLocked_(), so
+    // it must be set ONLY when a reference was actually taken: S_OK and
+    // S_FALSE both take one, RPC_E_CHANGED_MODE takes none. Uninitializing a
+    // reference we never took would unbalance the GUI thread's apartment —
+    // the hazard that function's own comment warns about.
     hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr)) {
+    if (SUCCEEDED(hr)) {
+        comInitialized_ = true;
+    } else if (hr != RPC_E_CHANGED_MODE) {
         lastError_ = "Failed to initialize COM";
         return -1;
     }
-    comInitialized_ = true;
 
     // Create device enumerator.
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
