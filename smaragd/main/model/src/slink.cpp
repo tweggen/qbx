@@ -54,6 +54,11 @@ int SLink::readAttributes( QDomElement &element )
         startTicks_ = parseFractionOrDouble( ticks.toStdString() );
         if( timebase_ == Timebase::Beats ) rederiveStartTime();
     }
+    // Proposal 41 D6: -1 = as-authored.
+    {
+        const int ch = element.attribute( "eventChannel", "-1" ).toInt();
+        eventChannelOverride_ = ( ch < 0 || ch > 15 ) ? -1 : ch;
+    }
     return 0;
 }
 
@@ -178,6 +183,17 @@ void SLink::setStartTime( offset_t newStartTime )
 }
 
 
+// Proposal 41 D6. No signal to emit and listen for here: the resolveFn
+// closure STrack::trackChildWasAdded installs captures this SLink by
+// pointer and re-reads the override on every collect, so the FEED is
+// correct on the very next read with no invalidation of its own. The
+// caller (SSetClipEventChannelAction) invalidates the render path so any
+// already-frozen page downstream re-evaluates too.
+void SLink::setEventChannelOverride( int channel )
+{
+    eventChannelOverride_ = ( channel < 0 || channel > 15 ) ? -1 : channel;
+}
+
 SLink::~SLink()
 {
     // Detach from the parent NOW, while this object is still a fully-typed, live
@@ -200,7 +216,8 @@ SLink::SLink( SObject &sobject, SObject *parent /*=0*/ )
       startTime_( 0 ),
       startTicks_( 0 ),
       timebase_( defaultTimebaseFor( sobject ) ),
-      object_( sobject )
+      object_( sobject ),
+      eventChannelOverride_( -1 )
 {
     object_.addRef();
     // Attach only after construction (slink.h rule): a parent passed to the
@@ -218,7 +235,8 @@ SLink::SLink( const SLink &other )
       startTime_( other.getStartTime() ),
       startTicks_( other.getStartTicks() ),
       timebase_( other.getTimebase() ),
-      object_( other.getSObject() )
+      object_( other.getSObject() ),
+      eventChannelOverride_( other.getEventChannelOverride() )
 {
     object_.addRef();
     // Attach only after construction (slink.h rule): a parent passed to the

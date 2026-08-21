@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M3, AC3.3 (D6): channel remap on the PLACEMENT (the SCut
+  windowing the fragment), same convention as midiOutChannel / SMidiCut's own
+  channel override - -1 (the default) is "as authored"; 0..15 rewrites every
+  channel-carrying exported event to that channel.
+
+  A single note authored on channel 5 is packed into a fragment and placed
+  TWICE (D2: one shared cut, two independent placements). The first
+  placement is left at the default (-1) and must still read channel 5; the
+  second is given an explicit remap to channel 9 via set-clip-event-channel
+  and must read channel 9 there and NOT channel 5 - proving the remap is
+  per-PLACEMENT (the fragment's own content is untouched, D3 - "no verb can
+  reach a fragment's children" - so if the remap touched the content instead
+  of the placement, BOTH placements would move).
+-->
+<SActionScript version="1" name="fragment_midi_channel_remap">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="1920" name="Chan"/>
+    <add-note clip="0,0" tick="0" dur="960" key="60" velocity="100" channel="5"/>
+
+    <pack-clips clips="0,0" name="ChanFrag"/>
+
+    <!-- Placement 1 (track 0's own, left at -1): as-authored, channel 5. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" channel="5"
+                        count="1" startFrame="0" frameCount="48000"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" channel="9"
+                        count="0" startFrame="0" frameCount="48000"/>
+
+    <!-- Placement 2, same asset, remapped to channel 9. -->
+    <add-track index="-1"/>
+    <place-asset assetName="ChanFrag" trackPath="1" timePos="0"/>
+    <set-clip-event-channel clip="1,0" channel="9"/>
+
+    <assert-midi-events scope="feed" trackPath="1" kind="note" channel="9"
+                        count="1" startFrame="0" frameCount="48000"/>
+    <assert-midi-events scope="feed" trackPath="1" kind="note" channel="5"
+                        count="0" startFrame="0" frameCount="48000"/>
+
+    <!-- Placement 1 is UNCHANGED by placement 2's remap - the remap lives
+         on the placement, never on the shared content. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" channel="5"
+                        count="1" startFrame="0" frameCount="48000"/>
+
+    <!-- ...and undoing the remap restores -1 / channel 5 there too. -->
+    <undo count="1"/>
+    <assert-midi-events scope="feed" trackPath="1" kind="note" channel="5"
+                        count="1" startFrame="0" frameCount="48000"/>
+    <assert-midi-events scope="feed" trackPath="1" kind="note" channel="9"
+                        count="0" startFrame="0" frameCount="48000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

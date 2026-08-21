@@ -33,6 +33,7 @@
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
 #include "tw/sidecar/twgrooveaspect.h"    // proposal 40 M3: trained-structure (de)serialize
 #include "tw/core/twlog.h"
+#include "tw/events/tweventseq.h"
 
 #include <QByteArray>
 #include <limits>
@@ -42,6 +43,27 @@
 // any later position (design 3.2, F9). Spelled once here.
 static constexpr offset_t EVENT_DIRTY_END =
     std::numeric_limits<offset_t>::max();
+
+namespace {
+// Proposal 41 D6: the channel remap lives on the SLINK (the placement), not
+// on the shared content (D2 shares ONE SCut/fragment across every placement
+// of an asset, so a remap stored on the content would move every placement
+// at once - the opposite of what "a fragment authored on channel 10 placed
+// on a track whose instrument wants channel 1" needs). Applied here, at the
+// one place that already holds the SLink*, over whatever the content's own
+// resolveEventFeed() returned. A NEW table only when actually overriding -
+// the common -1 case shares the content's sequence with zero copying.
+std::shared_ptr<const twEventSeq> remapEventChannel(
+    const std::shared_ptr<const twEventSeq> &seq, int channel )
+{
+    if( channel < 0 || !seq ) return seq;
+    std::vector<twEvent> events = seq->events();
+    for( twEvent &e : events ) {
+        if( e.channel >= 0 ) e.channel = (int16_t) channel;
+    }
+    return std::make_shared<const twEventSeq>( std::move( events ), seq->arena() );
+}
+}  // namespace
 
 using namespace std;
 
@@ -304,6 +326,13 @@ std::shared_ptr<twEventMerge> STrack::eventFeed()
     // list, and solo is global — a dirty flag would have to be poked from the
     // whole tree, which is the coupling ssolorules.h exists to avoid.
     std::vector<std::shared_ptr<const twEventSource>> sources;
+    // eventClips_ is now TWO source classes at once (proposal 41 D4/M3): our
+    // own plain event clips (as always) PLUS any placement whose content
+    // answered resolveEventFeed() with something residual — a lane fragment
+    // — dual-inserted alongside its audio sum in trackChildWasAdded. A
+    // container asset with its own instrument answers nothing there (D4:
+    // STrack/SStdMixer do not override resolveEventFeed()), so it never
+    // reaches eventClips_ and is never double-triggered.
     sources.push_back( eventClips_ );
 
     SObject *root = splacements::rootContainer( getProjectSafe() );
@@ -724,12 +753,21 @@ void STrack::trackChildDurationChanged( length_t newLength )
     }
     if( obj ) {
         twEditRange affected;
+        twFrameRange eventAffected;
         for( SLink *lk : childLinks() ) {
             if( !lk || &lk->getSObject() != obj ) continue;
             if( cpTrackMix_ ) {
                 twEditRange r = cpTrackMix_->updateClip(
                     lk, lk->getStartTime(), newLength);
                 affected.unite(r.start, r.end);
+            }
+            // PROPOSAL 41 D4/M3: a fragment placement is dual-inserted
+            // (trackChildWasAdded) — keep its residual event window's
+            // duration in step with its audio window's. A no-op for every
+            // plain audio clip (never in eventClips_).
+            if( eventClips_->hasClip( lk ) ) {
+                eventAffected.unite( eventClips_->updateClip(
+                    lk, lk->getStartTime(), newLength ) );
             }
         }
         // AFTER the engine mutation: stale this chain and every container up
@@ -738,6 +776,8 @@ void STrack::trackChildDurationChanged( length_t newLength )
         // in the song survive (proposal 18 Phase 5).
         invalidateRootWalkOrDefer( (offset_t) affected.start,
                                    (offset_t) affected.end );
+        if( !eventAffected.empty() )
+            invalidateRenderPathRange( (offset_t) eventAffected.start, EVENT_DIRTY_END );
     }
     lastDurationValid_ = false;
     checkDurationChanged();
@@ -750,12 +790,13 @@ void STrack::trackChildWasMoved( offset_t newTime )
         // Blocking read — a stale try-lock duration here would resize the clip
         // window wrongly via updateClip (same class as the insert-path fix).
         length_t duration = slink->getSObject().getDurationBlocking();
+        // PROPOSAL 41 D4/M3: no early return — a fragment placement is
+        // dual-inserted (trackChildWasAdded), and both its residual event
+        // window and its audio sum must move together. For a plain event
+        // clip (never in cpTrackMix_) the update below is a no-op.
         if( eventClips_->hasClip( slink ) ) {
             twFrameRange r = eventClips_->updateClip( slink, newTime, duration );
             invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );
-            lastDurationValid_ = false;
-            checkDurationChanged();
-            return;
         }
         twEditRange affected;
         if( cpTrackMix_ ) {
@@ -844,6 +885,33 @@ void STrack::trackChildWasAdded( SLink &child )
                 affected.unite(r.start, r.end);
             }
 
+            // PROPOSAL 41 D4/M3: a DUAL insertion — a placement can carry
+            // both an audio sum (above, cpTrackMix_) AND a RESIDUAL event
+            // feed (a fragment placed here, D1) at the SAME time, keyed by
+            // the SAME SLink*. resolveEventFeed() is the base-class virtual
+            // that answers "nothing" for everything that existed before
+            // proposal 41 — an ordinary sample cut, and (deliberately, D4) a
+            // CONTAINER ASSET whose folder already has its own instrument —
+            // so this check costs one virtual call and adds nothing to any
+            // of those paths. Only a fragment with Event-kind children
+            // answers non-empty, and eventClips_->insertClip gives it the
+            // SAME window-gating / note-off-synthesis / loop machinery a
+            // plain event clip already gets, one call site above.
+            if( child.getSObject().resolveEventFeed( 0 ).seq ) {
+                SLink *key = &child;
+                twFrameRange r = eventClips_->insertClip(
+                    key, startTime, duration,
+                    [key]( offset_t clipPos ) {
+                        twEventClipResolved r = key->getSObject().resolveEventFeed( clipPos );
+                        // D6: the remap is per-PLACEMENT (the SLink), never
+                        // per-content (see remapEventChannel's comment) -
+                        // applied here, the one place both are in hand.
+                        r.seq = remapEventChannel( r.seq, key->getEventChannelOverride() );
+                        return r;
+                    } );
+                invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );
+            }
+
             // We are the summing parent for a child TRACK (a folder lane), so
             // its audibility is ours to enforce — a nested track is not a mixer
             // child, so SStdMixer's null-the-input-plug path never sees it. Seed
@@ -892,12 +960,17 @@ void STrack::trackChildWasRemoved( SLink &child )
                 checkDurationChanged();
                 return;
             }
+            // PROPOSAL 41 D4/M3: a fragment placement is DUAL-inserted (see
+            // trackChildWasAdded), so both sets are checked — never an early
+            // return the way the pure-event case used to take, or a
+            // fragment's audio half would stay in cpTrackMix_ after removal.
+            // For a PLAIN event clip (never in cpTrackMix_) and a PLAIN
+            // audio clip (never in eventClips_) the other call is a no-op:
+            // removeClip on a key that is not present matches nothing and
+            // returns an empty range (twtrackmix.cc / twEventClipSet).
             if( eventClips_->hasClip( &child ) ) {
                 twFrameRange r = eventClips_->removeClip( &child );
                 invalidateRenderPathRange( (offset_t) r.start, EVENT_DIRTY_END );
-                lastDurationValid_ = false;
-                checkDurationChanged();
-                return;
             }
             // Remove the clip from all track mixers, keyed by the link itself.
             twEditRange affected;

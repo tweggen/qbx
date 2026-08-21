@@ -9,8 +9,18 @@
 
 #include "tw/graph/tw303aenv.h"
 #include "tw/mix/twtrackmix.h"
+#include "tw/events/tweventseq.h"
+#include "tw/events/tweventsource.h"
 
 #include <QDomElement>
+#include <limits>
+
+// An event edit is never bounded on the right — same reasoning, same
+// constant, as STrack's EVENT_DIRTY_END (strack.cpp): the consumer of an
+// event stream is class-1 (a synth voice carries state across pages), so a
+// change at `a` can be heard at any later position (design 3.2, F9).
+static constexpr offset_t FRAGMENT_EVENT_DIRTY_END =
+    std::numeric_limits<offset_t>::max();
 
 #include <cmath>
 
@@ -147,12 +157,11 @@ void SLaneFragment::onProjectChannelsChanged( int n )
 }
 
 /**
- * A new clip link. Mirrors STrack::trackChildWasAdded, stripped to what a
- * fragment actually has: no event clip set (proposal 41 M3 — a fragment's
- * event feed is residual and bubbles through the placement, not consumed
- * here), no live-recording short-circuit (a fragment cannot be armed), no
- * nested-track mute/solo forwarding (D8 — a fragment holds clips, not
- * lanes).
+ * A new clip link. Mirrors STrack::trackChildWasAdded: an Event-kind child
+ * goes into our OWN eventClips_ (proposal 41 M3), an audio-kind child into
+ * cpTrackMix_ — stripped of what a fragment does not have: no live-recording
+ * short-circuit (a fragment cannot be armed), no nested-track mute/solo
+ * forwarding (D8 — a fragment holds clips, not lanes).
  */
 void SLaneFragment::fragmentChildWasAdded( SLink &child )
 {
@@ -164,12 +173,19 @@ void SLaneFragment::fragmentChildWasAdded( SLink &child )
     QObject::connect( &( child.getSObject() ), SIGNAL( durationChanged( length_t ) ),
                       this, SLOT( fragmentChildDurationChanged( length_t ) ) );
 
-    // Event-kind content is accepted as a plain child link (it persists and
-    // round-trips) but is NOT inserted into the mix — nothing consumes an
-    // event feed out of a fragment yet (M3), and its getRootComponent() is
-    // null, so a twTrackMix entry over it would be a freeze that can never
-    // succeed.
+    // Event-kind content goes into OUR OWN event clip set (proposal 41 M3),
+    // never into the mix — its getRootComponent() is null, so a twTrackMix
+    // entry over it would be a freeze that can never succeed. This mirrors
+    // STrack::trackChildWasAdded's Event branch exactly (same key, same
+    // resolveEventClip callback) so the window gating / note-off synthesis /
+    // loop tiling is the SAME tested code, not a second implementation.
     if( child.getSObject().contentKind() == SContentKind::Event ) {
+        SLink *key = &child;
+        eventClips_.insertClip(
+            key, child.getStartTime(), child.getSObject().getDurationBlocking(),
+            [key]( offset_t clipPos ) {
+                return key->getSObject().resolveEventClip( clipPos );
+            } );
         lastDurationValid_ = false;
         checkDurationChanged();
         return;
@@ -192,6 +208,7 @@ void SLaneFragment::fragmentChildWasAdded( SLink &child )
         twEditRange r = cpTrackMix_->insertClip(
             &child, startTime, duration, getComponentFn, resolveFn );
         affected.unite( r.start, r.end );
+        ++audioChildCount_;
     }
     invalidateRenderPathRange( (offset_t) affected.start, (offset_t) affected.end );
 
@@ -204,10 +221,19 @@ void SLaneFragment::fragmentChildWasRemoved( SLink &child )
     if( !child.hasStartTime() ) return;
     if( !child.getSObject().hasDuration() ) return;
 
+    if( eventClips_.hasClip( &child ) ) {
+        twFrameRange r = eventClips_.removeClip( &child );
+        invalidateRenderPathRange( (offset_t) r.start, FRAGMENT_EVENT_DIRTY_END );
+        lastDurationValid_ = false;
+        checkDurationChanged();
+        return;
+    }
+
     twEditRange affected;
     if( cpTrackMix_ ) {
         twEditRange r = cpTrackMix_->removeClip( &child );
         affected.unite( r.start, r.end );
+        if( audioChildCount_ > 0 ) --audioChildCount_;
     }
     invalidateRenderPathRange( (offset_t) affected.start, (offset_t) affected.end );
 
@@ -221,6 +247,15 @@ void SLaneFragment::fragmentChildWasMoved( offset_t newTime )
     if( !slink || !slink->getSObject().hasDuration() ) return;
 
     const length_t duration = slink->getSObject().getDurationBlocking();
+
+    if( eventClips_.hasClip( slink ) ) {
+        twFrameRange r = eventClips_.updateClip( slink, newTime, duration );
+        invalidateRenderPathRange( (offset_t) r.start, FRAGMENT_EVENT_DIRTY_END );
+        lastDurationValid_ = false;
+        checkDurationChanged();
+        return;
+    }
+
     twEditRange affected;
     if( cpTrackMix_ ) {
         twEditRange r = cpTrackMix_->updateClip( slink, newTime, duration );
@@ -236,10 +271,15 @@ void SLaneFragment::fragmentChildDurationChanged( length_t newLength )
 {
     SObject *obj = dynamic_cast<SObject *>( sender() );
     if( !obj ) return;
-    // See fragmentChildWasAdded: event content never entered the mix, so
-    // there is nothing to update in it — only the fragment's own extent may
-    // have moved.
-    if( obj->contentKind() != SContentKind::Event ) {
+
+    if( obj->contentKind() == SContentKind::Event ) {
+        for( SLink *lk : childLinks() ) {
+            if( !lk || &lk->getSObject() != obj ) continue;
+            if( !eventClips_.hasClip( lk ) ) continue;
+            twFrameRange r = eventClips_.updateClip( lk, lk->getStartTime(), newLength );
+            invalidateRenderPathRange( (offset_t) r.start, FRAGMENT_EVENT_DIRTY_END );
+        }
+    } else {
         twEditRange affected;
         for( SLink *lk : childLinks() ) {
             if( !lk || &lk->getSObject() != obj ) continue;
@@ -254,6 +294,31 @@ void SLaneFragment::fragmentChildDurationChanged( length_t newLength )
 
     lastDurationValid_ = false;
     checkDurationChanged();
+}
+
+// Proposal 41 D4/M3: flatten our own event clip set into ONE immutable
+// snapshot, rebuilt fresh on every call (no dirty-flag cache — see the class
+// comment: our children are write-once past M2's pack-clips, D3a, and this
+// mirrors STrack::eventFeed()'s own "rebuilt on every read" discipline).
+// clipPos is unused; the map is always identity because THIS object's own
+// zero already IS the flattened table's zero — any slip/loop/channel remap
+// belongs to the WINDOW (the SCut over us), never to the content underneath.
+twEventClipResolved SLaneFragment::resolveEventFeed( offset_t )
+{
+    twEventClipResolved out;
+    if( eventClips_.clipCount() == 0 ) return out;
+
+    const length_t span = getDuration();
+    if( span == 0 ) return out;
+
+    twEventBlock block;
+    eventClips_.collect( 0, (int64_t) span, block );
+    if( block.events.empty() ) return out;
+
+    out.seq = std::make_shared<const twEventSeq>(
+        std::move( block.events ), std::move( block.arena ) );
+    out.map = nullptr;   // identity — see the header comment
+    return out;
 }
 
 SLink *SLaneFragment::instantiateFromDomElement(

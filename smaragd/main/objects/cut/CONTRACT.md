@@ -182,9 +182,58 @@ Notes:
     `apply()` (which only ever runs while the action is still alive) sidesteps
     the question entirely: the local simply stays empty when apply() fails.
 
+11. **`resolveEventFeed()` NEVER NAMES A CONCRETE CONTENT TYPE, AND `objects/cut`
+    HAS NO EDGE TO `objects/fragment`** (proposal 41 D4/D5/M3). `SCut`
+    overrides only the base-class virtuals (`resolveEventFeed()`,
+    `isPureEventContent()`, both on `SObject`) and reaches its content only
+    through `getContent()` — a `SObject&`. This is what lets an `SCut` window
+    a lane fragment's residual event feed without `objects/cut` depending on
+    `objects/fragment` (see that module's CONTRACT.md — the dependency is
+    CONCEPTUALLY cut -> fragment but is deliberately NOT a declared
+    `check_layering.py` edge; M2's pack-clips/unpack-clips live in
+    `objects/mixer` for the same reason). `resolveEventFeed()` applies OUR OWN
+    slip/loop map over the content's already-flattened, content-relative
+    sequence (mirroring `SMidiCut::resolveEventClip`'s window-over-content
+    shape); it REFUSES (D5, never approximates) when `getStretchExact() != 1`
+    on a cut whose content answers non-empty — the tick/frame conversion for
+    that material already happened exactly once, inside the content's own
+    window, and stretching here too would convert a second time in the frame
+    domain. The edit surface (`SResizeClipAction`) refuses the EDIT itself
+    with the same check, before `resolveEventFeed()` would ever be asked to
+    log about it; the log line here is the belt to that suspenders for any
+    other path that might set a non-unity rate.
+
+    **D6's channel remap is deliberately NOT here.** It was tried on `SCut`
+    first and is wrong: D2 shares ONE `SCut` across every placement of an
+    asset ("edit any and all change"), so a remap stored on the content moves
+    EVERY placement at once — the opposite of D6's own motivating case, one
+    fragment placed on two tracks whose instruments want different channels.
+    It lives on `SLink` (`app/model/slink.h`,
+    `getEventChannelOverride()`/`setEventChannelOverride()`, -1 = as-authored)
+    and is applied by `STrack::trackChildWasAdded`'s `resolveFn` closure —
+    the one place that already holds both the SLink (the placement) and the
+    resolved event sequence (the content) at once. `set-clip-event-channel`
+    (`objects/cut/src/ssetclipeventchannelaction.cpp`) writes it there,
+    scoped to an `SCut` placement by a `dynamic_cast` check, not because the
+    storage needs `SCut` but because that is the shape this verb exists for.
+12. **`isPureEventContent()` MIRRORS `isLiveRecording()` ONE FOR ONE** (proposal
+    41 D7/M4): both are base-class `SObject` virtuals `SCut` forwards to
+    `getContent()`, and both gate the SAME four call sites —
+    `buildCapture_`, `ensureReader`, `invalidateAspects`, `getPreview` — for
+    the same reason (a render/reader/cache/preview over content that can only
+    ever be silent costs real UI-thread time for nothing). `getPreview`'s
+    short-circuit returns `-1` directly rather than falling into
+    `getContent().getPreview(...)` — a container's own preview path can reach
+    `requestPage()`, a DEMANDED FREEZE forbidden on this thread
+    (`main/timeline/CONTRACT.md` inv. 1).
+
 How to test: takes_comping.qxa (audibility, comping per column, undo),
 takes_serialize_roundtrip.qxa (loader registration, per-column activeTake
-persistence incl. -1).
+persistence incl. -1). Proposal 41 M3/M4: `fragment_midi_feed`,
+`fragment_midi_no_double_trigger`, `fragment_midi_channel_remap`,
+`fragment_midi_loop`, `fragment_rate_refused` (qxa, in
+`objects/fragment`'s test list — the fixtures are fragment-shaped, the
+assertions are on `SCut`'s behaviour).
 
 Phase 2 verbs (recording): place-clip (path-addressed windowed plain-cut
 placement; inverse SUnplaceClipAction), place-recording (plans the file

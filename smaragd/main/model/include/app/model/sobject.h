@@ -184,6 +184,42 @@ public:
     { (void) clipPos; return twEventClipResolved{}; }
 
     /**
+     * The RESIDUAL event feed a clip contributes when PLACED (proposal 41
+     * D4/M3), as distinct from resolveEventClip() above: a plain event clip
+     * IS its own content, but a container that has no track identity (a lane
+     * fragment) consumes nothing, so its whole event feed is residual and
+     * must bubble into whatever track the placement sits on.
+     *
+     * The base default JOINS contentKind() and resolveEventClip() — for
+     * ordinary Event-kind content this is already the right answer, so only a
+     * content kind that is NOT itself Event but still carries events (a
+     * fragment, via its SCut window) needs to override. It lives here, not on
+     * a fragment-specific type, for the same reason contentKind() and
+     * resolveEventClip() do: the track routes without knowing the subclass
+     * (design 37 §3.5, extended by 41 D4).
+     *
+     * `clipPos` is unused by every override to date (SMidiCut's
+     * resolveEventClip ignores it too) — the returned `map` carries the
+     * slip/loop translation, not the argument.
+     */
+    virtual twEventClipResolved resolveEventFeed( offset_t clipPos )
+    {
+        return contentKind() == SContentKind::Event ? resolveEventClip( clipPos )
+                                                      : twEventClipResolved{};
+    }
+
+    /**
+     * True for a container whose own audio sum is EMPTY right now — a pure-
+     * event lane fragment, or one with no children at all (proposal 41 D7/M4).
+     * `SCut::buildCapture_` treats any no-random-source content as container-
+     * backed and renders it into a snapshot on the UI thread; over a fragment
+     * with no audio children that render is guaranteed silence, bought at
+     * tens of milliseconds. Default false — everything before proposal 41
+     * either has a random source or is a real audio-summing container.
+     */
+    virtual bool isPureEventContent() const { return false; }
+
+    /**
      * One step of a WINDOW, for a position walk (proposal 09 §15).
      *
      * A window (a cut, a take stack) does not place its content by a start
