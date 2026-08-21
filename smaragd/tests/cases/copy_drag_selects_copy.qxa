@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC-a1: a Ctrl-drag copy in the arranger leaves the COPIES selected, not the
+  originals and not a dangling reference to the deleted live preview.
+
+  THE BUG THIS CLOSES: the arm-time code used to call
+  SApplication::submitSetSelectionAction(anchorCopy) — an UNDOABLE selection
+  action pointing at the live PREVIEW link — and mouseReleaseEvent then
+  `delete`s every preview before submitting anything else. So the undo history
+  carried a selection step naming an object already gone by the time the next
+  action landed, and the finalize's own selection change (when there was one at
+  all) was a SEPARATE undo step from the duplicate itself: a single-clip
+  Ctrl-drag cost 2 undo entries (select-the-preview, then duplicate-the-clip)
+  for what the user experiences as ONE gesture.
+
+  Fixed by: never touching the app-wide selection at arm time (the ORIGINAL
+  clip stays selected/highlighted for the whole drag — see the comment in
+  sstdmixerview.cpp), and folding ONE SSetSelectionAction naming the finished
+  copies into the SAME macro as the SDuplicateClipAction(s), unconditionally
+  (a single-clip copy grows the macro too, so undo count is 1 either way).
+
+  The clip starts at 0 with the fixture's own duration (192000 frames,
+  test_sawtooth.wav — see tabs_edit_in_arrangement.qxa for the same number);
+  the drop lands at 500000, comfortably clear of it, so there is no overlap
+  question to worry about. Duplicates append to the END of a track's child
+  list (SObject::addToChildLinks), so with one clip already at index 0 the
+  copy lands at index 1 — "0,1" — which is what the drag-clip-edge house
+  pattern already relies on elsewhere.
+-->
+<SActionScript version="1" name="copy_drag_selects_copy">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The user has the ORIGINAL selected before starting the drag. -->
+    <set-selection paths="0,0"/>
+    <assert-selection paths="0,0"/>
+
+    <!-- Ctrl-drag the clip's BODY to a new position: this must COPY it. -->
+    <drag-clip-edge track="0" clip="0" edge="body" toTime="500000"
+                    modifiers="ctrl"/>
+
+    <!-- After release: the COPY is selected (index 1), the ORIGINAL (index 0)
+         is not, and both clips exist. -->
+    <assert-selection paths="0,1"/>
+    <assert-clip-window clip="0,0" duration="192000"/>
+    <assert-clip-window clip="0,1" duration="192000"/>
+
+    <!-- ONE undo restores both the model (the copy is gone) AND the prior
+         selection (the original, "0,0" — not empty, not the copy). -->
+    <undo count="1"/>
+    <assert-selection paths="0,0"/>
+    <assert-clip-window clip="0,1" duration="192000" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

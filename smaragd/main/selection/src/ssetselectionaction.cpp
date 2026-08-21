@@ -24,9 +24,15 @@ SApplyResult SSetSelectionAction::apply(SProject *project)
     SObject *root = project->getRootComponent();
     if (!root) return {false, nullptr};
 
+    // pathRoot_ names WHICH root (master, or a named arrangement) the paths
+    // below resolve against (proposal 09 D21) -- omitting it here validated
+    // every arrangement-tab path against the MASTER tree instead, which only
+    // ever "worked" because a fixture's arrangement happened to mirror the
+    // master's shape. AC-a3 (Ctrl-A, one root per tab) is the first caller to
+    // build a selection whose shape genuinely differs from the master's.
     SSelectionManager mgr;
     for (const QList<int> &path : paths_) {
-        if (!mgr.isPathValid(path, project)) {
+        if (!mgr.isPathValid(path, project, pathRoot_)) {
             return {false, nullptr};
         }
     }

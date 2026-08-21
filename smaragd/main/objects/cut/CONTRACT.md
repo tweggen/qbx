@@ -172,6 +172,15 @@ Notes:
    own [0, 1] linear-amplitude axis with unity at the top. The GESTURES for it
    are not here: hit-testing is the arranger's business (app/timeline), and
    objects/cut may not depend on it.
+10. **`SDuplicateClipAction::setCreatedPathOut()` (AC-a1) is an out-param
+    written DURING `apply()`, never a getter read off the action afterward.**
+    A caller building a Ctrl-drag macro (`app/timeline`'s
+    `mouseReleaseEvent`) needs the new copy's path to select it, but the
+    action can be `delete`d by `SActionHistory` the moment `submit()` returns
+    on the REJECTED path — reading a member off the action pointer at that
+    point would be a use-after-free. Writing into a caller-owned local during
+    `apply()` (which only ever runs while the action is still alive) sidesteps
+    the question entirely: the local simply stays empty when apply() fails.
 
 How to test: takes_comping.qxa (audibility, comping per column, undo),
 takes_serialize_roundtrip.qxa (loader registration, per-column activeTake

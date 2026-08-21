@@ -160,7 +160,37 @@ Known debt:
     above) — a change to one must be checked against the other by eye.
     `main/servicesui/src/soptionsdialog.cpp`'s "Event Editor" page is the
     config UI, built/loaded/applied exactly like the arranger's "Mouse
-    navigation" page. **No headless gate exists for either the gestures or
-    the options page** (no verb drives a synthetic wheel event anywhere in
-    this repo, and no verb builds the Options dialog off screen the way
-    `assert-midi-options` does for the MIDI page) — hand-verified only.
+    navigation" page. **No headless gate exists for either the piano roll's
+    OWN wheel gestures or the options page** (no verb drives a synthetic
+    wheel event into `SPianoRollView` specifically, and no verb builds the
+    Options dialog off screen the way `assert-midi-options` does for the MIDI
+    page) — hand-verified only. (AC-g1 since added `wheel-scroll`, a real
+    `QWheelEvent` into the ARRANGER canvas, `SMVActualView` — a different
+    widget, in `app/timeline`; it does not reach this module at all.)
+
+14. **Ctrl-drag on a note BODY copies it (AC-a2), and only the copies end up
+    selected.** `DragKind::Copy` is a distinct kind from `Move`: `previewNotes()`
+    APPENDS a new `SEvent` per dragged note rather than mutating the original
+    in place — the whole point of a copy is that the original stays exactly
+    where it was. A Ctrl press that never crosses `QApplication::
+    startDragDistance()` is still a plain TOGGLE (deferred from press to
+    release, checked in `commitDrag()`), exactly as a Ctrl-click behaved
+    before this gesture existed — `piano_roll_edits.qxa`'s plain-click path is
+    untouched. A copy whose computed address exactly equals its source
+    (e.g. a drag that crossed the pixel threshold but snapped back to the
+    start) is REFUSED rather than produced, since `idStr()` cannot tell it
+    apart from the original. Ctrl on an EDGE stays a resize; Ctrl on the
+    velocity/CC lanes is unchanged. Gate: `note_copy_drag.qxa`.
+15. **Ctrl/Cmd-A selects every note of the bound clip (AC-a3), through a
+    `QEvent::ShortcutOverride` this view accepts in `event()` before the shell's
+    window-level "Select All" `QAction` can claim the keystroke.** Accepting the
+    override is what routes the ordinary `QKeyEvent` into `keyPressEvent()`
+    instead — the same technique a `QLineEdit` already relies on for its own
+    Ctrl-A. View state only (like every other selection change in this file);
+    nothing here is undoable. **Not gated headlessly**: `QApplication::
+    focusWidget()` is always null in a `--test-case` run (the main window is
+    never shown), so `select-all` (main/testkit, driving
+    `SMainWindow::sendSelectAllShortcut()`) can only ever exercise the SHELL's
+    default (arranger) branch in a script — see `select_all_scope.qxa`, which
+    gates that branch's per-tab independence instead. This view's own branch
+    is reviewed, production code, hand-verification-only.

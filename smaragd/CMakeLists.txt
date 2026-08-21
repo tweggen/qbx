@@ -471,6 +471,20 @@ foreach(_met metronome_click metronome_render_identity metronome_toggle_during_p
     endif()
 endforeach()
 
+# --- AC-g1: the follow-playhead scroll HOLD ----------------------------------
+#
+# A manual scroll suspends re-paging for FOLLOW_HOLD_MS (5 s), measured
+# against a real QElapsedTimer while real-time playback runs — a wall-clock
+# case in exactly the sense the section above describes, so RUN_SERIAL with
+# SMARAGD_CAPTURE_SPEED=1 spelled out (it is already the default; stating it
+# is what makes the ~7 s of wait-ms below mean what the comments in the .qxa
+# say they mean rather than an accident of whatever the default happens to be).
+if(TEST qxa.follow_scroll_hold)
+    set_tests_properties(qxa.follow_scroll_hold PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+endif()
+
 # THE COUNT-IN / PRE-ROLL CASES record, so they take the same paced,
 # position-encoded input and the same reported latency as the L3b record four -
 # which is what makes `compensationFrames="-5824"` a closed form in both.

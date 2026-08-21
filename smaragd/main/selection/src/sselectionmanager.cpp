@@ -67,3 +67,31 @@ bool SSelectionManager::isPathValid(const QList<int> &path, SProject *project,
     if (!rootObj) return false;
     return strackpath::resolveByPath(rootObj, path) != nullptr;
 }
+
+namespace {
+// Depth-first over EVERY child (lane or clip), appending a clip's path and
+// recursing into a lane's — `prefix` is pushed/popped rather than rebuilt, so
+// this costs one QList append/removeLast per child rather than one copy.
+void collectClipPaths( SObject *container, QList<int> &prefix,
+                       QList<QList<int>> &out )
+{
+    if( !container ) return;
+    int idx = 0;
+    for( SLink *lk : container->childLinks() ) {
+        prefix.append( idx );
+        SObject &child = lk->getSObject();
+        if( child.isPathContainer() ) collectClipPaths( &child, prefix, out );
+        else                          out.append( prefix );
+        prefix.removeLast();
+        ++idx;
+    }
+}
+}  // namespace
+
+QList<QList<int>> SSelectionManager::allClipPaths( SObject *root ) const
+{
+    QList<QList<int>> out;
+    QList<int> prefix;
+    collectClipPaths( root, prefix, out );
+    return out;
+}
