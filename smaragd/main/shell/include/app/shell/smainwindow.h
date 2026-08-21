@@ -248,6 +248,26 @@ public:
     bool grabTrackHead( const QString &path, const QString &trackPath,
                         int headHeight, int w, int h );
 
+    // TEST ENTRY POINTS (proposal 40 "Feel Flow" M3): build the REAL Track
+    // Detail "Feel Flow" section off screen (parentless, never shown) for
+    // the named track and return SFeelFlowPanel::describe() -- the
+    // assert-track-head shape (a single widget, not a whole dialog page),
+    // here for the same reason: testkit may not include app/timeline
+    // (testkit CONTRACT inv. 5). Empty string when the path names no track.
+    QString describeFeelFlow( const QString &trackPath );
+    // ...and paint that same off-screen section into a PNG. Coverage, not
+    // oracle: describe() is the numbers, this only proves it draws.
+    bool grabFeelFlow( const QString &path, const QString &trackPath,
+                       int w, int h );
+    // Drives the panel's REAL button handler (`onAnalyzeClicked()` /
+    // `onLearnClicked()`, invoked by name through the meta-object system --
+    // both are Qt slots, private or not) on a throwaway off-screen instance
+    // bound to the REAL track, so the model mutation it makes (starting a
+    // bounce, submitting learn-feel-flow) is the genuine one, exactly as a
+    // real click on the docked panel would make. `button` = "analyze" |
+    // "learn". False for an unknown button or track.
+    bool clickFeelFlowPanel( const QString &trackPath, const QString &button );
+
     // TEST ENTRY POINTS for automation (proposal 37 P6). All four go through
     // the shell for the usual reason: testkit may not include app/timeline
     // (tools/check_layering.py, testkit CONTRACT inv. 5).

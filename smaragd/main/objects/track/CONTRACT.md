@@ -421,3 +421,50 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     not exist yet); freshness is a SEPARATE question, deliberately not folded
     in — a caller (the lane painter, `main/timeline/CONTRACT.md` inv. 25)
     checks `feelFlowStale()` itself.
+
+## Feel Flow tuning panel + trained mode (proposal 40 M3)
+
+26. **Trained-mode state is serialized on `STrack` as an INLINE, NON-`SLink`
+    element** (`<feelflow mode='adaptive'|'trained'><trained data='...'/>
+    </feelflow>`, base64 = `twGrooveTrainedStructureSerialize`'s wire
+    format) — the automation-lane discipline (inv. 11), not a second one:
+    `STrack` overrides `serialize()`/`readPostChildrenAttributes()` FULLY
+    (mirroring `SObject::serialize()`'s own body, the way
+    `SMidiSequence::serialize()` does for its `<events>` payload) rather than
+    hooking into a shared seam, because `SObject` offers none there. Written
+    ONLY when `feelFlowMode_ != Adaptive` or a trained structure exists, so a
+    project that has never touched Feel Flow's mode re-serializes
+    BYTE-IDENTICAL to a pre-M3 build and every existing golden is untouched.
+    An older build simply ignores the element, exactly as it already ignores
+    `<automation>`.
+27. **The analysis params blob carries `mode`/`trained` ADDITIVELY, and ONLY
+    for `mode == Trained`** (`twGrooveAnalysisParams::serialize`,
+    `tw/sidecar/twgrooveaspect.h`) — a default-constructed params blob (every
+    M1/M1b/M2 caller, and every track that has never touched the mode) stops
+    at exactly the pre-M3 byte sequence, so its `paramsHash` and every cached
+    `groove.res`/`groove.ev` store entry keyed from it are UNCHANGED. Only a
+    track actually switched to Trained mode mints a new (and by construction
+    DIFFERENT) key — which is also what makes AC 4's param-aware staleness
+    work with no engine-side epoch bump: `SFeelFlowTrackBounce::isStale()`
+    rebuilds the track's CURRENT effective params (`STrack::feelFlowMode()` +
+    `feelFlowTrainedStructure()`), hashes them the same way, and compares
+    against `paramsHashAtBounce_` — recorded from the SAME `twGrooveAnalysisParams`
+    the bounce+analysis job actually ran under, built on the calling
+    (main) thread by `SFeelFlowTrackBounce::start()`, NEVER re-read from the
+    track inside the background job (which runs arbitrarily later, on
+    another thread, with no synchronization of its own over `STrack`'s
+    mode/trained members).
+28. **`twGroovePendulumTrainStructure`'s `trainedHasRegion` is ALWAYS sized
+    to the front end's region count, never empty, even on total training
+    failure** (`twgroovependulum.cc`) — so "has this track EVER been
+    trained" (`STrack::feelFlowHasTrainedStructure()`, a null check on the
+    `unique_ptr`) and "did THIS training pass recover anything"
+    (`std::any_of` over `trainedHasRegion`, `SLearnFeelFlowAction::apply()`)
+    are two DIFFERENT questions answered two different ways — conflating
+    them (checking `.empty()` for the second) would make `learn-feel-flow`
+    silently accept a selection with no recoverable groove and store an
+    all-false structure that never falsifies. The SAME `.empty()` check is
+    correct at the `twGrooveAnalysisParams::trained`/`buildEffectiveGrooveParams`
+    layer, because there it is asking the FIRST question (a
+    default-constructed `twGrooveTrainedStructure` has `trainedHasRegion`
+    genuinely empty — no `TrainStructure` call has ever populated it).

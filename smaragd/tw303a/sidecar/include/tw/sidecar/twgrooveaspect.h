@@ -21,6 +21,17 @@
  */
 
 /**
+ * Proposal 40 "Feel Flow" M3 -- which scoring path an analysis run takes.
+ * Adaptive (the default, value 0) is the M1/M1b/M2 free-running path
+ * (twGroovePendulumAnalyze); Trained scores against a frozen structure
+ * (twGroovePendulumScoreWithStructure, design section 3.2's "training
+ * freezes the STRUCTURE, never the clock"). The numeric values are never
+ * written to the params blob for Adaptive (see serialize() below) -- they
+ * only need to be stable for the ONE non-default case.
+ */
+enum class twGrooveMode : uint8_t { Adaptive = 0, Trained = 1 };
+
+/**
  * Every ANALYSIS-SIDE free parameter that can change the resulting bytes:
  * the front-end config (twGrooveFrontEndParams) plus the ensemble/pendulum
  * and stats-pooling config (twGroovePendulumParams, which already carries
@@ -28,13 +39,55 @@
  * keying -- field order is normative, matching the house convention
  * (tw/sidecar/twanalyzers.h's twOnsetParams::serialize et al.): changing
  * ANY default here mints a new store key.
+ *
+ * `mode`/`trained` are proposal 40 M3's addition and are appended
+ * ADDITIVELY, at the END, and ONLY WHEN NON-DEFAULT (see serialize()): a
+ * default-constructed twGrooveAnalysisParams -- what every M1/M1b/M2 caller
+ * builds and what a track that has never touched Feel Flow's mode still
+ * builds -- serializes to EXACTLY the pre-M3 byte sequence, so its
+ * paramsHash and every cached "groove.res"/"groove.ev" store entry keyed
+ * from it are unchanged. Only a track actually switched to Trained mode
+ * mints a new (and DIFFERENT, by construction) key, which is also what
+ * makes trained-vs-adaptive "different paramsHash keys, coexisting in the
+ * store" (design section 4.1) true without any special-casing here.
  */
 struct twGrooveAnalysisParams {
     twGrooveFrontEndParams frontEnd;
     twGroovePendulumParams pendulum;
+    twGrooveMode mode = twGrooveMode::Adaptive;
+    // Meaningful only when mode == Trained. Default-constructed (empty
+    // ensemble) when there is no frozen structure yet.
+    twGrooveTrainedStructure trained;
 
     void serialize( std::vector<uint8_t> &out ) const;
 };
+
+/**
+ * Proposal 40 M3: binary (LE) serialize/deserialize of a WHOLE
+ * twGrooveTrainedStructure. This is the one canonical byte layout for the
+ * struct, used in two places that must never independently drift: the
+ * additive "mode == Trained" tail of twGrooveAnalysisParams::serialize
+ * above, and the project's own inline `<feelflow><trained data='...'/>`
+ * persistence (main/objects/track/src/strack.cpp, base64-wrapped). Kept as
+ * free functions here (rather than methods on the struct, which lives in
+ * twgroovependulum.h) for the same reason the rest of this module exists:
+ * twgroovependulum.h has no I/O, no wire format, no byte layout of its own.
+ *
+ * Field order (normative): the ensemble (twGrooveAnalysisParams::serialize's
+ * own per-unit block: u32 count, then per unit nameLen+bytes, periodInTatums,
+ * receptive, periodInBars, k, eps, dampingCycles), then f64
+ * minTatumSec/maxTatumSec/defaultBarPeriodSec/confidenceFloor, then f64
+ * driftWindowSec/driftStepSec/bimodalMinGapMs/bimodalMinFrac/bleedGateDb
+ * (the stats block), then u32 trainedHasRegion count + that many u8 0/1,
+ * then u32 trainedMuMsByRegion count + that many f64.
+ */
+void twGrooveTrainedStructureSerialize( const twGrooveTrainedStructure &s,
+                                        std::vector<uint8_t> &out );
+
+/** Returns false (and leaves `out` default-constructed) on a truncated or
+ * malformed blob -- never partially fills it. */
+bool twGrooveTrainedStructureDeserialize( const uint8_t *data, uint64_t len,
+                                          twGrooveTrainedStructure &out );
 
 /** One decoded "groove.res" record (twaspects.h): per-unit normalized
  * resonance power (ensemble order) plus the compliance scalar. */
@@ -63,6 +116,16 @@ struct twGrooveAspectPayloads {
     uint64_t              resRecordCount = 0;   // == ceil(nFrames / hopFrames)
     std::vector<uint8_t>  evPayload;
     uint64_t              evRecordCount  = 0;   // == number of pass-2 scored events (may be 0)
+
+    // Proposal 40 M3: the pass-2 physical-readout summary (design section
+    // 3.5), copied verbatim from the twGroovePendulumResult this call
+    // computed internally -- an IN-MEMORY CONVENIENCE for a caller building
+    // the Track Detail panel's readouts, and NEVER written to the sidecar
+    // wire format ("groove.res"/"groove.ev" stay exactly what twaspects.h
+    // documents). One entry per ensemble unit, same order as the "groove.res"
+    // per-unit power columns.
+    std::vector<twGrooveCounterTension> counterTension;
+    std::vector<double>                 unitMeanR;   // time-mean |z|^2, one per unit
 };
 
 /**

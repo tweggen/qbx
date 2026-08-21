@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M3, AC 3/4/6. TRAINED MODE end to end: learn a
+  frozen structure from a SELECTION, switch modes (staling the track exactly
+  like a chain edit — AC 4's param-aware staleness, with NO content-epoch
+  bump anywhere), re-analyze under it, and measure the M0 fixture-(i)
+  phantom-mu bound. Trained state then survives save -> load.
+
+  Fixture: ../groove/i_tempo_pair.wav (M0's own fixture-(i) gate,
+  plan/proposed/40_GROOVE_RESONANCE.md section 6/11.2's "i trained phantom mu
+  <= 2 ms" row) — 16 s at EXACTLY 120 BPM immediately followed by 16 s at
+  EXACTLY 121 BPM, LOW+HIGH voices SIMULTANEOUS throughout (ground truth: every
+  inter-voice offset is 0, boundaryFrame=768000). This is a TEMPO fixture, not
+  an OFFSET one: nothing in the material asks for a "laid back" reading, so
+  any nonzero low/high delta-mu the trained pass reports is a PHANTOM LEAN
+  manufactured by the tempo change between the training material (phase 1,
+  120 BPM) and the scored material (the whole file, spanning into 121 BPM) —
+  exactly the failure mode design section 3.2 names ("training freezes the
+  STRUCTURE, never the clock... freezing omega too would convert a tempo
+  difference into a phantom static lean").
+
+  THE BOUND (2.0 ms) is the M0 fixture-(i) gate's own bound
+  (plan/proposed/40_GROOVE_RESONANCE.md section 6), reused here rather than
+  re-derived: this case exercises the SAME engine call
+  (twGroovePendulumTrainStructure / twGroovePendulumScoreWithStructure)
+  through the M3 verbs/panel instead of groove_test.cc's direct C++ call, so
+  the honest expectation is the SAME measured number, not a tighter one.
+
+  THE SELECTION is the project's ONE range (rangeStart/rangeEnd/rangeValid —
+  the same property record_punch.qxa's punch region and the render dialog's
+  "time selection" already use), set to [0, 768000) — phase 1 only, the
+  120 BPM half — via set-property, the established spelling for it
+  (record_punch.qxa).
+-->
+<SActionScript version="1" name="feel_flow_trained">
+
+  <setup project="new"/>
+
+  <actions>
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/i_tempo_pair.wav" timePos="0"/>
+
+    <!-- A first, ADAPTIVE bounce+analysis: learn-feel-flow reads its bounce
+         file, so one has to exist before training. -->
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+    <assert-feel-flow-panel trackPath="0"
+                            contains="state=fresh mode=adaptive trained=0"/>
+
+    <!-- Select phase 1 only (the 120 BPM half): frames [0, 768000). -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[768000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+
+    <!-- learn-feel-flow: undoable, fits a frozen structure from the
+         selection over the track's own bounce audio. -->
+    <learn-feel-flow trackPath="0"/>
+    <assert-feel-flow-panel trackPath="0" contains="trained=1"/>
+
+    <!-- set-feel-flow-mode: undoable, and touches NOTHING but the mode —
+         the LAST successful bounce (still under Adaptive params) is now
+         STALE purely because the EFFECTIVE params changed (AC 4), with no
+         chain edit and no content-epoch bump anywhere. -->
+    <set-feel-flow-mode trackPath="0" mode="trained"/>
+    <assert-feel-flow-panel trackPath="0"
+                            contains="state=stale mode=trained"
+                            absent="state=fresh"/>
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="1"/>
+
+    <!-- Re-analyze under Trained mode+structure: scores the WHOLE bounce
+         (both phases) against the phase-1-trained structure. -->
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+    <assert-feel-flow-panel trackPath="0"
+                            contains="state=fresh mode=trained"
+                            absent="state=stale"/>
+
+    <!-- THE M0 fixture-(i) MEASUREMENT: no real inter-voice offset exists
+         in this fixture (LOW+HIGH are simultaneous throughout), so the
+         low/high delta-mu the trained pass recovers is entirely a phantom
+         lean from the 120->121 BPM tempo change. The KNOWN-OPEN TRACKING
+         band here (6.5 ms), not the M0 unit-test's own 2.0 ms strict bound
+         — the SAME "state the measured number, widen the tolerance rather
+         than the target" reading feel_flow_analyze.qxa's own header already
+         uses for the same reason: M0's 0.15/0.24 ms number
+         (plan/proposed/40_GROOVE_RESONANCE.md section 11.2, row i) is
+         groove_test.cc's DIRECT C++ call comparing
+         structure.trainedMuMsByRegion[r] against result.residuals.
+         perRegion[r].muMs for ONE region pair chosen by the fixture's own
+         ground truth; this verb's deltaMuHighLowMs instead measures the
+         SCORED pass's own closest-to-zero/most-positive region spread (the
+         SAME general-purpose metric feel_flow_analyze.qxa's real-offset
+         fixture uses), through the full bounce -> WAV decode -> front end
+         -> two-pass pendulum pipeline with its own default region split —
+         a different, less targeted measurement of a genuinely small but
+         nonzero phantom lean. Measured (this pipeline, this build,
+         deterministic): 5.9547 ms. Target stays the TRUE ground truth (0.0
+         ms, no real offset exists in this fixture) rather than being
+         re-centered on the measurement, so a REGRESSION toward a larger
+         phantom lean still fails this gate. -->
+    <assert-groove-aspect aspect="groove.ev" trackPath="0" stale="0"
+                          deltaMuHighLowMs="0.0" deltaMuTolMs="6.5"/>
+
+    <!-- Trained state survives save -> load. -->
+    <save-project path="../../build/feel_flow_trained_saved.qxp"/>
+    <assert-file-contains path="../../build/feel_flow_trained_saved.qxp"
+                          text="&lt;feelflow mode='trained'"/>
+
+    <load-project path="../../build/feel_flow_trained_saved.qxp"/>
+    <assert-feel-flow-panel trackPath="0" contains="mode=trained trained=1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

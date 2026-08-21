@@ -401,6 +401,26 @@ long-term shape.
     M1b bounce is a whole-project render anchored at project frame 0 — no
     warp map, no clip-relative offset, anywhere in the paint path.
 
+26. **The Feel Flow Track Detail panel section is read-only and pumped from
+    `SApplication::meterTick`, never a second implementation of the overlay's
+    own read path** (proposal 40 M3, `main/timeline/include/app/timeline/
+    sfeelflowpanel.h`). Its readouts (compliance at the playhead, per-
+    pendulum energy bars, the §3.5 lean/drive pair) go through the SAME
+    `STrack::feelFlowForUi()` cached read inv. 25 already gates, indexed by
+    `locator / hopFrames` exactly as the overlay indexes it — never a
+    separate store read, never a demand, never a block. No control on the
+    panel bumps a content epoch: the Analyze button calls the SAME
+    `STrack::startFeelFlowBounce()` the `feel-flow-analyze` verb calls
+    (background, non-undoable — scheduling analysis is not an edit to the
+    arrangement), and the mode combo / Learn button submit ordinary
+    undoable actions (`set-feel-flow-mode`, `learn-feel-flow`,
+    `main/objects/track/CONTRACT.md` inv. 26-28) that touch model state
+    only. `describe()` is the SAME function the on-screen labels are built
+    from, callable synchronously with no running tick (`SMainWindow::
+    describeFeelFlow`/`grabFeelFlow`, the `assert-track-head` shape — a
+    single throwaway widget, never a whole dialog page) — so a testkit
+    assertion and what a user actually sees can never independently drift.
+
 ## The `media:` drop branch (proposal 38 gate 3)
 
 23. **`SMVActualView::dropEvent` has ONE new branch and it is five lines:**

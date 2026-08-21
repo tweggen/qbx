@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <QDebug>
+#include <QMetaObject>
 #include <qmessagebox.h>
 #include <qaction.h>
 #include <QCursor>
@@ -77,6 +78,7 @@
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/strackdetailpanel.h"
+#include "app/timeline/sfeelflowpanel.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptionsdialog.h"
 #include "app/servicesui/scleanupdialog.h"
@@ -2505,6 +2507,69 @@ QString SMainWindow::describeTrackHead( const QString &trackPath,
     SSMVMixerControl head( nullptr, *v, *track );
     head.resize( SMV_TRACK_CTRL_WIDTH, headHeight > 0 ? headHeight : 1 );
     return head.describeHead();
+}
+
+
+// --- proposal 40 "Feel Flow" M3 test seams --------------------------------
+
+QString SMainWindow::describeFeelFlow( const QString &trackPath )
+{
+    // The APP's project, not this window's -- describeTrackHead's own reason
+    // (a headless --test-case run drives SApplication directly and leaves
+    // currentProject_ null).
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return QString();
+
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return QString();
+
+    // A section built for the assertion and thrown away -- parentless and
+    // never shown (describeTrackHead's own SSMVMixerControl shape), so no
+    // native window appears and no live QTimer tick races the read: describe()
+    // is a pure function of `track` + the current locator, computed
+    // synchronously here exactly as it is from the real docked instance's
+    // meterTick handler.
+    SFeelFlowPanel panel( track, nullptr );
+    return panel.describe();
+}
+
+bool SMainWindow::grabFeelFlow( const QString &path, const QString &trackPath,
+                                int w, int h )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return false;
+
+    SFeelFlowPanel panel( track, nullptr );
+    panel.resize( w > 0 ? w : 320, h > 0 ? h : 200 );
+    if( panel.layout() ) panel.layout()->activate();
+    const QPixmap pm = panel.grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
+bool SMainWindow::clickFeelFlowPanel( const QString &trackPath,
+                                      const QString &button )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return false;
+
+    const char *slot;
+    if( button == QLatin1String( "analyze" ) )      slot = "onAnalyzeClicked";
+    else if( button == QLatin1String( "learn" ) )   slot = "onLearnClicked";
+    else return false;
+
+    SFeelFlowPanel panel( track, nullptr );
+    return QMetaObject::invokeMethod( &panel, slot, Qt::DirectConnection );
 }
 
 

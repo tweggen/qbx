@@ -75,6 +75,14 @@ float getF32( const uint8_t *p )
     return v;
 }
 
+double getF64( const uint8_t *p )
+{
+    uint64_t bits = getU64( p );
+    double   v;
+    memcpy( &v, &bits, 8 );
+    return v;
+}
+
 // Linear interpolation of an array at a fractional index, clamped to the
 // array's own domain -- a generic reduction (identical in spirit to, but a
 // separate implementation from, twgroovependulum.cc's private lerpAt: that
@@ -148,6 +156,127 @@ void twGrooveAnalysisParams::serialize( std::vector<uint8_t> &out ) const
     putF64( out, st.bimodalMinGapMs );
     putF64( out, st.bimodalMinFrac );
     putF64( out, st.bleedGateDb );
+
+    // Proposal 40 M3: appended ADDITIVELY and ONLY for mode == Trained (see
+    // the struct's own doc) -- a default-constructed params blob (every
+    // M1/M1b/M2 caller, and every track that has never touched Feel Flow's
+    // mode) stops exactly here, byte-identical to the pre-M3 sequence above.
+    if( mode == twGrooveMode::Trained ) {
+        out.push_back( 1 );   // trained-mode marker; NEVER written for Adaptive
+        std::vector<uint8_t> tsBlob;
+        twGrooveTrainedStructureSerialize( trained, tsBlob );
+        putU32( out, (uint32_t) tsBlob.size() );
+        out.insert( out.end(), tsBlob.begin(), tsBlob.end() );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// twGrooveTrainedStructureSerialize / Deserialize -- see twgrooveaspect.h's
+// doc for the normative field order. A small local helper for the ensemble
+// block only, deliberately NOT shared with twGrooveAnalysisParams::serialize
+// above: that function's byte-exactness is the whole M1/M1b/M2 gate, and a
+// shared helper would mean a change made for THIS struct's sake could move
+// bytes there too. Two independent (if textually similar) encoders is the
+// safer trade here.
+// ---------------------------------------------------------------------------
+namespace {
+void putTrainedEnsemble( std::vector<uint8_t> &out,
+                         const std::vector<twGroovePendulumUnitSpec> &ensemble )
+{
+    putU32( out, (uint32_t) ensemble.size() );
+    for( const twGroovePendulumUnitSpec &u : ensemble ) {
+        putU32( out, (uint32_t) u.name.size() );
+        out.insert( out.end(), u.name.begin(), u.name.end() );
+        putF64( out, u.periodInTatums );
+        out.push_back( (uint8_t) u.receptive );
+        putF64( out, u.periodInBars );
+        putF64( out, u.k );
+        putF64( out, u.eps );
+        putF64( out, u.dampingCycles );
+    }
+}
+} // namespace
+
+void twGrooveTrainedStructureSerialize( const twGrooveTrainedStructure &s,
+                                        std::vector<uint8_t> &out )
+{
+    out.clear();
+    putTrainedEnsemble( out, s.paramsUsed.ensemble );
+    putF64( out, s.paramsUsed.minTatumSec );
+    putF64( out, s.paramsUsed.maxTatumSec );
+    putF64( out, s.paramsUsed.defaultBarPeriodSec );
+    putF64( out, s.paramsUsed.confidenceFloor );
+    const twGrooveStatsParams &st = s.paramsUsed.stats;
+    putF64( out, st.driftWindowSec );
+    putF64( out, st.driftStepSec );
+    putF64( out, st.bimodalMinGapMs );
+    putF64( out, st.bimodalMinFrac );
+    putF64( out, st.bleedGateDb );
+
+    putU32( out, (uint32_t) s.trainedHasRegion.size() );
+    for( bool b : s.trainedHasRegion ) out.push_back( b ? 1 : 0 );
+    putU32( out, (uint32_t) s.trainedMuMsByRegion.size() );
+    for( double v : s.trainedMuMsByRegion ) putF64( out, v );
+}
+
+bool twGrooveTrainedStructureDeserialize( const uint8_t *data, uint64_t len,
+                                          twGrooveTrainedStructure &out )
+{
+    out = twGrooveTrainedStructure();
+    if( data == nullptr ) return false;
+
+    uint64_t pos = 0;
+    auto need = [&]( uint64_t n ) { return pos + n <= len; };
+
+    if( !need( 4 ) ) return false;
+    const uint32_t nUnits = getU32( data + pos ); pos += 4;
+    out.paramsUsed.ensemble.resize( nUnits );
+    for( uint32_t i = 0; i < nUnits; i++ ) {
+        if( !need( 4 ) ) return false;
+        const uint32_t nameLen = getU32( data + pos ); pos += 4;
+        if( !need( nameLen ) ) return false;
+        twGroovePendulumUnitSpec &u = out.paramsUsed.ensemble[i];
+        u.name.assign( (const char *) ( data + pos ), nameLen ); pos += nameLen;
+        if( !need( 8 ) ) return false;
+        u.periodInTatums = getF64( data + pos ); pos += 8;
+        if( !need( 1 ) ) return false;
+        u.receptive = (twGrooveReceptiveShape) data[pos]; pos += 1;
+        if( !need( 32 ) ) return false;
+        u.periodInBars   = getF64( data + pos ); pos += 8;
+        u.k              = getF64( data + pos ); pos += 8;
+        u.eps            = getF64( data + pos ); pos += 8;
+        u.dampingCycles  = getF64( data + pos ); pos += 8;
+    }
+
+    if( !need( 32 ) ) return false;
+    out.paramsUsed.minTatumSec        = getF64( data + pos ); pos += 8;
+    out.paramsUsed.maxTatumSec        = getF64( data + pos ); pos += 8;
+    out.paramsUsed.defaultBarPeriodSec = getF64( data + pos ); pos += 8;
+    out.paramsUsed.confidenceFloor    = getF64( data + pos ); pos += 8;
+
+    if( !need( 40 ) ) return false;
+    twGrooveStatsParams &st = out.paramsUsed.stats;
+    st.driftWindowSec  = getF64( data + pos ); pos += 8;
+    st.driftStepSec    = getF64( data + pos ); pos += 8;
+    st.bimodalMinGapMs = getF64( data + pos ); pos += 8;
+    st.bimodalMinFrac  = getF64( data + pos ); pos += 8;
+    st.bleedGateDb     = getF64( data + pos ); pos += 8;
+
+    if( !need( 4 ) ) return false;
+    const uint32_t nHasRegion = getU32( data + pos ); pos += 4;
+    if( !need( nHasRegion ) ) return false;
+    out.trainedHasRegion.resize( nHasRegion );
+    for( uint32_t i = 0; i < nHasRegion; i++ ) out.trainedHasRegion[i] = data[pos++] != 0;
+
+    if( !need( 4 ) ) return false;
+    const uint32_t nMu = getU32( data + pos ); pos += 4;
+    if( !need( (uint64_t) nMu * 8 ) ) return false;
+    out.trainedMuMsByRegion.resize( nMu );
+    for( uint32_t i = 0; i < nMu; i++ ) {
+        out.trainedMuMsByRegion[i] = getF64( data + pos ); pos += 8;
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,8 +295,20 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
     if( field.nHops == 0 )
         return out;   // invalid front-end config -- see twGrooveAnalyzeFrontEnd's doc
 
-    const twGroovePendulumResult result =
-        twGroovePendulumAnalyze( field, params.pendulum );
+    // Proposal 40 M3: Trained mode scores against a frozen structure
+    // (design section 3.2 -- training freezes the STRUCTURE, never the
+    // clock: omega is always re-seeded from THIS field, never frozen).
+    // trainedHasRegion.empty() -- NOT paramsUsed.ensemble.empty(), which
+    // twGroovePendulumParams's own default member initializer (the 5-unit
+    // twGrooveDefaultEnsemble()) makes true even for a NEVER-trained
+    // structure -- means "requested Trained but twGroovePendulumTrainStructure
+    // has never run for this track": fall back to the ordinary Adaptive path
+    // rather than mis-score against a structure that was never fit.
+    const bool useTrained = params.mode == twGrooveMode::Trained
+                           && !params.trained.trainedHasRegion.empty();
+    const twGroovePendulumResult result = useTrained
+        ? twGroovePendulumScoreWithStructure( field, params.trained )
+        : twGroovePendulumAnalyze( field, params.pendulum );
     // Honest-empty: no recoverable tatum, or no "reference" unit in the
     // ensemble -- twGroovePendulumAnalyze's own bail conditions.
     if( result.tatumPeriodSec <= 0.0 || result.unitTrajectories.empty() )
@@ -220,6 +361,12 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
         putU16( out.evPayload, se.region );
         putU16( out.evPayload, (uint16_t)0 );   // flags: reserved (M2+)
     }
+
+    // Proposal 40 M3: the in-memory-only physical-readout summary (never
+    // part of either wire payload above) -- copied straight from `result`,
+    // which already computed it as part of pass 2.
+    out.counterTension = result.counterTension;
+    out.unitMeanR       = result.unitMeanR;
 
     return out;
 }

@@ -1,6 +1,7 @@
 #include "app/testkit/ssidecartestactions.h"
 #include "app/actions/sactionregistry.h"
 #include "app/shell/sapplication.h"
+#include "app/shell/smainwindow.h"
 #include "app/model/sproject.h"
 #include "app/model/sexternfile.h"
 #include "app/model/slink.h"
@@ -16,10 +17,13 @@
 #include "tw/sidecar/twqaf.h"
 #include "tw/sidecar/twgrooveaspect.h"
 
+#include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QDomElement>
 #include <QElapsedTimer>
 #include <QThread>
+#include <QWidget>
 #include <QDebug>
 
 #include <algorithm>
@@ -749,5 +753,140 @@ static const bool s_reg_assert_groove_aspect = (
     SActionRegistry::instance().registerType(
         QStringLiteral("assert-groove-aspect"),
         []{ return new SAssertGrooveAspectAction; }
+    ), true
+);
+
+// --------------------------------------------------- click-feel-flow-panel
+
+namespace {
+// testkit may not include app/timeline (CONTRACT inv. 5), so the section is
+// reached through the shell, exactly as assert-track-head/collect-envelope
+// do -- each of those files keeps its own file-local copy of this lookup.
+SMainWindow *feelFlowMainWindow()
+{
+    for( QWidget *w : QApplication::topLevelWidgets() )
+        if( SMainWindow *win = qobject_cast<SMainWindow *>( w ) ) return win;
+    return nullptr;
+}
+} // namespace
+
+SApplyResult SClickFeelFlowPanelAction::apply( SProject * )
+{
+    SMainWindow *win = feelFlowMainWindow();
+    if( !win ) {
+        qWarning() << "click-feel-flow-panel: no main window";
+        return { false, nullptr };
+    }
+    if( !win->clickFeelFlowPanel( trackPath_, button_ ) ) {
+        qWarning() << "click-feel-flow-panel FAILED: track" << trackPath_
+                  << "button" << button_;
+        return { false, nullptr };
+    }
+    return { true, nullptr };   // both routes it can drive are non-undoable
+                                 // OR submit their own undoable action already
+}
+
+void SClickFeelFlowPanelAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "button", button_ );
+}
+
+bool SClickFeelFlowPanelAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    button_    = elem.attribute( "button", "" );
+    return true;
+}
+
+static const bool s_reg_click_feel_flow_panel = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("click-feel-flow-panel"),
+        []{ return new SClickFeelFlowPanelAction; }
+    ), true
+);
+
+// -------------------------------------------------- assert-feel-flow-panel
+
+SApplyResult SAssertFeelFlowPanelAction::apply( SProject * )
+{
+    SMainWindow *win = feelFlowMainWindow();
+    if( !win ) {
+        qWarning() << "assert-feel-flow-panel: no main window";
+        return { false, nullptr };
+    }
+    const QString desc = win->describeFeelFlow( trackPath_ );
+    if( desc.isEmpty() ) {
+        qWarning() << "assert-feel-flow-panel FAILED: no track at" << trackPath_;
+        return { false, nullptr };
+    }
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning() << "assert-feel-flow-panel FAILED: reports" << desc
+                  << "which lacks" << contains_;
+        return { false, nullptr };
+    }
+    if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+        qWarning() << "assert-feel-flow-panel FAILED: reports" << desc
+                  << "which unexpectedly contains" << absent_;
+        return { false, nullptr };
+    }
+    if( !grabPng_.isEmpty() ) {
+        if( grabPng_.contains( '/' ) || grabPng_.contains( '\\' )
+            || grabPng_.contains( ".." ) ) {
+            qWarning() << "assert-feel-flow-panel: grabPng contains path"
+                          " separators:" << grabPng_;
+            return { false, nullptr };
+        }
+        SApplication &app = SApplication::app();
+        if( app.testOutputDir().isEmpty() || !app.ensureOutputDirExists() ) {
+            qWarning() << "assert-feel-flow-panel FAILED: no usable test"
+                          " output directory";
+            return { false, nullptr };
+        }
+        const QString out = QDir( app.testOutputDir() ).filePath( grabPng_ );
+        if( !win->grabFeelFlow( out, trackPath_, grabWidth_, grabHeight_ ) ) {
+            qWarning() << "assert-feel-flow-panel FAILED: could not grab the"
+                          " panel into" << out;
+            return { false, nullptr };
+        }
+    }
+    qDebug().noquote() << "assert-feel-flow-panel: OK -" << desc;
+    return { true, nullptr };
+}
+
+QStringList SAssertFeelFlowPanelAction::knownAttributes() const
+{
+    return { QStringLiteral("trackPath"), QStringLiteral("contains"),
+             QStringLiteral("absent"), QStringLiteral("grabPng"),
+             QStringLiteral("grabWidth"), QStringLiteral("grabHeight") };
+}
+
+void SAssertFeelFlowPanelAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( !absent_.isEmpty() )   elem.setAttribute( "absent", absent_ );
+    if( !grabPng_.isEmpty() ) {
+        elem.setAttribute( "grabPng", grabPng_ );
+        if( grabWidth_ > 0 )  elem.setAttribute( "grabWidth", grabWidth_ );
+        if( grabHeight_ > 0 ) elem.setAttribute( "grabHeight", grabHeight_ );
+    }
+}
+
+bool SAssertFeelFlowPanelAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_  = elem.attribute( "trackPath", "0" );
+    contains_   = elem.attribute( "contains", "" );
+    absent_     = elem.attribute( "absent", "" );
+    grabPng_    = elem.attribute( "grabPng", "" );
+    grabWidth_  = elem.attribute( "grabWidth", "0" ).toInt();
+    grabHeight_ = elem.attribute( "grabHeight", "0" ).toInt();
+    return true;
+}
+
+static const bool s_reg_assert_feel_flow_panel = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-feel-flow-panel"),
+        []{ return new SAssertFeelFlowPanelAction; }
     ), true
 );

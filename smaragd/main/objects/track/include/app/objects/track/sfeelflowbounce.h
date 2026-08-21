@@ -26,6 +26,38 @@ class STrack;
 struct SFeelFlowUiData {
     std::vector<float> compliance;     // per hop, each in [0,1]
     uint32_t             hopFrames = 0;  // 0 == "no data" (paint nothing)
+
+    // --- proposal 40 M3: the Track Detail panel's readouts --------------
+    //
+    // Per-pendulum energy AT THE PLAYHEAD (design section 4.4's "per-
+    // pendulum energy bars"): the SAME per-hop "groove.res" power columns
+    // the overlay's compliance scalar comes from, just no longer discarded
+    // after decoding. Flattened, hop-major: perUnitPower[hop*nUnits + u],
+    // size == compliance.size() * nUnits when hopFrames != 0. Index at the
+    // playhead exactly as the overlay indexes compliance (position /
+    // hopFrames), never by a separate lookup.
+    uint32_t             nUnits = 0;
+    std::vector<float>   perUnitPower;
+
+    // The pass-2 physical-readout summary (design section 3.5) -- WHOLE-RUN
+    // scalars, not per-hop (twGroovePendulumResult::counterTension is
+    // computed once over the full analyzed material), so these do NOT
+    // change with the playhead the way compliance/perUnitPower do. Reusing
+    // this one accessor for both is deliberate: the panel's pump (meterTick)
+    // is the SAME "am I stale, do I have data" read either way, and the
+    // per-unit COUNT/NAMES are shared between the energy bars above and
+    // these three parallel arrays.
+    //
+    // Populated from IN-MEMORY job state only (SFeelFlowTrackBounce's own
+    // members, never the QAF store -- these are not part of either sidecar
+    // wire format) -- see SFeelFlowTrackBounce's doc for when they are
+    // (and are not) refreshed.
+    std::vector<std::string> unitNames;
+    std::vector<float>       meanSinDeltaPhi;   // the "lean" (design 3.5)
+    std::vector<float>       varSinDeltaPhi;    // the "jitter cost"
+    std::vector<float>       meanF;             // the drive factor, reported
+                                                 // SEPARATELY (a loudness
+                                                 // confound, section 3.5)
 };
 
 // Proposal 40 "Feel Flow" M1b — the internal-bounce consumer for a TRACK's
@@ -105,7 +137,12 @@ public:
 
     // True when the track's root-component content epoch has moved since
     // the START of the last successful bounce, or no bounce has ever
-    // completed.
+    // completed. Proposal 40 M3 (AC 4): ALSO true when the track's
+    // EFFECTIVE analysis params (mode + trained structure, hashed the same
+    // way twGrooveAnalysisParams::serialize/twSidecarStore::hashParams key
+    // the store) have changed since the last successful bounce -- so a mode
+    // flip or a fresh learn-feel-flow stales the overlay/panel exactly like
+    // a chain edit, with no engine-side epoch bump needed for it.
     bool isStale() const;
 
     // Proposal 40 M2: the SPlainWave::onsetsForUi() pattern verbatim (see
@@ -129,6 +166,12 @@ public:
     // single place that decision is made.
     std::shared_ptr<const SFeelFlowUiData> feelFlowForUi() const;
 
+    // Proposal 40 M3: the last bounce's own output path (empty before the
+    // first start()), so learn-feel-flow can decode the SAME audio the
+    // overlay/panel are reading, sliced to the current in/out selection.
+    // Never validated here (the caller decides what "no bounce yet" means).
+    const std::string &bouncePath() const { return bouncePath_; }
+
 private:
     STrack *track_;   // not owned; this holder is owned BY the track
     std::unique_ptr<audio::RenderSession> session_;
@@ -145,6 +188,32 @@ private:
     // epochAtBounce_ for isStale().
     std::atomic<uint64_t> contentHashLo_{ 0 };
     std::atomic<uint64_t> contentHashHi_{ 0 };
+
+    // Proposal 40 M3 AC 4: the paramsHash the last successful bounce actually
+    // ran under (built from the track's mode/trained state at the moment
+    // start() was called -- see start()'s own comment). Published the same
+    // way epochAtBounce_/contentHash*_ are: written (relaxed) BEFORE
+    // haveResult_'s release store, read (relaxed) AFTER its acquire load.
+    std::atomic<uint64_t> paramsHashAtBounce_{ 0 };
+
+    // Proposal 40 M3: the pass-2 physical-readout summary (design section
+    // 3.5), plain (non-atomic) members synchronized by the SAME haveResult_
+    // release/acquire edge as contentHash*_ above -- written on the analysis
+    // job thread strictly BEFORE haveResult_'s release store, read on the UI
+    // thread only after haveResult_'s acquire load has returned true.
+    // Refreshed on every REAL analysis pass; deliberately left UNTOUCHED on
+    // the "already valid, skip the heavy pass" branch (sfeelflowbounce.cpp)
+    // -- correct when that branch fires because a prior real pass already
+    // populated them under the identical content+params, empty if the very
+    // FIRST bounce in this process happens to hit a warm sidecar from an
+    // earlier run (a documented, narrow gap: the panel's physical readouts
+    // stay blank until a re-analyze forces a fresh pass, while the heatmap
+    // and compliance scalar -- which DO come from the store -- show up at
+    // once).
+    std::vector<std::string> physUnitNames_;
+    std::vector<float>       physMeanSinDeltaPhi_;
+    std::vector<float>       physVarSinDeltaPhi_;
+    std::vector<float>       physMeanF_;
 
     struct UiSlot { std::shared_ptr<const SFeelFlowUiData> ptr; };
     std::shared_ptr<UiSlot> uiCache_;

@@ -31,7 +31,10 @@
 #include "app/objects/track/sfeelflowbounce.h"
 #include "app/persistence/sprojectloader.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
+#include "tw/sidecar/twgrooveaspect.h"    // proposal 40 M3: trained-structure (de)serialize
+#include "tw/core/twlog.h"
 
+#include <QByteArray>
 #include <limits>
 
 // An event edit is never bounded on the right: the consumer is class-1 (a
@@ -473,6 +476,112 @@ std::shared_ptr<const SFeelFlowUiData> STrack::feelFlowForUi() const
 {
     if( !feelFlowBounce_ ) return nullptr;   // never bounced: no holder yet
     return feelFlowBounce_->feelFlowForUi();
+}
+
+// --- Feel Flow tuning panel + trained mode (proposal 40 M3) ----------------
+
+STrack::FeelFlowMode STrack::feelFlowModeFromString( const QString &s, bool *ok )
+{
+    if( ok ) *ok = true;
+    if( s.compare( "trained", Qt::CaseInsensitive ) == 0 ) return FeelFlowMode::Trained;
+    if( s.compare( "adaptive", Qt::CaseInsensitive ) == 0 ) return FeelFlowMode::Adaptive;
+    if( ok ) *ok = false;
+    return FeelFlowMode::Adaptive;
+}
+
+QString STrack::feelFlowModeToString( FeelFlowMode m )
+{
+    switch( m ) {
+    case FeelFlowMode::Trained: return QStringLiteral( "trained" );
+    default:                    return QStringLiteral( "adaptive" );
+    }
+}
+
+void STrack::setFeelFlowTrainedStructureInternal(
+    std::unique_ptr<twGrooveTrainedStructure> structure )
+{
+    feelFlowTrained_ = std::move( structure );
+}
+
+std::unique_ptr<twGrooveTrainedStructure> STrack::copyFeelFlowTrainedStructure() const
+{
+    if( !feelFlowTrained_ ) return nullptr;
+    return std::make_unique<twGrooveTrainedStructure>( *feelFlowTrained_ );
+}
+
+std::string STrack::feelFlowBouncePath() const
+{
+    return feelFlowBounce_ ? feelFlowBounce_->bouncePath() : std::string();
+}
+
+// A full override, not just serializeSelfAttributes(): the trained structure
+// is an INLINE, non-<SLink> element (the automation-lane discipline, design
+// section 4.4 — "invisible to older loaders, the automation-lane
+// discipline") and has to land between the ">" and the child links, exactly
+// where SObject::serialize() already puts serializeAutomation(). This
+// mirrors SObject::serialize() body-for-body rather than trying to hook into
+// it, because SObject offers no seam there — see SMidiSequence::serialize()
+// for the same shape used for a different inline payload (<events>).
+int STrack::serialize( QTextStream &o )
+{
+    o << "<" << metaObject()->className();
+    if( serializeSelfAttributes( o ) < 0 ) return -1;
+    o << ">\n";
+
+    serializeAutomation( o );
+
+    // Written ONLY when non-default (mode == Trained, or a structure was
+    // learned while still in Adaptive mode) -- so a project that has never
+    // touched Feel Flow's mode re-serializes BYTE-IDENTICAL to a pre-M3
+    // build, and every existing golden stays untouched.
+    if( feelFlowMode_ == FeelFlowMode::Trained || feelFlowTrained_ ) {
+        o << "<feelflow mode='" << feelFlowModeToString( feelFlowMode_ ) << "'";
+        if( !feelFlowTrained_ ) {
+            o << "/>\n";
+        } else {
+            o << ">\n";
+            std::vector<uint8_t> blob;
+            twGrooveTrainedStructureSerialize( *feelFlowTrained_, blob );
+            const QByteArray b64 = QByteArray(
+                (const char *) blob.data(), (int) blob.size() ).toBase64();
+            o << " <trained data='" << QString::fromLatin1( b64 ) << "'/>\n";
+            o << "</feelflow>\n";
+        }
+    }
+
+    for( SLink *lk : childLinks() ) {
+        int res = lk->serialize( o );
+        if( res < 0 ) break;
+    }
+
+    o << "</" << metaObject()->className() << ">\n";
+    return 0;
+}
+
+int STrack::readPostChildrenAttributes( QDomElement &element )
+{
+    SObject::readPostChildrenAttributes( element );   // <automation>
+
+    const QDomElement ffEl = element.firstChildElement( "feelflow" );
+    if( ffEl.isNull() ) return 0;   // absent == every pre-M3 project's meaning
+
+    feelFlowMode_ = feelFlowModeFromString( ffEl.attribute( "mode", "adaptive" ) );
+
+    const QDomElement trainedEl = ffEl.firstChildElement( "trained" );
+    if( !trainedEl.isNull() ) {
+        const QByteArray b64 = trainedEl.attribute( "data" ).toLatin1();
+        const QByteArray blob = QByteArray::fromBase64( b64 );
+        auto structure = std::make_unique<twGrooveTrainedStructure>();
+        if( twGrooveTrainedStructureDeserialize(
+                (const uint8_t *) blob.constData(), (uint64_t) blob.size(),
+                *structure ) ) {
+            feelFlowTrained_ = std::move( structure );
+        } else {
+            TW_LOGW( "model", "STrack: ignoring malformed <trained> Feel Flow "
+                              "structure (%d bytes)", (int) blob.size() );
+        }
+    }
+    return 0;
 }
 
 int STrack::seekTo( offset_t ofs )

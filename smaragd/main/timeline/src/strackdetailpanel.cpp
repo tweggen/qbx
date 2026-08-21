@@ -10,6 +10,7 @@
 #include "app/model/sobjectpath.h"
 #include "app/model/ssolorules.h"
 #include "app/pluginui/splugineffectstrip.h"
+#include "app/timeline/sfeelflowpanel.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
 #include <QVBoxLayout>
@@ -51,6 +52,7 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
 
     // Plugin strip (will be created when track is set)
     pluginStrip_ = nullptr;
+    feelFlowPanel_ = nullptr;   // proposal 40 M3, mounted the same way
 
     // Spacer for plugins (will be populated when track is set)
     QWidget *pluginContainer = new QWidget();
@@ -162,12 +164,24 @@ void STrackDetailPanel::rebuildUI()
         delete pluginStrip_;
         pluginStrip_ = nullptr;
     }
+    // Proposal 40 M3: same discipline -- deleted and re-created per track
+    // switch, never owning anything across one (the track owns its own
+    // Feel Flow state; this widget is a pure reader of it).
+    if (feelFlowPanel_) {
+        delete feelFlowPanel_;
+        feelFlowPanel_ = nullptr;
+    }
 
     if (currentTrack_) {
         // Create new plugin strip for this track, add directly to content
         pluginStrip_ = new SPluginEffectStrip(currentTrack_, this);
         pluginStrip_->setParent(contentWidget_);
         contentLayout_->insertWidget(0, pluginStrip_, 1);
+
+        // Feel Flow section, below the FX strip and above the volume row.
+        feelFlowPanel_ = new SFeelFlowPanel(currentTrack_, this);
+        feelFlowPanel_->setParent(contentWidget_);
+        contentLayout_->insertWidget(1, feelFlowPanel_, 0);
 
         // Update volume slider, through the shared curve so this fader and the
         // arranger's put the same dB in the same place.

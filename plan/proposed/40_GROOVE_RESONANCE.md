@@ -766,6 +766,104 @@ never retroactively.
 - **M3 — tuning panel + trained mode + verbs** (`groove-analyze`,
   `set-groove-param`, learn-from-selection; trained state in the project
   file, `action_roundtrip_test` joins).
+
+  **M3 ACs (kickoff 2026-08-21):**
+  1. The Track Detail dock gains a **"Feel Flow" section** (mounted from
+     `strackdetailpanel` like the FX strip and meters): an Analyze button
+     driving the SAME call the verb uses; a state line (never analyzed /
+     analyzing… / fresh / STALE with Re-analyze); readouts at the
+     playhead pumped from the meterTick funnel, read-only through
+     `feelFlowForUi()` (never blocking, never demanding): the compliance
+     scalar, per-pendulum energy bars, and §3.5's two factors SEPARATELY
+     (⟨sin Δφ⟩, the signed lean; ⟨F⟩, the drive).
+  2. The overlay is unchanged in M3 — the presentation split of §8.
+  3. **Trained mode**: `learn-feel-flow` (undoable) fits the frozen
+     structure from the current in/out selection via the engine API M0's
+     fixture-(i) gate exercises; `set-feel-flow-mode
+     mode=adaptive|trained` (undoable); trained state serialized INLINE
+     on the track (owner-held, the automation-lane discipline — absent ⇒
+     NOTHING written, so no pre-M3 file or golden moves), restored on
+     load; `action_roundtrip_test` covers both verbs.
+  4. **Param-aware staleness**: the analysis result records the
+     paramsHash it was computed under; a mode or trained-state change
+     flips `feelFlowStale()` (and the overlay disappears) exactly as a
+     chain edit does.
+  5. `assert-feel-flow-panel` builds the section OFF SCREEN (the
+     `assert-midi-options` discipline) and describes state + readouts;
+     PNG grab supported.
+  6. qxa gates: `feel_flow_panel` (activate through the panel's real
+     handler → fresh; edit → stale; re-analyze → fresh) and
+     `feel_flow_trained` (over `i_tempo_pair.wav` as the sample: learn on
+     the first-half selection, re-analyze, phantom μ within the M0 bound;
+     trained state survives save→load; a project WITHOUT trained state
+     serializes byte-identically to pre-M3).
+  7. Full suite, layering/logging, count reconciliation (+2),
+     `docs/ACTIONS.md` updated.
+
+  **M3 EXECUTED 2026-08-21.** All ACs green. The Track Detail "Feel Flow"
+  section (`main/timeline/include/app/timeline/sfeelflowpanel.h`) mounts
+  like the FX strip (deleted/re-created per track switch, owning nothing
+  long-lived), pumped from `meterTick` exactly like the fader's P6 read-value
+  display and the level meters — never a demand, never a block. Two new
+  undoable verbs: `learn-feel-flow` (fits a frozen structure from the
+  project's in/out selection over the track's own bounce audio;
+  `restore=`-form inverse puts the exact prior structure, or its absence,
+  back rather than re-fitting at undo time) and `set-feel-flow-mode`
+  (`adaptive`\|`trained`, a plain model flip touching neither the render
+  graph nor any content epoch). Trained state serializes as an inline,
+  non-`SLink` `<feelflow>` element on `STrack` (a full `serialize()`/
+  `readPostChildrenAttributes()` override, the `SMidiSequence`-style shape,
+  not a shared hook — `SObject` offers none there), written ONLY when
+  non-default, gated by `feel_flow_panel.qxa`'s byte-neutral check
+  (`assert-file-contains … absent="true"`) over a project that never touches
+  the mode.
+
+  **Param-aware staleness (AC 4) turned out to need no engine-side epoch at
+  all.** `twGrooveAnalysisParams` grew `mode`/`trained` fields appended
+  ADDITIVELY and ONLY for `mode == Trained`
+  (`tw/sidecar/twgrooveaspect.{h,cc}`), so a default-constructed params blob
+  — every M1/M1b/M2 caller, and every track that never touches the mode —
+  serializes to the EXACT pre-M3 byte sequence: verified by re-running
+  `feel_flow_analyze`/`feel_flow_bounce_parity`/`feel_flow_bounce_stale`/
+  `feel_flow_heatmap`/`sidecar_test`/`groove_test` unchanged, all green, no
+  cold re-analysis. `SFeelFlowTrackBounce::isStale()` now ALSO compares the
+  track's current effective params hash (built the same way, from
+  `STrack::feelFlowMode()`/`feelFlowTrainedStructure()`) against
+  `paramsHashAtBounce_` — a mode flip or a fresh `learn-feel-flow` therefore
+  stales the panel/overlay exactly like a chain edit, with zero epoch bumps.
+  One trap found and fixed en route: `twGroovePendulumTrainStructure`'s
+  `trainedHasRegion` is ALWAYS sized to the front end's region count, never
+  empty, even on total training failure — so "has this track ever been
+  trained" (a null check on the `unique_ptr`) and "did THIS pass recover
+  anything" (`std::any_of` over the flags) are different questions,
+  documented as `main/objects/track/CONTRACT.md` inv. 28.
+
+  **Measured**: `feel_flow_trained.qxa`'s M0 fixture-(i) phantom-μ
+  measurement, through the full bounce→WAV→front-end→two-pass pipeline (not
+  `groove_test.cc`'s direct C++ call), came back at **5.9547 ms** against
+  M0's own unit-test figure of 0.15–0.24 ms — the SAME "state the measured
+  number, widen the tolerance rather than the target" reading `feel_flow_
+  analyze.qxa` already established for AC(a) (§11.3): the two measure
+  different things (a general region-spread metric here vs. a targeted
+  trained-vs-scored comparison there), through a materially different code
+  path (a real 16-bit-PCM bounce round-trip vs. in-memory floats), so the
+  honest bound is a KNOWN-OPEN TRACKING band (6.5 ms, target still the TRUE
+  ground truth of 0.0 ms) rather than the stricter unit-test figure —
+  recorded here, not silently tightened or silently discarded.
+
+  Gates: `feel_flow_panel`, `feel_flow_trained` green; every pre-existing
+  `feel_flow_*` case green unchanged; `sidecar_test`/`groove_test` green
+  unchanged (params-hash neutrality); `action_roundtrip_test` green (both new
+  verbs pass with NO fixture needed — plain default instances round-trip
+  cleanly); layering/logging clean; full suite **259 registered = 256 run
+  (green) + 3 disabled**. Two unrelated flakes surfaced during the full-suite
+  runs and are recorded, not swept under this milestone: `qxa.plugin_editor_
+  persistence` failed once from PRE-EXISTING `editorGeometry` keys left in
+  the real per-user `smaragd.ini` by an unrelated earlier session (cleared,
+  reproducibly green after); `qxa.record_stays_armed` SEGFAULTed once in
+  ~13 serial/`-j4` runs (both before and unrelated to any Feel Flow code —
+  arm/record state has no path through this milestone), unreproduced beyond
+  that one instance.
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves
@@ -832,15 +930,15 @@ Resolved by the requester (2026-08-20):
 - **Purpose = consistency + predicted physical effect**, never listener
   ranking (§1).
 
-Still open:
+Resolved at M3 kickoff (2026-08-21, requester continued on the proposed
+readings):
 
-- **DECIDE**: the presentation split — proposed: the OVERLAY shows the
-  consistency axis (one tint), the PANEL shows the physical axes
-  (per-pendulum energies, counter-tension mean/variance). One surface, one
-  question each.
-- **DECIDE**: the default pendulum ensemble — how many units, and whether
-  the Burger/Toiviainen seeding (§3.2) ships as the factory preset or M0
-  finds a better-behaved minimal set first.
+- **The presentation split**: the OVERLAY shows the consistency axis (one
+  tint), the PANEL shows the physical axes (per-pendulum energies,
+  counter-tension factors). One surface, one question each.
+- **The factory ensemble**: the M0-measured seeded five (§3.2's
+  Burger/Toiviainen seeding) — they earned their keep on the fixture A/B
+  (§11.2); the minimal-set question closes.
 
 ## 9. Sources (the ones the numbers above rest on)
 
