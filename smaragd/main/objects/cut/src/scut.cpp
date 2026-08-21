@@ -951,6 +951,43 @@ QList<SObject::SDirtyRange> SCut::mapChildRangesToSelf(
     return out;
 }
 
+// The forward twin of mapChildRangesToSelf, for a single position (proposal 09
+// §15). The arranger's playhead in an ARRANGEMENT tab is derived by walking a
+// position down from the master through whatever places that arrangement, and
+// every window on the way has to be applied exactly — a naive `pos - clipStart`
+// would be wrong for a looping clip (the whole point of the user's case: a drum
+// loop that cycles) and wrong again for a stretched one.
+//
+// NON-BLOCKING: getSnapshot()'s try-lock, and NO ensureReader(). See the header.
+bool SCut::windowStep( offset_t clipRel, SWindowStep &out ) const
+{
+    if( !content_ ) return false;
+    SCutSnapshot snap = getSnapshot();
+    const twWarpMap wm( snap.grainParams.warpAnchors,
+                        snap.grainParams.stretch > Fraction(0)
+                            ? snap.grainParams.stretch : Fraction(1) );
+    // Same looping predicate as mapChildRangesToSelf, deliberately spelled the
+    // same way: a loop length that covers the whole window is not a loop.
+    const bool looping = snap.loopLength > WarpedLen(0)
+                      && snap.loopLength < warpedFromClip( snap.cutDuration );
+
+    // clipRel is clip-relative in the WARPED domain (the domain the reader is
+    // addressed in — see clipToReaderMap). Fold, then invert the warp.
+    Fraction w( (int64_t) clipRel );
+    if( looping ) {
+        // twLoopMap::map is base + (p mod len): exactly the tiling whose
+        // PREIMAGES mapChildRangesToSelf enumerates in the other direction.
+        w = twLoopMap( Fraction( snap.startOffset.frames() ),
+                       Fraction( snap.loopLength.frames() ) ).map( w );
+    } else {
+        w = w + Fraction( snap.startOffset.frames() );
+    }
+    out.content = &content_->getSObject();
+    out.pos = (offset_t) wm.warpedToSrc( w ).floorToInt();
+    if( out.pos < 0 ) out.pos = 0;
+    return true;
+}
+
 // W9: the render path must learn about a slip. See the comment on
 // invalidateRenderPathForSlip in the header for why, and why the duration is
 // read under the SAME lock that applied the edit rather than through

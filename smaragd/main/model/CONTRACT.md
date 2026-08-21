@@ -284,3 +284,26 @@ smallest thing that provides it. The defaults (`0` / `-1` / null / no-op) mean
 an object that is not a column answers honestly rather than being asked to
 pretend, so a caller's `windowTakeCount() == 0` test is "this is a plain
 placement" and needs no `dynamic_cast`.
+
+### `splayheadmap.h` — where an arrangement is being heard (proposal 09 §15)
+
+`splayhead::derivedPos( project, rootName, masterPos )` walks the transport's
+position DOWN to one arrangement root: child links by start time, a span test
+at every placement, and `SObject::windowStep()` at every window.
+
+It lives in the model, and reaches a cut's slip/loop/warp without depending on
+`app/objects/cut`, for exactly the reason `contentKind()` and
+`resolveEventClip()` do — the virtual is the seam.
+
+Three properties, each a decision (proposal 09 D23):
+
+1. **First hit in child-link order wins** when an arrangement is placed more
+   than once, or when placements overlap. One cursor, chosen deterministically.
+2. **`sounding == false` is an answer, not a zero.** `pos` must not be read as
+   a position when it is false.
+3. **The cycle guard is per PATH, not a global memo.** The same body reached
+   twice at two positions must be visited twice — the first reach may not
+   contain the position while the second does. Depth is bounded too: a cycle
+   here is a stack overflow on the UI thread.
+
+Main thread only, and NON-BLOCKING: a repaint calls it.

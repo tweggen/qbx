@@ -457,3 +457,29 @@ things are contractual:
 
 The arranger never learns what a source, a fetch or a cache is. The payload is
 the whole interface, exactly as it already was for `file:` and `asset:`.
+
+### inv. 24 — the playhead a view draws is ITS OWN root's (proposal 09 §15)
+
+`SMVActualView` draws `localPlayhead()`, never
+`SApplication::getGlobalLocatorPos()`. The transport's position is a **master
+frame**; in an arrangement tab it names nothing, and drawing it there was a
+green line borrowed from another coordinate system.
+
+The master view returns the locator unchanged and pays for nothing else, which
+is what makes the rest of the suite the gate for "the master did not move".
+
+Three consequences a change here must keep:
+
+- **`localPlayhead()` is called from `paintEvent` and must never block or
+  render.** It walks the object tree and asks `SObject::windowStep()`, which
+  is contractually try-lock (inv. 1). An implementation that reached
+  `SCut::ensureReader()` would build a capture — a full render — on the UI
+  thread.
+- **`sounding == false` is drawn DIMMED, not hidden and not moved.** The
+  cursor rests where the root was last heard. A resting cursor drawn in the
+  playing colour is indistinguishable from a stalled transport.
+- **Every locator-consuming edit driven from a view reads
+  `localLocatorPos()`**, not the transport: `ctSplitSample` and
+  `SSMVMixerControl`'s automation write tick do. `followLocator` follows the
+  DRAWN cursor and does not scroll while the root is resting. The recording
+  overlay is gated to the master, where both of its inputs live.

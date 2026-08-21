@@ -355,3 +355,20 @@ it runs four independent edit/render pairs to raise detection (one pair caught
 the broken binary 4 times in 12; four pairs catch it 6 times in 12). 20/20 green
 with the fix, and 5/5 at each of `SMARAGD_REVAL_WORKERS` 1/4/8/16. It cannot be
 made deterministic without test-only sequencing hooks in production code.
+
+### `windowStep()` is the NON-BLOCKING forward map (proposal 09 §15)
+
+`SCut::windowStep()` maps one clip-relative position into the content — the
+forward twin of `mapChildRangesToSelf`, and deliberately spelled the same way
+(the same looping predicate, the same `twLoopMap` base, the same
+`twWarpMap`) so the two cannot disagree about where the window maps.
+
+**It takes `getSnapshot()` and never `ensureReader()`.** A repaint calls it
+(the arrangement-tab playhead), and `ensureReader()` on a container-backed
+asset builds a capture. The blocking siblings — `seekTo`,
+`mapTimelineToComponentPos`, `resolveClip` — are freeze/edit-path calls and
+stay as they are.
+
+`STakeStack` overrides it to step into the **ACTIVE** take only. The base's
+`childLinks()` fallback would descend into every take and report an inactive
+one's material as audible.

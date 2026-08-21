@@ -189,6 +189,12 @@ void SViewTabs::onRootDestroyed( QObject *obj )
     }
 }
 
+QWidget *SViewTabs::editorFor( const SObject *root ) const
+{
+    const int i = indexOfRoot( root );
+    return i >= 0 ? entries_.at( i ).editor : nullptr;
+}
+
 QStringList SViewTabs::tabNames() const
 {
     QStringList out;

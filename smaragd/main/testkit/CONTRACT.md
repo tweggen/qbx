@@ -993,3 +993,13 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     `|latency=`, for the same reason `latency=` was itself appended last: the
     proposal-08 M5 cases assert contiguous SPANS of that string and a field
     inserted among them would break assertions about something else entirely.
+
+49. **`assert-view-playhead` reads the OPEN VIEW and opens nothing.** It goes
+    through `SMainWindow::viewPlayheadFor()` because testkit may not include
+    `app/timeline` (inv. 5), the same route `drag-clip-edge` and
+    `assert-envelope` take. Reading the view rather than calling
+    `splayhead::derivedPos` directly is the point: it gates the WIRING — the
+    walk, the resting position and what `paintEvent` actually chose — rather
+    than the arithmetic alone. And it opens no tab, because an assertion that
+    creates the thing it measures measures nothing; `open-arrangement-tab`
+    first.

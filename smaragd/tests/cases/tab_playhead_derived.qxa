@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 09 §15: THE PLAYHEAD IN AN ARRANGEMENT TAB IS DERIVED.
+
+  Requester, 2026-08-21: "Main arrangement is playing back linearily. Let's say
+  there is a drum loop starting at bar 5 which is an asset of its own. I would
+  now expect: if playback runs, position cursor in main window progresses
+  linearily, in asset tab it rests somewhere until the loop is played back,
+  then it cycles as the loop cycles in main arrangement."
+
+  That is the whole case, in numbers. The transport has ONE position and it is
+  a MASTER frame; an arrangement tab drawing that number was drawing a
+  position from a timeline it is not showing.
+
+  THE SHAPE. Track 1 is extracted as "Drums", its asset clip is moved to
+  96000 (the "bar 5") and given a 48000-frame LOOP inside a 192000-frame
+  window, so it cycles four times. Then the locator is walked and both tabs
+  are read at each stop:
+
+      master   Drums          why
+      ~~~~~~   ~~~~~~~~~~~~   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           0   not sounding   the clip has not started; cursor RESTS at 0
+       96000   0              the clip starts: the arrangement is heard
+      120000   24000          advancing with it
+      144000   0              LOOP WRAP - the cycling the requester described
+      168000   24000          second pass, same phase as 120000
+      288000   not sounding   past the clip end; RESTS where last heard
+
+  The two loop-wrap rows are what a naive `masterPos - clipStart` cannot
+  produce, and they are why the walk goes through SObject::windowStep() -
+  SCut's exact loop fold and warp inverse, the forward twin of the map
+  mapChildRangesToSelf already used in the other direction.
+
+  NOT PLAYBACK. set-locator moves the locator with the transport stopped,
+  which is exactly what the derivation reads. Running the transport would add
+  a wall-clock timing bound to a case about arithmetic, and this repo has
+  enough of those; what playback would additionally exercise is the repaint
+  wiring, which no headless run can observe anyway (the arranger canvas is not
+  grabbable - see the folder-sum overlay's note).
+
+  THE MASTER IS THE CONTROL, at every stop. Its playhead must remain exactly
+  the locator and must never report "not sounding" - that is the property that
+  says this feature changed nothing for the tab everybody uses.
+-->
+<SActionScript version="1" name="tab_playhead_derived">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <assert-arrangements names="Drums" trackCounts="1"/>
+    <assert-track-name trackPath="1" name="Drums"/>
+
+    <!-- Move the asset clip to "bar 5" and make it LOOP: a 48000-frame window
+         repeated across a 192000-frame clip. -->
+    <resize-clip clip="1,0" startTime="96000" startOffset="0"
+                 duration="192000" loopLength="48000"/>
+    <assert-clip-window clip="1,0" startTime="96000" duration="192000"
+                        loopLength="48000"/>
+
+    <open-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+
+    <!-- BEFORE the clip: the arrangement is not being heard. The cursor rests
+         at 0, which is where it has never moved from. -->
+    <set-locator position="0"/>
+    <assert-view-playhead root="Drums" sounding="false" frame="0"/>
+    <assert-view-playhead root="" sounding="true" frame="0"/>
+
+    <!-- The clip starts. -->
+    <set-locator position="96000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="0"/>
+    <assert-view-playhead root="" sounding="true" frame="96000"/>
+
+    <set-locator position="120000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="24000"/>
+    <assert-view-playhead root="" sounding="true" frame="120000"/>
+
+    <!-- THE LOOP WRAP. The master has advanced 48000 frames since 96000; the
+         arrangement is back at its own 0. -->
+    <set-locator position="144000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="0"/>
+    <assert-view-playhead root="" sounding="true" frame="144000"/>
+
+    <!-- Second pass, same phase as the first: this is what "it cycles as the
+         loop cycles" means, stated as an equality. -->
+    <set-locator position="168000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="24000"/>
+    <assert-view-playhead root="" sounding="true" frame="168000"/>
+
+    <!-- PAST the clip (it ends at 96000+192000 = 288000): not sounding, and
+         RESTING at the position it was last heard at - 24000, from the stop
+         above. Not 0, and not the master's 288000. -->
+    <set-locator position="288000"/>
+    <assert-view-playhead root="Drums" sounding="false" frame="24000"/>
+    <assert-view-playhead root="" sounding="true" frame="288000"/>
+
+    <!-- A NON-LOOPING clip is the control for the fold itself: same walk, no
+         wrap, so the derived position tracks the master one-for-one. -->
+    <resize-clip clip="1,0" startTime="96000" startOffset="0"
+                 duration="192000" loopLength="0"/>
+    <set-locator position="144000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="48000"/>
+    <set-locator position="168000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="72000"/>
+
+    <!-- A SLIP moves the window, and the derived position moves with it: the
+         same clip-relative offset now names a later moment in the arrangement.
+         This is the startOffset term of the fold, which a `pos - clipStart`
+         implementation has no place for at all. -->
+    <resize-clip clip="1,0" startTime="96000" startOffset="12000"
+                 duration="192000" loopLength="0"/>
+    <set-locator position="144000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="60000"/>
+  </actions>
+</SActionScript>

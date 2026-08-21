@@ -114,7 +114,9 @@ void SSMVMixerControl::applyVolume_( double newVolume )
         t.target = QStringLiteral( "self:Volume" );
         if( SApplication::app().isPlaying()
             && SApplication::app().automationRecorder().writeTick(
-                   t, newVolume, SApplication::app().getGlobalLocatorPos() ) )
+                   t, newVolume,
+                   smv_.contentView() ? smv_.contentView()->localLocatorPos()
+                                      : SApplication::app().getGlobalLocatorPos() ) )
             return;
         stimeline::submitActive(
             new SSetTrackVolumeAction( trackPath, newVolume ) );

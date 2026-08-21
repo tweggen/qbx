@@ -47,4 +47,32 @@ private:
     QString paths_;
 };
 
+// <assert-view-playhead root="Drums" frame="24000" sounding="true" tolerance="0"/>
+//
+// Where the playhead IS in one tab's view (proposal 09 §15). It reads the OPEN
+// VIEW, not splayhead::derivedPos directly, so it gates the wiring — the walk,
+// the resting position and the paint-time choice — rather than the arithmetic
+// alone. The tab must already be open; the verb opens nothing, because an
+// assertion that creates the thing it measures measures nothing.
+//
+// `sounding` is the state the cursor is drawn in: true = this root is being
+// heard at the transport's current position, false = it is RESTING (drawn
+// dimmed) and `frame` is where it rests.
+class SAssertViewPlayheadAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-view-playhead" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override
+    { return { QStringLiteral("root"), QStringLiteral("frame"),
+               QStringLiteral("sounding"), QStringLiteral("tolerance") }; }
+private:
+    QString  root_;
+    qint64   frame_ = 0;
+    bool     frameGiven_ = false;
+    QString  sounding_;
+    qint64   tolerance_ = 0;
+};
+
 #endif  // STABTESTACTIONS_H

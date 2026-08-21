@@ -2668,6 +2668,22 @@ bool SMainWindow::clickFeelFlowPanel( const QString &trackPath,
 
 // --- proposal 39 M1 test seam --------------------------------------------
 
+// Proposal 09 §15. See the header for why this lives on the shell.
+bool SMainWindow::viewPlayheadFor( const QString &rootName, offset_t &pos,
+                                   bool &sounding ) const
+{
+    SProject *project = SApplication::app().getCurrentProject();
+    SObject *root = splacements::rootNamed( project, rootName );
+    if( !root || !viewTabs_ ) return false;
+    SStdMixerView *view =
+        qobject_cast<SStdMixerView *>( viewTabs_->editorFor( root ) );
+    if( !view || !view->contentView() ) return false;
+    const SMVActualView::LocalPlayhead lp = view->contentView()->localPlayhead();
+    pos = lp.pos;
+    sounding = lp.sounding;
+    return true;
+}
+
 bool SMainWindow::collectClipEnvelope( const QString &clipPath, offset_t start,
                                        length_t length, int width,
                                        std::vector<preview_t> &out )
