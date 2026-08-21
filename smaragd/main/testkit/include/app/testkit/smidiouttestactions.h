@@ -176,6 +176,43 @@ private:
     QString value_;
 };
 
+// close-options-dialog - drive the REAL SOptionsDialog's close path (AC-b1),
+// off screen, the house pattern once again.
+//
+// There is no verb anywhere in this repo that can click a QTreeWidget item
+// or drive a modal QDialog's own event loop, so this is a deliberate stand-in
+// for "the user navigated to `page`, then closed the dialog": it constructs
+// SOptionsDialog(nullptr, page) -- the ctor argument standing in for the
+// click -- then closes it through `result` ("ok" default, or "cancel"),
+// which is what actually exercises SOptionsDialog::done() and persists
+// `SOpt::OptionsLastPage`. Read the persisted value back with
+// `assert-settings-file contains="optionsLastPage=<name>"` (the key's own
+// section is "ui", per SSettings' "first segment is the [section]" rule).
+//
+// Closed through a QDialog* -- SOptionsDialog::done() is a PRIVATE override,
+// but QDialog::done() is public, and C++ access control for a virtual call
+// is checked against the STATIC type used to make it: through a QDialog*
+// the call is well-formed and still dispatches to the override at runtime.
+class SCloseOptionsDialogAction : public SAction
+{
+public:
+    SCloseOptionsDialogAction() = default;
+
+    QString name() const override
+    { return QStringLiteral( "close-options-dialog" ); }
+    QStringList knownAttributes() const override
+    { return { QStringLiteral( "page" ), QStringLiteral( "result" ) }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    // -1 = omit the ctor argument entirely (opens on whatever is currently
+    // remembered, or page 0 if nothing is).
+    int     page_   = -1;
+    QString result_ = QStringLiteral( "ok" );   // "ok" | "cancel"
+};
+
 // wait-ms - pump the event loop for a wall-clock duration.
 //
 // `wait-playhead` covers "playback got somewhere", which is the right verb

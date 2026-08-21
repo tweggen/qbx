@@ -89,13 +89,26 @@ Invariants:
    `dock_clip_properties`, and — since proposal 37 P4 —
    `dock_event_editor` (bottom, tabified with the Log) and
    `dock_virtual_keyboard` (bottom, tabified with the editor), and — since
-   proposal 38 gate 2 — `dock_media_browser` (LEFT, beside the resources
-   dock). All of the later ones start hidden; the View menu
-   carries their toggles (Ctrl+Shift+E for the editor; the media browser has no
-   shortcut). Constructing the media browser CONTACTS NOTHING — a media source
-   is registered, which does no I/O, and opened only when it is SELECTED — so a
-   dock restored with `media/lastSourceId` naming a dead server costs a banner
-   at the next click rather than a hang at launch.
+   proposal 38 gate 2, moved to RIGHT and tabified with Clip Properties by
+   AC-b1's sibling AC-e1 (2026-08-21) — `dock_media_browser`. The View menu
+   carries every dock's toggle (Ctrl+Shift+E for the editor; the media browser
+   has no shortcut). Constructing the media browser CONTACTS NOTHING — a media
+   source is registered, which does no I/O, and opened only when it is
+   SELECTED — so a dock restored with `media/lastSourceId` naming a dead
+   server costs a banner at the next click rather than a hang at launch.
+
+   **Every dock but the media browser starts hidden.** The media browser
+   starts VISIBLE by default (AC-e1) — but that is a PRE-RESTORE default only,
+   never an override of `restoreState()`: on any run where `ui/windowState`
+   is non-empty, `restoreWindowLayout()` (called after every dock exists, per
+   this same invariant) restores whatever the user last left it as, exactly
+   as it already does for the other six. The default is suppressed under
+   `SApplication::isTestCaseMode()`, for the same reason `restoreOpenEditors()`
+   (proposal 33 D2) is: a headless qxa run must not start showing a window it
+   did not show before. **Dock LAYOUT stays PER-USER, never per-project** — a
+   `ui/windowState` key in the shared `smaragd.ini`, not a `.qxp` property —
+   and that is unchanged by AC-e1; only the constructor's pre-restore default
+   moved.
 8. **The event editor's time axis is linked to the arranger HERE**
    (`linkEventEditorAxis()`), because the shell is the only module that sees
    both app/timeline and app/eventui — the editor deliberately has no

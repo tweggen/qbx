@@ -49,10 +49,6 @@ constexpr int kRoleLoaded = Qt::UserRole + 4;   // a dir whose children arrived
 // "kick" issues one walk rather than four, and short enough to feel live.
 constexpr int kSearchDebounceMs = 250;
 
-// The Size column holds "12.3 MB" and nothing wider; a name is what the user
-// is reading, so the name column takes every pixel the size column does not.
-constexpr int kSizeColumnWidth = 80;
-
 }   // namespace
 
 // Decimal (1000-based) k/M/G, at most 3 significant digits, no "B" and no
@@ -234,12 +230,18 @@ void SMediaBrowserPanel::buildUi()
     root->addWidget( banner_ );
 
     tree_ = new SMediaBrowserTree( this, this );
-    tree_->setColumnCount( 2 );
-    tree_->setHeaderLabels( { tr( "Name" ), tr( "Size" ) } );
-    tree_->header()->setStretchLastSection( false );   // or Size eats the dock
-    tree_->header()->setSectionResizeMode( 0, QHeaderView::Stretch );
-    tree_->header()->setSectionResizeMode( 1, QHeaderView::Interactive );   // 80 px is a default, not a cage
-    tree_->setColumnWidth( 1, kSizeColumnWidth );
+    tree_->setColumnCount( 1 );
+    tree_->setHeaderLabels( { tr( "Name" ) } );
+    // One column now (AC-d1): the size that used to live beside it is a
+    // tooltip instead (see makeItem()) — a narrow dock has no room to spare
+    // on a "12.3M" that is rarely what the user is scanning for, and with
+    // only one column there is no stretch/resize split to maintain between
+    // it and a Size column.
+    tree_->header()->setStretchLastSection( true );
+    // Roughly two 'M's per level: Qt's default indent is wide enough that a
+    // sample library's directory nesting pushes the name off the right edge
+    // of a narrow dock well before the tree runs out of depth.
+    tree_->setIndentation( 2 * tree_->fontMetrics().horizontalAdvance( 'M' ) );
     tree_->setDragEnabled( true );
     tree_->setDragDropMode( QAbstractItemView::DragOnly );
     tree_->setSelectionMode( QAbstractItemView::SingleSelection );
@@ -516,8 +518,13 @@ QTreeWidgetItem *SMediaBrowserPanel::makeItem( const SMediaEntry &entry ) const
 {
     QTreeWidgetItem *item = new QTreeWidgetItem;
     item->setText( 0, entry.name );
-    item->setText( 1, entry.isDir ? QString()
-                                   : mediaBrowserFormatSize( entry.sizeBytes ) );
+    // Size is no longer a column (AC-d1); a FILE row gets it as a tooltip
+    // instead, in the same mediaBrowserFormatSize() spelling the column used
+    // to show. A directory's size is unknown (entry.sizeBytes < 0) and gets
+    // no tooltip at all, rather than a misleading "-1" or an empty one that
+    // still pops up.
+    if( !entry.isDir && entry.sizeBytes >= 0 )
+        item->setToolTip( 0, tr( "Size: %1" ).arg( mediaBrowserFormatSize( entry.sizeBytes ) ) );
     item->setData( 0, kRolePath, entry.ref.path );
     item->setData( 0, kRoleIsDir, entry.isDir );
     item->setData( 0, kRoleSize, (qlonglong) entry.sizeBytes );
@@ -859,6 +866,11 @@ QString SMediaBrowserPanel::describe() const
                    .arg( r->text( 0 ) )
                    .arg( r->data( 0, kRoleSize ).toLongLong() )
                    .arg( r->data( 0, kRoleIsDir ).toBool() ? 1 : 0 );
+        // The size moved from a column to a tooltip (AC-d1); appended here,
+        // never inserted, so every existing `contains="name,size,dir"`
+        // substring match still matches — it is a PREFIX of this longer line.
+        const QString tip = r->toolTip( 0 );
+        if( !tip.isEmpty() ) out += QStringLiteral( ",tooltip=%1" ).arg( tip );
     }
     return out;
 }

@@ -70,6 +70,25 @@ Invariants:
     password value, length or prefix (AC 15) — only
     `set|unset|undecryptable`.
 
+11. **The dialog reopens on the page it was last CLOSED on** (AC-b1,
+    2026-08-21), stored by NAME (`SOpt::OptionsLastPage`, `ui/optionsLastPage`)
+    rather than by the top-level INDEX invariant 0 above already warns about —
+    an index surviving in the INI across a version that inserted or removed a
+    page would silently open a DIFFERENT page than the one the user actually
+    left it on. `-1` is the ctor's sentinel for "the caller named no page",
+    resolved against the remembered name (falling back to page 0 when it is
+    empty or matches no current page); a non-negative `initialPage` always
+    wins over it, which is what keeps `SMainWindow`'s "audio device
+    unavailable" path landing on Audio regardless of what the user last had
+    open. The single write hook is `done(int)`, overridden because
+    `QDialog::accept()` and the default `reject()` both call it — the one
+    place OK, Cancel, the window close box and Escape all funnel through, so
+    "closing is closing" needed no separate hook for each. Found in the same
+    pass: `SMainWindow`'s "Open Audio Options..." button had been calling
+    `openOptionsDialogAt(1)` since before the Event Editor page existed at
+    index 1, so it had silently been opening Event Editor instead of Audio;
+    fixed to `2` alongside this change.
+
 How to test: `ctest -R qxa.log_dock_scale` covers the log dock's scale
 requirement numerically (300k records, asserts the worst drain tick). The
 other dialogs are manual; the headless render action bypasses them by design.

@@ -608,7 +608,13 @@ void SMainWindow::onAudioOutputDeviceFailed()
     box.setDefaultButton( openBtn );
     box.exec();
     if( box.clickedButton() == openBtn )
-        openOptionsDialogAt( 1 );   // 1 = the Audio page (SOptionsDialog's tree order)
+        openOptionsDialogAt( 2 );   // 2 = the Audio page (SOptionsDialog's tree order):
+                                    // Mouse navigation=0, Event Editor=1, Audio=2. This
+                                    // was "1" and landed on Event Editor instead -- the
+                                    // Event Editor page was inserted at index 1 after this
+                                    // call was written and the index was never bumped.
+                                    // Found while wiring AC-b1's "an explicit initialPage
+                                    // always wins over the remembered page" guarantee.
 }
 
 void SMainWindow::openOptionsDialogAt( int pageIndex )
@@ -1351,11 +1357,17 @@ SMainWindow::SMainWindow()
     tabifyDockWidget( qDockEventEditor_, qDockVirtualKeys_ );
     qDockVirtualKeys_->hide();
 
-    // The media browser (proposal 38 gate 2) — the SEVENTH dock, LEFT, beside
-    // the resources dock. Created here in the ctor for the reason every dock
-    // above is (shell CONTRACT inv. 4), hidden on a first run so it does not
-    // steal width from the arranger, and persisted entirely by its objectName
-    // through the existing ui/windowState blob.
+    // The media browser (proposal 38 gate 2) — the SEVENTH dock, RIGHT,
+    // tabified with Clip Properties (AC-e1, 2026-08-21 — it was LEFT and
+    // hidden by default; only the DEFAULT moved, see below). Created here in
+    // the ctor for the reason every dock above is (shell CONTRACT inv. 4),
+    // and persisted entirely by its objectName through the existing
+    // ui/windowState blob — dock layout stays PER-USER, not per-project; a
+    // requester assumption that it was remembered per project is wrong and
+    // is left as-is by design, see the PR. Tabified rather than split: both
+    // panels are consulted occasionally (properties of a selected clip, a
+    // sample being browsed for) rather than watched continuously, so sharing
+    // one strip costs nothing either loses by not being permanently visible.
     //
     // Constructing it contacts NOTHING: a media source is registered (which
     // does no I/O) and opened when it is SELECTED, so a dock remembering a
@@ -1365,8 +1377,21 @@ SMainWindow::SMainWindow()
     qDockMediaBrowser_->setObjectName( "dock_media_browser" );
     mediaBrowser_ = new SMediaBrowserPanel( qDockMediaBrowser_ );
     qDockMediaBrowser_->setWidget( mediaBrowser_ );
-    addDockWidget( Qt::LeftDockWidgetArea, qDockMediaBrowser_ );
-    qDockMediaBrowser_->hide();
+    addDockWidget( Qt::RightDockWidgetArea, qDockMediaBrowser_ );
+    tabifyDockWidget( qDockClipProps_, qDockMediaBrowser_ );
+    // Visible by default on a FIRST run (no ui/windowState stored yet) — AC-e1.
+    // On any LATER run restoreWindowLayout()'s restoreState() call (below,
+    // after every dock exists) honours whatever the user left it as, exactly
+    // as every other dock's "hidden on a first run" comment already promises;
+    // this is the same mechanism, just defaulting the other way. Suppressed
+    // under --test-case (proposal 38 trap T10): a headless qxa run must not
+    // start showing a window it did not show before, and
+    // SPluginNativeEditor::restoreOpenEditors() (called from openProject(),
+    // gated the same way) is the existing precedent for suppressing a
+    // first-run-shaped default under "not a --test-case run" rather than
+    // under whether a layout was stored.
+    if( SApplication::app().isTestCaseMode() )
+        qDockMediaBrowser_->hide();
 
     // Proposal 38 gate 3: a deferred `media:` drop has things to say -- it is
     // fetching, it could not fetch, the target track went away, the project is
@@ -3325,7 +3350,11 @@ void SMainWindow::redo()
 
 void SMainWindow::showOptionsDialog()
 {
-    openOptionsDialogAt( 0 );
+    // -1 = no explicit page (AC-b1): the dialog opens on whichever page it
+    // was last CLOSED on, rather than always on Mouse navigation. Every
+    // OTHER caller of openOptionsDialogAt() names a real page on purpose and
+    // must keep winning over that memory -- see the sentinel's own comment.
+    openOptionsDialogAt( -1 );
 }
 
 void SMainWindow::showCleanupDialog()

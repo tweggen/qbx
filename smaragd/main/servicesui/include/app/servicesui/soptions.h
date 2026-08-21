@@ -88,6 +88,16 @@ inline constexpr const char *ShortcutClipProperties = "ui/shortcuts/clipProperti
 // disagree with it.
 inline constexpr const char *UiTheme = "ui/theme";
 
+// The Options dialog's last-shown page (AC-b1, 2026-08-21). Stored by NAME
+// (the tree item's own label, e.g. "Audio"), never by top-level INDEX: the
+// dialog ctor's own comment already warns that the tree and the stack are
+// mapped by index and nothing else, so an index surviving in the INI across
+// a version that inserted or removed a page would silently open a DIFFERENT
+// page than the one the user actually left it on. A name that no longer
+// matches any page (removed, or a stale/corrupt value) falls back to page 0
+// exactly as an out-of-range explicit `initialPage` always has.
+inline constexpr const char *OptionsLastPage = "ui/optionsLastPage";
+
 // Plugin hosting (proposal 08 M2). PluginSearchPaths is a QStringList of
 // directories, scanned recursively; its default is the FIRST platform-dependent
 // default in this table and comes from the engine

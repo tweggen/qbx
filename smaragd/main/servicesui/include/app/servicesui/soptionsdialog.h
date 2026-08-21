@@ -33,10 +33,18 @@ class SOptionsDialog : public QDialog
     Q_OBJECT
 public:
     // initialPage indexes the tree/stack pair below (0 = Mouse navigation,
-    // 1 = Audio, ...); out-of-range falls back to 0. Lets a caller (e.g. the
-    // "audio device unavailable" dialog) open straight to the Audio page
-    // instead of making the user find it.
-    explicit SOptionsDialog( QWidget *parent = nullptr, int initialPage = 0 );
+    // 1 = Event Editor, 2 = Audio, ...); out-of-range falls back to 0. Lets a
+    // caller (e.g. the "audio device unavailable" dialog) open straight to
+    // the Audio page instead of making the user find it.
+    //
+    // -1 (the default) is a SENTINEL, not "out of range": it means "the
+    // caller named no page", so the ctor opens on `SOpt::OptionsLastPage`
+    // instead (AC-b1) -- the page this same dialog was last CLOSED on, OK or
+    // Cancel, in this session or a previous one. An explicit non-negative
+    // page always wins over the remembered one, which is what lets
+    // `openOptionsDialogAt(2)` still land on Audio for the "device
+    // unavailable" path regardless of what the user last had open.
+    explicit SOptionsDialog( QWidget *parent = nullptr, int initialPage = -1 );
 
     // One line per fact the MIDI page is showing, for headless coverage
     // (the house pattern: build the REAL widget off screen, assert on its
@@ -48,6 +56,10 @@ public:
     // undecryptable` -- NEVER the secret itself, its length or a prefix
     // (AC 15).
     QString describeMediaPage() const;
+    // The tree item label of the page currently showing (e.g. "Audio"), for
+    // headless coverage of AC-b1's remembered-page round trip. Never parsed
+    // by production code.
+    QString currentPageName() const;
 
 private slots:
     void apply();             // write all pages to SSettings (no close)
@@ -81,6 +93,15 @@ private slots:
     void onMediaTestConnection();
 
 private:
+    // done() is the ONE place QDialog::accept() and the default reject()
+    // both funnel through (QDialog::{accept,reject}() each call done() with
+    // their own result code), so it is the single hook that fires whether
+    // the dialog closed via OK, Cancel, the window's close box or Escape --
+    // "closing is closing" (AC-b1). Remembers the current page BEFORE
+    // handing off to QDialog::done(), which is what actually hides the
+    // window.
+    void done( int r ) override;
+
     QWidget *buildMousePage();
     QWidget *buildEventEditorPage();
     QWidget *buildAudioPage();

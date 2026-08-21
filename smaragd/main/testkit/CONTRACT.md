@@ -1004,6 +1004,30 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     creates the thing it measures measures nothing; `open-arrangement-tab`
     first.
 
+51. **`close-options-dialog` closes a REAL `SOptionsDialog` through a `QDialog*`
+    ON PURPOSE** (AC-b1, 2026-08-21). There is no verb in this repo that can
+    click a `QTreeWidget` item or drive a modal `QDialog`'s own event loop, so
+    the verb's `page=` attribute stands in for "the user navigated here" (the
+    ctor argument) and closing it is what actually exercises
+    `SOptionsDialog::done()` — the one place `accept()` and the default
+    `reject()` both funnel through, which is what makes `result="ok"` and
+    `result="cancel"` equally valid ways to persist `SOpt::OptionsLastPage`.
+    `done()` is a PRIVATE override; the call goes through a `QDialog*` because
+    a virtual call's access check is against the STATIC type used to make it,
+    so the call compiles against the public base and still dispatches to the
+    override at runtime. The committed case (`options_last_page.qxa`) only
+    ever passes `result="cancel"`: `accept()` ALSO runs `apply()`, which writes
+    every OTHER page's widget values back into `SSettings` and, for Audio,
+    calls `twSpeaker::setOutputDevice()` — a real device re-open no case in
+    this suite has ever exercised through this dialog, and not a risk worth
+    taking for a feature that persists identically either way. `assert-media-
+    options`' new `initialPage` attribute is the READ-side twin: omitted, it
+    builds `SOptionsDialog(nullptr)` with no explicit page (what every case
+    before AC-b1 did, now meaning "open on the remembered page" rather than
+    always page 0); given, it is what asserts an EXPLICIT page still wins over
+    the remembered one. `describeMediaPage()`'s new first line, `page=<name>`,
+    is not really a Media-page fact — it is the cheapest way to make either
+    side of the round trip assertable without a new describe method.
 51. **`drag-note` grew a `modifiers=` attribute (AC-a2)**, spelled exactly as
     `drag-clip-edge`'s own ("ctrl"/"alt"/"shift", "+"-joined) — a separate,
     file-local `parseModifiers()` copy in `seventuitestactions.cpp`, matching

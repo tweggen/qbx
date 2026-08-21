@@ -455,6 +455,34 @@ bool SSetOptionAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+// ---------------------------------------------------------- close-options-dialog
+
+SApplyResult SCloseOptionsDialogAction::apply( SProject * )
+{
+    SOptionsDialog dialog( nullptr, page_ );
+    // Through a QDialog* on purpose (see the header comment): SOptionsDialog
+    // overrides done() PRIVATELY, but the call is well-formed through the
+    // public base and still dispatches to the override, which is what
+    // actually writes SOpt::OptionsLastPage.
+    QDialog *base = &dialog;
+    if( result_ == QStringLiteral( "cancel" ) ) base->reject();
+    else                                        base->accept();
+    return { true, nullptr };   // Not undoable: a per-user preference, like set-option.
+}
+
+void SCloseOptionsDialogAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "page", page_ );
+    elem.setAttribute( "result", result_ );
+}
+
+bool SCloseOptionsDialogAction::readXml( const QDomElement &elem, int )
+{
+    page_   = elem.attribute( "page", "-1" ).toInt();
+    result_ = elem.attribute( "result", "ok" );
+    return true;
+}
+
 // --------------------------------------------------------------------- wait-ms
 
 SApplyResult SWaitMsAction::apply( SProject * )
@@ -496,6 +524,9 @@ static const bool s_reg_midi_out_verbs = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "set-option" ),
         []{ return new SSetOptionAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "close-options-dialog" ),
+        []{ return new SCloseOptionsDialogAction; } ),
     SActionRegistry::instance().registerType(
         QStringLiteral( "wait-ms" ),
         []{ return new SWaitMsAction; } ),

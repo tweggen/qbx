@@ -484,6 +484,31 @@ Three consequences a change here must keep:
   DRAWN cursor and does not scroll while the root is resting. The recording
   overlay is gated to the master, where both of its inputs live.
 
+### inv. 27 — Escape closes the Clip Properties panel only while FLOATING (AC-f1)
+
+`SClipPropertiesPanel`'s ctor installs a `QShortcut(Qt::Key_Escape)` on
+ITSELF with `Qt::WidgetWithChildrenShortcut` context — not a `keyPressEvent`
+override, because several of the panel's own child widgets (combo boxes,
+spin boxes) consume Escape themselves before it would ever bubble up to a
+widget-level override, and a shortcut with this context fires regardless of
+which descendant currently holds focus. The activation handler asks its
+PARENT (`qobject_cast<QDockWidget*>(parentWidget())`) whether it
+`isFloating()` and calls `close()` only then — a DOCKED panel ignores Escape
+entirely, exactly as it did before this existed, so a user mid-edit who taps
+Escape to abandon a typed value loses nothing but the field's own revert (see
+below), never the whole dock. `close()` hides the dock and leaves its stored
+geometry and objectName alone, so reopening it from the View menu brings it
+back floating in the same place.
+
+This was found ALREADY IMPLEMENTED while wiring AC-f1 (commit a214c4ff,
+proposal 09 M8c, landed for an unrelated reason) — nothing needed changing,
+only documenting. **NOT gated**: there is no floating-window or
+context-menu verb anywhere in this repo's testkit, so the floating/docked
+split and "a text field's own Escape keeps its normal meaning first" (Qt's
+own `QEvent::ShortcutOverride` mechanism, which a widget with something to
+revert — e.g. a line edit's uncommitted text, an open combo popup — sends
+before a `QShortcut` in its ancestor chain ever fires) are both hand-verified
+only, by running the app on this box.
 ### inv. 25 — a Ctrl-drag duplicate never touches the SELECTION until release
 (AC-a1)
 

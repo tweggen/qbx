@@ -541,7 +541,14 @@ const Fixture kFixtures[] = {
       " password='s3cret' remember='0'/>" },
     { "assert-media-options",
       "<assert-media-options contains='accounts=1' absent='foo'"
-      " accountCount='1'/>" },
+      " accountCount='1' initialPage='2'/>" },
+    // AC-b1: the "no explicit page" default is -2 and is written only when
+    // the attribute was actually given (it means "omit the ctor argument
+    // entirely" -- see the header), which this fixture exercises by giving
+    // one; -2's own round trip (attribute absent both times) is covered by
+    // every OTHER assert-media-options fixture in the suite that omits it.
+    { "close-options-dialog",
+      "<close-options-dialog page='2' result='cancel'/>" },
     { "assert-settings-file",
       "<assert-settings-file contains='foo' absent='bar'/>" },
     // GATE 5c, + gate 6's expectAuth. Every attribute is written
