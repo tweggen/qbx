@@ -39,6 +39,9 @@ QVariant SOpt::def( const QString &key )
 
     if( key == ShortcutClipProperties ) return QStringLiteral( "F2" );
 
+    // Empty on purpose -- STheme::resolve() owns the default (see soptions.h).
+    if( key == UiTheme )        return QString();
+
     // The only platform-dependent default in this table, and deliberately not
     // spelled out here: the per-OS plugin locations belong to the engine's
     // twPluginSearchPaths, so the scanner and the options page can never

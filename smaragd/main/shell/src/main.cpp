@@ -10,6 +10,7 @@
 #include "app/actions/sactionregistry.h"
 #include "app/shell/ssettings.h"
 #include "app/servicesui/soptions.h"
+#include "app/theme/stheme.h"
 #include "tw/core/twlog.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include <iostream>
@@ -332,6 +333,21 @@ int main( int argc, char *argv[] )
         uiFont.setStyleStrategy( QFont::PreferAntialias );
         QApplication::setFont( uiFont );
     }
+
+    // Widget style. AFTER the font (both are application-wide presentation and
+    // belong together) and BEFORE the first widget: QApplication::setStyle()
+    // re-polishes everything already built, and a widget polished by two styles
+    // can keep the first one's palette. SMainWindow is constructed further down.
+    //
+    // The default under --test-case is "system", i.e. nothing is installed --
+    // see STheme::resolve(), which owns that decision because it is the only
+    // place that knows the run is headless. SMARAGD_UI_THEME overrides it, so a
+    // future theme case can still ask for the real style explicitly.
+    STheme::apply( app,
+                   STheme::resolve(
+                       SSettings::instance().value( SOpt::UiTheme,
+                                                    SOpt::def( SOpt::UiTheme ) ).toString(),
+                       parser.isSet( "test-case" ) ) );
 
     // Set test output directory if provided
     QString outputDir = parser.value("test-output-dir");

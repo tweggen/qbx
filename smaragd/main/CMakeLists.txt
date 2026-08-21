@@ -292,6 +292,17 @@ set(APP_OBJECTS_FILES
 )
 
 set(APP_UI_FILES
+    # --- app/theme. The widget STYLE and its colour tokens: SBrownProStyle
+    # (a QProxyStyle over Fusion) plus the STheme installer. A LEAF -- it
+    # includes no other app/<module> header, which is what keeps it out of the
+    # app's one big dependency cycle; the shell reads the persisted preference
+    # and hands the resolved name in.
+    theme/include/app/theme/sbrownprostyle.h
+    theme/include/app/theme/sthemecolors.h
+    theme/include/app/theme/stheme.h
+    theme/src/sbrownprostyle.cpp
+    theme/src/sthemecolors.cpp
+    theme/src/stheme.cpp
     # --- app/timeline
     timeline/include/app/timeline/sclippropertiespanel.h
     timeline/include/app/timeline/sgridtoolbar.h
@@ -540,6 +551,7 @@ target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar)
 # Layer 4 — the UI and the shell (the only layer that may see everything).
 add_library(app_ui OBJECT ${APP_UI_FILES})
 target_include_directories(app_ui PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/theme/include
     ${CMAKE_CURRENT_SOURCE_DIR}/timeline/include
     ${CMAKE_CURRENT_SOURCE_DIR}/eventui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/mediabrowser/include
