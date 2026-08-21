@@ -52,14 +52,19 @@
 //
 // No project, no audio device, no display.
 
+#include "app/model/sappcontext.h"
 #include "app/model/sobject.h"
 #include "app/model/sobjectrenderer.h"
 #include "app/model/slink.h"
+#include "app/model/sproject.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/scutrndrinline.h"
+#include "app/objects/track/strack.h"
+#include "app/objects/track/strackrndrinline.h"
 #include "app/objects/wave/swaveformdraw.h"
 
 #include "tw/core/twtypes.h"
+#include "tw/graph/tw303aenv.h"
 #include "tw/sources/twrandomsource.h"
 
 #include <QApplication>
@@ -616,6 +621,239 @@ int main( int argc, char **argv )
         // Detach before the fixtures unwind. Declaration order already makes it
         // safe; saying it is cheaper than relying on it.
         lk.setParent( nullptr );
+    }
+
+    // ===== 6. PROPOSAL 41 M5 — DETERMINISTIC Z-ORDER AND MATERIAL PAINTING
+    //
+    // D11: paint order is start-time ASCENDING (latest start ON TOP),
+    // tiebreak child index then object id — never childLinks()' insertion
+    // order, which is arbitrary. D10: a clip's BODY (the opaque grey rect
+    // STrackRendererInline used to fill for the WHOLE window before the
+    // inner renderer draws) is now clipped to where
+    // SObjectRenderer::collectEnvelope() reports MATERIAL (min!=0 || max!=0
+    // — the same "silence draws nothing" proxy drawChildSumOverlay() already
+    // uses, proposal 39 M3's discipline), so a later clip's GAP leaves an
+    // earlier clip's material on screen instead of erasing it.
+    //
+    // THIS HAS TO BE A PIXEL GATE (proposal 41 trap 6, mirroring proposal 39
+    // M2's finding): a script-level gate through collectEnvelope sits BELOW
+    // the paint and cannot see a paint-order or paint-clip bug, so this
+    // section calls the REAL STrackRendererInline::draw() into a QImage and
+    // reads colours back out of it — the same technique paintAndRecover()
+    // above uses, generalized to more than one colour so "which clip's
+    // pixels survived" is a plain RGB search. It runs over a REAL STrack
+    // with REAL SLink children, because AC5.1/5.2/5.3 are about that
+    // renderer's ACTUAL paint order and ACTUAL clipping, not a
+    // reimplementation of them.
+    //
+    // No SLaneFragment placement exists yet to build a real disjoint
+    // fragment (proposal 41 M2 is a parallel, not-yet-landed milestone), so
+    // — exactly as this milestone's own task text prescribes — a clip with
+    // an internal silent stretch stands in for the "gap" a container-backed
+    // cut over a partially-filled folder track would show. Verified to FAIL
+    // on the pre-fix code below (see the two comments marked "FAILS
+    // PRE-FIX"); this is not a gate that has never seen red.
+    {
+        // A colour per clip, so "which clip's pixels survived" is a plain
+        // RGB search over the painted image.
+        class RangedRenderer : public SObjectRenderer {
+        public:
+            RangedRenderer( SObject &o, QColor c )
+                : SObjectRenderer( o ), color_( c ) {}
+            void draw( SLink &lk, SRenderContext &ctx ) override
+            { drawObjectWaveform( getObject(), lk, ctx, color_ ); }
+            bool collectEnvelope( SLink &lk, const SEnvelopeWindow &win,
+                                  preview_t *out ) override
+            { return collectObjectEnvelope( getObject(), lk, win, out ); }
+        private:
+            QColor color_;
+        };
+
+        // A fixture whose preview is EXPLICIT DIGITAL ZERO (min==max==0)
+        // outside [matStart, matEnd) of its own duration, and a fixed
+        // +-level plateau inside it. matStart=0, matEnd=duration means
+        // "fully covered", used where no gap is wanted at all.
+        class RangedObject : public SObject {
+        public:
+            RangedObject( length_t duration, offset_t matStart, offset_t matEnd,
+                         previewPart_t level, QColor color )
+                : SObject( nullptr ), duration_( duration ),
+                  matStart_( matStart ), matEnd_( matEnd ), level_( level ),
+                  source_( duration ), color_( color ) {}
+            ~RangedObject() override { delete renderer_; }
+            std::shared_ptr<twComponent> getRootComponent() override
+            { return nullptr; }
+            bool     hasDuration() const override { return true; }
+            length_t getDuration() const override { return duration_; }
+            bool     hasPreview()  const override { return true; }
+            twRandomSource *getRandomSource() override { return &source_; }
+            int getPreview( preview_t *dest, offset_t start, length_t length,
+                            offset_t nProbes ) override
+            {
+                if( nProbes <= 0 || !dest ) return -1;
+                if( length < 1 ) length = 1;
+                for( offset_t i = 0; i < nProbes; ++i ) {
+                    const offset_t pos = start + ( i * length ) / nProbes;
+                    if( pos >= matStart_ && pos < matEnd_ ) {
+                        dest[i].min = (previewPart_t)( -level_ );
+                        dest[i].max = level_;
+                    } else {
+                        dest[i].min = 0;
+                        dest[i].max = 0;
+                    }
+                }
+                return 0;
+            }
+            QWidget *getDetailEditWidget( QWidget * ) override { return nullptr; }
+            QWidget *getInlineEditWidget( QWidget * ) override { return nullptr; }
+            SObjectRenderer *getInlineRenderer() override
+            {
+                if( !renderer_ ) renderer_ = new RangedRenderer( *this, color_ );
+                return renderer_;
+            }
+        private:
+            length_t       duration_;
+            offset_t       matStart_, matEnd_;
+            previewPart_t  level_;
+            StubSource     source_;
+            QColor         color_;
+            RangedRenderer *renderer_ = nullptr;
+        };
+
+        // The narrow app context STrack's construction reaches
+        // (STrack::setChannels builds a REAL twTrackMix/twPluginChain/
+        // twRewire against the environment) — the same stub fragment_test.
+        // cpp uses, including its setBufferSize(4096) fix for a documented
+        // latent crash in tw303aEnvironment::bufferSize (uninitialized
+        // until set).
+        class StubAppContext : public SAppContext {
+        public:
+            StubAppContext() { env_.setBufferSize( 4096 ); }
+            SProject *getCurrentProject() const override { return nullptr; }
+            tw303aEnvironment *get303aEnvironment() const override { return &env_; }
+            void rewireSpeaker() override {}
+            bool isSLinkSelected( SLink * ) const override { return false; }
+            void setSelectionFromPaths( const QList<QList<int>> & ) override {}
+            void addSelectionFromPaths( const QList<QList<int>> & ) override {}
+            void removeSelectionFromPaths( const QList<QList<int>> & ) override {}
+            void toggleSelectionFromPaths( const QList<QList<int>> & ) override {}
+            QList<QList<int>> getCurrentSelectionPaths() const override { return {}; }
+            QString testOutputDir() const override { return QString(); }
+            bool ensureOutputDirExists() const override { return false; }
+            void startRender( const audio::RenderParams & ) override {}
+            bool isRenderingActive() const override { return false; }
+            void setPlaybackRunning( bool ) override {}
+            offset_t getGlobalLocatorPos() const override { return 0; }
+        private:
+            mutable tw303aEnvironment env_;
+        };
+
+        StubAppContext ctx;
+        SAppContext::setInstance( &ctx );
+
+        std::unique_ptr<SProject> project( new SProject );
+        project->setChannels( 1 );
+
+        // Paint `track` into a fresh 1-pixel-per-frame canvas (FlatContext
+        // with spp=1.0 makes screen pixels and timeline frames coincide, so
+        // fixture start times can be chosen as pixel positions directly).
+        auto paintTrack = []( STrack &track, int w, int h ) {
+            QImage img( w, h, QImage::Format_RGB32 );
+            img.fill( QColor( 0, 0, 0 ) );
+            QPainter painter( &img );
+            FlatContext rc( painter, 0, 0, 1.0 );
+            rc.setVisibRect( QRect( 0, 0, w, h ) );
+            STrackRendererInline rndr( track );
+            SLink dummySelf( track, nullptr );   // draw()'s 1st arg is unused
+            rndr.draw( dummySelf, rc );
+            return img;
+        };
+        auto columnHasColor = []( const QImage &img, int x, QColor c ) {
+            for( int y = 0; y < img.height(); ++y )
+                if( ( img.pixel( x, y ) & 0x00ffffff ) == ( c.rgb() & 0x00ffffff ) )
+                    return true;
+            return false;
+        };
+
+        // --- AC5.1: deterministic z-order, latest start on top -------------
+        //
+        // Q starts LATER (1200) than P (1000) but is added as CHILD 0 (P is
+        // child 1) — child order CONTRADICTS start-time order on purpose,
+        // which is the only way this sub-test can tell "sorted by start
+        // time" apart from "drawn in childOrder_" (the behaviour before
+        // this milestone).
+        {
+            std::unique_ptr<STrack> track( new STrack( project.get() ) );
+            RangedObject *q = new RangedObject(
+                300, 0, 300, 80, QColor( 0, 0, 255 ) );
+            SLink *qLink = new SLink( *q, nullptr );
+            qLink->setStartTime( 1200 );
+            qLink->setParent( track.get() );
+
+            RangedObject *p = new RangedObject(
+                300, 0, 300, 80, QColor( 255, 0, 0 ) );
+            SLink *pLink = new SLink( *p, nullptr );
+            pLink->setStartTime( 1000 );
+            pLink->setParent( track.get() );
+
+            check( track->indexOfChild( qLink ) == 0
+                      && track->indexOfChild( pLink ) == 1,
+                   "AC5.1 fixture: Q is child 0, P is child 1 (contradicts "
+                   "start-time order)" );
+
+            QImage img = paintTrack( *track, 1400, 200 );
+            const int OVERLAP_X = 1250;   // inside [1200,1300), the overlap
+            // FAILS PRE-FIX: the unfixed code paints childLinks() in child
+            // order (Q then P), so P — child 1 but the EARLIER start — ends
+            // up on top and this reads false.
+            check( columnHasColor( img, OVERLAP_X, QColor( 0, 0, 255 ) ),
+                   "AC5.1: Q (the LATER start, 1200) is ON TOP in the "
+                   "overlap, though it is child 0" );
+            // FAILS PRE-FIX: for the same reason, P's red is still visible
+            // there on the unfixed code.
+            check( !columnHasColor( img, OVERLAP_X, QColor( 255, 0, 0 ) ),
+                   "AC5.1: ...and P (the earlier start, 1000) is fully "
+                   "covered there, not merely partially" );
+        }
+
+        // --- AC5.2 / AC5.3: material clipping, a gap paints what is beneath
+        //
+        // E is fully covered [0,300); L starts at 100 with a GAP over its
+        // own relative [0,200) (timeline [100,300)) and material only in
+        // relative [200,300) (timeline [300,400)). L's start (100) is LATER
+        // than E's (0), so D11 already puts L on top — this sub-test
+        // isolates D10 by construction.
+        {
+            std::unique_ptr<STrack> track( new STrack( project.get() ) );
+            RangedObject *e = new RangedObject(
+                300, 0, 300, 80, QColor( 255, 0, 0 ) );
+            SLink *eLink = new SLink( *e, nullptr );
+            eLink->setStartTime( 0 );
+            eLink->setParent( track.get() );
+
+            RangedObject *l = new RangedObject(
+                300, 200, 300, 80, QColor( 0, 0, 255 ) );
+            SLink *lLink = new SLink( *l, nullptr );
+            lLink->setStartTime( 100 );
+            lLink->setParent( track.get() );
+
+            QImage img = paintTrack( *track, 500, 200 );
+
+            // Inside L's gap AND E's material (timeline [150,250), clear of
+            // both the 1px inset and the matEnd/window edges by 50+ px).
+            // FAILS PRE-FIX: the unfixed code fills L's WHOLE window
+            // opaquely regardless of L's own material, erasing E's red
+            // there entirely.
+            check( columnHasColor( img, 220, QColor( 255, 0, 0 ) ),
+                   "AC5.2/AC5.3: E's material SURVIVES under L's gap — the "
+                   "body was clipped to L's material extent, not painted "
+                   "as L's whole window" );
+
+            // Sanity: L still paints normally where it DOES have material,
+            // so the fix is a CLIP, not a suppression of L altogether.
+            check( columnHasColor( img, 350, QColor( 0, 0, 255 ) ),
+                   "...and L's OWN material still paints where it exists" );
+        }
     }
 
     if( g_failures ) {

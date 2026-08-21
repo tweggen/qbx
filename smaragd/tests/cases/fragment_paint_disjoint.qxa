@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M5 - D10 (paint the material, not the window) and D11
+  (deterministic z-order) exercised through the REAL app, on a scenario
+  reachable with TODAY's verbs: no SLaneFragment placement exists yet
+  (proposal 41 M2 is a parallel, not-yet-landed milestone), so a
+  CONTAINER-BACKED CUT with a genuine internal silent stretch stands in for a
+  disjoint fragment - exactly what this milestone's own task text names as
+  the thing to build and gate against ("ordinary clips, and a
+  container-backed cut").
+
+  Layout on track 1 (one lane, two overlapping placements - the SHAPE this
+  milestone paints):
+
+    clip C (plain sample, timePos=0):        material [0, 192000)
+    asset "Gappy" (container-backed cut,
+                   timePos=50000):            GAP      [50000, 146000)
+                                              material [146000, 338000)
+
+  "Gappy" windows track 0, which holds ONE sample starting at 96000 (2 s) -
+  so the container's own [0, 96000) is genuine digital silence, not merely
+  quiet audio. The asset windows [0, 288000) of that container, i.e. its
+  placed copy carries the SAME silent lead-in as a gap.
+
+  The asset starts LATER (50000) than C (0), so D11 already puts it on top;
+  this scenario isolates D10 by construction - the overlap [50000,146000) is
+  exactly where C has material and the (topmost) asset has none.
+
+  A SECOND, isolated placement of the SAME asset sits alone on track 2, well
+  past everything else in the project (track 0 is muted; track 1's own
+  content ends at 338000) - the only way to assert the gap/material SHAPE at
+  the AUDIO level without track 1's own overlapping clip C confounding the
+  measurement (a rendered file sums every track; two overlapping sources on
+  one lane cannot be told apart by RMS alone).
+
+  WHAT THIS CASE DOES NOT GATE. Neither assert-audio-energy nor
+  assert-envelope can see a PAINT-ORDER or paint-CLIPPING bug (proposal 41
+  trap 6, mirroring proposal 39 M2's finding): both sit below the paint, and
+  would pass on the pre-M5 binary exactly as preview_volume_independent.qxa
+  did for M2. They are here only to pin this SCENARIO's shape (the gap really
+  is silent, the material really is not), so a future change to the fixture
+  localises here rather than in a 200-line diff. THE discriminating pixel
+  gate for AC5.1/5.2/5.3 is preview_envelope_test.cpp section 6, which paints
+  a real STrack off screen and recovers colours per clip from the image; it
+  is verified to fail on the pre-fix code (both direct AC5.1 assertions and
+  the AC5.2/5.3 survival assertion) and to pass after it.
+
+  A container-backed cut's PREVIEW capture (what the arranger PAINTS) is
+  built off the async revalidator, not synchronously at placement, and
+  nothing in a headless test-case run schedules it without a real paint -
+  so this case cannot exercise assert-envelope / assert-lane-overlay on the
+  container-backed clip at all; only the AUDIO render path (which resolves
+  its capture synchronously via SCut::ensureReader) is reachable headlessly.
+  That is the actual reason the pixel gate lives in preview_envelope_test.cpp
+  instead of here: it paints a REAL STrack directly, off the arranger and off
+  the revalidator both.
+-->
+<SActionScript version="1" name="fragment_paint_disjoint">
+
+  <setup project="new"/>
+
+  <actions>
+    <grid-disable/>
+
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- track 0: the asset's container. Its own [0,96000) is silence. Muted
+         so it does not ALSO sound on its own in the render below. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <create-asset container="0" startOffset="0" duration="288000"
+                  assetName="Gappy"/>
+
+    <!-- track 1: the lane both placements interleave on (the documented
+         shape - not independently assertable at the audio level, see
+         header). -->
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <place-asset assetName="Gappy" trackPath="1" timePos="50000"/>
+
+    <!-- track 2: the SAME asset, alone, far past everything else (track 1's
+         own content ends at 338000) - isolates the gap/material shape for
+         assert-audio-energy. -->
+    <place-asset assetName="Gappy" trackPath="2" timePos="400000"/>
+
+    <!-- C (clip 1,0) has material through the whole overlap - the one
+         collect-seam check reachable headlessly (a plain sample-backed clip
+         previews live, no capture to wait on). -->
+    <assert-envelope clip="1,0" start="50000" length="96000" width="8"
+                     expectEmpty="false"/>
+
+    <render filename="fragment_paint_disjoint_probe.wav" format="wav"
+           quality="10" durationSec="15"/>
+
+    <!-- track 2's gap (timeline [400000,496000), well inside it): digital
+         silence, the container's own leading silence carried through the
+         placement. -->
+    <assert-audio-energy filename="fragment_paint_disjoint_probe.wav"
+                         startFrame="420000" frameCount="50000"
+                         minRms="0.0" maxRms="0.001"/>
+
+    <!-- track 2's material (timeline [496000,688000), well inside it): real
+         signal. -->
+    <assert-audio-energy filename="fragment_paint_disjoint_probe.wav"
+                         startFrame="550000" frameCount="50000"
+                         minRms="0.02" maxRms="0.9"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
