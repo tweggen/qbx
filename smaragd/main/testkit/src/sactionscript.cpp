@@ -14,6 +14,12 @@ SActionScript::~SActionScript()
     qDeleteAll(actions_);
 }
 
+void SActionScript::releaseActions()
+{
+    actions_.clear();
+    for( ActionMeta &m : actionsMeta_ ) m.action = nullptr;
+}
+
 bool SActionScript::readFile(const QString &path)
 {
     QFile file(path);

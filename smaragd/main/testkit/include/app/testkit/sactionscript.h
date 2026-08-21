@@ -29,6 +29,17 @@ public:
     SActionScript();
     ~SActionScript();
 
+    // Forget every SAction* this script parsed, WITHOUT deleting them.
+    // SActionRunner::run() calls this once every action has been submitted
+    // via SApplication::submitAction() -- which (SActionHistory::submit() /
+    // drain_() / onApplied_() / onRejected_()) deletes each one exactly once
+    // on its own, one way or another: applied + undoable => owned by the
+    // undo stack via SActionUndoCommand; applied + non-undoable, or
+    // rejected => deleted immediately. actions() and actionsMeta() still
+    // hold those pointers at that point, and without this call ~SActionScript()'s
+    // qDeleteAll(actions_) double-frees every one of them. See the call site.
+    void releaseActions();
+
     // Parse a .qxa file. Returns false + fills error() on malformed input or
     // an unknown action verb (fail fast).
     bool readFile(const QString &path);

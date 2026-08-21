@@ -51,6 +51,21 @@ public:
     // any. Leaves an empty workspace when there is nothing to restore.
     void openMostRecent();
 
+    // RUN-MODE entry point (--run-actions): SActionRunner builds/loads the
+    // script's project straight on SApplication (SActionRunner::run(),
+    // teardownProject=false) and never routes it through fileNew()/
+    // openProjectFile(), so this window's own currentProject_ would
+    // otherwise stay null and no central widget, dock or window title would
+    // ever bind to it -- ensureArranger_()'s comment describes the same gap
+    // for a single testkit call. Call once, after the script has run, to make
+    // the kept project (SApplication::getCurrentProject()) this window's
+    // project: the same binding openProjectFile() does after a successful
+    // load, minus the load itself. A no-op when there is no current project,
+    // or it is already bound. From here on the project rides the ordinary
+    // File->Close path (closeEvent() -> closeProject()) for its teardown,
+    // exactly like an interactively opened one.
+    void adoptCurrentProject();
+
     // Startup: a non-invasive open/close probe of the CONFIGURED output
     // device (twSpeaker::probeOutputDevice()), run once the window is up.
     // Called ONLY from main.cpp's interactive branch — never under

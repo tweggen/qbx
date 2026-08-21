@@ -376,7 +376,20 @@ int main( int argc, char *argv[] )
         SActionScript script;
         if (script.readFile(scriptPath)) {
             SActionRunner runner;
-            SActionRunner::Result result = runner.run(script, app);
+            // --test-case tears the project down the instant the script ends
+            // (proposal 27 M2, still load-bearing there); --run-actions is
+            // documented to "keep the window open", so it must not — see
+            // SActionRunner::run()'s teardownProject doc comment.
+            SActionRunner::Result result = runner.run(script, app, /*teardownProject=*/testMode);
+
+            if (!testMode) {
+                // Bind the kept project into THIS window (central widget,
+                // docks, title) — SActionRunner built it straight on
+                // SApplication, never through fileNew()/openProjectFile(), so
+                // without this the window would sit empty forever even though
+                // app.getCurrentProject() holds a live, fully built project.
+                win->adoptCurrentProject();
+            }
 
             // Output results
             if (testMode) {
