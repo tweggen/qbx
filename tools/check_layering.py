@@ -181,6 +181,13 @@ APP_DEPS = {
     # SSettings. Every other option verb in the tree lives beside its own
     # setting for the same reason.
     'servicesui':     {'actions', 'model', 'shell'},
+    # theme (the widget style, 2026-08-21) is a LEAF and must stay one. It
+    # names no other app module -- not even servicesui for its own option key
+    # and not SSettings for the value: the shell reads the preference and
+    # passes the resolved name to STheme::apply(). That is what keeps a style
+    # out of the app's one big dependency cycle, and what lets the resolution
+    # be reasoned about without an INI or a window.
+    'theme':          set(),
     # shell + objects/midi since proposal 37 P1: the transport tempo box
     # commits through the set-tempo verb instead of writing the project.
     # shell + eventui since proposal 37 P4: the event editor and the virtual
@@ -213,7 +220,7 @@ APP_DEPS = {
     'shell':          {'actions', 'eventui', 'media', 'mediabrowser', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
                        'objects/track', 'objects/wave', 'persistence',
-                       'pluginui', 'selection', 'servicesui', 'testkit',
+                       'pluginui', 'selection', 'servicesui', 'testkit', 'theme',
                        'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:
     # set-render-gate addresses an SCut, wait-analysis reads SPlainWave.
@@ -284,6 +291,8 @@ APP_ENG = {
     # doing the engine's job.
     'media':          _ENG_BASE,
     'mediabrowser':   _ENG_BASE,
+    # theme reaches NO engine module beyond the base -- only tw/core's TW_LOG.
+    'theme':          _ENG_BASE,
     'persistence':    _ENG_BASE,
     'selection':      _ENG_BASE,
     # timeline + metering since proposal 34: the track head owns an SLevelMeter

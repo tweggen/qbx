@@ -63,7 +63,7 @@ a STATIC lib would drop):
     (model)     (actions,     (objects/cut,   (timeline, pluginui,
                 persistence,   wave, midi,     eventui, servicesui,
                 selection,     track, mixer)   shell, testkit,
-                media)                         mediabrowser)
+                media)                         mediabrowser, theme)
 
 The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
 only its own include dirs and links only the lower layers plus its declared
@@ -111,6 +111,7 @@ minimal.
 | app/actions | command framework + generic verbs | main/actions/CONTRACT.md |
 | app/persistence | project load/save | main/persistence/CONTRACT.md |
 | app/selection | selection state + actions | main/selection/CONTRACT.md |
+| app/theme | the widget STYLE — SBrownProStyle (QProxyStyle over Fusion), its colour tokens, and the installer. A LEAF: no app/* edges | main/theme/CONTRACT.md |
 | app/timeline | the arrangement canvas + chrome | main/timeline/CONTRACT.md |
 | app/mediabrowser | the Media Browser DOCK and nothing else — source picker, tree, filter, search, drag out | main/mediabrowser/CONTRACT.md |
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |

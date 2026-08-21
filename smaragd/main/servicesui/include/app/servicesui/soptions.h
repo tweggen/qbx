@@ -75,6 +75,19 @@ inline constexpr const char *LogToFile      = "log/toFile";
 // unbound rather than crashing.
 inline constexpr const char *ShortcutClipProperties = "ui/shortcuts/clipProperties";
 
+// Widget style / theme. The NAMES STHeme::available() understands ("brownpro",
+// "system"); an unknown value falls back rather than leaving the app unstyled.
+// There is no options-page control yet -- like the shortcut above, this is a
+// DEFAULT that is rebindable by editing smaragd.ini, and the environment
+// variable SMARAGD_UI_THEME overrides it for one run.
+//
+// The default is EMPTY, not "brownpro", and that is deliberate: STheme::resolve()
+// owns the default because it is the only place that knows whether this is a
+// --test-case run (where the default is "system", so no committed pixel gate
+// moves). A default spelled here as well would be a second authority that could
+// disagree with it.
+inline constexpr const char *UiTheme = "ui/theme";
+
 // Plugin hosting (proposal 08 M2). PluginSearchPaths is a QStringList of
 // directories, scanned recursively; its default is the FIRST platform-dependent
 // default in this table and comes from the engine
