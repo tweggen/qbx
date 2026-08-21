@@ -3,6 +3,10 @@
 #include <qobject.h>
 #include <QVarLengthArray>
 
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
 #include "app/model/sappcontext.h"
 #include "app/model/slink.h"
 #include "app/objects/track/strack.h"
@@ -222,21 +226,58 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         return;
     }
     // qWarning( "visibRect.x() = %d, leftTime = %d; rightTime=%d.\n", visibRect.x(), (int)leftTime, (int)rightTime );
+
+    // D11 (proposal 41): PAINT ORDER is deterministic — start-time ascending,
+    // latest start on top — rather than childLinks()' insertion order, which
+    // is arbitrary and unpredictable to a user. The payoff (M6) is a bottom-
+    // left tag that is ALWAYS visible: a clip's left edge can only be covered
+    // by a clip painting above it, which by this rule starts later, i.e.
+    // strictly to the right, and so can never reach that pixel. The single
+    // exception is equal start times, which is exactly why the tiebreak is
+    // spelled out here rather than left to childOrder_: child index, then
+    // object id (the link's SObject address — the same "objectId" spelling
+    // slink.cpp already serializes).
+    //
+    // The filter pass below is UNCHANGED from before this milestone (same
+    // skip-folder-children, hasStartTime/hasDuration, visible-window rules);
+    // only the paint ORDER of what survives it is new.
+    struct ClipPaintEntry {
+        SLink       *lk;
+        offset_t     startTime;
+        int          childIndex;
+        std::uintptr_t objId;
+    };
+    std::vector<ClipPaintEntry> entries;
+    entries.reserve( (size_t) getTrack().childCount() );
     for( SLink *lk : getTrack().childLinks() ) {
         // Child tracks are summed into this (folder) track's audio but they are
         // their own lanes — don't draw them as clips here. The lane shows only
         // this track's own clips.
         if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
-        bool isSelected = SAppContext::get().isSLinkSelected( lk );
-        //printf( "Link found: $%08x.\n", lk );
-        //fflush( stdout ); fflush( stderr );
         if( !lk->hasStartTime() ) continue;
         if( !lk->getSObject().hasDuration() ) continue;
-        offset_t startTime = lk->getStartTime();
-//        qWarning( "With start time of %d.\n", (int) startTime );
-        length_t length = lk->getSObject().getDuration();
-//        qWarning( "And length of %d.\n", (int) length );
+        const offset_t startTime = lk->getStartTime();
+        const length_t length = lk->getSObject().getDuration();
         if( startTime >= rightTime || (startTime+length)<leftTime ) continue;
+        ClipPaintEntry e;
+        e.lk = lk;
+        e.startTime = startTime;
+        e.childIndex = getTrack().indexOfChild( lk );
+        e.objId = reinterpret_cast<std::uintptr_t>( &lk->getSObject() );
+        entries.push_back( e );
+    }
+    std::sort( entries.begin(), entries.end(),
+        []( const ClipPaintEntry &a, const ClipPaintEntry &b ) {
+            if( a.startTime != b.startTime ) return a.startTime < b.startTime;
+            if( a.childIndex != b.childIndex ) return a.childIndex < b.childIndex;
+            return a.objId < b.objId;
+        } );
+
+    for( const ClipPaintEntry &entry : entries ) {
+        SLink *lk = entry.lk;
+        bool isSelected = SAppContext::get().isSLinkSelected( lk );
+        const offset_t startTime = entry.startTime;
+        const length_t length = lk->getSObject().getDuration();
         double relStart = (double)startTime-(double)leftTime;
         double relEnd = (double)(startTime+length)-(double)leftTime;
         double startX = ((double)visibRect.x())
@@ -247,8 +288,51 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
             +( relEnd*((double)(visibRect.width()))
                / ((double)(rightTime-leftTime)) );
         if( endX<visibRect.x() ) continue;
-        p.fillRect( (int)startX, visibRect.y(),
-                    (int)(endX-startX), visibRect.height(), QColor( 160, 160, 160 ) );
+
+        // D10 (proposal 41): paint the MATERIAL, not the window. The clip
+        // body used to be one opaque fillRect spanning the whole window, so a
+        // later clip's EMPTY regions painted over an earlier clip's MATERIAL
+        // and the reader saw a hole where audio is sounding (an asset over a
+        // container whose own children don't fill the whole placed window is
+        // the shape reachable today — no SLaneFragment placement exists yet).
+        // No transparency anywhere: this is clipping, not alpha. Per column,
+        // fill only where SObjectRenderer::collectEnvelope says material
+        // exists (min!=0 || max!=0, the same "silence draws nothing" proxy
+        // drawChildSumOverlay() above already uses, proposal 39 M3's
+        // discipline); leave a gap column unpainted so whatever was drawn
+        // beneath it — an earlier clip, the lane background, the folder-sum
+        // overlay — shows through. An object whose renderer does not support
+        // collectEnvelope at all (the default false — an event clip has no
+        // waveform) falls back to the ORIGINAL solid fill: "unknown material"
+        // must never read as "no material".
+        const int bodyLeft  = (int) startX;
+        const int bodyWidth = (int)( endX - startX );
+        const QColor bodyColor( 160, 160, 160 );
+        SObjectRenderer *rndr = lk->getSObject().getInlineRenderer();
+        bool paintedByMaterial = false;
+        if( rndr && bodyWidth >= 1 ) {
+            SEnvelopeWindow bodyWin;
+            bodyWin.leftTime  = ctx.getTimeOf( bodyLeft );
+            bodyWin.rightTime = ctx.getTimeOf( bodyLeft + bodyWidth );
+            bodyWin.width     = bodyWidth;
+            QVarLengthArray<preview_t> pv( bodyWidth );
+            if( rndr->collectEnvelope( *lk, bodyWin, pv.data() ) ) {
+                paintedByMaterial = true;
+                p.setPen( bodyColor );
+                const int top = visibRect.y();
+                const int bottom = visibRect.y() + visibRect.height() - 1;
+                for( int i = 0; i < bodyWidth; ++i ) {
+                    if( !pv[i].min && !pv[i].max ) continue;   // gap: leave it
+                    const int x = bodyLeft + i;
+                    p.drawLine( x, top, x, bottom );
+                }
+            }
+        }
+        if( !paintedByMaterial ) {
+            p.fillRect( bodyLeft, visibRect.y(), bodyWidth, visibRect.height(),
+                        bodyColor );
+        }
+
         if( isSelected ) {
             p.setPen( QColor( 255, 255, 255 ) );
             p.drawRect( (int)startX+1, visibRect.y()+1, 
@@ -267,8 +351,7 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         if( vr.width()<1 ) continue;
         myctx.setVisibRect( vr );
         //qWarning( "lk is $%08x.\n", (unsigned ) lk );
-        SObjectRenderer *rndr = lk->getSObject().getInlineRenderer();
-        //qWarning( "rndr is $%08x.\n", (unsigned ) rndr );        
+        // rndr was already fetched above, for the material-aware body fill.
         if( rndr ) {
             rndr->draw( *lk, myctx );
         }
