@@ -260,6 +260,13 @@ set(APP_OBJECTS_FILES
     objects/track/src/strack.cpp
     objects/track/src/strackcolormodifier.cpp
     objects/track/src/strackrndrinline.cpp
+    # --- app/objects/fragment (proposal 41 M1). A path container with no
+    # track identity — at the RANK of objects/track, not inside it (a
+    # fragment must not inherit the track's plugin/instrument dependencies)
+    # and not inside objects/cut (a fragment is content a cut WINDOWS; the
+    # dependency runs cut -> fragment, never the reverse).
+    objects/fragment/include/app/objects/fragment/slanefragment.h
+    objects/fragment/src/slanefragment.cpp
     # --- app/objects/mixer
     objects/mixer/include/app/objects/mixer/saddtrackaction.h
     objects/mixer/include/app/objects/mixer/sdissolvearrangementaction.h
@@ -544,6 +551,7 @@ target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/midi/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/wave/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/objects/fragment/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/mixer/include
 )
 target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar)
@@ -962,6 +970,22 @@ target_link_libraries(project_channels_test
 )
 add_test(NAME project_channels_test COMMAND project_channels_test)
 set_tests_properties(project_channels_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# SLaneFragment (proposal 41 M1): a path container with no track identity.
+# AC1.1 (isPathContainer()/isLane() split, unity-sum twTrackMix), AC1.2
+# (structural absence of fader/inserts/instrument/solo/arm/meters/automation),
+# AC1.3 (serialize/load round trip, including an unresolvable child link) and
+# AC1.4 (SCut windows it exactly as it windows a track). Same shape as
+# project_channels_test: a real SProject/STrack/SCut/SLaneFragment against a
+# StubAppContext, no display, no audio device.
+add_executable(fragment_test testkit/src/fragment_test.cpp)
+target_link_libraries(fragment_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME fragment_test COMMAND fragment_test)
+set_tests_properties(fragment_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The media SOURCE layer (proposal 38 gate 1): the async/id-tagged contract,
