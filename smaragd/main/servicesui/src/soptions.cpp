@@ -39,6 +39,11 @@ QVariant SOpt::def( const QString &key )
 
     if( key == ShortcutClipProperties ) return QStringLiteral( "F2" );
 
+    // Empty means "no page remembered yet" -- SOptionsDialog's ctor reads
+    // that as "fall back to page 0", the same fallback an unrecognised name
+    // gets (see soptions.h).
+    if( key == OptionsLastPage ) return QString();
+
     // Empty on purpose -- STheme::resolve() owns the default (see soptions.h).
     if( key == UiTheme )        return QString();
 

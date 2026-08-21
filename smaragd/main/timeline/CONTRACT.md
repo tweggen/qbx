@@ -626,3 +626,72 @@ Three consequences a change here must keep:
   `SSMVMixerControl`'s automation write tick do. `followLocator` follows the
   DRAWN cursor and does not scroll while the root is resting. The recording
   overlay is gated to the master, where both of its inputs live.
+
+### inv. 27 — Escape closes the Clip Properties panel only while FLOATING (AC-f1)
+
+`SClipPropertiesPanel`'s ctor installs a `QShortcut(Qt::Key_Escape)` on
+ITSELF with `Qt::WidgetWithChildrenShortcut` context — not a `keyPressEvent`
+override, because several of the panel's own child widgets (combo boxes,
+spin boxes) consume Escape themselves before it would ever bubble up to a
+widget-level override, and a shortcut with this context fires regardless of
+which descendant currently holds focus. The activation handler asks its
+PARENT (`qobject_cast<QDockWidget*>(parentWidget())`) whether it
+`isFloating()` and calls `close()` only then — a DOCKED panel ignores Escape
+entirely, exactly as it did before this existed, so a user mid-edit who taps
+Escape to abandon a typed value loses nothing but the field's own revert (see
+below), never the whole dock. `close()` hides the dock and leaves its stored
+geometry and objectName alone, so reopening it from the View menu brings it
+back floating in the same place.
+
+This was found ALREADY IMPLEMENTED while wiring AC-f1 (commit a214c4ff,
+proposal 09 M8c, landed for an unrelated reason) — nothing needed changing,
+only documenting. **NOT gated**: there is no floating-window or
+context-menu verb anywhere in this repo's testkit, so the floating/docked
+split and "a text field's own Escape keeps its normal meaning first" (Qt's
+own `QEvent::ShortcutOverride` mechanism, which a widget with something to
+revert — e.g. a line edit's uncommitted text, an open combo popup — sends
+before a `QShortcut` in its ancestor chain ever fires) are both hand-verified
+only, by running the app on this box.
+### inv. 25 — a Ctrl-drag duplicate never touches the SELECTION until release
+(AC-a1)
+
+The arm-time code (`mousePressEvent`'s primary-modifier body branch) may
+mutate `clipDupItems_`/`lastClickSLink_` for its own bookkeeping, but must
+NEVER call anything that changes `SApplication`'s selection list — no
+`submitSetSelectionAction`, no `setSelectedSLink`, nothing. The ORIGINAL
+clip(s) stay selected/highlighted for the whole drag.
+
+Why: the live preview link `mouseReleaseEvent` drags is `delete`d before the
+finalize submits anything, and `SLink`'s destroyed()→unselectSLink auto-removal
+means selecting the preview at arm time silently erases whatever the user had
+selected BEFORE the gesture — by the time the release snapshots "the
+selection before this action" (inside `SSetSelectionAction::apply()`'s own
+undo bookkeeping), it is already gone. One undo then restores an EMPTY
+selection instead of the true prior one. Leaving the real selection alone
+until release is what keeps that snapshot honest.
+
+The release itself submits the new-copy `SDuplicateClipAction`(s) and exactly
+ONE `SSetSelectionAction` naming the created copies, **inside the same
+`beginMacro`/`endMacro` pair**, unconditionally — a single-clip copy grows the
+macro too, so the step count is 1 whether one clip or a group was dragged.
+Gate: `copy_drag_selects_copy.qxa`.
+
+### inv. 26 — a manual horizontal scroll suspends follow-the-playhead for
+`SMVActualView::FOLLOW_HOLD_MS` (AC-g1)
+
+`armFollowHold()` may be called ONLY from a user-initiated pan: the wheel's
+`ScrollHorizontal` case, the horizontal scrollbar's `actionTriggered` (never
+`valueChanged`, which also fires when `followLocator` mirrors its own
+auto-repage onto the scrollbar — arming from that signal would let the very
+re-page the hold exists to delay immediately disarm it), and the
+drag-past-the-canvas-edge branch of `mouseMoveEvent`. It must NEVER be called
+from `setLeftOffset()` itself, `followLocator()`, or any other path that is
+not directly a hand gesture, for the identical self-defeat reason.
+
+`followLocator()` checks a monotonic `QElapsedTimer` (`followHoldTimer_`) at
+the top, ahead of every other early-out, and returns without re-paging while
+`followHoldArmed_` is true and less than `FOLLOW_HOLD_MS` (5000) has elapsed
+since the last arm; once expired it clears the flag and behaves exactly as
+before this feature. Gate: `follow_scroll_hold.qxa` (`RUN_SERIAL`, a real
+wall-clock case — see its header for the measured, reproducible canvas
+geometry the closed-form scrollX value depends on).

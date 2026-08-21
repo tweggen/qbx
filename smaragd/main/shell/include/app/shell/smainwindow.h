@@ -172,6 +172,34 @@ public:
     bool clickLane( const QString &trackPath, offset_t time,
                     Qt::KeyboardModifiers mods = Qt::NoModifier );
 
+    // TEST ENTRY POINT (AC-g1): a real QWheelEvent to the arranger canvas —
+    // see SStdMixerView::wheelScroll. `mods` picks the gesture the wheel
+    // performs (Shift = pan by default); `deltaY` is angleDelta units.
+    bool wheelScrollArranger( int deltaY,
+                              Qt::KeyboardModifiers mods = Qt::NoModifier );
+
+    // TEST ENTRY POINT (AC-a3, `select-all`): Ctrl-A, driven through the SAME
+    // two-step dance real Qt input goes through — a ShortcutOverride offered
+    // to the current FOCUS WIDGET first, then either that widget's own
+    // keyPressEvent (a piano roll bound clip, a QLineEdit's own text) or, when
+    // nothing claims the override, this window's "Select All" QAction, exactly
+    // as a real keystroke would fall through to it. There is no general
+    // "send-shortcut" verb (only this one binding is needed today); a second
+    // shortcut earns its own entry point rather than a generic key-sequence
+    // parser nothing else uses. Hard-codes Qt::ControlModifier — the box this
+    // suite runs on is Linux/Windows-shaped, where QKeySequence::SelectAll IS
+    // Ctrl-A (macOS's Cmd binding is untested here).
+    //
+    // KNOWN GAP: QApplication::focusWidget() is always null in a --test-case
+    // run, because the main window is never SHOWN there (proposal 38 trap
+    // T10's rule, unrelated to this feature). So this verb can only ever
+    // exercise the ARRANGER default branch headlessly — the piano roll's own
+    // ShortcutOverride (SPianoRollView::event()) is real production code,
+    // reviewed and consistent with the same technique a QLineEdit already
+    // relies on, but is NOT reachable from a qxa script; it needs a shown
+    // window to hand-verify.
+    bool sendSelectAllShortcut();
+
     // TEST ENTRY POINT: the split command ('s' / "Split object"), unchanged
     // from what a real keypress or menu click runs — SStdMixerView::
     // ctSplitSample() is a public slot, so this just calls it. Splits every
@@ -347,7 +375,8 @@ public:
     bool grabEventEditor( const QString &path, int w, int h );
     bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
                    qint64 toTick, int toKey, const QString &edge,
-                   const QString &lane, double toValue );
+                   const QString &lane, double toValue,
+                   Qt::KeyboardModifiers mods = Qt::NoModifier );
     int  scrollEventEditorKeys( const QString &clipPath, int topKey );
     bool virtualKey( int key, double velocity, qint64 durationTicks );
     //   virtualKeyHold / Release — PLAY the virtual keyboard rather than write
@@ -497,6 +526,18 @@ protected slots:
     void showOptionsDialog();
     // Opened from the resources dock's context menu (SExternFileList).
     void showCleanupDialog();
+
+    // AC-a3: Edit -> Select All (Ctrl/Cmd-A). The DEFAULT answer for the
+    // keyboard shortcut — selects every clip on every lane of the ACTIVE
+    // arranger tab's own root, as ONE undoable SSetSelectionAction, matching
+    // every other selection change in this app. It is reached only when
+    // nothing more specific has claimed the shortcut for itself: the piano
+    // roll accepts a QEvent::ShortcutOverride for Ctrl-A so its OWN
+    // keyPressEvent gets it instead (selecting notes, not clips), and a
+    // QLineEdit already does the same for its built-in "select all text" —
+    // Qt tries the focus widget's ShortcutOverride before a WindowShortcut
+    // QAction fires, so this slot never steals either keystroke.
+    void selectAllInActiveArranger();
 
     // Toolbar palette toggles (each submits the matching toggle action).
     void toggleSnapToGrid();

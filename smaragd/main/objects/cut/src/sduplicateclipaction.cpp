@@ -74,6 +74,7 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
 
     QList<int> newClipPath = destTrackPath_;
     newClipPath.append( destTrack->indexOfChild( copy ) );
+    if( createdPathOut_ ) *createdPathOut_ = newClipPath;
     SAction *inverse = new SRemoveClipAction( newClipPath, sourceClipPath_,
                                               destTrackPath_, startTime_ );
     return {true, inverse};

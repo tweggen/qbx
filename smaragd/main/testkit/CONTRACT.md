@@ -1004,7 +1004,61 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     creates the thing it measures measures nothing; `open-arrangement-tab`
     first.
 
-51. **`double-click-lane` is `click-lane`'s double-click twin, and it exists
+51. **`close-options-dialog` closes a REAL `SOptionsDialog` through a `QDialog*`
+    ON PURPOSE** (AC-b1, 2026-08-21). There is no verb in this repo that can
+    click a `QTreeWidget` item or drive a modal `QDialog`'s own event loop, so
+    the verb's `page=` attribute stands in for "the user navigated here" (the
+    ctor argument) and closing it is what actually exercises
+    `SOptionsDialog::done()` — the one place `accept()` and the default
+    `reject()` both funnel through, which is what makes `result="ok"` and
+    `result="cancel"` equally valid ways to persist `SOpt::OptionsLastPage`.
+    `done()` is a PRIVATE override; the call goes through a `QDialog*` because
+    a virtual call's access check is against the STATIC type used to make it,
+    so the call compiles against the public base and still dispatches to the
+    override at runtime. The committed case (`options_last_page.qxa`) only
+    ever passes `result="cancel"`: `accept()` ALSO runs `apply()`, which writes
+    every OTHER page's widget values back into `SSettings` and, for Audio,
+    calls `twSpeaker::setOutputDevice()` — a real device re-open no case in
+    this suite has ever exercised through this dialog, and not a risk worth
+    taking for a feature that persists identically either way. `assert-media-
+    options`' new `initialPage` attribute is the READ-side twin: omitted, it
+    builds `SOptionsDialog(nullptr)` with no explicit page (what every case
+    before AC-b1 did, now meaning "open on the remembered page" rather than
+    always page 0); given, it is what asserts an EXPLICIT page still wins over
+    the remembered one. `describeMediaPage()`'s new first line, `page=<name>`,
+    is not really a Media-page fact — it is the cheapest way to make either
+    side of the round trip assertable without a new describe method.
+51. **`drag-note` grew a `modifiers=` attribute (AC-a2)**, spelled exactly as
+    `drag-clip-edge`'s own ("ctrl"/"alt"/"shift", "+"-joined) — a separate,
+    file-local `parseModifiers()` copy in `seventuitestactions.cpp`, matching
+    the existing convention that each gesture-verb file keeps its own rather
+    than sharing one (`click-lane`, `select-track`). Threaded all the way
+    through `SMainWindow::dragNote` → `SPianoRollView::tkDragNote`, applied to
+    every press/move/release the gesture sends, exactly as a real held
+    modifier would be.
+52. **`wheel-scroll` (AC-g1) sends a REAL `QWheelEvent`**, not a call into the
+    factored-out gesture logic directly, so it exercises `SMVActualView::
+    wheelEvent()`'s own entry point (the macOS accessibility early-out, the
+    `dy==0` guard) rather than skipping past it — going through
+    `SMainWindow::wheelScrollArranger()` → `SStdMixerView::wheelScroll()`,
+    reusing the `dragClipEdge`/`dragNote` house pattern of a public test entry
+    point on the view rather than a re-spelling of the gesture. Its position
+    barely matters (only `ZoomHorizontal`'s zoom-to-cursor reads the anchor
+    x), so it lands at a fixed interior point; `QApplication::sendEvent`
+    delivers it there regardless of visibility, same as every other
+    synthesized gesture in this file.
+53. **`select-all` (AC-a3) drives the SAME two-step fork real Qt input takes**:
+    a `QEvent::ShortcutOverride` offered to `QApplication::focusWidget()`
+    first, then either that widget's own `keyPressEvent` or — nothing
+    claimed it — `SMainWindow`'s window-level "Select All" `QAction`, through
+    `SMainWindow::sendSelectAllShortcut()`. **The known gap**:
+    `QApplication::focusWidget()` is always null in a `--test-case` run (the
+    main window is never shown), so this verb can only ever reach the
+    ARRANGER default branch from a script — see `select_all_scope.qxa`. A
+    widget-specific branch (the piano roll's own Ctrl-A) is real, reviewed
+    production code that this verb cannot exercise; it needs a shown window.
+
+54. **`double-click-lane` is `click-lane`'s double-click twin, and it exists
     because `double-click-clip` cannot reach a lane with no clip on it.**
     Both go out through the shell (`SMainWindow::doubleClickLane` /
     `SStdMixerView::doubleClickLane`), the same routing reason inv. 5 gives

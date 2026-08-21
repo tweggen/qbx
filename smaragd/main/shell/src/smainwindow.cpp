@@ -40,6 +40,8 @@
 #include "app/objects/midi/smidiclipactions.h"
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
+#include "app/selection/sselectionmanager.h"
+#include "app/selection/ssetselectionaction.h"
 #include "app/shell/ssettings.h"
 #include "app/pluginui/spluginnativeeditor.h"
 #include "app/servicesui/srecordingprogress.h"
@@ -606,7 +608,13 @@ void SMainWindow::onAudioOutputDeviceFailed()
     box.setDefaultButton( openBtn );
     box.exec();
     if( box.clickedButton() == openBtn )
-        openOptionsDialogAt( 1 );   // 1 = the Audio page (SOptionsDialog's tree order)
+        openOptionsDialogAt( 2 );   // 2 = the Audio page (SOptionsDialog's tree order):
+                                    // Mouse navigation=0, Event Editor=1, Audio=2. This
+                                    // was "1" and landed on Event Editor instead -- the
+                                    // Event Editor page was inserted at index 1 after this
+                                    // call was written and the index was never bumped.
+                                    // Found while wiring AC-b1's "an explicit initialPage
+                                    // always wins over the remembered page" guarantee.
 }
 
 void SMainWindow::openOptionsDialogAt( int pageIndex )
@@ -1244,6 +1252,12 @@ SMainWindow::SMainWindow()
     editMenu->addAction( "&Undo", Qt::CTRL | Qt::Key_Z, this, SLOT( undo() ) );
     editMenu->addAction( "&Redo", Qt::CTRL | Qt::SHIFT | Qt::Key_Z, this, SLOT( redo() ) );
     editMenu->addSeparator();
+    // AC-a3: QKeySequence::SelectAll is Ctrl-A / Cmd-A. See
+    // selectAllInActiveArranger()'s own comment for why a focused piano roll
+    // or QLineEdit is unaffected by this shortcut existing.
+    editMenu->addAction( "Select &All", QKeySequence::SelectAll,
+                         this, SLOT( selectAllInActiveArranger() ) );
+    editMenu->addSeparator();
     editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
                          this, SLOT( showOptionsDialog() ) );
     menuBar()->addMenu( editMenu );
@@ -1343,11 +1357,17 @@ SMainWindow::SMainWindow()
     tabifyDockWidget( qDockEventEditor_, qDockVirtualKeys_ );
     qDockVirtualKeys_->hide();
 
-    // The media browser (proposal 38 gate 2) — the SEVENTH dock, LEFT, beside
-    // the resources dock. Created here in the ctor for the reason every dock
-    // above is (shell CONTRACT inv. 4), hidden on a first run so it does not
-    // steal width from the arranger, and persisted entirely by its objectName
-    // through the existing ui/windowState blob.
+    // The media browser (proposal 38 gate 2) — the SEVENTH dock, RIGHT,
+    // tabified with Clip Properties (AC-e1, 2026-08-21 — it was LEFT and
+    // hidden by default; only the DEFAULT moved, see below). Created here in
+    // the ctor for the reason every dock above is (shell CONTRACT inv. 4),
+    // and persisted entirely by its objectName through the existing
+    // ui/windowState blob — dock layout stays PER-USER, not per-project; a
+    // requester assumption that it was remembered per project is wrong and
+    // is left as-is by design, see the PR. Tabified rather than split: both
+    // panels are consulted occasionally (properties of a selected clip, a
+    // sample being browsed for) rather than watched continuously, so sharing
+    // one strip costs nothing either loses by not being permanently visible.
     //
     // Constructing it contacts NOTHING: a media source is registered (which
     // does no I/O) and opened when it is SELECTED, so a dock remembering a
@@ -1357,8 +1377,21 @@ SMainWindow::SMainWindow()
     qDockMediaBrowser_->setObjectName( "dock_media_browser" );
     mediaBrowser_ = new SMediaBrowserPanel( qDockMediaBrowser_ );
     qDockMediaBrowser_->setWidget( mediaBrowser_ );
-    addDockWidget( Qt::LeftDockWidgetArea, qDockMediaBrowser_ );
-    qDockMediaBrowser_->hide();
+    addDockWidget( Qt::RightDockWidgetArea, qDockMediaBrowser_ );
+    tabifyDockWidget( qDockClipProps_, qDockMediaBrowser_ );
+    // Visible by default on a FIRST run (no ui/windowState stored yet) — AC-e1.
+    // On any LATER run restoreWindowLayout()'s restoreState() call (below,
+    // after every dock exists) honours whatever the user left it as, exactly
+    // as every other dock's "hidden on a first run" comment already promises;
+    // this is the same mechanism, just defaulting the other way. Suppressed
+    // under --test-case (proposal 38 trap T10): a headless qxa run must not
+    // start showing a window it did not show before, and
+    // SPluginNativeEditor::restoreOpenEditors() (called from openProject(),
+    // gated the same way) is the existing precedent for suppressing a
+    // first-run-shaped default under "not a --test-case run" rather than
+    // under whether a layout was stored.
+    if( SApplication::app().isTestCaseMode() )
+        qDockMediaBrowser_->hide();
 
     // Proposal 38 gate 3: a deferred `media:` drop has things to say -- it is
     // fetching, it could not fetch, the target track went away, the project is
@@ -2241,6 +2274,25 @@ SStdMixerView *SMainWindow::ensureArranger_()
         ? dynamic_cast<SStdMixerView*>( viewTabs_->activeEditor() ) : NULL;
 }
 
+// AC-a3: Ctrl/Cmd-A's default answer. Every clip on every lane of the ACTIVE
+// arranger's own root becomes selected, as ONE undoable action — an
+// arrangement tab and the master keep independent selections (proposal 09
+// §3), so this reads v->rootName() rather than assuming the master.
+void SMainWindow::selectAllInActiveArranger()
+{
+    SStdMixerView *v = ensureArranger_();
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !v || !proj ) return;
+    SObject *root = splacements::rootNamed( proj, v->rootName() );
+    if( !root ) return;
+
+    SSelectionManager mgr;
+    QList<QList<int>> paths = mgr.allClipPaths( root );
+    SAction *action = new SSetSelectionAction( paths );
+    action->setPathRoot( v->rootName() );
+    SApplication::app().submitAction( action );
+}
+
 // See the header comment. Runs the tail openProjectFile() runs after a
 // successful load (build the central widget, wire the docks, title the
 // window) without the load itself -- the project already exists and is
@@ -2535,6 +2587,39 @@ bool SMainWindow::doubleClickLane( const QString &trackPath, offset_t time,
     STrack *track = trackAtPath_( trackPath );
     if( !track ) return false;
     return v->doubleClickLane( track, time, mods );
+}
+
+bool SMainWindow::wheelScrollArranger( int deltaY, Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    return v->wheelScroll( deltaY, mods );
+}
+
+bool SMainWindow::sendSelectAllShortcut()
+{
+    QWidget *focus = QApplication::focusWidget();
+    if( focus ) {
+        // Qt's own precedence: a ShortcutOverride reaches the focus widget
+        // BEFORE a WindowShortcut-context QAction is even considered. Accept
+        // it there (a piano roll, a QLineEdit) and the ordinary KeyPress goes
+        // to the SAME widget instead of anywhere else.
+        QKeyEvent overrideEv( QEvent::ShortcutOverride, Qt::Key_A,
+                              Qt::ControlModifier );
+        QApplication::sendEvent( focus, &overrideEv );
+        if( overrideEv.isAccepted() ) {
+            QKeyEvent press( QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier );
+            QApplication::sendEvent( focus, &press );
+            QKeyEvent release( QEvent::KeyRelease, Qt::Key_A,
+                               Qt::ControlModifier );
+            QApplication::sendEvent( focus, &release );
+            return true;
+        }
+    }
+    // Nothing claimed the override: the window's own default, exactly what a
+    // real keystroke falls through to.
+    selectAllInActiveArranger();
+    return true;
 }
 
 bool SMainWindow::splitSelectionGesture()
@@ -3099,7 +3184,7 @@ bool SMainWindow::grabEventEditor( const QString &path, int w, int h )
 bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
                             int channel, qint64 toTick, int toKey,
                             const QString &edge, const QString &lane,
-                            double toValue )
+                            double toValue, Qt::KeyboardModifiers mods )
 {
     if( !eventEditor_ ) return false;
     // The axis must exist before a gesture can be expressed in pixels; the
@@ -3111,7 +3196,7 @@ bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return false;
     return roll->tkDragNote( tick, key, channel, toTick, toKey, edge, lane,
-                             toValue );
+                             toValue, mods );
 }
 
 int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )
@@ -3277,7 +3362,11 @@ void SMainWindow::redo()
 
 void SMainWindow::showOptionsDialog()
 {
-    openOptionsDialogAt( 0 );
+    // -1 = no explicit page (AC-b1): the dialog opens on whichever page it
+    // was last CLOSED on, rather than always on Mouse navigation. Every
+    // OTHER caller of openOptionsDialogAt() names a real page on purpose and
+    // must keep winning over that memory -- see the sentinel's own comment.
+    openOptionsDialogAt( -1 );
 }
 
 void SMainWindow::showCleanupDialog()

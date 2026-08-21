@@ -136,22 +136,31 @@ module starts no thread of its own and touches no other one.
    REAL `itemDoubleClicked` SIGNAL (`activateRowNamed` emits it on the widget),
    so removing the connection fails the case.
 
-11. **The Size column is 80 px wide and the Name column takes the rest.**
-   `setStretchLastSection(false)` + `Stretch` on column 0 + `Interactive` on
-   column 1: a size reads "12.3 MB" at most, a name is what the user is
-   actually reading, and the dock is 200-360 px wide (inv. 9). Interactive, not
-   Fixed — 80 is a default, not a cage.
+11. **The tree is ONE column (Name); size is a tooltip, not a column**
+   (AC-d1, 2026-08-21). The dock is 200-360 px wide (inv. 9), and a Size
+   column wide enough to read "12.3M" left too little for the name in a deep
+   tree — so `makeItem()` puts the size on the Name item's tooltip instead
+   (`Size: <mediaBrowserFormatSize()>`), and a directory (size unknown, -1)
+   gets no size tooltip at all. `setIndentation(2 * fontMetrics().
+   horizontalAdvance('M'))` replaces Qt's default per-level indent, which was
+   wide enough to push a nested name off the right edge of a narrow dock well
+   before the tree ran out of depth. `describe()`'s PER-ROW fields are
+   UNCHANGED — it already read `kRoleSize`/`kRoleIsDir` item data, never
+   column 1's text, so dropping the column moved no gate — but it grew an
+   optional 4th field for the new tooltip (below), because otherwise nothing
+   in the tooltip would be assertable at all.
 
 ## `describe()` — the format `assert-media-browser` matches
 
-One state line, then one `name,size,dir` triple per row in DEPTH-FIRST tree
-order (so an expanded directory's children follow it immediately):
+One state line, then one `name,size,dir[,tooltip=…]` row per row in
+DEPTH-FIRST tree order (so an expanded directory's children follow it
+immediately):
 
 ```
 mode=browse|source=local|path=../media/lib|filter=audio|recursive=0|rows=3|truncated=0|busy=0|banner=0|error=
 sub,-1,1
-kick.wav,768044,0
-snare.wav,768044,0
+kick.wav,768044,0,tooltip=Size: 768k
+snare.wav,768044,0,tooltip=Size: 768k
 ```
 
 - `mode` is `browse` or `search`; `filter` is `smedia::categoryMaskToString`
@@ -159,6 +168,12 @@ snare.wav,768044,0
 - `size` is `-1` for a directory — the documented "unknown", never
   `QFileInfo::size()`, which is platform junk and would make an exact-count
   gate disagree between Windows and Linux.
+- `tooltip=…` is APPENDED, never inserted, so it is a suffix on the
+  `name,size,dir` triple and every existing `contains="name,size,dir"`
+  substring match still matches (AC-d1, 2026-08-21). Present only on a FILE
+  row (`makeItem()` sets no tooltip on a directory, whose size is unknown);
+  its text is `Size: ` + `mediaBrowserFormatSize()`, the same spelling the
+  removed Size column used to show.
 - `busy` is 1 while a root request, a lazy expand, or a search still inside its
   250 ms debounce is outstanding. A test verb WAITS on it rather than sleeping.
 - `path` is machine-dependent by nature; no committed case asserts it.

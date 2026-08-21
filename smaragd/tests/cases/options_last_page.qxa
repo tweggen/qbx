@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC-b1: Edit -> Options reopens on the page it was last closed on.
+
+  RUN_SERIAL (set in smaragd/CMakeLists.txt): this case writes the real
+  per-user key `ui/optionsLastPage` into the SHARED smaragd.ini, exactly as
+  midi_options_page and the media Options cases do. It OWNS that key and
+  restores it (to SOpt::def's empty string) at the end.
+
+  There is no verb anywhere in this repo that can click a QTreeWidget item or
+  drive a modal QDialog's own event loop, so the round trip is exercised in
+  two halves through the REAL SOptionsDialog, off screen (the house pattern):
+
+    - the WRITE half: `close-options-dialog page="N"` constructs the dialog
+      as if the user had navigated to page N (the ctor argument stands in
+      for the click, which nothing here can synthesize) and then closes it
+      through SOptionsDialog::done() - the one place OK, Cancel, the window
+      close box and Escape all funnel through - which is what actually
+      persists the page name. Every close below uses result="cancel"
+      (QDialog::reject()) rather than "ok": accept() ALSO runs apply(), which
+      writes the Audio/MIDI/Log/Plugins pages' widget values back into
+      SSettings and, for Audio, calls twSpeaker::setOutputDevice() - a real
+      device re-open with no case anywhere in this suite exercising it
+      through this dialog. done() is the SAME override either way (it is
+      what QDialog::accept() and QDialog::reject() both call), so Cancel
+      alone is full coverage of what this feature adds; OK's extra work is
+      unrelated to AC-b1 and not worth the risk of touching live device state
+      under a shared, parallel gate.
+    - the READ half: `assert-media-options` (no `initialPage`) constructs a
+      dialog with NO explicit page, exactly as `SMainWindow::showOptionsDialog()`
+      does for a plain Edit -> Options, and `describeMediaPage()`'s new
+      `page=` line reports what it opened on.
+
+  ON-DISK KEY SPELLING: QSettings::IniFormat brackets only the FIRST path
+  component as a "[group]" header, so "ui/optionsLastPage" is written under
+  "[ui]" as the single key "optionsLastPage=..." - the assert-settings-file
+  checks below match that disk spelling, not the logical "ui/..." one.
+-->
+<SActionScript version="1" name="options_last_page">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Start from a known state: an EMPTY remembered value, which is what
+         `set-option` writes (it calls setValue(), never remove()) and is
+         indistinguishable, for this purpose, from the key never having been
+         written at all - SOpt::def(OptionsLastPage) is itself the empty
+         string, so `value(key, def)` answers "" either way. No name matches
+         any page, so this falls back to page 0 (Mouse navigation). -->
+    <set-option key="ui/optionsLastPage" value=""/>
+    <assert-media-options contains="page=Mouse navigation"/>
+
+    <!-- Close the dialog on page 6 (Media): the name is persisted. -->
+    <close-options-dialog page="6" result="cancel"/>
+    <assert-settings-file contains="optionsLastPage=Media"/>
+    <!-- A later NO-ARGUMENT open lands on that same page. -->
+    <assert-media-options contains="page=Media"/>
+
+    <!-- Closing on a DIFFERENT page with CANCEL still remembers it - AC-b1
+         says "closing is closing", OK or Cancel. -->
+    <close-options-dialog page="2" result="cancel"/>
+    <assert-settings-file contains="optionsLastPage=Audio"/>
+    <assert-media-options contains="page=Audio"/>
+
+    <!-- A remembered NAME that matches no CURRENT page (stale after a page
+         was renamed/removed between versions) falls back to page 0, exactly
+         as an out-of-range explicit index always has. -->
+    <set-option key="ui/optionsLastPage" value="No Such Page"/>
+    <assert-media-options contains="page=Mouse navigation"/>
+
+    <!-- An EXPLICIT initialPage always wins over the remembered one - this is
+         what keeps SMainWindow's "audio device unavailable" path landing on
+         Audio (openOptionsDialogAt(2)) regardless of what the user last had
+         open. -->
+    <set-option key="ui/optionsLastPage" value="Log"/>
+    <assert-media-options initialPage="2" contains="page=Audio"/>
+    <!-- The explicit-page open does NOT itself remember anything: it never
+         calls done(). The stale "Log" value is still there. -->
+    <assert-settings-file contains="optionsLastPage=Log"/>
+
+    <!-- Restore to the default so the INI comes back to what any other case
+         would find. -->
+    <set-option key="ui/optionsLastPage" value=""/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

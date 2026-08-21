@@ -105,8 +105,25 @@ SOptionsDialog::SOptionsDialog( QWidget *parent, int initialPage )
     loadAudioPage();
     loadMidiPage();
 
-    if( initialPage < 0 || initialPage >= tree_->topLevelItemCount() )
+    // -1 is the "no explicit page" sentinel (AC-b1): resolve it to the page
+    // this dialog was last CLOSED on, by NAME (see SOpt::OptionsLastPage's
+    // comment for why a name and not the index this used to be). Anything
+    // else -- no remembered name yet, a name no page currently carries, or
+    // an explicit out-of-range index -- falls back to page 0, exactly as an
+    // out-of-range explicit page always has.
+    if( initialPage < 0 ) {
+        const QString rememberedName = SSettings::instance().value(
+            SOpt::OptionsLastPage, SOpt::def( SOpt::OptionsLastPage ) ).toString();
         initialPage = 0;
+        for( int i = 0; i < tree_->topLevelItemCount(); ++i ) {
+            if( tree_->topLevelItem( i )->text( 0 ) == rememberedName ) {
+                initialPage = i;
+                break;
+            }
+        }
+    } else if( initialPage >= tree_->topLevelItemCount() ) {
+        initialPage = 0;
+    }
     tree_->setCurrentItem( tree_->topLevelItem( initialPage ) );
     resize( 520, 320 );
 }
@@ -1420,6 +1437,12 @@ QString SOptionsDialog::describeMediaPage() const
 {
     SMediaAccountManager *mgr = SApplication::app().mediaAccounts();
     QStringList lines;
+    // Not really a MEDIA-page fact, but the house pattern for asserting
+    // ANYTHING about this dialog off screen is "match a describe*() string"
+    // (assert-media-options / assert-midi-options), and this is the
+    // cheapest way to make AC-b1's remembered-page round trip assertable
+    // without a new verb: `currentPageName()` is already a public accessor.
+    lines << QString( "page=%1" ).arg( currentPageName() );
     lines << QString( "backend=%1 canRemember=%2" )
                  .arg( mgr->secretBackendName() )
                  .arg( mgr->canRememberPasswords() ? "yes" : "no" );
@@ -1458,4 +1481,21 @@ void SOptionsDialog::accept()
 {
     apply();
     QDialog::accept();
+}
+
+QString SOptionsDialog::currentPageName() const
+{
+    QTreeWidgetItem *cur = tree_->currentItem();
+    return cur ? cur->text( 0 ) : QString();
+}
+
+void SOptionsDialog::done( int r )
+{
+    // "Closing is closing" (AC-b1): QDialog::accept() calls done(Accepted)
+    // and the default reject() calls done(Rejected), and Escape / the window
+    // close box route through reject() the same way -- so this one override
+    // remembers the page whichever of those the user used, with no separate
+    // hook needed for each. Written by NAME (see SOpt::OptionsLastPage).
+    SSettings::instance().setValue( SOpt::OptionsLastPage, currentPageName() );
+    QDialog::done( r );
 }

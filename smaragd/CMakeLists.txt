@@ -336,13 +336,34 @@ endforeach()
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is
 # restated in both blocks below.
-foreach(_media_dpapi media_options_page media_secret_redaction)
-    if(TEST qxa.${_media_dpapi})
-        set_tests_properties(qxa.${_media_dpapi} PROPERTIES
-            RUN_SERIAL TRUE
-            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=dpapi")
-    endif()
-endforeach()
+#
+# Both cases FORCE the backend to `dpapi`, so on a build that never compiled
+# DPAPI (i.e. SMARAGD_HAVE_DPAPI unset -- every non-Windows build, and it is
+# PROPAGATED from the exact `if(SMARAGD_WINDOWS)` block in main/CMakeLists.txt
+# that adds ssecretstore_win.cpp and defines TW_HAVE_DPAPI, never re-derived
+# here as a second `if(WIN32)`) `resolveBackend("dpapi")` warns and silently
+# substitutes the platform default, so the case exercises the WRONG backend
+# and its on-disk-ciphertext assertions (AC 8/9/17) cannot pass BY
+# CONSTRUCTION -- this is the au_* precedent above, extended: a capability
+# gap, not a bug, so DISABLED rather than left to fail. `keychain`/`libsecret`
+# are not gated the same way because nothing here asks for them: neither
+# backend writes to the INI at all (§B.8), so no qxa case forces one the way
+# these two force `dpapi`.
+if(SMARAGD_HAVE_DPAPI)
+    foreach(_media_dpapi media_options_page media_secret_redaction)
+        if(TEST qxa.${_media_dpapi})
+            set_tests_properties(qxa.${_media_dpapi} PROPERTIES
+                RUN_SERIAL TRUE
+                ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=dpapi")
+        endif()
+    endforeach()
+else()
+    foreach(_media_dpapi media_options_page media_secret_redaction)
+        if(TEST qxa.${_media_dpapi})
+            set_tests_properties(qxa.${_media_dpapi} PROPERTIES DISABLED YES)
+        endif()
+    endforeach()
+endif()
 if(TEST qxa.media_options_no_store)
     set_tests_properties(qxa.media_options_no_store PROPERTIES
         RUN_SERIAL TRUE
@@ -390,6 +411,17 @@ if(TEST qxa.media_webdav_drop)
     set_tests_properties(qxa.media_webdav_drop PROPERTIES
         RUN_SERIAL TRUE
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=memory;SMARAGD_MEDIA_CACHE_DIR=${CMAKE_BINARY_DIR}/test-output/media_webdav_drop/mediacache")
+endif()
+
+# --- the Options dialog's remembered page (AC-b1) ----------------------------
+#
+# Writes the real per-user key ui/optionsLastPage into the SHARED smaragd.ini
+# via set-option and close-options-dialog, the same RUN_SERIAL reason as
+# midi_options_page and the media Options cases above: it OWNS that one key
+# and restores it to SOpt::def's empty string at the end. Not a wall-clock
+# test -- everything here is a synchronous off-screen dialog construction.
+if(TEST qxa.options_last_page)
+    set_tests_properties(qxa.options_last_page PROPERTIES RUN_SERIAL TRUE)
 endif()
 
 # --- the live lane (proposal 21 L1b) -----------------------------------------
@@ -470,6 +502,20 @@ foreach(_met metronome_click metronome_render_identity metronome_toggle_during_p
             ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
     endif()
 endforeach()
+
+# --- AC-g1: the follow-playhead scroll HOLD ----------------------------------
+#
+# A manual scroll suspends re-paging for FOLLOW_HOLD_MS (5 s), measured
+# against a real QElapsedTimer while real-time playback runs — a wall-clock
+# case in exactly the sense the section above describes, so RUN_SERIAL with
+# SMARAGD_CAPTURE_SPEED=1 spelled out (it is already the default; stating it
+# is what makes the ~7 s of wait-ms below mean what the comments in the .qxa
+# say they mean rather than an accident of whatever the default happens to be).
+if(TEST qxa.follow_scroll_hold)
+    set_tests_properties(qxa.follow_scroll_hold PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+endif()
 
 # THE COUNT-IN / PRE-ROLL CASES record, so they take the same paced,
 # position-encoded input and the same reported latency as the L3b record four -

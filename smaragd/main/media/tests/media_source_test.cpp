@@ -402,6 +402,23 @@ int main( int argc, char **argv )
 
         check( !SMediaRef::fromUri( QStringLiteral( "file:/x.wav" ) ).isValid(),
                QStringLiteral( "a non-smedia URI yields an invalid ref" ) );
+
+        // A POSIX absolute path IS the local source's whole path — the
+        // leading '/' is not a separator to normalise away, it is the first
+        // character of the identity. A prior version of toUri() stripped it,
+        // so a Linux/macOS drop of a local file lost its leading '/' on the
+        // round trip and "fetch of 'home/…'" failed with "no such file".
+        SMediaRef posix;
+        posix.sourceId = QStringLiteral( "local" );
+        posix.path     = QStringLiteral( "/home/user/samples/kick.wav" );
+        checkEq( posix.toUri(),
+                 QStringLiteral( "smedia://local//home/user/samples/kick.wav" ),
+                 QStringLiteral( "toUri keeps a POSIX path's leading '/'" ) );
+
+        const SMediaRef posixBack = SMediaRef::fromUri( posix.toUri() );
+        check( posixBack == posix,
+               QStringLiteral( "fromUri round-trips a POSIX absolute path" ),
+               posixBack.sourceId + " | " + posixBack.path );
     }
 
     // ------------------------------------------------------- the type table

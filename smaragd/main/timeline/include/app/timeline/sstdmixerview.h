@@ -18,6 +18,7 @@
 #include <QHash>
 #include <QList>
 #include <QPointer>
+#include <QElapsedTimer>
 
 class SStdMixer;
 class QGridLayout;
@@ -150,6 +151,17 @@ public:
     // Returns true when the gesture was consumed.
     bool applyWheel( QWheelEvent *ev, int anchorX );
 
+    // AC-a3/AC-g1's sibling knob: arm the follow-playhead HOLD (below). Called
+    // from every USER-INITIATED horizontal pan — wheelEvent's ScrollHorizontal
+    // case, the drag-scroll-past-the-edge branch of mouseMoveEvent(), and the
+    // horizontal scrollbar's OWN user-driven signal (SStdMixerView wires
+    // qScrollHoriz_'s actionTriggered(), not valueChanged(), to this — see the
+    // comment on followHoldArmed_ for why that distinction matters). NEVER
+    // call this from setLeftOffset() itself: followLocator() calls that too,
+    // and arming the hold from inside it would let the very re-page the hold
+    // exists to delay immediately re-arm and disable following forever.
+    void armFollowHold();
+
     // Time-range selection (shown in the ruler band). Bounds are normalized
     // (start <= end). hasRange() is false when there is no selection.
     bool hasRange() const { return rangeValid_; }
@@ -245,6 +257,17 @@ private:
     // View-follows-playhead (SOpt::FollowPlayhead), cached alongside the wheel
     // config and refreshed on SSettings::changed. See followLocator().
     bool followPlayhead_;
+    // AC-g1: a manual horizontal scroll suspends re-paging for FOLLOW_HOLD_MS
+    // after the last one, so nudging the view to look at something nearby does
+    // not get yanked back by the very next advance. A monotonic QElapsedTimer
+    // rather than a QTimer -- the check is "how long since the last arm", which
+    // needs no signal plumbing, just a timestamp read at the point of use
+    // (followLocator()). followHoldArmed_ additionally records that arming has
+    // happened at all (an unstarted QElapsedTimer::elapsed() is 0, which would
+    // otherwise read as "armed 0 ms ago" forever).
+    static constexpr qint64 FOLLOW_HOLD_MS = 5000;
+    QElapsedTimer followHoldTimer_;
+    bool followHoldArmed_ = false;
     // The x column where paintEvent last drew the playhead (-1 = off-screen /
     // not yet drawn). globalLocatorMoved erases THIS column rather than a
     // position-derived one, so an RT-advanced locator can't leave a ghost line.
@@ -596,6 +619,16 @@ public:
     bool doubleClickLane( STrack *t, offset_t time,
                           Qt::KeyboardModifiers mods = Qt::NoModifier );
 
+    // TEST ENTRY POINT (AC-g1): send a REAL QWheelEvent to the canvas, exactly
+    // as a physical wheel notch would, so `wheel-scroll` exercises the actual
+    // wheelEvent()/applyWheel() path — including armFollowHold() — rather than
+    // a re-spelling of "pan the view" that could not tell the follow-hold gate
+    // apart from set-lane-view's direct setLeftOffset() call. `deltaY` is
+    // angleDelta units (positive = wheel "up" = pan earlier, under the default
+    // Shift mapping); `mods` selects which gesture the wheel performs, exactly
+    // as SOpt's WheelPlain/Shift/Ctrl/CtrlShift do for a real notch.
+    bool wheelScroll( int deltaY, Qt::KeyboardModifiers mods );
+
     // TEST ENTRY POINTS for the multi-track selection. A headless run never
     // clicks, and the two things worth covering are exactly the click
     // semantics (plain / Ctrl / Shift) and the BROADCAST from a head's toggle
@@ -866,6 +899,16 @@ private slots:
     void onArrangementChangedRows();
     void timeSliderMoved( int newValue );
     void trackSliderMoved( int newValue );
+    // AC-g1: arms qContent_'s follow-hold. Wired to qScrollHoriz_'s
+    // actionTriggered(int), NEVER to valueChanged(int) (that is
+    // timeSliderMoved's job, above) -- actionTriggered fires only for a
+    // user-driven step/page/drag on the WIDGET itself (QAbstractSlider never
+    // raises it from a plain setValue() call), which is exactly what
+    // distinguishes "the user touched the scrollbar" from "followLocator()
+    // moved it to mirror an auto re-page". Wiring this to valueChanged would
+    // have the auto-follow re-arm its own hold through the scrollbar's mirror
+    // and disable following after the very first re-page.
+    void onHScrollUserAction( int action );
     void zoomOutHor();
     void zoomInHor();
     void zoomOutVert();

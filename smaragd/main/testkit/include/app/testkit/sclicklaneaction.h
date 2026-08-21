@@ -80,4 +80,51 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 };
 
+// wheel-scroll (AC-g1) — one REAL QWheelEvent to the arranger canvas, exactly
+// as a physical notch would be delivered, so the follow-playhead HOLD
+// (SMVActualView::armFollowHold) is exercised through its actual call site
+// rather than by moving the view directly (set-lane-view's scrollX=, which
+// bypasses every arm point on purpose).
+//
+//   deltaY    = "600"    angleDelta units — one QWheelEvent's worth of a
+//                         single notch; positive = wheel "up".
+//   modifiers = "shift"  which SOpt wheel-action slot fires: the arranger's
+//                         default maps plain wheel to vertical (track)
+//                         scroll and Shift+wheel to horizontal PAN, so
+//                         "shift" is what a case wanting the follow-hold
+//                         gate needs (see main/servicesui's SOpt::WheelShift).
+//
+// Not undoable: a wheel scroll is view state, never a model edit.
+class SWheelScrollAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "wheel-scroll" ); }
+    QStringList knownAttributes() const override
+    { return { QStringLiteral( "deltaY" ), QStringLiteral( "modifiers" ) }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    int     deltaY_ = 600;
+    QString modifiers_;
+};
+
+// select-all (AC-a3) — Ctrl-A, driven through SMainWindow::
+// sendSelectAllShortcut(): a ShortcutOverride offered to the current focus
+// widget first, then either that widget's own keyPressEvent or (nothing
+// claimed it) the window's "Select All" QAction — the same fork a real
+// keystroke goes through. No attributes: what it does depends on WHICH
+// WIDGET has focus (set that up first, e.g. with activate-tab or
+// show-event-editor) exactly as a real Ctrl-A would.
+//
+// Not undoable itself: the arranger's answer is ONE SSetSelectionAction,
+// which carries its own inverse; the piano roll's answer is view state.
+class SSelectAllAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "select-all" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+};
+
 #endif  // SCLICKLANEACTION_H

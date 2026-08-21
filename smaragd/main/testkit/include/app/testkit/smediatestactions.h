@@ -262,12 +262,19 @@ private:
 // house pattern as assert-midi-options: match against describeMediaPage().
 //   contains / absent   substrings of the describe() dump
 //   accountCount        exact count (-1 = not checked)
+//   initialPage         the SOptionsDialog ctor argument (-2 = "omit it",
+//                        the default; -1 or unset means "use whatever the
+//                        no-arg ctor does", which is AC-b1's remembered
+//                        page). Passing a real index (e.g. 2 = Audio) is
+//                        what makes "an explicit page still wins over the
+//                        remembered one" assertable — `describeMediaPage()`
+//                        starts with `page=<name>` for exactly this.
 class SAssertMediaOptionsAction : public SAction {
 public:
     QString name() const override
     { return QStringLiteral( "assert-media-options" ); }
     QStringList knownAttributes() const override
-    { return { "contains", "absent", "accountCount" }; }
+    { return { "contains", "absent", "accountCount", "initialPage" }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -276,6 +283,11 @@ private:
     QString contains_;
     QString absent_;
     int     accountCount_ = -1;
+    // -2 means "the attribute was not given" -- construct the dialog with
+    // NO explicit page (the ordinary `SOptionsDialog dialog(nullptr)` every
+    // other case exercises), so a case that never mentions initialPage sees
+    // no change in behaviour from before AC-b1.
+    int     initialPage_ = -2;
 };
 
 // assert-settings-file — the ON-DISK smaragd.ini, resolved via

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC-a3: Ctrl/Cmd-A selects all, PER VIEW. An arrangement tab selects its own
+  clips; the master selects the master's; the two stay independent — the same
+  property tabs_selection_scoped.qxa gates for a single explicit selection, now
+  for the SHORTCUT's default answer.
+
+  `select-all` is a new minimal testkit verb (main/testkit/src/
+  sclicklaneaction.cpp): it drives SMainWindow::sendSelectAllShortcut(), which
+  goes through the SAME two-step fork a real keystroke does — offer the
+  current FOCUS WIDGET a ShortcutOverride first, fall through to the window's
+  "Select All" QAction (Edit menu, QKeySequence::SelectAll) only when nothing
+  claims it. With no widget shown or focused (the normal headless shape) that
+  fork always lands on the arranger's default, which is what this case
+  exercises; note_copy_drag.qxa exercises the OTHER branch (a focused piano
+  roll claims the override for itself and selects notes, not clips).
+
+  This is also the FIRST exercise of SSetSelectionAction against a
+  NON-MASTER root with a genuinely different shape than the master's — see
+  the fix in main/selection/src/ssetselectionaction.cpp: its validation loop
+  used to call SSelectionManager::isPathValid() WITHOUT the action's own
+  pathRoot_, so it validated an arrangement-tab selection against the MASTER
+  tree instead. That bug was invisible in tabs_selection_scoped.qxa only
+  because its Drums arrangement happens to mirror the master's shape
+  (one track, two clips, in both). Master and Drums below deliberately do NOT
+  mirror each other (two tracks vs one, different clip counts), so this case
+  would have failed the moment Ctrl-A tried to select the arrangement's own
+  clips on the pre-fix binary.
+-->
+<SActionScript version="1" name="select_all_scope">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Master: two tracks, one clip each. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Drums: ONE track, TWO clips — deliberately a different shape (see
+         the header). -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="192000"/>
+
+    <!-- The master tab is active (the only tab open so far). Ctrl-A selects
+         its own two clips, as ONE undoable action. -->
+    <assert-selection paths=""/>
+    <select-all/>
+    <assert-selection paths="0,0;1,0"/>
+    <undo count="1"/>
+    <assert-selection paths=""/>
+
+    <!-- Re-select, so the cross-tab comparison below has something to find
+         UNCHANGED when it comes back. -->
+    <select-all/>
+    <assert-selection paths="0,0;1,0"/>
+
+    <!-- Open Drums in its own tab and activate it: Ctrl-A there selects ITS
+         OWN two clips (a single track's worth), not the master's. -->
+    <open-arrangement-tab name="Drums"/>
+    <activate-tab name="Drums"/>
+    <assert-selection paths=""/>
+    <select-all/>
+    <assert-selection paths="Drums:0,0;Drums:0,1"/>
+
+    <!-- Back to the master: exactly what select-all left it, untouched by
+         anything Ctrl-A did in Drums. THIS is the pair that fails were the
+         two roots not kept independent. -->
+    <activate-tab name="Arrangement"/>
+    <assert-selection paths="0,0;1,0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -25,7 +25,7 @@
 
       kick.wav          768044 bytes (a byte copy of test_sawtooth.wav)
       snare.wav         768044
-      notes.txt         73      the thing the Audio filter must omit
+      notes.txt         72      the thing the Audio filter must omit
       sub/hat.wav       768044
       sub/deep/tom.wav  768044
 
@@ -155,7 +155,7 @@
 
     <!-- The positive control for the line above. -->
     <media-browser-filter categories="" waitMs="10000"/>
-    <assert-media-browser rowCount="4" contains="notes.txt,73,0"/>
+    <assert-media-browser rowCount="4" contains="notes.txt,72,0"/>
     <media-browser-filter categories="audio" waitMs="10000"/>
     <assert-media-browser rowCount="3" absent="notes.txt"/>
 

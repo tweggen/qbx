@@ -635,7 +635,13 @@ SApplyResult SAssertMediaOptionsAction::apply( SProject * )
     // The REAL dialog, built off screen and never shown -- the house pattern
     // (assert-midi-options). Its constructor runs loadMediaPage(), which is
     // the code under test, including the plaintext-migration rescan (AC 17).
-    SOptionsDialog dialog( nullptr );
+    // initialPage_ == -2 (the attribute was never given) maps to -1, the
+    // ctor's own "no explicit page" sentinel, so a case that never mentions
+    // initialPage builds exactly as every case before AC-b1 did -- which now
+    // means "open on the remembered page" rather than always page 0. Passing
+    // a real index is what a case uses to assert that an EXPLICIT page still
+    // wins over whatever is remembered.
+    SOptionsDialog dialog( nullptr, initialPage_ == -2 ? -1 : initialPage_ );
     const QString desc = dialog.describeMediaPage();
 
     bool ok = true;
@@ -668,6 +674,7 @@ void SAssertMediaOptionsAction::writeXml( QDomElement &elem ) const
     if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
     if( !absent_.isEmpty() )   elem.setAttribute( "absent", absent_ );
     elem.setAttribute( "accountCount", accountCount_ );
+    if( initialPage_ != -2 ) elem.setAttribute( "initialPage", initialPage_ );
 }
 
 bool SAssertMediaOptionsAction::readXml( const QDomElement &elem, int )
@@ -675,6 +682,7 @@ bool SAssertMediaOptionsAction::readXml( const QDomElement &elem, int )
     contains_     = elem.attribute( "contains" );
     absent_       = elem.attribute( "absent" );
     accountCount_ = elem.attribute( "accountCount", "-1" ).toInt();
+    initialPage_  = elem.attribute( "initialPage", "-2" ).toInt();
     return true;
 }
 

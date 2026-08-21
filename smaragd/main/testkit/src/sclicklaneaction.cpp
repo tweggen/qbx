@@ -159,6 +159,62 @@ bool SSplitSelectionAction::readXml( const QDomElement & /*elem*/, int /*version
     return true;
 }
 
+// --- wheel-scroll (AC-g1) ------------------------------------------------
+
+SApplyResult SWheelScrollAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "wheel-scroll: no main window";
+        return { false, nullptr };
+    }
+    Qt::KeyboardModifiers mods = Qt::NoModifier;
+    if( !parseModifiers_( modifiers_, mods, "wheel-scroll" ) ) {
+        return { false, nullptr };
+    }
+    if( !win->wheelScrollArranger( deltaY_, mods ) ) {
+        qWarning() << "wheel-scroll: no arranger, or deltaY=0";
+        return { false, nullptr };
+    }
+    return { true, nullptr };   // view state; nothing to undo
+}
+
+void SWheelScrollAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "deltaY", deltaY_ );
+    if( !modifiers_.isEmpty() ) elem.setAttribute( "modifiers", modifiers_ );
+}
+
+bool SWheelScrollAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    deltaY_ = elem.attribute( "deltaY", "600" ).toInt();
+    modifiers_ = elem.attribute( "modifiers", "" );
+    Qt::KeyboardModifiers ignored;
+    return parseModifiers_( modifiers_, ignored, "wheel-scroll" );
+}
+
+// --- select-all (AC-a3) --------------------------------------------------
+
+SApplyResult SSelectAllAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "select-all: no main window";
+        return { false, nullptr };
+    }
+    win->sendSelectAllShortcut();
+    return { true, nullptr };
+}
+
+void SSelectAllAction::writeXml( QDomElement & /*elem*/ ) const
+{
+}
+
+bool SSelectAllAction::readXml( const QDomElement & /*elem*/, int /*version*/ )
+{
+    return true;
+}
+
 static const bool s_reg_clicklane =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "click-lane" ),
@@ -169,4 +225,16 @@ static const bool s_reg_splitselection =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "split-selection" ),
           [] { return new SSplitSelectionAction; } ),
+      true );
+
+static const bool s_reg_wheelscroll =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "wheel-scroll" ),
+          [] { return new SWheelScrollAction; } ),
+      true );
+
+static const bool s_reg_selectall =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "select-all" ),
+          [] { return new SSelectAllAction; } ),
       true );

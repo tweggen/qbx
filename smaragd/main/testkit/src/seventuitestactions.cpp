@@ -23,6 +23,29 @@ SMainWindow *mainWindow()
     return nullptr;
 }
 
+// Same spelling as drag-clip-edge's own `modifiers` attribute
+// (sdragclipedgeaction.cpp) — each testkit file keeps its own copy of this
+// rather than sharing one, matching the existing convention (click-lane,
+// select-track each have their own too).
+bool parseModifiers( const QString &modStr, Qt::KeyboardModifiers &out )
+{
+    out = Qt::NoModifier;
+    const QString s = modStr.trimmed();
+    if( s.isEmpty() ) return true;
+    const QStringList parts = s.split( '+', Qt::SkipEmptyParts );
+    for( const QString &raw : parts ) {
+        const QString m = raw.trimmed().toLower();
+        if( m == "ctrl" )       out |= Qt::ControlModifier;
+        else if( m == "alt" )   out |= Qt::AltModifier;
+        else if( m == "shift" ) out |= Qt::ShiftModifier;
+        else {
+            qWarning() << "drag-note: unknown modifier:" << raw;
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 // ------------------------------------------------------------- virtual-key
@@ -107,7 +130,7 @@ QStringList SDragNoteAction::knownAttributes() const
              QStringLiteral( "key" ),     QStringLiteral( "channel" ),
              QStringLiteral( "toTick" ),  QStringLiteral( "toKey" ),
              QStringLiteral( "edge" ),    QStringLiteral( "lane" ),
-             QStringLiteral( "toValue" ) };
+             QStringLiteral( "toValue" ), QStringLiteral( "modifiers" ) };
 }
 
 SApplyResult SDragNoteAction::apply( SProject * )
@@ -117,8 +140,12 @@ SApplyResult SDragNoteAction::apply( SProject * )
         qWarning() << "drag-note: no main window";
         return { false, nullptr };
     }
+    Qt::KeyboardModifiers mods = Qt::NoModifier;
+    if( !parseModifiers( modifiers_, mods ) ) {
+        return { false, nullptr };
+    }
     if( !win->dragNote( clip_, tick_, key_, channel_, toTick_, toKey_, edge_,
-                        lane_, toValue_ ) ) {
+                        lane_, toValue_, mods ) ) {
         qWarning() << "drag-note: no note at tick" << tick_ << "key" << key_
                    << "in clip" << clip_;
         return { false, nullptr };
@@ -137,6 +164,7 @@ void SDragNoteAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "edge", edge_ );
     elem.setAttribute( "lane", lane_ );
     elem.setAttribute( "toValue", QString::number( toValue_ ) );
+    if( !modifiers_.isEmpty() ) elem.setAttribute( "modifiers", modifiers_ );
 }
 
 bool SDragNoteAction::readXml( const QDomElement &elem, int )
@@ -150,6 +178,7 @@ bool SDragNoteAction::readXml( const QDomElement &elem, int )
     edge_    = elem.attribute( "edge" );
     lane_    = elem.attribute( "lane", "notes" );
     toValue_ = elem.attribute( "toValue", "-1" ).toDouble();
+    modifiers_ = elem.attribute( "modifiers", "" );
 
     if( !edge_.isEmpty() && edge_ != QLatin1String( "end" ) ) {
         qWarning() << "drag-note: unknown edge:" << edge_;
@@ -168,7 +197,8 @@ bool SDragNoteAction::readXml( const QDomElement &elem, int )
         // A move needs a destination key; a resize does not.
         toKey_ = key_;
     }
-    return true;
+    Qt::KeyboardModifiers ignored;
+    return parseModifiers( modifiers_, ignored );
 }
 
 // ---------------------------------------------------- scroll-event-editor-keys

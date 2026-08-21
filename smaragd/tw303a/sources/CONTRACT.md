@@ -44,6 +44,25 @@ floor(inLen*stretch) (invariant 3 below). The proposal-27 M2 `warp.pcm` sidecar
 still serves the materialise paths (RB/ola/offline-vocoder) as a durable byte
 cache; the streaming default writes no `warp.pcm` — pages render on demand.
 
+**"A time-COMPRESSED clip (stretch < 1) renders as silence" is NOT a bug in
+this module** (found and fixed 2026-08-21, the obvious place to go looking
+first). Every code path here — the ctor's `nFrames_ = floor(inLen*stretch)`,
+both synthesis backends, `read()` — is correct for any stretch, including
+sub-1. The actual defect was one directory down, in `tw/core`: a
+`resize-clip stretch="0.5"`-style attribute is parsed by
+`parseFractionOrDouble` (`twfraction.cpp`), which used a bare `std::stod` —
+locale-dependent, and Qt's platform integration mutates the process's global
+C locale at `QApplication` construction — so on a Linux box whose environment
+sets a comma-decimal `LC_NUMERIC` (e.g. `de_DE.UTF-8`), `"0.5"` silently
+parsed as `0.0`. `Fraction(0)` then hits THIS module's own `stretch >
+Fraction(0)` guard and gets clamped to `1e-6` — a wholesale duration collapse
+that looks exactly like a stretch-arithmetic bug from in here, but isn't one:
+by the time the fraction reaches this ctor it is simply the wrong number.
+Whole-integer stretch values ("1.0", "2.0") were immune by coincidence — the
+locale only eats the fractional part, and a `.0` has none to lose — which is
+why time-EXPANSION and unity stretch never showed the symptom. See
+`tw/core/CONTRACT.md` invariant 7 for the actual fix.
+
 Invariants:
 1. twSampleReader::seekTo is ABSOLUTE in the source domain; the acquire-time
    offset is an initial position, not a base (MapPosFn adds slip offsets —
