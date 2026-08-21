@@ -15,7 +15,8 @@
 #include <QUndoStack>
 #include <QTextStream>
 
-SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplication &app)
+SActionRunner::Result SActionRunner::run(SActionScript &script, SApplication &app,
+                                         bool teardownProject)
 {
     Result result;
     result.passed = true;
@@ -92,6 +93,15 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
         }
     }
 
+    // Every action just handed to app.submitAction() is now owned elsewhere
+    // (SActionHistory::submit()/onApplied_()/onRejected_() deletes each one
+    // exactly once, one way or another -- see SActionScript::releaseActions()'s
+    // doc comment). Forget them here so ~SActionScript() does not ALSO delete
+    // them: a double-free that --test-case never reaches (main.cpp std::exit()s
+    // before the script local goes out of scope there) but --run-actions does,
+    // on every run, the moment the script finishes.
+    script.releaseActions();
+
     // Step 3: Evaluate assertions (Phase 2).
     if (!script.assertions().isEmpty()) {
         if (!evaluateAssertions_(script, project, result.failures)) {
@@ -124,20 +134,32 @@ SActionRunner::Result SActionRunner::run(const SActionScript &script, SApplicati
     // expectReject'd rejections count in actionsRejected but are not failures.
     result.passed = result.passed && (result.assertionsFailed == 0);
 
-    // Step 6: ORDERLY teardown (proposal 27 M2 root-cause fix). The project
-    // was leaked here, so its CaptureRevalidator workers outlived main() and
-    // ran into static destruction — any engine static they touched in that
-    // window (the sidecar store deterministically; logging/pools before it,
-    // intermittently: the long-standing "teardown segfault after PASS" family)
-    // was already destroyed. Deleting the project joins every worker before
-    // return, exactly like the production File→Close path. Detach it from the
-    // app first so nothing dangles at the app layer, and pump once so queued
-    // worker→UI invokes (notifyCaptureRevalidated) deliver to a live object
-    // instead of being purged mid-flight.
-    app.setCurrentProject(nullptr);
-    app.rewireSpeaker();
-    QCoreApplication::processEvents();
-    delete project;
+    // Step 6: ORDERLY teardown (proposal 27 M2 root-cause fix) — but ONLY for
+    // a caller that is done with the project the instant the script ends
+    // (--test-case). The project was leaked here, so its CaptureRevalidator
+    // workers outlived main() and ran into static destruction — any engine
+    // static they touched in that window (the sidecar store deterministically;
+    // logging/pools before it, intermittently: the long-standing "teardown
+    // segfault after PASS" family) was already destroyed. Deleting the project
+    // joins every worker before return, exactly like the production
+    // File→Close path. Detach it from the app first so nothing dangles at the
+    // app layer, and pump once so queued worker→UI invokes
+    // (notifyCaptureRevalidated) deliver to a live object instead of being
+    // purged mid-flight.
+    //
+    // A `--run-actions` caller (teardownProject == false) is NOT done: the
+    // script's whole point there is to leave a project on screen, and tearing
+    // it down here would cancel whatever the script kicked off (e.g. a bounce
+    // RenderSession) out from under it the moment the last action returns.
+    // The project stays the app's current project and main.cpp rides
+    // SMainWindow's ordinary project-close path (closeEvent -> closeProject())
+    // for its eventual, equally orderly teardown.
+    if (teardownProject) {
+        app.setCurrentProject(nullptr);
+        app.rewireSpeaker();
+        QCoreApplication::processEvents();
+        delete project;
+    }
 
     return result;
 }

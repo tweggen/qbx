@@ -2166,6 +2166,31 @@ SStdMixerView *SMainWindow::ensureArranger_()
     return dynamic_cast<SStdMixerView*>( projectRootWidget_ );
 }
 
+// See the header comment. Runs the tail openProjectFile() runs after a
+// successful load (build the central widget, wire the docks, title the
+// window) without the load itself -- the project already exists and is
+// already the app's current one by the time --run-actions gets here.
+void SMainWindow::adoptCurrentProject()
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj || currentProject_ == proj ) return;
+
+    currentProject_ = proj;
+    ensureArranger_();
+    createDocksToolbars();
+    attachTrackDetail();
+    attachClipProperties();
+    attachEventEditor();
+
+    // A script that itself did `load-project` already stamped this via
+    // SLoadProjectAction::apply() -> SProject::setProjectFilePath(); a
+    // script that built a project from scratch leaves it empty, same as a
+    // fresh fileNew() project.
+    currentFilePath_ = proj->projectFilePath();
+    updateWindowTitle();
+    syncPaletteToProject( currentProject_ );
+}
+
 bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
                                 offset_t dropTime, bool upperHalf,
                                 Qt::KeyboardModifiers mods )
