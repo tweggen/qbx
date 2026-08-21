@@ -2527,6 +2527,16 @@ bool SMainWindow::clickLane( const QString &trackPath, offset_t time,
     return v->clickLane( track, time, mods );
 }
 
+bool SMainWindow::doubleClickLane( const QString &trackPath, offset_t time,
+                                   Qt::KeyboardModifiers mods )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->doubleClickLane( track, time, mods );
+}
+
 bool SMainWindow::splitSelectionGesture()
 {
     SStdMixerView *v = ensureArranger_();
@@ -3213,8 +3223,10 @@ QString SMainWindow::arrangerDescribeScrollRange()
     // Scroll exactly as far as the real scrollbar's own maximum allows —
     // NOT to rowCount()-1, which tkSetTopRow() would happily accept but which
     // is not what a mouse wheel can actually reach (see the header comment on
-    // tkVerticalScrollMaximum()).
-    v->tkSetTopRow( maxScroll );
+    // tkVerticalScrollMaximum()). maxScroll is PIXELS since fix/arranger-ui-
+    // fixes C (it used to be a row index) — go through the content view's
+    // own pixel setter, not tkSetTopRow(), which now takes a ROW.
+    v->contentView()->setTopPixel( maxScroll );
     const int lastRow = v->rowCount() - 1;
     const int bottom = v->contentView()->laneTop( lastRow ) + v->rowHeight( lastRow );
     const int canvasHeight = v->contentView()->height();

@@ -215,25 +215,31 @@ void SPluginEffectStrip::rebuildUI()
 
         // Create a container widget for drag support.
         //
+        // NO ROW SETS A BACKGROUND, and the instrument row is no exception.
+        // It used to carry a pale "background: #efecf8", which is a
+        // light-theme guess baked into a widget the theme cannot reach
+        // (main/theme/CONTRACT.md names this file as one of the four sites
+        // that carry their own setStyleSheet). Under the shipped DARK theme
+        // the palette ink is #E6E0DD, so a near-white fill left the plugin
+        // name and every control on the row light-grey-on-white and barely
+        // readable. Both branches now set only a border and let the palette
+        // paint the fill, so a row is readable under whatever theme is
+        // active. The instrument is still distinguished FOUR other ways: the
+        // accent border colour, the eighth-note prefix on its name, its extra
+        // tooltip line, and kind=instrument in describeSlot().
+        //
         // The selector is scoped to THIS widget's objectName (an ID selector),
         // never a bare "QWidget { ... }" type selector: Qt Style Sheets match a
-        // type selector against every descendant that IS-A that type, so
-        // "QWidget { background: #efecf8; }" here used to paint every child too
-        // — the bypass checkbox, the Edit/Remove buttons, even the name label —
-        // because a QPushButton/QCheckBox/QLabel all derive from QWidget. That
-        // pale near-white background survived on top of whatever palette the
-        // app is using, which is unreadable against light/pale button text on
-        // a dark theme (the very bug this fixes). An ID selector matches only
-        // the widget carrying that objectName, so the row itself keeps its
-        // border/background and every child button falls back to the app's
-        // normal (readable) styling, exactly like the non-instrument rows,
-        // which never set a background at all.
+        // type selector against every descendant that IS-A that type, so a
+        // bare "QWidget { ... }" here would paint every child too - the bypass
+        // checkbox, the Edit/Remove buttons, even the name label - because a
+        // QPushButton/QCheckBox/QLabel all derive from QWidget.
         QWidget *container = new QWidget();
         container->setObjectName(QStringLiteral("pluginSlotRow"));
         container->setStyleSheet(
             isInstrumentRow
                 ? "QWidget#pluginSlotRow { border: 1px solid #6050a0; "
-                  "border-radius: 2px; padding: 4px; background: #efecf8; }"
+                  "border-radius: 2px; padding: 4px; }"
                 : "QWidget#pluginSlotRow { border: 1px solid #ccc; "
                   "border-radius: 2px; padding: 4px; }");
         // Not draggable: nothing may move in front of the instrument and the

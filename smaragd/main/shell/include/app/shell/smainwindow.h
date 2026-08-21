@@ -104,12 +104,14 @@ public:
     QString arrangerLaneAlignment();
 
     // TEST ENTRY POINT (fix/track-list-polish l): scroll the vertical
-    // scrollbar to its OWN maximum (the number a real mouse wheel is capped
-    // by — see SStdMixerView::tkVerticalScrollMaximum()'s comment on why
-    // tkSetTopRow(rowCount()-1) would not test this) and report
+    // scrollbar to its OWN maximum — in PIXELS since fix/arranger-ui-fixes C
+    // (the number a real mouse wheel is capped by — see SStdMixerView::
+    // tkVerticalScrollMaximum()'s comment on why tkSetTopRow(rowCount()-1)
+    // would not test this) — and report
     // "maxScroll=<int>|lastRowBottom=<int>|canvasHeight=<int>|fullyVisible=
-    // true|false" — the numeric form of "does the padding let the true last
-    // track end up fully visible". "" when there is no arranger or no rows.
+    // true|false" — the numeric form of "does the true last track end up
+    // fully visible at the scrollbar's own limit". "" when there is no
+    // arranger or no rows.
     QString arrangerDescribeScrollRange();
 
     // TEST ENTRY POINT: build the REAL track head at `headHeight` and return its
@@ -136,9 +138,15 @@ public:
 
     // TEST ENTRY POINT: double-click a clip in the arranger through its real
     // mouse handlers (drag-clip-edge's twin, same routing reason). An EVENT
-    // (MIDI) clip opens the event editor for it, matching the real
-    // mouseDoubleClickEvent; any other clip is a no-op success.
+    // (MIDI) clip opens the event editor for it; a CONTAINER clip (anything
+    // painted blue) resolves through SMVActualView::tryOpenContainerClip();
+    // any other clip is a genuine no-op success.
     bool doubleClickClip( int rowIdx, int clipIdx );
+    // TEST ENTRY POINT: doubleClickClip()'s twin for a double-click that may
+    // hit no clip — clickLane()'s twin for a DOUBLE click. The only route to
+    // double-clicking a bare folder lane (see SStdMixerView::doubleClickLane).
+    bool doubleClickLane( const QString &trackPath, offset_t time,
+                          Qt::KeyboardModifiers mods = Qt::NoModifier );
 
     // Testkit: the multi-track selection. selectTrackGesture() is one REAL
     // head click with modifiers (plain / ctrl / shift), so the click semantics

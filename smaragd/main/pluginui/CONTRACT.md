@@ -152,10 +152,13 @@ about an instrument is DERIVED from `slot->getDescriptor().isInstrument` and
   what puts the slot at index 0 and refuses a second one; the button HIDES
   itself once the track has an instrument, because an affordance that can only
   fail is worse than none (`addInstrumentEnabled()`).
-- The instrument's row is row 0 because it IS slot 0. It is tinted, prefixed
-  with an eighth note, carries its own tooltip line, and is NOT draggable — a
-  reorder across slot 0 is refused, so offering the grab would only produce a
-  rejection. `describeSlot()` reports `kind=instrument|effect` between `mode=`
+- The instrument's row is row 0 because it IS slot 0. It carries an ACCENT
+  BORDER (never a background fill — no row sets one, because a colour written
+  here is a colour the theme cannot reach, and the near-white fill this row
+  used to carry was unreadable under the shipped dark theme's `#E6E0DD` ink),
+  is prefixed with an eighth note, carries its own tooltip line, and is NOT
+  draggable — a reorder across slot 0 is refused, so offering the grab would
+  only produce a rejection. `describeSlot()` reports `kind=instrument|effect` between `mode=`
   and `bypass=` (see ACTIONS.md for why not next to `name=`).
 - The arranger head's "I" button was already derived, by P4
   (`SSMVMixerControl::hasInstrumentSlot`); P3b made it non-empty for the first

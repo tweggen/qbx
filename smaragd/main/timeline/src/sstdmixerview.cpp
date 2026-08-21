@@ -13,6 +13,7 @@
 #include <qfiledialog.h>
 #include <QFileInfo>
 #include <qscrollbar.h>
+#include <QSignalBlocker>
 #include <qlayout.h>
 #include <qmessagebox.h>
 #include <qinputdialog.h>
@@ -25,6 +26,7 @@
 
 #include "tw/sources/twwavinput.h"
 #include "tw/playback/twspeaker.h"
+#include "tw/core/twlog.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
 #include "app/objects/mixer/sstdmixer.h"
@@ -38,6 +40,7 @@
 #include "app/model/slink.h"
 #include "app/model/sclipwindow.h"
 #include "app/objects/cut/scut.h"
+#include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
@@ -111,15 +114,51 @@ static SMainWindow *findMainWindow()
     return nullptr;
 }
 
+// True if `t` has at least one child TRACK (as opposed to only clips) --
+// i.e. it is a folder that can be expanded/collapsed. Used by the
+// double-click container resolve below to tell a foldable folder track from
+// a plain leaf track referenced as an asset window.
+static bool hasChildTracks( STrack *t )
+{
+    if( !t ) return false;
+    for( SLink *lk : t->childLinks() )
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) return true;
+    return false;
+}
+
+// The take stack a link's clip represents OR WRAPS. proposal 17's modern
+// shape places a take column directly (SLink -> STakeStack); an older shape
+// a real saved project can still carry is SLink -> SCut whose CONTENT is
+// the STakeStack (found while fixing the double-click "blueish clip does
+// nothing" bug -- rendering AND every take-lane gesture below silently
+// no-op on that shape without this resolve, which is why every
+// dynamic_cast<STakeStack*>( &lk->getSObject() ) that answers "does THIS
+// LINK carry take lanes" goes through here instead of repeating the cast).
+// Null for a plain clip with no take column at all. Deliberately scoped to
+// take-lane RENDERING/INTERACTION only -- the many other
+// dynamic_cast<STakeStack*> call sites across objects/cut's actions ask a
+// different, per-action question (what does editing THIS clip mean) that
+// this resolve does not answer for them.
+static STakeStack *takeStackOfLink( SLink *lk )
+{
+    if( !lk ) return nullptr;
+    SObject &obj = lk->getSObject();
+    if( STakeStack *stack = dynamic_cast<STakeStack*>( &obj ) ) return stack;
+    if( SCut *cut = dynamic_cast<SCut*>( &obj ) )
+        return dynamic_cast<STakeStack*>( &cut->getContent() );
+    return nullptr;
+}
+
 // The wheel response AT 100 % SENSITIVITY. SOpt::WheelSensitivityPct scales all
 // four together (see loadWheelConfig); these stay the reference point, so the
 // default feel is stated once and can still be read off here.
 //
-// Vertical wheel-scroll: angleDelta units accumulated before stepping one track
-// lane. A standard mouse notch is 120 units; at 600 that is one lane per 5 notches
-// — ~1/5 the previous per-event sensitivity — and it also tames trackpad / Magic
-// Mouse sub-notch deltas that used to jump a whole lane each.
-static constexpr int SMV_WHEEL_VSCROLL_STEP = 600;
+// Vertical wheel-scroll (fix/arranger-ui-fixes C): PIXEL-granular, a fraction
+// of the CURRENT base lane height per notch (a standard mouse notch is 120
+// angleDelta units) — roughly a third of a lane per notch at the default
+// height, which reads as a similar feel to the old "one lane per 5 notches"
+// while landing on any pixel, including a partially visible top row.
+static constexpr double SMV_WHEEL_VSCROLL_FRACTION = 1.0 / 3.0;
 // Zoom is multiplicative, so its sensitivity is an EXPONENT rather than a factor:
 // n notches at s == 1 must be the same zoom as one notch at s == n, which only
 // pow() gives. 1.2x per notch on the time axis, 1.5x on track height.
@@ -147,11 +186,16 @@ void SMVActualView::setTrackHeight( int h )
     if( h<6 ) h = 6;
     trackHeight_ = h;
     // The base height feeds every lane's height (through its track's scale),
-    // so the row geometry — and with it the scroll offset, which is a running
-    // sum, not a multiple — has to be rebuilt before anything is placed.
+    // so the row geometry has to be rebuilt before anything is placed. Scroll
+    // is PIXEL-granular (fix/arranger-ui-fixes C), and a row boundary does not
+    // survive a height change, so re-anchor by FRACTION of the total height
+    // rather than by row — same reasoning as the SStdMixerView call sites
+    // that do this (setTrackHeightScale, onArrangementChangedRows,
+    // refreshTrackTree).
+    const int oldTotal = smv_.totalRowsHeight();
+    const double frac = ( oldTotal > 0 ) ? (double) upperLeftY_ / (double) oldTotal : 0.0;
     smv_.rebuildRowGeometry();
-    upperLeftY_ = smv_.rowTop( (int) topRow_ );
-    smv_.layoutControlColumn();
+    smv_.reanchorScrollByFraction( frac );   // re-anchors + relayouts heads
     smv_.viewResized();
     update();
     // FIXME: Emit signal?
@@ -168,38 +212,60 @@ static idx_t clampTopRow( idx_t topOffset, int nRows )
 
 void SMVActualView::setUpperLeft( offset_t leftOffset, idx_t topOffset )
 {
-    topRow_ = clampTopRow( topOffset, smv_.rowCount() );
-    upperLeftY_ = smv_.rowTop( (int) topRow_ );
-    smv_.layoutControlColumn();
+    setTopOffset( topOffset );
     setLeftOffset( leftOffset );
     // FIXME: Blitting
-    // FIXME: Signal
     update();
 }
 
 void SMVActualView::setLeftOffset( offset_t leftOffset )
-{   
+{
     if( upperLeftOffset_ == leftOffset ) return;
     upperLeftOffset_ = leftOffset;
     int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
     int newUpperLeftX = ((int)((((double)leftOffset)/srate)*secondWidth_));
-    if( upperLeftX_ == newUpperLeftX ) return;
+    const bool pixelChanged = ( upperLeftX_ != newUpperLeftX );
     upperLeftX_ = newUpperLeftX;
 //    qWarning( "SMVActualView::setLeftOffset(): leftOffset = %d:%d, upperLeftX_ = %d",
 //              (int)leftOffset, (int)(leftOffset>>32), upperLeftX_ );
     // FIXME: Blitting
+    // Emitted whenever the FRAME offset changed, even when it rounds to the
+    // SAME pixel column (e.g. a fine wheel pan at a low zoom level). This used
+    // to return above, before the emit, whenever the pixel column matched —
+    // which meant the scrollbar sync (avLeftOffsetChanged) and the view-state
+    // save (saveViewStateToProject) never saw the change either
+    // (fix/arranger-ui-fixes B4ii). Only the repaint is skippable when the
+    // screen would look identical.
     emit leftOffsetChanged( leftOffset );
+    if( pixelChanged ) update();
+}
+
+void SMVActualView::setTopPixel( int y )
+{
+    // AUTHORITY for vertical scroll (fix/arranger-ui-fixes C). Clamped to the
+    // same range the real scrollbar's maximum() computes
+    // (SStdMixerView::verticalScrollMaximum()) so this can never show blank
+    // space below the content, whatever asked for it.
+    const int availPx = qMax( 0, height() - SMV_TIME_RULER_HEIGHT );
+    const int maxY = qMax( 0, smv_.totalRowsHeight() - availPx );
+    if( y < 0 ) y = 0;
+    if( y > maxY ) y = maxY;
+    upperLeftY_ = y;
+    topRow_ = smv_.rowAtLaneY( y );
+    if( topRow_ < 0 ) topRow_ = 0;   // empty view (or the clamp above landed past the last row)
+    smv_.layoutControlColumn();
+    // FIXME: Blitting
+    // FIXME: Signal
     update();
 }
 
 void SMVActualView::setTopOffset( idx_t topOffset )
 {
-    topRow_ = clampTopRow( topOffset, smv_.rowCount() );
-    upperLeftY_ = smv_.rowTop( (int) topRow_ );
-    smv_.layoutControlColumn();
-    // FIXME: Blitting
-    // FIXME: Signal
-    update();
+    // Thin row->pixel wrapper (fix/arranger-ui-fixes C). Kept for the testkit
+    // (tkSetTopRow) and the row-anchored re-anchor call sites; setTopPixel()
+    // above is the authority now.
+    const idx_t row = clampTopRow( topOffset, smv_.rowCount() );
+    setTopPixel( (int) smv_.rowTop( (int) row ) );
 }
 
 // --- lane geometry ------------------------------------------------------
@@ -387,6 +453,16 @@ void SMVActualView::paintEvent( QPaintEvent * )
         QColor( 0x00, 0x00, 0x00 ) 
         );
 
+    // Vertical scroll is pixel-granular (fix/arranger-ui-fixes C), so the
+    // first visible row can now be only PARTIALLY on screen — its laneTop()
+    // can sit above SMV_TIME_RULER_HEIGHT, even negative. Nothing below ever
+    // relied on the first lane starting flush against the ruler before, so
+    // clip the lane loop and the record overlay to the band below it; the
+    // grid lines and the cursor draw their own bounded rects and need no clip.
+    p.save();
+    p.setClipRect( 0, SMV_TIME_RULER_HEIGHT, myRect.width(),
+                   myRect.height() - SMV_TIME_RULER_HEIGHT );
+
     // OK, we have tracks (lanes of the flattened tree).
     int nTracks = smv_.rowCount();
     // First lane touching the viewport. With variable heights this is a
@@ -452,6 +528,8 @@ void SMVActualView::paintEvent( QPaintEvent * )
             }
         }
     }
+    p.restore();
+
     // Before painting the timegrid, decide, wether the grid elements are not too close
     // together. Grid visibility is a per-project property (toolbar palette / grid action).
     STimeGridSpec tgs = smv_.getTimeGridSpec();
@@ -1717,8 +1795,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         // clipDragTakeIndex_ is -1 for all of them.
         SCut *cut = nullptr;
         if( clipDragTakeIndex_ >= 0 ) {
-            STakeStack *stack = dynamic_cast<STakeStack*>(
-                &lastClickSLink_->getSObject() );
+            STakeStack *stack = takeStackOfLink( lastClickSLink_ );
             SClipWindow *take = stack ? stack->takeAt( clipDragTakeIndex_ ) : nullptr;
             cut = take ? dynamic_cast<SCut*>( &take->asObject() ) : nullptr;
         } else {
@@ -1856,7 +1933,7 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
 {
     p.fillRect( laneRect, QColor( 26, 38, 50 ) );   // darker than track lanes
     for( SLink *lk : row.track->childLinks() ) {
-        STakeStack *stack = dynamic_cast<STakeStack*>( &lk->getSObject() );
+        STakeStack *stack = takeStackOfLink( lk );
         if( !stack ) continue;
         // Timeline invariant 2: the canvas does not know clip types. A take
         // lane draws whatever window is on it through the polymorphic renderer
@@ -1865,7 +1942,13 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         SObject *take = stack->takeObjectAt( row.takeRow );
         if( !take ) continue;                       // this stack has fewer takes
         const offset_t start = lk->getStartTime();
-        const length_t dur = stack->getDuration();
+        // The LINK's own object's duration, not the inner stack's: on the
+        // legacy SCut-wraps-STakeStack shape lk->getSObject() is the
+        // WRAPPING cut, whose own window governs the clip's displayed
+        // extent (it may be slipped/trimmed independent of the stack's raw
+        // material) -- on the modern shape lk->getSObject() IS the stack,
+        // so this is identical to stack->getDuration() and nothing changes.
+        const length_t dur = lk->getSObject().getDuration();
         int x0 = getXPosOfOffset( start );
         int x1 = getXPosOfOffset( start + (offset_t)dur );
         if( x1 <= laneRect.left() || x0 >= laneRect.right() ) continue;
@@ -2422,8 +2505,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     // The object actually being slipped is the take under the
                     // pointer, resolved fresh every move in case a concurrent
                     // edit removed it.
-                    STakeStack *stack = dynamic_cast<STakeStack*>(
-                        &lastClickSLink_->getSObject() );
+                    STakeStack *stack = takeStackOfLink( lastClickSLink_ );
                     SClipWindow *take =
                         stack ? stack->takeAt( clipDragTakeIndex_ ) : nullptr;
                     cut = take ? dynamic_cast<SCut*>( &take->asObject() ) : nullptr;
@@ -2925,37 +3007,174 @@ bool SMVActualView::tryAddMarkerAt( QMouseEvent *ev )
     return true;
 }
 
+// The double-click "open this container" resolve. Every content object
+// scutrndrinline.cpp's cutIsContainer() paints BLUE — a registered
+// arrangement, a take stack, a plain folder-track window, or a nested
+// container that is none of those — gets handled here, in the order the
+// user asked for: a registered arrangement opens (or fronts) its tab; a
+// take stack shows its take lanes; a folder track reveals its own lanes;
+// anything else tries the tab route and, failing that, SAYS SO rather than
+// doing nothing. Returns true iff it acted (opened, revealed, or reported a
+// dead end) — the caller stops the double-click there either way; a false
+// return means `link` was not a container at all and the caller should keep
+// walking its other branches (the event-clip branch, in practice).
+bool SMVActualView::tryOpenContainerClip( SLink *link )
+{
+    if( !link || !smv_.getModel() ) return false;
+    SProject *proj = smv_.getModel()->getProjectSafe();
+    if( !proj ) return false;
+
+    SObject *raw = &link->getSObject();
+
+    // Unwrap a take column at the LINK level: a take stack placed directly
+    // on the track (SLink -> STakeStack, as opposed to an SCut whose
+    // *content* is a take stack) resolves to its ACTIVE take first, so a
+    // container cut sitting in a take column behaves exactly like the same
+    // cut placed on its own.
+    SObject *obj = raw;
+    if( SClipWindow *w = raw->windowTakeAt( -1 ) ) obj = &w->asObject();
+
+    if( SCut *cut = dynamic_cast<SCut *>( obj ) ) {
+        SObject &content = cut->getContent();
+
+        // Rule 1: a registered arrangement root -- open (or bring forward)
+        // its tab. Unchanged from the pre-existing "asset clip" behaviour.
+        const QString arrName = proj->arrangementNameOf( &content );
+        if( !arrName.isEmpty() ) {
+            if( SMainWindow *mw = findMainWindow() ) {
+                if( SViewTabs *tabs = mw->ensureViewShell() )
+                    tabs->openFor( &content, arrName );
+            }
+            return true;
+        }
+
+        // Rule 2: the content is a take stack (an SCut windowing a take
+        // column) -- a take stack vends no detail editor at all, so "open
+        // it" means SHOW ITS TAKE LANES on the clip's own track.
+        if( dynamic_cast<STakeStack *>( &content ) )
+            return revealTakeLanes( lastClickTrack_ );
+
+        // Rule 3: the content is a plain track (what create-asset over a
+        // FOLDER TRACK produces) -- reveal that track's own lanes. A track
+        // with no children has nothing to reveal; fall through to rule 5.
+        if( STrack *tr = dynamic_cast<STrack *>( &content ) ) {
+            if( hasChildTracks( tr ) )
+                return revealTrackLanes( tr );
+        }
+
+        // Rule 5: anything else cutIsContainer() paints blue (a nested
+        // SCut, a container that vends no editor, an STrack with no
+        // children) -- try the tab route, and if it refuses, SAY SO instead
+        // of leaving the double-click looking like it did nothing.
+        if( content.contentKind() == SContentKind::Audio
+            && !content.getRandomSource() ) {
+            if( SMainWindow *mw = findMainWindow() ) {
+                if( SViewTabs *tabs = mw->ensureViewShell() ) {
+                    if( tabs->openFor( &content, QString() ) ) return true;
+                }
+            }
+            reportContainerDeadEnd( content );
+            return true;
+        }
+        return false;
+    }
+
+    if( STakeStack *stack = dynamic_cast<STakeStack *>( raw ) ) {
+        // `raw` IS the take stack (SLink -> STakeStack directly) and its
+        // active take did not resolve to an SCut above -- either there is no
+        // active take, or the active take is an EVENT window, which the
+        // event-clip branch below already opens an editor for (contentKind()
+        // is homogeneous across a stack's takes, so this one check covers
+        // every take in it).
+        if( stack->contentKind() != SContentKind::Event )
+            return revealTakeLanes( lastClickTrack_ );
+    }
+    return false;
+}
+
+// Rule 2: show (never blindly toggle) a track's take lanes. A double-click
+// that OPENS take lanes and a second double-click that leaves them open is
+// acceptable; one that CLOSES lanes the user just opened is worse, so this
+// only ever expands.
+bool SMVActualView::revealTakeLanes( STrack *track )
+{
+    if( !track ) return false;
+    const bool wasExpanded = smv_.isTrackTakesExpanded( track );
+    if( !wasExpanded ) smv_.toggleTrackTakesExpanded( track );
+    if( QMainWindow *mw = qobject_cast<QMainWindow *>( window() ) )
+        mw->statusBar()->showMessage(
+            wasExpanded
+                ? QString( "Take lanes already shown for \"%1\"" ).arg( track->getSName() )
+                : QString( "Take lanes shown for \"%1\"" ).arg( track->getSName() ),
+            4000 );
+    return true;
+}
+
+// Rule 3: reveal a folder track's own lanes -- expand every collapsed
+// ancestor between the model root and `tr` (a track can be reachable by
+// path yet have no row at all because a collapsed ancestor hides it), then
+// `tr` itself so its children get a row.
+bool SMVActualView::revealTrackLanes( STrack *tr )
+{
+    if( !tr ) return false;
+
+    if( SObject *root = smv_.getModel() ) {
+        SObject *cur = root;
+        for( int idx : strackpath::pathOf( root, tr ) ) {
+            if( STrack *anc = dynamic_cast<STrack *>( cur ) ) {
+                if( anc->isCollapsed() ) smv_.toggleTrackCollapsed( anc );
+            }
+            SLink *lk = strackpath::childLinkAt( cur, idx );
+            cur = lk ? &lk->getSObject() : nullptr;
+            if( !cur ) break;
+        }
+    }
+    if( tr->isCollapsed() ) smv_.toggleTrackCollapsed( tr );
+
+    if( QMainWindow *mw = qobject_cast<QMainWindow *>( window() ) )
+        mw->statusBar()->showMessage(
+            QString( "Lanes shown for track \"%1\"" ).arg( tr->getSName() ), 4000 );
+    return true;
+}
+
+// Rule 5's "say so": a blue clip whose content has no editor to open. Not
+// silent -- a status message plus a TW_LOG line naming the content's kind
+// and class, so a report of "double-click does nothing" can be told apart
+// from an actual dead end.
+void SMVActualView::reportContainerDeadEnd( SObject &content )
+{
+    const QString name = content.getSName().isEmpty()
+        ? QString::fromLatin1( content.metaObject()->className() )
+        : content.getSName();
+    if( QMainWindow *mw = qobject_cast<QMainWindow *>( window() ) )
+        mw->statusBar()->showMessage(
+            QString( "\"%1\" has nothing to open here" ).arg( name ), 4000 );
+    TW_LOGW( "ui.timeline",
+             "double-click: container '%s' (class=%s, kind=%d) vends no editor",
+             name.toUtf8().constData(),
+             content.metaObject()->className(),
+             (int) content.contentKind() );
+}
+
 void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
 {
-    // W2: double-click in a clip's marker strip adds a warp marker.
+    // W2: double-click in a clip's marker strip adds a warp marker. LEFT
+    // EXACTLY AS IS: the strip wins even over a container clip, so opening
+    // one means double-clicking lower on its body.
     if( ev->button() == Qt::LeftButton && smv_.getModel()
         && tryAddMarkerAt( ev ) )
         return;
 
-    // Double-click on an ASSET clip drills INTO it: the arrangement it windows
-    // comes to the front, or opens if its tab was closed (proposal 09 §2, the
-    // drill-in gesture). This is the other half of "creating an asset always
-    // makes an arrangement" -- without it the arrangement is reachable only
-    // from the resources dock, and the clip on the timeline is a dead end.
-    //
-    // The clip's OBJECT is the asset body itself (place-asset links the body,
-    // not a copy), so the arrangement is one hop through its content -- and
-    // arrangementNameOf() is what decides, so a cut over an ordinary folder
-    // track is NOT an asset clip and falls through to the branches below.
+    // Double-click on a CONTAINER clip -- anything scutrndrinline.cpp's
+    // cutIsContainer() paints BLUE -- resolves through tryOpenContainerClip()
+    // above: a registered arrangement's tab, a take stack's lanes, a folder
+    // track's lanes, or (as a last resort) a reported dead end. This
+    // replaces the old "asset clip only" check, which left every other blue
+    // clip a silent no-op.
     if( ev->button() == Qt::LeftButton && lastClickSLink_ && smv_.getModel() ) {
-        if( SCut *cut = dynamic_cast<SCut *>( &lastClickSLink_->getSObject() ) ) {
-            if( SProject *proj = smv_.getModel()->getProjectSafe() ) {
-                const QString arrName =
-                    proj->arrangementNameOf( &cut->getContent() );
-                if( !arrName.isEmpty() ) {
-                    if( SMainWindow *mw = findMainWindow() ) {
-                        if( SViewTabs *tabs = mw->ensureViewShell() )
-                            tabs->openFor( &cut->getContent(), arrName );
-                    }
-                    ev->accept();
-                    return;
-                }
-            }
+        if( tryOpenContainerClip( lastClickSLink_ ) ) {
+            ev->accept();
+            return;
         }
     }
 
@@ -2974,6 +3193,28 @@ void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
             path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
             if( SMainWindow *mw = findMainWindow() )
                 mw->showEventEditor( strackpath::pathToString( path ) );
+            ev->accept();
+            return;
+        }
+    }
+
+    // Double-click on a bare FOLDER LANE: a real row whose track has no clip
+    // at this click position (lastClickSLink_ is null, so neither branch
+    // above could have fired) but DOES have child tracks -- toggle its fold,
+    // the same flip the head's fold triangle drives. This is the "I expected
+    // the lanes to open" case (proposal 39's own dead end): a folder lane
+    // with nothing of its own on it was otherwise unreachable from a
+    // double-click at all.
+    if( ev->button() == Qt::LeftButton && !lastClickSLink_ && lastClickTrack_
+        && smv_.getModel() ) {
+        const STrackRow *row = smv_.rowAt( lastClickTrackIdx_ );
+        if( row && row->subKind == SubLaneKind::None && row->hasChildren ) {
+            smv_.toggleTrackCollapsed( lastClickTrack_ );
+            if( QMainWindow *mw = qobject_cast<QMainWindow *>( window() ) )
+                mw->statusBar()->showMessage(
+                    QString( "%1 \"%2\"" )
+                        .arg( lastClickTrack_->isCollapsed() ? "Collapsed" : "Expanded" )
+                        .arg( lastClickTrack_->getSName() ), 4000 );
             ev->accept();
             return;
         }
@@ -3030,8 +3271,7 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
         const STrackRow *clickRow = smv_.rowAt( lastClickTrackIdx_ );
         if( clickRow && clickRow->takeRow >= 0 ) {
             if( lastClickSLink_ ) {
-                STakeStack *stack = dynamic_cast<STakeStack*>(
-                    &lastClickSLink_->getSObject() );
+                STakeStack *stack = takeStackOfLink( lastClickSLink_ );
                 SClipWindow *take =
                     stack ? stack->takeAt( clickRow->takeRow ) : nullptr;
                 if( stack && take ) {
@@ -3069,7 +3309,12 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         clipSrcStart0_     = takeCut->getSrcStart();
                         clipLoopLen0_      = takeCut->getLoopLength().frames();
                         clipStretch0_      = takeCut->getStretchExact();
-                        lastClickDuration_ = stack->getDuration();
+                        // The LINK's own object's duration -- same
+                        // reasoning as drawTakeLane's dur: the wrapping
+                        // cut's own window governs the drag bounds on the
+                        // legacy shape, and is identical to stack->
+                        // getDuration() on the modern one.
+                        lastClickDuration_ = lastClickSLink_->getSObject().getDuration();
                         update();
                         return;
                     }
@@ -3273,8 +3518,7 @@ static int maxTakesOf( STrack *tk )
 {
     int maxTakes = 0;
     for( SLink *lk : tk->childLinks() ) {
-        if( STakeStack *stack =
-                dynamic_cast<STakeStack*>( &lk->getSObject() ) ) {
+        if( STakeStack *stack = takeStackOfLink( lk ) ) {
             if( stack->nTakes() > maxTakes ) maxTakes = stack->nTakes();
         }
     }
@@ -3322,11 +3566,17 @@ void SStdMixerView::onArrangementChangedRows()
 {
     if( takesExpanded_.isEmpty() ) return;   // canvas repaint happens anyway
     const int before = rows_.size();
+    // Capture the scroll FRACTION before the rebuild (fix/arranger-ui-fixes C
+    // item 7): scroll is pixel-granular now, and a row boundary does not
+    // survive a row-count change intact, so re-anchor by fraction of the
+    // total height rather than by row.
+    const int oldTotal = totalRowsHeight();
+    const double frac = ( oldTotal > 0 ) ? (double) qContent_->getUpperLeftY() / (double) oldTotal : 0.0;
     rebuildRows();
     if( rows_.size() != before ) {
         rebuildControlColumn();
         nTracksChanged();
-        qContent_->setTopOffset( qContent_->getTopRow() );
+        reanchorScrollByFraction( frac );
     } else {
         // Same lane count, but a take could have moved between tracks — the
         // heads are cheap to re-place and must not be left behind.
@@ -3369,9 +3619,13 @@ void SStdMixerView::setTrackHeightScale( STrack *t, double scale )
     if( qFuzzyCompare( scale, 1.0 ) ) trackScale_.remove( t );
     else                              trackScale_.insert( t, scale );
     // Heights changed under the scroll anchor: re-derive the geometry, then
-    // re-anchor the scroll on the same row and replace the heads.
+    // re-anchor the scroll by FRACTION of the total height (fix/arranger-ui-
+    // fixes C item 7) rather than by row — pixel scroll does not survive a
+    // row's own height changing size while it holds the anchor.
+    const int oldTotal = totalRowsHeight();
+    const double frac = ( oldTotal > 0 ) ? (double) qContent_->getUpperLeftY() / (double) oldTotal : 0.0;
     rebuildRowGeometry();
-    qContent_->setTopOffset( qContent_->getTopRow() );
+    reanchorScrollByFraction( frac );
     recalcPageStep();
     layoutControlColumn();
     qContent_->update();
@@ -3401,6 +3655,17 @@ void SStdMixerView::rebuildRowGeometry()
     rowTop_[rows_.size()] = y;          // total height, one call away
 }
 
+// See the header for the rationale (fix/arranger-ui-fixes C item 7).
+void SStdMixerView::reanchorScrollByFraction( double frac )
+{
+    const int total = totalRowsHeight();
+    int y = (int)( frac * total + 0.5 );
+    if( y < 0 ) y = 0;
+    if( total > 0 && y >= total ) y = total - 1;
+    const int row = rowAtLaneY( y );
+    qContent_->setTopPixel( row >= 0 ? rowTop( row ) : 0 );
+}
+
 int SStdMixerView::rowTop( int row ) const
 {
     if( rowTop_.isEmpty() ) return 0;
@@ -3425,17 +3690,6 @@ int SStdMixerView::rowAtLaneY( int y ) const
         if( rowTop( mid ) <= y ) lo = mid; else hi = mid-1;
     }
     return lo;
-}
-
-int SStdMixerView::visibleRowCountFrom( int firstRow ) const
-{
-    int avail = qContent_->height() - SMV_TIME_RULER_HEIGHT;
-    int n = 0;
-    for( int i=qMax( 0, firstRow ); i<rows_.size() && avail>0; ++i ) {
-        avail -= rowHeight( i );
-        ++n;
-    }
-    return qMax( 1, n );
 }
 
 // The lane group of a track lane: the lane itself plus every sub-lane hanging
@@ -3467,15 +3721,54 @@ int SStdMixerView::rowAtControlY( int y ) const
 
 // THE place head geometry is decided. The box itself never moves (its layout
 // owns it); the heads inside carry the scroll and are clipped by it.
+// See layoutControlColumn()'s comment for what this row IS. Shared with
+// tkCheckLaneAlignment() (fix/arranger-ui-fixes C item 5) so a head's real
+// clamped geometry and the testkit's idea of "correct" geometry cannot
+// silently compute two different rows.
+int SStdMixerView::rulerStraddleHeadRow() const
+{
+    int headRow = 0;
+    if( !rows_.isEmpty() ) {
+        headRow = qBound( 0, (int) qContent_->getTopRow(), rows_.size()-1 );
+        while( headRow > 0 && rows_.at( headRow ).isSubLane() ) --headRow;
+    }
+    return headRow;
+}
+
+// Shared by layoutControlColumn() and tkCheckLaneAlignment() (fix/arranger-
+// ui-fixes C item 5), so the real head geometry and the testkit's expected
+// geometry cannot diverge. Clamps a head's [top,height) so it never draws
+// above SMV_TIME_RULER_HEIGHT — but only for `isHeadRow` true, the ONE row
+// whose lane GROUP contains the current scroll offset. Every row strictly
+// before it already ends at or before the ruler line (adjacent prefix-sum
+// geometry: row r's bottom edge is always exactly row r+1's top edge, so the
+// row just above the scrolled-to one always butts up against it — true
+// before this feature too, and left alone). Every row strictly after it
+// starts at or after the ruler line. Only the scrolled-to row can straddle
+// it, and only now that scroll is pixel-granular (a row-granular scroll
+// always landed it exactly AT the ruler line).
+static void clampHeadToRulerBand( bool isHeadRow, int &top, int &h )
+{
+    if( isHeadRow && top < SMV_TIME_RULER_HEIGHT ) {
+        h -= ( SMV_TIME_RULER_HEIGHT - top );
+        top = SMV_TIME_RULER_HEIGHT;
+        if( h < 0 ) h = 0;
+    }
+}
+
 void SStdMixerView::layoutControlColumn()
 {
     if( !qTrackControlBox_ || !controlArray_ ) return;
     const int w = trackControlWidth_;
+    const int headRow = rulerStraddleHeadRow();
     for( int c=0; c<controlArray_->size(); ++c ) {
         SSMVMixerControl *mc = controlArray_->at( c );
         if( !mc ) continue;
         const int row = ( c < controlRow_.size() ) ? controlRow_.at( c ) : c;
-        mc->setGeometry( 0, controlYOfRow( row ), w, laneGroupHeight( row ) );
+        int top = controlYOfRow( row );
+        int h = laneGroupHeight( row );
+        clampHeadToRulerBand( row == headRow, top, h );
+        mc->setGeometry( 0, top, w, h );
     }
     if( dropIndicator_ ) dropIndicator_->raise();
 }
@@ -3540,12 +3833,16 @@ void SStdMixerView::rebuildControlColumn()
 // rebuild the flattened tree, the control column, the scroll range, and repaint.
 void SStdMixerView::refreshTrackTree()
 {
+    // Capture the scroll FRACTION before the rebuild (fix/arranger-ui-fixes C
+    // item 7): a structural change (add/remove/reorder/fold) can change every
+    // row's height and index, so "the same row" no longer names a stable
+    // position the way a fraction of the whole does.
+    const int oldTotal = totalRowsHeight();
+    const double frac = ( oldTotal > 0 ) ? (double) qContent_->getUpperLeftY() / (double) oldTotal : 0.0;
     rebuildRows();
     rebuildControlColumn();
     nTracksChanged();
-    // Rows moved under the scroll anchor: re-derive the pixel offset from the
-    // (clamped) top row, which also re-places the heads.
-    qContent_->setTopOffset( qContent_->getTopRow() );
+    reanchorScrollByFraction( frac );
     qContent_->update();
 }
 
@@ -3697,12 +3994,15 @@ void SStdMixerView::endTrackDrag( int yInControlBox )
 
 void SStdMixerView::nTracksChanged()
 {
-    int newNTracks = rowCount();    // visible lanes, not just top-level tracks
+    // Pixel-granular (fix/arranger-ui-fixes C): pageStep is a PIXEL count now
+    // (set by recalcPageStep(), which a resize/zoom already keeps current),
+    // so "does the current scroll position still fit" compares pixels to
+    // pixels — totalRowsHeight(), not rowCount().
+    const int pageStep = qScrollVert_->pageStep();
+    const int total = totalRowsHeight();
     int currValue = qScrollVert_->value();
-    int pageStep = qScrollVert_->pageStep();
-    if( currValue+pageStep > newNTracks ) {
-        currValue = newNTracks-pageStep;
-        if( currValue<0 ) currValue = 0;
+    if( currValue+pageStep > total ) {
+        currValue = qMax( 0, total-pageStep );
         trackSliderMoved( currValue );
     }
     qScrollVert_->setMaximum( verticalScrollMaximum( pageStep ) );
@@ -3710,29 +4010,34 @@ void SStdMixerView::nTracksChanged()
 
 void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
 {
-    int sliderValue;
-    offset_t dur = (offset_t) 1;
-    if( model_->hasDuration() ) {
-	dur = model_->getDuration();
+    // The bar's domain is FRAMES now (fix/arranger-ui-fixes B), matching
+    // getLeftOffset() exactly — no HSliderRange rescale, so no quantisation
+    // and no "+dur" fudge that used to map offset 0 to slider value 1.
+    // Recompute the horizontal extent/range FIRST: an unbounded wheel-pan
+    // past the last clip must grow the bar's maximum before the bar's VALUE
+    // is synced to it, or the bar would visibly lag one step behind what the
+    // wheel can already reach.
+    recalcPageStep();
+    offset_t v = newValue;
+    if( v < 0 ) v = 0;
+    if( v > 0x7fffffff ) v = 0x7fffffff;
+    // Re-entrancy guard: this slot exists only to keep the SCROLLBAR in step
+    // with the canvas' exact frame offset. setValue() re-fires the bar's own
+    // valueChanged() -> timeSliderMoved() -> setLeftOffset(); blocking it here
+    // means the wheel's exact offset is set once, not round-tripped through
+    // the bar and back.
+    if( (int) v != qScrollHoriz_->value() ) {
+        QSignalBlocker blocker( qScrollHoriz_ );
+        qScrollHoriz_->setValue( (int) v );
     }
-    sliderValue = (dur + HSliderRange * newValue) / dur;
-    // Correct the scroll bar.
-    if( sliderValue != (int)qScrollHoriz_->value() ) qScrollHoriz_->setValue( sliderValue );
 }
 
 void SStdMixerView::timeSliderMoved( int newValue )
 {
-    if( newValue<0 ) {
-	   //qWarning( "SStdMixerView::timeSliderMoved(): newValue was less than zero." );
-	   newValue = 0;
-    }
-    //qWarning( "SStdMixerView::timeSliderMoved(): newValue=%d.",
-	//      newValue );
-    if( model_->hasDuration() ) {
-	   qContent_->setLeftOffset( (offset_t)(newValue*model_->getDuration()/HSliderRange+0.5) );
-    } else {	
-	   qContent_->setLeftOffset( 0 );
-    }
+    if( newValue<0 ) newValue = 0;
+    // The bar's domain is FRAMES (fix/arranger-ui-fixes B) — a drag lands
+    // EXACTLY where the thumb is, at any zoom or duration, with no rescale.
+    qContent_->setLeftOffset( (offset_t) newValue );
 }
 
 void SStdMixerView::trackSliderMoved( int newValue )
@@ -3741,7 +4046,8 @@ void SStdMixerView::trackSliderMoved( int newValue )
 	   qWarning( "SStdMixerView::trackSliderMoved(): newValue was less than zero." );
 	   newValue = 0;
     }
-    qContent_->setTopOffset( newValue );
+    // The bar's domain is PIXELS (fix/arranger-ui-fixes C).
+    qContent_->setTopPixel( newValue );
 }
 
 /**
@@ -3903,6 +4209,47 @@ bool SStdMixerView::clickLane( STrack *t, offset_t time,
     return true;
 }
 
+// The double-click twin of clickLane() above, and to dragClipEdge()'s
+// doubleClickClip() twin: it lands wherever `time` puts it on the track's
+// lane, clip or no clip — which is what makes it the ONLY driver that can
+// reach the bare-folder-lane double-click (mouseDoubleClickEvent's "no clip
+// link at all" branch), the one double-click gesture doubleClickClip() can
+// never synthesize because it requires an existing clip to aim at.
+bool SStdMixerView::doubleClickLane( STrack *t, offset_t time,
+                                     Qt::KeyboardModifiers mods )
+{
+    if( !t || !qContent_ ) return false;
+    int rowIdx = rowIndexOfTrack( t );
+    if( rowIdx < 0 ) return false;
+    int x = qContent_->getXPosOfOffset( time );
+    int th = rowHeight( rowIdx );
+    int y = qContent_->laneTop( rowIdx ) + th/2;
+    if( x < 0 || y < 0 ) return false;
+
+    // The window is never shown in test mode; grow the canvas so the point
+    // lands inside it (same reasoning as clickLane / dragClipEdge).
+    if( qContent_->width() < x+64 || qContent_->height() < y+th+64 )
+        qContent_->resize( qMax( qContent_->width(), x+64 ),
+                           qMax( qContent_->height(), y+th+64 ) );
+
+    auto send = [&]( QEvent::Type type, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        QPointF local( x, y );
+        QMouseEvent ev( type, local, qContent_->mapToGlobal( QPointF( x, y ) ),
+                        button, buttons, mods );
+        QApplication::sendEvent( qContent_, &ev );
+    };
+    // Same press/release/DBLCLICK/release sequence Qt itself delivers and
+    // doubleClickClip() already sends — the leading press selects whatever
+    // is under the point (a track, if the lane is bare) before the double-
+    // click handler runs.
+    send( QEvent::MouseButtonPress,    Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    send( QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
 // --- test entry points for the lane geometry ----------------------------
 
 void SStdMixerView::tkSetBaseTrackHeight( int h )
@@ -3946,7 +4293,11 @@ QString SStdMixerView::tkCheckLaneAlignment() const
                    .arg( totalRowsHeight() ).arg( running );
 
     // 2. The heads: one per non-sub-lane row, in row order, each sitting
-    //    exactly on the lane the canvas paints for it.
+    //    exactly on the lane the canvas paints for it — through the SAME
+    //    ruler-band clamp layoutControlColumn() applies (fix/arranger-ui-
+    //    fixes C item 5), so the one row that may legally straddle the
+    //    ruler under a pixel-granular scroll is expected CLAMPED here too.
+    const int headRow = rulerStraddleHeadRow();
     int c = 0;
     for( int i=0; i<rows_.size(); ++i ) {
         if( rows_.at( i ).isSubLane() ) continue;
@@ -3959,8 +4310,10 @@ QString SStdMixerView::tkCheckLaneAlignment() const
         SSMVMixerControl *mc = controlArray_->at( c );
         if( !mc ) return QString( "head %1: null" ).arg( c );
         const QRect g = mc->geometry();
-        const QRect want( 0, qContent_->laneTop( i ), trackControlWidth_,
-                          laneGroupHeight( i ) );
+        int wantTop = qContent_->laneTop( i );
+        int wantH = laneGroupHeight( i );
+        clampHeadToRulerBand( i == headRow, wantTop, wantH );
+        const QRect want( 0, wantTop, trackControlWidth_, wantH );
         if( g != want )
             return QString( "head %1 (row %2): geometry %3,%4 %5x%6, "
                             "lane is %7,%8 %9x%10" )
@@ -3999,41 +4352,68 @@ SLink *SStdMixerView::ensureSCut( SLink *lk )
     return nlk;
 }
 
+// The scrollable horizontal TIMELINE EXTENT, in project frames (fix/
+// arranger-ui-fixes B1/B3). See the header comment on the declaration.
+offset_t SStdMixerView::horizontalExtent() const
+{
+    const offset_t dur = ( model_ && model_->hasDuration() ) ? model_->getDuration() : (offset_t) 0;
+    const int srate = model_ ? model_->getProject().getSRate() : 48000;
+    offset_t visSpan = 0;
+    if( qContent_ && qContent_->getSecondWidth() > 0.0 ) {
+        visSpan = (offset_t)( (double) qContent_->width() / qContent_->getSecondWidth() * srate );
+    }
+    const offset_t cur = qContent_ ? qContent_->getLeftOffset() : (offset_t) 0;
+    offset_t extent = qMax( dur, cur + visSpan );
+    // Floor (B3): the old bug's own trigger was `dur <= 1`, which made a
+    // division by `dur` blow up to a near-infinite `double` and then an
+    // out-of-range double->int conversion (undefined behaviour) that landed
+    // `maximum` on 0 — the bar dead while the wheel still panned. Nothing
+    // here divides by `dur` any more, but an empty/near-empty arrangement
+    // should still offer a SANE domain rather than a near-[0,1] one: ten
+    // seconds at the project's own rate.
+    extent = qMax( extent, (offset_t) srate * 10 );
+    return extent;
+}
+
 void SStdMixerView::recalcPageStep()
 {
     // qContent_ was resized. Recalc scrollbars.
     int w = qContent_->width();
-    // Calc new pageStep.
     int srate = model_ ? model_->getProject().getSRate() : 48000;
-    double dw = w;
-    dw = dw * srate / qContent_->getSecondWidth();
-    offset_t lw = (offset_t) (dw);
-    if( lw>0x7fffffff ) lw = 0x7fffffff;
-    offset_t dur = 1;
-    if( model_->hasDuration() ) {
-	dur = model_->getDuration();
-    }
-    dw = HSliderRange*(double)w/qContent_->getSecondWidth()*srate / (double)dur;
-    int ps = (int)(dw+0.5);
+
+    // Horizontal (fix/arranger-ui-fixes B): the bar's domain is FRAMES, so
+    // the page step is "how many project frames fit in the viewport at the
+    // current zoom" directly — no HSliderRange rescale — and the maximum is
+    // the scrollable EXTENT (B1) minus that.
+    double dw = (double) w * srate / qContent_->getSecondWidth();
+    offset_t pageFrames = (offset_t) dw;
+    if( pageFrames < 0 ) pageFrames = 0;
+    if( pageFrames > 0x7fffffff ) pageFrames = 0x7fffffff;
+    const int ps = (int) pageFrames;
     qScrollHoriz_->setPageStep( ps );
     qScrollHoriz_->setSingleStep( (ps/10)+1 );
-    qScrollHoriz_->setMaximum( qMax( 0, (int)HSliderRange - ps ) );
-    // Vertical scrolling stays row-granular, but with variable lane heights
-    // "how many rows fit" depends on which rows are on screen.
-    int vis = visibleRowCountFrom( (int) qContent_->getTopRow() );
-    qScrollVert_->setPageStep( vis );
-    qScrollVert_->setMaximum( verticalScrollMaximum( vis ) );
+    const offset_t extent = horizontalExtent();
+    offset_t maxFrames = ( extent > (offset_t) ps ) ? extent - (offset_t) ps : (offset_t) 0;
+    if( maxFrames > 0x7fffffff ) maxFrames = 0x7fffffff;
+    qScrollHoriz_->setMaximum( (int) maxFrames );
+
+    // Vertical (fix/arranger-ui-fixes C): pixel-granular, so the page step is
+    // simply the visible pixel height below the ruler.
+    const int availPx = qMax( 0, qContent_->height() - SMV_TIME_RULER_HEIGHT );
+    qScrollVert_->setPageStep( availPx );
+    qScrollVert_->setSingleStep( qMax( 1, getTrackHeight() / 8 ) );
+    qScrollVert_->setMaximum( verticalScrollMaximum( availPx ) );
 }
 
-// See the header for why this exists (fix/track-list-polish l): a single
-// definition of "how far may qScrollVert_ go" shared by recalcPageStep() and
-// nTracksChanged(), so a track add/remove cannot silently undo the padding a
-// resize just computed.
-int SStdMixerView::verticalScrollMaximum( int vis ) const
+// See the header for why this exists: a single definition of "how far may
+// qScrollVert_ go" shared by recalcPageStep() and nTracksChanged(), so a
+// track add/remove cannot silently compute a different answer. Pixel-granular
+// now (fix/arranger-ui-fixes C) — the old "+1 row of headroom" hack existed
+// only because ROW granularity could not reach a partially visible last row;
+// a pixel offset reaches the true content bottom directly.
+int SStdMixerView::verticalScrollMaximum( int availPx ) const
 {
-    const int availPx = qContent_ ? qContent_->height() - SMV_TIME_RULER_HEIGHT : 0;
-    const bool overflow = totalRowsHeight() > availPx;
-    return qMax( 0, rowCount() - vis + ( overflow ? 1 : 0 ) );
+    return qMax( 0, totalRowsHeight() - availPx );
 }
 
 void SStdMixerView::viewResized()
@@ -4412,29 +4792,23 @@ void SMVActualView::loadWheelConfig()
     pct = qBound( 10, pct, 500 );
     wheelSensitivity_ = pct / 100.0;
 
-    // Scroll and pan are LINEAR in the gesture, so sensitivity divides the
-    // threshold / multiplies the step; zoom is multiplicative, so it raises the
-    // per-notch factor to the power (see the constants above).
+    // Scroll and pan are LINEAR in the gesture, so sensitivity multiplies the
+    // step directly (vertical scroll joined this since fix/arranger-ui-fixes
+    // C — it used to divide a lane-count threshold, kept here in the same
+    // spot for the reader tracing the four gestures together); zoom is
+    // multiplicative, so it raises the per-notch factor to the power (see the
+    // constants above).
     //
-    // Each expression below is exact at 100 %: 100/100.0 is exactly 1.0, so the
-    // threshold rounds back to 600 and the two factors are handed back verbatim.
-    // The pow() calls are guarded by that equality rather than trusted, because
-    // pow(x, 1.0) returning exactly x is a quality-of-implementation property,
-    // not a guarantee — and "the default feel does not move" is the whole
-    // argument for shipping this option.
-    wheelVScrollStep_ = (int) std::lround( SMV_WHEEL_VSCROLL_STEP / wheelSensitivity_ );
-    if( wheelVScrollStep_ < 1 ) wheelVScrollStep_ = 1;
+    // The pow() calls are guarded by an exact `wheelSensitivity_ == 1.0` check
+    // rather than trusted, because pow(x, 1.0) returning exactly x is a
+    // quality-of-implementation property, not a guarantee — and "the default
+    // feel does not move" is the whole argument for shipping this option.
     wheelZoomHFactor_ = ( wheelSensitivity_ == 1.0 )
                         ? SMV_WHEEL_ZOOM_H_BASE
                         : std::pow( SMV_WHEEL_ZOOM_H_BASE, wheelSensitivity_ );
     wheelZoomVFactor_ = ( wheelSensitivity_ == 1.0 )
                         ? SMV_WHEEL_ZOOM_V_BASE
                         : std::pow( SMV_WHEEL_ZOOM_V_BASE, wheelSensitivity_ );
-
-    // The part-lane carried over from the old threshold means nothing under the
-    // new one — kept, it would cash in as a multi-lane jump on the first event
-    // after the setting was lowered.
-    wheelVScrollAccum_ = 0;
 }
 
 int SMVActualView::wheelActionFor( Qt::KeyboardModifiers mods ) const
@@ -4516,16 +4890,19 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
     switch( action ) {
 
     case SOpt::ScrollVertical: {
-        // Accumulate sub-notch deltas and step one lane per wheelVScrollStep_
-        // units, so a trackpad / Magic Mouse no longer jumps a whole lane per event
-        // (~1/5 the old sensitivity). +delta = wheel up = scroll toward upper rows.
+        // Pixel-granular (fix/arranger-ui-fixes C): a notch moves a fraction
+        // of the CURRENT base lane height, scaled by the wheel sensitivity —
+        // mirrors ScrollHorizontal right below it. No accumulator is needed
+        // (unlike the old lane-quantised step): any sub-notch delta from a
+        // trackpad already maps to a valid pixel amount, so the thumb (and
+        // the canvas) can land on a partially visible top row, same as a
+        // drag. +delta = wheel up = scroll toward upper rows.
         if( smv_.qScrollVert_ ) {
-            wheelVScrollAccum_ += dy;
-            int lanes = wheelVScrollAccum_ / wheelVScrollStep_;
-            if( lanes != 0 ) {
-                wheelVScrollAccum_ -= lanes * wheelVScrollStep_;
-                smv_.qScrollVert_->setValue( smv_.qScrollVert_->value() - lanes );
-            }
+            const double pxPerNotch = (double) trackHeight_ * SMV_WHEEL_VSCROLL_FRACTION * wheelSensitivity_;
+            const double px = (double) dy / 120.0 * pxPerNotch;
+            const int deltaPx = (int)( px + ( px >= 0.0 ? 0.5 : -0.5 ) );
+            if( deltaPx != 0 )
+                smv_.qScrollVert_->setValue( smv_.qScrollVert_->value() - deltaPx );
         }
         break;
     }
@@ -4763,10 +5140,8 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qScrollVert_ = new QScrollBar(
         /* 0, 0, 0, 1, 1, */
         Qt::Vertical, this );
-    qScrollHoriz_ = new QScrollBar( 
-        /* 0, HSliderRange-1, HSliderRange, 
-		  HSliderRange/10, 0, */ 
-        Qt::Horizontal, this );    
+    qScrollHoriz_ = new QScrollBar(
+        Qt::Horizontal, this );
 
     QSize hSliderSize = qScrollHoriz_->sizeHint();
     QSize vSliderSize = qScrollVert_->sizeHint();
