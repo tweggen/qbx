@@ -128,10 +128,19 @@ public:
     void scheduleAnalysisJob(std::function<void()> fn, int priority = 4);
 
     /**
-     * Graceful shutdown: wait for workers to finish and join.
+     * Permanent shutdown: drop queued work, abort every outstanding demand,
+     * and join the workers. IDEMPOTENT — the second call finds no joinable
+     * thread and returns.
      *
-     * Called by destructor; can also be called explicitly.
-     * After shutdown, no new jobs are accepted.
+     * CALL THIS BEFORE TEARING DOWN ANYTHING THE POOL CAN REACH. The reval
+     * lane holds BORROWED IRevalidatable* pointers, so an owner that destroys
+     * its object graph and only then lets ~CaptureRevalidator run has handed
+     * the pool a window in which every one of those pointers is dangling.
+     * ~SProject calls it first thing, on both of its paths.
+     *
+     * After shutdown, scheduleRevalidation()/scheduleAnalysisJob() refuse
+     * (and take no pin), and requestGraphPages() returns a vacuously-done
+     * demand. Unlike pause(), there is no way back.
      */
     void shutdown();
 

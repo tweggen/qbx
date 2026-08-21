@@ -84,6 +84,27 @@ Invariants:
    while it walks (design §5 says the exclusion wiring precedes the drain; this
    makes "should not arrive" into "cannot").
 
+11. **shutdown() IS A TEARDOWN, NOT A DRAIN — and the OWNER quiesces before it
+   destroys anything the pool can reach.** shutdown() drops all three queues,
+   aborts every outstanding demand, and every worker leaves on the next turn of
+   its loop WHATEVER STATE THE POOL IS IN; scheduleRevalidation() and
+   scheduleAnalysisJob() then refuse, and scheduleRevalidation() refuses
+   BEFORE taking its pin (a pin nothing will ever release keeps the app-side
+   object alive forever — see revalRemoveRef's deleteLater re-arm). Two ways
+   this was wrong at once, both observed as a hung app in ~SProject on
+   File -> Open: the worker exit test required all three queues to be empty
+   while shutdown() cleared only two of them, so a PAUSED pool with one
+   leftover reval job span at 100 % CPU against a wait predicate that was
+   already true and join() never returned; and the owner ran the whole
+   destruction of its object graph BEFORE the pool's own destructor, handing
+   live workers a reval lane full of dangling borrowed pointers. The reval
+   lane's entries are borrowed and nothing else's are, which is why this lane
+   is the one that must be dropped rather than drained. A dropped job is NOT
+   unpinned, for retireObject()'s reason. Note the workers are adopted by Qt
+   (the app posts a queued invokeMethod from revalCompleted), so a pointer
+   freed under a worker tends to surface as a fault in Qt's per-thread
+   teardown, nowhere near the object.
+
 How to test: `ctest -R schedule_test` (retireObject and retireComponentNodes lifetime/retirement — including 100
 randomized interleavings of a retirement against a running demand — the
 dependency-
@@ -93,4 +114,5 @@ missPages / selfStale` at shutdown, which is how a scheduler change is shown
 not to multiply renders. Also exercised by every project load + edit.
 
 Known debt: revalidationComplete UI signal still TODO (UI re-reads on next
-paint); shutdown discards queued jobs (acceptable for background work).
+paint); shutdown discards queued jobs (acceptable for background work — and
+required, see invariant 11).

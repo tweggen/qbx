@@ -78,6 +78,19 @@ Invariants:
    removeRef() on freed memory (the teardown SEGFAULT after a passing
    headless run, 2026-08-16).
 
+6c. **~SProject QUIESCES THE REVALIDATOR BEFORE IT TOUCHES THE OBJECT GRAPH**,
+   on both of its paths (`shutdownRevalidation()`, first statement). The pool
+   is a MEMBER, so leaving it to its own destructor joins the workers at the
+   CLOSING BRACE — after the refcount cascade and the survivor pass above have
+   already deleted every SObject the pool's borrowed IRevalidatable* pointers
+   name. ~SCut's retireObject() is per-object and runs in the middle of that
+   cascade, which keeps scheduling more work as objects invalidate on their way
+   out; the up-front shutdown is the property, the retire is the belt. Symptom
+   when it was missing: the app hung in ~SProject's join on File -> Open, with
+   a worker faulting in Qt's per-thread teardown (workers are Qt-adopted —
+   SObject::revalCompleted posts a queued invokeMethod), i.e. nowhere near the
+   object that had been freed under it. See tw/schedule CONTRACT inv. 11.
+
 7. An external file reference is PORTABLE ON DISK and ABSOLUTE IN MEMORY.
    SFilePathRef::toStored/fromStored are the only encoders, and they pick
    project-relative first, "~/..." when the climb lands exactly on the home

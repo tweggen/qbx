@@ -581,18 +581,32 @@ SLink *SProject::linkToFile( QString &fileName )
 
 SProject::~SProject()
 {
+    // QUIESCE FIRST, ON EVERY PATH, BEFORE TOUCHING THE OBJECT GRAPH.
+    //
+    // The revalidator is a MEMBER, so leaving this to its own destructor runs
+    // it at the closing brace of this function — i.e. after the refcount
+    // cascade and the survivor pass below have deleted every SObject in the
+    // project. The pool's revalidation lane holds BORROWED IRevalidatable*
+    // pointers into exactly those objects, and its workers are adopted by Qt
+    // (SObject::revalCompleted posts a queued invokeMethod), so the damage
+    // surfaces at the far end as a fault in Qt's per-thread teardown rather
+    // than anywhere near the object that was freed under a worker.
+    //
+    // ~SCut retires itself from the pool, which covers the reval lane for the
+    // one class that schedules into it — but it covers it one object at a
+    // time, in the middle of a cascade that keeps scheduling MORE work as
+    // objects invalidate on their way out. Quiescing once, up front, is the
+    // property; the per-object retire is the belt.
+    //
+    // This subsumes the pauseRevalidation() that used to guard the partial-load
+    // path alone: shutdown() is the same drain plus a join and a one-way gate,
+    // so nothing can be scheduled behind it.
+    shutdownRevalidation();
+
     // For partially-loaded projects that failed during object creation, skip
     // the normal cleanup since accessing the partially-constructed objects
     // could crash. Qt's parent-child mechanism will still clean them up.
     if( isPartialLoad_ ) {
-        // Quiesce FIRST. Returning early hands the object graph to ~QObject,
-        // which frees the children in its own order while the revalidator's
-        // workers may still hold raw pointers into them. pauseRevalidation()
-        // blocks until in-flight jobs drain, so after this line no worker is
-        // inside an object that is about to be deleted. (The revalidator itself
-        // is a member and outlives this body — it dies after the destructor
-        // returns, before ~QObject runs.)
-        pauseRevalidation();
         return;
     }
 
@@ -762,6 +776,11 @@ void SProject::pauseRevalidation()
 void SProject::resumeRevalidation()
 {
     if (revalidator_) revalidator_->resume();
+}
+
+void SProject::shutdownRevalidation()
+{
+    if (revalidator_) revalidator_->shutdown();
 }
 
 void SProject::enableInvalidation()

@@ -279,6 +279,12 @@ public:
     void pauseRevalidation();
     void resumeRevalidation();
 
+    // Quiesce the worker pool PERMANENTLY, and join it. ~SProject calls this
+    // before it touches the object graph: the pool's revalidation lane holds
+    // BORROWED pointers into that graph, so a cascade that runs while the
+    // workers are live hands them dangling ones. There is no resume.
+    void shutdownRevalidation();
+
     // Suppress capture invalidation during project loading.
     // During deserialization, all pages are empty anyway, so there's no point
     // in triggering invalidation chains. Wrap entire load sequence in:

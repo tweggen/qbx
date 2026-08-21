@@ -30,8 +30,16 @@ void CaptureRevalidator::scheduleRevalidation(IRevalidatable* object, uint32_t a
     if (!object || aspects == 0) return;
 
     {
-        object->revalAddRef();
         std::lock_guard<std::mutex> lock(queueLock_);
+        // Refuse after shutdown, and refuse BEFORE taking the pin. No worker
+        // will ever dequeue this job, so nothing would release the pin — and a
+        // permanently pinned SObject never re-arms the deleteLater() that
+        // event() swallowed while it was pinned (see SObject::revalRemoveRef).
+        // The teardown path reaches here for real: ~SProject quiesces the pool
+        // first and THEN cascades the object graph, and an object dying inside
+        // that cascade still runs its invalidation hooks.
+        if (shutdown_) return;
+        object->revalAddRef();
         revalidationQueue_.push({object, aspects, priority});
     }
     queueNotEmpty_.notify_one();
@@ -56,6 +64,15 @@ void CaptureRevalidator::shutdown() {
         // Clearing releases the closures' shared_ptr captures here, under the
         // lock, before workers are joined.
         analysisQueue_.clear();
+
+        // Drop queued revalidation jobs too. This lane used to be the ONE the
+        // shutdown left standing, and it is the one whose entries are BORROWED
+        // raw pointers — a job still in it at teardown is a job a worker would
+        // run against an object the project is busy destroying. As in
+        // retireObject(), the dropped jobs are deliberately NOT unpinned: the
+        // last unpin re-arms a deleteLater() on an object that is already
+        // being torn down.
+        while (!revalidationQueue_.empty()) revalidationQueue_.pop();
 
         // Abort pending graph demands so no consumer stays blocked in wait();
         // in-flight nodes finish on their own (their demand refs are on the
@@ -129,11 +146,23 @@ void CaptureRevalidator::workerLoop() {
                       || !graphReady_.empty()));
             });
 
-            // If shutting down and all queues empty, exit
-            if (shutdown_ && revalidationQueue_.empty() && graphReady_.empty()
-                && analysisQueue_.empty()) {
-                break;
-            }
+            // Shutdown is a TEARDOWN, not a drain: leave at once, and leave
+            // whatever state the pool is in.
+            //
+            // This test used to require all three queues to be empty, which is
+            // a HANG: shutdown() never cleared revalidationQueue_, so with the
+            // pool PAUSED (pause() from a failed load, pauseBackground() from
+            // a render) a leftover reval job made the predicate above return
+            // true on shutdown_, the exit test false, and the paused branch
+            // below `continue` — every worker spinning at 100% CPU against the
+            // condition variable while shutdown()'s join() waited for them
+            // forever.
+            //
+            // Nothing is left waiting on the work being abandoned: shutdown()
+            // aborts every demand of every node it knows about, and a node
+            // promoted afterwards by an in-flight completion had its demands
+            // cleared in the same pass.
+            if (shutdown_) break;
 
             // Paused (woke only for a shutdown check) or nothing to do: loop.
             const bool backgroundAvailable =

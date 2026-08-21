@@ -19,6 +19,7 @@
 #include <thread>
 #include <vector>
 #include <cstdio>
+#include <cstdlib>
 
 static int failures = 0;
 #define CHECK(cond, msg)                                                    \
@@ -226,6 +227,69 @@ int main()
         auto *s = new SlowReval();
         reval.retireObject(s);                      // must return promptly
         CHECK(s->prepCount_.load() == 0, "retireObject() with no jobs is a safe no-op");
+        delete s;
+    }
+
+    // ---- Test 4: shutdown() must return while the pool is PAUSED ----------
+    // The reval lane is the one shutdown() used to leave standing, and the
+    // worker exit test used to require every queue empty. Paused + one queued
+    // job = each worker spinning between the wait predicate (true the moment
+    // shutdown_ is set) and the paused `continue` below it, forever, while
+    // shutdown()'s join() waits for threads that will never return. Observed
+    // as a hung app in ~SProject on File -> Open.
+    {
+        auto *pool  = new CapturePagePool(16);
+        auto *reval = new CaptureRevalidator(pool, 4);
+        auto *s     = new SlowReval();
+
+        reval->pause();                      // no worker will dequeue
+        reval->scheduleRevalidation(s, Preview, 1);
+
+        std::atomic<bool> done{false};
+        std::thread t([&]() { delete reval; done.store(true); });
+        // WALL CLOCK, not an iteration count: when this regresses the four
+        // workers spin at 100 % CPU, a 1 ms sleep on Windows becomes ~15 ms,
+        // and a 5000-iteration loop is a 78-second watchdog that CTest kills
+        // first — the named failure would never be printed.
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (!done.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+        CHECK(done.load(),
+              "shutdown() returns while the pool is paused with a queued job");
+        if (!done.load()) {
+            // The workers are spinning and the join will never return, so
+            // there is nothing to join here either: report the named failure
+            // instead of burning the whole CTest timeout on a hang.
+            printf("%d test(s) failed\n", failures);
+            fflush(stdout);
+            std::_Exit(1);
+        }
+        t.join();
+        CHECK(s->prepCount_.load() == 0,
+              "the queued job was dropped by shutdown(), not run");
+        // refs_ stays 1 on purpose: a dropped job is NOT unpinned, exactly as
+        // retireObject() documents (the last unpin re-arms a deleteLater() on
+        // an object that is already being destroyed).
+        delete s;
+        delete pool;
+    }
+
+    // ---- Test 5: after shutdown(), scheduling refuses and takes no pin -----
+    {
+        CapturePagePool pool(16);
+        CaptureRevalidator reval(&pool, 2);
+        auto *s = new SlowReval();
+
+        reval.shutdown();                    // idempotent: the dtor repeats it
+        reval.scheduleRevalidation(s, Preview, 1);
+
+        CHECK(s->refs_.load() == 0,
+              "scheduleRevalidation() after shutdown() takes no pin");
+        CHECK(reval.jobsQueued() == 0,
+              "scheduleRevalidation() after shutdown() queues nothing");
+        std::this_thread::sleep_for(20ms);
+        CHECK(s->prepCount_.load() == 0,
+              "scheduleRevalidation() after shutdown() runs nothing");
         delete s;
     }
 
