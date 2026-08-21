@@ -62,10 +62,13 @@ private:
 };
 
 // A VST3 class id is 16 opaque bytes; the engine's descriptor uid is a string.
-// The canonical spelling here is 32 upper-case hex digits, which is stable
-// across platforms and safe in an XML attribute — a saved project resolves its
-// plugin by exactly this. Both directions, because the loader has to get back to
-// the TUID it was given.
+// The canonical spelling here is 32 upper-case hex digits IN COM (Windows
+// GUID) BYTE ORDER, ALWAYS — regardless of which platform produced the TUID
+// (plugins/CONTRACT.md; the .cc file explains the COM_COMPATIBLE mechanism
+// this is canonicalizing across). That is what makes it safe in an XML
+// attribute: a project saved on Windows and one saved on Linux/macOS name the
+// SAME plugin with the SAME string. Both directions, because the loader has
+// to get back to the TUID it was given.
 std::string vst3UidFromTuid( const Steinberg::TUID uid );
 bool        vst3TuidFromUid( const std::string &uid, Steinberg::TUID out );
 

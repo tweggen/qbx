@@ -43,6 +43,28 @@ Invariants:
    reach the file. Asserted by twlog_test (late records from a fresh thread,
    plus an atexit handler registered before the sink exists).
 
+7. **String→double parsing in `parseFractionOrDouble` is LOCALE-INDEPENDENT**
+   (found 2026-08-21: every clip time-COMPRESSED with `resize-clip
+   stretch="0.5"` rendered as digital silence, on Linux only). `std::stod`/
+   `strtod` read the C library's GLOBAL locale — the one `std::setlocale()`
+   mutates — not the separate C++ `std::locale` mechanism, and Qt's platform
+   integration calls `setlocale(LC_ALL, "")` while constructing `QApplication`
+   (confirmed by probe, including under `QT_QPA_PLATFORM=offscreen`) whenever
+   the environment's `LC_NUMERIC` names a comma-decimal locale — e.g.
+   `de_DE.UTF-8`, an ordinary developer-machine setting on Linux, and never
+   seen on Windows because the Win32 CRT does not adopt `LC_NUMERIC` from the
+   environment on its own. Every `.qxp`/`.qxa` attribute this parser reads is
+   written with `.` as the decimal point, so under a comma locale
+   `std::stod("0.5")` silently parsed only the leading `"0"` and returned
+   `0.0` — collapsing to `Fraction(0)`, which every caller downstream (e.g.
+   `twGrainSource`'s ctor) then clamps away from zero as if no stretch had
+   been requested at all. `parseDoubleInvariant()` (a `std::istringstream`
+   imbued with `std::locale::classic()` — a mechanism `setlocale()` cannot
+   touch) is the ONLY correct way to parse a decimal literal anywhere in this
+   codebase; never add a bare `std::stod`/`std::strtod` call on a value that
+   came from a project file, a script attribute, or any other portable
+   spelling.
+
 **Toolchain constraint — no `thread_local` with a non-trivial destructor.**
 On MinGW-w64 GCC 13.1.0 (x86_64-posix-seh, the Windows build compiler), a
 `thread_local std::string`/`std::vector`/anything needing `__cxa_thread_atexit`
