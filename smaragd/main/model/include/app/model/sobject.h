@@ -184,6 +184,35 @@ public:
     { (void) clipPos; return twEventClipResolved{}; }
 
     /**
+     * One step of a WINDOW, for a position walk (proposal 09 §15).
+     *
+     * A window (a cut, a take stack) does not place its content by a start
+     * time the way a container places a child link: it applies its own slip,
+     * loop fold and stretch. So a walk that converts a position in THIS
+     * object's timeline into a position in the material underneath it has to
+     * ask the window, and this is where it asks.
+     *
+     * `clipRel` is a position in this object's own domain (already relative to
+     * this object's start); on success `content` is the object the material
+     * actually lives in and `pos` is the position IN THAT OBJECT. False means
+     * "not a window" — the caller then walks childLinks() by start time, which
+     * is what an ordinary container wants.
+     *
+     * It lives on SObject for the reason contentKind() and resolveEventClip()
+     * do: the walk is in the MODEL and may not depend on `app/objects/cut`.
+     * Read-only and non-blocking BY CONTRACT — a repaint calls it, so it must
+     * never build a capture, acquire a reader or block on the object mutex
+     * (main/timeline/CONTRACT.md inv. 1). SCut's override therefore takes the
+     * try-lock snapshot, never getSnapshotBlocking().
+     */
+    struct SWindowStep {
+        SObject *content = nullptr;
+        offset_t pos     = 0;
+    };
+    virtual bool windowStep( offset_t clipRel, SWindowStep &out ) const
+    { (void) clipRel; (void) out; return false; }
+
+    /**
      * True for containers the index-path search may descend into (track
      * lanes). Path RESOLUTION follows explicit indices and needs no flag;
      * this only scopes the reverse search (pathOf) exactly as the historical

@@ -152,6 +152,19 @@ public:
     // dirty ranges inside an inactive take's content map to NOTHING.
     QList<SDirtyRange> mapChildRangesToSelf(
         SLink *childLink, const QList<SDirtyRange> &childRanges ) override;
+    // Position walk (proposal 09 §15): a column is a window whose content is
+    // its ACTIVE take, aligned with the column — so the step is the identity
+    // into that take, which is itself a window and continues the chain. The
+    // base's childLinks() fallback would descend into EVERY take and report an
+    // inactive one's arrangement as sounding.
+    bool windowStep( offset_t clipRel, SWindowStep &out ) const override
+    {
+        SObject *take = activeTakeObject();
+        if( !take ) return false;               // no active take: nothing audible
+        out.content = take;
+        out.pos     = clipRel;
+        return true;
+    }
     int seekTo( offset_t ) override;
     bool hasDuration() const override { return true; }
     length_t getDuration() const override;

@@ -227,6 +227,18 @@ public:
     QList<SDirtyRange> mapChildRangesToSelf(
         SLink *childLink, const QList<SDirtyRange> &childRanges ) override;
 
+    // The FORWARD twin of mapChildRangesToSelf, for a single position
+    // (proposal 09 §15): a clip-relative position -> the position in our
+    // CONTENT. Same three stages, applied in the other order — loop fold in
+    // the warped domain, then the exact warp inverse — so the two can never
+    // disagree about where the window maps.
+    //
+    // NON-BLOCKING by contract (SObject::windowStep): a repaint asks it. It
+    // takes the try-lock snapshot and NEVER calls ensureReader(), which for a
+    // container-backed asset would build a capture — a full render — on the UI
+    // thread.
+    bool windowStep( offset_t clipRel, SWindowStep &out ) const override;
+
     // Waveform preview for a container-backed asset cut: peaks come from the
     // capture (the rendered snapshot shared with audio), in the container's frame
     // domain, so `start` is the container offset the cut window maps to. Sample

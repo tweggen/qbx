@@ -431,6 +431,8 @@ const Fixture kFixtures[] = {
       "<dissolve-arrangement name='Drums' restorePlan='@0;1@2'/>" },
     { "assert-tab-set",
       "<assert-tab-set names='Arrangement,Drums' active='Drums'/>" },
+    { "assert-view-playhead",
+      "<assert-view-playhead root='Drums' frame='24000' sounding='true' tolerance='0'/>" },
     { "assert-arrangements",
       "<assert-arrangements names='Bass,Drums' trackCounts='1,2'/>" },
     // The root-qualified spellings (D21): a qualifier must survive the round

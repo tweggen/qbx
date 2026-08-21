@@ -244,6 +244,37 @@ private:
     // position-derived one, so an RT-advanced locator can't leave a ghost line.
     int lastPaintedCursorX_ = -1;
 
+    // --- the playhead in THIS view's own root (proposal 09 §15) ----------
+    // The transport has one position and it is a MASTER frame. In an
+    // arrangement tab that number means nothing, so the cursor is DERIVED by
+    // walking it down through whatever places this arrangement
+    // (splayhead::derivedPos). A master view returns the locator unchanged and
+    // pays nothing.
+    //
+    // `sounding` false = the arrangement is not being heard at this instant.
+    // The cursor then RESTS at parkedLocalPos_ — the last position it was
+    // heard at, or where the user last clicked — drawn dimmed, because a
+    // cursor that stops moving must not read as a cursor that is playing.
+public:
+    struct LocalPlayhead { offset_t pos = 0; bool sounding = false; };
+    LocalPlayhead localPlayhead() const;
+    // The position an edit driven from THIS view should act at ("split at the
+    // playhead", "write an automation point here"). In the master that is the
+    // transport's own locator; in an arrangement tab it is the derived or
+    // resting position, because a MASTER frame does not name a moment in an
+    // arrangement's timeline.
+    offset_t localLocatorPos() const { return localPlayhead().pos; }
+private:
+    // Parked position for the idle case. Mutable: paintEvent updates it while
+    // the arrangement IS sounding, so the moment it stops the cursor rests
+    // exactly where it was last heard.
+    mutable offset_t parkedLocalPos_ = 0;
+    // One-repaint memo. paintEvent and globalLocatorMoved both ask, and the
+    // walk is over the object tree; keyed on the master position it answered
+    // for, which is the only input that changes between the two calls.
+    mutable offset_t lastWalkMasterPos_ = -1;
+    mutable LocalPlayhead lastWalk_;
+
     // --- time-range selection -------------------------------------------
     enum RangeDrag { RangeNone, RangeCreate, RangeMoveStart, RangeMoveEnd, RangeMove };
     void beginRangeDrag( int x );    // mouse press in the ruler band

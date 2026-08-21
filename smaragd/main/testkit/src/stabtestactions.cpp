@@ -105,6 +105,70 @@ bool SAssertSelectionAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+// --- assert-view-playhead ---------------------------------------------------
+
+SApplyResult SAssertViewPlayheadAction::apply( SProject *project )
+{
+    if( !project ) return { false, nullptr };
+    // Through the SHELL: testkit may not include app/timeline (testkit
+    // CONTRACT inv. 5), the same route drag-clip-edge and assert-envelope take.
+    SMainWindow *win = nullptr;
+    for( QWidget *w : QApplication::topLevelWidgets() )
+        if( SMainWindow *m = qobject_cast<SMainWindow *>( w ) ) { win = m; break; }
+    if( !win ) {
+        qWarning() << "assert-view-playhead: no main window";
+        return { false, nullptr };
+    }
+    win->ensureViewShell();
+
+    struct { offset_t pos = 0; bool sounding = false; } lp;
+    if( !win->viewPlayheadFor( root_, lp.pos, lp.sounding ) ) {
+        qWarning() << "assert-view-playhead FAILED: no open view for root" << root_
+                   << "(open-arrangement-tab first; this verb opens nothing)";
+        return { false, nullptr };
+    }
+
+    if( !sounding_.isEmpty() ) {
+        const bool want = ( sounding_ == QStringLiteral("true") );
+        if( lp.sounding != want ) {
+            qWarning() << "assert-view-playhead FAILED: root" << root_
+                       << "sounding is" << lp.sounding << "expected" << want
+                       << "(pos" << (qint64) lp.pos << ")";
+            return { false, nullptr };
+        }
+    }
+    if( frameGiven_ ) {
+        const qint64 have = (qint64) lp.pos;
+        if( qAbs( have - frame_ ) > tolerance_ ) {
+            qWarning() << "assert-view-playhead FAILED: root" << root_
+                       << "frame is" << have << "expected" << frame_
+                       << "tolerance" << tolerance_;
+            return { false, nullptr };
+        }
+    }
+    return { true, nullptr };
+}
+
+void SAssertViewPlayheadAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "root", root_ );
+    if( frameGiven_ ) elem.setAttribute( "frame", QString::number( frame_ ) );
+    if( !sounding_.isEmpty() ) elem.setAttribute( "sounding", sounding_ );
+    // Always written: the roundtrip gate compares attribute sets, and a
+    // conditional write of a value the fixture spells is a mismatch.
+    elem.setAttribute( "tolerance", QString::number( tolerance_ ) );
+}
+
+bool SAssertViewPlayheadAction::readXml( const QDomElement &elem, int )
+{
+    root_       = elem.attribute( "root" );
+    frameGiven_ = elem.hasAttribute( "frame" );
+    frame_      = elem.attribute( "frame", "0" ).toLongLong();
+    sounding_   = elem.attribute( "sounding" );
+    tolerance_  = elem.attribute( "tolerance", "0" ).toLongLong();
+    return true;
+}
+
 static const bool s_reg_tabtest = (
     SActionRegistry::instance().registerType(
         QStringLiteral("assert-tab-set"),
@@ -112,5 +176,8 @@ static const bool s_reg_tabtest = (
     SActionRegistry::instance().registerType(
         QStringLiteral("assert-selection"),
         []{ return new SAssertSelectionAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-view-playhead"),
+        []{ return new SAssertViewPlayheadAction; } ),
     true
 );

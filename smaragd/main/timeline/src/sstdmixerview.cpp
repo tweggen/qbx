@@ -76,6 +76,7 @@
 #include "app/media/smediadrop.h"
 #include "app/media/smediaref.h"
 #include "app/model/splacements.h"
+#include "app/model/splayheadmap.h"
 #include "app/actions/sactionhistory.h"
 #include <QFrame>
 #include <QUndoStack>
@@ -238,6 +239,39 @@ int SMVActualView::getXPosOfOffset( offset_t off ) const
     return ((int)((((double)off)/srate)*secondWidth_))-upperLeftX_;
 }
 
+// Where the playhead is in THIS view's root (proposal 09 §15). See the comment
+// on LocalPlayhead in the header, and splayhead::derivedPos for the walk and
+// the three decisions it encodes.
+//
+// The master view takes the early return, so nothing about the master's
+// playhead changed with this feature — which is what makes the whole existing
+// suite the gate for "nothing moved".
+SMVActualView::LocalPlayhead SMVActualView::localPlayhead() const
+{
+    const offset_t masterPos = SApplication::app().getGlobalLocatorPos();
+    const QString root = smv_.rootName();
+    if( root.isEmpty() ) return { masterPos, true };
+
+    if( masterPos == lastWalkMasterPos_ ) return lastWalk_;   // one-repaint memo
+
+    LocalPlayhead lp;
+    SProject *project = smv_.model_ ? &smv_.model_->getProject() : nullptr;
+    const splayhead::Position d = splayhead::derivedPos( project, root, masterPos );
+    if( d.sounding ) {
+        lp.pos = d.pos;
+        lp.sounding = true;
+        // Remember where it was last HEARD, so the moment the placement ends
+        // the cursor rests there instead of jumping.
+        parkedLocalPos_ = d.pos;
+    } else {
+        lp.pos = parkedLocalPos_;
+        lp.sounding = false;
+    }
+    lastWalkMasterPos_ = masterPos;
+    lastWalk_ = lp;
+    return lp;
+}
+
 void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
 {
     // Qt6 forbids constructing a QPainter on a widget outside paintEvent.
@@ -246,7 +280,11 @@ void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
     QRect myRect = rect();
     int w = myRect.width();
     int h = myRect.height();
-    int newX = getXPosOfOffset( newPos );
+    // Not getXPosOfOffset(newPos): in an arrangement tab the cursor is drawn
+    // at the DERIVED position, so the column to invalidate is that one.
+    // (newPos is still what the memo keys on — SApplication has already
+    // published it by the time this slot runs.)
+    int newX = getXPosOfOffset( localPlayhead().pos );
     const int cursorWidth = 3;
 
     // Erase the cursor at the column where it was ACTUALLY last painted, NOT at
@@ -281,7 +319,14 @@ void SMVActualView::followLocator( offset_t newPos, offset_t oldPos )
 
     int w = width();
     if( w <= 0 ) return;
-    int x = getXPosOfOffset( newPos );   // cursor position in view-space pixels
+    // In an arrangement tab the cursor is at the DERIVED position (proposal 09
+    // §15), so following newPos — a MASTER frame — would scroll to a column the
+    // cursor is nowhere near. Follow what is actually drawn, and do not follow
+    // at all while this root is not being heard: the cursor is resting, and a
+    // view that scrolled while nothing moved would be chasing a still line.
+    const LocalPlayhead lp = localPlayhead();
+    if( !lp.sounding ) return;
+    int x = getXPosOfOffset( lp.pos );   // cursor position in view-space pixels
 
     // Leading-edge zones: last 20% moving forward, first 20% winding backward.
     // Re-page so the cursor lands back near the far side (10% / 90%), leaving
@@ -388,7 +433,12 @@ void SMVActualView::paintEvent( QPaintEvent * )
     // grows with the playhead, on each armed lane (from the record start to the
     // live locator). The real clip — with its waveform — is placed when recording
     // finishes; this is live feedback that something is being captured.
-    if( SApplication::app().isRecordingActive() ) {
+    // Master root only: recordingStartFrame() and the global locator are both
+    // MASTER frames, so this overlay would be drawn at meaningless columns in
+    // an arrangement tab. Recording into an arrangement is not reachable
+    // today (an armed track lives in the master), so there is nothing there
+    // to draw rather than something drawn wrongly.
+    if( SApplication::app().isRecordingActive() && smv_.rootName().isEmpty() ) {
         int xs = getXPosOfOffset( SApplication::app().recordingStartFrame() );
         int xe = getXPosOfOffset( SApplication::app().getGlobalLocatorPos() );
         if( xe > xs ) {
@@ -449,9 +499,15 @@ void SMVActualView::paintEvent( QPaintEvent * )
     // (SourceOver) reads cleanly over the grey selection band, where the old XOR
     // compositing would have produced a muddy colour.
     {
-        int x = getXPosOfOffset( SApplication::app().getGlobalLocatorPos() );
+        const LocalPlayhead lp = localPlayhead();
+        int x = getXPosOfOffset( lp.pos );
         if( x>=0 && x<myRect.width() ) {
-            p.setPen( QColor( 30, 200, 30 ) );
+            // Dimmed while this root is NOT being heard: the cursor rests
+            // rather than moving, and a resting cursor must not look like a
+            // playing one. Only ever dim in an arrangement tab — the master
+            // is always sounding by definition.
+            p.setPen( lp.sounding ? QColor( 30, 200, 30 )
+                                  : QColor( 60, 110, 60 ) );
             p.drawLine( x, 0, x, myRect.height()-1 );
             // Remember where the line really landed so the next move erases THIS
             // column (globalLocatorMoved), not a drifted position.
@@ -622,7 +678,11 @@ void SStdMixerView::ctSplitSample()
     SProject *project = app.getCurrentProject();
     if( !project ) return;
 
-    offset_t splitTime = app.getGlobalLocatorPos();
+    // THIS view's playhead, not the transport's: in an arrangement tab the
+    // global locator is a master frame and would split at an unrelated moment
+    // (proposal 09 §15). In the master the two are the same number.
+    offset_t splitTime = qContent_ ? qContent_->localLocatorPos()
+                                   : app.getGlobalLocatorPos();
 
     QList<QList<int>> paths = app.getCurrentSelectionPaths();
     if( paths.isEmpty() ) {
@@ -1749,6 +1809,24 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         if( delta.manhattanLength() <= CLICK_THRESHOLD ) {
             // No range drag and minimal mouse movement = pure click.
             offset_t ofs = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+            if( !smv_.rootName().isEmpty() ) {
+                // ARRANGEMENT TAB: `ofs` is a frame of THIS arrangement, and the
+                // transport's position is a MASTER frame. Writing one into the
+                // other is what made clicking in an asset tab jump the master
+                // transport to an unrelated bar — the defect proposal 09 §15
+                // exists to remove. So the click parks THIS view's own resting
+                // cursor and does not touch the transport.
+                //
+                // Mapping the click BACK to a master frame was considered and is
+                // a non-goal for now: it is ambiguous by construction (which of
+                // N placements, and which repetition of a looping one) and
+                // impossible when nothing places the arrangement at all. §15
+                // records it.
+                parkedLocalPos_ = ofs;
+                lastWalkMasterPos_ = -1;      // drop the memo: the answer moved
+                update();
+                return;
+            }
             // setGlobalLocatorPos repositions the RUNNING engine too when
             // playing (see SApplication) — a plain model_->seekTo would only
             // move the component cursors, not the playback position.

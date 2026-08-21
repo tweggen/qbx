@@ -68,6 +68,10 @@ public:
      *  cannot be closed and the call is ignored for it. */
     void closeFor( SObject *root );
 
+    /** The editor already open for `root`, or null. Unlike openFor() this
+     *  OPENS NOTHING — an assertion that reads a view must not create one. */
+    QWidget *editorFor( const SObject *root ) const;
+
     /** Tab labels in order, master first. For assert-tab-set. */
     QStringList tabNames() const;
 

@@ -787,3 +787,108 @@ Two properties that must hold through the migration, and that the gates check:
 - **A qualified path that names an unknown arrangement is REFUSED**, never
   silently resolved against the master. That refusal is the whole safety property
   the ambient design could not offer.
+
+## 15. The playhead in an arrangement tab (requester, 2026-08-21)
+
+> "Main arrangement is playing back linearily. Let's say there is a drum loop
+> starting at bar 5 which is an asset of its own. I would now expect: if
+> playback (main window) runs, position cursor in main window progresses
+> linearily, in asset tab it rests somewhere until the loop is played back,
+> then it cycles as the loop cycles in main arrangement."
+
+**This reopens §4's locked decision.** §4 read: *"Drawn-from tabs need no
+playhead drawing… the 'N ghost playheads where the asset is placed N times'
+problem… simply does not arise."* That was wrong in the direction that matters:
+the tab did not need *no* playhead, it needed *its own*. What it actually had
+was the worst of both — `SMVActualView::paintEvent` drew
+`SApplication::getGlobalLocatorPos()`, a **master frame**, on a timeline that
+has no relation to the master's. The green line in a Drums tab was a number
+from another coordinate system.
+
+### D22 — the arrangement playhead is DERIVED, never the locator
+
+The transport has one position. An arrangement tab's cursor is that position
+**walked down** through whatever places the arrangement:
+`splayhead::derivedPos( project, rootName, masterPos )`
+(`main/model/include/app/model/splayheadmap.h`).
+
+The walk descends child links by start time, tests a placement's span, and
+hands the position to the WINDOW at every window it meets — the new
+`SObject::windowStep()`, overridden by `SCut` (slip, loop fold, warp inverse)
+and by `STakeStack` (the ACTIVE take only). It is the forward twin of
+`mapChildRangesToSelf`, deliberately spelled the same way so the two cannot
+disagree about where a window maps.
+
+**A naive `masterPos - clipStart` is wrong and the requester's own example is
+the counter-example**: a *loop* is exactly the thing that subtraction cannot
+express. Stretch and slip are the other two.
+
+### D23 — three decisions inside the walk, none of them details
+
+1. **Which placement wins.** An arrangement may be placed N times, and two
+   placements can overlap. **The first hit in child-link order wins** — the
+   order the arranger draws in. §4's "N ghost playheads" objection is answered
+   by *choosing*, not by drawing nothing: the tab is showing ONE timeline, and
+   one cursor that is right for one placement beats N the user must
+   disambiguate. Announced here rather than discovered later.
+2. **"Not sounding" is an answer, not a zero.** The locator is outside every
+   placement, the placement is on an inactive take, or nothing places the
+   arrangement at all. The cursor then **RESTS** at the position it was last
+   heard at — or where the user last clicked — and is drawn **dimmed**, because
+   a cursor that has stopped moving must not read as one that is playing. That
+   is the requester's "rests somewhere" made literal.
+3. **The cycle guard is per PATH, not a global memo.** The same body reached
+   twice at two positions must be visited twice: the first reach may not
+   contain the position while the second does. A cycle here is a stack
+   overflow on the UI thread — the same failure class M5's placement guard
+   found — so depth is bounded too.
+
+### D24 — a click in an arrangement tab parks; it does not seek
+
+Before this, clicking the timeline in a Drums tab called
+`setGlobalLocatorPos( ofs )` with `ofs` a **Drums frame**, jumping the master
+transport to an unrelated bar. It now parks that tab's own resting cursor and
+leaves the transport alone.
+
+**Mapping the click BACK to a master frame is a deliberate non-goal.** It is
+ambiguous by construction — which of N placements, and which repetition of a
+looping one — and impossible when nothing places the arrangement. A later
+proposal may add it with a stated rule (nearest repetition to the current
+locator is the obvious candidate); guessing one now would put a silent choice
+under a gesture.
+
+### D25 — the same rule for every locator-consuming edit in the arranger
+
+A master frame does not name a moment in an arrangement, so anything that
+reads "the playhead" to decide *where to edit* had to move to the view's own
+position: **split at the playhead** (`ctSplitSample`) and the **automation
+write tick** (`SSMVMixerControl`) now read `SMVActualView::localLocatorPos()`.
+`followLocator` follows the drawn cursor and does not scroll while the root is
+resting. The **recording overlay** is gated to the master, where its two
+inputs (`recordingStartFrame()` and the locator) actually live.
+
+**NON-BLOCKING BY CONTRACT.** A repaint calls all of this, so `windowStep()`
+takes `SCut`'s try-lock snapshot and **never** `ensureReader()` — which for a
+container-backed asset would build a capture, i.e. run a full render on the UI
+thread (`main/timeline/CONTRACT.md` inv. 1, and the same trap proposal 39 M3
+records for `folderTrack->getPreview()`).
+
+### Gate
+
+`tab_playhead_derived.qxa` walks the locator across a looping asset clip
+placed at 96000 and reads BOTH tabs at every stop — the master as the control,
+which must stay exactly the locator and never report "not sounding". The
+loop-wrap rows are the ones that bite: **verified failing** with the fold
+disabled (`frame is 48000 expected 0`, `72000 expected 24000`, and the
+resting-position row cascading from it). The non-looping and slipped controls
+in the same case are what separate the fold from the walk.
+
+**NOT gated:** the pixels (the arranger canvas is not grabbable — the same
+limit proposal 39 records for `SRecordingRendererInline::draw`), so the DIMMED
+colour and the repaint wiring are hand-verified; the derived cursor under a
+running transport (the case moves the locator with `set-locator`, which is
+what the derivation reads — running it would add a wall-clock bound to a case
+about arithmetic); more than one placement of one arrangement, and overlapping
+placements — the first-hit rule is implemented and stated, not gated; nesting
+deeper than one level; and the parked position surviving a project save (it is
+view state and is deliberately not persisted).

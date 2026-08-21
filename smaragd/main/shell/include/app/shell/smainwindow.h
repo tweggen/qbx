@@ -192,6 +192,20 @@ public:
     // point of the verb is that the SAME call the painter makes is what runs.
     // It needs NO arranger and NO painter - a collect is expressed on a time
     // window, not on a QPainter (see SEnvelopeWindow).
+    // TEST ENTRY POINT (proposal 09 §15): where the playhead IS in the view
+    // OPEN for `rootName` (empty = the master). `pos` is that view's own
+    // position — the transport's locator in the master, the DERIVED position
+    // in an arrangement tab — and `sounding` is false when the arrangement is
+    // not being heard and the cursor is resting. False means no tab is open
+    // for that root: this OPENS NOTHING, because an assertion that creates the
+    // thing it measures measures nothing.
+    //
+    // Here for the same reason collectClipEnvelope is: testkit may not include
+    // app/timeline (testkit CONTRACT inv. 5), and the point of the verb is
+    // that it reads the REAL view rather than re-deriving the number.
+    bool viewPlayheadFor( const QString &rootName, offset_t &pos,
+                          bool &sounding ) const;
+
     bool collectClipEnvelope( const QString &clipPath, offset_t start,
                               length_t length, int width,
                               std::vector<preview_t> &out );
