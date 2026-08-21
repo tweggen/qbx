@@ -276,6 +276,9 @@ SApplyResult SAssertLaneOverlayAction::apply( SProject * )
     const long long fillPx   = field( QStringLiteral( "fillPixels" ) );
     const long long darker   = field( QStringLiteral( "darkerThanFill" ) );
     const long long lighter  = field( QStringLiteral( "lighterThanClip" ) );
+    const long long lutPx    = field( QStringLiteral( "lutPixels" ) );
+    const long long lutMin   = field( QStringLiteral( "lutIndexMin" ) );
+    const long long lutMax   = field( QStringLiteral( "lutIndexMax" ) );
 
     if( expectOverlay_ ) {
         // The fill must be ON SCREEN, or "lighter than the fill" is a relation
@@ -311,6 +314,32 @@ SApplyResult SAssertLaneOverlayAction::apply( SProject * )
         }
     }
 
+    // --- the LUT gate (proposal 40 M2 palette follow-up, 2026-08-21) -------
+    // Independent of the expectOverlay_ branch above (a different colour law,
+    // a different classifier), and STRICTLY additive: unset (-1, the
+    // default) runs neither check, so every pre-existing case is untouched.
+    if( minLutPixels_ >= 0 && lutPx < minLutPixels_ ) {
+        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                   << "- expected at least" << minLutPixels_
+                   << "LUT (exact palette-colour) pixels, got" << lutPx
+                   << "|" << rep;
+        return { false, nullptr };
+    }
+    if( maxLutPixels_ >= 0 && lutPx > maxLutPixels_ ) {
+        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                   << "- expected at most" << maxLutPixels_
+                   << "LUT (exact palette-colour) pixels, found" << lutPx
+                   << "|" << rep;
+        return { false, nullptr };
+    }
+    if( minLutSpread_ >= 0 && ( lutMax - lutMin ) < minLutSpread_ ) {
+        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                   << "- expected a palette index spread of at least"
+                   << minLutSpread_ << "(lutIndexMax - lutIndexMin), got"
+                   << ( lutMax - lutMin ) << "|" << rep;
+        return { false, nullptr };
+    }
+
     if( !contains_.isEmpty() && !rep.contains( contains_ ) ) {
         qWarning() << "assert-lane-overlay FAILED:" << trackPath_
                    << "- report does not contain" << contains_ << "|" << rep;
@@ -333,6 +362,12 @@ void SAssertLaneOverlayAction::writeXml( QDomElement &elem ) const
     // byte-unchanged.
     if( bandOnly_ )            elem.setAttribute( "bandOnly", "true" );
     if( maxPixels_ >= 0 )      elem.setAttribute( "maxPixels", maxPixels_ );
+    // Same "written only when set" discipline as maxPixels_ above, for the
+    // same reason: every case predating proposal 40's 2026-08-21 palette
+    // follow-up round-trips byte-unchanged.
+    if( minLutPixels_ >= 0 )   elem.setAttribute( "minLutPixels", minLutPixels_ );
+    if( maxLutPixels_ >= 0 )   elem.setAttribute( "maxLutPixels", maxLutPixels_ );
+    if( minLutSpread_ >= 0 )   elem.setAttribute( "minLutSpread", minLutSpread_ );
 }
 
 bool SAssertLaneOverlayAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -346,6 +381,9 @@ bool SAssertLaneOverlayAction::readXml( const QDomElement &elem, int /*version*/
     contains_      = elem.attribute( "contains" );
     bandOnly_      = elem.attribute( "bandOnly", "false" ) == "true";
     maxPixels_     = elem.attribute( "maxPixels", "-1" ).toInt();
+    minLutPixels_  = elem.attribute( "minLutPixels", "-1" ).toInt();
+    maxLutPixels_  = elem.attribute( "maxLutPixels", "-1" ).toInt();
+    minLutSpread_  = elem.attribute( "minLutSpread", "-1" ).toInt();
     return true;
 }
 

@@ -401,6 +401,22 @@ long-term shape.
     M1b bounce is a whole-project render anchored at project frame 0 — no
     warp map, no clip-relative offset, anywhere in the paint path.
 
+    **The colour law changed 2026-08-21** (requester follow-up: "rainbow, in
+    case I miss shades of grey" — the original partial-alpha tint mixed from
+    the lane fill was too subtle). The band now paints fully OPAQUE from ONE
+    authoritative LUT, `STrackRendererInline::feelFlowPalette()`: a quantized
+    24-step hue ramp, red (low compliance) through yellow to green (high
+    compliance) — traffic-light semantics, red is the spot to edit/listen/
+    overdub. The pixel gate got STRONGER, not weaker, to match: exact-RGB LUT
+    membership (`SMainWindow::describeLaneOverlay`'s band-mode classification,
+    `assert-lane-overlay`'s `minLutPixels=`/`maxLutPixels=`/`minLutSpread=`)
+    replaces the old luminance-relation floor as the load-bearing check, and
+    the negative ("nothing painted") cases now assert an EXACT zero LUT
+    pixels rather than a measured noise floor with margin — opaque paint
+    makes an exact match sound, where the old partial-alpha tint could not
+    honestly reach a literal zero over a clip's own waveform paint. See
+    `main/objects/track/CONTRACT.md`'s Feel Flow section for the LUT itself.
+
 26. **The Feel Flow Track Detail panel section is read-only and pumped from
     `SApplication::meterTick`, never a second implementation of the overlay's
     own read path** (proposal 40 M3, `main/timeline/include/app/timeline/

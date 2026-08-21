@@ -91,41 +91,47 @@ static void drawChildSumOverlay( QPainter &p, const QRect &visibRect,
 
 // --- proposal 40 "Feel Flow" M2: the compliance heatmap band --------------
 //
-// Per-column tint for the compliance heatmap (design section 4.4, kickoff
-// AC 2). The two endpoints of the interpolation are THIS track's own current
-// fill colour (laneFillColor(), already selection/mute/solo/arm-aware) and
-// the clip body's fixed grey QColor(160,160,160) -- the same pair
-// drawChildSumOverlay's colour is derived from above. That choice makes the
-// relation assert-lane-overlay measures (strictly lighter than the fill,
-// strictly darker than the clip body) hold BY CONSTRUCTION rather than by
-// eyeballing a palette: every channel is interpolated identically, and
-// Rec.601 luminance is a LINEAR function of the channels, so the mixed
-// colour's luminance is exactly the same linear interpolation of the two
-// endpoints' luminances. For any mixing fraction strictly inside (0,1) the
-// result is therefore strictly between the two -- whatever this particular
-// track's fill colour happens to be. `tPercent` is kept well inside (0,100)
-// (25..55, i.e. never closer than 20 to either end) purely as an extra
-// margin against a dark/light STrackColorModifier state pushing the fill
-// unusually close to the clip grey; the core guarantee does not need it.
-//
-// Mapping (a relation, not a palette -- proposal 39's own discipline, D4):
-//  - LOW compliance -> closer to the clip grey (higher tPercent, higher
-//    alpha): bolder and more saturated relative to the lane -- reads as
-//    "hot"/flagged, a section fighting its own established feel;
-//  - HIGH compliance -> closer to the fill (lower tPercent, lower alpha):
-//    fainter -- reads as settled, consistent with the track's own groove.
-// Alpha and tPercent move together so the two cues never disagree.
-static QColor sFeelFlowTint( const QColor &fill, float compliance )
+// Per-column colour for the compliance heatmap (design section 4.4, kickoff
+// AC 2). ORIGINALLY (2026-08-20) this interpolated between the lane's own
+// fill colour and the clip body's fixed grey at partial alpha, chosen so the
+// M2 pixel gate's colour relation (strictly lighter than the fill, strictly
+// darker than the clip body) held BY CONSTRUCTION. The requester found that
+// too subtle to read at a glance ("rainbow, in case I miss shades of grey")
+// and asked for AGGRESSIVE, unambiguous colour instead -- so as of the
+// 2026-08-21 follow-up the band is painted OPAQUE from
+// STrackRendererInline::feelFlowPalette(), a quantized 24-step hue ramp, RED
+// (low compliance) through YELLOW to GREEN (high compliance) -- traffic-light
+// semantics: red is the hot spot to edit, listen to, or overdub. The relation
+// the old comment described no longer applies (there is no lane-fill mixing
+// left to reason about); the new gate is exact-RGB LUT membership instead
+// (SMainWindow::describeLaneOverlay's band-mode classification), which is a
+// STRONGER assertion than a luminance relation -- opaque paint makes an exact
+// match sound, with no compositing variation to tolerate.
+int STrackRendererInline::feelFlowPaletteIndex( float compliance )
 {
     compliance = qBound( 0.0f, compliance, 1.0f );
-    const QColor clipBody( 160, 160, 160 );
-    const int tPercent = 55 - (int) ( 30.0f * compliance );   // 55 (low) .. 25 (high)
-    const int r = fill.red()   + ( ( clipBody.red()   - fill.red()   ) * tPercent ) / 100;
-    const int g = fill.green() + ( ( clipBody.green() - fill.green() ) * tPercent ) / 100;
-    const int b = fill.blue()  + ( ( clipBody.blue()  - fill.blue()  ) * tPercent ) / 100;
-    QColor tint( qBound( 0, r, 255 ), qBound( 0, g, 255 ), qBound( 0, b, 255 ) );
-    tint.setAlpha( 90 + (int) ( 120.0f * ( 1.0f - compliance ) ) );  // 210 (low) .. 90 (high)
-    return tint;
+    int idx = (int) ( compliance * (float) kFeelFlowPaletteSize );
+    if( idx >= kFeelFlowPaletteSize ) idx = kFeelFlowPaletteSize - 1;
+    return idx;
+}
+
+const std::array<QRgb, STrackRendererInline::kFeelFlowPaletteSize> &
+STrackRendererInline::feelFlowPalette()
+{
+    // Function-local static: computed exactly once, on first use (from the UI
+    // thread -- the paint path never runs off it), never per-column.
+    static const std::array<QRgb, kFeelFlowPaletteSize> palette = [] {
+        std::array<QRgb, kFeelFlowPaletteSize> pal{};
+        for( int i = 0; i < kFeelFlowPaletteSize; ++i ) {
+            // 0 deg (red) .. 120 deg (green) over the 24 steps inclusive.
+            const int hue = ( i * 120 ) / ( kFeelFlowPaletteSize - 1 );
+            QColor c;
+            c.setHsv( hue, 255, 217 );          // value ~0.85 * 255
+            pal[i] = c.rgba() | 0xff000000u;     // fully opaque, alpha 255
+        }
+        return pal;
+    }();
+    return palette;
 }
 
 // Drawn AFTER the clip loop, unlike the folder-sum overlay above, which is
@@ -148,9 +154,15 @@ static QColor sFeelFlowTint( const QColor &fill, float compliance )
 // (sfeelflowbounce.h/.cpp's RenderParams), so its hop grid already sits in
 // the SAME frame domain ctx.getTimeOf() returns here -- no warp map, no
 // clip-relative mapping, anywhere in this function.
+//
+// No `finalColor` parameter (unlike drawChildSumOverlay above): the
+// 2026-08-21 palette follow-up made the band colour a pure function of
+// compliance alone (STrackRendererInline::feelFlowPalette()), independent of
+// the lane's own fill -- that is the whole point of an unambiguous
+// traffic-light ramp, and it is also what makes the LUT gate an exact-RGB
+// match rather than a per-track-colour-dependent relation.
 static void drawFeelFlowBand( QPainter &p, const QRect &visibRect,
-                              SRenderContext &ctx, STrack &track,
-                              const QColor &finalColor )
+                              SRenderContext &ctx, STrack &track )
 {
     if( visibRect.width() < 1 || visibRect.height() < 2 ) return;
     if( track.feelFlowStale() ) return;
@@ -161,13 +173,16 @@ static void drawFeelFlowBand( QPainter &p, const QRect &visibRect,
     const int bandTop    = visibRect.bottom() - bandHeight + 1;
     const int x0         = visibRect.left();
     const size_t nHops   = ui->compliance.size();
+    const auto &palette  = STrackRendererInline::feelFlowPalette();
 
     for( int i = 0; i < visibRect.width(); ++i ) {
         const offset_t frame = ctx.getTimeOf( x0 + i );
         if( frame < 0 ) continue;               // before the project start
         const uint64_t hop = (uint64_t) frame / (uint64_t) ui->hopFrames;
         if( hop >= nHops ) continue;             // past the analyzed material
-        p.setPen( sFeelFlowTint( finalColor, ui->compliance[hop] ) );
+        const int idx = STrackRendererInline::feelFlowPaletteIndex(
+            ui->compliance[hop] );
+        p.setPen( QColor::fromRgba( palette[idx] ) );
         p.drawLine( x0 + i, bandTop, x0 + i, visibRect.bottom() );
     }
 }
@@ -268,7 +283,7 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     // Proposal 40 M2: the compliance heatmap band, drawn LAST -- see
     // drawFeelFlowBand()'s doc for why it cannot share the folder-sum
     // overlay's earlier slot.
-    drawFeelFlowBand( p, visibRect, ctx, getTrack(), finalColor );
+    drawFeelFlowBand( p, visibRect, ctx, getTrack() );
 }
 
 /**
