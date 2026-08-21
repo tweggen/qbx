@@ -93,8 +93,28 @@ void SCut::ensureReader()
         // MISS, not a cache hit -- see captureContentEpoch_ in the header for
         // the race this closes. Rebuild rather than hand out stale audio.
         const uint64_t now = contentEpochForCapture_();
-        if( now == 0 || now == captureContentEpoch_.load() ) return;
+        if( now == 0 || now == captureContentEpoch_.load() ) {
+            captureRebuildAttempts_.store( 0 );   // converged
+            captureStaleReported_.store( false );
+            return;
+        }
+        // BOUNDED (see kMaxCaptureRebuildAttempts): a container capture can be
+        // stale on every rebuild, and retrying forever hangs the UI thread.
+        if( captureRebuildAttempts_.load() >= kMaxCaptureRebuildAttempts ) {
+            if( !captureStaleReported_.exchange( true ) ) {
+                TW_LOGW( "cut", "capture for '%s' did not converge after %d "
+                                "rebuilds (stamp %llu, content %llu); serving it "
+                                "as-is until the next edit",
+                         getSName().toUtf8().constData(),
+                         kMaxCaptureRebuildAttempts,
+                         (unsigned long long) captureContentEpoch_.load(),
+                         (unsigned long long) now );
+            }
+            return;
+        }
+        const int attempts = captureRebuildAttempts_.load() + 1;
         invalidateCapture();       // clears capture_, pages and readerTried_
+        captureRebuildAttempts_.store( attempts );   // survives its own reset
     }
     // Blocking snapshot (Phase 2b): build from the CURRENT window params. With
     // the try-lock getSnapshot(), a second concurrent first-build (two broadcast
@@ -597,6 +617,15 @@ void SCut::invalidateCapture()
         nextPage_.reset();
         capture_.reset();  // Also clear the old capture_ cache (Phase 5e integration)
         captureContentEpoch_.store( 0 );
+        // A REAL edit resets the non-convergence budget: this is the path every
+        // window change, plugin edit and onArrangementChanged takes, and after
+        // one of those the capture deserves a fresh set of attempts. Without
+        // this the bound would wedge a capture permanently after two
+        // non-converging rebuilds. ensureReader's own retry re-applies its
+        // count immediately after calling us, so it is not reset by its own
+        // invalidation.
+        captureRebuildAttempts_.store( 0 );
+        captureStaleReported_.store( false );
         // Peaks are derived from capture_; a rebuilt capture must not be drawn
         // through the old envelope.
         if( capPeaks_ ) { ::free( capPeaks_ ); capPeaks_ = NULL; capPeakN_ = 0; }

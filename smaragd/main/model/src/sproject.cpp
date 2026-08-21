@@ -445,6 +445,18 @@ QList<QString> SProject::assetNames() const
 void SProject::registerArrangement( const QString &name, SObject *root )
 {
     if( !root || name.isEmpty() ) return;
+    // A NAME MAY NOT CONTAIN ':'. It is the qualifier separator in a path
+    // ("Drums:0,1"), and parseQualified splits on the FIRST one -- so an
+    // arrangement called "Drum:Loop" would make every path addressing it parse
+    // as root "Drum" plus "Loop...".toInt() == 0, i.e. resolve silently in the
+    // MASTER at lane 0. Refused here, at the one chokepoint every route
+    // (the verbs, the extraction, the loader) passes through.
+    if( name.contains( QLatin1Char( ':' ) ) ) {
+        qWarning() << QString( "SProject::registerArrangement: refused, a name "
+                               "may not contain ':' (it separates the root from "
+                               "the path): \"%1\"." ).arg( name );
+        return;
+    }
     if( arrangementDict_.contains( name ) ) {
         qWarning() << QString( "SProject::registerArrangement: name already in "
                                "use: \"%1\"." ).arg( name );

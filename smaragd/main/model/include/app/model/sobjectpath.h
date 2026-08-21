@@ -67,8 +67,8 @@ inline QList<int> stringToPath( const QString &s )
 //
 // The separator is ':' because a path is digits and commas and can never
 // contain one. An arrangement NAME could, in principle; parsing splits on the
-// FIRST colon and a name containing one is rejected at registration rather than
-// escaped here.
+// FIRST colon, so a name containing one is REFUSED by
+// SProject::registerArrangement rather than escaped here.
 struct QualifiedPath {
     QString    root;   // empty == the master root
     QList<int> idx;

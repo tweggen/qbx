@@ -161,6 +161,12 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
 
     const QString arrName = arrName_.isEmpty() ? generateArrangementName( project )
                                                : arrName_;
+    if( arrName.contains( QLatin1Char( ':' ) ) ) {
+        TW_LOGW( "cut", "extract-arrangement: refused, a name may not contain "
+                        "':' (it separates the root from the path): '%s'",
+                 arrName.toUtf8().constData() );
+        return { false, nullptr };
+    }
     if( project->hasArrangement( arrName ) || project->hasAsset( arrName ) ) {
         TW_LOGW( "cut", "extract-arrangement: refused, name '%s' is in use",
                  arrName.toUtf8().constData() );
