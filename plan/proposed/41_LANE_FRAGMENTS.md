@@ -238,7 +238,15 @@ and so cannot reach that pixel. No occlusion test, no reflow, no z-aware layout.
 
 The **single exception is equal start times**, which is exactly why the tiebreak
 must be specified rather than left to child order: it is the only case that can
-hide a handle. Tiebreak: child index, then object id.
+hide a handle. **Tiebreak: child index, and nothing after it.** A child index is
+a POSITION in the lane's child list, so `(startTime, childIndex)` is already a
+TOTAL order.
+
+An earlier edition of this line read "child index, then object id" and that was
+wrong twice: the second key is unreachable, and an `SObject`'s "id" in this tree
+is its ADDRESS (`slink.cpp` serializes it that way), so a comparison on it would
+order by whatever the allocator chose and differ run to run. A tiebreak this
+proposal calls CONTRACTUAL may not rest on that.
 
 Bottom, not top, because warp markers own the top edge
 (`scutrndrinline.cpp:351`). Left, not right, because the right edge of an early

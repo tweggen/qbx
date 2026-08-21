@@ -4,7 +4,6 @@
 #include <QVarLengthArray>
 
 #include <algorithm>
-#include <cstdint>
 #include <vector>
 
 #include "app/model/sappcontext.h"
@@ -245,7 +244,6 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         SLink       *lk;
         offset_t     startTime;
         int          childIndex;
-        std::uintptr_t objId;
     };
     std::vector<ClipPaintEntry> entries;
     entries.reserve( (size_t) getTrack().childCount() );
@@ -263,14 +261,22 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         e.lk = lk;
         e.startTime = startTime;
         e.childIndex = getTrack().indexOfChild( lk );
-        e.objId = reinterpret_cast<std::uintptr_t>( &lk->getSObject() );
         entries.push_back( e );
     }
     std::sort( entries.begin(), entries.end(),
         []( const ClipPaintEntry &a, const ClipPaintEntry &b ) {
             if( a.startTime != b.startTime ) return a.startTime < b.startTime;
-            if( a.childIndex != b.childIndex ) return a.childIndex < b.childIndex;
-            return a.objId < b.objId;
+            // childIndex is a POSITION in the lane's child list, so it is
+            // unique across these entries and (startTime, childIndex) is
+            // already a TOTAL order — there is no third key and there must
+            // not be one. Proposal 41 D11 originally said "child index, then
+            // object id"; an SObject's "id" in this tree is its ADDRESS
+            // (slink.cpp serializes it that way), so an address comparison
+            // here would be non-deterministic run to run. The tiebreak is
+            // contractual (it is the only case that can hide the bottom-left
+            // corner M6 pins a drag handle to), so it may not rest on
+            // anything the allocator chooses.
+            return a.childIndex < b.childIndex;
         } );
 
     for( const ClipPaintEntry &entry : entries ) {
