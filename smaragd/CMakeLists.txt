@@ -392,6 +392,17 @@ if(TEST qxa.media_webdav_drop)
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=memory;SMARAGD_MEDIA_CACHE_DIR=${CMAKE_BINARY_DIR}/test-output/media_webdav_drop/mediacache")
 endif()
 
+# --- the Options dialog's remembered page (AC-b1) ----------------------------
+#
+# Writes the real per-user key ui/optionsLastPage into the SHARED smaragd.ini
+# via set-option and close-options-dialog, the same RUN_SERIAL reason as
+# midi_options_page and the media Options cases above: it OWNS that one key
+# and restores it to SOpt::def's empty string at the end. Not a wall-clock
+# test -- everything here is a synchronous off-screen dialog construction.
+if(TEST qxa.options_last_page)
+    set_tests_properties(qxa.options_last_page PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # --- the live lane (proposal 21 L1b) -----------------------------------------
 #
 # All five PLAY (or monitor) in real time against a paced FILE INPUT and assert
