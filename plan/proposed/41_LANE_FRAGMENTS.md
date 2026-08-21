@@ -125,6 +125,39 @@ Split into `isPathContainer()` (descend) and `isLane()` (carries lane state).
 **This is the load-bearing refactor and it is far cheaper before there is a
 second container kind than after.** It is M0 for that reason.
 
+### D3a. A fragment's CHILDREN are unaddressable by every clip verb — and that
+is the price of D3, discovered in M2
+
+`splacements::placementAt()` resolves through `laneAt()`, which requires
+`isLane()`. A fragment answers **false** by design, so once clips are packed
+into a fragment **no existing clip verb can reach them** — `resize-clip`,
+`set-pitch`, `set-clip-pan`, `set-clip-name`, `select-take`, the formant verbs,
+`sautomationactions` and the MIDI clip actions all resolve through that one
+function and all refuse.
+
+**This was not foreseen when this proposal was written, and AC2.3 as originally
+worded assumed the opposite.** It is the exact trade D3 makes: the predicate
+that stops a fragment's internal flags darkening lanes across the project is
+the same predicate every clip verb uses to decide what it may address.
+
+It is a GAP, not a defect in D3 — the answer is the *edit-inside* affordance the
+asset route was chosen for in the first place (open the asset, so the fragment
+becomes the addressing root and its children are reachable relative to it,
+exactly as an arrangement tab already does for a nested root). But it is real
+work, it is not in the milestone list below, and until it exists a packed
+fragment is **write-once**: placeable, shareable and unpackable, but not
+editable in place.
+
+What M2 DID gate is sharing at the CUT's own window — "edit any placement and
+all change", D2's actual invariant — which is a weaker statement than AC2.3's
+original wording and is recorded as such in M2's ACs.
+
+**M2b (NEW, unscheduled): addressing inside a fragment.** Extend clip-verb
+addressing to descend through a non-lane path container. It needs its own audit
+before it is written: many verbs currently rely on "not a lane" meaning
+"refuse", so widening the predicate blindly would let them address things they
+have always rejected.
+
 ### D4. Event export is the residual feed, and residual-only
 
 `SObject::resolveEventFeed()` joins `contentKind()` and `resolveEventClip()` on
@@ -375,13 +408,15 @@ reconciled registered/run/skipped count, and **byte-identical goldens**
 - **AC2.2** `unpack-clips` is the exact inverse (clips restored to their
   original lane at their original times).
 - **AC2.3** Placing the asset a second time yields a second `SLink` to the
-  **same** cut; editing a child clip is visible through both placements.
+  **same** cut; an edit made through one placement is visible through both.
+  **Scoped by D3a**: the edit is to the shared CUT's own window, not to a clip
+  nested inside the fragment — no verb can address one of those today.
 - **AC2.4** `duplicate-asset-here` mints a NEW asset with a DEEP-COPIED
   fragment, repoints exactly one placement to it, and leaves the original asset
   and all its other placements untouched and still sharing.
-- **AC2.4b** Sharing is never broken: editing a child clip of an asset placed
-  three times is visible through all three, before AND after an unrelated
-  placement has been duplicated away.
+- **AC2.4b** Sharing is never broken: an edit through an asset placed three
+  times is visible through all three, before AND after an unrelated placement
+  has been duplicated away. **Scoped by D3a**, as AC2.3.
 - **AC2.5** A selection spanning two lanes is REFUSED with a message naming the
   lanes (D8).
 - **AC2.6** The cycle guard refuses a placement that would close a reference
