@@ -565,20 +565,27 @@ coverage that does not exist. Unreproduced flakes get named too.
 6. **Latency:** Buffer sizing largely fixed; no user-facing control.
 7. **Credential stores off Windows: WRITTEN, NEVER COMPILED.** `SSecretStore`'s
    `libsecret` (Linux) and `keychain` (macOS) backends exist in the tree and
-   have never been built — this repo's regular box is Windows/MinGW. Measured on
-   Ubuntu 2026-08-21 against `main` (37845a2d), `secret_store_test` reports
-   `platform default backend on this build: none`, so on Linux the media browser
-   **cannot remember a Nextcloud/WebDAV password at all** and "Remember" is
-   disabled. Absence is graceful by design (backend `none`, nothing persisted) —
-   what is missing is the CMake detection (`libsecret-1` via pkg-config, a
-   PRIVATE `TW_HAVE_*` macro like `TW_HAVE_CLAP`/`TW_HAVE_VST3`/`TW_HAVE_AU`,
-   the `apt install` line in `docs/BUILD.md`, and `./rebuild.sh` naming it when
-   it cannot find it). It is also why `media_options_page` and
-   `media_secret_redaction` pin `SMARAGD_SECRET_BACKEND=dpapi` and so cannot
-   pass off Windows: with a persisting backend on Linux they could be gated on
-   the CAPABILITY rather than on the platform. Not in scope either way: whether
-   these stores resist an attacker — the plumbing and the failure modes are what
-   this project gates, the cryptography is DPAPI's / Keychain's / libsecret's.
+   have never been built or executed by anything — this repo's regular box is
+   Windows/MinGW, and `main/CMakeLists.txt` says so out loud when it does find
+   libsecret ("UNTESTED on the Windows box this gate was built on"). **The build
+   plumbing is already complete** and is NOT what is missing: CMake probes
+   `libsecret-1` through `pkg_check_modules`, `docs/BUILD.md:68` names
+   `libsecret-1-dev` as an optional prerequisite, and `_env.sh:247` makes
+   `./rebuild.sh` name it when it is absent. What is missing is that nobody has
+   installed the package and compiled it. Measured on Ubuntu 2026-08-21,
+   `secret_store_test` reports `platform default backend on this build: none`,
+   so on a box without `libsecret-1-dev` the media browser **cannot remember a
+   Nextcloud/WebDAV password at all** and "Remember" is disabled — gracefully,
+   by design, but silently as far as the build log is concerned. Anyone with a
+   Linux box can retire half of this in one `apt install libsecret-1-dev` plus a
+   re-configure; whether the backend then COMPILES and round-trips against a
+   real session bus is unknown and is the actual open question. It is also why
+   `media_options_page` and `media_secret_redaction` pin
+   `SMARAGD_SECRET_BACKEND=dpapi` and are DISABLED off Windows: with a
+   persisting backend on Linux they could be gated on the CAPABILITY instead.
+   Not in scope either way: whether these stores resist an attacker — the
+   plumbing and the failure modes are what this project gates, the cryptography
+   is DPAPI's / Keychain's / libsecret's.
 
 ## Common Tasks
 
