@@ -56,6 +56,17 @@
     <remove-arrangement name="Taken" expectReject="true"/>
     <assert-arrangements names="Taken" trackCounts="1"/>
 
+    <!-- A NAME MAY NOT CONTAIN ':'. It separates the root from the path in a
+         qualified spelling, and parseQualified splits on the FIRST one, so
+         "Drum:Loop" would make every path addressing it resolve as root
+         "Drum" plus lane 0 OF THE MASTER. Refused at both naming verbs and at
+         the registry chokepoint behind them. -->
+    <create-arrangement name="Bad:Name" expectReject="true"/>
+    <assert-arrangements names="Taken"/>
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="96000"
+                         name="Also:Bad" expectReject="true"/>
+    <assert-arrangements names="Taken"/>
+
     <!-- ==== the cycle guard (D11) ======================================== -->
     <create-arrangement name="A"/>
     <add-track arrangement="A" index="-1"/>

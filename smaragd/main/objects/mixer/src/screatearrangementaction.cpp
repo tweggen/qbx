@@ -30,6 +30,9 @@ SApplyResult SCreateArrangementAction::apply( SProject *project )
     if( project->hasArrangement( name ) ) {
         return { false, nullptr };          // names are unique
     }
+    if( name.contains( QLatin1Char( ':' ) ) ) {
+        return { false, nullptr };          // see SProject::registerArrangement
+    }
 
     // A second mixer, built exactly like the master's (proposal 09 D2): the
     // detail-editor factory is keyed on the CLASS NAME, so this root gets the
