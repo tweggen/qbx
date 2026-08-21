@@ -46,6 +46,9 @@ Invariants:
    holder's layout; the heads inside it carry the vertical scroll and are
    clipped by it. Never move/resize the box — the next layout activation
    silently undoes it, which is exactly how the heads used to come unstuck.
+   Qt's own clipping only handles a head whose top is negative; a head
+   straddling `[0, SMV_TIME_RULER_HEIGHT)` needs the explicit clamp inv. 29
+   describes.
 7. A QWidget subclass here must draw its own style-sheet background
    (`WA_StyledBackground` + a `PE_Widget` paintEvent, or a plain paintEvent).
    Declaring a background in a sheet suppresses the palette fill, so a
@@ -253,11 +256,16 @@ Invariants:
      (proposal 33 M3). The app's own slider press/release is the punch-in.
 
 How to test: lane_alignment.qxa (lane geometry + head placement under zoom,
-scroll, per-track heights and take lanes), track_list_scroll_padding.qxa
-(fix/track-list-polish l — the vertical scroll-range padding, via
-assert-scroll-range's numeric gate: scrolling to the scrollbar's own
-maximum() brings the true last row fully into view when content overflows
-the viewport, and adds no scroll room when it already fits),
+scroll, per-track heights and take lanes — including inv. 29's ruler-band
+clamp on whichever row a `set-lane-view topRow=` lands the scroll offset
+inside, now that a requested row can be pixel-clamped short of its own top),
+track_list_scroll_padding.qxa (originally fix/track-list-polish l's
+row-granular padding hack; since fix/arranger-ui-fixes C the SAME numeric
+gate — `assert-scroll-range`, scrolling to the scrollbar's own `maximum()`
+— passes for a different reason: pixel granularity reaches the true content
+bottom directly, so `maxScroll=` is now PIXELS and no longer needs the old
+"+1 row" correction; the case's own numbers did not need retuning, only its
+header prose describing the mechanism),
 track_list_view_roundtrip.qxa (fix/track-list-polish m — fold state and
 zoom/pan survive a save/load round trip, via assert-lane-view),
 test_track_column_expansion.qxa,
@@ -368,6 +376,38 @@ long-term shape.
     link with a bogus `SCut(project, *stack)` and orphan every take in it.
     Move/stretch/loop gestures are still unclaimed on a take-lane row.
 
+    **Every place this invariant's gestures ask "does this link carry take
+    lanes" goes through `takeStackOfLink( SLink* )`, never a bare
+    `dynamic_cast<STakeStack*>( &lk->getSObject() )`.** Found alongside inv.
+    30: proposal 17's modern shape places a take column directly (`SLink ->
+    STakeStack`), but a real saved project can also carry an OLDER shape,
+    `SLink -> SCut` whose CONTENT is the `STakeStack` (loadable, not
+    buildable through any verb in this suite — `add-take` always produces
+    the direct shape). The bare cast matches only the modern shape, so on
+    the legacy one `maxTakesOf()` counted zero takes (no row was ever
+    built), `drawTakeLane()` had nothing to paint even if a row existed, and
+    the take-lane press/drag handlers (the ones this invariant describes)
+    could not resolve a `stack` either — showing take lanes for such a clip
+    (inv. 30's rule 2) did nothing OBSERVABLE, which is exactly the
+    "double-click does nothing" symptom one layer deeper. `takeStackOfLink()`
+    resolves both shapes; it is deliberately scoped to take-lane
+    RENDERING/INTERACTION only — the many other `dynamic_cast<STakeStack*>`
+    sites in `objects/cut`'s actions (add-take, remove-take, resize-clip,
+    select-take, set-clip-name/pan/volume, set-formant-*, set-pitch,
+    split-clip) and in `ctPitchNudge`/`SClipPropertiesPanel` ask a different,
+    per-action question (what does EDITING this clip mean on the legacy
+    shape) that this resolve does not answer for them and that stays open.
+    **The drawn/dragged EXTENT comes from the LINK's own object's duration
+    (`lk->getSObject().getDuration()`), never the inner stack's
+    (`stack->getDuration()`)**: on the legacy shape `lk->getSObject()` is
+    the WRAPPING cut, whose own window governs the clip's displayed extent
+    independent of the stack's raw material (it may be slipped/trimmed);
+    on the modern shape `lk->getSObject()` IS the stack, so this is
+    identical to what was there before and no golden or existing case moved.
+    Gate: `qxa.takestack_legacy_wrap_lanes` (a hand-written `.qxp` fixture,
+    `tests/legacy_takestack_wrap.qxp`, since no verb builds the shape),
+    proven failing on the pre-fix binary before being fixed.
+
 24. **A double-click on an EVENT clip opens the event editor for it**
     (`SMVActualView::mouseDoubleClickEvent`), through `SMainWindow::
     showEventEditor()` — never through `app/eventui` directly, which this
@@ -381,9 +421,12 @@ long-term shape.
     re-resolves both at the exact double-click position as its own first
     step, which is why this check does not call `updateLastClickVars()`
     again — doing so a second time would just repeat what that call
-    already did. Any OTHER clip is a no-op (matches design: only an event
-    clip has an editor to open). Test entry point: `double-click-clip`
-    (`SStdMixerView::doubleClickClip`, `drag-clip-edge`'s twin).
+    already did. A CONTAINER clip (anything `scutrndrinline.cpp`'s
+    `cutIsContainer()` paints blue) is resolved by inv. 30 below, checked
+    BEFORE this branch; any other clip is a genuine no-op (matches design:
+    a plain audio clip has no editor to open). Test entry point:
+    `double-click-clip` (`SStdMixerView::doubleClickClip`, `drag-clip-edge`'s
+    twin).
 
 25. **The Feel Flow compliance heatmap is a bottom band, drawn AFTER the clip
     loop, read-only and never a demand** (proposal 40 M2,
@@ -436,6 +479,106 @@ long-term shape.
     describeFeelFlow`/`grabFeelFlow`, the `assert-track-head` shape — a
     single throwaway widget, never a whole dialog page) — so a testkit
     assertion and what a user actually sees can never independently drift.
+
+27. **Vertical scroll is PIXEL-granular, and `SMVActualView::upperLeftY_` is
+    the AUTHORITY** (fix/arranger-ui-fixes C, replacing the row-granular
+    scroll invariant 5 predates). `setTopPixel(int y)` is the only writer,
+    clamped to `[0, max(0, totalRowsHeight() - (height() -
+    SMV_TIME_RULER_HEIGHT))]` — the same bound `SStdMixerView::
+    verticalScrollMaximum()` computes for the real scrollbar, so neither can
+    show blank space below the content. `topRow_` (`getTopRow()`) is a
+    DERIVED convenience — `rowAtLaneY(upperLeftY_)` — kept because some
+    callers only need "which row is on top", never written directly.
+    `setTopOffset(idx_t row)` is a thin wrapper, `setTopPixel(rowTop(row))`,
+    kept for the testkit (`tkSetTopRow`) and for the re-anchor call sites
+    (`setTrackHeightScale`, `onArrangementChangedRows`, `refreshTrackTree`,
+    `SMVActualView::setTrackHeight`) — every one of which re-anchors by
+    FRACTION of the (just-changed) `totalRowsHeight()`
+    (`SStdMixerView::reanchorScrollByFraction()`), snapped to a row
+    boundary, not by the old row INDEX: a row's own height can change size
+    while it holds the anchor, and a structural change can renumber every
+    row. `qScrollVert_`'s value/pageStep/maximum are pixels too
+    (`SStdMixerView::recalcPageStep()`/`verticalScrollMaximum()`); the old
+    "+1 row of scroll headroom" hack (track_list_scroll_padding.qxa) is
+    GONE — it existed only because row granularity could not reach a
+    partially visible last row, and a pixel offset reaches the true content
+    bottom directly. A wheel notch (`SMVActualView::applyWheel()`,
+    `SOpt::ScrollVertical`) moves a fraction of the CURRENT base lane height
+    (`SMV_WHEEL_VSCROLL_FRACTION`), scaled by `SOpt::WheelSensitivityPct`,
+    with no accumulator — unlike the old lane-quantised step, any sub-notch
+    delta already maps to a valid pixel amount.
+
+28. **The horizontal scrollbar's domain is project FRAMES, not a fixed
+    `HSliderRange`-step index** (fix/arranger-ui-fixes B — `HSliderRange`
+    is gone). `qScrollHoriz_->value()` IS `SMVActualView::getLeftOffset()`;
+    `SStdMixerView::timeSliderMoved()`/`avLeftOffsetChanged()` no longer
+    rescale through `dur`, so a drag or a wheel notch lands EXACTLY where
+    requested, at any zoom or duration — this closed the sub-step dead zone
+    a wheel notch used to fall into when zoomed in, and the out-of-range
+    `double`→`int` conversion `dur <= 1` (an empty/near-empty arrangement)
+    used to trigger. The bar's range comes from
+    `SStdMixerView::horizontalExtent()`: at least the content duration, at
+    least far enough to cover the current pan plus one visible span (so an
+    UNBOUNDED wheel-pan past the last clip — `applyWheel()`'s
+    `SOpt::ScrollHorizontal` case never clamps the pan itself — always has
+    a scrollbar that can already reach it, since `avLeftOffsetChanged()`
+    recomputes the extent before syncing the bar's value), and never below
+    a ten-second floor. `avLeftOffsetChanged()` wraps its `setValue()` in a
+    `QSignalBlocker`, so the wheel's exact frame offset is never
+    round-tripped back through `timeSliderMoved()`. `SMainWindow::
+    arrangerSetZoomPan()` is unaffected — it already spoke frames.
+
+29. **The lane paint is CLIPPED below the ruler band, and the head column
+    has a matching clamp** (fix/arranger-ui-fixes C, a consequence of inv.
+    27's pixel granularity). `SMVActualView::paintEvent()` wraps the lane
+    loop and the record overlay in `p.setClipRect(0, SMV_TIME_RULER_HEIGHT,
+    w, h - SMV_TIME_RULER_HEIGHT)`: with a partially scrolled top row,
+    `laneTop(firstVisibleRow)` can be less than `SMV_TIME_RULER_HEIGHT`
+    (even negative), and nothing previously stopped a lane drawing OVER the
+    ruler. `SStdMixerView::layoutControlColumn()` applies the mirror fix to
+    the track-head column, but ONLY to the ONE row whose lane GROUP
+    contains the scroll offset (`rulerStraddleHeadRow()`) — every row
+    strictly before it already ends at or before the ruler line by
+    construction (adjacent prefix-sum geometry), and clamping it too would
+    be wrong, not merely redundant. `tkCheckLaneAlignment()` applies the
+    SAME clamp (the shared static `clampHeadToRulerBand()`) when computing
+    its expected geometry, so the checker and the real head cannot silently
+    diverge — the two must stay ONE definition, as inv. 5 already requires
+    of row→pixel geometry generally.
+
+30. **A double-click on a CONTAINER clip never falls through to nothing**
+    (fix/arranger-ui-fixes, the "blueish clip does nothing" bug). Every
+    content object `scutrndrinline.cpp`'s `cutIsContainer()` paints BLUE —
+    a registered arrangement, a take stack, a plain folder-track window, a
+    nested `SCut`, or anything else with no random source — is resolved by
+    `SMVActualView::tryOpenContainerClip()`, checked in
+    `mouseDoubleClickEvent` right after inv. 24's marker-strip branch and
+    BEFORE the event-clip check (inv. 24): a registered arrangement opens
+    or fronts its tab (`arrangementNameOf()`, unchanged from before this
+    invariant existed); a take stack shows THAT CLIP'S TRACK's take lanes
+    (`SStdMixerView::toggleTrackTakesExpanded`) — SHOWN, never merely
+    toggled, so a second double-click cannot close lanes the first one just
+    opened; a plain track with children reveals that track's own lanes,
+    expanding every collapsed ancestor between the model root and it; and
+    anything else that is still blue tries the tab route and, failing
+    that, REPORTS the dead end (status bar + `TW_LOGW("ui.timeline", …)`
+    naming the content's class and kind) rather than doing nothing.
+    A take column is unwrapped FIRST — `SObject::windowTakeAt(-1)` on the
+    clicked link's object, before the `dynamic_cast<SCut*>` — so a
+    container cut sitting inside a take column (`SLink -> STakeStack`
+    directly, what `add-take` builds at runtime) resolves exactly as the
+    same cut would on its own; skipping the unwrap is how this dead-ended
+    silently before (the cast on the STACK itself always failed). A BARE
+    folder lane — no clip of the track's own under the pointer, a real row
+    whose track has child tracks — toggles that folder's fold the same way
+    the head's fold triangle does; `double-click-clip` cannot reach this
+    (it needs an existing clip to address), so `double-click-lane` is the
+    test entry point for it (`SStdMixerView::doubleClickLane`,
+    `click-lane`'s double-click twin). None of this is undoable itself:
+    opening a tab, expanding a fold or showing take lanes is view/UI state,
+    same as inv. 24's editor-opening. Gate: `qxa.doubleclick_blue_clip_resolve`
+    plus the pre-existing `qxa.tabs_doubleclick_drillin` for the unchanged
+    arrangement-tab half.
 
 ## The `media:` drop branch (proposal 38 gate 3)
 

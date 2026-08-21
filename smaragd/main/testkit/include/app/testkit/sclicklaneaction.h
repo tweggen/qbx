@@ -39,6 +39,33 @@ private:
     QString  modifiers_;
 };
 
+// double-click-lane — click-lane's DOUBLE-click twin, and double-click-clip's
+// twin for a double-click that may hit no clip at all.
+//
+//   trackPath = "0"      index-path from the root mixer
+//   time      = "0"      project frame to double-click at
+//   modifiers = ""       same spelling as click-lane
+//
+// Runs the REAL mouse handlers (SMVActualView::mouseDoubleClickEvent) via
+// SStdMixerView::doubleClickLane — the only route to double-clicking a bare
+// FOLDER LANE (no clip at `time`), which double-click-clip cannot reach
+// because it requires an existing clip to address. Lands on a clip if one
+// covers `time` (same as double-click-clip), empty lane space otherwise.
+// Not undoable itself; whatever the real handler does (open a tab, show take
+// lanes, toggle a fold) carries its own undo story where it has one.
+class SDoubleClickLaneAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "double-click-lane" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString  trackPath_ = QStringLiteral( "0" );
+    offset_t time_ = 0;
+    QString  modifiers_;
+};
+
 // split-selection — the split command ('s' / "Split object"), run exactly as
 // a real keypress or menu click runs it: SStdMixerView::ctSplitSample().
 // Splits every clip in the CURRENT SELECTION whose extent strictly contains

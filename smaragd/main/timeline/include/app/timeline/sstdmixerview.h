@@ -173,6 +173,12 @@ public slots:
     void setSecondWidth( double x );
     void setUpperLeft( offset_t upperLeftX, idx_t offsetLeftY );
     void setLeftOffset( offset_t );
+    // Vertical scroll is PIXEL-granular (fix/arranger-ui-fixes C): this is
+    // the AUTHORITY — it clamps into [0, totalRowsHeight() - visible height]
+    // and is the only place that writes upperLeftY_. setTopOffset() below is
+    // now a thin row->pixel wrapper kept for the testkit and the row-anchored
+    // call sites; nothing new should call it when a pixel is available.
+    void setTopPixel( int y );
     void setTopOffset( idx_t );
 
 signals:
@@ -240,14 +246,14 @@ private:
     // ONE place because "one notch" has to mean the same amount of gesture in
     // all four. At 100 % each is bit-for-bit the value it was hard-coded to.
     double wheelSensitivity_;
-    int    wheelVScrollStep_;   // angleDelta units per track lane
     double wheelZoomHFactor_;   // px/second multiplier per notch
     double wheelZoomVFactor_;   // track-height multiplier per notch
-    // Accumulated vertical-scroll wheel delta (angleDelta units). A trackpad or a
-    // Magic Mouse delivers many tiny sub-notch deltas; stepping a whole lane per
-    // event made vertical scroll wildly over-sensitive. We accumulate and step one
-    // lane per SMV_WHEEL_VSCROLL_STEP units instead (see wheelEvent).
-    int  wheelVScrollAccum_ = 0;
+    // Vertical wheel-scroll is PIXEL-granular (fix/arranger-ui-fixes C): a
+    // notch moves a fraction of the CURRENT base lane height (scaled by
+    // wheelSensitivity_), computed inline in applyWheel(). No accumulator is
+    // needed — unlike the old lane-quantised step, any sub-notch delta already
+    // maps to a valid pixel amount, exactly like the ScrollHorizontal branch
+    // right next to it.
     // View-follows-playhead (SOpt::FollowPlayhead), cached alongside the wheel
     // config and refreshed on SSettings::changed. See followLocator().
     bool followPlayhead_;
@@ -337,10 +343,12 @@ private:
     };
 
     int upperLeftX_;
-    // Vertical scroll, in pixels, derived from topRow_: scrolling is still
-    // row-granular, but with variable lane heights the pixel offset is the
-    // running sum up to topRow_, not a multiplication. Keep the two in sync
-    // through setTopOffset()/setUpperLeft() only.
+    // Vertical scroll, in PIXELS, and the AUTHORITY (fix/arranger-ui-fixes C —
+    // scrolling used to be row-granular, landing only on a row boundary; now
+    // any pixel is reachable, including a partially visible top row). Written
+    // only by setTopPixel(). topRow_ below is a DERIVED convenience (the row
+    // containing upperLeftY_), kept because getTopRow() has callers that only
+    // need "which row is on top", not the exact pixel.
     idx_t upperLeftY_;
     idx_t topRow_ = 0;
     offset_t upperLeftOffset_;
@@ -416,6 +424,17 @@ private:
     void updateMarkerDrag( QMouseEvent *ev );
     void finishMarkerDrag();
     bool tryAddMarkerAt( QMouseEvent *ev );
+
+    // Double-click "open this container" resolve (the blue-clip dead-end
+    // fix). See the .cpp for the rule table; kept as named methods rather
+    // than folded into mouseDoubleClickEvent() so the testkit's
+    // double-click-clip verb — which drives the REAL mouse handlers via
+    // synthesized QMouseEvents, not a second implementation — exercises
+    // exactly this code, never a twin that could drift from it.
+    bool tryOpenContainerClip( SLink *link );
+    bool revealTakeLanes( STrack *track );
+    bool revealTrackLanes( STrack *tr );
+    void reportContainerDeadEnd( SObject &content );
     bool clipDragIsLoopMarker_ = false;   // grabbed a loop marker (re-tile)
     // Left edge, upper half: extend/shrink the clip BACKWARDS in whole loop
     // cycles. Whole cycles is not a UI nicety — twLoopMap sends clip-relative p
@@ -574,9 +593,12 @@ public:
 
     // TEST ENTRY POINT: drive a real double-click on a clip through the
     // arranger's own mouse handlers (drag-clip-edge's twin). Lands on the
-    // clip BODY, exactly as SMVActualView::mouseDoubleClickEvent expects for
-    // its "open the event editor" branch — an EVENT clip opens it, any other
-    // clip is a no-op success (matches production: nothing else happens).
+    // clip BODY, exactly as SMVActualView::mouseDoubleClickEvent expects.
+    // An EVENT clip opens the event editor; a CONTAINER clip (anything
+    // scutrndrinline.cpp's cutIsContainer() paints blue) resolves through
+    // tryOpenContainerClip() — a tab, a take stack's lanes, or a folder
+    // track's lanes, never silently nothing; any other clip is a genuine
+    // no-op success (matches production).
     bool doubleClickClip( int rowIdx, int clipIdx );
     // TEST ENTRY POINT: a single, real click (press+release, no move) into
     // track `t`'s LANE — the clip-drawing area, as opposed to its head — at
@@ -588,6 +610,14 @@ public:
     // it is the only route to a lane click that hits no clip at all.
     bool clickLane( STrack *t, offset_t time,
                     Qt::KeyboardModifiers mods = Qt::NoModifier );
+    // TEST ENTRY POINT: doubleClickClip()'s twin for a double-click that may
+    // hit no clip at all — clickLane()'s twin for a DOUBLE click. It is the
+    // only route to a double-click on a bare FOLDER LANE (no clip of the
+    // track's own at `time`): mouseDoubleClickEvent()'s "toggle the fold"
+    // branch, which doubleClickClip() can never reach because it requires an
+    // existing clip to address.
+    bool doubleClickLane( STrack *t, offset_t time,
+                          Qt::KeyboardModifiers mods = Qt::NoModifier );
 
     // TEST ENTRY POINT (AC-g1): send a REAL QWheelEvent to the canvas, exactly
     // as a physical wheel notch would, so `wheel-scroll` exercises the actual
@@ -631,12 +661,14 @@ public:
     // the painter uses, full column width), otherwise the first mismatch.
     QString tkCheckLaneAlignment() const;
     // TEST ENTRY POINT (fix/track-list-polish l): the vertical scrollbar's own
-    // `maximum()`, in row-index units — the number `verticalScrollMaximum()`
-    // computes and the real mouse wheel is capped by. `tkSetTopRow()` above
-    // does NOT reproduce the bug the padding fixes: it clamps only to
-    // `rowCount()-1` and bypasses the scrollbar's maximum entirely, so a case
-    // that wants to test what a wheel scroll can actually reach must read
-    // this number and scroll to IT, not to `rowCount()-1`.
+    // `maximum()`, in PIXEL units since fix/arranger-ui-fixes C (it used to be
+    // row-index units — see verticalScrollMaximum()'s own comment for why the
+    // old padding-row hack is gone). `tkSetTopRow()` above does NOT reproduce
+    // the bug the padding fixed: it clamps only to `rowCount()-1` in ROW
+    // terms and does not go through the pixel clamp `setTopPixel()` applies,
+    // so a case that wants to test what a wheel scroll can actually reach
+    // must read this number and scroll to IT (in pixels, via
+    // `contentView()->setTopPixel()`), not to `rowCount()-1`.
     int tkVerticalScrollMaximum() const;
     // The automation half of that check (proposal 37 P6), defined in
     // sautomationlane.cpp: every Automation row must still name a lane the
@@ -666,22 +698,19 @@ public:
     int rowTop( int row ) const;
     int rowHeight( int row ) const;
     int totalRowsHeight() const { return rowTop( rows_.size() ); }
-    // How many lanes fit in the canvas starting at `firstRow` (>= 1). The
-    // vertical scrollbar is row-granular, so its page step depends on which
-    // rows are on screen once heights differ.
-    int visibleRowCountFrom( int firstRow ) const;
-    // The `qScrollVert_` maximum for a given page step `vis` (fix/
-    // track-list-polish l). `visibleRowCountFrom()` can count a row that only
-    // PARTIALLY fits as fully visible whenever the content does not divide
-    // evenly into the viewport, which without correction leaves the true
-    // last row permanently clipped at the bottom with no scroll room left to
-    // reach it. This reserves roughly one track's height of scroll headroom
-    // below the real content whenever it is taller than the viewport (never
-    // when it already fits, so scrolling stays disabled when there is
-    // nothing to scroll for). ONE definition, used by both recalcPageStep()
-    // (a resize/zoom/height-scale change) and nTracksChanged() (a track
-    // added/removed), so the two cannot compute two different answers.
-    int verticalScrollMaximum( int vis ) const;
+    // The `qScrollVert_` maximum for a given visible-viewport height `availPx`
+    // (fix/arranger-ui-fixes C, replacing fix/track-list-polish l's row-
+    // granular version). Vertical scrolling is now PIXEL-granular, so this is
+    // simply `max(0, totalRowsHeight() - availPx)` — the old "+1 row of
+    // headroom" hack existed only because ROW granularity could not reach a
+    // partially visible last row (the old `visibleRowCountFrom()` counted
+    // such a row as fully "visible", stranding it below the fold with no
+    // scroll room left). Pixel granularity reaches the true content bottom
+    // directly, so no correction is needed. ONE definition, used by both
+    // recalcPageStep() (a resize/zoom/height-scale change) and
+    // nTracksChanged() (a track added/removed), so the two cannot compute two
+    // different answers.
+    int verticalScrollMaximum( int availPx ) const;
     // Row containing column-space y, or -1 past the last lane.
     int rowAtLaneY( int y ) const;
 
@@ -832,10 +861,22 @@ signals:
     void timeGridSpecChanged( const STimeGridSpec & );
 
 protected:
-    enum {
-	HSliderRange = 2000
-    };
+    // fix/arranger-ui-fixes B: the horizontal scrollbar's domain used to be a
+    // fixed HSliderRange=2000-step index into [0, duration], quantising every
+    // wheel notch and drag onto a dur/2000 grid and re-deriving a different
+    // pan on the way back. The bar's domain is now FRAMES — the same unit
+    // getLeftOffset() already speaks — so `qScrollHoriz_->value()` IS the
+    // frame offset, with no lossy round trip through either converter. See
+    // horizontalExtent(), avLeftOffsetChanged() and timeSliderMoved().
     void recalcPageStep();
+    // The scrollable horizontal TIMELINE EXTENT, in project frames: at least
+    // the content duration, at least far enough to cover the current pan plus
+    // one visible span (so an unbounded wheel-pan past the last clip always
+    // has a scrollbar that can already reach it — recalculated on every
+    // leftOffsetChanged, which now includes the wheel path), and never below
+    // a floor so an empty/near-empty arrangement (duration <= 1 frame) still
+    // has a sane domain instead of a degenerate near-[0,1] one.
+    offset_t horizontalExtent() const;
     // Watches qTrackControlBoxHolder_ for double-clicks in its blank area
     // (below the track heads) to spawn a new track.
     bool eventFilter( QObject *watched, QEvent *event ) override;
@@ -982,6 +1023,19 @@ private:
     void rebuildRowGeometry();      // recompute row heights + rowTop_
     int  rowHeightOf( const STrackRow & ) const;
     void rebuildControlColumn();
+    // Re-anchor the vertical scroll onto the row nearest a given FRACTION of
+    // the (just-changed) total row height (fix/arranger-ui-fixes C item 7).
+    // Used by every call site reacting to a ZOOM or STRUCTURAL change, where
+    // the OLD row index can no longer be trusted (its height, or its very
+    // existence, may have changed) but "roughly this far down" still names a
+    // stable position. Snaps to that row's own top pixel rather than leaving
+    // a raw fractional one: only a REAL sub-row pixel scroll (a wheel notch,
+    // a drag) is meant to land off a row boundary, so every OTHER geometry
+    // invariant row-granular scroll always held (including the
+    // layoutControlColumn() ruler-straddle guard staying quiet) keeps
+    // holding here too. `frac` is captured by the CALLER before its rebuild,
+    // from the OLD totalRowsHeight()/getUpperLeftY() — this only applies it.
+    void reanchorScrollByFraction( double frac );
 
 public:
     // Place every head at its lane: y = laneTop(row), height = the lane group
@@ -997,6 +1051,12 @@ public:
     // sub-lane attached to it, so a track owning several lanes gets one head
     // spanning all of them.
     int laneGroupHeight( int row ) const;
+    // The ONE row whose lane group may legally straddle the ruler band under
+    // pixel-granular scroll (fix/arranger-ui-fixes C item 5) — see
+    // layoutControlColumn()'s definition for the full reasoning. Shared with
+    // tkCheckLaneAlignment() so the two cannot disagree about which head is
+    // clamped.
+    int rulerStraddleHeadRow() const;
 
     // Track header resizing (Phase 3 UI)
     static constexpr int TRACK_CTRL_WIDTH_MINIMAL = 120;

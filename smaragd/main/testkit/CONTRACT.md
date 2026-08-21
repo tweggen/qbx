@@ -1057,3 +1057,24 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     ARRANGER default branch from a script — see `select_all_scope.qxa`. A
     widget-specific branch (the piano roll's own Ctrl-A) is real, reviewed
     production code that this verb cannot exercise; it needs a shown window.
+
+54. **`double-click-lane` is `click-lane`'s double-click twin, and it exists
+    because `double-click-clip` cannot reach a lane with no clip on it.**
+    Both go out through the shell (`SMainWindow::doubleClickLane` /
+    `SStdMixerView::doubleClickLane`), the same routing reason inv. 5 gives
+    `drag-clip-edge`. It sends the real press/release/`MouseButtonDblClick`/
+    release sequence `doubleClickClip` already sends, at a `time` rather
+    than at a clip's body, so it lands on a clip if one covers that
+    position (same resolve as `double-click-clip`) or on bare lane space
+    otherwise — the ONLY way a script reaches
+    `SMVActualView::mouseDoubleClickEvent`'s bare-folder-lane branch
+    (`main/timeline/CONTRACT.md` inv. 30). `double-click-clip` itself grew a
+    second real branch the same fix landed: a CONTAINER clip (a registered
+    arrangement, a take stack, a plain folder-track window, anything
+    `cutIsContainer()` paints blue) now resolves through
+    `SMVActualView::tryOpenContainerClip()` instead of the old
+    arrangement-only check, so `assert-tab-set` / `assert-lane-view` /
+    `assert-lane-overlay`'s `row=` report are what a case reads afterward,
+    not a blanket "any other clip is a no-op" (that description is still
+    true, but only for a clip that is not blue at all). Gate:
+    `qxa.doubleclick_blue_clip_resolve`.

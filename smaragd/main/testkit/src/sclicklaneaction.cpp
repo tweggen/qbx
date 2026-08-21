@@ -81,6 +81,56 @@ bool SClickLaneAction::readXml( const QDomElement &elem, int /*version*/ )
     return parseModifiers_( modifiers_, ignored, "click-lane" );
 }
 
+// --- double-click-lane -----------------------------------------------------
+
+SApplyResult SDoubleClickLaneAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "double-click-lane: no main window";
+        return { false, nullptr };
+    }
+    Qt::KeyboardModifiers mods = Qt::NoModifier;
+    if( !parseModifiers_( modifiers_, mods, "double-click-lane" ) ) {
+        return { false, nullptr };
+    }
+    if( !win->doubleClickLane( trackPath_, time_, mods ) ) {
+        qWarning() << "double-click-lane: no track at" << trackPath_;
+        return { false, nullptr };
+    }
+    // Whatever the real handler did (open/front a tab, show take lanes,
+    // toggle a fold) carries its own undo story where it has one; a fold
+    // toggle is view state, same as click-lane's selection.
+    return { true, nullptr };
+}
+
+void SDoubleClickLaneAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "time", QString::number( (qint64) time_ ) );
+    if( !modifiers_.isEmpty() ) elem.setAttribute( "modifiers", modifiers_ );
+}
+
+bool SDoubleClickLaneAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    bool ok = false;
+    time_ = (offset_t) elem.attribute( "time", "0" ).toLongLong( &ok );
+    if( !ok || time_ < 0 ) {
+        qWarning() << "double-click-lane: invalid time:" << elem.attribute( "time" );
+        return false;
+    }
+    modifiers_ = elem.attribute( "modifiers", "" );
+    Qt::KeyboardModifiers ignored;
+    return parseModifiers_( modifiers_, ignored, "double-click-lane" );
+}
+
+static const bool s_reg_doubleclicklane =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "double-click-lane" ),
+          [] { return new SDoubleClickLaneAction; } ),
+      true );
+
 // --- split-selection -----------------------------------------------------
 
 SApplyResult SSplitSelectionAction::apply( SProject * /*project*/ )

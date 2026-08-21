@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Bug: double-clicking a "blueish" container clip in the arranger did nothing
+  for several clips. `scutrndrinline.cpp`'s cutIsContainer() paints BLUE any
+  audio content with no random source (a registered arrangement, a take
+  stack, a plain folder-track window, a nested SCut) — but the old
+  mouseDoubleClickEvent only ever asked arrangementNameOf(), the narrowest of
+  those. Everything else painted blue and did nothing on a double-click.
+
+  THE RULE, implemented in SMVActualView::tryOpenContainerClip():
+    1. content is a REGISTERED ARRANGEMENT  -> open/front its tab (unchanged)
+    2. content is a TAKE STACK               -> show that clip's track's
+                                                 take lanes (never toggle
+                                                 closed — SHOW, not toggle)
+    3. content is a plain TRACK with children -> reveal that track's own
+                                                 lanes (expand every
+                                                 collapsed ancestor)
+    4. no clip at all, on a FOLDER LANE       -> toggle that folder's fold
+                                                 (double-click-lane, the
+                                                 only route to this — there
+                                                 is no clip to address)
+    5. anything else still blue               -> try the tab route; if it
+                                                 refuses, report it (status
+                                                 bar + TW_LOG), never silence
+
+  A take column is unwrapped FIRST (SLink -> STakeStack directly, as
+  add-take produces at runtime): the ACTIVE take is resolved and the rule
+  above re-applied to IT, so a container cut sitting in a take column
+  behaves exactly like the same cut placed on its own (rule table case 3 of
+  the bug report). Section 4 below is the gate for that unwrap.
+
+  THE EXACT LEGACY SHAPE behind 5 of the 7 blue clips in the reported
+  project — an SCut whose CONTENT is an STakeStack (as opposed to an SLink
+  pointing straight at one) — predates proposal 37 D8b's window-typing of
+  STakeStack and is loadable but NOT reachable through any VERB this suite
+  has (add-take always produces the direct SLink->STakeStack shape). Section
+  2 below exercises the SAME resolve branch (content resolves to a bare
+  STakeStack with no active take, which "show the take lanes" covers
+  identically) through the shape a script CAN build: a stack deactivated via
+  select-take.
+
+  THAT WAS NOT THE WHOLE STORY. Showing take lanes for the legacy shape
+  turned out to do nothing OBSERVABLE: proposal 17's take-lane row/paint/
+  gesture code (main/timeline/CONTRACT.md inv. 23's follow-up paragraph)
+  resolved a clip's take stack with a bare `dynamic_cast<STakeStack*>` that
+  only matches the direct shape, so the legacy one got no row built and
+  nothing painted even once "shown". That is gated separately, on the
+  legacy shape itself (a hand-written fixture, since no verb builds it):
+  `qxa.takestack_legacy_wrap_lanes`.
+
+  Also not gated here: pixel exactness of the fold triangle/tab UI, and real
+  mouse ergonomics (drag, hover) — every gesture here is a synthesized
+  press/release/dblclick/release, same as every other clip gesture in this
+  suite.
+
+  THE ROW-NUMBER TRICK. assert-lane-overlay's `row=N` is read off the MODEL
+  layout (rowIndexOfTrack), not off pixels, so it is a real report whatever
+  the grab measures, which is what folder_sum_preview.qxa's own negative
+  controls (expectOverlay="false") lean on. Here the sentinel tracks carry no
+  material of their own, so their band can show incidental non-fill pixels
+  (a leftover selection tint, a playhead sample that misses the colour-
+  identity check) that have nothing to do with this feature; asserting
+  expectOverlay="false" against that noise asserts something this case does
+  not care about. expectOverlay="true" minPixels="0" sidesteps it without a
+  new verb: minPixels=0 makes the floor check pass by construction (overlay
+  can never be negative), so only fillPx>0 (any lane has SOME fill colour)
+  and the contains="row=N" check are load-bearing.
+-->
+<SActionScript version="1" name="doubleclick_blue_clip_resolve">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The grid crosses every lane and would land in the overlay pixel
+         histogram as chrome (folder_sum_preview.qxa's own reasoning). -->
+    <grid-disable/>
+
+    <!-- ================================================================
+         SECTION 1 (rule 1): a registered-arrangement asset clip STILL
+         opens a tab exactly as before. Full regression coverage of this
+         path already lives in tabs_doubleclick_drillin.qxa; this is a
+         smoke check that the new resolve did not disturb it.
+         ================================================================ -->
+    <add-track index="-1"/>                         <!-- 0: leaf, own clip -->
+    <add-track index="-1"/>                         <!-- 1: extracted -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <close-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement" active="Arrangement"/>
+    <assert-track-name trackPath="1" name="Drums"/>
+
+    <double-click-clip track="1" clip="0"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+    <activate-tab name="Arrangement"/>
+
+    <!-- ================================================================
+         SECTION 2 (rule 2): a TAKE STACK clip shows its take lanes.
+         nTakes()==2, activeTake==-1 (a legitimate STakeStack state:
+         "activeTake_ in [-1, nTakes())") is what makes the clip resolve
+         to the STAKE STACK ITSELF rather than to one take's own content,
+         so this is the live, verb-reachable way to exercise rule 2's
+         branch. Observed the folder_sum_preview way: through a SENTINEL
+         lane's row number moving, never a row-count probe.
+         ================================================================ -->
+    <add-track index="-1"/>                         <!-- 2: take-stack track -->
+    <add-track index="-1"/>                         <!-- 3: sentinel -->
+    <add-sample trackIndex="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="2,0" filePath="../test_stereo.wav" startOffset="0"
+             activate="0"/>
+    <select-take clip="2,0" take="-1" broadcast="0"/>
+
+    <!-- Before: rows 0..3, one per track, sentinel at row 3. -->
+    <assert-lane-overlay trackPath="3" grabWidth="900" grabHeight="1200" expectOverlay="true" minPixels="0" contains="row=3"/>
+
+    <double-click-clip track="2" clip="0"/>
+
+    <!-- After: two take-lane rows appear under track 2's own lane, pushing
+         the sentinel from row 3 to row 5. -->
+    <assert-lane-overlay trackPath="3" grabWidth="900" grabHeight="1200" expectOverlay="true" minPixels="0" contains="row=5"/>
+
+    <!-- A second double-click must NOT close what the first one opened
+         (user decision: SHOW, never toggle-closed). -->
+    <double-click-clip track="2" clip="0"/>
+    <assert-lane-overlay trackPath="3" grabWidth="900" grabHeight="1200" expectOverlay="true" minPixels="0" contains="row=5"/>
+
+    <!-- Collapse the take lanes back so every row number after this point
+         stays simple to reason about. -->
+    <set-lane-view toggleTakesRow="2"/>
+    <assert-lane-overlay trackPath="3" grabWidth="900" grabHeight="1200" expectOverlay="true" minPixels="0" contains="row=3"/>
+
+    <!-- ================================================================
+         SECTION 3 (rule 3): a clip whose content is a plain TRACK (what
+         create-asset over a FOLDER TRACK produces) reveals that track's
+         own lanes.
+         ================================================================ -->
+    <add-track index="-1"/>                         <!-- 4: folder -->
+    <add-track index="-1"/>                         <!-- 5: (temp) child -->
+    <add-sample trackIndex="5" filePath="../test_sawtooth.wav" timePos="0"/>
+    <reparent-track source="5" destParent="4" destIndex="-1"/>
+    <!-- Top level now: 0,1(Drums),2,3,4(folder with 1 child). -->
+    <add-track index="-1"/>                         <!-- 5: asset target -->
+
+    <create-asset container="4" startOffset="0" duration="192000"
+                  assetName="FolderAsset"/>
+    <place-asset assetName="FolderAsset" trackPath="5" timePos="0"/>
+
+    <collapse-track trackPath="4" collapsed="1"/>
+    <assert-lane-view trackPath="4" collapsed="1"/>
+
+    <double-click-clip track="5" clip="0"/>
+    <assert-lane-view trackPath="4" collapsed="0"/>
+
+    <!-- Reset, so Section 5's row arithmetic starts from a clean baseline
+         (one visible row per top-level track). -->
+    <collapse-track trackPath="4" collapsed="1"/>
+    <assert-lane-view trackPath="4" collapsed="1"/>
+
+    <!-- ================================================================
+         SECTION 4 (the case-3 unwrap fix): a take stack placed directly
+         on the track (SLink -> STakeStack, what add-take builds) whose
+         ACTIVE take is itself a container cut over a REGISTERED
+         ARRANGEMENT. Before the fix, dynamic_cast<SCut*> on the STACK
+         itself failed outright and this fell all the way through to
+         nothing; the unwrap-then-resolve makes it drill in exactly as a
+         bare asset clip would.
+         ================================================================ -->
+    <create-arrangement name="Drums2"/>
+    <create-asset container="Drums2:" startOffset="0" duration="192000"
+                  assetName="Drums2Asset"/>
+    <add-track index="-1"/>                         <!-- 6: target -->
+    <place-asset assetName="Drums2Asset" trackPath="6" timePos="0"/>
+    <!-- Wrap it into a 2-take stack; activate="0" keeps the ORIGINAL
+         (Drums2-windowing) take active, matching "add-take onto an
+         existing clip keeps the wrapped material audible". -->
+    <add-take clip="6,0" filePath="../test_sawtooth.wav" startOffset="0"
+             activate="0"/>
+
+    <double-click-clip track="6" clip="0"/>
+    <assert-tab-set names="Arrangement,Drums,Drums2" active="Drums2"/>
+    <activate-tab name="Arrangement"/>
+
+    <!-- ================================================================
+         SECTION 5 (rule 4 / "case 4"): a bare FOLDER LANE — no clip of
+         the track's own — toggles the fold, exactly what the head's fold
+         triangle does. This is the literal "I expected the lanes to open"
+         report. double-click-clip cannot reach it (it needs a clip to
+         address); double-click-lane is the new verb that can.
+         Observed through the lanes BELOW the folder moving, exactly as
+         folder_sum_preview.qxa observes a collapse/expand.
+         ================================================================ -->
+    <add-track index="-1"/>                         <!-- 7: folder, no clips -->
+    <add-track index="-1"/>                         <!-- 8: (temp) child -->
+    <add-sample trackIndex="8" filePath="../test_sawtooth.wav" timePos="0"/>
+    <reparent-track source="8" destParent="7" destIndex="-1"/>
+    <!-- Top level: 0,1,2,3,4(collapsed folder),5,6,7(folder w/ 1 child). -->
+    <add-track index="-1"/>                         <!-- 8: sentinel -->
+
+    <collapse-track trackPath="7" collapsed="0"/>
+
+    <!-- Expanded: rows 0..6 one each, 7=folder's own lane, 8=its child,
+         9=sentinel. -->
+    <assert-lane-view trackPath="7" collapsed="0"/>
+    <assert-lane-overlay trackPath="8" grabWidth="900" grabHeight="1200" expectOverlay="true" minPixels="0" contains="row=9"/>
+
+    <!-- The bare lane click: no clip under the pointer on track 7 at all. -->
+    <double-click-lane trackPath="7" time="0"/>
+
+    <!-- Collapsed: the child row is gone, sentinel moves up to row 8. -->
+    <assert-lane-view trackPath="7" collapsed="1"/>
+    <assert-lane-overlay trackPath="8" grabWidth="900" grabHeight="1200" expectOverlay="true" minPixels="0" contains="row=8"/>
+
+    <!-- A second bare-lane double-click re-expands it (a genuine TOGGLE,
+         unlike rule 2's take lanes — the fold triangle itself toggles). -->
+    <double-click-lane trackPath="7" time="0"/>
+    <assert-lane-view trackPath="7" collapsed="0"/>
+    <assert-lane-overlay trackPath="8" grabWidth="900" grabHeight="1200" expectOverlay="true" minPixels="0" contains="row=9"/>
+    <double-click-lane trackPath="7" time="0"/>
+    <assert-lane-view trackPath="7" collapsed="1"/>
+
+    <!-- ================================================================
+         NEGATIVE CONTROL: a bare lane on a PLAIN (non-folder) track's own
+         row does nothing — no fold to toggle, no tab, no new track. Track
+         0 has a 4 s clip at [0,192000); double-click well past its end,
+         still inside track 0's own lane.
+         ================================================================ -->
+    <assert-track-count arrangement="" count="9"/>
+    <double-click-lane trackPath="0" time="480000"/>
+    <assert-track-count arrangement="" count="9"/>
+    <assert-tab-set names="Arrangement,Drums,Drums2" active="Arrangement"/>
+  </actions>
+
+</SActionScript>

@@ -3,34 +3,45 @@
   fix/track-list-polish (l): a mouse-wheel scroll must be able to bring the
   TRUE LAST track fully into view.
 
-  THE BUG. Vertical scrolling is row-granular: SStdMixerView::rowCount()-vis
-  used to be the whole story for the scrollbar's `maximum()`, where `vis` is
-  SStdMixerView::visibleRowCountFrom() - "how many rows are visible from a
-  given top row". That function counts a row that only PARTIALLY fits inside
-  the viewport as fully "visible" (its loop stops the moment the remaining
-  height goes non-positive, AFTER charging that row's full height), so
-  whenever the total row height does not divide evenly into the viewport
-  height, the computed maximum can land exactly at the content's own bottom
-  edge - with no scroll room left to bring the true last row's remaining
-  pixels into view. Six 100px rows (600px of content) in a viewport whose
-  lane band is not a multiple of 100px hits exactly this: the counting loop
-  consumes the whole viewport DURING the sixth row, so `vis` comes out equal
-  to `rowCount`, and the old `maximum = rowCount - vis` is 0 - no scrolling
-  at all, even though the sixth row is only partially inside the viewport.
+  THE ORIGINAL BUG (fix/track-list-polish l) was that vertical scrolling was
+  ROW-granular: SStdMixerView::rowCount()-vis was the whole story for the
+  scrollbar's `maximum()`, where `vis` counted a row that only PARTIALLY fit
+  inside the viewport as fully "visible" (its loop stopped the moment the
+  remaining height went non-positive, AFTER charging that row's full
+  height), so whenever the total row height did not divide evenly into the
+  viewport height, the computed maximum could land exactly at the content's
+  own bottom edge - with no scroll room left to bring the true last row's
+  remaining pixels into view. THE FIX AT THE TIME reserved roughly one
+  track's height of extra scroll headroom whenever the real content was
+  taller than the viewport.
 
-  THE FIX reserves roughly one track's height of extra scroll headroom
-  whenever the real content is taller than the viewport (SStdMixerView::
-  verticalScrollMaximum(), used by both recalcPageStep() and
-  nTracksChanged() so a track add/remove cannot silently undo it). This is
-  scroll RANGE only: no row is added, nothing is drawn, and it is not a drop
-  target (that is item (i), handled elsewhere).
+  fix/arranger-ui-fixes (C) replaced row-granular scrolling with PIXEL
+  granularity end to end (SMVActualView::setTopPixel() is the authority;
+  SStdMixerView::verticalScrollMaximum() is now `max(0, totalRowsHeight() -
+  availPx)`, no row counting at all). The old "+1 row of headroom" hack is
+  GONE - it existed only to route around row granularity's inability to
+  reach a partially visible last row, and a pixel offset reaches the true
+  content bottom directly by construction, with no correction needed. THIS
+  CASE'S OWN NUMBERS (`expectMaxAtLeast="1"`, `expectMaxAtMost="0"`) did NOT
+  need retuning for the unit change: `maxScroll=` is now PIXELS rather than
+  ROWS, but "there is scroll room" (>= 1) and "there is none" (<= 0) hold
+  under either unit for this fixture. What DID change is what `maxScroll=`
+  MEANS and how it is reached - see below.
 
   THE NUMERIC GATE. `assert-scroll-range` scrolls the vertical scrollbar to
-  its own `maximum()` - the number a real mouse wheel is capped by, per
-  SStdMixerView::tkVerticalScrollMaximum() - and reports whether the true
-  last row ends up fully visible. Deliberately not `set-lane-view
-  topRow=<rowCount-1>`: that call clamps only to rowCount()-1 and bypasses
-  the scrollbar's maximum() entirely, so it cannot see this bug at all.
+  its own `maximum()` (now a PIXEL count) - the number a real mouse wheel is
+  capped by, per SStdMixerView::tkVerticalScrollMaximum() - and reports
+  whether the true last row ends up fully visible. Deliberately not
+  `set-lane-view topRow=<rowCount-1>`: `tkSetTopRow()` now goes through the
+  SAME pixel clamp `setTopPixel()` applies (fix/arranger-ui-fixes C item 1),
+  so on THIS fixture it no longer bypasses the scrollbar's maximum() at
+  all - it would land at the identical position `assert-scroll-range`
+  already reaches, making the two indistinguishable here. The two entry
+  points can still diverge on a viewport where "the last row" is far enough
+  past the pixel-clamped maximum that `rowTop(rowCount-1)` itself exceeds
+  it, but this fixture's six equal 100px rows do not manufacture that gap,
+  so `assert-scroll-range` remains the one that states the CONTRACT (what a
+  real wheel can reach) rather than an incidental fact about this fixture.
 
   THE VIEWPORT SIZE is forced through `assert-lane-alignment`'s own
   `grabWidth`/`grabHeight` (the same resize-then-layout-activate trick

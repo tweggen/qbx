@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Regression: take lanes must render for the LEGACY take-stack shape too.
+
+  Proposal 17's take-lane machinery (`SStdMixerView::maxTakesOf` and
+  `SMVActualView::drawTakeLane`, both in main/timeline/src/sstdmixerview.cpp)
+  reaches a clip's take stack with `dynamic_cast<STakeStack*>(&lk->
+  getSObject())`. That only matches the MODERN shape add-take builds at
+  runtime (SLink -> STakeStack directly). It misses the LEGACY shape a real
+  saved project can carry (SCut -> content is an STakeStack), found while
+  fixing the double-click "blueish clip does nothing" bug: on that shape,
+  showing take lanes silently did nothing, because no row for them was ever
+  built and drawTakeLane had nothing to paint even if one existed.
+
+  No verb in this suite builds the legacy shape (add-take always produces
+  the direct one), so this is a hand-written .qxp fixture,
+  tests/legacy_takestack_wrap.qxp, derived from the spelling of a real
+  affected project (never the user's own file, which this suite never reads
+  or writes). track1 holds one clip: an SCut ('wrapcut') whose CONTENT is an
+  STakeStack ('stack1') with 2 takes. track2 is an empty sentinel with no
+  clips of its own.
+
+  THE OBSERVATION is the same row-shift technique folder_sum_preview.qxa and
+  doubleclick_blue_clip_resolve.qxa use: assert-lane-overlay's `row=N` is
+  read off the row LAYOUT (rowIndexOfTrack), not off pixels, so it is exact
+  whatever the grab measures. Before the fix, expanding track1's take lanes
+  (`set-lane-view toggleTakesRow`) adds NO rows: track2 stays at row 1.
+  After the fix, two take-lane rows appear under track1's own lane and
+  track2 moves to row 3. expectOverlay="true" minPixels="0" is the same
+  sidestep doubleclick_blue_clip_resolve.qxa uses to read the row report
+  without also asserting pixel content the sentinel lane has no reason to
+  carry.
+-->
+<SActionScript version="1" name="takestack_legacy_wrap_lanes">
+
+  <setup project="new"/>
+
+  <actions>
+    <grid-disable/>
+    <load-project path="../legacy_takestack_wrap.qxp"/>
+
+    <!-- Before: track1's own row, then track2 (the sentinel) at row 1. -->
+    <assert-lane-overlay trackPath="1" grabWidth="900" grabHeight="600"
+                         expectOverlay="true" minPixels="0" contains="row=1"/>
+
+    <!-- Expand track1's take lanes (row 0 is its own composite lane). -->
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- After: two take-lane rows (one per take in the stack) appear under
+         track1's own lane, pushing the sentinel from row 1 to row 3. -->
+    <assert-lane-overlay trackPath="1" grabWidth="900" grabHeight="600"
+                         expectOverlay="true" minPixels="0" contains="row=3"/>
+  </actions>
+
+</SActionScript>
