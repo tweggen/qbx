@@ -31,21 +31,23 @@ public:
     // Request stop. Safe to call from any thread.
     void requestStop();
 
-    // Query state (safe from any thread)
+    // Query state (safe from any thread). The UI polls these on its own thread
+    // instead of receiving callbacks on the record thread — a worker std::thread
+    // must never touch Qt (it crashed in Qt's per-thread teardown when it did).
     bool isRunning() const;
+    bool isFinished() const;     // true once the record thread has fully completed
+    bool succeeded() const;      // valid once isFinished(): completion vs. error
     double recordedDurationSeconds() const;
-    const char *errorMessage() const;
+    const char *errorMessage() const;  // valid once isFinished()
 
     // List of created WAV files (returned after recording completes)
     const std::vector<std::string> &createdFiles() const;
 
-    // Callbacks (called from record thread, must be thread-safe)
-    // Called every ~0.1s with current duration
+    // Optional callbacks. NOTE: these are invoked ON THE RECORD THREAD, so a
+    // handler must be thread-safe and must NOT touch Qt/UI objects. The progress
+    // dialog deliberately does not use them — it polls the query methods above
+    // from the GUI thread instead.
     std::function<void(double durationSeconds)> onProgress;
-
-    // Called when recording completes
-    // success=true: normal completion
-    // success=false: error occurred
     std::function<void(bool success, const char *error)> onComplete;
 
 private:
@@ -53,6 +55,8 @@ private:
 
     RecordingParams params_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> finished_{false};
+    std::atomic<bool> succeeded_{false};
     std::atomic<bool> stopRequested_{false};
     std::atomic<double> recordedDuration_{0.0};
     std::unique_ptr<std::thread> recordThread_;
