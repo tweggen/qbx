@@ -156,9 +156,14 @@ APP_DEPS = {
     # (five lines) hands a `media:` payload to smediadrop::placeWhenLocal. The
     # arranger never learns what a source or a cache is -- the payload is the
     # whole interface, the same way it already is for `file:` and `asset:`.
+    # timeline + selection (AC-a1): the Ctrl-drag-duplicate finalize submits
+    # ONE SSetSelectionAction naming the copies, folded into the SAME undo
+    # macro as the SDuplicateClipAction(s) — see sstdmixerview.cpp's
+    # mouseReleaseEvent.
     'timeline':       {'actions', 'media', 'model', 'objects/cut',
                        'objects/midi', 'objects/mixer', 'objects/track',
-                       'objects/wave', 'pluginui', 'servicesui', 'shell'},
+                       'objects/wave', 'pluginui', 'selection', 'servicesui',
+                       'shell'},
     'pluginui':       {'model', 'objects/mixer', 'objects/track', 'shell'},
     # eventui (proposal 37 P4) sits at the RANK of pluginui: a UI slice that
     # edits ONE object kind through the action system and is hosted by the

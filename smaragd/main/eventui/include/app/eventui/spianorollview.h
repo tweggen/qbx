@@ -69,11 +69,17 @@ public:
      *   lane="notes"    : move to (toTick, toKey); edge="end" resizes instead
      *   lane="velocity" : drag the velocity lane bar to toValue (0..127)
      *
+     * `mods` are delivered ON THE EVENT, exactly as drag-clip-edge's do — so
+     * Ctrl-drag-copies-the-body (AC-a2) is drivable from a script the same
+     * way Ctrl-stretch is on a clip edge. Applied to every press/move/release
+     * in the gesture, matching a real held-modifier drag.
+     *
      * Returns false when the note is not there or the geometry is degenerate.
      */
     bool tkDragNote( qint64 tick, int key, int channel, qint64 toTick,
                      int toKey, const QString &edge, const QString &lane,
-                     double toValue );
+                     double toValue,
+                     Qt::KeyboardModifiers mods = Qt::NoModifier );
 
     /**
      * TEST ENTRY POINT for the vertical key scrollbar - drives the REAL
@@ -94,6 +100,14 @@ protected:
     void keyPressEvent( QKeyEvent * ) override;
     void resizeEvent( QResizeEvent * ) override;
     void wheelEvent( QWheelEvent * ) override;
+    // AC-a3: claim Ctrl/Cmd-A for THIS view before it can become an ambiguous
+    // WindowShortcut. Qt asks a focused widget's event() for
+    // QEvent::ShortcutOverride before dispatching a QAction shortcut with
+    // Window/ApplicationShortcut context; accepting it here is what routes
+    // Ctrl-A into keyPressEvent() below (select every note) instead of into
+    // the shell's "Select All" QAction (select every clip) — the same trick
+    // QLineEdit uses internally to keep its own Ctrl-A "select all text".
+    bool event( QEvent * ) override;
 
 private:
     // --- band geometry ----------------------------------------------------
@@ -131,7 +145,11 @@ private:
                    const QPoint &pos, bool *onEndEdge = nullptr ) const;
 
     // --- the live gesture -------------------------------------------------
-    enum class DragKind { None, Move, Resize, Marquee, Velocity, Cc };
+    // Copy (AC-a2): Ctrl-drag on a note BODY. A distinct kind from Move
+    // because previewNotes() has to APPEND a new SEvent rather than mutate
+    // the dragged one in place — the whole point is that the original stays
+    // exactly where it was.
+    enum class DragKind { None, Move, Resize, Marquee, Velocity, Cc, Copy };
     struct Drag {
         DragKind kind = DragKind::None;
         QPoint   press;

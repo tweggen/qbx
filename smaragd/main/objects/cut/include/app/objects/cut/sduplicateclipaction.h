@@ -30,10 +30,19 @@ public:
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
+    // AC-a1: an optional out-param, written by apply() with the path of the
+    // newly created copy (destTrackPath_ + the index it landed at). A caller
+    // building a Ctrl-drag macro (sstdmixerview.cpp) reads THIS, never the
+    // action pointer itself after submitting: on the REJECTED path the action
+    // is deleted by SActionHistory before control returns, so a getter on the
+    // action would be a use-after-free. Left untouched when apply() fails.
+    void setCreatedPathOut( QList<int> *out ) { createdPathOut_ = out; }
+
 private:
     QList<int> sourceClipPath_;   // [track path..., link index] of the original
     QList<int> destTrackPath_;    // path TO the destination track
     offset_t   startTime_ = 0;
+    QList<int> *createdPathOut_ = nullptr;   // not owned; see setCreatedPathOut
 };
 
 #endif // SDUPLICATECLIPACTION_H

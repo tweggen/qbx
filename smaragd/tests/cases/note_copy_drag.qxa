@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AC-a2: Ctrl-drag on a note BODY copies it, and the copy — not the original —
+  ends up selected. A Ctrl-press that never crosses Qt's own drag threshold
+  (QApplication::startDragDistance()) is STILL a plain toggle, exactly as
+  before this feature existed (regression guard for piano_roll_edits.qxa,
+  which does not itself exercise Ctrl at all).
+
+  Frames per tick: 120 BPM, PPQ 960, 48 kHz -> 25 frames/tick (same arithmetic
+  piano_roll_edits.qxa documents), so every `at=` below is exact:
+    tick 0    ->     0 frames (the original, untouched)
+    tick 1920 -> 48000 frames (the copy's drop point, snapped to the 1/16 grid,
+                 1920 already being a multiple of the grid's 240 ticks)
+
+  `drag-note` grew a `modifiers=` attribute for this (spelled exactly as
+  drag-clip-edge's: "ctrl"/"alt"/"shift", "+"-joined) — see
+  main/testkit/include/app/testkit/seventuitestactions.h.
+
+  AC-a3's OTHER half (Ctrl-A with the piano roll focused selects every note of
+  the bound clip, leaving the arranger's selection alone) is NOT exercised
+  here, or anywhere in the qxa suite: `select-all`'s fork depends on
+  QApplication::focusWidget(), which is always null in a headless test-case
+  run because the main window is never SHOWN (proposal 38 trap T10) — so this
+  harness can only ever drive the ARRANGER default branch (see
+  select_all_scope.qxa). SPianoRollView's own ShortcutOverride handling
+  (spianorollview.cpp/.h) is real, reviewed code exercising the identical
+  technique a QLineEdit already relies on for its own Ctrl-A; it is
+  hand-verification-only until something in this repo can show a window.
+-->
+<SActionScript version="1" name="note_copy_drag">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Notes"/>
+    <set-selection paths="0,0"/>
+    <set-locator position="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="0"/>
+
+    <virtual-key key="60" velocity="100" durationTicks="960"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+
+    <!-- =================== drag-note: Ctrl-drag COPIES ================== -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="1920" toKey="60"
+              modifiers="ctrl"/>
+
+    <!-- The ORIGINAL is untouched, a NEW note exists at the drop point, and
+         the copy — only the copy — is selected. -->
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="48000"/>
+    <assert-event-editor clip="0,0" contains="selection=1"/>
+
+    <!-- ONE undo removes the copy and leaves the original exactly as it was. -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+
+    <!-- ================ drag-note: no-drag Ctrl-click TOGGLES ============ -->
+    <!-- Establish a known baseline first: a plain (non-Ctrl) click selects
+         exactly the one existing note. -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="0" toKey="60"/>
+    <assert-event-editor clip="0,0" contains="selection=1"/>
+
+    <!-- A Ctrl press that does not move past the threshold is a TOGGLE, not a
+         copy: no new note, and the selection flips each time. -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="0" toKey="60"
+              modifiers="ctrl"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <assert-event-editor clip="0,0" contains="selection=0"/>
+
+    <drag-note clip="0,0" tick="0" key="60" toTick="0" toKey="60"
+              modifiers="ctrl"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <assert-event-editor clip="0,0" contains="selection=1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -59,6 +59,7 @@
 #include "app/objects/track/smoveclipaction.h"
 #include "app/objects/cut/ssplitclipaction.h"
 #include "app/objects/cut/sduplicateclipaction.h"
+#include "app/selection/ssetselectionaction.h"
 #include "app/objects/cut/sresizeclipaction.h"
 #include "app/objects/mixer/screateassetaction.h"
 #include "app/objects/mixer/sextractarrangementaction.h"
@@ -310,12 +311,28 @@ void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
     }
 }
 
+void SMVActualView::armFollowHold()
+{
+    followHoldArmed_ = true;
+    followHoldTimer_.restart();
+}
+
 void SMVActualView::followLocator( offset_t newPos, offset_t oldPos )
 {
     // Only when enabled, and only for a real advance under playback/recording
     // (this slot is wired to locatorAdvanced, so a manual seek never lands here).
     if( !followPlayhead_ ) return;
     if( newPos == oldPos ) return;
+
+    // AC-g1: a manual scroll suspends re-paging for FOLLOW_HOLD_MS after the
+    // last one. followHoldTimer_ is only ever armed from a USER-initiated pan
+    // (wheelEvent, the scrollbar's own user-driven signal, drag-scroll-past-
+    // the-edge) — never from here or from setLeftOffset() itself, which would
+    // let the very re-page the hold exists to delay immediately disarm it.
+    if( followHoldArmed_ ) {
+        if( followHoldTimer_.elapsed() < FOLLOW_HOLD_MS ) return;
+        followHoldArmed_ = false;   // the hold has expired; resume following
+    }
 
     int w = width();
     if( w <= 0 ) return;
@@ -1669,8 +1686,12 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 
     // Finalize a clip DUPLICATE (Ctrl-drag): the dragged clips are live copies.
     // Drop the previews and submit an undoable SDuplicateClipAction per copy that
-    // re-creates it at its final (snapped) position. Several copies land as one
-    // undo macro so the whole group reverts together.
+    // re-creates it at its final (snapped) position, followed by ONE selection
+    // action naming every copy. The macro is UNCONDITIONAL (AC-a1): a single
+    // copy needs it exactly as much as a group does, because the selection
+    // change is now itself a second action inside it. Before this the selection
+    // was set at ARM time, pointing at the live PREVIEW link (about to be
+    // deleted below) — an undo step that outlived the object it named.
     if( clipDragArmed_ && clipDragIsDuplicate_ ) {
         struct Fin { QList<int> src; QList<int> dest; offset_t start; };
         QVector<Fin> fins;
@@ -1689,13 +1710,25 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         lastClickSLink_ = NULL;
 
         QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
-        bool macro = fins.size() > 1 && stack;
+        bool macro = !fins.isEmpty() && stack;
         if( macro ) stack->beginMacro( QStringLiteral("Duplicate clips") );
+        QList<QList<int>> createdPaths;
         for( const Fin &f : fins ) {
-            if( !f.src.isEmpty() && !f.dest.isEmpty() )
-                stimeline::submitActive(
-                    new SDuplicateClipAction( f.src, f.dest, f.start ) );
+            if( f.src.isEmpty() || f.dest.isEmpty() ) continue;
+            QList<int> createdPath;
+            SDuplicateClipAction *dup =
+                new SDuplicateClipAction( f.src, f.dest, f.start );
+            dup->setCreatedPathOut( &createdPath );
+            stimeline::submitActive( dup );
+            // createdPath is a LOCAL, so it stays safe to read even when
+            // apply() rejected and SActionHistory already deleted `dup`.
+            if( !createdPath.isEmpty() ) createdPaths.append( createdPath );
         }
+        // Select exactly the COPIES — never the originals, never the deleted
+        // previews — as part of the SAME macro, so one undo restores both the
+        // model and whatever was selected before the drag.
+        if( !createdPaths.isEmpty() )
+            stimeline::submitActive( new SSetSelectionAction( createdPaths ) );
         if( macro ) stack->endMacro();
         update();
         clipDragArmed_ = false;
@@ -2346,7 +2379,9 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
         return;
     }
 
-    // Check scrolling, if the event position is invisible.
+    // Check scrolling, if the event position is invisible. AC-g1: dragging
+    // past either edge is a hand-driven pan exactly as the wheel and the
+    // scrollbar are, so it arms the same hold.
     QRect myRect = rect();
     int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
     if( ev->pos().x()<0 ) {
@@ -2355,6 +2390,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
         currentOffset -= d;
         if( currentOffset<0 ) currentOffset = 0;
         if( currentOffset != upperLeftX_ ) {
+            armFollowHold();
             setLeftOffset( (offset_t)( ((double)currentOffset)/secondWidth_*srate) );
         }
     } else if( ev->pos().x()>=myRect.width() ) {
@@ -2362,6 +2398,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
         int d = ev->pos().x()-myRect.width();
         currentOffset += d;
         if( currentOffset != upperLeftX_ ) {
+            armFollowHold();
             setLeftOffset( (offset_t)( ((double)currentOffset)/secondWidth_*srate) );
         }
     }
@@ -3154,7 +3191,22 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         anchorCopy = clipDupItems_.first().copy;
 
                     if( anchorCopy ) {
-                        SApplication::app().submitSetSelectionAction( anchorCopy );
+                        // AC-a1: the app-wide SELECTION is deliberately left
+                        // alone here — the ORIGINAL clip(s) stay selected/
+                        // highlighted for the whole drag. anchorCopy is only a
+                        // local bookkeeping pointer (syncDuplicateGroup and the
+                        // release below read it), never pushed into
+                        // SApplication's selection list. Doing that used to be
+                        // how this gesture lost its own prior selection: the
+                        // preview gets `delete`d before release submits
+                        // anything, whose destroyed() signal auto-unselects it
+                        // — so by the time the release's SSetSelectionAction
+                        // snapshotted "the selection before this action" for
+                        // its undo, the TRUE pre-drag selection (whatever the
+                        // user had selected before Ctrl-pressing) was already
+                        // gone, and one undo restored an EMPTY selection
+                        // instead of it. Leaving the true selection untouched
+                        // here is what makes the release's snapshot correct.
                         lastClickSLink_ = anchorCopy;
                         lastClickTrack_ = clickedTrack;
                         lastClickSelStartOffset_ = anchorCopy->getStartTime();
@@ -3730,9 +3782,18 @@ void SStdMixerView::timeSliderMoved( int newValue )
 	//      newValue );
     if( model_->hasDuration() ) {
 	   qContent_->setLeftOffset( (offset_t)(newValue*model_->getDuration()/HSliderRange+0.5) );
-    } else {	
+    } else {
 	   qContent_->setLeftOffset( 0 );
     }
+}
+
+// AC-g1: see the header comment on why this listens to actionTriggered rather
+// than valueChanged. `action` itself is not consulted — every user-driven
+// trigger (drag, page step, arrow click) counts as "the user scrolled by
+// hand", and the hold does not distinguish among them.
+void SStdMixerView::onHScrollUserAction( int /*action*/ )
+{
+    if( qContent_ ) qContent_->armFollowHold();
 }
 
 void SStdMixerView::trackSliderMoved( int newValue )
@@ -3900,6 +3961,22 @@ bool SStdMixerView::clickLane( STrack *t, offset_t time,
     };
     send( QEvent::MouseButtonPress,   Qt::LeftButton, Qt::LeftButton );
     send( QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
+bool SStdMixerView::wheelScroll( int deltaY, Qt::KeyboardModifiers mods )
+{
+    if( !qContent_ || deltaY == 0 ) return false;
+    // Position barely matters here (ScrollHorizontal/ScrollVertical do not
+    // read anchorX at all; only ZoomHorizontal's zoom-to-cursor does), but the
+    // point must be INSIDE the canvas or QApplication::sendEvent still
+    // delivers it — Qt does not hit-test a QWheelEvent against the receiver's
+    // rect — so a fixed interior point is fine.
+    const QPointF local( 100, 60 );
+    QWheelEvent ev( local, qContent_->mapToGlobal( local ), QPoint( 0, 0 ),
+                    QPoint( 0, deltaY ), Qt::NoButton, mods,
+                    Qt::NoScrollPhase, false );
+    QApplication::sendEvent( qContent_, &ev );
     return true;
 }
 
@@ -4540,6 +4617,7 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
         offset_t cur = upperLeftOffset_;
         offset_t next = (dir > 0) ? ( cur > step ? cur - step : 0 )   // up = earlier
                                   : cur + step;
+        armFollowHold();   // AC-g1: a hand-driven pan, not an auto-follow re-page
         setLeftOffset( next );
         break;
     }
@@ -4794,7 +4872,11 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
     qZoomTotal_->setFixedSize( scrollButtonSize );
     QObject::connect( qScrollHoriz_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( timeSliderMoved( int ) ) );
-    QObject::connect( qScrollVert_, SIGNAL( valueChanged( int ) ), 
+    // AC-g1: actionTriggered, not valueChanged — see the header comment on
+    // onHScrollUserAction for why the distinction is load-bearing.
+    QObject::connect( qScrollHoriz_, SIGNAL( actionTriggered( int ) ),
+                      this, SLOT( onHScrollUserAction( int ) ) );
+    QObject::connect( qScrollVert_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( trackSliderMoved( int ) ) );
 
     qTrackControlBoxHolder_ = new QWidget( this );

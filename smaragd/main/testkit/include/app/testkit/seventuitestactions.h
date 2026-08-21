@@ -107,6 +107,12 @@ private:
     QString edge_;                              // "" | "end"
     QString lane_ = QStringLiteral( "notes" );  // "notes" | "velocity"
     double  toValue_ = -1.0;
+    // AC-a2: "" | "ctrl" | "alt" | "shift", "+"-joined, spelled exactly as
+    // drag-clip-edge's own `modifiers` attribute. Ctrl on a note BODY (lane
+    //="notes", edge="") copies it instead of moving it; every other
+    // combination is unchanged (Ctrl-drag on the velocity/CC lanes stays a
+    // plain drag, and Ctrl on an EDGE stays a resize).
+    QString modifiers_;
 };
 
 /**

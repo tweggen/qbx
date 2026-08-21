@@ -1003,3 +1003,33 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     than the arithmetic alone. And it opens no tab, because an assertion that
     creates the thing it measures measures nothing; `open-arrangement-tab`
     first.
+
+51. **`drag-note` grew a `modifiers=` attribute (AC-a2)**, spelled exactly as
+    `drag-clip-edge`'s own ("ctrl"/"alt"/"shift", "+"-joined) — a separate,
+    file-local `parseModifiers()` copy in `seventuitestactions.cpp`, matching
+    the existing convention that each gesture-verb file keeps its own rather
+    than sharing one (`click-lane`, `select-track`). Threaded all the way
+    through `SMainWindow::dragNote` → `SPianoRollView::tkDragNote`, applied to
+    every press/move/release the gesture sends, exactly as a real held
+    modifier would be.
+52. **`wheel-scroll` (AC-g1) sends a REAL `QWheelEvent`**, not a call into the
+    factored-out gesture logic directly, so it exercises `SMVActualView::
+    wheelEvent()`'s own entry point (the macOS accessibility early-out, the
+    `dy==0` guard) rather than skipping past it — going through
+    `SMainWindow::wheelScrollArranger()` → `SStdMixerView::wheelScroll()`,
+    reusing the `dragClipEdge`/`dragNote` house pattern of a public test entry
+    point on the view rather than a re-spelling of the gesture. Its position
+    barely matters (only `ZoomHorizontal`'s zoom-to-cursor reads the anchor
+    x), so it lands at a fixed interior point; `QApplication::sendEvent`
+    delivers it there regardless of visibility, same as every other
+    synthesized gesture in this file.
+53. **`select-all` (AC-a3) drives the SAME two-step fork real Qt input takes**:
+    a `QEvent::ShortcutOverride` offered to `QApplication::focusWidget()`
+    first, then either that widget's own `keyPressEvent` or — nothing
+    claimed it — `SMainWindow`'s window-level "Select All" `QAction`, through
+    `SMainWindow::sendSelectAllShortcut()`. **The known gap**:
+    `QApplication::focusWidget()` is always null in a `--test-case` run (the
+    main window is never shown), so this verb can only ever reach the
+    ARRANGER default branch from a script — see `select_all_scope.qxa`. A
+    widget-specific branch (the piano roll's own Ctrl-A) is real, reviewed
+    production code that this verb cannot exercise; it needs a shown window.

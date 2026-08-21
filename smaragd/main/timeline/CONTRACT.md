@@ -483,3 +483,47 @@ Three consequences a change here must keep:
   `SSMVMixerControl`'s automation write tick do. `followLocator` follows the
   DRAWN cursor and does not scroll while the root is resting. The recording
   overlay is gated to the master, where both of its inputs live.
+
+### inv. 25 — a Ctrl-drag duplicate never touches the SELECTION until release
+(AC-a1)
+
+The arm-time code (`mousePressEvent`'s primary-modifier body branch) may
+mutate `clipDupItems_`/`lastClickSLink_` for its own bookkeeping, but must
+NEVER call anything that changes `SApplication`'s selection list — no
+`submitSetSelectionAction`, no `setSelectedSLink`, nothing. The ORIGINAL
+clip(s) stay selected/highlighted for the whole drag.
+
+Why: the live preview link `mouseReleaseEvent` drags is `delete`d before the
+finalize submits anything, and `SLink`'s destroyed()→unselectSLink auto-removal
+means selecting the preview at arm time silently erases whatever the user had
+selected BEFORE the gesture — by the time the release snapshots "the
+selection before this action" (inside `SSetSelectionAction::apply()`'s own
+undo bookkeeping), it is already gone. One undo then restores an EMPTY
+selection instead of the true prior one. Leaving the real selection alone
+until release is what keeps that snapshot honest.
+
+The release itself submits the new-copy `SDuplicateClipAction`(s) and exactly
+ONE `SSetSelectionAction` naming the created copies, **inside the same
+`beginMacro`/`endMacro` pair**, unconditionally — a single-clip copy grows the
+macro too, so the step count is 1 whether one clip or a group was dragged.
+Gate: `copy_drag_selects_copy.qxa`.
+
+### inv. 26 — a manual horizontal scroll suspends follow-the-playhead for
+`SMVActualView::FOLLOW_HOLD_MS` (AC-g1)
+
+`armFollowHold()` may be called ONLY from a user-initiated pan: the wheel's
+`ScrollHorizontal` case, the horizontal scrollbar's `actionTriggered` (never
+`valueChanged`, which also fires when `followLocator` mirrors its own
+auto-repage onto the scrollbar — arming from that signal would let the very
+re-page the hold exists to delay immediately disarm it), and the
+drag-past-the-canvas-edge branch of `mouseMoveEvent`. It must NEVER be called
+from `setLeftOffset()` itself, `followLocator()`, or any other path that is
+not directly a hand gesture, for the identical self-defeat reason.
+
+`followLocator()` checks a monotonic `QElapsedTimer` (`followHoldTimer_`) at
+the top, ahead of every other early-out, and returns without re-paging while
+`followHoldArmed_` is true and less than `FOLLOW_HOLD_MS` (5000) has elapsed
+since the last arm; once expired it clears the flag and behaves exactly as
+before this feature. Gate: `follow_scroll_hold.qxa` (`RUN_SERIAL`, a real
+wall-clock case — see its header for the measured, reproducible canvas
+geometry the closed-form scrollX value depends on).
