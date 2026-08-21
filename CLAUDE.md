@@ -563,6 +563,22 @@ coverage that does not exist. Unreproduced flakes get named too.
 4. **Resampler:** Linear (pitch-correct, not mastering-grade).
 5. **No CI:** Only Windows/Qt6/MinGW regularly tested.
 6. **Latency:** Buffer sizing largely fixed; no user-facing control.
+7. **Credential stores off Windows: WRITTEN, NEVER COMPILED.** `SSecretStore`'s
+   `libsecret` (Linux) and `keychain` (macOS) backends exist in the tree and
+   have never been built — this repo's regular box is Windows/MinGW. Measured on
+   Ubuntu 2026-08-21 against `main` (37845a2d), `secret_store_test` reports
+   `platform default backend on this build: none`, so on Linux the media browser
+   **cannot remember a Nextcloud/WebDAV password at all** and "Remember" is
+   disabled. Absence is graceful by design (backend `none`, nothing persisted) —
+   what is missing is the CMake detection (`libsecret-1` via pkg-config, a
+   PRIVATE `TW_HAVE_*` macro like `TW_HAVE_CLAP`/`TW_HAVE_VST3`/`TW_HAVE_AU`,
+   the `apt install` line in `docs/BUILD.md`, and `./rebuild.sh` naming it when
+   it cannot find it). It is also why `media_options_page` and
+   `media_secret_redaction` pin `SMARAGD_SECRET_BACKEND=dpapi` and so cannot
+   pass off Windows: with a persisting backend on Linux they could be gated on
+   the CAPABILITY rather than on the platform. Not in scope either way: whether
+   these stores resist an attacker — the plumbing and the failure modes are what
+   this project gates, the cryptography is DPAPI's / Keychain's / libsecret's.
 
 ## Common Tasks
 
