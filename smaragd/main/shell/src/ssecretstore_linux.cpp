@@ -9,11 +9,20 @@
 // reviewed against it; no headless run can exercise it (Secret Service needs
 // a running session bus / keyring daemon).
 
+// libsecret (and the glib it drags in) MUST be included BEFORE any Qt header.
+// Qt's qobjectdefs.h does `#define signals public`, and glib's
+// gdbusintrospection.h declares a MEMBER named `signals` -- so with Qt first
+// that member becomes `GDBusSignalInfo **public;` and the compile dies inside
+// a system header, pointing at glib rather than at us. TW_HAVE_LIBSECRET is a
+// compile definition from CMake, so it is already usable up here, above the
+// include that pulls Qt in.
+#if defined( TW_HAVE_LIBSECRET )
+#include <libsecret/secret.h>
+#endif
+
 #include "ssecretstorebackend.h"
 
 #if defined( TW_HAVE_LIBSECRET )
-
-#include <libsecret/secret.h>
 
 #include "tw/core/twlog.h"
 

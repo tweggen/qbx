@@ -563,26 +563,25 @@ coverage that does not exist. Unreproduced flakes get named too.
 4. **Resampler:** Linear (pitch-correct, not mastering-grade).
 5. **No CI:** Only Windows/Qt6/MinGW regularly tested.
 6. **Latency:** Buffer sizing largely fixed; no user-facing control.
-7. **Credential stores off Windows: WRITTEN, NEVER COMPILED.** `SSecretStore`'s
-   `libsecret` (Linux) and `keychain` (macOS) backends exist in the tree and
-   have never been built or executed by anything — this repo's regular box is
-   Windows/MinGW, and `main/CMakeLists.txt` says so out loud when it does find
-   libsecret ("UNTESTED on the Windows box this gate was built on"). **The build
-   plumbing is already complete** and is NOT what is missing: CMake probes
-   `libsecret-1` through `pkg_check_modules`, `docs/BUILD.md:68` names
-   `libsecret-1-dev` as an optional prerequisite, and `_env.sh:247` makes
-   `./rebuild.sh` name it when it is absent. What is missing is that nobody has
-   installed the package and compiled it. Measured on Ubuntu 2026-08-21,
-   `secret_store_test` reports `platform default backend on this build: none`,
-   so on a box without `libsecret-1-dev` the media browser **cannot remember a
-   Nextcloud/WebDAV password at all** and "Remember" is disabled — gracefully,
-   by design, but silently as far as the build log is concerned. Anyone with a
-   Linux box can retire half of this in one `apt install libsecret-1-dev` plus a
-   re-configure; whether the backend then COMPILES and round-trips against a
-   real session bus is unknown and is the actual open question. It is also why
-   `media_options_page` and `media_secret_redaction` pin
-   `SMARAGD_SECRET_BACKEND=dpapi` and are DISABLED off Windows: with a
-   persisting backend on Linux they could be gated on the CAPABILITY instead.
+7. **macOS Keychain credential backend: WRITTEN, NEVER COMPILED.**
+   `SSecretStore`'s `keychain` backend exists in the tree and has never been
+   built or executed by anything — this repo's regular box is Windows/MinGW and
+   there is no macOS box. `main/CMakeLists.txt:600` says so out loud when it
+   enables it ("UNTESTED on the Windows box this gate was built on").
+   **The Linux `libsecret` half of this was retired on 2026-08-21** and is a
+   cautionary tale for whoever compiles the macOS one: an optional dependency
+   nobody installs is one nobody BUILDS, and both bugs it was hiding could only
+   appear once the dependency was present. `pkg_check_modules` was missing
+   `IMPORTED_TARGET`, so *finding* libsecret turned a clean configure into a
+   hard generate failure — the optional dep broke the build by being there —
+   and the backend included Qt before glib, which is `#define signals public`
+   against a struct member called `signals`. Expect the Keychain file to have
+   its own equivalents; it is Objective-C++ and has never seen a compiler.
+   On a box with no credential backend the store falls back to `none`, which
+   means "Remember" is disabled in the media browser and nothing else changes.
+   Note this does NOT make `media_options_page` / `media_secret_redaction`
+   runnable off Windows: those assert what lands in the INI, and only DPAPI
+   puts ciphertext there — a keyring backend stores nothing in the INI at all.
    Not in scope either way: whether these stores resist an attacker — the
    plumbing and the failure modes are what this project gates, the cryptography
    is DPAPI's / Keychain's / libsecret's.
