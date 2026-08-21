@@ -581,6 +581,13 @@ if(SMARAGD_WINDOWS)
     target_compile_definitions(app_ui PRIVATE TW_HAVE_DPAPI=1)
     target_link_libraries(app_ui PRIVATE crypt32)
     message(STATUS "app_ui: SSecretStore DPAPI backend enabled")
+
+    # Propagated to the top-level CMakeLists.txt (PARENT_SCOPE, unset/false
+    # everywhere this if() does not run) so the qxa cases that need a REAL
+    # on-disk backend can gate on "was TW_HAVE_DPAPI actually compiled" rather
+    # than restating `if(WIN32)` as a second, independent authority that could
+    # drift from this one.
+    set(SMARAGD_HAVE_DPAPI TRUE PARENT_SCOPE)
 endif()
 
 if(SMARAGD_MACOS)

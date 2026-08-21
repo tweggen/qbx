@@ -5,3 +5,14 @@
 # Standard MIDI Files are binary: the corpus is compared BYTE for byte
 # (events_test authored-file identity), so no eol conversion may touch them.
 *.mid binary
+
+# The media-browser fixture tree (proposal 38) is read by EXACT BYTE COUNT:
+# media_browser_browse.qxa, media_browser_search.qxa and media_webdav_browse.qxa
+# all assert "notes.txt,73,0". The .wav fixtures are already safe (their binary
+# content defeats git's own text heuristic), but notes.txt is plain ASCII and
+# was silently eol-converted -- LF in the repo (72 bytes), CRLF on a checkout
+# with core.autocrlf=true (73 bytes, what the three cases above were authored
+# against). `-text` pins every fixture under here to whatever bytes are
+# committed, on every platform and every autocrlf setting, so a size-asserted
+# fixture can never again drift out from under its own gate.
+smaragd/tests/media/** -text

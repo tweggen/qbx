@@ -237,7 +237,22 @@ bool SSecretStore::store( const QString &key, const QString &secret )
 
 SSecretStore::Result SSecretStore::retrieve( const QString &key, QString *secret ) const
 {
-    if( backend_ == QLatin1String( "none" ) ) return Result::Unset;
+    // NOTE: unlike store()/remove(), backend_ == "none" is deliberately NOT
+    // handled here as a blanket early Unset. Inv. 43 says the scheme tag
+    // stored AT THIS KEY governs, never this instance's own currently-
+    // resolved backend_ -- and an instance whose PLATFORM DEFAULT happens to
+    // be "none" (no DPAPI/Keychain/libsecret compiled into this build) can
+    // still be pointed at a QSettings/INI that was carried over from a build
+    // or machine that DID have a real backend. Short-circuiting to Unset
+    // before ever looking at the scheme tag is exactly the bug §B.8/inv. 43
+    // exists to prevent: it hides an Undecryptable behind a false "nothing is
+    // stored here", and a caller that trusts Unset would be free to treat the
+    // key as never-set rather than as a credential it cannot read. Falling
+    // through to the settings_ == nullptr / schemeKey_ checks below answers
+    // it correctly in every case: no settings_ (the header allows null for
+    // "none") still yields Unset, an INI with no scheme tag yields Unset, and
+    // an INI naming a real scheme this build cannot serve yields
+    // Undecryptable via the per-scheme branches further down.
 
     if( backend_ == QLatin1String( "memory" ) ) {
         QMutexLocker lock( &g_memoryMutex );
@@ -248,10 +263,17 @@ SSecretStore::Result SSecretStore::retrieve( const QString &key, QString *secret
     }
 
     if( settings_ == nullptr ) {
-        TW_LOGE( "secretstore",
-                 "backend '%s' needs a QSettings instance and none was given; "
-                 "'%s' reported as Unset",
-                 backend_.toUtf8().constData(), key.toUtf8().constData() );
+        // Legitimate, not misuse, for "none": the header documents settings_
+        // may be null for `memory`/`none`, and with nothing to read from,
+        // Unset is simply correct -- no error worth logging. For every OTHER
+        // backend a null settings_ IS misuse (a real backend has nowhere to
+        // read its scheme/ciphertext from), which is worth the loud log.
+        if( backend_ != QLatin1String( "none" ) ) {
+            TW_LOGE( "secretstore",
+                     "backend '%s' needs a QSettings instance and none was given; "
+                     "'%s' reported as Unset",
+                     backend_.toUtf8().constData(), key.toUtf8().constData() );
+        }
         return Result::Unset;
     }
 
