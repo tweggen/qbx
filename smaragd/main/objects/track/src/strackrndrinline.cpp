@@ -98,6 +98,47 @@ QString STrackRendererInline::tagFullText( SObject &clipObject )
     return clipObject.getSName();
 }
 
+// proposal 41 D15/M7: THE CHIP'S GEOMETRY, factored out of draw()'s own
+// chip-drawing block below so a hit test (SMVActualView::tagHitTestAt) asks
+// the SAME question the paint path answers, rather than re-deriving the
+// padding/minimum-width constants a second time and risking the two
+// disagreeing about where the handle actually is.
+QRect STrackRendererInline::tagChipRect( SObject &clipObject, const QRect &vr,
+                                         QString *outDrawnText )
+{
+    if( outDrawnText ) outDrawnText->clear();
+
+    const QString fullName = tagFullText( clipObject );
+    const int kTagPadX = 3;
+    const int kTagPadY = 1;
+    const int kTagMinChipW = 6;    // "chip only": still reads as a mark
+    const int kTagMinHeightPx = 8; // lane too short: draw nothing at all
+    if( fullName.isEmpty() || vr.height() < kTagMinHeightPx || vr.width() < 1 )
+        return QRect();
+
+    QFont tagFont = QGuiApplication::font();
+    tagFont.setPointSize( 7 );   // matches scutLoopHandleRect's
+                                  // "one character high"
+    QFontMetrics fm( tagFont );
+    const int chipH = qMin( vr.height(),
+        qMax( fm.height() + 2 * kTagPadY, kTagMinHeightPx ) );
+    const int chipTop = vr.bottom() - chipH + 1;
+
+    const QString drawn = tagDensityText( fullName, fm,
+        vr.width() - 2 * kTagPadX, nullptr );
+    int chipW = 0;
+    if( !drawn.isEmpty() ) {
+        chipW = qMin( vr.width(), fm.horizontalAdvance( drawn ) + 2 * kTagPadX );
+    } else if( vr.width() >= kTagMinChipW ) {
+        chipW = qMin( kTagMinChipW, vr.width() );   // CHIP ONLY
+    }
+    // else: NOTHING -- not even the chip fits.
+    if( chipW < 1 ) return QRect();
+
+    if( outDrawnText ) *outDrawnText = drawn;
+    return QRect( vr.left(), chipTop, chipW, chipH );
+}
+
 // THE FOLDER-SUM OVERLAY (proposal 39 M3, design D4).
 //
 // A folder lane used to be a blank rectangle: the clip loop below skips every
@@ -442,50 +483,27 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         // (SCutRendererInline used to draw cut.getSName() there) -- one
         // mechanism, two text sources (tagFullText: the fragment/asset name
         // for a container-backed clip, the file name for a plain one).
+        // proposal 41 D15/M7: geometry now comes from tagChipRect() -- the
+        // SAME function SMVActualView::tagHitTestAt() calls for the hit
+        // test, so paint and hit-test can never independently drift apart
+        // on where the chip actually is. This block only draws.
         {
-            const QString fullName = tagFullText( lk->getSObject() );
-            const int kTagPadX = 3;
-            const int kTagPadY = 1;
-            const int kTagMinChipW = 6;    // "chip only": still reads as a mark
-            const int kTagMinHeightPx = 8; // lane too short: draw nothing at all
-            if( !fullName.isEmpty() && vr.height() >= kTagMinHeightPx
-                && vr.width() >= 1 ) {
-                // Taken from the APPLICATION font, not the painter, so the
-                // drawn chip and any independently-computed geometry (the
-                // hover tooltip's cut decision, the pixel gate) always
-                // agree on the size — scutLoopHandleRect's own reasoning
-                // for the identical choice.
-                QFont tagFont = QGuiApplication::font();
-                tagFont.setPointSize( 7 );   // matches scutLoopHandleRect's
-                                              // "one character high"
-                QFontMetrics fm( tagFont );
-                const int chipH = qMin( vr.height(),
-                    qMax( fm.height() + 2 * kTagPadY, kTagMinHeightPx ) );
-                const int chipTop = vr.bottom() - chipH + 1;
+            QString drawnTagText;
+            const QRect chipRect = tagChipRect( lk->getSObject(), vr, &drawnTagText );
+            if( !chipRect.isEmpty() ) {
                 const QColor chipColor = tagChipColor( finalColor );
-
-                const QString drawn = tagDensityText( fullName, fm,
-                    vr.width() - 2 * kTagPadX, nullptr );
-                int chipW = 0;
-                if( !drawn.isEmpty() ) {
-                    chipW = qMin( vr.width(),
-                                 fm.horizontalAdvance( drawn ) + 2 * kTagPadX );
-                } else if( vr.width() >= kTagMinChipW ) {
-                    chipW = qMin( kTagMinChipW, vr.width() );   // CHIP ONLY
-                }
-                // else: NOTHING -- not even the chip fits.
-
-                if( chipW >= 1 ) {
-                    const QRect chipRect( vr.left(), chipTop, chipW, chipH );
-                    p.fillRect( chipRect, chipColor );
-                    if( !drawn.isEmpty() ) {
-                        QFont oldFont = p.font();
-                        p.setFont( tagFont );
-                        p.setPen( QColor( 255, 255, 255 ) );
-                        p.drawText( chipRect.adjusted( kTagPadX, 0, -kTagPadX, 0 ),
-                                   Qt::AlignVCenter | Qt::AlignLeft, drawn );
-                        p.setFont( oldFont );
-                    }
+                p.fillRect( chipRect, chipColor );
+                if( !drawnTagText.isEmpty() ) {
+                    QFont tagFont = QGuiApplication::font();
+                    tagFont.setPointSize( 7 );   // matches tagChipRect's own
+                                                  // font, and scutLoopHandleRect's
+                                                  // "one character high"
+                    QFont oldFont = p.font();
+                    p.setFont( tagFont );
+                    p.setPen( QColor( 255, 255, 255 ) );
+                    p.drawText( chipRect.adjusted( 3, 0, -3, 0 ),
+                               Qt::AlignVCenter | Qt::AlignLeft, drawnTagText );
+                    p.setFont( oldFont );
                 }
                 // D14: "the cap is announced" -- whenever what is drawn is
                 // not the true full name (the 12-char cap, further pixel

@@ -7,6 +7,7 @@
 #include <qobject.h>
 #include <QColor>
 #include <QFontMetrics>
+#include <QRect>
 #include <QRgb>
 #include <QString>
 #include "app/model/sobjectrenderer.h"
@@ -131,6 +132,27 @@ public:
      * same reason the clip loop in the .cpp never dynamic_casts to SCut.
      */
     static QString tagFullText( SObject &clipObject );
+
+    /**
+     * THE TAG CHIP'S GEOMETRY (proposal 41 D15, M7) -- the exact rect draw()
+     * fills, factored out of it so a HIT TEST can ask the identical
+     * question the paint path already answered rather than re-deriving it
+     * (the same "shared decision" discipline as the three statics above).
+     * `vr` is the clip's own inset content rect -- what draw() computes as
+     * `vr` right before this block runs, i.e. NOT the outer selection rect,
+     * and NOT clamped to any narrower hit region: the returned rect can
+     * extend into territory a later clip's BODY paints over, on purpose --
+     * see D15 and SMVActualView::tagHitTestAt for why a clip's declared tag
+     * footprint is always its full width regardless of what got painted on
+     * top of part of it afterwards.
+     *
+     * Returns an empty (isEmpty()) QRect when nothing would be drawn --
+     * `vr` too short/narrow, or not even the "chip only" minimum fits.
+     * `outDrawnText`, when non-null, receives the text draw() would paint
+     * inside the chip (possibly empty for the "chip only" rung).
+     */
+    static QRect tagChipRect( SObject &clipObject, const QRect &vr,
+                              QString *outDrawnText = nullptr );
 
 private:
     class InlineRenderContext

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M7 (D15): the tag chip is a drag handle, and hit-testing must
+  NOT follow paint order.
+
+  Tags are tested FIRST, across EVERY clip on the lane, and only then do
+  bodies fall back to a Z-ORDER test (latest start on top, D11's tiebreak).
+  Paint order and hit order deliberately differ - that asymmetry is what this
+  case exercises, through the REAL mouse handlers (drag-clip-edge / click-lane
+  drive SMVActualView::mousePressEvent exactly as automation_lane_gestures.qxa
+  drives the automation gestures - no re-spelling of the hit test in this
+  script).
+
+  Zoom is 30 px/s (the arranger default - see lane_click_selection.qxa's own
+  comment) at 48 kHz, i.e. 1600 frames/pixel, snap-to-grid disabled: every
+  frame value below is a clean multiple of 1600, so pixel<->frame is lossless
+  for the numbers this case chooses itself. It does NOT try to predict the
+  exact pixel width of a rendered tag chip (font metrics, not this codebase's
+  business to pin down) - see the drag-clip-edge "tag" edge kind, which grabs
+  a clip by asking STrackRendererInline::tagChipRect() for that clip's REAL
+  geometry rather than approximating it here.
+
+  TWO CLIPS, deliberately close together: A at frame 0, B just ONE PIXEL
+  (1600 frames) later - both the same 192000-frame fixture, so B's body
+  reaches to 193600, comfortably past any tag chip's rendered width (the
+  chip is capped at kTagMaxChars=12 characters and never narrower than 6 px,
+  D12/D14). Per D11, B (the LATER start) paints ON TOP of A everywhere their
+  intervals overlap - which, at this spacing, is almost everywhere, including
+  most of A's own tag footprint.
+-->
+<SActionScript version="1" name="fragment_tag_drag">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <set-lane-view secondWidth="30"/>
+
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="1600"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" startTime="1600" duration="192000"/>
+
+    <!-- ===== AC7.3 FIRST, while both clips are still where they started:
+         a plain BODY click, mid-lane vertically (the default trackHeight is
+         100 px; the tag band sits only a dozen-odd pixels off the bottom, so
+         the lane's own middle is well clear of it), deep in the region both
+         clips' extents share. This must resolve to B - the clip that
+         started LATER, and therefore paints on top per D11 - never A, which
+         is merely the one added FIRST. That is the z-order fix
+         (STrack::getTopMostSLinkAt is no longer "first match in child-list
+         order") and it is also the "existing behaviour must not regress"
+         check AC7.3 asks for: a body press still hits the TOPMOST clip. ===== -->
+    <click-lane trackPath="0" time="150000"/>
+    <assert-selection paths="0,1"/>
+
+    <!-- ===== AC7.1/AC7.2: drag clip A (child index 0, the one addressed as
+         "0,0") by its TAG. A's own chip is anchored at A's own bottom-left
+         corner; B's body (and quite possibly B's own tag too, this close)
+         paints over most of that footprint, because B starts only a single
+         pixel after A. A body-only hit test - even the now-z-order-correct
+         one the click above just exercised - resolves EVERY pixel in that
+         shared footprint to B: that is D15's "handle swallowed by the clip
+         above it". Tags are tested FIRST here, across every clip on the
+         lane (not just the topmost by paint order), so the press lands on A
+         instead - the deliberate asymmetry between paint order and hit
+         order that is this milestone. ===== -->
+    <drag-clip-edge track="0" clip="0" edge="tag" toTime="480000"/>
+
+    <!-- Direct proof of WHICH clip the tag press resolved to: the gesture's
+         arm-time selection (SApplication::submitSetSelectionAction) names
+         A, not B. -->
+    <assert-selection paths="0,0"/>
+
+    <!-- A actually MOVED - a plain move gesture armed (drag-clip-edge's
+         "tag" grab lands near the chip's RIGHT edge specifically to clear
+         the trim-start band, so this is a move, not a resize) - while B is
+         completely untouched. The exact new startTime is deliberately NOT
+         asserted: it depends on where inside A's chip the grab landed,
+         which depends on the rendered text width and is not this test's
+         business to pin down (see the header comment). -->
+    <assert-clip-window clip="0,0" startTime="0" expectReject="true"/>
+    <assert-clip-window clip="0,1" startTime="1600" duration="192000"/>
+
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

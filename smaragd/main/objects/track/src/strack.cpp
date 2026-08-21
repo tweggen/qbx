@@ -655,23 +655,44 @@ void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
         cpRewire_->invalidatePagesInRange(start, end);
 }
 
+// proposal 41 D11/M7: TOPMOST means Z-ORDER topmost -- latest start time,
+// childIndex as the tiebreak (the same total order STrackRendererInline's
+// paint loop sorts by) -- not "first match in child-list insertion order",
+// which is what this used to return. The two agree whenever clips were
+// added in time order (the common case, which is why this bug went
+// unnoticed), and disagree the moment an earlier-inserted clip encloses a
+// later-inserted, later-starting one: the old code handed back the
+// ENCLOSING clip, even though the later one paints on top of it. A single
+// pass keeps the best (startTime, childIndex) seen so far rather than
+// returning on the first containing match.
 SLink *STrack::getTopMostSLinkAt( offset_t queryTime ) const
 {
+    SLink *best = NULL;
+    offset_t bestStart = 0;
+    int bestIndex = -1;
+    int idx = 0;
     for( SLink *lk : childLinks() ) {
+        const int myIndex = idx++;
         // Skip child tracks — they have their own lanes; this query is for the
         // track's own clips.
         if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
         if( !lk->hasStartTime() ) continue;
         offset_t startTime = lk->getStartTime();
         if( queryTime<startTime ) continue;
+        bool contains;
         if( lk->getSObject().hasDuration() ) {
             offset_t endTime = startTime+lk->getSObject().getDuration();
-            if( queryTime<endTime ) return lk;
+            contains = ( queryTime<endTime );
         } else {
-            return lk;
+            contains = true;
+        }
+        if( !contains ) continue;
+        if( !best || startTime>bestStart
+            || ( startTime==bestStart && myIndex>bestIndex ) ) {
+            best = lk; bestStart = startTime; bestIndex = myIndex;
         }
     }
-    return NULL;
+    return best;
 }
 
 void STrack::checkDurationChanged()

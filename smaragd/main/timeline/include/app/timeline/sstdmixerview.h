@@ -386,6 +386,15 @@ private:
     int loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) const;
     int lastClickLoopMarker_ = 0;   // boundary index under the last press (0=none)
 
+    // proposal 41 D15/M7: THE TAG-FIRST HIT TEST. Used ONLY by
+    // updateLastClickVars() (i.e. a PRESS) -- the cursor-feedback and
+    // tooltip lookups elsewhere in this class deliberately keep using plain
+    // STrack::getTopMostSLinkAt(), per the note beside the tooltip handler:
+    // tag priority governs which clip a PRESS lands on, nothing else. See
+    // the .cpp for the full contract (which clip wins when more than one
+    // tag rect contains `pos`, and why).
+    SLink *tagHitTestAt( int rowIdx, const QPoint &pos ) const;
+
     // Clip MOVE drag snapshot: captured at press so the move lands as one
     // undoable SMoveClipAction on release (the drag itself mutates live).
     bool     clipDragArmed_ = false;
@@ -571,7 +580,15 @@ public:
     // ev->modifiers() rather than the live keyboard. `grabWhere` picks where the
     // press lands: GrabBody is what the body gestures (slip, duplicate, move)
     // need, since a press inside an edge band can never arm them.
-    enum ClipGrab { GrabStart = 0, GrabEnd = 1, GrabBody = 2 };
+    // GrabTag (proposal 41 D15/M7): land inside the clip's OWN tag chip
+    // (STrackRendererInline::tagChipRect against that clip's real geometry),
+    // near the chip's RIGHT edge rather than its centre — far enough from
+    // the left edge to clear the GrabStart trim band (SMV_LEFT_DRAG_PIXEL)
+    // so the gesture that arms is a plain MOVE, and, being the far end of
+    // the clip's OWN declared chip, still comfortably inside whatever a
+    // later/occluding clip's body painted over the rest of it. See
+    // dragClipEdge's .cpp for the exact geometry.
+    enum ClipGrab { GrabStart = 0, GrabEnd = 1, GrabBody = 2, GrabTag = 3 };
     // Testkit: run the REAL Group/Ungroup context-menu slots on `t`. The index
     // arithmetic in those slots is the whole risk, so it must be the thing
     // under test rather than a re-spelling of it in a qxa script.
