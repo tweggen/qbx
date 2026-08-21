@@ -270,3 +270,44 @@ Two invariants:
   latency-reporting plugin monitored live is heard late by exactly the badge's
   number, and the row tooltip, the chain footer's tooltip and the transport
   bar's latency readout all state it.
+
+## A plugin restart is metadata, and only acted on when it changed something
+
+`SPluginNativeEditor::handleRestart()` calls `SPluginSlot::notifyPluginEdited()`
+only when the slot's `reportedLatencyFrames()` or its `paramRows()` count
+differs from the one the window last saw. Identical means the restart carried
+nothing, and it is logged at debug and dropped.
+
+**Without this, playback does not start.** `twPluginSlotProcessor` resets a
+plugin instance whenever a page arrives out of order; an iPlug2-built plugin
+answers a reset by re-reporting its latency, and both SDK backends notify the
+host UNCONDITIONALLY (`IPlugVST3::SetLatency` → `restartComponent`,
+`IPlugCLAP::SetLatency` → `request_restart`), whether or not the number moved.
+`notifyPluginEdited()` stales the whole render path above the slot, so the pages
+are re-frozen out of order and the instance is reset again — the readahead never
+reaches the three seconds the transport waits for. Measured with the guard
+disabled: **about 25 restarts per second**, each one an invalidation.
+
+Three things about the shape of it:
+
+- **Comparing those two values compares everything a restart can tell us.** A
+  parameter VALUE change does not arrive this way — VST3's `kParamValuesChanged`
+  is filtered out in `twVst3Editor::poll()`, and CLAP values come as out-events.
+  What is left is metadata: the latency badge and the parameter list.
+- **The first restart after the window opens is always acted on** (both
+  baselines start at −1, which no latency or count can be). The host has not
+  read the plugin's configuration since the window existed, so it has nothing to
+  compare against and must not guess.
+- **Rate-limiting was considered and rejected.** A slow loop is still a loop.
+
+The engine-side twin — a restart raised from inside a call the host itself made
+is never reported at all — is `tw303a/plugins/CONTRACT.md` invariant 53. That
+one is VST3-only by construction; this one is what catches CLAP, where iPlug2
+defers the request to the main thread and it arrives long after its cause.
+
+Gated by `qxa.plugin_restart_no_livelock` against the `tw.test.clap.restart`
+fixture, which is `tw.test.clap.gui` plus that one habit. The case asserts the
+MECHANISM (at most one restart acted on per second of playback, and the guard
+seen declining the rest) and deliberately not the SYMPTOM: on a 4-second
+sawtooth through one arithmetic-only plugin the freeze outruns the loop and the
+playhead advances even with the guard disabled.

@@ -652,6 +652,10 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
         preparedMax_.load( std::memory_order_relaxed ) == maxBlock )
         return;   // idempotent: the steady-state call is a comparison
 
+    // Everything below reconfigures the plugin, and a plugin answering a
+    // reconfiguration with restartComponent() is answering US (twvst3host.h).
+    twVst3HostCallScope hostCall( handler_.get() );
+
     deactivate();
 
     // Ask for the arrangement we actually intend to drive, BEFORE
@@ -818,6 +822,8 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
 void twVst3Plugin::deactivate()
 {
     if( !component_ ) return;
+    // Nests inside prepare()'s scope; stands alone when teardown calls it.
+    twVst3HostCallScope hostCall( handler_.get() );
     const bool wasActive = active_.exchange( false, std::memory_order_acq_rel );
     if( processing_.exchange( false, std::memory_order_acq_rel ) && processor_ )
         processor_->setProcessing( false );
@@ -831,6 +837,13 @@ void twVst3Plugin::reset()
     // prepared — an unprepared instance has nothing to flush.
     std::lock_guard<std::mutex> lock( hostMutex_ );
     if( !component_ || !active_.load( std::memory_order_acquire ) ) return;
+
+    // THE LIVELOCK. This runs on a freeze worker whenever a page arrives out of
+    // order, and an iPlug2 plugin re-reports its latency from OnReset() — which
+    // is restartComponent(kLatencyChanged), unconditionally, even when the
+    // number has not moved. Reported, it invalidates the render path, which
+    // re-freezes the pages, which lands here again. See twvst3host.h.
+    twVst3HostCallScope hostCall( handler_.get() );
 
     if( processing_.exchange( false, std::memory_order_acq_rel ) && processor_ )
         processor_->setProcessing( false );
@@ -1380,6 +1393,11 @@ bool twVst3Plugin::loadState( const std::vector<std::uint8_t> &blob )
         TW_LOGW( "plugins", "[vst3] state blob for '%s' is truncated", uid_.c_str() );
         return false;
     }
+
+    // A plugin legitimately restarts itself over a state load (a patch with a
+    // different oversampling factor changes its latency). The host asked for
+    // this one and has already staled what it had to.
+    twVst3HostCallScope hostCall( handler_.get() );
 
     bool ok = true;
     if( component_ && !comp.empty() ) {

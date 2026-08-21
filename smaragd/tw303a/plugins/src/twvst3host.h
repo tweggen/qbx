@@ -53,6 +53,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace audio {
@@ -313,11 +314,44 @@ public:
     Steinberg::int32 takeRestartFlags()
     { return restartFlags_.exchange( 0, std::memory_order_acq_rel ); }
 
+    // --- restarts the HOST provoked (the freeze livelock) --------------------
+    //
+    // A restartComponent that arrives from INSIDE a call we just made carries no
+    // news, and reporting it is a LIVELOCK, not a slow path. The measured chain,
+    // on an iPlug2 plugin with its native editor open:
+    //
+    //   a page arrives out of order -> twPluginSlotProcessor resets the instance
+    //   -> twVst3Plugin::reset() does the documented deactivate/activate cycle
+    //   -> the plugin's OnReset() re-reports its latency -> IPlugVST3::SetLatency
+    //      calls restartComponent(kLatencyChanged) UNCONDITIONALLY, even when the
+    //      number did not move
+    //   -> the editor's 30 Hz poll reports a restart
+    //   -> SPluginNativeEditor calls SPluginSlot::notifyPluginEdited()
+    //   -> the whole render path above the slot is invalidated
+    //   -> every page is re-frozen, out of order, and we are back at line one.
+    //
+    // Playback never starts: the readahead can never reach its 3 s of buffer
+    // because its pages are staled as fast as it freezes them.
+    //
+    // The window is scoped to the CALLING THREAD, not to a bare flag, so a
+    // genuine restart raised on the plugin's UI thread while a freeze worker
+    // happens to be inside reset() is still reported. Depth counts because these
+    // calls nest (prepare() activates, and deactivate() runs inside it).
+    void enterHostCall();
+    void leaveHostCall();
+
 private:
+    bool inHostCallHere() const;
+
     void record_( Steinberg::Vst::ParamID id, double value, twEditorGesture phase );
 
     std::atomic<bool> edited_{ false };
     std::atomic<bool> restart_{ false };
+
+    // The thread currently inside a host-initiated call, as a hash (0 = none),
+    // and how deep it is nested. Only that thread writes the depth.
+    std::atomic<std::uint64_t> hostCallThread_{ 0 };
+    std::uint32_t              hostCallDepth_ = 0;
 
     std::mutex          editMutex_;
     std::vector<Edit>   edits_;
@@ -329,6 +363,23 @@ private:
     // the newest is not: the newest is the current position of the control, and
     // Begin/End are never dropped (see the .cc).
     static constexpr std::size_t kMaxPendingEdits = 4096;
+};
+
+// RAII for the window above. Wrap EVERY call that reconfigures the plugin —
+// setupProcessing, setActive, setProcessing, setState — because each of them is
+// a documented occasion for a plugin to answer with restartComponent, and an
+// answer to something we just did is not news the host has to act on.
+class twVst3HostCallScope {
+public:
+    explicit twVst3HostCallScope( twVst3ComponentHandler *h ) : h_( h )
+    { if( h_ ) h_->enterHostCall(); }
+    ~twVst3HostCallScope() { if( h_ ) h_->leaveHostCall(); }
+
+    twVst3HostCallScope( const twVst3HostCallScope & )            = delete;
+    twVst3HostCallScope &operator=( const twVst3HostCallScope & ) = delete;
+
+private:
+    twVst3ComponentHandler *h_ = nullptr;
 };
 
 // --- IParameterChanges --------------------------------------------------------

@@ -86,8 +86,27 @@
          not look like a user closing the window. -->
     <assert-plugin-strip trackIndex="0" slotIndex="0" contains="editorOpen=1"/>
 
-    <!-- 5. Nothing of ours reached the user's INI. -->
-    <assert-settings-file absent="editorGeometry"/>
+    <!-- 5. Nothing of OURS reached the user's INI: a headless open
+         (showWindow = false) was never on screen, so it has no geometry worth
+         keeping and saveGeometryToSettings() must decline to invent one.
+
+         THE KEY IS SPELLED OUT, and the bare `editorGeometry` this used to
+         match is what a scoped assertion exists to avoid. `smaragd.ini` is the
+         REAL per-user file, shared by every build and every interactive
+         session on the machine, and `editorGeometry\<format>%3A<uid>` is a key
+         the app legitimately writes whenever a human opens a plugin's window
+         and closes it. So the unscoped form failed on any developer box where
+         that had ever happened - observed 2026-08-21 against a
+         `vst3%3A...` entry from a real session, with nothing wrong in the code
+         under test. Every other INI-touching case declares the keys it OWNS
+         and restores them; this one owns exactly one, the CLAP fixture's, and
+         that is the one it may speak about.
+
+         The spelling is the ON-DISK one (`assert-settings-file` reads the file,
+         not QSettings): `pluginui/editorGeometry/clap:tw.test.clap.gui` is
+         written under `[pluginui]` as the key below, with QSettings' own
+         percent-escape for the colon. -->
+    <assert-settings-file absent="editorGeometry\clap%3Atw.test.clap.gui"/>
   </actions>
 
   <assertions>

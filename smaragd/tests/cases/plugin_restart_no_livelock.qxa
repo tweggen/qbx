@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_restart_no_livelock">
+
+  <!-- A PLUGIN THAT ASKS TO BE RESTARTED MUST NOT STOP PLAYBACK FROM STARTING.
+
+       THE BUG THIS CASE EXISTS FOR, in the order it happens:
+
+         1. the readahead freezes a page out of order, so
+            twPluginSlotProcessor resets the plugin instance
+            ("[slot] non-sequential page at N; resetting plugin state");
+         2. the plugin answers the reset by asking the host to restart it.
+            THIS IS NORMAL AND EVERY iPlug2 PLUGIN DOES IT: OnReset() reports
+            the plugin's latency, and both IPlugCLAP::SetLatency() and
+            IPlugVST3::SetLatency() notify the host UNCONDITIONALLY, without
+            comparing the new number with the old one;
+         3. SPluginNativeEditor's 30 Hz poll reports the restart and calls
+            SPluginSlot::notifyPluginEdited(), which stales the whole render
+            path above the slot;
+         4. every page is re-frozen, out of order, and we are back at (1).
+
+       The readahead can never reach the three seconds of buffer the transport
+       waits for, so PLAYBACK NEVER STARTS. Measured on a real project: the log
+       printed "[PLAYBACK] Waiting for readahead to build buffer..." forever,
+       and one worker sat in the plugin's process() while the content epoch
+       climbed underneath it.
+
+       IT NEEDS THE PLUGIN'S OWN WINDOW OPEN, which is why this case opens one:
+       the restart flag has no drain anywhere else (twClapPlugin::poll /
+       twVst3Editor::poll are only called by the editor). That is also the
+       user-facing workaround, and it is what made the report reproducible.
+
+       WHAT IS ASSERTED — and WHAT IS NOT, which matters here:
+
+         * THE MECHANISM, and it is the whole gate. At most ONE restart is
+           acted on across a second of playback, and the guard is SEEN
+           declining the rest. Both halves are needed: without the second
+           assertion the case would also pass on a build where the plugin
+           simply never asked for anything.
+
+         * NOT THE SYMPTOM. `wait-playhead` is here so the case cannot pass
+           with the transport standing still, but it DOES NOT reproduce the
+           starvation and it is not evidence of one. Measured with the guard
+           disabled: about 25 restarts per second, each staling the render
+           path — and the playhead still advanced 48128 frames in 1168 ms,
+           because a 4-second sawtooth through one arithmetic-only plugin
+           re-freezes faster than the loop can stale it. The report this case
+           comes from is a guitar-amp plugin at 4x oversampling on several
+           tracks, where the freeze is the slow side and the loop wins. A
+           fixture that could starve the readahead would have to burn real CPU
+           per page, and a gate whose failure mode is "the suite got slower"
+           is not one worth having.
+
+       THE FIXTURE IS THE POINT. tw.test.clap.restart is tw.test.clap.gui plus
+       one habit — request_restart() from activate() and reset(), always — which
+       is iPlug2's behaviour reduced to the one line a host can observe. It
+       turns no knob (its GUI twin does; see twtestclap.c), so a parameter edit
+       cannot stand in for the thing being measured.
+
+       This gates the FORMAT-NEUTRAL half of the fix, in SPluginNativeEditor:
+       a restart that changes neither the reported latency nor the parameter
+       count has nothing in it. The VST3 half (twvst3host.h: a restart raised
+       from inside a call the host itself made is never reported) is NOT gated
+       here and has no fixture — twtestvst3.cpp's createView returns nullptr, so
+       there is no headless route to a VST3 editor poll at all. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.restart"
+                   name="Smaragd Test Restart" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- The fixture carries clap.gui, so the slot must resolve to the native
+         editor: without that there is nothing to open and nothing to poll. -->
+    <assert-plugin-editor-kind trackIndex="0" slotIndex="0" expect="native"/>
+
+    <!-- 1. Open the window (no window is created — the fixture's gui allocates
+         nothing) and let the poll settle. Any restart left over from the
+         instance being prepared is consumed HERE, so the window measured below
+         starts clean. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"/>
+    <wait-ms ms="300"/>
+
+    <!-- 2. Play. The readahead freezes pages, the pages provoke resets, and the
+         resets provoke restarts — the loop, if there is one. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="48000" minAdvance="4096" timeoutMs="30000"/>
+
+    <!-- 3. A second of ordinary playback is the assert-log WINDOW: the window is
+         the records since the PREVIOUS action started, and two assert-logs in a
+         row share it. -->
+    <wait-ms ms="1000"/>
+
+    <!-- Pre-fix this window held one of these per poll — about thirty per
+         second, each one staling the render path. -->
+    <assert-log contains="native editor: plugin requested a restart"
+                minCount="0" maxCount="1"/>
+
+    <!-- ...and this is the guard doing it, rather than the plugin having gone
+         quiet. It is a DEBUG line; the ring keeps every level. -->
+    <assert-log contains="restart with no observable change" minCount="1"/>
+
+    <toggle-playback play="0"/>
+
+    <!-- An editor still alive when its plugin is destroyed is a contract
+         violation the CLAP backend logs as an error. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

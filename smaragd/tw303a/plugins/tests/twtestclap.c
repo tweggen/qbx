@@ -18,6 +18,7 @@
  *   tw.test.clap.sine         0 in / stereo + aux out INSTRUMENT   (37 P2)
  *   tw.test.clap.arp          note in / note out      (37 P2)
  *   tw.test.clap.gui          gain + a WINDOWLESS clap.gui          (33 M6)
+ *   tw.test.clap.restart      gui + request_restart on every reset
  *
  * --- tw.test.clap.gain -------------------------------------------------------
  *
@@ -137,9 +138,11 @@
 #define TW_TESTCLAP_SINE_ID "tw.test.clap.sine"
 #define TW_TESTCLAP_ARP_ID  "tw.test.clap.arp"
 #define TW_TESTCLAP_GUI_ID  "tw.test.clap.gui"
+#define TW_TESTCLAP_RESTART_ID "tw.test.clap.restart"
 
-/* Which behaviour this instance has. tw.test.clap.gui shares GAIN's, and is
- * told apart by hasGui rather than by a kind of its own. */
+/* Which behaviour this instance has. tw.test.clap.gui and
+ * tw.test.clap.restart share GAIN's, and are told apart by hasGui /
+ * restartsOnReset rather than by a kind of their own. */
 enum tw_kind { TW_KIND_GAIN = 0, TW_KIND_SKEW = 1, TW_KIND_SINE = 2, TW_KIND_ARP = 3 };
 
 #define TW_SINE_VOICES 16
@@ -233,6 +236,52 @@ static const clap_plugin_descriptor_t s_desc_gui = {
    .features     = s_features,
 };
 
+/* tw.test.clap.restart - the GUI fixture that asks the host to restart it from
+ * activate() and reset(), UNCONDITIONALLY, whether or not anything about it
+ * changed.
+ *
+ * THIS IS NOT A CONTRIVED PLUGIN. It is what iPlug2 does, and by extension what
+ * every plugin built on it does: IPlugCLAP::SetLatency() calls
+ * clap_host::request_restart() every time it is called, and OnReset() -- which
+ * runs from clap_plugin::activate() and clap_plugin::reset() -- reports the
+ * latency and then re-pushes every parameter, at least one of which reports it
+ * again. The VST3 twin is IPlugVST3::SetLatency() ->
+ * IComponentHandler::restartComponent(kLatencyChanged). Neither compares the
+ * new number with the old one.
+ *
+ * What that costs a host is a LIVELOCK, and this fixture is here to hold the
+ * door shut on it. twPluginSlotProcessor resets an instance whenever a page
+ * arrives out of order; if the host answers the resulting restart by
+ * invalidating the render path, the pages are re-frozen out of order, the
+ * instance is reset again, and the readahead can never reach the buffer
+ * playback waits for. Measured on a real project before the fix: the transport
+ * printed "Waiting for readahead to build buffer..." forever.
+ *
+ * It carries the gui extension because the restart is only DRAINED while a
+ * native editor is open (twVst3Editor::poll / twClapPlugin::poll), which is
+ * also why the bug needed the plugin's window to be open to appear at all. It
+ * deliberately does NOT queue tw.test.clap.gui's knob edit on show(): a
+ * parameter edit invalidates the render path in its own right, and this fixture
+ * has to leave exactly one thing to measure.
+ *
+ * The restart is requested SYNCHRONOUSLY from reset(), i.e. on whichever thread
+ * the host resets from. That is legal (request_restart is [thread-safe]) and it
+ * is the harder case for a host: iPlug2 defers its own to the main thread, so a
+ * host that recognised "a restart raised inside a call I just made" by thread
+ * would still be caught out by the real thing. */
+static const clap_plugin_descriptor_t s_desc_restart = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_RESTART_ID,
+   .name         = "Smaragd Test Restart",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: windowless GUI that requests a restart on every reset",
+   .features     = s_features,
+};
+
 static const clap_plugin_descriptor_t s_desc_arp = {
    .clap_version = CLAP_VERSION_INIT,
    .id           = TW_TESTCLAP_ARP_ID,
@@ -289,6 +338,9 @@ typedef struct {
 
    /* gui (proposal 33 M6) */
    int      hasGui;
+   /* tw.test.clap.restart: ask the host to restart us from activate() and
+    * reset(), whether or not anything changed. See the descriptor. */
+   int      restartsOnReset;
    int      guiCreated;
    int      guiFloating;
    int      guiShown;
@@ -808,6 +860,15 @@ static void tc_destroy( const clap_plugin_t *p )
    free( p->plugin_data );
 }
 
+/* iPlug2's SetLatency(), reduced to the one line a host can observe. See
+ * s_desc_restart. */
+static void tc_request_restart_if_asked( tw_testclap_t *self )
+{
+   if( !self->restartsOnReset || !self->host || !self->host->request_restart )
+      return;
+   self->host->request_restart( self->host );
+}
+
 static bool tc_activate( const clap_plugin_t *p, double sample_rate,
                          uint32_t min_frames, uint32_t max_frames )
 {
@@ -818,6 +879,7 @@ static bool tc_activate( const clap_plugin_t *p, double sample_rate,
    self->maxFrames  = max_frames;
    self->sampleRate = sample_rate > 0.0 ? sample_rate : 48000.0;
    self->active     = 1;
+   tc_request_restart_if_asked( self );
    return true;
 }
 
@@ -849,6 +911,7 @@ static void tc_reset( const clap_plugin_t *p )
    self->arpOffPending = 0;
    self->arpOffAt      = 0;
    self->arpNextId     = 0;
+   tc_request_restart_if_asked( self );
 }
 
 /* --- the effects: render [from, to) with the current parameters ----------- */
@@ -1316,6 +1379,12 @@ static bool tc_gui_show( const clap_plugin_t *p )
       return false;
    self->guiShown = 1;
 
+   /* tw.test.clap.restart opens a window and turns NO knob: its case measures
+    * how the host answers a restart, and a parameter edit invalidates the
+    * render path on its own. */
+   if( self->restartsOnReset )
+      return true;
+
    /* Stand in for the user turning the Gain knob. The value is applied
     * INTERNALLY first, exactly as a real plugin does - its DSP follows its own
     * GUI without asking the host - and only then offered to the host. */
@@ -1387,7 +1456,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 5;
+   return 6;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1399,6 +1468,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 2 ) return &s_desc_sine;
    if( index == 3 ) return &s_desc_arp;
    if( index == 4 ) return &s_desc_gui;
+   if( index == 5 ) return &s_desc_restart;
    return NULL;
 }
 
@@ -1420,6 +1490,9 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
     * params, same ports, same DSP - so it reuses the kind rather than adding a
     * fifth branch to every switch in the file. hasGui is the only difference. */
    else if( !strcmp( id, TW_TESTCLAP_GUI_ID ) )  { kind = TW_KIND_GAIN; desc = &s_desc_gui; }
+   /* And RESTART is GUI plus one habit, for the same reason again. */
+   else if( !strcmp( id, TW_TESTCLAP_RESTART_ID ) )
+                                                 { kind = TW_KIND_GAIN; desc = &s_desc_restart; }
    else                                          { return NULL; }
 
    tw_testclap_t *self = (tw_testclap_t *)calloc( 1, sizeof( tw_testclap_t ) );
@@ -1435,7 +1508,8 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    self->maxFrames  = 0;
    self->sampleRate = 48000.0;
    self->active     = 0;
-   self->hasGui     = !strcmp( id, TW_TESTCLAP_GUI_ID );
+   self->restartsOnReset = !strcmp( id, TW_TESTCLAP_RESTART_ID );
+   self->hasGui     = !strcmp( id, TW_TESTCLAP_GUI_ID ) || self->restartsOnReset;
    self->guiScale   = 1.0;
 
    self->base.desc            = desc;

@@ -1814,7 +1814,11 @@ accepts any handle, so the whole native-editor PARAMETER PATH is gateable with
 no display. It is a separate entry point precisely because
 `supportsNativeEditor()` is observable — giving `gain` a GUI would flip
 `plugin_ui_strip_and_editor`'s fallback assertion and make a headless run try to
-open a window.
+open a window. `tw.test.clap.restart` is that fixture plus ONE HABIT —
+`request_restart()` from `activate()` and `reset()`, always, whether or not
+anything changed, which is iPlug2's `SetLatency()` reduced to the one line a
+host can observe — and it turns no knob, so a parameter edit cannot stand in for
+the thing its case measures.
 
 `plugins/tests/twtestvst3.cpp` is the VST3 counterpart, built as
 `twtestvst3.vst3`. It is C++ because VST3's ABI *is* a C++ vtable, and it links
@@ -1874,6 +1878,7 @@ FLOW.
 | The window is gated headlessly **only because the fixture has no window** | `tw.test.clap.gui` + `openFor( …, showWindow = false )`. A qxa run uses the REAL platform plugin (the suite does not set `QT_QPA_PLATFORM=offscreen`), so a shown dialog would land on the developer's desktop mid-suite. |
 | **D2 persistence splits by what actually travels** | WHETHER the editor was open goes in the PROJECT (`<SPluginSlot editorOpen='true'>`, written only when true so no existing file or golden moved); WHERE the window was goes in `SSettings` keyed `<format>:<uid>`, because monitor layout is machine-local. Same split, same reason, as proposal 37 P7's portable `midiOutPort` NAME against `midi/portId/<name>`. Neither is an action: opening a window is not an edit to the arrangement. |
 | A restored geometry is **clamped onto a live `QScreen`**, and the SIZE is restored only when `caps().resizable` | Unplug the second monitor and a blindly restored window comes back at x=2400 — off screen, unreachable, and on Windows not even reported. And a fixed-size editor has exactly one correct size (the one it reported at attach); forcing a remembered one on it clips its own drawing silently. `clampOntoAScreen()` is a public static precisely so it can be gated. |
+| **A RESTART THE PLUGIN ASKS FOR IS METADATA, and is acted on ONLY when it changed something** (2026-08-21) | Otherwise playback never starts. `twPluginSlotProcessor` resets an instance whenever a page arrives out of order; an iPlug2 plugin answers a reset by re-reporting its latency, and BOTH SDK backends notify the host unconditionally (`IPlugVST3::SetLatency` → `restartComponent(kLatencyChanged)`, `IPlugCLAP::SetLatency` → `request_restart`) without comparing the number with the old one. Reported, it invalidates the render path, which re-freezes the pages out of order, which resets the instance again — the readahead can never reach the 3 s the transport waits for. Two guards: `twVst3HostCallScope` never reports a restart raised from inside a call the host itself made (VST3-only — iPlug2's CLAP half DEFERS its request to the main thread, where no scope at the source can recognise it), and `SPluginNativeEditor::handleRestart()` compares the reported latency and the param count, which is everything a restart can carry (a param VALUE change does not come this way). Measured with the second guard off: **~25 restarts a second**. Only reachable with the plugin's own window OPEN — nothing else drains the flag, which is also the workaround. |
 | `restoreOpenEditors()` is a **no-op in a `--test-case` run**, and is called from the END of `SMainWindow::openProject()` | Same desktop-pollution reason as the row above. That call site is the one place that happens once per load with every dock already built, which is why `shell -> pluginui` is a DECLARED edge in `check_layering.py` — it shortens the existing `shell -> timeline -> pluginui -> shell` cycle rather than adding a new class of problem. |
 
 Gates: `plugins_test`'s editor section (28 checks, both delivery routes),
@@ -1881,15 +1886,24 @@ Gates: `plugins_test`'s editor section (28 checks, both delivery routes),
 reaching the render at exactly 2.5x, ONE undo entry that restores the level, and
 the window closing before teardown), `qxa.plugin_editor_persistence` (D2's
 project half, including the suppressed post-load restore),
-`plugin_editor_geometry_test` (D2's off-screen clamp) and
-`qxa.plugin_ui_strip_and_editor` for the other two fallback answers.
+`plugin_editor_geometry_test` (D2's off-screen clamp),
+`qxa.plugin_ui_strip_and_editor` for the other two fallback answers, and
+`qxa.plugin_restart_no_livelock` (the restart guard, against
+`tw.test.clap.restart`: at most one restart acted on per second of playback,
+and the guard SEEN declining the rest — watched failing both ways).
 **NOT gated:** whether a real plugin's GUI draws inside our container
 (hand-verified: Dexed, NassauEQ, Mangrove on Win11); keyboard and focus routing;
 host-driven resize (every installed VST3 reports `canResize=no`); DPI on a
 scaled monitor; a real restore putting a real window back where it was (the
 headless case opens with `showWindow = false`, so nothing is ever mapped);
 AudioUnit (M7) and Linux/X11 (M8 — VST3 there needs `IRunLoop`; CLAP does not,
-so `caps().needsRunLoop` is false in that backend on every platform).
+so `caps().needsRunLoop` is false in that backend on every platform); the VST3
+half of the restart guard (`twtestvst3.cpp`'s `createView` returns nullptr, so
+there is no headless route to a VST3 editor poll at all); and the readahead
+STARVATION itself — `plugin_restart_no_livelock` gates the mechanism, and on a
+4-second sawtooth through one arithmetic-only plugin the freeze outruns the
+loop, so the playhead advances even with the guard disabled. A fixture that
+could starve it would have to burn real CPU per page.
 
 **The mono-sink gap is CLOSED (proposal 36 B5).** It was recorded here for
 five milestones: the graph carried N channels but `RenderSession` and
