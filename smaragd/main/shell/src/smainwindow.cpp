@@ -684,11 +684,32 @@ void SMainWindow::closeProject()
     }
 
     destroyDocksToolbars();
-    // Detach (not delete) projectRootWidget_ from the main window so it doesn't
-    // interfere with project destruction. The project may have created children
-    // that are part of its QObject tree; deleting them here would corrupt the
-    // tree before the project destructor runs.
+    // Hand the central widget back, so the project's own QObject tree is not
+    // torn up from underneath its destructor.
+    //
+    // setCentralWidget( nullptr ) DOES NOT MERELY DETACH, whatever the comment
+    // that stood here for a long time said. Qt removes the old widget from the
+    // layout IMMEDIATELY and then deleteLater()s it (verified against this
+    // build's Qt 6.11.1: centralWidget() reads null on the next line, and the
+    // widget itself dies on the next turn of the event loop). So the shell this
+    // window keeps a pointer to is gone, and BOTH of its stale readings bite:
+    //
+    //   - within one call chain, before the deferred delete has run, the shell
+    //     is alive but is NO LONGER THE CENTRAL WIDGET, so installMasterEditor_
+    //     takes its `if( !viewTabs_ )` false branch, never calls
+    //     setCentralWidget again, and the freshly loaded project renders into a
+    //     window that has no central widget at all - File -> Open looked like a
+    //     successful load with a blank window;
+    //
+    //   - across two keystrokes (Ctrl-W then Ctrl-N) the event loop turns in
+    //     between, the deferred delete runs, and the same false branch
+    //     dereferences freed memory - SIGSEGV inside QTabWidget::count(), from
+    //     SViewTabs::clearAll().
+    //
+    // Clearing the member is what makes installMasterEditor_ build a fresh
+    // shell and re-install it, which is the path a first project already takes.
     setCentralWidget( nullptr );
+    viewTabs_ = nullptr;
     projectRootWidget_ = NULL;
     delete currentProject_;
     currentProject_ = NULL;
