@@ -336,13 +336,34 @@ endforeach()
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is
 # restated in both blocks below.
-foreach(_media_dpapi media_options_page media_secret_redaction)
-    if(TEST qxa.${_media_dpapi})
-        set_tests_properties(qxa.${_media_dpapi} PROPERTIES
-            RUN_SERIAL TRUE
-            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=dpapi")
-    endif()
-endforeach()
+#
+# Both cases FORCE the backend to `dpapi`, so on a build that never compiled
+# DPAPI (i.e. SMARAGD_HAVE_DPAPI unset -- every non-Windows build, and it is
+# PROPAGATED from the exact `if(SMARAGD_WINDOWS)` block in main/CMakeLists.txt
+# that adds ssecretstore_win.cpp and defines TW_HAVE_DPAPI, never re-derived
+# here as a second `if(WIN32)`) `resolveBackend("dpapi")` warns and silently
+# substitutes the platform default, so the case exercises the WRONG backend
+# and its on-disk-ciphertext assertions (AC 8/9/17) cannot pass BY
+# CONSTRUCTION -- this is the au_* precedent above, extended: a capability
+# gap, not a bug, so DISABLED rather than left to fail. `keychain`/`libsecret`
+# are not gated the same way because nothing here asks for them: neither
+# backend writes to the INI at all (§B.8), so no qxa case forces one the way
+# these two force `dpapi`.
+if(SMARAGD_HAVE_DPAPI)
+    foreach(_media_dpapi media_options_page media_secret_redaction)
+        if(TEST qxa.${_media_dpapi})
+            set_tests_properties(qxa.${_media_dpapi} PROPERTIES
+                RUN_SERIAL TRUE
+                ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_SECRET_BACKEND=dpapi")
+        endif()
+    endforeach()
+else()
+    foreach(_media_dpapi media_options_page media_secret_redaction)
+        if(TEST qxa.${_media_dpapi})
+            set_tests_properties(qxa.${_media_dpapi} PROPERTIES DISABLED YES)
+        endif()
+    endforeach()
+endif()
 if(TEST qxa.media_options_no_store)
     set_tests_properties(qxa.media_options_no_store PROPERTIES
         RUN_SERIAL TRUE

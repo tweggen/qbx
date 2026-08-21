@@ -8,11 +8,20 @@ const QLatin1String kScheme( "smedia://" );
 
 QString SMediaRef::toUri() const
 {
-    // Plain concatenation, not QUrl — see the header. A leading '/' on the
-    // path would double up against the separator we add here.
-    QString p = path;
-    while( p.startsWith( QLatin1Char( '/' ) ) ) p.remove( 0, 1 );
-    return QString( kScheme ) + sourceId + QLatin1Char( '/' ) + p;
+    // Plain concatenation, not QUrl — see the header. Do NOT strip a leading
+    // '/' from the path: for the "local" source on POSIX, path IS the
+    // absolute filesystem path ("/home/…"), and that leading slash is part
+    // of the identity, not decoration. A prior version of this function
+    // stripped it "to avoid doubling up against the separator we add here",
+    // which is backwards — the separator and the path's own leading slash
+    // are two DIFFERENT characters, and stripping one loses information
+    // fromUri() cannot get back (it turns "/home/x" into "home/x", a
+    // RELATIVE path). The resulting "smedia://local//home/x" double slash is
+    // harmless: fromUri() below splits at the FIRST '/' only, so the second
+    // one is simply the first character of the recovered path — exactly the
+    // "scheme://authority//path" shape file: URIs already use for the same
+    // reason.
+    return QString( kScheme ) + sourceId + QLatin1Char( '/' ) + path;
 }
 
 SMediaRef SMediaRef::fromUri( const QString &uri )

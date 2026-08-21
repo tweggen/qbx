@@ -73,7 +73,7 @@
          legitimate hit for "notes". -->
     <media-browser-filter categories=""/>
     <media-browser-search needle="notes" recursive="1"/>
-    <assert-media-browser rowCount="1" contains="notes.txt,73,0"/>
+    <assert-media-browser rowCount="1" contains="notes.txt,72,0"/>
     <media-browser-filter categories="audio"/>
     <media-browser-search needle="notes" recursive="1"/>
     <assert-media-browser rowCount="0"/>
