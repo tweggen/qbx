@@ -129,6 +129,10 @@ private:
     void    saveGeometryToSettings() const;
     void applyEdit( std::uint32_t paramId, double value, double previousValue,
                     bool gestureEnd );
+
+    // Acts on a restart request, or declines to — see the .cpp for the livelock
+    // that makes "declines to" the important half.
+    void handleRestart();
     void resizeToPlugin( audio::twEditorSize physical );
 
     // The model address, DERIVED, never cached. Both return an empty/-1 "cannot
@@ -152,4 +156,11 @@ private:
 
     // The last value committed per parameter, for the echo guard in applyEdit().
     std::map<std::uint32_t, double>  lastCommitted_;
+
+    // THE RESTART GUARD (see onPoll()). The plugin's observable configuration
+    // as of the last restart we acted on: a restart that changes neither is a
+    // restart with nothing in it, and acting on one is a livelock. -1 means
+    // "not sampled yet", which is not a value either can take.
+    long long                        lastRestartLatency_    = -1;
+    long long                        lastRestartParamCount_ = -1;
 };

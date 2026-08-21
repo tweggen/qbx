@@ -1052,3 +1052,31 @@ different views of the same type.
     `vst3UidFromTuid()` or a future round-trip use silently breaks. Test
     literals in `instrument_sine_render.qxa` / `automation_plugin_param.qxa`
     keep the Windows spelling on purpose — see the note above this rule.
+
+53. **A RESTART THE HOST PROVOKED IS NOT REPORTED AS A RESTART** (found
+    2026-08-21: playback stopped starting on a project holding an iPlug2-built
+    VST3 with its own window open). `twVst3Plugin::prepare()`, `deactivate()`,
+    `reset()` and `loadState()` each hold a `twVst3HostCallScope`, and
+    `twVst3ComponentHandler::restartComponent()` records nothing when it is
+    called from inside one of those, on that same thread.
+
+    THE REASON IS A LIVELOCK, not tidiness. VST3 has no `reset()`, so ours is
+    the documented deactivate/activate cycle — which an iPlug2 plugin answers
+    from `OnReset()` by re-reporting its latency, and `IPlugVST3::SetLatency()`
+    calls `restartComponent(kLatencyChanged)` UNCONDITIONALLY, without comparing
+    the new number with the old one. `twPluginSlotProcessor` resets an instance
+    whenever a page arrives out of order (invariant 5's continuity rule), so the
+    reported restart made `SPluginNativeEditor` invalidate the render path,
+    which re-froze the pages out of order, which reset the instance again. The
+    readahead can never reach the buffer the transport waits for; the log prints
+    "Waiting for readahead to build buffer..." for as long as you leave it.
+
+    The scope is per THREAD, not a bare flag, so a genuine restart raised on the
+    plugin's UI thread while a freeze worker happens to be inside `reset()` is
+    still reported. It is deliberately NOT the whole answer: iPlug2's CLAP half
+    defers its `request_restart()` to the main thread, where it arrives long
+    after the call that provoked it and no scope at the source can recognise it.
+    The format-neutral half is in `main/pluginui/CONTRACT.md` and is what
+    `qxa.plugin_restart_no_livelock` gates; this half has NO fixture, because
+    `twtestvst3.cpp`'s `createView` returns nullptr and there is no headless
+    route to a VST3 editor poll at all.

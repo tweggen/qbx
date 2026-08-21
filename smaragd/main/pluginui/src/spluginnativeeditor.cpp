@@ -472,12 +472,55 @@ void SPluginNativeEditor::onPoll()
         return;
     }
 
-    if( fb.restartRequested ) {
-        // The plugin's parameter list, I/O or latency changed. The slot's own
-        // consumers re-read on paramsChanged; this is the honest place to say so.
-        TW_LOGI( "pluginui", "native editor: plugin requested a restart" );
-        if( slot_ ) slot_->notifyPluginEdited();
+    if( fb.restartRequested && slot_ ) handleRestart();
+}
+
+// A RESTART IS ONLY WORTH ACTING ON WHEN SOMETHING ACTUALLY CHANGED, and this
+// guard is not defensive tidiness — without it, playback never starts.
+//
+// The measured chain, on an iPlug2-built plugin with its window open: a page
+// arrives out of order, twPluginSlotProcessor resets the instance, the plugin
+// re-reports its latency from OnReset() — which both SDK backends turn into a
+// restart request UNCONDITIONALLY, whether or not the number moved — this poll
+// sees it, notifyPluginEdited() stales the whole render path above the slot,
+// every page is re-frozen out of order, and the reset happens again. The
+// readahead can never reach its three seconds of buffer because its pages are
+// staled as fast as it freezes them, so the transport waits forever.
+//
+// twvst3host.h closes the synchronous half of that loop at the source (a
+// restart raised from inside a call the host itself made is not reported at
+// all). This is the format-neutral half, and it is the one that catches CLAP:
+// there, iPlug2 defers the request to the main thread, so it arrives long after
+// the reset that provoked it and no scope at the source can recognise it.
+//
+// What the host consumes from a restart is METADATA — the latency badge and the
+// parameter list. A parameter VALUE change does not come this way (VST3's
+// kParamValuesChanged is filtered out in the backend; CLAP values arrive as
+// out-events), so comparing those two is comparing everything a restart can
+// tell us. Deliberately NOT rate-limiting instead: a slow loop is still a loop.
+void SPluginNativeEditor::handleRestart()
+{
+    const long long latency = (long long)slot_->reportedLatencyFrames();
+    const long long params  = (long long)slot_->paramRows().size();
+
+    if( latency == lastRestartLatency_ && params == lastRestartParamCount_ ) {
+        TW_LOGD( "pluginui", "native editor: restart with no observable change "
+                 "(latency %lld, %lld params); not invalidating",
+                 latency, params );
+        return;
     }
+
+    // The first restart after the window opens has nothing to compare against
+    // and is acted on, which is correct: the host has not read the plugin's
+    // configuration since it opened.
+    lastRestartLatency_    = latency;
+    lastRestartParamCount_ = params;
+
+    // The slot's own consumers re-read on paramsChanged; this is the honest
+    // place to say so.
+    TW_LOGI( "pluginui", "native editor: plugin requested a restart "
+             "(latency %lld, %lld params)", latency, params );
+    slot_->notifyPluginEdited();
 }
 
 // --- the model address, derived ------------------------------------------------

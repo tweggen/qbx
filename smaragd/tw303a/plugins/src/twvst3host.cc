@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
+#include <thread>
 
 using namespace Steinberg;
 
@@ -360,12 +362,60 @@ tresult PLUGIN_API twVst3ComponentHandler::endEdit( Vst::ParamID id )
     return kResultOk;
 }
 
+// --- the host-call window (see the header for the livelock it closes) ---------
+
+namespace {
+std::uint64_t thisThreadKey()
+{
+    // +1 so the key is never 0, which means "no thread is inside a host call".
+    return (std::uint64_t)std::hash<std::thread::id>{}( std::this_thread::get_id() ) + 1u;
+}
+}  // namespace
+
+void twVst3ComponentHandler::enterHostCall()
+{
+    const std::uint64_t me = thisThreadKey();
+    if( hostCallThread_.load( std::memory_order_acquire ) == me ) {
+        ++hostCallDepth_;   // nested, same thread: only that thread touches this
+        return;
+    }
+    // A second thread reconfiguring the same instance concurrently is a bug
+    // elsewhere (hostMutex_ serializes these), so the last writer simply wins
+    // rather than this becoming a lock of its own.
+    hostCallDepth_ = 1;
+    hostCallThread_.store( me, std::memory_order_release );
+}
+
+void twVst3ComponentHandler::leaveHostCall()
+{
+    if( hostCallThread_.load( std::memory_order_acquire ) != thisThreadKey() ) return;
+    if( hostCallDepth_ > 0 ) --hostCallDepth_;
+    if( hostCallDepth_ == 0 ) hostCallThread_.store( 0, std::memory_order_release );
+}
+
+bool twVst3ComponentHandler::inHostCallHere() const
+{
+    const std::uint64_t owner = hostCallThread_.load( std::memory_order_acquire );
+    return owner != 0 && owner == thisThreadKey();
+}
+
 tresult PLUGIN_API twVst3ComponentHandler::restartComponent( int32 flags )
 {
     // kLatencyChanged / kParamValuesChanged / kReloadComponent all land here and
     // used to be indistinguishable — the body was `(void)flags;`. They are OR-ed
     // rather than replaced, so two restarts between drains do not lose the first
     // one's reason. Recorded, never acted on from this thread.
+
+    // ...unless WE caused it. A plugin answering the deactivate/activate cycle
+    // we are inside right now is telling us about a change we made, and turning
+    // that into a render-path invalidation re-provokes the same cycle for as
+    // long as anything is freezing pages. See the header.
+    if( inHostCallHere() ) {
+        TW_LOGD( "plugins", "[vst3] restartComponent(0x%x) inside a host-initiated "
+                 "call; not reported", (unsigned)flags );
+        return kResultOk;
+    }
+
     restartFlags_.fetch_or( flags, std::memory_order_acq_rel );
     restart_.store( true, std::memory_order_release );
     return kResultOk;
