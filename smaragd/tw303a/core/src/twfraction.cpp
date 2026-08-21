@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cmath>
 #include <iostream>
+#include <locale>
+#include <stdexcept>
 
 // ============================================================================
 // Known Decimal Values Lookup Table
@@ -185,6 +187,43 @@ static std::string trimmed(const std::string& in) {
     return s;
 }
 
+// Parse a decimal string as a double using the PORTABLE ('.' as decimal
+// point) convention, independent of the process's global C locale.
+//
+// std::stod()/strtod() read the C library's global locale — the one
+// std::setlocale() mutates — not the separate C++ std::locale mechanism.
+// Qt's platform integration calls setlocale(LC_ALL, "") while constructing
+// QApplication (confirmed by probe: localeconv()->decimal_point flips from
+// "." to "," the instant QApplication is built, under QT_QPA_PLATFORM=
+// offscreen too) whenever the environment's LC_NUMERIC names a comma-decimal
+// locale — e.g. de_DE.UTF-8, an ordinary developer-machine setting on Linux,
+// and never seen on Windows because the Win32 CRT does not adopt LC_NUMERIC
+// from the environment on its own. Every .qxp/.qxa attribute this parser
+// reads is written with '.' as the decimal point, so under a comma locale
+// std::stod("0.5") silently parses only the leading "0" and returns 0.0 —
+// this is proposal-independent, project-wide breakage, not a twGrainSource
+// bug: a resize-clip `stretch="0.5"` collapses to Fraction(0) here, the
+// grain ctor's `stretch > Fraction(0)` guard then clamps it to 1e-6, and a
+// TIME-COMPRESSED clip (stretch < 1) renders as digital silence. A stretch
+// whose fractional part is exactly zero ("1.0", "2.0") is immune by
+// coincidence — truncating at the decimal point loses nothing — which is
+// why unity stretch and time-EXPANSION never showed the symptom.
+//
+// std::istringstream imbued with std::locale::classic() is a genuinely
+// separate mechanism from the C library's mutable global locale, so it
+// always reads '.' as the decimal point no matter what setlocale() has done
+// to the process — this is the fix, not a workaround for one call site.
+static double parseDoubleInvariant(const std::string& s) {
+    std::istringstream iss(s);
+    iss.imbue(std::locale::classic());
+    double value = 0.0;
+    iss >> value;
+    if (iss.fail()) {
+        throw std::invalid_argument("parseDoubleInvariant: not a number: " + s);
+    }
+    return value;
+}
+
 Fraction parseFractionOrDouble(const std::string& str) {
     std::string s = trimmed(str);
 
@@ -212,8 +251,8 @@ Fraction parseFractionOrDouble(const std::string& str) {
 
         // Legacy/lenient path: decimal parts ("3.5/2.0") via doubles.
         try {
-            double num = std::stod(numStr);
-            double den = std::stod(denStr);
+            double num = parseDoubleInvariant(numStr);
+            double den = parseDoubleInvariant(denStr);
             if (den == 0) {
                 TW_LOGW( "core", "Fraction parser: division by zero in %s", str.c_str() );
                 return {0, 1};
@@ -231,7 +270,7 @@ Fraction parseFractionOrDouble(const std::string& str) {
         return Fraction(ival, 1);
     }
     try {
-        double value = std::stod(s);
+        double value = parseDoubleInvariant(s);
         return doubleToFractionWithLookup(value);
     } catch (const std::exception& e) {
         TW_LOGW( "core", "Fraction parser: cannot parse '%s': %s", str.c_str(), e.what() );

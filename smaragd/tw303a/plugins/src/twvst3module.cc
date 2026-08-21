@@ -18,6 +18,7 @@
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -189,18 +190,102 @@ void *symbolOf( void *handle, const char *name )
 }  // namespace
 
 // --- uid <-> TUID -------------------------------------------------------------
+//
+// A persisted VST3 uid is ALWAYS 32 hex digits in COM (Windows GUID) byte
+// order, on every platform this engine runs on. That is not a preference
+// stated here for the first time — it is what already sits in every
+// committed .qxp and .qxa, because the VST3 SDK's own COM_COMPATIBLE switch
+// (pluginterfaces/base/fplatform.h) is 1 only on Windows, and INLINE_UID(l1,
+// l2,l3,l4) lays the SAME four 32-bit values out DIFFERENTLY depending on it:
+// Windows packs them as a Win32 GUID (Data1/Data2/Data3 little-endian, Data4
+// verbatim); Linux/macOS pack them straight (all four big-endian, back to
+// back). Before this fix, vst3UidFromTuid() was a byte-for-byte hex dump of
+// whichever layout THIS build's TUID happened to be in, so the identical
+// INLINE_UID(...) source line in twtestvst3.cpp produced two DIFFERENT
+// strings depending on the platform that compiled it — confirmed here: the
+// same declaration hex-dumped as "4554575454535356543353494E450000" under
+// the (Windows-only) COM_COMPATIBLE=1 layout and as
+// "5457455453545653543353494E450000" under the Linux/macOS straight one.
+// vst3UidFromTuid() is what fills <SPluginSlot uid=...>, so a project saved
+// on Windows silently lost its VST3 plugins on Linux/macOS and vice versa —
+// the slot fell back to the transparent placeholder with no error a user
+// could act on.
+//
+// FUID::getLong1..4()/to4Int() (funknown.cpp) already decode a TUID's four
+// 32-bit values CORRECTLY regardless of platform — that decode is exactly
+// the COM_COMPATIBLE-conditional half this function must NOT hand-roll, per
+// the design note above it. What the SDK has no ready-made function for is
+// the encode half done UNCONDITIONALLY: "give me the COM/GUID byte order
+// always, whichever platform I'm running on" (FUID::from4Int() only ever
+// gives the NATIVE order, i.e. exactly COM order on Windows and exactly
+// straight order elsewhere — the very asymmetry causing the bug). That one
+// packing formula — the COM_COMPATIBLE branch of INLINE_UID/from4Int, lifted
+// out from behind its #if so it always runs — is hand-rolled below, and nothing
+// else is: on a COM_COMPATIBLE (Windows) build the TUID is ALREADY in that
+// order, so decode-then-reencode is a no-op and the output is byte-identical
+// to the pre-fix dump — every existing Windows-authored .qxp keeps resolving
+// with NO change on that platform. On Linux/macOS it now produces that same
+// Windows spelling instead of the platform-local one.
+namespace {
+
+// Pack (l1,l2,l3,l4) into COM/GUID byte order (Data1/Data2/Data3
+// little-endian, Data4 big-endian) — the COM_COMPATIBLE branch of the SDK's
+// own INLINE_UID/FUID::from4Int, reproduced here WITHOUT the #if so it runs
+// on every platform, not only the one the SDK would apply it on natively.
+void packComOrder( uint32 l1, uint32 l2, uint32 l3, uint32 l4, uint8_t out[16] )
+{
+    out[0]  = (uint8_t)( ( l1 & 0x000000FF )       );
+    out[1]  = (uint8_t)( ( l1 & 0x0000FF00 ) >>  8 );
+    out[2]  = (uint8_t)( ( l1 & 0x00FF0000 ) >> 16 );
+    out[3]  = (uint8_t)( ( l1 & 0xFF000000 ) >> 24 );
+    out[4]  = (uint8_t)( ( l2 & 0x00FF0000 ) >> 16 );
+    out[5]  = (uint8_t)( ( l2 & 0xFF000000 ) >> 24 );
+    out[6]  = (uint8_t)( ( l2 & 0x000000FF )       );
+    out[7]  = (uint8_t)( ( l2 & 0x0000FF00 ) >>  8 );
+    out[8]  = (uint8_t)( ( l3 & 0xFF000000 ) >> 24 );
+    out[9]  = (uint8_t)( ( l3 & 0x00FF0000 ) >> 16 );
+    out[10] = (uint8_t)( ( l3 & 0x0000FF00 ) >>  8 );
+    out[11] = (uint8_t)( ( l3 & 0x000000FF )       );
+    out[12] = (uint8_t)( ( l4 & 0xFF000000 ) >> 24 );
+    out[13] = (uint8_t)( ( l4 & 0x00FF0000 ) >> 16 );
+    out[14] = (uint8_t)( ( l4 & 0x0000FF00 ) >>  8 );
+    out[15] = (uint8_t)( ( l4 & 0x000000FF )       );
+}
+
+// Inverse of packComOrder: recover (l1,l2,l3,l4) from COM/GUID-ordered bytes.
+void unpackComOrder( const uint8_t in[16], uint32 &l1, uint32 &l2,
+                     uint32 &l3, uint32 &l4 )
+{
+    l1 = ( (uint32) in[0] )        | ( (uint32) in[1] << 8 )
+       | ( (uint32) in[2] << 16 )  | ( (uint32) in[3] << 24 );
+    l2 = ( (uint32) in[6] )        | ( (uint32) in[7] << 8 )
+       | ( (uint32) in[4] << 16 )  | ( (uint32) in[5] << 24 );
+    l3 = ( (uint32) in[11] )       | ( (uint32) in[10] << 8 )
+       | ( (uint32) in[9]  << 16 ) | ( (uint32) in[8]  << 24 );
+    l4 = ( (uint32) in[15] )       | ( (uint32) in[14] << 8 )
+       | ( (uint32) in[13] << 16 ) | ( (uint32) in[12] << 24 );
+}
+
+}  // namespace
 
 std::string vst3UidFromTuid( const TUID uid )
 {
+    uint32 l1, l2, l3, l4;
+    FUID( FUID::fromTUID( uid ) ).to4Int( l1, l2, l3, l4 );   // platform-aware decode
+
+    uint8_t com[16];
+    packComOrder( l1, l2, l3, l4, com );                      // unconditional COM encode
+
     char buf[33];
     for( int i = 0; i < 16; ++i )
-        std::snprintf( buf + i * 2, 3, "%02X", (unsigned char)uid[i] );
+        std::snprintf( buf + i * 2, 3, "%02X", com[i] );
     return std::string( buf, 32 );
 }
 
 bool vst3TuidFromUid( const std::string &uid, TUID out )
 {
     if( uid.size() != 32 ) return false;
+    uint8_t com[16];
     for( int i = 0; i < 16; ++i ) {
         int v = 0;
         for( int k = 0; k < 2; ++k ) {
@@ -212,8 +297,13 @@ bool vst3TuidFromUid( const std::string &uid, TUID out )
             else return false;
             v = ( v << 4 ) | d;
         }
-        out[i] = (char)(unsigned char)v;
+        com[i] = (uint8_t) v;
     }
+
+    uint32 l1, l2, l3, l4;
+    unpackComOrder( com, l1, l2, l3, l4 );   // undo the unconditional COM encode
+    FUID f( l1, l2, l3, l4 );                // platform-aware native construction
+    f.toTUID( out );
     return true;
 }
 

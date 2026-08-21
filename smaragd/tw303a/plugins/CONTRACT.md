@@ -1022,3 +1022,33 @@ different views of the same type.
     playing. VST3 is the opposite case — controller and processor are separate
     and `inputParameterChanges` is the only route — which is why
     `twVst3Plugin::applyGuiEdit` pushes the ring and the CLAP path does not.
+
+52. **A PERSISTED VST3 UID IS IN COM (WINDOWS GUID) BYTE ORDER, ON EVERY
+    PLATFORM** (found 2026-08-21: a Windows-saved `.qxp` silently lost its VST3
+    plugins on Linux/macOS, and vice versa). The VST3 SDK's `COM_COMPATIBLE`
+    switch (`pluginterfaces/base/fplatform.h`) is 1 only on Windows, and
+    `INLINE_UID(l1,l2,l3,l4)` lays the SAME four 32-bit values out DIFFERENTLY
+    depending on it — a Win32 GUID (Data1/Data2/Data3 little-endian) on
+    Windows, straight big-endian everywhere else — so the identical source
+    literal produces two different 16-byte class ids depending on which
+    platform compiled the plugin. `vst3UidFromTuid()` (`twvst3module.cc`) is
+    what fills `<SPluginSlot uid=...>`, and until this invariant existed it was
+    a byte-for-byte hex dump of whichever layout the CURRENT build's TUID
+    happened to be in — right on Windows, wrong everywhere else, with no error
+    a user could act on: the slot just fell back to the transparent
+    placeholder. The fix decodes a TUID's four longs the PLATFORM-AWARE way
+    (`FUID::to4Int()`, which is exactly the COM_COMPATIBLE-conditional half
+    that must not be hand-rolled) and re-packs them into COM/GUID byte order
+    UNCONDITIONALLY — the ENCODE half the SDK has no "always emit COM order"
+    function for, so it is reproduced from `INLINE_UID`'s own
+    `COM_COMPATIBLE` branch with the `#if` lifted off. On a Windows build this
+    is a no-op round trip (the TUID is already in that order), so an existing
+    Windows-authored `.qxp` keeps resolving with NO change on that platform —
+    the invariant does not pick a NEW spelling, it makes every OTHER platform
+    converge on the one Windows (and every committed fixture) already uses.
+    `vst3TuidFromUid()` is the mirror (unpack COM order, then `FUID::from4Int()`
+    — again platform-aware — to reconstruct THIS platform's native TUID); it
+    currently has no caller, but must stay the exact inverse of
+    `vst3UidFromTuid()` or a future round-trip use silently breaks. Test
+    literals in `instrument_sine_render.qxa` / `automation_plugin_param.qxa`
+    keep the Windows spelling on purpose — see the note above this rule.
