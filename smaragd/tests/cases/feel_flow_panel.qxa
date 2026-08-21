@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M3, AC 1/2/4/5/6. The Track Detail "Feel Flow"
+  section: an Analyze button driving the SAME call feel-flow-analyze makes
+  (STrack::startFeelFlowBounce()), a state line (never -> analyzing... is not
+  observable synchronously here since the bounce is background, but the
+  fresh/stale transitions are), and param-aware / edit-aware staleness — all
+  read through SFeelFlowPanel::describe(), the SAME computation the on-screen
+  labels are built from (main/timeline/CONTRACT.md inv. 26).
+
+  Fixture: ../groove/a_offset15.wav, the M1 fixture feel_flow_analyze.qxa and
+  feel_flow_heatmap.qxa already use.
+
+  THE REAL HANDLER, not the plain verb. click-feel-flow-panel drives
+  SFeelFlowPanel::onAnalyzeClicked() by name through the meta-object system on
+  a throwaway off-screen instance bound to the REAL track — proving the
+  BUTTON's wiring, not just STrack::startFeelFlowBounce() in isolation (which
+  feel_flow_analyze.qxa/feel_flow_bounce_parity.qxa already gate). Both act on
+  the model/track, never on the widget instance, so the mutation is genuine.
+
+  THE STALING EDIT is set-track-volume (feel_flow_heatmap.qxa's own choice,
+  deliberately NOT insert-plugin, which feel_flow_bounce_stale.qxa already
+  uses) — an independent path to the same content-epoch bump
+  (STrack::onTrackVolumeChanged -> invalidateRenderPath(), upstream of the
+  twGainStage the bounce's root component sits downstream of).
+
+  THE BYTE-NEUTRAL SERIALIZATION CHECK closes proposal 40 M3's own AC 3/AC 6:
+  this project's track NEVER touches feelFlowMode (mode stays Adaptive
+  throughout, and no learn-feel-flow ever runs), so the saved file must carry
+  NO <feelflow> element at all — exactly what a pre-M3 build would have
+  written for the identical arrangement. See feel_flow_trained.qxa for the
+  POSITIVE case (an element IS written, and survives save->load) with its
+  own project.
+-->
+<SActionScript version="1" name="feel_flow_panel">
+
+  <setup project="new"/>
+
+  <actions>
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <!-- Never analyzed: the default mode, no trained structure. -->
+    <assert-feel-flow-panel trackPath="0"
+                            contains="state=never mode=adaptive trained=0"/>
+
+    <!-- ACTIVATE THROUGH THE PANEL'S REAL HANDLER. -->
+    <click-feel-flow-panel trackPath="0" button="analyze"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <assert-feel-flow-panel trackPath="0"
+                            contains="state=fresh mode=adaptive trained=0"
+                            absent="state=stale"/>
+    <!-- The panel's OWN read of what the overlay already gates
+         (feel_flow_bounce_parity.qxa / feel_flow_analyze.qxa): a real
+         analysis produced real per-hop data, so the state line carries a
+         compliance readout too, not just the bare "state=fresh" tokens. -->
+    <assert-feel-flow-panel trackPath="0" contains="compliance="/>
+
+    <!-- An edit -> stale, WITHOUT re-analyzing. -->
+    <set-track-volume trackPath="0" volume="-6"/>
+    <assert-feel-flow-panel trackPath="0"
+                            contains="state=stale" absent="state=fresh"/>
+
+    <!-- Re-analyze through the SAME real handler -> fresh again. -->
+    <click-feel-flow-panel trackPath="0" button="analyze"/>
+    <wait-analysis timeoutMs="60000"/>
+    <assert-feel-flow-panel trackPath="0"
+                            contains="state=fresh" absent="state=stale"/>
+
+    <!-- PNG coverage of the section's paint path (never an oracle). -->
+    <assert-feel-flow-panel trackPath="0" grabPng="feel_flow_panel.png"/>
+
+    <!-- Byte-neutral serialization: mode was NEVER touched on this project
+         (still Adaptive, no trained structure was ever learned), so the
+         saved file must carry no <feelflow element at all. -->
+    <save-project path="../../build/feel_flow_panel_saved.qxp"/>
+    <assert-file-contains path="../../build/feel_flow_panel_saved.qxp"
+                          text="&lt;feelflow" absent="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

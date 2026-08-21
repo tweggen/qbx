@@ -5,6 +5,7 @@
 #include <qobject.h>
 #include <qlist.h>
 #include <memory>
+#include <string>
 #include "app/model/sobject.h"
 #include "app/model/sobjectrenderer.h"   // SEnvelopeWindow, preview_t
 #include "tw/events/tweventclipset.h"
@@ -18,6 +19,7 @@ class SPluginChain;
 class SPluginSlot;
 class SFeelFlowTrackBounce;
 struct SFeelFlowUiData;
+struct twGrooveTrainedStructure;
 class twTrackMix;
 class twRewire;
 class twGainStage;
@@ -79,6 +81,15 @@ public:
     QList<SLink *> ownedRefLinks() const override;
 
     virtual int readPreChildrenAttributes( QDomElement &element ) override;
+    virtual int readPostChildrenAttributes( QDomElement &element ) override;
+
+    // Proposal 40 M3: a full override (not just serializeSelfAttributes) --
+    // trained-mode state is an INLINE element (the automation-lane
+    // discipline: a non-<SLink> child the loader's ordering never sees), and
+    // that has to land between the ">" and the child links, exactly where
+    // SObject::serialize() already puts serializeAutomation(). See
+    // strack.cpp for why this mirrors, rather than calls into a shared hook.
+    virtual int serialize( QTextStream &o ) override;
 
     virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
     virtual QWidget *getInlineEditWidget( QWidget *parent ) override;
@@ -331,6 +342,53 @@ public:
     // itself, exactly as it already does for the badge.
     std::shared_ptr<const SFeelFlowUiData> feelFlowForUi() const;
 
+    // --- Feel Flow tuning panel + trained mode (proposal 40 M3) -----------
+
+    // Two modes, one switch (design section 3.2): Adaptive is the M1/M1b/M2
+    // free-running scoring path; Trained scores against a structure frozen by
+    // learn-feel-flow (training freezes the STRUCTURE -- receptive fields,
+    // period ratios, the mu(region) pattern -- never the clock: omega keeps
+    // adapting to whatever material is scored, so a tempo difference between
+    // the trained-from material and the scored material is never misread as
+    // a static lean).
+    enum class FeelFlowMode { Adaptive = 0, Trained = 1 };
+
+    static FeelFlowMode feelFlowModeFromString( const QString &, bool *ok = nullptr );
+    static QString feelFlowModeToString( FeelFlowMode );
+
+    FeelFlowMode feelFlowMode() const { return feelFlowMode_; }
+
+    // Called ONLY by SSetFeelFlowModeAction -- direct model mutation, mirrors
+    // every other setFooInternal() this track exposes to its own action
+    // (e.g. setMidiOutput). Does NOT bump any content epoch: a mode change
+    // affects what the NEXT bounce+analysis computes, not the audio graph,
+    // so it must never look like a chain edit to the render path.
+    void setFeelFlowModeInternal( FeelFlowMode mode ) { feelFlowMode_ = mode; }
+
+    // True once learn-feel-flow has produced a frozen structure for this
+    // track (whether or not the track is currently IN Trained mode).
+    bool feelFlowHasTrainedStructure() const { return (bool) feelFlowTrained_; }
+
+    // Null when feelFlowHasTrainedStructure() is false.
+    const twGrooveTrainedStructure *feelFlowTrainedStructure() const
+    { return feelFlowTrained_.get(); }
+
+    // Called ONLY by SLearnFeelFlowAction (apply AND its inverse -- an
+    // undo/redo of learn-feel-flow is exactly "replace the trained structure
+    // with the one that was there before"). Takes ownership; null clears it.
+    void setFeelFlowTrainedStructureInternal(
+        std::unique_ptr<twGrooveTrainedStructure> structure );
+
+    // A COPY of the current trained structure (null when there is none), for
+    // an action to stash as its own undo state without aliasing the track's
+    // live copy.
+    std::unique_ptr<twGrooveTrainedStructure> copyFeelFlowTrainedStructure() const;
+
+    // The last bounce's output path, or empty when this track has never
+    // been bounced (SFeelFlowTrackBounce::bouncePath()). learn-feel-flow's
+    // read source.
+    std::string feelFlowBouncePath() const;
+
     // --- the folder-sum preview (proposal 39 M3, design D3) ---------------
 
     /**
@@ -539,6 +597,13 @@ private:
     // CaptureRevalidator pointers valid: ~SProject deletes tracks from its
     // own destructor BODY, before its revalidator_ member is torn down.
     std::unique_ptr<SFeelFlowTrackBounce> feelFlowBounce_;
+    // Proposal 40 M3. Project state (unlike feelFlowBounce_ above, which is
+    // session-local derived data): feelFlowMode_ default-constructs to
+    // Adaptive and feelFlowTrained_ default-constructs empty, which is what
+    // keeps serialize() writing NOTHING for every track that never touches
+    // Feel Flow (see serialize()/readPostChildrenAttributes() in strack.cpp).
+    FeelFlowMode feelFlowMode_ = FeelFlowMode::Adaptive;
+    std::unique_ptr<twGrooveTrainedStructure> feelFlowTrained_;
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
     // Our REFERENCE to that chain, not a child link (a chain is not an SLink
     // child of a track — SObject::childEvent only accepts SLinks, and a chain in

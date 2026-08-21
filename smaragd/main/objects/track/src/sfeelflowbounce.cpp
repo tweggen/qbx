@@ -34,6 +34,36 @@
 
 namespace fs = std::filesystem;
 
+namespace {
+
+// Proposal 40 M3 AC 4: the track's EFFECTIVE analysis params -- what the
+// bounce+analyze job must actually run with, and what its paramsHash must be
+// keyed on for isStale() to notice a mode/trained-state change. A track that
+// has never touched Feel Flow's mode gets a plain default-constructed
+// twGrooveAnalysisParams (mode == Adaptive), which is BYTE-IDENTICAL to what
+// M1/M1b/M2 always built here -- see twGrooveAnalysisParams::serialize's own
+// doc for why that keeps every pre-M3 store key unchanged.
+twGrooveAnalysisParams buildEffectiveGrooveParams( STrack *track )
+{
+    twGrooveAnalysisParams gp;
+    if( track && track->feelFlowMode() == STrack::FeelFlowMode::Trained ) {
+        if( const twGrooveTrainedStructure *ts = track->feelFlowTrainedStructure() ) {
+            gp.mode    = twGrooveMode::Trained;
+            gp.trained = *ts;
+        }
+        // else: Trained requested but learn-feel-flow has never run for this
+        // track -- gp stays at its Adaptive default. twGrooveBuildAspect
+        // Payloads would fall back to Adaptive scoring even if mode==Trained
+        // reached it with an untrained structure (its own trainedHasRegion.
+        // empty() guard); falling back HERE too keeps this hash matching
+        // what actually gets computed, rather than minting a store key
+        // nothing else will ever produce again.
+    }
+    return gp;
+}
+
+} // namespace
+
 SFeelFlowTrackBounce::SFeelFlowTrackBounce( STrack *track )
     : track_( track ),
       uiCache_( std::make_shared<UiSlot>() )
@@ -62,7 +92,17 @@ bool SFeelFlowTrackBounce::isStale() const
     if( !track_ ) return true;
     std::shared_ptr<twComponent> root = track_->getRootComponent();
     if( !root ) return true;
-    return root->contentEpochNow() != epochAtBounce_.load( std::memory_order_acquire );
+    if( root->contentEpochNow() != epochAtBounce_.load( std::memory_order_acquire ) )
+        return true;
+
+    // Proposal 40 M3 AC 4: param-aware staleness. Cheap (a handful of floats
+    // and a hash, never I/O or a demand) -- safe to call from a UI read.
+    twGrooveAnalysisParams liveParams = buildEffectiveGrooveParams( track_ );
+    std::vector<uint8_t> liveBlob;
+    liveParams.serialize( liveBlob );
+    const uint64_t liveHash =
+        twSidecarStore::hashParams( liveBlob.data(), liveBlob.size() );
+    return liveHash != paramsHashAtBounce_.load( std::memory_order_acquire );
 }
 
 void SFeelFlowTrackBounce::start()
@@ -140,6 +180,18 @@ void SFeelFlowTrackBounce::start()
     // section 4.3 / AC 4 — the SCut::contentEpochForCapture_ pattern).
     const std::uint64_t epochAtStart = root->contentEpochNow();
 
+    // Proposal 40 M3: the EFFECTIVE analysis params are built HERE, on the
+    // calling (main) thread, from the track's mode/trained state at this
+    // exact moment -- never re-read from the track inside the background
+    // job, which runs arbitrarily later on another thread and would then be
+    // reading STrack state with no synchronization of its own. Captured by
+    // value into the closures below, exactly like epochAtStart already is.
+    const twGrooveAnalysisParams gp = buildEffectiveGrooveParams( track_ );
+    std::vector<uint8_t> gpBlob;
+    gp.serialize( gpBlob );
+    const uint64_t gpHash =
+        twSidecarStore::hashParams( gpBlob.data(), gpBlob.size() );
+
     // Always recreate, mirroring SApplication::startRender's own comment
     // ("Always recreate for reproducibility") — and it lets ~SFeelFlowTrackBounce
     // join a STALE session cleanly even if start() is called again mid-flight
@@ -188,7 +240,8 @@ void SFeelFlowTrackBounce::start()
     const std::string bouncePathCopy = bouncePath_;
 
     session_->onComplete = [self, project, reval, epochAtStart, bouncingFlag,
-                            bouncePathCopy]( bool success, const char *error ) {
+                            bouncePathCopy, gp, gpBlob, gpHash](
+                               bool success, const char *error ) {
         if( !success ) {
             TW_LOGW( "feelflow", "[bounce] render failed: %s",
                      error ? error : "(no error message)" );
@@ -200,7 +253,8 @@ void SFeelFlowTrackBounce::start()
         // SPlainWave::enqueueGrooveAnalysis() uses, so a concurrent RENDER's
         // pauseBackground() quiesces this too. Runs later, off THIS thread.
         reval->scheduleAnalysisJob(
-            [self, project, epochAtStart, bouncingFlag, bouncePathCopy]() {
+            [self, project, epochAtStart, bouncingFlag, bouncePathCopy,
+             gp, gpBlob, gpHash]() {
                 tw303aEnvironment *jobEnv =
                     SAppContext::get().get303aEnvironment();
                 if( jobEnv ) {
@@ -215,15 +269,11 @@ void SFeelFlowTrackBounce::start()
                     if( src.wasLoaded() ) {
                         const twContentHash content = src.contentHash();
                         if( !content.isNull() ) {
-                            // M1's default analysis-side params, verbatim --
-                            // M1b points the SAME encoder at a different
-                            // signal (the bounce) without touching M1's
-                            // per-clip path (proposal 40 section 4.3).
-                            twGrooveAnalysisParams gp;
-                            std::vector<uint8_t> gpBlob;
-                            gp.serialize( gpBlob );
-                            const uint64_t gpHash = twSidecarStore::hashParams(
-                                gpBlob.data(), gpBlob.size() );
+                            // gp/gpBlob/gpHash: the EFFECTIVE params (mode +
+                            // trained structure) built on the MAIN thread by
+                            // start(), captured by value -- M1b's M1 default
+                            // path, extended proposal 40 M3's way (never
+                            // re-read from the track on this thread).
 
                             // Skip the heavy pass when both aspects for THIS
                             // bounce's exact content already validate (M1's
@@ -251,6 +301,12 @@ void SFeelFlowTrackBounce::start()
                                     content.lo, std::memory_order_relaxed );
                                 self->contentHashHi_.store(
                                     content.hi, std::memory_order_relaxed );
+                                self->paramsHashAtBounce_.store(
+                                    gpHash, std::memory_order_relaxed );
+                                // physUnitNames_/phys*_ are DELIBERATELY left
+                                // untouched here -- see their own doc
+                                // (sfeelflowbounce.h) for why that is correct
+                                // on this branch.
                                 self->epochAtBounce_.store(
                                     epochAtStart, std::memory_order_release );
                                 self->haveResult_.store(
@@ -296,10 +352,32 @@ void SFeelFlowTrackBounce::start()
                                         qi, built.evPayload.data(),
                                         (uint64_t) built.evPayload.size() );
 
+                                    // Proposal 40 M3: the physical-readout
+                                    // summary, IN-MEMORY only (never part of
+                                    // either QAF payload above) -- written
+                                    // strictly before haveResult_'s release
+                                    // store below, per the members' own doc.
+                                    self->physUnitNames_.clear();
+                                    self->physMeanSinDeltaPhi_.clear();
+                                    self->physVarSinDeltaPhi_.clear();
+                                    self->physMeanF_.clear();
+                                    for( const twGrooveCounterTension &ct
+                                         : built.counterTension ) {
+                                        self->physUnitNames_.push_back( ct.name );
+                                        self->physMeanSinDeltaPhi_.push_back(
+                                            (float) ct.meanSinDeltaPhi );
+                                        self->physVarSinDeltaPhi_.push_back(
+                                            (float) ct.varSinDeltaPhi );
+                                        self->physMeanF_.push_back(
+                                            (float) ct.meanF );
+                                    }
+
                                     self->contentHashLo_.store(
                                         content.lo, std::memory_order_relaxed );
                                     self->contentHashHi_.store(
                                         content.hi, std::memory_order_relaxed );
+                                    self->paramsHashAtBounce_.store(
+                                        gpHash, std::memory_order_relaxed );
                                     self->epochAtBounce_.store(
                                         epochAtStart, std::memory_order_release );
                                     self->haveResult_.store(
@@ -371,13 +449,34 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                         twGrooveDecodeResPayload( payload.data(), payload.size(),
                                                   nUnits );
                     fresh->compliance.reserve( decoded.size() );
-                    for( const twGrooveResRecord &rec : decoded )
+                    // Proposal 40 M3: kept alongside compliance (same decode,
+                    // same records) for the panel's per-pendulum energy bars
+                    // -- the ONLY new thing this read path does is stop
+                    // discarding the unitPower columns M2 already decoded.
+                    fresh->nUnits = nUnits;
+                    fresh->perUnitPower.reserve( decoded.size() * (size_t) nUnits );
+                    for( const twGrooveResRecord &rec : decoded ) {
                         fresh->compliance.push_back( rec.compliance );
+                        for( uint32_t u = 0; u < nUnits; u++ )
+                            fresh->perUnitPower.push_back(
+                                u < rec.unitPower.size() ? rec.unitPower[u] : 0.0f );
+                    }
                     if( !decoded.empty() )
                         fresh->hopFrames = (uint32_t) reader->info().hopFrames;
                 }
             }
         }
+
+        // Proposal 40 M3: the pass-2 physical-readout summary -- IN-MEMORY
+        // only (see the members' own doc for when this is, and is not,
+        // fresh). Copied unconditionally alongside the disk read above so a
+        // process that has bounced at least once always shows what it has,
+        // even on a "skip the heavy pass" re-bounce that left these members
+        // exactly as a prior real pass set them.
+        fresh->unitNames       = physUnitNames_;
+        fresh->meanSinDeltaPhi = physMeanSinDeltaPhi_;
+        fresh->varSinDeltaPhi  = physVarSinDeltaPhi_;
+        fresh->meanF           = physMeanF_;
     }
 
     auto published = std::shared_ptr<const SFeelFlowUiData>( std::move( fresh ) );

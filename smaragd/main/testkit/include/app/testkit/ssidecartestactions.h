@@ -95,6 +95,33 @@
 //       above — a track's staleness is a property of the HOLDER, not of any
 //       file on disk.
 //
+//   <click-feel-flow-panel trackPath="0" button="analyze|learn"/>
+//       Proposal 40 "Feel Flow" M3. Drives the Track Detail "Feel Flow"
+//       section's REAL button handler (SMainWindow::clickFeelFlowPanel,
+//       invoking SFeelFlowPanel::onAnalyzeClicked()/onLearnClicked() by name
+//       through the meta-object system) on a throwaway off-screen instance
+//       bound to the addressed track -- the mutation it makes (starting a
+//       bounce; submitting learn-feel-flow) is the genuine one, since both
+//       act on the model/track, never on the widget instance. "analyze" is
+//       non-undoable (scheduling analysis is not an edit); "learn" submits
+//       learn-feel-flow and fails the SAME way that verb does (see its own
+//       doc) when the track has no bounce yet or no selection is set. Fails
+//       for an unknown button or track.
+//
+//   <assert-feel-flow-panel trackPath="0" contains="" absent=""
+//                           grabPng="" grabWidth="0" grabHeight="0"/>
+//       Proposal 40 "Feel Flow" M3. Builds the REAL Track Detail "Feel Flow"
+//       section off screen for the addressed track (SMainWindow::
+//       describeFeelFlow, the assert-track-head shape -- a single widget,
+//       never shown) and matches its describe() string
+//       ("state=... mode=... trained=0/1 [compliance=... units=...
+//       lean=... drive=...]", SFeelFlowPanel::describe()) against `contains`/
+//       `absent` (both substring checks, empty = don't check). `grabPng`
+//       (into the test output dir, `grabWidth`/`grabHeight` default to the
+//       panel's own sizeHint) additionally paints the same off-screen
+//       section into a PNG -- coverage, not an oracle. Fails if the track
+//       is missing or not an STrack, or any check fails.
+//
 // All are transient/test-support actions: not undoable themselves.
 
 class SSidecarRootAction : public SAction {
@@ -214,6 +241,45 @@ private:
     // QAF glob above.
     QString trackPath_;             // empty = don't check staleness
     int     stale_ = -1;            // -1 = don't check, else 0/1
+};
+
+// --------------------------------------------------- click-feel-flow-panel
+
+class SClickFeelFlowPanelAction : public SAction {
+public:
+    SClickFeelFlowPanelAction() = default;
+
+    QString name() const override { return QStringLiteral("click-feel-flow-panel"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+    QStringList knownAttributes() const override
+    { return { QStringLiteral("trackPath"), QStringLiteral("button") }; }
+
+private:
+    QString trackPath_ = QStringLiteral("0");
+    QString button_;   // "analyze" | "learn"
+};
+
+// -------------------------------------------------- assert-feel-flow-panel
+
+class SAssertFeelFlowPanelAction : public SAction {
+public:
+    SAssertFeelFlowPanelAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-feel-flow-panel"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+    QStringList knownAttributes() const override;
+
+private:
+    QString trackPath_ = QStringLiteral("0");
+    QString contains_;
+    QString absent_;
+    QString grabPng_;
+    int     grabWidth_  = 0;
+    int     grabHeight_ = 0;
 };
 
 #endif // SSIDECARTESTACTIONS_H

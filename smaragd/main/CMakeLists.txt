@@ -216,6 +216,8 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/smoveclipaction.h
     objects/track/include/app/objects/track/spluginactionsupport.h
     objects/track/include/app/objects/track/sfeelflowbounce.h
+    objects/track/include/app/objects/track/slearnfeelflowaction.h
+    objects/track/include/app/objects/track/ssetfeelflowmodeaction.h
     objects/track/include/app/objects/track/spluginchain.h
     objects/track/include/app/objects/track/spluginslot.h
     objects/track/include/app/objects/track/sremovepluginaction.h
@@ -239,6 +241,8 @@ set(APP_OBJECTS_FILES
     objects/track/src/sinstrumenttracks.cpp
     objects/track/src/smoveclipaction.cpp
     objects/track/src/sfeelflowbounce.cpp
+    objects/track/src/slearnfeelflowaction.cpp
+    objects/track/src/ssetfeelflowmodeaction.cpp
     objects/track/src/spluginchain.cpp
     objects/track/src/spluginslot.cpp
     objects/track/src/sremovepluginaction.cpp
@@ -296,12 +300,14 @@ set(APP_UI_FILES
     timeline/include/app/timeline/ssubmit.h
     timeline/include/app/timeline/sstdmixerview.h
     timeline/include/app/timeline/strackdetailpanel.h
+    timeline/include/app/timeline/sfeelflowpanel.h
     timeline/include/app/timeline/sfadercurve.h
     timeline/include/app/timeline/slevelmeter.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
     timeline/src/sautomationlane.h
     timeline/src/sautomationlane.cpp
+    timeline/src/sfeelflowpanel.cpp
     timeline/src/sclippropertiespanel.cpp
     timeline/src/sgridtoolbar.cpp
     timeline/src/sobjecttreeview.cpp

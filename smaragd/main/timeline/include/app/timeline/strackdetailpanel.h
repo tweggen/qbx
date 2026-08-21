@@ -8,6 +8,7 @@
 class STrack;
 class SLevelMeter;
 class SPluginEffectStrip;
+class SFeelFlowPanel;
 class QVBoxLayout;
 class QSlider;
 class QLabel;
@@ -54,6 +55,10 @@ private:
     QWidget *contentWidget_;
     QVBoxLayout *contentLayout_;
     SPluginEffectStrip *pluginStrip_;
+    // Proposal 40 M3: mounted/torn down exactly like pluginStrip_ above, on
+    // every track switch (rebuildUI() owns nothing long-lived — the state it
+    // reads lives on the track, sfeelflowpanel.h's own doc).
+    SFeelFlowPanel *feelFlowPanel_ = nullptr;
     QSlider *volumeSlider_;
     QLabel *volumeLabel_;
     QLabel *placeholder_;   // shown instead of the content when no track is set
