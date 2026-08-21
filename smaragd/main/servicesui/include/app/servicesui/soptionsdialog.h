@@ -61,6 +61,14 @@ private slots:
     // output, finds it on the input, and OFFERS the residual. It never applies
     // anything by itself — see the .cpp for why that is not timidity.
     void onMeasureLoopback();
+    // An ASIO input entry's channel count is unknown from listDevices() alone
+    // (its driver is not loaded just to fill a combo box — see
+    // AsioInput::listDevices()). Selecting one here is a deliberate
+    // "configure this device" gesture, so THIS is where it is safe to open the
+    // driver briefly and cache the real count in SSettings — never from the
+    // arm button's context menu, which can appear mid-session during playback
+    // or recording.
+    void onAudioInputDeviceSelected( int index );
     // Media page (proposal 38 GATE 5b). Add/Save both go through
     // onMediaSaveAccount() -- "Add" only clears the form to a fresh accountId
     // first; the persistence call is the SAME one either way, which is what

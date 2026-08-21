@@ -56,6 +56,20 @@ public:
     uint32_t audioInputLatencyFrames( const QString &deviceId ) const;
     void     setAudioInputLatencyFrames( const QString &deviceId, uint32_t frames );
 
+    // Cached count of the input channels the DEVICE HAS, keyed by device id —
+    // `AudioInput::deviceInputChannels()`, never `getConfig().channels`, which
+    // on ASIO is the demand-driven width of the stream as opened (one channel
+    // until something asks for more) rather than the sixteen the interface
+    // offers. An ASIO entry reports channels==0 from listDevices() on purpose
+    // (no driver loaded to ask it — see AsioInput::listDevices()), so a probe
+    // at startup, and the Options page's Audio tab when the user selects a
+    // device there, open the driver ONCE and cache the real count here; the
+    // arm button's context menu then reads this cache instead of ever opening
+    // a driver itself (that menu can pop up mid-session, during playback or
+    // recording, where a driver open is unwelcome). Returns 0 if never probed.
+    uint32_t audioInputChannelCount( const QString &deviceId ) const;
+    void     setAudioInputChannelCount( const QString &deviceId, uint32_t channels );
+
     // Per-DEVICE recording offset, in milliseconds, signed (proposal 21 L0,
     // design §6). The device-reported latencies above are what the driver
     // CLAIMS; this is the user's correction for what it actually does — the

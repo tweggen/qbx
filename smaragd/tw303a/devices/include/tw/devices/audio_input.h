@@ -13,12 +13,23 @@ namespace audio {
 
 struct AudioInputConfig {
     std::uint32_t sampleRate = 48000;
+    // The width of the stream AS OPENED — what read() interleaves. On ASIO
+    // that is the DEMANDED channel set (grow-only, one channel until somebody
+    // asks for more), NOT what the interface has: see `deviceChannels`.
     std::uint32_t channels = 2;
     std::uint32_t bufferFrames = 1024;
     twSampleType sampleType = twSampleType::Float32;
     // Total input latency (device + driver + resampler) in frames.
     // Measured/calculated after device is opened; 0 if not yet determined.
     std::uint32_t inputLatencyFrames = 0;
+    // How many input channels the DEVICE HAS, which on ASIO is a different
+    // number from `channels` above and is the one a channel PICKER wants: a
+    // 16-input interface whose stream is open on input 1 alone reports
+    // `channels == 1` and `deviceChannels == 16`. 0 means the backend does not
+    // report it separately — read it through AudioInput::deviceInputChannels(),
+    // which falls back to `channels` (correct for every backend that opens the
+    // endpoint's full width whether anyone asked or not).
+    std::uint32_t deviceChannels = 0;
 };
 
 struct AudioInputDeviceInfo {
@@ -91,6 +102,17 @@ public:
     // Get the total input latency (device + driver + resampler) in frames.
     // Returns 0 if not yet determined or if getConfig().inputLatencyFrames is not set.
     virtual uint32_t getLatencyFrames() const { return getConfig().inputLatencyFrames; }
+
+    // How many input channels the DEVICE HAS — what a channel PICKER must be
+    // sized from. NOT getConfig().channels, which is the width of the stream
+    // as opened: on ASIO the channel set is demand-driven and grow-only, so a
+    // 16-input interface reports channels == 1 until something asks for more,
+    // and a picker built from that offers exactly one channel forever.
+    virtual std::uint32_t deviceInputChannels() const
+    {
+        const AudioInputConfig &c = getConfig();
+        return c.deviceChannels ? c.deviceChannels : c.channels;
+    }
 
     // Get the list of selectable buffer sizes (in frames) for this backend.
     // Empty list means buffer size is not user-selectable (fixed by device/OS).
