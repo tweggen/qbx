@@ -422,6 +422,26 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     in — a caller (the lane painter, `main/timeline/CONTRACT.md` inv. 25)
     checks `feelFlowStale()` itself.
 
+    **The band's colour law is PALETTE MEMBERSHIP from ONE authoritative LUT,
+    `STrackRendererInline::feelFlowPalette()`** (2026-08-21 follow-up, over
+    the requester's explicit request for AGGRESSIVE visibility — "rainbow, in
+    case I miss shades of grey" — against the original partial-alpha tint
+    mixed from the lane fill). A quantized 24-step hue ramp, red (low
+    compliance) through yellow to green (high compliance), full saturation,
+    value ~0.85, fully OPAQUE (alpha 255); `feelFlowPaletteIndex(compliance)`
+    is the one quantization function. Both the painter
+    (`drawFeelFlowBand`) and the pixel gate (`SMainWindow::describeLaneOverlay`'s
+    band-mode exact-RGB classification, `main/timeline/CONTRACT.md` inv. 25)
+    read this SAME array — never a second copy of the ramp. Chosen over the
+    old lane-fill-relative interpolation deliberately: the palette no longer
+    depends on a track's own fill colour, which is what makes an exact-RGB
+    LUT match possible at all. The gate got STRONGER for it, not weaker: an
+    absent-or-stale band is now asserted as an EXACT zero LUT pixels
+    (`maxLutPixels="0"`), where the pre-existing luminance-relation gate could
+    only name a measured noise floor with margin (a clip's own waveform paint
+    lands inside that relation too). Computed once (function-local static);
+    no per-column allocation anywhere in the paint path (inv. 1).
+
 ## Feel Flow tuning panel + trained mode (proposal 40 M3)
 
 26. **Trained-mode state is serialized on `STrack` as an INLINE, NON-`SLink`

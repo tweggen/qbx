@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <QDebug>
+#include <QHash>
 #include <QMetaObject>
 #include <qmessagebox.h>
 #include <qaction.h>
@@ -2797,14 +2798,40 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
         scanH   = bandHeight;
     }
 
+    // Proposal 40 M2 palette follow-up (2026-08-21): the feel-flow band now
+    // paints OPAQUE, exact colours out of ONE authoritative LUT
+    // (STrackRendererInline::feelFlowPalette()) instead of a partial-alpha
+    // tint mixed from the lane fill -- so the STRONGER gate for it is exact
+    // membership in that LUT, not a luminance relation. Built and counted
+    // only in bandOnly mode: the LUT is the band's OWN colour law and has no
+    // meaning over the rest of the lane (the fill, a clip body, the M3
+    // folder-sum overlay's own derived tint, ...), and every pre-existing
+    // caller (bandOnly=false, e.g. folder_sum_preview.qxa) must see this
+    // block do nothing at all.
+    QHash<QRgb, int> lutIndexByRgb;
+    if( bandOnly ) {
+        const auto &pal = STrackRendererInline::feelFlowPalette();
+        for( int i = 0; i < (int) pal.size(); ++i ) lutIndexByRgb.insert( pal[i], i );
+    }
+
     int fillPixels = 0, overlayPixels = 0, darkerThanFill = 0;
     int lighterThanClip = 0, clipBodyPixels = 0, playheadPixels = 0;
     int otherPixels = 0;
     int overlayLumMin = 255, overlayLumMax = 0;
     QRgb overlaySample = 0;
+    int lutPixels = 0, lutIndexMin = -1, lutIndexMax = -1;
     for( int y = scanTop; y < scanTop + scanH; ++y ) {
         for( int x = 0; x < img.width(); ++x ) {
             const QRgb c = img.pixel( x, y ) | 0xff000000u;
+            if( bandOnly ) {
+                const auto it = lutIndexByRgb.constFind( c );
+                if( it != lutIndexByRgb.constEnd() ) {
+                    ++lutPixels;
+                    const int idx = it.value();
+                    if( lutIndexMin < 0 || idx < lutIndexMin ) lutIndexMin = idx;
+                    if( idx > lutIndexMax )                    lutIndexMax = idx;
+                }
+            }
             if( c == ( fill.rgb() | 0xff000000u ) ) { ++fillPixels; continue; }
             if( c == playhead )     { ++playheadPixels; continue; }
             const int lum = sLuminance( c );
@@ -2825,14 +2852,16 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
     return QString( "row=%1 band=%2,%3 fill=#%4 fillLum=%5 clipLum=%6"
                     " overlayPixels=%7 overlayLum=%8..%9 overlaySample=#%10"
                     " fillPixels=%11 darkerThanFill=%12 lighterThanClip=%13"
-                    " clipBodyPixels=%14 playheadPixels=%15 otherPixels=%16" )
+                    " clipBodyPixels=%14 playheadPixels=%15 otherPixels=%16"
+                    " lutPixels=%17 lutIndexMin=%18 lutIndexMax=%19" )
         .arg( row ).arg( scanTop ).arg( scanH )
         .arg( (uint) ( fill.rgb() & 0xffffff ), 6, 16, QChar( '0' ) )
         .arg( lumFill ).arg( lumClip )
         .arg( overlayPixels ).arg( overlayLumMin ).arg( overlayLumMax )
         .arg( (uint) ( overlaySample & 0xffffff ), 6, 16, QChar( '0' ) )
         .arg( fillPixels ).arg( darkerThanFill ).arg( lighterThanClip )
-        .arg( clipBodyPixels ).arg( playheadPixels ).arg( otherPixels );
+        .arg( clipBodyPixels ).arg( playheadPixels ).arg( otherPixels )
+        .arg( lutPixels ).arg( lutIndexMin ).arg( lutIndexMax );
 }
 
 // --- proposal 39 M3a: the fold path ---------------------------------------

@@ -21,20 +21,23 @@
   body PASSES on the corrected code and would have measured 0 overlay pixels
   on the v2 slot.
 
-  THE COLOUR RELATION (assert-lane-overlay's own gate, proposal 39's
-  discipline, D4): every band pixel must be strictly LIGHTER than the lane
-  fill and strictly DARKER than the clip body grey. sFeelFlowTint()
-  (strackrndrinline.cpp) gets this BY CONSTRUCTION rather than by picking
-  numbers: it linearly interpolates every channel between the lane's own
-  fill colour and the fixed clip-body grey, and Rec.601 luminance is a
-  LINEAR function of the channels, so a mixing fraction strictly inside
-  (0,1) always lands strictly between the two luminances, whatever this
-  track's fill colour happens to be, and whichever of the two backgrounds
-  (bare lane fill beyond the clip, or the clip body itself) a given column's
-  alpha-blended pixel actually composites over. Compliance modulates BOTH
-  the mixing fraction and the alpha (low compliance = bolder, closer to the
-  clip grey, reads "hotter"; high compliance = fainter, closer to the fill),
-  and the two never fight.
+  THE COLOUR LAW, UPDATED 2026-08-21 (aggressive visibility follow-up). M2's
+  original band interpolated between the lane fill and the clip body grey at
+  partial alpha — the requester found it too subtle ("rainbow, in case I miss
+  shades of grey"). The band now paints OPAQUE from ONE authoritative LUT,
+  STrackRendererInline::feelFlowPalette(): a quantized 24-step hue ramp, RED
+  (low compliance, hue 0 deg) through YELLOW to GREEN (high compliance,
+  hue 120 deg), full saturation, value ~0.85 — traffic-light semantics, red is
+  the hot spot to edit/listen/overdub. The old luminance-relation gate
+  (strictly lighter than the fill, strictly darker than the clip body) still
+  runs unmodified below (it is now a WEAKER, informational check — the
+  palette's yellows and greens still land inside that band, but nothing about
+  the relation is load-bearing for this feature any more); the STRONGER,
+  load-bearing gate is exact-RGB LUT membership: `lutPixels=` counts pixels
+  whose exact colour is one of the 24 palette entries, and
+  `lutIndexMin=`/`lutIndexMax=` report the observed compliance range. Opaque
+  paint makes an exact match sound — no compositing, no partial alpha, no
+  noise floor to name.
 
   THE HOP DOMAIN (AC 2's "placement arithmetic only, no warp map"). The
   bounce is a whole-project render starting at project frame 0
@@ -54,24 +57,36 @@
   which is what feeds twGainStage, downstream of which sits the root
   component the bounce reads and STrack::feelFlowStale() checks).
 
-  WHY THE "FALSE" ASSERTIONS USE maxPixels, NOT A LITERAL ZERO. Measured on
-  this exact fixture: a freshly-added, never-analyzed clip already
-  contributes ~1100-1200 pixels in the "strictly between fill and clip body"
-  luminance range, EVEN with bandOnly="true" scoping the scan to the bottom
-  fifth of the lane (a waveform's troughs reach the bottom of the clip rect
-  as often as the top), the clip's own waveform paint, found empirically
-  while writing this case, not a defect in the feel-flow band. It is
-  UNCHANGED by staling: 1131 pixels both before the first analysis and after
-  the staling edit, byte-identical in the log. So the negative assertions
-  name that noise floor explicitly (with margin) via `maxPixels`
-  (sassertenvelopeaction.h's own doc has the full measurement) rather than
-  asserting a zero the classifier cannot honestly reach over real waveform
-  content, the same hazard folder_sum_preview.qxa's "NOT gated" note
-  already named for a CLIP as a negative control, worked around there by
-  using only clip-free lanes, which this feature's own subject cannot be.
-  The gap between the noise floor (~1131) and the fresh band (~8779, 8x
-  higher) is what actually carries the "nothing paints when stale or absent"
-  claim; assert-groove-aspect's `stale=` attribute gates the exact boolean
+  maxPixels vs maxLutPixels — WHY BOTH, AND WHY ONLY ONE IS LOAD-BEARING NOW.
+  `maxPixels` (kept, unchanged since M2) names a NOISE FLOOR: measured on this
+  exact fixture, a freshly-added, never-analyzed clip already contributes
+  ~1100-1200 pixels in the "strictly between fill and clip body" luminance
+  range, EVEN with bandOnly="true" scoping the scan to the bottom fifth of the
+  lane (a waveform's troughs reach the bottom of the clip rect as often as the
+  top) — the clip's own waveform paint, not a defect in the feel-flow band,
+  and unchanged by staling (byte-identical in the log before the first
+  analysis and after the staling edit). It stays as a legacy/informational
+  check. `maxLutPixels="0"` (2026-08-21) is the load-bearing negative
+  assertion now: since the band paints fully opaque from a fixed 24-entry LUT
+  and nothing else in this project ever paints one of those exact colours, an
+  absent-or-stale band is measured as EXACTLY ZERO LUT pixels — no floor, no
+  margin, no noise to name. Measured on this fixture: lutPixels=0 both before
+  the first analysis and after the staling edit.
+
+  minPixels vs minLutPixels/minLutSpread — the FRESH case. `minPixels="2500"`
+  (kept) is the old luminance-relation floor. `minLutPixels` (2026-08-21) is
+  the load-bearing floor on exact LUT membership: measured 9234 lutPixels on
+  this fixture (a wider count than the old 8779 overlayPixels, because opaque
+  palette colours land squarely inside the same luminance band the old
+  metric also counted, plus a few palette entries the interpolated tint never
+  reached) — 8000 leaves ~1200 of margin below the measurement.
+  `minLutSpread="10"` asserts the ramp is not flat: this fixture's compliance
+  DOES vary (verified, not assumed) — the observed range is the full
+  lutIndexMin=0 .. lutIndexMax=23, i.e. every one of the 24 steps appears
+  somewhere in the band, so 10 is a wide-margin floor under a measured spread
+  of 23, proving "at least 2 distinct palette indices appear" many times
+  over (this is an XML comment, so no literal double hyphen above).
+  assert-groove-aspect's `stale=` attribute gates the exact boolean
   (STrack::feelFlowStale()) the paint code branches on.
 -->
 <SActionScript version="1" name="feel_flow_heatmap">
@@ -93,9 +108,12 @@
          answer per sfeelflowbounce.h's own doc) whether or not a holder even
          exists yet, so the band contributes NOTHING beyond the clip's own
          intrinsic waveform noise (measured ~1131 px, see the header note);
-         maxPixels names that floor with margin. -->
+         maxPixels names that floor with margin (legacy/informational).
+         maxLutPixels="0" is the LOAD-BEARING check since 2026-08-21: the
+         opaque band never painted, so EXACT zero LUT pixels, no margin. -->
     <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
-                         expectOverlay="false" bandOnly="true" maxPixels="2500"/>
+                         expectOverlay="false" bandOnly="true" maxPixels="2500"
+                         maxLutPixels="0"/>
     <assert-groove-aspect aspect="groove.res" trackPath="0" stale="1"
                           expectExists="false"/>
 
@@ -113,10 +131,14 @@
          (AC 3: repaint rides captureRevalidated() with no manual poke, the
          same notifyCaptureRevalidated() the analysis job's completion
          already queues for the badge). minPixels=2500 sits ABOVE the
-         measured noise floor's ceiling, so this genuinely proves the band
-         itself, not the clip's own waveform. -->
+         measured noise floor's ceiling (legacy/informational). Since
+         2026-08-21 the LOAD-BEARING assertions are minLutPixels="8000"
+         (measured 9234, ~1200 margin) and minLutSpread="10" (measured
+         lutIndexMin=0..lutIndexMax=23, i.e. every one of the 24 palette
+         steps appears; the fixture's compliance genuinely varies). -->
     <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
                          minPixels="2500" bandOnly="true"
+                         minLutPixels="8000" minLutSpread="10"
                          grabPng="feel_flow_heatmap.png"/>
 
     <!-- =========== AC 4 (3/3): a staling edit -> NOTHING again =========== -->
@@ -124,7 +146,8 @@
     <assert-groove-aspect aspect="groove.res" trackPath="0" stale="1"
                           expectExists="true"/>
     <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
-                         expectOverlay="false" bandOnly="true" maxPixels="2500"/>
+                         expectOverlay="false" bandOnly="true" maxPixels="2500"
+                         maxLutPixels="0"/>
   </actions>
 
   <assertions>

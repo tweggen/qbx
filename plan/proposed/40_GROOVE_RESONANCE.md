@@ -763,6 +763,38 @@ never retroactively.
   BOOLEAN is gated separately via `assert-groove-aspect stale=`.
   Invariants: `main/timeline/CONTRACT.md` inv. 25,
   `main/objects/track/CONTRACT.md` inv. 25.
+
+  **M2 palette follow-up, 2026-08-21.** The requester found the tinted-mix
+  band too subtle ("rainbow, in case I miss shades of grey") and asked for
+  AGGRESSIVE colour. `sFeelFlowTint()` is retired; the band now paints fully
+  OPAQUE from ONE authoritative LUT, `STrackRendererInline::feelFlowPalette()`
+  — a quantized 24-step hue ramp, red (low compliance) through yellow to
+  green (high compliance), full saturation, value ~0.85 — traffic-light
+  semantics, red is the spot to edit/listen/overdub. The gate got STRONGER,
+  not weaker: `assert-lane-overlay` gained `minLutPixels=`/`maxLutPixels=`/
+  `minLutSpread=` (band mode only, unset = no check, every pre-existing
+  caller byte-unaffected), reading a new `lutPixels=`/`lutIndexMin=`/
+  `lutIndexMax=` exact-RGB classification `SMainWindow::describeLaneOverlay`
+  now reports in band mode. Because the paint is fully opaque, the negative
+  ("nothing painted") cases in `feel_flow_heatmap.qxa` now assert
+  `maxLutPixels="0"` — an EXACT zero, not the old `maxPixels` noise floor
+  with margin. Measured on the `a_offset15.wav` fixture: **9234 lutPixels
+  fresh vs 0 both before analysis and after the staling edit** (exact, not a
+  floor); the fixture's compliance genuinely varies — `lutIndexMin=0` ..
+  `lutIndexMax=23`, i.e. every one of the 24 palette steps is reached
+  somewhere in the band, so `feel_flow_heatmap.qxa` asserts
+  `minLutPixels="8000"` and `minLutSpread="10"` (both well inside the
+  measured margin). The old `maxPixels`/`minPixels`/luminance-relation gate
+  stays wired and green (informational; it still holds because the
+  palette's yellows and greens land inside that relation too), unmodified,
+  so nothing about it needed re-measuring. Invariants updated in the same
+  two CONTRACT.md files; `docs/ACTIONS.md` updated for the new attributes.
+  Gates: `./build.sh`; the 7 `qxa.feel_flow_*` cases green; `qxa.folder_
+  sum_preview` and the `qxa.envelope_*`/`preview_volume_independent` cases
+  green (one unreproduced `preview_volume_independent` flake seen once in a
+  4-case batch, passed on immediate re-run and 3 further repeats — unrelated
+  to this change, which touches no code that case exercises);
+  `action_roundtrip_test` green; layering/logging clean.
 - **M3 — tuning panel + trained mode + verbs** (`groove-analyze`,
   `set-groove-param`, learn-from-selection; trained state in the project
   file, `action_roundtrip_test` joins).
@@ -1096,6 +1128,8 @@ on a virgin clip" as a MODE CHANGE (the clip's sound changes once,
 globally), not a local edit. Listening files are staged for the requester;
 the human verdict on both deltas is still owed. Not swept: other nudge
 magnitudes, spacings, real drum material.
+
+**Verdict received 2026-08-21: "sound is fine."** M4 is unblocked.
 
 ### 11.5 Two implementation findings worth more than their bug reports
 

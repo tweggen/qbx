@@ -179,6 +179,35 @@ private:
  *                  still catching a genuine leak of feel-flow band pixels
  *                  (measured: ~1100 baseline noise vs ~8800 when the band is
  *                  actually fresh -- an 8x gap, nowhere near the ceiling).
+ * - minLutPixels,
+ *   maxLutPixels:  proposal 40 M2 palette follow-up (2026-08-21). BAND MODE
+ *                  ONLY (`bandOnly="true"`) -- unset (-1, default) makes
+ *                  neither check run, so every pre-existing case (which never
+ *                  sets these) is byte-unaffected. Where `overlayPixels` above
+ *                  counts a LUMINANCE RELATION (a soft, mixture-tolerant
+ *                  measure that predates the palette and still applies to the
+ *                  M3 folder-sum overlay's own derived tint),
+ *                  `lutPixels` — reported by describeLaneOverlay and checked
+ *                  here — counts EXACT membership in
+ *                  STrackRendererInline::feelFlowPalette(), the one
+ *                  authoritative 24-entry LUT the opaque band paints from.
+ *                  Because the paint is fully opaque (no compositing, no
+ *                  partial alpha), an exact-RGB match is a SOUND classifier
+ *                  with no noise floor to name — unlike `maxPixels` above,
+ *                  `maxLutPixels="0"` over a stale/absent band is a genuine
+ *                  ZERO, not a measured floor with margin. `minLutPixels` is
+ *                  the positive-case floor (how many band pixels must have
+ *                  landed on a palette entry); `maxLutPixels` is the
+ *                  negative-case ceiling (how many are tolerated when nothing
+ *                  should have painted).
+ * - minLutSpread:  optional, default -1 (unset, no check). BAND MODE ONLY.
+ *                  Requires `lutIndexMax - lutIndexMin >= minLutSpread` from
+ *                  the same report, i.e. that AT LEAST `minLutSpread + 1`
+ *                  distinct palette indices were observed in the band —
+ *                  the ramp is not flat. `describeLaneOverlay`'s report
+ *                  carries `lutIndexMin=`/`lutIndexMax=` (both -1 when
+ *                  `lutPixels` is 0) so a case can also read them via
+ *                  `contains=` for a specific value.
  */
 class SAssertLaneOverlayAction : public SAction
 {
@@ -192,7 +221,8 @@ public:
                  QStringLiteral( "minPixels" ),  QStringLiteral( "grabWidth" ),
                  QStringLiteral( "grabHeight" ), QStringLiteral( "grabPng" ),
                  QStringLiteral( "contains" ),   QStringLiteral( "bandOnly" ),
-                 QStringLiteral( "maxPixels" ) };
+                 QStringLiteral( "maxPixels" ),  QStringLiteral( "minLutPixels" ),
+                 QStringLiteral( "maxLutPixels" ), QStringLiteral( "minLutSpread" ) };
     }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -208,6 +238,9 @@ private:
     QString contains_;
     bool    bandOnly_      = false;
     int     maxPixels_     = -1;   // -1 = unset -> ceiling is exactly 0 (old behaviour)
+    int     minLutPixels_  = -1;   // -1 = unset -> no floor check (band mode only)
+    int     maxLutPixels_  = -1;   // -1 = unset -> no ceiling check (band mode only)
+    int     minLutSpread_  = -1;   // -1 = unset -> no distinct-index-spread check
 };
 
 #endif // SASSERTENVELOPEACTION_H
