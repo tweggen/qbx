@@ -37,7 +37,7 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     int idx = lanePath.takeLast();
     SObject *lane = splacements::laneAt( mixer, lanePath );
     SLink *link = lane ? lane->childAt( idx ) : nullptr;
-    if( !link || link->getSObject().isPathContainer() ) {
+    if( !link || link->getSObject().isLane() ) {
         return {false, nullptr};
     }
 

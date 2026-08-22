@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M3, AC3.5 (D5): a rate != 1 on an event-exporting cut is
+  REFUSED, not approximated - POSITION_DOMAINS rule 7, the tick/frame
+  conversion for a fragment's residual events already happened exactly once
+  inside its own content; a second, frame-domain stretch on the OUTER
+  placement would make the part stop following tempo.
+
+  Two clips on one track: clip 0 is a plain sample (audio-only, no residual
+  events) and clip 1 is a fragment packed from a MIDI note. A stretch on
+  clip 0 is ORDINARY and must SUCCEED (the negative control - this refusal
+  is about event-exporting content specifically, not about stretch in
+  general). The SAME resize-clip on clip 1 must be REFUSED wholesale
+  (expectReject): the window is left exactly as it was, and a log line names
+  the rate.
+-->
+<SActionScript version="1" name="fragment_rate_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- Negative control: an ordinary audio clip stretches normally. -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="0,0" startTime="0" startOffset="0" duration="384000"
+                loopLength="0" stretch="2.0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="384000"/>
+
+    <!-- The fragment under test. -->
+    <insert-midi-clip trackPath="0" timePos="500000" duration="960" name="R"/>
+    <add-note clip="0,1" tick="0" dur="480" key="60" velocity="100" channel="0"/>
+    <pack-clips clips="0,1" name="RateFrag"/>
+    <assert-clip-window clip="0,1" startTime="500000" duration="24000"/>
+
+    <!-- AC3.5: refused wholesale, not clamped. The assert-log MUST come
+         immediately after the refused resize-clip and before any other
+         action - each action resets assert-log's read window to start at
+         itself, so an intervening assertion here would hide the very log
+         line this checks for (found the hard way: an assert-clip-window
+         placed between the two hid it). -->
+    <resize-clip clip="0,1" startTime="500000" startOffset="0"
+                duration="48000" loopLength="0" stretch="2.0"
+                expectReject="true"/>
+
+    <!-- ...refused LOUDLY: a log line names the rate. -->
+    <assert-log contains="resize-clip: refusing stretch" minCount="1"/>
+
+    <!-- The window is EXACTLY as it was before the refused edit - not
+         silently degraded to some other value. -->
+    <assert-clip-window clip="0,1" startTime="500000" duration="24000"/>
+
+    <!-- The residual feed is unaffected - still there, still at rate 1. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        startFrame="500000" frameCount="24000"/>
+
+    <!-- A NON-stretch resize (slip/duration/loop only) is still permitted on
+         the same clip - the refusal is specific to a non-unity rate. -->
+    <resize-clip clip="0,1" startTime="500000" startOffset="0"
+                duration="24000" loopLength="0" stretch="1.0"/>
+    <assert-clip-window clip="0,1" startTime="500000" duration="24000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

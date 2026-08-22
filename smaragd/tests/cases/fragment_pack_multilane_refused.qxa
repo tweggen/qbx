@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M2, AC2.5 + AC2.6: two refusals pack-clips/place-asset must
+  produce, neither of them silently.
+
+  Scenario 1 (AC2.5): a selection spanning two lanes is refused, naming both
+  lanes in the log (D8 - a fragment is single-lane by construction).
+
+  Scenario 2 (AC2.6): a placement that would close a reference cycle is
+  refused, reusing sarrangements::reaches with NO second guard written for
+  fragments. This is newly REACHABLE because of proposal 41, not merely
+  re-testing the pre-existing container-asset guard: a fragment may now hold
+  arbitrary clip content, INCLUDING an asset placement, so packing one asset
+  placement into a fragment and placing THAT fragment's asset back inside the
+  first asset's own windowed subtree closes a cycle that never existed before
+  fragments could carry such content. Built with only existing verbs:
+
+    T (folder) -> Inner (child track)         - the subtree G will window
+    L2 (unrelated top-level lane)
+    G = create-asset windowing T, placed on L2 (safe: L2 is not inside T)
+    F = pack-clips of G's placement (on L2), placed back on L2 (still safe:
+        L2 is still not inside T - F's content merely REACHES T now)
+    place-asset F onto Inner (T's own child)  - REFUSED: F -> G -> T -> Inner
+        is a live reference cycle, and place-asset's EXISTING
+        sarrangements::placementWouldCycle check is what catches it - the
+        dynamic_cast<STrack*> branch in splaceassetaction.cpp does NOT fire
+        for a fragment (SLaneFragment is not an STrack), so this scenario
+        would slip through unnoticed if the general reaches() walk did not
+        already cover it.
+
+  The old (container-asset) guard is unaffected by any of this and is not
+  re-tested here; asset_* cases already cover it.
+-->
+<SActionScript version="1" name="fragment_pack_multilane_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- - Scenario 1: AC2.5 - -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <pack-clips clips="0,0;1,0" name="Spans" expectReject="true"/>
+    <assert-log level="warn" contains="spans two lanes" minCount="1"/>
+
+    <!-- Nothing moved: both clips are exactly where they were. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <assert-track-count count="2"/>
+
+    <!-- - Scenario 2: AC2.6 -
+         T = track index 0 (after the reparent below); Inner = T's child 0.
+         L2 = track index 1. -->
+    <add-track index="-1"/>
+    <!-- track 2: will become Inner, T's child. -->
+    <add-track index="-1"/>
+    <!-- track 3: will become T, the folder. -->
+    <reparent-track source="2" destParent="3" destIndex="-1"/>
+    <!-- track 2 ("Inner") is now T's (track 3's) child 0; top-level tracks
+         are now: 0 (from scenario 1), 1 (from scenario 1), 2 = T (track 3
+         shifted down once track 2 left the top level). -->
+
+    <add-track index="-1"/>
+    <!-- track 3 = L2, an ordinary top-level lane unrelated to T. -->
+
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="0"/>
+    <create-asset container="2" startOffset="0" duration="48000"
+                  assetName="G"/>
+    <place-asset assetName="G" trackPath="3" timePos="300000"/>
+
+    <!-- Pack G's placement (L2's second clip) into a fragment asset "F".
+         Still safe: the destination (L2) is not inside T. -->
+    <pack-clips clips="3,1" name="F"/>
+    <assert-clip-window clip="3,1" startTime="300000"/>
+
+    <!-- Placing F onto T's OWN CHILD closes the cycle F -> G -> T -> Inner. -->
+    <place-asset assetName="F" trackPath="2,0" timePos="0"
+                expectReject="true"/>
+    <assert-log level="warn" contains="close a reference cycle" minCount="1"/>
+
+    <!-- Inner still has nothing placed on it. -->
+    <assert-track-count count="4"/>
+  </actions>
+
+  <assertions/>
+
+</SActionScript>

@@ -53,7 +53,7 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
                 placements.append( lk );
                 continue;
             }
-            if( child.isPathContainer() ) findPlacements( &child );
+            if( child.isLane() ) findPlacements( &child );
         }
     };
     findPlacements( master );

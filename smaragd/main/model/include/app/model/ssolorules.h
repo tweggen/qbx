@@ -28,8 +28,11 @@
  * comment above twTrackMix::setClipMuted.
  *
  * Everything here is a plain read of model flags on the UI thread; nothing
- * touches the engine. Only lanes (SObject::isPathContainer()) carry solo, so
- * the walks never descend into clips.
+ * touches the engine. Only lanes (SObject::isLane(), proposal 41 D3) carry
+ * solo, so the walks never descend into clips — and, since M1, never into a
+ * fragment either: a fragment answers isPathContainer() true (it is a
+ * container) but isLane() false (it has no track identity), so a
+ * fragment-internal flag can never darken lanes across the project.
  */
 namespace ssolo {
 
@@ -41,7 +44,7 @@ inline bool soloInSubtree( SObject *obj )
     for( SLink *lk : obj->childLinks() ) {
         if( !lk ) continue;
         SObject *child = &lk->getSObject();
-        if( !child->isPathContainer() ) continue;
+        if( !child->isLane() ) continue;
         if( soloInSubtree( child ) ) return true;
     }
     return false;
@@ -56,7 +59,7 @@ inline bool anySoloInTree( SObject *root )
     for( SLink *lk : root->childLinks() ) {
         if( !lk ) continue;
         SObject *child = &lk->getSObject();
-        if( !child->isPathContainer() ) continue;
+        if( !child->isLane() ) continue;
         if( soloInSubtree( child ) ) return true;
     }
     return false;
@@ -70,7 +73,7 @@ inline bool underSoloedAncestorRec( SObject *cur, SObject *lane, bool ancestorSo
     for( SLink *lk : cur->childLinks() ) {
         if( !lk ) continue;
         SObject *child = &lk->getSObject();
-        if( !child->isPathContainer() ) continue;
+        if( !child->isLane() ) continue;
         if( child == lane ) {
             // The same object can be placed under more than one parent; keep
             // looking if THIS placement is not under a soloed ancestor.

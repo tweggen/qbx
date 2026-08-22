@@ -6,10 +6,14 @@
 
 #include <qobject.h>
 #include <QColor>
+#include <QFontMetrics>
+#include <QRect>
 #include <QRgb>
+#include <QString>
 #include "app/model/sobjectrenderer.h"
 
 class STrack;
+class SObject;
 
 class STrackRendererInline
     : public SObjectRenderer
@@ -59,6 +63,96 @@ public:
      * interpret an observed palette index, not just the colours.
      */
     static int feelFlowPaletteIndex( float compliance );
+
+    /**
+     * THE TAG CHIP (proposal 41 D12-D14, M6). One solid opaque chip per
+     * clip, bottom-left corner — the corner D11's start-time-ascending paint
+     * order guarantees visible (a clip's left edge can only be covered by a
+     * clip that starts strictly to its right), except at an exact start-
+     * time tie, where the tiebreak above (child index) makes WHICH tag wins
+     * deterministic rather than flaky. It REPLACES the old bottom-right
+     * container-asset label SCutRendererInline used to draw — one
+     * mechanism now, never a second label.
+     *
+     * The three statics below are the SHARED decision between draw() (in
+     * the .cpp) and the pixel gate (preview_envelope_test.cpp section 7):
+     * the gate must read the SAME colour/text/cap logic the paint path
+     * used, never a second guess at it (the laneFillColor()/
+     * feelFlowPalette() precedent above).
+     */
+
+    /**
+     * The chip's fill colour (D13): DERIVED from the lane's own final
+     * colour (laneFillColor(), post-selection/post-STrackColorModifier),
+     * never a fourth hardcoded constant, so it follows track selection and
+     * every muted/solo/armed state for free — exactly as the folder-sum
+     * overlay's colour does (proposal 39 M3). The RELATION is contractual,
+     * not the exact hue: strictly DARKER (lower qGray() luminance) than the
+     * lane fill it derives from — darker() scales every channel down
+     * identically, so a lower luminance holds for every reachable
+     * STrackColorModifier state — and, because the fixed clip-body grey
+     * QColor(160,160,160) sits well above every reachable fill luminance
+     * (measured: base fill ~64-117, so this chip ~40-73), comfortably
+     * darker than the clip body too, which is what makes white chip text
+     * readable against it.
+     */
+    static QColor tagChipColor( const QColor &laneFill );
+
+    /**
+     * The tag's DENSITY LADDER (D12/D14): the full name, capped at
+     * kTagMaxChars, drawn in full if it fits `availTextWidthPx`; elided
+     * (Qt::ElideRight) if a shorter form still fits; or "" — no room for
+     * even one character plus an ellipsis, so the caller falls back to a
+     * chip with no text at all (the "chip only" rung; "nothing" is the
+     * caller's own decision when even the chip does not fit). A PURE
+     * function of the name, the font metrics and the pixel budget, so the
+     * widths a gate re-derives are the SAME decision draw() made.
+     *
+     * `*cut`, when non-null, is set true whenever the returned text is not
+     * `fullName` itself — the 12-character cap counts as a cut even when
+     * the capped text still fits with room to spare, because "the cap is
+     * announced" (D14) means the TRUE full name, not the already-capped
+     * one: a tooltip is owed whenever what is drawn does not equal the
+     * true full name.
+     */
+    static constexpr int kTagMaxChars = 12;
+    static QString tagDensityText( const QString &fullName,
+                                   const QFontMetrics &fm,
+                                   int availTextWidthPx, bool *cut = nullptr );
+
+    /**
+     * The tag's text SOURCE (D12): the fragment/asset name for a
+     * container-backed clip (an asset windowing a fragment, a track or the
+     * mixer — SCutRendererInline's old bottom-right label read exactly
+     * this, `cut.getSName()`), the FILE name for a plain sample-backed
+     * clip. Resolved through the type-agnostic SClipWindow/SExternFile
+     * model interfaces rather than SCut/SMidiCut/SLaneFragment directly,
+     * because `objects/track` may not depend on `objects/cut`,
+     * `objects/midi` or `objects/fragment` (tools/check_layering.py) — the
+     * same reason the clip loop in the .cpp never dynamic_casts to SCut.
+     */
+    static QString tagFullText( SObject &clipObject );
+
+    /**
+     * THE TAG CHIP'S GEOMETRY (proposal 41 D15, M7) -- the exact rect draw()
+     * fills, factored out of it so a HIT TEST can ask the identical
+     * question the paint path already answered rather than re-deriving it
+     * (the same "shared decision" discipline as the three statics above).
+     * `vr` is the clip's own inset content rect -- what draw() computes as
+     * `vr` right before this block runs, i.e. NOT the outer selection rect,
+     * and NOT clamped to any narrower hit region: the returned rect can
+     * extend into territory a later clip's BODY paints over, on purpose --
+     * see D15 and SMVActualView::tagHitTestAt for why a clip's declared tag
+     * footprint is always its full width regardless of what got painted on
+     * top of part of it afterwards.
+     *
+     * Returns an empty (isEmpty()) QRect when nothing would be drawn --
+     * `vr` too short/narrow, or not even the "chip only" minimum fits.
+     * `outDrawnText`, when non-null, receives the text draw() would paint
+     * inside the chip (possibly empty for the "chip only" rung).
+     */
+    static QRect tagChipRect( SObject &clipObject, const QRect &vr,
+                              QString *outDrawnText = nullptr );
 
 private:
     class InlineRenderContext

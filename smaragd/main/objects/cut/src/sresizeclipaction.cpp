@@ -10,6 +10,7 @@
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
 #include "tw/core/twfraction.h"
+#include "tw/core/twlog.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -59,13 +60,11 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     if( !mixer ) {
         return {false, nullptr};
     }
-    QList<int> trackPath = clipPath_;
-    int idx = trackPath.takeLast();
-    SObject *track = splacements::laneAt( mixer, trackPath );
-    if( !track ) {
-        return {false, nullptr};
-    }
-    SLink *link = track->childAt( idx );
+    // Proposal 41 M2b: resolve through placementAt(), not an inline
+    // laneAt()+childAt() duplicate of it -- the inline form used to require
+    // the clip's immediate parent to be a LANE, which is exactly what kept
+    // resize-clip from reaching a clip already packed into a fragment.
+    SLink *link = splacements::placementAt( mixer, clipPath_ );
     if( !link ) {
         return {false, nullptr};
     }
@@ -123,6 +122,25 @@ SApplyResult SResizeClipAction::apply( SProject *project )
 
     std::vector<twWarpAnchor> oldAnchors =
         cut ? cut->getGrainParams().warpAnchors : std::vector<twWarpAnchor>();
+
+    // PROPOSAL 41 D5: a rate != 1 on an event-exporting cut is REFUSED, not
+    // approximated. POSITION_DOMAINS rule 7 — the tick/frame conversion for
+    // a fragment's residual events already happened exactly once, inside its
+    // own content's window(s); stretching the OUTER placement too would
+    // convert a second time, in the frame domain, and the part would stop
+    // following tempo (the Ardour <= 6 defect this whole model exists to
+    // avoid). Checked here, at the EDIT surface, so the whole action is
+    // refused loudly rather than silently degraded — never a Q_ASSERT (this
+    // build compiles those out).
+    if( cut && stretch_ != Fraction( 1 ) ) {
+        twEventClipResolved residual = cut->getContent().resolveEventFeed( 0 );
+        if( residual.seq && !residual.seq->empty() ) {
+            TW_LOGW( "cut", "resize-clip: refusing stretch=%s on '%s' -- it "
+                            "exports residual events (proposal 41 D5)",
+                     stretch_.toString().c_str(), cut->getSName().toUtf8().constData() );
+            return {false, nullptr};
+        }
+    }
 
     link->setStartTime( startTime_ );
     win->setWindowExact( srcStart_, duration_, loopLength_, stretch_ );

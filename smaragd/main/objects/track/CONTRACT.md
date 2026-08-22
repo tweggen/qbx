@@ -177,9 +177,12 @@ Invariants (normative detail: CLIP_MODEL.md):
 14. **The RUN BARRIER finds its instrument tracks by WALKING, not by a
    registry** (proposal 37 P3c). `sinstruments::collectInstrumentTracks(root,
    out)` (`app/objects/track/sinstrumenttracks.h`) is a depth-first walk of the
-   LANE tree — `isPathContainer()` only, exactly as `ssolo`'s walks do, so a
-   folder track's own instrument and a leaf's are both found. It lives here and
-   not in the shell because it is a fact about how a track tree is shaped.
+   LANE tree — `isLane()` only (proposal 41 D3 split lane-state from the more
+   general `isPathContainer()`), exactly as `ssolo`'s walks do, so a
+   folder track's own instrument and a leaf's are both found, and a fragment
+   (which is a path container but never a lane) is never descended into. It
+   lives here and not in the shell because it is a fact about how a track
+   tree is shaped.
    Deliberately not a maintained list: a registry would have to be kept in step
    with insert/remove/reorder-plugin, the undo of each, track add/remove/
    reparent and project load — nine places, every one of them a chance to hand
@@ -488,3 +491,24 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     layer, because there it is asking the FIRST question (a
     default-constructed `twGrooveTrainedStructure` has `trainedHasRegion`
     genuinely empty — no `TrainStructure` call has ever populated it).
+
+29. **A RESIDUAL-EXPORTING PLACEMENT IS DUAL-INSERTED, KEYED BY THE SAME
+    `SLink*`** (proposal 41 D4/M3). `trackChildWasAdded` inserts an audio-kind
+    child into `cpTrackMix_` as always, then ALSO asks
+    `child.getSObject().resolveEventFeed(0)` — a base-class `SObject` virtual,
+    never a fragment-specific check — and, when it answers non-empty, inserts
+    the SAME `SLink*` into `eventClips_` too, with `resolveEventFeed` as the
+    resolver instead of `resolveEventClip`. `trackChildWasRemoved` /
+    `trackChildWasMoved` / `trackChildDurationChanged` therefore never early-
+    return after touching ONE of the two sets — both are always attempted, and
+    a key absent from either is a harmless no-op (`twTrackMix`/`twEventClipSet`
+    match nothing and return an empty range). **A container asset (an
+    `STrack`/`SStdMixer` placed elsewhere) exports NOTHING through this path
+    because neither overrides `resolveEventFeed()`** — the base default is
+    "Event content only", and a container's own `contentKind()` stays Audio —
+    so D4's "no double-trigger" rule costs zero special-case code, not a
+    predicate that has to be called correctly at every site. The resolver
+    closure ALSO applies D6's channel remap (`SLink::getEventChannelOverride()`)
+    — on the `SLink`, not the content, because D2 shares one `SCut` across
+    every placement of an asset and a remap stored on the content would move
+    them all; this closure is the one place that already holds both.

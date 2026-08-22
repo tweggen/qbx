@@ -193,6 +193,14 @@ dedicated stress case in playback_test ("seek storm"): four threads freezing
 position-coded pages while a fifth hammers AudioEngine::seekTo, then every
 produced page is decoded and must carry the audio of its own startPosition.
 
+tw303aEnvironment::bufferSize is DEFAULT-INITIALISED (4096, the value
+sapplication.cpp sets). It must never be left indeterminate: twMixer's ctor
+chain reads it through setBufferSize( env.getBufferSize() ) before anything
+has configured the environment, so an indeterminate value reaches calloc and
+a null return throws out of a constructor. The app masked this by setting the
+size during startup; a minimal fixture (fragment_test, proposal 41 M1) does
+not, which is how it surfaced as a ~1-in-30 crash.
+
 Known debt: calcOutputTo default impl allocates per block; deprecated
 raw-pointer calcOutputTo overload awaits removal; tw303a.cc (dead standalone
 demo) parked in ../src/.

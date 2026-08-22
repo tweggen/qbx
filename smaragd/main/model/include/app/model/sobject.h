@@ -184,6 +184,42 @@ public:
     { (void) clipPos; return twEventClipResolved{}; }
 
     /**
+     * The RESIDUAL event feed a clip contributes when PLACED (proposal 41
+     * D4/M3), as distinct from resolveEventClip() above: a plain event clip
+     * IS its own content, but a container that has no track identity (a lane
+     * fragment) consumes nothing, so its whole event feed is residual and
+     * must bubble into whatever track the placement sits on.
+     *
+     * The base default JOINS contentKind() and resolveEventClip() — for
+     * ordinary Event-kind content this is already the right answer, so only a
+     * content kind that is NOT itself Event but still carries events (a
+     * fragment, via its SCut window) needs to override. It lives here, not on
+     * a fragment-specific type, for the same reason contentKind() and
+     * resolveEventClip() do: the track routes without knowing the subclass
+     * (design 37 §3.5, extended by 41 D4).
+     *
+     * `clipPos` is unused by every override to date (SMidiCut's
+     * resolveEventClip ignores it too) — the returned `map` carries the
+     * slip/loop translation, not the argument.
+     */
+    virtual twEventClipResolved resolveEventFeed( offset_t clipPos )
+    {
+        return contentKind() == SContentKind::Event ? resolveEventClip( clipPos )
+                                                      : twEventClipResolved{};
+    }
+
+    /**
+     * True for a container whose own audio sum is EMPTY right now — a pure-
+     * event lane fragment, or one with no children at all (proposal 41 D7/M4).
+     * `SCut::buildCapture_` treats any no-random-source content as container-
+     * backed and renders it into a snapshot on the UI thread; over a fragment
+     * with no audio children that render is guaranteed silence, bought at
+     * tens of milliseconds. Default false — everything before proposal 41
+     * either has a random source or is a real audio-summing container.
+     */
+    virtual bool isPureEventContent() const { return false; }
+
+    /**
      * One step of a WINDOW, for a position walk (proposal 09 §15).
      *
      * A window (a cut, a take stack) does not place its content by a start
@@ -213,12 +249,45 @@ public:
     { (void) clipRel; (void) out; return false; }
 
     /**
-     * True for containers the index-path search may descend into (track
-     * lanes). Path RESOLUTION follows explicit indices and needs no flag;
-     * this only scopes the reverse search (pathOf) exactly as the historical
-     * dynamic_cast<STrack*> did. STrack returns true.
+     * True for containers the index-path search may descend into (proposal
+     * 41 D3: PATH DESCENT, not lane-ness). Path RESOLUTION follows explicit
+     * indices and needs no flag; this only scopes the reverse search
+     * (pathOf) exactly as the historical dynamic_cast<STrack*> did, and it
+     * is also the general "may this be windowed as an asset / does this
+     * childLink hold a nested container rather than a leaf clip" test used
+     * throughout objects/track, objects/cut and objects/mixer.
+     *
+     * Until proposal 41 M1 every override of this was ALSO a lane (STrack,
+     * SStdMixer), so callers that actually wanted "is this a lane" (solo,
+     * mute, edit groups, arm, the active-lane map) read this flag too, and
+     * the two meanings agreed by accident. M1 introduces the first
+     * container that is NOT a lane (SLaneFragment: a path container with no
+     * track identity — no fader, no inserts, no instrument, no solo, no
+     * arm), so the accident stops holding. Lane STATE lives on isLane()
+     * below; this flag stays purely about tree descent / "is this a
+     * container, not a leaf". A lane answers both true; a fragment answers
+     * this one true and isLane() false.
      */
     virtual bool isPathContainer() const { return false; }
+
+    /**
+     * True for objects that carry LANE state: solo, mute, edit-group
+     * membership, arm-for-recording, and the active-lane / playhead-map
+     * entries that key off a lane rather than off any path container
+     * (proposal 41 D3). Every lane is a path container (it must be
+     * descended into to resolve its own children's paths), but not every
+     * path container is a lane — a fragment (proposal 41 M1) holds clip
+     * links and answers isPathContainer() true, yet has no track identity
+     * at all, so it must never be consulted for solo/mute/edit-group/arm:
+     * doing so would let a fragment-internal flag darken lanes across the
+     * whole project the fragment happens to be placed into.
+     *
+     * Defaults false. STrack and SStdMixer override it true, exactly as
+     * they override isPathContainer() true — the two happened to answer
+     * identically before proposal 41 and are now two separate questions
+     * asked for two separate reasons.
+     */
+    virtual bool isLane() const { return false; }
 
     /**
      * The kind of material this object carries (proposal 37 D8b). Audio by
@@ -666,6 +735,17 @@ public slots:
      * re-rendered rather than a pre-edit freeze being stamped current.
      */
     void invalidateRenderPath();
+
+    /**
+     * How many SLinks (plus any explicit pin, e.g. SProject::registerAsset's
+     * addRef()) currently reference this object — main-thread read of the
+     * same counter addRef()/removeRef() maintain (proposal 41 M2). A
+     * registered asset's body sits at 1 with no placement; a lane-fragment
+     * unpack refuses unless it reads exactly 2 (the registry pin plus the
+     * ONE placement being unpacked), so unpacking can never empty a fragment
+     * out from under a SECOND placement still sharing it (D2's invariant).
+     */
+    int refCount() const { return nRefs_; }
 
     // --- Range-scoped variant (proposal 18 Phase 5) -------------------------
     // Plain methods, not slots (moc must not see the struct declaration).

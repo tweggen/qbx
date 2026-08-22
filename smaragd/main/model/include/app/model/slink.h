@@ -71,6 +71,22 @@ public:
     const Fraction &getStartTicks() const { return startTicks_; }
     /** Set the musical anchor and DERIVE startTime from it (Beats links). */
     void setStartTicks( const Fraction &ticks );
+
+    /**
+     * Proposal 41 D6: the channel remap THIS PLACEMENT applies to whatever
+     * residual event feed its content exports (SObject::resolveEventFeed()).
+     * -1 (default) = as-authored; 0..15 rewrites every channel-carrying
+     * exported event. Lives HERE, not on the content, because D2 shares ONE
+     * content object (an SCut, say) across every placement of an asset --
+     * "edit any and all change" is exactly right for the content's OWN
+     * window, but a channel remap is the one thing D6 explicitly wants
+     * to differ PER PLACEMENT (a fragment authored on channel 10 placed on
+     * two tracks whose instruments want different channels). Applied by the
+     * caller that already holds the SLink (STrack::trackChildWasAdded's
+     * resolveFn), never inside the content's own resolveEventFeed().
+     */
+    int getEventChannelOverride() const { return eventChannelOverride_; }
+    void setEventChannelOverride( int channel );
     /**
      * Re-derive `startTime` from `startTicks` at the project's CURRENT tempo.
      * Called by `set-tempo` for every Beats link in the project; a no-op for a
@@ -127,6 +143,8 @@ private:
     Fraction startTicks_;
     Timebase timebase_;
     SObject &object_;
+    // Proposal 41 D6. -1 = as-authored (see getEventChannelOverride() above).
+    int eventChannelOverride_ = -1;
 };
 
 #endif

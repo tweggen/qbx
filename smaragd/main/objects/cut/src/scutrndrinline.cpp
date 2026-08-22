@@ -467,11 +467,14 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     // 6.1: "clip envelope = overlay in the cut renderer after drawWarpMarkers").
     drawGainEnvelope( p, visibRect, ctx, lk, cut );
 
-    // Container cuts show their asset name (bottom-right).
-    if( container && !cut.getSName().isEmpty() ) {
-        p.setPen( QColor( 10, 10, 40 ) );
-        p.drawText( visibRect, Qt::AlignBottom | Qt::AlignRight, cut.getSName() );
-    }
+    // The container-asset name used to be drawn here, bottom-right
+    // (Qt::AlignBottom | Qt::AlignRight). Proposal 41 D11/D12 (M6) moved it:
+    // a bottom-RIGHT label forfeits D11's occlusion invariant (the right
+    // edge of an earlier clip is the first thing a later one covers), and
+    // the name is now the tag CHIP drawn at every clip's bottom-LEFT corner
+    // by STrackRendererInline::draw() (one mechanism, not a second label —
+    // see its `tagFullText()`, which reads exactly `cut.getSName()` for a
+    // container-backed cut, same as this used to).
     drawPitchBadge( p, visibRect, cut.getPitchCents(),
                     cut.getPreserveFormants() );
 }

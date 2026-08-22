@@ -20,7 +20,55 @@ sobjectpath.h (generic index-path helpers; SObject::isPathContainer scopes
 the reverse search exactly as the old STrack cast did), and splacements.h
 (the placement service: rootContainer/laneAt/placementAt — the generic
 resolution+validation that action code uses instead of STrack/SStdMixer
-casts; lane-ness is isPathContainer, the active lane is activeLane).
+casts; lane-ness is isLane(), the active lane is activeLane).
+
+**isPathContainer() vs isLane() (proposal 41 D3, split in M0).** Two
+questions that agreed by accident because, until M1, the only two overrides
+(STrack, SStdMixer) answered both true. `isPathContainer()` is PATH DESCENT
+only — "does the index-path search / the placement service descend into me,
+and may I be windowed as an asset" — and stays the predicate `sobjectpath.h`
+and the asset-creation actions use. `isLane()` is LANE STATE — "do I carry
+solo, mute, edit-group membership and arm-for-recording" — and is what
+`ssolorules.h`, `seditgroups.h`, `splayheadmap.h`, and `splacements.h`'s
+`laneAt()` (the placement DESTINATION resolver — `place-clip`, `move-clip`
+and `pack-clips`'s own lane check all use it, and it consults ONLY `isLane()`,
+never the wider predicate) consult. Proposal 41 M1's `SLaneFragment` is the
+first type to answer them differently: a path container (it may be windowed
+and its children path-resolved) that is emphatically not a lane (no fader,
+no inserts, no instrument, no solo, no arm) — see `plan/proposed/
+41_LANE_FRAGMENTS.md` D3.
+
+**`containerAt()` and the M2b widening of `placementAt()`.** `splacements.h`
+also has `containerAt()` — `isPathContainer()`, the strictly WIDER predicate
+— and since proposal 41 M2b, `placementAt()` (a clip PLACEMENT'S own
+resolver: parent path + link index) resolves the clip's PARENT through
+`containerAt()`, not `laneAt()`. This is what lets a clip-property verb
+(`resize-clip`, `set-clip-volume`, `slip-clip`, …) reach a clip already
+nested inside a non-lane path container such as an `SLaneFragment`, while
+`placementAt()`'s FINAL check — the addressed child itself must not be a
+lane — is unchanged and still uses `isLane()`, so a nested TRACK is never
+returned as if it were a clip, fragment or not. **Widening `placementAt()`
+this way widens every DELETION that resolves through it too** (the
+production `unplace-clip`/`remove-midi-clip`, both live-only action
+inverses): a clip deleted while nested in a fragment is removed from the
+ONE object every placement of that asset shares, so the deletion cascades to
+every placement. Decided deliberately (2026-08-21, `objects/fragment/
+CONTRACT.md` inv. 6) rather than special-cased away — a deletion is a shared
+edit like any other edit `placementAt()` already permitted. `laneAt()` itself
+was NOT widened and stays exactly as strict as before: a clip still cannot
+be MOVED into or out of a non-lane container by any verb but `pack-clips`/
+`unpack-clips` (`objects/fragment/CONTRACT.md` inv. 5).
+
+`splacements::rootNamed()` also grew an ASSET-NAME fallback in M2b: a
+qualifier that names neither an arrangement nor resolves under the master
+falls back to a registered asset of that name, and — only when its windowed
+content answers `isPathContainer() && !isLane()` — resolves to that content
+directly, so `"MyLoop:0"` addresses a fragment asset's own first child the
+same way `"Drums:0"` already addresses an arrangement's. An asset over a
+plain lane (a folder-track "container asset") gains NO second name this way:
+that lane is already addressable by itself, and the `isLane()` check screens
+it out. Arrangements always WIN a name collision, so every path that already
+resolved keeps its current meaning.
 volumeDbSnapshot() is the thread-safe volume read (it holds volumeMutex_,
 which a bare getVolume() does not). Proposal 39 M2 left it with NO CALLER —
 it deleted the paint-time fader multiply from drawObjectWaveform — and kept

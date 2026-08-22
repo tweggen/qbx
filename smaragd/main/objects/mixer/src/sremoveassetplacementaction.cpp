@@ -38,7 +38,7 @@ SApplyResult SRemoveAssetPlacementAction::apply(SProject *project)
     }
 
     SObject *track = trackObj;
-    if (!track->isPathContainer()) {
+    if (!track->isLane()) {
         return {false, nullptr};   // destination is not a lane
     }
 

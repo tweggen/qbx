@@ -24,10 +24,12 @@ class STrack;
  * block or per edit), and `STrack::instrumentSlot()` is two pointer hops, so the
  * cost is nothing measurable next to opening an audio device.
  *
- * Only LANES are descended into (`SObject::isPathContainer()`), exactly as
- * ssolo's walks do: a clip is never a track and a folder's instrument is as much
- * an instrument as a leaf's (3.2.1 — the folder is where a drum kit fed by
- * bubbled-up children lives).
+ * Only LANES are descended into (`SObject::isLane()`, proposal 41 D3 split
+ * this from `isPathContainer()`), exactly as ssolo's walks do: a clip is
+ * never a track and a folder's instrument is as much an instrument as a
+ * leaf's (3.2.1 — the folder is where a drum kit fed by bubbled-up children
+ * lives). A fragment (M1) is a path container but never a lane, and carries
+ * no instrument slot of its own, so it must never be descended into here.
  *
  * MAIN THREAD ONLY. It reads the model tree, which is the UI thread's.
  */

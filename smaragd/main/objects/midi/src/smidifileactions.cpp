@@ -80,7 +80,7 @@ bool projectIsEmpty( SProject *project, const QString &pathRoot_ )
     for( SLink *lk : root->childLinks() ) {
         if( !lk ) continue;
         SObject &obj = lk->getSObject();
-        if( !obj.isPathContainer() ) return false;   // a clip on the root
+        if( !obj.isLane() ) return false;   // a clip on the root
         if( obj.childCount() > 0 ) return false;     // a track with something on it
     }
     return true;
@@ -278,7 +278,7 @@ void collectFromLane( SObject *lane, twSmfFile &out )
     for( SLink *lk : lane->childLinks() ) {
         if( !lk ) continue;
         SObject &obj = lk->getSObject();
-        if( obj.isPathContainer() ) { collectFromLane( &obj, out ); continue; }
+        if( obj.isLane() ) { collectFromLane( &obj, out ); continue; }
         SMidiCut *cut = dynamic_cast<SMidiCut *>( &obj );
         if( !cut ) continue;
         SMidiSequence *seq = cut->sequence();

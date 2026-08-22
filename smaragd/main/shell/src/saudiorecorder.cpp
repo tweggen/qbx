@@ -47,7 +47,7 @@ void collectArmed( SObject *container, const QList<int> &path,
         SLink *lk = container->childAt( i );
         if( !lk ) continue;
         SObject *child = &lk->getSObject();
-        if( !child->isPathContainer() ) continue;
+        if( !child->isLane() ) continue;
         QList<int> p = path;
         p.append( i );
         if( STrack *t = dynamic_cast<STrack *>( child ) ) {

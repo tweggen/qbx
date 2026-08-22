@@ -41,7 +41,8 @@ void SDragClipEdgeAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "track", track_ );
     elem.setAttribute( "clip", clip_ );
     elem.setAttribute( "edge", grabWhere_ == 1 ? "end"
-                             : grabWhere_ == 2 ? "body" : "start" );
+                             : grabWhere_ == 2 ? "body"
+                             : grabWhere_ == 3 ? "tag" : "start" );
     elem.setAttribute( "toTime", QString::number( (qint64) toTime_ ) );
     elem.setAttribute( "half", upperHalf_ ? "upper" : "lower" );
 
@@ -61,6 +62,7 @@ bool SDragClipEdgeAction::readXml( const QDomElement &elem, int /*version*/ )
     if( edge == "end" )       grabWhere_ = 1;
     else if( edge == "start") grabWhere_ = 0;
     else if( edge == "body" ) grabWhere_ = 2;
+    else if( edge == "tag" )  grabWhere_ = 3;   // proposal 41 D15/M7
     else {
         qWarning() << "SDragClipEdgeAction::readXml: unknown edge:" << edge;
         return false;

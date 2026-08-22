@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M3, AC3.1: a fragment of event clips placed on a track with an
+  instrument is audible through it; the SAME fragment on a track with no
+  instrument is silent and NOT an error (matching the existing event-clip
+  rule, midi_clip_render_silent.qxa).
+
+  A single-note MIDI clip is packed into a fragment ("BDFrag") on track 0,
+  which has no instrument - so its render must be silent, and the whole
+  script must still run to completion (nothing here uses expectReject). The
+  SAME asset is then placed a second time on track 1, which DOES carry an
+  instrument (tw.test.clap.sine, the reference generator: RMS = velocity/127
+  / sqrt(2), so a velocity-100 note reads ~0.55689), and that render must be
+  audible at the note's own frequency and level.
+
+  assert-midi-events scope="feed" checks the MODEL claim directly (the
+  residual feed reaches STrack::eventFeed() on BOTH tracks, since the
+  fragment's audio-content dual-insertion carries the SAME event window
+  regardless of whether anything downstream consumes it); the render checks
+  the AUDIBLE claim.
+
+  Proposal 41 M4, AC4.1/AC4.2 (D7): this fragment has NO audio children (it
+  is packed from ONE MIDI note), so it is pure-event content by construction
+  - SCut::buildCapture_ must never render its (silent, by definition)
+  twTrackMix sum, in the same shape midi_clip_render_silent.qxa already gates
+  for a plain event clip. The observable is the ABSENCE of buildCapture_'s
+  own "buildCapture_: ..." TW_LOGD line across the first render.
+-->
+<SActionScript version="1" name="fragment_midi_feed">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="1920" name="BD"/>
+    <add-note clip="0,0" tick="0" dur="960" key="60" velocity="100" channel="0"/>
+
+    <pack-clips clips="0,0" name="BDFrag"/>
+
+    <!-- The residual feed exists on track 0 whether or not anything sounds
+         it - D4's "consumed here, or bubbled" question is orthogonal to
+         whether the events are EXPORTED at all. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" count="1"
+                        key="60" startFrame="0" frameCount="48000"/>
+
+    <!-- AC3.1, part 1: track 0 has no instrument - silent, and no action
+         here is expected to fail. -->
+    <render filename="frag_midi_no_instr.wav" format="wav" quality="10"
+           durationSec="1.0"/>
+    <assert-audio-energy filename="frag_midi_no_instr.wav"
+                         minRms="0.0" maxRms="0.0001"/>
+
+    <!-- AC4.1/AC4.2: no capture was ever built for this pure-event
+         fragment during that render. -->
+    <assert-log contains="buildCapture_:" minCount="0" maxCount="0"/>
+
+    <!-- AC3.1, part 2: the SAME asset, placed on a track that DOES have an
+         instrument, sounds. -->
+    <add-track index="-1"/>
+    <place-asset assetName="BDFrag" trackPath="1" timePos="0"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <assert-midi-events scope="feed" trackPath="1" kind="note" count="1"
+                        key="60" startFrame="0" frameCount="48000"/>
+
+    <render filename="frag_midi_feed.wav" format="wav" quality="10"
+           durationSec="1.0"/>
+    <!-- key 60 = C4 = 261.626 Hz. The note itself is only 960 ticks = 24000
+         frames (half the clip's own 1920-tick/48000-frame window, D3.4's
+         window-gating fixture reused here) - measure over its OWN span,
+         not the whole clip window. -->
+    <assert-audio-frequency filename="frag_midi_feed.wav"
+                            startFrame="0" frameCount="24000" channel="0"
+                            minHz="260.626" maxHz="262.626"/>
+    <assert-audio-energy filename="frag_midi_feed.wav"
+                         startFrame="0" frameCount="24000" channel="0"
+                         minRms="0.54007" maxRms="0.57347"/>
+    <!-- ...and the second half (past the note's own end) is silent again -
+         the synthesised note-off actually stopped the voice. -->
+    <assert-audio-energy filename="frag_midi_feed.wav"
+                         startFrame="24000" frameCount="24000" channel="0"
+                         minRms="0.0" maxRms="0.01"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

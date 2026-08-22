@@ -43,7 +43,7 @@ SApplyResult SAssertMidiRecordedAction::apply( SProject *project )
     std::vector<SLink *> clips;
     for( int i = 0; i < lane->childCount(); ++i ) {
         SLink *lk = lane->childAt( i );
-        if( !lk || lk->getSObject().isPathContainer() ) continue;
+        if( !lk || lk->getSObject().isLane() ) continue;
         if( !lk->getSObject().hasDuration() ) continue;
         if( lk->getSObject().contentKind() != SContentKind::Event ) continue;
         clips.push_back( lk );

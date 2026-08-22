@@ -23,6 +23,7 @@
 #include <QMainWindow>
 #include <QStatusBar>
 #include <QApplication>
+#include <QToolTip>
 
 #include "tw/sources/twwavinput.h"
 #include "tw/playback/twspeaker.h"
@@ -35,6 +36,7 @@
 #include "app/shell/sviewtabs.h"
 #include "app/timeline/strackheaderresizer.h"
 #include "app/objects/track/strack.h"
+#include "app/objects/track/strackrndrinline.h"
 #include "app/model/sobjectrenderer.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
@@ -806,7 +808,7 @@ void SStdMixerView::ctSplitSample()
     int nTargets = 0;
     for( const QList<int> &p : paths ) {
         SLink *lk = splacements::placementAt( mixer, p );
-        if( !lk || lk->getSObject().isPathContainer() ) continue;
+        if( !lk || lk->getSObject().isLane() ) continue;
         offset_t startTime = lk->getStartTime();
         length_t fullDur = lk->getSObject().getDurationBlocking();
         offset_t inObjOffset = splitTime - startTime;
@@ -1655,6 +1657,84 @@ int SMVActualView::loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) co
     return ( !box.isNull() && box.contains( pos ) ) ? k : 0;
 }
 
+// proposal 41 D15/M7: THE TAG-FIRST HIT TEST. "Test all tags first, across
+// every clip on the lane, then bodies in z-order" (D15) -- so this walks
+// EVERY clip on the row, not just whichever one a plain time-based lookup
+// would call topmost, and asks STrackRendererInline::tagChipRect() -- the
+// SAME geometry draw() paints from -- whether `pos` lands in ITS chip.
+//
+// A clip's declared tag rect is its full chip width, REGARDLESS of whether a
+// later clip's body was painted over part of it afterwards (D11 only
+// guarantees the leftmost pixel column stays free of a later clip's body;
+// nothing guarantees the rest of a chip that is wide relative to how close
+// the next clip starts). Paint order and hit order deliberately differ here
+// -- that asymmetry is the whole point of D15: without it, an occluded
+// clip's handle would be reachable only through a sliver a few pixels wide,
+// which defeats having a generous drag handle at all.
+//
+// RESOLUTION when more than one clip's tag rect contains `pos` (only
+// possible when a later clip starts close enough to reach backward into an
+// earlier clip's chip footprint, or at an exact start-time tie):
+//
+//   - Different start times: the EARLIER clip wins. It is the one that can
+//     be occluded (D11 gives a strictly later clip no way to cover the
+//     earlier one's own corner), so its whole declared chip stays a valid
+//     handle even where a later clip's body/tag was drawn on top of part of
+//     it. The later clip is not shortchanged by this: its own body is a much
+//     bigger fallback target, reachable via the body pass below wherever its
+//     own tag does not also match.
+//   - Exact start-time tie (D11's own tiebreak case, unique childIndex): the
+//     two rects are PIXEL-IDENTICAL -- there is no "partly free" clip to
+//     protect here, so the decision instead follows PAINT order, i.e. the
+//     higher childIndex (the one actually drawn on top), so a tied click
+//     lands on the clip the user is actually looking at.
+//
+// Both rules fall out of ONE comparator: ascending by startTime, and within
+// an exact tie, descending by childIndex. First match along that order wins.
+SLink *SMVActualView::tagHitTestAt( int rowIdx, const QPoint &pos ) const
+{
+    const STrackRow *row = smv_.rowAt( rowIdx );
+    STrack *track = row ? row->track : nullptr;
+    if( !track ) return nullptr;
+    const int top = laneTop( rowIdx );
+    const int lh  = laneHeight( rowIdx );
+
+    SLink *best = nullptr;
+    offset_t bestStart = 0;
+    int bestIndex = -1;
+    int idx = 0;
+    for( SLink *lk : track->childLinks() ) {
+        const int myIndex = idx++;
+        // Nested tracks are their own lanes, never a clip on this one
+        // (same skip the paint loop and getTopMostSLinkAt both use).
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
+        if( !lk->hasStartTime() ) continue;
+        if( !lk->getSObject().hasDuration() ) continue;   // no extent, no chip
+
+        const offset_t startTime = lk->getStartTime();
+        const length_t length = lk->getSObject().getDuration();
+        // The SAME startX/endX -> inset-vr mapping strackrndrinline.cpp's
+        // draw() computes (there via ctx.getTimeOf()/visibRect, here via
+        // getXPosOfOffset() -- the two are the same affine map at
+        // visibRect.x()==0, which every lane row paints at).
+        const int startX = getXPosOfOffset( startTime );
+        const int endX   = getXPosOfOffset( startTime + (offset_t) length );
+        QRect vr( startX + 1, top + 1, ( endX - startX ) - 2, lh - 2 );
+        if( vr.left() < 0 ) vr.setLeft( 0 );
+        if( vr.right() > width() - 1 ) vr.setRight( width() - 1 );
+        if( vr.width() < 1 ) continue;
+
+        const QRect chip = STrackRendererInline::tagChipRect( lk->getSObject(), vr );
+        if( chip.isEmpty() || !chip.contains( pos ) ) continue;
+
+        const bool better = !best
+            || startTime < bestStart
+            || ( startTime == bestStart && myIndex > bestIndex );
+        if( better ) { best = lk; bestStart = startTime; bestIndex = myIndex; }
+    }
+    return best;
+}
+
 void SMVActualView::updateLastClickVars( const QPoint &pos )
 {
     lastClickedStart_ = lastClickedEnd_ = false;
@@ -1674,7 +1754,13 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
     SLink *tlk = row ? row->link : NULL;
     if( tlk ) {
         lastClickTrack_ = row->track;
-        lastClickSLink_ = lastClickTrack_->getTopMostSLinkAt( lastClickOffset_ );
+        // D15/M7 (AC7.1/AC7.2): tags are tested FIRST, across every clip on
+        // the lane; only when nothing's tag matches does this fall back to
+        // the body test, which is topmost-by-z-order (AC7.3) via
+        // STrack::getTopMostSLinkAt.
+        lastClickSLink_ = tagHitTestAt( lastClickTrackIdx_, pos );
+        if( !lastClickSLink_ )
+            lastClickSLink_ = lastClickTrack_->getTopMostSLinkAt( lastClickOffset_ );
         if( lastClickSLink_ ) {
             //qWarning( "Clicked on a %s.\n", lastClickSLink_->getSObject().className() );
             if( lastClickSLink_->hasStartTime() ) {
@@ -2433,6 +2519,59 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
     else setCursor( QCursor( shape ) );
 
     SApplication::app().setStatusMode( mode );
+}
+
+// Proposal 41 D14 (M6): the tag chip's density ladder ANNOUNCES its own cap
+// (the level meter's describe()/tooltip precedent) -- whenever a clip draws
+// less than its true full name, hovering it must reveal that name. The
+// canvas paints clips as rects into ONE QPainter, not as per-clip QWidgets,
+// so there is no setToolTip() to hang this off; Qt's own answer for a
+// position-dependent tooltip on a plain widget is to override event() for
+// QEvent::ToolTip (QWidget::event's docs). The clip lookup reuses the SAME
+// hit test the cursor/status-bar code above already uses
+// (rowAtViewY + STrack::getTopMostSLinkAt) -- a read-only lookup for a
+// tooltip, not the tag-as-drag-handle hit-test order proposal 41 D15/M7
+// specifies (that governs which clip a PRESS lands on; this only decides
+// what text to show under the pointer). The width/text decision recomputes
+// STrackRendererInline::tagFullText()/tagDensityText() -- the SAME shared
+// functions draw() calls -- against the clip's own painted rect
+// (getSLinkVisibRect, the same rect repaint invalidation already uses), so
+// this can never disagree with what is actually on screen without caching
+// anything.
+bool SMVActualView::event( QEvent *ev )
+{
+    if( ev->type() != QEvent::ToolTip ) return QWidget::event( ev );
+
+    QHelpEvent *he = static_cast<QHelpEvent *>( ev );
+    const QPoint pos = he->pos();
+    if( pos.y() >= SMV_TIME_RULER_HEIGHT ) {
+        const int rowIdx = rowAtViewY( pos.y() );
+        const STrackRow *row = smv_.rowAt( rowIdx );
+        STrack *track = row ? row->track : nullptr;
+        SLink *clip = track ? track->getTopMostSLinkAt( getTimeOf( pos.x() ) )
+                             : nullptr;
+        if( clip && clip->hasStartTime()
+            && !dynamic_cast<STrack *>( &clip->getSObject() ) ) {
+            const QString fullName =
+                STrackRendererInline::tagFullText( clip->getSObject() );
+            if( !fullName.isEmpty() ) {
+                const QRect vr = getSLinkVisibRect( rowIdx, *clip );
+                QFont f = QGuiApplication::font();   // matches the tag's
+                f.setPointSize( 7 );                 // own font exactly
+                const QFontMetrics fm( f );
+                bool cut = false;
+                STrackRendererInline::tagDensityText(
+                    fullName, fm, vr.width() - 2 * 3, &cut );
+                if( cut ) {
+                    QToolTip::showText( he->globalPos(), fullName, this );
+                    return true;
+                }
+            }
+        }
+    }
+    QToolTip::hideText();
+    ev->ignore();
+    return true;
 }
 
 /**
@@ -4150,18 +4289,39 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     // only place the body gestures (slip / duplicate / move) can arm.
     int sx = qContent_->getXPosOfOffset( start );
     int ex = qContent_->getXPosOfOffset( start + (offset_t) dur );
-    int x0 = ( grabWhere == GrabEnd )  ? ex - 1
-           : ( grabWhere == GrabBody ) ? ( sx + ex ) / 2
-                                       : sx;
-    if( grabWhere == GrabBody && ( x0 < sx + SMV_LEFT_DRAG_PIXEL
-                                   || x0 >= ex - SMV_RIGHT_DRAG_PIXEL ) )
-        return false;   // clip too narrow to have a body clear of the edge bands
-    int x1 = qContent_->getXPosOfOffset( dropTime );
-    if( x0 < 0 || x1 < 0 ) return false;
-
     int th = rowHeight( rowIdx );
     int laneTop = qContent_->laneTop( rowIdx );
-    int y = laneTop + ( upperHalf ? th/4 : (3*th)/4 );
+
+    int x0, y;
+    if( grabWhere == GrabTag ) {
+        // proposal 41 D15/M7: land inside THIS clip's own tag chip -- the
+        // SAME geometry tagChipRect()/tagHitTestAt() use, computed from the
+        // clip's REAL start/duration rather than an approximation of it.
+        // `vr` mirrors the inset content rect strackrndrinline.cpp's draw()
+        // computes right before it asks for the chip.
+        QRect vr( sx + 1, laneTop + 1, ( ex - sx ) - 2, th - 2 );
+        if( vr.left() < 0 ) vr.setLeft( 0 );
+        if( vr.right() > qContent_->width() - 1 ) vr.setRight( qContent_->width() - 1 );
+        const QRect chip = STrackRendererInline::tagChipRect( clip->getSObject(), vr );
+        if( chip.isEmpty() ) return false;   // nothing to grab -- lane too short/narrow
+        // Near the chip's RIGHT edge: far enough from vr.left() to clear the
+        // GrabStart trim band (SMV_LEFT_DRAG_PIXEL) whenever the chip is wide
+        // enough to have room for it, so a plain move gesture arms rather
+        // than a resize -- and still inside the clip's declared chip
+        // footprint, whatever got painted over part of it since.
+        x0 = chip.right();
+        y  = chip.center().y();
+    } else {
+        x0 = ( grabWhere == GrabEnd )  ? ex - 1
+           : ( grabWhere == GrabBody ) ? ( sx + ex ) / 2
+                                       : sx;
+        if( grabWhere == GrabBody && ( x0 < sx + SMV_LEFT_DRAG_PIXEL
+                                       || x0 >= ex - SMV_RIGHT_DRAG_PIXEL ) )
+            return false;   // clip too narrow to have a body clear of the edge bands
+        y = laneTop + ( upperHalf ? th/4 : (3*th)/4 );
+    }
+    int x1 = qContent_->getXPosOfOffset( dropTime );
+    if( x0 < 0 || x1 < 0 ) return false;
 
     // The drag auto-scrolls when the pointer leaves the canvas, which would move
     // the time axis mid-gesture. The window is never shown in test mode, so grow

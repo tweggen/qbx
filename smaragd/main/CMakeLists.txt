@@ -143,6 +143,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/saddtakeaction.h
     objects/cut/include/app/objects/cut/sremovetakeaction.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
+    objects/cut/include/app/objects/cut/ssetclipeventchannelaction.h
     objects/cut/include/app/objects/cut/ssetclipnameaction.h
     objects/cut/include/app/objects/cut/ssetclippanaction.h
     objects/cut/include/app/objects/cut/ssetclipvolumeaction.h
@@ -167,6 +168,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/sremovetakeaction.cpp
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/sselecttakeaction.cpp
+    objects/cut/src/ssetclipeventchannelaction.cpp
     objects/cut/src/ssetclipnameaction.cpp
     objects/cut/src/ssetclippanaction.cpp
     objects/cut/src/ssetclipvolumeaction.cpp
@@ -260,6 +262,13 @@ set(APP_OBJECTS_FILES
     objects/track/src/strack.cpp
     objects/track/src/strackcolormodifier.cpp
     objects/track/src/strackrndrinline.cpp
+    # --- app/objects/fragment (proposal 41 M1). A path container with no
+    # track identity — at the RANK of objects/track, not inside it (a
+    # fragment must not inherit the track's plugin/instrument dependencies)
+    # and not inside objects/cut (a fragment is content a cut WINDOWS; the
+    # dependency runs cut -> fragment, never the reverse).
+    objects/fragment/include/app/objects/fragment/slanefragment.h
+    objects/fragment/src/slanefragment.cpp
     # --- app/objects/mixer
     objects/mixer/include/app/objects/mixer/saddtrackaction.h
     objects/mixer/include/app/objects/mixer/sdissolvearrangementaction.h
@@ -275,6 +284,10 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/sreparenttrackaction.h
     objects/mixer/include/app/objects/mixer/srestoretrackaction.h
     objects/mixer/include/app/objects/mixer/sstdmixer.h
+    # --- pack-clips / unpack-clips / duplicate-asset-here (proposal 41 M2)
+    objects/mixer/include/app/objects/mixer/spackclipsaction.h
+    objects/mixer/include/app/objects/mixer/sunpackclipsaction.h
+    objects/mixer/include/app/objects/mixer/sduplicateassethereaction.h
     objects/mixer/src/saddtrackaction.cpp
     objects/mixer/src/sdissolvearrangementaction.cpp
     objects/mixer/src/sextractarrangementaction.cpp
@@ -289,6 +302,9 @@ set(APP_OBJECTS_FILES
     objects/mixer/src/sreparenttrackaction.cpp
     objects/mixer/src/srestoretrackaction.cpp
     objects/mixer/src/sstdmixer.cpp
+    objects/mixer/src/spackclipsaction.cpp
+    objects/mixer/src/sunpackclipsaction.cpp
+    objects/mixer/src/sduplicateassethereaction.cpp
 )
 
 set(APP_UI_FILES
@@ -444,6 +460,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/sclicklaneaction.h
     testkit/include/app/testkit/ssidecartestactions.h
+    testkit/include/app/testkit/sfragmentdeleteclipaction.h
     testkit/include/app/testkit/sslipclipaction.h
     testkit/include/app/testkit/stestfilepath.h
     testkit/include/app/testkit/sarrangementtabactions.h
@@ -488,6 +505,7 @@ set(APP_UI_FILES
     testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
+    testkit/src/sfragmentdeleteclipaction.cpp
     testkit/src/sslipclipaction.cpp
     testkit/src/stestfilepath.cpp
     testkit/src/sarrangementtabactions.cpp
@@ -544,6 +562,7 @@ target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/midi/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/wave/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/objects/fragment/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/mixer/include
 )
 target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar)
@@ -962,6 +981,22 @@ target_link_libraries(project_channels_test
 )
 add_test(NAME project_channels_test COMMAND project_channels_test)
 set_tests_properties(project_channels_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# SLaneFragment (proposal 41 M1): a path container with no track identity.
+# AC1.1 (isPathContainer()/isLane() split, unity-sum twTrackMix), AC1.2
+# (structural absence of fader/inserts/instrument/solo/arm/meters/automation),
+# AC1.3 (serialize/load round trip, including an unresolvable child link) and
+# AC1.4 (SCut windows it exactly as it windows a track). Same shape as
+# project_channels_test: a real SProject/STrack/SCut/SLaneFragment against a
+# StubAppContext, no display, no audio device.
+add_executable(fragment_test testkit/src/fragment_test.cpp)
+target_link_libraries(fragment_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME fragment_test COMMAND fragment_test)
+set_tests_properties(fragment_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The media SOURCE layer (proposal 38 gate 1): the async/id-tagged contract,

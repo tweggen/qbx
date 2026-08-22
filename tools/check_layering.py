@@ -121,8 +121,32 @@ APP_DEPS = {
     # through SObject::contentKind() and SObject::resolveEventClip().
     'objects/midi':   {'actions', 'model', 'persistence'},
     'objects/track':  {'actions', 'model', 'persistence'},
-    'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/track',
-                       'persistence'},
+    # objects/fragment (proposal 41 M1) sits at the RANK of objects/track, not
+    # inside it: a fragment is content an SCut windows (D1), not a track, and
+    # must not inherit the track's dependency on plugins/instruments. It must
+    # also stay OUT of objects/cut's deps — the dependency runs cut ->
+    # fragment (an SCut may window a fragment), never the reverse — so it is
+    # declared as its own module rather than folded into either neighbour.
+    # {'actions', 'model', 'persistence'} matches objects/track's shape; M1
+    # itself uses only 'model' (SLaneFragment names no SAction and does its
+    # own loader registration through app/persistence). M2's pack-clips /
+    # unpack-clips / duplicate-asset-here verbs turned out NOT to belong here
+    # after all (the 'actions' entry below predates that finding and is now
+    # unused slack, left alone rather than narrowed): they construct an SCut
+    # over the fragment they just built, and objects/fragment must stay OUT of
+    # objects/cut's deps (the dependency runs cut -> fragment, never the
+    # reverse — see this module's CONTRACT.md). Building an SCut from inside
+    # objects/fragment would reverse that. slanefragment.h's class comment had
+    # already named the fix: the verbs' natural home is objects/mixer, which
+    # already depends on objects/cut for SCreateAssetAction/SPlaceAssetAction
+    # — hence the new objects/mixer -> objects/fragment edge below instead.
+    'objects/fragment': {'actions', 'model', 'persistence'},
+    # objects/fragment added (proposal 41 M2): pack-clips/unpack-clips build a
+    # new SLaneFragment and duplicate-asset-here deep-copies one; both need
+    # the type. See the objects/fragment entry above for why the verbs live
+    # here and not there.
+    'objects/mixer':  {'actions', 'model', 'objects/cut', 'objects/fragment',
+                       'objects/track', 'persistence'},
     'actions':        {'model'},
     # media (proposal 38 gate 1) is the media-browser's SOURCE layer: the
     # provider ABI, the local walk, and later the cache and the WebDAV client.
@@ -246,10 +270,16 @@ APP_DEPS = {
     # here too. Today they reach the panel THROUGH the shell (the drag has to,
     # because testkit may not include app/timeline), so the two edges are
     # declared ahead of the code that needs them rather than discovered later.
+    # testkit + objects/fragment since proposal 41 M1: fragment_test builds a
+    # real SLaneFragment (and an SCut windowing one) off screen, the same
+    # shape as project_channels_test reaching objects/track. testkit +
+    # persistence, same milestone: fragment_test's AC1.3 round-trips a
+    # hand-authored document through the REAL SProjectLoader, exactly the
+    # save/load machinery a project file goes through.
     'testkit':        {'actions', 'media', 'mediabrowser', 'model',
-                       'objects/cut', 'objects/midi', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'pluginui',
-                       'servicesui', 'shell'},
+                       'objects/cut', 'objects/fragment', 'objects/midi',
+                       'objects/mixer', 'objects/track', 'objects/wave',
+                       'persistence', 'pluginui', 'servicesui', 'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).
@@ -289,6 +319,14 @@ APP_ENG = {
     # the other way).
     'objects/track':  _ENG_BASE | {'events', 'mix', 'plugins', 'render',
                                    'schedule', 'sidecar', 'sources'},
+    # objects/fragment + mix (proposal 41 M1): SLaneFragment's root component
+    # is ONE twTrackMix at unity (D1) — the minimal engine set that actually
+    # compiles. events ADDED proposal 41 M3: the fragment's own eventClips_
+    # (a twEventClipSet, same type STrack's own uses) and resolveEventFeed()'s
+    # flattened twEventSeq. Still no plugins/render/sidecar/sources — a
+    # fragment has no inserts, no bounce, nothing to persist to the sidecar
+    # store, and no random source of its own.
+    'objects/fragment': _ENG_BASE | {'mix', 'events'},
     'objects/mixer':  _ENG_BASE | {'mix', 'schedule'},
     'actions':        _ENG_BASE | {'render'},
     # media reaches NO engine module beyond the base every app module gets --

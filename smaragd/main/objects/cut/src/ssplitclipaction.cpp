@@ -47,7 +47,7 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         return {false, nullptr};
     }
     SLink *link = track->childAt(idx);
-    if (!link || (link->getSObject().isPathContainer())) {
+    if (!link || (link->getSObject().isLane())) {
         return {false, nullptr};
     }
 
