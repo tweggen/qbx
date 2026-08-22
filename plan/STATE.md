@@ -15429,3 +15429,128 @@ still-strict `laneAt()`. Wiring a user-facing path is future work.
 **Glue remains out of scope** — the destructive commit (audio renders to a WAV,
 events merge into one sequence, sources consumed) is a separate proposal. Pack is
 the reference; Glue is the commitment; `Pack` -> `Glue` composes.
+
+---
+
+## fix/missing-sample-placeholder — a missing sample keeps its clips; a project can be made self-contained (2026-08-22)
+
+### The report
+
+A project written on Windows into a OneDrive folder and opened on Ubuntu raised
+**three modal dialogs reading only "Unable to load file."** — no path in any of
+them. The user's reading was that the files were all present; measured, three of
+the nine `<SPlainWave filename=…>` references were `~`-anchored into
+`~/Documents/Cubase Projects/…`, i.e. OUTSIDE the project folder, and only the
+project folder had been copied to the Linux box. The other six (recordings
+written beside the .qxp) resolved correctly, so this was never a path-encoding
+bug on Linux.
+
+What WAS wrong was everything the app did about it. Measured headlessly on the
+user's own file, before any change:
+
+```
+3 x  SPlainWave: unable to load file: …            (3 anonymous modal dialogs)
+3 x  "Failed to instantiate … SKIPPED"
+4 x  "…SCut… references object(s) … DROPPED"
+```
+
+**Four clips gone**, and the next save would have made that permanent — on the
+machine where the originals do not happen to be.
+
+### Part A — the MISSING placeholder
+
+`SPlainWave::setMissingWave()` / `isMissing()` / `linkToMissingFile()`. An
+unreachable sample now yields an object that keeps the path, the project's
+recorded `durationSec` and every clip on it, owns a **source-less
+`twWavInput`** and renders SILENCE. Post-change on the same file: **0 skipped,
+0 dropped**, all 9 waves / 28 cuts / 89 links round-trip through a re-save.
+
+Four things that made it cheap rather than invasive:
+
+1. A `twWavInput` constructed with an EMPTY file name loads nothing, warns about
+   nothing, and answers every render path with silence — so no missing-file
+   branch was needed in the graph, the scheduler, the freeze path or the RT
+   callback.
+2. `SObject::isMissing()` went on the BASE CLASS (the `contentKind()` rule), so
+   `SCut::buildCapture_` can short-circuit on it. Without that short-circuit a
+   placeholder is classified CONTAINER-BACKED and its whole declared duration is
+   rendered into a capture of zeros on the UI thread, once per clip: **~17 s of
+   load** measured before the early return, down to ~0.6 s after.
+3. The serializer writes the project file's OWN spelling verbatim. The reference
+   is unresolvable here, so this machine has no standing to rewrite where it
+   points.
+4. The loader window (`SProject::beginLoad`/`endLoad`) is what lets `setWave`
+   record instead of announcing, so the shell reports the whole set ONCE, by
+   name, with both spellings (what the file says / what this machine searched).
+
+### Part B — "Project is not self-contained." + Collect external media
+
+`SProject::externalMediaPaths()` is the banner's condition: every extern file
+outside the project file's directory **or any subdirectory of it**. A
+subdirectory counts as INSIDE (`<projectdir>/media/` is where both the media
+browser's drop and the collect put things); an untitled project reports EMPTY.
+
+The button runs `smediadrop::collectExternalMedia` — `materialiseIntoProject`
+applied to a list, so the collision, sanitising and reuse-identical-bytes rules
+are the media browser's rather than a second set — plus
+`SProject::relocateExternFile`, which rekeys the dictionary and does NOT reload
+(a copy is not a different sample, so the content hash and every sidecar keyed
+on it stay valid). It does not save; `QUndoStack::resetClean()` marks the window
+dirty, because a collect touches the file system and cannot be an undoable
+action.
+
+### Gates
+
+New verbs `assert-extern-files` and `collect-external-media`
+(`main/testkit/src/sexternmediatestactions.cpp`). New cases
+`missing_sample_reference_verbatim`, `collect_external_media`,
+`collect_external_media_missing`; new fixture
+`tests/missing_relative_sample.qxp`. `sample_missing_survives` and
+`load_missing_sample_placed_survives` extended — their headers now record all
+three behaviours this fixture pair has gated (abort → drop → placeholder).
+
+**Only `assert-extern-files` can bite the placeholder**: a dropped clip and a
+placeholder are both SILENT, so no audio assertion can separate them — which is
+how the drop shipped under a green suite for as long as it did.
+
+Watched failing under four sabotages, one per assertion: NULL instead of a
+placeholder (3 cases), re-encoding the stored spelling (1 case), collecting a
+placeholder as if it had bytes (1), and treating a subdirectory as outside (2).
+
+**The verbatim gate needed its own fixture, and the sabotage pass is what found
+that out.** `collect_external_media_missing`'s reference is `~/…`, which
+re-encodes to the identical string, so that assertion passed under the sabotage.
+`missing_relative_sample.qxp` uses a project-relative reference to a file that
+does not exist and is saved three levels away — the one shape where the two
+answers differ visibly.
+
+### Measured
+
+**295 registered / 290 run / 5 Not Run (Disabled), 100% passed, 258 s at `-j4`**
+(Linux, `TW_HAVE_LIBSECRET=OFF`). The 5 disabled are the 3 macOS-only `au_*`
+plus the 2 Windows-only DPAPI media cases. `check_layering.py` and
+`check_logging.py` clean.
+
+Hand-verified through the production `openProjectFile` path on the reported
+project: `resources: project is NOT self-contained — 3 file(s) outside the
+project folder` and `load: 3 sample file(s) could not be found`.
+
+### NOT gated
+
+Every widget of the banner and both dialogs — appearance, wording, the button
+connection, the untitled-project refusal. There is no testkit verb that builds
+the resources dock off screen (the same gap that leaves the Audio options page
+unreachable), so what is gated is the NUMBER the banner is computed from and the
+PASS the button runs. Also: what a placeholder LOOKS like on the arranger (solid
+body, no waveform); re-linking through the UI (there is no "Locate…" dialog);
+a placeholder inside a take stack or a fragment; and a file that EXISTS but whose
+format this build cannot decode, which takes the same path with no case of its
+own.
+
+### Found, NOT fixed
+
+`load-project` loads INTO the existing `SProject` and does not clear
+`externFileDict_`, so a SECOND scripted load in one .qxa is counted against the
+first load's files as well. The GUI never sees it (`openProjectFile` builds a
+fresh `SProject` per open). It is why the two collect cases are separate case
+files rather than two phases of one.

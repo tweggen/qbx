@@ -391,6 +391,73 @@ void SProject::removeExternObject( QString &fileName )
     }
 }
 
+void SProject::beginLoad()
+{
+    isLoading_ = true;
+    missingFiles_.clear();
+}
+
+void SProject::endLoad()
+{
+    isLoading_ = false;
+}
+
+void SProject::noteMissingFile( const QString &stored, const QString &resolved )
+{
+    // De-duplicate: one sample referenced by six clips is ONE missing file to
+    // the user, and the report reads as a list of files, not of references.
+    for( const MissingFile &m : missingFiles_ )
+        if( m.resolved == resolved ) return;
+    missingFiles_.push_back( MissingFile{ stored, resolved } );
+}
+
+bool SProject::relocateExternFile( const QString &from, const QString &to )
+{
+    if( from.isEmpty() || to.isEmpty() || from == to ) return false;
+    SExternFile *ef = externFileDict_.value( from );
+    if( !ef ) return false;
+    if( !ef->relocateTo( to ) ) return false;
+
+    // Rekey. The dictionary is the project's only index of extern files and
+    // ~SPlainWave removes itself BY ITS OWN CURRENT NAME, so leaving the old
+    // key behind would leave a dangling entry at teardown.
+    externFileDict_.remove( from );
+    externFileDict_.insert( to, ef );
+
+    // The views key their rows by path too (SExternFileList::itemDict_), so the
+    // move is announced as a removal plus an addition rather than in place —
+    // there is no rename signal, and inventing one would need every consumer to
+    // learn about it for a case that happens once per collect.
+    emit externFileRemoved( from );
+    emit externFileAdded( *ef );
+    return true;
+}
+
+QStringList SProject::externalMediaPaths() const
+{
+    QStringList out;
+    if( projectFilePath_.isEmpty() ) return out;   // untitled: nothing to be outside OF
+    const QString projectDir =
+        QDir::cleanPath( QFileInfo( projectFilePath_ ).absolutePath() );
+    if( projectDir.isEmpty() ) return out;
+
+    for( auto it = externFileDict_.constBegin();
+         it != externFileDict_.constEnd(); ++it ) {
+        if( !it.value() ) continue;
+        const QString abs = QDir::cleanPath(
+            QFileInfo( it.value()->getFileName() ).absoluteFilePath() );
+        // "Inside the project folder" means inside it OR ANY SUBDIRECTORY of
+        // it — the <projectdir>/media/ the media browser drops into is the
+        // commonest case and must count as self-contained. The trailing
+        // separator is what stops "/x/proj2" matching a project in "/x/proj".
+        if( abs == projectDir || abs.startsWith( projectDir + QLatin1Char( '/' ) ) )
+            continue;
+        out << abs;
+    }
+    out.sort();
+    return out;
+}
+
 void SProject::registerAsset( const QString &name, SObject *body )
 {
     if( !body || name.isEmpty() ) return;

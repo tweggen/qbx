@@ -503,3 +503,24 @@ moved.
 caller.** It is deliberately lazy (it must not build a reader on the UI thread),
 so it answers "the raw content" whenever no reader exists. Anything that needs
 what PLAYS must ask `resolveClip()`. Gate: `wrapped_take_window.qxa`.
+
+## A cut over MISSING content builds no capture at all (2026-08-22)
+
+`buildCapture_` returns immediately on `content.isMissing()`, before every other
+test in it.
+
+A MISSING placeholder (`main/objects/wave/CONTRACT.md`) has no random source, so
+without this the very next line classifies it as CONTAINER-BACKED and the
+function renders its whole declared duration into a capture — a full-length
+buffer of ZEROS, built on the UI thread, once per clip on the absent sample.
+Measured on a real project carrying three unreachable samples: **~17 s of load**,
+all of it producing silence.
+
+Nothing reads what it would have produced. With no capture, `rebuildReader`
+builds no reader (`needCapture` is true, `capture_` stays null, and the chain
+short-circuits) and the clip is SILENT — which is exactly what the capture would
+have said, at whatever cost.
+
+This is the same class of decision as `isLiveRecording()`'s four short-circuits
+just above, and for the same reason: a container-shaped thing that is not a
+container must be routed around the capture path, not through it.

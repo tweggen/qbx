@@ -332,6 +332,46 @@ QString materialiseIntoProject( const QString &localPath,
     return localPath;
 }
 
+int collectExternalMedia( SProject *project, QStringList *skippedMissing,
+                          QStringList *failed )
+{
+    if( !project ) return 0;
+    const QStringList outside = project->externalMediaPaths();
+    if( outside.isEmpty() ) return 0;
+
+    int copied = 0;
+    for( const QString &from : outside ) {
+        // A MISSING placeholder has no bytes to copy. Named, never counted:
+        // this is exactly the case a user meets when they open a travelled
+        // project on the machine that does NOT hold the originals, and the one
+        // answer that helps is "collect on the machine that has them".
+        const SExternFile *ef = project->externFiles().value( from );
+        if( ef && ef->isMissing() ) {
+            if( skippedMissing ) *skippedMissing << from;
+            continue;
+        }
+        const QString to = materialiseIntoProject(
+            from, QFileInfo( from ).fileName(), project );
+        // materialiseIntoProject falls back to the SOURCE path on every failure
+        // (it logs the reason), so "nothing moved" is how a failure reads here.
+        if( to.isEmpty() || to == from ) {
+            if( failed ) *failed << from;
+            continue;
+        }
+        if( !project->relocateExternFile( from, to ) ) {
+            if( failed ) *failed << from;
+            continue;
+        }
+        ++copied;
+    }
+    TW_LOGI( "media", "collect: %d file(s) copied into the project, "
+                      "%d missing, %d failed",
+             copied,
+             skippedMissing ? (int) skippedMissing->size() : 0,
+             failed ? (int) failed->size() : 0 );
+    return copied;
+}
+
 void placeWhenLocal( const SMediaRef &ref, SObject *track, offset_t timePos )
 {
     if( !ref.isValid() ) {

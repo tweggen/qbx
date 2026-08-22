@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  "PROJECT IS NOT SELF-CONTAINED" AND WHAT THE BUTTON UNDER IT DOES.
+
+  A project whose samples live somewhere else is a perfectly reasonable way to
+  work — a shared loop library, a Cubase export folder, a network drive. What it
+  is NOT is portable: copy the project folder to another machine and the
+  references point at directories that machine has never heard of. The resources
+  dock says so ("Project is not self-contained."), and its one button copies
+  every outside file into <projectdir>/media/ and re-points the project at the
+  copies, which is what makes the folder travel as a unit.
+
+  This case drives smediadrop::collectExternalMedia — the SAME pass the button
+  runs; the shell adds only a confirmation and a report on top of it.
+
+  ITS SIBLING IS collect_external_media_missing.qxa, which covers the half that
+  CANNOT be done — a MISSING placeholder has no bytes to copy. The two are
+  separate CASES rather than two phases of one because `load-project` loads INTO
+  the existing SProject and does NOT clear its extern-file dictionary, so a
+  second load in one script would be counted against the first load's files as
+  well. That is pre-existing scripted-reload behaviour (the GUI builds a fresh
+  SProject per open, so it never sees it) and this case declines to depend on
+  it either way.
+
+  AN ORDINARY OUTSIDE SAMPLE. The project is written three levels away
+  from tests/, so its one sample is genuinely outside its folder and the climb is
+  real (a case whose project and sample shared a directory would pass on a build
+  with no self-containment logic at all). After the collect the reference is
+  `media/test_sawtooth.wav`, RELATIVE — that spelling is the whole point, and it
+  is asserted as text rather than as "some relative path": an absolute path, a
+  bare basename or a wrongly-anchored climb all fail it. Then the project is
+  loaded BACK and RENDERED, because a reference that is textually pretty and
+  audibly silent is worse than no collect at all.
+
+-->
+<SActionScript version="1" name="collect_external_media">
+
+  <setup project="new"/>
+
+  <actions>
+
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <save-project path="../../build/test-output/collect_external_media/song.qxp"/>
+
+    <!-- One extern file, and it is OUTSIDE the project folder: the banner's
+         own condition, asserted as the number it is computed from. -->
+    <assert-extern-files count="1" missing="0" external="1"/>
+
+    <collect-external-media expectCopied="1" expectMissing="0" expectFailed="0"/>
+
+    <!-- Self-contained now. Same file count — a collect copies, it never adds
+         a second reference to the same material. -->
+    <assert-extern-files count="1" missing="0" external="0"/>
+
+    <save-project path="../../build/test-output/collect_external_media/song.qxp"/>
+    <assert-file-contains path="../../build/test-output/collect_external_media/song.qxp"
+                          text="filename='media/test_sawtooth.wav'"/>
+
+    <!-- The copy is REAL AUDIO, resolved from the project's own directory. -->
+    <load-project path="../../build/test-output/collect_external_media/song.qxp"/>
+    <render filename="collect_external_media.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="collect_external_media.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="collect_external_media.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+  </actions>
+
+</SActionScript>

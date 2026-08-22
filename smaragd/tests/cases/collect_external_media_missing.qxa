@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A MISSING PLACEHOLDER CANNOT BE COLLECTED, AND MUST SAY SO.
+
+  The sibling of collect_external_media.qxa, which covers the half that works.
+  This is the half that does not, and it is not an edge case: it is exactly what
+  a user meets when they carry a project to the machine that does NOT hold the
+  originals — which is the machine they are most likely to press "Collect
+  external media" on. There is nothing to copy, and a collect that counted the
+  placeholder as done would be a lie the user only discovers on the NEXT
+  machine. So it is NAMED (`expectMissing="1"`), never counted, and the file is
+  still reported as external afterwards.
+
+  Saving into build/test-output rather than working in tests/ does two things:
+  it makes the GOOD sample outside the project folder too — so one collectable
+  file and one uncollectable one go through a single pass — and it keeps the
+  collect from creating files under tests/, which nothing in the suite may do.
+
+  THIS CASE ALSO CARRIES THE VERBATIM RE-SAVE GATE, which has no other home.
+  A placeholder re-serializes the spelling the PROJECT FILE itself used
+  (`~/__smaragd_no_such_dir_missing__/...`), untouched. Re-encoding it against
+  THIS machine's anchor would be wrong in the one way that matters: the
+  reference is unresolvable HERE, so this machine has no standing to rewrite
+  where it points — and a project carried back to the machine where the file
+  DOES live would arrive broken, by the very act of having been opened
+  somewhere else. That failure is silent, permanent and one save away, which is
+  why it is asserted as an exact string.
+-->
+<SActionScript version="1" name="collect_external_media_missing">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sample_missing_survives.qxp"/>
+    <assert-extern-files count="2" missing="1"/>
+
+    <save-project path="../../build/test-output/collect_external_media_missing/missing.qxp"/>
+
+    <!-- Both files are now outside the project's folder: the good one because
+         the project moved away from it, the placeholder because an unreachable
+         file is by definition not inside anything. -->
+    <assert-extern-files count="2" missing="1" external="2"/>
+
+    <collect-external-media expectCopied="1" expectMissing="1" expectFailed="0"/>
+
+    <!-- The placeholder is STILL external, because nothing moved it. A build
+         that reported it collected would read external="0" here. -->
+    <assert-extern-files count="2" missing="1" external="1"/>
+
+    <save-project path="../../build/test-output/collect_external_media_missing/missing.qxp"/>
+
+    <!-- The unresolvable reference comes back out EXACTLY as it went in… -->
+    <assert-file-contains path="../../build/test-output/collect_external_media_missing/missing.qxp"
+                          text="filename='~/__smaragd_no_such_dir_missing__/__missing_sample__.wav'"/>
+    <!-- …and the collectable one moved into the project. -->
+    <assert-file-contains path="../../build/test-output/collect_external_media_missing/missing.qxp"
+                          text="filename='media/test_sawtooth.wav'"/>
+  </actions>
+
+</SActionScript>
