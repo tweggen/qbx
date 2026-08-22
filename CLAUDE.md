@@ -2218,6 +2218,69 @@ identity by design, but no case exercises either); nested containers deeper than
 one wrapper; and the DRAWN composite lane, which needs a container clip to
 preview at all — a separate fix on `fix/take-lane-capture-align`.
 
+## Clicking and Alt-dragging a take lane reach the WRAPPED column too (fix/take-lane-click-and-slip, 2026-08-22)
+
+Two user-reported defects on a real project's `SCut -> STakeStack` column, one
+ROOT CAUSE, and three more defects found underneath it. Invariants:
+`main/objects/cut/CONTRACT.md` (the resolver, the split-field `resize-clip`,
+the publish route, the capture generation), `main/timeline/CONTRACT.md`
+inv. 36-37.
+
+**THE ROOT CAUSE, in one sentence.** The take-lane UI resolves a clip's take
+column THROUGH the wrapper (`takeStackOfLink`), and the two ACTIONS that UI
+submits re-resolved it with a bare
+`dynamic_cast<STakeStack*>( &link->getSObject() )` — true only of the DIRECT
+shape. So on the WRAPPED shape (`SLink -> SCut -> STakeStack`, what a SHARED or
+PLACED column is) `select-take` was REFUSED outright and `resize-clip` fell
+through to its generic single-window branch and wrote the TAKE's window onto
+the WRAPPER.
+
+| What the user saw | What it was |
+|---|---|
+| Clicking a clip on take lane 2 does NOTHING | `SSelectTakeAction::apply` returned `{false, nullptr}` on the wrapper. The `.qxa` runner sees this as the enclosing `drag-clip-edge` being rejected, which is what makes the gate crisp |
+| Alt-dragging lane 1 MOVES lane 2, and dragging back and forth TIME-STRETCHES it | The slip landed on the WRAPPER (source window jumped 1.4 s), the wrapper's duration became the TAKE's (2 s clip -> 4 s) and the take's became the wrapper's — and the two SWAPPED on every further drag. An AUDIO corruption, not a paint bug |
+
+| Thing to know | Why |
+|---|---|
+| **`stakes::columnOfLink` is the ONE spelling** of "which take column does this placement carry", and `SMVActualView::takeStackOfLink` now calls it | The UI's comment used to argue the resolve was "deliberately scoped to take-lane RENDERING/INTERACTION only". True of most of objects/cut's other casts — `set-clip-volume` on a wrapped column really does mean the WRAPPER — and false of exactly the two verbs that exist to serve this UI. It unwraps through the generic `SClipWindow`, not through `SCut`, so an EVENT column wrapped by an `SMidiCut` is the same question |
+| **`resize-clip`'s discriminator is `take_ >= 0`, NEVER the shape** | A composite-lane resize or slip of a wrapped column (`take < 0`) edits the WRAPPER and must keep doing exactly that; keying on the shape would clobber it. With `take >= 0` the geometry goes to the object the LINK carries and the anchor to the addressed take — on the DIRECT shape that is bit-identical to the old code, which is why `take_lane_slip` and `takes_group_broadcast` did not move |
+| **A take-lane Alt-slip commits exactly ONE fact** — the take's anchor | The release used to read `duration`/`loopLength` from the TAKE while `lastClickDuration_` was the LINK's, so `changed` was true even for a zero-pixel drag and the revert wrote the wrapper's duration onto the take. The revert is now `setSrcStart( clipSrcStart0_ )` — only what the live drag mutated, and the EXACT pre-drag `Fraction`, so a take under a non-unity stretch reverts to the value the inverse is built from |
+| **DEFECT 2, found only because 1 was fixed: the model changed and the audio did not** | `setActiveTake` publishes through `durationChanged`, which the TRACK is connected to on the direct shape (`twTrackMix::updateClip` — a content-epoch bump and a state-chain reset — plus the invalidation). On the wrapped shape the link's object is the WINDOW, **and a window does not listen to its content's `durationChanged`: that emission has NO listener at all**. `stakes::publishColumnChange` republishes the window's own unchanged duration. Dropping the wrapper's capture and staling its render path were both tried and are NOT substitutes — measured |
+| **DEFECT 3, found only because 2 was fixed: a CAPTURE-BUILD RACE that silently reinstates stale audio** | `buildCapture_` runs on a revalidator worker holding only `captureBuildMutex_`, which deliberately does not exclude `invalidateCapture()`. Measured: a worker entered the build and resolved the stack at take 0; the click set take 1 and invalidated in the SAME millisecond; the worker published its take-0 capture 2 ms later, over the invalidation; the next render served it. `captureGen_` — sampled once before any content is read, checked at publish — makes the invalidation win. **This is not take-specific**: any edit to a container-backed clip could lose to it |
+| **A gate on this path must render BEFORE the edit as well as after**, in one process | A case that renders only afterwards finds the capture cold and correct and cannot see defect 3 at all. That is why both new cases open with a render, and it is the reason `wrapped_take_window.qxa` (load -> render once) never caught any of this |
+| The live drag's negative-slip clamp used the WRAPPER's duration against the TAKE's content | Found in review, fixed with the rest: `minOff` now bounds against the take's own length on the take path (`maxOff` already did). Worth 96000 frames of premature clamping on the test fixture |
+
+**Reaper-style PARTIAL comping is NOT what was built and NOT what the report
+needed.** Every take of a column shares the column's extent (`stakestack.h`
+inv. 1), so the clicked take's extent IS the column's and a plain `select-take`
+is exactly "activate lane 2 for the size of the clip I clicked". Comping a
+sub-region means splitting the column first; that is a feature, not this bug.
+
+Gates: the qxa cases `take_lane_click_wrapped` and `take_lane_slip_wrapped`,
+both over `tests/takestack_wrap_takeslip.qxp`, both closed forms
+(`A/sqrt(3)` over `test_gapsaw.wav`'s ramp). **Watched failing under five
+separate sabotages**, one per fix: the click case bites the select-take
+resolver, the publish and the capture race; the slip case bites all five,
+including the resize-clip resolver and the UI's geometry source. `take_lane_slip`
+(the DIRECT shape), `take_lane_click_split`, `takes_group_broadcast`,
+`wrapped_take_window` and `take_lane_domain` stayed green under every one.
+
+**NOT gated:** the ~10 OTHER wrapped-shape blind spots found while reading and
+deliberately left alone — `add-take`, `remove-take`, `split-clip`,
+`set-clip-name` / `-volume` / `-pan`, `set-pitch`, `set-formant-shift`,
+`set-formant-preserve` and `sclippropertiespanel.cpp:427` all still resolve
+DIRECT-only. For the per-clip ones (volume, pan, name) targeting the wrapper is
+arguably CORRECT; for `add-take` / `remove-take` it is probably not, and
+neither has a wrapped-shape case. Also not gated: a wrapped take under a
+non-unity STRETCH or a LOOP (the take-lane drag domain is still the
+pre-existing bug `fix/take-lane-domain` named, and this branch does not fix
+it); an EVENT column wrapped by an `SMidiCut` (`columnOfLink` resolves it and
+nothing exercises it); the capture race under any load other than the one the
+new cases produce; and the two verbs' behaviour when `take` is out of range on
+a wrapped column (the geometry is applied and the anchor write skipped — the
+same thing the direct branch has always done for "no active take", but nothing
+asserts it).
+
 ## Dependencies
 
 ### Core

@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AN ALT-DRAG ON A TAKE LANE SLIPS **THAT TAKE**, AND NOTHING ELSE — on the
+  WRAPPED shape (`SLink -> SCut -> STakeStack`), where it used to CORRUPT the
+  clip. take_lane_slip.qxa gates the same gesture on the DIRECT shape, where
+  it has always been right.
+
+  THE DEFECT WAS DATA CORRUPTION, NOT A PAINT BUG. `SResizeClipAction` resolved
+  its take stack with a bare `dynamic_cast<STakeStack*>( &link->getSObject() )`
+  — the DIRECT shape only — so on the wrapped shape it fell through to the
+  generic single-window branch, where `win` IS THE WRAPPER, and wrote the
+  values the UI had computed FOR THE TAKE onto it. The UI half was wrong in the
+  same direction: for a take-lane slip the release read `duration`/`loopLength`
+  from the TAKE while `lastClickDuration_` had been snapshotted from the LINK's
+  object, so `changed` was true even for a zero-pixel drag and the pre-submit
+  revert wrote the WRAPPER's duration onto the take.
+
+  Measured on this fixture, ONE Alt-drag of 4800 frames to the left:
+
+    | object   | before                    | after (pre-fix)                     |
+    |—————|—————————————-|——————————————————-|
+    | take 0   | srcStart 24000 dur 192000 | srcStart 24000 (SLIP NEVER LANDED), dur 96000 |
+    | take 1   | srcStart 0     dur 192000 | untouched                            |
+    | wrapper  | srcStart 96000 dur 96000  | srcStart 28800, dur 192000           |
+
+  So the clip's source window jumped 1.4 s and its length grew from 2 s to 4 s
+  — it PLAYED different material — and because the two durations then swapped
+  on every further drag, dragging back and forth made the take lanes appear to
+  time-stretch. That is the user report this case was written from.
+
+  WHAT IS ASSERTED, and each line bites a different half:
+
+    * the WRAPPER's window is untouched (pre-fix: duration 192000,
+      startOffset 28800) — the model half;
+    * the AUDIO moved by EXACTLY the drag — the take's slip is real and
+      reaches the ear through the wrapper's capture;
+    * TAKE 1 is untouched, checked WHILE THE SLIP IS STILL APPLIED;
+    * one UNDO restores the audio exactly — the inverse is exact even though
+      the action now writes two objects on this shape (the placement's geometry
+      to the wrapper, the source anchor to the take).
+
+  CLOSED FORMS. takestack_wrap_takeslip.qxp: a 2 s wrapper window 2 s into the
+  stack over test_gapsaw.wav (a 0.1 -> 0.8 ramp with EXACT-ZERO regions at
+  [0.6,0.9) and [2.5,3.0) s); take 0 slipped 0.5 s in, take 1 not. A sawtooth
+  of amplitude A has RMS A/sqrt(3), so every half-second window is arithmetic:
+
+      take 0, as loaded  -> source [2.5,4.5) -> 0 / 0.38638 / 0.43686 / 0
+      take 0, +0.5 s slip-> source [3.0,5.0) -> 0.38638 / 0.43686 / 0 / 0
+      take 1, as loaded  -> source [2.0,4.0) -> 0.28544 / 0 / 0.38638 / 0.43686
+
+  The drag is the clip's body midpoint (48000) to 24000: 0.5 s to the LEFT,
+  which reveals 0.5 s LATER content (`take 0, +0.5 s slip` above). Snap is off,
+  so the 24000 is exact.
+
+  ROWS: `toggleTakesRow="0"` gives row 0 = the composite lane, row 1 = TAKE 0's
+  lane (dragged here), row 2 = take 1's lane, row 3 = the sentinel track.
+-->
+<SActionScript version="1" name="take_lane_slip_wrapped">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_takeslip.qxp"/>
+    <snap-to-grid-disable/>
+
+    <!-- BEFORE. Also warms the capture, which is what makes the invalidation
+         race real rather than theoretical (see take_lane_click_wrapped). -->
+    <render filename="tlsw_before.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="tlsw_before.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="tlsw_before.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- THE GESTURE: Alt-drag TAKE 0's lane body, 0.5 s to the left. -->
+    <drag-clip-edge track="1" clip="0" edge="body" toTime="24000"
+                    half="lower" modifiers="alt"/>
+
+    <!-- THE PLACEMENT IS UNTOUCHED. Pre-fix this read duration=192000 and
+         startOffset=28800 (for a smaller drag) — the corruption, stated in
+         model terms. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        startOffset="96000"/>
+
+    <!-- ...and the SLIP IS AUDIBLE, shifted by exactly the drag: the two loud
+         windows move to the front and the tail goes silent. -->
+    <render filename="tlsw_after.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="tlsw_after.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+    <assert-audio-energy filename="tlsw_after.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.430" maxRms="0.443"/>
+    <assert-audio-energy filename="tlsw_after.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.0" maxRms="0.002"/>
+
+    <!-- TAKE 1 WAS NOT TOUCHED, asserted while take 0's slip still stands:
+         comping to it must give its ORIGINAL unslipped window. -->
+    <select-take clip="0,0" take="1"/>
+    <render filename="tlsw_take1.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="tlsw_take1.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.280" maxRms="0.291"/>
+    <assert-audio-energy filename="tlsw_take1.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="tlsw_take1.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+
+    <!-- Back to take 0, then ONE undo of the slip: the audio must be the
+         pre-drag audio exactly. The action writes TWO objects on this shape
+         (geometry -> wrapper, anchor -> take), so this is the gate on the
+         split inverse. -->
+    <select-take clip="0,0" take="0"/>
+    <undo/>
+    <undo/>
+    <undo/>
+    <render filename="tlsw_undo.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        startOffset="96000"/>
+    <assert-audio-energy filename="tlsw_undo.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="tlsw_undo.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+    <assert-audio-energy filename="tlsw_undo.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.430" maxRms="0.443"/>
+    <assert-audio-energy filename="tlsw_undo.wav"
+                         startFrame="72000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+  </actions>
+
+</SActionScript>

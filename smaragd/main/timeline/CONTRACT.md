@@ -1026,3 +1026,46 @@ across all 1289.
 A second copy of the per-column rule is exactly how the two lanes came to mean
 different things by the same colour, which is why it is one shared function and
 not two loops.
+
+### inv. 36 — A TAKE-LANE ALT-SLIP COMMITS EXACTLY ONE FACT: THE TAKE'S ANCHOR
+
+The gesture changes the take's source anchor and nothing else. So in
+`mouseReleaseEvent`'s edge-edit branch, for `clipDragTakeIndex_ >= 0`:
+
+* the action's PLACEMENT GEOMETRY (`duration` / `loopLength` / `stretch`) is
+  the pre-drag value of the LINK's own window (`lastClickDuration_`,
+  `clipLoopLen0_`, `clipStretch0_`), **never the take's** — it must be read
+  from the object `SResizeClipAction` will write it to;
+* the pre-submit revert undoes ONLY what the live drag mutated —
+  `cut->setSrcStart( clipSrcStart0_ )`, the EXACT pre-drag `Fraction` — never
+  the whole-window `setWindow()` the other edge gestures revert with;
+* `changed` therefore turns on the anchor.
+
+**Both halves were wrong and together they CORRUPTED a wrapped column.** The
+release read `newDur`/`newLoop` from the TAKE while `lastClickDuration_` had
+been snapshotted from the LINK's object at press time, and on the wrapped shape
+(`SLink -> SCut -> STakeStack`) those are legitimately different numbers. So
+`changed` was true even for a zero-pixel drag; the revert wrote the WRAPPER's
+duration onto the take; and the action carried the TAKE's duration as the
+placement's. Measured, one Alt-drag of 4800 frames on a 2 s wrapper over 4 s
+takes: the wrapper's source window jumped 1.4 s and its length became 4 s,
+while the take's own length was cut to 2 s — and the two durations then SWAPPED
+on every further drag, which is what made dragging back and forth look like a
+time-stretch. On the DIRECT shape the two numbers are equal by `stakestack.h`
+invariant 1, which is why this was invisible for as long as it was.
+
+The live drag's negative-slip clamp (`minOff`) is in the same family and now
+bounds against the TAKE's own duration on the take path; `maxOff` was already
+in the take's domain. Gate: `take_lane_slip_wrapped.qxa`.
+
+### inv. 37 — `takeStackOfLink` IS `stakes::columnOfLink`
+
+The canvas's "does this link carry take lanes" and the ACTIONS' "which column
+does this placement carry" are the same question and now have one spelling
+(`app/objects/cut/stakehelpers.h`). This file's own comment used to argue the
+opposite — that the resolve was "deliberately scoped to take-lane
+RENDERING/INTERACTION only" — and for most of objects/cut's casts that is still
+right. It was not right for the two verbs that exist to serve this UI:
+`select-take` and the take-addressed half of `resize-clip` resolved DIRECT-only
+while this unwrapped, so a gesture the canvas could express was one the action
+refused (`objects/cut/CONTRACT.md`).

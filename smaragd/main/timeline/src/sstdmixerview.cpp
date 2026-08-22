@@ -43,6 +43,7 @@
 #include "app/model/sclipwindow.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/stakestack.h"
+#include "app/objects/cut/stakehelpers.h"
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
@@ -139,19 +140,23 @@ static bool hasChildTracks( STrack *t )
 // no-op on that shape without this resolve, which is why every
 // dynamic_cast<STakeStack*>( &lk->getSObject() ) that answers "does THIS
 // LINK carry take lanes" goes through here instead of repeating the cast).
-// Null for a plain clip with no take column at all. Deliberately scoped to
-// take-lane RENDERING/INTERACTION only -- the many other
-// dynamic_cast<STakeStack*> call sites across objects/cut's actions ask a
-// different, per-action question (what does editing THIS clip mean) that
-// this resolve does not answer for them.
+// Null for a plain clip with no take column at all.
+//
+// IT IS NOW ONE SPELLING WITH THE ACTIONS, and it had to become one. The
+// comment here used to say this resolve was "deliberately scoped to take-lane
+// RENDERING/INTERACTION only", on the grounds that objects/cut's actions ask a
+// different, per-action question. For most of them that is still true — a
+// `set-clip-volume` on a wrapped column really does mean the WRAPPER. But two
+// of them ask EXACTLY this question, because they exist to serve this UI:
+// `select-take` (which take is audible) and the take-addressed half of
+// `resize-clip` (slip THIS take). Both resolved DIRECT-only while this
+// unwrapped, so a click on a wrapped column's take lane was REFUSED and an
+// Alt-drag on one wrote the take's window onto the wrapper. The resolve now
+// lives in `stakes::columnOfLink` where both sides can reach it; anything
+// finer is still each action's own business.
 static STakeStack *takeStackOfLink( SLink *lk )
 {
-    if( !lk ) return nullptr;
-    SObject &obj = lk->getSObject();
-    if( STakeStack *stack = dynamic_cast<STakeStack*>( &obj ) ) return stack;
-    if( SCut *cut = dynamic_cast<SCut*>( &obj ) )
-        return dynamic_cast<STakeStack*>( &cut->getContent() );
-    return nullptr;
+    return stakes::columnOfLink( lk );
 }
 
 // The wheel response AT 100 % SENSITIVITY. SOpt::WheelSensitivityPct scales all
@@ -2068,6 +2073,26 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             length_t newDur     = cut->getDuration();
             length_t newLoop    = cut->getLoopLength().frames();
             Fraction newStretch = clipStretch0_;
+            // A TAKE-LANE SLIP COMMITS EXACTLY ONE FACT: the take's source
+            // anchor. Everything else in the action is the PLACEMENT's
+            // geometry, which the gesture did not touch -- so it must be read
+            // from the object it will be WRITTEN to (the link's own window),
+            // never from the take.
+            //
+            // Reading it from the take is what made an Alt-drag on a WRAPPED
+            // column corrupt it: the take's duration (the stack's raw length)
+            // went into the action as the placement's, and `lastClickDuration_`
+            // -- snapshotted from the LINK's object -- is the wrapper's, so
+            // `changed` was true even for a zero-pixel drag and the two
+            // durations SWAPPED on every drag. Measured on a 2 s wrapper over
+            // 4 s takes: one drag made the clip 4 s long and moved its source
+            // window 1.4 s. On the DIRECT shape the two numbers are equal by
+            // stakestack.h invariant 1, which is why this never showed there.
+            if( clipDragTakeIndex_ >= 0 ) {
+                newDur     = lastClickDuration_;   // the LINK's own, unchanged
+                newLoop    = clipLoopLen0_;
+                newStretch = clipStretch0_;
+            }
             if( clipDragIsStretch_ ) {
                 // Same exact-ratio computation as the live drag (the values
                 // must agree). The SOURCE ANCHOR is invariant under a
@@ -2090,9 +2115,22 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 
                 // Then revert to pre-drag state and re-apply via action
                 lastClickSLink_->setStartTime( clipDragStart0_ );
+                if( clipDragTakeIndex_ >= 0 ) {
+                    // REVERT ONLY WHAT THE LIVE DRAG MUTATED. The move handler
+                    // touches the take's slip and nothing else, so the whole-
+                    // window revert below would write the PLACEMENT's duration
+                    // onto the take -- the second half of the corruption above,
+                    // and the reason the take's own length changed on a drag
+                    // that only ever asked for a slip. `setSrcStart` takes the
+                    // EXACT pre-drag anchor (a Fraction, not a floored warped
+                    // offset), so a take under a non-unity stretch reverts to
+                    // the value the inverse action is then built from.
+                    cut->setSrcStart( clipSrcStart0_ );
+                } else {
                 cut->setWindow( clipSrcStart0_,
                                 ClipLen( lastClickDuration_ ),
                                 WarpedLen( clipLoopLen0_ ), clipStretch0_ );
+                }
                 QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
                 clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
                 stimeline::submitActive(
@@ -2868,7 +2906,16 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // with silence and its data starts later. Bounded so at least
                 // SMV_CUT_MIN_TIME of content stays inside the clip — the mirror
                 // of the maxOff rule below, which lets the tail run into silence.
-                length_t minOff = SMV_CUT_MIN_TIME - (length_t) lastClickDuration_;
+                // The take path bounds against the TAKE's own length: on the
+                // wrapped shape `lastClickDuration_` is the WRAPPER's window
+                // and using it here engages the negative-slip clamp early (by
+                // the difference between the two, 96000 frames on the test
+                // fixture). `maxOff` below was already in the take's domain.
+                const length_t slipSpan =
+                    ( clipDragTakeIndex_ >= 0 )
+                        ? (length_t) cut->getDuration()
+                        : (length_t) lastClickDuration_;
+                length_t minOff = SMV_CUT_MIN_TIME - slipSpan;
                 if( minOff > 0 ) minOff = 0;
                 if( newOff < minOff ) newOff = minOff;
                 // Bound the window START (output domain) to near the content end,

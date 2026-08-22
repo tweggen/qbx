@@ -1,5 +1,6 @@
 #include "app/objects/cut/sselecttakeaction.h"
 #include "app/objects/cut/stakestack.h"
+#include "app/objects/cut/stakehelpers.h"
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
 #include "app/model/sobjectpath.h"
@@ -34,8 +35,7 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
             SCompositeAction composite;
             for( const QList<int> &p : targets ) {
                 SLink *lk = splacements::placementAt( root, p );
-                STakeStack *st = lk ? dynamic_cast<STakeStack*>(
-                                          &lk->getSObject() ) : nullptr;
+                STakeStack *st = stakes::columnOfLink( lk );
                 if( !st || takeIndex_ >= st->nTakes() ) continue;
                 composite.append(
                     new SSelectTakeAction( p, takeIndex_, false ) );
@@ -50,7 +50,14 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
     if( !link ) {
         return {false, nullptr};
     }
-    STakeStack *stack = dynamic_cast<STakeStack *>( &link->getSObject() );
+    // BOTH SHAPES. `columnOfLink` unwraps `SLink -> SCut -> STakeStack`, which
+    // is what a SHARED or PLACED column is and what a real saved project
+    // carries. The bare cast this replaced matched the DIRECT shape only, so a
+    // click on a wrapped column's take lane submitted this action and had it
+    // REFUSED -- the take-lane UI resolves through the wrapper (SMVActualView's
+    // takeStackOfLink, now the same call) and the action did not, so the
+    // gesture the UI could express was one the action would not accept.
+    STakeStack *stack = stakes::columnOfLink( link );
     if( !stack ) {
         return {false, nullptr};       // not a take stack
     }
@@ -60,6 +67,7 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
 
     const int oldActive = stack->activeTakeIndex();
     stack->setActiveTake( takeIndex_ );
+    stakes::publishColumnChange( link, stack );
 
     SAction *inverse = new SSelectTakeAction( clipPath_, oldActive );
     return {true, inverse};

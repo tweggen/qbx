@@ -503,3 +503,111 @@ moved.
 caller.** It is deliberately lazy (it must not build a reader on the UI thread),
 so it answers "the raw content" whenever no reader exists. Anything that needs
 what PLAYS must ask `resolveClip()`. Gate: `wrapped_take_window.qxa`.
+
+## A take COLUMN is resolved through `stakes::columnOfLink`, on BOTH shapes
+
+A take column reaches a lane two ways:
+
+```
+DIRECT    SLink -> STakeStack                 (what add-take builds)
+WRAPPED   SLink -> SCut/SMidiCut -> STakeStack (a SHARED or PLACED column)
+```
+
+`stakes::columnOfLink( SLink* )` (`stakehelpers.h`) is the ONE spelling of
+"which take column does this placement carry". It casts, else unwraps exactly
+one window level through the GENERIC `SClipWindow` interface — not through
+`SCut` — because a stack is homogeneous by `contentKind()` and an EVENT column
+wrapped by an `SMidiCut` is the same question. `SMVActualView`'s
+`takeStackOfLink` now calls it, so the take-lane UI and the take-lane actions
+cannot drift apart again.
+
+**They had drifted, and both halves of the drift were user-visible.** The UI
+unwrapped and the actions did not, so on a wrapped column — which a real saved
+project carries — `select-take` was REFUSED outright (a click on a take lane
+did nothing at all) and `resize-clip` fell through to its generic
+single-window branch and wrote the TAKE's window onto the WRAPPER.
+
+**Which cast to use is still per-action.** Most of objects/cut's other
+`dynamic_cast<STakeStack*>( &link->getSObject() )` sites ask a different
+question — `set-clip-volume` on a wrapped column really does mean the WRAPPER —
+and are deliberately unchanged. Only the two verbs that exist to serve the
+take-lane UI ask exactly the column question.
+
+## `resize-clip` with `take >= 0` writes TWO objects on a wrapped column
+
+The discriminator is **`take_ >= 0`** ("this edit names ONE take"), never the
+shape. With `take_ < 0` the action is byte-for-byte what it was: a direct stack
+takes the write-through branch, a wrapper takes the generic single-window
+branch (a composite-lane resize or slip of a wrapped column edits the WRAPPER,
+and must keep doing exactly that).
+
+With `take_ >= 0`:
+
+| field | goes to |
+|---|---|
+| `startTime` | the LINK, as always |
+| `duration` / `loopLength` / `stretch` | the object the LINK carries: the stack (`applyWindowAll`, invariant 1's write-through) on the direct shape, the WRAPPER's own window on the wrapped one |
+| `srcStart` | the ADDRESSED TAKE only, in the take's OWN geometry |
+
+On the direct shape that is identical to the previous code — the link's object
+IS the column and `duration_` equals what the take already had by
+`stakestack.h` invariant 1 — which is why `take_lane_slip.qxa` and
+`takes_group_broadcast.qxa` cannot move.
+
+On the wrapped shape a wrapper is a WINDOW INTO the column, so its duration and
+the takes' are legitimately different numbers, and writing one onto the other
+breaks invariant 1 in whichever direction it is done. The INVERSE reads
+`oldAnchor` from the take and `oldDur`/`oldLoop`/`oldStretch` from the object
+the geometry will be written to, which is what makes undo exact on both shapes
+despite the split. An out-of-range `take_` leaves `takeWin` null: the geometry
+is still applied and the anchor write is skipped — the same thing the direct
+branch has always done for "no active take".
+
+## A CONTENT-IDENTITY change must be published through the PLACEMENT
+
+`stakes::publishColumnChange( SLink*, STakeStack* )`. A take switch, or a slip
+of one take, changes which material the column produces WITHOUT touching the
+placement's timeline extent.
+
+On the DIRECT shape the TRACK is connected to the stack's own
+`durationChanged`, and its slot is what actually does the work:
+`twTrackMix::updateClip` — a CONTENT-EPOCH BUMP and a state-chain reset — plus
+the range invalidation. **On the WRAPPED shape the link's object is the WINDOW,
+and a window does not listen to its content's `durationChanged`: that emission
+has no listener at all.** So the frozen track / chain / mixer pages keep serving
+the old material and the edit is INAUDIBLE.
+
+The wrapper therefore republishes its own, UNCHANGED duration.
+`SClipWindow::setDurationFromTimeline` has no unchanged-value early-out, so
+that reaches the track's slot exactly as the direct shape does.
+
+**Dropping the wrapper's capture and staling its render path are NOT
+substitutes.** Both were tried and measured: with `invalidateCapture()` +
+`invalidateRenderPath()` and no republish, the next render still served the old
+take.
+
+## Preview READINESS is the CAPTURE, not the aspect page — and a build that
+## RACED an invalidation must be DISCARDED
+
+`SCut::buildCapture_` runs on a revalidator worker holding only
+`captureBuildMutex_`, which deliberately does not exclude `invalidateCapture()`
+(that resets under `mutex()`). A build takes tens of milliseconds, so an
+invalidation landing mid-build was simply overwritten by that build's own
+publish a moment later — and the stale capture then read as fresh, because
+`ensureReader`'s `captureContentEpoch_` check compares a per-COMPONENT counter
+that a take switch need not move.
+
+MEASURED, on a wrapped take column: a worker entered `buildCapture_` and
+resolved the stack at take 0; `select-take` set take 1 and invalidated in the
+SAME millisecond; the worker published its take-0 capture 2 ms later; the next
+render served it. The click "worked" and the audio did not.
+
+`captureGen_` closes it. `invalidateCapture()` bumps it; `buildCapture_`
+samples it ONCE before it reads any content and publishes only if it has not
+moved. A discarded build costs one rebuild — which the very next
+`ensureReader()` does anyway, since `capture_` is null and `readerTried_` false
+— and publishing it costs correctness.
+
+**A gate for anything on this path must render BEFORE the edit as well as
+after**, in one process. A case that renders only afterwards finds the capture
+cold and correct, and cannot see this class of defect at all.
