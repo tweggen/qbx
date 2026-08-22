@@ -386,6 +386,38 @@ STakeStack &STakeStackRendererInline::stack() const
     return (STakeStack &)getObject();
 }
 
+SObject *STakeStackRendererInline::takeFor( int takeIndex ) const
+{
+    STakeStack &st = stack();
+    return takeIndex < 0 ? st.activeTakeObject() : st.takeObjectAt( takeIndex );
+}
+
+void STakeStackRendererInline::drawTake( SLink &lk, SRenderContext &ctx,
+                                         int takeIndex )
+{
+    // The take-lane terminal. NO "no take" hatch and NO n/N badge: a take lane
+    // draws one alternative, and a row that this column has no take for is
+    // skipped by the caller before it ever gets here (drawTakeLane's
+    // "this stack has fewer takes" continue). Same link, same context, so the
+    // domain map the caller already folded — a wrapping cut's slip, stretch and
+    // loop tiling — is the one this take is drawn in.
+    if( SObject *take = takeFor( takeIndex ) )
+        if( SObjectRenderer *rndr = take->getInlineRenderer() )
+            rndr->draw( lk, ctx );          // my link but his object (CLIP_MODEL)
+}
+
+bool STakeStackRendererInline::collectTakeEnvelope( SLink &lk,
+                                                    const SEnvelopeWindow &win,
+                                                    preview_t *out,
+                                                    int takeIndex )
+{
+    SObject *take = takeFor( takeIndex );
+    if( !take ) return false;
+    SObjectRenderer *rndr = take->getInlineRenderer();
+    if( !rndr ) return false;
+    return rndr->collectEnvelope( lk, win, out );
+}
+
 void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
 {
     QPainter &p = ctx.getPainter();

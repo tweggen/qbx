@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A TAKE LANE must show its take AT THE POSITION IT PLAYS, and must paint its
+  MATERIAL rather than its window.
+
+  Two defects in SMVActualView::drawTakeLane, both fixed together here:
+
+  A (correctness) - it built a bare view context and handed the TAKE OBJECT's
+    renderer the outer link, so on the `SLink -> SCut -> STakeStack` shape
+    (a shared / placed take column: the stack carries nRefs > 1 and each
+    placement is its own SCut window into it) every window parameter of the
+    WRAPPING cut - slip, stretch, loop tiling - was dropped. The take was laid
+    out 1:1 from the clip's left edge while the audio played it through the
+    wrapper's window. Measured on a real project: one whole bar out. A take
+    lane is the COMPING surface, so a waveform that does not line up with what
+    plays is not cosmetic.
+
+  B (consistency) - it filled the take's whole window with one opaque
+    fillRect, while the composite lane has painted per-column-by-material
+    since proposal 41 M5/D10. The same grey meant "material" on one lane and
+    "window" on the lane directly below it.
+
+  WHY THIS NEEDS ITS OWN AUDIO FIXTURE. The thing under test is WHICH PART of
+  a take is drawn, so the material needs landmarks - and no other committed
+  fixture has any. test_sawtooth / test_autosaw / test_clipsaw / test_position
+  / test_stereo / test_channels4 are all continuous (longest exact-zero run:
+  one sample), so every column of every window carries material and a wrong
+  window is invisible to a position measurement. Windowing PAST the source end
+  does not manufacture a gap either: SObject::getStraightPreview clamps its
+  probe index to the last probe, so an overhang draws the last level HELD.
+  Hence tests/test_gapsaw.wav (tests/tools/gen_gap_fixture.py): a 0.1 -> 0.8
+  ramp with EXACT-ZERO regions at [0.6, 0.9) and [2.5, 3.0) s.
+
+  THE ASYMMETRY IS THE GATE. tests/takestack_wrap_slipped.qxp places a 2 s
+  wrapper window 2 s into the 4 s take (srcStart='96000' - and it must be
+  srcStart, because SCut's loader prefers it and only falls back to
+  startOffset when srcStart is ABSENT, so slipping via startOffset alone
+  would leave the fixture unslipped and this case would pass on the broken
+  binary):
+
+      correct : shows source [2.0, 4.0) -> ONE gap at 25%..50% of the clip
+      broken  : shows source [0.0, 2.0) -> ONE gap at 30%..45% of the clip
+
+  Both windows contain exactly one gap, so the case cannot pass by getting
+  gap PRESENCE right - it has to get the POSITION right. A periodic silence
+  pattern would have produced identical relative positions in both windows and
+  gated nothing.
+
+  WHY A PIXEL VERB. Everything a script can reach through collectEnvelope sits
+  BELOW the paint, which is exactly how proposal 39 M2 and proposal 41 M5 each
+  shipped a green gate over a broken paint. assert-take-lane grabs the real
+  arranger canvas and classifies the named take row column by column, on
+  drawTakeLane's own BODY colour - never on waveform pixels, because a SILENT
+  column still paints one waveform pixel at the midline (drawObjectWaveform
+  maps min==max==0 to drawLine(x,y,x,y)).
+
+  waveMeanPct is the one assertion here that rides the DRAW terminal; the gap
+  metrics come from the body fill, i.e. the COLLECT terminal. Both are needed,
+  and neither may be dropped: without waveMeanPct a draw-side regression is
+  invisible to this case.
+
+  Take 0 is ACTIVE (yellow frame, undrawn dim) and take 1 is INACTIVE (dimmed
+  51% by a black alpha-130 fill). Both takes carry the same window, so both
+  rows must report the SAME geometry - which also gates that the dim does not
+  destroy the classification.
+-->
+<SActionScript version="1" name="take_lane_domain">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_slipped.qxp"/>
+
+    <!-- Row 0 is track1's composite lane; expanding adds one row per take. -->
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- THE GRID MUST BE OFF, AND IT HAS TO BE DISABLED **HERE** - after the
+         load and after the lane expansion. Two separate reasons, both paid
+         for by a failing run:
+
+         (a) it matters far more than taste. A non-emphasised grid line is
+             drawn in QColor(160,160,160) (sstdmixerview.cpp), which is
+             EXACTLY the clip-body colour, and it is drawn OVER the lanes
+             (`drawLine(x, SMV_TIME_RULER_HEIGHT, x, lanesBottom())`) - so a
+             grid line is indistinguishable from material to any pixel
+             classifier and reads as a full-height column of it. Measured with
+             the grid on: spanLast 500 instead of 398 (a grid line at x=500,
+             a hundred pixels past the clip's own end, extended the measured
+             span) and the gap percentages came out 20/40 instead of 25/50.
+
+         (b) THIS PROJECT LOADS WITH `gridVisible` TRUE WHATEVER THE FILE
+             SAYS. The fixture was written with `"gridVisible":false` and it
+             read back TRUE, while `"timelineZoomSecondWidth":200` out of the
+             SAME properties JSON loaded correctly - so the dict is parsed and
+             something re-asserts this one key after the load. A grid-disable
+             placed before or immediately after `load-project` therefore finds
+             the key already false, no-ops (SProject::setProp returns early
+             when unchanged), and the key is true again by paint time. That is
+             a real defect in its own right and is NOT fixed on this branch;
+             it is recorded in the PR. Disabling here is what actually holds. -->
+    <grid-disable/>
+
+    <!-- TAKE 0, the active one (yellow frame, no dim).
+
+         The span assertion is what stops the gate quietly widening: spanLast
+         is derived from the outermost MATERIAL column, so anything else
+         painted in the body colour (see the grid note above) would inflate it
+         and drag every percentage off. 2 s at the fixture's 200 px/s is 400
+         px; take 0's own last column carries the active-take frame, hence 398
+         rather than 399, and the tolerance covers that either way. -->
+    <assert-take-lane trackPath="0" takeRow="0"
+                      grabWidth="900" grabHeight="600"
+                      grabPng="take_lane_domain_take0.png"
+                      spanFirst="1" spanLast="398" spanTolerance="2"
+                      minGapCols="1" gapRuns="1"
+                      firstGapStartPct="25" firstGapEndPct="50"
+                      pctTolerance="3"
+                      minWaveMeanPct="50" maxWaveMeanPct="75"/>
+
+    <!-- TAKE 1, inactive and therefore dimmed 51 % by a black alpha-130 fill:
+         same window, so the SAME geometry and the same drawn level. That the
+         numbers survive the dim is itself the gate on the verb's dim
+         handling - it composites the reference colours through Qt rather than
+         reproducing its rounding. -->
+    <assert-take-lane trackPath="0" takeRow="1"
+                      grabWidth="900" grabHeight="600"
+                      grabPng="take_lane_domain_take1.png"
+                      spanFirst="1" spanLast="399" spanTolerance="2"
+                      minGapCols="1" gapRuns="1"
+                      firstGapStartPct="25" firstGapEndPct="50"
+                      pctTolerance="3"
+                      minWaveMeanPct="50" maxWaveMeanPct="75"/>
+  </actions>
+
+</SActionScript>

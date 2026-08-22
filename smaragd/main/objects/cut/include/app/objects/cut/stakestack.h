@@ -29,8 +29,15 @@ public:
     // 39 M1): a stack is one clip whose identity is whichever take is audible,
     // so the envelope a caller reads is the envelope on screen.
     bool collectEnvelope( SLink &, const SEnvelopeWindow &, preview_t * ) override;
+    // The TAKE-LANE terminals: the same delegation, to the take the caller
+    // NAMES rather than to the audible one. takeIndex < 0 keeps meaning "the
+    // audible one", so both are exactly draw()/collectEnvelope() then.
+    void drawTake( SLink &, SRenderContext &, int takeIndex ) override;
+    bool collectTakeEnvelope( SLink &, const SEnvelopeWindow &, preview_t *,
+                              int takeIndex ) override;
 private:
     STakeStack &stack() const;
+    SObject *takeFor( int takeIndex ) const;
 };
 
 /**

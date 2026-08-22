@@ -478,6 +478,14 @@ const Fixture kFixtures[] = {
       "<assert-lane-overlay trackPath='0,1' expectOverlay='false'"
       " minPixels='200' grabWidth='900' grabHeight='700'"
       " grabPng='folder.png' contains='row=0'/>" },
+    // Every optional bound is written only when >= 0; trackPath/takeRow and
+    // the two tolerances are always written.
+    { "assert-take-lane",
+      "<assert-take-lane trackPath='0,1' takeRow='1' grabWidth='900'"
+      " grabHeight='700' grabPng='take.png' contains='row=2' minGapCols='10'"
+      " maxGapCols='400' gapRuns='1' firstGapStartPct='25'"
+      " firstGapEndPct='50' pctTolerance='4' minWaveMeanPct='20'"
+      " maxWaveMeanPct='80' spanFirst='0' spanLast='399' spanTolerance='3'/>" },
     // ABSOLUTE, so both attributes are always written.
     { "collapse-track",
       "<collapse-track trackPath='0,1' collapsed='0'/>" },

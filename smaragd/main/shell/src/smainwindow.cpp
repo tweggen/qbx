@@ -2866,6 +2866,201 @@ int sLuminance( QRgb c )
 }
 }  // namespace
 
+// --- the TAKE-LANE pixel gate --------------------------------------------
+//
+// A take lane must show the take AT THE POSITION IT PLAYS. That is a claim
+// about WHERE material lands on screen, so it can only be gated on pixels: a
+// script-level check through collectEnvelope sits BELOW the paint and cannot
+// see a paint-domain bug, which proposal 39 M2 and proposal 41 M5 each found
+// the hard way.
+//
+// The measurement is columns, not a luminance histogram: for every column of
+// the lane, does drawTakeLane's BODY colour appear in it (material) or not
+// (a gap)? Body pixels only -- never wave pixels -- because a SILENT column
+// still paints exactly one waveform pixel, at the midline: drawObjectWaveform
+// maps min==max==0 to drawLine(x,y,x,y). Counting "any wave pixel" would
+// therefore report a gap as material and this gate would measure nothing.
+namespace {
+
+// Composite `c` under drawTakeLane's inactive-take dim, USING QT, rather than
+// reproducing its rounding here: the dim is p.fillRect(vr, QColor(0,0,0,130))
+// and the exact result is Qt's business, not ours.
+QRgb sTakeDim( QRgb c )
+{
+    QImage one( 1, 1, QImage::Format_ARGB32_Premultiplied );
+    one.fill( QColor::fromRgb( c ) );
+    QPainter q( &one );
+    q.fillRect( 0, 0, 1, 1, QColor( 0, 0, 0, 130 ) );
+    q.end();
+    return one.pixel( 0, 0 ) | 0xff000000u;
+}
+
+}  // namespace
+
+QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
+                                       int w, int h, const QString &pngPath )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return QString();
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return QString();
+
+    SMVActualView *canvas = v->contentView();
+    if( w > 0 && h > 0 ) {           // the same sizing dance as the overlay verb
+        resize( w + v->getTrackControlWidth() + 48, h + 160 );
+        if( layout() ) layout()->activate();
+        if( v->layout() ) v->layout()->activate();
+    }
+    // SETTLE BEFORE GRABBING, which the overlay verb does not need and this one
+    // does. Measured: the FIRST grab of a run came back carrying the time grid
+    // that `grid-disable` had already switched off, while the second grab in
+    // the same run did not -- the disable posts an update and the pending
+    // repaint had not run. A grid line is drawn in QColor(160,160,160), the
+    // EXACT clip-body colour, so a stale one reads as a full-height column of
+    // material and drags the measured clip span (and every percentage derived
+    // from it) off by however far away it lands.
+    QCoreApplication::processEvents( QEventLoop::ExcludeUserInputEvents );
+    canvas->repaint();
+    const QPixmap pm = canvas->grab();
+    if( pm.isNull() ) return QString();
+    if( !pngPath.isEmpty() ) pm.save( pngPath, "PNG" );
+    const QImage img = pm.toImage();
+
+    // SEARCH for the row, never rowIndexOfTrack()+1+k: automation sub-lanes
+    // can sit between a track's lane and its take rows, and an offset would
+    // silently measure one of them.
+    int row = -1;
+    for( int i = 0; i < v->rowCount(); ++i ) {
+        const STrackRow *r = v->rowAt( i );
+        if( r && r->track == track && r->subKind == SubLaneKind::Take
+            && r->takeRow == takeRow ) { row = i; break; }
+    }
+    if( row < 0 )
+        return QString( "no take row %1 on track %2 (rows=%3)"
+                        " - is the take lane expanded?" )
+            .arg( takeRow ).arg( trackPath ).arg( v->rowCount() );
+
+    // drawTakeLane is handed QRect(0, laneTop+1, width, laneHeight-2) and
+    // paints its clips into that inset by one more row top and bottom.
+    const int top = canvas->laneTop( row ) + 2;
+    const int bandH = canvas->laneHeight( row ) - 4;
+    if( bandH < 3 || top < 0 || top + bandH > img.height() )
+        return QString( "row=%1 band=%2,%3 OUTSIDE the %4x%5 grab"
+                        " - raise grabHeight" )
+            .arg( row ).arg( top ).arg( bandH )
+            .arg( img.width() ).arg( img.height() );
+
+    const QRgb bodyLit  = QColor( 160, 160, 160 ).rgb() | 0xff000000u;
+    const QRgb fillLit  = QColor(  26,  38,  50 ).rgb() | 0xff000000u;
+    const QRgb bodyDim  = sTakeDim( bodyLit );
+    const QRgb fillDim  = sTakeDim( fillLit );
+
+    // ACTIVE or INACTIVE is read off the image rather than off the model, so
+    // the verb measures the paint on its own terms: whichever body colour is
+    // actually on screen is the one this row was drawn with.
+    int litCount = 0, dimCount = 0;
+    for( int y = top; y < top + bandH; ++y )
+        for( int x = 0; x < img.width(); ++x ) {
+            const QRgb c = img.pixel( x, y ) | 0xff000000u;
+            if( c == bodyLit ) ++litCount;
+            else if( c == bodyDim ) ++dimCount;
+        }
+    const bool dimmed  = dimCount > litCount;
+    const QRgb bodyRgb = dimmed ? bodyDim : bodyLit;
+
+    // Per column: material iff the body colour appears; plus a histogram of
+    // everything that is neither body nor lane fill, whose most frequent
+    // member IS the waveform (the file name drawn bottom-right is the same
+    // class of pixel and is one to two orders of magnitude rarer).
+    QVector<int> bodyPerCol( img.width(), 0 );
+    QHash<QRgb, int> other;
+    for( int y = top; y < top + bandH; ++y )
+        for( int x = 0; x < img.width(); ++x ) {
+            const QRgb c = img.pixel( x, y ) | 0xff000000u;
+            if( c == bodyRgb ) { ++bodyPerCol[x]; continue; }
+            if( c == fillLit || c == fillDim ) continue;
+            ++other[c];
+        }
+    QRgb waveRgb = 0;
+    int  waveBest = 0;
+    for( auto it = other.constBegin(); it != other.constEnd(); ++it )
+        if( it.value() > waveBest ) { waveBest = it.value(); waveRgb = it.key(); }
+
+    // The clip's SPAN is its outermost material columns. Stated, because it is
+    // a bound: a clip that BEGINS or ENDS in silence would report a shorter
+    // span than it occupies. The fixture this gate exists for carries material
+    // at both ends on purpose, and the case asserts the span itself so a
+    // change to that would fail loudly rather than quietly narrow the window.
+    int spanFirst = -1, spanLast = -1;
+    for( int x = 0; x < img.width(); ++x )
+        if( bodyPerCol[x] > 0 ) { if( spanFirst < 0 ) spanFirst = x; spanLast = x; }
+    if( spanFirst < 0 )
+        return QString( "row=%1 band=%2,%3 dimmed=%4 NO MATERIAL COLUMNS"
+                        " (bodyLit=%5 bodyDim=%6) - the take lane painted no"
+                        " body at all" )
+            .arg( row ).arg( top ).arg( bandH ).arg( dimmed ? 1 : 0 )
+            .arg( litCount ).arg( dimCount );
+
+    const int cols = spanLast - spanFirst + 1;
+    int materialCols = 0, gapCols = 0, gapRuns = 0;
+    int firstGapStart = -1, firstGapEnd = -1;
+    bool inGap = false;
+    for( int x = spanFirst; x <= spanLast; ++x ) {
+        if( bodyPerCol[x] > 0 ) {
+            ++materialCols;
+            if( inGap ) { inGap = false; if( firstGapEnd < 0 ) firstGapEnd = x; }
+            continue;
+        }
+        ++gapCols;
+        if( !inGap ) {
+            inGap = true; ++gapRuns;
+            if( firstGapStart < 0 ) firstGapStart = x;
+        }
+    }
+    if( inGap && firstGapEnd < 0 ) firstGapEnd = spanLast + 1;
+
+    // The drawn waveform's mean HALF-HEIGHT over the material columns, as a
+    // percentage of the lane's half height. This is the only assertion that
+    // rides the DRAW terminal rather than the collect one -- the gap metrics
+    // above come from the body fill, so without this a draw-side regression
+    // would be invisible to this verb.
+    double waveSum = 0.0;
+    int    waveCols = 0;
+    if( waveRgb ) {
+        for( int x = spanFirst; x <= spanLast; ++x ) {
+            if( bodyPerCol[x] <= 0 ) continue;
+            int lo = -1, hi = -1;
+            for( int y = top; y < top + bandH; ++y )
+                if( ( img.pixel( x, y ) | 0xff000000u ) == waveRgb ) {
+                    if( lo < 0 ) lo = y;
+                    hi = y;
+                }
+            if( lo < 0 ) continue;
+            waveSum += ( hi - lo ) / 2.0;      // half-height; a lone dot is 0
+            ++waveCols;
+        }
+    }
+    const int waveMeanPct = waveCols
+        ? (int) qRound( 100.0 * ( waveSum / waveCols ) / ( bandH / 2.0 ) ) : 0;
+
+    auto pct = [cols]( int x, int spanFirst ) {
+        return cols > 0 ? (int) qRound( 100.0 * ( x - spanFirst ) / cols ) : -1;
+    };
+
+    return QString( "row=%1 dimmed=%2 band=%3,%4 spanFirst=%5 spanLast=%6"
+                    " cols=%7 materialCols=%8 gapCols=%9 gapRuns=%10"
+                    " firstGapStartPct=%11 firstGapEndPct=%12 waveMeanPct=%13"
+                    " waveColor=#%14 bodyColor=#%15" )
+        .arg( row ).arg( dimmed ? 1 : 0 ).arg( top ).arg( bandH )
+        .arg( spanFirst ).arg( spanLast ).arg( cols ).arg( materialCols )
+        .arg( gapCols ).arg( gapRuns )
+        .arg( firstGapStart < 0 ? -1 : pct( firstGapStart, spanFirst ) )
+        .arg( firstGapEnd   < 0 ? -1 : pct( firstGapEnd,   spanFirst ) )
+        .arg( waveMeanPct )
+        .arg( (uint) ( waveRgb & 0xffffff ), 6, 16, QChar( '0' ) )
+        .arg( (uint) ( bodyRgb & 0xffffff ), 6, 16, QChar( '0' ) );
+}
+
 QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h,
                                           const QString &pngPath, bool bandOnly )
 {

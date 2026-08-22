@@ -392,3 +392,166 @@ static const bool s_reg_assert_lane_overlay =
           QStringLiteral( "assert-lane-overlay" ),
           [] { return new SAssertLaneOverlayAction; } ),
       true );
+
+// --- assert-take-lane -----------------------------------------------------
+
+SApplyResult SAssertTakeLaneAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "assert-take-lane: no main window";
+        return { false, nullptr };
+    }
+
+    QString png;
+    if( !grabPng_.isEmpty() ) {
+        if( grabPng_.contains( '/' ) || grabPng_.contains( QLatin1Char( 0x5c ) )
+            || grabPng_.contains( ".." ) ) {
+            qWarning() << "assert-take-lane: grabPng contains path"
+                          " separators:" << grabPng_;
+            return { false, nullptr };
+        }
+        SApplication &app = SApplication::app();
+        if( app.testOutputDir().isEmpty() || !app.ensureOutputDirExists() ) {
+            qWarning() << "assert-take-lane FAILED: no usable test output"
+                          " directory";
+            return { false, nullptr };
+        }
+        png = QDir( app.testOutputDir() ).filePath( grabPng_ );
+    }
+
+    const QString rep = win->describeTakeLane( trackPath_, takeRow_,
+                                               grabWidth_, grabHeight_, png );
+    if( rep.isEmpty() ) {
+        qWarning() << "assert-take-lane FAILED: no take lane at" << trackPath_
+                   << "take" << takeRow_ << "(or the canvas could not be"
+                      " grabbed)";
+        return { false, nullptr };
+    }
+    qDebug() << "assert-take-lane: track" << trackPath_ << "take" << takeRow_
+             << rep;
+
+    auto field = [&rep]( const QString &key ) -> long long {
+        const int i = rep.indexOf( key + QLatin1Char( '=' ) );
+        if( i < 0 ) return -1;
+        int j = i + key.size() + 1;
+        int k = j;
+        while( k < rep.size() && ( rep[k].isDigit() || rep[k] == '-' ) ) ++k;
+        return rep.mid( j, k - j ).toLongLong();
+    };
+    const long long gapCols   = field( QStringLiteral( "gapCols" ) );
+    const long long gapRuns   = field( QStringLiteral( "gapRuns" ) );
+    const long long gStartPct = field( QStringLiteral( "firstGapStartPct" ) );
+    const long long gEndPct   = field( QStringLiteral( "firstGapEndPct" ) );
+    const long long wavePct   = field( QStringLiteral( "waveMeanPct" ) );
+    const long long spanFirst = field( QStringLiteral( "spanFirst" ) );
+    const long long spanLast  = field( QStringLiteral( "spanLast" ) );
+
+    auto fail = [&]( const QString &what ) {
+        qWarning() << "assert-take-lane FAILED:" << trackPath_
+                   << "take" << takeRow_ << "-" << what << "|" << rep;
+        return SApplyResult{ false, nullptr };
+    };
+
+    if( minGapCols_ >= 0 && gapCols < minGapCols_ )
+        return fail( QStringLiteral( "expected at least %1 gap columns, got %2"
+                                     " - a take lane that fills its whole"
+                                     " window paints the WINDOW, not the"
+                                     " MATERIAL" )
+                         .arg( minGapCols_ ).arg( gapCols ) );
+    if( maxGapCols_ >= 0 && gapCols > maxGapCols_ )
+        return fail( QStringLiteral( "expected at most %1 gap columns, got %2" )
+                         .arg( maxGapCols_ ).arg( gapCols ) );
+    if( gapRuns_ >= 0 && gapRuns != gapRuns_ )
+        return fail( QStringLiteral( "expected %1 gap runs, got %2" )
+                         .arg( gapRuns_ ).arg( gapRuns ) );
+    if( firstGapStartPct_ >= 0
+        && qAbs( (int) gStartPct - firstGapStartPct_ ) > pctTolerance_ )
+        return fail( QStringLiteral( "first gap starts at %1%% of the clip,"
+                                     " expected %2%% +/- %3 - the take lane is"
+                                     " showing the WRONG PART of the take" )
+                         .arg( gStartPct ).arg( firstGapStartPct_ )
+                         .arg( pctTolerance_ ) );
+    if( firstGapEndPct_ >= 0
+        && qAbs( (int) gEndPct - firstGapEndPct_ ) > pctTolerance_ )
+        return fail( QStringLiteral( "first gap ends at %1%% of the clip,"
+                                     " expected %2%% +/- %3" )
+                         .arg( gEndPct ).arg( firstGapEndPct_ )
+                         .arg( pctTolerance_ ) );
+    if( minWaveMeanPct_ >= 0 && wavePct < minWaveMeanPct_ )
+        return fail( QStringLiteral( "mean drawn waveform height %1%%, expected"
+                                     " at least %2%%" )
+                         .arg( wavePct ).arg( minWaveMeanPct_ ) );
+    if( maxWaveMeanPct_ >= 0 && wavePct > maxWaveMeanPct_ )
+        return fail( QStringLiteral( "mean drawn waveform height %1%%, expected"
+                                     " at most %2%%" )
+                         .arg( wavePct ).arg( maxWaveMeanPct_ ) );
+    if( spanFirst_ >= 0 && qAbs( (int) spanFirst - spanFirst_ ) > spanTolerance_ )
+        return fail( QStringLiteral( "clip span starts at x=%1, expected %2"
+                                     " +/- %3" )
+                         .arg( spanFirst ).arg( spanFirst_ )
+                         .arg( spanTolerance_ ) );
+    if( spanLast_ >= 0 && qAbs( (int) spanLast - spanLast_ ) > spanTolerance_ )
+        return fail( QStringLiteral( "clip span ends at x=%1, expected %2"
+                                     " +/- %3" )
+                         .arg( spanLast ).arg( spanLast_ )
+                         .arg( spanTolerance_ ) );
+    if( !contains_.isEmpty() && !rep.contains( contains_ ) )
+        return fail( QStringLiteral( "report does not contain '%1'" )
+                         .arg( contains_ ) );
+
+    return { true, nullptr };
+}
+
+void SAssertTakeLaneAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "takeRow", takeRow_ );
+    if( grabWidth_  > 0 ) elem.setAttribute( "grabWidth", grabWidth_ );
+    if( grabHeight_ > 0 ) elem.setAttribute( "grabHeight", grabHeight_ );
+    if( !grabPng_.isEmpty() )  elem.setAttribute( "grabPng", grabPng_ );
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( minGapCols_       >= 0 ) elem.setAttribute( "minGapCols", minGapCols_ );
+    if( maxGapCols_       >= 0 ) elem.setAttribute( "maxGapCols", maxGapCols_ );
+    if( gapRuns_          >= 0 ) elem.setAttribute( "gapRuns", gapRuns_ );
+    if( firstGapStartPct_ >= 0 )
+        elem.setAttribute( "firstGapStartPct", firstGapStartPct_ );
+    if( firstGapEndPct_   >= 0 )
+        elem.setAttribute( "firstGapEndPct", firstGapEndPct_ );
+    elem.setAttribute( "pctTolerance", pctTolerance_ );
+    if( minWaveMeanPct_   >= 0 )
+        elem.setAttribute( "minWaveMeanPct", minWaveMeanPct_ );
+    if( maxWaveMeanPct_   >= 0 )
+        elem.setAttribute( "maxWaveMeanPct", maxWaveMeanPct_ );
+    if( spanFirst_        >= 0 ) elem.setAttribute( "spanFirst", spanFirst_ );
+    if( spanLast_         >= 0 ) elem.setAttribute( "spanLast", spanLast_ );
+    elem.setAttribute( "spanTolerance", spanTolerance_ );
+}
+
+bool SAssertTakeLaneAction::readXml( const QDomElement &elem, int )
+{
+    trackPath_        = elem.attribute( "trackPath", "0" );
+    takeRow_          = elem.attribute( "takeRow", "0" ).toInt();
+    grabWidth_        = elem.attribute( "grabWidth", "0" ).toInt();
+    grabHeight_       = elem.attribute( "grabHeight", "0" ).toInt();
+    grabPng_          = elem.attribute( "grabPng" );
+    contains_         = elem.attribute( "contains" );
+    minGapCols_       = elem.attribute( "minGapCols", "-1" ).toInt();
+    maxGapCols_       = elem.attribute( "maxGapCols", "-1" ).toInt();
+    gapRuns_          = elem.attribute( "gapRuns", "-1" ).toInt();
+    firstGapStartPct_ = elem.attribute( "firstGapStartPct", "-1" ).toInt();
+    firstGapEndPct_   = elem.attribute( "firstGapEndPct", "-1" ).toInt();
+    pctTolerance_     = elem.attribute( "pctTolerance", "3" ).toInt();
+    minWaveMeanPct_   = elem.attribute( "minWaveMeanPct", "-1" ).toInt();
+    maxWaveMeanPct_   = elem.attribute( "maxWaveMeanPct", "-1" ).toInt();
+    spanFirst_        = elem.attribute( "spanFirst", "-1" ).toInt();
+    spanLast_         = elem.attribute( "spanLast", "-1" ).toInt();
+    spanTolerance_    = elem.attribute( "spanTolerance", "2" ).toInt();
+    return true;
+}
+
+static const bool s_reg_assert_take_lane =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-take-lane" ),
+          [] { return new SAssertTakeLaneAction; } ),
+      true );

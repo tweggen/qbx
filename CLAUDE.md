@@ -2022,6 +2022,77 @@ fixture every other fragment-nested-edit gate uses; and `unpack-clips`'s own
 interaction with a fragment mid-deletion (delete one child, then unpack the
 rest) has no case either.
 
+## Take lanes show the take AT THE POSITION IT PLAYS (fix/take-lane-domain, 2026-08-22)
+
+`SMVActualView::drawTakeLane` had two defects, both found from a user
+screenshot and both confirmed against a real project file before a line was
+changed. Invariants: `main/timeline/CONTRACT.md` inv. 33-34,
+`main/model/CONTRACT.md` ("The TAKE terminals on `SObjectRenderer`",
+"`fillBodyByMaterial()`"), `main/testkit/CONTRACT.md` 50-54.
+
+**Read this before touching a take lane — the shape that breaks is the one you
+will not have in front of you.** A take column reaches a track two ways:
+
+* **direct** `SLink -> STakeStack` — what `add-take` builds (`stakehelpers.cpp`).
+* **wrapped** `SLink -> SCut -> STakeStack` — what a SHARED or PLACED column is:
+  the stack carries `nRefs > 1` and each placement is its own `SCut` window into
+  it, with its own slip. Real projects have these; `tests/legacy_takestack_wrap.qxp`
+  has had a fixture for one since the row-layout bug.
+
+| Thing to know | Why |
+|---|---|
+| A take lane paints through **the CLIP's renderer asked for one take** (`SObjectRenderer::drawTake` / `collectTakeEnvelope`, `takeIndex < 0` = the audible one), never by reaching past the clip to the take OBJECT | The old code handed the take object's renderer a bare VIEW context, so on the wrapped shape the wrapper's slip, stretch and loop tiling never reached the take lane: the take was laid out 1:1 from the clip's left edge while the audio played it through the wrapper's window. **Measured on the user's project: one whole bar out** (`srcStart='96004'`, 2.0001 s at 120 BPM). A take lane is the COMPING surface; a waveform that does not line up with what plays is not cosmetic. On the DIRECT shape the old code was accidentally right, which is why this survived since proposal 17. |
+| The domain composition **already held** and is what makes the fix one call | Every `InlineRenderContext::getTimeOf` returns `clipStart + position-in-its-own-domain` and every terminal subtracts `lk.getStartTime()` again, so nesting wrapper-context inside take-context with the SAME link composes exactly `takeCut.clipToSource( wrapper.clipToSource( rel ) )`. It rests on take links having `startTime == 0` and all takes sharing the column's duration (`stakestack.h` inv. 1). |
+| The composite lane and the take lanes now share ONE body-fill rule (`fillBodyByMaterial`) | `drawTakeLane` filled its whole window with an opaque `fillRect` while the composite lane had painted by material since proposal 41 D10 — so the same grey meant "material" on one lane and "window" on the lane below it. Measured: the active take lane carried material in 274 of 1289 columns and painted a solid block across all 1289. |
+| **The two lanes now derive from DIFFERENT data paths on the wrapped shape, and that is accepted** | The composite reads the wrapper's CAPTURE (`SCut::getPreview` -> `capPeaks_`, async, quantised); the take rows read each take's own live preview. They agree POSITIONALLY — the point — not sample for sample, and where the capture is missing the composite still says "Asset: (no preview)" while the take rows draw. Take rows agree with EACH OTHER, which is what comping needs. |
+| A **PIXEL** gate is the only thing that bites, for the third time in this codebase | Proposal 39 M2 and proposal 41 M5 both shipped a green gate over a broken paint because a script-level check through `collectEnvelope` sits BELOW the paint. `assert-take-lane` grabs the real canvas and classifies one take row column by column. |
+| The gate classifies on the BODY colour and **never on waveform pixels** | A silent column still paints ONE waveform pixel at the midline (`drawObjectWaveform` maps `min==max==0` to `drawLine(x,y,x,y)`), so "has wave pixels" is true of every column and would report every gap as material. |
+| **The time grid is drawn in EXACTLY the clip-body colour, over the lanes** | `QColor(160,160,160)` (`sstdmixerview.cpp`), so a grid line is a full-height column of "material" to any classifier. Measured with it on: `spanLast` 500 instead of 398, gap percentages 20/40 instead of 25/50. |
+
+**A separate defect found while gating this, NOT fixed here:** a project loads
+with **`gridVisible` TRUE whatever the file says**. A fixture written with
+`"gridVisible":false` reads back `true`, while `"timelineZoomSecondWidth":200`
+out of the SAME properties JSON loads correctly — so the dict is parsed and
+something re-asserts that one key after the load. Consequence for every case:
+a `grid-disable` placed before or immediately after `load-project` finds the key
+already false, **no-ops** (`SProject::setProp` returns early when unchanged) and
+the grid is back on by paint time. Disable the grid AFTER the load and after any
+lane-layout change.
+
+**Also NOT fixed, and named rather than left silent:** the take-lane Alt-slip
+DRAG still works in the old domain — it moves `takeCut->getStartOffset()` by a
+raw timeline-pixel delta and composes none of the wrapper's stretch. That is a
+PRE-EXISTING audible bug (`startOffset` is in the take's own warped OUTPUT
+domain and playback composes the wrapper's map), inert at `stretch == 1` — every
+fixture and every project seen so far — and today's broken paint moved 1:1 with
+the hand and HID it. A correct paint reveals it. It needs its own gate.
+
+Gates: the qxa case `take_lane_domain` over the new fixtures
+`tests/test_gapsaw.wav` (`tests/tools/gen_gap_fixture.py` — a 0.1->0.8 ramp with
+EXACT-ZERO regions at [0.6,0.9) and [2.5,3.0) s, **asymmetric on purpose** so the
+correct and the broken window give DIFFERENT gap positions rather than merely
+gap/no-gap) and `tests/takestack_wrap_slipped.qxp` (a 2 s wrapper window 2 s into
+a 4 s take — **`srcStart='96000'`, and it must be `srcStart`**: `SCut`'s loader
+prefers it and falls back to `startOffset` only when `srcStart` is ABSENT, so
+slipping via `startOffset` alone leaves the fixture unslipped and the case passes
+on the broken binary), plus `action_roundtrip_test`.
+
+**Watched failing, in two stages, so each assertion is shown to bite its own
+defect** — pre-fix BOTH fail, which proves neither individually:
+
+| Stage | `gapCols` | first gap | `waveMeanPct` | fails on |
+|---|---|---|---|---|
+| pre-fix (solid fill + old draw) | **0** | none | 23 | `minGapCols` -> defect B |
+| B fixed, A still broken | 59 | **30-45 %** | **27** | position + level -> defect A |
+| both fixed | 99 | **25-50 %** | **62** | PASS |
+
+**NOT gated:** the take-lane drag domain (above); a wrapper with `stretch != 1`
+or a LOOPING wrapper (implemented and reachable through the same walk, no case);
+an EVENT take on a take lane (falls to the solid-fill fallback by design, no
+case); pixel aesthetics; and the DIRECT shape's byte-identity of
+`collectTakeEnvelope(-1)` against `collectEnvelope`, which holds by construction
+but has no unit assertion.
+
 ## Dependencies
 
 ### Core

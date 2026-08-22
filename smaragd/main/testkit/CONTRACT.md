@@ -1078,3 +1078,47 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     not a blanket "any other clip is a no-op" (that description is still
     true, but only for a clip that is not blue at all). Gate:
     `qxa.doubleclick_blue_clip_resolve`.
+
+## `assert-take-lane` — the pixel gate on ONE take lane
+
+50. **It classifies on the BODY colour, never on waveform pixels.** A SILENT
+    column still paints exactly one waveform pixel, at the midline —
+    `drawObjectWaveform` maps `min == max == 0` to `drawLine(x, y, x, y)` — so
+    "this column has wave pixels in it" is true of every column of every clip
+    and would report each gap as material. `materialCols` / `gapCols` are
+    counted from `QColor(160,160,160)` (composited under the inactive-take dim
+    when that is what is on screen) and from nothing else.
+
+51. **ACTIVE vs INACTIVE is read off the IMAGE, and the dim is composited
+    THROUGH QT.** The verb tries both the lit and the dimmed body colour and
+    uses whichever actually appears, reporting `dimmed=`. The dimmed reference
+    is produced by doing what `drawTakeLane` does — `fillRect` with
+    `QColor(0,0,0,130)` onto a 1x1 `ARGB32_Premultiplied` — rather than by
+    reproducing Qt's rounding in the verb, so the two cannot drift. (It happens
+    to be exact: 160 -> 78, 26,38,50 -> 13,19,25, 240 -> 118, 10 -> 5.)
+
+52. **The measured clip span is a BOUND, and the case must pin it.** `spanFirst`
+    / `spanLast` are the outermost MATERIAL columns, so a clip that BEGINS or
+    ENDS in silence reports a shorter span than it occupies, and every
+    percentage is taken over that span. `take_lane_domain.qxa` therefore
+    asserts the span itself; without that, anything else painted in the body
+    colour silently widens the span and drags the percentages off — which is
+    exactly what the time grid did (see 53).
+
+53. **RUN IT WITH THE GRID OFF, AND DISABLE THE GRID AFTER `load-project`.** A
+    non-emphasised grid line is `QColor(160,160,160)` — the EXACT clip-body
+    colour — and is drawn OVER the lanes, so it is a full-height column of
+    "material" to any classifier. Measured with the grid on: `spanLast` 500
+    instead of 398 and the gap percentages 20/40 instead of 25/50. And a
+    `grid-disable` placed BEFORE or immediately after the load does not hold:
+    a loaded project comes back with `gridVisible` TRUE whatever the file says
+    (its `timelineZoomSecondWidth`, out of the same properties JSON, loads
+    correctly), so the disable finds the key already false, no-ops, and the key
+    is true again by paint time. That defect is NOT fixed on this branch.
+
+54. **`waveMeanPct` is the only field on the DRAW terminal and may not be
+    dropped.** Every gap metric comes from the body fill, i.e. the COLLECT
+    terminal. A case that asserts only gaps goes blind to a draw-side
+    regression. In `take_lane_domain.qxa` it is also an independent second
+    discriminator for the same defect: the correct window reads **62**, the
+    broken one **27**.

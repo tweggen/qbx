@@ -243,4 +243,60 @@ private:
     int     minLutSpread_  = -1;   // -1 = unset -> no distinct-index-spread check
 };
 
+/**
+ * assert-take-lane -- the PIXEL gate on ONE take row of the arranger canvas.
+ *
+ * A take lane must show its take AT THE POSITION IT PLAYS, which is a claim
+ * about where material lands on screen and therefore only gateable on pixels:
+ * everything a script can reach through collectEnvelope sits BELOW the paint
+ * (proposal 39 M2, proposal 41 M5, both found the hard way).
+ *
+ * Percentages are of the CLIP's own pixel span, so the assertions are
+ * zoom-independent. Every check is opt-in (-1 = unset).
+ */
+class SAssertTakeLaneAction : public SAction
+{
+public:
+    SAssertTakeLaneAction() = default;
+
+    QString name() const override { return QStringLiteral( "assert-take-lane" ); }
+    QStringList knownAttributes() const override
+    {
+        return { QStringLiteral( "trackPath" ),   QStringLiteral( "takeRow" ),
+                 QStringLiteral( "grabWidth" ),   QStringLiteral( "grabHeight" ),
+                 QStringLiteral( "grabPng" ),     QStringLiteral( "contains" ),
+                 QStringLiteral( "minGapCols" ),  QStringLiteral( "maxGapCols" ),
+                 QStringLiteral( "gapRuns" ),
+                 QStringLiteral( "firstGapStartPct" ),
+                 QStringLiteral( "firstGapEndPct" ),
+                 QStringLiteral( "pctTolerance" ),
+                 QStringLiteral( "minWaveMeanPct" ),
+                 QStringLiteral( "maxWaveMeanPct" ),
+                 QStringLiteral( "spanFirst" ),   QStringLiteral( "spanLast" ),
+                 QStringLiteral( "spanTolerance" ) };
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_        = QStringLiteral( "0" );
+    int     takeRow_          = 0;
+    int     grabWidth_        = 0;
+    int     grabHeight_       = 0;
+    QString grabPng_;
+    QString contains_;
+    int     minGapCols_       = -1;
+    int     maxGapCols_       = -1;
+    int     gapRuns_          = -1;
+    int     firstGapStartPct_ = -1;
+    int     firstGapEndPct_   = -1;
+    int     pctTolerance_     = 3;
+    int     minWaveMeanPct_   = -1;
+    int     maxWaveMeanPct_   = -1;
+    int     spanFirst_        = -1;
+    int     spanLast_         = -1;
+    int     spanTolerance_    = 2;
+};
+
 #endif // SASSERTENVELOPEACTION_H

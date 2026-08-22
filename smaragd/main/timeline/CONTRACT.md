@@ -887,3 +887,78 @@ clip even though the later one's body painted over most of its chip
 footprint (AC7.1/AC7.2). Verified as a real gate: with the tag-first wiring
 reverted, the same case fails on exactly the three assertions this milestone
 is about.
+
+### inv. 33 — A TAKE LANE IS PAINTED BY THE CLIP'S OWN RENDERER, ASKED FOR ONE
+### TAKE — NEVER BY REACHING PAST IT TO THE TAKE OBJECT
+
+`SMVActualView::drawTakeLane` paints through
+`lk->getSObject().getInlineRenderer()->drawTake( *lk, ctx, row.takeRow )` and
+fills its body through the matching `collectTakeEnvelope`. It may not fetch the
+take object and draw that instead.
+
+**The reason is a defect this cost.** It used to build a bare view context and
+hand the TAKE OBJECT's renderer the outer link. For the direct shape
+(`SLink -> STakeStack`) that is accidentally right — the composite lane's
+`STakeStackRendererInline::draw` passes the same link and the same context down
+to the active take, so both lanes agree. For the WRAPPED shape
+(`SLink -> SCut -> STakeStack`, which is what a SHARED or PLACED take column is:
+the stack carries `nRefs > 1` and each placement is its own `SCut` window into
+it) it is wrong, because the composite lane goes through the wrapper's
+`InlineRenderContext` — its slip, its stretch/warp, its loop tiling — and the
+take lane went through none of them. The take was laid out 1:1 from the clip's
+left edge while the audio played it through the wrapper's window.
+
+Measured on a real user project: the take lane's material sat **one whole bar**
+(96004 frames at 48 kHz, 2.0001 s at 120 BPM) to the right of where it sounds.
+A take lane is the COMPING surface — you click it to choose a take
+(`SSelectTakeAction`) — so a waveform that does not line up with what plays is
+not a cosmetic defect.
+
+Two consequences that are part of the contract, not incidental:
+
+* **The canvas gets MORE polymorphic, not less** (inv. 2). `drawTakeLane` no
+  longer needs the take object to paint; the take INDEX is the only thing it
+  says. It still asks `takeStackOfLink` whether this clip is a column at all,
+  and whether the column HAS a row `k` — those are questions about the lane's
+  own layout, not about what a clip is.
+* **The domain composition is what makes this correct, and it already held.**
+  Every `SCutRendererInline::InlineRenderContext::getTimeOf` returns
+  `clipStart + position-in-its-own-domain`, and every terminal subtracts
+  `lk.getStartTime()` again. Nesting wrapper-context inside take-context with
+  the SAME link therefore composes exactly
+  `takeCut.clipToSource( wrapper.clipToSource( rel ) )` — what plays. It relies
+  on take links having `startTime == 0` and on all takes sharing the column's
+  duration (`stakestack.h` invariant 1). Under a WARPED or nonlinearly
+  stretched wrapper the nested tiling and marker geometry are linearised
+  between the two probes the parent supplies — the same approximation
+  `forEachLoopTile` and `drawWarpMarkers` already make, not a new one.
+
+**NOT fixed here, and named so nobody reads the silence as a claim:** the
+take-lane Alt-slip DRAG still works in the old domain. It snapshots
+`takeCut->getStartOffset()` and moves it by a raw timeline-pixel delta,
+composing none of the wrapper's stretch — so under a wrapper with
+`stretch != 1` the drag and the (now correct) paint disagree. That is a
+PRE-EXISTING audible bug: `startOffset` is in the take's own warped OUTPUT
+domain and playback composes the wrapper's map, so a drag of `d` frames has
+always moved the content by `wrapperStretch * d`. Today's broken paint moved
+1:1 with the hand and HID it; a correct paint reveals it. Inert at
+`stretch == 1`, which is every fixture and every project seen so far.
+
+### inv. 34 — THE COMPOSITE LANE AND THE TAKE LANES SHARE ONE BODY-FILL RULE
+
+Both go through `fillBodyByMaterial()` (`app/model/sobjectrenderer.h`): fill a
+column only where the envelope reports material (`min != 0 || max != 0`), leave
+a gap column untouched, and fall back to the ORIGINAL solid `fillRect` when the
+renderer has no envelope to give ("unknown material" must never read as "no
+material" — an event clip has no waveform and its window is still a window).
+
+`drawTakeLane` filled its whole window with one opaque `fillRect` from proposal
+17 until this landed, while the composite lane had painted by material since
+proposal 41 M5/D10 — so the same grey meant "material" on one lane and "window"
+on the lane directly below it. Measured on the user's screenshot: the active
+take lane carried material in **274 of 1289** columns and painted a solid block
+across all 1289.
+
+A second copy of the per-column rule is exactly how the two lanes came to mean
+different things by the same colour, which is why it is one shared function and
+not two loops.
