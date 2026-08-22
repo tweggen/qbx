@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A WRAPPED TAKE COLUMN MUST PLAY THE ACTIVE TAKE THROUGH THE TAKE'S OWN
+  WINDOW. This is an AUDIO gate, and the defect it holds shut was audible.
+
+  THE SHAPE. A take column reaches a track two ways: DIRECT
+  (`SLink -> STakeStack`, what add-take builds) and WRAPPED
+  (`SLink -> SCut -> STakeStack`, what a SHARED or PLACED column is - the
+  stack carries nRefs > 1 and each placement is its own SCut window into it).
+  Only the wrapped shape goes through a CAPTURE, and only the wrapped shape
+  was broken: on the direct shape a take slip has always been audible, which
+  take_lane_slip.qxa gates.
+
+  THE DEFECT. SCut::buildCapture_'s container branch rendered
+  `content->getRootComponent()` from position 0, and that dropped the
+  content's own window TWO independent ways:
+
+    * getRootComponent() returns the built READER when one exists and falls
+      back to the raw, UNWINDOWED content when it does not. At capture-build
+      time the inner take's reader typically does not exist yet - and the
+      capture is CACHED, so it latched on first use.
+    * Even WITH the reader built it was still wrong: a plain reader is
+      addressed in the WARPED domain with the slip folded in BY THE CALLER
+      (SCut::clipToReaderMap), and freezing from 0 applies no mapping at all.
+
+  So the take's srcStart was lost either way - and because the wrapper's
+  PLAYBACK reader is built over that same capture, the clip PLAYED the wrong
+  part of the take. It is now resolved through SObject::resolveClip(), the
+  same authority twView asks on the playback path, which yields the component
+  and the mapping from ONE snapshot (proposal 19 Inv-1).
+
+  THE FIXTURE IS A CLOSED FORM, not a measurement. takestack_wrap_takeslip.qxp
+  puts a 2 s wrapper window 2 s into the stack (srcStart='96000'), and the
+  active take is itself slipped half a second in (srcStart='24000'), over
+  test_gapsaw.wav - a 0.1 -> 0.8 amplitude ramp with EXACT-ZERO regions at
+  [0.6,0.9) and [2.5,3.0) s. So the clip must play source [2.5, 4.5) s:
+
+      clip 0.0-0.5 s  -> source [2.5,3.0)  -> the SILENCE
+      clip 0.5-1.5 s  -> source [3.0,4.0)  -> the ramp's loud tail
+      clip 1.5-2.0 s  -> past the 4 s file -> SILENCE
+
+  A sawtooth of amplitude A has RMS A/sqrt(3), and the ramp is linear, so the
+  two loud windows have closed forms 0.38610 and 0.43662. Measured on the
+  first run: 0.38640 and 0.43689 - four decimal places, no fitting.
+
+  WHY THE FIRST AND LAST WINDOWS ARE THE GATE. Unwindowed, the clip would play
+  source [2.0, 4.0) instead: the silence would land at clip 0.5-1.0 s and BOTH
+  the first and the last window would be loud. So silent-loud-loud-silent
+  against loud-silent-loud-loud discriminates the two readings at every one of
+  the four windows, and the two ends flip outright.
+
+  NOT asserted here: the drawn composite lane. A container-backed clip only
+  previews once its capture is reachable, which is a separate fix on its own
+  branch (fix/take-lane-capture-align); this case deliberately measures the
+  AUDIO, which is where the defect actually bit.
+-->
+<SActionScript version="1" name="wrapped_take_window">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_takeslip.qxp"/>
+
+    <render filename="wrapped_take_window.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+
+    <!-- clip 0.0-0.5 s = the source's [2.5,3.0) SILENCE. Unwindowed this
+         window is source [2.0,2.5) and reads RMS 0.285. -->
+    <assert-audio-energy filename="wrapped_take_window.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+
+    <!-- clip 0.5-1.5 s = source [3.0,4.0), the ramp's loud tail. Closed form
+         A/sqrt(3) over each half: 0.38610 and 0.43662. -->
+    <assert-audio-energy filename="wrapped_take_window.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+    <assert-audio-energy filename="wrapped_take_window.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.430" maxRms="0.443"/>
+
+    <!-- clip 1.5-2.0 s = past the end of the 4 s file. Unwindowed this window
+         is source [3.5,4.0) and reads RMS 0.487. -->
+    <assert-audio-energy filename="wrapped_take_window.wav"
+                         startFrame="72000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+  </actions>
+
+</SActionScript>
