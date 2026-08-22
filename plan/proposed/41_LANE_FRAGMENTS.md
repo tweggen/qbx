@@ -1,6 +1,6 @@
 # Proposal 41 — Lane fragments: reusable same-lane clip groups, and the clip visual model
 
-> **Status: PROPOSED (2026-08-21).** Two parts, deliberately in one proposal:
+> **Status: EXECUTED (2026-08-22, PR #130).** Two parts, deliberately in one proposal:
 > the model change makes *disjoint* clip groups placeable, and the moment they
 > are placeable the arranger's current painting is wrong. Part B exists because
 > of Part A and is not independently motivated.

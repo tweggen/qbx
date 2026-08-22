@@ -15343,3 +15343,89 @@ this branch changed. 6/6 in isolation afterwards and green in a second full
 `dump-playback-capture`) carrying no `RUN_SERIAL`, and that first run followed
 a rebuild, so a plugin rescan was re-probing six modules while it measured.
 Recorded as load-sensitive, not explained.
+
+## 2026-08-22 — Proposal 41 EXECUTED: lane fragments, and the clip visual model
+
+Reusable same-lane clip groups placed by reference through the existing asset
+bin, plus the arranger painting changes disjoint fragments force. Branch
+`feat/lane-fragments`, off `main` at debb28fe, 18 commits (PR #130). Design and
+the decisions, including three corrected during execution:
+`plan/proposed/41_LANE_FRAGMENTS.md`.
+
+### The rule the whole thing falls out of
+
+> **A fragment has no track identity.** No fader, inserts, instrument, solo,
+> arm, meters or automation of its own.
+
+Audio children sum with per-clip settings and no track FX because there are no
+track FX to apply. Event children are consumed by nothing, so the entire feed is
+residual and bubbles into whatever track the placement sits on — a drum figure
+dropped on any lane sounds through THAT lane's sampler. One property, both
+behaviours.
+
+### Milestones
+
+| M | What | Note |
+|---|---|---|
+| M0 | `isPathContainer()` / `isLane()` split | pure refactor; the two had agreed by accident because only STrack and SStdMixer overrode it |
+| M1 | `SLaneFragment`, new `main/objects/fragment` | first type answering container true / lane false |
+| M2 | `pack-clips`, `unpack-clips`, `duplicate-asset-here` | verbs live in `objects/mixer` — minting the registered SCut would reverse cut -> fragment |
+| M2b | addressing inside a fragment (`<AssetName>:<idx>`) | closes D3a; `laneAt()` stays strict so structural moves are still refused |
+| M3 | event bubbling through a placement | residual rule is STRUCTURAL: STrack/SStdMixer never override `resolveEventFeed()` |
+| M4 | no silent audio capture for a pure-event fragment | four call sites, the `isLiveRecording()` shape |
+| M5 | deterministic z-order + material clipping | latest start on top; body clipped to material so gaps show what is beneath |
+| M6 | the tag chip | bottom-LEFT, which D11's z-order makes guaranteed-visible |
+| M7 | tag-first hit-testing | paint order and hit order deliberately differ |
+| M8 | contracts, ACTIONS.md, CLAUDE.md | |
+
+Plus one engine fix: `tw303aEnvironment::bufferSize` had no initialiser and the
+ctor never set it, so `getBufferSize()` before the first `setBufferSize()` was an
+indeterminate read — masked in the app, a ~1-in-30 crash for any minimal fixture
+building a `twMixer`.
+
+### THE LESSON, and it cost three bugs to learn
+
+**A model-state assertion cannot see any of these. Gate the ARTEFACT — rendered
+audio, captured MIDI, or pixels.**
+
+- `set-clip-volume` on a fragment-nested clip invalidated correctly, bumped the
+  epoch, cleared the page cache — and rendered **byte-identical audio**, because
+  `refreshClipGainCurves()` had no `SLaneFragment` equivalent. Every model
+  assertion passed.
+- The event channel override was put on the shared `SCut`. Because every
+  placement is an `SLink` to the SAME cut, a remap would have been asset-wide
+  rather than per-placement. Only a two-tracks-two-channels case could tell.
+- M5 changed painting to latest-start-on-top; `STrack::getTopMostSLinkAt` still
+  returned the first child-order match, so **paint and hit order silently
+  disagreed through a green suite** from M5 until M7 found it. They now share one
+  geometry function (`tagChipRect`) so they cannot drift.
+
+Each fix was verified by reverting it and confirming the gate fails. That is the
+standard this proposal was run to, and it is why the count of gates matters less
+than what they measure.
+
+### Measured
+
+285 registered / 280 run / 5 Not Run (Disabled), 100% passed, 258 s at `-j4`
+(Linux, `TW_HAVE_LIBSECRET=OFF`). Both goldens byte-identical across all 18
+commits. CLAUDE.md's old 220/217/3 was a stale Windows figure and is refreshed.
+
+### NOT gated
+
+Drag ergonomics; pixel aesthetics (D13 is a luminance RELATION, never a
+palette); repaint latency under load (measured 2.4 -> 3.3 ms per 1200x800 grab
+for six overlapping clips, deliberately unbounded, and M6's chip is on the same
+path); nesting beyond two levels; real MIDI hardware; the fragment bin's UI
+beyond the existing asset list; an event clip's deletion cascade; and
+`unpack-clips` after a child deletion.
+
+**Deletion inside a fragment is NOT REACHABLE IN PRODUCTION.** The cascade is a
+decided policy and `fragment_delete_cascades` proves the mechanism, but through
+a testkit verb: `unplace-clip`/`remove-midi-clip` do resolve through the
+fragment-aware `placementAt()`, yet neither is a registered scriptable verb
+(both are undo inverses) and the UI's `remove-clip` resolves its lane through the
+still-strict `laneAt()`. Wiring a user-facing path is future work.
+
+**Glue remains out of scope** — the destructive commit (audio renders to a WAV,
+events merge into one sequence, sources consumed) is a separate proposal. Pack is
+the reference; Glue is the commitment; `Pack` -> `Glue` composes.
