@@ -4,6 +4,7 @@
 
 #include <QRect>
 #include <QPainter>
+#include <QVarLengthArray>
 #include <qobject.h>
 #include "tw/graph/tw303aenv.h"
 
@@ -87,7 +88,55 @@ inline SEnvelopeWindow envelopeWindowOfContext( SRenderContext &ctx )
     return win;
 }
 
-class SObjectRenderer 
+/**
+ * Fill `bodyRect` with `bodyColor` only in the COLUMNS where `collect` reports
+ * MATERIAL — `min != 0 || max != 0`, the same "silence draws nothing" proxy the
+ * folder-sum overlay uses (proposal 41 D10, proposal 39 M3). A gap column is
+ * left untouched, so whatever was drawn beneath it — an earlier clip, the lane
+ * background, the folder-sum overlay — shows through. No transparency anywhere:
+ * this is clipping, not alpha.
+ *
+ * Returns FALSE and paints NOTHING when `collect` has no envelope to give. The
+ * caller then does the ORIGINAL solid fill, because "unknown material" must
+ * never read as "no material" — an event clip has no waveform and its window is
+ * still a window.
+ *
+ * ONE spelling, shared by the composite lane's clip loop
+ * (STrackRendererInline::draw) and the take lanes (SMVActualView::drawTakeLane).
+ * A second copy is exactly how the same grey came to mean "material" on one lane
+ * and "window" on the lane directly below it.
+ *
+ * `collect` is any callable `bool( const SEnvelopeWindow &, preview_t * )`, so
+ * the caller decides WHICH envelope — the clip's, or one take's.
+ */
+template <typename CollectFn>
+bool fillBodyByMaterial( QPainter &p, const QRect &bodyRect,
+                         const QColor &bodyColor, SRenderContext &ctx,
+                         CollectFn &&collect )
+{
+    const int width = bodyRect.width();
+    if( width < 1 ) return false;
+
+    SEnvelopeWindow win;
+    win.leftTime  = ctx.getTimeOf( bodyRect.x() );
+    win.rightTime = ctx.getTimeOf( bodyRect.x() + width );
+    win.width     = width;
+
+    QVarLengthArray<preview_t> pv( width );
+    if( !collect( win, pv.data() ) ) return false;
+
+    p.setPen( bodyColor );
+    const int top    = bodyRect.y();
+    const int bottom = bodyRect.y() + bodyRect.height() - 1;
+    for( int i = 0; i < width; ++i ) {
+        if( !pv[i].min && !pv[i].max ) continue;   // gap: leave it
+        const int x = bodyRect.x() + i;
+        p.drawLine( x, top, x, bottom );
+    }
+    return true;
+}
+
+class SObjectRenderer
     : public QObject
 {
     Q_OBJECT
@@ -116,6 +165,31 @@ public:
      */
     virtual bool collectEnvelope( SLink &, const SEnvelopeWindow &, preview_t * )
     { return false; }
+
+    /**
+     * draw() / collectEnvelope() for ONE TAKE of a take COLUMN, rather than for
+     * whichever take is audible.
+     *
+     * `takeIndex < 0` means "the audible one", so the default forwards and every
+     * renderer that is not a take column — or is asked for the audible take —
+     * is byte-for-byte what it was.
+     *
+     * It exists so a TAKE LANE is painted by the SAME walk the composite lane
+     * uses: same domain map, same loop tiling, same delegation, only the
+     * terminal swapped. Before it, SMVActualView::drawTakeLane reached past the
+     * clip's own renderer to the take OBJECT and drew it against a bare view
+     * context, so every window parameter of a WRAPPING cut (slip, stretch, loop
+     * tiling) was silently dropped: on the `SLink -> SCut -> STakeStack` shape
+     * the take lane disagreed with what plays by the wrapper's slip, measured at
+     * one whole bar on a real project. A take lane is the COMPING surface, so a
+     * waveform that does not line up with the audio is not a cosmetic defect.
+     */
+    virtual void drawTake( SLink &lk, SRenderContext &ctx, int takeIndex )
+    { (void) takeIndex; draw( lk, ctx ); }
+
+    virtual bool collectTakeEnvelope( SLink &lk, const SEnvelopeWindow &win,
+                                      preview_t *out, int takeIndex )
+    { (void) takeIndex; return collectEnvelope( lk, win, out ); }
 
     SObject &getObject() const { return sobject_; }
     

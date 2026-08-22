@@ -2200,8 +2200,8 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         // lane draws whatever window is on it through the polymorphic renderer
         // path, so an event take paints like an audio one (proposal 37 P1) -
         // the SCut cast this replaced silently drew nothing.
-        SObject *take = stack->takeObjectAt( row.takeRow );
-        if( !take ) continue;                       // this stack has fewer takes
+        if( !stack->takeObjectAt( row.takeRow ) )
+            continue;                               // this stack has fewer takes
         const offset_t start = lk->getStartTime();
         // The LINK's own object's duration, not the inner stack's: on the
         // legacy SCut-wraps-STakeStack shape lk->getSObject() is the
@@ -2219,11 +2219,38 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         if( vr.width() < 1 ) continue;
 
         const bool active = ( stack->activeTakeIndex() == row.takeRow );
-        p.fillRect( vr, QColor( 160, 160, 160 ) );
+
+        // THE CLIP'S OWN RENDERER, asked for ONE take (SObjectRenderer::
+        // drawTake / collectTakeEnvelope). It used to reach past the clip to
+        // the take OBJECT and draw it against this bare view context, which
+        // dropped every window parameter of a WRAPPING cut on the
+        // `SLink -> SCut -> STakeStack` shape: slip, stretch and loop tiling
+        // never reached the take lane, so the take was laid out 1:1 from the
+        // clip's left edge while the audio played it through the wrapper's
+        // window. Measured on a real project: a whole bar out. A take lane is
+        // the COMPING surface, so a waveform that does not line up with what
+        // plays is not a cosmetic defect. Going through the clip's renderer
+        // also restores timeline CONTRACT inv. 2 — the canvas does not know
+        // clip types; the take index is the only thing it says.
         InlineRenderContext myctx( *this, p );
         myctx.setVisibRect( vr );
-        if( SObjectRenderer *rndr = take->getInlineRenderer() )
-            rndr->draw( *lk, myctx );   // outer link for timing, his own window
+        SObjectRenderer *rndr = lk->getSObject().getInlineRenderer();
+
+        // ...and fill the body BY MATERIAL, exactly as the composite lane has
+        // since proposal 41 D10 — the same helper, so the same grey means the
+        // same thing on both. The take-lane fill shows through a gap.
+        const QColor bodyColor( 160, 160, 160 );
+        const bool paintedByMaterial = rndr
+            && fillBodyByMaterial( p, vr, bodyColor, myctx,
+                   [&]( const SEnvelopeWindow &w, preview_t *o ) {
+                       return rndr->collectTakeEnvelope( *lk, w, o,
+                                                         row.takeRow );
+                   } );
+        if( !paintedByMaterial )
+            p.fillRect( vr, bodyColor );
+
+        if( rndr )
+            rndr->drawTake( *lk, myctx, row.takeRow );
         if( active ) {
             p.setPen( QColor( 240, 220, 80 ) );
             p.drawRect( vr.adjusted( 0, 0, -1, -1 ) );

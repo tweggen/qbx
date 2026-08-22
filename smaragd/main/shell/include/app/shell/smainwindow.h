@@ -272,6 +272,20 @@ public:
     // body" luminance range across the WHOLE lane, which the feel-flow
     // heatmap's own subject (a lane that always holds a clip) cannot avoid
     // the way proposal 39's clip-free negative controls did.
+    /**
+     * The TAKE-LANE pixel gate: grab the arranger canvas and classify ONE take
+     * row of one track, column by column. Reports where the drawn material and
+     * its GAPS are, as a percentage of the clip's own pixel span, plus the mean
+     * drawn waveform height — which is what makes "the take lane shows the part
+     * of the take that PLAYS" measurable rather than eyeballed.
+     *
+     * Everything is derived from pixels and from the two colours drawTakeLane
+     * paints with; nothing is read off the model, so it cannot agree with the
+     * paint by construction.
+     */
+    QString describeTakeLane( const QString &trackPath, int takeRow,
+                              int w, int h, const QString &pngPath );
+
     QString describeLaneOverlay( const QString &trackPath, int w, int h,
                                  const QString &pngPath, bool bandOnly = false );
 

@@ -404,43 +404,23 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         // and the reader saw a hole where audio is sounding (an asset over a
         // container whose own children don't fill the whole placed window is
         // the shape reachable today — no SLaneFragment placement exists yet).
-        // No transparency anywhere: this is clipping, not alpha. Per column,
-        // fill only where SObjectRenderer::collectEnvelope says material
-        // exists (min!=0 || max!=0, the same "silence draws nothing" proxy
-        // drawChildSumOverlay() above already uses, proposal 39 M3's
-        // discipline); leave a gap column unpainted so whatever was drawn
-        // beneath it — an earlier clip, the lane background, the folder-sum
-        // overlay — shows through. An object whose renderer does not support
-        // collectEnvelope at all (the default false — an event clip has no
-        // waveform) falls back to the ORIGINAL solid fill: "unknown material"
-        // must never read as "no material".
-        const int bodyLeft  = (int) startX;
-        const int bodyWidth = (int)( endX - startX );
+        // No transparency anywhere: this is clipping, not alpha. The per-column
+        // rule and the "unknown material must never read as no material"
+        // fallback both live in fillBodyByMaterial() (app/model/
+        // sobjectrenderer.h), because the TAKE LANES paint the same way and a
+        // second copy is exactly how the same grey came to mean "material" on
+        // this lane and "window" on the take lane directly below it.
         const QColor bodyColor( 160, 160, 160 );
+        const QRect bodyRect( (int) startX, visibRect.y(),
+                              (int)( endX - startX ), visibRect.height() );
         SObjectRenderer *rndr = lk->getSObject().getInlineRenderer();
-        bool paintedByMaterial = false;
-        if( rndr && bodyWidth >= 1 ) {
-            SEnvelopeWindow bodyWin;
-            bodyWin.leftTime  = ctx.getTimeOf( bodyLeft );
-            bodyWin.rightTime = ctx.getTimeOf( bodyLeft + bodyWidth );
-            bodyWin.width     = bodyWidth;
-            QVarLengthArray<preview_t> pv( bodyWidth );
-            if( rndr->collectEnvelope( *lk, bodyWin, pv.data() ) ) {
-                paintedByMaterial = true;
-                p.setPen( bodyColor );
-                const int top = visibRect.y();
-                const int bottom = visibRect.y() + visibRect.height() - 1;
-                for( int i = 0; i < bodyWidth; ++i ) {
-                    if( !pv[i].min && !pv[i].max ) continue;   // gap: leave it
-                    const int x = bodyLeft + i;
-                    p.drawLine( x, top, x, bottom );
-                }
-            }
-        }
-        if( !paintedByMaterial ) {
-            p.fillRect( bodyLeft, visibRect.y(), bodyWidth, visibRect.height(),
-                        bodyColor );
-        }
+        const bool paintedByMaterial = rndr
+            && fillBodyByMaterial( p, bodyRect, bodyColor, ctx,
+                   [&]( const SEnvelopeWindow &w, preview_t *o ) {
+                       return rndr->collectEnvelope( *lk, w, o );
+                   } );
+        if( !paintedByMaterial )
+            p.fillRect( bodyRect, bodyColor );
 
         if( isSelected ) {
             p.setPen( QColor( 255, 255, 255 ) );

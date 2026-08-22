@@ -368,3 +368,61 @@ Three properties, each a decision (proposal 09 D23):
    here is a stack overflow on the UI thread.
 
 Main thread only, and NON-BLOCKING: a repaint calls it.
+
+## The TAKE terminals on `SObjectRenderer` (take lanes)
+
+```cpp
+virtual void drawTake( SLink &, SRenderContext &, int takeIndex );
+virtual bool collectTakeEnvelope( SLink &, const SEnvelopeWindow &,
+                                  preview_t *, int takeIndex );
+```
+
+`draw()` / `collectEnvelope()` for ONE TAKE of a take column rather than for
+whichever take is audible. **`takeIndex < 0` means "the audible one"**, and the
+DEFAULTS forward to `draw()` / `collectEnvelope()` — so every renderer that is
+not a take column is byte-for-byte what it was, and no golden and no existing
+case moved.
+
+They exist so a TAKE LANE is painted by the same walk the composite lane uses —
+same domain map, same loop tiling, same delegation — with only the terminal
+swapped. See `main/timeline/CONTRACT.md` inv. 34 for the defect that made this
+necessary.
+
+Two implementations, and the asymmetry between them is deliberate:
+
+* `STakeStackRendererInline` delegates to the NAMED take instead of the active
+  one, with the same link and the same context. At `takeIndex < 0` it is
+  literally `draw()` / `collectEnvelope()`.
+* `SCutRendererInline` walks its own window (slip, stretch/warp, loop tiling)
+  and, when the CONTENT is a take column, terminates in the content renderer's
+  `drawTake` / `collectTakeEnvelope`. Whether the content is a column is asked
+  through the GENERIC seam (`SObject::windowTakeCount() > 0`), never a cast —
+  `objects/cut`'s renderer must not know which slice implements a column.
+  It paints SEGMENTS ONLY: no pitch badge, no warp handles, no gain envelope.
+  Those belong to the wrapper, and the take draws its own inside the segment.
+
+**`collectTakeEnvelope(..., -1)` on a CUT WRAPPING A COLUMN is NOT byte-identical
+to `collectEnvelope`, and that is correct rather than a leak.** The wrapper's
+`collectEnvelope` reads the CAPTURE (`SCut::getPreview` -> `capPeaks_`,
+asynchronously built and `capPeakSkip_`-quantised); the take terminal reads the
+take's own live preview. They agree POSITIONALLY — which is the whole point —
+and not sample for sample. The consequence to know rather than rediscover: after
+this change the composite lane and the take lanes of a WRAPPED column derive
+from two different data paths, so where the capture is missing the composite
+still shows "Asset: (no preview)" while the take lanes draw. The take rows agree
+with EACH OTHER, which is what comping needs. Byte identity holds only for the
+DIRECT shape.
+
+## `fillBodyByMaterial()` — one clip-body rule, two lanes
+
+A header-inline template beside `envelopeWindowOfContext()`. Fill a body rect's
+COLUMNS only where a caller-supplied collect reports material; leave gap columns
+untouched; return false and paint nothing when there is no envelope, so the
+caller does the original solid fill. Shared by `STrackRendererInline::draw()`
+(the composite lane) and `SMVActualView::drawTakeLane()` (the take lanes) —
+see `main/timeline/CONTRACT.md` inv. 35.
+
+It lives here because it is about a RENDERER and an `SRenderContext` and belongs
+beside them. (Not for `envelopeWindowOfContext`'s layering reason: `main/timeline`
+DOES include `app/objects/track/strackrndrinline.h`, so that header would have
+worked too.)

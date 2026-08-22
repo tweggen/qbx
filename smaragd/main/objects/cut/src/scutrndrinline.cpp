@@ -383,6 +383,84 @@ void drawWarpMarkers( QPainter &p, const QRect &visibRect, SRenderContext &ctx,
  * tiling needs repeated draws rather than a wrapped getTimeOf), with a faint
  * divider at each loop boundary.
  */
+SObjectRenderer *SCutRendererInline::takeColumnRendererOf( SObject &content )
+{
+    // The GENERIC take seam on SObject (proposal 21 L4), not a cast: objects/cut
+    // must be able to ask "is this a column of takes" without this renderer
+    // knowing which slice implements one.
+    if( content.windowTakeCount() <= 0 ) return nullptr;
+    return content.getInlineRenderer();
+}
+
+void SCutRendererInline::walkSegments(
+    SLink &lk, SRenderContext &ctx,
+    const std::function<bool( SRenderContext & )> &drawSeg )
+{
+    QPainter &p = ctx.getPainter();
+    QRect visibRect = ctx.getVisibRect();
+    SCut &cut = getCut();
+
+    if( !cut.isLooping() ) {
+        // Note, that this is my link but his object!!!
+        InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );
+        myctx.setVisibRect( visibRect );
+        if( !drawSeg( myctx ) )
+            p.drawText( visibRect, Qt::AlignCenter, "Asset: (no preview)" );
+        return;
+    }
+
+    // Looping: tile the loop segment across the clip width. The wave renderer
+    // / getPreview each fetch one linear range per call, so tiling means
+    // repeated draws (rather than a wrapped getTimeOf), with a faint divider
+    // and grab handle at each loop boundary. Tiling is what makes the preview
+    // CONTINUE past the content end for BOTH cut kinds: a container cut's
+    // capture is zero past its natural length, so a single linear pass would
+    // otherwise draw a flat/zero tail — matching a wave-backed looped cut.
+    const length_t segLen = cut.getLoopLength().frames();
+
+    // The tiling geometry is forEachLoopTile()'s, shared with the collect
+    // terminal - a second copy here is how the envelope a caller reads and
+    // the envelope on screen come to describe different tiles.
+    int xa = visibRect.x();
+    int xb = visibRect.x() + visibRect.width();
+    if( xb <= xa ) xb = xa + 1;
+    const int right = visibRect.x() + visibRect.width();
+    forEachLoopTile(
+        lk.getStartTime(), segLen, visibRect.x(), visibRect.width(),
+        ctx.getTimeOf( xa ), ctx.getTimeOf( xb ),
+        [&]( double sx, double ex, double segWpx, int isx, int iex ) {
+            LoopSegmentContext lctx( p, lk.getStartTime(), cut,
+                                     sx, segWpx, segLen );
+            lctx.setVisibRect( QRect( isx, visibRect.y(),
+                                      iex - isx, visibRect.height() ) );
+            drawSeg( lctx );
+            if( ex < right ) {                          // loop boundary divider
+                p.setPen( QColor( 70, 70, 70 ) );
+                p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
+                // Grab handle at the divider's upper end; drag it to re-tile
+                // the loop (SMVActualView::loopMarkerAt hit-tests the same box).
+                if( segWpx >= LOOP_HANDLE_MIN_SEG_PX )
+                    drawLoopHandle( p, visibRect, (int) ex );
+            }
+        } );
+}
+
+void SCutRendererInline::drawTake( SLink &lk, SRenderContext &ctx,
+                                   int takeIndex )
+{
+    SObjectRenderer *colRndr = takeColumnRendererOf( getCut().getContent() );
+    if( !colRndr ) {
+        // Not a take column — nothing take-specific to say, so this is the
+        // ordinary clip paint, badges and all.
+        draw( lk, ctx );
+        return;
+    }
+    walkSegments( lk, ctx, [&]( SRenderContext &segCtx ) -> bool {
+        colRndr->drawTake( lk, segCtx, takeIndex );
+        return true;
+    } );
+}
+
 void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
 {
     QPainter &p = ctx.getPainter();
@@ -417,48 +495,7 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         return true;
     };
 
-    if( !cut.isLooping() ) {
-        // Note, that this is my link but his object!!!
-        InlineRenderContext myctx( cut, ctx, p, lk.getStartTime() );
-        myctx.setVisibRect( visibRect );
-        if( !drawSeg( myctx ) )
-            p.drawText( visibRect, Qt::AlignCenter, "Asset: (no preview)" );
-    } else {
-        // Looping: tile the loop segment across the clip width. The wave renderer
-        // / getPreview each fetch one linear range per call, so tiling means
-        // repeated draws (rather than a wrapped getTimeOf), with a faint divider
-        // and grab handle at each loop boundary. Tiling is what makes the preview
-        // CONTINUE past the content end for BOTH cut kinds: a container cut's
-        // capture is zero past its natural length, so a single linear pass would
-        // otherwise draw a flat/zero tail — matching a wave-backed looped cut.
-        const length_t segLen = cut.getLoopLength().frames();
-
-        // The tiling geometry is forEachLoopTile()'s, shared with the collect
-        // terminal - a second copy here is how the envelope a caller reads and
-        // the envelope on screen come to describe different tiles.
-        int xa = visibRect.x();
-        int xb = visibRect.x() + visibRect.width();
-        if( xb <= xa ) xb = xa + 1;
-        const int right = visibRect.x() + visibRect.width();
-        forEachLoopTile(
-            lk.getStartTime(), segLen, visibRect.x(), visibRect.width(),
-            ctx.getTimeOf( xa ), ctx.getTimeOf( xb ),
-            [&]( double sx, double ex, double segWpx, int isx, int iex ) {
-                LoopSegmentContext lctx( p, lk.getStartTime(), cut,
-                                         sx, segWpx, segLen );
-                lctx.setVisibRect( QRect( isx, visibRect.y(),
-                                          iex - isx, visibRect.height() ) );
-                drawSeg( lctx );
-                if( ex < right ) {                          // loop boundary divider
-                    p.setPen( QColor( 70, 70, 70 ) );
-                    p.drawLine( (int) ex, visibRect.y(), (int) ex, visibRect.y() + visibRect.height() );
-                    // Grab handle at the divider's upper end; drag it to re-tile
-                    // the loop (SMVActualView::loopMarkerAt hit-tests the same box).
-                    if( segWpx >= LOOP_HANDLE_MIN_SEG_PX )
-                        drawLoopHandle( p, visibRect, (int) ex );
-                }
-            } );
-    }
+    walkSegments( lk, ctx, drawSeg );
 
     // Onset ticks + user warp-marker handles over the waveform (proposal 28 W2).
     drawWarpMarkers( p, visibRect, ctx, lk, cut );
@@ -487,9 +524,6 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
 bool SCutRendererInline::collectEnvelope( SLink &lk, const SEnvelopeWindow &win,
                                           preview_t *out )
 {
-    if( !out ) return false;
-    const int width = win.width < 1 ? 1 : win.width;
-
     SCut &cut = getCut();
     SObject &content = cut.getContent();
 
@@ -497,14 +531,36 @@ bool SCutRendererInline::collectEnvelope( SLink &lk, const SEnvelopeWindow &win,
     SObjectRenderer *rndr = container ? NULL : content.getInlineRenderer();
     if( !container && !rndr ) return false;   // draw() paints "no renderer" here
 
-    const offset_t clipStart = lk.getStartTime();
-
     // The collect twin of drawSeg(): ONE linear repetition, already mapped into
     // the content's own domain.
-    auto collectSeg = [&]( const SEnvelopeWindow &seg, preview_t *dst ) -> bool {
-        if( container ) return collectObjectEnvelope( cut, lk, seg, dst );
-        return rndr->collectEnvelope( lk, seg, dst );
-    };
+    return collectWalk( lk, win, out,
+        [&]( const SEnvelopeWindow &seg, preview_t *dst ) -> bool {
+            if( container ) return collectObjectEnvelope( cut, lk, seg, dst );
+            return rndr->collectEnvelope( lk, seg, dst );
+        } );
+}
+
+bool SCutRendererInline::collectTakeEnvelope( SLink &lk,
+                                              const SEnvelopeWindow &win,
+                                              preview_t *out, int takeIndex )
+{
+    SObjectRenderer *colRndr = takeColumnRendererOf( getCut().getContent() );
+    if( !colRndr ) return collectEnvelope( lk, win, out );
+    return collectWalk( lk, win, out,
+        [&]( const SEnvelopeWindow &seg, preview_t *dst ) -> bool {
+            return colRndr->collectTakeEnvelope( lk, seg, dst, takeIndex );
+        } );
+}
+
+bool SCutRendererInline::collectWalk(
+    SLink &lk, const SEnvelopeWindow &win, preview_t *out,
+    const std::function<bool( const SEnvelopeWindow &, preview_t * )> &collectSeg )
+{
+    if( !out ) return false;
+    const int width = win.width < 1 ? 1 : win.width;
+
+    SCut &cut = getCut();
+    const offset_t clipStart = lk.getStartTime();
 
     if( !cut.isLooping() ) {
         // InlineRenderContext::getTimeOf, at the two boundaries the draw path
