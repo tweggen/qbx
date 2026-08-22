@@ -115,6 +115,11 @@ public:
     // carries no lane state.
     bool isPathContainer() const override { return true; }
 
+    // The type-agnostic seam the ARRANGER asks through (SObject::
+    // isLaneFragment): app/timeline has no edge to app/objects/fragment, so
+    // the Unpack menu item cannot dynamic_cast for this.
+    bool isLaneFragment() const override { return true; }
+
     bool hasDuration() const override;
     length_t getDuration() const override;
 

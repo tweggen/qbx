@@ -53,3 +53,41 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
    be folded. A top-level closure member is always the TOPMOST one by
    construction, which is why the rule here is simply "in the closure ⇒ null
    the plug".
+
+7. **`pack-selection` PARTITIONS; `pack-clips` PACKS — and the split is not
+   cosmetic.** `pack-clips` is single-lane BY CONTRACT (proposal 41 D8 /
+   AC2.5: it refuses a two-lane selection naming both lanes, and
+   `fragment_pack_multilane_refused.qxa` gates exactly that refusal). The
+   arranger's "Pack clips into fragment" item, however, acts on a selection
+   that routinely crosses lanes. Widening `pack-clips` with a mode flag would
+   have blunted the one gate keeping a fragment single-lane, so the partition
+   is a verb ABOVE it: `SPackSelectionAction` groups the paths by lane, packs
+   every lane holding two or more of them, leaves a lane holding exactly one
+   alone, and delegates each actual pack to an UNMODIFIED `SPackClipsAction`
+   inside one `SCompositeAction` — the "a planner verb is a composite of
+   primitives" shape `place-recording` and `duplicate-asset-here` already use,
+   and what makes a multi-lane gesture ONE undo step.
+
+   Two consequences worth knowing rather than rediscovering:
+
+   - **The members are independent by construction**, which is why their
+     order is free. Packing lane A removes clips from A and adds a placement
+     to A, which cannot shift an index in lane B; no track is added or
+     removed, so no LANE path moves either.
+   - **The naming works only because each pack registers its asset before the
+     next member runs.** `pack-selection` has no `name` attribute at all (one
+     name cannot serve N lanes), so every lane takes `pack-clips`' generated
+     first-unused "\<lane name\> N" — and two lanes with the SAME name come
+     out as "Riff 1" and "Riff 2" purely because `generatePackName`'s
+     `hasAsset()` sees the first registration. `fragment_pack_selection.qxa`
+     names both packed lanes "Riff" on purpose to pin that.
+
+   Refusing when NO lane holds two or more clips is deliberate: an
+   applied-but-empty action would put a no-op on the undo stack.
+
+   **The partition rule is ONE function**, `spackselection::groupByLane` /
+   `packableLaneCount`, shared by the action and by the arranger menu item's
+   enabled state. Those are the same question — "what would this pack?" — and
+   proposal 41 M7 already paid for what happens when two call sites each
+   derive the same rule separately (paint and hit-test disagreeing on z-order,
+   green for two milestones).

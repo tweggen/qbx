@@ -1980,6 +1980,7 @@ already does, not what looks natural to build.**
 | **A per-placement remap belongs on the `SLink`, never on the shared content — `eventChannelOverride_` was drafted on `SCut` first and had to move** | D2 shares ONE `SCut` across every placement of an asset (the row above), so a channel remap stored on the CONTENT would move every placement's channel at once — the exact mistake sharing exists to prevent, caught before it shipped. `set-clip-event-channel` writes `SLink::getEventChannelOverride()`, matching `midiOutChannel`'s `-1`=as-authored convention so the scripting API speaks one dialect (D6, `objects/fragment/CONTRACT.md` inv. 9). |
 | **The equal-start-time tiebreak is CONTRACTUAL, and the first spelling of it was wrong twice, corrected the same day it landed** (`bb6b924f`) | D11 originally read "child index, then object id". `childIndex` alone is already a POSITION in the lane's child list — unique across the set being sorted — so `(startTime, childIndex)` is already a TOTAL order and the third key is UNREACHABLE. Worse, an `SObject`'s "id" in this tree IS its ADDRESS (`slink.cpp` serializes it that way), so a live tiebreak on it would order by whatever the allocator returned — differing run to run — which a tiebreak this proposal calls CONTRACTUAL (it is the one thing standing between a drag handle and being permanently hidden) may never rest on. Fixed to `(startTime, childIndex)` alone (`main/timeline/CONTRACT.md` inv. 28). |
 | A fragment is **single-lane by construction** (D8); vertical reuse is a folder track, not a fragment feature | A fragment spanning multiple lanes would have to decide which instrument each stream reaches — routing, which means track identity, and D1 (no track identity) is gone. `pack-clips` refuses a multi-lane selection, naming both lanes. |
+| **The ARRANGER's menu items landed later than the verbs, and pack got a SECOND verb rather than a mode flag** (2026-08-22) | Proposal 41 built no UI surface at all: M0-M8 are the model, the verbs and the paint, and until this the three fragment verbs were reachable only from a `.qxa` script. The clip context menu (`SMVActualView::ctGlobalShow`) now carries **Pack clips into fragment** and **Unpack "\<name\>"**. Pack reads the SELECTION (packing is a group operation, so unlike split/pitch there is no last-clicked fallback) and a selection crossing lanes is NORMAL — it submits the new **`pack-selection`**, which packs every lane holding two or more selected clips and leaves singleton lanes alone. That is a verb ABOVE `pack-clips`, not a flag inside it: `pack-clips` refusing a two-lane selection is exactly what `fragment_pack_multilane_refused.qxa` gates, and every actual pack is still an unmodified `SPackClipsAction` inside one `SCompositeAction` (so a four-lane gesture is ONE undo step). Names are GENERATED per lane, no prompt — one name cannot serve N lanes. The pack handler CLEARS the selection first: the packed clips are REPARENTED, not deleted, so a surviving selection would make the next Delete cascade through every placement of the new asset. The fragment test is `SObject::isLaneFragment()`, NOT `dynamic_cast` (`app/timeline` has no edge to `app/objects/fragment`) and NOT `isPathContainer() && !isLane()` (an accidental agreement M0 exists to stop relying on). `main/timeline/CONTRACT.md` inv. 33, `main/objects/mixer/CONTRACT.md` inv. 7. |
 | A clip paints its material, not its window — **clipped, never alpha-blended** (D10) | An opaque rect spanning a disjoint fragment's window paints the fragment's EMPTY regions over whatever material sits beneath it. Per-column `collectEnvelope()` decides what paints; a gap column is left untouched. An object whose renderer does not support `collectEnvelope()` at all keeps the old solid fill — "unknown material" must never read as "no material" (`main/timeline/CONTRACT.md` inv. 29). |
 | The tag chip is a SOLID OPAQUE CHIP, never bare text — separable by a pixel gate | Proposal 39 already found that anti-aliased text drawn on a clip body lands at every luminance between the text and the body, which defeats measurement. A chip of known, DERIVED fill colour (`laneFillColor().darker(160)`) is separable; loose glyphs are not (D12-D13, `main/timeline/CONTRACT.md` inv. 30). |
 
@@ -1990,7 +1991,9 @@ and the qxa cases `fragment_pack_roundtrip`, `fragment_place_reuse`,
 `fragment_delete_cascades` (M8), `fragment_midi_feed`,
 `fragment_midi_no_double_trigger`, `fragment_midi_channel_remap`,
 `fragment_midi_loop`, `fragment_rate_refused` (M3/M4), `fragment_paint_
-disjoint` (M5), `fragment_tag_drag` (M6/M7). **A PIXEL gate, not a
+disjoint` (M5), `fragment_tag_drag` (M6/M7), `fragment_pack_selection` (the
+menu's verb — verified failing under two sabotages: packing only the first
+lane, and packing singletons too). **A PIXEL gate, not a
 `collectEnvelope` one, is what actually bites for Part B** (trap 6, proposal
 39's own precedent confirmed a second time): a script-level check through
 `collectEnvelope` sits BELOW the paint and cannot see a paint-order or
@@ -2014,7 +2017,14 @@ DEEP NESTING — fragments inside fragments inside assets beyond two levels.
 Real MIDI hardware for the exported feed — the capture port is the
 measurement, as everywhere else. The fragment bin's UI beyond what the
 existing asset list already shows. Glue (the destructive commit) — out of
-scope entirely, a separate proposal. **Additionally found while writing M8**:
+scope entirely, a separate proposal. **And nothing headless touches the two CONTEXT-MENU ITEMS** — their
+enabled state, their labels, the pack handler's selection-clearing, or the
+fragment-only / unshared-asset conditions the Unpack item is shown under.
+There is no testkit verb for a context menu anywhere in this repo, so what is
+gated is the VERB each item submits, plus the partition rule the Pack item's
+enabled state reads (`spackselection::packableLaneCount`, `fragment_test`);
+the wiring itself is hand-verified only. **Additionally found while writing
+M8**:
 no case exercises a MIDI (event) clip's deletion cascade — `fragment_
 delete_cascades.qxa` is audio-only (an `SCut` over an `SExternFile`), because
 the testkit verb it needed (`delete-fragment-clip`) was scoped to the same
