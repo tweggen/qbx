@@ -290,6 +290,25 @@ public:
     virtual bool isLane() const { return false; }
 
     /**
+     * True for a PACKED LANE FRAGMENT -- the container `pack-clips` mints and
+     * `unpack-clips` takes apart (proposal 41 M1/M2).
+     *
+     * On the base class for exactly the reason contentKind(),
+     * resolveEventClip() and isLiveRecording() are: the ARRANGER has to ask
+     * the question (its context menu offers Unpack only over a fragment
+     * placement) and `app/timeline` deliberately has no edge to
+     * `app/objects/fragment` -- the tag chip already reads a fragment's name
+     * through the type-agnostic SClipWindow interface for the same reason.
+     *
+     * NOT spelled `isPathContainer() && !isLane()`, which is true of a
+     * fragment today and reads like a test for one. That conjunction is an
+     * ACCIDENT of there being exactly one non-lane container so far, and
+     * relying on an accidental agreement between two predicates is precisely
+     * what proposal 41 M0 split them up to stop doing.
+     */
+    virtual bool isLaneFragment() const { return false; }
+
+    /**
      * The kind of material this object carries (proposal 37 D8b). Audio by
      * default — every object that existed before event clips is audio, and a
      * container's kind is the kind of what it renders, which is audio too.

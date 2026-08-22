@@ -452,6 +452,12 @@ const Fixture kFixtures[] = {
       "<unpack-clips clip='Drums:0,3'/>" },
     { "duplicate-asset-here",
       "<duplicate-asset-here clip='Drums:0,3' name='Riff copy'/>" },
+    // pack-selection: the multi-lane partition ABOVE pack-clips (the
+    // arranger's "Pack clips into fragment" menu item). Same `clips`
+    // spelling, deliberately no `name` -- one name cannot serve N lanes, so
+    // each lane's fragment takes pack-clips' generated "<lane name> N".
+    { "pack-selection",
+      "<pack-selection clips='Drums:0,0;0,1;1,0;1,1'/>" },
     // Proposal 41 M8 gate: delete-fragment-clip addresses a clip nested
     // INSIDE a fragment with the asset-name-qualified spelling M2b gave
     // splacements::rootNamed() ("Riff:0"). restore-fragment-clip, its

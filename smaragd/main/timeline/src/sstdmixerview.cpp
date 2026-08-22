@@ -58,6 +58,8 @@
 #include <QPen>
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/objects/mixer/saddtrackaction.h"
+#include "app/objects/mixer/spackselectionaction.h"
+#include "app/objects/mixer/sunpackclipsaction.h"
 #include "app/objects/mixer/smovetrackaction.h"
 #include "app/objects/mixer/sreparenttrackaction.h"
 #include "app/objects/mixer/sremovetrackaction.h"
@@ -825,6 +827,102 @@ void SStdMixerView::ctSplitSample()
     qContent_->update();
 }
 
+// --- proposal 41 M2: pack / unpack from the arranger ------------------------
+//
+// PACK ACTS ON THE SELECTION, not on the right-clicked clip. Packing is a
+// group operation and a single clip has nothing to group with, so there is no
+// last-clicked fallback here (unlike ctSplitSample / nudgeClipPitch, where a
+// one-clip target is the normal case).
+//
+// A selection that crossed several lanes is NOT refused: `pack-selection`
+// partitions it and mints one fragment per lane holding two or more selected
+// clips, leaving every lane that holds exactly one alone. `pack-clips` itself
+// stays single-lane by contract (D8, AC2.5), which is what
+// fragment_pack_multilane_refused.qxa gates -- the partition lives one level
+// above it rather than as a mode flag inside it.
+//
+// The names are GENERATED ("<lane name> N", pack-clips' own fallback) and
+// there is deliberately no prompt: one dialog cannot name N lanes' fragments,
+// and unlike "Create asset from range" -- whose name becomes a TAB LABEL --
+// a fragment's name shows only on its tag chip and is renameable afterwards.
+void SStdMixerView::ctPackClips()
+{
+    SApplication &app = SApplication::app();
+    if( !app.getCurrentProject() ) return;
+
+    auto showStatus = [this]( const QString &msg ) {
+        if( QMainWindow *mw = qobject_cast<QMainWindow*>( window() ) )
+            mw->statusBar()->showMessage( msg, 4000 );
+    };
+
+    const QList<QList<int>> paths =
+        app.getCurrentSelectionPathsFor( rootName() );
+    const int nLanes = spackselection::packableLaneCount( paths );
+    if( nLanes == 0 ) {
+        showStatus( "Select two or more clips on the same lane to pack them" );
+        return;
+    }
+
+    // The packed clips are REPARENTED into the fragments, not deleted, so the
+    // selection would survive as a set of links now living INSIDE them --
+    // and Delete over that selection would cascade into every placement
+    // (objects/fragment/CONTRACT.md inv. 6), which is not what a user who
+    // just packed and pressed Delete means. Cleared as plain UI state, like
+    // resetLastClickSLink() below; undo restores the clips, not the selection.
+    app.clearSelection( rootName() );
+    qContent_->resetLastClickSLink();
+
+    stimeline::submitActive( new SPackSelectionAction( paths ) );
+    showStatus( nLanes > 1
+                    ? QString( "Packed %1 lanes into fragments" ).arg( nLanes )
+                    : QString( "Packed the selection into a fragment" ) );
+    qContent_->update();
+}
+
+// Unpack the right-clicked fragment placement. Both refusals the action makes
+// are already reflected in the menu item's enabled state (see ctGlobalShow);
+// they are re-checked here because a slot is reachable however it was
+// triggered, and a status line beats a log line nobody has open.
+void SStdMixerView::ctUnpackClips()
+{
+    SApplication &app = SApplication::app();
+    if( !app.getCurrentProject() || !model_ ) return;
+
+    auto showStatus = [this]( const QString &msg ) {
+        if( QMainWindow *mw = qobject_cast<QMainWindow*>( window() ) )
+            mw->statusBar()->showMessage( msg, 4000 );
+    };
+
+    STrack *track = qContent_->getLastClickTrack();
+    SLink  *link  = qContent_->getLastClickSLink();
+    if( !track || !link ) {
+        showStatus( "Right-click a packed fragment to unpack it" );
+        return;
+    }
+    SCut *cut = dynamic_cast<SCut *>( &link->getSObject() );
+    if( !cut || !cut->getContent().isLaneFragment() ) {
+        showStatus( "That clip is not a packed fragment" );
+        return;
+    }
+    if( cut->refCount() != 2 ) {
+        showStatus( QString( "\"%1\" is placed %2 times; unpacking it would "
+                             "empty it out from under the other placements" )
+                        .arg( cut->getSName() ).arg( cut->refCount() - 1 ) );
+        return;
+    }
+
+    QList<int> p = strackpath::pathOf( model_, track );
+    p.append( track->indexOfChild( link ) );
+
+    // The placement link is DELETED by the action; a stale lastClickSLink_
+    // would dangle (same reason ctSplitSample resets it). The SELECTION needs
+    // no clearing -- SApplication watches each selected link's destroyed()
+    // and drops it.
+    qContent_->resetLastClickSLink();
+    stimeline::submitActive( new SUnpackClipsAction( p ) );
+    qContent_->update();
+}
+
 // Transpose the target clips by `cents`. Pitch lives in the grain stage, so
 // this changes only how the clip SOUNDS — its window, its length and every
 // position mapping stay exactly where they were.
@@ -941,6 +1039,50 @@ void SMVActualView::ctGlobalShow()
         qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction( smv_.actSplit_ );
         qGlobalPopup_->addAction( "Add &link", &smv_, SLOT( ctAddLink() ) );
+
+        // --- proposal 41 M2: the arranger's surface for pack / unpack -----
+        // Pack acts on the SELECTION (packing is a group operation), unpack
+        // on the CLICKED clip (there is exactly one fragment under the
+        // pointer). Both items announce what they would do rather than
+        // failing after the fact, the way "Create asset from range" already
+        // does when there is no range.
+        {
+            const int nLanes = spackselection::packableLaneCount(
+                SApplication::app().getCurrentSelectionPathsFor(
+                    smv_.rootName() ) );
+            QAction *aPack = qGlobalPopup_->addAction(
+                nLanes > 1
+                    ? QString( "Pac&k clips into %1 fragments" ).arg( nLanes )
+                    : QString( "Pac&k clips into fragment" ),
+                &smv_, SLOT( ctPackClips() ) );
+            if( nLanes == 0 ) {
+                aPack->setEnabled( false );
+                aPack->setText( "Pac&k clips into fragment  "
+                                "(select two or more clips on one lane)" );
+            }
+        }
+        // Offered only over a fragment placement -- every other clip has
+        // nothing to take apart. Asked through SObject::isLaneFragment()
+        // because app/timeline has no edge to app/objects/fragment.
+        if( SCut *cut = dynamic_cast<SCut *>( &lastClickSLink_->getSObject() ) ) {
+            if( cut->getContent().isLaneFragment() ) {
+                QAction *aUnpack = qGlobalPopup_->addAction(
+                    QString( "&Unpack \"%1\"" ).arg( cut->getSName() ),
+                    &smv_, SLOT( ctUnpackClips() ) );
+                // unpack-clips REFUSES a shared asset: it moves every child
+                // out, which would leave any other placement windowing an
+                // emptied fragment (D2's sharing invariant). refCount() is
+                // the registry pin plus one per placement, so 2 means this is
+                // the only one -- the same number the action itself checks.
+                if( cut->refCount() != 2 ) {
+                    aUnpack->setEnabled( false );
+                    aUnpack->setText(
+                        aUnpack->text()
+                        + QString( "  (placed %1 times \u2014 unpacking would "
+                                   "break sharing)" ).arg( cut->refCount() - 1 ) );
+                }
+            }
+        }
         qGlobalPopup_->addSeparator();
     }
     if( lastClickTrack_ ) {

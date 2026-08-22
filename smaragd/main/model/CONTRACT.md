@@ -385,7 +385,7 @@ case moved.
 
 They exist so a TAKE LANE is painted by the same walk the composite lane uses —
 same domain map, same loop tiling, same delegation — with only the terminal
-swapped. See `main/timeline/CONTRACT.md` inv. 33 for the defect that made this
+swapped. See `main/timeline/CONTRACT.md` inv. 34 for the defect that made this
 necessary.
 
 Two implementations, and the asymmetry between them is deliberate:
@@ -420,7 +420,7 @@ COLUMNS only where a caller-supplied collect reports material; leave gap columns
 untouched; return false and paint nothing when there is no envelope, so the
 caller does the original solid fill. Shared by `STrackRendererInline::draw()`
 (the composite lane) and `SMVActualView::drawTakeLane()` (the take lanes) —
-see `main/timeline/CONTRACT.md` inv. 34.
+see `main/timeline/CONTRACT.md` inv. 35.
 
 It lives here because it is about a RENDERER and an `SRenderContext` and belongs
 beside them. (Not for `envelopeWindowOfContext`'s layering reason: `main/timeline`

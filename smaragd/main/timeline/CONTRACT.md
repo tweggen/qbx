@@ -888,7 +888,71 @@ footprint (AC7.1/AC7.2). Verified as a real gate: with the tag-first wiring
 reverted, the same case fails on exactly the three assertions this milestone
 is about.
 
-### inv. 33 — A TAKE LANE IS PAINTED BY THE CLIP'S OWN RENDERER, ASKED FOR ONE
+### inv. 33 — PACK ACTS ON THE SELECTION, UNPACK ON THE CLICKED CLIP, AND NEITHER ITEM APPEARS WHERE IT WOULD ONLY FAIL
+
+The arranger's clip context menu (`SMVActualView::ctGlobalShow`) is the UI
+surface for proposal 41's fragment verbs; before this it had none, and the
+verbs were reachable only from a `.qxa` script.
+
+**Pack reads the SELECTION, with no last-clicked fallback.** Every other clip
+item in this menu — split, pitch — falls back to `lastClickSLink_` when the
+selection is empty, because a one-clip target is their normal case. Packing is
+a GROUP operation: one clip has nothing to group with, so a fallback here
+could only produce a one-child fragment nobody asked for. The item is
+DISABLED, with the reason in its own text ("select two or more clips on one
+lane"), following the precedent "Create asset from range  (select a range
+first)" already set two items below.
+
+**A selection that crossed lanes is normal, not an error.** The item submits
+`pack-selection`, which mints one fragment per lane holding two or more
+selected clips and leaves singleton lanes alone (see objects/mixer inv. 7).
+The item's LABEL says how many fragments that is, because an item that
+silently touches four lanes when the pointer is on one is the whole risk of a
+multi-selection — the same reasoning as the `" (%1 tracks)"` suffix the track
+items carry.
+
+**The names are generated; there is no prompt.** One dialog cannot name N
+lanes' fragments. Unlike "Create asset from range", whose name becomes a TAB
+LABEL and is therefore asked for, a fragment's name shows only on its tag chip
+(inv. 30) and is renameable afterwards.
+
+**The handler CLEARS the selection before submitting.** The packed clips are
+REPARENTED into the fragments, not deleted, so the selection would otherwise
+survive as a set of links now living INSIDE them — and Delete over that
+selection cascades through every placement of the asset
+(`objects/fragment/CONTRACT.md` inv. 6), which is not what a user who just
+packed and pressed Delete means. It is plain UI state, cleared like
+`resetLastClickSLink()`; undo restores the clips, not the selection. Unpack
+needs no such clearing: `SApplication` watches each selected link's
+`destroyed()` and drops it.
+
+**Unpack is offered ONLY over a fragment placement, and only over an
+UNSHARED one.** Both conditions are the action's own refusals, surfaced as the
+item's enabled state rather than as a log line after the fact: `unpack-clips`
+moves every child out, which would leave any other placement windowing an
+emptied fragment (D2's sharing invariant), and `refCount()` — the registry pin
+plus one per placement — reading 2 is the same number the action checks. The
+disabled text names the placement count.
+
+**The fragment test is `SObject::isLaneFragment()`, not a `dynamic_cast`.**
+`app/timeline` has no edge to `app/objects/fragment` and must not grow one —
+the tag chip already reads a fragment's NAME through the type-agnostic
+`SClipWindow` interface for exactly this reason (inv. 30). It is also not
+spelled `isPathContainer() && !isLane()`: that conjunction is true of a
+fragment today only because there is exactly one non-lane container so far,
+and relying on an accidental agreement between two predicates is what
+proposal 41 M0 split them up to stop doing.
+
+**NOT GATED — there is no testkit verb for a context menu anywhere in this
+repo.** Nothing headless exercises either item: not its enabled state, not its
+label, not the selection-clearing, not the fragment-only / unshared
+conditions. What IS gated is the verb the pack item submits
+(`fragment_pack_selection.qxa`, verified failing under two sabotages: packing
+only the first lane, and packing singletons too) and the verb the unpack item
+submits (`fragment_pack_roundtrip.qxa`). The menu wiring itself is
+hand-verified only.
+
+### inv. 34 — A TAKE LANE IS PAINTED BY THE CLIP'S OWN RENDERER, ASKED FOR ONE
 ### TAKE — NEVER BY REACHING PAST IT TO THE TAKE OBJECT
 
 `SMVActualView::drawTakeLane` paints through
@@ -944,7 +1008,7 @@ always moved the content by `wrapperStretch * d`. Today's broken paint moved
 1:1 with the hand and HID it; a correct paint reveals it. Inert at
 `stretch == 1`, which is every fixture and every project seen so far.
 
-### inv. 34 — THE COMPOSITE LANE AND THE TAKE LANES SHARE ONE BODY-FILL RULE
+### inv. 35 — THE COMPOSITE LANE AND THE TAKE LANES SHARE ONE BODY-FILL RULE
 
 Both go through `fillBodyByMaterial()` (`app/model/sobjectrenderer.h`): fill a
 column only where the envelope reports material (`min != 0 || max != 0`), leave

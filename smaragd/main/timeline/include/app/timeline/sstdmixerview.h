@@ -868,6 +868,13 @@ public slots:
     void ctRemoveSample();
     void ctDeleteSample();
     void ctSplitSample();
+    // Proposal 41 M2, arranger surface: pack the current clip selection into
+    // fragments, ONE PER LANE, leaving any lane that holds a single selected
+    // clip alone (pack-selection). Named automatically -- no prompt.
+    void ctPackClips();
+    // Its inverse over the right-clicked clip, which must be the only
+    // placement of its fragment asset (unpack-clips refuses a shared one).
+    void ctUnpackClips();
     // Transpose the selected clips (or, with an empty selection, the
     // last-clicked one) by a signed offset in CENTS. One undo step per press.
     void ctPitchUp()       { nudgeClipPitch(  100.0 ); }

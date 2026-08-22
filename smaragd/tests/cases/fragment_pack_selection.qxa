@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pack-selection: the MULTI-LANE partition above pack-clips, and the verb the
+  arranger's "Pack clips into fragment" context-menu item submits.
+
+  The rule, and it is the whole verb:
+
+      for each lane in the selection:
+          two or more selected clips -> pack them into one fragment
+          exactly one                -> leave the clip alone
+
+  pack-clips itself stays single-lane BY CONTRACT (D8/AC2.5 - it REFUSES a
+  two-lane selection, and fragment_pack_multilane_refused.qxa gates that
+  refusal), so the partition is a verb ABOVE it rather than a mode flag
+  inside it. Every actual pack here is an unmodified SPackClipsAction inside
+  ONE SCompositeAction, which is what makes the whole multi-lane gesture ONE
+  undo step.
+
+  The shape:
+
+    lane 0 "Riff":  clips at 0, 200000, 400000  -> 3 selected -> PACKED
+    lane 1 "Riff":  clips at 100000, 300000     -> 2 selected -> PACKED
+    lane 2 "Solo":  one clip at 0               -> 1 selected -> LEFT ALONE
+
+  A one-lane-at-a-time reading of this verb would leave lane 1 untouched; a
+  pack-everything reading would swallow lane 2's single clip into a
+  one-child fragment. Both are excluded by the same call, which is why all
+  three lanes are asserted after ONE pack-selection.
+
+  NAMES ARE GENERATED, per lane, and there is deliberately no `name`
+  attribute - one name cannot serve N lanes. BOTH packed lanes are called
+  "Riff" here ON PURPOSE: pack-clips' first-unused generator must therefore
+  produce "Riff 1" and "Riff 2", which it can only do because each pack
+  REGISTERS its asset before the next member of the composite runs. The
+  assertion is made through the asset-qualified path spelling
+  (splacements::rootNamed resolves an asset whose content is a fragment), so
+  it gates the generated NAME and the fragment's CONTENTS in one line - and
+  "Riff 3" not existing is what proves lane 2 was never packed at all.
+
+  NOT gated here - there is no testkit verb for a context menu anywhere in
+  this repo: the menu ITEMS themselves (their enabled state, their labels,
+  the selection-clearing the pack handler does, and the fragment-only /
+  shared-asset conditions the unpack item is shown under). What is gated is
+  the verb they submit.
+
+  Fixture: test_sawtooth.wav, 4 s (192000 frames), amplitude ramps 0 -> 0.8,
+  unique RMS per source second: sec0 ~0.067, sec1 ~0.176.
+-->
+<SActionScript version="1" name="fragment_pack_selection">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- add-track's generated names are random adjective+noun pairs, so the
+         two packed lanes are named EXPLICITLY, and identically, to pin the
+         "Riff 1" / "Riff 2" claim above. -->
+    <set-track-name trackPath="0" name="Riff"/>
+    <set-track-name trackPath="1" name="Riff"/>
+    <set-track-name trackPath="2" name="Solo"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="200000"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="400000"/>
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="100000"/>
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="300000"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <render filename="sel_pre.wav" format="wav" quality="10"/>
+    <!-- Two windows, measured, that the pack must not disturb by one sample.
+         At 0 lane 0's first clip and lane 2's clip sound together, both at
+         their own sec0 (~0.067 each); at 400000 lane 0's third clip is at
+         sec0 under lane 1's second clip, which is mid-ramp by then. -->
+    <assert-audio-energy filename="sel_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.125" maxRms="0.142"/>
+    <assert-audio-energy filename="sel_pre.wav"
+                         startFrame="400000" frameCount="48000"
+                         minRms="0.278" maxRms="0.296"/>
+
+    <!-- ONE call over all six clips, spanning all three lanes. -->
+    <pack-selection clips="0,0;0,1;0,2;1,0;1,1;2,0"/>
+
+    <assert-track-count count="3"/>
+
+    <!-- Lane 0: three clips became ONE placement at the group's own start. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="592000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- Lane 1: two clips became ONE placement - the partition reached the
+         SECOND lane too, which is the claim a single-lane verb cannot make.
+         Its start is the GROUP's own start (100000), not 0. -->
+    <assert-clip-window clip="1,0" startTime="100000" duration="392000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- Lane 2: a lane holding ONE selected clip is left exactly alone. -->
+    <assert-clip-window clip="2,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <!-- The generated names, and the fragments' contents, in one spelling.
+         Children sit at FRAGMENT-RELATIVE offsets from their own group's
+         earliest start: lane 0's at 0/200000/400000, lane 1's at 0/200000
+         (from 100000 and 300000). -->
+    <assert-clip-window clip="Riff 1:0" startTime="0"      duration="192000"/>
+    <assert-clip-window clip="Riff 1:1" startTime="200000" duration="192000"/>
+    <assert-clip-window clip="Riff 1:2" startTime="400000" duration="192000"/>
+    <assert-clip-window clip="Riff 1:3" expectReject="true"/>
+
+    <assert-clip-window clip="Riff 2:0" startTime="0"      duration="192000"/>
+    <assert-clip-window clip="Riff 2:1" startTime="200000" duration="192000"/>
+    <assert-clip-window clip="Riff 2:2" expectReject="true"/>
+
+    <!-- No third fragment: lane 2's single clip was never packed. -->
+    <assert-clip-window clip="Riff 3:0" expectReject="true"/>
+    <assert-clip-window clip="Solo 1:0" expectReject="true"/>
+
+    <render filename="sel_post.wav" format="wav" quality="10"/>
+    <!-- Not one sample moved: the same energy at the same absolute frames. -->
+    <assert-audio-energy filename="sel_post.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.125" maxRms="0.142"/>
+    <assert-audio-energy filename="sel_post.wav"
+                         startFrame="400000" frameCount="48000"
+                         minRms="0.278" maxRms="0.296"/>
+
+    <!-- ONE undo step for the whole multi-lane gesture, not one per lane. -->
+    <undo count="1"/>
+
+    <assert-clip-window clip="0,0" startTime="0"      duration="192000"/>
+    <assert-clip-window clip="0,1" startTime="200000" duration="192000"/>
+    <assert-clip-window clip="0,2" startTime="400000" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="100000" duration="192000"/>
+    <assert-clip-window clip="1,1" startTime="300000" duration="192000"/>
+    <assert-clip-window clip="2,0" startTime="0"      duration="192000"/>
+    <assert-clip-window clip="Riff 1:0" expectReject="true"/>
+    <assert-clip-window clip="Riff 2:0" expectReject="true"/>
+
+    <render filename="sel_undo.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="sel_undo.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.125" maxRms="0.142"/>
+    <assert-audio-energy filename="sel_undo.wav"
+                         startFrame="400000" frameCount="48000"
+                         minRms="0.278" maxRms="0.296"/>
+
+    <!-- REFUSAL: a selection in which NO lane holds two or more clips has
+         nothing to pack, and must refuse rather than put an applied-but-empty
+         entry on the undo stack. Three singletons, one per lane. -->
+    <pack-selection clips="0,0;1,0;2,0" expectReject="true"/>
+    <assert-log level="warn" contains="no lane in the selection" minCount="1"/>
+
+    <!-- Nothing moved. -->
+    <assert-clip-window clip="0,0" startTime="0"      duration="192000"/>
+    <assert-clip-window clip="0,1" startTime="200000" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="100000" duration="192000"/>
+    <assert-clip-window clip="2,0" startTime="0"      duration="192000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

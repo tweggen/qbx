@@ -288,6 +288,9 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/spackclipsaction.h
     objects/mixer/include/app/objects/mixer/sunpackclipsaction.h
     objects/mixer/include/app/objects/mixer/sduplicateassethereaction.h
+    # --- pack-selection: the multi-lane partition over pack-clips (the
+    #     arranger's "Pack clips into fragment" menu item)
+    objects/mixer/include/app/objects/mixer/spackselectionaction.h
     objects/mixer/src/saddtrackaction.cpp
     objects/mixer/src/sdissolvearrangementaction.cpp
     objects/mixer/src/sextractarrangementaction.cpp
@@ -305,6 +308,7 @@ set(APP_OBJECTS_FILES
     objects/mixer/src/spackclipsaction.cpp
     objects/mixer/src/sunpackclipsaction.cpp
     objects/mixer/src/sduplicateassethereaction.cpp
+    objects/mixer/src/spackselectionaction.cpp
 )
 
 set(APP_UI_FILES

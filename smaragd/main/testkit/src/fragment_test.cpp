@@ -36,6 +36,7 @@
 #include "app/model/ssolorules.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/fragment/slanefragment.h"
+#include "app/objects/mixer/spackselectionaction.h"
 #include "app/objects/midi/smidicut.h"
 #include "app/objects/midi/smidisequence.h"
 #include "app/objects/mixer/sstdmixer.h"
@@ -500,6 +501,68 @@ void testSerializeRoundTrip()
 
 }  // namespace
 
+// The partition rule pack-selection is built on, and the SAME function the
+// arranger's "Pack clips into fragment" menu item reads to decide whether to
+// enable itself. It is purely syntactic -- a clip path's lane is its path
+// minus the last element -- so it needs no project, which is exactly why it
+// can be shared by a menu that must answer instantly and an action that must
+// answer correctly.
+//
+// This is the closest thing to a gate the MENU has: no testkit verb in this
+// repo can open a context menu, so what is pinned here is the DECISION the
+// item makes, not the item. The action's own end-to-end behaviour is
+// qxa.fragment_pack_selection.
+static void testPackSelectionPartition()
+{
+    using namespace spackselection;
+    auto P = []( std::initializer_list<int> v ) { return QList<int>( v ); };
+
+    // Three lanes: 3 clips, 2 clips, 1 clip. Two lanes are packable.
+    const QList<QList<int>> mixed = {
+        P({0,0}), P({0,1}), P({0,2}), P({1,0}), P({1,1}), P({2,0}) };
+    check( groupByLane( mixed ).size() == 3,
+           "groupByLane: three lanes in the selection" );
+    check( packableLaneCount( mixed ) == 2,
+           "packableLaneCount: the two lanes holding 2+ clips" );
+
+    // Lanes come out in FIRST-SEEN order and each keeps its clips' order,
+    // which is what makes a composite's member order stable run to run.
+    const QList<QList<int>> interleaved = {
+        P({1,0}), P({0,0}), P({1,1}), P({0,1}) };
+    const QList<QList<QList<int>>> g = groupByLane( interleaved );
+    check( g.size() == 2 && g[0].size() == 2 && g[1].size() == 2,
+           "groupByLane: interleaved paths regroup into two lanes" );
+    check( g[0][0] == P({1,0}) && g[0][1] == P({1,1}),
+           "groupByLane: first-seen lane first, its clips in order" );
+
+    // Nothing to pack: every lane holds exactly one clip. The action REFUSES
+    // on this, rather than applying an empty composite.
+    check( packableLaneCount( { P({0,0}), P({1,0}), P({2,0}) } ) == 0,
+           "packableLaneCount: singletons only => nothing to pack" );
+    check( packableLaneCount( {} ) == 0,
+           "packableLaneCount: empty selection" );
+
+    // A NESTED lane is its own lane: "0,1,0" and "0,1,1" share the container
+    // path "0,1", and neither joins top-level lane "0".
+    check( packableLaneCount( { P({0,0}), P({0,1,0}), P({0,1,1}) } ) == 1,
+           "packableLaneCount: a nested lane groups by its own full path" );
+
+    // Grouping is SYNTACTIC and stays so: a ONE-element path is a clip on the
+    // ROOT container, so its lane path is the EMPTY one, and it forms a group
+    // of its own rather than joining lane "0". That is deliberate -- deciding
+    // here that such a path is really a lane would mean resolving it, which
+    // this function must not do to stay callable from a menu. Whether it
+    // names a clip at all is pack-clips' business: placementAt() returns null
+    // for a nested track, and the member refuses, rolling the composite back.
+    check( groupByLane( { P({0}), P({0,0}), P({0,1}) } ).size() == 2,
+           "groupByLane: a root-level path is its own group, not lane 0's" );
+
+    // The one path shape that IS dropped here: an empty one. The action
+    // refuses on it up front, before any grouping.
+    check( groupByLane( { QList<int>(), P({0,0}), P({0,1}) } ).size() == 1,
+           "groupByLane: an empty path contributes no group" );
+}
+
 int main( int argc, char **argv )
 {
     // QApplication (offscreen) for the app object libraries' static
@@ -522,6 +585,7 @@ int main( int argc, char **argv )
         testLaneStateNeverLeaksFromFragment( *p );
         testCutWindowsFragmentLikeTrack( *p );
         testAssetNameAddressing( *p );
+        testPackSelectionPartition();
     }
 
     testSerializeRoundTrip();
