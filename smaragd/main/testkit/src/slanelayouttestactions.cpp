@@ -217,6 +217,17 @@ static const bool s_reg_collapsetrack = (
 
 // --- assert-lane-view (fix/track-list-polish m) ---------------------------
 
+// Pan snapshots, by name. Same shape and lifetime as assert-envelope's: a
+// plain process-global map, so a snapshot taken by one action is visible to
+// every later one in the same script and nowhere else.
+namespace {
+QMap<QString, qlonglong> &panSnapshots()
+{
+    static QMap<QString, qlonglong> s;
+    return s;
+}
+}  // namespace
+
 SApplyResult SAssertLaneViewAction::apply(SProject * /*project*/)
 {
     SMainWindow *win = mainWindow();
@@ -237,7 +248,9 @@ SApplyResult SAssertLaneViewAction::apply(SProject * /*project*/)
             return {false, nullptr};
         }
     }
-    if (expectSecondWidth_ >= 0.0 || expectScrollX_ >= 0) {
+    if (expectSecondWidth_ >= 0.0 || expectScrollX_ >= 0
+        || !snapshot_.isEmpty() || !compareTo_.isEmpty()
+        || minScrollX_ >= 0) {
         const QString view = win->arrangerDescribeView();
         if (view.isEmpty()) {
             qWarning() << "SAssertLaneViewAction: no arranger to read"
@@ -265,6 +278,42 @@ SApplyResult SAssertLaneViewAction::apply(SProject * /*project*/)
                 return {false, nullptr};
             }
         }
+        // --- the RELATIVE pan checks (see the header for why they exist) ---
+        if (!snapshot_.isEmpty() || !compareTo_.isEmpty() || minScrollX_ >= 0) {
+            const QRegularExpression re(QStringLiteral("scrollX=([0-9]+)"));
+            const QRegularExpressionMatch m = re.match(view);
+            if (!m.hasMatch()) {
+                qWarning() << "assert-lane-view FAILED: no scrollX in" << view;
+                return {false, nullptr};
+            }
+            const qlonglong got = (qlonglong) m.captured(1).toULongLong();
+            if (minScrollX_ >= 0 && got < minScrollX_) {
+                qWarning() << "assert-lane-view FAILED: scrollX=" << got
+                           << "expected at least" << minScrollX_ << "in" << view;
+                return {false, nullptr};
+            }
+            if (!compareTo_.isEmpty()) {
+                if (!panSnapshots().contains(compareTo_)) {
+                    qWarning() << "assert-lane-view FAILED: no snapshot named"
+                               << compareTo_ << "(take one with snapshot= first)";
+                    return {false, nullptr};
+                }
+                const qlonglong was = panSnapshots()[compareTo_];
+                if (got != was) {
+                    qWarning() << "assert-lane-view FAILED: scrollX=" << got
+                               << "differs from snapshot" << compareTo_
+                               << "=" << was;
+                    return {false, nullptr};
+                }
+                qDebug() << "assert-lane-view: scrollX" << got
+                         << "matches snapshot" << compareTo_;
+            }
+            if (!snapshot_.isEmpty()) {
+                panSnapshots()[snapshot_] = got;
+                qDebug() << "assert-lane-view: snapshot" << snapshot_
+                         << "= scrollX" << got;
+            }
+        }
     }
     return {true, nullptr};
 }
@@ -277,6 +326,9 @@ void SAssertLaneViewAction::writeXml(QDomElement &elem) const
         elem.setAttribute("secondWidth", expectSecondWidth_);
     if (expectScrollX_ >= 0)
         elem.setAttribute("scrollX", (qlonglong) expectScrollX_);
+    if (!snapshot_.isEmpty())  elem.setAttribute("snapshot", snapshot_);
+    if (!compareTo_.isEmpty()) elem.setAttribute("compareTo", compareTo_);
+    if (minScrollX_ >= 0)      elem.setAttribute("minScrollX", (qlonglong) minScrollX_);
 }
 
 bool SAssertLaneViewAction::readXml(const QDomElement &elem, int /*version*/)
@@ -288,6 +340,9 @@ bool SAssertLaneViewAction::readXml(const QDomElement &elem, int /*version*/)
         ? elem.attribute("secondWidth").toDouble() : -1.0;
     expectScrollX_ = elem.hasAttribute("scrollX")
         ? (qlonglong) elem.attribute("scrollX").toULongLong() : -1;
+    snapshot_   = elem.attribute("snapshot");
+    compareTo_  = elem.attribute("compareTo");
+    minScrollX_ = elem.attribute("minScrollX", "-1").toLongLong();
     return true;
 }
 

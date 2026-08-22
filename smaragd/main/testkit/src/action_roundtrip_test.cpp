@@ -492,6 +492,11 @@ const Fixture kFixtures[] = {
       " maxGapCols='400' gapRuns='1' firstGapStartPct='25'"
       " firstGapEndPct='50' pctTolerance='4' minWaveMeanPct='20'"
       " maxWaveMeanPct='80' spanFirst='0' spanLast='399' spanTolerance='3'/>" },
+    // The relative pan trio is written only when set, so the fixture names all
+    // three alongside the absolute pair.
+    { "assert-lane-view",
+      "<assert-lane-view trackPath='0,1' collapsed='1' secondWidth='1000'"
+      " scrollX='2580' snapshot='held' compareTo='held' minScrollX='1'/>" },
     // ABSOLUTE, so both attributes are always written.
     { "collapse-track",
       "<collapse-track trackPath='0,1' collapsed='0'/>" },
