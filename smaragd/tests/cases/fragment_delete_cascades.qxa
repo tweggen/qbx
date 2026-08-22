@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 41 M2b/D3a follow-up (M8): a clip DELETED while nested inside a
+  fragment cascades to EVERY placement of that fragment's asset, and undo
+  restores it everywhere in ONE step. Decided 2026-08-21 (D3a's "Deletion
+  cascades, and that is INTENDED" note): a deletion is a shared edit like
+  any other, D2's invariant working rather than an exception to it. Recorded
+  as NOT GATED until now.
+
+  No production verb reaches a fragment-nested clip's deletion from a script
+  (SUnplaceClipAction / SRemoveMidiClipAction both resolve via
+  splacements::placementAt(), which IS fragment-aware since M2b, but both are
+  live-only inverses of verbs - place-clip / insert-midi-clip - whose own
+  DESTINATION resolves through the still-strict laneAt() and so can never
+  place directly into a fragment). delete-fragment-clip/restore-fragment-clip
+  (testkit, main/testkit/src/sfragmentdeleteclipaction.cpp) exercise the SAME
+  placementAt()/containerAt() production resolver every other fragment-nested
+  clip verb uses (set-clip-volume, resize-clip, ...) and then do exactly what
+  SUnplaceClipAction's own apply() does - delete the SLink. The cascade
+  itself is not testkit logic: it falls out of the object graph for free,
+  because every placement of "Riff" is an SLink to the ONE shared fragment
+  (D2) - deleting Riff's OWN child removes it from that one shared object,
+  which is what every placement was already showing.
+
+  Shape and fixture reused verbatim from fragment_nested_edit_reaches_all_
+  placements.qxa, so the audio-level proof stays comparable: two whole-file
+  placements of test_sawtooth.wav (Riff:0 at fragment-relative 0, Riff:1 at
+  fragment-relative 200000) packed into fragment asset "Riff", placed TWICE
+  (track 0 at base 0, track 1 at base 500000). Riff:1's own sec1
+  [0.16,0.19] sits at fragment-relative 248000, i.e. at absolute 248000
+  (through placement 0,0) and 748000 (through placement 1,0). Deleting
+  Riff:1 must silence BOTH; undoing must restore BOTH - gated on the
+  RENDERED audio, per the house rule ("asserting model state instead of
+  rendered output" is exactly the hole D3a's own audit found: a model-state
+  assertion passes even when the render never noticed).
+-->
+<SActionScript version="1" name="fragment_delete_cascades">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="200000"/>
+    <pack-clips clips="0,0;0,1" name="Riff"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="392000"/>
+
+    <!-- A second, independent placement of the SAME asset on a different
+         lane - this is what "every placement" means below. -->
+    <place-asset assetName="Riff" trackPath="1" timePos="500000"/>
+    <assert-clip-window clip="1,0" startTime="500000" duration="392000"/>
+
+    <assert-clip-window clip="Riff:0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="Riff:1" startTime="200000" duration="192000"/>
+
+    <render filename="fdc_pre.wav" format="wav" quality="10"/>
+    <!-- Riff:1's own sec1, through BOTH placements. -->
+    <assert-audio-energy filename="fdc_pre.wav"
+                         startFrame="248000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+    <assert-audio-energy filename="fdc_pre.wav"
+                         startFrame="748000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+    <!-- Riff:0's own sec0, through BOTH placements - the survivor's
+         baseline, checked again after the delete to prove the cascade is
+         scoped to Riff:1 alone. -->
+    <assert-audio-energy filename="fdc_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="fdc_pre.wav"
+                         startFrame="500000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- THE DELETION: one address, one child of the ONE shared fragment. -->
+    <delete-fragment-clip clip="Riff:1"/>
+
+    <!-- Gone at the fragment's own address - the model-level half of the
+         proof. -->
+    <assert-clip-window clip="Riff:1" expectReject="true"/>
+    <!-- The survivor is untouched in the model. -->
+    <assert-clip-window clip="Riff:0" startTime="0" duration="192000"/>
+
+    <render filename="fdc_post.wav" format="wav" quality="10"/>
+    <!-- THE CASCADE, gated on rendered audio, through BOTH independent
+         placements: Riff:1's material is gone everywhere the asset is
+         placed, not merely at the address used to delete it. -->
+    <assert-audio-energy filename="fdc_post.wav"
+                         startFrame="248000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="fdc_post.wav"
+                         startFrame="748000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+    <!-- Riff:0 still sounds, through both - the deletion was scoped to its
+         own child, not the whole fragment. -->
+    <assert-audio-energy filename="fdc_post.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="fdc_post.wav"
+                         startFrame="500000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+
+    <!-- UNDO restores it everywhere, in ONE step. -->
+    <undo count="1"/>
+
+    <assert-clip-window clip="Riff:1" startTime="200000" duration="192000"/>
+
+    <render filename="fdc_undo.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="fdc_undo.wav"
+                         startFrame="248000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+    <assert-audio-energy filename="fdc_undo.wav"
+                         startFrame="748000" frameCount="48000"
+                         minRms="0.16" maxRms="0.19"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -452,6 +452,13 @@ const Fixture kFixtures[] = {
       "<unpack-clips clip='Drums:0,3'/>" },
     { "duplicate-asset-here",
       "<duplicate-asset-here clip='Drums:0,3' name='Riff copy'/>" },
+    // Proposal 41 M8 gate: delete-fragment-clip addresses a clip nested
+    // INSIDE a fragment with the asset-name-qualified spelling M2b gave
+    // splacements::rootNamed() ("Riff:0"). restore-fragment-clip, its
+    // inverse, is live-only (readXml returns false, like
+    // SRestoreContainerClipAction) and deliberately absent from this table.
+    { "delete-fragment-clip",
+      "<delete-fragment-clip clip='Riff:0'/>" },
     { "assert-lane-view",
       "<assert-lane-view trackPath='0,1' collapsed='1' secondWidth='45.5'"
       " scrollX='123456'/>" },

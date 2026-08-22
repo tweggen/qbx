@@ -460,6 +460,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/sclicklaneaction.h
     testkit/include/app/testkit/ssidecartestactions.h
+    testkit/include/app/testkit/sfragmentdeleteclipaction.h
     testkit/include/app/testkit/sslipclipaction.h
     testkit/include/app/testkit/stestfilepath.h
     testkit/include/app/testkit/sarrangementtabactions.h
@@ -504,6 +505,7 @@ set(APP_UI_FILES
     testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
+    testkit/src/sfragmentdeleteclipaction.cpp
     testkit/src/sslipclipaction.cpp
     testkit/src/stestfilepath.cpp
     testkit/src/sarrangementtabactions.cpp

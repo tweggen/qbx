@@ -552,3 +552,195 @@ since the last arm; once expired it clears the flag and behaves exactly as
 before this feature. Gate: `follow_scroll_hold.qxa` (`RUN_SERIAL`, a real
 wall-clock case — see its header for the measured, reproducible canvas
 geometry the closed-form scrollX value depends on).
+
+### inv. 28 — Z-ORDER IS DETERMINISTIC: LATEST START ON TOP, TIEBREAK CHILD
+INDEX AND NOTHING ELSE (proposal 41 D11, M5)
+
+`STrackRendererInline::draw()` sorts a lane's visible clips by
+`(startTime, childIndex)` ASCENDING before painting, instead of walking
+`childLinks()` in arbitrary insertion order. **The tiebreak is CONTRACTUAL,
+not incidental**: `childIndex` is a POSITION in the lane's child list, so it
+is unique across the entries being sorted and `(startTime, childIndex)` is
+already a TOTAL order — nothing may be appended after it. An earlier edition
+of this rule read "child index, then object id" and that was wrong twice
+(`bb6b924f`, corrected the same day it landed): the third key was
+unreachable, since childIndex alone already totally orders the set; and an
+`SObject`'s "id" in this tree is its ADDRESS (`slink.cpp` serializes it that
+way), so a comparison on it would order by whatever the allocator returned —
+differing run to run, which a tiebreak this contract calls CONTRACTUAL may
+never rest on.
+
+The payoff is inv. 30's guaranteed-visible tag: a clip's left edge can only
+be covered by a clip painting ABOVE it, which by this rule starts STRICTLY
+LATER, i.e. strictly to the right, and so can never reach that pixel. The
+single exception is an exact start-time tie, which is exactly why the
+tiebreak has to be spelled out here rather than left to insertion order.
+
+Gate: `preview_envelope_test` section 6 (a REAL `STrack` with REAL `SLink`
+children painted off screen through the actual `draw()`, colours recovered
+from the rendered `QImage` by RGB search — a script-level check through
+`collectEnvelope` sits BELOW the paint and cannot see a paint-ORDER bug,
+proposal 39 M2's finding confirmed again here, trap 6) and the qxa case
+`fragment_paint_disjoint`.
+
+### inv. 29 — A CLIP BODY PAINTS ITS MATERIAL, NOT ITS WINDOW (proposal 41
+D10, M5)
+
+A clip's body used to be one opaque `fillRect` spanning the whole placed
+window. Once a fragment can place DISJOINT material on a lane (a summed
+`SLaneFragment` whose children don't fill the window, or a container-backed
+cut with a genuine internal silent stretch), an opaque rect over the gaps
+paints a later clip's EMPTY regions over an earlier clip's MATERIAL, and the
+reader sees a hole where audio is sounding.
+
+The fix is CLIPPING, never transparency (this design uses no alpha anywhere):
+per column, `STrackRendererInline::draw()` asks the clip's renderer for
+`collectEnvelope()` over that column and paints only where `min != 0 ||
+max != 0` — the identical "silence draws nothing" proxy proposal 39 M3's
+folder-sum overlay already uses — leaving a gap column UNPAINTED so whatever
+was drawn beneath it (an earlier clip, the lane background, the folder-sum
+overlay) shows through. **An object whose renderer does not support
+`collectEnvelope()` at all** (the base class's default `false` — an event
+clip has no waveform) **keeps the ORIGINAL solid fill**: "unknown material"
+must never read as "no material".
+
+Gate: `preview_envelope_test` section 6 (the AC5.2/AC5.3 survival assertion —
+verified FAILING on the pre-fix code: a later clip's gap fully erased an
+earlier clip's material) and the qxa case `fragment_paint_disjoint` (the
+audio-level shape only — see its header for why the paint claim itself is
+not reachable from that script).
+
+**Repaint cost, measured, not bounded** (AC5.4): a 1200×800 grab over a lane
+with 6 overlapping 4 s clips (proposal 39's own corpus shape),
+baseline-subtracted over 200 repeated `assert-lane-overlay` grabs, median of
+3 runs: **~2.4 ms/grab before this milestone, ~3.3 ms/grab after** (+~0.9 ms,
+~38%) — the added cost of per-column `collectEnvelope` + per-column
+`drawLine` replacing one flat `fillRect`. M6's tag chip (inv. 30-31) adds to
+the SAME paint pass; its own cost was not separately re-measured.
+
+### inv. 30 — THE TAG CHIP: ONE OPAQUE CHIP AT BOTTOM-LEFT, GUARANTEED
+VISIBLE BY inv. 28 (proposal 41 D12-D14, M6)
+
+Every clip paints exactly ONE solid opaque chip, bottom-left corner of its
+inset content rect — the corner inv. 28's z-order rule guarantees is never
+covered except at an exact start-time tie (which the childIndex tiebreak
+then makes deterministic). Bottom because warp markers own the top edge
+(`scutrndrinline.cpp`); left because the RIGHT edge of an earlier clip is
+the first thing a later one covers, which is why the OLD bottom-right
+container-asset label (`SCutRendererInline`, `Qt::AlignBottom |
+Qt::AlignRight`) forfeited the invariant and is now GONE — replaced, not
+duplicated: `tagFullText()` is the one mechanism, reading the fragment/asset
+name (`cut.getSName()`) for a container-backed clip and the file's basename
+for a sample-backed one, resolved through the type-agnostic
+`SClipWindow`/`SExternFile` interfaces because `objects/track` may not
+depend on `objects/cut`, `objects/midi` or `objects/fragment`.
+
+A chip rather than bare text, for the load-bearing reason proposal 39 already
+recorded: anti-aliased text drawn straight on a clip body lands at every
+luminance between the text and the body, which defeats a pixel gate. A chip
+of known fill colour is separable; loose glyphs are not.
+
+**Geometry is computed by ONE function, `STrackRendererInline::tagChipRect()`
+— never re-derived.** `draw()` and inv. 32's hit test both call it, so paint
+and hit-test cannot independently drift (the exact failure inv. 32 records
+happening BEFORE this function existed). Its three collaborators are public
+static functions for the same "shared decision" reason `laneFillColor()`
+already is:
+
+- `tagChipColor(laneFill)` — DERIVED from `laneFillColor()`
+  (post-selection/post-`STrackColorModifier`), `.darker(160)`. The
+  RELATION is contractual, never the exact hue: strictly darker (lower
+  `qGray()` luminance) than the lane fill it derives from, and — because
+  the fixed clip-body grey `QColor(160,160,160)` sits well above every
+  reachable fill luminance (measured: base fill ~64-117, chip ~40-73) —
+  comfortably darker than the clip body too, which is what keeps white
+  chip text readable against it. Asserted as LUMINANCE across selection
+  and every `STrackColorModifier` state, never a palette.
+- `tagDensityText(fullName, fm, availTextWidthPx, cut)` — the DENSITY
+  LADDER (D14): capped at `kTagMaxChars` (12) BEFORE any pixel fitting;
+  full text if the capped form fits; `Qt::ElideRight` if a shorter form
+  still fits; empty string if not even one character plus an ellipsis
+  fits (the caller's own decision then reduces further, to "chip only" or
+  "nothing"). `*cut` is set whenever the returned text is not the TRUE
+  full name — the 12-char cap counts as a cut on its own, because "the cap
+  is announced" (D14) means the true full name belongs on a tooltip
+  whenever what is drawn is not it, not merely when pixels ran out.
+- `tagFullText(clipObject)` — the text SOURCE (D12), described above.
+
+`tagChipRect()` composes these into the actual rect `draw()` fills: chip
+height is `max(fm.height() + 2*padY, kTagMinHeightPx)` clamped to the row;
+chip width is the fitted text's advance plus padding, or — when no text fits
+at all but the rect is still wide enough — `kTagMinChipW` (6 px, "still
+reads as a mark": the CHIP-ONLY rung of D14's ladder); an empty (`isEmpty()`)
+`QRect` means NOTHING fits (the row is too short, or not even the minimum
+chip width). Full → elided → chip-only → nothing is therefore the ladder
+`tagChipRect()`'s own three checks walk, not a separate density state
+machine.
+
+Gate: `preview_envelope_test` section 7 (colour luminance relations across
+selection/`STrackColorModifier` states, the density ladder at multiple
+widths, the text-source pair) and the qxa case `fragment_tag_drag` (a
+canvas PNG proving both clips' chips are painted where `tagChipRect()` says
+they are).
+
+### inv. 31 — THE TAG REPLACES THE OLD LABEL; IT IS NOT A SECOND ONE
+(proposal 41 D12)
+
+`SCutRendererInline::draw()`'s old bottom-right `cut.getSName()` label is
+DELETED, not left drawing alongside the new chip (`e6ae33af`,
+`scutrndrinline.cpp`). Two labels naming the same clip would read as a
+possible disagreement between them and would double the pixel budget a
+future gate has to reason about. `tagFullText()`'s container-backed branch
+reads exactly the same `cut.getSName()` the old label did, so nothing that
+could be shown is lost — only WHERE it is drawn, and WHETHER it survives
+`STrackColorModifier`/density pressure, changed.
+
+### inv. 32 — HIT-TESTING FOLLOWS TAGS FIRST, THEN Z-ORDERED BODIES — NEVER
+PAINT ORDER ALONE (proposal 41 D15, M7)
+
+If the tag is the drag handle and hit-testing used paint order the way the
+canvas always had, an OCCLUDED fragment's handle would be swallowed by
+whatever clip painted above it — removing the entire reason the handle
+exists. `SMVActualView::updateLastClickVars()` therefore tries
+`tagHitTestAt()` FIRST, across EVERY clip on the lane (not just the topmost
+body), and falls back to the z-ordered body test
+(`STrack::getTopMostSLinkAt()`) only when no tag rect contains the point.
+
+**This exposed a real, silent bug that had shipped since M5 and gone
+undetected through a green suite for two milestones**: `STrack::
+getTopMostSLinkAt()` used to return the FIRST child-order match whose
+interval contained the query time — the exact insertion-order rule inv. 28
+replaced for PAINTING — so paint order (inv. 28, start-time ascending) and
+hit order (child-list order) silently DISAGREED the moment an
+earlier-inserted clip enclosed a later-inserted, later-starting one. It now
+returns the entry with the greatest `(startTime, childIndex)` among those
+containing the query time — the SAME total order the paint loop sorts by —
+and this fix reaches all three of its callers (press, hover cursor,
+tooltip), not just the tag-priority path.
+
+**Tag-vs-tag resolution, when more than one clip's tag rect contains the
+point, is NOT the same order as body hit-testing**: ascending by start
+time — the EARLIER (occludable) clip wins, protecting its WHOLE declared
+chip footprint as a handle even where a later clip's body painted over part
+of it, which is the actual asymmetry this milestone exists to fix. At an
+EXACT start-time tie (inv. 28's own tiebreak case) the two tag rects are
+pixel-identical, so there is no "partly free" clip to protect, and the
+decision falls back to paint order — the higher `childIndex`, i.e. whichever
+one is actually drawn on top.
+
+**Geometry is never re-derived**: `tagHitTestAt()` calls the SAME
+`STrackRendererInline::tagChipRect()` inv. 30 names, computing `vr` (the
+clip's inset content rect) the identical way `draw()` does — `getXPosOfOffset()`
+in the hit test, `ctx.getTimeOf()`/`visibRect` in the paint path, the same
+affine map at `visibRect.x()==0`, which every lane row paints at.
+
+Gate: the qxa case `fragment_tag_drag`, driving the REAL mouse handlers
+(`click-lane`/`drag-clip-edge`'s new `edge="tag"` grab kind, computed from
+the targeted clip's REAL `tagChipRect()` rather than approximated in the
+script) — two same-lane clips one pixel apart: a body click deep in their
+shared overlap resolves to the LATER (topmost) clip (AC7.3, the z-order
+regression check), while dragging the EARLIER clip by its tag moves THAT
+clip even though the later one's body painted over most of its chip
+footprint (AC7.1/AC7.2). Verified as a real gate: with the tag-first wiring
+reverted, the same case fails on exactly the three assertions this milestone
+is about.

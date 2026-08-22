@@ -372,6 +372,19 @@ on the machine (**re-measured 2026-08-18, proposal 38 gate 6**):
 Counts reconciled both ways: **220 registered / 217 run / 3 Not Run (Disabled)**
 — the disabled three are the macOS-only `au_*` trio.
 
+**Re-measured 2026-08-22 on a Linux/`TW_HAVE_LIBSECRET=OFF` box** (this
+worktree, `ctest -N` at the `feat/lane-fragments` tip, `-N` only — the timing
+table above is Windows-specific and was not re-run here): **285 registered,
+5 Not Run (Disabled)** — the 3 macOS-only `au_*` cases plus 2 more that did
+not exist when the figure above was last taken, `qxa.media_options_page` and
+`qxa.media_secret_redaction`, both pinned to `SMARAGD_SECRET_BACKEND=dpapi`
+and disabled off Windows (see "Credential stores off Windows" under Known
+Issues & Gaps). That leaves up to **280 that would run** on this box. This is
+a REGISTERED-count snapshot only, taken with `ctest -N`; it does not include
+pass/fail or wall-clock, per this branch's own instruction not to run the
+full suite. Quote it exactly as staged, and expect it to be stale again the
+moment the next gate lands — that is the whole point of the warning below.
+
 **THE SPEEDUP COLLAPSED AND IT IS NOT A REGRESSION — IT IS `RUN_SERIAL`.** The
 previous edition of this table read 164 s serial and **2.9× at `-j4`**. The
 suite has since grown from 171 to 217 running tests, and **41 of them now carry
@@ -1924,6 +1937,77 @@ code with it and writes the project's full width: a 6-channel project renders a
 lives as a pure function (`twmonitor::pullChannels` / `twmonitor::interleave`)
 so `playback_test` can assert it at widths 1/2/6 against 2- and 6-channel
 devices without opening one.
+
+## Lane fragments and the clip visual model (proposal 41 — M0-M8 executed 2026-08-21/22)
+
+A same-lane group of clips can be packed into a reusable `SLaneFragment`
+asset (`pack-clips`/`unpack-clips`/`duplicate-asset-here`), placed by
+reference like any other asset; and the arranger now paints a clip's actual
+MATERIAL — start-time-ascending z-order, a bottom-left tag chip guaranteed
+visible, tags hit-tested before bodies. Design: `plan/proposed/
+41_LANE_FRAGMENTS.md` (D1-D15). Invariants: `main/objects/fragment/
+CONTRACT.md` (13 of them), `main/timeline/CONTRACT.md` inv. 28-32,
+`main/objects/track/CONTRACT.md` inv. 29, `main/model/CONTRACT.md`
+(`isPathContainer()` vs `isLane()`, and the M2b `containerAt()` widening).
+
+**Read this before touching a fragment or the clip paint path — the obvious
+design is wrong SEVEN times in this one proposal, more than any other
+feature in this codebase, and every one of them was found the way the level
+meters', MIDI-out's and the metronome's were: by asking what the ENGINE
+already does, not what looks natural to build.**
+
+| Thing to know | Why |
+|---|---|
+| **A fragment does not RENDER a group to a new file — it SHARES the group.** An asset placed twice is TWO `SLink`s to the SAME registered `SCut`, never two independent copies | The DAW instinct is "glue = bounce to a new WAV"; this proposal's whole point is the opposite. Sharing is the INVARIANT (D2) — one asset, N placements, edit any and all change, the Unix hard-link model — and nothing in it ever un-shares a placement. **A variation is therefore a NEW ASSET**, never an edited-in-place copy: `duplicate-asset-here` mints a second `SLaneFragment` by DEEP-COPYING the first and repoints exactly ONE placement to it; the original asset and every other placement are untouched, because they were never the thing being edited. Read the other way round it is a defect: "make this placement unique" implies an asset whose instances can diverge, which is exactly what an asset is not (`objects/fragment/CONTRACT.md` inv. 3). |
+| **A fragment is a path container, NOT A LANE — and the two questions used to be the SAME predicate by accident.** `isPathContainer()` (may be windowed, may be path-resolved into) and `isLane()` (carries solo/mute/edit-group/arm) were one function until M0 split them, because `SLaneFragment` is the first type to answer them DIFFERENTLY | Folding them back together would let a fragment-internal flag darken lanes across the whole project it happens to be placed into — `ssolorules.h`'s `anySoloInTree` descending into a fragment is the concrete failure this prevents. This is the LOAD-BEARING refactor of the whole proposal and had to land FIRST (M0), before a second container kind existed to expose the accidental coupling. |
+| **Widening addressability to reach a fragment's children was NOT free — it had to be its own audited milestone (M2b), because "not a lane" meant "refuse" at every clip verb** | `splacements::placementAt()` resolves a clip's PARENT through `isLane()`, so once M1/M2 shipped, `resize-clip`, `set-clip-volume`, `set-pitch` and every other clip verb could not reach a clip already packed into a fragment — the exact price the M0 split extracts, discovered only once M2 tried to use it (D3a). M2b widened `placementAt()`'s PARENT resolution to `containerAt()` (`isPathContainer()`, the strictly wider predicate) while leaving `laneAt()` — the placement DESTINATION resolver `place-clip`/`move-clip`/`pack-clips`'s own lane check use — exactly as strict as before. **`unpack-clips` remains the only way to move material OUT of a fragment**; a clip can be edited or deleted in place, never relocated into or out of one by any other verb. |
+| **Deletion reaching inside a fragment CASCADES to every placement — and that is the sharing invariant working, not a bug to special-case away.** Decided 2026-08-21, after M2b's audit found `placementAt()`'s widening incidentally let the production `unplace-clip`/`remove-midi-clip` reach a fragment-nested clip too | "Edit any placement and all change" (D2) applies to a deletion exactly as it applies to a resize: the child link removed is removed from the ONE object every placement shares. The alternative — special-casing deletion to refuse inside a fragment — would make deletion the ONE edit that does not obey D2, for no principled reason. Gated by the M8 case `fragment_delete_cascades.qxa`: place an asset twice, delete one child through one address, assert the RENDERED audio lost that material through BOTH placements, and that one undo restores it through both (`objects/fragment/CONTRACT.md` inv. 6). |
+| **Invalidation reaching a nested clip is not the same thing as the EDIT becoming audible — and the gap was invisible to every model-state assertion.** M2b's audit expected the hard part to be invalidation (a fragment "outside the root walk"); that guess was WRONG — the walk already reached it, with no fix | `set-clip-volume` on a fragment-nested clip invalidated correctly (pages went stale — a clip-window assertion would PASS) and then rendered the exact PRE-EDIT audio, because `STrack::refreshClipGainCurves()` — which pulls a child's gain into its owning `twTrackMix`'s clip entries — had no `SLaneFragment` equivalent at all. Only the RENDERED OUTPUT caught it. Every gate for a fragment-nested edit (`fragment_nested_edit_reaches_all_placements`, `fragment_delete_cascades`) therefore asserts RMS through a render, never clip-window model state alone (`objects/fragment/CONTRACT.md` inv. 7). |
+| **M5 made PAINTING latest-start-on-top; HIT-TESTING still returned the first child-order match — and this shipped, green, for TWO MILESTONES before M7 caught it** | `STrack::getTopMostSLinkAt()` predates D11 and was never touched when the paint loop's z-order changed, so paint and hit-test silently DISAGREED the moment an earlier-inserted clip enclosed a later-inserted, later-starting one — exactly the kind of "changed one half of a pair, not the other" bug this codebase's own history is full of (the P5 automation point-drop, the P6 `slots:` access-specifier bug). Fixed by making `getTopMostSLinkAt()` sort by the SAME `(startTime, childIndex)` order the paint loop uses, and by sharing ONE geometry function (`tagChipRect()`) between `draw()` and the hit test so paint and hit CANNOT independently drift again (`main/timeline/CONTRACT.md` inv. 32). |
+| **A per-placement remap belongs on the `SLink`, never on the shared content — `eventChannelOverride_` was drafted on `SCut` first and had to move** | D2 shares ONE `SCut` across every placement of an asset (the row above), so a channel remap stored on the CONTENT would move every placement's channel at once — the exact mistake sharing exists to prevent, caught before it shipped. `set-clip-event-channel` writes `SLink::getEventChannelOverride()`, matching `midiOutChannel`'s `-1`=as-authored convention so the scripting API speaks one dialect (D6, `objects/fragment/CONTRACT.md` inv. 9). |
+| **The equal-start-time tiebreak is CONTRACTUAL, and the first spelling of it was wrong twice, corrected the same day it landed** (`bb6b924f`) | D11 originally read "child index, then object id". `childIndex` alone is already a POSITION in the lane's child list — unique across the set being sorted — so `(startTime, childIndex)` is already a TOTAL order and the third key is UNREACHABLE. Worse, an `SObject`'s "id" in this tree IS its ADDRESS (`slink.cpp` serializes it that way), so a live tiebreak on it would order by whatever the allocator returned — differing run to run — which a tiebreak this proposal calls CONTRACTUAL (it is the one thing standing between a drag handle and being permanently hidden) may never rest on. Fixed to `(startTime, childIndex)` alone (`main/timeline/CONTRACT.md` inv. 28). |
+| A fragment is **single-lane by construction** (D8); vertical reuse is a folder track, not a fragment feature | A fragment spanning multiple lanes would have to decide which instrument each stream reaches — routing, which means track identity, and D1 (no track identity) is gone. `pack-clips` refuses a multi-lane selection, naming both lanes. |
+| A clip paints its material, not its window — **clipped, never alpha-blended** (D10) | An opaque rect spanning a disjoint fragment's window paints the fragment's EMPTY regions over whatever material sits beneath it. Per-column `collectEnvelope()` decides what paints; a gap column is left untouched. An object whose renderer does not support `collectEnvelope()` at all keeps the old solid fill — "unknown material" must never read as "no material" (`main/timeline/CONTRACT.md` inv. 29). |
+| The tag chip is a SOLID OPAQUE CHIP, never bare text — separable by a pixel gate | Proposal 39 already found that anti-aliased text drawn on a clip body lands at every luminance between the text and the body, which defeats measurement. A chip of known, DERIVED fill colour (`laneFillColor().darker(160)`) is separable; loose glyphs are not (D12-D13, `main/timeline/CONTRACT.md` inv. 30). |
+
+Gates: `ctest -R "fragment_test|action_roundtrip_test|preview_envelope_test"`
+and the qxa cases `fragment_pack_roundtrip`, `fragment_place_reuse`,
+`fragment_duplicate_asset`, `fragment_pack_multilane_refused` (M2),
+`fragment_nested_edit_reaches_all_placements` (M2b),
+`fragment_delete_cascades` (M8), `fragment_midi_feed`,
+`fragment_midi_no_double_trigger`, `fragment_midi_channel_remap`,
+`fragment_midi_loop`, `fragment_rate_refused` (M3/M4), `fragment_paint_
+disjoint` (M5), `fragment_tag_drag` (M6/M7). **A PIXEL gate, not a
+`collectEnvelope` one, is what actually bites for Part B** (trap 6, proposal
+39's own precedent confirmed a second time): a script-level check through
+`collectEnvelope` sits BELOW the paint and cannot see a paint-order or
+paint-clipping bug — `preview_envelope_test` sections 6-7 paint a REAL
+`STrack` off screen through the ACTUAL `draw()` and recover colours from the
+rendered `QImage`, and were verified FAILING on the pre-fix binary before the
+fix was restored.
+
+**Repaint cost, measured, not bounded** (AC5.4): a 1200×800 grab over a lane
+with 6 overlapping 4 s clips, baseline-subtracted over 200 repeated
+`assert-lane-overlay` grabs, median of 3 runs: **~2.4 ms/grab before M5,
+~3.3 ms/grab after** (+~0.9 ms, ~38%) — per-column `collectEnvelope` +
+`drawLine` replacing one flat `fillRect`, for 6 overlapping clips. M6's tag
+chip paints in the SAME pass and was not separately re-measured.
+
+**NOT gated** (the proposal's own list, unchanged by M8): drag ergonomics —
+synthesised presses go straight to the handler; nothing measures what a hand
+does. Pixel AESTHETICS — D13 asserts a luminance RELATION, never a palette.
+Repaint latency UNDER LOAD — the number above is measured, not bounded.
+DEEP NESTING — fragments inside fragments inside assets beyond two levels.
+Real MIDI hardware for the exported feed — the capture port is the
+measurement, as everywhere else. The fragment bin's UI beyond what the
+existing asset list already shows. Glue (the destructive commit) — out of
+scope entirely, a separate proposal. **Additionally found while writing M8**:
+no case exercises a MIDI (event) clip's deletion cascade — `fragment_
+delete_cascades.qxa` is audio-only (an `SCut` over an `SExternFile`), because
+the testkit verb it needed (`delete-fragment-clip`) was scoped to the same
+fixture every other fragment-nested-edit gate uses; and `unpack-clips`'s own
+interaction with a fragment mid-deletion (delete one child, then unpack the
+rest) has no case either.
 
 ## Dependencies
 
