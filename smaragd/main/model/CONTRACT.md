@@ -426,3 +426,68 @@ It lives here because it is about a RENDERER and an `SRenderContext` and belongs
 beside them. (Not for `envelopeWindowOfContext`'s layering reason: `main/timeline`
 DOES include `app/objects/track/strackrndrinline.h`, so that header would have
 worked too.)
+
+## Missing external files, and "self-contained" (2026-08-22)
+
+Three additions to `SProject`, all about what a project REFERENCES rather than
+about what it sounds like.
+
+**`beginLoad()` / `endLoad()` / `isLoading()` / `noteMissingFile()` /
+`missingFiles()`.** While a load is in progress a sample that will not load is
+RECORDED rather than announced: `SPlainWave::setWave` raises no dialog, the
+loader keeps a MISSING PLACEHOLDER (`main/objects/wave/CONTRACT.md`), and the
+shell reports the whole set ONCE afterwards, by name. What this replaced was one
+anonymous modal `"Unable to load file."` per miss, raised from deep inside the
+loader — three unreachable samples meant three dialogs and not one path between
+them, so the single thing the user needed was the single thing not said.
+
+Both spellings are kept per entry. `stored` is what the .qxp says (the portable
+form — `sfilepathref.h`), `resolved` is the absolute path searched on THIS
+machine. A user whose project travels between machines needs both to see which
+of the two is wrong; either alone is a riddle.
+
+`missingFiles()` is cleared by `beginLoad()`, so what a caller reads afterwards
+always describes the load that just finished.
+
+**`isMissing()` lives on `SObject`, not on `SExternFile`.** Same rule as
+`contentKind()`, `resolveEventClip()` and `isLiveRecording()`: `objects/cut` has
+to ask this about its content without knowing which slice that content belongs
+to, and it has no edge to `objects/wave`. It is load-bearing rather than
+cosmetic — see `SCut::buildCapture_`.
+
+**`externalMediaPaths()` is the "Project is not self-contained" condition.**
+Every extern file whose absolute path is not the project file's own directory
+OR A SUBDIRECTORY OF IT. Two things are contractual:
+
+* **A subdirectory counts as INSIDE.** `<projectdir>/media/` is where both the
+  media browser's drop and "Collect external media" put things, so a rule that
+  looked only at the directory itself would leave the banner permanently lit and
+  the button unable to clear it. The trailing separator in the comparison is
+  what stops `/x/proj2` matching a project in `/x/proj`.
+* **An untitled project reports EMPTY.** There is no folder for anything to be
+  outside OF, so the warning would be unanswerable (the button has no
+  destination) as well as untrue.
+
+MISSING placeholders ARE counted: a file this machine cannot see is by
+definition not inside the project folder.
+
+**`relocateExternFile( from, to )`** re-points an extern file at a different
+path holding the SAME BYTES — what a collect produces. It rekeys
+`externFileDict_` (the project's only index, and `~SPlainWave` deregisters by
+its own CURRENT name, so a stale key would dangle at teardown) and announces the
+move as `externFileRemoved` + `externFileAdded`, because there is no rename
+signal and inventing one would make every consumer learn about a case that
+happens once per collect. It deliberately does NOT reload: a copy is not a
+different sample, so the resident data, its content hash and every sidecar keyed
+on that hash stay valid.
+
+Gates: `collect_external_media.qxa`, `collect_external_media_missing.qxa`,
+`missing_sample_reference_verbatim.qxa`, `sample_missing_survives.qxa`,
+`load_missing_sample_placed_survives.qxa`.
+
+**A KNOWN LIMITATION, pre-existing and NOT fixed here:** `load-project` loads
+INTO the existing `SProject` and does not clear `externFileDict_`, so a SECOND
+scripted load in one .qxa is counted against the first load's files as well. The
+GUI never sees it (`SMainWindow::openProjectFile` builds a fresh `SProject` per
+open). It is why the two collect cases are separate case FILES rather than two
+phases of one.

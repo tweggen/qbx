@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QFrame>
 #include <QLabel>
 #include <QInputDialog>
 #include <QTimer>
@@ -37,6 +38,9 @@
 #include "app/shell/sviewtabs.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
+#include "app/model/sappcontext.h"
+#include "app/model/sexternfile.h"
+#include "app/media/smediadrop.h"
 #include "app/objects/midi/smidiclipactions.h"
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
@@ -133,6 +137,10 @@ void SMainWindow::destroyDocksToolbars()
     if( externFileList_ ) {
         externFileList_->setProject( nullptr );
     }
+    // …and the banner with it: it describes a project, and there is about to
+    // be none. refreshSelfContainedBanner_ reads currentProject_, which is
+    // still set at this point, so hide explicitly rather than re-deriving.
+    if( selfContainedBanner_ ) selfContainedBanner_->hide();
     // Drop the detail panel's view of the (about to die) project's tracks.
     detachTrackDetail();
     detachClipProperties();
@@ -312,6 +320,17 @@ void SMainWindow::createDocksToolbars()
     if( externFileList_ && currentProject_ ) {
         externFileList_->setProject( currentProject_ );
     }
+    // The banner is a function of WHICH files the project holds and WHERE the
+    // project file is, so it follows both. Dropping a sample from a shared
+    // library onto a lane makes a self-contained project stop being one, and
+    // the banner has to say so at that moment rather than at the next open.
+    if( currentProject_ ) {
+        connect( currentProject_, &SProject::externFileAdded,
+                 this, &SMainWindow::refreshSelfContainedBanner_ );
+        connect( currentProject_, &SProject::externFileRemoved,
+                 this, &SMainWindow::refreshSelfContainedBanner_ );
+    }
+    refreshSelfContainedBanner_();
 }
 
 bool SMainWindow::saveToPath( const QString &path )
@@ -335,6 +354,10 @@ bool SMainWindow::saveToPath( const QString &path )
     SSettings::instance().addRecentProject( path );
     updateRecentMenu();
     updateWindowTitle();
+    // Save As moves the ANCHOR every external reference is measured against, so
+    // a project that was self-contained can stop being one (saved elsewhere) or
+    // become one (saved beside its samples) without a single file changing.
+    refreshSelfContainedBanner_();
     statusBar()->showMessage( QString( "Saved %1" )
                                   .arg( QFileInfo( path ).fileName() ), 2000 );
     return true;
@@ -520,7 +543,159 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     // a finished window rather than over a half-built one. It is a no-op under
     // --test-case (see SPluginNativeEditor::restoreOpenEditors).
     SPluginNativeEditor::restoreOpenEditors( currentProject_, this );
+
+    // The modal report LAST, and after createDocksToolbars() above has already
+    // refreshed the self-contained banner: the window behind a modal dialog
+    // must already be correct, because the user reads it while the dialog is up.
+    reportMissingSamples_();
     return true;
+}
+
+void SMainWindow::refreshSelfContainedBanner_()
+{
+    if( !selfContainedBanner_ || !selfContainedLabel_ ) return;
+
+    // No project, or one that has never been saved: HIDDEN. An untitled project
+    // has no folder for anything to be outside OF, so the warning would be
+    // both unanswerable (the button needs a destination) and untrue.
+    const QStringList outside =
+        currentProject_ ? currentProject_->externalMediaPaths() : QStringList();
+    if( outside.isEmpty() ) {
+        selfContainedBanner_->hide();
+        TW_LOGD( "ui.shell", "resources: project is self-contained" );
+        return;
+    }
+    TW_LOGI( "ui.shell", "resources: project is NOT self-contained — %d file(s) "
+                         "outside the project folder",
+             (int) outside.size() );
+
+    selfContainedLabel_->setText(
+        tr( "<b>Project is not self-contained.</b><br>"
+            "%n file(s) used by this project live outside its folder, so "
+            "copying or moving the folder alone will not take them along.",
+            "", outside.size() ) );
+    selfContainedLabel_->setToolTip( outside.join( QStringLiteral( "\n" ) ) );
+    selfContainedBanner_->show();
+}
+
+void SMainWindow::collectExternalMedia_()
+{
+    if( !currentProject_ ) return;
+    if( currentProject_->projectFilePath().isEmpty() ) {
+        QMessageBox::information(
+            this, tr( "Collect external media" ),
+            tr( "Save the project first. The files are collected into the "
+                "project file's own folder, and an unsaved project does not "
+                "have one yet." ) );
+        return;
+    }
+
+    const QStringList outside = currentProject_->externalMediaPaths();
+    if( outside.isEmpty() ) { refreshSelfContainedBanner_(); return; }
+
+    const QString mediaDir =
+        QDir( QFileInfo( currentProject_->projectFilePath() ).absolutePath() )
+            .filePath( QStringLiteral( "media" ) );
+
+    if( QMessageBox::question(
+            this, tr( "Collect external media" ),
+            tr( "Copy %n file(s) into\n\n%1\n\nand point the project at the "
+                "copies?\n\nThe originals are left exactly where they are. "
+                "This cannot be undone, and the project must be saved "
+                "afterwards for the new locations to stick.",
+                "", outside.size() ).arg( QDir::toNativeSeparators( mediaDir ) ),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Yes )
+        != QMessageBox::Yes )
+        return;
+
+    // The copy itself lives in app/media, beside materialiseIntoProject whose
+    // rules it inherits, so a test verb and this button run the SAME pass.
+    QGuiApplication::setOverrideCursor( Qt::WaitCursor );
+    QStringList skippedMissing, failed;
+    const int copied = smediadrop::collectExternalMedia(
+        currentProject_, &skippedMissing, &failed );
+    QGuiApplication::restoreOverrideCursor();
+
+    if( copied > 0 ) {
+        // The references have moved IN MEMORY ONLY. Nothing here writes the
+        // .qxp — a collect that silently saved would be the one file operation
+        // in this app the user did not ask for.
+        //
+        // There is no dirty FLAG to set: hasUnsavedChanges() reads the undo
+        // stack's clean marker. A collect is deliberately not an action (it
+        // copies files, and no undo step can put a file system back the way it
+        // found it), so resetClean() is how a non-action change tells the
+        // window there is now something worth saving.
+        if( SActionHistory *hist = SApplication::app().actionHistory() )
+            if( QUndoStack *stack = hist->undoStack() )
+                stack->resetClean();
+        updateWindowTitle();
+    }
+    refreshSelfContainedBanner_();
+
+    QString msg = tr( "Copied %n file(s) into the project folder.", "", copied );
+    if( !skippedMissing.isEmpty() )
+        msg += tr( "\n\n%n file(s) could not be copied because they are missing "
+                   "on this computer. Open the project on a machine that has "
+                   "them, collect there, and save.", "", skippedMissing.size() );
+    if( !failed.isEmpty() )
+        msg += tr( "\n\n%n file(s) could not be copied.", "", failed.size() );
+
+    QMessageBox box( this );
+    box.setIcon( failed.isEmpty() && skippedMissing.isEmpty()
+                     ? QMessageBox::Information : QMessageBox::Warning );
+    box.setWindowTitle( tr( "Collect external media" ) );
+    box.setText( msg );
+    if( !skippedMissing.isEmpty() || !failed.isEmpty() )
+        box.setDetailedText( ( skippedMissing + failed ).join( QStringLiteral( "\n" ) ) );
+    box.exec();
+}
+
+void SMainWindow::reportMissingSamples_()
+{
+    if( !currentProject_ ) return;
+    const QVector<SProject::MissingFile> &missing = currentProject_->missingFiles();
+    if( missing.isEmpty() ) return;
+
+    // NEVER MODAL IN A HEADLESS RUN. box.exec() would block the process until
+    // CTest killed it at its timeout, and the failure would read as a hang
+    // rather than as a dialog nobody can see — the qoffscreen failure mode
+    // this repo has already paid for once. The same guard SPlainWave::setWave
+    // and SPluginNativeEditor::restoreOpenEditors use, for the same reason.
+    // The paths are already in the log either way (SPlainWave warns per file).
+    if( !SAppContext::get().testOutputDir().isEmpty() ) return;
+
+    // ONE dialog for the whole load, naming every file. What this replaced was
+    // one anonymous "Unable to load file." per miss, raised from inside the
+    // loader — so three unreachable samples meant three modal boxes and not one
+    // path between them. Both spellings are shown: the project says one thing
+    // (portable, possibly written on another OS) and this machine searched
+    // another, and a user whose project travels between machines needs to see
+    // which of the two is wrong.
+    QStringList lines;
+    TW_LOGW( "ui.shell", "load: %d sample file(s) could not be found",
+             (int) missing.size() );
+    for( const SProject::MissingFile &m : missing ) {
+        lines << ( m.stored == m.resolved
+                       ? m.resolved
+                       : QString( "%1\n    (searched: %2)" ).arg( m.stored, m.resolved ) );
+    }
+
+    QMessageBox box( this );
+    box.setIcon( QMessageBox::Warning );
+    box.setWindowTitle( tr( "Samples not found" ) );
+    box.setText( tr( "%n sample file(s) referenced by this project could not be "
+                     "found on this computer.", "", missing.size() ) );
+    // Say plainly what was NOT done, because the old behaviour was the opposite
+    // and a user who met it once will assume it still holds.
+    box.setInformativeText(
+        tr( "The clips using them have been kept and are SILENT. Nothing was "
+            "removed from the arrangement, and saving the project will not "
+            "discard them — they play again as soon as the files are back in "
+            "place.\n\nThey are listed in the Extern file list." ) );
+    box.setDetailedText( lines.join( "\n" ) );
+    box.setStandardButtons( QMessageBox::Ok );
+    box.exec();
 }
 
 void SMainWindow::updateRecentMenu()
@@ -1288,8 +1463,49 @@ SMainWindow::SMainWindow()
     // its content is managed by setProject() called from createDocksToolbars.
     qDockExternFileList_ = new QDockWidget( tr( "Extern file list" ), this );
     qDockExternFileList_->setObjectName( "dock_extern_file_list" );
-    externFileList_ = new SExternFileList( qDockExternFileList_, nullptr );
-    qDockExternFileList_->setWidget( externFileList_ );
+
+    // The dock holds a CONTAINER: the self-contained banner on top, the list
+    // below. The banner cannot live inside SExternFileList — that is a
+    // QTreeWidget in app_model, a layer that may include no other app module
+    // (tools/check_layering.py, APP_DEPS['model'] == set()) and therefore has
+    // no way to reach the copy helper the button needs.
+    {
+        QWidget *container = new QWidget( qDockExternFileList_ );
+        QVBoxLayout *vb = new QVBoxLayout( container );
+        vb->setContentsMargins( 0, 0, 0, 0 );
+        vb->setSpacing( 0 );
+
+        selfContainedBanner_ = new QFrame( container );
+        selfContainedBanner_->setObjectName( "banner_not_self_contained" );
+        // A WARNING, not an error: a project referencing a shared sample
+        // library is a perfectly reasonable way to work. What it is not is
+        // portable, and that is what the banner says.
+        selfContainedBanner_->setStyleSheet(
+            "QFrame#banner_not_self_contained {"
+            "  background: palette(alternate-base);"
+            "  border-bottom: 1px solid palette(mid); }" );
+        QVBoxLayout *bl = new QVBoxLayout( selfContainedBanner_ );
+        bl->setContentsMargins( 6, 6, 6, 6 );
+        bl->setSpacing( 4 );
+        selfContainedLabel_ = new QLabel( selfContainedBanner_ );
+        selfContainedLabel_->setWordWrap( true );
+        bl->addWidget( selfContainedLabel_ );
+        QPushButton *collect =
+            new QPushButton( tr( "Collect external media" ), selfContainedBanner_ );
+        collect->setToolTip(
+            tr( "Copy every file that lives outside this project's folder into "
+                "<project folder>/media/ and point the project at the copies, "
+                "so the whole project travels as one folder." ) );
+        bl->addWidget( collect, 0, Qt::AlignLeft );
+        connect( collect, &QPushButton::clicked,
+                 this, &SMainWindow::collectExternalMedia_ );
+        selfContainedBanner_->hide();
+
+        vb->addWidget( selfContainedBanner_ );
+        externFileList_ = new SExternFileList( container, nullptr );
+        vb->addWidget( externFileList_, 1 );
+        qDockExternFileList_->setWidget( container );
+    }
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
     // The list only ANNOUNCES the cleanup request (app/model may not reach
     // app/servicesui); the shell owns the dialog and the current project.

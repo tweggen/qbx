@@ -1,25 +1,46 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   A sample that cannot be found ANYWHERE must not cost the user the whole
-  project. Before this, a missing sample made instantiate() return NULL and the
-  loader hard-aborted the entire load; now a failed instantiate is SKIPPED, like
-  an id-less element, and the no-progress leftover sweep drops whatever
-  referenced it — so the REST of the project loads.
+  project — and, since the MISSING PLACEHOLDER landed, must not cost the user
+  the CLIPS ON IT either.
 
-  The fixture carries both a GOOD track and an orphan BAD branch:
+  THE HISTORY IS WORTH KNOWING, because this case has now gated three different
+  behaviours over the same fixture:
+
+    1. Originally a missing sample made instantiate() return NULL and the loader
+       HARD-ABORTED the whole load. One unreachable file, no project.
+    2. Then a failed instantiate was SKIPPED like an id-less element, and the
+       no-progress leftover sweep DROPPED whatever referenced it. The project
+       loaded — minus those clips, permanently once it was saved again.
+    3. Now instantiate() returns a MISSING PLACEHOLDER: an SPlainWave that keeps
+       the path exactly as the file spells it and the duration the project
+       recorded, owns a source-less component, and renders SILENCE. Nothing is
+       dropped, nothing is rewritten, and the reference resolves again by itself
+       on a machine that has the file.
+
+  Step 2 was not wrong for its time — it is much better than step 1 — but
+  "the arrangement is quietly smaller than the user left it" is a bad thing for
+  a DAW to do about a file that is merely somewhere else today.
+
+  The fixture carries a GOOD track and an orphan BAD branch:
 
    1. track1 -> cut1 -> wave1 ("../test_sawtooth.wav") resolves via the qxa
       sample base dir and renders, exactly as in legacy_project_recovery.qxa.
 
    2. wave2 ("~/__smaragd_no_such_dir_missing__/__missing_sample__.wav") exists
       nowhere and its basename is NOT next to the project either, so basename
-      recovery cannot save it: instantiate fails and wave2 is skipped. cut2
-      references wave2, is referenced by nothing, and is dropped by the leftover
-      sweep. Neither reaches the surviving track.
+      recovery cannot save it. It becomes a placeholder; cut2, which windows it
+      and is referenced by nothing, survives as an orphan exactly as it was
+      written.
 
-  The assertions are the point: the load SUCCEEDS (a hard abort would leave zero
-  tracks and a silent render) and the good track renders intact. If wave2 ever
-  aborts the load again, the track count and energy assertions both fail.
+  WHAT EACH ASSERTION BITES. The audio assertions are unchanged and still catch
+  a regression to step 1 (a hard abort leaves zero tracks and a silent render).
+  `assert-extern-files` is the one that catches a regression to step 2, and it
+  is the only kind of assertion that can: a missing sample is SILENT and so is a
+  clip that was dropped for having one, so NO audio assertion anywhere can tell
+  the placeholder from the drop. count="2"/missing="1" fails in both directions
+  — a build that drops the file fails the count, and one that somehow loads it
+  for real fails `missing`.
 -->
 <SActionScript version="1" name="sample_missing_survives">
 
@@ -39,6 +60,10 @@
     <assert-audio-energy filename="sample_missing_survives.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
+    <!-- BOTH waves are in the project: the good one, and the placeholder for
+         the one this machine cannot see. In <actions>, not <assertions>: that
+         block dispatches two hardcoded kinds and knows no verbs. -->
+    <assert-extern-files count="2" missing="1"/>
   </actions>
 
   <assertions>

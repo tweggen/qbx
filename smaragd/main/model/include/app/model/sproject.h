@@ -11,6 +11,7 @@
 #include <QVariantMap>
 #include <QList>
 #include <QStringList>
+#include <QVector>
 
 #include <cstdint>
 #include <vector>
@@ -302,6 +303,52 @@ public:
     const QHash<QString,SExternFile*> &externFiles() const { return externFileDict_; }
     const QHash<QString,SObject*> &assets() const { return assetDict_; }
 
+    // ---- A LOAD'S MISSING EXTERNAL FILES -------------------------------
+    //
+    // A sample that will not load must NOT take the arrangement down with it.
+    // The loader keeps a MISSING PLACEHOLDER for it (SPlainWave::isMissing),
+    // so every clip on that sample survives the load with its position, window
+    // and duration intact and re-links by itself once the file is back; the
+    // paths that could not be found land here.
+    //
+    // WHY THE PATHS ARE COLLECTED RATHER THAN REPORTED WHERE THEY ARE FOUND:
+    // the old behaviour was one anonymous modal "Unable to load file." per
+    // miss, raised from deep inside SPlainWave::setWave. On a project carrying
+    // three unreachable samples that is three dialogs, none of which names a
+    // file — so the one thing the user needs (WHICH file, and where it was
+    // looked for) was the one thing not said. While isLoading() is set,
+    // setWave records instead of raising, and the shell reports the whole set
+    // ONCE after the load, by name.
+    //
+    // Both spellings are kept: `stored` is what the .qxp actually says (the
+    // portable form — see sfilepathref.h), `resolved` is the absolute path
+    // that was looked for on THIS machine. A user whose project came from
+    // another OS needs to see both to understand the miss.
+    struct MissingFile {
+        QString stored;      // the spelling in the project file
+        QString resolved;    // the absolute path searched on this machine
+    };
+    void beginLoad();
+    void endLoad();
+    bool isLoading() const { return isLoading_; }
+    void noteMissingFile( const QString &stored, const QString &resolved );
+    const QVector<MissingFile> &missingFiles() const { return missingFiles_; }
+
+    // Re-point an already-loaded extern file at a different path on disk, with
+    // the SAME content (a COPY made by "Collect external media"). Rekeys
+    // externFileDict_ and tells the object, so the next save serializes the new
+    // location. Deliberately does NOT reload: the bytes are identical, so the
+    // resident sample data, its content hash and every sidecar keyed on it stay
+    // valid. Returns false when `from` is not a known extern file.
+    bool relocateExternFile( const QString &from, const QString &to );
+
+    // Extern files that live OUTSIDE the project file's own directory tree.
+    // Empty for an untitled project (nothing to be outside OF) and for a
+    // project whose every sample sits beside it — which is what makes a project
+    // portable as one folder. MISSING placeholders are included: an unreachable
+    // file is by definition not inside the project folder.
+    QStringList externalMediaPaths() const;
+
 signals:
     void fileNameChanged( const QString & );
     void assetAdded( const QString &name, SObject &body );
@@ -361,6 +408,9 @@ private:
     QVariantMap properties_;
 
     QHash<QString,SExternFile*> externFileDict_;
+    // See missingFiles() / isLoading() above.
+    bool isLoading_ = false;
+    QVector<MissingFile> missingFiles_;
     QHash<QString,SObject*> assetDict_;
     QHash<QString,SObject*> arrangementDict_;
 

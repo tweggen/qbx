@@ -537,6 +537,17 @@ const Fixture kFixtures[] = {
     // audited at all. The other four round-trip from their defaults, and the
     // rows below give them non-default values so an unread attribute cannot
     // hide behind one.
+    // assert-extern-files REJECTS an element that asserts nothing (all three
+    // counts default to -1 = "do not check"), so it needs a fixture to be
+    // audited at all — and every attribute is written only when >= 0, so the
+    // fixture has to name all three or an unread one would hide behind a
+    // default. collect-external-media round-trips from its defaults, but the
+    // same "written only when >= 0" rule applies, so it gets a row too.
+    { "assert-extern-files",
+      "<assert-extern-files count='3' missing='1' external='2'/>" },
+    { "collect-external-media",
+      "<collect-external-media expectCopied='2' expectMissing='1'"
+      " expectFailed='0'/>" },
     { "media-browser-source",
       "<media-browser-source sourceId='local' waitMs='3000'/>" },
     { "media-browser-path",

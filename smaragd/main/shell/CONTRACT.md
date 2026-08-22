@@ -860,3 +860,66 @@ releasing when the last source for the account closes, and no more than that is
 claimed. And whether DPAPI, Keychain and libsecret actually resist an attacker
 is **their** business — this proposal gates the plumbing and the failure modes,
 not the cryptography.
+
+## inv. 48-50 — missing samples and the self-contained banner (2026-08-22)
+
+**inv. 48. `reportMissingSamples_()` is ONE dialog per LOAD, naming every file,
+and it is the LAST thing `openProjectFile` does.** Last for the same reason
+`SPluginNativeEditor::restoreOpenEditors` is: a modal box is stacked over a
+finished window, never over a half-built one — and the self-contained banner is
+already refreshed by `createDocksToolbars()` earlier in the same function, so
+what the user reads BEHIND the dialog is correct.
+
+It **returns immediately when `SAppContext::testOutputDir()` is set.** A modal
+`exec()` in a headless run blocks until CTest kills the process at its timeout,
+and the failure then reads as a HANG rather than as a dialog nobody can see —
+the `qoffscreen` failure mode this repo has already paid ten minutes of gate
+time for once. The same guard `SPlainWave::setWave` uses. The paths reach the
+log either way (`SPlainWave` warns per file, and this logs the count).
+
+The text states what was NOT done, deliberately: the previous behaviour was the
+opposite (clips were dropped), and a user who met it once will assume it still
+holds unless told otherwise.
+
+**inv. 49. The resources dock holds a CONTAINER — banner on top, list below.**
+The banner cannot live inside `SExternFileList`: that is a `QTreeWidget` in
+`app_model`, a layer that may include no other app module
+(`tools/check_layering.py`, `APP_DEPS['model'] == set()`), so it can reach
+neither the copy helper the button needs nor the project's own
+`externalMediaPaths()` semantics beyond the model call itself. Its visibility is
+recomputed by `refreshSelfContainedBanner_()`, which is re-run on
+`createDocksToolbars()`, on `SProject::externFileAdded`/`externFileRemoved`
+(dropping a library sample makes a self-contained project stop being one at that
+moment, not at the next open), and after every SAVE — a Save As moves the ANCHOR
+every reference is measured against, so self-containment can change with no file
+changing at all.
+
+**inv. 50. `collectExternalMedia_()` confirms, delegates, and reports — it does
+not copy.** The pass itself is `smediadrop::collectExternalMedia` in `app/media`,
+beside `materialiseIntoProject` whose rules it inherits, so the button and the
+`collect-external-media` test verb run the SAME code.
+
+Three things it must keep doing:
+
+* **Refuse on an untitled project**, with the reason. The destination is the
+  project file's own folder and there is not one yet.
+* **NOT save.** The references move in memory; writing the .qxp stays the user's
+  decision. Since there is no dirty FLAG (`hasUnsavedChanges()` reads the undo
+  stack's clean marker) and a collect is deliberately not an action — it copies
+  files, and no undo step can put a file system back the way it found it —
+  `QUndoStack::resetClean()` is how a non-action change says there is now
+  something worth saving.
+* **Name the placeholders it skipped.** A file this machine cannot see has no
+  bytes to copy, and a collect that counted it as done would be a lie the user
+  discovers only on the next machine.
+
+**NOT gated (hand-verified only):** every widget in the banner — that it appears
+and disappears, its wording, the button's connection, the confirmation and the
+report dialogs, and the untitled-project refusal. There is no testkit verb that
+builds the resources dock off screen, the same gap `assert-midi-options` fills
+for the MIDI options page and nothing fills for the Audio one. What IS gated is
+the NUMBER the banner is computed from (`assert-extern-files external=`) and the
+pass the button runs (`collect-external-media`). Verified by hand on Linux
+against a real project carried from Windows: `resources: project is NOT
+self-contained — 3 file(s) outside the project folder` and `load: 3 sample
+file(s) could not be found`, both from the production `openProjectFile` path.

@@ -500,6 +500,7 @@ set(APP_UI_FILES
     testkit/src/slanelayouttestactions.cpp
     testkit/src/slogstressaction.cpp
     testkit/src/smediatestactions.cpp
+    testkit/src/sexternmediatestactions.cpp
     testkit/src/smetertestactions.cpp
     testkit/include/app/testkit/smidiouttestactions.h
     testkit/src/smidiouttestactions.cpp

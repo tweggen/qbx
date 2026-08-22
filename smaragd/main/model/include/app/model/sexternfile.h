@@ -26,6 +26,24 @@ public:
     virtual ~SExternFile() {}
 
     virtual QString getFileName() const = 0;
+
+    /**
+     * Point this object at a DIFFERENT PATH HOLDING THE SAME BYTES — what
+     * "Collect external media" does when it copies a sample into the project's
+     * own folder. Only the reference moves: the resident sample data, its
+     * content hash and every sidecar keyed on that hash stay exactly as they
+     * are, because a copy is not a different sample.
+     *
+     * Callers go through SProject::relocateExternFile(), which also rekeys the
+     * project's by-path dictionary — calling this directly leaves the project
+     * indexing the object under its old name.
+     *
+     * Returns false by default: a subclass that cannot be re-pointed simply
+     * does not participate, and the collect pass reports it as skipped rather
+     * than silently doing nothing.
+     */
+    virtual bool relocateTo( const QString & ) { return false; }
+
 };
 
 #endif

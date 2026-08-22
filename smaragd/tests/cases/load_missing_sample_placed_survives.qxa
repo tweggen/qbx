@@ -1,30 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  A missing sample under a PLACED clip must cost that clip, not the project.
+  A missing sample under a PLACED clip must cost NOTHING but its sound.
 
-  sample_missing_survives.qxa already covers the easy half: there the cut over
-  the missing wave is referenced by nothing, so dropping it changes no
-  container. The hard half is this one — the dead clip is ON the track, at
-  96000, next to a good clip:
+  sample_missing_survives.qxa covers the easy half: there the cut over the
+  missing wave is referenced by nothing. The hard half is this one — the clip on
+  the absent sample is ON the track, at 96000, next to a good clip:
 
       track1 -> cut1 -> wave1 (../test_sawtooth.wav)   good, audible
-             -> cut2 -> wave2 (nowhere on any machine) dead
+             -> cut2 -> wave2 (nowhere on any machine) silent
 
-  Before proposal 37 D8a that lost EVERYTHING. wave2 could not be
-  instantiated, so cut2 could never resolve, so track1 could never resolve,
-  so the mixer could not either, and the load ended on "root component of
-  project was not found". The prune-and-retry sweep repairs by element kind
-  instead: an <SCut> is a WINDOW, and a window whose content is gone has
-  nothing to show, so cut2 is dropped; on the next pass track1 is a CONTAINER
-  whose link to cut2 dangles, so the LINK goes and the track stays — with its
-  other clip intact and audible.
+  THE THREE BEHAVIOURS THIS FIXTURE HAS SEEN, in order:
+
+    1. Before proposal 37 D8a it lost EVERYTHING. wave2 could not be
+       instantiated, so cut2 could never resolve, so track1 could never resolve,
+       so the mixer could not either, and the load ended on "root component of
+       project was not found".
+    2. D8a's prune-and-retry repaired by element KIND: an <SCut> is a WINDOW and
+       a window whose content is gone has nothing to show, so cut2 was DROPPED;
+       on the next pass track1 was a container with a dangling link, so the LINK
+       went and the track stayed. The project loaded — one clip short, and the
+       next save made that permanent.
+    3. Now wave2 loads as a MISSING PLACEHOLDER, so cut2 never dangles and
+       nothing is pruned at all. The clip keeps its position and its window and
+       is SILENT; it plays again the moment the file is reachable.
+
+  The prune-and-retry sweep is untouched and still guards every OTHER way a
+  reference can dangle (an unknown element, a truncated file) — see
+  load_unknown_object_survives.qxa. What changed is that a missing FILE is no
+  longer one of those ways.
 
   The fixture ALSO declares formatVersion='99', i.e. it claims to come from a
   build newer than this one. That belongs here rather than in a case of its
-  own: a reader must never refuse a document over its version (it would
-  strand a user's file on whichever build they happen to have installed), so
-  the correct behaviour is precisely the tolerance this case is about — warn,
-  then load. Both warnings are asserted; neither is visible in the audio.
+  own: a reader must never refuse a document over its version (it would strand a
+  user's file on whichever build they happen to have installed), so the correct
+  behaviour is precisely the tolerance this case is about — warn, then load.
+
+  WHAT BITES. The audio assertions catch a regression to step 1. Only
+  `assert-extern-files` can catch a regression to step 2: the dropped clip and
+  the placeholder are both SILENT, so no audio assertion anywhere can separate
+  them — which is why step 2 shipped under a green suite in the first place.
 -->
 <SActionScript version="1" name="load_missing_sample_placed_survives">
 
@@ -51,6 +65,11 @@
     <assert-audio-energy filename="load_missing_sample_placed_survives.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
+    <!-- The placeholder is IN the project, so cut2 is still on the track.
+         Under the drop-and-prune behaviour this read count="1" missing="0".
+         In <actions>, not <assertions>: that block dispatches two hardcoded
+         kinds and knows no verbs. -->
+    <assert-extern-files count="2" missing="1"/>
   </actions>
 
   <assertions>
