@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AN UNRESOLVABLE REFERENCE MUST COME BACK OUT EXACTLY AS IT WENT IN.
+
+  A MISSING placeholder re-serializes the spelling the PROJECT FILE used,
+  untouched — it does NOT re-encode it against this machine's anchor. That is
+  not a nicety: the reference is unresolvable HERE, so this machine has no
+  standing to rewrite where it points, and a project carried back to the machine
+  where the file DOES live would arrive broken by the mere act of having been
+  opened somewhere else. The failure is silent, permanent and one save away.
+
+  WHY THIS CASE NEEDS ITS OWN FIXTURE, and why the obvious one cannot gate it.
+  collect_external_media_missing.qxa also re-saves a placeholder, but its
+  reference is `~/__smaragd_no_such_dir_missing__/...` — a HOME-relative form
+  whose re-encoding produces the identical string, because the path climbs to
+  home either way. So that assertion passes whether the rule holds or not. This
+  fixture uses a PROJECT-RELATIVE reference to a file that does not exist
+  (`samples/__missing_rel__.wav`) and then saves the project THREE LEVELS AWAY,
+  which is the one shape where the two answers differ visibly:
+
+    verbatim (correct) : samples/__missing_rel__.wav
+    re-encoded (wrong) : an anchor-relative climb built out of the working
+                         directory the app happened to be run from — a path
+                         that names nothing on any machine, including this one.
+
+  Verified by sabotage: replacing the verbatim branch with a re-encode leaves
+  collect_external_media_missing.qxa GREEN and fails this case.
+
+  The good clip is here for the same reason it is in every case in this family:
+  it proves the load did not merely fail quietly.
+-->
+<SActionScript version="1" name="missing_sample_reference_verbatim">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../missing_relative_sample.qxp"/>
+
+    <!-- Both waves present; one of them a placeholder. -->
+    <assert-extern-files count="2" missing="1"/>
+
+    <!-- Saved three levels away, so a re-encode cannot coincide with the
+         original spelling. -->
+    <save-project path="../../build/test-output/missing_sample_reference_verbatim/song.qxp"/>
+
+    <assert-file-contains path="../../build/test-output/missing_sample_reference_verbatim/song.qxp"
+                          text="filename='samples/__missing_rel__.wav'"/>
+
+    <!-- The surviving clip is real audio: source sec0 of the ramped sawtooth. -->
+    <render filename="missing_sample_reference_verbatim.wav" format="wav"
+            quality="10" durationSec="2.5"/>
+    <assert-audio-energy filename="missing_sample_reference_verbatim.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

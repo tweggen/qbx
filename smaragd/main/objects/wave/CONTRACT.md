@@ -182,3 +182,51 @@ it for every LATER consumer of the seam.
 
 Known debt: swaveformdraw is shared by other renderers (cut) — candidate
 for a render-support module when slices become real targets.
+
+## A sample that will not load becomes a PLACEHOLDER, never a deletion
+
+`SPlainWave::setMissingWave()` / `isMissing()` / `linkToMissingFile()`
+(2026-08-22).
+
+**Invariant: a `<SPlainWave>` whose file cannot be loaded still produces an
+object, and every clip built on it survives the load unchanged.**
+
+Before this, `instantiateFromDomElement` returned NULL and the loader —
+correctly, given that — dropped the element and cascaded the drop to every
+`<SCut>` windowing it, "so the rest of the project can load"
+(`sprojectloader.cpp`). The cost was silent and permanent: a project opened on a
+machine where one sample happens to be absent came up MINUS those clips, and the
+next save wrote that arrangement back. Measured on a real project carried from
+Windows to Linux: 3 unreachable samples, **3 waves and 4 clips gone**.
+
+| Rule | Why |
+|---|---|
+| A placeholder owns a **source-less `twWavInput`** (constructed with an EMPTY file name), not a null component | That ctor spelling loads nothing and warns about nothing, and what comes out is an ordinary component whose every render path already answers "no source" with silence. It is what makes the graph, the capture builder, the scheduler, the freeze path and the RT callback need NO missing-file branch. |
+| `getDuration()` reports the **project's recorded `durationSec`**, not the component's | There is no file to measure and `twWavInput::getLength()` answers -1 with no source, so every clip on the absent sample would load with a nonsense extent. The attribute is read in `instantiateFromDomElement`, because `SPlainWave` overrides `hasDuration()`/`getDuration()` out of its component and `SObject::readPreChildrenAttributes`' `duration_` is therefore never consulted for a wave. |
+| `serializeSelfAttributes` writes the **spelling the project file used, verbatim** — never `SFilePathRef::toStored` | The reference is unresolvable HERE, so this machine has no standing to rewrite where it points. Re-encoding it would take a project carried from another OS and rewrite its unreachable samples relative to a folder they were never in — breaking it on the machine where they DO exist, silently, one save away. Gate: `missing_sample_reference_verbatim.qxa`, whose fixture is deliberately PROJECT-RELATIVE; the home-relative fixture in `collect_external_media_missing.qxa` re-encodes to the same string and cannot bite this. |
+| `relocateTo()` **REFUSES** on a placeholder | There are no bytes to have been copied, so "Collect external media" reports it as skipped rather than quietly re-pointing a reference at a file that is not there either. |
+| `enqueueAnalysis()` is deliberately NOT called | No content, and a null content hash is declined by every sidecar job anyway. |
+| The placeholder is **registered like any other extern file** (`addExternObject`) | It must appear in the resources list — that is where the user sees the miss — a second clip on the same absent sample must find it, and `~SPlainWave` deregisters by name whether it loaded or not. |
+
+**A placeholder must be routed AROUND `SCut::buildCapture_`** (see
+`main/objects/cut/CONTRACT.md` and `SObject::isMissing()`): it has no random
+source, so every test there classifies it as CONTAINER-BACKED and the function
+renders its whole declared duration into a capture — a full-length buffer of
+zeros, built on the UI thread, once per clip. Measured before the early return:
+**~17 s of load** on the project above, all of it producing silence.
+
+Gates: `sample_missing_survives.qxa`, `load_missing_sample_placed_survives.qxa`
+(both extended with `assert-extern-files count/missing`),
+`missing_sample_reference_verbatim.qxa`,
+`collect_external_media_missing.qxa`. **Only `assert-extern-files` can bite
+here**: a dropped clip and a placeholder are BOTH SILENT, so no audio assertion
+anywhere can separate them — which is exactly how the drop shipped under a green
+suite for as long as it did.
+
+**NOT gated:** what a placeholder LOOKS like on the arranger (it falls to the
+solid-body fill, since `SCut::getPreview` has no capture to build peaks from);
+re-linking by pointing the project at the file again through the UI (there is no
+"Locate…" dialog — the answer today is to put the file back and re-open);
+a placeholder inside a take stack or a fragment; and `setMissingWave` on a file
+that EXISTS but whose FORMAT this build cannot decode, which takes the same path
+and has no case of its own.

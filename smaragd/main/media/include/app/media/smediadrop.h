@@ -48,6 +48,7 @@
 #include "tw/core/twtypes.h"
 
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 
@@ -103,6 +104,28 @@ QString sanitiseFileName( const QString &name );
 QString materialiseIntoProject( const QString &localPath,
                                 const QString &displayName,
                                 SProject *project );
+
+// --- "Collect external media" -------------------------------------------
+//
+// Copy every sample the project references from OUTSIDE its own folder into
+// <projectDir>/media/ (through materialiseIntoProject above, so the sanitising,
+// the never-overwrite collision rule and the reuse-identical-bytes rule are the
+// media browser's, not a second set) and re-point the project at the copies.
+// That is what turns a project referencing a shared library into one that
+// travels as a single folder.
+//
+// Returns the number of files actually re-pointed. `skippedMissing` collects
+// the placeholders — a sample this machine cannot see has no bytes to copy, and
+// a collect that reported it as done would be a lie the user only discovers on
+// the next machine. `failed` collects the rest (unreadable source, no room,
+// 999 name collisions). Either pointer may be null.
+//
+// NOT undoable and it does NOT save: it copies files, which no undo step can
+// put back, and writing the .qxp is the caller's decision. Copies nothing at
+// all for an untitled project — there is no folder to be outside OF yet.
+int collectExternalMedia( SProject *project,
+                          QStringList *skippedMissing = nullptr,
+                          QStringList *failed = nullptr );
 
 }   // namespace smediadrop
 

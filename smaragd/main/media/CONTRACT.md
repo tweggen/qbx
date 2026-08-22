@@ -495,3 +495,41 @@ Gate 3's, first:
   large download's memory behaviour (the stub serves fixtures up to ~200 KB;
   nothing here streams to disk in a way that would behave differently at
   100 MB, but that claim itself is untested).
+
+## `collectExternalMedia()` — the project copy, run over a whole project
+
+`smediadrop::collectExternalMedia( project, skippedMissing, failed )`
+(2026-08-22). Copies every sample the project references from OUTSIDE its own
+folder into `<projectDir>/media/` and re-points the project at the copies. It is
+what the resources dock's **"Collect external media"** button runs; the shell
+adds only a confirmation and a report on top of it, and the
+`collect-external-media` test verb calls exactly the same function.
+
+It lives here rather than in the shell for one reason: it is
+`materialiseIntoProject` applied to a list. Sanitising for this file system, the
+never-overwrite `"name (2).ext"` collision rule and the reuse-an-identical-copy
+rule are all inherited from it, so there is no second set of them to keep in
+step — and reusing identical bytes is what makes running the pass twice cost
+nothing.
+
+Two properties are contractual:
+
+* **A MISSING placeholder is NAMED, never counted.** It has no bytes to copy
+  (`SExternFile::relocateTo` refuses on one), and this is not an edge case: it
+  is precisely what a user meets when they carry a project to the machine that
+  does NOT hold the originals — which is the machine they are most likely to
+  press the button on. Reporting it as collected would be a lie they discover
+  only on the NEXT machine.
+* **It does not save, and it is not undoable.** It touches the file system;
+  writing the .qxp stays the caller's decision. Note the consequence, which is
+  the same asymmetry a deferred drop already has (see above): the copies stay
+  behind if the user never saves, and *Cleanup…* is the precedent for that class
+  of orphan.
+
+Which files are "outside" is `SProject::externalMediaPaths()`, not a rule
+restated here — including its two contractual answers, that a SUBDIRECTORY of
+the project folder counts as inside and that an untitled project reports empty.
+
+Gates: `collect_external_media.qxa` (the half that works, through to rendered
+audio out of the copy) and `collect_external_media_missing.qxa` (the half that
+cannot: one collectable file and one placeholder in a single pass).

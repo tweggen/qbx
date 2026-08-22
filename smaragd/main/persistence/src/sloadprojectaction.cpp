@@ -25,6 +25,12 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
     // BEFORE createObjects() resolves the first <SPlainWave filename='...'>.
     project->setProjectFilePath(path_);
 
+    // Open the load window. Two things hang off it: a sample that will not load
+    // records itself as a MISSING placeholder instead of raising its own modal
+    // dialog (SProject::missingFiles, SPlainWave::setMissingWave), and the set
+    // is cleared here so what the caller reads afterwards describes THIS load.
+    project->beginLoad();
+
     // Suppress invalidation during project load to avoid deadlock.
     // All captures are empty on construction anyway, and worker threads
     // would race with the UI thread still deserializing objects.
@@ -49,10 +55,12 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
         // BEFORE balancing the suppression counter.
         project->pauseRevalidation();
         project->enableInvalidation();  // keep the counter balanced even on error
+        project->endLoad();
         return {false, nullptr};
     }
 
     // Loading complete: re-enable invalidation and trigger revalidation pass.
+    project->endLoad();
     project->enableInvalidation();
 
     // Not undoable: loading replaces the whole project; callers manage the swap.
