@@ -1133,3 +1133,25 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     means. `asset_clip_preview.qxa` uses exactly that to assert the two lanes
     land in the same columns while reading through two different data paths
     (the wrapper's CAPTURE, and each take's own preview).
+
+56. **A PAN assertion must not name a distance — the distance is a USER
+    SETTING.** `applyWheel`'s horizontal pan is
+    `step = (visibleSpan / 8) * wheelSensitivity_`, and `wheelSensitivity_`
+    comes from `SOpt::WheelSensitivityPct` (Edit -> Options -> Mouse,
+    persisted as `[mouse] wheelSensitivityPercent`). An absolute
+    `assert-lane-view scrollX="N"` therefore encodes the author's own INI and
+    passes only on a box left at the 100 % default.
+
+    `follow_scroll_hold` did exactly that and had been RED on the author's
+    machine, where the setting is 160 %: it expected 2580 (canvas 430 px at
+    secondWidth=1000 -> span 20640 -> span/8) and measured 2580 * 1.6 = 4128,
+    to the unit. Not a flake, not a regression, and nothing to do with the
+    behaviour under test. It is the same class as the
+    `plugin_editor_persistence` INI dependency: a case reading a key a real
+    interactive session is free to write.
+
+    Use `snapshot` / `compareTo` (+ `minScrollX` to keep the first check from
+    being vacuous), which say what the AC actually claims — moved, then did
+    not move, then moved again. **Reading a user-settable key is as much a
+    -j hazard as writing one**, and the INI-ownership convention above only
+    ever covered the writers.

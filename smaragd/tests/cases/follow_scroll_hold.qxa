@@ -13,18 +13,34 @@
   (set-lane-view's scrollX= bypasses every arm point ON PURPOSE, so a case
   using it could not tell the hold apart from doing nothing at all).
 
-  THE GEOMETRY IS MEASURED, NOT GUESSED, and that is worth recording plainly:
-  the canvas is never SHOWN in a headless run, and `assert-lane-alignment
-  grabWidth="800"` resizes the WINDOW to fit an 800px canvas but the canvas
-  itself lands at a narrower width once the layout subtracts the track-control
-  column, scrollbar and margins — an internal-only detail with no verb that
-  reports it directly. What IS deterministic (confirmed by running this
-  exact setup repeatedly before committing it) is the single wheel-scroll's
-  RESULT: secondWidth=1000, one Shift+wheel notch (deltaY=-600, which is
-  ScrollHorizontal's default binding — see SOpt::WheelShift) always lands
-  scrollX at EXACTLY 2580. That number is this case's closed form; the 800px
-  request is only what makes it reproducible run to run, not a number this
-  case computes independently.
+  THE PAN DISTANCE IS NOT ASSERTED, AND THAT IS THE POINT. This case used to
+  assert `scrollX="2580"` after the wheel notch, described as its "closed
+  form", measured by running the setup repeatedly before committing it. That
+  number was never a property of the code under test:
+
+      step = (visibleSpan / 8) * wheelSensitivity_        (applyWheel)
+
+  and `wheelSensitivity_` is a USER SETTING — SOpt::WheelSensitivityPct, Edit
+  -> Options -> Mouse, persisted in smaragd.ini as
+  `[mouse] wheelSensitivityPercent`. The case therefore passed only on a box
+  left at the 100 % default, and it had been FAILING on the author's own
+  machine, where that setting is 160 %: canvas 430 px at secondWidth=1000
+  gives span 20640 and span/8 = 2580, and the run measured 2580 * 1.6 = 4128
+  exactly. Not a flake, not a regression, and nothing to do with the hold.
+
+  So the three checks below are RELATIVE (`snapshot` / `compareTo`, the same
+  pair assert-envelope already uses). They say what AC-g1 actually claims —
+  the view moved, then did not move, then moved again — without naming a
+  distance the user is free to change. `minScrollX="1"` keeps the first check
+  honest: the wheel must have done SOMETHING, or "unchanged" two seconds later
+  would be vacuous.
+
+  (The canvas geometry note that used to live here still holds and still
+  matters for the grab: the canvas is never SHOWN in a headless run, and
+  `assert-lane-alignment grabWidth="800"` resizes the WINDOW to fit an 800px
+  canvas while the canvas itself lands narrower — 430 px as measured — once
+  the layout subtracts the track-control column, scrollbar and margins. It is
+  simply no longer load-bearing for any assertion.)
 
   WHY THE HOLD IS ACTUALLY BEING TESTED, not just "nothing moved because
   nothing would have anyway": at scrollX=2580 and secondWidth=1000, the
@@ -57,18 +73,21 @@
     <!-- A REAL wheel notch, Shift+wheel = Pan under the default mapping
          (SOpt::WheelShift). This ARMS the 5 s hold. -->
     <wheel-scroll deltaY="-600" modifiers="shift"/>
-    <assert-lane-view scrollX="2580"/>
+    <!-- The view MOVED, and we remember where to - we do not name the number.
+         See the header: one notch pans span/8 * wheelSensitivity_, and that
+         sensitivity is a USER SETTING. -->
+    <assert-lane-view minScrollX="1" snapshot="held"/>
 
     <!-- Well inside the hold window: the transport has had ~2 s to cross the
          forward edge repeatedly, and the view must not have moved. -->
     <wait-ms ms="2000"/>
-    <assert-lane-view scrollX="2580"/>
+    <assert-lane-view compareTo="held"/>
 
     <!-- ~7 s since the scroll, 2 s past the 5 s hold with margin: follow has
          resumed and re-paged AT LEAST once, so the view is no longer sitting
          at the held position. -->
     <wait-ms ms="5000"/>
-    <assert-lane-view scrollX="2580" expectReject="true"/>
+    <assert-lane-view compareTo="held" expectReject="true"/>
 
     <toggle-playback play="0"/>
   </actions>

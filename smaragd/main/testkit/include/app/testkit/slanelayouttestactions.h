@@ -183,6 +183,24 @@ private:
     int     expectCollapsed_ = -1;      // -1 = not checked
     double  expectSecondWidth_ = -1.0;  // < 0 = not checked
     qlonglong expectScrollX_ = -1;      // < 0 = not checked
+    // RELATIVE pan checks (same shape as assert-envelope's, and for the same
+    // reason): `snapshot` records the current scrollX under a name and asserts
+    // nothing; `compareTo` asserts the current scrollX EQUALS the named one,
+    // and with the script-level `expectReject="true"` that it DIFFERS.
+    //
+    // They exist because an ABSOLUTE scrollX is not a property of the code
+    // under test. One wheel notch pans `span/8 * wheelSensitivity_`, and that
+    // sensitivity is a USER SETTING (SOpt::WheelSensitivityPct, Edit ->
+    // Options -> Mouse). A case that hard-codes the landing position therefore
+    // passes only on a box left at the 100 % default -- which is how
+    // follow_scroll_hold came to fail on the author's own machine, where the
+    // arranger wheel sensitivity is 160 %: it expected 2580 and measured
+    // 2580 * 1.6 = 4128 exactly. What that case is actually about is whether
+    // the view MOVED, and these two attributes say that without naming a
+    // number the user is free to change.
+    QString snapshot_;
+    QString compareTo_;
+    qlonglong minScrollX_ = -1;         // < 0 = not checked
 };
 
 /**
