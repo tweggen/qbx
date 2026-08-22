@@ -464,7 +464,39 @@ void SCut::buildCapture_()
         // bearing either: freezePage_nolock positions the component itself
         // (reset() + seekTo(page->startPosition)) for every page it renders,
         // under the component's own cursorMutex_.
-        std::shared_ptr<twComponent> rootComp = c.getRootComponent();
+        // RESOLVE THE CONTENT THE WAY PLAYBACK RESOLVES IT.
+        //
+        // This used to be `c.getRootComponent()` read from position 0, and that
+        // silently dropped the content's OWN WINDOW. Two independent ways:
+        //
+        //  * getRootComponent() returns the built READER when one exists and
+        //    falls back to `content_->getRootComponent()` -- the raw, UNWINDOWED
+        //    content -- when it does not. At capture-build time the inner clip's
+        //    reader typically does not exist yet, so the capture was of the raw
+        //    file. And the capture is CACHED, so it latched on first use.
+        //  * Even WITH the reader built it was still wrong, because a plain
+        //    reader is addressed in the WARPED domain with the slip folded in BY
+        //    THE CALLER (SCut::clipToReaderMap) -- and freezing from 0 applies no
+        //    mapping at all. So the slip was lost either way.
+        //
+        // resolveClip() is the one authority for both halves (proposal 19
+        // Inv-1: ONE structural snapshot yields the component AND the mapping),
+        // and it is what twView asks on the playback path -- so the capture is
+        // now built from exactly what the engine would have played.
+        //
+        // The blast radius is small ON PURPOSE: SObject's default resolveClip is
+        // `{ getRootComponent(), mapTimelineToComponentPos( off ) }` with an
+        // identity map, and only SCut and STakeStack override either. A cut over
+        // an STrack or an SStdMixer -- an ordinary ASSET -- therefore resolves to
+        // exactly what this line used to produce, base 0 included.
+        const twResolvedClip resolvedContent = c.resolveClip( 0 );
+        std::shared_ptr<twComponent> rootComp = resolvedContent.component;
+        // Where to READ from. The capture is indexed in the CONTENT's own
+        // domain (index i == content position i), so the buffer offset stays at
+        // zero while the read position starts at the content's mapped base --
+        // the two are decoupled below.
+        const uint64_t readBase = resolvedContent.mappedPos > 0
+                                ? (uint64_t) resolvedContent.mappedPos : 0;
 
         // Stamp BEFORE freezing (see captureContentEpoch_): a content change
         // that lands during the loop below leaves the OLDER value here, so the
@@ -488,7 +520,7 @@ void SCut::buildCapture_()
         // Page at a time to avoid huge allocations.
         size_t remainingSamples = n;
         size_t bufOffset = 0;
-        uint64_t pagePos = 0;
+        uint64_t pagePos = readBase;
 
         while( remainingSamples > 0 && bufOffset < n ) {
             auto frozenPage = rootComp->freezePage(

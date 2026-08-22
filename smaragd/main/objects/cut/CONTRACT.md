@@ -430,3 +430,49 @@ stay as they are.
 `STakeStack` overrides it to step into the **ACTIVE** take only. The base's
 `childLinks()` fallback would descend into every take and report an inactive
 one's material as audible.
+
+## A container CAPTURE is built through resolveClip(), never getRootComponent()
+
+`buildCapture_`'s container branch renders the content the way PLAYBACK
+resolves it:
+
+```cpp
+const twResolvedClip resolvedContent = c.resolveClip( 0 );
+rootComp = resolvedContent.component;
+pagePos  = resolvedContent.mappedPos;      // the buffer offset stays at 0
+```
+
+It used to be `c.getRootComponent()` frozen from position 0, and that dropped
+the content's OWN WINDOW two independent ways:
+
+* `getRootComponent()` returns the built READER when one exists and falls back
+  to `content_->getRootComponent()` — the raw, UNWINDOWED content — when it does
+  not. At capture-build time the inner clip's reader typically does not exist
+  yet, and the capture is CACHED, so it LATCHED on first use.
+* Even with the reader built it was still wrong: a plain reader is addressed in
+  the WARPED domain with the slip folded in BY THE CALLER
+  (`SCut::clipToReaderMap`), and freezing from 0 applies no mapping at all.
+
+**This was an AUDIO defect, not a drawing one.** `rebuildReader` builds the
+wrapper's playback reader over that same capture, so a `SCut -> STakeStack`
+wrapper — what a SHARED or PLACED take column is — PLAYED the active take with
+the take's own `srcStart` dropped. On the DIRECT shape (`SLink -> STakeStack`)
+a take slip has always been audible (`take_lane_slip.qxa`), so the wrapped
+shape was the anomaly.
+
+`resolveClip()` is the one authority for both halves — proposal 19 Inv-1: ONE
+structural snapshot yields the component AND the mapping — and it is what
+`twView` asks on the playback path, so a capture is now built from exactly what
+the engine would have played.
+
+**The blast radius is small by construction.** `SObject`'s default
+`resolveClip()` is `{ getRootComponent(), mapTimelineToComponentPos( off ) }`
+with an IDENTITY map, and only `SCut` and `STakeStack` override either. A cut
+over an `STrack` or an `SStdMixer` — an ordinary ASSET — therefore resolves to
+exactly what the old line produced, base 0 included, which is why no golden
+moved.
+
+**`getRootComponent()`'s own fallback is unchanged and still a trap for a new
+caller.** It is deliberately lazy (it must not build a reader on the UI thread),
+so it answers "the raw content" whenever no reader exists. Anything that needs
+what PLAYS must ask `resolveClip()`. Gate: `wrapped_take_window.qxa`.

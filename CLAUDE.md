@@ -2103,6 +2103,74 @@ case); pixel aesthetics; and the DIRECT shape's byte-identity of
 `collectTakeEnvelope(-1)` against `collectEnvelope`, which holds by construction
 but has no unit assertion.
 
+## A wrapped take column plays the take's OWN window (fix/wrapped-take-window, 2026-08-22)
+
+**This was an AUDIO defect and it shipped for a long time.** A `SCut` wrapping
+an `STakeStack` — what a SHARED or PLACED take column is, the stack carrying
+`nRefs > 1` with each placement its own `SCut` window into it — PLAYED the
+active take with the take's own `srcStart` dropped. Invariants:
+`main/objects/cut/CONTRACT.md` ("A container CAPTURE is built through
+resolveClip(), never getRootComponent()").
+
+`SCut::buildCapture_`'s container branch rendered `content->getRootComponent()`
+from position 0, which lost the content's own window TWO independent ways:
+
+| Way | Why |
+|---|---|
+| `getRootComponent()` returns the built READER when one exists and falls back to the raw, **UNWINDOWED** content when it does not | At capture-build time the inner take's reader typically does not exist yet — and the capture is **CACHED**, so it LATCHED on first use. |
+| Even WITH the reader built it was still wrong | A plain reader is addressed in the WARPED domain with the slip folded in **by the caller** (`SCut::clipToReaderMap`), and freezing from 0 applies no mapping at all. |
+
+The wrapper's PLAYBACK reader is built over that same capture
+(`rebuildReader`), which is why this reached the ear rather than only the
+screen. On the **DIRECT** shape (`SLink -> STakeStack`) a take slip has always
+been audible — `take_lane_slip.qxa` gates it — so the wrapped shape was the
+anomaly, and that asymmetry is what made it survive.
+
+**The fix is to resolve the content the way playback resolves it**:
+`c.resolveClip( 0 )` yields the component AND the mapping from ONE structural
+snapshot (proposal 19 Inv-1), and it is what `twView` asks on the playback path.
+The read position starts at the resolved base while the capture's buffer offset
+stays at 0 — the capture is indexed in the CONTENT's own domain, so the two are
+deliberately decoupled.
+
+**The blast radius is small by construction, and that is why no golden moved.**
+`SObject`'s default `resolveClip()` is
+`{ getRootComponent(), mapTimelineToComponentPos( off ) }` with an IDENTITY map,
+and only `SCut` and `STakeStack` override either — so a cut over an `STrack` or
+an `SStdMixer` (an ordinary ASSET) resolves to exactly what the old line
+produced, base 0 included.
+
+**HOW IT WAS FOUND**, because the route matters: it was NOT found by reading.
+A user screenshot showed a ~29 ms disagreement between a track's composite lane
+and its take lane, left over after the take-lane domain fix (#133). Chasing that
+with a pixel measurement, then a fixture, then a rendered-RMS probe turned a
+"the two lanes derive from different data paths, so they cannot agree exactly"
+hand-wave — which is what the #133 PR claimed, wrongly — into a reproducible
+audio defect. Their take 0 carried `srcStart='1227'`; 1227 frames is 25.6 ms.
+
+Gate: `wrapped_take_window.qxa` over `tests/takestack_wrap_takeslip.qxp` — a
+2 s wrapper window 2 s into the stack, whose ACTIVE TAKE is itself slipped half
+a second in, over `test_gapsaw.wav`. The clip must play source [2.5, 4.5) s, so
+the four half-second windows are **silent / loud / loud / silent**, and a
+sawtooth of amplitude A has RMS `A/sqrt(3)` — closed forms **0.38610** and
+**0.43662**, measured **0.38640** and **0.43689** on the first run.
+
+**Watched failing: ALL FOUR assertions fail on the pre-fix binary**, and the
+measured pre-fix sequence is the correct one displaced by exactly one window —
+`0.28546 / 0.00000 / 0.38640 / 0.43689` against `0.00000 / 0.38640 / 0.43689 /
+0.00000`. That displacement IS the take's `srcStart`, to the frame.
+
+**`getRootComponent()`'s own fallback is unchanged and is still a trap for a new
+caller.** It is deliberately lazy — it must not build a reader on the UI thread
+— so it answers "the raw content" whenever no reader exists. Anything that needs
+what PLAYS must ask `resolveClip()`.
+
+**NOT gated:** a wrapped column whose take carries a non-unity STRETCH or a LOOP
+(the same `clipToReaderMap` now applies to both, and the looping branch is
+identity by design, but no case exercises either); nested containers deeper than
+one wrapper; and the DRAWN composite lane, which needs a container clip to
+preview at all — a separate fix on `fix/take-lane-capture-align`.
+
 ## Dependencies
 
 ### Core
