@@ -766,10 +766,39 @@ int SCut::getPreview( preview_t *dest, offset_t start, length_t length,
     // inv. 1).
     if( isPureEventContent() ) return -1;
 
-    // Try async capture first (non-blocking, may be stale or invalid)
-    // If not ready, fall back to live content preview (sample-backed cuts only)
+    // READINESS IS THE CAPTURE, NOT THE ASPECT PAGE.
+    //
+    // getPreviewCapture() is still CALLED, for its side effect: getCapture()
+    // schedules a Preview revalidation whenever the current page is missing
+    // that aspect, and the paint path is what drives that scheduling. Its
+    // RESULT is deliberately not gated on any more.
+    //
+    // It used to be `if( !page || !captureSnapshot() )`, and the page half of
+    // that was wrong twice over:
+    //
+    //  * It is not a freshness signal. getCapture() returns the current page
+    //    even when the requested aspects are MISSING — "stale is OK; better
+    //    than null/dropout" — so a non-null page says only that the
+    //    revalidator has ever published one for this cut, never that it
+    //    describes the audio below.
+    //  * The thing this function actually reads is capPeaks_, which
+    //    ensureCapturePeaks() builds from captureSnapshot() and which
+    //    invalidateCapture() frees in the SAME breath as it resets
+    //    currentPage_ and capture_. So the capture carries the identical
+    //    invalidation guarantee, applied to the data actually used.
+    //
+    // The cost of the old gate was that a CONTAINER-BACKED cut — an asset, or
+    // the SCut wrapping an STakeStack — drew as a solid body with no waveform
+    // whenever no page had been published yet, with a complete capture sitting
+    // right there. Measured headlessly after load + render + a 3 s settle:
+    // `page=0 snap=1`, with buildCapture_ having logged a 192000-frame
+    // container capture five times. Nothing in a --test-case run ever
+    // publishes that page, so every asset clip was a blank rectangle in every
+    // headless context, and the composite lane's waveform could not be gated
+    // at all.
     auto page = getPreviewCapture();
-    if( !page || !captureSnapshot() ) {
+    (void) page;
+    if( !captureSnapshot() ) {
         // No capture available (yet or ever)
         // For sample-backed cuts: preview the content live
         // For container-backed cuts: return error (no fallback)

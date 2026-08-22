@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A CONTAINER-BACKED CLIP MUST DRAW ITS WAVEFORM AS SOON AS ITS CAPTURE EXISTS.
+
+  `SCut::getPreview` used to bail unless getPreviewCapture() - the Preview
+  ASPECT PAGE - was non-null, and that gate was wrong twice over:
+
+    * it is not a freshness signal. getCapture() returns the current page even
+      when the requested aspects are MISSING ("stale is OK; better than
+      null/dropout"), so a non-null page says only that the revalidator has
+      ever published one for this cut;
+    * the data this function actually reads is capPeaks_, built by
+      ensureCapturePeaks() from captureSnapshot() - and invalidateCapture()
+      frees capPeaks_ in the SAME breath as it resets currentPage_ and
+      capture_. The capture therefore carries the identical invalidation
+      guarantee, applied to the data actually used.
+
+  The cost was that a container-backed cut - an ASSET, or the SCut wrapping an
+  STakeStack - painted as a SOLID BODY with no waveform whenever no page had
+  been published, with a complete capture sitting right there. Measured
+  headlessly after load + render + a 3 s settle: `page=0 snap=1`, with
+  buildCapture_ having logged a 192000-frame container capture five times.
+
+  NOTHING IN A HEADLESS RUN EVER PUBLISHES THAT PAGE, so before this every
+  asset clip was a blank rectangle in every headless context and the
+  composite lane's waveform could not be gated at all. That is what this case
+  exists to hold shut: it is the first case in the suite that measures a
+  container-backed clip's DRAWN MATERIAL.
+
+  THE FIXTURE IS THE TAKE-LANE ONE, deliberately. `takestack_wrap_slipped.qxp`
+  puts a 2 s wrapper window 2 s into a 4 s take over test_gapsaw.wav, whose
+  EXACT-ZERO regions at [0.6,0.9) and [2.5,3.0) s make the drawn material a
+  closed form: the correct window shows source [2.0,4.0), i.e. ONE gap at
+  25%..50% of the clip. So this case does not merely assert "something was
+  drawn" - it asserts the RIGHT audio was drawn, at the right place.
+
+  AND IT ASSERTS THE TWO LANES AGREE. The composite lane reads the wrapper's
+  CAPTURE; the take lane reads the take's own preview. Those are two different
+  data paths over the same material, so "they land in the same columns" is a
+  real claim and not a tautology - it was measured at bestShift 0, correlation
+  0.9967, and it is the property that makes comping by eye possible.
+
+  `<render>` is what builds the capture (via ensureReader -> buildCapture_);
+  without it there is nothing for either gate to measure, and the case would
+  pass vacuously on the "no capture" fallback path.
+-->
+<SActionScript version="1" name="asset_clip_preview">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_slipped.qxp"/>
+
+    <!-- Builds the container capture the composite lane previews from. -->
+    <render filename="asset_clip_preview.wav" format="wav" quality="10"
+            durationSec="2.5"/>
+
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- After the load and the lane change - see take_lane_domain.qxa's header
+         for why a grid-disable anywhere earlier does not hold, and why the
+         grid matters at all (it is drawn in EXACTLY the clip-body colour). -->
+    <grid-disable/>
+
+    <!-- THE COMPOSITE LANE (takeRow="-1"). Before the fix this was one solid
+         body: gapCols 0, and firstGapStartPct -1. -->
+    <assert-take-lane trackPath="0" takeRow="-1"
+                      grabWidth="900" grabHeight="600"
+                      grabPng="asset_clip_preview_composite.png"
+                      spanFirst="1" spanLast="399" spanTolerance="2"
+                      minGapCols="1" gapRuns="1"
+                      firstGapStartPct="25" firstGapEndPct="50"
+                      pctTolerance="3"
+                      minWaveMeanPct="50" maxWaveMeanPct="75"/>
+
+    <!-- THE ACTIVE TAKE LANE, over the same window through the other data
+         path. Identical expectations: that is the agreement claim. -->
+    <assert-take-lane trackPath="0" takeRow="0"
+                      grabWidth="900" grabHeight="600"
+                      minGapCols="1" gapRuns="1"
+                      firstGapStartPct="25" firstGapEndPct="50"
+                      pctTolerance="3"
+                      minWaveMeanPct="50" maxWaveMeanPct="75"/>
+  </actions>
+
+</SActionScript>
