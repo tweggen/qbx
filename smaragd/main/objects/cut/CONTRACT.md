@@ -431,6 +431,33 @@ stay as they are.
 `childLinks()` fallback would descend into every take and report an inactive
 one's material as audible.
 
+## Preview READINESS is the CAPTURE, not the aspect page
+
+`SCut::getPreview()` decides "is there anything to draw" on
+`captureSnapshot() != nullptr`. It still CALLS `getPreviewCapture()` first,
+for that call's side effect — `getCapture()` schedules a Preview revalidation
+whenever the current page lacks the aspect, and the paint path is what drives
+that scheduling — but it does not gate on the result.
+
+**Why the page is the wrong signal.** `getCapture()` returns the current page
+even when the requested aspects are MISSING ("stale is OK; better than
+null/dropout"), so a non-null page says only that the revalidator has ever
+published one for this cut — never that it describes the audio below. The data
+`getPreview()` actually reads is `capPeaks_`, which `ensureCapturePeaks()`
+builds from `captureSnapshot()`; and `invalidateCapture()` resets
+`currentPage_`, `capture_` AND frees `capPeaks_` in one breath. The capture
+therefore carries the identical invalidation guarantee, applied to the data
+actually used — so this is strictly more correct, not a relaxation.
+
+**What the old gate cost.** A container-backed cut — an ASSET, or the `SCut`
+wrapping an `STakeStack` — painted as a solid body with no waveform whenever no
+page had been published, with a complete capture sitting right there. Measured
+headlessly after load + render + a 3 s settle: `page=0 snap=1`, with
+`buildCapture_` having logged a 192000-frame container capture five times.
+Nothing in a headless run ever publishes that page, so every asset clip was a
+blank rectangle in every `.qxa` context and the composite lane's waveform could
+not be gated at all. Gate: `asset_clip_preview.qxa`, watched failing.
+
 ## A container CAPTURE is built through resolveClip(), never getRootComponent()
 
 `buildCapture_`'s container branch renders the content the way PLAYBACK

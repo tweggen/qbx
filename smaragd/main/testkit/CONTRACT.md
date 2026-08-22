@@ -1122,3 +1122,14 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     regression. In `take_lane_domain.qxa` it is also an independent second
     discriminator for the same defect: the correct window reads **62**, the
     broken one **27**.
+
+55. **`assert-take-lane takeRow="-1"` addresses the track's OWN (composite)
+    lane.** Same classifier, one different reference colour — the lane fill
+    comes from `STrackRendererInline::laneFillColor( *track )`, the function
+    the renderer paints with, rather than the take lanes' constant — and no
+    dim, because a composite lane is never dimmed. The point is that a
+    composite lane and its take lanes become comparable through ONE
+    measurement instead of two that could disagree about what "material"
+    means. `asset_clip_preview.qxa` uses exactly that to assert the two lanes
+    land in the same columns while reading through two different data paths
+    (the wrapper's CAPTURE, and each take's own preview).

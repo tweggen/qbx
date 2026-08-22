@@ -2929,21 +2929,36 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
     // SEARCH for the row, never rowIndexOfTrack()+1+k: automation sub-lanes
     // can sit between a track's lane and its take rows, and an offset would
     // silently measure one of them.
+    //
+    // takeRow < 0 addresses the track's OWN (composite) lane instead. Same
+    // classifier, one different reference colour -- which is the point: the
+    // composite lane and its take lanes become comparable through ONE
+    // measurement rather than two that could disagree about what "material"
+    // means.
+    const bool composite = ( takeRow < 0 );
     int row = -1;
     for( int i = 0; i < v->rowCount(); ++i ) {
         const STrackRow *r = v->rowAt( i );
-        if( r && r->track == track && r->subKind == SubLaneKind::Take
-            && r->takeRow == takeRow ) { row = i; break; }
+        if( !r || r->track != track ) continue;
+        if( composite ) {
+            if( r->subKind == SubLaneKind::None ) { row = i; break; }
+        } else if( r->subKind == SubLaneKind::Take && r->takeRow == takeRow ) {
+            row = i; break;
+        }
     }
     if( row < 0 )
-        return QString( "no take row %1 on track %2 (rows=%3)"
+        return QString( "no %1 row on track %2 (rows=%3)"
                         " - is the take lane expanded?" )
-            .arg( takeRow ).arg( trackPath ).arg( v->rowCount() );
+            .arg( composite ? QStringLiteral( "composite" )
+                            : QStringLiteral( "take %1" ).arg( takeRow ) )
+            .arg( trackPath ).arg( v->rowCount() );
 
     // drawTakeLane is handed QRect(0, laneTop+1, width, laneHeight-2) and
-    // paints its clips into that inset by one more row top and bottom.
-    const int top = canvas->laneTop( row ) + 2;
-    const int bandH = canvas->laneHeight( row ) - 4;
+    // paints its clips into that inset by one more row top and bottom. The
+    // COMPOSITE lane's renderer is handed the same rect and paints the clip
+    // body over its full height, so one row of inset is enough there.
+    const int top = canvas->laneTop( row ) + ( composite ? 1 : 2 );
+    const int bandH = canvas->laneHeight( row ) - ( composite ? 2 : 4 );
     if( bandH < 3 || top < 0 || top + bandH > img.height() )
         return QString( "row=%1 band=%2,%3 OUTSIDE the %4x%5 grab"
                         " - raise grabHeight" )
@@ -2951,7 +2966,13 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
             .arg( img.width() ).arg( img.height() );
 
     const QRgb bodyLit  = QColor( 160, 160, 160 ).rgb() | 0xff000000u;
-    const QRgb fillLit  = QColor(  26,  38,  50 ).rgb() | 0xff000000u;
+    // The lane's own background: the take lanes' constant, or -- for the
+    // composite lane -- whatever laneFillColor() derives for THIS track
+    // (selection and every STrackColorModifier state), read from the same
+    // function the renderer paints with rather than guessed at.
+    const QRgb fillLit  = composite
+        ? ( STrackRendererInline::laneFillColor( *track ).rgb() | 0xff000000u )
+        : ( QColor( 26, 38, 50 ).rgb() | 0xff000000u );
     const QRgb bodyDim  = sTakeDim( bodyLit );
     const QRgb fillDim  = sTakeDim( fillLit );
 
@@ -2965,7 +2986,7 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
             if( c == bodyLit ) ++litCount;
             else if( c == bodyDim ) ++dimCount;
         }
-    const bool dimmed  = dimCount > litCount;
+    const bool dimmed  = !composite && dimCount > litCount;
     const QRgb bodyRgb = dimmed ? bodyDim : bodyLit;
 
     // Per column: material iff the body colour appears; plus a histogram of

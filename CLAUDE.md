@@ -2103,6 +2103,53 @@ case); pixel aesthetics; and the DIRECT shape's byte-identity of
 `collectTakeEnvelope(-1)` against `collectEnvelope`, which holds by construction
 but has no unit assertion.
 
+## A container clip previews as soon as its CAPTURE exists (fix/take-lane-capture-align, 2026-08-22)
+
+`SCut::getPreview()` used to bail unless `getPreviewCapture()` - the Preview
+ASPECT PAGE - was non-null. Invariants: `main/objects/cut/CONTRACT.md`
+("Preview READINESS is the CAPTURE, not the aspect page"),
+`main/testkit/CONTRACT.md` 55.
+
+**That gate was wrong twice over.** It is not a freshness signal — `getCapture()`
+returns the current page even when the requested aspects are MISSING ("stale is
+OK; better than null/dropout"), so a non-null page says only that the
+revalidator has ever published one. And the data `getPreview()` actually reads
+is `capPeaks_`, built by `ensureCapturePeaks()` from `captureSnapshot()`, which
+`invalidateCapture()` frees in the SAME breath as it resets `currentPage_` and
+`capture_` — so the capture carries the identical invalidation guarantee applied
+to the data actually used. `getPreviewCapture()` is still CALLED (that call is
+what schedules Preview revalidation); only the gate is gone.
+
+**What it cost:** a container-backed cut — an ASSET, or the `SCut` wrapping an
+`STakeStack` — painted as a SOLID BODY with no waveform whenever no page had
+been published, with a complete capture sitting right there. Measured headlessly
+after load + render + a 3 s settle: **`page=0 snap=1`**, with `buildCapture_`
+having logged a 192000-frame container capture five times. Nothing in a headless
+run ever publishes that page, so every asset clip was a blank rectangle in every
+`.qxa` context and the composite lane's waveform **could not be gated at all**.
+
+Gates: `asset_clip_preview.qxa` (the first case in the suite that measures a
+container-backed clip's DRAWN MATERIAL) plus `assert-take-lane takeRow="-1"`,
+which addresses the track's own composite lane. Watched failing: pre-fix the
+composite reads `materialCols=399 gapCols=0` — one solid block — while the take
+lane is untouched at `gapCols=99`. Post-fix the two lanes agree at gap 25-50 %
+and `waveMeanPct` 61 vs 62, through two different data paths. Full suite
+287/288, the one failure being `follow_scroll_hold`, which is red on `main`.
+
+**A SEPARATE AND MORE SERIOUS DEFECT THIS EXPOSED, NOT FIXED HERE.**
+`SCut::getRootComponent()` returns the cut's reader when one has been built and
+otherwise falls back to `content_->getRootComponent()` — the **UNWINDOWED**
+content. `buildCapture_` renders exactly that, and at capture-build time the
+active take's own reader typically does not exist yet, so a wrapped take
+column's capture drops the take's own `srcStart` — and the capture is cached, so
+it LATCHES on first use. The wrapper's playback reader is built over that same
+capture, so **this is an AUDIO bug, not a paint one**: what plays through a
+`SCut -> STakeStack` wrapper ignores the active take's own window. Measured with
+a fixture take at `srcStart=24000` (0.5 s): the composite lane and the RENDERED
+AUDIO both stayed put (silence at 0.50-1.00 s instead of 0.00-0.50 s) while the
+take lane followed. On the DIRECT shape a take slip IS audible
+(`take_lane_slip.qxa`), so the wrapped shape is the anomaly.
+
 ## A wrapped take column plays the take's OWN window (fix/wrapped-take-window, 2026-08-22)
 
 **This was an AUDIO defect and it shipped for a long time.** A `SCut` wrapping
