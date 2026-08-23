@@ -221,6 +221,14 @@ static constexpr double SMV_WHEEL_VSCROLL_FRACTION = 1.0 / 3.0;
 static constexpr double SMV_WHEEL_ZOOM_H_BASE = 1.2;
 static constexpr double SMV_WHEEL_ZOOM_V_BASE = 1.5;
 
+// The BASE lane height a fresh view starts at, in pixels. It is not persisted
+// anywhere (unlike the horizontal zoom/pan, which ride in the project's
+// property dict), so every view is built at this height and the wheel zoom
+// works out from it. 49 px is one toggle row plus one fader row with the head
+// still legible at the compact density - what the arranger is actually used
+// at, rather than the 100 px it started life with.
+static constexpr int SMV_DEFAULT_TRACK_HEIGHT = 49;
+
 void SMVActualView::setSecondWidth( double w )
 {
     if( w<0.000001 ) w=0.000001;
@@ -5504,7 +5512,7 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Accept drag-drop from the resource list (assets and external files).
     setAcceptDrops(true);
 
-    trackHeight_ = 100;      // BASE lane height; per-track scales ride on it
+    trackHeight_ = SMV_DEFAULT_TRACK_HEIGHT;   // per-track scales ride on it
     upperLeftY_ = 0;
     topRow_ = 0;
     // Zoom / horizontal pan (fix/track-list-polish m): secondWidth_,
