@@ -164,6 +164,26 @@ public:
     /** The window interface of an object, or null when it is not a window. */
     static SClipWindow *of( SObject *obj );
     static SClipWindow *of( SObject &obj ) { return of( &obj ); }
+
+    /**
+     * THE WINDOW WHOSE PARAMETERS A PLACEMENT CARRIES — a different question
+     * from `windowTakeAt()`, and the two differ exactly on a wrapped column.
+     *
+     *   a plain clip / a WINDOW over a column  -> that window
+     *   a take COLUMN placed directly          -> its ACTIVE take
+     *
+     * Order matters: a window over a column is the placement's own window, and
+     * its slip / length / gain are the ones the placement has. A direct column
+     * has no window of its own, so the audible take's are.
+     *
+     * Null when the placement carries neither (raw content on a lane, which no
+     * verb produces).
+     */
+    static SClipWindow *parametersOf( SObject &placementObject )
+    {
+        if( SClipWindow *w = of( &placementObject ) ) return w;
+        return placementObject.windowTakeAt( -1 );
+    }
 };
 
 #endif // _SCLIPWINDOW_H_

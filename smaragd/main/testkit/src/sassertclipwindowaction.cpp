@@ -27,8 +27,14 @@ SApplyResult SAssertClipWindowAction::apply( SProject *project )
         return { false, nullptr };
     }
     SObject *obj = &link->getSObject();
-    // A stack presents the addressed take through the generic take seam.
-    if( SClipWindow *w = obj->windowTakeAt( take_ ) ) obj = &w->asObject();
+    // WHICH question this verb is asking depends on whether a take was NAMED.
+    // With `take=`, the addressed take (which since proposal 42 M2 the seam
+    // reaches through a WINDOW over a column too — it used to be silently
+    // ignored there). Without it, the window whose PARAMETERS the placement
+    // carries: the clip itself, or a direct column's active take.
+    if( SClipWindow *w = ( take_ >= 0 ? obj->windowTakeAt( take_ )
+                                      : SClipWindow::parametersOf( *obj ) ) )
+        obj = &w->asObject();
     SClipWindow *win = SClipWindow::of( obj );
 
     const qint64 gotStart = (qint64) link->getStartTime();

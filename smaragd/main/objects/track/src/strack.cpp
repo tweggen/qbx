@@ -1856,7 +1856,14 @@ void STrack::refreshClipGainCurves()
         if( !lk || !lk->hasStartTime() ) continue;
         SObject *obj = &lk->getSObject();
         if( obj->isLane() ) continue;          // a nested lane, not a clip
-        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        // The window whose PARAMETERS this placement carries — the placement's
+        // own window when it has one, the active take when it does not. NOT
+        // `windowTakeAt(-1)`, which since proposal 42 M2 forwards through a
+        // window and would make a wrapped column's own clip gain and volume
+        // inaudible in favour of the take's (`set-clip-volume` on a wrapped
+        // column edits the WRAPPER, so the mix has to read the wrapper).
+        if( SClipWindow *w = SClipWindow::parametersOf( *obj ) )
+            obj = &w->asObject();
         cpTrackMix_->setClipGainCurve(
             lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
         // THE PER-CLIP STATIC VOLUME (per-clip volume/pan proposal).
