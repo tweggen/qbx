@@ -16,6 +16,14 @@ public:
     void writeXml(QDomElement &elem) const override;
     bool readXml(const QDomElement &elem, int version) override;
 
+    // The file on disk now matches memory: SActionHistory::onApplied_() marks
+    // the undo stack clean once apply() has succeeded. This is what makes
+    // "unsaved changes" clear after a save at all — see saction.h's doc
+    // comment and SMainWindow::saveToPath(), which does the equivalent thing
+    // by hand for the interactive Save path (it calls this action's apply()
+    // directly and never goes through SActionHistory::submit()).
+    bool marksProjectClean() const override { return true; }
+
 private:
     QString path_;
 };

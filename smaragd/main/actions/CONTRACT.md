@@ -32,6 +32,23 @@ submit/apply/reject path.
 Known debt: sactionhistory reaches SApplication for the current project
 (shell edge); expectReject is per-element, not per-verb.
 
+**`SAction::marksProjectClean()` (2026-08-23, default `false`) is an opt-in
+hook for exactly one thing today**: `SSaveProjectAction` overrides it `true`,
+and `SActionHistory::onApplied_()` calls `QUndoStack::setClean()` for any
+applied action that returns true from it, AFTER any inverse has been pushed (a
+`setClean()` before the push marks the position the push then leaves BELOW the
+new command — dirty again immediately; irrelevant while the only override is
+non-undoable, but the ordering is correct regardless). It exists here rather
+than as a `name() == "save-project"` string check in the history, for the same
+reason `mergeKey()`/`knownAttributes()` are hooks rather than special cases:
+the history owns the `QUndoStack` and applies every action the SAME way,
+scripted (`<save-project>` in a `.qxa`) or interactive (the menu's Save, which
+does NOT go through this history — see `main/shell/CONTRACT.md` inv. 51 — and
+calls `setClean()` by hand for exactly that reason). Before this, `setClean()`
+was called NOWHERE in this repository, so a project's undo stack never went
+clean after a save and `hasUnsavedChanges()` stayed true forever past the
+first edit.
+
 **`metronome-toggle/-enable/-disable` stopped being a stub in proposal 21 L5**,
 without one line of this module changing. They still only flip
 `SProjectProps::Metronome`; what is new is that `SApplication` watches that

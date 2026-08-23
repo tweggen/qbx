@@ -959,3 +959,135 @@ file(s) could not be found`, both from the production `openProjectFile` path.
     Gate: `record_count_in_primed.qxa`, which asserts the poll count rather
     than a wall clock — what changed is WHEN the freezing happens, not how
     fast this box freezes.
+
+## inv. 51-52 — a save marks the undo stack clean, and "Save" in the prompt can no longer lose work (2026-08-23)
+
+**inv. 51. `SMainWindow::saveToPath()` calls `QUndoStack::setClean()` on a
+successful write — the ONE call in this repository's history that had never
+existed anywhere.** An exhaustive grep before this fix found `setClean()`
+called NOWHERE and only `resetClean()` (inv. 50's `collectExternalMedia_()`,
+the one place a non-action change had to say "now dirty"); `hasUnsavedChanges()`
+reads `!stack->isClean()`, so it stayed true forever after the first edit,
+however many times the project was saved — Ctrl+S then Ctrl+W always prompted,
+with nothing between them.
+
+Two entry points reach a save and both must clean the stack, because they take
+DIFFERENT routes to the file:
+
+* **The interactive path** (`saveToPath()`, called from `fileSave()` /
+  `fileSaveAs()`) applies `SSaveProjectAction` DIRECTLY — `action.apply(
+  currentProject_)` — never through `SActionHistory::submit()`. It calls
+  `setClean()` itself, right after a successful write.
+* **A SCRIPTED `<save-project>`** goes through `submitAction()` →
+  `SActionHistory::submit()`, which never sees `saveToPath()` at all. The fix
+  there is `SAction::marksProjectClean()` (`main/actions/include/app/actions/
+  saction.h`), a hook `SSaveProjectAction` overrides to `true`;
+  `SActionHistory::onApplied_()` (`main/actions/CONTRACT.md`) calls
+  `setClean()` for any action that does, AFTER any inverse is pushed (a
+  `setClean()` before a push marks the position the push then leaves BELOW the
+  new command — dirty again immediately; `save-project` is not undoable today,
+  so the ordering does not currently bite, but it is correct either way).
+
+This is what makes undo's clean-INDEX tracking — `QUndoStack`'s own, not a
+hand-rolled bool — give D4 for free: undoing back to the exact command a save
+marked clean re-cleans the stack, and redoing past it dirties it again, with no
+extra bookkeeping anywhere.
+
+**inv. 52. `promptSaveUnsavedChanges()`'s `QMessageBox::Save` case now
+PROPAGATES the real outcome of the save, instead of hard-coding `true`.**
+`fileSave()` and `fileSaveAs()` are now `bool`-returning (`false` on a write
+failure, or on the user CANCELLING the Save As file dialog an untitled
+project routes through) — the old code called `fileSave()` and unconditionally
+`return true`, which meant choosing "Save" and then cancelling the Save As
+dialog closed the project and DISCARDED the work the user had just asked to
+keep. `promptSaveUnsavedChanges()` now `return`s `fileSave()`'s result
+directly, so every caller — `fileClose()`, `fileNew()`, `openProjectFile()`,
+`closeEvent()` — correctly treats that combination as a CANCELLED close, the
+same as choosing Cancel outright.
+
+`unsavedChangesForTest()`, added for `assert-unsaved-changes`
+(`main/testkit`), is NOT a forward to the private `hasUnsavedChanges()` —
+found while writing the gate: that predicate also gates on `currentProject_`,
+this window's own notion of "a project is open" (set by `fileNew()`/
+`openProjectFile()`/`adoptCurrentProject()`), which a `--test-case` run never
+populates, because `SActionRunner` puts the project on `SApplication`
+directly and never routes it through this window at all. Both read the SAME
+undo stack's clean bit once a project genuinely exists — `unsavedChangesForTest()`
+just does not require this window to have "opened" it first.
+
+Gate: `save_marks_clean.qxa` — `add-track` (dirty), `<save-project>` (must
+clean), `add-track` again (dirty again), `<undo>` (re-clean — D4), `<redo>`
+(re-dirty — D4's other half), a SECOND `<save-project>` (must clean again, from
+a state the first save never saw). Watched failing on the pre-fix binary: the
+assertion right after the first `<save-project>` read `expect="0"`
+(clean) where the stack was still `expect="1"` (unsaved) — `setClean()` had
+never run. **NOT gated, hand-verified only** (say so in every PR that touches
+this): D3 (Save As) shares `saveToPath()`/`setClean()` with plain Save, so it
+is covered by construction rather than by a separate headless assertion — the
+file DIALOG a Save As needs cannot be driven from a script. D5 (choosing
+"Save" and then cancelling the Save As dialog cancels the close) is entirely
+dialog-modal; the correctness argument is the bool-propagation change itself,
+verified by reading. inv. 50's `collectExternalMedia_()` `resetClean()` call
+is UNCHANGED by this fix — that line was not touched — but remains
+un-headlessly-gated for the reason inv. 50 already names: the
+`collect-external-media` testkit verb calls `smediadrop::collectExternalMedia`
+directly and does not go through this button handler, the only caller of
+`resetClean()`.
+
+## inv. 53 — Ctrl(Cmd)+Shift+A clears the active arranger's selection (issue f, 2026-08-23)
+
+`SMainWindow::deselectAllInActiveArranger()` mirrors `selectAllInActiveArranger()`
+(above) exactly, including WHY it must set the path root explicitly:
+`SClearSelectionAction::apply()` honours `pathRoot_`
+(`main/selection/src/sclearselectionaction.cpp:15,18`), and
+`SApplication::submitClearSelectionAction()` — the OTHER, older way to reach
+this action, used elsewhere in the app — builds one with NO path root, which
+resolves to the MASTER. A bare "clear selection" bound to this shortcut would
+therefore clear the master's selection while an arrangement tab was active;
+`action->setPathRoot(v->rootName())` is what keeps the two tabs independent,
+the same fix inv. (AC-a3's Select All) already needed for the SAME reason.
+
+`sendDeselectAllShortcut()` is `sendSelectAllShortcut()`'s twin: a
+`QEvent::ShortcutOverride` offered to the focus widget first (a focused piano
+roll claims it and clears its OWN note selection — `eventui/CONTRACT.md`
+inv. 16 — never the arranger's), falling through to the window's "Select None"
+`QAction` (Edit menu, `Ctrl+Shift+A`, spelled as an explicit `QKeySequence`
+rather than `QKeySequence::Deselect` because Qt only defines that standard key
+on X11 and this chord must be the same on every platform this app builds for).
+
+Gate: `deselect_all_scope.qxa`, the deselect-all twin of `select_all_scope.qxa`
+— select all in the master, deselect, undo (restores); switch to an
+arrangement tab with a DIFFERENT shape, select-then-deselect there, and confirm
+the master's selection (set earlier) is untouched — the pair that fails were
+the two roots not kept independent. **Not gated**: the piano roll's own branch,
+for the `QApplication::focusWidget()` reason `eventui/CONTRACT.md` inv. 16
+already names.
+
+## inv. 54 — `smaragdOrderlyShutdown()` drains `QEvent::DeferredDelete` before `std::exit()` (issue a follow-up, 2026-08-23)
+
+`main.cpp`'s `smaragdOrderlyShutdown()` — already responsible for stopping the
+plugin scan thread and flushing the logger before a `--test-case` run's
+`std::exit()` — now ALSO calls `QCoreApplication::sendPostedEvents( nullptr,
+QEvent::DeferredDelete )` first, while `QApplication` is still fully alive.
+
+**Found chasing a SIGSEGV**, downstream of fixing `main/objects/track/
+CONTRACT.md`'s `SPluginSlot::slotDestroying()` bug: once an editor correctly
+closes DURING project teardown, `QDialog::close()` on a `WA_DeleteOnClose`
+widget POSTS a deferred delete rather than running it, and `std::exit()`
+leaves through no event-loop pump at all. That deferred `~QWidget()` (and the
+`~QWindow()`/`QOpenGLContext` teardown it drags in) then ran from a
+Qt-internal atexit hook AFTER the platform integration had already torn
+itself down — SIGSEGV, and a DIFFERENT crash from the one fixing
+`slotDestroying()` was chasing.
+
+`main.cpp`'s own long-standing comment on `std::exit()` ("destroys no stack
+object") already flagged the general hazard for OTHER things (the plugin scan
+thread, the log sink); this is the same hazard reaching a THIRD kind of
+resource — a widget's own deferred teardown — that nobody had needed to drain
+before because nothing used to close cleanly enough to post one.
+
+Gate: `qxa.plugin_native_editor_teardown_safe` (`main/pluginui/CONTRACT.md`),
+watched crashing with this drain reverted (and the `slotDestroying()` fix
+kept) — a DIFFERENT stack trace than reverting `slotDestroying()` alone,
+confirming the two fixes address genuinely separate failure points rather
+than one bug wearing two disguises.

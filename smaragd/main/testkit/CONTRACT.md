@@ -1185,3 +1185,88 @@ share a directory would pass on a build with no self-containment logic at all),
 and it keeps the collect from creating files under `tests/`, which nothing in
 the suite may do (see "Why `-j` is safe" — `git status tests/` stays clean
 across a full run).
+
+## 58-61. fix/editor-ui-and-shortcuts verbs (2026-08-23)
+
+**58. `plugin-native-editor action="open-via-strip"`** is the headless repro
+for a real defect, not a convenience wrapper. It builds a THROWAWAY
+`SPluginEffectStrip`, PARENTED TO THE REAL MAIN WINDOW (looked up the same way
+`sclicklaneaction.cpp`'s `mainWindow_()` does), and opens the editor through it
+as `parentForPosition` — the exact call `SPluginEffectStrip::
+openParamEditor()` makes — then destroys ONLY the strip, the way
+`STrackDetailPanel::rebuildUI()` destroys the real one on every track switch
+(`delete pluginStrip_`). `expectOpen="1"` afterwards is the assertion that the
+editor's lifetime no longer depends on the strip — see `main/pluginui/
+CONTRACT.md` ("The native editor window is never parented to the FX strip")
+for the fix and why the plain `action="open"` mode (which always passes
+`nullptr`) could never have caught this: it never exercises the
+strip-as-parent path at all.
+
+**Parenting the throwaway strip to `nullptr` instead of the main window would
+have silently tested the wrong thing, and this was found by doing exactly
+that first.** A parentless `QWidget` IS its own `window()` (a top-level
+widget's `window()` returns itself), so `SPluginNativeEditor`'s
+`parentForPosition->window()` climb (the fix) would land right back on the
+strip — indistinguishable, from inside the constructor, from the PRE-fix
+`QDialog(parent)` call it replaced. The verb failed with the strip parented to
+`nullptr` even on the FIXED binary, which is what caught it: the real
+production ownership chain (strip → `STrackDetailPanel` → … → `SMainWindow`)
+has to be reproduced far enough that the climb has somewhere durable to land.
+
+**59. `assert-unsaved-changes`** reads `SMainWindow::unsavedChangesForTest()`
+— `!QUndoStack::isClean()`, the same predicate `promptSaveUnsavedChanges()`
+reads before putting up the "Unsaved work" dialog, but read directly rather
+than through the private `hasUnsavedChanges()`: that one ALSO gates on
+`currentProject_`, this window's own notion of "a project is open", which a
+`--test-case` run never populates (`SActionRunner` puts the project on
+`SApplication` directly and never routes it through this window) — found
+while writing this case, which failed with "expected unsaved got clean" on
+every assertion until the fix. `expect="1"` = changes pending, `expect="0"` =
+clean. Exists because `QUndoStack::setClean()` was never called anywhere in
+this repository before `main/shell/CONTRACT.md` inv. 51 — this is what makes
+that fix headlessly gateable (`save_marks_clean.qxa`) instead of
+hand-verify-only.
+
+**60. `deselect-all`** is `select-all`'s twin, driving `SMainWindow::
+sendDeselectAllShortcut()` through the identical two-step fork: a
+`QEvent::ShortcutOverride` offered to the current focus widget first, falling
+through to the window's "Select None" `QAction` only when nothing claims it.
+The SAME known gap applies and for the SAME reason: `QApplication::
+focusWidget()` is always null in a `--test-case` run (the main window is never
+shown), so this verb can only ever exercise the ARRANGER default branch
+(`SMainWindow::deselectAllInActiveArranger()`) — `SPianoRollView`'s own
+Ctrl-Shift-A handling (`main/eventui/CONTRACT.md` inv. 16) is real,
+reviewed code, unreachable from a script the same way its Ctrl-A sibling is.
+Gate: `deselect_all_scope.qxa`, mirroring `select_all_scope.qxa` exactly.
+
+**61. `note_resize_selection.qxa`** needed no new verb — `drag-note`'s existing
+`edge="end"` mode and `assert-event-editor`'s existing `selection=N` field in
+`describe()` were already enough (main/eventui/CONTRACT.md inv. 17). Recorded
+here because it is the clearest illustration in this suite of "read what
+already exists before adding a verb": the fix it gates (`previewNotes()`'s
+`touchedIds` out-parameter) needed a new PARAMETER on an existing internal
+function, not a new testkit action.
+
+**62. `plugin-generic-editor`** is `plugin-native-editor`'s twin for the
+GENERIC (slider-list) editor, found necessary the same day 58 was written:
+the coordinator reviewing issue (a)'s fix pointed out `SPluginEffectStrip::
+ensureParamEditor()` had the IDENTICAL strip-ownership bug, and on a platform
+where a plugin's native editor is refused (Linux/X11 VST3), the generic
+editor is the window a user actually sees — so 58 alone left a live field bug
+uncovered. Same `open-via-strip` shape, same real-main-window caveat, driving
+the new `SPluginEffectStrip::ensureGenericEditorForTest()` (a headless seam
+mirroring `editorSetParam()`/`editorValueText()`) and reading the new static
+`isGenericEditorOpenFor()`/`closeGenericEditorFor()` (`main/pluginui/
+CONTRACT.md`). Gate: `qxa.plugin_generic_editor_survives_strip`, over
+`tw.test.clap.stereoskew` (no `clap.gui`, so `openParamEditor()` genuinely
+falls through rather than merely failing a native attach).
+
+**63. No new verb was needed for `qxa.plugin_native_editor_teardown_safe`** —
+the crash it gates (`main/pluginui/CONTRACT.md`'s SIGSEGV-in-`detach()` and
+the deferred-delete-at-exit follow-up) needs no assertion at all: a script
+that opens a native editor and never closes it either segfaults (pre-fix,
+non-zero exit) or does not (post-fix), and CTest already judges a qxa case by
+EXIT CODE — the same mechanism `qxa.split_plain_screenshot`'s own teardown
+crash relies on (CLAUDE.md, "Two known crash flakes"). Deliberately violates
+`qxa.plugin_native_editor`'s own "a case that opens one MUST close it" rule;
+that IS the point.

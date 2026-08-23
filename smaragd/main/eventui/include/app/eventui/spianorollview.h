@@ -162,9 +162,24 @@ private:
     };
     Drag drag_;
 
-    /** Apply `drag_` to the note table and return the new absolute state. */
+    /** Apply `drag_` to the note table and return the new absolute state.
+     *
+     * `touchedIds`, when non-null, is filled with the POST-drag idStr() of
+     * every note the gesture actually touched (Move/Resize/Velocity mutate in
+     * place, so this is the id AFTER the mutation — the address the note now
+     * lives at). commitDrag() uses this instead of re-deriving "which notes
+     * moved" from `selected_`, which is exactly the bug this parameter fixes:
+     * checking `selected_.contains(idStr(e))` against the POST-drag table
+     * answers "is this note's new address in the OLD selection", which for a
+     * Resize (the id does not depend on duration) is true for every note in
+     * the whole selection whenever `wholeSelection` is true — i.e. almost
+     * always, since mousePressEvent already selects the grabbed note before a
+     * drag starts. Left unfilled for Copy, which computes its own touched set
+     * by diffing against the pre-drag table (a copy never reuses an existing
+     * id, so that diff is exact and self-contained). */
     std::vector<SEvent> previewNotes( const Resolved &r,
-                                      const std::vector<SEvent> &notes ) const;
+                                      const std::vector<SEvent> &notes,
+                                      QSet<QString> *touchedIds = nullptr ) const;
 
     void commitDrag();
     void selectOnly( const QString &id );

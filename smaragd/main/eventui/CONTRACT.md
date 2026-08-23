@@ -194,3 +194,59 @@ Known debt:
     default (arranger) branch in a script — see `select_all_scope.qxa`, which
     gates that branch's per-tab independence instead. This view's own branch
     is reviewed, production code, hand-verification-only.
+16. **Ctrl/Cmd-Shift-A clears THIS view's own note selection (issue f,
+    2026-08-23), through the SAME `event()`/`keyPressEvent()` fork invariant 15
+    describes** — `hasPrimaryMod()` only tests the Ctrl bit, so the
+    `QEvent::ShortcutOverride` accept already covered Shift held or not; the
+    fix is `keyPressEvent()` branching on `ev->modifiers() & Qt::ShiftModifier`
+    to clear `selected_` instead of filling it. View state only, like every
+    other selection change in this file; nothing to undo. Deliberately does
+    NOT touch the arranger's clip selection — it is a different `SAction`
+    entirely (`SClearSelectionAction`, reached only through
+    `SMainWindow::deselectAllInActiveArranger()` when nothing claims the
+    override). Same gap as invariant 15: `select-all`'s twin, `deselect-all`,
+    can only reach the SHELL's arranger branch headlessly
+    (`deselect_all_scope.qxa`); this view's own branch is
+    hand-verification-only, for the identical `QApplication::focusWidget()`
+    reason.
+17. **`previewNotes()`'s `touchedIds` out-parameter is the ONLY source of truth
+    for "which notes did this gesture actually move" (fixed 2026-08-23).**
+    `commitDrag()`'s shared Move/Resize/Velocity tail used to derive the
+    post-drag selection from `wholeSelection || id == done.anchor` evaluated
+    over EVERY note in the clip — and `wholeSelection` (`selected_.contains(
+    done.anchor)`) is true for essentially every drag, because
+    `mousePressEvent()` already selects the grabbed note (or leaves an
+    existing multi-selection alone) before any drag begins. Once true, that
+    condition is constant-TRUE, so every drag — a Resize most visibly, since
+    `idStr()` is `(tick,key,channel)` and a resize changes none of them, but a
+    plain Move and a velocity-lane drag carried the identical defect — left
+    THE WHOLE CLIP selected on release. `previewNotes()` now fills
+    `touchedIds` with the POST-mutation `idStr()` of every note its own
+    predicate actually touches, in the SAME loop that mutates it (mirroring
+    `nudgeSelection()`'s `moved.insert(idStr(e))`, which never had this bug);
+    `commitDrag()` seeds `keep` from that set instead of re-deriving
+    membership. Gate: `note_resize_selection.qxa` (new) — resize one note among
+    several, move one, velocity-drag one, and a real multi-note group move
+    built the way `note_copy_drag.qxa`'s own Ctrl-toggle is, asserting
+    `selection=N` through `assert-event-editor` at every step. Watched failing
+    on the pre-fix binary: the very first assertion (`selection="1"` after
+    resizing ONE of three notes) read `selection=3`.
+18. **"Q" quantizes the bound clip to the toolbar's current grid (issue e,
+    2026-08-23), scoped to `SEventEditorDock` via `Qt::WidgetWithChildrenShort
+    cut`.** A bare, window-wide `Key_Q` would collide with the virtual
+    keyboard's OWN Q = note-12 binding (`svirtualkeyboarddock.cpp:36`), so the
+    shortcut is a `QAction` added to the dock itself (`buildUi()`), not a
+    window-level menu entry — it fires only while the dock (or a child, the
+    piano roll included) has focus, and `SPianoRollView::keyPressEvent()`'s
+    `default: ignore()` is what lets an unhandled key bubble up here from the
+    view. It runs the identical `SQuantizeNotesAction` the Quantize button
+    submits (`onQuantizeClicked()`), one undo step. Discoverable from the
+    button's own tooltip ("… — Q"), per this repo's convention of putting a
+    shortcut where the control it duplicates already is, rather than only in
+    a menu. **Not gated headlessly**, for the same `QApplication::
+    focusWidget()` reason as invariants 15/16 — there is no verb that builds
+    the event editor dock WITH FOCUS and sends it a bare `Q`; verified by
+    review that the WidgetWithChildrenShortcut scope is the one other Q-owning
+    dock in this app (the virtual keyboard) cannot be shadowed by, and that
+    the shortcut and the button call the SAME slot so there is only one
+    behaviour to verify.

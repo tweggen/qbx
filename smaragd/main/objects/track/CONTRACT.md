@@ -512,3 +512,33 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     — on the `SLink`, not the content, because D2 shares one `SCut` across
     every placement of an asset and a remap stored on the content would move
     them all; this closure is the one place that already holds both.
+
+## `SPluginSlot::slotDestroying()` fires BEFORE `proc_` dies (fixed 2026-08-23)
+
+`SPluginSlot::~SPluginSlot()` is no longer `= default`: its body's first (and
+only) statement is `emit slotDestroying()`, a new signal declared beside
+`bypassChanged`/`pluginReloaded`/`paramsChanged`.
+
+**Why this exists, found chasing a SIGSEGV**, not by inspection: both
+`SPluginNativeEditor` and `SPluginEffectStrip`'s generic editor used to close
+their window by connecting to the QObject BASE CLASS's own `destroyed()`
+signal. That signal fires from `~QObject()`, which — being the base class —
+runs strictly AFTER `~SPluginSlot()`'s body and every MEMBER destructor,
+`proc_` (the `std::shared_ptr<audio::twPluginSlotProcessor>` holding the live
+plugin instance) included. So a listener that waited for `destroyed()` to
+close a native editor was calling `twPluginEditor::detach()` on an
+ALREADY-DESTROYED plugin — reproduced with a three-action script (insert a
+plugin, open its native editor, never close it, let the project tear down):
+SIGSEGV inside `twClapEditor::detach()`, touching a dangling CLAP GUI
+extension pointer.
+
+`slotDestroying()` is emitted from a point where the slot — and the plugin
+behind it — are still fully alive, so a `close()` triggered from it can safely
+run the plugin's own teardown. `main/pluginui/CONTRACT.md` records both
+listeners that switched to it and the SECOND crash (a deferred-delete /
+process-exit ordering issue) found chasing the first fix.
+
+**The lesson generalises beyond this one bug**: any future listener that wants
+to act "before this slot's plugin is gone" must connect to `slotDestroying()`,
+never to `QObject::destroyed()` — the base class fires last, not first, and a
+plugin's own resources are members, which are gone well before that.

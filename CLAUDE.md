@@ -2391,6 +2391,38 @@ not a palette), the head column's own colours (unchanged, and deliberately NOT
 halved — its controls have to stay legible), the ruler, or how a full-scale
 waveform at ~#CCC covers a mid-tone body on a short lane.
 
+## Five user-reported editor/shortcut bugs (fix/editor-ui-and-shortcuts, 2026-08-23)
+
+| Bug | The obvious-looking cause was NOT it | What actually was |
+|---|---|---|
+| A plugin editor closed on almost any arranger click, and often would not reopen | `SPluginNativeEditor`'s own header comment already SAID it must not be parented to the FX strip — and it looked like ONE bug in ONE class | It was TWO parenting bugs and TWO SEPARATE crashes, in four different files, and "will not reopen" turned out to name none of them directly. `SPluginNativeEditor`'s ctor did `QDialog(parent)` with `parentForPosition` passed straight through as the real Qt OWNERSHIP parent, and the FX strip's Edit handler passed the strip itself; `STrackDetailPanel::rebuildUI()` deletes that strip on every track switch, taking the window down as a Qt child. `SPluginEffectStrip::ensureParamEditor()` — the GENERIC slider-list editor, and the window a user on Linux/X11 VST3 actually sees, since a native editor is refused there — had the IDENTICAL bug through its own `editors_` STRIP MEMBER; found only because a coordinator's review pushed back on treating the native fix as the whole story. Both fixed by climbing to `parentForPosition->window()` — the durable top-level ancestor — before handing a dialog to `QDialog`, and (the generic path) moving its registry OFF the strip into a module-level map keyed by slot, mirroring the native editor's own registry (reparenting alone would have let a rebuilt strip mint a DUPLICATE editor for the same slot). Testing "why does a second open fail" directly with gdb — rather than assuming a hypothesis — then found a THIRD, wholly unrelated, PRE-EXISTING crash: both editors closed their window by listening for `QObject::destroyed()` on the plugin's `SPluginSlot`, a signal that fires from the QObject BASE class, which runs strictly AFTER the slot's own plugin instance (a member) is already destroyed — so `close() -> closeEvent() -> twPluginEditor::detach()` touched freed memory. SIGSEGV, reproduced with a three-action script (open, never close, let the project tear down). Fixed by a new `SPluginSlot::slotDestroying()` signal emitted FIRST in a no-longer-`=default` `~SPluginSlot()`, while the plugin is still alive. Fixing THAT uncovered a FOURTH crash: closing an editor during teardown now correctly posts a deferred delete, and a `--test-case` run's `std::exit()` leaves through no event-loop pump, so that delete ran from an atexit hook after the platform integration had already torn down. Fixed by draining `QEvent::DeferredDelete` in `main.cpp`'s `smaragdOrderlyShutdown()` before `std::exit()`. `main/pluginui/CONTRACT.md`, `main/objects/track/CONTRACT.md`, `main/shell/CONTRACT.md` inv. 54 |
+| Resizing ONE note in the piano roll selected every note in the clip | Looked resize-specific ("ids don't change with duration") | It was not resize-specific at all — `commitDrag()`'s shared Move/Resize/Velocity tail read `if (wholeSelection \|\| id == done.anchor) keep.insert(id)` over EVERY note in the clip, and `wholeSelection` is true for essentially every drag (mousePressEvent already selects the grabbed note first). Resize just made it most VISIBLE. Fixed by threading `previewNotes()`'s own touched-note predicate back out as a `touchedIds` set instead of re-deriving membership from the stale pre-drag selection. `main/eventui/CONTRACT.md` inv. 17 |
+| Ctrl+S then Ctrl+W still asked to save | Sounded like a stale-flag bug in ONE function | `QUndoStack::setClean()` was called NOWHERE in this repository. A save wrote the file and never told the stack the write happened, so `hasUnsavedChanges()` stayed true forever after the first edit — every save, always. Two entry points had to learn this, because a scripted `<save-project>` and the interactive Save take different routes to the file: `SMainWindow::saveToPath()` now calls `setClean()` directly; `SAction::marksProjectClean()` is a new opt-in hook `SSaveProjectAction` overrides, read by `SActionHistory::onApplied_()`. A SECOND bug found in the same function, fixed alongside it: `promptSaveUnsavedChanges()`'s "Save" case returned `true` unconditionally, so choosing Save and then cancelling the Save-As dialog closed the project and discarded the work — `fileSave()`/`fileSaveAs()` now return the real outcome and the prompt propagates it. `main/shell/CONTRACT.md` inv. 51-52, `main/actions/CONTRACT.md` |
+| "Q" did not quantize | — | It never had a shortcut at all — only the toolbar button did. Added as a `QAction` on `SEventEditorDock` itself with `Qt::WidgetWithChildrenShortcut` scope, deliberately NOT a window-wide binding: the virtual keyboard already owns bare Q as its note-12 key, and a window-level shortcut would have shadowed it whenever that dock had focus. `main/eventui/CONTRACT.md` inv. 18 |
+| Ctrl(Cmd)+Shift+A ("select none") did not exist, in the arranger or the event editor | — | Added as the Select-All-shaped feature it should have been from the start: `SMainWindow::deselectAllInActiveArranger()` mirrors `selectAllInActiveArranger()` exactly, INCLUDING setting the path root explicitly — `SClearSelectionAction::apply()` honours `pathRoot_`, and the existing `SApplication::submitClearSelectionAction()` helper does not set one, so it resolves to the MASTER; using it here would have cleared the wrong tab's selection. The piano roll gained the identical fork Ctrl-A already has, discriminated on the Shift bit. `main/shell/CONTRACT.md` inv. 53, `main/eventui/CONTRACT.md` inv. 16 |
+
+**Gated:** `plugin_native_editor_survives_strip.qxa` and
+`plugin_generic_editor_survives_strip.qxa` (new `plugin-native-editor` /
+`plugin-generic-editor` `action="open-via-strip"` modes),
+`plugin_native_editor_teardown_safe.qxa` (the two crash fixes — no assertion
+needed, CTest judges by EXIT CODE, exactly as it already does for
+`split_plain_screenshot`'s teardown crash), `note_resize_selection.qxa`,
+`save_marks_clean.qxa` (new `assert-unsaved-changes` verb), `deselect_all_scope.qxa`
+(new `deselect-all` verb, the twin of `select-all`) — every one watched
+FAILING (or, for the crash gate, watched SEGFAULTING under two INDEPENDENT
+sabotages, each crashing at a different point in the stack) on the pre-fix
+binary before the fix landed, per this repo's own testing rule.
+**NOT gated, hand-verify only, and said so in the PR:**
+whether a real plugin's window stays visually anchored after the reparent, and
+raising a FLOATING (CLAP D1) editor on a second Edit press (the ABI has no
+"bring a plugin-owned window to front" call — unchanged by this fix, a
+pre-existing gap); Save As's own file dialog and the Cancel-after-Save
+data-loss fix (both share code with the gated Save path, but the dialog itself
+cannot be driven headlessly); the piano roll's own Q and Ctrl-Shift-A
+handling, for the standing reason `main/eventui/CONTRACT.md` already gives —
+`QApplication::focusWidget()` is always null in a `--test-case` run, because
+the main window is never shown there.
+
 ## Dependencies
 
 ### Core

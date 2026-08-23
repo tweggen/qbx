@@ -3,6 +3,7 @@
 #include <QFontDatabase>
 #include <QFont>
 #include <QCommandLineParser>
+#include <QEvent>
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
 #include "app/testkit/sactionscript.h"
@@ -93,6 +94,18 @@ static bool parseLogLevel( const QString &s, tw::LogLevel &out )
 // printed PASS (plan/STATE.md 2026-08-16).
 static void smaragdOrderlyShutdown()
 {
+    // Drain any WA_DeleteOnClose widget's posted deleteLater() BEFORE the
+    // platform teardown that follows -- fixed 2026-08-23, found chasing a
+    // SECOND SIGSEGV uncovered while fixing SPluginSlot::slotDestroying()
+    // (spluginslot.h): once an editor closes correctly during project
+    // teardown its QDialog::close() POSTS a deferred delete rather than
+    // running it, and --test-case leaves through std::exit() with no event
+    // loop pump in between. That deferred ~QWidget()/~QWindow() then ran from
+    // an atexit hook AFTER the platform integration had already torn down --
+    // reproduced with a three-line script (open a native editor, never close
+    // it). Draining it here, with QApplication still fully alive, is what
+    // makes the destruction happen at a point where it is safe.
+    QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
     audio::pluginRegistry().stopScan();
     tw::TwLog::instance().shutdown();
 }

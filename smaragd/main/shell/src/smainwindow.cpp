@@ -46,6 +46,7 @@
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
 #include "app/selection/sselectionmanager.h"
+#include "app/selection/sclearselectionaction.h"
 #include "app/selection/ssetselectionaction.h"
 #include "app/shell/ssettings.h"
 #include "app/pluginui/spluginnativeeditor.h"
@@ -354,6 +355,20 @@ bool SMainWindow::saveToPath( const QString &path )
                                       QFileInfo( path ).absolutePath() );
     SSettings::instance().addRecentProject( path );
     updateRecentMenu();
+
+    // THE FIX FOR "Ctrl+S then Ctrl+W still prompts unsaved changes": nothing
+    // in this codebase ever called QUndoStack::setClean() before. Saving
+    // wrote the file but never told the stack the file now MATCHES it, so
+    // hasUnsavedChanges() (== !stack->isClean()) stayed true forever after the
+    // very first edit, however many times the project was saved. Marking
+    // clean HERE — at the point a write just succeeded — is what makes undo
+    // walk back OUT of "unsaved" for free: QUndoStack already tracks a clean
+    // INDEX, not a hand-rolled bool, so undoing to this exact point re-cleans
+    // the stack and redoing past it re-dirties it, with no extra bookkeeping.
+    if( SActionHistory *hist = SApplication::app().actionHistory() )
+        if( QUndoStack *stack = hist->undoStack() )
+            stack->setClean();
+
     updateWindowTitle();
     // Save As moves the ANCHOR every external reference is measured against, so
     // a project that was self-contained can stop being one (saved elsewhere) or
@@ -364,21 +379,20 @@ bool SMainWindow::saveToPath( const QString &path )
     return true;
 }
 
-void SMainWindow::fileSave()
+bool SMainWindow::fileSave()
 {
-    if( !currentProject_ ) return;
+    if( !currentProject_ ) return false;
 
     // No path yet (untitled project) -> behave like Save As.
     if( currentFilePath_.isEmpty() ) {
-        fileSaveAs();
-        return;
+        return fileSaveAs();
     }
-    saveToPath( currentFilePath_ );
+    return saveToPath( currentFilePath_ );
 }
 
-void SMainWindow::fileSaveAs()
+bool SMainWindow::fileSaveAs()
 {
-    if( !currentProject_ ) return;
+    if( !currentProject_ ) return false;
 
     QString startDir;
     if( !currentFilePath_.isEmpty() ) {
@@ -401,7 +415,7 @@ void SMainWindow::fileSaveAs()
         fileName = dialog.selectedFiles().isEmpty() ? QString() : dialog.selectedFiles().at( 0 );
     }
     if( fileName.isNull() ) {
-        return;  // user cancelled
+        return false;  // user cancelled
     }
 
     // Ensure the .qxp extension so Open's filter finds it later.
@@ -409,7 +423,7 @@ void SMainWindow::fileSaveAs()
         fileName += ".qxp";
     }
 
-    saveToPath( fileName );
+    return saveToPath( fileName );
 }
 
 void SMainWindow::fileClose()
@@ -908,6 +922,20 @@ bool SMainWindow::hasUnsavedChanges() const
     return !stack->isClean();
 }
 
+bool SMainWindow::unsavedChangesForTest() const
+{
+    // See the header: this reads SApplication's current project, not
+    // currentProject_, which a --test-case run never populates (the runner
+    // never routes its project through fileNew()/openProjectFile()/
+    // adoptCurrentProject()). What matters for the testkit is the undo
+    // stack's own clean bit, exactly as `hasUnsavedChanges()` reads it once
+    // a project genuinely exists.
+    if( !SApplication::app().getCurrentProject() ) return false;
+    SActionHistory *hist = SApplication::app().actionHistory();
+    QUndoStack *stack = hist ? hist->undoStack() : nullptr;
+    return stack && !stack->isClean();
+}
+
 bool SMainWindow::promptSaveUnsavedChanges()
 {
     if( !hasUnsavedChanges() ) return true;  // No unsaved changes, proceed
@@ -927,8 +955,14 @@ bool SMainWindow::promptSaveUnsavedChanges()
 
     switch( result ) {
         case QMessageBox::Save:
-            fileSave();  // This will save to currentFilePath_ or prompt Save As if untitled
-            return true;
+            // THE OTHER FIX HERE: fileSave() (via fileSaveAs() for an untitled
+            // project) can fail to actually save — a write error, or the user
+            // cancelling the Save As file dialog — and the old code returned
+            // true regardless, which let the caller (fileClose, fileNew,
+            // openProjectFile, closeEvent) go on to closeProject() and DISCARD
+            // the work the user just asked to keep. Propagate the real
+            // outcome: only a save that actually happened may proceed.
+            return fileSave();
         case QMessageBox::Discard:
             return true;
         case QMessageBox::Cancel:
@@ -1433,6 +1467,14 @@ SMainWindow::SMainWindow()
     // or QLineEdit is unaffected by this shortcut existing.
     editMenu->addAction( "Select &All", QKeySequence::SelectAll,
                          this, SLOT( selectAllInActiveArranger() ) );
+    // Ctrl(Cmd)+Shift+A, explicit rather than a QKeySequence::StandardKey: Qt
+    // only defines QKeySequence::Deselect on X11, and this must be the same
+    // chord on every platform this app builds for. See
+    // deselectAllInActiveArranger()'s own comment for why the piano roll is
+    // unaffected by this shortcut existing.
+    editMenu->addAction( "Select &None",
+                         QKeySequence( Qt::CTRL | Qt::SHIFT | Qt::Key_A ),
+                         this, SLOT( deselectAllInActiveArranger() ) );
     editMenu->addSeparator();
     editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
                          this, SLOT( showOptionsDialog() ) );
@@ -2510,6 +2552,24 @@ void SMainWindow::selectAllInActiveArranger()
     SApplication::app().submitAction( action );
 }
 
+// Ctrl(Cmd)+Shift+A's default answer: clear the ACTIVE arranger's own
+// selection, as ONE undoable action. NOT SApplication::submitClearSelection
+// Action() — that helper builds a bare SClearSelectionAction with no path
+// root, which SClearSelectionAction::apply() reads as the MASTER
+// (sclearselectionaction.cpp:15,18: pathRoot_ defaults empty), so a Ctrl-
+// Shift-A on an arrangement tab would clear the master's selection instead of
+// its own. setPathRoot(v->rootName()) here is what selectAllInActiveArranger()
+// does for the identical reason, immediately above.
+void SMainWindow::deselectAllInActiveArranger()
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return;
+
+    SAction *action = new SClearSelectionAction();
+    action->setPathRoot( v->rootName() );
+    SApplication::app().submitAction( action );
+}
+
 // See the header comment. Runs the tail openProjectFile() runs after a
 // successful load (build the central widget, wire the docks, title the
 // window) without the load itself -- the project already exists and is
@@ -2843,6 +2903,27 @@ bool SMainWindow::sendSelectAllShortcut()
     // Nothing claimed the override: the window's own default, exactly what a
     // real keystroke falls through to.
     selectAllInActiveArranger();
+    return true;
+}
+
+bool SMainWindow::sendDeselectAllShortcut()
+{
+    QWidget *focus = QApplication::focusWidget();
+    if( focus ) {
+        QKeyEvent overrideEv( QEvent::ShortcutOverride, Qt::Key_A,
+                              Qt::ControlModifier | Qt::ShiftModifier );
+        QApplication::sendEvent( focus, &overrideEv );
+        if( overrideEv.isAccepted() ) {
+            QKeyEvent press( QEvent::KeyPress, Qt::Key_A,
+                             Qt::ControlModifier | Qt::ShiftModifier );
+            QApplication::sendEvent( focus, &press );
+            QKeyEvent release( QEvent::KeyRelease, Qt::Key_A,
+                               Qt::ControlModifier | Qt::ShiftModifier );
+            QApplication::sendEvent( focus, &release );
+            return true;
+        }
+    }
+    deselectAllInActiveArranger();
     return true;
 }
 

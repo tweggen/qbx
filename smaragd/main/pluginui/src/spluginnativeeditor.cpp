@@ -80,7 +80,11 @@ audio::twEditorHandle handleOf( QWidget *w )
 
 SPluginNativeEditor::SPluginNativeEditor( STrack *track, SPluginSlot *slot,
                                           QWidget *parent )
-    : QDialog( parent ), track_( track ), slot_( slot )
+    // Climb to the durable TOP-LEVEL ancestor rather than owning through
+    // whatever transient widget the caller happened to pass (see the header:
+    // this is the fix for the window dying on every FX-strip rebuild). A
+    // window is its own window(); nullptr's window() is nullptr.
+    : QDialog( parent ? parent->window() : nullptr ), track_( track ), slot_( slot )
 {
     setAttribute( Qt::WA_DeleteOnClose );
     setWindowTitle( slot_ ? slot_->getDescriptor().name.c_str() : "Plugin" );
@@ -105,10 +109,19 @@ SPluginNativeEditor::SPluginNativeEditor( STrack *track, SPluginSlot *slot,
     connect( pollTimer_, &QTimer::timeout, this, &SPluginNativeEditor::onPoll );
 
     // The slot dying closes the window. Same rule the generic editor follows
-    // (splugineffectstrip.cpp:524) and the reason remove-plugin does not leave a
+    // (splugineffectstrip.cpp) and the reason remove-plugin does not leave a
     // window addressing freed memory.
+    //
+    // slotDestroying(), NOT QObject::destroyed() (fixed 2026-08-23, found
+    // chasing a SIGSEGV reproduced by opening a native editor and never
+    // closing it before project teardown): destroyed() fires from ~QObject(),
+    // the BASE class, which runs strictly AFTER ~SPluginSlot()'s body and
+    // every member -- proc_, and the live audio::twPlugin instance behind it
+    // -- has already been torn down, so close() -> closeEvent() ->
+    // editor_->detach() reached a dangling extension pointer. slotDestroying()
+    // is emitted first, while the slot and its plugin are still fully alive.
     if( slot_ ) {
-        connect( slot_, &QObject::destroyed, this, &QDialog::close );
+        connect( slot_, &SPluginSlot::slotDestroying, this, &QDialog::close );
         // A reload REPLACES every twPlugin instance (plugins/CONTRACT.md inv.
         // 18), so the view we hold points at a controller that is gone. There is
         // nothing to re-attach to in place: close, and let the user reopen.

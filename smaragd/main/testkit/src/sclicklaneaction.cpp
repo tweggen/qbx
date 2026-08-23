@@ -238,3 +238,31 @@ static const bool s_reg_selectall =
           QStringLiteral( "select-all" ),
           [] { return new SSelectAllAction; } ),
       true );
+
+// --- deselect-all (issue f) ------------------------------------------------
+
+SApplyResult SDeselectAllAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "deselect-all: no main window";
+        return { false, nullptr };
+    }
+    win->sendDeselectAllShortcut();
+    return { true, nullptr };
+}
+
+void SDeselectAllAction::writeXml( QDomElement & /*elem*/ ) const
+{
+}
+
+bool SDeselectAllAction::readXml( const QDomElement & /*elem*/, int /*version*/ )
+{
+    return true;
+}
+
+static const bool s_reg_deselectall =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "deselect-all" ),
+          [] { return new SDeselectAllAction; } ),
+      true );

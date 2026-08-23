@@ -1,8 +1,6 @@
 #ifndef SPLUGINEFFECTSTRIP_H
 #define SPLUGINEFFECTSTRIP_H
 
-#include <QHash>
-#include <QPointer>
 #include <QString>
 #include <QWidget>
 #include <cstdint>
@@ -42,6 +40,14 @@ public:
     // Open (or re-raise) the generic parameter editor for one slot. This is what
     // a double-click on the row and the row's "Edit" button both do.
     void openParamEditor( int slotIndex );
+
+    // Static, symmetric with SPluginNativeEditor::isOpenFor()/closeFor()
+    // (spluginnativeeditor.h): the generic editor's dialog lives in a
+    // MODULE-LEVEL registry keyed by slot (splugineffectstrip.cpp), not on
+    // any one strip instance, for the identical reason the native editor's
+    // does -- see ensureParamEditor()'s own comment.
+    static bool isGenericEditorOpenFor( SPluginSlot *slot );
+    static void closeGenericEditorFor( SPluginSlot *slot );
 
     // --- introspection seams (used by the qxa verbs in app/testkit) ----------
     // These exist because M5 is almost entirely UI: without them the greying of
@@ -85,6 +91,17 @@ public:
     // Empty if there is no such editor/row. Pairs with editorSetParam() to prove
     // units / enum names reach the screen, not just the model.
     QString editorValueText( int slotIndex, int row );
+
+    // Headless seam: open (or find) the generic editor for `slotIndex` WITHOUT
+    // showing it -- same discipline as editorSetParam()/editorValueText().
+    // Exists for the strip-rebuild survival gate (issue a's generic-editor
+    // half, 2026-08-23): returns whether an editor now exists.
+    // isGenericEditorOpenFor() below reads the same fact back from the
+    // durable registry, which is what makes the survival check possible --
+    // this call and that query can be made through TWO DIFFERENT strip
+    // instances and still agree, because the registry is keyed by slot, not
+    // by strip.
+    bool ensureGenericEditorForTest( int slotIndex );
 
 protected slots:
     void onAddPluginClicked();
@@ -133,9 +150,6 @@ private:
     std::vector<PluginWidget> pluginWidgets_;
     int dragSourceIndex_ = -1;
 
-    // One editor window per slot, keyed by the slot so a rebuild of the strip
-    // does not orphan it. QPointer because the dialog is WA_DeleteOnClose.
-    QHash<SPluginSlot *, QPointer<QDialog> > editors_;
 };
 
 #endif

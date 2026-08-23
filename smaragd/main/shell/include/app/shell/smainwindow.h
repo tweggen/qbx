@@ -38,6 +38,18 @@ public:
     // tab set without reaching through the central widget by cast.
     class SViewTabs *viewTabs() const { return viewTabs_; }
 
+    // For the testkit (`assert-unsaved-changes`): the undo stack's clean bit,
+    // the same one promptSaveUnsavedChanges() reads before deciding whether
+    // to prompt at all. NOT a forward to the private hasUnsavedChanges() —
+    // that also gates on `currentProject_`, THIS WINDOW's own notion of "a
+    // project is open" (set by fileNew()/openProjectFile()/
+    // adoptCurrentProject()), which a `--test-case` run never populates: the
+    // runner puts the project on SApplication directly and never routes it
+    // through this window. See saction.h's `marksProjectClean()` and
+    // SMainWindow::saveToPath() for what keeps the stack's clean bit honest
+    // after a save.
+    bool unsavedChangesForTest() const;
+
     // The shell, BUILDING it if this is the first thing to ask. The shell is
     // created lazily with the master editor, so a script that has not yet
     // touched the arranger has none -- the same laziness ensureArranger_()
@@ -203,6 +215,16 @@ public:
     // relies on, but is NOT reachable from a qxa script; it needs a shown
     // window to hand-verify.
     bool sendSelectAllShortcut();
+
+    // The Ctrl(Cmd)+Shift+A twin of the above, for the same reason and
+    // through the same fork: a ShortcutOverride offered to the focus widget
+    // first (the piano roll claims it and clears its OWN note selection),
+    // falling through to the window's "Select None" QAction (Edit menu,
+    // Ctrl+Shift+A) which clears the ACTIVE arranger's clip selection as one
+    // undoable SClearSelectionAction. Same KNOWN GAP as sendSelectAllShortcut
+    // above: QApplication::focusWidget() is always null in a --test-case run,
+    // so this verb can only ever exercise the arranger branch headlessly.
+    bool sendDeselectAllShortcut();
 
     // TEST ENTRY POINT: the split command ('s' / "Split object"), unchanged
     // from what a real keypress or menu click runs — SStdMixerView::
@@ -521,8 +543,12 @@ protected slots:
     void nyi();
     void fileExit();
     void fileNew();
-    void fileSave();
-    void fileSaveAs();
+    // Both return whether the project ended up SAVED — false on a write
+    // failure or on the user cancelling the Save As dialog. promptSave
+    // UnsavedChanges() propagates it: choosing "Save" and then cancelling
+    // Save As must cancel the close, not lose the work (see the .cpp).
+    bool fileSave();
+    bool fileSaveAs();
     void fileOpen();
     void fileClose();
     void onRenderTriggered();
@@ -556,6 +582,16 @@ protected slots:
     // Qt tries the focus widget's ShortcutOverride before a WindowShortcut
     // QAction fires, so this slot never steals either keystroke.
     void selectAllInActiveArranger();
+
+    // Its Ctrl(Cmd)+Shift+A twin: clears the ACTIVE arranger tab's clip
+    // selection, as ONE undoable SClearSelectionAction. Mirrors
+    // selectAllInActiveArranger() exactly, including the pathRoot: an
+    // SClearSelectionAction honours pathRoot_ (SClearSelectionAction::apply(),
+    // main/selection/src/sclearselectionaction.cpp) so a bare "clear
+    // selection" WOULD clear the master's selection while an arrangement tab
+    // is active — setPathRoot(v->rootName()) is what keeps the two tabs
+    // independent, exactly as select-all's own comment explains.
+    void deselectAllInActiveArranger();
 
     // Toolbar palette toggles (each submits the matching toggle action).
     void toggleSnapToGrid();

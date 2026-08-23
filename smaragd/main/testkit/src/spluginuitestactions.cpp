@@ -17,7 +17,9 @@
 #include "app/objects/track/spluginslot.h"
 #include "app/pluginui/splugineffectstrip.h"
 #include "app/pluginui/spluginnativeeditor.h"
+#include "app/shell/smainwindow.h"
 
+#include <QApplication>
 #include <QCoreApplication>
 #include <QEvent>
 
@@ -26,6 +28,18 @@
 #include <memory>
 
 namespace {
+
+// Same lookup as sclicklaneaction.cpp's mainWindow_() — testkit may not
+// include app/timeline, and this is the durable top-level widget a throwaway
+// strip needs a REAL ancestor chain to, for `open-via-strip` below (see its
+// own comment for why a strip parented to nullptr would not reproduce the
+// bug it exists to gate).
+SMainWindow *mainWindowForStrip_()
+{
+    for( QWidget *w : QApplication::topLevelWidgets() )
+        if( SMainWindow *win = qobject_cast<SMainWindow *>( w ) ) return win;
+    return nullptr;
+}
 
 STrack *trackAt( SProject *project, int index )
 {
@@ -403,6 +417,34 @@ SApplyResult SPluginNativeEditorAction::apply( SProject *project )
         // showWindow = false: see the header. The attach is real; only the
         // mapping of our container onto the screen is skipped.
         SPluginNativeEditor::openFor( track, slot, nullptr, /*showWindow=*/false );
+    } else if( action_ == QLatin1String( "open-via-strip" ) ) {
+        // The headless repro for the 2026-08-23 parenting fix: reproduce
+        // SPluginEffectStrip::openParamEditor()'s own call EXACTLY — the
+        // dialog's parentForPosition is a real strip, not nullptr — then tear
+        // the strip down the way STrackDetailPanel::rebuildUI() tears the real
+        // one down on every track switch (`delete pluginStrip_`). Before the
+        // fix this left the editor destroyed as the strip's Qt child;
+        // expectOpen="1" afterwards asserts it no longer does.
+        //
+        // The strip is parented to the REAL main window, not nullptr: in
+        // production a strip is a descendant of STrackDetailPanel, itself
+        // ultimately parented under SMainWindow, so `strip->window()`
+        // resolves PAST it. A parentless strip IS its own window() (a
+        // top-level widget's window() is itself) — passing nullptr here would
+        // make the fix's `parentForPosition->window()` climb land right back
+        // on the strip, and the very construction meant to prove the fix
+        // would instead silently test the pre-fix shape. Found the hard way:
+        // this mode failed with the strip parented to nullptr even AFTER the
+        // fix landed, for exactly that reason.
+        SMainWindow *host = mainWindowForStrip_();
+        if( !host ) {
+            qWarning() << "plugin-native-editor open-via-strip: no main window"
+                          " to parent the throwaway strip to";
+            return { false, nullptr };
+        }
+        auto strip = std::make_unique<SPluginEffectStrip>( track, host );
+        SPluginNativeEditor::openFor( track, slot, strip.get(), /*showWindow=*/false );
+        strip.reset();
     } else if( action_ == QLatin1String( "assert" ) ) {
         // Opens and closes nothing; the expectOpen check below is the whole
         // verb. It exists so a case can say "and NOTHING opened" about a step
@@ -421,7 +463,7 @@ SApplyResult SPluginNativeEditorAction::apply( SProject *project )
         QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
     } else {
         qWarning() << "plugin-native-editor: action must be "
-                      "open|close|assert|restore, got" << action_;
+                      "open|open-via-strip|close|assert|restore, got" << action_;
         return { false, nullptr };
     }
 
@@ -458,6 +500,88 @@ static const bool s_reg_pluginnativeeditor =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "plugin-native-editor" ),
           [] { return new SPluginNativeEditorAction; } ),
+      true );
+
+// --- plugin-generic-editor -------------------------------------------------
+
+SApplyResult SPluginGenericEditorAction::apply( SProject *project )
+{
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+                                         : trackAtPath( project, pathRoot_, trackPath_ );
+    if( !track ) {
+        qWarning() << "plugin-generic-editor: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
+        return { false, nullptr };
+    }
+    SPluginChain *chain = track->getPluginChain();
+    SPluginSlot  *slot  = chain ? chain->getSlotAt( slotIndex_ ) : nullptr;
+    if( !slot ) {
+        qWarning() << "plugin-generic-editor: no slot" << slotIndex_;
+        return { false, nullptr };
+    }
+
+    if( action_ == QLatin1String( "open-via-strip" ) ) {
+        // Same caveat as plugin-native-editor's own "open-via-strip": the
+        // throwaway strip must be parented to the REAL main window, or its
+        // own window() resolves to itself and the fix's
+        // `parentForPosition->window()` climb (inside ensureParamEditor(),
+        // via `window()` on the strip) lands right back on the strip.
+        SMainWindow *host = mainWindowForStrip_();
+        if( !host ) {
+            qWarning() << "plugin-generic-editor open-via-strip: no main"
+                          " window to parent the throwaway strip to";
+            return { false, nullptr };
+        }
+        auto strip = std::make_unique<SPluginEffectStrip>( track, host );
+        strip->ensureGenericEditorForTest( slotIndex_ );
+        strip.reset();
+    } else if( action_ == QLatin1String( "assert" ) ) {
+        // Opens and closes nothing.
+    } else if( action_ == QLatin1String( "close" ) ) {
+        SPluginEffectStrip::closeGenericEditorFor( slot );
+        // WA_DeleteOnClose only POSTS the deletion; drain it so the check
+        // below means "it is gone", not "it has been asked to go".
+        QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
+    } else {
+        qWarning() << "plugin-generic-editor: action must be "
+                      "open-via-strip|close|assert, got" << action_;
+        return { false, nullptr };
+    }
+
+    const bool open = SPluginEffectStrip::isGenericEditorOpenFor( slot );
+    if( open != ( expectOpen_ != 0 ) ) {
+        qWarning() << "plugin-generic-editor FAILED: after" << action_
+                   << "the slot's generic editor is" << ( open ? "open" : "closed" )
+                   << "expected" << ( expectOpen_ ? "open" : "closed" );
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SPluginGenericEditorAction::writeXml( QDomElement &elem ) const
+{
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "trackIndex", trackIndex_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "action", action_ );
+    elem.setAttribute( "expectOpen", expectOpen_ );
+}
+
+bool SPluginGenericEditorAction::readXml( const QDomElement &elem, int )
+{
+    trackPath_  = elem.attribute( "trackPath" );
+    trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
+    slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
+    action_     = elem.attribute( "action", "open-via-strip" );
+    expectOpen_ = elem.attribute( "expectOpen", "1" ).toInt();
+    return true;
+}
+
+static const bool s_reg_plugingenericeditor =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "plugin-generic-editor" ),
+          [] { return new SPluginGenericEditorAction; } ),
       true );
 
 static const bool s_reg_assertplugineditorkind =
