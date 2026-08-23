@@ -1279,7 +1279,8 @@ symptom you can read.**
 | `SRecordingContent` (`main/objects/wave`) is a **VIEW of the growing capture**, and `getRootComponent()` is NULL | `STrack` routes it out of the bus mixers on `SObject::isLiveRecording()` - the same decision `objects/track` already makes for MIDI clips, for the same reason: no component to freeze, so a dummy freeze per page per clip plus `twView::getComponent() returned nullptr` forever. What you HEAR while recording is the live monitor lane; what you SEE is this clip. |
 | **A cut over a live recording does no capture, no reader, no aspect** | THIS IS THE ONE THAT BITES. `SCut::buildCapture_` RENDERS the content into a fixed-size snapshot; over a growing multi-second take that cost seconds on the UI thread and then **segfaulted** (found by `record_punch`'s `previewNonEmpty` assertion). Separately, a growing clip re-scheduling a Preview recompute per 100 ms tick starved the bridge thread badly enough to **lose 2.2 s of input to ring overruns** and put the capture backend 2.5 s behind. All four paths (`buildCapture_`, `ensureReader`, `invalidateAspects`, `getPreview`) short-circuit on `isLiveRecording()`. |
 | Preview peaks are **EXTENDED from the frontier**, in whole hops, never recomputed | A five-minute take rescanned ten times a second is 90 GB of reads a minute. Folding a partial hop would bake silence into a bucket for frames about to arrive. |
-| **Loop passes are ARITHMETIC, not wrap detection** | The conversion is linear in capture frame, so the pass is `floor((placement - loopIn)/loopLen)`. A 100 ms poll could not see a wrap between two ticks. Each pass is one `place-recording` at the loop start, and that verb's own proposal-17 planner turns pass 2 onto pass 1's column as a TAKE - so proposal 17's "phase 5" needed no new machinery, only `srcOffset`/`length` on a verb that already existed. |
+| **THE CYCLE REGION IS THE TAKE REGION: one take per PASS, every take spanning the WHOLE region** | The conversion is linear in capture frame, so the pass is `floor((placement - loopIn)/loopLen)` - arithmetic, never wrap detection, because a 100 ms poll could not see a wrap between two ticks. Each pass is one `place-recording` **at the loop start and one loop long**, and that verb's own proposal-17 planner turns pass 2 onto pass 1's column as a TAKE - so proposal 17's "phase 5" needed no new machinery, only `srcOffset`/`length` on a verb that already existed. **It used to CHOP the performance at every wrap and place each piece at its own WRAPPED position** (2026-08-23), so pieces landing on the same spot became "takes" that were really CONSECUTIVE FRAGMENTS of one performance - and the middle of the performance landed as a PLAIN CLIP that could not be comped at all. Only visible when recording STARTED PARTWAY INTO THE CYCLE; from the loop start every pass is a whole one, which is why the suite had it green for a year. |
+| A pass that starts MID-CYCLE carries a **NEGATIVE source offset**, which is LEADING SILENCE (proposal 23) | Both halves of a partial pass are then the same mechanism: one that ends early simply runs past the end of the capture, which is silence too. `SPlaceRecordingAction` used to clamp the offset to 0, and THAT ONE LINE is what made a late pass inexpressible - the recorder had to chop instead. A take whose material begins partway in is what a late first pass IS; nothing else can represent it. |
 | **Punch is a CLAMP, not a race** | The take ends once the placement passes the out point and the span is then clipped to `[in, out)` however far past it the tick got - the placed clip is exact to the frame. The project has ONE range: the LOOP when Cycle is on, the PUNCH region when it is off. |
 | The growing clips are **not actions**; the placement is **one macro** | The clip at record start is a direct model mutation, like auto-disarm. At stop the growing clips are removed FIRST (else `place-recording` would stack a take on them) and then one macro of `place-recording` calls is submitted. |
 | `locatorHeldElsewhere()` is **RETIRED** | It existed because the old path drove the playhead from the record worker. A record start now goes through `setPlaybackRunning()`, so the OUTPUT publication is the playhead authority in every mode - which is also what the placement anchor needs. |
@@ -1319,7 +1320,8 @@ screen.
 
 ### Gates
 
-The qxa cases `record_offset_zero`, `record_loop_takes`, `record_punch`,
+The qxa cases `record_offset_zero`, `record_loop_takes`,
+`record_loop_late_start`, `record_punch`,
 `record_while_monitoring` - all `RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1`
 against the paced position-encoded `file:` input with
 `SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800` - plus `takes_recording_placement`
@@ -1331,7 +1333,11 @@ held to the frame on every run; 7 s over a 2 s cycle gave **one column** whose
 take count EQUALS the pass count (4 and 4 as measured), removed by **one undo**;
 a punch region placed a clip at 48000 of length 48000 **exactly**; and a record
 start on an already-monitoring track opened **no** device and provoked **no**
-device-change deferral.
+device-change deferral. A record start at 72000 into a 0..96000 cycle
+(`record_loop_late_start`) gave **ONE** column at **0** of length **96000**
+exactly with 4 takes for 4 passes, whose take 0 - the late first pass - is
+**exactly 0.000000** RMS over [4000, 60000) and **0.353606** over [76000,
+92000), while take 1 reads **0.353531** over that same early window.
 
 **A LOOP-PASS COUNT IS A WALL-CLOCK QUANTITY** and must be asserted as a FLOOR.
 It is captured material over loop length, and captured material shrinks when

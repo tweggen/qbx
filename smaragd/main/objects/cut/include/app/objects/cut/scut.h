@@ -199,6 +199,7 @@ public:
     // which may not know its track (the same reason a `cut:Gain` lane goes
     // that way, mix/CONTRACT.md inv. 23).
     const twClipFade &getFade() const { return fade_; }
+    const twClipFade &clipFade() const override { return fade_; }
     void setFade( const twClipFade &f );
 
     // Proposal 28 W1: THE source<->warped conversion authority for this clip.

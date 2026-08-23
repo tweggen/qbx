@@ -335,13 +335,31 @@ start and a record stop MEAN in the app.
     `place-recording` calls — one per armed track, one per LOOP PASS — is
     submitted, so a whole take is ONE undo.
 
-27. **LOOP PASSES ARE ARITHMETIC, NOT WRAP DETECTION.** The conversion is
-    linear in capture frame, so the pass a frame belongs to is
-    `floor((placement - loopIn) / loopLen)`; the recorder splits at those
-    boundaries and emits one `place-recording` per segment, all at the loop
-    start. `place-recording`'s own proposal-17 planner then turns pass 2 onto
-    pass 1's column as a TAKE. A poll-based wrap detector could not see a wrap
-    that happened between two 100 ms ticks.
+27. **LOOP PASSES ARE ARITHMETIC, NOT WRAP DETECTION -- AND THE CYCLE REGION
+    IS THE TAKE REGION.** The conversion is linear in capture frame, so the
+    pass a frame belongs to is `floor((placement - loopIn) / loopLen)`; the
+    recorder splits at those boundaries and emits one `place-recording` per
+    pass, **all at the loop start and each one loop long**.
+    `place-recording`'s own proposal-17 planner then turns pass 2 onto pass 1's
+    column as a TAKE. A poll-based wrap detector could not see a wrap that
+    happened between two 100 ms ticks.
+
+    **THE `length` HALF OF THAT SENTENCE WAS MISSING FROM THE CODE UNTIL
+    2026-08-23, AND THIS INVARIANT ALREADY SAID IT.** The recorder emitted a
+    segment per WRAP PIECE at `cycleIn + inLoop`, so a performance recorded
+    from partway into the cycle came back as consecutive FRAGMENTS stacked as
+    "takes" in the tail of the region, plus an uncompable plain clip for the
+    middle. Recording from the loop START -- the only shape the suite had --
+    hid it completely, because there every pass is a whole one and its wrapped
+    position IS the loop start. Reported from a real session; gated by
+    `record_loop_late_start`.
+
+    A pass that STARTS MID-CYCLE therefore carries a **NEGATIVE source
+    offset**, which is leading silence (proposal 23), and one that ENDS early
+    runs past the end of the capture, which is silence too: both halves of a
+    partial pass are the same mechanism. `SPlaceRecordingAction` clamped that
+    offset to 0, and that one line is what made a late pass inexpressible --
+    see `objects/cut`'s own note.
 
 28. **PUNCH IS A CLAMP, NOT A RACE.** The take ends once the placement passes
     the out point, and the placed span is then clipped to `[in, out)` however

@@ -320,6 +320,12 @@ QList<SAutomationLane *> SObject::automationLanes() const
     return out;
 }
 
+const twClipFade &SObject::clipFade() const
+{
+    static const twClipFade kNone;      // default-constructed = no fade
+    return kNone;
+}
+
 std::shared_ptr<const twAutomationCurve>
 SObject::automationCurve( const QString &target ) const
 {

@@ -13,6 +13,7 @@
 #include <memory>
 #include "app/model/sautomationlane.h"
 #include "tw/events/tweventclipset.h"
+#include "tw/events/twfade.h"
 #include "tw/pages/capture_page_pool.h"
 #include "tw/schedule/revalidatable.h"
 
@@ -412,6 +413,20 @@ public:
     /// a project with no lanes byte-identical (P5 AC6).
     std::shared_ptr<const twAutomationCurve>
         automationCurve( const QString &target ) const;
+
+    /// The clip FADE this object carries — a BASE-CLASS SEAM, for the same
+    /// reason `contentKind()` and `resolveEventClip()` are ones: the per-clip
+    /// mix funnel (`STrack::refreshClipGainCurves`) must read it without
+    /// knowing which window slice is in front of it, and `objects/track` may
+    /// not depend on `objects/cut`. It used to `dynamic_cast<SCut*>` there,
+    /// one line below an `automationCurve()` call doing the identical job
+    /// generically — which is exactly the edge the layering gate rejects.
+    ///
+    /// A fade is AUDIO-specific, so the default is "no fade" and only `SCut`
+    /// overrides it. That keeps it off `SClipWindow`, whose contract lists
+    /// pitch, warp anchors and the grain params as deliberately absent for
+    /// the same reason.
+    virtual const twClipFade &clipFade() const;
 
     /// Called AFTER a lane mutation, with the affected range in THIS object's
     /// own time domain. Owners override to push the new snapshot into their

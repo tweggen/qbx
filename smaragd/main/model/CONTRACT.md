@@ -562,3 +562,20 @@ it (measured: 8854 pixels in `lighterThanClip`, 380 left in the band). That
 gate's load-bearing assertions are exact-colour LUT membership and are immune;
 its informational `minPixels` was retired rather than retuned. Anything new
 that wants to be found by colour should be found by IDENTITY.
+### `SObject::clipFade()` is a base-class seam, for the layering reason
+
+The per-clip mix funnel (`STrack::refreshClipGainCurves`) reads three factors
+off each clip: its `cut:Gain` curve, its static volume and its FADE. The first
+two already came through `SObject`; the fade was a `dynamic_cast<SCut*>` one
+line below them, which made `objects/track` depend on `objects/cut` -- an edge
+the layering gate rejects, and it rejected it on `main` for three merges before
+anyone ran the gate.
+
+`clipFade()` is virtual on `SObject`, defaults to a default-constructed
+`twClipFade` (no fade) and is overridden only by `SCut`. Same shape, and the
+same reason, as `contentKind()` and `resolveEventClip()`: the track must read
+the property without knowing which window slice is in front of it.
+
+It is deliberately NOT on `SClipWindow`. A fade is AUDIO-specific, and that
+interface's contract already lists pitch, warp anchors and the grain params as
+absent for exactly that reason.

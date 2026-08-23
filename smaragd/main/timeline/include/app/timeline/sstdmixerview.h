@@ -630,6 +630,11 @@ public:
     // arithmetic in those slots is the whole risk, so it must be the thing
     // under test rather than a re-spelling of it in a qxa script.
     bool groupGesture( STrack *t, bool ungroup );
+    bool grabPointFor( int rowIdx, int clipIdx, int grabWhere,
+                       offset_t dropTime, bool upperHalf,
+                       QPoint &outGrab, QPoint &outDrop );
+    bool hoverClipEdge( int rowIdx, int clipIdx, int grabWhere,
+                        Qt::KeyboardModifiers mods = Qt::NoModifier );
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 

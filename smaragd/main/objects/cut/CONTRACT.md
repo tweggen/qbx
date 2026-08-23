@@ -837,3 +837,24 @@ about the shape of the same join is one more than there should be.
 Gate: `clip_fade.qxa`, all closed forms over `test_gapsaw.wav`. The
 equal-power number (0.06262 against linear's 0.05401 over the same second)
 is what makes the SHAPE gateable rather than just the length.
+
+### `place-recording` may carry a NEGATIVE source offset
+
+`SPlaceRecordingAction`'s `srcOffset` is the point in the recorded WAV the
+placement starts at, and it is **signed**: a negative value is LEADING SILENCE
+(proposal 23 -- "the clip then opens with silence and its data starts later"),
+which is how a placement expresses material that begins partway in.
+
+It used to be clamped to 0 on the way in. Nothing needed the negative half
+until loop recording had to place a pass that STARTED MID-CYCLE at the loop
+start and one loop long -- a take whose material begins partway in is exactly
+what such a pass IS, and no non-negative offset can represent it. The clamp is
+therefore what forced the recorder to chop the performance at every wrap
+instead (`main/shell/CONTRACT.md` inv. 27).
+
+The machinery already handled a pass that ENDS early, because running past the
+end of the sample is silence too; the asymmetry was that one line. `span` still
+derives from `waveDur - srcOff`, which grows by the leading silence, and is
+still capped by an explicit `length`.
+
+Gate: `record_loop_late_start.qxa`.

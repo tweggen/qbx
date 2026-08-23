@@ -448,6 +448,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sasserttrackchannelsaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertclipwindowaction.h
+    testkit/include/app/testkit/sasserthovermodeaction.h
     testkit/include/app/testkit/sasserttakecolumnaction.h
     testkit/include/app/testkit/sassertclipmixaction.h
     testkit/include/app/testkit/sassertenvelopeaction.h
@@ -491,6 +492,7 @@ set(APP_UI_FILES
     testkit/src/sasserttrackchannelsaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertclipwindowaction.cpp
+    testkit/src/sasserthovermodeaction.cpp
     testkit/src/sasserttakecolumnaction.cpp
     testkit/src/sassertclipmixaction.cpp
     testkit/src/sassertenvelopeaction.cpp

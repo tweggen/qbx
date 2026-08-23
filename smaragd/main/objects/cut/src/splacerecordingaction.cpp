@@ -52,7 +52,18 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     }
     // The SUB-RANGE of the recording this call places (proposal 21 L3b): the
     // whole file by default, one loop pass when the recorder is cycling.
-    offset_t srcOff = srcOffset_ < 0 ? 0 : srcOffset_;
+    // A NEGATIVE SOURCE OFFSET IS LEGAL AND MEANS LEADING SILENCE, which is
+    // what lets a placement carry material that starts PARTWAY IN.
+    //
+    // It used to be clamped to 0 here, and that clamp is what made loop
+    // recording unable to express a pass that STARTED LATE. A pass beginning
+    // mid-cycle needs its material pushed later inside a take that spans the
+    // whole cycle region -- i.e. exactly a negative anchor, which `SCut` has
+    // supported since proposal 23 ("the clip then opens with silence and its
+    // data starts later"). The machinery already handled a pass that ENDED
+    // early, because running past the end of a sample is silence too; the
+    // asymmetry was this one line.
+    offset_t srcOff = srcOffset_;
     if( srcOff >= (offset_t) waveDur ) return {false, nullptr};
     length_t span = (length_t)( (offset_t) waveDur - srcOff );
     if( length_ > 0 && length_ < span ) span = length_;
