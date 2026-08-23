@@ -159,6 +159,54 @@ static STakeStack *takeStackOfLink( SLink *lk )
     return stakes::columnOfLink( lk );
 }
 
+// THE WINDOW A CLIP GESTURE EDITS — resolved ONCE per gesture, proposal 42 M1.
+//
+// A placement's object is one of three things, and the gesture layer used to
+// force it to be the first by REWRITING THE TREE (`ensureSCut`, below):
+//
+//   * an `SCut`            — the common case, and the only one that used to work
+//   * another `SClipWindow` — an `SMidiCut`, or an `SCut` WRAPPING a take column
+//   * a take COLUMN        — `SLink -> STakeStack`, what `add-take` builds
+//
+// The rule is one line: **a gesture edits the placement's own WINDOW when it
+// has one, and the ACTIVE TAKE of a column when it does not.** Order matters —
+// a wrapper IS a window, so a wrapped column's border drag edits the WRAPPER,
+// which is exactly what `resize-clip` with `take < 0` already does.
+//
+// `column` is non-null only for the DIRECT shape, and is what an EXTENT edit
+// writes through to (`stakestack.h` invariant 1: all takes share the column's
+// duration). `cut` is the same object as `win` whenever the window is audio,
+// so every existing gesture branch keeps its `SCut` fast path untouched.
+struct ClipEditTarget {
+    SClipWindow *win    = nullptr;
+    STakeStack  *column = nullptr;
+    SCut        *cut    = nullptr;
+};
+
+static ClipEditTarget clipEditTargetOf( SLink *lk )
+{
+    ClipEditTarget t;
+    if( !lk ) return t;
+    SObject &obj = lk->getSObject();
+    if( SClipWindow *w = SClipWindow::of( &obj ) ) {
+        t.win = w;                        // a WINDOW placement (a wrapper included)
+    } else if( STakeStack *col = stakes::columnOfLink( lk ) ) {
+        t.column = col;                   // a DIRECT column
+        t.win    = col->windowTakeAt( -1 );   // ...edited through its ACTIVE take
+    }
+    if( t.win ) t.cut = dynamic_cast<SCut *>( &t.win->asObject() );
+    return t;
+}
+
+// NO EXTENT WRITE-THROUGH DURING THE DRAG, deliberately. On a direct column
+// the gesture edits the ACTIVE take, and `STakeStack::getDuration()` delegates
+// to exactly that take — so the column's drawn extent (and every take ROW's,
+// which `drawTakeLane` sizes from the LINK's object) follows live with no
+// second write. `stakestack.h` invariant 1 is restored at the RELEASE, by
+// `SResizeClipAction`'s `applyWindowAll`, which is the one place length ops on
+// a column live. Writing through per mouse-move would put the inactive takes
+// ahead of the revert the release performs before it submits.
+
 // The wheel response AT 100 % SENSITIVITY. SOpt::WheelSensitivityPct scales all
 // four together (see loadWheelConfig); these stay the reference point, so the
 // default feel is stated once and can still be read off here.
@@ -681,7 +729,18 @@ void SStdMixerView::ctAddLink()
         qWarning( "ctAddLink called without object.\n" );
         return;
     }
-    SLink *newLink = new SLink( oldLink->getSObject(), NULL );
+    // A TAKE COLUMN IS DEEP-COPIED, never linked (proposal 42 M1). "Add link"
+    // means SHARE, and two placements of one `STakeStack` share its
+    // `activeTake_` -- so comping either would comp both, which is
+    // indistinguishable from comping not working. Everything else keeps the
+    // sharing semantics the menu item names.
+    SObject *shared = &oldLink->getSObject();
+    if( STakeStack *column = dynamic_cast<STakeStack *>( shared ) ) {
+        if( STakeStack *dup = stakes::cloneColumn(
+                SApplication::app().getCurrentProject(), *column ) )
+            shared = dup;
+    }
+    SLink *newLink = new SLink( *shared, NULL );
     newLink->setStartTime( oldLink->getStartTime()+oldLink->getSObject().getDuration() );
     STrack *oldTrack = qContent_->getLastClickTrack();
     if( !oldTrack ) {
@@ -2059,19 +2118,34 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         // (path/position identity); the cut actually edited is the take under
         // the pointer. Every other edge gesture is composite-lane only, so
         // clipDragTakeIndex_ is -1 for all of them.
+        // The commit is WINDOW-GENERIC (proposal 42 M1): `win` is what the
+        // action's values are read from and reverted on, so an EVENT clip's
+        // trim lands as one undoable `resize-clip` exactly as an audio clip's
+        // does. `cut` stays only for the two things that are audio-specific --
+        // draining the queued window-param events, and the take-slip revert's
+        // exact-Fraction anchor setter.
         SCut *cut = nullptr;
+        SClipWindow *win = nullptr;
         if( clipDragTakeIndex_ >= 0 ) {
             STakeStack *stack = takeStackOfLink( lastClickSLink_ );
             SClipWindow *take = stack ? stack->takeAt( clipDragTakeIndex_ ) : nullptr;
             cut = take ? dynamic_cast<SCut*>( &take->asObject() ) : nullptr;
+            win = take;
         } else {
-            cut = dynamic_cast<SCut*>( &lastClickSLink_->getSObject() );
+            // The SAME resolve the drag used (proposal 42 M1). The bare
+            // `dynamic_cast<SCut*>( &lastClickSLink_->getSObject() )` this
+            // replaced was NULL for a direct take column, so a border drag on
+            // one committed NOTHING: the live mutation stood with no action
+            // and no undo step behind it.
+            cut = clipEditTargetOf( lastClickSLink_ ).cut;
+            win = clipEditTargetOf( lastClickSLink_ ).win;
         }
-        if( cut ) {
+        if( cut ) win = SClipWindow::of( &cut->asObject() );
+        if( win ) {
             offset_t newStart   = lastClickSLink_->getStartTime();
-            Fraction newAnchor  = cut->getSrcStart();
-            length_t newDur     = cut->getDuration();
-            length_t newLoop    = cut->getLoopLength().frames();
+            Fraction newAnchor  = win->contentAnchorExact();
+            length_t newDur     = win->duration();
+            length_t newLoop    = win->loopLength();
             Fraction newStretch = clipStretch0_;
             // A TAKE-LANE SLIP COMMITS EXACTLY ONE FACT: the take's source
             // anchor. Everything else in the action is the PLACEMENT's
@@ -2111,7 +2185,7 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             if( changed ) {
                 // Apply queued window parameter events first (before reverting)
                 // This safely handles any invalidateCapture calls without lock contention
-                cut->processWindowParamEvents();
+                if( cut ) cut->processWindowParamEvents();
 
                 // Then revert to pre-drag state and re-apply via action
                 lastClickSLink_->setStartTime( clipDragStart0_ );
@@ -2125,11 +2199,13 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
                     // EXACT pre-drag anchor (a Fraction, not a floored warped
                     // offset), so a take under a non-unity stretch reverts to
                     // the value the inverse action is then built from.
-                    cut->setSrcStart( clipSrcStart0_ );
+                    if( cut ) cut->setSrcStart( clipSrcStart0_ );
+                    else win->setWindowExact( clipSrcStart0_, win->duration(),
+                                              win->loopLength(),
+                                              win->stretchOrRate() );
                 } else {
-                cut->setWindow( clipSrcStart0_,
-                                ClipLen( lastClickDuration_ ),
-                                WarpedLen( clipLoopLen0_ ), clipStretch0_ );
+                    win->setWindowExact( clipSrcStart0_, lastClickDuration_,
+                                         clipLoopLen0_, clipStretch0_ );
                 }
                 QList<int> clipPath = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
                 clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
@@ -2841,6 +2917,12 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
     // Determine which action to take.
     if( ev->buttons() & Qt::LeftButton ) {        
         if( lastClickSLink_ ) {
+            // ONE resolve for every gesture below (proposal 42 M1). `cut` is
+            // null only for an EVENT window, which the branches guard on; it is
+            // the placement's own `SCut` for an ordinary clip and for a wrapped
+            // column, and the ACTIVE TAKE's for a direct column — so every
+            // branch's existing fast path is reached unchanged in all three.
+            const ClipEditTarget tgt = clipEditTargetOf( lastClickSLink_ );
             offset_t downTime = getLastClickOffset();
             offset_t nowTime = getTimeOf( ev->pos().x() );
 	    length_t delta = (length_t)nowTime-(length_t)downTime;
@@ -2857,8 +2939,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // more repetitions into the same clip. Kept strictly below the
                 // duration so the clip stays looping (SCut::isLooping) and at
                 // least one marker remains to grab.
-                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                SCut *cut = tgt.cut;
+                if( !cut ) return;   // an EVENT window: not this gesture's domain
                 length_t span = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
                               - (length_t) clipDragStart0_;
                 length_t newSeg = span / lastClickLoopMarker_;
@@ -2894,8 +2976,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                     cut = take ? dynamic_cast<SCut*>( &take->asObject() ) : nullptr;
                     if( !cut ) return;
                 } else {
-                    lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                    cut = (SCut *)&(lastClickSLink_->getSObject());
+                    cut = tgt.cut;
+                    if( !cut ) return;   // an EVENT window has no grain slip
                 }
                 length_t contentLen = cut->getContent().hasDuration()
                                       ? (length_t) cut->getContent().getDuration() : -1;
@@ -2950,8 +3032,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // them with the raw setters (no invalidateCapture, so no lock
                 // contention); the audio chain rebuilds once on release via the
                 // SResizeClipAction. Not clamped to content (it stretches).
-                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                SCut *cut = tgt.cut;
+                if( !cut ) return;   // an EVENT window: not this gesture's domain
                 offset_t m = smv_.alignTime( getTimeOf( ev->pos().x() ) );
                 Fraction s0 = clipStretch0_ > Fraction(0) ? clipStretch0_
                                                           : Fraction(1);
@@ -2990,8 +3072,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Drag the RIGHT edge's UPPER half: extend the clip past its
                 // content by repeating the previously visible cut. Capture the
                 // loop segment once, then grow the total duration.
-                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                SCut *cut = tgt.cut;
+                if( !cut ) return;   // an EVENT window: not this gesture's domain
                 if( clipLoopSeg_ <= 0 ) {
                     // Capture the segment to repeat once: the previously visible
                     // cut (original loop length if already looping, else the
@@ -3033,8 +3115,8 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // the only one that leaves (p mod len) unchanged for every p —
                 // anything else moves the wrap point and rewrites the audio.
                 // The loop base is therefore left alone.
-                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                SCut *cut = tgt.cut;
+                if( !cut ) return;   // an EVENT window: not this gesture's domain
                 if( clipLoopSeg_ <= 0 ) {
                     // Same lazy capture as the right-edge loop gesture: an
                     // already-looping clip keeps its segment, a plain one starts
@@ -3084,8 +3166,11 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
             } else if( lastClickedStart_ ) {
                 // Drag the LEFT edge: move the clip start to the snapped mouse
                 // time, trimming the front (cut start offset shifts with it).
-                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                // TRIM IS WINDOW-GENERIC (proposal 42 M1): an EVENT clip is
+                // resized through `SClipWindow`, which converts to its own
+                // units exactly once, instead of being wrapped in an audio cut.
+                SCut *cut = tgt.cut;
+                if( !cut && !tgt.win ) return;
                 offset_t end0 = clipDragStart0_ + (offset_t) lastClickDuration_;  // fixed right edge
                 offset_t rStart = smv_.alignTime( getTimeOf( ev->pos().x() ) );
                 // Keep at least the minimum length.
@@ -3111,18 +3196,25 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // right-edge branch and "Remove loop").
                 if( rDur >= SMV_CUT_MIN_TIME ) {
                     QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
+                    if( cut ) {
                     cut->setStartOffset( rCutStart );
                     cut->setDuration( rDur );
+                    } else {
+                        tgt.win->setWindowFromTimeline( rCutStart, rDur,
+                                                        tgt.win->loopLength(),
+                                                        tgt.win->stretchOrRate() );
+                    }
                     lastClickSLink_->setStartTime( rStart );
-                    cut->invalidateCapture();  // Drop cached render, schedule async revalidation
+                    if( cut ) cut->invalidateCapture();  // Drop cached render, schedule async revalidation
                     // Non-blocking: get preview cache (or stale) for live feedback during drag
-                    cut->getPreviewCapture();
+                    if( cut ) cut->getPreviewCapture();
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                     update( oldRect );
                     update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
                 }
             } else if( lastClickedEnd_ ) {
                 // Drag the RIGHT edge: set the duration to the snapped mouse time.
+                // Window-generic, like the left edge above (proposal 42 M1).
                 // NOT clamped to the content length. A clip longer than its data
                 // is a legitimate state, not an accident: a looping clip tiles
                 // its segment for as long as you drag, and a plain one simply
@@ -3131,17 +3223,21 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // survive a later extend too. The old clamp to
                 // (contentLen - startOffset) snapped both back to about the
                 // length of their data.
-                lastClickSLink_ = smv_.ensureSCut( lastClickSLink_ );
-                SCut *cut = (SCut *)&(lastClickSLink_->getSObject());
+                SCut *cut = tgt.cut;
+                if( !cut && !tgt.win ) return;
                 offset_t rEnd = smv_.alignTime( getTimeOf( ev->pos().x() ) );
                 length_t rDur = (length_t) rEnd - (length_t) clipDragStart0_;
                 if( rDur < SMV_CUT_MIN_TIME ) rDur = SMV_CUT_MIN_TIME;
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 // Only rebuild if duration actually changed (not clamped to same value)
-                if( rDur != cut->getDuration() ) {
+                if( rDur != ( cut ? cut->getDuration() : tgt.win->duration() ) ) {
+                    if( cut ) {
                     cut->setDuration( rDur );
                     cut->queueWindowParamEvent( DURATION_CHANGE, (double) rDur );
                     cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
+                    } else {
+                        tgt.win->setDurationFromTimeline( rDur );
+                    }
                     smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
                 }
                 update( oldRect );
@@ -3845,13 +3941,19 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     clipDragTrack0_ = lastClickTrack_;
                     clipDragStart0_ = lastClickSLink_->getStartTime();
                     {
-                        SObject &o = lastClickSLink_->getSObject();
-                        if( qstrcmp( o.metaObject()->className(), "SCut" ) == 0 ) {
-                            SCut *c = (SCut*)&o;
-                            clipResizeOffset0_ = (offset_t) c->getStartOffset().frames();
-                            clipSrcStart0_     = c->getSrcStart();
-                            clipLoopLen0_      = c->getLoopLength().frames();
-                            clipStretch0_ = c->getStretchExact();
+                        // Snapshot the window the gesture will EDIT, resolved
+                        // by the same rule the drag and the release use
+                        // (proposal 42 M1). The class-NAME test this replaced
+                        // snapshotted ZEROS for a take column — so a border
+                        // drag on one started from a slip of 0, a loop of 0 and
+                        // a stretch of 1 whatever the column actually held.
+                        const ClipEditTarget t0 =
+                            clipEditTargetOf( lastClickSLink_ );
+                        if( t0.win ) {
+                            clipResizeOffset0_ = t0.win->startOffset();
+                            clipSrcStart0_     = t0.win->contentAnchorExact();
+                            clipLoopLen0_      = t0.win->loopLength();
+                            clipStretch0_      = t0.win->stretchOrRate();
                         } else {
                             clipResizeOffset0_ = 0;
                             clipSrcStart0_     = Fraction(0);
@@ -4785,25 +4887,19 @@ QString SStdMixerView::tkCheckLaneAlignment() const
     return QString();
 }
 
-SLink *SStdMixerView::ensureSCut( SLink *lk )
-{
-    if( !lk ) return NULL;
-    SObject *so = &(lk->getSObject());
-    if( !qstrcmp( so->metaObject()->className(), "SCut" ) ) {
-        // Not needed to create an scut.
-        return lk;
-    }
-    qWarning( "Class name is %s and not SCut, so creating a new SCut object.\n",
-              so->metaObject()->className() );
-    offset_t oldStart = lk->getStartTime();
-    SObject *pso = (SObject *)lk->parent();
-    SCut *sc = new SCut( (SProject *)(so->parent()), *so );
-    SLink *nlk = new SLink( *sc );
-    nlk->setStartTime( oldStart );
-    delete lk;
-    nlk->setParent(pso); // was: pso->insertChild( nlk );
-    return nlk;
-}
+// `ensureSCut()` LIVED HERE and is deleted (proposal 42 M1). It tested the
+// class NAME against the literal "SCut" and wrapped anything else in a new
+// `SCut`, deleting the old link — during a mouse-move, from seven gesture call
+// sites. It was the principal factory of the wrapped take-column shape, it
+// turned a MIDI clip into an audio clip pinned to TIME (measured: `startTicks`
+// gone after one border drag), it appended the rewritten link so every clip
+// path recorded in the undo stack then addressed a different clip, and it left
+// the old object's `durationChanged` connected to the lane. Its callers now
+// resolve an editable target instead (`clipEditTargetOf`), which needs no tree
+// rewrite because a window and a take column are both already editable.
+//
+// Raw content on a lane — its original purpose — is produced by no verb; such
+// a placement now resolves to no window and its gestures are no-ops.
 
 // The scrollable horizontal TIMELINE EXTENT, in project frames (fix/
 // arranger-ui-fixes B1/B3). See the header comment on the declaration.

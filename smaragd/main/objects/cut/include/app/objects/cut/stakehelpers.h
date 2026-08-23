@@ -70,6 +70,22 @@ STakeStack *columnOfLink( SLink *lk );
 void publishColumnChange( SLink *link, STakeStack *column );
 
 /**
+ * A DEEP COPY of a take column: a new stack holding a clone of every take's
+ * window (the clones share the same CONTENT, exactly as `cloneWindowOver`
+ * does everywhere else) and the same active index.
+ *
+ * A COLUMN BELONGS TO EXACTLY ONE PLACEMENT (proposal 42). A second placement
+ * of the same stack object shares its `activeTake_`, so comping either one
+ * comps both — which is what `duplicate-clip` and "add link" silently produced
+ * before this existed, and is indistinguishable to the user from the comping
+ * gesture not working. Whoever wants the SHARE semantics wants an asset
+ * (proposal 41's fragment), where sharing is the stated invariant.
+ *
+ * Null if `column` is null or holds no take.
+ */
+STakeStack *cloneColumn( SProject *project, STakeStack &column );
+
+/**
  * Wrap a plain-cut placement into a single-take stack (take 0 = the cut,
  * active). Returns the new stack link on the lane, or null if cutLink's
  * object is not an SCut.

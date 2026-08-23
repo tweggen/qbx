@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  NO GESTURE AND NO VERB MAY TURN A TAKE COLUMN INTO SOMETHING ELSE.
+
+  This is the gate the take subsystem never had, and its absence is why ten
+  defects were found one at a time instead of all at once. Proposal 42 §1: a
+  take column reaches a track in two structural spellings, DIRECT
+  (`SLink -> STakeStack`) and WRAPPED (`SLink -> SCut -> STakeStack`), and 31
+  of the 43 sites that resolve one handle only the first. Nothing DESIGNS the
+  wrapped shape; three things PRODUCED it, and this case holds all three shut.
+
+  PRODUCER 1 — `SStdMixerView::ensureSCut`, reached from all seven border /
+  trim / stretch / loop gesture branches. It compared the class NAME against
+  the literal "SCut" and wrapped anything else in a new `SCut`, deleting the
+  old link, DURING A MOUSE-MOVE. Measured before the fix, on the two drags a
+  user reported:
+
+    * right border dragged to before the clip start: the column became
+      `SLink -> SCut(cutDuration=1024) -> STakeStack` — collapsed to the
+      minimum length, the stack's own placement gone;
+    * left border of a split column's tail dragged right: it became
+      `SLink -> SCut(srcStart=24000, dur=72000) -> STakeStack` — a bogus
+      double offset, and the take stack orphaned behind it.
+
+  PRODUCER 2 — `duplicate-clip` (the Ctrl-drag copy). `SClipWindow::of()` is
+  null for an `STakeStack`, so it fell to `wrapContent` and minted a window
+  over the SAME stack: the copy was WRAPPED *and* the column then had two
+  placements sharing one `activeTake_`, so comping either comped both.
+
+  PRODUCER 3 — "add link" (`ctAddLink`), which made a second DIRECT link to
+  the same stack: no wrapper, same shared `activeTake_`.
+
+  WHAT IS ASSERTED. After each gesture and each verb the placement is still a
+  take column with the take count it had, and its window is what the gesture
+  asked for. `assert-clip-window` reads the LINK's own object, so a wrap is
+  visible as a changed duration/offset; `assert-take-column` — the verb this case
+  exists to introduce — asserts the SHAPE itself, the take count, the active
+  take and the column's PLACEMENT COUNT, none of which any existing verb can
+  see.
+
+  Fixture: a 4 s gapsaw clip with a second take slipped 0.5 s in, so the
+  column is DIRECT and two takes deep.
+-->
+<SActionScript version="1" name="take_column_one_shape">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="24000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+
+    <!-- PRODUCER 1a: drag the RIGHT border in. A column, not a wrapper, and
+         the extent is what was asked for. -->
+    <drag-clip-edge track="0" clip="0" edge="end" toTime="144000" half="lower"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="144000"/>
+
+    <!-- ...and BOTH takes followed it: stakestack.h invariant 1, restored by
+         SResizeClipAction's applyWindowAll at the release. -->
+    <assert-clip-window clip="0,0" take="0" duration="144000"/>
+    <assert-clip-window clip="0,0" take="1" duration="144000"/>
+
+    <!-- PRODUCER 1b: drag the LEFT border in. -->
+    <drag-clip-edge track="0" clip="0" edge="start" toTime="24000" half="lower"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"/>
+    <assert-clip-window clip="0,0" startTime="24000" duration="120000"/>
+
+    <!-- PRODUCER 1c: the right border dragged BEFORE the clip start — the
+         user's report (b). It clamps to SMV_CUT_MIN_TIME and stays a column;
+         before the fix it became a 1024-frame WRAPPER. -->
+    <drag-clip-edge track="0" clip="0" edge="end" toTime="0" half="lower"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"/>
+    <assert-clip-window clip="0,0" startTime="24000" duration="1024"/>
+    <undo/>
+    <assert-clip-window clip="0,0" startTime="24000" duration="120000"/>
+
+    <!-- PRODUCER 2: duplicate. TWO columns, each with its own takes — not one
+         column with two placements. -->
+    <duplicate-clip source="0,0" destTrack="0" startTime="288000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"/>
+    <assert-take-column clip="0,1" shape="direct" takes="2" placements="1"/>
+
+    <!-- ...and they comp INDEPENDENTLY, which is the property the sharing
+         destroyed: select take 1 on the copy, take 0 stays on the original. -->
+    <!-- add-take auto-activates the take it appends, so BOTH columns start
+         on take 1. Comp the COPY back to take 0: the original must not move.
+         Before the fix the two were ONE stack and this assertion is the one
+         that reads exactly like "comping does not work". -->
+    <select-take clip="0,1" take="0"/>
+    <assert-take-column clip="0,0" activeTake="1" placements="1"/>
+    <assert-take-column clip="0,1" activeTake="0" placements="1"/>
+  </actions>
+
+</SActionScript>

@@ -6,6 +6,8 @@
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
 #include "app/model/sclipwindow.h"
+#include "app/objects/cut/stakestack.h"
+#include "app/objects/cut/stakehelpers.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
 
@@ -15,6 +17,20 @@ SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
                           SObject *destLane, offset_t startTime )
 {
     if( !project || !destLane ) return nullptr;
+    // A TAKE COLUMN IS DEEP-COPIED, never shared (proposal 42 M1). `SClipWindow
+    // ::of` is null for an `STakeStack`, so this used to fall to `wrapContent`
+    // and mint an `SCut`/`SMidiCut` over the SAME stack -- producing the wrapped
+    // shape AND a column with two placements, which share one `activeTake_`.
+    // Comping either one then comped both, which reads exactly like comping
+    // being broken.
+    if( STakeStack *column = dynamic_cast<STakeStack *>( &srcObj ) ) {
+        STakeStack *dup = stakes::cloneColumn( project, *column );
+        if( !dup ) return nullptr;
+        SLink *link = new SLink( *dup, NULL );
+        link->setStartTime( startTime );
+        link->setParent( destLane );
+        return link;
+    }
     SClipWindow *copy;
     if( SClipWindow *src = SClipWindow::of( &srcObj ) ) {
         // Copy the WHOLE window faithfully — cloneWindowOver shares the same
