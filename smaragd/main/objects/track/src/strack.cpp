@@ -25,6 +25,7 @@
 #include "app/objects/track/strack.h"
 #include "app/model/sautomationlane.h"
 #include "app/model/sclipwindow.h"
+#include "app/objects/cut/scut.h"
 #include "app/objects/track/strackrndrinline.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
@@ -1875,6 +1876,11 @@ void STrack::refreshClipGainCurves()
         // by default, so this is a no-op for every clip that never set one.
         cpTrackMix_->setClipGainScalar(
             lk, std::pow( 10.0, obj->getVolume() / 20.0 ) );
+        // THE CLIP FADE (proposal 43 N5), through the same funnel and read
+        // from the same window: it is a third factor in the mix's per-frame
+        // product, beside the gain curve and the static volume.
+        if( SCut *audioCut = dynamic_cast<SCut *>( obj ) )
+            cpTrackMix_->setClipFade( lk, audioCut->getFade() );
     }
 }
 

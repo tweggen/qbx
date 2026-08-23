@@ -9,6 +9,7 @@
 
 #include "tw/graph/twcomponent.h"
 #include "tw/events/twautomationcurve.h"
+#include "tw/events/twfade.h"
 
 class tw303aEnvironment;
 
@@ -46,6 +47,11 @@ struct ClipEntry {
                                 // async preview/freeze job that still references
                                 // it after the clip is removed (see teardown)
     std::shared_ptr<twOutputPage> previousPage;  // State snapshot for resumption
+    // THE CLIP'S FADE (proposal 43 N5). Default-constructed = no fade, and
+    // APPENDED rather than inserted: the entry is aggregate-initialised at
+    // addClip, so a field in the middle would silently shift every positional
+    // member past it.
+    twClipFade   fade;
     bool         muted{ false };   // This entry is not summed into the track.
                                 // Mute is a property of the CHANNEL, i.e. of the
                                 // parent that sums a child — never of the child's
@@ -133,6 +139,14 @@ public:
     // skips null plugs), so this path exists for FOLDER tracks, which sum their
     // lanes here as ordinary clip entries.
     twEditRange setClipMuted(const void *key, bool muted);
+
+    // ONE CLIP'S FADE (proposal 43 N5). Same protocol as setClipGainCurve:
+    // swapped under mutex(), read once per page into a local, applied per
+    // frame in the clip's OWN domain -- so it trims, slips and loops with the
+    // clip, and composes with the gain curve and the static volume as a
+    // product of linear factors. Returns the timeline extent the change
+    // affects, like the other mutators, so the caller can stale downstream.
+    twEditRange setClipFade(const void *key, const twClipFade &fade);
 
     // Set (or clear) one clip entry's gain envelope, in CLIP-RELATIVE frames.
     // Returns the timeline extent the change affects, exactly like the other

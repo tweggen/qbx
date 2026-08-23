@@ -792,3 +792,48 @@ the very thing `move-comp-boundary` changes.
 
 Gate: `comp_map_model.qxa`, whose last assertion is that a render is UNCHANGED
 by the map — the one N2 will flip.
+
+## A clip FADE is audio-only, and it is a third factor in the mix's product
+
+`twClipFade` (`tw/events/twfade.h`, beside `twCompMap` and
+`twAutomationCurve`): a fade-in length, a fade-out length and a SHAPE, in the
+clip's OWN frame domain — so a fade trims, slips and loops with its clip,
+exactly as a `cut:Gain` curve does.
+
+**There was no fade primitive anywhere in this model before proposal 43 N5.**
+The two things that look like one are not: `twGrainParams::crossfadeMs` is a
+granular-synthesis knob, and the live monitor's 2-3 ms ramp is an RT detail of
+the device lane.
+
+It lives on `SCut`, not on `SClipWindow`: a fade is a GAIN shape, and that is
+audio-only by the same rule pitch, formant preservation and warp anchors follow
+(invariant 4). `set-clip-fade` REFUSES an event clip rather than ignoring it —
+an event clip's equivalent is velocity, a different thing in a different
+domain.
+
+**THE FADE-OUT IS ANCHORED TO THE CLIP'S END**, which is why `gainAt()` takes
+the clip's length rather than the fade storing one: a clip's length changes
+under a trim, and a fade-out that did not follow it would slide into the middle
+of the clip on the first resize.
+
+It reaches the mix through `STrack::refreshClipGainCurves()` — the one
+main-thread funnel a clip's gain already travels, and NOT through the cut,
+which may not know its track — and `twTrackMix` applies it as a THIRD FACTOR in
+the per-frame product it already computes for the gain curve and the static
+volume. `ClipEntry::fade` is APPENDED to that struct, never inserted: the entry
+is aggregate-initialised in `addClip`, so a field in the middle would silently
+shift every positional member past it.
+
+A fade-in and a fade-out that OVERLAP (a clip shorter than their sum) both
+apply, as a product. That is the honest reading of "both are declared", it
+degrades continuously as the clip is trimmed, and it makes a very short clip
+fade to a peak below unity rather than jump.
+
+**The SHAPE is shared with the crossfade N3 will build**, deliberately: a
+crossfade is two fades that meet, and two curve families that could disagree
+about the shape of the same join is one more than there should be.
+`EqualPower` is `sin(t·π/2)`, whose square sums to 1 across a join.
+
+Gate: `clip_fade.qxa`, all closed forms over `test_gapsaw.wav`. The
+equal-power number (0.06262 against linear's 0.05401 over the same second)
+is what makes the SHAPE gateable rather than just the length.

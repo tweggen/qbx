@@ -1546,6 +1546,18 @@ SCut::SCut( SProject *parentProject, SObject &content )
                       this, SLOT( onVolumeChanged( double ) ) );
 }
 
+void SCut::setFade( const twClipFade &f )
+{
+    if( f == fade_ ) return;
+    fade_ = f;
+    // The same publish `onVolumeChanged` makes, for the same reason: a fade
+    // reaches the mix through STrack::refreshClipGainCurves(), which every
+    // ancestor's bumpRenderChainEpochRange() calls unconditionally. Not
+    // throttled like the SLIP setters (cut/CONTRACT invariant 6): a fade edit
+    // is a dialog commit or one drag RELEASE, never a per-mouse-move write.
+    invalidateRenderPathRange( 0, (offset_t) getDurationBlocking() );
+}
+
 void SCut::onVolumeChanged( double /*db*/ )
 {
     // THE PER-CLIP STATIC VOLUME (proposal: per-clip volume/pan, item f).
@@ -1623,13 +1635,30 @@ int SCut::serializeSelfAttributes( QTextStream &o )
     o << " grainSizeMs='" << grainSizeMs << "'"
       << " crossfadeMs='" << crossfadeMs << "'";
 
+    // THE CLIP FADE (proposal 43 N5), written only when SET — so every
+    // project and every golden without one re-serializes byte-unchanged, the
+    // same rule <automation> follows.
+    if( fade_.inLen  > 0 ) o << " fadeIn='"  << (qlonglong) fade_.inLen  << "'";
+    if( fade_.outLen > 0 ) o << " fadeOut='" << (qlonglong) fade_.outLen << "'";
+    if( !fade_.none() && fade_.shape != twFadeShape::Linear )
+        o << " fadeShape='equalPower'";
+
     SObject::serializeSelfAttributes( o );
     return 0;
+
 }
 
 int SCut::readPostChildrenAttributes( QDomElement &element )
 {
     SObject::readPostChildrenAttributes( element );
+
+    // The clip FADE (proposal 43 N5). Absent attributes leave the default,
+    // which is no fade at all.
+    fade_.inLen  = element.attribute( "fadeIn",  "0" ).toLongLong();
+    fade_.outLen = element.attribute( "fadeOut", "0" ).toLongLong();
+    fade_.shape  =
+        ( element.attribute( "fadeShape", "linear" ) == "equalPower" )
+            ? twFadeShape::EqualPower : twFadeShape::Linear;
 
     // A registered ASSET re-registers itself here (proposal 09 M1). The gap
     // this closes predates tabs: SProject::registerAsset() had exactly ONE
