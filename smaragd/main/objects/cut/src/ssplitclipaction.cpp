@@ -7,6 +7,7 @@
 #include "app/model/slink.h"
 #include "app/model/sclipwindow.h"
 #include "app/objects/cut/stakestack.h"
+#include "app/objects/cut/stakehelpers.h"
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
 #include "tw/core/twfraction.h"
@@ -138,7 +139,31 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     // params) faithfully, and setWindowExact then narrows the copy. Copying
     // through setGrainParams() instead would preserve-span-rescale the
     // duration and double-apply the factor.
-    SClipWindow *w2 = w1->cloneWindowOver(project);
+    // A WINDOW OVER A TAKE COLUMN GIVES ITS TAIL ITS OWN COLUMN (proposal 42
+    // M3). `cloneWindowOver` shares the content, which is right for a wave and
+    // WRONG for a column: two placements of one `STakeStack` share its
+    // `activeTake_`, so after the split, comping either half comped BOTH and
+    // per-region comping — the entire point of splitting a take column — was
+    // impossible on this shape. Measured before the fix: clicking take 1's
+    // lane on the HEAD moved the TAIL's audio too.
+    //
+    // The head keeps the original column and the tail gets a deep copy; each
+    // window already covers its own region of it (the split arithmetic below
+    // is unchanged), so nothing about the takes' own windows has to move.
+    //
+    // The DIRECT shape never reaches here — the branch above builds a second
+    // `STakeStack` itself, and additionally TRIMS every take, which a wrapper
+    // must not do: the wrapper does the windowing, and trimming the takes as
+    // well would window twice.
+    SObject &w1Content = w1->windowContent();
+    SClipWindow *w2 = nullptr;
+    if( STakeStack *column = dynamic_cast<STakeStack *>( &w1Content ) ) {
+        STakeStack *tailColumn = stakes::cloneColumn( project, *column );
+        if( !tailColumn ) return {false, nullptr};
+        w2 = w1->cloneWindowOverContent( project, *tailColumn );
+    } else {
+        w2 = w1->cloneWindowOver(project);
+    }
     if (!w2) {
         return {false, nullptr};
     }

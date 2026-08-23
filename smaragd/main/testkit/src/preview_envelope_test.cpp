@@ -932,7 +932,7 @@ int main( int argc, char **argv )
             void setWindowExact( const Fraction &, length_t, length_t,
                                  const Fraction & ) override {}
             void setContentAnchorExact( const Fraction & ) override {}
-            SClipWindow *cloneWindowOver( SProject * ) const override { return nullptr; }
+            SClipWindow *cloneWindowOverContent( SProject *, SObject & ) const override { return nullptr; }
             std::shared_ptr<twComponent> getRootComponent() override { return nullptr; }
             bool     hasDuration() const override { return true; }
             length_t getDuration() const override { return content_.getDuration(); }

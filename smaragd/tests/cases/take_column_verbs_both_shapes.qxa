@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE TAKE VERBS ADDRESS THE COLUMN, ON BOTH SHAPES — and a column edit keeps
+  the takes ALIGNED WITH EACH OTHER.
+
+  Proposal 42 M3. `split-clip`, `add-take` and `remove-take` each resolved
+  their column with a bare `dynamic_cast<STakeStack*>( &link->getSObject() )`,
+  true only of the DIRECT shape. On the WRAPPED shape
+  (`SLink -> SCut -> STakeStack`, which every real saved project carries):
+
+    * `split-clip` fell to the generic window branch and cloned the WRAPPER
+      over the SAME stack, so both halves shared one `activeTake_` and
+      PER-REGION COMPING WAS IMPOSSIBLE — the user-reported bug this
+      milestone exists for. Measured before the fix: comping the HEAD moved
+      the TAIL's audio too.
+    * `add-take` saw the wrapper as a plain clip and wrapped it AGAIN,
+      producing a COLUMN INSIDE A COLUMN: the new take became a sibling of
+      the entire old column instead of of its takes.
+    * `remove-take` was rejected outright and did nothing.
+
+  And `resize-clip` with NO take named sent the extent to every take but the
+  ANCHOR to the ACTIVE take alone, so every left-edge move desynced the
+  column. Measured: trimming 12000 frames later moved the inactive take's
+  anchor by 0 and the active take's by -12000 — in OPPOSITE directions,
+  24000 apart — so switching takes afterwards gave different material at the
+  same instant. That is precisely the operation comping needs when a boundary
+  moves.
+
+  PART A uses the WRAPPED fixture (wrapper 2 s into a 4 s column, take 0
+  slipped 0.5 s in, take 1 not) and measures COMPING THROUGH A RENDER, which
+  is the only thing that can see it: a model assertion passes on the broken
+  binary because the split arithmetic was always right — it was the shared
+  column identity that was wrong.
+
+      take 0 -> source [2.5,4.5) -> 0 / 0.38638 / 0.43686 / 0
+      take 1 -> source [2.0,4.0) -> 0.28544 / 0 / 0.38638 / 0.43686
+
+  PART B builds a DIRECT column and drags its left edge through the real
+  mouse handlers, then asserts BOTH takes moved by the same delta.
+-->
+<SActionScript version="1" name="take_column_verbs_both_shapes">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ============ PART A: the WRAPPED shape ============ -->
+    <load-project path="../takestack_wrap_takeslip.qxp"/>
+    <snap-to-grid-disable/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2" placements="1"/>
+
+    <!-- split the wrapped column in half -->
+    <click-lane trackPath="0" time="24000"/>
+    <set-locator position="48000"/>
+    <split-selection/>
+
+    <!-- TWO columns, each with its OWN stack. `placements="1"` is the
+         assertion that bites: before the fix both halves were placements of
+         ONE column and this read 2. -->
+    <assert-take-column clip="0,0" takes="2" placements="1"/>
+    <assert-take-column clip="0,1" takes="2" placements="1"/>
+
+    <!-- comp the HEAD to take 1; the TAIL must not move -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" activeTake="1"/>
+    <assert-take-column clip="0,1" activeTake="0"/>
+
+    <!-- ...and that is AUDIBLE, which is the only proof that counts. Head
+         [0,1)s carries take 1's material, tail [1,2)s still take 0's. -->
+    <render filename="tcv_comped.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="tcv_comped.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.280" maxRms="0.291"/>
+    <assert-audio-energy filename="tcv_comped.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="tcv_comped.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.430" maxRms="0.443"/>
+    <assert-audio-energy filename="tcv_comped.wav"
+                         startFrame="72000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+
+    <!-- add-take reaches the column, it does not nest a new one over it -->
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="0"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="3" placements="1"/>
+    <assert-take-column clip="0,1" takes="2" placements="1"/>
+
+    <!-- ...and remove-take reaches it too (it was simply rejected before) -->
+    <remove-take clip="0,0" take="2"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2" placements="1"/>
+
+    <!-- ============ PART B: a column edge keeps the takes ALIGNED ======== -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="1,0" filePath="../test_gapsaw.wav" startOffset="24000"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2"/>
+    <assert-clip-window clip="1,0" take="0" startOffset="0"/>
+    <assert-clip-window clip="1,0" take="1" startOffset="24000"/>
+
+    <!-- drag the LEFT edge 0.25 s later, through the real handlers. Both
+         anchors must advance by exactly 12000; before the fix take 0 stayed
+         at 0 while take 1 moved. -->
+    <drag-clip-edge track="1" clip="0" edge="start" toTime="12000"
+                    half="lower"/>
+    <assert-clip-window clip="1,0" startTime="12000" duration="180000"/>
+    <assert-clip-window clip="1,0" take="0" startOffset="12000"
+                        duration="180000"/>
+    <assert-clip-window clip="1,0" take="1" startOffset="36000"
+                        duration="180000"/>
+  </actions>
+
+</SActionScript>

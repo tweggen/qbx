@@ -37,7 +37,9 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     if( !link ) {
         return {false, nullptr};
     }
-    STakeStack *stack = dynamic_cast<STakeStack *>( &link->getSObject() );
+    // BOTH SHAPES (proposal 42 M3): DIRECT-only, this was simply REJECTED on
+    // a wrapped column -- `remove-take` did nothing at all there.
+    STakeStack *stack = stakes::columnOfLink( link );
     if( !stack || takeIndex_ < 0 || takeIndex_ >= stack->nTakes() ) {
         return {false, nullptr};
     }

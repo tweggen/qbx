@@ -132,12 +132,35 @@ SApplyResult SResizeClipAction::apply( SProject *project )
                                          takeWin->loopLength(),
                                          takeWin->stretchOrRate() );
         } else {
-            // DIRECT: unchanged. Length/loop/stretch write through to every
-            // take (invariant 1); the slip targets one take.
+            // DIRECT: length / loop / stretch write through to every take
+            // (invariant 1).
             column->applyWindowAll( duration_, loopLength_, stretch_ );
-            if( takeWin )
+            if( takeWin && take_ >= 0 ) {
+                // A NAMED take: the anchor is that take's alone. This is the
+                // take-lane slip, and moving the others would be the opposite
+                // of what it means.
                 takeWin->setWindowExact( srcStart_, duration_, loopLength_,
                                          stretch_ );
+            } else if( takeWin ) {
+                // NO take named — an edit to the COLUMN, i.e. a left-edge trim
+                // from the arranger. Every take shifts by the SAME delta, so
+                // the takes stay ALIGNED WITH EACH OTHER (proposal 42 M3).
+                //
+                // The anchor used to go to the active take alone while the
+                // extent went to all of them, which desynced the column on
+                // every left-edge move. Measured, trimming a column's left
+                // edge 12000 frames later: the inactive take's anchor stayed
+                // at 0 while the active take's moved 24000 -> 12000 — the two
+                // moving in OPPOSITE directions, 24000 frames apart, so
+                // switching takes afterwards gave different material at the
+                // same instant. That is exactly the operation comping needs
+                // when a boundary is moved.
+                const Fraction delta = srcStart_ - oldAnchor;
+                for( int i = 0; i < column->nTakes(); ++i )
+                    if( SClipWindow *tw = column->takeAt( i ) )
+                        tw->setWindowExact( tw->contentAnchorExact() + delta,
+                                            duration_, loopLength_, stretch_ );
+            }
         }
         if( setAnchors_ && takeCut ) takeCut->setWarpAnchors( anchors_ );
         // NO publishColumnChange() here, deliberately: both branches above

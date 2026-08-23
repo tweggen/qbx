@@ -181,7 +181,8 @@ public:
                          length_t loopLength,
                          const Fraction &stretchOrRate ) override;
     void setContentAnchorExact( const Fraction &contentAnchor ) override;
-    SClipWindow *cloneWindowOver( SProject *project ) const override;
+    SClipWindow *cloneWindowOverContent( SProject *project,
+                                         SObject &content ) const override;
 
 protected:
     int serializeSelfAttributes( QTextStream &o ) override;
