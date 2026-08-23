@@ -1009,6 +1009,98 @@ int main()
     }
 
     // ------------------------------------------------------------------
+    // Cycle wrap ACROSS MULTIPLE PAGES (fix/loop-behaviour, issue h). The
+    // single-page case above is BLIND TO THIS BY CONSTRUCTION: when the loop
+    // fits inside one 65536-frame page, updateFrozenPage(loopStart) finds the
+    // SAME page it is already holding, so the readahead's own window/demand
+    // arithmetic around the wrap is never exercised at all — which is why
+    // that case survived unchanged while this one shipped broken. Here the
+    // loop spans THREE pages and playback is seeded NEAR THE LOOP END, so
+    // loopStart_'s pages are untouched by ordinary forward playback: nothing
+    // freezes them except EITHER the wrap actually happening OR the
+    // readahead demanding them ahead of it (H1). The old readahead window
+    // was purely linear in the playhead, so approaching loopEnd_ its whole
+    // ~3s window was spent on pages PAST it that could never play, and no
+    // page at loopStart_ was ever demanded before the wrap.
+    {
+        auto src = std::make_shared<RampComponent>(env);
+        src->init();
+
+        audio::AudioEngine engine(src, (uint32_t)env.getSRate());
+
+        constexpr length_t BLOCK = 4096;
+        constexpr uint64_t LOOP_END = 3ull * twOutputPage::FRAME_CAPACITY;  // 196608
+        static_assert(LOOP_END % BLOCK == 0,
+                      "loop end must be block-aligned so the wrap falls on a "
+                      "block boundary");
+        // Four blocks short of the loop end: the wrap is close, but position
+        // 0 (loopStart_) is a page and a half away from this seed and is
+        // reached by NOTHING except the mechanism under test.
+        const uint64_t SEEK_TARGET = LOOP_END - 4 * BLOCK;
+
+        engine.setLoopBoundaries(true, 0, LOOP_END);
+        // Adopted by the FIRST pull, before priming ever visits position 0 —
+        // the point of seeding here rather than after: ordinary forward
+        // playback from 0 would freeze loopStart_'s page "for free" and the
+        // case would prove nothing.
+        engine.requestSeek(SEEK_TARGET);
+        engine.startReadahead();
+
+        std::vector<float> L(BLOCK), R(BLOCK);
+
+        bool audible = false;
+        for (int i = 0; i < 500 && !audible; ++i) {
+            length_t n = pullLR(engine, L, R, BLOCK);
+            if (n == BLOCK && L[0] != 0.0f) audible = true;
+            else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(audible, "multi-page cycle: playback starts near the loop end");
+        CHECK(engine.currentPosition() >= SEEK_TARGET,
+              "multi-page cycle: the seed seek landed before priming, not at 0");
+
+        // Real wall-clock time for the BACKGROUND readahead thread to do its
+        // pre-fetching (many 20ms ticks) — this is exactly what H1 buys.
+        // Without it no amount of waiting here would help, because a
+        // purely-linear readahead never looks past loopEnd_ at all.
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Walk across the wrap. A miss costs at least one whole block of
+        // silence; the pre-fix failure (frontier collapsed by the jump
+        // detector, nothing pre-fetched at loopStart_) costs a great deal
+        // more, because recovery then means a COLD re-freeze from a
+        // discontinuity. rampVal() is never exactly 0, so a 0.0f sample is
+        // unambiguously a miss, not merely a quiet ramp value.
+        constexpr int BLOCKS_TO_WALK = 40;   // comfortably past the wrap
+        length_t silentOrShortFrames = 0;
+        length_t framesSeen = 0;
+        bool sawWrap = false;
+        for (int b = 0; b < BLOCKS_TO_WALK; ++b) {
+            length_t n = pullLR(engine, L, R, BLOCK);
+            if (n < BLOCK) silentOrShortFrames += (BLOCK - n);
+            for (length_t j = 0; j < n; ++j) {
+                if (L[j] == 0.0f) ++silentOrShortFrames;
+                ++framesSeen;
+            }
+            if (n > 0 && L[0] == rampVal(0)) sawWrap = true;
+        }
+
+        CHECK(sawWrap, "multi-page cycle: the wrap to loopStart is actually "
+                       "reached within the walked window");
+        // H3's bound, restated for this harness: the house bound for a live
+        // lane is 1024 frames (CLAUDE.md); this allows a few blocks of
+        // scheduling margin on a loaded box while remaining an order of
+        // magnitude below what an unfixed frontier collapse measures.
+        char gapMsg[192];
+        std::snprintf(gapMsg, sizeof(gapMsg),
+                      "multi-page cycle: no more than 4096 silent/short "
+                      "frames around the wrap (measured %lld of %lld seen)",
+                      (long long)silentOrShortFrames, (long long)framesSeen);
+        CHECK(silentOrShortFrames <= 4096, gapMsg);
+
+        engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
     // Component-level: replacing a stale-frozen page keeps the pre-edit
     // page reachable (stalePredecessor) until the replacement is frozen.
     {

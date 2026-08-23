@@ -291,6 +291,31 @@ private:
     // rather than merely late. 0 = no demand issued yet.
     uint64_t pendingDemandEpoch_{0};
 
+    // fix/loop-behaviour, issue h: a SECOND window, demanded/frozen AHEAD OF
+    // THE WRAP, so the loop-start pages are already current by the time
+    // pullBlock() actually crosses loopEnd_ — before this the whole readahead
+    // window was spent on pages PAST loopEnd_ that could never be played, and
+    // no page at loopStart_ was ever demanded until the playhead got there.
+    // Same shape as the range-A members above, mirrored rather than reused:
+    // range A tracks "the rest of THIS pass" and range B tracks "the START of
+    // the NEXT pass", and the two chains (state continuity via
+    // readaheadPostWrapPrevPage_) must stay independent because the pages are
+    // not contiguous with each other.
+    std::shared_ptr<twOutputPage> readaheadPostWrapPrevPage_;
+    // How far into the loop-start pages (an ABSOLUTE project-frame position,
+    // the SAME coordinate space as readaheadComputedUpTo_ — it names a real
+    // timeline position, loopStart_ onward, not an offset) THIS pass has
+    // pre-fetched ahead of the wrap it is going to hit. 0 = nothing pre-fetched
+    // for the upcoming pass yet. Consumed (reset to 0) the instant a wrap is
+    // detected and its value is adopted as the new readaheadComputedUpTo_ —
+    // see readaheadLoop()'s jump detector — so it always describes "ahead of
+    // the wrap that has not happened YET", never a stale prior pass's.
+    uint64_t readaheadPostWrapComputedUpTo_{0};
+    std::shared_ptr<CaptureRevalidator::GraphDemand> pendingDemand2_;
+    uint64_t pendingDemandStart2_{0};
+    uint64_t pendingDemandEnd2_{0};
+    uint64_t pendingDemandEpoch2_{0};
+
     void readaheadLoop();  // Entry point for read-ahead thread
 };
 

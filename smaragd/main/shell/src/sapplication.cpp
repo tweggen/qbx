@@ -1028,6 +1028,33 @@ void SApplication::setPlaybackRunning( bool play )
     if( liveMonitor_ ) liveMonitor_->transportAboutToChange( play );
     if( !t3Speaker_ ) return;
     if( play ) {
+        // fix/loop-behaviour, issue h: re-sync the speaker's cycle state from
+        // the project's CURRENT properties, immediately before starting
+        // output. SMainWindow::syncCyclePlayback() does the same push on
+        // every `Cycle`/`RangeStart`/`RangeEnd`/`RangeValid` property change
+        // AND again right before its own Play handler calls startOutput() —
+        // but this entry point (every PROGRAMMATIC transport start:
+        // toggle-playback, record-start, the count-in/pre-roll preamble) is
+        // the ONLY one of the two, and the property-change push alone is not
+        // enough: it silently no-ops whenever `getSpeaker()` returns null at
+        // the moment the property is set (found via a headless `--test-case`
+        // run — cycle-enable followed immediately by toggle-playback left
+        // `t3Speaker_`'s cycle atomics at their construction-time false/0/0,
+        // so the engine startOutput() is about to create never saw the
+        // region at all). A user's real Play BUTTON was never affected, only
+        // this programmatic path — but every testkit/record/count-in start
+        // goes through exactly this function, so the gap was total for
+        // anything not clicked by hand. Read the SAME four properties
+        // syncCyclePlayback() reads, in the SAME "cycle && haveRange" shape.
+        if( SProject *proj = getCurrentProject() ) {
+            const bool cycle = proj->prop( SProjectProps::Cycle, false ).toBool();
+            const bool haveRange = proj->prop( SProjectProps::RangeValid, false ).toBool();
+            const offset_t start = (offset_t) proj->prop(
+                SProjectProps::RangeStart, (qulonglong) 0 ).toULongLong();
+            const offset_t end = (offset_t) proj->prop(
+                SProjectProps::RangeEnd, (qulonglong) 0 ).toULongLong();
+            t3Speaker_->setCycle( cycle && haveRange, start, end );
+        }
         // Run barrier immediately before startOutput(), which performs the
         // engine's pre-readahead seekTo(locator) + startReadahead() on THIS
         // thread - so the barrier precedes the readahead's first demand (D4).
