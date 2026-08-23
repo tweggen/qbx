@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "app/model/sappcontext.h"
+#include "app/model/sclipcolors.h"
 #include "app/model/sclipwindow.h"
 #include "app/model/sexternfile.h"
 #include "app/model/slink.h"
@@ -34,11 +35,23 @@ QColor STrackRendererInline::laneFillColor( STrack &track )
         }
     }
 
-    // Determine base color (depends on selection state)
-    QColor baseColor = isTrackSelected ? QColor( 60, 90, 130 ) : QColor( 40, 70, 100 );
+    // Determine base color (depends on selection state).
+    //
+    // NEUTRAL FOR EVERY TRACK, and half the brightness it used to be. The
+    // per-track colour now lives on the CLIPS (app/model/sclipcolors.h), and a
+    // lane background tinted with it as well would compete with them: the point
+    // of dropping the borders is that a clip separates from its lane by TONE, so
+    // the lane has to be the quiet one. The halving is the same 50 % the grid
+    // and the separators took.
+    QColor baseColor = isTrackSelected ? QColor( 30, 45, 65 ) : QColor( 20, 35, 50 );
 
-    // Apply track state modifiers (muted, solo, armed for recording)
-    STrackColorModifier mod = STrackColorModifier::fromTrackState( track );
+    // Apply track state modifiers (muted, solo, armed for recording), with the
+    // OFFSETS HALVED to match the halved base. They are absolute level counts
+    // tuned against the old, twice-as-bright lane; applied unscaled here they
+    // made a MUTED lane come out LIGHTER than an unmuted one (#27313C against
+    // #142332). The HEAD keeps the full offsets -- it did not halve.
+    STrackColorModifier mod = STrackColorModifier::fromTrackState( track )
+                                 .withScaledOffsets( 0.5f );
     return mod.apply( baseColor );
 }
 
@@ -311,6 +324,17 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     // Draw background with the final color
     p.fillRect( visibRect, finalColor );    
 
+    // THE TRACK'S PALETTE ENTRY, resolved ONCE for the whole lane rather than
+    // once per clip: the auto index walks the project lanes, which is O(lanes)
+    // and would otherwise be paid by every clip on every repaint.
+    int colorIndex = getTrack().colorIndex();
+    if( colorIndex < 0 ) {
+        SProject *proj = SAppContext::get().getCurrentProject();
+        SObject *root = proj ? proj->getRootComponent() : nullptr;
+        colorIndex = root ? sclipcolors::autoIndexForLane( *root, getTrack() ) : 0;
+    }
+    const bool laneMuted = getTrack().isMuted();
+
     // The folder's child-sum overlay goes here: after the fill (which would
     // otherwise erase it) and before the clip loop (so the folder's own clips
     // sit on top of it). Proposal 39 M3.
@@ -410,7 +434,11 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         // sobjectrenderer.h), because the TAKE LANES paint the same way and a
         // second copy is exactly how the same grey came to mean "material" on
         // this lane and "window" on the take lane directly below it.
-        const QColor bodyColor( 160, 160, 160 );
+        // THE BODY COLOUR IS THE TRACK'S, in the variant this clip's state
+        // asks for (app/model/sclipcolors.h). It used to be one fixed grey for
+        // every clip in every project.
+        const QColor bodyColor =
+            sclipcolors::body( colorIndex, isSelected, laneMuted );
         const QRect bodyRect( (int) startX, visibRect.y(),
                               (int)( endX - startX ), visibRect.height() );
         SObjectRenderer *rndr = lk->getSObject().getInlineRenderer();
@@ -422,14 +450,13 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         if( !paintedByMaterial )
             p.fillRect( bodyRect, bodyColor );
 
-        if( isSelected ) {
-            p.setPen( QColor( 255, 255, 255 ) );
-            p.drawRect( (int)startX+1, visibRect.y()+1, 
-                        (int)(endX-startX)-2, visibRect.height()-2 );
-            p.setPen( QColor( 0, 0, 0 ) );
-            p.drawRect( (int)startX+2, visibRect.y()+2, 
-                        (int)(endX-startX)-4, visibRect.height()-4 );
-        }
+        // NO SELECTION BORDER. Selection is carried by the BRIGHTER body
+        // variant above -- the white rect plus the black rect inside it were
+        // two drawn lines doing what a tone change now does, and they are
+        // exactly the kind of chrome this pass exists to remove. The clip is
+        // still inset by one row top and bottom (`vr` below), so the lane
+        // background shows between stacked lanes as a margin rather than as a
+        // border on the clip.
         // Now draw the inner of the object.
         InlineRenderContext myctx( ctx, p );
         QRect vr( (int)startX+1, visibRect.y()+1, 
@@ -439,6 +466,16 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
             vr.setRight( visibRect.bottomRight().x() );
         if( vr.width()<1 ) continue;
         myctx.setVisibRect( vr );
+        // The waveform / note colour the CONTENT will draw itself in: same hue,
+        // near-grey and much lighter, so it reads on any anchor. The child
+        // renderers never see a track (they may not include app/objects/track),
+        // so it travels on the context.
+        {
+            SClipColors cc;
+            cc.body = bodyColor;
+            cc.wave = sclipcolors::wave( colorIndex, isSelected, laneMuted );
+            myctx.setClipColors( cc );
+        }
         //qWarning( "lk is $%08x.\n", (unsigned ) lk );
         // rndr was already fetched above, for the material-aware body fill.
         if( rndr ) {
@@ -446,7 +483,10 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
         }
         // Draw the number of links into the upper right.
         {
-            p.setPen( QColor( 0,0,0 ) );
+            // In the CONTENT colour, not black. Black was legible only while
+            // every clip body was a light grey; on a mid-tone anchor it
+            // disappears.
+            p.setPen( myctx.clipColors().wave );
             p.drawText( vr, Qt::AlignTop|Qt::AlignRight,
                         QString::number( lk->getSObject().getNReferences() ) );
         }
@@ -521,7 +561,10 @@ STrackRendererInline::InlineRenderContext::InlineRenderContext(
     SRenderContext &par, QPainter &painter )
     : SRenderContext( painter ),
       parentRC_( par )
-{    
+{
+    // Inherit the clip colours the parent resolved (app/model/sclipcolors.h);
+    // the clip loop overwrites them per clip before it calls a renderer.
+    setClipColors( par.clipColors() );
 }
 
 

@@ -64,8 +64,13 @@
   <actions>
     <grid-disable/>
 
-    <!-- Six equal 100px lanes (the default base track height) - total
-         content 600px. -->
+    <!-- Six equal 100px lanes - total content 600px. The height is PINNED
+         here rather than taken from the view default: the numbers below
+         (a 546px request leaving the sixth row only partly inside the lane
+         band, and "600px of content overflows") are measured against 100px
+         rows, and the default base height is a UI preference that has moved
+         once already (100 -> 49). -->
+    <set-lane-view trackHeight="100"/>
     <add-track index="-1"/>
     <add-track index="-1"/>
     <add-track index="-1"/>

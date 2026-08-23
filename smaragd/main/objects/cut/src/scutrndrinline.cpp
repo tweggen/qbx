@@ -585,7 +585,11 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     // yet, so the non-loop path can show a placeholder.
     auto drawSeg = [&]( SRenderContext &segCtx ) -> bool {
         if( container )
-            return drawObjectWaveform( cut, lk, segCtx, QColor( 120, 200, 255 ) );
+            // The track's wave colour, not a fixed blue. A container clip is
+            // no longer told apart from a sample by HUE -- both are their
+            // track's -- and the tag chip already names what it is.
+            return drawObjectWaveform( cut, lk, segCtx,
+                                       segCtx.clipColors().wave );
         rndr->draw( lk, segCtx );
         return true;
     };
@@ -728,6 +732,8 @@ SCutRendererInline::InlineRenderContext::InlineRenderContext(
       cut_( cut ),
       clipStart_( clipStart )
 {
+    // A cut's content is the SAME clip, so it draws in the same colours.
+    setClipColors( par.clipColors() );
 }
 
 

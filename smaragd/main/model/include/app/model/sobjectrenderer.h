@@ -7,6 +7,7 @@
 #include <QVarLengthArray>
 #include <qobject.h>
 #include "tw/graph/tw303aenv.h"
+#include "app/model/sclipcolors.h"
 
 class SObject;
 class SLink;
@@ -23,6 +24,21 @@ public:
     void setVisibRect( const QRect & );
 
     /**
+     * THE COLOURS OF THE CLIP BEING DRAWN (app/model/sclipcolors.h).
+     *
+     * Whoever fills a clip body -- the composite lane's clip loop and the
+     * take lanes -- resolves the track's palette entry ONCE and sets it here
+     * before calling the content renderer, so a wave, a cut and an event clip
+     * all draw in their track's colour without any of them knowing what a
+     * track is (none of those modules may include app/objects/track).
+     *
+     * A nested context INHERITS its parent's pair -- a cut's content is the
+     * same clip -- which every InlineRenderContext ctor does explicitly.
+     */
+    const SClipColors &clipColors() const { return clipColors_; }
+    void setClipColors( const SClipColors &c ) { clipColors_ = c; }
+
+    /**
      * Return the absolute time position of the given visible x coordinate.
      * This of course implies, that x is the time dimension.
      */
@@ -32,6 +48,7 @@ protected:
 private:
     QPainter &painter_;
     QRect visibRect_;
+    SClipColors clipColors_;
 };
 
 

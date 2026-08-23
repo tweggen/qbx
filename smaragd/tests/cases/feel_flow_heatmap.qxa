@@ -101,6 +101,12 @@
     <sidecar-root/>
 
     <add-track index="-1"/>
+    <!-- Every pixel count below (the ~1131px noise floor, minLutPixels="8000")
+         is measured over a lane band of the 100px base height this case was
+         written at, and scales with it - so PIN it rather than inherit the
+         view default, which is a UI preference and has moved once already
+         (100 -> 49, which halves the band and every count in it). -->
+    <set-lane-view trackHeight="100"/>
     <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
 
     <!-- ============ AC 4 (1/3): never analyzed -> NOTHING paints ========= -->
@@ -136,8 +142,19 @@
          (measured 9234, ~1200 margin) and minLutSpread="10" (measured
          lutIndexMin=0..lutIndexMax=23, i.e. every one of the 24 palette
          steps appears; the fixture's compliance genuinely varies). -->
+    <!-- minPixels IS GONE, and the reason is not a weakening: since the clip
+         palette (app/model/sclipcolors.h) a clip body is its TRACK'S colour,
+         mid-tone at luminance ~102 rather than the old fixed grey at 160, so
+         the LUT's brighter steps now sit ABOVE it and land in
+         `lighterThanClip` (measured 8854) instead of inside the "overlay"
+         band (380). The luminance band simply no longer BRACKETS this
+         feature's own colours. It was already documented above as
+         legacy/informational and superseded on 2026-08-21 by the two
+         assertions below, which are exact-colour membership in the band's own
+         LUT and are unaffected by any body colour, and they measured 9234 and
+         0..23 before this change and after it. -->
     <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
-                         minPixels="2500" bandOnly="true"
+                         bandOnly="true"
                          minLutPixels="8000" minLutSpread="10"
                          grabPng="feel_flow_heatmap.png"/>
 

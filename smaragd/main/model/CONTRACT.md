@@ -531,6 +531,37 @@ Three call sites deliberately do NOT take the forwarded answer:
 Gate: `take_seam_through_window.qxa`, over a fixture whose wrapper, take 0 and
 take 1 all carry DIFFERENT windows, so no assertion can pass by accident.
 
+## THE CLIP PALETTE — one authority, sixteen anchors, everything else derived
+
+`app/model/sclipcolors.h` decides what colour a clip is, and it lives at the
+BOTTOM of the app layering on purpose: everything that needs the answer is
+above it and none of those may see each other — `app/objects/track` paints the
+composite lane, `app/objects/wave` and `app/objects/midi` paint the content on
+it, `app/timeline` paints the take lanes, and `app/shell` MEASURES all three.
+
+**A track carries an INDEX; only the anchor is stored.** The selected body, the
+muted body and the waveform colour are HSL moves off that one anchor
+(`body()` / `wave()`), never separate constants. So the picker this is built for
+— any colour, later — gets its whole family for free, and there is no way for
+one mount to invent a "bright" variant another mount disagrees with.
+
+| Rule | Why |
+|---|---|
+| **`SObject::colorIndex_`, -1 = AUTO**, resolved to the lane's position in the flattened lane order | On `SObject` rather than on `STrack` for the reason `contentKind()` and `resolveEventClip()` are: the serializer, a future picker action and the pixel gates must reach it without knowing which slice owns the lane. |
+| It is written to the file **only when it is not -1** | Every project saved before the palette — and every committed golden — serializes byte-unchanged. The same discipline as `editGroup`, `midiRouting` and `recordingChannels`. |
+| The resolved pair travels on **`SRenderContext::clipColors()`** | A wave, a cut and an event clip all draw in their track's colour while none of them may include `app/objects/track`. Whoever fills the body sets it; every nested `InlineRenderContext` inherits its parent's. |
+| The auto index is resolved **ONCE PER LANE**, never per clip | It walks the project's lanes. Per clip that is O(lanes x clips) on every repaint. |
+| **THE PIXEL GATES CALL THE SAME FUNCTIONS THE PAINTER DOES** | `assert-lane-overlay` and `assert-take-lane` classify a grabbed lane by exact colour and by luminance band, and they used to hardcode `QColor(160,160,160)` as "the clip body" — true only while every clip in every project was one grey. `smainwindow.cpp`'s `sClipBodyOf()` is the shared spelling, exactly as proposal 41 M7 gave paint and hit-test one `tagChipRect()`. |
+| The anchors are **mid-tone and quiet** (S 20-44 %, L 36-48 %), ordered so NEIGHBOURS DIFFER IN HUE | The selected variant is the same hue made lighter, so an anchor near white would have nowhere to go. And the auto assignment is by lane order: a hue RAMP would make two lanes stacked on top of each other nearly identical. |
+
+**A luminance BAND is no longer a safe way to describe a third colour.** The
+"overlay" band in `assert-lane-overlay` is `lumFill < lum < lumClip`, and the
+clip body dropped from 160 to ~102 when it became a track colour — so the
+feel-flow heatmap's own LUT, which used to sit inside that band, now sits ABOVE
+it (measured: 8854 pixels in `lighterThanClip`, 380 left in the band). That
+gate's load-bearing assertions are exact-colour LUT membership and are immune;
+its informational `minPixels` was retired rather than retuned. Anything new
+that wants to be found by colour should be found by IDENTITY.
 ### `SObject::clipFade()` is a base-class seam, for the layering reason
 
 The per-clip mix funnel (`STrack::refreshClipGainCurves`) reads three factors

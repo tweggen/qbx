@@ -157,6 +157,11 @@ int SObject::serializeSelfAttributes( QTextStream &o )
     o << " delay='" << getDelay() << "'";
     if( editGroup_ != 0 )
         o << " editGroup='" << editGroup_ << "'";
+    // The clip colour (app/model/sclipcolors.h). -1 is AUTO and is what every
+    // project written before the palette means, so writing only a CHOSEN
+    // index keeps those files -- and the committed goldens -- byte-unchanged.
+    if( colorIndex_ >= 0 )
+        o << " colorIndex='" << colorIndex_ << "'";
     // Written only when the object carries a name the USER chose. Every
     // SObject is constructed with DEFAULT_SNAME, so serializing unconditionally
     // would stamp a meaningless sName on every object in every project file;
@@ -230,6 +235,9 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
     data = element.attribute( "delay", "0.0" );
     setDelay( data.toDouble() );
     setEditGroup( element.attribute( "editGroup", "0" ).toInt() );
+    // Absent = -1 = auto (sclipcolors.h), which is what every project written
+    // before the palette means.
+    setColorIndex( element.attribute( "colorIndex", "-1" ).toInt() );
     // Absent on projects saved before proposal 31, and absent for unnamed
     // objects. Only assign when there is something to assign: setSName("")
     // means "(untitled)", which would turn every unnamed object into a named

@@ -2063,7 +2063,7 @@ will not have in front of you.** A take column reaches a track two ways:
 | **The two lanes now derive from DIFFERENT data paths on the wrapped shape, and that is accepted** | The composite reads the wrapper's CAPTURE (`SCut::getPreview` -> `capPeaks_`, async, quantised); the take rows read each take's own live preview. They agree POSITIONALLY — the point — not sample for sample, and where the capture is missing the composite still says "Asset: (no preview)" while the take rows draw. Take rows agree with EACH OTHER, which is what comping needs. |
 | A **PIXEL** gate is the only thing that bites, for the third time in this codebase | Proposal 39 M2 and proposal 41 M5 both shipped a green gate over a broken paint because a script-level check through `collectEnvelope` sits BELOW the paint. `assert-take-lane` grabs the real canvas and classifies one take row column by column. |
 | The gate classifies on the BODY colour and **never on waveform pixels** | A silent column still paints ONE waveform pixel at the midline (`drawObjectWaveform` maps `min==max==0` to `drawLine(x,y,x,y)`), so "has wave pixels" is true of every column and would report every gap as material. |
-| **The time grid is drawn in EXACTLY the clip-body colour, over the lanes** | `QColor(160,160,160)` (`sstdmixerview.cpp`), so a grid line is a full-height column of "material" to any classifier. Measured with it on: `spanLast` 500 instead of 398, gap percentages 20/40 instead of 25/50. |
+| **The time grid USED TO BE drawn in EXACTLY the clip-body colour** | `QColor(160,160,160)` (`sstdmixerview.cpp`), so a grid line was a full-height column of "material" to any classifier. Measured with it on: `spanLast` 500 instead of 398, gap percentages 20/40 instead of 25/50. **Fixed 2026-08-23** by the clip palette below — the grid is now `#505050`/`#303030` and a clip body is its track's colour — but the `grid-disable` calls stay: they still keep chrome out of a histogram. |
 
 **A separate defect found while gating this, NOT fixed here:** a project loads
 with **`gridVisible` TRUE whatever the file says**. A fixture written with
@@ -2362,6 +2362,29 @@ new cases produce; and the two verbs' behaviour when `take` is out of range on
 a wrapped column (the geometry is applied and the anchor write skipped — the
 same thing the direct branch has always done for "no active take", but nothing
 asserts it).
+
+## The arranger's colours: one palette, sixteen anchors (2026-08-23)
+
+Clips carry their TRACK's colour; the field under them went quiet. Invariants:
+`main/model/CONTRACT.md` ("The clip palette") and `main/timeline/CONTRACT.md`
+("The field is tone, not lines").
+
+| Thing to know | Why |
+|---|---|
+| **`app/model/sclipcolors.h` is THE authority**, and it is in the LOWEST app layer | Everything that needs a clip colour is above it and none of those may see each other: `objects/track` paints the composite lane, `objects/wave` and `objects/midi` the content on it, `timeline` the take lanes, `shell` MEASURES all three. |
+| A track stores an INDEX; **the selected, muted and waveform colours are DERIVED** (HSL moves) | The picker this is built for gets its whole family for free, and no mount can invent a "bright" variant another mount disagrees with. 16 anchors, not 64 colours. |
+| `SObject::colorIndex_`, **-1 = auto** = the lane's position in the flattened lane order; written to the file only when it is not -1 | Same base-class argument as `contentKind()`; same non-default-only rule as `editGroup` and `midiRouting`, so every project and every golden serializes byte-unchanged. **There is no picker UI and no verb yet** — the field and the resolution are the interface, deliberately built first. |
+| The resolved pair rides on **`SRenderContext::clipColors()`** | A wave, a cut and an event clip draw in their track's colour while none of them may include `app/objects/track`. |
+| **The pixel gates call the painter's own functions** (`sClipBodyOf`, `laneFillColor`) | They hardcoded `QColor(160,160,160)` as "the clip body", true only while every clip was one grey. Proposal 41 M7's `tagChipRect()` lesson, applied to colour. |
+| **A luminance BAND can no longer describe a third colour** | `assert-lane-overlay`'s overlay band is `lumFill < lum < lumClip`, and `lumClip` fell from 160 to ~102. The feel-flow LUT moved out of the band and into `lighterThanClip` (8854 against 380 left). Its exact-colour LUT assertions were immune; the informational `minPixels` was RETIRED, not retuned. Find things by IDENTITY. |
+| Waveforms and MIDI notes are the track's colour too — **except a RECORDING, which stays red** | "This is happening right now" is worth a fixed colour; "this is a sample rather than a container" is not, and the tag chip already names it. |
+
+**NOT done, and named rather than left implied:** no colour picker, no
+`set-track-color` verb and no palette UI — `colorIndex_` is reachable only from
+a loaded file. Nothing gates the anchors themselves (a luminance/hue relation,
+not a palette), the head column's own colours (unchanged, and deliberately NOT
+halved — its controls have to stay legible), the ruler, or how a full-scale
+waveform at ~#CCC covers a mid-tone body on a short lane.
 
 ## Dependencies
 
