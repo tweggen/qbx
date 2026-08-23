@@ -186,10 +186,12 @@ tw_module(events
 # --- E6 mix: arrangement composition (track mix, mixer, rewire) --------------
 tw_module(mix
     SOURCES
+        mix/include/tw/mix/twcompcolumn.h
         mix/include/tw/mix/twtrackmix.h
         mix/include/tw/mix/twmixer.h
         mix/include/tw/mix/twrewire.h
         mix/include/tw/mix/twgainstage.h
+        mix/src/twcompcolumn.cc
         mix/src/twtrackmix.cc
         mix/src/twmixer.cc
         mix/src/twrewire.cc

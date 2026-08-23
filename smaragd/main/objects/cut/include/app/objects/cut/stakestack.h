@@ -3,6 +3,7 @@
 
 #include "app/model/sobject.h"
 #include "tw/events/twcompmap.h"
+#include "tw/mix/twcompcolumn.h"
 #include "app/model/sobjectrenderer.h"
 #include "tw/core/twfraction.h"
 
@@ -238,6 +239,17 @@ private:
 
     int activeTake_ = -1;
     twCompMap compMap_;
+
+    // THE COMP COLUMN (proposal 43 N2), built ONLY when a map exists.
+    //
+    // With an EMPTY map this object hands out the ACTIVE TAKE's component
+    // exactly as it always has, so every project written before proposal 43 --
+    // and every golden -- renders through the same code as ever. That is not
+    // compatibility theatre: an extra page copy is bit-exact, but routing a
+    // stretched take's DSP state through a second component's chaining is not,
+    // and no golden should have to prove that.
+    std::shared_ptr<twCompColumn> cpComp_;
+    std::shared_ptr<twCompColumn> ensureCompColumn();
     // Guards against per-take forwarding storms while setDurationAll/
     // applyWindowAll mutate every take; they emit ONE durationChanged after.
     bool forwardSuppressed_ = false;
