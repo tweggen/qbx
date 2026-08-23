@@ -10,6 +10,7 @@
 using namespace std;
 
 #include "app/persistence/sprojectloader.h"
+#include <QVector>
 
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
@@ -29,6 +30,26 @@ QHash<QString, SElementKind> &SProjectLoader::sObjectKinds()
 {
     static QHash<QString, SElementKind> kinds;
     return kinds;
+}
+
+namespace {
+// File-static, like the class registry below: a plain vector, appended by
+// static initializers before main() and read once per load.
+QVector<SProjectLoader::postLoadPass_f> &postLoadPasses()
+{
+    static QVector<SProjectLoader::postLoadPass_f> v;
+    return v;
+}
+}   // namespace
+
+void SProjectLoader::registerPostLoadPass( postLoadPass_f fn )
+{
+    if( fn ) postLoadPasses().append( fn );
+}
+
+void SProjectLoader::runPostLoadPasses( SProject &project )
+{
+    for( postLoadPass_f fn : postLoadPasses() ) fn( project );
 }
 
 void SProjectLoader::registerSObjectClass(

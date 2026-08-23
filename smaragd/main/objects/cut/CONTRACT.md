@@ -700,3 +700,51 @@ moved by 0 and the active take's by −12000 — **opposite directions, 24000
 apart** — so switching takes afterwards gave different material at the same
 instant. That is precisely the operation comping needs when a boundary is
 moved, and it is why the desync was invisible until someone tried to comp.
+
+## A saved WRAPPED column is normalised to the DIRECT shape on load
+
+`stakes::normalizeColumns` (proposal 42 M4), registered as a post-load pass
+from `stakehelpers.cpp`'s static initializer — the same self-registration the
+loader's class registry and `SClipWindow::registerWrapFactory` use, and for
+the same layering reason: `app/persistence` is `app_core` and may not name
+`STakeStack`.
+
+**Composition, not deletion.** Each take's anchor becomes the content position
+the wrapper's anchor maps to THROUGH THAT TAKE'S OWN MAP
+(`timelineToSourceExact`, so a stretched or warped take lands where the wrapper
+actually showed it), each take takes the wrapper's duration, and the wrapper's
+dB volume is SUMMED onto each take — which is how the mix already composes a
+clip's static gain. The column object, its active index and every take's
+identity survive, so nothing downstream sees a new object.
+
+**Refused, not approximated**, when the fold is not exact: a wrapper that
+loops, is stretched, is panned or carries an automation lane, or a take that
+loops. Such a column keeps its wrapper, is counted, and is logged. M2 and M3
+handle it correctly — it is simply not migrated, and that path is gated too.
+
+`SMARAGD_TAKE_MIGRATE=off` disables the pass; the gates for the wrapped shape
+itself run with it.
+
+**Two things this cost, both found by measurement and both worth knowing:**
+
+* **The loader must be DESTROYED before a post-load pass runs.** Its
+  `objectDict_` holds one temporary handle `SLink` per loaded object, released
+  only in `~SProjectLoader`, so while it is alive every object's reference
+  count reads one too high. Measured: a wrapper the pass had just unlinked
+  still reported 1 reference, so it was not deleted, survived into the saved
+  file and kept the column at `nRefs='2'`. `SLoadProjectAction` now scopes the
+  loader.
+* **The collapsed wrapper is deleted EXPLICITLY, not by refcount.**
+  `removeRef()` schedules a `deleteLater()`, and `SProject::serialize` writes
+  every `SObject` still parented to the project — so a wrapper waiting on the
+  event loop is written into the very file this pass exists to clean. Qt
+  removes a pending `DeferredDelete` in `~QObject`, so an explicit delete after
+  one is safe, and the refcount test is what makes it safe here: a wrapped
+  column has exactly one placement (M1), and it is the link just deleted.
+
+Gate: `take_column_migrate.qxa`, whose audio assertions are copied VERBATIM
+from `wrapped_take_window.qxa` — the same fixture and the same four closed
+forms, asserted once through the wrapped shape and once through the migrated
+one, so a fold that moved the audio by a frame fails. Plus the refusal path
+over `tests/takestack_wrap_looping.qxp`, which is that fixture with
+`loopLength='48000'` on the wrapper and nothing else changed.
