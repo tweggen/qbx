@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A SAVED WRAPPED COLUMN IS NORMALISED TO THE DIRECT SHAPE ON LOAD, WITHOUT
+  CHANGING ONE SAMPLE OF WHAT IT PLAYS.
+
+  Proposal 42 M4. The WRAPPED shape (`SLink -> SCut -> STakeStack`) is what
+  saved files carry: nothing designed it, three now-closed producers made it
+  (M1), and 31 of the 43 sites that resolve a column were written for the
+  DIRECT one only. M2 and M3 made the code handle both, so this pass is not a
+  fix — it is what lets those branches eventually retire, and what restores
+  `stakestack.h` invariant 3 (a one-take column collapses), which
+  `collapseSingleTakeStack` cannot reach through a wrapper.
+
+  COMPOSITION, NOT DELETION. The wrapper's window is folded INTO each take:
+  the take's anchor becomes the content position the wrapper's anchor maps to
+  THROUGH THAT TAKE'S OWN MAP, and every take takes the wrapper's duration.
+  On this fixture (wrapper 2 s into a 4 s column at srcStart 96000; take 0
+  slipped 24000, take 1 not) that is arithmetic:
+
+      take 0   24000 + 96000 = 120000, duration 96000
+      take 1       0 + 96000 =  96000, duration 96000
+
+  THE AUDIO ASSERTIONS ARE COPIED VERBATIM FROM wrapped_take_window.qxa, which
+  asserts the same fixture BEFORE migration. That is the whole point: the two
+  cases assert the same four closed forms over the same file, one through the
+  wrapped shape and one through the migrated one, so a fold that moved the
+  audio by a frame fails here.
+
+      clip 0.0-0.5 s -> source [2.5,3.0) -> the SILENCE
+      clip 0.5-1.5 s -> source [3.0,4.0) -> 0.38610 and 0.43662
+      clip 1.5-2.0 s -> past the 4 s file -> SILENCE
+
+  AND THE REFUSAL PATH. A wrapper the fold cannot express exactly — one that
+  LOOPS, is stretched, is panned, or carries automation, or over a take that
+  loops — keeps its wrapper, is counted and is logged. takestack_wrap_looping
+  .qxp is takestack_wrap_takeslip.qxp with `loopLength='48000'` on the wrapper
+  and nothing else changed, so the only reason it stays wrapped is the rule.
+-->
+<SActionScript version="1" name="take_column_migrate">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_takeslip.qxp"/>
+
+    <!-- MIGRATED: the placement IS the column now, one placement, two takes,
+         the active index carried over. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        placements="1"/>
+
+    <!-- the fold, as arithmetic -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,0" take="0" startOffset="120000"
+                        duration="96000"/>
+    <assert-clip-window clip="0,0" take="1" startOffset="96000"
+                        duration="96000"/>
+
+    <!-- ...and NOT ONE SAMPLE MOVED (wrapped_take_window.qxa's own numbers) -->
+    <render filename="tcm.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tcm.wav" startFrame="0" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="tcm.wav" startFrame="24000" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+    <assert-audio-energy filename="tcm.wav" startFrame="48000" frameCount="24000"
+                         minRms="0.430" maxRms="0.443"/>
+    <assert-audio-energy filename="tcm.wav" startFrame="72000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+
+    <!-- comping works on the migrated column, which is what M3 gates on the
+         wrapped one: take 1 is the unslipped window. -->
+    <select-take clip="0,0" take="1"/>
+    <render filename="tcm_take1.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tcm_take1.wav" startFrame="0" frameCount="24000"
+                         minRms="0.280" maxRms="0.291"/>
+    <assert-audio-energy filename="tcm_take1.wav" startFrame="24000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+
+    <!-- THE REFUSAL PATH: a wrapper that LOOPS is left exactly as it was. -->
+    <load-project path="../takestack_wrap_looping.qxp"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2" placements="1"/>
+    <assert-clip-window clip="0,0" duration="96000" startOffset="96000"
+                        loopLength="48000"/>
+    <assert-clip-window clip="0,0" take="0" startOffset="24000"
+                        duration="192000"/>
+  </actions>
+
+</SActionScript>

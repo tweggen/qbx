@@ -46,6 +46,27 @@ public:
     // static initializer in its own .cpp (proposal 14, Phase 5) — the loader
     // names NO concrete types. Requires the app to stay an OBJECT library
     // (a STATIC lib would drop the registration TUs; see main/CMakeLists.txt).
+    /**
+     * A POST-LOAD NORMALISATION PASS, registered by the slice that owns the
+     * shape it normalises and run once after a project's objects are built
+     * and resolved.
+     *
+     * Registration is by static initializer from that slice, exactly like
+     * `registerSObjectClass` and `SClipWindow::registerWrapFactory`, and for
+     * exactly the same reason: `app/persistence` is in `app_core` and may not
+     * include `app/objects/...`, so the loader must not name the types it is
+     * normalising. `objects/cut` registers the take-column pass (proposal 42
+     * M4) this way.
+     *
+     * Passes run in registration order, on the main thread, with invalidation
+     * still suppressed — a pass is finishing the LOAD, not editing the
+     * arrangement, so nothing it does is undoable and nothing it does may
+     * demand a freeze.
+     */
+    typedef void (*postLoadPass_f)( SProject & );
+    static void registerPostLoadPass( postLoadPass_f fn );
+    static void runPostLoadPasses( SProject &project );
+
     static void registerSObjectClass( const QString &name,
                                      instantiateFromDomElement_f creationFunction,
                                      SElementKind kind = SElementKind::Plain );

@@ -349,6 +349,28 @@ endforeach()
 # are not gated the same way because nothing here asks for them: neither
 # backend writes to the INI at all (§B.8), so no qxa case forces one the way
 # these two force `dpapi`.
+# THE WRAPPED-TAKE-COLUMN GATES need the shape proposal 42 M4's post-load
+# migration REMOVES, so they pin `SMARAGD_TAKE_MIGRATE=off`.
+#
+# This is not a workaround: a wrapper the migration REFUSES to fold (one that
+# loops, is stretched, is panned or carries automation -- see
+# `stakes::normalizeColumns`) survives a load in the field, and M2/M3's
+# both-shape handling is what serves it. The knob is how the suite reaches
+# that code with the fixtures it already has; making the fixtures
+# non-composable instead would change the audio every one of them asserts.
+#
+# Note ENVIRONMENT is REPLACED, not appended, so the render timeout is
+# restated -- the same rule the DPAPI block below documents.
+foreach(_wrapped
+        take_seam_through_window
+        take_lane_slip_wrapped
+        take_column_verbs_both_shapes)
+    if(TEST qxa.${_wrapped})
+        set_tests_properties(qxa.${_wrapped} PROPERTIES
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_TAKE_MIGRATE=off")
+    endif()
+endforeach()
+
 if(SMARAGD_HAVE_DPAPI)
     foreach(_media_dpapi media_options_page media_secret_redaction)
         if(TEST qxa.${_media_dpapi})

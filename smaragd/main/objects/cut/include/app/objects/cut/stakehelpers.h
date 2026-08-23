@@ -70,6 +70,39 @@ STakeStack *columnOfLink( SLink *lk );
 void publishColumnChange( SLink *link, STakeStack *column );
 
 /**
+ * NORMALISE every take column in a loaded project to the DIRECT shape
+ * (proposal 42 M4). Registered as a post-load pass from this file's static
+ * initializer, so `app/persistence` never names `STakeStack`.
+ *
+ * A WRAPPED column (`SLink -> SCut/SMidiCut -> STakeStack`) is what saved
+ * files carry: nothing designed it, three now-closed producers made it (M1),
+ * and 31 of the 43 sites that resolve a column were written for the direct one
+ * only. M2 and M3 made the code handle both, so this is not a fix — it is what
+ * lets those branches eventually retire, and what restores `stakestack.h`
+ * invariant 3 (a one-take column collapses), which `collapseSingleTakeStack`
+ * cannot reach through a wrapper.
+ *
+ * COMPOSITION, not deletion. The wrapper's window is folded INTO each take:
+ * each take's anchor becomes the content position the wrapper's anchor maps
+ * to THROUGH THAT TAKE'S OWN MAP (`timelineToSourceExact`, so a take's stretch
+ * and warp anchors are honoured), and every take takes the wrapper's duration.
+ * The wrapper's own dB volume is SUMMED onto each take, which is exactly how
+ * the mix already composes a clip's static gain. The column object, its active
+ * index and every take's identity survive.
+ *
+ * REFUSED, not approximated, when the fold is not exact — a wrapper that
+ * LOOPS or carries a stretch, a pan or an automation lane, or a take that
+ * loops. Such a column keeps its wrapper, is counted and is logged once. M2
+ * and M3 handle it correctly; it is simply not migrated.
+ *
+ * `SMARAGD_TAKE_MIGRATE=off` disables the pass, which is what the gates for
+ * the wrapped shape itself run with.
+ *
+ * Returns the number of columns collapsed.
+ */
+int normalizeColumns( SProject &project );
+
+/**
  * A DEEP COPY of a take column: a new stack holding a clone of every take's
  * window (the clones share the same CONTENT, exactly as `cloneWindowOver`
  * does everywhere else) and the same active index.
