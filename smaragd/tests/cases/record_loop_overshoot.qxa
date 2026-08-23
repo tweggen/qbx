@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/loop-behaviour, issue g. THE GROWING CLIP MUST NEVER OVERSHOOT THE
+  CYCLE REGION while recording a loop — it wraps and restarts at cycleIn_
+  instead, redrawing the CURRENT pass in place of the previous one.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  BEFORE THIS FIX, `SAudioRecorder::poll()` read the cycle region only at
+  start() and never consulted it again while growing: the tick set
+  `a.cut->setDuration(shown)` from the total captured length, UNWRAPPED and
+  UNBOUNDED, so a clip recorded across a 2 s cycle kept growing past the
+  cycle's own end for as long as the take ran — visually "shooting over" the
+  loop and continuing on into the track, as reported.
+
+  THE BITING ASSERTION is `maxDurationFrames="96000"`: the fixed cap is the
+  cycle length itself, checked at TOLERANCE ZERO (a hard bound, not a
+  "roughly this long" claim). Pre-fix, waited past the first wrap, the
+  growing clip's duration is the UNWRAPPED total captured so far — well over
+  96000 by the second assertion below — and this case fails there. Post-fix
+  it never exceeds the cycle length because each wrap restarts the count.
+
+  Every growing-clip assertion is sampled TWICE, a full cycle apart, so the
+  case cannot pass by luck on a single wrap: both must hold, at every wrap,
+  for the whole take.
+
+  `startFrame="0"` is asserted alongside it, but for THIS case (recording
+  begins exactly at the cycle start) it does not by itself distinguish the
+  fix — see record_loop_overshoot_late_start.qxa, where it is the assertion
+  that bites, because there the pre-fix clip never leaves the record-start
+  anchor at all.
+-->
+<SActionScript version="1" name="record_loop_overshoot">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- NAME THE INPUT DEVICE, so the offset key is read under a name no real
+         device can have. See record_offset_zero. -->
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+
+    <!-- The cycle region: 0 .. 2 s. set-property takes a JSON ARRAY. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+
+    <!-- PAST THE FIRST WRAP (2 s), well into pass 2 with margin either side
+         of the boundary. -->
+    <wait-ms ms="4500"/>
+    <assert-recorded-clip trackPath="0" clips="1" growing="true"
+                          startFrame="0" startTolerance="0"
+                          minDurationFrames="1" maxDurationFrames="96000"/>
+
+    <!-- PAST THE SECOND WRAP (4 s): the same must hold again, proving this
+         is a repeating wrap-and-restart, not a one-off correction. -->
+    <wait-ms ms="4500"/>
+    <assert-recorded-clip trackPath="0" clips="1" growing="true"
+                          startFrame="0" startTolerance="0"
+                          minDurationFrames="1" maxDurationFrames="96000"/>
+
+    <record-stop/>
+
+    <!-- THE COMMITTED TAKE IS UNCHANGED (G3): identical shape and numbers to
+         record_loop_takes, whose setup this mirrors exactly — so the
+         mid-take preview above changed, and the final placement did not. -->
+    <assert-recorded-clip trackPath="0" clips="1" minTakes="3" minPasses="3"
+                          startFrame="0" startTolerance="0"
+                          durationFrames="96000" durationTolerance="0"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          compensationFrames="-5824"/>
+
+    <undo/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

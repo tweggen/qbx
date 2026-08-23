@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/loop-behaviour, issue g (G5). THE GROWING CLIP WHILE RECORDING A LOOP
+  STARTED PARTWAY IN also stays inside the cycle region — the shape CLAUDE.md
+  records as the one that hid a year-long bug in the COMMITTED path
+  (record_loop_late_start.qxa), and the same "record from the loop start
+  only" blind spot applies to the mid-take PREVIEW here.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  Setup is record_loop_late_start's: a 2 s cycle, recording begun at 1.5 s
+  in (locator 72000), so pass 1 is a LATE pass wrapping after only ~0.62 s.
+
+  THE BITING ASSERTION HERE IS `startFrame="0"`, not the duration cap. Before
+  this fix, `reseatClips_()` unconditionally reseated every growing clip to
+  `placementFrame(trimmed_)` — the RECORD-START anchor, here about 66176 —
+  and poll() never moved it again. So a pre-fix growing clip in this shape
+  sits at ~66176 for the WHOLE take, never at cycleIn_, and this assertion
+  fails immediately once anchored, before any wrap has even happened.
+  Post-fix, once cycling, the clip is reseated to cycleIn_ (0) on the very
+  first post-anchor tick, matching the committed take's own placement.
+
+  `maxDurationFrames="96000"` is asserted alongside it as the second
+  guard — the one record_loop_overshoot.qxa's own header explains bites
+  THAT case — so between the two cases every one of this fix's two live
+  guards is shown biting on the shape it exists for.
+-->
+<SActionScript version="1" name="record_loop_overshoot_late_start">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+
+    <!-- The cycle region: 0 .. 2 s. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <!-- Start recording in the LAST QUARTER of the cycle, not at its start
+         (record_loop_late_start's own setup). -->
+    <set-locator position="72000"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+
+    <!-- Past the first wrap (~0.62 s in), with margin. -->
+    <wait-ms ms="1500"/>
+    <assert-recorded-clip trackPath="0" clips="1" growing="true"
+                          startFrame="0" startTolerance="0"
+                          minDurationFrames="1" maxDurationFrames="96000"/>
+
+    <!-- Past a second wrap. -->
+    <wait-ms ms="3500"/>
+    <assert-recorded-clip trackPath="0" clips="1" growing="true"
+                          startFrame="0" startTolerance="0"
+                          minDurationFrames="1" maxDurationFrames="96000"/>
+
+    <record-stop/>
+
+    <!-- THE COMMITTED TAKE IS UNCHANGED (G3): identical numbers to
+         record_loop_late_start, whose setup and timing this mirrors
+         exactly. -->
+    <assert-recorded-clip trackPath="0" clips="1" minTakes="2" minPasses="2"
+                          startFrame="0" startTolerance="0"
+                          durationFrames="96000" durationTolerance="0"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          compensationFrames="-5824"/>
+    <assert-take-column clip="0,0" shape="direct"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

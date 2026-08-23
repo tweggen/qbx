@@ -61,6 +61,7 @@ QStringList SAssertRecordedClipAction::knownAttributes() const
              QStringLiteral( "minPasses" ),        QStringLiteral( "startFrame" ),
              QStringLiteral( "startTolerance" ),   QStringLiteral( "durationFrames" ),
              QStringLiteral( "durationTolerance" ),QStringLiteral( "minDurationFrames" ),
+             QStringLiteral( "maxDurationFrames" ),
              QStringLiteral( "inputLatencyFrames" ),
              QStringLiteral( "outputLatencyFrames" ),
              QStringLiteral( "userOffsetFrames" ), QStringLiteral( "compensationFrames" ),
@@ -152,6 +153,15 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
     if( minDurationFrames_ != kUnset && dur < minDurationFrames_ ) {
         qWarning() << "assert-recorded-clip: clip duration" << dur
                    << "below the minimum" << minDurationFrames_;
+        return { false, nullptr };
+    }
+    // fix/loop-behaviour (issue g): the UPPER bound, checked with NO
+    // tolerance — the growing clip's window must never overshoot a hard
+    // limit (a cycle region's own length), unlike durationFrames_ above,
+    // which is a "roughly this long" claim about a wall-clock-paced take.
+    if( maxDurationFrames_ != kUnset && dur > maxDurationFrames_ ) {
+        qWarning() << "assert-recorded-clip: clip duration" << dur
+                   << "above the maximum" << maxDurationFrames_;
         return { false, nullptr };
     }
 
@@ -322,6 +332,8 @@ void SAssertRecordedClipAction::writeXml( QDomElement &elem ) const
         elem.setAttribute( "durationTolerance", QString::number( durationTolerance_ ) );
     if( minDurationFrames_ != kUnset )
         elem.setAttribute( "minDurationFrames", QString::number( minDurationFrames_ ) );
+    if( maxDurationFrames_ != kUnset )
+        elem.setAttribute( "maxDurationFrames", QString::number( maxDurationFrames_ ) );
     if( inputLatency_ != kUnset )
         elem.setAttribute( "inputLatencyFrames", QString::number( inputLatency_ ) );
     if( outputLatency_ != kUnset )
@@ -356,6 +368,7 @@ bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
     durationFrames_    = elem.attribute( "durationFrames", "-1" ).toLongLong();
     durationTolerance_ = elem.attribute( "durationTolerance", "4096" ).toLongLong();
     minDurationFrames_ = elem.attribute( "minDurationFrames", "-1" ).toLongLong();
+    maxDurationFrames_ = elem.attribute( "maxDurationFrames", "-1" ).toLongLong();
     inputLatency_      = elem.attribute( "inputLatencyFrames", "-1" ).toLongLong();
     outputLatency_     = elem.attribute( "outputLatencyFrames", "-1" ).toLongLong();
     userOffset_        = elem.attribute( "userOffsetFrames", "-999999" ).toLongLong();
