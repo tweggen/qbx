@@ -294,7 +294,13 @@ APP_ENG = {
     'model':          _ENG_BASE | {'events', 'pages', 'schedule', 'sources'},
     # objects/cut + events since proposal 37 P5: an SCut owns its `cut:Gain`
     # envelope and hands the twAutomationCurve snapshot to the track's mix.
-    'objects/cut':    _ENG_BASE | {'events', 'pages', 'schedule', 'sources'},
+    # + mix since proposal 43 N2: STakeStack OWNS a twCompColumn - the
+    # component that makes its comp map audible - exactly as objects/fragment
+    # owns a twTrackMix and objects/track owns its whole chain. A model object
+    # holding the engine component it publishes to is the established shape
+    # here, not a new one; everything else stays out (no plugins, no render).
+    'objects/cut':    _ENG_BASE | {'events', 'mix', 'pages', 'schedule',
+                                   'sources'},
     # objects/wave + sidecar since proposal 27 M0: SPlainWave persists its
     # straight preview through the derived-data sidecar store.
     'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources', 'sidecar'},
