@@ -74,6 +74,17 @@ public:
     virtual length_t durationBlocking() const = 0;
     /** Length of the repeating segment; 0 = not looping. */
     virtual length_t loopLength() const = 0;
+    /**
+     * Whether the window is actually TILING (fix/loop-behaviour, issue b).
+     * A loop length that is 0, negative, or >= the window's own duration
+     * stores fine (`setWindowFromTimeline` only clamps against 0) but is
+     * never drawn or played as a loop by either window kind
+     * (`SCut::isLooping`, `SMidiCutRendererInline::draw`'s `looping`) — so
+     * this is the ONE predicate every gesture, hit test and renderer must
+     * use, spelled once here rather than re-derived per window type.
+     */
+    bool isLooping() const
+    { return loopLength() > 0 && loopLength() < duration(); }
     /** Slip: where in the content the window starts, in timeline frames. */
     virtual offset_t startOffset() const = 0;
     /**

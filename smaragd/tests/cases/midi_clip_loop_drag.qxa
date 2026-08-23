@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/loop-behaviour, issue b. A MIDI clip's loop is set, extended and
+  loop-backed through the REAL DRAG HANDLERS — the same `drag-clip-edge`
+  verb the audio loop cases use — not through the `resize-clip` action
+  directly. `resize-clip` was ALREADY window-generic before this fix (proposal
+  42 M1); what was broken was every arranger GESTURE that reaches it for a
+  loop: `SMVActualView`'s three loop-drag branches (right-edge-upper "extend
+  by repeating", left-edge-upper "loop back whole cycles", and the
+  loop-marker handle) all resolved `tgt.cut` (an `SCut*`) and bailed silently
+  for any other window kind, while the hover cursor showed "Loop"/"Loop back"
+  over every clip regardless — promising a gesture that then refused. A
+  MODEL-ONLY assertion through `assert-clip-window` cannot see this class of
+  bug by itself (this codebase has shipped a green gate over a broken paint
+  or hit test more than once — see main/timeline/CONTRACT.md inv. 32, 34-35),
+  so every window assertion below is paired with a `assert-midi-events
+  scope="feed"` collect through the SAME `STrack::eventFeed()` an instrument
+  reads, proving the loop is not merely stored but AUDIBLE (in the sense a
+  MIDI clip is audible: repeated in the event stream).
+
+  Tempo/PPQ: 120 BPM, PPQ 960, 48 kHz -> 960 ticks = 24000 frames (25 fr/tick),
+  the same convention midi_clip_edit_verbs.qxa uses, so every frame number
+  below is an exact integer.
+
+  NOT gated here, and named rather than left silent: dragging the LOOP-MARKER
+  HANDLE itself (the third of the three fixed branches) — there is no
+  testkit verb that can target that handle's computed pixel position the way
+  `drag-clip-edge edge="end"/"start"` targets a fixed clip-relative offset,
+  and building one is out of scope for this fix. Its code path is the
+  identical `tgt.win`/`tgt.cut` pattern the two gated branches use (see
+  SMVActualView::mouseMoveEvent's `clipDragIsLoopMarker_` branch), reviewed
+  by hand. Also not gated: the CURSOR/status-text half of the fix (B4) —
+  `assert-hover-mode`'s own `hoverClipEdge()` hardcodes `upperHalf=false`
+  (main/timeline/src/sstdmixerview.cpp), so it can only reach the
+  LOWER-half "Trim"/"Extend" modes and never the UPPER-half "Loop"/"Loop
+  back" ones this fix is about — a pre-existing testkit gap, not something
+  this case can route around; the Clip Properties panel's own loop field
+  (main/timeline/CONTRACT.md inv. 42) — there is no testkit verb that
+  drives its widgets, the same gap that leaves the Options pages
+  unreachable headlessly — and the loop-divider HANDLE's pixel geometry
+  (drawn, not hit-tested here).
+-->
+<SActionScript version="1" name="midi_clip_loop_drag">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Grid snap would perturb the exact frame numbers below (the same
+         reason loop_start_edge_drag.qxa disables it before its own
+         left-edge drag). -->
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- ===================== right edge: extend by repeating =========== -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="960" name="Loop Test"/>
+    <add-note clip="0,0" tick="0" dur="240" key="60" velocity="100" channel="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="24000" loopLength="0"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" key="60"
+                        count="1" startFrame="0" frameCount="24000"/>
+
+    <!-- THE REAL DRAG. Right-edge upper half, grown from 24000 to 96000
+         frames: BITES pre-fix (the branch returns early for an event
+         window, so the window is unchanged). -->
+    <drag-clip-edge track="0" clip="0" edge="end" half="upper" toTime="96000"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        loopLength="24000"/>
+    <!-- 96000 / 24000 = 4 repetitions of the note, through the track FEED
+         (the merge an instrument reads) — the SECOND bite, independent of
+         the model-only assertion above. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="note" key="60"
+                        count="4" startFrame="0" frameCount="96000"/>
+
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="24000" loopLength="0"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="note" key="60"
+                        count="1" startFrame="0" frameCount="24000"/>
+
+    <!-- ===================== left edge: loop back whole cycles ========= -->
+    <!-- A second clip, on its own track, placed 2 s in so there is room
+         behind it to grow into. -->
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="1" timePos="48000" duration="960" name="Loop Back"/>
+    <add-note clip="1,0" tick="0" dur="240" key="64" velocity="100" channel="0"/>
+    <assert-clip-window clip="1,0" startTime="48000" duration="24000"
+                        loopLength="0"/>
+
+    <!-- Drag the LEFT edge's upper half back to frame 0 — WHOLE CYCLES of
+         the clip's own 24000-frame duration (its loop segment, captured
+         lazily on the first move since it is not looping yet): 48000 / 24000
+         = exactly 2 cycles, so the start lands on 0 exactly. BITES pre-fix
+         the same way the right-edge case does. -->
+    <drag-clip-edge track="1" clip="0" edge="start" half="upper" toTime="0"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="72000"
+                        loopLength="24000"/>
+    <!-- 72000 / 24000 = 3 repetitions. -->
+    <assert-midi-events scope="feed" trackPath="1" kind="note" key="64"
+                        count="3" startFrame="0" frameCount="72000"/>
+
+    <undo count="1"/>
+    <assert-clip-window clip="1,0" startTime="48000" duration="24000"
+                        loopLength="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

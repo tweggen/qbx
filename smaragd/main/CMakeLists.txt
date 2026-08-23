@@ -22,6 +22,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sautomationlane.h
     model/include/app/model/sclipcolors.h
     model/include/app/model/sclipwindow.h
+    model/include/app/model/sclipwindowgeometry.h
     model/include/app/model/sdetaileditors.h
     model/include/app/model/sexternfile.h
     model/include/app/model/sexternfilelist.h
@@ -40,6 +41,7 @@ set(APP_MODEL_FILES
     model/src/sautomationlane.cpp
     model/src/sclipcolors.cpp
     model/src/sclipwindow.cpp
+    model/src/sclipwindowgeometry.cpp
     model/src/sdetaileditors.cpp
     model/src/sexternfile.cpp
     model/src/sexternfilelist.cpp

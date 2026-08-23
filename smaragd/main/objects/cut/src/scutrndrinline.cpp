@@ -201,20 +201,10 @@ static void drawGainEnvelope( QPainter &p, const QRect &visibRect,
     }
 }
 
-QRect scutLoopHandleRect( const QRect &clipRect, int x )
-{
-    // "One character high", in the same 7pt font the small per-clip numbers end
-    // up being drawn in. Taken from the application font, NOT from a painter, so
-    // the drawn box and the arranger's hit box are always the same size.
-    QFont f = QGuiApplication::font();
-    f.setPointSize( 7 );
-    int h = QFontMetrics( f ).height();
-    int maxH = clipRect.height() - 2;
-    if( h > maxH ) h = maxH;
-    if( h < 4 ) return QRect();                  // lane too short for a grip
-    return QRect( x - SCUT_LOOP_HANDLE_W/2, clipRect.y() + 1,
-                  SCUT_LOOP_HANDLE_W, h );
-}
+// scutLoopHandleRect() itself is now an inline forward in scutrndrinline.h to
+// app/model/sclipwindowgeometry.h's sClipWindowLoopHandleRect() -- see that
+// header for why (fix/loop-behaviour, issue b: a MIDI clip's loop handle
+// needed the same geometry and objects/midi may not include objects/cut).
 
 QRect scutFadeHandleRect( const QRect &clipRect, int x )
 {

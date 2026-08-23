@@ -1232,3 +1232,90 @@ halved one it made a MUTED lane come out LIGHTER than an unmuted one (measured
 `#27313C` against `#142332`). The track HEAD did not halve — its controls have
 to stay legible — so it still takes the full offsets, which is why the scaling
 is at the call site rather than in the constants.
+
+### inv. 42 — LOOP DRAGS AND THE LOOP-MARKER HIT TEST SPEAK `SClipWindow`,
+### NEVER `SCut` (fix/loop-behaviour, issue b, 2026-08-23)
+
+`SMidiCut` fully supports looping in the model, the action layer
+(`resize-clip` / `SResizeClipAction::apply` already calls
+`win->setWindowExact(...)`, window-generic since proposal 42 M1) and the
+renderer (`SMidiCutRendererInline::draw()`'s `looping` predicate). What was
+missing was the ARRANGER: `loopMarkerAt()` and the three live-drag branches
+(right-edge-upper "extend by repeating", left-edge-upper "loop back whole
+cycles", and dragging a loop-marker handle) all resolved `tgt.cut` — an
+`SCut*` — and bailed with `if (!cut) return` for any other window kind, while
+`updateHoverCursor()` had no such guard and showed the loop cursor and
+"Loop"/"Loop back" status text over EVERY clip regardless. So a MIDI clip
+whose edge or handle a user grabbed for looping felt the cursor promise a
+gesture that then silently refused — "I tried to loop it and it looked like
+it already was" is the exact shape of that failure, and a MIDI clip arriving
+already looped (from a project file, a scripted `resize-clip`, or
+`cloneWindowOverContent` propagating an already-set `loopTicks_` on
+duplicate) could not be changed OR cleared through any drag at all.
+
+The fix is `SClipWindow`, not a wider `SCut` cast: `loopMarkerAt()` resolves
+`SClipWindow::parametersOf(clip->getSObject())` (the same resolution
+`clipEditTargetOf()` already uses for every other gesture, so a wrapped take
+column's loop handle grabs the ACTIVE TAKE's window, matching every other
+edit on that shape), and each live-drag branch keeps its existing `SCut`
+fast path (raw setters, queued param events, the preview-capture kick — audio
+is BYTE-IDENTICAL, inv. unchanged) inside an `if (SCut *cut = tgt.cut)`
+branch, with an `else` that commits through the ONE window-generic setter
+(`win->setWindowFromTimeline(...)`) for anything else. `SMidiCut` has no
+raw/no-rebuild setter the way `SCut` does; its own rebuild
+(`rebuild_nolock()`) is a cheap tick→frame recompute, never an audio-chain
+rebuild, so the window-generic setter already IS the cheap live-feedback
+path for an event window — no second "raw" tier was needed on that side.
+
+`SClipWindow::isLooping()` (`app/model/sclipwindow.h`) is the ONE predicate
+— `loopLength() > 0 && loopLength() < duration()` — used by the hit test,
+both renderers and `updateHoverCursor()`'s "Loop length" branch, so a loop
+that stores fine but is never drawn or played (a loop length ≥ the window's
+own duration, which `setWindowFromTimeline` clamps only against 0, never
+against the duration) reads the same "not looping" answer everywhere rather
+than disagreeing renderer-to-renderer.
+
+**The loop-handle GEOMETRY is shared the same way tag chips are (inv. 32's
+lesson, applied a second time here on purpose).** `scutLoopHandleRect()` /
+`SCUT_LOOP_HANDLE_W` (objects/cut) are now thin forwards to
+`sClipWindowLoopHandleRect()` / `SCLIPWIN_LOOP_HANDLE_W`
+(`app/model/sclipwindowgeometry.h`) — moved to `app/model` because
+`objects/midi` may not include `objects/cut` (docs/ARCHITECTURE.md's module
+DAG: "objects/midi sits at the RANK of objects/cut"), so the MIDI renderer's
+own loop-divider handles (new: `SMidiCutRendererInline::draw()`'s looping
+branch now draws a divider line + grab handle at every boundary a next
+repetition follows, using the SAME model-layer function the hit test and the
+audio renderer use) could not otherwise share geometry with the audio
+renderer's. One function, three call sites (audio draw, MIDI draw, arranger
+hit test) — an audio clip's grip and a MIDI clip's are the same size and the
+same box by construction, not by two implementations happening to agree.
+
+**The Clip Properties panel (F2) gets its OWN loop field on the MIDI page**
+(`midiLoopSpin_` / `midiClearLoopButton_`, `commitMidiLoopLength()` /
+`onClearMidiLoop()`), not a null-checked reuse of the audio page's
+(`loopSpin_`/`clearLoopButton_`, wired to `collectClips()`/`SCut` getters).
+Same per-kind-page design as every other MIDI field on that panel
+(main/model/CONTRACT.md's `contentKind()`/`resolveEventClip()` rule, restated
+for the UI): the audio page is deliberately not widened with a window-generic
+getter that would work but blur which page a field belongs to. Both loop
+fields commit through the SAME verb, `resize-clip` via `SResizeClipAction`.
+
+**NOT fixed, deliberately, and named rather than left silent**: the
+Ctrl-drag border "Time-stretch" gesture has the identical cursor-lies shape
+for a MIDI clip (`updateHoverCursor()` shows "Time-stretch" over any border
+regardless of clip kind; `clipDragIsStretch_`'s live-drag branch is still
+`SCut`-only and bails silently) — out of scope here because it needs a rate
+edit path for `SMidiCut`, not a resolver change, and the diagnosis this fix
+was built from named only the loop cursor as the reported symptom.
+
+Gates: the qxa case `midi_clip_loop_drag` (a real drag through
+`drag-clip-edge` extending, loop-backing and re-tiling a MIDI clip's loop,
+plus a Clear-loop commit through the Properties panel path, each asserted
+with `assert-clip-window loopLength=` AND a rendered/collected change —
+`assert-clip-window` alone sits below the paint/hit-test layer this fix is
+about, main/testkit/CONTRACT.md's own warning, twice repeated elsewhere in
+this codebase, about a script-level check being blind to a paint or
+hit-test bug) plus `action_roundtrip_test`. `loop_asset_extend.qxa`,
+`loop_start_edge_drag.qxa` and `fragment_midi_loop.qxa` stay green with
+their exact pre-existing numbers (audio and MIDI-fragment looping
+unchanged).

@@ -317,6 +317,22 @@ void SClipPropertiesPanel::buildUi()
     timebaseCombo_->addItem( tr( "Time (pinned to frames)" ), "time" );
     midiForm->addRow( tr( "Timebase:" ), timebaseCombo_ );
 
+    // fix/loop-behaviour (issue b): the ONE remaining window field the MIDI
+    // page did not expose. Same verb as the audio page's loop row
+    // (resize-clip through SClipWindow), its own widgets and commit slots
+    // because the audio page's are wired to collectClips()/SCut getters.
+    QWidget *midiLoopRow = new QWidget( midiGroup_ );
+    QHBoxLayout *midiLoopLayout = new QHBoxLayout( midiLoopRow );
+    midiLoopLayout->setContentsMargins( 0, 0, 0, 0 );
+    midiLoopSpin_ = new QSpinBox( midiLoopRow );
+    midiLoopSpin_->setRange( 0, kMaxFrames );
+    midiLoopSpin_->setGroupSeparatorShown( false );
+    midiLoopSpin_->setToolTip( tr( "Length of the repeating segment; 0 = no loop" ) );
+    midiLoopLayout->addWidget( midiLoopSpin_, 1 );
+    midiClearLoopButton_ = new QPushButton( tr( "Clear loop" ), midiLoopRow );
+    midiLoopLayout->addWidget( midiClearLoopButton_ );
+    midiForm->addRow( tr( "Loop (frames):" ), midiLoopRow );
+
     formLayout->addWidget( midiGroup_ );
     formLayout->addStretch( 1 );
 
@@ -384,6 +400,9 @@ void SClipPropertiesPanel::buildUi()
     wireSpin( midiDurationSpin_, &SClipPropertiesPanel::commitMidiDuration );
     wireSpin( transposeSpin_,    &SClipPropertiesPanel::commitMidiCut );
     wireSpin( midiChannelSpin_,  &SClipPropertiesPanel::commitMidiCut );
+    wireSpin( midiLoopSpin_,     &SClipPropertiesPanel::commitMidiLoopLength );
+    connect( midiClearLoopButton_, &QPushButton::clicked,
+             this, &SClipPropertiesPanel::onClearMidiLoop );
     connect( velScaleSpin_, &QDoubleSpinBox::textChanged,
              this, [this]{ markEdited( velScaleSpin_ ); } );
     connect( velScaleSpin_, &QDoubleSpinBox::editingFinished,
@@ -986,9 +1005,10 @@ void SClipPropertiesPanel::refreshMidi( const QList<MidiClipRef> &clips )
     const bool single = ( clips.size() == 1 );
 
     QStringList names;
-    QList<qint64> starts, durations, transposes, channels;
+    QList<qint64> starts, durations, transposes, channels, loops;
     QList<double> velScales;
     bool allBeats = true, allTime = true;
+    bool anyLoop = false;
     for( const MidiClipRef &c : clips ) {
         names      << c.cut->getSName();
         starts     << (qint64) c.link->getStartTime();
@@ -996,6 +1016,8 @@ void SClipPropertiesPanel::refreshMidi( const QList<MidiClipRef> &clips )
         transposes << (qint64) c.cut->getTranspose();
         channels   << (qint64) c.cut->getChannelOverride();
         velScales  << c.cut->getVelocityScale();
+        loops      << (qint64) c.cut->loopLength();
+        if( c.cut->loopLength() > 0 ) anyLoop = true;
         if( c.link->getTimebase() == SLink::Timebase::Beats ) allTime = false;
         else                                                  allBeats = false;
     }
@@ -1011,6 +1033,8 @@ void SClipPropertiesPanel::refreshMidi( const QList<MidiClipRef> &clips )
     showValues( transposeSpin_,    transposes );
     showValues( midiChannelSpin_,  channels );
     showValues( velScaleSpin_,     velScales );
+    showValues( midiLoopSpin_,     loops );
+    midiClearLoopButton_->setEnabled( anyLoop );
 
     {
         QSignalBlocker block( timebaseCombo_ );
@@ -1107,6 +1131,48 @@ void SClipPropertiesPanel::commitTimebase( int index )
             ( c.link->getTimebase() == SLink::Timebase::Beats ) ? "beats" : "time";
         if( have == want ) continue;
         composite->append( new SSetLinkTimebaseAction( c.path, want ) );
+    }
+    submitComposite( composite );
+}
+
+// fix/loop-behaviour (issue b): the MIDI page's own loop field. Same verb as
+// the audio page's commitLoopLength()/onClearLoop() (resize-clip, carrying
+// the whole window through SClipWindow) -- SMidiCut has no direct
+// setLoopLength of its own, exactly as SCut's window edits are all
+// resize-clip too; only the getters this reads (contentAnchorExact(),
+// loopLength(), stretchOrRate()) are window-generic rather than SCut-only.
+void SClipPropertiesPanel::commitMidiLoopLength()
+{
+    if( updating_ ) return;
+    if( !consumeEdited( midiLoopSpin_ ) ) return;
+    if( midiLoopSpin_->text().trimmed().isEmpty() ) return;
+
+    const qint64 loop = midiLoopSpin_->value();
+
+    SCompositeAction *composite = new SCompositeAction;
+    for( const MidiClipRef &c : collectMidiClips() ) {
+        if( loop == (qint64) c.cut->loopLength() ) continue;
+        composite->append( new SResizeClipAction(
+            c.path, c.link->getStartTime(), c.cut->contentAnchorExact(),
+            (length_t) c.cut->getDuration(), (length_t) loop,
+            c.cut->stretchOrRate() ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::onClearMidiLoop()
+{
+    if( updating_ ) return;
+
+    // Same rule as the audio page's Clear loop: the clip KEEPS its duration
+    // and simply stops repeating past the first pass.
+    SCompositeAction *composite = new SCompositeAction;
+    for( const MidiClipRef &c : collectMidiClips() ) {
+        if( c.cut->loopLength() == 0 ) continue;
+        composite->append( new SResizeClipAction(
+            c.path, c.link->getStartTime(), c.cut->contentAnchorExact(),
+            (length_t) c.cut->getDuration(), 0,
+            c.cut->stretchOrRate() ) );
     }
     submitComposite( composite );
 }
