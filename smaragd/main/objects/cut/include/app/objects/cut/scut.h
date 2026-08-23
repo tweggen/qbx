@@ -712,6 +712,24 @@ public:
     }
 
 private:
+    // CAPTURE GENERATION — the guard that makes invalidateCapture() WIN a race
+    // it used to lose. buildCapture_ can take tens of milliseconds and runs on
+    // a revalidator worker holding only captureBuildMutex_, which deliberately
+    // does NOT exclude invalidateCapture() (that resets under mutex()). So an
+    // invalidation landing mid-build was simply overwritten by the build's own
+    // publish a moment later, and the stale capture then read as fresh.
+    //
+    // MEASURED, on the wrapped take column: a worker entered buildCapture_ and
+    // resolved the stack at take 0; `select-take` set take 1 and invalidated in
+    // the same millisecond; the worker published its take-0 capture 2 ms later;
+    // the next render served it. The click "worked" and the audio did not move.
+    //
+    // buildCapture_ samples this ONCE before it reads any content and publishes
+    // only if it has not moved. A discarded build costs one rebuild, which the
+    // very next ensureReader() does anyway (capture_ is null and readerTried_
+    // is false); publishing it costs correctness.
+    std::atomic<uint64_t> captureGen_{ 0 };
+
     // Set (never cleared) when buildCapture_ publishes a capture; gates
     // onArrangementChanged(). Atomic: written on the reval worker.
     std::atomic<bool> everHadCapture_{false};

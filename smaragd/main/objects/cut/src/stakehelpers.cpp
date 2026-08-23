@@ -7,6 +7,25 @@
 
 namespace stakes {
 
+STakeStack *columnOfLink( SLink *lk )
+{
+    if( !lk ) return nullptr;
+    SObject &obj = lk->getSObject();
+    if( STakeStack *stack = dynamic_cast<STakeStack *>( &obj ) ) return stack;
+    if( SClipWindow *win = SClipWindow::of( &obj ) )
+        return dynamic_cast<STakeStack *>( &win->windowContent() );
+    return nullptr;
+}
+
+void publishColumnChange( SLink *link, STakeStack *column )
+{
+    if( !link || !column ) return;
+    SObject &obj = link->getSObject();
+    if( &obj == (SObject *) column ) return;     // DIRECT: the track is wired
+    if( SClipWindow *win = SClipWindow::of( &obj ) )
+        win->setDurationFromTimeline( win->durationBlocking() );
+}
+
 SLink *wrapCutLinkIntoStack( SProject *project, SObject *lane,
                              SLink *cutLink )
 {

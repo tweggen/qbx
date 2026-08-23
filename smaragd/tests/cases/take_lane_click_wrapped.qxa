@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CLICKING A TAKE LANE MUST COMP THAT TAKE ON A **WRAPPED** COLUMN — and the
+  new take must be HEARD, not merely highlighted.
+
+  THE SHAPE. A take column reaches a track two ways: DIRECT
+  (`SLink -> STakeStack`, what add-take builds) and WRAPPED
+  (`SLink -> SCut -> STakeStack`, what a SHARED or PLACED column is). Only the
+  direct one had a gate — take_lane_click_split.qxa. A real saved project
+  carries the wrapped one, and on it the comping gesture did NOTHING AT ALL.
+
+  THREE DEFECTS, all on this one gesture, each found only because the one
+  before it was fixed:
+
+    1. `SSelectTakeAction::apply` resolved its stack with a bare
+       `dynamic_cast<STakeStack*>( &link->getSObject() )`, true only of the
+       DIRECT shape. On the wrapped shape the link's object is the WRAPPER, so
+       the action was REFUSED and the click did nothing. (The take-lane UI has
+       always unwrapped — SMVActualView's takeStackOfLink — so the gesture the
+       UI could express was one the action would not accept.)
+    2. With that fixed the model changed and the AUDIO did not.
+       `STakeStack::setActiveTake` publishes through `durationChanged`, which
+       on the direct shape the TRACK is connected to (`twTrackMix::updateClip`
+       -> a content-epoch bump and a state-chain reset, plus the range
+       invalidation). On the wrapped shape the link's object is the WINDOW,
+       and a window does not listen to its content's `durationChanged`: that
+       emission had NO listener. `stakes::publishColumnChange` republishes the
+       window's own unchanged duration, which is exactly what the track's slot
+       needs. Dropping the wrapper's capture and staling its render path were
+       BOTH tried and are NOT substitutes — measured.
+    3. A RACE, and it is why this case renders BEFORE the click as well as
+       after. `SCut::buildCapture_` runs on a revalidator worker holding only
+       `captureBuildMutex_`, which deliberately does not exclude
+       `invalidateCapture()`. Measured: a worker entered the build and
+       resolved the stack at take 0; the click set take 1 and invalidated in
+       the SAME millisecond; the worker published its take-0 capture 2 ms
+       later, over the invalidation; the next render served it. `captureGen_`
+       makes the invalidation win. A case that only renders AFTER the click
+       cannot see this — the capture would be cold and correct.
+
+  THE FIXTURE IS A CLOSED FORM. takestack_wrap_takeslip.qxp puts a 2 s wrapper
+  window 2 s into the stack (`srcStart='96000'`) over test_gapsaw.wav — a
+  0.1 -> 0.8 amplitude ramp with EXACT-ZERO regions at [0.6,0.9) and
+  [2.5,3.0) s. take 0 is slipped half a second in (`srcStart='24000'`), take 1
+  is not. A sawtooth of amplitude A has RMS A/sqrt(3), so each half-second
+  window is arithmetic, not a measurement:
+
+      take 0 (active on load) -> source [2.5,4.5) -> 0 / 0.38638 / 0.43686 / 0
+      take 1 (clicked here)   -> source [2.0,4.0) -> 0.28544 / 0 / 0.38638 / 0.43686
+
+  The two disagree in EVERY window, and the first two swap outright, so no
+  window can pass by accident.
+
+  ROWS. `set-lane-view toggleTakesRow="0"` expands track1's take lanes:
+  row 0 = track1's composite lane, row 1 = take 0's lane, row 2 = take 1's
+  lane, row 3 = the sentinel track2. The click is `drag-clip-edge` with
+  `toTime` AT the clip's own body midpoint (48000 = 1 s of a 2 s clip at 0),
+  i.e. zero pixel movement — a press and release at one point, which is what
+  take_lane_click_split.qxa uses too.
+-->
+<SActionScript version="1" name="take_lane_click_wrapped">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_takeslip.qxp"/>
+
+    <!-- BEFORE: take 0 is active on load. This render is not decoration —
+         it is what makes defect 3 above reachable (it warms the capture and
+         starts the revalidator traffic the click then has to beat). -->
+    <render filename="tlcw_before.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="tlcw_before.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="tlcw_before.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+    <assert-audio-energy filename="tlcw_before.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.430" maxRms="0.443"/>
+    <assert-audio-energy filename="tlcw_before.wav"
+                         startFrame="72000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- THE GESTURE: a plain left click on TAKE 1's lane row. Before defect 1
+         was fixed the nested SSelectTakeAction was REJECTED, and the runner
+         (which counts the global rejection counter) fails the enclosing
+         drag-clip-edge outright — so this line alone is the defect-1 gate. -->
+    <drag-clip-edge track="2" clip="0" edge="body" toTime="48000"/>
+
+    <!-- AFTER: take 1's window, in the SAME process, over pages and a capture
+         that are all still resident. Every window differs from the four
+         above; windows 1 and 2 swap loud for silent. -->
+    <render filename="tlcw_after.wav" format="wav" quality="10"
+            durationSec="2.0"/>
+    <assert-audio-energy filename="tlcw_after.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.280" maxRms="0.291"/>
+    <assert-audio-energy filename="tlcw_after.wav"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="tlcw_after.wav"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.380" maxRms="0.392"/>
+    <assert-audio-energy filename="tlcw_after.wav"
+                         startFrame="72000" frameCount="24000"
+                         minRms="0.430" maxRms="0.443"/>
+
+    <!-- The click comps the column; it does not MOVE or RESIZE it. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        startOffset="96000"/>
+  </actions>
+
+</SActionScript>

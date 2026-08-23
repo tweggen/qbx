@@ -7,6 +7,7 @@
 #include "app/model/sclipwindow.h"
 #include "app/objects/cut/scut.h"          // warp anchors only (audio-specific)
 #include "app/objects/cut/stakestack.h"
+#include "app/objects/cut/stakehelpers.h"
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
 #include "tw/core/twfraction.h"
@@ -42,8 +43,7 @@ SApplyResult SResizeClipAction::apply( SProject *project )
             if( t < 0 ) {
                 SObject *mixer = splacements::rootNamed( project, pathRoot_ );
                 if( SLink *anchor = splacements::placementAt( mixer, clipPath_ ) ) {
-                    if( STakeStack *stack = dynamic_cast<STakeStack*>(
-                            &anchor->getSObject() ) )
+                    if( STakeStack *stack = stakes::columnOfLink( anchor ) )
                         t = stack->activeTakeIndex();
                 }
             }
@@ -68,36 +68,84 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     if( !link ) {
         return {false, nullptr};
     }
-    // Take stack: length/loop/stretch write through to every take; the slip
-    // targets one take (take_, -1 = active). Decision 3's group sync happens
-    // one level up (broadcast layer, phase 4) — this action stays single-clip.
-    if( STakeStack *stack = dynamic_cast<STakeStack*>( &link->getSObject() ) ) {
-        int t = ( take_ >= 0 ) ? take_ : stack->activeTakeIndex();
-        SClipWindow *takeWin = stack->takeAt( t );  // may be null (no active take)
+    // THE TAKE COLUMN, AND WHICH SHAPE IT IS.
+    //
+    //   DIRECT   SLink -> STakeStack          -- the link's object IS the column
+    //   WRAPPED  SLink -> SCut -> STakeStack  -- a SHARED or PLACED column
+    //
+    // The DISCRIMINATOR BELOW IS `take_ >= 0`, NOT THE SHAPE, and that is
+    // load-bearing: a composite-lane resize or slip of a WRAPPED column
+    // (take_ < 0) edits the WRAPPER and must keep doing exactly that, so the
+    // wrapped column is resolved here only for an edit that names a take.
+    // On the direct shape nothing changes at all -- `take_ < 0` still lands in
+    // the stack branch through `directStack`.
+    STakeStack *directStack = dynamic_cast<STakeStack*>( &link->getSObject() );
+    STakeStack *column = directStack ? directStack
+                       : ( take_ >= 0 ? stakes::columnOfLink( link ) : nullptr );
+    if( column ) {
+        int t = ( take_ >= 0 ) ? take_ : column->activeTakeIndex();
+        SClipWindow *takeWin = column->takeAt( t );  // may be null (no active take)
         // Warp anchors are audio-only (cut/CONTRACT invariant 4), so this is
         // the one place the take's concrete type still matters.
         SCut *takeCut = takeWin ? dynamic_cast<SCut*>( &takeWin->asObject() )
                                 : nullptr;
+        // The window the PLACEMENT's geometry belongs to: the wrapper on the
+        // wrapped shape, and NOTHING on the direct one -- `STakeStack` is an
+        // `SObject`, never an `SClipWindow`, so `SClipWindow::of` is null
+        // there and the stack's own write-through is used instead.
+        SClipWindow *wrapWin = directStack ? nullptr
+                                           : SClipWindow::of( &link->getSObject() );
 
         offset_t oldStart  = link->getStartTime();
         Fraction oldAnchor = takeWin ? takeWin->contentAnchorExact() : Fraction(0);
         // Blocking (P19): a stale oldDur would bake a wrong window into the
-        // inverse action (edit path, bounded block).
-        length_t oldDur    = stack->getDurationBlocking();
-        length_t oldLoop   = takeWin ? takeWin->loopLength() : 0;
-        Fraction oldStretch = takeWin ? takeWin->stretchOrRate() : Fraction(1);
+        // inverse action (edit path, bounded block). Read from the object the
+        // geometry will be WRITTEN to, so the inverse restores what it changed.
+        length_t oldDur     = wrapWin ? wrapWin->durationBlocking()
+                                      : column->getDurationBlocking();
+        length_t oldLoop    = wrapWin ? wrapWin->loopLength()
+                                      : ( takeWin ? takeWin->loopLength() : 0 );
+        Fraction oldStretch = wrapWin ? wrapWin->stretchOrRate()
+                                      : ( takeWin ? takeWin->stretchOrRate()
+                                                  : Fraction(1) );
 
         std::vector<twWarpAnchor> oldAnchors =
             takeCut ? takeCut->getGrainParams().warpAnchors
                     : std::vector<twWarpAnchor>();
 
         link->setStartTime( startTime_ );
-        stack->applyWindowAll( duration_, loopLength_, stretch_ );
-        if( takeWin ) {
-            takeWin->setWindowExact( srcStart_, duration_, loopLength_,
-                                     stretch_ );
-            if( setAnchors_ && takeCut ) takeCut->setWarpAnchors( anchors_ );
+        if( wrapWin ) {
+            // WRAPPED: the placement's geometry is the WRAPPER's window and the
+            // takes keep their own -- a wrapper is a WINDOW INTO the column, so
+            // its duration and the takes' are legitimately different numbers.
+            // Writing the wrapper's duration onto every take (what the stack's
+            // write-through does, and what this action used to do to the
+            // wrapper by falling through to the generic branch below) breaks
+            // stakestack.h invariant 1 in the other direction and was measured
+            // making a 2 s clip 4 s long on one Alt-drag.
+            wrapWin->setWindowExact( wrapWin->contentAnchorExact(), duration_,
+                                     loopLength_, stretch_ );
+            // ...and the ANCHOR is the addressed TAKE's, in the take's own
+            // geometry. A take-lane slip changes exactly this one number.
+            if( takeWin )
+                takeWin->setWindowExact( srcStart_, takeWin->durationBlocking(),
+                                         takeWin->loopLength(),
+                                         takeWin->stretchOrRate() );
+        } else {
+            // DIRECT: unchanged. Length/loop/stretch write through to every
+            // take (invariant 1); the slip targets one take.
+            column->applyWindowAll( duration_, loopLength_, stretch_ );
+            if( takeWin )
+                takeWin->setWindowExact( srcStart_, duration_, loopLength_,
+                                         stretch_ );
         }
+        if( setAnchors_ && takeCut ) takeCut->setWarpAnchors( anchors_ );
+        // NO publishColumnChange() here, deliberately: both branches above
+        // already went through a PUBLISHING setter on the object the link
+        // carries (`applyWindowAll` on the stack, `setWindowExact` on the
+        // wrapper), and each of those emits the `durationChanged` the track's
+        // slot needs. `select-take` needs the explicit call because it writes
+        // no window at all.
 
         SResizeClipAction *inverse = new SResizeClipAction(
             clipPath_, oldStart, oldAnchor, oldDur, oldLoop, oldStretch,

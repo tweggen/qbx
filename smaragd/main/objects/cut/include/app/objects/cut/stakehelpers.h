@@ -4,6 +4,7 @@
 class SProject;
 class SObject;
 class SLink;
+class STakeStack;
 
 /**
  * Tree canonicalization for take stacks (proposal 17, invariant 3): a stack
@@ -16,6 +17,57 @@ class SLink;
  * the old link is deleted, so the refcount never touches zero.
  */
 namespace stakes {
+
+/**
+ * THE take column a placement carries — on BOTH shapes.
+ *
+ * A take column reaches a lane two ways, and the difference is not cosmetic:
+ *
+ *   DIRECT    SLink -> STakeStack                (what add-take builds)
+ *   WRAPPED   SLink -> SCut/SMidiCut -> STakeStack
+ *
+ * The wrapped one is what a SHARED or PLACED column is (each placement its
+ * own window into one stack), and a real saved project carries it. Every
+ * take-lane consumer must resolve BOTH or it silently serves one shape only:
+ * the take-lane UI already unwrapped (SMVActualView's takeStackOfLink, which
+ * now calls this), while `select-take` and the take-addressed half of
+ * `resize-clip` did not — so a click on a take lane was REFUSED and a
+ * take-lane slip wrote the TAKE's window onto the WRAPPER. One question
+ * therefore gets one spelling, here, where both sides can reach it.
+ *
+ * It unwraps exactly ONE window level, through the generic `SClipWindow`
+ * interface rather than through `SCut`: a stack is homogeneous by
+ * contentKind, so an EVENT column wrapped by an `SMidiCut` is the same
+ * question and deserves the same answer.
+ *
+ * Null when this placement is not a take column at all.
+ */
+STakeStack *columnOfLink( SLink *lk );
+
+/**
+ * PUBLISH a change of a take column's CONTENT IDENTITY through its placement.
+ *
+ * A take switch, or a slip of one take, changes which material the column
+ * produces WITHOUT touching the placement's timeline extent. On the DIRECT
+ * shape the track is connected to the stack's own `durationChanged` and does
+ * the rest (`twTrackMix::updateClip` -- a content-epoch bump and a state-chain
+ * reset -- plus the range invalidation). On the WRAPPED shape the link's
+ * object is the WINDOW, and a window does not listen to its content's
+ * `durationChanged`: that emission has NO listener at all, so the frozen
+ * track / chain / mixer pages keep serving the old material and the edit is
+ * INAUDIBLE. Measured, on `select-take` over a wrapped column: the take-lane
+ * highlight flipped and the next render was byte-identical.
+ *
+ * So on the wrapped shape the WINDOW republishes its own, unchanged duration.
+ * That is not a no-op and not a trick: `setDurationFromTimeline` has no
+ * unchanged-value early-out, and what the track's slot then does is exactly
+ * what the direct shape already gets. Dropping the wrapper's capture and
+ * staling its render path are NOT substitutes -- measured, with both of those
+ * and no republish the next render still served the old take.
+ *
+ * A no-op on the direct shape, where the track is already wired.
+ */
+void publishColumnChange( SLink *link, STakeStack *column );
 
 /**
  * Wrap a plain-cut placement into a single-take stack (take 0 = the cut,

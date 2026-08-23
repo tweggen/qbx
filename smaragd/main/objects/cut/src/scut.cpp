@@ -379,6 +379,9 @@ void SCut::buildCapture_()
         // thread and captureBuildMutex_ (held here) does not exclude it.
         return;  // Already built
     }
+    // Sampled BEFORE any content is read (see captureGen_): an invalidation
+    // that lands from here on must not be overwritten by this build's publish.
+    const uint64_t genAtEntry = captureGen_.load();
 
     SObject &c = content_->getSObject();
     uint64_t pendingCaptureEpoch = 0;   // see captureContentEpoch_
@@ -654,6 +657,14 @@ void SCut::buildCapture_()
         auto newCapture = std::make_shared<twCapturingSource>(
             std::move( buf ), captureLen, captureChannels, env.getSRate() );
         std::lock_guard<std::mutex> lock( mutex() );
+        if( captureGen_.load() != genAtEntry ) {
+            // An invalidateCapture() landed while this build was reading the
+            // content: what we just rendered describes a model that no longer
+            // exists. DROP it -- ensureReader()/the revalidator rebuild from
+            // the current one, and publishing here would reinstate the stale
+            // capture that invalidation existed to remove.
+            return;
+        }
         capture_ = newCapture;
         captureContentEpoch_.store( pendingCaptureEpoch );
     }
@@ -667,6 +678,7 @@ void SCut::invalidateCapture()
     // Drop the cached render (async model).
     // Use reset() not delete: the shared_ptr releases SCut's reference, but readers
     // (audio thread) may still hold references via currentPage().
+    captureGen_.fetch_add( 1 );   // see captureGen_: beat an in-flight build
     {
         std::lock_guard<std::mutex> lock(mutex());
         currentPage_.reset();
