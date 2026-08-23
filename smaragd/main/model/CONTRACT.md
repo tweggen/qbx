@@ -491,3 +491,42 @@ scripted load in one .qxa is counted against the first load's files as well. The
 GUI never sees it (`SMainWindow::openProjectFile` builds a fresh `SProject` per
 open). It is why the two collect cases are separate case FILES rather than two
 phases of one.
+
+## The generic take seam is TOTAL, and it answers a different question from
+## `SClipWindow::parametersOf()`
+
+`SObject`'s take-column seam (`windowTakeAt` / `windowTakeCount` /
+`activeWindowTakeIndex` / `insertWindowTake` / `removeWindowTake` /
+`setActiveWindowTake`) exists so a verb can address a take without naming
+`STakeStack`. Until proposal 42 M2 only `STakeStack` implemented it, so on the
+WRAPPED shape (`SLink -> SCut/SMidiCut -> STakeStack`) every consumer got
+`SObject`'s base answer — 0 / null / nothing — and silently addressed the
+WRAPPER. `SCut` and `SMidiCut` now FORWARD all six one level into a take-column
+content: a window over a column is a placement of that column and answers for
+it.
+
+**Two questions, two spellings, and they differ exactly on a wrapped column:**
+
+| you want | ask |
+|---|---|
+| take k of this placement's column (k < 0 = the audible one) | `SObject::windowTakeAt( k )` |
+| the window whose PARAMETERS this placement carries | `SClipWindow::parametersOf( obj )` |
+
+`parametersOf` is the placement's own window when it has one, and a direct
+column's ACTIVE TAKE when it does not. It is what a clip's slip, length, gain
+and volume live on — so `STrack::refreshClipGainCurves` and
+`SLaneFragment`'s twin use it, not the seam: a wrapped column's own clip gain
+is on the WRAPPER (that is what `set-clip-volume` edits there), and reading the
+take's instead would make the wrapper's inaudible.
+
+Three call sites deliberately do NOT take the forwarded answer:
+
+* `SMVActualView::tryOpenContainerClip` unwraps a DIRECTLY-PLACED column only —
+  its rule 2 is "the content is a take stack", which never fires if the wrapper
+  has already been unwrapped to its take;
+* `assert-clip-window` / `assert-clip-mix` use the seam only when a `take=` is
+  NAMED, and `parametersOf` otherwise — without that split, an assertion about
+  the clip silently became one about its active take.
+
+Gate: `take_seam_through_window.qxa`, over a fixture whose wrapper, take 0 and
+take 1 all carry DIFFERENT windows, so no assertion can pass by accident.

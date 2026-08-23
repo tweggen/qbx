@@ -127,7 +127,14 @@ void SLaneFragment::refreshClipGainCurves()
         if( obj->isLane() ) continue;           // never true for a fragment
                                                   // child, kept for parity
         if( obj->contentKind() == SContentKind::Event ) continue;  // M3
-        if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
+        // The window whose PARAMETERS this placement carries — the placement's
+        // own window when it has one, the active take when it does not. NOT
+        // `windowTakeAt(-1)`, which since proposal 42 M2 forwards through a
+        // window and would make a wrapped column's own clip gain and volume
+        // inaudible in favour of the take's (`set-clip-volume` on a wrapped
+        // column edits the WRAPPER, so the mix has to read the wrapper).
+        if( SClipWindow *w = SClipWindow::parametersOf( *obj ) )
+            obj = &w->asObject();
         cpTrackMix_->setClipGainCurve(
             lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
         cpTrackMix_->setClipGainScalar(

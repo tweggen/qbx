@@ -188,12 +188,8 @@ static ClipEditTarget clipEditTargetOf( SLink *lk )
     ClipEditTarget t;
     if( !lk ) return t;
     SObject &obj = lk->getSObject();
-    if( SClipWindow *w = SClipWindow::of( &obj ) ) {
-        t.win = w;                        // a WINDOW placement (a wrapper included)
-    } else if( STakeStack *col = stakes::columnOfLink( lk ) ) {
-        t.column = col;                   // a DIRECT column
-        t.win    = col->windowTakeAt( -1 );   // ...edited through its ACTIVE take
-    }
+    t.win = SClipWindow::parametersOf( obj );   // the rule, said once (M2)
+    if( !SClipWindow::of( &obj ) ) t.column = stakes::columnOfLink( lk );
     if( t.win ) t.cut = dynamic_cast<SCut *>( &t.win->asObject() );
     return t;
 }
@@ -3520,7 +3516,15 @@ bool SMVActualView::tryOpenContainerClip( SLink *link )
     // container cut sitting in a take column behaves exactly like the same
     // cut placed on its own.
     SObject *obj = raw;
-    if( SClipWindow *w = raw->windowTakeAt( -1 ) ) obj = &w->asObject();
+    if( !SClipWindow::of( raw ) ) {
+        // DIRECTLY-PLACED columns only — exactly what the comment above says.
+        // Since proposal 42 M2 the seam forwards through a window, so an
+        // unguarded `windowTakeAt(-1)` would unwrap a WRAPPED column to its
+        // take as well; `content` would then be the wave and rule 2 below
+        // ("the content is a take stack") would never fire, so double-clicking
+        // a wrapped column would stop revealing its take lanes.
+        if( SClipWindow *w = raw->windowTakeAt( -1 ) ) obj = &w->asObject();
+    }
 
     if( SCut *cut = dynamic_cast<SCut *>( obj ) ) {
         SObject &content = cut->getContent();

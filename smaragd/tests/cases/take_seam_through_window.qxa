@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE GENERIC TAKE SEAM REACHES A TAKE THROUGH A WINDOW OVER A COLUMN.
+
+  Proposal 42 M2. `SObject`'s take seam (`windowTakeAt` / `windowTakeCount` /
+  `activeWindowTakeIndex` / `insertWindowTake` / `removeWindowTake` /
+  `setActiveWindowTake`) exists so a verb can address a take without naming
+  `STakeStack`. It was NOT TOTAL: only `STakeStack` implemented it, so on the
+  WRAPPED shape (`SLink -> SCut/SMidiCut -> STakeStack`) every consumer that
+  reached a take through it got `SObject`'s base answer — 0 / null / nothing —
+  and silently addressed the WRAPPER instead.
+
+  The audit behind proposal 42 found that costing, all latent:
+
+    * every MIDI event verb (`add-note`, `set-events`, `quantize-notes`, ...)
+      REJECTED outright on a wrapped event column, because the wrapper's
+      `sequence()` is null over a stack;
+    * the event editor, the virtual keyboard and the clip-properties panel
+      bound an empty ref and showed nothing;
+    * a per-take `cut:Gain` / `cut:Transpose` automation lane landed on the
+      WRAPPER and was shared by every take;
+    * four testkit asserts silently IGNORED their `take=` attribute — which
+      means the suite could not have caught any of the above.
+
+  THIS CASE GATES THE LAST ONE, because it is the one that gates the rest.
+  `assert-clip-window take=k` over a wrapped column must read TAKE k. Before
+  M2 all three assertions below read the WRAPPER and two of them were simply
+  false.
+
+  THE FIXTURE IS THE POINT. takestack_wrap_takeslip.qxp is the wrapped shape
+  with THREE different windows in one clip, so nothing can pass by accident:
+
+      the WRAPPER   srcStart= 96000  cutDuration=96000   (2 s into the column)
+      take 0        srcStart= 24000  cutDuration=192000  (slipped half a second)
+      take 1        srcStart=     0  cutDuration=192000  (unslipped)
+
+  And `take=` ABSENT must still mean the placement's own window, not the
+  active take — the two questions are different on this shape and
+  `SClipWindow::parametersOf()` is the one that answers the second.
+-->
+<SActionScript version="1" name="take_seam_through_window">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_takeslip.qxp"/>
+
+    <!-- the placement is a WRAPPED column: a window over a stack of 2 -->
+    <assert-take-column clip="0,0" shape="wrapped" takes="2" activeTake="0"
+                        placements="1"/>
+
+    <!-- no take named: the PLACEMENT's own window (the wrapper) -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        startOffset="96000"/>
+
+    <!-- take 0 and take 1, THROUGH the wrapper. Before M2 both of these read
+         the wrapper's 96000/96000 and the case could not be written at all. -->
+    <assert-clip-window clip="0,0" take="0" duration="192000"
+                        startOffset="24000"/>
+    <assert-clip-window clip="0,0" take="1" duration="192000"
+                        startOffset="0"/>
+
+    <!-- the seam's WRITE half, through the same window: comping to take 1 and
+         back must move the column's active index, not the wrapper. -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" shape="wrapped" activeTake="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        startOffset="96000"/>
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" shape="wrapped" activeTake="0"/>
+  </actions>
+
+</SActionScript>

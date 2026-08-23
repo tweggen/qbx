@@ -134,6 +134,36 @@ public:
     // the CONTENT-domain anchor in TICKS, which is authoritative.
     SObject &asObject() override { return *this; }
     SObject &windowContent() const override { return getContent(); }
+
+    // --- the take-COLUMN seam, FORWARDED ONE LEVEL (proposal 42 M2) --------
+    //
+    // A window over a take column IS a placement of that column, so it answers
+    // the column questions on the column's behalf. Without this the seam was
+    // NOT TOTAL: `SObject`'s base returns 0 / null / nothing, so every consumer
+    // that reached a take through it silently got the WRAPPER instead — the
+    // MIDI event verbs (rejected outright, because the wrapper's `sequence()`
+    // is null over a stack), the event editor and virtual keyboard (bound an
+    // empty ref), the clip-properties panel (no take navigation), the
+    // automation `cut:` owner (a per-take envelope landed on the wrapper) and
+    // four testkit asserts (`take=` silently ignored).
+    //
+    // THE SEAM MEANS "TAKE k OF THIS PLACEMENT'S COLUMN". It does NOT mean
+    // "the window whose parameters this placement carries" — that question is
+    // `SClipWindow::parametersOf()`, and on a wrapped column the two give
+    // different answers on purpose.
+    SClipWindow *windowTakeAt( int index ) const override
+    { return windowContent().windowTakeAt( index ); }
+    int windowTakeCount() const override
+    { return windowContent().windowTakeCount(); }
+    int activeWindowTakeIndex() const override
+    { return windowContent().activeWindowTakeIndex(); }
+    SLink *insertWindowTake( SClipWindow &window, int atIndex ) override
+    { return windowContent().insertWindowTake( window, atIndex ); }
+    void removeWindowTake( int index ) override
+    { windowContent().removeWindowTake( index ); }
+    void setActiveWindowTake( int index ) override
+    { windowContent().setActiveWindowTake( index ); }
+
     length_t duration() const override { return getDuration(); }
     length_t durationBlocking() const override { return getDuration(); }
     length_t loopLength() const override;
