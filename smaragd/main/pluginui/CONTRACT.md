@@ -314,3 +314,61 @@ MECHANISM (at most one restart acted on per second of playback, and the guard
 seen declining the rest) and deliberately not the SYMPTOM: on a 4-second
 sawtooth through one arithmetic-only plugin the freeze outruns the loop and the
 playhead advances even with the guard disabled.
+
+## The native editor window is never parented to the FX strip (fixed 2026-08-23)
+
+`SPluginNativeEditor`'s own header comment already said the window must not be
+parented to `SPluginEffectStrip` — `STrackDetailPanel::rebuildUI()` deletes the
+strip on every track selection change (a lane click, a clip click, or an
+explicit track switch), which would take the window down as a Qt child — but
+the implementation contradicted it: the constructor did `QDialog( parent )`
+with `parentForPosition` passed straight through as the real Qt OWNERSHIP
+parent, and `SPluginEffectStrip::openParamEditor()` passes THE STRIP ITSELF.
+`SPluginNativeEditor::restoreOpenEditors()` passes `SMainWindow` instead, which
+is why a RESTORED editor never showed the bug and only an Edit-button-opened
+one did — that asymmetry is what gave the root cause away.
+
+**The fix**: the constructor now climbs to `parentForPosition->window()` — the
+durable TOP-LEVEL ancestor — before handing it to `QDialog`. A dock, a strip, a
+panel: whatever transient widget a caller has on hand, its `window()` is the
+long-lived `QMainWindow`, which is never deleted while the app runs.
+`parentForPosition->window()` on `SMainWindow` itself is `SMainWindow`
+(`window()` on a window is itself), and on `nullptr` is `nullptr` — both
+existing callers (`restoreOpenEditors`, the testkit's headless open) are
+unaffected. `parentForPosition`'s only remaining job is that one climb; it is
+not read for anything else — `attachPlugin()`'s D1 floating-rung transient
+parent already reads `parentWidget()->window()`, which now equals what the
+constructor computed.
+
+**A window that survives a strip rebuild also fixes the "will not reopen"
+report**, though this could only be verified by removing the abrupt teardown
+rather than proven by isolating the original failure: the FX strip being
+deleted destroyed the window as a Qt child WITHOUT running `closeEvent()`
+(a plain `delete`, not `close()`), so geometry was never saved and
+`slot_->setEditorOpen(false)` never ran — every subsequent Edit press then
+depended on the plugin backend surviving an unclean teardown to attach a second
+time, which is exactly the kind of thing a real plugin SDK is not guaranteed to
+tolerate. With the window never destroyed by a rebuild, there is nothing left
+to fail to recreate.
+
+**No transport guard exists and none should be added.** The only `isPlaying()`
+read in this module is the automation-recorder routing inside `applyEdit()`
+(`SApplication::app().isPlaying()`), which decides whether a knob move is
+captured as a Touch/Latch/Write point — it never gates whether `openFor()`
+opens a window.
+
+Gated: `qxa.plugin_native_editor_survives_strip` (new), which drives the exact
+FX-strip-parented open through the testkit's new `plugin-native-editor
+action="open-via-strip"` mode — build a throwaway `SPluginEffectStrip`, open
+through it (exactly `openParamEditor()`'s own call), then destroy the strip
+(exactly `rebuildUI()`'s `delete pluginStrip_`) — and asserts the editor is
+STILL open. Watched failing on the pre-fix binary: `expectOpen="1"` read
+`isOpenFor()==false`. **NOT gated, hand-verify only:** whether a REAL plugin's
+window visually stays anchored above the main window after the reparent (no
+display in a `--test-case` run); the reopen-after-abrupt-teardown failure mode
+itself, since it needs a real plugin GUI and is removed by construction rather
+than independently reproduced; raising a FLOATING (CLAP D1) editor on a second
+Edit press — the ABI (`twPluginEditor`) has no "bring to front" call for a
+window the plugin itself owns, so a floating editor's Edit press is a no-op by
+design, unchanged by this fix, and is a genuine gap rather than something this
+fix could close.

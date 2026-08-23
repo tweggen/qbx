@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_native_editor_survives_strip">
+
+  <!-- fix/editor-ui-and-shortcuts, issue (a): a native plugin editor window
+       used to close whenever the user clicked into the arrangement, and would
+       often refuse to reopen at all afterwards.
+
+       ROOT CAUSE: SPluginNativeEditor's constructor did `QDialog( parent )`
+       with `parentForPosition` passed straight through as the real Qt
+       ownership parent, and SPluginEffectStrip::openParamEditor() passes THE
+       STRIP ITSELF as that parent. STrackDetailPanel::rebuildUI() runs
+       `delete pluginStrip_` on every track selection change (a lane click, a
+       clip click, or an explicit track switch all route through
+       SStdMixer::setSelectedTrack), which took the editor down as a Qt CHILD
+       of the strip — exactly the failure the class's own header comment says
+       it exists to avoid. `restoreOpenEditors()` passes SMainWindow instead of
+       the strip, which is why a RESTORED editor never showed this bug and only
+       an Edit-button-opened one did.
+
+       This case reproduces it headlessly with the new `open-via-strip` verb
+       mode (spluginuitestactions.cpp): it opens through a THROWAWAY
+       SPluginEffectStrip — the exact call openParamEditor() makes — then
+       destroys that strip the way rebuildUI() destroys the real one. Watched
+       FAILING on the pre-fix binary: expectOpen="1" read isOpenFor()==false
+       (the window was gone), so the case failed at the very assertion this
+       header exists to gate. Fixed by climbing to parentForPosition->window()
+       — the durable top-level SMainWindow — before handing it to QDialog, so
+       any transient caller (a strip, a dock panel) is safe to pass; SMainWindow
+       itself and nullptr (the headless open path) both still work because
+       window() on a window is itself and window() on nullptr is nullptr.
+
+       The throwaway strip is parented to the REAL main window (found via
+       QApplication::topLevelWidgets(), exactly like sclicklaneaction.cpp's
+       own lookup), never to nullptr: production parents a strip under
+       STrackDetailPanel, ultimately under SMainWindow, so the fix's
+       `parentForPosition->window()` climb lands PAST the strip. A parentless
+       strip IS its own window() — a top-level widget's window() is itself —
+       so testing with nullptr would make the climb land right back on the
+       strip and silently test the PRE-fix shape even on the post-fix binary;
+       this was found by doing exactly that first and watching the case still
+       fail on the FIXED binary.
+
+       NOT gated here (see the PR body): that the SAME window instance survives
+       — only the registry entry does, which is everything a script can
+       observe without a real GUI event loop; the "does not reopen" half of the
+       report, which this fix removes by construction (the window is never
+       abruptly destroyed any more, so there is nothing left to fail to
+       recreate) but which had no isolated repro to gate on its own; and
+       whether a REAL plugin's window is still visually anchored above the main
+       window after the reparent (hand-verify only, no display in this run). -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gui"
+                   name="Smaragd Test GUI" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- Open through a throwaway strip, exactly as the FX strip's Edit button
+         does, then destroy that strip exactly as a track switch does. The
+         editor must survive: this IS the bug. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0"
+                          action="open-via-strip" expectOpen="1"/>
+
+    <!-- And it must still be reachable/open after a second such destroy — not
+         a one-shot survival. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0"
+                          action="open-via-strip" expectOpen="1"/>
+
+    <!-- Take the window down. An editor alive when its plugin is destroyed is
+         a contract violation the CLAP backend logs as an error. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

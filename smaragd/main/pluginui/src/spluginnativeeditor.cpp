@@ -80,7 +80,11 @@ audio::twEditorHandle handleOf( QWidget *w )
 
 SPluginNativeEditor::SPluginNativeEditor( STrack *track, SPluginSlot *slot,
                                           QWidget *parent )
-    : QDialog( parent ), track_( track ), slot_( slot )
+    // Climb to the durable TOP-LEVEL ancestor rather than owning through
+    // whatever transient widget the caller happened to pass (see the header:
+    // this is the fix for the window dying on every FX-strip rebuild). A
+    // window is its own window(); nullptr's window() is nullptr.
+    : QDialog( parent ? parent->window() : nullptr ), track_( track ), slot_( slot )
 {
     setAttribute( Qt::WA_DeleteOnClose );
     setWindowTitle( slot_ ? slot_->getDescriptor().name.c_str() : "Plugin" );

@@ -92,11 +92,21 @@ private:
 //   trackPath  = ""      index-path; empty = use trackIndex
 //   trackIndex = "0"
 //   slotIndex  = "0"
-//   action     = "open"  "open" | "close" | "assert" | "restore"
+//   action     = "open"  "open" | "open-via-strip" | "close" | "assert" |
+//                        "restore"
 //                        `assert` touches nothing and only checks expectOpen;
 //                        `restore` drives the D2 post-load walk, which is a
 //                        NO-OP under --test-case, so `expectOpen="0"` after it
 //                        is what asserts that guard held.
+//                        `open-via-strip` is the headless repro for the
+//                        2026-08-23 fix: it opens through a THROWAWAY
+//                        SPluginEffectStrip, exactly as
+//                        SPluginEffectStrip::openParamEditor() does, then
+//                        destroys that strip the way
+//                        STrackDetailPanel::rebuildUI() destroys the real one
+//                        on every track switch. `expectOpen="1"` afterwards is
+//                        the assertion that the editor's lifetime no longer
+//                        depends on the strip.
 //   expectOpen = "1"     what isOpenFor() must say afterwards
 class SPluginNativeEditorAction : public SAction {
 public:

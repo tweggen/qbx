@@ -14,6 +14,26 @@
 // clicks another lane. Tolerable for a slider list; for a synth's editor it
 // reads as a crash. Ownership therefore lives in the module-level registry
 // below, keyed by slot, and the windows are top-level.
+//
+// THAT LAST PARAGRAPH WAS ALSO THE BUG (found 2026-08-23): the constructor did
+// `QDialog( parent )` with `parentForPosition` passed straight through as the
+// real Qt ownership parent, and the FX strip's Edit handler passed the STRIP
+// ITSELF. So a window opened from the strip WAS parented to the strip after
+// all, and rebuildUI()'s `delete pluginStrip_` took it down as a Qt child —
+// exactly the failure mode this comment already described as unacceptable.
+// `restoreOpenEditors()` passed `SMainWindow` and its windows survived, which
+// was the asymmetry that gave the fix away.
+//
+// The constructor now climbs to `parentForPosition->window()` — the durable
+// TOP-LEVEL ancestor — before handing it to QDialog. A dock, a strip, a panel:
+// whatever transient widget a caller has on hand, its window() is the
+// long-lived QMainWindow, which is never deleted while the app runs. Passing
+// SMainWindow directly (restoreOpenEditors) or nullptr (the testkit's headless
+// open) both still work: window() on a window is itself, and window() on
+// nullptr is nullptr. `parentForPosition`'s only remaining job is that walk —
+// it is not read for anything else (attachPlugin()'s D1 floating-rung
+// transient parent reads parentWidget()->window(), which after this change
+// already equals what parentForPosition->window() computed at construction).
 
 #include <QDialog>
 #include <QHash>
