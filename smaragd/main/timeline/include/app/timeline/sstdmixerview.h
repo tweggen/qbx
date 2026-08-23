@@ -397,6 +397,13 @@ private:
     int lastClickLoopMarker_ = 0;
     // 1 = fade-in, 2 = fade-out, 0 = neither (proposal 43 N5 UI).
     int lastClickFadeHandle_ = 0;
+    // COMP SWIPE (proposal 43 N4): a plain horizontal DRAG along a take lane
+    // comps that region to that take. A plain CLICK keeps its old meaning --
+    // the whole column -- so nothing that worked before changes, and the
+    // gesture that was FREE is the one comping needed.
+    bool compSwipeArmed_ = false;
+    int  compSwipeTake_ = -1;
+    offset_t compSwipeFrom_ = 0;
     bool clipDragIsFade_ = false;
     int clipDragFadeWhich_ = 0;
     twClipFade clipFade0_;   // boundary index under the last press (0=none)

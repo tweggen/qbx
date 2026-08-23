@@ -1164,3 +1164,35 @@ The drag REVERTS its live shape before submitting one `set-clip-fade`, the same
 rule every other gesture here follows. Skip the revert and the action finds
 nothing to change: its undo step is a no-op and a redo double-applies. The gate
 watches that failing.
+
+### inv. 41 — A SWIPE ALONG A TAKE LANE COMPS THAT REGION; A CLICK COMPS THE COLUMN
+
+Proposal 43 N4. A plain horizontal DRAG along a take lane was the one gesture
+that surface still had free, and it is exactly Reaper's and Logic's quick-swipe
+comping. A plain CLICK keeps its old meaning — the whole column, through
+`select-take` — so nothing that worked before changes, which is what
+`takes_comping.qxa` and `take_lane_click_split.qxa` keep proving.
+
+The press ARMS and the RELEASE decides, because deciding at the press would
+mean knowing whether the pointer is about to move. A swipe writes TWO segments
+— this take from the swipe's start, and whatever sounded at the END restored
+just after it — inside ONE undo macro, so the comp changes only over the region
+the pointer covered and one undo takes the whole gesture back.
+
+**A COMP SWIPE OWNS THE GESTURE and mutates nothing live.** `mouseMoveEvent`
+returns immediately while one is armed. Without that guard the drag falls
+through to the final `else if( delta != 0 )` branch, which MOVES THE CLIP —
+and computes the new position from `getLastClickStartOffset()`, which a
+take-lane press never sets. Measured before the guard: the column's
+`startTime_` went from 0 to 4467570023102409344 between press and release, a
+different value on every run. `comp_swipe_ui.qxa` therefore asserts that the
+clip did NOT move, and that assertion is not decoration.
+
+**A take lane draws WHERE it is comped, not WHETHER it is active.** The paint
+walks the map's runs and frames or dims each one. With no map that reduces to
+the old two-branch paint on the whole clip, because `takeIndexAt()` folds the
+degenerate case in — so a project with no comp looks exactly as it did.
+
+NOT in N4: dragging a BOUNDARY or a crossfade handle with the mouse. Both verbs
+exist (`move-comp-boundary`, `set-comp-xfade`) and a swipe over the adjacent
+region moves a boundary in practice, but neither has a grab handle yet.
