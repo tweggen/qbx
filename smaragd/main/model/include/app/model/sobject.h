@@ -607,6 +607,22 @@ public:
     int getEditGroup() const
         { return editGroup_; }
 
+    // THE CLIP COLOUR INDEX (see app/model/sclipcolors.h). -1 = AUTO, which
+    // resolves to the lane's position in the flattened lane order; >= 0 is a
+    // colour the user chose and is taken modulo the palette size.
+    //
+    // It sits on SObject rather than on STrack for the reason contentKind()
+    // and resolveEventClip() do: the serializer, a future picker action and
+    // the pixel gates must reach it without knowing which SObject slice owns
+    // the lane. Only a LANE has one today (nothing else is asked), and it is
+    // written to the file ONLY when it is not -1, so every project saved
+    // before the palette existed -- and every committed golden -- serializes
+    // byte-unchanged.
+    int colorIndex() const
+        { return colorIndex_; }
+    void setColorIndex( int i )
+        { colorIndex_ = ( i < 0 ) ? -1 : i; }
+
     // User properties.
     bool isSolo() const
         { return solo_; }
@@ -981,6 +997,7 @@ private:
     bool muted_;
     bool armed_;
     int editGroup_ = 0;   // 0 = ungrouped (proposal 17 phase 4)
+    int colorIndex_ = -1; // -1 = auto, by lane order (sclipcolors.h)
     double volume_;
     // Recording channel selection: bitmask of channels (bit 0 = ch 0, etc).
     // 0 means "all channels"; the default is the first input alone — see

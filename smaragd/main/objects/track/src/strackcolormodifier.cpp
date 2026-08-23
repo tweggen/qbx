@@ -65,3 +65,12 @@ QColor STrackColorModifier::apply(const QColor &baseColor) const
 
     return QColor(r, g, b);
 }
+
+STrackColorModifier STrackColorModifier::withScaledOffsets(float k) const
+{
+    STrackColorModifier out = *this;
+    out.offset_r = (int)(offset_r * k);
+    out.offset_g = (int)(offset_g * k);
+    out.offset_b = (int)(offset_b * k);
+    return out;
+}

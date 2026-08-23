@@ -45,6 +45,20 @@ struct STrackColorModifier {
      * Per-channel affine: C' = factor * C + offset, clamped to [0, 255].
      */
     QColor apply(const QColor &baseColor) const;
+
+    /**
+     * The same modifier with its OFFSETS scaled -- the factors untouched.
+     *
+     * An offset is an ABSOLUTE number of levels, so it only says what it was
+     * tuned to say against a base of a given brightness. The arranger lane
+     * halved (the clips carry the colour now, so the field under them has to be
+     * quiet), and at half brightness the mute offset of +25 made a MUTED lane
+     * come out LIGHTER than an unmuted one: measured #27313C against #142332.
+     * The HEAD did not halve -- its controls have to stay legible -- so it
+     * still wants the full offsets, which is why this is a scaling at the call
+     * site rather than smaller constants above.
+     */
+    STrackColorModifier withScaledOffsets(float k) const;
 };
 
 #endif

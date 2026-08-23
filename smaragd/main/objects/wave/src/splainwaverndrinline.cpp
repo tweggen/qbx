@@ -41,7 +41,10 @@ void SPlainWaveRendererInline::draw( SLink &lk, SRenderContext &ctx )
     QPainter &p = ctx.getPainter();
     QRect r = ctx.getVisibRect();
 
-    if( !drawObjectWaveform( getPlainWave(), lk, ctx, QColor( 240, 240, 10 ) ) ) {
+    // The waveform colour is THE TRACK'S (app/model/sclipcolors.h), handed
+    // down on the context by whoever filled the clip body. It was a fixed
+    // yellow, which said "audio sample" on every track in every project.
+    if( !drawObjectWaveform( getPlainWave(), lk, ctx, ctx.clipColors().wave ) ) {
         p.fillRect( r, QColor( 160, 128, 128 ) );
         p.setPen( QColor( 160, 30, 30 ) );
         p.drawText( r, Qt::AlignCenter, "No Preview" );

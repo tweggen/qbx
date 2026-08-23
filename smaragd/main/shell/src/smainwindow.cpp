@@ -38,6 +38,7 @@
 #include "app/shell/sviewtabs.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
+#include "app/model/sclipcolors.h"
 #include "app/model/sappcontext.h"
 #include "app/model/sexternfile.h"
 #include "app/media/smediadrop.h"
@@ -3101,6 +3102,23 @@ namespace {
 // Composite `c` under drawTakeLane's inactive-take dim, USING QT, rather than
 // reproducing its rounding here: the dim is p.fillRect(vr, QColor(0,0,0,130))
 // and the exact result is Qt's business, not ours.
+// THE CLIP BODY COLOUR OF ONE TRACK, from the very function the painter uses
+// (app/model/sclipcolors.h). Both classifiers below need it, and hardcoding it
+// -- which is what QColor(160,160,160) was -- is exactly the drift proposal 41
+// M7 fixed for the tag chip by giving paint and hit-test one geometry function.
+//
+// The UNSELECTED variant: neither verb knows which clip it is about to meet,
+// and a selected clip's brighter body is measured through
+// assert-lane-overlay's luminance bands rather than by exact identity.
+QColor sClipBodyOf( STrack *track )
+{
+    SProject *proj = SAppContext::get().getCurrentProject();
+    SObject *root = proj ? proj->getRootComponent() : nullptr;
+    const int idx = ( root && track )
+        ? sclipcolors::indexForLane( *root, *track ) : 0;
+    return sclipcolors::body( idx, false, track && track->isMuted() );
+}
+
 QRgb sTakeDim( QRgb c )
 {
     QImage one( 1, 1, QImage::Format_ARGB32_Premultiplied );
@@ -3181,14 +3199,27 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
             .arg( row ).arg( top ).arg( bandH )
             .arg( img.width() ).arg( img.height() );
 
-    const QRgb bodyLit  = QColor( 160, 160, 160 ).rgb() | 0xff000000u;
+    // THE CLIP BODY COLOUR IS THE TRACK'S (app/model/sclipcolors.h), read from
+    // the same function the renderer paints with -- as the lane fill below
+    // already was. It used to be a hardcoded QColor(160,160,160), which was
+    // true only while every clip in every project was one grey.
+    //
+    // A take lane never draws a SELECTED body (selection lives on the
+    // composite lane), so the two mounts ask for different variants: the
+    // composite lane's body follows the clip's own selection, and this verb
+    // does not know which clip it is about to meet -- so it takes the
+    // UNSELECTED variant and reports what it found. A gate that selects a clip
+    // and then measures its lane is asking a question this verb cannot answer;
+    // that is what assert-lane-overlay's luminance bands are for.
+    const QRgb bodyLit  =
+        sClipBodyOf( track ).rgb() | 0xff000000u;
     // The lane's own background: the take lanes' constant, or -- for the
     // composite lane -- whatever laneFillColor() derives for THIS track
     // (selection and every STrackColorModifier state), read from the same
     // function the renderer paints with rather than guessed at.
     const QRgb fillLit  = composite
         ? ( STrackRendererInline::laneFillColor( *track ).rgb() | 0xff000000u )
-        : ( QColor( 26, 38, 50 ).rgb() | 0xff000000u );
+        : ( QColor( 13, 19, 25 ).rgb() | 0xff000000u );
     const QRgb bodyDim  = sTakeDim( bodyLit );
     const QRgb fillDim  = sTakeDim( fillLit );
 
@@ -3340,7 +3371,9 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
 
     const QColor fill = STrackRendererInline::laneFillColor( *track );
     const int lumFill = sLuminance( fill.rgb() );
-    const int lumClip = sLuminance( QColor( 160, 160, 160 ).rgb() );
+    // The upper bound of the "overlay" band is the CLIP BODY, which is now the
+    // track's colour rather than one grey -- same function the painter uses.
+    const int lumClip = sLuminance( sClipBodyOf( track ).rgb() );
 
     // The PLAYHEAD crosses every lane, once, in exactly this colour, and its
     // luminance (129) happens to fall inside the overlay band - so it is

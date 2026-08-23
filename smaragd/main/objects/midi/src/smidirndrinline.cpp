@@ -13,8 +13,12 @@
 
 namespace {
 
-const QColor kNoteColor( 120, 220, 150 );
-const QColor kCcColor( 90, 140, 190 );
+// A NOTE IS DRAWN IN ITS TRACK'S COLOUR (app/model/sclipcolors.h), handed down
+// on the render context by whoever filled the clip body -- exactly as a
+// waveform is. These were fixed green and blue, so every event clip in every
+// project looked the same and an event clip on a track looked unrelated to the
+// audio clips beside it. kMetaColor stays a constant: a meta marker is not
+// content, it is an annotation.
 const QColor kMetaColor( 200, 190, 110 );
 
 /**
@@ -97,7 +101,7 @@ void paintSeq( QPainter &p, SRenderContext &ctx, const twEventSeq &seq,
             const int y = bottom - noteH
                         - (int) ( ( (double) ( e.key - lowKey ) / keySpan )
                                   * ( usable - noteH ) );
-            QColor c = kNoteColor;
+            QColor c = ctx.clipColors().wave;
             // Velocity as opacity: a soft note reads as a soft note.
             const int alpha = 90 + (int) ( 165.0 * std::min( 1.0, e.value / 127.0 ) );
             c.setAlpha( std::max( 60, std::min( 255, alpha ) ) );
@@ -106,7 +110,11 @@ void paintSeq( QPainter &p, SRenderContext &ctx, const twEventSeq &seq,
         }
         // Everything else (CC, bend, pressure): a faint tick low in the body.
         if( e.time < firstFrame || e.time >= lastFrame ) continue;
-        p.fillRect( QRect( xOf( e.time ), bottom - 2, 1, 2 ), kCcColor );
+        // A CC tick is content too, but subordinate to the notes: the same
+        // colour, taken down. (The old fixed blue is kept only as the colour a
+        // context with no palette set would produce something sensible from.)
+        p.fillRect( QRect( xOf( e.time ), bottom - 2, 1, 2 ),
+                    ctx.clipColors().wave.darker( 150 ) );
     }
     p.restore();
 }
@@ -217,7 +225,8 @@ void SMidiCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
 
     if( !c.getSName().isEmpty() ) {
         p.save();
-        p.setPen( QColor( 210, 230, 215 ) );
+        // The clip name, in the same content colour as the notes under it.
+        p.setPen( ctx.clipColors().wave );
         p.drawText( ctx.getVisibRect().adjusted( 3, 1, -3, -1 ),
                     Qt::AlignLeft | Qt::AlignTop, c.getSName() );
         p.restore();

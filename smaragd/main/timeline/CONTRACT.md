@@ -1196,3 +1196,39 @@ degenerate case in — so a project with no comp looks exactly as it did.
 NOT in N4: dragging a BOUNDARY or a crossfade handle with the mouse. Both verbs
 exist (`move-comp-boundary`, `set-comp-xfade`) and a swipe over the adjacent
 region moves a boundary in practice, but neither has a grab handle yet.
+
+## THE FIELD IS TONE, NOT LINES (2026-08-23)
+
+The arranger separates things by colour tone rather than by drawn rules. Three
+changes, one direction:
+
+**The grid's two roles are SWAPPED and both are half as bright.** The
+emphasized (bar/downbeat) line is the LIGHT one, `#505050`; every subdivision
+is `#303030` and recedes. The lane separator is the SUBDIVISION's colour — the
+two are the same kind of ruling and must read as the same weight; it used to be
+`#606060`, twice as loud as the thing it separates. The lane fill halved with
+them (`#284664` -> `#142332`, selected `#3C5A82` -> `#1E2D41`, the take lane
+`#1A2632` -> `#0D1319`).
+
+**THIS ENDED A COLLISION WORTH KNOWING ABOUT.** The subdivision line used to be
+drawn in EXACTLY the old clip-body grey `#A0A0A0`, so a grid line was a
+full-height column of "material" to every pixel classifier — which is why the
+paint gates have to `grid-disable` first and why `describeTakeLane` settles a
+pending repaint before grabbing (a stale grid line moved the measured clip span
+and every percentage derived from it). Nothing in the grid is a clip colour any
+more. The `grid-disable` calls are kept: they still remove chrome from a
+histogram, and removing them is a separate, gateable change.
+
+**A CLIP HAS NO BORDER, and selection is a TONE.** The white rect plus the
+black rect inside it are gone; a selected clip is drawn in the brighter variant
+of its track's anchor (`app/model/sclipcolors.h`) and nothing else changes. The
+clip is still inset one row top and bottom, so what separates two stacked lanes
+is the lane background showing through as a margin — not a line on the clip.
+
+**The state tint is applied to the lane with its OFFSETS HALVED**
+(`STrackColorModifier::withScaledOffsets`). An offset is an absolute number of
+levels tuned against the old, twice-as-bright lane: applied unscaled to the
+halved one it made a MUTED lane come out LIGHTER than an unmuted one (measured
+`#27313C` against `#142332`). The track HEAD did not halve — its controls have
+to stay legible — so it still takes the full offsets, which is why the scaling
+is at the call site rather than in the constants.

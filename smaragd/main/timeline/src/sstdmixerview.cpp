@@ -37,6 +37,7 @@
 #include "app/timeline/strackheaderresizer.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackrndrinline.h"
+#include "app/model/sclipcolors.h"
 #include "app/model/sobjectrenderer.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
@@ -558,7 +559,10 @@ void SMVActualView::paintEvent( QPaintEvent * )
         int lh = laneHeight( i );
         // All lanes start at x=0 (full width) — the hierarchy is shown by the
         // indented control strips, not the timeline, so editing keeps full width.
-        p.setPen( QColor( 96, 96, 96 ) );
+        // The lane separator is THE OFFBEAT GRID COLOUR: the two are the same
+        // kind of ruling and should read as the same weight. After the halving
+        // that is 48; it used to be 96, twice as loud as what it separates.
+        p.setPen( QColor( 48, 48, 48 ) );
         ctx.setVisibRect(
             QRect( 0, top+1, myRect.width(), lh-2 ) );
         p.drawLine( 0, top, myRect.bottomRight().x(), top );
@@ -578,7 +582,7 @@ void SMVActualView::paintEvent( QPaintEvent * )
             if( row->track && smv_.getModel()
                 && smv_.getModel()->isTrackSelected( row->track ) ) {
                 p.fillRect( QRect( 0, top+1, myRect.width(), lh-2 ),
-                            QColor( 30, 46, 66 ) );
+                            QColor( 15, 23, 33 ) );   // halved with the field
             }
             // Draw the track's clips.
             row->track->getInlineRenderer()->draw( *row->link, ctx );
@@ -639,7 +643,19 @@ void SMVActualView::paintEvent( QPaintEvent * )
             // Pick the pen per line: emphasized (bar) lines dark, the rest light.
             // (The old code only set the light pen *after* the first bar line, so
             // the first few lines were wrongly drawn in the bar colour.)
-            p.setPen( emph ? QColor( 96, 96, 96 ) : QColor( 160, 160, 160 ) );
+            // THE SWAP: the emphasized (bar) line is now the LIGHT one and every
+            // other line is dark. The downbeat is what the eye should find, and
+            // the subdivisions should recede into the background instead of
+            // ruling it into boxes. Both are then half the brightness they were,
+            // with the rest of the field.
+            //
+            // IT ALSO ENDS A COLLISION. The subdivision line used to be drawn in
+            // EXACTLY the old clip-body grey, so a grid line was a full-height
+            // column of "material" to every pixel gate -- which is why those
+            // cases have to `grid-disable` before they can measure anything, and
+            // why describeTakeLane settles a pending repaint first. Nothing in
+            // the grid is a clip colour any more.
+            p.setPen( emph ? QColor( 80, 80, 80 ) : QColor( 48, 48, 48 ) );
             p.drawLine( x, SMV_TIME_RULER_HEIGHT, x, lanesBottom() );
             a += tgs.getTimeGridWidth();
         }
@@ -2447,7 +2463,21 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
                                   int /*rowIdx*/, const QRect &laneRect )
 {
-    p.fillRect( laneRect, QColor( 26, 38, 50 ) );   // darker than track lanes
+    // Halved with the rest of the field; still darker than a track lane.
+    p.fillRect( laneRect, QColor( 13, 19, 25 ) );
+    // THE TRACK'S PALETTE ENTRY (app/model/sclipcolors.h), resolved once for
+    // the lane exactly as STrackRendererInline::draw does it for the composite
+    // lane above -- the two lanes MUST agree about what colour this track is,
+    // and they agree by calling one function rather than by both being grey.
+    int colorIndex = row.track->colorIndex();
+    if( colorIndex < 0 ) {
+        SProject *proj = SAppContext::get().getCurrentProject();
+        SObject *croot = proj ? proj->getRootComponent() : nullptr;
+        colorIndex = croot
+            ? sclipcolors::autoIndexForLane( *croot, *row.track ) : 0;
+    }
+    const bool laneMuted = row.track->isMuted();
+
     for( SLink *lk : row.track->childLinks() ) {
         STakeStack *stack = takeStackOfLink( lk );
         if( !stack ) continue;
@@ -2494,7 +2524,20 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         // ...and fill the body BY MATERIAL, exactly as the composite lane has
         // since proposal 41 D10 — the same helper, so the same grey means the
         // same thing on both. The take-lane fill shows through a gap.
-        const QColor bodyColor( 160, 160, 160 );
+        // The track's colour, in this clip's state. A take lane is never
+        // "selected" in its own right -- the composite lane carries selection --
+        // so only the muted variant applies here; the INACTIVE dimming below is
+        // a separate, additive black wash and works on any body colour.
+        const QColor bodyColor =
+            sclipcolors::body( colorIndex, false, laneMuted );
+        // ...and hand that pair down to the take's own renderer, so a take
+        // waveform is the same colour as the one on the composite lane above.
+        {
+            SClipColors cc;
+            cc.body = bodyColor;
+            cc.wave = sclipcolors::wave( colorIndex, false, laneMuted );
+            myctx.setClipColors( cc );
+        }
         const bool paintedByMaterial = rndr
             && fillBodyByMaterial( p, vr, bodyColor, myctx,
                    [&]( const SEnvelopeWindow &w, preview_t *o ) {
