@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  COMPING WITH THE MOUSE: A SWIPE ALONG A TAKE LANE COMPS THAT REGION.
+
+  Proposal 43 N4. N1-N3 built the map, made it audible and gave it crossfades;
+  a comp could be built from a script and not with the mouse. This is the
+  gesture.
+
+  A PLAIN DRAG ALONG A TAKE LANE WAS FREE, and it is exactly Reaper's and
+  Logic's quick-swipe comping. A plain CLICK keeps its old meaning — the WHOLE
+  column, via `select-take` — so nothing that worked before changes, which is
+  what `takes_comping.qxa` and `take_lane_click_split.qxa` keep proving. The
+  press ARMS and the RELEASE decides, because deciding at the press would mean
+  knowing whether the pointer is about to move.
+
+  THE SWIPE WRITES TWO SEGMENTS: this take from the swipe's start, and whatever
+  sounded at the END restored just after it, so the comp changes ONLY over the
+  region the pointer covered. One undo macro for one gesture.
+
+  A BUG THIS GATE CAUGHT, and the reason the "did not move" assertion below is
+  not decoration: without a guard in `mouseMoveEvent` the swipe fell through to
+  the final `else if( delta != 0 )` branch, which MOVES THE CLIP — and does it
+  from `getLastClickStartOffset()`, which a take-lane press never set.
+  Measured: the column's `startTime_` went from 0 to 4467570023102409344
+  between press and release. A swipe would have thrown the take column to a
+  garbage position on the timeline, differently on every run.
+
+  THE NUMBERS. test_gapsaw.wav is a 0.1 -> 0.8 ramp (RMS A/sqrt(3)) with
+  exact-zero regions at [0.6,0.9) and [2.5,3.0) s. Take A is unslipped, take B
+  is slipped one second, so B(t) = A(t+1). Over [2,3) s that is
+
+      take A  ->  source [2,3)  ->  0.20184
+      take B  ->  source [3,4)  ->  0.41239
+
+  a factor of two apart, which is what makes the swiped window unmistakable.
+-->
+<SActionScript version="1" name="comp_swipe_ui">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+    <select-take clip="0,0" take="0"/>
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- BEFORE: take A everywhere, and NO map (the degenerate case). -->
+    <assert-take-column clip="0,0" comp="" activeTake="0"/>
+    <render filename="csu_before.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="csu_before.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.2005" maxRms="0.2035"/>
+
+    <!-- THE SWIPE: take B's lane (row 2), from its body midpoint at 2 s to
+         3 s. row 0 = the composite lane, row 1 = take A, row 2 = take B. -->
+    <drag-clip-edge track="2" clip="0" edge="body" toTime="144000"/>
+
+    <!-- TWO segments, covering exactly the swiped region. -->
+    <assert-take-column clip="0,0" comp="96000:1;144000:0"/>
+    <assert-take-column clip="0,0" takeAtPos="95999" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="0"/>
+
+    <!-- THE CLIP DID NOT MOVE. See the header: without the guard this read a
+         garbage start time that differed on every run. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+
+    <!-- ...and the swiped second is take B's, twice the level take A had. -->
+    <render filename="csu_after.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="csu_after.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.4100" maxRms="0.4150"/>
+    <!-- outside the swipe, nothing moved -->
+    <assert-audio-energy filename="csu_after.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0840" maxRms="0.0857"/>
+    <assert-audio-energy filename="csu_after.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.2100" maxRms="0.2130"/>
+
+    <!-- ONE UNDO for one gesture (the two segments are one macro). -->
+    <undo/>
+    <assert-take-column clip="0,0" comp=""/>
+    <render filename="csu_undo.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="csu_undo.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.2005" maxRms="0.2035"/>
+  </actions>
+
+</SActionScript>

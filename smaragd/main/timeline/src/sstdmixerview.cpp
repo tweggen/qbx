@@ -45,6 +45,7 @@
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "app/objects/cut/ssetclipfadeaction.h"
+#include "app/objects/cut/scompmapactions.h"
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
@@ -2150,6 +2151,71 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         return;
     }
 
+    // FINALIZE A COMP SWIPE (proposal 43 N4). A drag along a take lane comps
+    // the region it covered TO THAT TAKE; a plain click (no movement) comps
+    // the WHOLE column, which is what a take-lane click has always meant.
+    if( compSwipeArmed_ ) {
+        compSwipeArmed_ = false;
+        const int take = compSwipeTake_;
+        compSwipeTake_ = -1;
+        STakeStack *stack = takeStackOfLink( lastClickSLink_ );
+        if( stack && lastClickTrack_ && lastClickSLink_ && take >= 0 ) {
+            QList<int> path =
+                strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+            path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+            const QString clipRef = strackpath::pathToString( path );
+
+            const QPoint delta = ev->pos() - lastClickPos_;
+            if( qAbs( delta.x() ) <= 4 ) {
+                // A CLICK: the whole column, exactly as before. `select-take`
+                // clears the map, which is what "this take everywhere" means
+                // (proposal 43 N1) -- and its inverse carries the map back.
+                stimeline::submitActive( new SSelectTakeAction( path, take ) );
+            } else {
+                // A SWIPE. Two segments: this take from the swipe's start, and
+                // whatever sounded at the END restored just after it, so the
+                // comp changes ONLY over the region the pointer covered.
+                const offset_t clipStart = lastClickSLink_->getStartTime();
+                offset_t a = compSwipeFrom_;
+                offset_t b = smv_.alignTime( getTimeOf( ev->pos().x() ) );
+                if( b < a ) std::swap( a, b );
+                const length_t dur = lastClickSLink_->getSObject().getDuration();
+                // Plain conditionals, NOT std::max/std::min: those return a
+                // REFERENCE, and with an explicit template argument any
+                // operand that needs a conversion binds to a temporary that
+                // dies at the end of the full expression. Measured here: `lo`
+                // read 96000 on one run and 4181882645476535168 on the next,
+                // from the same binary and the same input.
+                const offset_t clipEnd = clipStart + (offset_t) dur;
+                const offset_t lo = ( a > clipStart ) ? a : clipStart;
+                const offset_t hi = ( b < clipEnd )   ? b : clipEnd;
+                if( hi > lo ) {
+                    // COLUMN-relative: the map's domain is the column's own,
+                    // which is the take windows' domain and NOT the timeline's.
+                    const int64_t relA = (int64_t) ( lo - clipStart );
+                    const int64_t relB = (int64_t) ( hi - clipStart );
+                    const int after = stack->takeIndexAt( relB );
+                    QUndoStack *ustack =
+                        SApplication::app().actionHistory()->undoStack();
+                    // ONE undo step for one gesture.
+                    if( ustack ) ustack->beginMacro(
+                        QStringLiteral( "Comp take" ) );
+                    stimeline::submitActive(
+                        new SCompMapAction( SCompMapAction::Op::SetSegment,
+                                            clipRef, relA, take, 0, 0 ) );
+                    if( after >= 0 && after != take
+                        && relB < (int64_t) dur )
+                        stimeline::submitActive(
+                            new SCompMapAction( SCompMapAction::Op::SetSegment,
+                                                clipRef, relB, after, 0, 0 ) );
+                    if( ustack ) ustack->endMacro();
+                }
+            }
+            update();
+        }
+        return;
+    }
+
     // Finalize a FADE drag: revert the live shape, then re-apply it as ONE
     // undoable `set-clip-fade` (proposal 43 N5 UI). Same revert-then-act rule
     // every other gesture here follows -- skip the revert and the action finds
@@ -2432,11 +2498,42 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
 
         if( rndr )
             rndr->drawTake( *lk, myctx, row.takeRow );
-        if( active ) {
-            p.setPen( QColor( 240, 220, 80 ) );
-            p.drawRect( vr.adjusted( 0, 0, -1, -1 ) );
-        } else {
-            p.fillRect( vr, QColor( 0, 0, 0, 130 ) );   // dim inactive takes
+        // WHERE THIS TAKE IS COMPED, not just WHETHER it is active (proposal
+        // 43 N4). With no map that is the whole clip or none of it, exactly as
+        // before -- `takeIndexAt` folds the degenerate case in, so this loop
+        // reduces to the old two-branch paint on every project that has no
+        // comp. With a map it is per REGION, which is the only honest way to
+        // draw a lane whose take sounds in some places and not others.
+        const twCompMap &cmap = stack->compMap();
+        const offset_t clipEndPos = start + (offset_t) dur;
+        offset_t segPos = start;
+        while( segPos < clipEndPos ) {
+            // The run this take's state holds for: the next boundary, or the
+            // clip's end. Positions are COLUMN-relative for the map and
+            // TIMELINE for the paint, and `start` is the difference.
+            offset_t nextPos = clipEndPos;
+            for( const twCompSegment &cs : cmap.segments() ) {
+                const offset_t at = start + (offset_t) cs.at;
+                if( at > segPos ) { nextPos = std::min( nextPos, at ); break; }
+            }
+            const bool on =
+                ( stack->takeIndexAt( (int64_t) ( segPos - start ) )
+                  == row.takeRow );
+            int rx0 = getXPosOfOffset( segPos );
+            int rx1 = getXPosOfOffset( nextPos );
+            if( rx0 < vr.left() )  rx0 = vr.left();
+            if( rx1 > vr.right() + 1 ) rx1 = vr.right() + 1;
+            if( rx1 > rx0 ) {
+                QRect rr( rx0, vr.y(), rx1 - rx0, vr.height() );
+                if( on ) {
+                    p.setPen( QColor( 240, 220, 80 ) );
+                    p.drawRect( rr.adjusted( 0, 0, -1, -1 ) );
+                } else {
+                    p.fillRect( rr, QColor( 0, 0, 0, 130 ) );   // dim
+                }
+            }
+            if( nextPos <= segPos ) break;
+            segPos = nextPos;
         }
     }
 }
@@ -2984,6 +3081,15 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
     // Determine which action to take.
     if( ev->buttons() & Qt::LeftButton ) {        
         if( lastClickSLink_ ) {
+            // A COMP SWIPE OWNS THE GESTURE and mutates nothing live
+            // (proposal 43 N4). Without this the drag falls through to the
+            // final `else if( delta != 0 )` branch below, which MOVES THE
+            // CLIP -- and does it from `getLastClickStartOffset()`, which a
+            // take-lane press never set. Measured: the column's `startTime_`
+            // went from 0 to 4467570023102409344 between press and release,
+            // which is what a swipe would have done to a user's arrangement.
+            if( compSwipeArmed_ ) return;
+
             // ONE resolve for every gesture below (proposal 42 M1). `cut` is
             // null only for an EVENT window, which the branches guard on; it is
             // the placement's own `SCut` for an ordinary clip and for a wrapped
@@ -3905,12 +4011,13 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         update();
                         return;
                     }
-                    QList<int> path =
-                        strackpath::pathOf( smv_.getModel(), clickRow->track );
-                    path.append(
-                        clickRow->track->indexOfChild( lastClickSLink_ ) );
-                    stimeline::submitActive(
-                        new SSelectTakeAction( path, clickRow->takeRow ) );
+                    // ARM THE SWIPE and decide at the RELEASE. A plain click
+                    // still comps the WHOLE column (`select-take`, below); a
+                    // drag comps the region it covers. Deciding here would
+                    // need to know whether the pointer is going to move.
+                    compSwipeArmed_ = true;
+                    compSwipeTake_  = clickRow->takeRow;
+                    compSwipeFrom_  = lastClickOffset_;
                     update();
                 }
             }
