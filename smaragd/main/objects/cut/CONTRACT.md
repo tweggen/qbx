@@ -748,3 +748,47 @@ forms, asserted once through the wrapped shape and once through the migrated
 one, so a fold that moved the audio by a frame fails. Plus the refusal path
 over `tests/takestack_wrap_looping.qxp`, which is that fixture with
 `loopLength='48000'` on the wrapper and nothing else changed.
+
+## The COMP MAP: which take of a column sounds WHERE
+
+`twCompMap` (`tw/events/twcompmap.h`, beside `twAutomationCurve` and modelled
+on it) is a sorted list of segments in the COLUMN's own frame domain — which is
+NOT the placement's domain when a wrapper still windows the column, and
+proposal 42 M4 deliberately leaves some of those in place. A segment's take
+governs `[seg.at, next.at)`, the same left-point convention `twAutomationCurve`
+uses; `xfade` is the crossfade CENTRED on the segment's own left boundary, so
+it belongs to the BOUNDARY rather than to either take.
+
+**THE EMPTY MAP IS THE DEGENERATE CASE AND IT IS LOAD-BEARING.** An empty map
+means `activeTake_` everywhere. That is what makes every project written before
+proposal 43 — and every golden, and the whole of proposal 42's gate set —
+correct and unchanged: no map, no behaviour change, and `<comp>` is written
+only when non-empty (the `<automation>` rule). `STakeStack::takeIndexAt()` is
+THE one place the substitution is spelled, so no consumer has to remember it.
+
+`normalized()` sorts, drops negative positions, clears the first segment's
+crossfade, and REPLACES a segment at an existing position rather than keeping
+the earlier one. That last is a stable fold and not `std::unique` on purpose:
+`std::unique` keeps the FIRST of an equal run, which is exactly the bug
+proposal 37 P6 found in `SAutomationLane::setPoints` — an edit landing on an
+existing position silently DROPPED while the docs promised a replace. Clicking
+a boundary you already made is the commonest comping gesture there is.
+
+`setCompMap` publishes by the SAME route and in the same order as
+`setActiveTake` — mutation, then `durationChanged` — so the track's slot runs
+`updateClip` (a content-epoch bump and a state-chain reset) and the range
+invalidation. N1 has no consumer, so that publishes a change nothing hears yet;
+wiring it now is what means N2 adds a component and no plumbing.
+
+**`select-take` CLEARS the map**, because it means "this take for the WHOLE
+column", and its inverse carries the previous map back — one undo of a click
+must not silently destroy a comp. `SSelectTakeAction::setPreviousCompMap()` has
+exactly one caller and must keep exactly one, the same discipline
+`SSetPluginParamAction::setPreviousValue()` carries.
+
+Every comp verb's INVERSE is the WHOLE previous map. A per-segment inverse
+would have to name a segment, and a segment's only identity is its position —
+the very thing `move-comp-boundary` changes.
+
+Gate: `comp_map_model.qxa`, whose last assertion is that a render is UNCHANGED
+by the map — the one N2 will flip.

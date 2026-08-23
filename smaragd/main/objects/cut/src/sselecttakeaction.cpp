@@ -66,10 +66,18 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
     }
 
     const int oldActive = stack->activeTakeIndex();
+    const twCompMap oldMap = stack->compMap();
     stack->setActiveTake( takeIndex_ );
+    // `select-take` is "this take for the WHOLE column", so the comp map --
+    // which says which take sounds WHERE -- is cleared; the inverse below
+    // carries it back, or one undo of a click would destroy a comp silently.
+    // Restoring it is what `prevMap_` is for, and on the forward pass that is
+    // an empty map, i.e. the clear.
+    stack->setCompMap( prevMap_ );
     stakes::publishColumnChange( link, stack );
 
-    SAction *inverse = new SSelectTakeAction( clipPath_, oldActive );
+    SSelectTakeAction *inverse = new SSelectTakeAction( clipPath_, oldActive );
+    inverse->setPreviousCompMap( oldMap );
     return {true, inverse};
 }
 

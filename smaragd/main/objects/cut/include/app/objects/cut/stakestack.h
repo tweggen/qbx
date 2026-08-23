@@ -2,6 +2,7 @@
 #define _STAKESTACK_H_
 
 #include "app/model/sobject.h"
+#include "tw/events/twcompmap.h"
 #include "app/model/sobjectrenderer.h"
 #include "tw/core/twfraction.h"
 
@@ -82,8 +83,36 @@ public:
     // --- takes ----------------------------------------------------------
     int nTakes() const { return childCount(); }
     int activeTakeIndex() const { return activeTake_; }
+
+    // --- the COMP MAP (proposal 43 N1) -----------------------------------
+    //
+    // WHICH TAKE SOUNDS WHERE, in the column's own frame domain. An EMPTY map
+    // -- the state every column has until something writes one, and the state
+    // every project written before proposal 43 loads in -- means "activeTake_
+    // everywhere", so no map means no behaviour change anywhere.
+    //
+    // N1 puts the map in the MODEL only: nothing reads it yet, so nothing
+    // sounds different. `twCompColumn` (N2) is what makes it audible, and it
+    // will read it BY POSITION at freeze time -- never precomputed and stashed,
+    // which is the mistake this codebase has made three times (the level
+    // meters, MIDI-out, the metronome).
+    const twCompMap &compMap() const { return compMap_; }
+    void setCompMap( const twCompMap &map );
+
+    /**
+     * The take sounding at a column position: the map's answer, or
+     * `activeTake_` where the map does not say. THE one place the degenerate
+     * case is spelled, so no consumer has to remember it.
+     */
+    int takeIndexAt( int64_t columnPos ) const
+    {
+        const int t = compMap_.takeAt( columnPos );
+        return ( t >= 0 && t < childCount() ) ? t : activeTake_;
+    }
     /** The take at index as a WINDOW (null when out of range). */
     SClipWindow *takeAt( int index ) const;
+
+    int serializeInlineChildren( QTextStream &o ) override;
     SClipWindow *activeTake() const { return takeAt( activeTake_ ); }
     /** SObject: index < 0 means the ACTIVE take (the generic take seam). */
     SClipWindow *windowTakeAt( int index ) const override
@@ -208,6 +237,7 @@ private:
     std::shared_ptr<twComponent> ensureSilence();
 
     int activeTake_ = -1;
+    twCompMap compMap_;
     // Guards against per-take forwarding storms while setDurationAll/
     // applyWindowAll mutate every take; they emit ONE durationChanged after.
     bool forwardSuppressed_ = false;
