@@ -941,3 +941,21 @@ pass the button runs (`collect-external-media`). Verified by hand on Linux
 against a real project carried from Windows: `resources: project is NOT
 self-contained — 3 file(s) outside the project folder` and `load: 3 sample
 file(s) could not be found`, both from the production `openProjectFile` path.
+
+37. **A COUNT-IN IS SPENT PRIMING THE FROZEN LANE.** `startRecording()` calls
+    `twSpeaker::warmFrozenLane()` at the moment it begins the count-in, for
+    the position the TRANSPORT will start from — the pre-roll's own start when
+    a pre-roll follows the count-in, and the record position otherwise. NOT
+    `preambleTarget_` unconditionally; that is the take's position, not the
+    transport's.
+
+    Without it the entire readahead is built AFTER the click, and the music
+    arrives late by however long the graph takes to freeze
+    `AudioEngine::primingFrames()` — ~2.3 s on a real project. A count-in is a
+    PROMISE about tempo, which is what makes this intolerable there rather
+    than merely annoying, and it is also the one transport start with dead
+    time of known length in front of a start position that is already known.
+
+    Gate: `record_count_in_primed.qxa`, which asserts the poll count rather
+    than a wall clock — what changed is WHEN the freezing happens, not how
+    fast this box freezes.

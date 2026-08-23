@@ -94,6 +94,37 @@ private:
     qulonglong position_ = 0;
 };
 
+/**
+ * assert-priming - HOW LONG THE FROZEN LANE WAS SILENT after the transport
+ * started.
+ *
+ * `twSpeaker` holds the frozen lane in BUFFERING until the readahead has
+ * covered `AudioEngine::primingFrames()` beyond the playhead, and it polls
+ * every 10 ms while it waits. The count reported here is those polls, so 0
+ * means the very first check answered PLAYING - the pages were already frozen
+ * and the readahead only had to walk them.
+ *
+ * That is the whole claim of the count-in warm-up, and it is the RIGHT shape
+ * of assertion for it: a wall-clock bound would be a bound on how fast this
+ * box freezes a graph, which is not what the fix changes. What the fix changes
+ * is WHEN the freezing happens.
+ */
+class SAssertPrimingAction : public SAction {
+public:
+    SAssertPrimingAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-priming"); }
+    QStringList knownAttributes() const override {
+        return {QStringLiteral("maxPolls")};
+    }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    int maxPolls_ = 0;
+};
+
 class SWaitPlayheadAction : public SAction {
 public:
     SWaitPlayheadAction() = default;

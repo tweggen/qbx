@@ -8,6 +8,7 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sobjectpath.h"
+#include "tw/playback/twspeaker.h"
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDomElement>
@@ -84,6 +85,47 @@ static const bool s_reg_assert_locator = (
     SActionRegistry::instance().registerType(
         QStringLiteral("assert-locator"),
         []{ return new SAssertLocatorAction; }
+    ), true
+);
+
+// ------------------------------------------------------------- assert-priming
+
+SApplyResult SAssertPrimingAction::apply(SProject *)
+{
+    std::shared_ptr<twSpeaker> spk = SApplication::app().getSpeaker();
+    if (!spk) {
+        qWarning() << "assert-priming: no speaker";
+        return {false, nullptr};
+    }
+    const int polls = spk->lastPrimingPolls();
+    if (polls > maxPolls_) {
+        qWarning() << "assert-priming FAILED: the frozen lane was held in"
+                   << "BUFFERING for" << polls << "poll(s) (~10 ms each) after"
+                   << "the transport started; expected at most" << maxPolls_
+                   << "- the readahead had to freeze pages that should already"
+                      " have been warm";
+        return {false, nullptr};
+    }
+    qDebug() << "assert-priming: OK -" << polls << "buffering poll(s) ( <="
+             << maxPolls_ << ")";
+    return {true, nullptr};
+}
+
+void SAssertPrimingAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("maxPolls", QString::number(maxPolls_));
+}
+
+bool SAssertPrimingAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    maxPolls_ = elem.attribute("maxPolls", "0").toInt();
+    return true;
+}
+
+static const bool s_reg_assert_priming = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-priming"),
+        []{ return new SAssertPrimingAction; }
     ), true
 );
 
