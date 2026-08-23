@@ -216,8 +216,36 @@ std::shared_ptr<twComponent> STakeStack::ensureSilence()
     return cpSilence_;
 }
 
+std::shared_ptr<twCompColumn> STakeStack::ensureCompColumn()
+{
+    if( !cpComp_ ) {
+        cpComp_ = std::make_shared<twCompColumn>(
+            *( SAppContext::get().get303aEnvironment() ),
+            (idx_t) getProject().channels() );
+        cpComp_->init();
+    }
+    // Rebuilt from the CURRENT takes and the CURRENT map on every ask: the
+    // column is only reached through resolveClip/getRootComponent, both of
+    // which run on the main thread, and a take list that went stale would
+    // render a take that no longer exists.
+    std::vector<twCompColumn::ResolveFn> fns;
+    fns.reserve( (size_t) nTakes() );
+    for( int i = 0; i < nTakes(); ++i ) {
+        SObject *t = takeObjectAt( i );
+        fns.push_back( [t]( offset_t p ) {
+            return t ? t->resolveClip( p ) : twResolvedClip{};
+        } );
+    }
+    cpComp_->setTakes( std::move( fns ) );
+    cpComp_->setCompMap( compMap_, activeTake_ );
+    return cpComp_;
+}
+
 std::shared_ptr<twComponent> STakeStack::getRootComponent()
 {
+    // THE EMPTY MAP IS THE DEGENERATE CASE and takes the ORIGINAL path, byte
+    // for byte (proposal 43 N2). Only a comped column becomes a component.
+    if( !compMap_.empty() && nTakes() > 0 ) return ensureCompColumn();
     if( SObject *take = activeTakeObject() )
         return take->getRootComponent();
     return ensureSilence();
@@ -251,6 +279,12 @@ offset_t STakeStack::mapTimelineToComponentPos( offset_t off )
 
 twResolvedClip STakeStack::resolveClip( offset_t off )
 {
+    // A comped column resolves to ITSELF, at the column's own position: the
+    // map is read per REGION inside freezePage, which is the whole point --
+    // the mix resolves once per PAGE and a page is 1.37 s, far coarser than a
+    // comp boundary.
+    if( !compMap_.empty() && nTakes() > 0 )
+        return twResolvedClip{ ensureCompColumn(), off };
     // Read the active take ONCE and resolve the whole clip through it, so the
     // component and the mapping can't come from different takes (getRootComponent
     // and mapTimelineToComponentPos used to resolve the take separately) nor from

@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE COMP MAP IS AUDIBLE: A COLUMN PLAYS A DIFFERENT TAKE IN EACH REGION.
+
+  Proposal 43 N2. N1 put the map in the model and asserted that a render was
+  UNCHANGED by it; this is the case that flips that assertion.
+
+  WHY THE COLUMN HAD TO BECOME A COMPONENT. `twTrackMix` resolves a clip's
+  component ONCE PER PAGE and a page is 65536 frames — 1.37 s at 48 kHz. A comp
+  boundary lands on a WORD, ~200 ms, so per-page resolution is two to seven
+  times too coarse and the map cannot be honoured at the clip. `twCompColumn`
+  honours it one level below, region by region, and NOTHING ABOVE IT CHANGED.
+
+  IT EXISTS ONLY WHEN A MAP DOES. With an empty map `STakeStack` hands out the
+  ACTIVE TAKE's component exactly as it always has, so every project written
+  before proposal 43 renders through the same code as ever. The first two
+  renders below take that path and are what the third is measured against.
+
+  THE FIXTURE MAKES EVERY WINDOW DISCRIMINATE. test_gapsaw.wav is a 0.1 -> 0.8
+  ramp (RMS A/sqrt(3)) with exact-zero regions at [0.6,0.9) and [2.5,3.0) s;
+  take A is unslipped and take B is slipped one second, so their per-second
+  RMS sequences are DIFFERENT IN EVERY WINDOW:
+
+      take A   0.08485  0.21131  0.20184  0.41239
+      take B   0.21131  0.20184  0.41239  0.00000
+
+  The comp below is B for the first two seconds and A for the last two, giving
+
+      comped   0.21131  0.20184  0.20184  0.41239
+
+  which equals NEITHER take in any window pair: windows 1-2 are B's and
+  windows 3-4 are A's, and the pair 0.20184 / 0.20184 in the middle is the ONE
+  place the two agree — chosen deliberately so a boundary that landed one
+  window early or late shows up at window 1 or window 4 rather than hiding.
+-->
+<SActionScript version="1" name="comp_map_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+
+    <!-- TAKE A alone, through the DEGENERATE (empty map) path. -->
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" comp="" activeTake="0"/>
+    <render filename="cma_a.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cma_a.wav" startFrame="0" frameCount="48000"
+                         minRms="0.0840" maxRms="0.0857"/>
+    <assert-audio-energy filename="cma_a.wav" startFrame="144000" frameCount="48000"
+                         minRms="0.4100" maxRms="0.4150"/>
+
+    <!-- TAKE B alone, same path. -->
+    <select-take clip="0,0" take="1"/>
+    <render filename="cma_b.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cma_b.wav" startFrame="0" frameCount="48000"
+                         minRms="0.2100" maxRms="0.2130"/>
+    <assert-audio-energy filename="cma_b.wav" startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.002"/>
+
+    <!-- COMP: take B for [0,2) s, take A for [2,4) s. -->
+    <set-comp-segment clip="0,0" at="0" take="1"/>
+    <set-comp-segment clip="0,0" at="96000" take="0"/>
+    <assert-take-column clip="0,0" comp="0:1;96000:0"/>
+    <assert-take-column clip="0,0" takeAtPos="95999" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="0"/>
+
+    <render filename="cma_comp.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- window 1: B's, and NOT A's 0.08485 -->
+    <assert-audio-energy filename="cma_comp.wav" startFrame="0" frameCount="48000"
+                         minRms="0.2100" maxRms="0.2130"/>
+    <!-- window 2: the one both takes agree on -->
+    <assert-audio-energy filename="cma_comp.wav" startFrame="48000" frameCount="48000"
+                         minRms="0.2005" maxRms="0.2035"/>
+    <!-- window 3: A's, and NOT B's 0.41239 -->
+    <assert-audio-energy filename="cma_comp.wav" startFrame="96000" frameCount="48000"
+                         minRms="0.2005" maxRms="0.2035"/>
+    <!-- window 4: A's, and NOT B's SILENCE -->
+    <assert-audio-energy filename="cma_comp.wav" startFrame="144000" frameCount="48000"
+                         minRms="0.4100" maxRms="0.4150"/>
+
+    <!-- MOVING A BOUNDARY MOVES THE AUDIO. Push it to 3 s: window 3 becomes
+         B's 0.41239 instead of A's 0.20184. That is the operation splits
+         cannot express and the reason the comp MAP was chosen. -->
+    <move-comp-boundary clip="0,0" at="96000" to="144000"/>
+    <render filename="cma_moved.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cma_moved.wav" startFrame="96000" frameCount="48000"
+                         minRms="0.4100" maxRms="0.4150"/>
+    <assert-audio-energy filename="cma_moved.wav" startFrame="144000" frameCount="48000"
+                         minRms="0.4100" maxRms="0.4150"/>
+
+    <!-- ONE UNDO puts the boundary, and the audio, back. -->
+    <undo/>
+    <render filename="cma_undone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cma_undone.wav" startFrame="96000" frameCount="48000"
+                         minRms="0.2005" maxRms="0.2035"/>
+
+    <!-- AND CLEARING THE MAP RETURNS TO THE DEGENERATE PATH, byte for byte
+         with the take-B render above. -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" comp=""/>
+    <render filename="cma_cleared.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cma_cleared.wav" startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="cma_cleared.wav" startFrame="0" frameCount="48000"
+                         minRms="0.2100" maxRms="0.2130"/>
+  </actions>
+
+</SActionScript>

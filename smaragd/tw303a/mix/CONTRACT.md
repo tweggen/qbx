@@ -191,3 +191,44 @@ an asset window over a faded track captures the unfaded audio.
     renders the master itself and the RT pops the ring only. `twMixer::
     inputLevel()` exists for exactly this check: a precondition that could not
     read the levels back would have to be assumed.
+
+## twCompColumn — a take column that renders its comp map
+
+Proposal 43 N2. `twTrackMix` resolves a clip's component ONCE PER PAGE, and a
+page is 65536 frames — 1.37 s at 48 kHz. A comp boundary lands on a WORD,
+~200 ms, so per-page resolution is two to seven times too coarse: **the map
+cannot be honoured at the clip.** `twCompColumn` honours it one level below,
+region by region, and nothing above it changes — the mix keeps resolving one
+component per clip per page and `resolveClip`'s contract is untouched.
+
+The rejected alternative was segmenting the clip inside `twTrackMix`. It would
+have made `clip.previousPage` — the per-clip DSP-state predecessor — per
+*(clip, take)*, grown a case in every `twPagePlan` consumer, and taught the mix
+what a take column is, which is the coupling `resolveClip` exists to prevent.
+
+**IT EXISTS ONLY WHEN A MAP DOES.** With an empty map `STakeStack` hands out
+the ACTIVE TAKE's component exactly as it always has. That is not compatibility
+theatre: an extra page copy is bit-exact, but routing a stretched take's DSP
+state through a second component's chaining is not, and no golden should have
+to prove that.
+
+| Rule | Why |
+|---|---|
+| A take is frozen at the SAME position the column is asked for | A take is a window addressed in the COLUMN's own domain (`stakestack.h`: take links have `startTime == 0`), so there is no offset to apply and nothing here knows what kind of window a take is |
+| `planPage` declares EVERY take the page will read, and no others | The scheduler binds exactly what a plan asks for: a take left out is a MISS and a re-freeze, a take declared and not read is a page nothing consumes. The walk is the SAME region walk `freezePage` makes, which is proposal 19 Inv-1 extended to the plan |
+| `plan.epoch` must be STAMPED | The scheduler asserts it (`capture_revalidator.cc`), and an unstamped plan cannot be compared against the pages it produces. Found by that assert firing, not by reading |
+| The state chain is PER TAKE, and it has GAPS | A take renders only where its regions are. That is inherent to cutting between sources and is the same situation `twTrackMix`'s non-contiguous clips are in |
+| The source channel is CLAMPED | A take's page carries the width of ITS source; a mono take must play on every channel (proposal 36 §4.4) |
+| The width is passed to the page BY HAND | This override allocates its own page and so bypasses `twComponent::freezePage`, the one place a page normally learns its width (proposal 36 trap 19) |
+| `calcOutputTo` refuses, loudly | The legacy PULL path cannot express a map. A comp column is reached only through the freeze path, so answering silence and logging is honest where half-rendering one take would not be |
+
+**The map is read BY POSITION at freeze time**, never precomputed and stashed.
+That is the mistake this codebase has made three times — the level meters,
+MIDI-out and the metronome — and it is the mirror image here: a page is frozen
+far from the playhead and for positions nobody is listening to, so the only
+honest answer is "what does the map say HERE".
+
+Gate: `comp_map_audible.qxa`, over a fixture whose two takes differ in EVERY
+per-second window, so a comped render equals neither. **Watched failing under a
+sabotage that renders one take per PAGE** — i.e. exactly the coarse resolution
+this component exists to escape.
