@@ -500,7 +500,8 @@ endforeach()
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
 foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_punch
-              record_while_monitoring record_stays_armed)
+              record_while_monitoring record_stays_armed
+              record_loop_overshoot record_loop_overshoot_late_start)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE
@@ -524,6 +525,16 @@ foreach(_met metronome_click metronome_render_identity metronome_toggle_during_p
             ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
     endif()
 endforeach()
+
+# fix/loop-behaviour, issue h: a CONTINUITY assertion over real-time-paced
+# playback through the capture backend — a wall-clock case in exactly the
+# sense the section above describes (10 s of real wait-ms crossing multiple
+# cycle-region wraps), so RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out.
+if(TEST qxa.playback_loop_wrap_continuity)
+    set_tests_properties(qxa.playback_loop_wrap_continuity PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+endif()
 
 # --- AC-g1: the follow-playhead scroll HOLD ----------------------------------
 #
