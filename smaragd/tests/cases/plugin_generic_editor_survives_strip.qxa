@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_generic_editor_survives_strip">
+
+  <!-- fix/editor-ui-and-shortcuts, issue (a), follow-up (2026-08-23): the
+       NATIVE editor was fixed first, but the GENERIC (slider-list) editor
+       had the IDENTICAL ownership bug and is very likely the window the
+       original reporter actually saw — they are on Linux, and
+       SPluginNativeEditor::attachPlugin() refuses a VST3 editor on X11
+       (caps().needsRunLoop), so openParamEditor() falls through to the
+       generic editor for EVERY VST3 instrument on that platform. Fixing only
+       the native path left the field bug live.
+
+       ROOT CAUSE: SPluginEffectStrip::ensureParamEditor() did
+       `dlg = new QDialog(this)` — parented to the STRIP — and kept the
+       QDialog in `editors_`, a MEMBER of the strip. STrackDetailPanel::
+       rebuildUI()'s `delete pluginStrip_` on every track selection change
+       therefore destroyed this editor too, exactly as it destroyed the
+       native one, and for the identical reason.
+
+       FIX: the dialog now parents to `window()` (the durable top-level
+       ancestor, mirroring SPluginNativeEditor's own fix) and the registry
+       moved to a MODULE-LEVEL map keyed by SPluginSlot* (genericEditorRegistry
+       () in splugineffectstrip.cpp), mirroring SPluginNativeEditor::registry()
+       — not a strip member, so it survives the strip that opened it.
+       SPluginEffectStrip::isGenericEditorOpenFor()/closeGenericEditorFor() are
+       the new static, symmetric query/close, added for exactly this gate.
+
+       This case uses tw.test.clap.stereoskew, which has NO clap.gui
+       (plugin_ui_strip_and_editor.qxa already gates that this fixture
+       resolves to "generic", never "native"), so `open-via-strip` genuinely
+       exercises ensureParamEditor()'s own parenting rather than falling
+       through from a native attach failure.
+
+       Watched failing on the pre-fix binary: expectOpen="1" read
+       isGenericEditorOpenFor()==false after the throwaway strip was
+       destroyed — the dialog died with it, same shape as the native gate. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- Confirms the fixture genuinely reaches the generic path (no native
+         GUI to fall through from). -->
+    <assert-plugin-editor-kind trackIndex="0" slotIndex="0" expect="generic"/>
+
+    <!-- Open through a throwaway strip, exactly as a track-switch rebuild
+         would tear one down; the editor must survive. -->
+    <plugin-generic-editor trackIndex="0" slotIndex="0"
+                           action="open-via-strip" expectOpen="1"/>
+
+    <!-- Twice, not a one-shot survival. -->
+    <plugin-generic-editor trackIndex="0" slotIndex="0"
+                           action="open-via-strip" expectOpen="1"/>
+
+    <!-- Take it down. -->
+    <plugin-generic-editor trackIndex="0" slotIndex="0"
+                           action="close" expectOpen="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -372,3 +372,92 @@ Edit press — the ABI (`twPluginEditor`) has no "bring to front" call for a
 window the plugin itself owns, so a floating editor's Edit press is a no-op by
 design, unchanged by this fix, and is a genuine gap rather than something this
 fix could close.
+
+## Follow-up (2026-08-23, same day): the generic editor had the IDENTICAL bug, and "will not reopen" was never the native editor at all
+
+Two more things were found chasing the "does not reopen" report further, both
+from a coordinator's review that (correctly) pushed back on the previous
+section's "removed by construction rather than independently reproduced"
+claim — that claim was too weak, and the real mechanism turned out to be
+different from the one guessed at above.
+
+**1. `SPluginEffectStrip::ensureParamEditor()` had the SAME parenting bug as
+`SPluginNativeEditor`**, and on a platform where a plugin's native editor is
+refused (Linux/X11 VST3, `caps().needsRunLoop`), the generic slider list is
+the window the user actually sees — so fixing only the native path left a
+live field bug for exactly that case. It did `dlg = new QDialog(this)` (the
+STRIP) and kept the dialog in `editors_`, a STRIP MEMBER — so
+`STrackDetailPanel::rebuildUI()`'s `delete pluginStrip_` destroyed this
+editor too, on every track switch, for the identical reason.
+
+**Fixed the same way**: the dialog now parents to `window()` (the strip's own
+durable top-level ancestor, computed via the SAME QWidget method the native
+editor's constructor climbs to), and the registry moved OFF the strip into a
+MODULE-LEVEL map keyed by `SPluginSlot*` (`genericEditorRegistry()` in
+`splugineffectstrip.cpp`), mirroring `SPluginNativeEditor::registry()` —
+critically, NOT just the parenting: reparenting the dialog while leaving the
+registry on the dying strip would have made the map die with the strip while
+the dialog survived as an orphan, and the NEXT strip would create a
+DUPLICATE editor for the same slot. `SPluginEffectStrip::isGenericEditorOpenFor()`
+/ `closeGenericEditorFor()` are new statics giving this path the same
+`isOpenFor()`/`closeFor()` symmetry the native editor already had — needed by
+the testkit (`plugin-generic-editor`) and available to any future caller.
+
+Gated: `qxa.plugin_generic_editor_survives_strip`, over `tw.test.clap.
+stereoskew` (no `clap.gui`, so `openParamEditor()` genuinely falls through to
+`ensureParamEditor()` rather than merely failing a native attach) — a
+throwaway strip parented to the REAL main window (the same caveat as the
+native gate's own case: a parentless strip's `window()` is itself, which
+would silently retest the pre-fix shape), opened twice, then closed.
+
+**2. A SEPARATE, PRE-EXISTING crash, unrelated to either parenting bug**, was
+found while testing the "why does a second open fail" hypothesis directly
+with gdb rather than assuming: open a native editor, never close it, let the
+project tear down. `SPluginNativeEditor` closed its window by connecting to
+`QObject::destroyed()` on the slot — a signal that fires from `~QObject()`,
+the BASE class, which runs strictly AFTER `~SPluginSlot()`'s own body and
+every member (`proc_`, the live plugin instance) has already been destroyed.
+`close() -> closeEvent() -> twPluginEditor::detach()` therefore touched an
+ALREADY-FREED plugin — SIGSEGV inside `twClapEditor::detach()`.
+
+Fixed by `main/objects/track/CONTRACT.md`'s new `SPluginSlot::slotDestroying()`
+signal, emitted first thing in a no-longer-`=default` `~SPluginSlot()`, while
+the plugin is still alive; both this class and the generic editor's
+`ensureParamEditor()` now connect to it instead of `destroyed()`.
+
+**A THIRD, downstream crash was uncovered fixing the second**: correctly
+closing an editor during project teardown POSTS a deferred delete
+(`QDialog::close()` on a `WA_DeleteOnClose` widget), and a `--test-case` run
+leaves through `std::exit()` with no event-loop pump in between — so that
+deferred `~QWidget()`/`~QWindow()` ran from a Qt-internal atexit hook AFTER
+the platform integration had already torn down. SIGSEGV inside
+`QWindow::~QWindow()`, downstream of `QOpenGLContext`. Fixed by draining
+`QEvent::DeferredDelete` in `smaragdOrderlyShutdown()` (`main/shell/src/
+main.cpp`), before `std::exit()`, while `QApplication` is still fully alive —
+see `main/shell/CONTRACT.md`.
+
+**The generic editor's own connection was ALSO switched to `slotDestroying()`,
+but for consistency, not a proven crash**: `SPluginParamEditor` holds no ABI
+`twPluginEditor` to `detach()`, and a dedicated probe (open it, never close
+it, let the project tear down) found no repro under the old `destroyed()`-based
+connection either way. Recorded rather than silently assumed safe — it still
+reads `slot->getProcessor()` in a few of its own slots
+(`onParamsChanged()`, `onMeterTick()`), and nothing guarantees none of those
+can fire in the gap `destroyed()` leaves open.
+
+Gate: `qxa.plugin_native_editor_teardown_safe` — deliberately violates
+`qxa.plugin_native_editor`'s own stated discipline ("a case that opens one
+MUST close it"): a forgetful caller, or simply closing a project with an
+editor still open (the ordinary shape for a real user), must not crash the
+app. There is no explicit "did not segfault" assertion; CTest catches that by
+EXIT CODE, the same mechanism that already catches `qxa.split_plain_
+screenshot`'s teardown crash (CLAUDE.md, "Two known crash flakes"). Watched
+segfaulting, reliably, under BOTH sabotages independently (reverting
+`slotDestroying()`'s connection alone; restoring that but reverting the
+`DeferredDelete` drain alone) — each crashes at a DIFFERENT point in the
+stack, confirming they are two distinct fixes, not one. A two-plugin variant
+of the same script (adding a second track/slot for the generic editor) was
+tried FIRST and did not reproduce reliably: a use-after-free's crash depends
+on allocator state, so it can silently read stale-but-harmless memory once
+the heap shape changes underneath it. The committed gate is deliberately the
+smallest script that reproduces every time.

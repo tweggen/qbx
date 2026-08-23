@@ -1062,3 +1062,32 @@ the master's selection (set earlier) is untouched — the pair that fails were
 the two roots not kept independent. **Not gated**: the piano roll's own branch,
 for the `QApplication::focusWidget()` reason `eventui/CONTRACT.md` inv. 16
 already names.
+
+## inv. 54 — `smaragdOrderlyShutdown()` drains `QEvent::DeferredDelete` before `std::exit()` (issue a follow-up, 2026-08-23)
+
+`main.cpp`'s `smaragdOrderlyShutdown()` — already responsible for stopping the
+plugin scan thread and flushing the logger before a `--test-case` run's
+`std::exit()` — now ALSO calls `QCoreApplication::sendPostedEvents( nullptr,
+QEvent::DeferredDelete )` first, while `QApplication` is still fully alive.
+
+**Found chasing a SIGSEGV**, downstream of fixing `main/objects/track/
+CONTRACT.md`'s `SPluginSlot::slotDestroying()` bug: once an editor correctly
+closes DURING project teardown, `QDialog::close()` on a `WA_DeleteOnClose`
+widget POSTS a deferred delete rather than running it, and `std::exit()`
+leaves through no event-loop pump at all. That deferred `~QWidget()` (and the
+`~QWindow()`/`QOpenGLContext` teardown it drags in) then ran from a
+Qt-internal atexit hook AFTER the platform integration had already torn
+itself down — SIGSEGV, and a DIFFERENT crash from the one fixing
+`slotDestroying()` was chasing.
+
+`main.cpp`'s own long-standing comment on `std::exit()` ("destroys no stack
+object") already flagged the general hazard for OTHER things (the plugin scan
+thread, the log sink); this is the same hazard reaching a THIRD kind of
+resource — a widget's own deferred teardown — that nobody had needed to drain
+before because nothing used to close cleanly enough to post one.
+
+Gate: `qxa.plugin_native_editor_teardown_safe` (`main/pluginui/CONTRACT.md`),
+watched crashing with this drain reverted (and the `slotDestroying()` fix
+kept) — a DIFFERENT stack trace than reverting `slotDestroying()` alone,
+confirming the two fixes address genuinely separate failure points rather
+than one bug wearing two disguises.

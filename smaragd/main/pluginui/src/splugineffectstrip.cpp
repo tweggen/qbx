@@ -15,6 +15,7 @@
 #include "app/objects/track/sremovepluginaction.h"
 #include "app/objects/track/sreorderpluginaction.h"
 #include "app/objects/track/ssetpluginbypassaction.h"
+#include "tw/core/twlog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QCheckBox>
@@ -99,6 +100,23 @@ QString reasonTooltip( SPluginSlot *slot )
     return SPluginEffectStrip::tr( "%1\nVendor: %2\nChannel mapping: %3" )
         .arg( ident, QString::fromStdString( d.vendor ),
               QString::fromLatin1( modeName( slot->getSlotMode() ) ) );
+}
+
+// The generic parameter editor's window registry (fixed 2026-08-23, mirroring
+// SPluginNativeEditor::registry() in spluginnativeeditor.cpp). MODULE-LEVEL,
+// deliberately NOT the `editors_` member SPluginEffectStrip used to own: a
+// QDialog parented under a strip is a Qt CHILD of it, so
+// STrackDetailPanel::rebuildUI()'s `delete pluginStrip_` on every track
+// selection change destroyed this editor exactly as it destroyed the native
+// one (see main/pluginui/CONTRACT.md, "The native editor window is never
+// parented to the FX strip") — the old `editors_` comment claimed a rebuild
+// would not orphan it, which was true only of SPluginEffectStrip::rebuildUI()
+// (the strip's OWN internal row rebuild, e.g. on reorder-plugin) and silent
+// about the STrackDetailPanel one, which is the one that matters.
+QHash<SPluginSlot *, QPointer<QDialog> > &genericEditorRegistry()
+{
+    static QHash<SPluginSlot *, QPointer<QDialog> > r;
+    return r;
 }
 
 }  // namespace
@@ -379,7 +397,7 @@ void SPluginEffectStrip::rebuildUI()
         // An editor window already open on this slot must learn its NEW index:
         // reorder-plugin moves the slot without touching the dialog, and a stale
         // index would send the next parameter edit to a different plugin.
-        if (QDialog *dlg = editors_.value(slot).data()) {
+        if (QDialog *dlg = genericEditorRegistry().value(slot).data()) {
             if (SPluginParamEditor *ed =
                     dlg->findChild<SPluginParamEditor *>(QStringLiteral("paramEditor"))) {
                 ed->setSlotIndex(i);
@@ -516,11 +534,31 @@ SPluginParamEditor *SPluginEffectStrip::ensureParamEditor(int slotIndex,
     if (!slot) return nullptr;
 
     const QString trackPath = trackPathString();
-    if (trackPath.isEmpty()) return nullptr;
+    if (trackPath.isEmpty()) {
+        // Not a silent nothing (issue a, AC A3): a caller reaching this with
+        // an empty path gets NO editor and no explanation, which is exactly
+        // the "pressing Edit does nothing" shape the bug report described.
+        // Reachable when track_ is not found under the project's MASTER root
+        // (splacements::rootContainer() never resolves an arrangement) --
+        // today that should not happen through the production Track Detail
+        // dock (attachTrackDetail() follows only the master mixer's own
+        // selectedTrackChanged), but a track removed from the tree between
+        // the strip being built and Edit being pressed reaches it too.
+        TW_LOGW( "pluginui",
+                 "generic editor: track path for slot %d did not resolve (the "
+                 "track is not reachable from the project's master root) -- "
+                 "Edit has nothing to open", slotIndex );
+        return nullptr;
+    }
 
-    QDialog *dlg = editors_.value(slot).data();
+    // MODULE-LEVEL registry, not the old `editors_` member -- see
+    // genericEditorRegistry()'s own comment for why.
+    QDialog *dlg = genericEditorRegistry().value(slot).data();
     if (!dlg) {
-        dlg = new QDialog(this);
+        // Parented to window() -- the durable top-level ancestor -- exactly
+        // as SPluginNativeEditor's constructor climbs past its own
+        // parentForPosition. `this` (the strip) is never the Qt parent.
+        dlg = new QDialog(window());
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setWindowTitle(storedName(slot));
         dlg->resize(420, 320);
@@ -530,19 +568,52 @@ SPluginParamEditor *SPluginEffectStrip::ensureParamEditor(int slotIndex,
             new SPluginParamEditor(slot, trackPath, slotIndex, dlg);
         editor->setObjectName(QStringLiteral("paramEditor"));
         lay->addWidget(editor);
-        editors_.insert(slot, dlg);
+        genericEditorRegistry().insert(slot, dlg);
 
         // The slot outliving its editor is the normal case; the reverse is not.
         // remove-plugin deletes the slot, so close the window with it rather than
         // leaving a dialog holding a dangling model pointer.
-        connect(slot, &QObject::destroyed, dlg, &QDialog::close);
+        //
+        // SPluginSlot::slotDestroying(), NOT QObject::destroyed() -- the
+        // SAME connection SPluginNativeEditor switched to (spluginslot.h's
+        // own comment on the signal), for CONSISTENCY rather than a proven
+        // crash here: unlike the native editor, SPluginParamEditor holds no
+        // ABI twPluginEditor to detach() and its close path was verified NOT
+        // to crash under the old destroyed()-based connection (a dedicated
+        // probe script found no repro). destroyed() firing only after the
+        // slot's plugin is already torn down is still the wrong signal to
+        // build on, though -- SPluginParamEditor reads slot->getProcessor()
+        // in several of its own slots (onParamsChanged(), onMeterTick()),
+        // and nothing guarantees none of those can fire in the gap.
+        connect(slot, &SPluginSlot::slotDestroying, dlg, &QDialog::close);
+
+        // The registry entry outliving the dialog is a leak, not a crash (the
+        // QPointer already reads null), but it would grow for as long as the
+        // app runs and plugins get inserted/removed. Erase it when the dialog
+        // actually goes -- `slot` is used only as a KEY here (pointer
+        // identity), never dereferenced, so it is safe to capture even if the
+        // slot itself is what triggered the close via the connection above.
+        connect(dlg, &QObject::destroyed, dlg, [slot]() {
+            genericEditorRegistry().remove(slot);
+        } );
     }
 
     if (showWindow) {
         dlg->show();
         dlg->raise();
+        dlg->activateWindow();
     }
     return dlg->findChild<SPluginParamEditor *>(QStringLiteral("paramEditor"));
+}
+
+bool SPluginEffectStrip::isGenericEditorOpenFor(SPluginSlot *slot)
+{
+    return genericEditorRegistry().value(slot).data() != nullptr;
+}
+
+void SPluginEffectStrip::closeGenericEditorFor(SPluginSlot *slot)
+{
+    if (QDialog *dlg = genericEditorRegistry().value(slot).data()) dlg->close();
 }
 
 void SPluginEffectStrip::openParamEditor(int slotIndex)
@@ -599,6 +670,11 @@ QString SPluginEffectStrip::editorValueText(int slotIndex, int row)
 {
     SPluginParamEditor *editor = ensureParamEditor(slotIndex, /*showWindow=*/false);
     return editor ? editor->valueLabelText(row) : QString();
+}
+
+bool SPluginEffectStrip::ensureGenericEditorForTest(int slotIndex)
+{
+    return ensureParamEditor(slotIndex, /*showWindow=*/false) != nullptr;
 }
 
 void SPluginEffectStrip::onAddInstrumentClicked()

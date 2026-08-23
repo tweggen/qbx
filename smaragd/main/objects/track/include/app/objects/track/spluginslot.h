@@ -211,6 +211,20 @@ public:
 
 signals:
     void bypassChanged( bool );
+    // Emitted FIRST in ~SPluginSlot() -- before proc_ (and therefore the live
+    // audio::twPlugin instance) or any other member is torn down. Found
+    // 2026-08-23 chasing a crash: SPluginNativeEditor / SPluginEffectStrip's
+    // generic editor used to connect to the QObject base's own destroyed()
+    // signal to close their window when the slot dies, but destroyed() fires
+    // from ~QObject(), which -- being the BASE class -- runs strictly AFTER
+    // ~SPluginSlot()'s body and every member destructor. By then proc_'s
+    // plugin is already gone, and closeEvent() -> twPluginEditor::detach()
+    // touches a dangling extension pointer -- SIGSEGV, reproduced with a
+    // three-line script (open a native editor, never close it, let the
+    // project tear down). This signal is emitted from a place where the slot
+    // -- and the plugin behind it -- are still fully alive, so a listener's
+    // detach() is operating on a live instance.
+    void slotDestroying();
     // The slot was re-instantiated (reloadPlugin()): its state/mode may have
     // changed and any editor showing its parameters is stale. M5 listens.
     void pluginReloaded();

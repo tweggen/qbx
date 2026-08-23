@@ -51,7 +51,17 @@ SPluginSlot::SPluginSlot( SProject *project, const audio::twPluginDescriptor &de
     // channel-mismatch mapping and only STrack knows it.
 }
 
-SPluginSlot::~SPluginSlot() = default;
+SPluginSlot::~SPluginSlot()
+{
+    // FIRST, before any member -- proc_ (and its live audio::twPlugin
+    // instance) included -- is torn down. See spluginslot.h's own comment on
+    // slotDestroying() for the crash this fixes: a listener closing a native
+    // or generic plugin editor here still finds a live plugin to detach()
+    // from, where the base QObject's own destroyed() signal (fired from
+    // ~QObject(), which runs strictly after this body and every member
+    // destructor) would not.
+    emit slotDestroying();
+}
 
 // Resolve (format, uid) against the registry: a scanned record carries the
 // module PATH and the plugin's REAL channel counts (the scanner instantiated it

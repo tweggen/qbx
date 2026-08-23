@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_native_editor_teardown_safe">
+
+  <!-- fix/editor-ui-and-shortcuts, issue (a), second follow-up (2026-08-23):
+       a SEPARATE, PRE-EXISTING crash found while investigating why a native
+       editor "will not reopen". Unrelated to the FX-strip parenting bug in
+       the same class: this one is reachable even from a single properly
+       parented window, simply by never closing an open editor before the
+       project (or the app) tears down — the ordinary shape of a real user
+       just closing a project with a plugin window still up.
+
+       ROOT CAUSE, found with gdb against this exact three-action script:
+       SPluginNativeEditor connected its "close me when the slot dies"
+       handler to the QObject BASE CLASS's own destroyed() signal. That
+       signal fires from ~QObject(), which — being the base class — runs
+       strictly AFTER ~SPluginSlot()'s own body and every MEMBER destructor,
+       including proc_ (the std::shared_ptr holding the live plugin
+       instance). So by the time destroyed() fired and the editor tried to
+       close() -> closeEvent() -> twPluginEditor::detach(), the plugin was
+       ALREADY DESTROYED — SIGSEGV inside twClapEditor::detach() touching a
+       dangling CLAP GUI extension pointer.
+
+       FIX PART 1: SPluginSlot gained a new signal, slotDestroying()
+       (spluginslot.h), emitted as the FIRST statement of a (no longer
+       =default) ~SPluginSlot() — while the slot, and the plugin behind it,
+       are still fully alive. SPluginNativeEditor (and SPluginEffectStrip's
+       generic editor, for consistency — see the note near the bottom) now
+       connect to THIS instead of QObject::destroyed().
+
+       FIX PART 2, found chasing a SECOND crash uncovered by fixing the
+       first: closing an editor during project teardown correctly POSTS a
+       deferred delete (QDialog::close() on a WA_DeleteOnClose widget), and
+       a headless test-case run leaves through std::exit() with no event-loop pump in
+       between — so that deferred ~QWidget()/~QWindow() ran from an atexit
+       hook AFTER the platform integration had already torn down. Fixed by
+       draining QEvent::DeferredDelete in smaragdOrderlyShutdown() (main.cpp),
+       BEFORE std::exit(), while QApplication is still fully alive.
+
+       THIS CASE DELIBERATELY VIOLATES plugin_native_editor.qxa's OWN STATED
+       DISCIPLINE ("a case that opens one MUST close it") — that is the
+       point: a forgetful caller, or a project simply being closed with an
+       editor still open, must not crash the app. There is no explicit
+       assertion for "the process did not segfault" — CTest catches that by
+       EXIT CODE, the same mechanism that already catches
+       qxa.split_plain_screenshot's teardown crash (see CLAUDE.md, "Two known
+       crash flakes"). A PASS printed by the runner and then a non-zero exit
+       is what a crash during teardown looks like from here.
+
+       Watched failing (segfaulting), reliably and repeatedly, on the
+       pre-fix binary — confirmed for BOTH fixes independently: reverting
+       slotDestroying()'s connection alone crashes inside
+       twClapEditor::detach() (proc_ already destroyed, exactly the trace
+       above); restoring that fix but reverting the DeferredDelete drain
+       crashes instead inside QWindow::~QWindow() at process exit, downstream
+       of QOpenGLContext — the SAME symptom qxa.split_plain_screenshot
+       already names as "a crash during teardown, after every action and
+       assertion succeeded". A two-plugin variant of this repro (adding a
+       SECOND track/slot for the generic editor) was tried first and did NOT
+       reproduce reliably — a use-after-free's crash depends on allocator
+       state, so it can silently read stale-but-harmless memory once the
+       heap shape changes. This file is deliberately the SMALLEST script that
+       reproduces every time.
+
+       THE GENERIC EDITOR GOT THE SAME slotDestroying() SWITCH
+       (splugineffectstrip.cpp) for CONSISTENCY, not because it independently
+       crashes: SPluginParamEditor holds no ABI twPluginEditor to detach(),
+       and a dedicated probe script (open the generic editor via
+       plugin-generic-editor, never close it, let the project tear down)
+       found NO repro under the old destroyed()-based connection either way.
+       Not given its own crash gate here for exactly that reason — there is
+       nothing observed to watch failing. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gui"
+                   name="Smaragd Test GUI" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

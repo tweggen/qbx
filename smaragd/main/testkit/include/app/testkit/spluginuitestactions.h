@@ -126,6 +126,50 @@ private:
     int     expectOpen_ = 1;
 };
 
+// plugin-generic-editor -- the plugin-native-editor twin for the GENERIC
+// slider-list editor (SPluginParamEditor, opened when a plugin has no native
+// GUI or its native editor cannot embed). Added 2026-08-23 for the same
+// reason plugin-native-editor's own "open-via-strip" mode exists: the
+// generic editor's dialog used to be owned by SPluginEffectStrip::editors_,
+// a STRIP MEMBER, so STrackDetailPanel::rebuildUI()'s `delete pluginStrip_`
+// on every track switch destroyed it exactly as it destroyed the native
+// editor -- and this is the window a Linux/VST3 user actually sees, because
+// SPluginNativeEditor::attachPlugin() refuses a VST3 editor on X11
+// (needsRunLoop), so openParamEditor() falls through to the generic editor
+// for every VST3 instrument on this platform.
+//
+//   trackPath  = ""      index-path; empty = use trackIndex
+//   trackIndex = "0"
+//   slotIndex  = "0"
+//   action     = "open-via-strip"  the only interesting mode: opens through a
+//                        THROWAWAY SPluginEffectStrip parented to the REAL
+//                        main window (a parentless strip's own window() is
+//                        itself, which would silently retest the pre-fix
+//                        shape -- see plugin_native_editor_survives_strip
+//                        .qxa's identical caveat), calling
+//                        SPluginEffectStrip::ensureGenericEditorForTest(),
+//                        then destroys ONLY the strip.
+//                        "close" | "assert" mirror plugin-native-editor.
+//   expectOpen = "1"     what SPluginEffectStrip::isGenericEditorOpenFor()
+//                        must say afterwards
+class SPluginGenericEditorAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "plugin-generic-editor" );
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_;
+    int     trackIndex_ = 0;
+    int     slotIndex_  = 0;
+    QString action_     = QStringLiteral( "open-via-strip" );
+    int     expectOpen_ = 1;
+};
+
 // plugin-editor-set-param — drive the parameter editor's slider the way a user
 // drag does, so the resulting set-plugin-param action (and its audible effect)
 // is what the render measures.

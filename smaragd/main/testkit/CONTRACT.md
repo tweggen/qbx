@@ -1246,3 +1246,27 @@ here because it is the clearest illustration in this suite of "read what
 already exists before adding a verb": the fix it gates (`previewNotes()`'s
 `touchedIds` out-parameter) needed a new PARAMETER on an existing internal
 function, not a new testkit action.
+
+**62. `plugin-generic-editor`** is `plugin-native-editor`'s twin for the
+GENERIC (slider-list) editor, found necessary the same day 58 was written:
+the coordinator reviewing issue (a)'s fix pointed out `SPluginEffectStrip::
+ensureParamEditor()` had the IDENTICAL strip-ownership bug, and on a platform
+where a plugin's native editor is refused (Linux/X11 VST3), the generic
+editor is the window a user actually sees — so 58 alone left a live field bug
+uncovered. Same `open-via-strip` shape, same real-main-window caveat, driving
+the new `SPluginEffectStrip::ensureGenericEditorForTest()` (a headless seam
+mirroring `editorSetParam()`/`editorValueText()`) and reading the new static
+`isGenericEditorOpenFor()`/`closeGenericEditorFor()` (`main/pluginui/
+CONTRACT.md`). Gate: `qxa.plugin_generic_editor_survives_strip`, over
+`tw.test.clap.stereoskew` (no `clap.gui`, so `openParamEditor()` genuinely
+falls through rather than merely failing a native attach).
+
+**63. No new verb was needed for `qxa.plugin_native_editor_teardown_safe`** —
+the crash it gates (`main/pluginui/CONTRACT.md`'s SIGSEGV-in-`detach()` and
+the deferred-delete-at-exit follow-up) needs no assertion at all: a script
+that opens a native editor and never closes it either segfaults (pre-fix,
+non-zero exit) or does not (post-fix), and CTest already judges a qxa case by
+EXIT CODE — the same mechanism `qxa.split_plain_screenshot`'s own teardown
+crash relies on (CLAUDE.md, "Two known crash flakes"). Deliberately violates
+`qxa.plugin_native_editor`'s own "a case that opens one MUST close it" rule;
+that IS the point.
