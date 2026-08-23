@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/loop-behaviour, issue h. AN AUDIBLE GAP AT A CYCLE WRAP, end to end
+  through the REAL playback path (readahead + the capture backend), not just
+  the engine-level harness `playback_test.cc` gates the mechanism with
+  (see its new "Cycle wrap ACROSS MULTIPLE PAGES" case, which measures the
+  same defect in isolation and is what should be read first for the
+  arithmetic).
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL (a
+  wall-clock/continuity assertion — CLAUDE.md's "When to run it SERIALLY").
+
+  THE SHAPE THAT BREAKS. The cycle region here is 150000 frames — a little
+  over TWO 65536-frame pages — deliberately more than one page: the readahead
+  window used to be purely linear in the playhead, so approaching the loop
+  end its whole ~3s window was spent on pages PAST it that could never play,
+  and no page at the loop start was ever demanded ahead of time. A loop that
+  fits inside a single page never shows this (updateFrozenPage finds the
+  SAME page it already holds), which is why the pre-existing single-page
+  regression test in playback_test.cc never caught it.
+
+  PLAYBACK IS SEEDED NEAR THE LOOP END (locator 130000 of a 0..150000
+  region), not at loopStart_ (0) — mirroring record_loop_late_start.qxa's
+  own reason for not starting at the loop start (main/shell/CONTRACT.md
+  inv. 27). Starting AT loopStart_ makes ordinary forward playback freeze
+  its pages "for free" as a side effect of minBufferFrames_'s own ~3s
+  lookahead (144000 frames, close to this loop's own 150000), which would
+  keep them warm regardless of whether the fix's own pre-fetch (H1) ever
+  ran — measured: with only the sapplication.cpp cycle-sync fix below and
+  NONE of the readahead changes, that seed shows the SAME small gap this
+  case's threshold allows, proving nothing. Seeding at 130000 instead means
+  loopStart_'s pages are reached by NOTHING except the mechanism under test,
+  and the FIRST wrap arrives in well under half a second — before an
+  unfixed linear readahead could ever have looked at position 0 by
+  accident.
+
+  test_sawtooth.wav is 192000 frames (4 s) of continuous, non-silent
+  material — comfortably longer than the 150000-frame loop, so nothing in
+  the loop region is ever silent BY CONTENT; any silence assert-audio-
+  continuity finds is the defect, not the fixture.
+
+  THE WAIT IS WALL-CLOCK, not a playhead target: the playhead never exceeds
+  the loop end while cycling, so there is no absolute position past it to
+  wait for. 10 s from a locator 20000 frames short of the wrap crosses it
+  almost immediately and then several full 150000-frame (3.125 s) passes
+  after — several complete wraps inside the recording, with margin for
+  scheduling jitter.
+-->
+<SActionScript version="1" name="playback_loop_wrap_continuity">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The cycle region: a little over two pages. set-property takes a
+         JSON ARRAY. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[150000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <!-- 20000 frames short of the wrap — see the header for why this,
+         and not 0, is what makes the case mean anything. -->
+    <set-locator position="130000"/>
+    <toggle-playback play="1"/>
+    <wait-ms ms="10000"/>
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="playback_loop_wrap_continuity.wav"
+                           minFrames="400000"/>
+
+    <!-- No run of frames below silenceLevel may be longer than 8192 frames
+         (170 ms): measured post-fix, the FIRST wrap (the readahead's
+         earliest chance to pre-fetch the loop-start pages, which is why it
+         is the tightest one) costs 4908 frames — the scheduler demand for
+         the loop-start pages has to complete once before they are warm, and
+         the first pass is the only one that cannot have started it early.
+         Every wrap after the first is gap-free (the pre-fetch is already
+         warm from the pass before). 8192 is a margin over 4908, not the
+         house live-lane bound (CLAUDE.md's 1024 frames) restated exactly —
+         that bound is for a DIFFERENT mechanism (a live lane's ring), and
+         this fix's own first-wrap cost is real and larger. The first 4096
+         frames are skipped: this is the CAPTURE backend's own paced start,
+         not the mechanism under test. Pre-fix (see the header) this same
+         measurement is two orders of magnitude larger. -->
+    <assert-audio-continuity filename="playback_loop_wrap_continuity.wav"
+                             channel="0" startFrame="4096" frameCount="-1"
+                             maxGapFrames="8192" silenceLevel="0.02"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

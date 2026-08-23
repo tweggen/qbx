@@ -5,6 +5,7 @@
 #include <qobject.h>
 #include <QRect>
 #include <functional>
+#include "app/model/sclipwindowgeometry.h"
 #include "app/model/sobjectrenderer.h"
 
 class SCut;
@@ -14,7 +15,18 @@ class SObject;
 // divider of a looping clip, one text line high — the same visual weight as the
 // reference-count numbers the track renderer prints in a clip's upper right.
 // Dragging it re-tiles the loop (see SMVActualView::loopMarkerAt).
-#define SCUT_LOOP_HANDLE_W 9
+//
+// fix/loop-behaviour (issue b): this used to be the ONLY definition, and the
+// arranger's hit test (SMVActualView::loopMarkerAt) used to be audio-only for
+// exactly that reason -- a MIDI clip's loop handle had nowhere to share
+// geometry with. Both the macro and the box function now forward to
+// app/model/sclipwindowgeometry.h, the one layer every window renderer
+// (audio's SCutRendererInline, event's SMidiCutRendererInline) AND the
+// arranger both depend on, so an audio clip's grip and a MIDI clip's are the
+// same size and the same box BY CONSTRUCTION rather than by two call sites
+// happening to agree. Kept as forwards, not deleted, so no existing call site
+// in this module or in main/timeline needs to change name.
+#define SCUT_LOOP_HANDLE_W SCLIPWIN_LOOP_HANDLE_W
 
 // How far a FADE handle parks from the clip's own edge, so it can never
 // swallow the trim / loop gesture that band already carries. It is the
@@ -29,11 +41,11 @@ class SObject;
 // so the two can never drift apart. Returns a null rect when the lane is too
 // short to show a grip — no handle is drawn and none can be grabbed.
 //
-// The height is derived from a fixed small font INSIDE this helper rather than
-// from any painter's current font: the arranger leaves the 7pt ruler font on the
-// painter after drawing the time ruler, so an ambient-font handle would be drawn
-// at one size and hit-tested at another.
-QRect scutLoopHandleRect( const QRect &clipRect, int x );
+// A thin forward to sClipWindowLoopHandleRect() (see SCUT_LOOP_HANDLE_W above);
+// kept under its historic name so nothing in objects/cut or main/timeline that
+// already spells `scutLoopHandleRect` needs to change.
+inline QRect scutLoopHandleRect( const QRect &clipRect, int x )
+{ return sClipWindowLoopHandleRect( clipRect, x ); }
 
 /**
  * The FADE handle's box (proposal 43 N5 UI). ONE geometry function, shared by

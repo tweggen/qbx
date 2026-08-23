@@ -450,10 +450,20 @@ a typo in a `target` must never read as a passing assertion. Pair it with
 
 16. **`assert-recorded-clip`'s numeric expectations are opt-in**, so one verb
     serves the mid-take assertions (`growing`, `previewNonEmpty`,
-    `minDurationFrames`) and the post-take ones. It ALSO checks the placement
-    IDENTITY on every call once the take is over — the clip's link start must
-    equal `placementFrame(trimmed)` — so a recorder that reported the right
-    terms and applied different ones fails even when no expectation was given.
+    `minDurationFrames`, `maxDurationFrames`) and the post-take ones. It ALSO
+    checks the placement IDENTITY on every call once the take is over — the
+    clip's link start must equal `placementFrame(trimmed)` — so a recorder
+    that reported the right terms and applied different ones fails even when
+    no expectation was given.
+
+16b. **`maxDurationFrames` is the ONLY upper bound in the verb, and it is
+    checked at TOLERANCE ZERO** (fix/loop-behaviour, issue g) — unlike
+    `durationFrames`/`durationTolerance`, which is a "roughly this long"
+    claim about a wall-clock-paced take, and `minDurationFrames`, which is a
+    floor. A floor alone cannot assert "the growing clip stayed inside the
+    cycle region while recording a loop" — only an upper bound can — so a
+    case gating that (`record_loop_overshoot.qxa`,
+    `record_loop_overshoot_late_start.qxa`) needs both.
 
 16a. **A CASE THAT ASSERTS `userOffsetFrames` MUST ALSO ASSERT
     `inputDevice`.** The offset comes from

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "app/model/sclipwindowgeometry.h"
 #include "app/model/slink.h"
 #include "app/objects/midi/smidicut.h"
 #include "app/objects/midi/smidisequence.h"
@@ -119,6 +120,23 @@ void paintSeq( QPainter &p, SRenderContext &ctx, const twEventSeq &seq,
     p.restore();
 }
 
+// Paint one loop-marker grab handle at a boundary divider. SHARES its box
+// with the audio renderer's own drawLoopHandle (scutrndrinline.cpp) via
+// sClipWindowLoopHandleRect, so an audio clip's loop grip and a MIDI clip's
+// are the same size and drawn from the same geometry (fix/loop-behaviour,
+// issue b) -- the identical visual the arranger's hit test grabs.
+void drawMidiLoopHandle( QPainter &p, const QRect &clipRect, int x )
+{
+    QRect box = sClipWindowLoopHandleRect( clipRect, x );
+    if( box.isNull() ) return;
+    p.fillRect( box, QColor( 225, 225, 205 ) );
+    p.setPen( QColor( 40, 40, 40 ) );
+    p.drawRect( box );
+    p.setPen( QColor( 90, 90, 90 ) );
+    for( int gx = box.center().x()-1; gx <= box.center().x()+1; gx += 2 )
+        p.drawLine( gx, box.y()+2, gx, box.bottom()-2 );
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -210,6 +228,20 @@ void SMidiCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
         const int64_t kLast = ( (int64_t) dur - 1 ) / (int64_t) loop;
         if( kFrom < 0 ) kFrom = 0;
         if( kTo > kLast ) kTo = kLast;
+
+        // Divider/handle geometry: the SAME linear map paintSeq's own xOf()
+        // uses (fix/loop-behaviour, issue b) -- so a boundary line and a
+        // handle box land exactly where the notes either side of it are
+        // drawn, and never drift from SMVActualView::loopMarkerAt's hit test,
+        // which uses this identical span-per-pixel arithmetic.
+        const double span = (double) ( tRight - tLeft );
+        const double pxPerFrame = span > 0.0 ? visib.width() / span : 0.0;
+        auto xOfAbs = [&]( offset_t frame ) {
+            return visib.left()
+                 + (int) ( ( (double) ( frame - tLeft ) ) * pxPerFrame );
+        };
+        const double segWpx = loop * pxPerFrame;
+
         for( int64_t k = kFrom; k <= kTo; ++k ) {
             // The last repetition is normally PARTIAL: the window ends where
             // it ends, mid-segment, and a note crossing that edge is clipped
@@ -220,6 +252,22 @@ void SMidiCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
             paintSeq( p, ctx, *snap.framesSeq,
                       clipStart + (offset_t) ( k * (int64_t) loop ) - first,
                       first, first + segLen, lowKey, highKey );
+
+            // A boundary divider + grab handle after every repetition that
+            // has another one following it -- the audio renderer's rule
+            // (SCutRendererInline::walkSegments), restated for the event
+            // table. `SMVActualView::loopMarkerAt` hit-tests the SAME box via
+            // the SHARED sClipWindowLoopHandleRect.
+            if( k < kLast ) {
+                const int ex = xOfAbs(
+                    clipStart + (offset_t) ( ( k + 1 ) * (int64_t) loop ) );
+                if( ex >= visib.left() && ex <= visib.right() + 1 ) {
+                    p.setPen( QColor( 70, 70, 70 ) );
+                    p.drawLine( ex, visib.top(), ex, visib.bottom() );
+                    if( segWpx >= 2 * SCLIPWIN_LOOP_HANDLE_W )
+                        drawMidiLoopHandle( p, visib, ex );
+                }
+            }
         }
     }
 

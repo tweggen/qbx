@@ -135,6 +135,16 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
                 if (loopEnd > loopStart) {
                     pos = loopStart;
                     prevFrozenPage_ = nullptr;
+                    // fix/loop-behaviour, issue h (point 5): publish the
+                    // wrapped position IMMEDIATELY, not only after a
+                    // successful batch below. The readahead thread polls
+                    // currentPos_ to know the playhead; if the very first
+                    // post-wrap page is a miss, the batch loop breaks below
+                    // WITHOUT ever storing pos, and currentPos_ is left at
+                    // its pre-wrap value (>= loopEnd) — so the readahead
+                    // never learns the wrap happened and keeps demanding
+                    // pages past loopEnd_ that can never play.
+                    currentPos_.store(pos, std::memory_order_relaxed);
                 }
             }
 
@@ -168,6 +178,12 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
                 int64_t readaheadGap = (int64_t)readaheadPos - (int64_t)pos;
                 batchSize = std::min(batchSize, (length_t)readaheadGap);
             } else {
+                // fix/loop-behaviour, issue h: this exit was missing the
+                // notify every OTHER miss/underrun path already has (see the
+                // page-not-available branch above and the passthrough path
+                // below), so recovery here waited for the readahead's next
+                // unconditional 20 ms tick instead of being woken at once.
+                readaheadCv_.notify_one();
                 break;  // Underrun
             }
 
@@ -298,6 +314,10 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
             if (loopEnd > loopStart) {
                 pos = loopStart;
                 prevFrozenPage_ = nullptr;  // Reset state chain for loop restart
+                // fix/loop-behaviour, issue h (point 5): publish the wrap AT
+                // the wrap, not only after a successful batch — see the
+                // resample path's identical fix above for why.
+                currentPos_.store(pos, std::memory_order_relaxed);
             }
         }
 
@@ -333,9 +353,13 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
             int64_t readaheadGap = (int64_t)readaheadPos - (int64_t)pos;
             batchSize = std::min(batchSize, (length_t)readaheadGap);
         } else {
-            // Serious underrun: output silence
+            // Serious underrun: output silence. fix/loop-behaviour, issue h:
+            // this exit was missing the notify every other miss/underrun path
+            // already has, so recovery waited for the readahead's next
+            // unconditional 20 ms tick instead of being woken immediately.
             zeroChannels(outChannels, nChannels, (std::size_t) outOffset,
                          (std::size_t) (nFrames - produced));
+            readaheadCv_.notify_one();
             return produced;
         }
 
@@ -620,7 +644,29 @@ PlaybackState AudioEngine::startPlayback() {
     uint64_t readaheadPos = readaheadComputedUpTo_;  // Plain uint64_t, no .load() needed
     uint64_t playPos = currentPos_.load(std::memory_order_relaxed);
 
-    if (readaheadPos >= playPos + minBufferFrames_) {
+    // fix/loop-behaviour, issue h: WHILE CYCLING, readaheadComputedUpTo_ is
+    // capped near loopEnd_ (range A never freezes pages PAST the wrap that
+    // could never play — the whole point of H1), so it can UNDERSHOOT
+    // `playPos + minBufferFrames_` forever whenever the loop is shorter than
+    // the priming window, even once the readahead has genuinely finished
+    // everything there is to freeze for this pass. The buffer this check
+    // means to measure is "how much upcoming material is ready", which while
+    // cycling is the rest of THIS pass PLUS whatever range B has already
+    // pre-fetched of the NEXT one — not a single linear difference.
+    uint64_t covered = (readaheadPos > playPos) ? (readaheadPos - playPos) : 0;
+    if (cycleEnabled_.load(std::memory_order_relaxed)) {
+        const uint64_t ls = loopStart_.load(std::memory_order_relaxed);
+        const uint64_t le = loopEnd_.load(std::memory_order_relaxed);
+        if (le > ls) {
+            const uint64_t cap = std::min(readaheadPos, le);
+            const uint64_t thisPass = (cap > playPos) ? (cap - playPos) : 0;
+            const uint64_t nextPass = (readaheadPostWrapComputedUpTo_ > ls)
+                ? (readaheadPostWrapComputedUpTo_ - ls) : 0;
+            covered = thisPass + nextPass;
+        }
+    }
+
+    if (covered >= minBufferFrames_) {
         // Sufficient buffer built; transition to PLAYING
         playbackState_.store(PlaybackState::PLAYING, std::memory_order_release);
         TW_LOGI( "playback", "[PLAYBACK] Minimum buffer reached (%.1f sec), starting playback",
@@ -687,6 +733,17 @@ void AudioEngine::readaheadLoop() {
         uint64_t currentPos = currentPos_.load(std::memory_order_relaxed);
         offset_t pageStart = twFloorAlign( (offset_t) currentPos, (offset_t) pageSize );
 
+        // fix/loop-behaviour, issue h. Loop state, read once per tick so the
+        // wrap detector and the two-range window below agree on the same
+        // snapshot (a boundary changing mid-tick would desync them).
+        const bool cyclingNow = cycleEnabled_.load(std::memory_order_relaxed);
+        const uint64_t loopStartNow = loopStart_.load(std::memory_order_relaxed);
+        const uint64_t loopEndNow = loopEnd_.load(std::memory_order_relaxed);
+        const bool loopValidNow = cyclingNow && loopEndNow > loopStartNow;
+        const uint64_t loopStartPage = loopValidNow
+            ? (uint64_t) twFloorAlign( (offset_t) loopStartNow, (offset_t) pageSize )
+            : 0;
+
         // Detect a real playhead jump (transport seek or loop wrap): the playhead
         // moved backwards, or past everything we've frozen. During normal playback
         // pageStart advances monotonically and stays at or behind the frontier, so
@@ -694,13 +751,39 @@ void AudioEngine::readaheadLoop() {
         // on every iteration — the readahead is *supposed* to run ahead.)
         if (lastPlayheadPage != UINT64_MAX &&
             (pageStart < lastPlayheadPage || pageStart > readaheadComputedUpTo_)) {
-            TW_LOGI( "playback", "[READAHEAD] Playhead jump: page %llu -> %llu (frontier=%llu), restarting chain",
-                    (unsigned long long)lastPlayheadPage, (unsigned long long)pageStart,
-                    (unsigned long long)readaheadComputedUpTo_ );
-            readaheadPrevPage_ = nullptr;
-            // The chain restarts at the playhead; the first page frozen from here
-            // is a discontinuity, which freezePage() answers with reset()+seekTo().
-            readaheadComputedUpTo_ = pageStart;
+            // A CYCLE WRAP is a jump that lands EXACTLY on the loop-start
+            // page while cycling. Unlike a real seek, it was ANTICIPATED —
+            // the range-B loop below pre-fetches loop-start pages ahead of
+            // time — so the frontier this tick's own pre-fetch already built
+            // for THIS pass must not be thrown away with the rest of a
+            // "restart from cold" jump. A seek that happens to land on the
+            // loop-start page adopts the same pre-fetch, which is harmless:
+            // it is still the position the playhead is actually at.
+            const bool isWrap = loopValidNow
+                && (uint64_t) pageStart == loopStartPage
+                && readaheadPostWrapComputedUpTo_ > (uint64_t) pageStart;
+            if (isWrap) {
+                TW_LOGI( "playback", "[READAHEAD] Cycle wrap: page %llu -> %llu, "
+                        "adopting pre-fetched frontier %llu (was %llu)",
+                        (unsigned long long)lastPlayheadPage, (unsigned long long)pageStart,
+                        (unsigned long long)readaheadPostWrapComputedUpTo_,
+                        (unsigned long long)readaheadComputedUpTo_ );
+                readaheadPrevPage_ = readaheadPostWrapPrevPage_;
+                readaheadComputedUpTo_ = readaheadPostWrapComputedUpTo_;
+            } else {
+                TW_LOGI( "playback", "[READAHEAD] Playhead jump: page %llu -> %llu (frontier=%llu), restarting chain",
+                        (unsigned long long)lastPlayheadPage, (unsigned long long)pageStart,
+                        (unsigned long long)readaheadComputedUpTo_ );
+                readaheadPrevPage_ = nullptr;
+                // The chain restarts at the playhead; the first page frozen from here
+                // is a discontinuity, which freezePage() answers with reset()+seekTo().
+                readaheadComputedUpTo_ = pageStart;
+            }
+            // Consumed either way: a fresh pre-fetch is earned for whichever
+            // wrap comes NEXT, never carried over from one that just happened.
+            readaheadPostWrapPrevPage_ = nullptr;
+            readaheadPostWrapComputedUpTo_ = 0;
+            pendingDemand2_.reset();
         }
         lastPlayheadPage = pageStart;
 
@@ -716,6 +799,9 @@ void AudioEngine::readaheadLoop() {
         int pagesNeeded = (int)((targetEnd - pageStart + pageSize - 1) / pageSize);
         if (pagesNeeded < READAHEAD_PAGES) pagesNeeded = READAHEAD_PAGES;
 
+        if (!loopValidNow) {
+        // NOT CYCLING: the ORIGINAL linear window, byte-for-byte unchanged
+        // (issue h, H7 — non-cycle playback stays identical).
         for (int i = 0; i < pagesNeeded; i++) {
             uint64_t pos = pageStart + (uint64_t)i * pageSize;
             // No "already computed" shortcut on the frontier here: an edit can
@@ -849,6 +935,132 @@ void AudioEngine::readaheadLoop() {
                             pos, page ? page->validAspects.load() : 0 );
                 }
                 break;
+            }
+        }
+        } else {
+            // CYCLING (fix/loop-behaviour, issue h). One page-attempt body,
+            // shared by range A (the rest of THIS pass) and range B (the
+            // START of the next pass, demanded/frozen AHEAD of the wrap —
+            // H1), so the two can never drift into two different answers for
+            // "is this page current" the way two hand-written copies could.
+            // Returns true to keep advancing within the calling range, false
+            // to stop it for this tick (a scheduler demand is now in flight,
+            // or a legacy freeze blocked/failed).
+            auto tryPage = [&]( uint64_t pos, uint64_t windowStart, int windowPages,
+                                std::shared_ptr<twOutputPage> &prevPage,
+                                uint64_t &computedUpTo,
+                                std::shared_ptr<CaptureRevalidator::GraphDemand> &pending,
+                                uint64_t &pendingStart, uint64_t &pendingEnd,
+                                uint64_t &pendingEpoch ) -> bool {
+                const uint64_t epochNow = synthOutput_->contentEpochNow();
+                auto existing = synthOutput_->getPageIfExists(pos);
+                if (existing && existing->validAspects != 0 &&
+                    existing->contentEpoch.load() >= epochNow) {
+                    prevPage = existing;
+                    if (pos + pageSize > computedUpTo) computedUpTo = pos + pageSize;
+                    return true;
+                }
+                if (scheduler_) {
+                    const uint64_t wantEnd = windowStart + (uint64_t) windowPages * pageSize;
+                    const bool covered = pending && !pending->done()
+                        && pendingEpoch == epochNow
+                        && pendingStart <= pos && pendingEnd >= wantEnd;
+                    if (!covered) {
+                        const int n = (int)((wantEnd - pos) / pageSize);
+                        if (n > 0) {
+                            pending = scheduler_->requestGraphPages(
+                                synthOutput_, pos, n, /*priority*/ 9);
+                            pendingStart = pos;
+                            pendingEnd = wantEnd;
+                            pendingEpoch = epochNow;
+                        }
+                    }
+                    return false;   // frontier advances on later ticks as pages land
+                }
+                // Legacy synchronous path (no scheduler — SMARAGD_REVAL_WORKERS=0).
+                auto page = synthOutput_->requestPage(
+                    pos, nullptr, 0, (length_t)pageSize, engineSampleRate_, prevPage);
+                if (page && page->validAspects != 0) {
+                    prevPage = page;
+                    if (pos + pageSize > computedUpTo) computedUpTo = pos + pageSize;
+                    return true;
+                }
+                if (prevPage != nullptr) {
+                    uint64_t skipPos = pos + (uint64_t)SKIP_DISTANCE * pageSize;
+                    auto skipPage = synthOutput_->requestPage(
+                        skipPos, nullptr, 0, (length_t)pageSize, engineSampleRate_, nullptr);
+                    if (skipPage && skipPage->validAspects != 0) {
+                        prevPage = skipPage;
+                        computedUpTo = skipPos + pageSize;
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            // How many of this tick's pagesNeeded pages fall before loopEnd_
+            // (range A) versus after the wrap, at loopStart_ (range B). A
+            // loop shorter than the window (H4's multi-page loops are the
+            // common case, but a short loop is not excluded) simply gives
+            // range B more than one wrap's worth of budget; only the FIRST
+            // pagesAfterWrap pages from loopStartPage are asked for; the rest
+            // of a very short loop is already covered by range A on a later
+            // tick once the wrap actually happens.
+            uint64_t pagesBeforeWrap = (uint64_t) pagesNeeded;
+            if ((uint64_t) pageStart < loopEndNow) {
+                const uint64_t framesToWrap = loopEndNow - (uint64_t) pageStart;
+                pagesBeforeWrap = (framesToWrap + pageSize - 1) / pageSize;
+                if (pagesBeforeWrap > (uint64_t) pagesNeeded)
+                    pagesBeforeWrap = (uint64_t) pagesNeeded;
+            } else {
+                // pageStart is already AT/PAST loopEnd_: this tick's window is
+                // entirely post-wrap (the wrap already happened and the jump
+                // detector above has re-anchored pageStart at loopStartPage).
+                pagesBeforeWrap = 0;
+            }
+            const uint64_t pagesAfterWrap = (uint64_t) pagesNeeded - pagesBeforeWrap;
+
+            // Range A: the rest of this pass, up to loopEnd_. Same state as
+            // the non-cycling path (readaheadPrevPage_/readaheadComputedUpTo_/
+            // pendingDemand_), so a pass that never reaches the wrap this
+            // tick is indistinguishable from ordinary linear playback.
+            bool rangeAStopped = false;
+            for (uint64_t i = 0; i < pagesBeforeWrap; i++) {
+                const uint64_t pos = (uint64_t) pageStart + i * pageSize;
+                if (!tryPage( pos, (uint64_t) pageStart, pagesNeeded,
+                             readaheadPrevPage_, readaheadComputedUpTo_,
+                             pendingDemand_, pendingDemandStart_, pendingDemandEnd_,
+                             pendingDemandEpoch_ )) {
+                    rangeAStopped = true;
+                    break;
+                }
+            }
+
+            // Range B (H1): the LOOP-START pages, pre-fetched ahead of the
+            // wrap so they are already current when pullBlock() actually
+            // crosses loopEnd_ (H3). Only pursued once range A settled
+            // cleanly this tick — a demand already claims this tick's
+            // budget, and issuing a second one for a position the playhead
+            // has not reached yet would compete with the more urgent one.
+            if (!rangeAStopped && pagesAfterWrap > 0) {
+                // The chain must start from THIS PASS's real predecessor at
+                // loopStartPage when range A's own walk already reached it
+                // (a short loop, or a wrap that just happened), never from a
+                // stale chain left over from the pre-fetch two wraps ago.
+                if (readaheadPostWrapComputedUpTo_ <= loopStartPage) {
+                    readaheadPostWrapPrevPage_ = nullptr;
+                    readaheadPostWrapComputedUpTo_ = loopStartPage;
+                }
+                for (uint64_t i = 0; i < pagesAfterWrap; i++) {
+                    const uint64_t pos = loopStartPage + i * pageSize;
+                    if (pos + pageSize <= readaheadPostWrapComputedUpTo_)
+                        continue;   // already pre-fetched by an earlier tick
+                    if (!tryPage( pos, loopStartPage, (int) pagesAfterWrap,
+                                 readaheadPostWrapPrevPage_, readaheadPostWrapComputedUpTo_,
+                                 pendingDemand2_, pendingDemandStart2_, pendingDemandEnd2_,
+                                 pendingDemandEpoch2_ ))
+                        break;
+                }
             }
         }
     }

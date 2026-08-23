@@ -82,6 +82,8 @@ private slots:
     void commitMidiDuration();
     void commitMidiCut();
     void commitTimebase( int index );
+    void commitMidiLoopLength();
+    void onClearMidiLoop();
 
 private:
     // One resolved selection entry. Built fresh on every use and never stored
@@ -187,6 +189,13 @@ private:
     QDoubleSpinBox *velScaleSpin_     = nullptr;
     QSpinBox       *midiChannelSpin_  = nullptr;
     QComboBox      *timebaseCombo_    = nullptr;
+    // fix/loop-behaviour (issue b): an event clip's window carries a loop
+    // exactly as an audio clip's does (SClipWindow::loopLength), but the
+    // audio page's loop field reads SCut-only getters deliberately not on
+    // the window interface (main/timeline/CONTRACT.md inv. 2) -- so this is
+    // its OWN field on the MIDI page, not a null-checked reuse of loopSpin_.
+    QSpinBox       *midiLoopSpin_        = nullptr;
+    QPushButton    *midiClearLoopButton_ = nullptr;
 };
 
 #endif // SCLIPPROPERTIESPANEL_H

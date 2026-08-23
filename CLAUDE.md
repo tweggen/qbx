@@ -2423,6 +2423,87 @@ handling, for the standing reason `main/eventui/CONTRACT.md` already gives —
 `QApplication::focusWidget()` is always null in a `--test-case` run, because
 the main window is never shown there.
 
+## Three loop-behaviour bugs: a MIDI clip's loop, a recording that shot past its cycle region, and a cycle wrap that could hang for hundreds of ms (fix/loop-behaviour, 2026-08-23)
+
+Three independent user reports, one branch, three different subsystems.
+Invariants: `main/timeline/CONTRACT.md` inv. 42, `main/shell/CONTRACT.md`
+inv. 30-31, `tw303a/playback/CONTRACT.md` ("The readahead demands ACROSS a
+cycle wrap"), `main/testkit/CONTRACT.md` 16b.
+
+**(b) A MIDI clip could not be looped, or un-looped, from the arranger.**
+`SMidiCut` already fully supported looping in the model, the action layer and
+the renderer — what was missing was every DRAG gesture and the loop-marker
+hit test, which all resolved `dynamic_cast<SCut*>` and bailed silently for
+anything else, while the hover cursor had no such guard and promised a
+gesture that then refused. Fixed by making the three loop-drag branches and
+`loopMarkerAt()` speak `SClipWindow` (the same resolution `resize-clip`
+already used), with the audio `SCut` fast path kept byte-identical inside an
+`if (SCut *cut = tgt.cut)` branch. The loop-handle GEOMETRY moved to
+`app/model/sclipwindowgeometry.h` — the one layer both the audio and event
+renderers and the arranger all depend on — so an audio clip's grip and a MIDI
+clip's are the same box by construction, not by two renderers happening to
+agree (proposal 41 M7's `tagChipRect()` lesson, applied a second time). The
+Clip Properties panel got its own loop field on the MIDI page, matching that
+page's existing per-kind design rather than widening the audio page with a
+null check. Gate: `qxa.midi_clip_loop_drag`, through the real `drag-clip-edge`
+handlers, paired with `assert-midi-events scope="feed"` because a model-only
+assertion sits below the paint/hit-test layer this bug lived in. NOT gated:
+dragging the loop-marker HANDLE itself (no verb can target its computed pixel
+position) and the Clip Properties panel's own widgets (no verb drives them,
+the same gap that leaves the Options pages unreachable headlessly).
+
+**(g) A recording made with Cycle on kept growing past the loop region
+instead of wrapping.** `SAudioRecorder::poll()` read the cycle region only at
+`start()` and then grew the preview clip from the total captured length,
+UNWRAPPED. Fixed by applying, LIVE on every tick, the SAME pass arithmetic
+`commitPlacement_()` already applies once at `stop()` — so at every instant
+the growing clip shows exactly what the current pass would commit if the
+take stopped right now, restarting at `cycleIn_` on every wrap.
+`reseatClips_()` (the record-start anchor) now refuses while cycling, since
+it used to unconditionally reseat the growing clip to the record-start
+position and leave it there for the whole take on a LATE-starting pass. The
+COMMITTED take is untouched — the growing clip is always removed before the
+real segments are placed. Gates: `qxa.record_loop_overshoot` (loop-start
+start) and `qxa.record_loop_overshoot_late_start` (the record_loop_late_start
+shape), both watched failing pre-fix, on a NEW `maxDurationFrames` attribute
+added to `assert-recorded-clip` (a tolerance-ZERO upper bound —
+`minDurationFrames` alone cannot assert "stayed inside the region").
+
+**(h) A cycle wrap could produce an audible gap up to hundreds of
+milliseconds.** The readahead window was purely linear in the playhead, so
+approaching the loop end its whole ~3 s window was spent on pages PAST it
+that could never play, and no page at the loop start was ever demanded ahead
+of time — invisible on a loop that fits in one 65536-frame page (the only
+shape the pre-existing regression test had), because `updateFrozenPage`
+then finds the same page it already holds regardless. Fixed with a
+SECOND, separately-tracked readahead window that pre-fetches the loop-start
+pages ahead of the wrap, adopted (not collapsed) by the jump detector when a
+wrap is actually detected; two missing `readaheadCv_.notify_one()` calls on
+underrun exits; and publishing the wrapped position to `currentPos_`
+immediately at the wrap rather than only after a successful batch. A THIRD,
+unanticipated fix fell out of gating this one: `AudioEngine::startPlayback()`'s
+buffering-ready check was a linear `frontier >= playhead + 3s`, which the
+capped cycling frontier can never satisfy for a loop shorter than 3 s — found
+by a qxa case reporting ZERO captured frames for an entire run, not merely a
+gap at the wrap, and fixed by making the check loop-aware the same way the
+demand side is. A FOURTH, genuinely separate pre-existing gap surfaced while
+building the qxa gate: `SApplication::setPlaybackRunning()` — the one entry
+point every PROGRAMMATIC transport start goes through — never re-synced the
+speaker's cycle state from the project, unlike the GUI Play button's own
+handler; a headless run's `cycle-enable` therefore never reached the engine
+at all through `toggle-playback`, by any property-setting order. Gates: a new
+multi-page cycle-wrap case in `tw303a/playback/tests/playback_test.cc`
+(watched failing pre-fix: 151552 of 163840 frames silent/short, reliably;
+post-fix: 0 of 163840) and `qxa.playback_loop_wrap_continuity` (watched
+failing pre-fix two different ways — see the header, which records why
+seeding at the loop start proves nothing). Measured post-fix: the first wrap
+after a cold start costs 4908 frames; every wrap after that is gap-free. NOT
+verified: the legacy synchronous readahead path (no `CaptureRevalidator`
+scheduler) shares the same code and is what the C++ harness exercises, but
+production and every qxa gate run with the scheduler attached, which is what
+the qxa case actually exercises end to end — real device latency and jitter
+are not covered by either.
+
 ## Dependencies
 
 ### Core

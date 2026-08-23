@@ -314,7 +314,7 @@ const Fixture kFixtures[] = {
     { "assert-recorded-clip",
       "<assert-recorded-clip trackPath='1,0' clips='1' takes='3' passes='3'"
       " startFrame='48000' startTolerance='0' durationFrames='48000'"
-      " durationTolerance='0' minDurationFrames='24000'"
+      " durationTolerance='0' minDurationFrames='24000' maxDurationFrames='96000'"
       " inputLatencyFrames='4800' outputLatencyFrames='1024'"
       " userOffsetFrames='-960' compensationFrames='-6784' trimmedFrames='0'"
       " growing='true' previewNonEmpty='true' sourceAtStartFrame='0'"

@@ -327,3 +327,129 @@ first iteration only — the frontier is reset to 0 by `startReadahead()`, so an
 unconditional wait there made a fully-warm start still report BUFFERING on the
 first poll. Every `continue` in the loop still lands on a wait, so this cannot
 become a spin.
+
+### The readahead demands ACROSS a cycle wrap (fix/loop-behaviour, issue h, 2026-08-23)
+
+**Read this before touching the readahead loop or `startPlayback()`'s
+buffering check — both were wrong in ways a single-page loop cannot show.**
+
+The readahead window (`readaheadLoop()`) used to be purely linear in the
+playhead: `pos = pageStart + i*pageSize` for `i` in `[0, pagesNeeded)`, with no
+reference to `loopEnd_`/`loopStart_` at all. Approaching a cycle's end, the
+whole ~3 s window was spent on pages PAST `loopEnd_` that could never play, and
+no page at `loopStart_` was ever demanded ahead of the wrap. A loop that fits
+inside one 65536-frame page never shows this — inv. 5/6 above already cover
+that shape — because `updateFrozenPage(loopStart)` finds the SAME page it
+already holds regardless of what the readahead's window logic does. A loop
+spanning more than one page is what breaks: `playback_test.cc`'s "Cycle wrap
+ACROSS MULTIPLE PAGES" case is the first regression test with that shape, and
+`qxa.playback_loop_wrap_continuity` gates the same failure end to end through
+the capture backend. Measured pre-fix: essentially the ENTIRE recording is
+silence when the loop starts within half a second of the wrap (a linear
+readahead, seeded there, has never looked at `loopStart_` by the time the wrap
+arrives) — the case's own header records the exact numbers.
+
+**The fix is TWO WINDOWS, not one.** While cycling, each tick splits its
+`pagesNeeded` budget at `loopEnd_`:
+
+* **Range A** — the rest of THIS pass, up to `loopEnd_`. Uses the SAME state
+  as non-cycling playback (`readaheadPrevPage_`, `readaheadComputedUpTo_`,
+  `pendingDemand_`), so a pass that never reaches the wrap on a given tick is
+  indistinguishable from ordinary linear playback — and the non-cycling code
+  path itself is UNTOUCHED (a separate `if (!loopValidNow)` branch, byte-for-
+  byte the pre-fix loop), which is what makes non-cycle playback byte-
+  identical (H7) a matter of construction, not measurement.
+* **Range B** — the LOOP-START pages, pre-fetched AHEAD of the wrap once range
+  A's own window for this tick settled cleanly. A SEPARATE chain
+  (`readaheadPostWrapPrevPage_`, `readaheadPostWrapComputedUpTo_`,
+  `pendingDemand2_`/`pendingDemandStart2_`/`pendingDemandEnd2_`/
+  `pendingDemandEpoch2_`) — mirrored, not shared, because the two windows are
+  not contiguous with each other and a shared frontier could not describe
+  "how far into THIS pass" and "how far pre-fetched into the NEXT one" at the
+  same time.
+
+**The jump detector must tell a WRAP from a SEEK**, or the pre-fetch is
+pointless: a wrap lands exactly on the loop-start page and moves backward,
+which is indistinguishable from a real backward seek by position alone. The
+distinguishing signal is `readaheadPostWrapComputedUpTo_ > pageStart` —
+something has actually been pre-fetched for a pass that has not started yet.
+When true, the frontier is ADOPTED (`readaheadComputedUpTo_ =
+readaheadPostWrapComputedUpTo_`, `readaheadPrevPage_ = readaheadPostWrapPrevPage_`)
+instead of being collapsed to `pageStart` the way a real jump still is (H5,
+unchanged for an actual seek). Either way `readaheadPostWrapComputedUpTo_` and
+its chain are CONSUMED (reset to empty) — a fresh pre-fetch is earned for
+whichever wrap comes NEXT, never carried over from the one that just happened.
+
+**`AudioEngine::startPlayback()`'s buffering check had to become loop-aware
+too, and this was NOT anticipated going in — it was found by a qxa case
+seeded away from `loopStart_` reporting ZERO captured frames for the WHOLE
+run, not merely a gap at the wrap.** The check is `readaheadComputedUpTo_ >=
+playPos + minBufferFrames_` (144000 frames, ~3 s) — a LINEAR difference. Once
+range A caps `readaheadComputedUpTo_` near `loopEnd_` (the whole point of not
+wasting the window past it), that difference can UNDERSHOOT the threshold
+FOREVER whenever the loop is shorter than `minBufferFrames_` and the playhead
+is not close to `loopStart_` — the readahead can have frozen everything there
+is to freeze for the pass and still never satisfy a check written for
+unbounded linear growth, so `startPlayback()` never returns PLAYING and the
+device callback never truly starts advancing the playhead. Fixed by making the
+"how much is buffered" measure loop-aware exactly where the demand side
+already is: `min(readaheadComputedUpTo_, loopEnd_) - playPos` (coverage within
+THIS pass) PLUS `readaheadPostWrapComputedUpTo_ - loopStart_` (coverage
+pre-fetched for the NEXT one), summed and compared against `minBufferFrames_`
+in place of the old linear difference. Non-cycling playback reads the
+identical linear difference it always did (the loop-aware branch is gated on
+`cycleEnabled_`), so this is a pure addition, not a rewrite of the existing
+check.
+
+**`readaheadCv_.notify_one()` was missing from two of `pullBlock()`'s
+underrun/miss exits** (the resample path's readahead-gap `break` and the
+passthrough path's "serious underrun" branch) — every OTHER miss path already
+notifies, and these two silently did not, so recovery from exactly those two
+exits waited for the readahead's next unconditional 20 ms tick instead of
+being woken immediately. Both now notify, matching every sibling exit.
+
+**The wrapped position is now published to `currentPos_` AT the wrap**, not
+only after a successful batch. The readahead thread learns the playhead moved
+by polling `currentPos_`; before this fix, a wrap whose first post-wrap page
+missed left `currentPos_` at its pre-wrap (`>= loopEnd_`) value, so the
+readahead kept demanding pages past `loopEnd_` that could never play and never
+learned the wrap had happened at all.
+
+Gates: `playback_test.cc`'s "Cycle wrap ACROSS MULTIPLE PAGES" case (watched
+failing pre-fix: 151552 of 163840 frames silent/short, reliably, across
+repeated runs; post-fix: 0 of 163840, every run) and the qxa case
+`playback_loop_wrap_continuity` (watched failing pre-fix — first with the
+locator at 0, which coincidentally warms `loopStart_`'s pages "for free" via
+`minBufferFrames_`'s own lookahead and proves NOTHING either way, a trap this
+gate's own header records so it is not rediscovered; then, seeded 20000 frames
+short of the wrap, essentially the WHOLE recording silent). Measured post-fix:
+the FIRST wrap costs 4908 frames (the one pass whose pre-fetch could not have
+started early); every wrap after that is gap-free.
+
+**A genuinely separate, PRE-EXISTING gap this fix also closed in passing**:
+`SApplication::setPlaybackRunning()` (main/shell/CONTRACT.md's own entry) did
+not re-sync the speaker's cycle state from the project before starting
+output — only `SMainWindow`'s GUI Play handler did, via
+`syncCyclePlayback()`, immediately before its own call to `startOutput()`.
+Every PROGRAMMATIC transport start (`toggle-playback`, `record-start`, the
+count-in/pre-roll preamble) went through `setPlaybackRunning()` alone, so
+`cycle-enable` followed by a testkit `toggle-playback` left the speaker's
+cycle atomics at their construction-time `false`/0/0 whenever the property
+change fired before the speaker was ever asked about — which a headless
+`--test-case` run hits on the very first `cycle-enable` of the process. A
+real Play BUTTON click was never affected. Found only because
+`playback_loop_wrap_continuity.qxa` could not get `AudioEngine::cycleEnabled_`
+to read true AT ALL through `toggle-playback`, by ANY property-setting order —
+confirmed by instrumenting `twSpeaker::setCycle()` directly and observing it
+was never called.
+
+**NOT fully verified**: the LEGACY synchronous readahead path (no
+`CaptureRevalidator` scheduler, `SMARAGD_REVAL_WORKERS=0`) shares the SAME
+range-A/range-B code (`tryPage`'s non-scheduler branch) and is what
+`playback_test.cc`'s C++ harness exercises directly — that half is gated.
+Production and every qxa gate run with the scheduler attached
+(`twSpeaker::startOutput()` calls `engine->setScheduler(pageScheduler_)`
+unconditionally), which is the path `qxa.playback_loop_wrap_continuity`
+exercises end to end. Real device latency, jitter, and a loop shorter than
+one page combined with heavy concurrent scheduler load are not covered by
+either gate.

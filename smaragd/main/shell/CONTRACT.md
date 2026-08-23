@@ -373,6 +373,79 @@ start and a record stop MEAN in the app.
     anywhere else (a punch-out, the record button again), and stops the take
     when closed.
 
+30. **THE GROWING CLIP NEVER OVERSHOOTS THE CYCLE REGION, AND `reseatClips_()`
+    IS THE RECORD-START ANCHOR ONLY** (fix/loop-behaviour, issue g,
+    2026-08-23). `cycleIn_`/`cycleOut_` were read once at `start()` and never
+    consulted again while growing — `poll()` set `a.cut->setDuration(shown)`
+    from the UNWRAPPED total, so a loop take's preview grew past the cycle's
+    own end for as long as the take ran, visually "shooting over" the loop
+    onto the track beyond it (a real user report). `poll()` now applies, LIVE,
+    the SAME pass arithmetic `commitPlacement_()` already applies once at
+    `stop()` — `loopLen = cycleOut_ - cycleIn_`, `rel = (firstPlace + shown) -
+    cycleIn_` clamped to ≥ 0, `inLoop = rel mod loopLen` — so at every instant
+    the growing clip shows exactly what the CURRENT pass would commit if the
+    take stopped right now: anchored at `cycleIn_`
+    (`a.link->setStartTime(cycleIn_)`), its duration `inLoop` (never exceeds
+    `loopLen` by construction of a modulo), and its content window
+    (`a.cut->setStartOffset(...)`) reading the tail of the capture — a
+    possibly-NEGATIVE offset for a pass that started mid-cycle, i.e. leading
+    silence, exactly the mechanism invariant 27 above already established for
+    the COMMITTED path. Reachable only once `placement_.anchored` (there is no
+    `firstPlace` before that); before the anchor a cycling take grows plainly,
+    same as the non-cycle path.
+
+    `reseatClips_()` — the record-start anchor — now REFUSES while `cycle_` is
+    set: it used to unconditionally reseat every growing clip to
+    `placementFrame(trimmed_)` on the anchor tick, which for a LATE-STARTING
+    pass (recording begun partway into the cycle, invariant 27's shape) put
+    the clip at the record-start position and left it there for the WHOLE
+    take — `poll()`'s cycle branch is what reseats to `cycleIn_` instead, on
+    the very first post-anchor tick, before any wrap has even happened.
+
+    `cycleIn_`/`cycleOut_` are read ONCE and never refreshed while a take is
+    in flight, matching this class's existing policy for `punchIn_`/
+    `punchOut_` (see their own header comment): a cycle-marker edit mid-take
+    must not move the goalposts under a take already running.
+
+    **The committed take is untouched by any of this** — `commitPlacement_()`
+    reads only `placement_`, `trimmed_`, `content_->availableFrames()` and the
+    cached `cycleIn_`/`cycleOut_`, none of which this touches; the growing
+    clip is always REMOVED before the real segments are placed
+    (`removeGrowingClips_()`, invariant 25). Gates:
+    `record_loop_overshoot.qxa`, `record_loop_overshoot_late_start.qxa` —
+    both watched failing pre-fix, on `maxDurationFrames` (a new, tolerance-0
+    upper-bound attribute on `assert-recorded-clip`, testkit/CONTRACT.md) and
+    `startFrame` respectively — plus `record_loop_takes.qxa`,
+    `record_loop_late_start.qxa` and the rest of the L3b suite staying green
+    with their exact pre-existing measured numbers (proof the COMMITTED
+    shape did not move).
+
+31. **`setPlaybackRunning(true)` RE-SYNCS THE SPEAKER'S CYCLE STATE FROM THE
+    PROJECT BEFORE STARTING OUTPUT** (fix/loop-behaviour, issue h,
+    2026-08-23). `SMainWindow::syncCyclePlayback()` pushes
+    `Cycle`/`RangeStart`/`RangeEnd`/`RangeValid` to `twSpeaker::setCycle()` on
+    every property change AND again immediately before its own Play-button
+    handler calls `startOutput()` — but this function, the ONE entry point
+    every PROGRAMMATIC transport start goes through (`toggle-playback`,
+    `record-start`, the count-in/pre-roll preamble), only ever relied on the
+    property-change push. That push silently no-ops whenever
+    `SApplication::getSpeaker()` answers null at the moment the property is
+    set, which a headless `--test-case` run hits on the FIRST `cycle-enable`
+    of the process — so `cycle-enable` followed by `toggle-playback` left
+    `twSpeaker`'s cycle atomics at their construction-time `false`/0/0 no
+    matter what order the properties were set in, and the engine
+    `startOutput()` was about to create never saw the loop region at all. A
+    real Play BUTTON click was never affected (`SMainWindow`'s own re-sync
+    covers it); every testkit-driven and every recorder-driven transport
+    start was. Found only because `qxa.playback_loop_wrap_continuity`
+    (tw303a/playback/CONTRACT.md) could not get `AudioEngine::cycleEnabled_`
+    to read true through `toggle-playback` by ANY property-setting order —
+    confirmed by instrumenting `twSpeaker::setCycle()` directly and observing
+    it was never called at all. Fixed by reading the same four properties
+    `syncCyclePlayback()` reads and calling `t3Speaker_->setCycle()`
+    immediately before `beginRun()`/`startOutput()`, so every programmatic
+    start now gets the same guarantee the GUI path already had.
+
 ### Known limitation: a record stop STOPS the transport
 
 `stop()` ends the transport and returns the playhead to the record start,

@@ -1858,9 +1858,16 @@ offset_t SMVActualView::getTimeOf( int x ) const
 int SMVActualView::loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) const
 {
     if( !clip || !clip->hasStartTime() ) return 0;
-    SCut *cut = dynamic_cast<SCut*>( &clip->getSObject() );
-    if( !cut || !cut->isLooping() ) return 0;
-    length_t seg = cut->getLoopLength().frames();
+    // fix/loop-behaviour (issue b): SClipWindow, not SCut -- an SMidiCut's
+    // loop handles are grabbable exactly like an SCut's, sharing the same
+    // geometry (scutLoopHandleRect / sClipWindowLoopHandleRect) the MIDI
+    // renderer now draws with (main/objects/midi/src/smidirndrinline.cpp).
+    // SClipWindow::parametersOf resolves through a wrapped take column the
+    // same way clipEditTargetOf() does, so the hit test and the drag it
+    // arms agree on which object's loop is being grabbed.
+    SClipWindow *win = SClipWindow::parametersOf( clip->getSObject() );
+    if( !win || !win->isLooping() ) return 0;
+    length_t seg = win->loopLength();
     if( seg <= 0 ) return 0;
     offset_t start = clip->getStartTime();
 
@@ -1875,7 +1882,7 @@ int SMVActualView::loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) co
     length_t rel = (length_t) getTimeOf( pos.x() ) - (length_t) start;
     if( rel <= 0 ) return 0;
     int k = (int)( ( rel + seg/2 ) / seg );
-    if( k < 1 || (length_t) k * seg >= (length_t) cut->getDuration() ) return 0;
+    if( k < 1 || (length_t) k * seg >= (length_t) win->duration() ) return 0;
 
     // The clip's paint rect: the lane inset by one pixel (paintEvent), then by
     // one more by the track renderer that frames each clip.
@@ -3194,23 +3201,35 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // k lands under the pointer — segment = (t - clipStart)/k. The
                 // clip's duration is untouched, so shortening the segment fits
                 // more repetitions into the same clip. Kept strictly below the
-                // duration so the clip stays looping (SCut::isLooping) and at
-                // least one marker remains to grab.
-                SCut *cut = tgt.cut;
-                if( !cut ) return;   // an EVENT window: not this gesture's domain
+                // duration so the clip stays looping (SClipWindow::isLooping)
+                // and at least one marker remains to grab.
+                //
+                // WINDOW-GENERIC (fix/loop-behaviour, issue b): an SMidiCut has
+                // no raw/no-rebuild setter the way SCut does — its rebuild is a
+                // cheap tick->frame recompute, never an audio-chain rebuild —
+                // so `setWindowFromTimeline` IS the cheap path for an event
+                // window. The audio path is untouched (B6): same raw setter,
+                // same param-event queue, same preview-capture kick.
+                SClipWindow *win = tgt.win;
+                if( !win ) return;
                 length_t span = (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
                               - (length_t) clipDragStart0_;
                 length_t newSeg = span / lastClickLoopMarker_;
-                length_t maxSeg = (length_t) cut->getDuration() - SMV_CUT_MIN_TIME;
+                length_t maxSeg = (length_t) win->duration() - SMV_CUT_MIN_TIME;
                 if( newSeg < SMV_CUT_MIN_TIME ) newSeg = SMV_CUT_MIN_TIME;
                 if( newSeg > maxSeg ) newSeg = maxSeg;
-                if( newSeg >= SMV_CUT_MIN_TIME
-                    && WarpedLen( newSeg ) != cut->getLoopLength() ) {
+                if( newSeg >= SMV_CUT_MIN_TIME && newSeg != win->loopLength() ) {
                     QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
-                    cut->setLoopLengthRaw( WarpedLen( newSeg ) );
-                    cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) newSeg );
-                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    SCut *cut = tgt.cut;
+                    if( cut ) {
+                        cut->setLoopLengthRaw( WarpedLen( newSeg ) );
+                        cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) newSeg );
+                        cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
+                        smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    } else {
+                        win->setWindowFromTimeline( win->startOffset(), win->duration(),
+                                                    newSeg, win->stretchOrRate() );
+                    }
                     update( oldRect );
                 }
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -3329,15 +3348,25 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // Drag the RIGHT edge's UPPER half: extend the clip past its
                 // content by repeating the previously visible cut. Capture the
                 // loop segment once, then grow the total duration.
+                //
+                // WINDOW-GENERIC (fix/loop-behaviour, issue b): audio unchanged
+                // (B6) — same raw setter, same real setDuration(), same queued
+                // param events, same preview-capture kick, all still gated on
+                // `cut`. An EVENT window has no content-length bound to clamp
+                // the captured segment against (a sequence is a bag of events,
+                // not a fixed-length buffer, unlike SCut's sample content), so
+                // that clamp stays inside the `cut` branch, and the event path
+                // commits through the one window-generic setter.
+                SClipWindow *win = tgt.win;
+                if( !win ) return;
                 SCut *cut = tgt.cut;
-                if( !cut ) return;   // an EVENT window: not this gesture's domain
                 if( clipLoopSeg_ <= 0 ) {
                     // Capture the segment to repeat once: the previously visible
                     // cut (original loop length if already looping, else the
                     // content the clip showed, capped at the content end).
                     length_t seg = clipLoopLen0_;
                     if( seg <= 0 ) {
-                        length_t contentLen = cut->getContent().hasDuration()
+                        length_t contentLen = ( cut && cut->getContent().hasDuration() )
                                               ? (length_t) cut->getContent().getDuration() : -1;
                         seg = lastClickDuration_;
                         if( contentLen >= 0
@@ -3352,14 +3381,18 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 if( newDur < SMV_CUT_MIN_TIME ) newDur = SMV_CUT_MIN_TIME;
                 QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                 // Only rebuild if duration actually changed
-                if( newDur != cut->getDuration()
-                    || WarpedLen( clipLoopSeg_ ) != cut->getLoopLength() ) {
-                    cut->setLoopLengthRaw( WarpedLen( clipLoopSeg_ ) );
-                    cut->setDuration( newDur );
-                    cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
-                    cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
-                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                if( newDur != win->duration() || clipLoopSeg_ != win->loopLength() ) {
+                    if( cut ) {
+                        cut->setLoopLengthRaw( WarpedLen( clipLoopSeg_ ) );
+                        cut->setDuration( newDur );
+                        cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
+                        cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                        cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
+                        smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    } else {
+                        win->setWindowFromTimeline( win->startOffset(), newDur,
+                                                    clipLoopSeg_, win->stretchOrRate() );
+                    }
                 }
                 update( oldRect );
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );
@@ -3371,16 +3404,18 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 // clip-relative p to base + (p mod len), so a shift of k*len is
                 // the only one that leaves (p mod len) unchanged for every p —
                 // anything else moves the wrap point and rewrites the audio.
-                // The loop base is therefore left alone.
+                // The loop base is therefore left alone. Window-generic for the
+                // same reason as the right-edge branch above.
+                SClipWindow *win = tgt.win;
+                if( !win ) return;
                 SCut *cut = tgt.cut;
-                if( !cut ) return;   // an EVENT window: not this gesture's domain
                 if( clipLoopSeg_ <= 0 ) {
                     // Same lazy capture as the right-edge loop gesture: an
                     // already-looping clip keeps its segment, a plain one starts
                     // looping the cut it currently shows.
                     length_t seg = clipLoopLen0_;
                     if( seg <= 0 ) {
-                        length_t contentLen = cut->getContent().hasDuration()
+                        length_t contentLen = ( cut && cut->getContent().hasDuration() )
                                               ? (length_t) cut->getContent().getDuration() : -1;
                         seg = lastClickDuration_;
                         if( contentLen >= 0
@@ -3407,16 +3442,27 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
                 }
                 if( newDur >= SMV_CUT_MIN_TIME
                     && ( rStart != lastClickSLink_->getStartTime()
-                         || newDur != cut->getDuration()
-                         || WarpedLen( clipLoopSeg_ ) != cut->getLoopLength() ) ) {
+                         || newDur != win->duration()
+                         || clipLoopSeg_ != win->loopLength() ) ) {
                     QRect oldRect = getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ );
                     lastClickSLink_->setStartTime( rStart );
-                    cut->setLoopLengthRaw( WarpedLen( clipLoopSeg_ ) );
-                    cut->setDuration( newDur );
-                    cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
-                    cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
-                    cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
-                    smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    if( cut ) {
+                        cut->setLoopLengthRaw( WarpedLen( clipLoopSeg_ ) );
+                        cut->setDuration( newDur );
+                        cut->queueWindowParamEvent( LOOP_LENGTH_CHANGE, (double) clipLoopSeg_ );
+                        cut->queueWindowParamEvent( DURATION_CHANGE, (double) newDur );
+                        cut->getPreviewCapture();  // Non-blocking: schedule async revalidation if needed
+                        smv_.getModel()->getProject().notifyArrangementChanged();  // Cascade to live assets
+                    } else {
+                        // The window's own startOffset moves WITH the link's
+                        // start (both are pinned to rStart above): the slip
+                        // (content anchor) is unchanged, only where the
+                        // window begins on the timeline. setWindowFromTimeline
+                        // takes the START OFFSET argument in the window's own
+                        // slip domain, which this gesture never touches.
+                        win->setWindowFromTimeline( win->startOffset(), newDur,
+                                                    clipLoopSeg_, win->stretchOrRate() );
+                    }
                     update( oldRect );
                 }
                 update( getSLinkVisibRect( lastClickTrackIdx_, *lastClickSLink_ ) );

@@ -351,6 +351,13 @@ void SAudioRecorder::tryAnchor_()
 
 void SAudioRecorder::reseatClips_()
 {
+    // Issue g (fix/loop-behaviour): this is the RECORD-START anchor, and it
+    // is valid only for the non-cycle case. While cycling, every growing
+    // clip's timeline position is CYCLE_IN — poll()'s per-tick pass window
+    // below is what seats it there, once anchored, and reseating here to
+    // placementFrame(trimmed_) would yank it back to the (pre-loop) record
+    // start on the very tick the anchor lands.
+    if( cycle_ ) return;
     const offset_t at = (offset_t) std::max<std::int64_t>(
         placement_.placementFrame( trimmed_ ), 0 );
     for( Armed &a : armed_ )
@@ -367,8 +374,55 @@ void SAudioRecorder::poll()
         const length_t len = content_->publishGrowth();
         const length_t shown =
             ( len > (length_t) trimmed_ ) ? ( len - (length_t) trimmed_ ) : 0;
-        for( Armed &a : armed_ )
-            if( a.cut && shown > 0 ) a.cut->setDuration( shown );
+
+        // Issue g (fix/loop-behaviour): while recording a loop, the growing
+        // preview must never overshoot the cycle region -- it wraps and
+        // restarts at cycleIn_ instead, redrawing the CURRENT pass in place
+        // of the previous one (self-overwriting: one link per armed track,
+        // reused for every pass, exactly as the non-cycle path already
+        // reuses it). This mirrors, LIVE, the SAME pass arithmetic
+        // commitPlacement_() applies once at stop() -- loopLen = cycleOut_ -
+        // cycleIn_, rel = (firstPlace + consumed) - cycleIn_ clamped to >= 0,
+        // inLoop = rel mod loopLen -- so at every instant the growing clip
+        // shows exactly what THIS pass would commit as if the take stopped
+        // right now: a leading silence (via a possibly-negative source
+        // offset) for a pass that started mid-cycle (the record_loop_late_
+        // start shape, G5), filling in with real audio as it streams in.
+        //
+        // Only reachable once ANCHORED: firstPlace needs P0. Before that,
+        // the clip stays at recordStart_ (placeGrowingClips_'s seat) and
+        // grows plainly, same as the non-cycle path -- there is no pass to
+        // compute yet.
+        //
+        // cycleIn_/cycleOut_ are READ ONCE AT start() and never refreshed
+        // here, matching this class's existing policy for punch_ (see the
+        // header comment on punchIn_/punchOut_): a cycle-marker edit mid-take
+        // must not move the goalposts under a take already in flight.
+        if( cycle_ && placement_.anchored && cycleOut_ > cycleIn_ ) {
+            const std::int64_t loopLen  = (std::int64_t) ( cycleOut_ - cycleIn_ );
+            const std::int64_t firstPlace = placement_.placementFrame( trimmed_ );
+            std::int64_t rel = firstPlace + (std::int64_t) shown
+                              - (std::int64_t) cycleIn_;
+            if( rel < 0 ) rel = 0;
+            std::int64_t inLoop = rel % loopLen;
+            if( inLoop < 0 ) inLoop = 0;                 // defensive
+            if( inLoop > loopLen ) inLoop = loopLen;      // defensive (see above)
+            const offset_t passSrcOffset = (offset_t) ( (std::int64_t) trimmed_
+                                                        + (std::int64_t) shown
+                                                        - inLoop );
+            for( Armed &a : armed_ ) {
+                if( !a.link || !a.cut ) continue;
+                if( a.link->getStartTime() != (offset_t) cycleIn_ )
+                    a.link->setStartTime( (offset_t) cycleIn_ );
+                if( a.cut->getSrcStart() != Fraction( passSrcOffset ) )
+                    a.cut->setStartOffset( passSrcOffset );
+                if( (length_t) inLoop != a.cut->getDuration() )
+                    a.cut->setDuration( (length_t) inLoop );
+            }
+        } else if( shown > 0 ) {
+            for( Armed &a : armed_ )
+                if( a.cut ) a.cut->setDuration( shown );
+        }
     }
 
     // PUNCH-OUT. The take ends by itself once its placement passes the out

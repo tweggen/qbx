@@ -31,7 +31,7 @@
  *                         trimmedFrames="-1" passes="-1"
  *                         growing="false" previewNonEmpty="false"
  *                         sourceAtStartFrame="-1" sourceTolerance="4096"
- *                         minDurationFrames="-1"
+ *                         minDurationFrames="-1" maxDurationFrames="-1"
  *                         inputDevice=""/>
  *
  * Every numeric expectation is opt-in (the sentinel means "unchecked"), so one
@@ -118,6 +118,11 @@ private:
     qint64 durationFrames_    = kUnset;
     qint64 durationTolerance_ = 4096;
     qint64 minDurationFrames_ = kUnset;
+    // fix/loop-behaviour (issue g): the UPPER bound, checked with tolerance 0
+    // (never a "roughly" claim) — this is what makes "the growing clip never
+    // overshoots the cycle region" assertable mid-take, which minDurationFrames_
+    // alone cannot: a floor says "it grew enough", not "it stayed inside".
+    qint64 maxDurationFrames_ = kUnset;
     qint64 inputLatency_      = kUnset;
     qint64 outputLatency_     = kUnset;
     qint64 userOffset_        = kUnsetS;
