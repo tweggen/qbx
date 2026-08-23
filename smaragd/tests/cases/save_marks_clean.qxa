@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/editor-ui-and-shortcuts, issue (d): "Ctrl+S then Ctrl+W still prompts
+  unsaved changes... no change in selection in between".
+
+  ROOT CAUSE: an exhaustive grep of this repository found QUndoStack::
+  setClean() called NOWHERE. SMainWindow::saveToPath() wrote the file and
+  never told the stack the write happened, so `hasUnsavedChanges()` (==
+  !stack->isClean()) stayed true forever after the first edit, however many
+  times the project was saved — a save simply never dirtied OR cleaned the
+  stack at all.
+
+  The fix is two-layered, because the interactive Save path and a SCRIPTED
+  `save-project` verb take DIFFERENT routes to the file:
+
+    - SMainWindow::saveToPath() (the menu's Ctrl+S / Save As) now calls
+      setClean() itself, right after a successful write.
+    - SSaveProjectAction — what THIS SCRIPT's <save-project> below actually
+      runs, via SActionHistory::submit() — now overrides the new
+      SAction::marksProjectClean() hook, and SActionHistory::onApplied_()
+      calls setClean() for any action that does. One mechanism, two entry
+      points, both exercised: this script only reaches the second, so what
+      it gates is the FIX'S REASONING (an action-applied save marks clean),
+      not the exact code path saveToPath() takes — that half is necessarily
+      hand-verified (see the PR body).
+
+  Watched failing on the pre-fix binary: the assertion right after the FIRST
+  <save-project> below (`expect="0"`) read `expect="1"` instead — the stack
+  never went clean at all.
+
+  Also gates D4: QUndoStack's own clean-INDEX tracking, not a hand-rolled
+  bool — undoing back to the exact command the save marked clean re-cleans
+  the stack for free, and redoing past it dirties it again.
+
+  NOT gated here, and said so in the PR: D3 (Save As) drives the SAME
+  saveToPath()/setClean() call as plain Save, so it is covered by
+  construction rather than by a separate assertion — the file DIALOG a Save
+  As needs cannot be driven headlessly. D5 (choosing "Save" in the prompt and
+  then cancelling the Save As dialog must cancel the close, not lose the
+  work) is entirely dialog-modal and is hand-verified only — the code
+  argument is that fileSave()/fileSaveAs()/promptSaveUnsavedChanges() now
+  propagate a real bool instead of a hard-coded true. D6
+  (collectExternalMedia_'s resetClean() still dirties the project) is
+  UNCHANGED by this fix — that line was not touched — but has no headless
+  gate either: the `collect-external-media` testkit verb calls
+  smediadrop::collectExternalMedia() directly and does not go through
+  SMainWindow's button handler, which is the only place resetClean() is
+  called (the same gap CLAUDE.md's media-browser section already names: no
+  verb builds the resources dock off screen).
+-->
+<SActionScript version="1" name="save_marks_clean">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <assert-unsaved-changes expect="1"/>
+
+    <!-- THE GATE: a save must clean the stack. -->
+    <save-project path="../../build/save_marks_clean.qxp"/>
+    <assert-unsaved-changes expect="0"/>
+
+    <!-- D2: an edit after a clean save dirties it again. -->
+    <add-track index="-1"/>
+    <assert-unsaved-changes expect="1"/>
+
+    <!-- D4: undo back to the save point re-cleans the stack (QUndoStack's
+         own clean-index tracking, not a hand-rolled flag). -->
+    <undo count="1"/>
+    <assert-unsaved-changes expect="0"/>
+
+    <!-- D4, the other half: redoing PAST the save point dirties it again. -->
+    <redo count="1"/>
+    <assert-unsaved-changes expect="1"/>
+
+    <!-- A second save cleans it again, from a state the first save never
+         saw — proof this is not a one-shot flag that only ever fires once. -->
+    <save-project path="../../build/save_marks_clean.qxp"/>
+    <assert-unsaved-changes expect="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

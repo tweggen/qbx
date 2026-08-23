@@ -84,6 +84,9 @@ void SActionHistory::onApplied_(quint64 id, SAction *inverse)
             SAction *forward = inFlight_[i].forward;
             inFlight_.removeAt(i);
 
+            // Read BEFORE `forward` can be deleted below.
+            const bool markClean = forward->marksProjectClean();
+
             // Push to QUndoStack as an SActionUndoCommand.
             if (inverse) {
                 undoStack_->push(new SActionUndoCommand(forward, inverse, this));
@@ -91,6 +94,14 @@ void SActionHistory::onApplied_(quint64 id, SAction *inverse)
                 // Non-undoable action: don't add to undo stack, but still clean up.
                 delete forward;
             }
+
+            // AFTER the (possible) push: setClean() marks the CURRENT
+            // top-of-stack index, and a push moves that index forward by one.
+            // Called before the push it would mark the position the push then
+            // leaves BELOW the new command — dirty again immediately. Today
+            // this only ever fires from the `else` branch (save-project is
+            // not undoable), but the ordering is correct either way.
+            if (markClean) undoStack_->setClean();
             return;
         }
     }

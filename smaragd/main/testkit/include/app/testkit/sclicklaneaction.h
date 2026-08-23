@@ -127,4 +127,18 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 };
 
+// deselect-all — the Ctrl(Cmd)+Shift+A twin of select-all, driven through
+// SMainWindow::sendDeselectAllShortcut(). Same fork, same caveat: headlessly
+// it can only ever exercise the arranger's default branch (clearing the
+// active tab's clip selection as one undoable SClearSelectionAction), never
+// the piano roll's own ShortcutOverride handling — QApplication::
+// focusWidget() is always null in a --test-case run.
+class SDeselectAllAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "deselect-all" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+};
+
 #endif  // SCLICKLANEACTION_H

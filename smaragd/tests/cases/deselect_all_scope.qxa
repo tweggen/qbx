@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/editor-ui-and-shortcuts, issue (f): Ctrl(Cmd)+Shift+A = "select none",
+  in the arranger, PER VIEW — the deselect-all twin of select_all_scope.qxa.
+
+  `deselect-all` is a new minimal testkit verb (main/testkit/src/
+  sclicklaneaction.cpp) mirroring select-all exactly: it drives
+  SMainWindow::sendDeselectAllShortcut(), the same two-step fork a real
+  Ctrl-Shift-A keystroke goes through — offer the current FOCUS WIDGET a
+  ShortcutOverride first (a focused piano roll would claim it for itself and
+  clear NOTE selection, not clip selection), fall through to the window's
+  "Select None" QAction only when nothing claims it. With no widget shown or
+  focused (the normal headless shape) that fork always lands on the
+  arranger's default: SMainWindow::deselectAllInActiveArranger(), which
+  submits ONE undoable SClearSelectionAction scoped to the ACTIVE tab's own
+  root.
+
+  THE GATE THAT MATTERS: SClearSelectionAction::apply() reads pathRoot_
+  (sclearselectionaction.cpp:15,18) and SApplication::submitClearSelection
+  Action() — the OTHER, older way to reach this action — builds one with NO
+  path root, which resolves to the MASTER. deselectAllInActiveArranger() must
+  set the path root explicitly (mirroring selectAllInActiveArranger()'s own
+  setPathRoot call) or a Ctrl-Shift-A on an arrangement tab would silently
+  clear the MASTER's selection instead of the tab's own — invisible unless a
+  case gives the two tabs genuinely different selections and checks both
+  survive independently, exactly as select_all_scope.qxa's own header
+  explains for the analogous Ctrl-A bug it caught.
+-->
+<SActionScript version="1" name="deselect_all_scope">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Master: two tracks, one clip each. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Drums: one track, two clips — deliberately a different shape. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="192000"/>
+
+    <!-- Master tab active: select its two clips, then clear them, as ONE
+         undoable action each. -->
+    <select-all/>
+    <assert-selection paths="0,0;1,0"/>
+    <deselect-all/>
+    <assert-selection paths=""/>
+    <undo count="1"/>
+    <assert-selection paths="0,0;1,0"/>
+
+    <!-- Open Drums in its own tab, select ITS clips, and check the master's
+         selection (still whatever select-all left it above) is untouched. -->
+    <open-arrangement-tab name="Drums"/>
+    <activate-tab name="Drums"/>
+    <assert-selection paths=""/>
+    <select-all/>
+    <assert-selection paths="Drums:0,0;Drums:0,1"/>
+
+    <!-- Deselect in Drums: only Drums' selection clears. -->
+    <deselect-all/>
+    <assert-selection paths=""/>
+
+    <!-- Back to the master: its selection (0,0;1,0 from above) is untouched
+         by anything Ctrl-Shift-A did in Drums — the pair that fails were the
+         two roots not kept independent. -->
+    <activate-tab name="Arrangement"/>
+    <assert-selection paths="0,0;1,0"/>
+
+    <!-- And a plain deselect-all on the master clears exactly the master's
+         own selection, leaving Drums (already empty) alone. -->
+    <deselect-all/>
+    <assert-selection paths=""/>
+    <activate-tab name="Drums"/>
+    <assert-selection paths=""/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

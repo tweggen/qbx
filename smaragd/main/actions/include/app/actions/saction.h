@@ -80,6 +80,18 @@ public:
     virtual QString mergeKey() const { return QString(); }
     virtual bool mergeWith(const SAction * /*later*/) { return false; }
 
+    // Opt-in: this action, once APPLIED, marks the undo stack CLEAN — the file
+    // on disk now matches what is in memory. `save-project` is the only
+    // override today. It is a hook here rather than a `name() == "save-
+    // project"` string check in SActionHistory because that is exactly the
+    // kind of coupling `mergeKey()`/`knownAttributes()` already avoid: the
+    // history owns the QUndoStack and applies every action the SAME way,
+    // scripted or interactive, so this is the one place both a `.qxa`
+    // `<save-project>` verb and the menu's Save route through and both need
+    // to say the same thing. Default false — everything else is a project
+    // MUTATION, not a write of it to disk.
+    virtual bool marksProjectClean() const { return false; }
+
 protected:
     QString pathRoot_;      // see pathRoot(); empty == the master root
 };

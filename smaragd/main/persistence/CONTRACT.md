@@ -143,6 +143,15 @@ chain linking to an id that exists nowhere) and asserts the rest of the
 project survives intact; it has a CTest TIMEOUT because a regression of 6(b)
 HANGS rather than fails.
 
+8. `SSaveProjectAction::marksProjectClean()` returns `true` (2026-08-23,
+   `main/actions/CONTRACT.md`'s new hook). A successful `apply()` here is what
+   `SActionHistory::onApplied_()` reads to call `QUndoStack::setClean()` for a
+   SCRIPTED `<save-project>` — the interactive Save path applies this same
+   action directly (never through the history) and calls `setClean()` by hand
+   in `SMainWindow::saveToPath()` instead. Before this, `setClean()` was called
+   NOWHERE in the repository and a project never went "clean" after a save no
+   matter how many times it ran.
+
 Known debt: an unknown element name in a project file warns, yields a null
 link and is skipped; since 6b the links that referenced it are pruned rather
 than cascading, so it costs exactly that object (`load_unknown_object_survives`
