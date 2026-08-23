@@ -632,3 +632,28 @@ moved. A discarded build costs one rebuild — which the very next
 **A gate for anything on this path must render BEFORE the edit as well as
 after**, in one process. A case that renders only afterwards finds the capture
 cold and correct, and cannot see this class of defect at all.
+
+## A take COLUMN belongs to exactly ONE placement
+
+Two placements of one `STakeStack` share its `activeTake_`, so comping either
+comps both — which is indistinguishable, from the outside, from the comping
+gesture not working. `stakes::cloneColumn()` is therefore what
+`duplicate-clip` and the arranger's "add link" use for a column: a new stack
+holding a clone of every take's window (sharing the same CONTENT, as
+`cloneWindowOver` does everywhere else) and the same active index.
+
+Before proposal 42 M1 both produced a SHARED column, and `duplicate-clip` also
+produced the WRAPPED shape while doing it: `SClipWindow::of()` is null for an
+`STakeStack`, so it fell through to `wrapContent` and minted a window over the
+same stack.
+
+**Whoever wants the SHARE semantics wants an ASSET** — proposal 41's fragment,
+where "one object, N placements, edit any and all change" is the stated
+invariant (D2) rather than an accident of which verb was used.
+
+Gate: `take_column_one_shape.qxa`, and the `assert-take-column` verb, which is
+the only thing in the suite that can see a placement's take-column SHAPE, its
+take count, its active take and its PLACEMENT COUNT. `assert-clip-window`
+cannot: it reads the link's own object, so it cannot tell a column from a
+window over one, and its `take=` attribute is silently ignored on the wrapped
+shape.

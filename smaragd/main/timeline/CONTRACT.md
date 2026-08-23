@@ -1069,3 +1069,58 @@ right. It was not right for the two verbs that exist to serve this UI:
 `select-take` and the take-addressed half of `resize-clip` resolved DIRECT-only
 while this unwrapped, so a gesture the canvas could express was one the action
 refused (`objects/cut/CONTRACT.md`).
+
+### inv. 38 — A GESTURE RESOLVES AN EDIT TARGET; IT NEVER REWRITES THE TREE
+
+`clipEditTargetOf()` (`sstdmixerview.cpp`) answers, once per gesture, what a
+clip drag edits:
+
+| the placement's object | what the gesture edits |
+|---|---|
+| an `SCut` | itself (the common case; every branch's fast path) |
+| another `SClipWindow` — an `SMidiCut`, or an `SCut` WRAPPING a column | itself |
+| a take COLUMN (`SLink -> STakeStack`) | its ACTIVE take |
+
+Order matters: a wrapper IS a window, so a wrapped column's border drag edits
+the WRAPPER — exactly what `resize-clip` with `take < 0` already does.
+
+**`ensureSCut()` is DELETED** (proposal 42 M1). It tested
+`metaObject()->className()` against the literal `"SCut"` and wrapped anything
+else in a new `SCut`, **deleting the old link, from inside a mouse-move**, at
+all seven gesture call sites. It cost, every time, for every class:
+
+* it was the principal FACTORY of the wrapped take-column shape that 31 of the
+  43 take-resolving sites in `main/` do not handle;
+* on an `SMidiCut` it produced an AUDIO window over EVENT content. Measured:
+  `startTicks='0'` present before one border drag and **absent after**, the
+  clip an `SCut`. `SLink::timebase` is serialized only when it differs from
+  `defaultTimebaseFor( content )`, and that default flips Beats → Time with the
+  class, so the clip silently stopped following the tempo;
+* `setParent` APPENDS, so the rewritten clip moved to the END of the lane's
+  child list. Measured: `[SMidiCut@0, SCut@192000]` became
+  `[SCut@192000, SCut@0]`. Clip paths are `(track, childIndex)`, so **every
+  path already recorded in the undo stack then addressed a different clip**;
+* it never disconnected the old object's `durationChanged` from the lane — the
+  one thing its two sibling link-swappers (`stakes::wrapCutLinkIntoStack`,
+  `collapseSingleTakeStack`) each call out as load-bearing, along with the
+  `moveChildToIndex` this one also lacked.
+
+Raw content on a lane — its original purpose — is produced by no verb. Such a
+placement now resolves to no window and its gestures are no-ops.
+
+### inv. 39 — TRIM IS WINDOW-GENERIC; THE COMMIT IS TOO
+
+The left- and right-edge trims, and `mouseReleaseEvent`'s edge commit, work
+through `SClipWindow`, so an EVENT clip resizes in its own units (converted
+exactly once, inside `SMidiCut`) and lands as one undoable `resize-clip`.
+Measured: a right-border drag to 1.5 s at 120 BPM takes `lengthTicks` from
+3840 to **2880** — three beats — with the clip still an `SMidiCut`, still at
+child index 0, still carrying `startTicks`.
+
+`SCut` keeps its raw-setter fast path unchanged; `cut` is consulted only for
+the two things that are audio-specific (draining queued window-param events,
+and the take-slip revert's exact-`Fraction` anchor setter).
+
+**Stretch, loop and grain-slip on an EVENT clip are still no-ops** — those
+branches return when the window is not an `SCut`. `SMidiCut` has `rate` and
+`loopTicks` and could express them; no gesture reaches them yet.

@@ -585,7 +585,6 @@ public:
     // view is fully constructed.
     SSnapSpec *snapSpec() const { return currentSnapSpec_; }
 
-    SLink *ensureSCut( SLink * );
 
     // TEST ENTRY POINT: drive a real clip-edge gesture through the arranger's
     // own mouse handlers (press → move → release) as a user drag does. Every

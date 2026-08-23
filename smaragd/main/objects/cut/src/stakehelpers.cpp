@@ -26,6 +26,23 @@ void publishColumnChange( SLink *link, STakeStack *column )
         win->setDurationFromTimeline( win->durationBlocking() );
 }
 
+STakeStack *cloneColumn( SProject *project, STakeStack &column )
+{
+    if( !project || column.nTakes() <= 0 ) return nullptr;
+    STakeStack *copy = new STakeStack( project );
+    for( int i = 0; i < column.nTakes(); ++i ) {
+        SClipWindow *take = column.takeAt( i );
+        if( !take ) continue;
+        SClipWindow *dup = take->cloneWindowOver( project );
+        if( !dup ) continue;
+        if( !copy->insertTake( *dup ) ) delete &dup->asObject();
+    }
+    if( copy->nTakes() <= 0 ) { delete copy; return nullptr; }
+    copy->setActiveTake( column.activeTakeIndex() < copy->nTakes()
+                             ? column.activeTakeIndex() : 0 );
+    return copy;
+}
+
 SLink *wrapCutLinkIntoStack( SProject *project, SObject *lane,
                              SLink *cutLink )
 {
