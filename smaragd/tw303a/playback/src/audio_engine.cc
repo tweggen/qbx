@@ -668,9 +668,18 @@ void AudioEngine::readaheadLoop() {
     static int readaheadLogCounter = 0;
     uint64_t lastPlayheadPage = UINT64_MAX;  // playhead page seen last iteration
 
+    // THE FIRST PASS RUNS IMMEDIATELY. The wait used to be unconditional at
+    // the top, so `readaheadComputedUpTo_` stayed at its post-reset 0 for at
+    // least 20 ms after `startReadahead()` however warm the pages were — and
+    // `startPlayback()` reads exactly that frontier, so a start whose pages
+    // were ALL already frozen still could not report PLAYING on the first
+    // poll. It is skipped only on the first iteration; every `continue` below
+    // still lands on a wait, so this cannot become a spin.
+    bool firstPass = true;
     while (readaheadRunning_.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> lk(readaheadMutex_);
-        readaheadCv_.wait_for(lk, std::chrono::milliseconds(20));
+        if (!firstPass) readaheadCv_.wait_for(lk, std::chrono::milliseconds(20));
+        firstPass = false;
         lk.unlock();
 
         if (!synthOutput_ || !readaheadRunning_.load(std::memory_order_relaxed)) continue;

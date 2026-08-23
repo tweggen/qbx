@@ -327,6 +327,41 @@ bool twSpeaker::isPlaying()
     return isPlaying_;
 }
 
+void twSpeaker::warmFrozenLane(offset_t pos)
+{
+    // MAIN THREAD ONLY, and never from the RT callback or the live pump: this
+    // issues a DEMAND, which is exactly what those two may not do.
+    if (!pageScheduler_ || !context_) return;
+    std::shared_ptr<twComponent> root = context_->rootComponent();
+    if (!root) return;
+
+    const offset_t page  = (offset_t) twOutputPage::FRAME_CAPACITY;
+    if (pos < 0) pos = 0;
+    const offset_t start = twFloorAlign(pos, page);
+    // Cover the SAME window startPlayback() will wait for, measured from the
+    // playhead rather than from the page it sits in - one authority for the
+    // number (AudioEngine::primingFrames), so a change there cannot leave the
+    // warm-up covering less than the wait requires.
+    const offset_t need  = (pos - start)
+                         + (offset_t) audio::AudioEngine::primingFrames();
+    int nPages = (int) ((need + page - 1) / page);
+    if (nPages < 1) nPages = 1;
+
+    // Priority 9, the readahead's own: this IS the readahead's work, done
+    // early. A lower priority would let background aspect jobs go first and
+    // spend the count-in on something nobody is waiting for.
+    warmDemand_ = pageScheduler_->requestGraphPages(root, start, nPages, 9);
+    TWSPK_LOG( "warmFrozenLane: demanded %d page(s) from %lld for a start at "
+               "%lld (%.1f s of priming)",
+               nPages, (long long) start, (long long) pos,
+               (double) audio::AudioEngine::primingFrames() / 48000.0 );
+}
+
+bool twSpeaker::frozenLaneWarm() const
+{
+    return warmDemand_ && warmDemand_->done();
+}
+
 void twSpeaker::monitorReadaheadBuffer()
 {
     // Phase 6b: Background task that polls readahead progress and starts backend output
@@ -347,6 +382,11 @@ void twSpeaker::monitorReadaheadBuffer()
     // Poll readahead progress with 10-second timeout
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     bool timed_out = false;
+    // HOW LONG THE FROZEN LANE WAS HELD SILENT while the transport ran. Zero
+    // is the goal and is reachable: with the pages already frozen (see
+    // warmFrozenLane) and the readahead's first pass immediate, the very
+    // first call below can answer PLAYING.
+    primingPolls_.store(0, std::memory_order_relaxed);
 
     while (bufferingTaskRunning_.load(std::memory_order_relaxed)) {
         std::shared_ptr<audio::AudioEngine> engine = engineSnapshot();
@@ -418,7 +458,11 @@ void twSpeaker::monitorReadaheadBuffer()
         }
 
         // Sleep for 50ms before checking again
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // 10 ms, not 50. This is the granularity of "how late the music is"
+        // once the pages are warm, and it is pure sleeping - one atomic
+        // compare per tick, bounded by the 10 s deadline above.
+        primingPolls_.fetch_add(1, std::memory_order_relaxed);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     if (timed_out || !bufferingTaskRunning_.load(std::memory_order_relaxed)) {

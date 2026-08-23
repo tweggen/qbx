@@ -147,6 +147,21 @@ public:
      *
      * \return Playback state: BUFFERING (still waiting) or PLAYING (ready)
      */
+    /**
+     * HOW MUCH READAHEAD `startPlayback()` WAITS FOR before it will let the
+     * frozen lane play — published so that a WARM-UP can demand exactly this
+     * window and no more.
+     *
+     * It is the whole reason a transport start from stopped has an audible
+     * lead-in on a heavy project: the readahead is created empty at
+     * `startOutput()`, so this many frames of the WHOLE graph have to be
+     * frozen before one sample is heard. Anything that can freeze them
+     * EARLIER (see `twSpeaker::warmFrozenLane`) turns that wait into a walk
+     * over cache hits, because the readahead probes with `getPageIfExists`
+     * and advances its frontier without re-freezing a page that is current.
+     */
+    static constexpr uint64_t primingFrames() { return minBufferFrames_; }
+
     PlaybackState startPlayback();
 
     /**

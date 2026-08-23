@@ -551,7 +551,14 @@ endif()
 # metronome_click_while_recording records too (a plain record-start with no
 # count-in/pre-roll, straight from stopped into recording), so it takes the
 # same paced input. It OWNS metronome/clickWhileRecording and puts it back.
-foreach(_pre record_count_in record_pre_roll metronome_click_while_recording)
+#
+# record_count_in_primed writes the same two keys and restores them, and is
+# RUN_SERIAL for a second reason on top of that: it asserts that the frozen
+# lane never waited for the readahead, which is a claim about work finishing
+# inside the count-in. A box running three other cases could miss that window
+# on a healthy build.
+foreach(_pre record_count_in record_count_in_primed record_pre_roll
+             metronome_click_while_recording)
     if(TEST qxa.${_pre})
         set_tests_properties(qxa.${_pre} PROPERTIES
             RUN_SERIAL TRUE

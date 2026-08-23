@@ -290,3 +290,40 @@ for deletion as dead scaffolding and did NOT delete it: unlike `getDataPtr()`
 and `twFormatCaps::channelCounts` it is READ, so removing it is "find the wire
 rate somewhere else", not a cleanup. Recorded here so the next reader does not
 spend the same half hour concluding it is dead.
+
+### The frozen lane can be WARMED before the transport moves
+
+`startOutput()` mints a NEW `AudioEngine` whose readahead frontier starts at
+0, and `AudioEngine::startPlayback()` will not let the frozen lane play until
+that frontier covers `AudioEngine::primingFrames()` beyond the playhead. On a
+heavy project that is SECONDS of running transport with nothing audible
+(~2.3 s measured on a real one).
+
+`twSpeaker::warmFrozenLane(pos)` demands exactly that window at `pos` through
+the page scheduler, from the MAIN THREAD, before the transport moves. It works
+for one reason and a change that breaks it breaks this: **the readahead
+PROBES**. `readaheadLoop` asks `getPageIfExists` and, for a page that exists
+and is current, advances its frontier and moves on WITHOUT re-freezing — so a
+pre-warmed window turns the wait into a walk. A readahead that unconditionally
+re-froze would make the warm-up worthless.
+
+Three properties it must keep:
+
+* **It never renders and never blocks.** It issues a demand and keeps the
+  handle only to report on; dropping the handle does not abort the work.
+* **Priority 9, the readahead's own.** This IS the readahead's work, done
+  early; at a lower priority the background aspect jobs would spend the
+  lead time on something nobody is waiting for.
+* **The window is derived from `primingFrames()`**, never from a second
+  constant. One authority for the number, so a change to the wait cannot
+  leave the warm-up covering less than the wait requires.
+
+The caller decides WHEN there is lead time to spend. Today exactly one does:
+a record COUNT-IN (`main/shell/CONTRACT.md` inv. 37). A plain Play from
+stopped has none and still pays the priming in full.
+
+**The readahead's first pass is immediate.** Its 20 ms wait is skipped on the
+first iteration only — the frontier is reset to 0 by `startReadahead()`, so an
+unconditional wait there made a fully-warm start still report BUFFERING on the
+first poll. Every `continue` in the loop still lands on a wait, so this cannot
+become a spin.

@@ -1436,7 +1436,7 @@ a mixed-clock session.
 ### Known Limitations & Future Work
 
 1. **CoreAudio input:** Currently placeholder (read returns silence). Full HAL callback integration pending.
-2. **Monitor priming lag:** `twSpeaker` defers the device start until the readahead is primed. Measured at **~2.3 s** on a real project (baseline on the capture backend: 0.06–0.13 s), during which the transport is running and nothing is audible. Recording no longer *mis-times* because of it (the playhead follows the audible position and a take is placed earlier by the measured priming — `tw/record/CONTRACT.md` inv. 1), but two seconds is still a long wait after pressing record. Unlike the endpoint-rate trap above, this one is ours.
+2. **Monitor priming lag:** `twSpeaker` defers the device start until the readahead is primed. Measured at **~2.3 s** on a real project (baseline on the capture backend: 0.06–0.13 s), during which the transport is running and nothing is audible. Recording no longer *mis-times* because of it (the playhead follows the audible position and a take is placed earlier by the measured priming — `tw/record/CONTRACT.md` inv. 1), but two seconds is still a long wait after pressing record. Unlike the endpoint-rate trap above, this one is ours. **A COUNT-IN NO LONGER PAYS IT** (2026-08-23): the click is dead time of known length in front of a start position that is already known, so it is spent freezing the priming window in advance (`twSpeaker::warmFrozenLane`) — measured 273–504 ms of priming down to **0**, on a fixture built to be cold. **A PLAIN PLAY FROM STOPPED STILL PAYS IT IN FULL**, deliberately: there is no lead time to spend, and warming speculatively at an idle locator is a policy decision (when to start, when to stop, what it costs a laptop on battery) rather than a bug fix.
 3. **Hardware monitoring:** Recording pulls from input device only (no synth-to-recording path). Plugin support on input planned for future phase.
 4. **Multi-input:** One WAV per input device; multiple inputs with separate files not yet supported.
 5. **Latency control:** Fixed at device default; no user-facing buffer sizing.
@@ -1524,6 +1524,8 @@ exclusion can be forgotten.
 | The click is a **pure function of the block position**; a tempo/level edit builds a NEW source | No "next click" cursor to get out of step with a seek, a wrap or a reposition, and a click straddling a block boundary is finished by the next block because both compute the same answer. `pull()` allocates nothing (both waveforms are rendered in the ctor). |
 | The beat is one note of the time signature's **denominator**, from `twTempoMap` — the ONE tempo authority | A quarter in 4/4, an eighth in 6/8, which is what every DAW's click does. The beat length is a REDUCED RATIONAL and `frameOfBeat(k)` is one floored division, so beat k is never the accumulation of k roundings. |
 | **COUNT-IN: the playhead does not move.** N bars of click while STOPPED, then recording begins AT THE LOCATOR | Cubase / Logic / REAPER. The placed clip lands exactly where it would have with no count-in (measured: **96000 exactly**) and the capture holds the N bars before it. The rejected reading — roll the bars ON the timeline — makes a preference silently move the user's recording. |
+| **THE COUNT-IN IS SPENT PRIMING THE FROZEN LANE** — the click and the readahead run at the same time, not one after the other | A transport start from stopped mints a NEW `AudioEngine` with an EMPTY readahead, and `startPlayback()` holds the frozen lane silent until it covers `primingFrames()` (3 s) beyond the playhead. Without this the whole readahead was built AFTER the click, so the click promised a tempo the music then missed by however long the graph takes to freeze — reported as a deal-breaker, and the reason it is intolerable here rather than merely annoying is that a count-in is a PROMISE. `warmFrozenLane()` demands exactly that window at exactly the position the transport will start from (the PRE-ROLL's start when one follows, not the record position), at the readahead's own priority 9. It works because the readahead PROBES with `getPageIfExists` and advances its frontier over a current page WITHOUT re-freezing it, so the wait collapses to a walk. Free when the pages are already warm. |
+| The readahead's **FIRST PASS RUNS IMMEDIATELY** | Its 20 ms wait used to be unconditional at the top of the loop, so `readaheadComputedUpTo_` stayed at its post-reset **0** for at least 20 ms however warm the pages were — and `startPlayback()` reads exactly that frontier. Worth the last **21 ms → 0** of the count-in fix, measured; skipped only on the first iteration, so the `continue`s below it cannot turn the loop into a spin. |
 | **PRE-ROLL: the transport rolls** N bars into the locator, recording begins there | The take goes into a run that was already playing, so nothing is trimmed and the clip lands a few thousand frames BEFORE the locator — which is what latency compensation IS. Neither knob is offered while the transport is already running. |
 | The count-in grid counts **FORWARD from the locator**, never backwards from `locator − N bars` | Backwards produces NEGATIVE positions at a locator inside the first N bars, and `twlive::gateEpoch` discards a ring entry stamped below zero as an unwritten slot — so a count-in at bar 1, the commonest case there is, would have been silent. |
 | The count-in ends on **frames the RT was actually handed** (`twLiveMixRing::framesDelivered`), not on a timer | While stopped there is no engine clock at all; a `QTimer` would measure the Windows scheduler (15.6 ms) against a grid the gate asserts to 38 frames. A wall-clock WATCHDOG still exists — a device that never opens delivers no frames, and a transport that never starts is a hang. |
@@ -1547,7 +1549,8 @@ MIDI one, so nothing exercises the Options-page controls headlessly — see
 travels with the arrangement.
 
 Gates: the qxa cases `metronome_click`, `metronome_render_identity`,
-`record_count_in`, `record_pre_roll`, `metronome_click_while_recording` (all
+`record_count_in`, `record_count_in_primed`, `record_pre_roll`,
+`metronome_click_while_recording` (all
 `RUN_SERIAL` at `SMARAGD_CAPTURE_SPEED=1`; the record cases take the L3b paced
 `file:` input so `compensationFrames="-5824"` is the same closed form there),
 the `assert-metronome-clicks` verb, `plugin_ui_strip_and_editor` (`latency=0`)
@@ -1555,6 +1558,8 @@ and `action_roundtrip_test`. Measured: click grid errors **0, −5, 0, 0, 0, −
 frames over playback measured from 1 s in (worst |5| against 1024) and
 **−33 … −38** through a count-in (worst |38|); inter-click RMS **exactly 0.000000**; metronome
 OFF ⇒ **0** clicks; the render **byte-identical** with the click on and off;
+the count-in's priming **0 buffering polls** against 28+ (273-504 ms) with
+the warm-up disabled;
 count-in placement **96000 exactly**, `comp=-5824`, `trim=9921`; pre-roll
 placement 89895 for a record start at 96256 (`trim=0`); accent ratio through
 the onset detector **≈1.4286** against the 1.3 asserted (room for the window,

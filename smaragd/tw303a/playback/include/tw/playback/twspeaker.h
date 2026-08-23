@@ -180,6 +180,10 @@ private:
     audio::PlaybackContext *context_ = nullptr;
     // Stage 5: borrowed page scheduler for minted engines (see setPageScheduler).
     CaptureRevalidator *pageScheduler_ = nullptr;
+    // The preamble warm-up's demand handle (see warmFrozenLane). Kept only to
+    // report on; dropping it does not abort the demand.
+    std::shared_ptr<CaptureRevalidator::GraphDemand> warmDemand_;
+    std::atomic<int> primingPolls_{0};
 
     // Phase 6b: Output state machine (deferred backend startup until buffer ready)
     std::atomic<OutputState> outputState_{OutputState::STOPPED};
@@ -296,6 +300,49 @@ public:
     // project-owned); null keeps the legacy pull. Takes effect on the next
     // startOutput().
     void setPageScheduler(CaptureRevalidator *scheduler) { pageScheduler_ = scheduler; }
+
+    /**
+     * WARM THE FROZEN LANE at `pos`, so that a later `startOutput()` from
+     * there does not have to freeze anything before the first sample is heard.
+     *
+     * A transport start from stopped mints a NEW AudioEngine with an empty
+     * readahead, and `AudioEngine::startPlayback()` holds the frozen lane
+     * silent until the readahead has covered `primingFrames()` beyond the
+     * playhead. On a heavy project that is seconds — measured at ~2.3 s on a
+     * real one — during which the transport IS RUNNING and nothing is audible.
+     *
+     * A COUNT-IN is the case where that is intolerable rather than merely
+     * annoying: the click establishes a tempo, the performer counts with it,
+     * and then the music does not arrive on the beat it promised. It is also
+     * the case with a REMEDY, because a count-in is dead time of known length
+     * in front of a start position that is already known.
+     *
+     * So this demands the priming window through the page scheduler, from the
+     * main thread, well before the transport moves. The pages land in the
+     * components' own caches (freezePage publication semantics), and the
+     * readahead then PROBES with `getPageIfExists` and advances its frontier
+     * over them WITHOUT re-freezing — so the wait collapses to the walk.
+     *
+     * It never renders here and never blocks: the handle is kept only so the
+     * demand can be reported on, and dropping it does not abort the work.
+     * Harmless and free when the pages are already current — the scheduler
+     * answers a demand for a resident page immediately.
+     *
+     * A no-op with no scheduler (the legacy pull), no playback context, or no
+     * root component.
+     */
+    void warmFrozenLane(offset_t pos);
+
+    /// Whether the last `warmFrozenLane()` demand has finished. False when
+    /// none was ever issued. Diagnostics and the gate; never a wait.
+    bool frozenLaneWarm() const;
+
+    /// How many 50 ms polls the LAST transport start spent with the frozen
+    /// lane held in BUFFERING — i.e. how long the readahead kept it silent
+    /// after the transport was already running. 0 means it never waited.
+    int lastPrimingPolls() const {
+        return primingPolls_.load(std::memory_order_relaxed);
+    }
 
 public:
     // THE FROZEN LANE. Unchanged in every respect except one: when the device is

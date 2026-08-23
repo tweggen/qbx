@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A COUNT-IN IS SPENT PRIMING THE FROZEN LANE, so the music arrives on the
+  beat the click promised.
+
+  Env, on the CTest entry: RUN_SERIAL, SMARAGD_CAPTURE_SPEED=1,
+  SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800.
+
+  WHAT WAS WRONG. A transport start from stopped mints a NEW AudioEngine with
+  an EMPTY readahead, and `AudioEngine::startPlayback()` holds the frozen lane
+  silent until that readahead covers `primingFrames()` (3 s) beyond the
+  playhead. On a heavy project that is seconds of running transport with
+  nothing audible - measured at ~2.3 s on a real one - and after a COUNT-IN it
+  is intolerable rather than merely annoying: the click establishes a tempo,
+  the performer counts with it, and the music then misses the downbeat.
+
+  A count-in is dead time of known length in front of a start position that is
+  already known, so it is now spent doing the readahead's work in advance
+  (`twSpeaker::warmFrozenLane`). The readahead PROBES with `getPageIfExists`
+  and advances its frontier over a page that is already current WITHOUT
+  re-freezing it, so the wait collapses to a walk.
+
+  WHY THE ASSERTION IS A POLL COUNT AND NOT A WALL CLOCK. A wall-clock bound
+  here would be a bound on how fast this box freezes a graph, which is not what
+  changed; what changed is WHEN the freezing happens. `assert-priming` counts
+  the 10 ms polls `twSpeaker` spent holding the frozen lane in BUFFERING while
+  the transport was already running. Zero means the very first check answered
+  PLAYING.
+
+  WHY THE PROJECT IS BUILT AND THEN INVALIDATED. A headless fixture is
+  normally WARM by accident: building it - or loading it - schedules
+  revalidation that happens to freeze the master pages a small project needs,
+  so priming reads ~50 ms whatever the code does and NO assertion could bite.
+  This case defeats that deliberately. Eight tracks of pitched material (the
+  phase vocoder, so freezing costs real work) at 20 s in - far from the
+  position background revalidation reaches from 0 - and then a track-volume
+  edit on every one of them right before the record start, which bumps the
+  content epoch and makes every page at the record position STALE.
+
+  Measured, with the warm-up disabled: 273-303 ms of priming (28+ polls) on
+  this fixture and 423-504 ms on a cold-loaded copy of it; with the warm-up:
+  0-1 ms. The real project that prompted this reads ~2.3 s.
+-->
+<SActionScript version="1" name="record_count_in_primed">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+
+    <!-- The material: pitched, so a page costs the vocoder real work, and at
+         20 s so it is nowhere near what a revalidation from 0 would cover. -->
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="1,0" cents="700"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="2,0" cents="700"/>
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="3,0" cents="700"/>
+    <add-sample trackPath="4" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="4,0" cents="700"/>
+    <add-sample trackPath="5" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="5,0" cents="700"/>
+    <add-sample trackPath="6" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="6,0" cents="700"/>
+    <add-sample trackPath="7" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="7,0" cents="700"/>
+    <add-sample trackPath="8" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="8,0" cents="700"/>
+
+    <set-track-input trackPath="0" input="audio:file:1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- This case OWNS transport/countInBars and transport/preRollBars. -->
+    <set-count-in bars="2"/>
+    <set-pre-roll bars="0"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="960000"/>
+
+    <!-- Let whatever the construction scheduled settle, THEN stale it all. -->
+    <wait-ms ms="2000"/>
+    <set-track-volume trackPath="1" volume="-1.0"/>
+    <set-track-volume trackPath="2" volume="-1.0"/>
+    <set-track-volume trackPath="3" volume="-1.0"/>
+    <set-track-volume trackPath="4" volume="-1.0"/>
+    <set-track-volume trackPath="5" volume="-1.0"/>
+    <set-track-volume trackPath="6" volume="-1.0"/>
+    <set-track-volume trackPath="7" volume="-1.0"/>
+    <set-track-volume trackPath="8" volume="-1.0"/>
+
+    <record-start/>
+    <wait-ms ms="4700"/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <!-- THE CLAIM: the transport did not wait for the readahead at all,
+         because the count-in had already frozen what it needed. ONE poll of
+         slack, on a case that measured EXACTLY 0 on 5 runs of 5 and is
+         RUN_SERIAL. It is deliberately tight enough to bite BOTH halves of
+         the fix: without the warm-up it reads 28+, and with the warm-up but
+         the readahead's first pass delayed by its old unconditional 20 ms
+         wait it reads exactly 2. If this ever flakes, THIS is the number to
+         relax - not the warm-up. -->
+    <assert-priming maxPolls="1"/>
+
+    <!-- ...and the count-in still places the take AT THE LOCATOR, which is
+         what record_count_in gates and what the warm-up must not disturb. -->
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          startFrame="960000" startTolerance="2048"/>
+
+    <set-count-in bars="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="9"/>
+  </assertions>
+
+</SActionScript>

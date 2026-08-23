@@ -1231,6 +1231,26 @@ bool SApplication::startRecording()
                          countInBars, (long long) countIn,
                          (long long) preambleTarget_ );
                 if( liveMonitor_ ) liveMonitor_->beginCountIn( countIn );
+                // SPEND THE COUNT-IN PRIMING THE FROZEN LANE.
+                //
+                // A count-in is dead time of known length in front of a start
+                // position that is already known, and without this the whole
+                // readahead is built AFTER it - so the click counts the bars
+                // in and the music then arrives late by however long the
+                // graph takes to freeze `AudioEngine::primingFrames()`
+                // (measured at ~2.3 s on a real project, and reported as a
+                // deal-breaker: the click promises a tempo the music does not
+                // keep). The warm-up is the readahead's own work, done during
+                // the click instead of after it.
+                //
+                // The position warmed is the one the TRANSPORT will start
+                // from, which is the pre-roll's own start when a pre-roll
+                // follows the count-in and the record position otherwise -
+                // NOT necessarily preambleTarget_.
+                if( t3Speaker_ )
+                    t3Speaker_->warmFrozenLane(
+                        preRoll > 0 ? std::max<offset_t>( preambleTarget_ - preRoll, 0 )
+                                    : preambleTarget_ );
             } else {
                 beginPreRoll_( preRoll );
             }
