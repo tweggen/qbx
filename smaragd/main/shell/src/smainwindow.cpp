@@ -2534,6 +2534,13 @@ void SMainWindow::adoptCurrentProject()
     syncPaletteToProject( currentProject_ );
 }
 
+bool SMainWindow::hoverClipEdge( int rowIdx, int clipIdx, int grabWhere )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    return v->hoverClipEdge( rowIdx, clipIdx, grabWhere );
+}
+
 bool SMainWindow::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
                                 offset_t dropTime, bool upperHalf,
                                 Qt::KeyboardModifiers mods )

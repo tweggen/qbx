@@ -2950,7 +2950,16 @@ void SMVActualView::updateHoverCursor( const QPoint &pos, Qt::KeyboardModifiers 
             bool onBorder = onLeft || onRight;
             bool ctrl = hasPrimaryMod( mods );   // ⌘ on macOS, Ctrl elsewhere
             bool alt  = mods & Qt::AltModifier;
-            if( loopMarkerAt( pos, rowIdx, clip ) > 0 )
+            // A FADE HANDLE is tested FIRST, matching the press: proposal 43
+            // N5's UI made it outrank every edge band AND the loop marker
+            // (`clipDragIsLoopMarker_` is gated on `!clipDragIsFade_`), so a
+            // cursor that reported anything else here would be promising a
+            // gesture the press will not perform.
+            if( int fh = fadeHandleAt( pos, rowIdx, clip ) )
+                                       { shape = Qt::SizeHorCursor;
+                                         mode = ( fh == 1 ) ? "Fade in"
+                                                            : "Fade out"; }
+            else if( loopMarkerAt( pos, rowIdx, clip ) > 0 )
                                        { shape = Qt::SizeHorCursor;    mode = "Loop length"; }
             else if( onBorder && ctrl ){ shape = Qt::SplitHCursor;     mode = "Time-stretch"; }
             else if( onRight && upper ){ custom = s_loopCursor;        mode = "Loop"; }
@@ -4798,9 +4807,15 @@ void SStdMixerView::trackSliderMoved( int newValue )
 // Drive one clip-edge gesture through the arranger's real mouse handlers. See
 // the header for why this exists: every clip-edge clamp lives in the drag code,
 // and nothing else in the qxa suite can reach it.
-bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
+// WHERE A SYNTHESIZED GESTURE GRABS A CLIP. Factored out of dragClipEdge so
+// the HOVER verb lands on exactly the same point a drag would (proposal 43
+// N5 UI's rule, and proposal 41 M7's before it: one geometry, or a
+// synthesized gesture starts testing a box a hand never touches).
+// `dropTime` only matters for the canvas grow below; pass the grab time for
+// a hover.
+bool SStdMixerView::grabPointFor( int rowIdx, int clipIdx, int grabWhere,
                                   offset_t dropTime, bool upperHalf,
-                                  Qt::KeyboardModifiers mods )
+                                  QPoint &outGrab, QPoint &outDrop )
 {
     const STrackRow *row = rowAt( rowIdx );
     if( !row || !row->track || !qContent_ ) return false;
@@ -4883,6 +4898,19 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     if( qContent_->width() < needed )
         qContent_->resize( needed, qContent_->height() > y+th ? qContent_->height() : y+th+64 );
 
+    outGrab = QPoint( x0, y );
+    outDrop = QPoint( x1, y );
+    return true;
+}
+
+bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
+                                  offset_t dropTime, bool upperHalf,
+                                  Qt::KeyboardModifiers mods )
+{
+    QPoint g, d;
+    if( !grabPointFor( rowIdx, clipIdx, grabWhere, dropTime, upperHalf, g, d ) )
+        return false;
+    const int x0 = g.x(), x1 = d.x(), y = g.y();
     auto send = [&]( QEvent::Type type, int x,
                      Qt::MouseButton button, Qt::MouseButtons buttons ) {
         QPointF local( x, y );
@@ -4893,6 +4921,32 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     send( QEvent::MouseButtonPress,   x0, Qt::LeftButton, Qt::LeftButton );
     send( QEvent::MouseMove,          x1, Qt::NoButton,   Qt::LeftButton );
     send( QEvent::MouseButtonRelease, x1, Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
+// ONE synthesized MOUSE-MOVE at a clip's grab point, so a script can assert
+// what the app tells the user is under the pointer (proposal 43 N5 UI). It is
+// a HOVER: no button is down, so nothing arms and nothing is edited.
+bool SStdMixerView::hoverClipEdge( int rowIdx, int clipIdx, int grabWhere,
+                                   Qt::KeyboardModifiers mods )
+{
+    const STrackRow *row = rowAt( rowIdx );
+    if( !row || !row->track || !qContent_ ) return false;
+    SLink *clip = NULL;
+    int n = 0;
+    for( SLink *lk : row->track->childLinks() ) {
+        if( dynamic_cast<STrack*>( &lk->getSObject() ) ) continue;
+        if( n++ == clipIdx ) { clip = lk; break; }
+    }
+    if( !clip || !clip->hasStartTime() ) return false;
+    QPoint g, d;
+    if( !grabPointFor( rowIdx, clipIdx, grabWhere, clip->getStartTime(),
+                       false, g, d ) )
+        return false;
+    QMouseEvent ev( QEvent::MouseMove, QPointF( g ),
+                    qContent_->mapToGlobal( QPointF( g ) ),
+                    Qt::NoButton, Qt::NoButton, mods );
+    QApplication::sendEvent( qContent_, &ev );
     return true;
 }
 

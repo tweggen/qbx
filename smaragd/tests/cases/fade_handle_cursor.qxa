@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE POINTER SAYS WHAT A FADE HANDLE WILL DO.
+
+  Reported after using proposal 43 N5's fade handles: they are draggable and
+  nothing signals it. Every other clip gesture on this surface already changes
+  the cursor and publishes a mode string — trim, extend, loop, time-stretch,
+  slip, duplicate, move — and the fade handles were the only control that did
+  neither.
+
+  A FADE HANDLE IS TESTED FIRST, matching the press. Proposal 43 N5's UI made
+  it outrank every edge band AND the loop marker (`clipDragIsLoopMarker_` is
+  gated on `!clipDragIsFade_`), so a cursor reporting anything else there would
+  be promising a gesture the press will not perform. That precedence is what
+  the fade-in assertion below actually pins: the handle sits near the clip's
+  LEFT edge, where the answer would otherwise be "Trim start".
+
+  WHY THE MODE STRING AND NOT THE CURSOR. Both are chosen in ONE branch of
+  `updateHoverCursor`, so the string is a faithful proxy — and a `QCursor` set
+  on a widget that is never shown is not something a headless run can read
+  back. `assert-hover-mode` synthesizes the move at the SAME grab point
+  `drag-clip-edge` uses, through the same `grabPointFor()`, so a hover cannot
+  be testing a box a drag would miss. This is the arranger's FIRST gate of any
+  kind on hover feedback.
+-->
+<SActionScript version="1" name="fade_handle_cursor">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+
+    <!-- With NO fade the handles are PARKED just clear of the edge bands, and
+         they are still grabbable — which is the whole reason they park. -->
+    <assert-hover-mode track="0" clip="0" edge="fadein"  mode="Fade in"/>
+    <assert-hover-mode track="0" clip="0" edge="fadeout" mode="Fade out"/>
+
+    <!-- With a fade set, the handle moves to the fade's end and still says so. -->
+    <set-clip-fade clip="0,0" fadeIn="48000" fadeOut="48000" shape="linear"/>
+    <assert-hover-mode track="0" clip="0" edge="fadein"  mode="Fade in"/>
+    <assert-hover-mode track="0" clip="0" edge="fadeout" mode="Fade out"/>
+
+    <!-- ...and every OTHER gesture still reports what it always did: the fade
+         handle outranks the edge bands without SWALLOWING them, which is the
+         property `clip_fade_handles.qxa` asserts from the other side (a trim
+         still works with a fade present). -->
+    <assert-hover-mode track="0" clip="0" edge="start" mode="Trim start"/>
+    <assert-hover-mode track="0" clip="0" edge="end"   mode="Extend"/>
+    <assert-hover-mode track="0" clip="0" edge="body"  mode="Move"/>
+  </actions>
+
+</SActionScript>
