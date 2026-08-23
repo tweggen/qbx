@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A COMP BOUNDARY CROSSFADES.
+
+  Proposal 43 N3. N1 stored `xfade` and N2 rendered every boundary as a HARD
+  CUT; this makes the crossfade audible. It is the last thing the AUDIO half of
+  comping needed — N4, the mouse, is what is left after it.
+
+  EQUAL POWER, ALWAYS, and the SAME curve family a clip fade uses
+  (`twFadeShape`, proposal 43 N5): a crossfade is two fades that meet, and two
+  curve families that could disagree about the shape of one join is one more
+  than there should be. sin(t*pi/2) and sin((1-t)*pi/2) sum to constant POWER,
+  which is what a join between two performances of the same part wants.
+
+  THE CROSSFADE IS CENTRED ON THE BOUNDARY and CLAMPED so two of them may touch
+  and can never overlap — each to half the distance to its neighbours.
+  Overlapping crossfades would need three takes live at once, and a rule that
+  silently produced that is a rule that produces audio nobody asked for.
+
+  THE FIXTURE MAKES THE FADE VISIBLE IN THE ARITHMETIC. test_gapsaw.wav has an
+  EXACT-ZERO region at [2.5,3.0) s. Take A is unslipped, so across that whole
+  window A is SILENT; take B is slipped one second, so there it is the ramp's
+  loud tail. Put the boundary at 2.75 s with a 0.5 s crossfade — exactly the
+  zero region — and the two readings separate completely in the FIRST half:
+
+                        [2.50,2.75)   [2.75,3.00)
+      hard cut            0.00000       0.44931
+      crossfaded          0.18332       0.40766
+
+  A hard cut is SILENT for the first half (it is still playing take A, which is
+  the zero region) and full level for the second. The crossfade instead ramps
+  take B in ACROSS the boundary, so the first half is audible and the second is
+  BELOW full. Silence against 0.18332 is not a tolerance question.
+-->
+<SActionScript version="1" name="comp_crossfade">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+
+    <!-- comp: take A up to 2.75 s, take B after. NO crossfade yet. -->
+    <set-comp-segment clip="0,0" at="0" take="0"/>
+    <set-comp-segment clip="0,0" at="132000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;132000:1"/>
+
+    <render filename="cx_hard.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- [2.50,2.75) s = frames 120000..132000: still take A, the ZERO region -->
+    <assert-audio-energy filename="cx_hard.wav" startFrame="120000"
+                         frameCount="12000" minRms="0.0" maxRms="0.002"/>
+    <!-- [2.75,3.00) s: take B at full level -->
+    <assert-audio-energy filename="cx_hard.wav" startFrame="132000"
+                         frameCount="12000" minRms="0.4470" maxRms="0.4520"/>
+
+    <!-- NOW A 0.5 s CROSSFADE, centred on the boundary. -->
+    <set-comp-xfade clip="0,0" at="132000" xfade="24000"/>
+    <assert-take-column clip="0,0" comp="0:0;132000:1:24000"/>
+    <render filename="cx_fade.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- The first half is no longer SILENT: take B is ramping in across the
+         boundary. This is the assertion a hard cut cannot pass. -->
+    <assert-audio-energy filename="cx_fade.wav" startFrame="120000"
+                         frameCount="12000" minRms="0.1810" maxRms="0.1855"/>
+    <!-- ...and the second half is BELOW full, because B is still ramping. -->
+    <assert-audio-energy filename="cx_fade.wav" startFrame="132000"
+                         frameCount="12000" minRms="0.4050" maxRms="0.4105"/>
+
+    <!-- OUTSIDE the crossfade nothing moved: the first two seconds are take A
+         exactly as before, and the last second take B exactly as before. -->
+    <assert-audio-energy filename="cx_fade.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0840" maxRms="0.0857"/>
+    <assert-audio-energy filename="cx_fade.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- REMOVING the crossfade returns the hard cut, exactly. -->
+    <set-comp-xfade clip="0,0" at="132000" xfade="0"/>
+    <render filename="cx_off.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cx_off.wav" startFrame="120000"
+                         frameCount="12000" minRms="0.0" maxRms="0.002"/>
+    <assert-audio-energy filename="cx_off.wav" startFrame="132000"
+                         frameCount="12000" minRms="0.4470" maxRms="0.4520"/>
+
+    <!-- ...and ONE undo brings it back, so the verb's inverse carries the
+         whole previous map as N1 designed it. -->
+    <undo/>
+    <render filename="cx_undo.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cx_undo.wav" startFrame="120000"
+                         frameCount="12000" minRms="0.1810" maxRms="0.1855"/>
+  </actions>
+
+</SActionScript>

@@ -1,4 +1,5 @@
 #include "tw/mix/twcompcolumn.h"
+#include "tw/events/twfade.h"
 
 #include "tw/core/twlog.h"
 #include "tw/graph/twview.h"
@@ -57,17 +58,57 @@ int twCompColumn::takeAt_nolock( offset_t pos ) const
     return ( chosen >= 0 && chosen < (int) takes_.size() ) ? chosen : -1;
 }
 
-length_t twCompColumn::runLength_nolock( offset_t pos, length_t limit ) const
+int64_t twCompColumn::clampedXfade_nolock( size_t segIndex ) const
 {
-    // The next boundary strictly after `pos` ends this run; nothing after it
-    // does, because the map is sorted.
-    for( const twCompSegment &s : map_.segments() ) {
-        if( (offset_t) s.at > pos ) {
-            const length_t run = (length_t) ( (offset_t) s.at - pos );
-            return std::min( run, limit );
+    const std::vector<twCompSegment> &segs = map_.segments();
+    if( segIndex == 0 || segIndex >= segs.size() ) return 0;
+    int64_t x = segs[ segIndex ].xfade;
+    if( x <= 0 ) return 0;
+    // Half the distance to each neighbouring boundary: two crossfades may
+    // TOUCH and can never overlap, so at most two takes are ever live.
+    const int64_t prevGap = segs[ segIndex ].at - segs[ segIndex - 1 ].at;
+    if( x > prevGap ) x = prevGap;
+    if( segIndex + 1 < segs.size() ) {
+        const int64_t nextGap = segs[ segIndex + 1 ].at - segs[ segIndex ].at;
+        if( x > nextGap ) x = nextGap;
+    }
+    return x < 0 ? 0 : x;
+}
+
+twCompColumn::CompRun twCompColumn::runAt_nolock( offset_t pos,
+                                                  length_t limit ) const
+{
+    CompRun r;
+    r.len = limit;
+    r.takeA = takeAt_nolock( pos );
+
+    const std::vector<twCompSegment> &segs = map_.segments();
+    // Every position at which the contributing SET changes: a crossfade's two
+    // ends, and a boundary with no crossfade.
+    for( size_t i = 0; i < segs.size(); ++i ) {
+        const int64_t x = clampedXfade_nolock( i );
+        const offset_t at = (offset_t) segs[ i ].at;
+        const offset_t xs = (offset_t) ( at - x / 2 );
+        const offset_t xe = (offset_t) ( xs + x );
+
+        if( x > 0 && pos >= xs && pos < xe ) {
+            // INSIDE this crossfade: both takes are live for the rest of it.
+            r.takeA  = takeAt_nolock( (offset_t) ( segs[ i ].at - 1 ) );
+            r.takeB  = segs[ i ].take;
+            r.xStart = xs;
+            r.xLen   = x;
+            r.len    = std::min( limit, (length_t) ( xe - pos ) );
+            return r;
+        }
+        // Otherwise the next event after `pos` ends this run.
+        const offset_t evt = ( x > 0 ) ? xs : at;
+        if( evt > pos ) {
+            r.len = std::min( r.len, (length_t) ( evt - pos ) );
+            break;      // segments are sorted; no later one can be nearer
         }
     }
-    return limit;
+    if( r.len < 0 ) r.len = 0;
+    return r;
 }
 
 twPagePlan twCompColumn::planPage( offset_t pageStart )
@@ -91,15 +132,18 @@ twPagePlan twCompColumn::planPage( offset_t pageStart )
     offset_t pos = pageStart;
     const offset_t end = pageStart + (offset_t) pageLen;
     while( pos < end ) {
-        const length_t run = runLength_nolock( pos, (length_t) ( end - pos ) );
-        const int t = takeAt_nolock( pos );
-        if( t >= 0 && takes_[ (size_t) t ].view ) {
+        const CompRun run = runAt_nolock( pos, (length_t) ( end - pos ) );
+        // BOTH takes across a crossfade, or the scheduler will not have the
+        // page the fade's other half reads (proposal 43 §6).
+        for( int t : { run.takeA, run.takeB } ) {
+            if( t < 0 || (size_t) t >= takes_.size() ) continue;
+            if( !takes_[ (size_t) t ].view ) continue;
             twResolvedClip r = takes_[ (size_t) t ].view->resolve( pos );
             if( r.component )
                 plan.deps.push_back( twPageDep{ r.component, r.mappedPos } );
         }
-        if( run <= 0 ) break;
-        pos += (offset_t) run;
+        if( run.len <= 0 ) break;
+        pos += (offset_t) run.len;
     }
     return plan;
 }
@@ -123,38 +167,64 @@ std::shared_ptr<twOutputPage> twCompColumn::freezePage(
     const offset_t end = startPos + (offset_t) pageLen;
 
     while( pos < end ) {
-        const length_t run = runLength_nolock( pos, (length_t) ( end - pos ) );
-        if( run <= 0 ) break;
-        const int t = takeAt_nolock( pos );
-        if( t >= 0 && takes_[ (size_t) t ].view ) {
+        const CompRun run = runAt_nolock( pos, (length_t) ( end - pos ) );
+        if( run.len <= 0 ) break;
+
+        // Freeze each contributing take AT THE SAME POSITION: a take is a
+        // window addressed in the COLUMN's own domain, so there is no offset.
+        auto freezeTake = [&]( int t ) -> std::shared_ptr<twOutputPage> {
+            if( t < 0 || (size_t) t >= takes_.size() ) return nullptr;
             TakeEntry &e = takes_[ (size_t) t ];
-            // Freeze the take at the SAME position: a take is a window
-            // addressed in the COLUMN's own domain (take links have
-            // startTime 0, stakestack.h), so there is no offset to apply and
-            // nothing here has to know what kind of window it is.
-            auto src = e.view->freezePage( pos, nullptr, 0, run, sampleRate,
-                                           e.previousPage );
-            if( src && src->validFrames > 0 ) {
-                // The per-take DSP state chain. A take renders only where its
-                // regions are, so its chain has GAPS -- which is inherent to
-                // cutting between sources and is the same situation
-                // twTrackMix's non-contiguous clips are in.
-                e.previousPage = src;
-                const offset_t dst = pos - startPos;
-                const length_t n =
-                    std::min<length_t>( (length_t) src->validFrames, run );
-                for( idx_t c = 0; c < (idx_t) page->channels(); ++c ) {
-                    // The source channel is CLAMPED, never assumed: a take's
-                    // page carries the width of ITS source, and a mono take
-                    // must play on every channel (proposal 36 §4.4).
-                    const idx_t sc = twPageClampChannel( *src, c );
-                    const sample_t *sp = src->channelPtr( sc );
-                    sample_t *dp = page->channelPtr( c ) + dst;
-                    for( length_t i = 0; i < n; ++i ) dp[ i ] = sp[ i ];
-                }
+            if( !e.view ) return nullptr;
+            auto sp = e.view->freezePage( pos, nullptr, 0, run.len, sampleRate,
+                                          e.previousPage );
+            // The per-take DSP state chain. A take renders only where its
+            // regions are, so its chain has GAPS -- inherent to cutting
+            // between sources, and the same situation twTrackMix's
+            // non-contiguous clips are in.
+            if( sp && sp->validFrames > 0 ) e.previousPage = sp;
+            return sp;
+        };
+        auto pa = freezeTake( run.takeA );
+        auto pb = ( run.takeB >= 0 ) ? freezeTake( run.takeB ) : nullptr;
+
+        const offset_t dst = pos - startPos;
+        for( idx_t c = 0; c < (idx_t) page->channels(); ++c ) {
+            sample_t *dp = page->channelPtr( c ) + dst;
+            // The source channel is CLAMPED, never assumed: a take's page
+            // carries the width of ITS source, and a mono take must play on
+            // every channel (proposal 36 4.4).
+            const sample_t *sa = ( pa && pa->validFrames > 0 )
+                ? pa->channelPtr( twPageClampChannel( *pa, c ) ) : nullptr;
+            const sample_t *sb = ( pb && pb->validFrames > 0 )
+                ? pb->channelPtr( twPageClampChannel( *pb, c ) ) : nullptr;
+            const length_t na = sa ? std::min<length_t>(
+                                        (length_t) pa->validFrames, run.len ) : 0;
+            const length_t nb = sb ? std::min<length_t>(
+                                        (length_t) pb->validFrames, run.len ) : 0;
+
+            if( run.takeB < 0 || run.xLen <= 0 ) {
+                for( length_t i = 0; i < run.len; ++i )
+                    dp[ i ] = ( i < na ) ? sa[ i ] : (sample_t) 0;
+                continue;
+            }
+            // THE CROSSFADE. EQUAL POWER, always: two of these sum to constant
+            // power across the join, which is what a comp boundary wants, and
+            // it is the SAME curve family a clip fade uses (twFadeShape) --
+            // a crossfade is two fades that meet, and two curve families that
+            // could disagree about the same join is one more than there
+            // should be.
+            for( length_t i = 0; i < run.len; ++i ) {
+                const double t =
+                    (double) ( pos + (offset_t) i - run.xStart ) / (double) run.xLen;
+                const double gIn  = twClipFade::shaped( t, twFadeShape::EqualPower );
+                const double gOut = twClipFade::shaped( 1.0 - t, twFadeShape::EqualPower );
+                const double a = ( i < na ) ? (double) sa[ i ] : 0.0;
+                const double b = ( i < nb ) ? (double) sb[ i ] : 0.0;
+                dp[ i ] = (sample_t) ( a * gOut + b * gIn );
             }
         }
-        pos += (offset_t) run;
+        pos += (offset_t) run.len;
     }
 
     page->validFrames = (uint32_t) pageLen;

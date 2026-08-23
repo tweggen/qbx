@@ -232,3 +232,34 @@ Gate: `comp_map_audible.qxa`, over a fixture whose two takes differ in EVERY
 per-second window, so a comped render equals neither. **Watched failing under a
 sabotage that renders one take per PAGE** — i.e. exactly the coarse resolution
 this component exists to escape.
+
+### A comp boundary CROSSFADES (proposal 43 N3)
+
+`twCompSegment::xfade` is the length of a crossfade **centred on that
+segment's own left boundary**, so it belongs to the BOUNDARY rather than to
+either take. Zero is a hard cut, which is what N2 rendered everywhere.
+
+**EQUAL POWER, always, and the SAME curve family a clip fade uses**
+(`twFadeShape`, proposal 43 N5). A crossfade is two fades that meet, and two
+curve families that could disagree about the shape of one join is one more than
+there should be. `sin(t·π/2)` and `sin((1−t)·π/2)` sum to constant POWER, which
+is what a join between two performances of the same part wants — and it is why
+the shape enum was introduced with the clip fade rather than invented here.
+
+**Each crossfade is CLAMPED to half the distance to its neighbouring
+boundaries**, so two of them may TOUCH and can never overlap. Overlapping
+crossfades would need three takes live at once, and a rule that silently
+produced that is a rule that produces audio nobody asked for.
+
+`runAt_nolock()` is the ONE walk both `planPage` and `freezePage` make: it
+yields runs over which the contributing SET does not change — one take outside
+a crossfade, TWO inside it. **`planPage` declares BOTH** across a boundary, or
+the scheduler will not have the page the fade's other half reads.
+
+Gate: `comp_crossfade.qxa`. The fixture puts the boundary and its 0.5 s
+crossfade exactly on `test_gapsaw.wav`'s EXACT-ZERO region, where the outgoing
+take is silent and the incoming take is loud — so a hard cut reads **0.00000**
+over the first half of the window and a crossfade reads **0.18332**. Silence
+against 0.18332 is not a tolerance question. The second half separates too
+(0.44931 against 0.40766), and the case asserts that nothing OUTSIDE the
+crossfade moved.

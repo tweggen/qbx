@@ -95,11 +95,32 @@ private:
     int takeAt_nolock( offset_t pos ) const;
 
     /**
-     * The half-open span of positions from `pos` that the SAME take covers,
-     * clamped to `limit`. What turns "read the map per frame" into "one freeze
-     * per region", which is what the page plan has to declare anyway.
+     * ONE RUN of the output: a span over which the set of contributing takes
+     * does not change. Outside a crossfade that is one take; inside one it is
+     * TWO, and their gains vary per frame.
+     *
+     * What turns "read the map per frame" into "one freeze per region", which
+     * is what the page plan has to declare anyway — and the one walk both
+     * `planPage` and `freezePage` make, so plan and render cannot disagree
+     * (proposal 19 Inv-1 extended to the plan).
      */
-    length_t runLength_nolock( offset_t pos, length_t limit ) const;
+    struct CompRun {
+        length_t len   = 0;
+        int      takeA = -1;    // the sole take, or the OUTGOING one
+        int      takeB = -1;    // the INCOMING take; -1 outside a crossfade
+        offset_t xStart = 0;    // crossfade start, absolute column position
+        int64_t  xLen   = 0;    // crossfade length; 0 outside one
+    };
+    CompRun runAt_nolock( offset_t pos, length_t limit ) const;
+
+    /**
+     * A boundary's crossfade, CLAMPED so two of them can touch but never
+     * overlap: each is limited to half the distance to its neighbouring
+     * boundaries. Overlapping crossfades would need three takes live at once,
+     * and a rule that silently produced that is a rule that produces audio
+     * nobody asked for.
+     */
+    int64_t clampedXfade_nolock( size_t segIndex ) const;
 
     struct TakeEntry {
         std::shared_ptr<twView>       view;
