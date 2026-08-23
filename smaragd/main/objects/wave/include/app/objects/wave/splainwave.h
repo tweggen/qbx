@@ -49,6 +49,46 @@ public:
     virtual twRandomSource *getRandomSource();
     virtual int setWave( const QString url );
     virtual QString getFileName() const;
+    virtual bool relocateTo( const QString &newPath ) override;
+    virtual bool isMissing() const override { return missing_; }
+
+    /**
+     * Become a MISSING PLACEHOLDER for a sample that could not be loaded.
+     *
+     * WHY THIS EXISTS AT ALL. Before it, a `<SPlainWave>` whose file was
+     * unreachable returned NULL from instantiateFromDomElement, and the loader
+     * — correctly, given that — dropped the element AND cascaded the drop to
+     * every `<SCut>` that windowed it, "so the rest of the project can load".
+     * The cost was silent and permanent: a project opened on a machine where
+     * one sample happens to be absent came up MINUS those clips, and the next
+     * save wrote that arrangement back. A file being temporarily out of reach
+     * (another machine, an unsynced cloud folder, an external disk) is a normal
+     * condition; losing the arrangement over it is not.
+     *
+     * A placeholder keeps the object's identity — the path AS THE FILE SPELLS
+     * IT, so a re-save says exactly what the original said and the reference
+     * resolves again on the machine where the file does exist — plus the
+     * duration the project recorded, so the clips keep their extents and the
+     * timeline is unchanged. It owns a source-less twWavInput, so it is a
+     * perfectly ordinary component that renders SILENCE: the graph, the
+     * capture builder and the freeze path need no missing-file branch anywhere.
+     *
+     * `durationFrames` comes from the element's own `durationSec` (there is no
+     * file to ask). Zero when the attribute was absent — the clips then keep
+     * their own windows, which is all a cut actually reads.
+     */
+    int setMissingWave( const QString &resolvedPath, const QString &storedSpelling,
+                        length_t durationFrames );
+
+    /**
+     * Build (or reuse) the MISSING placeholder for `resolved` and return a link
+     * to it. Mirrors SProject::linkToFile's caching: a second clip on the same
+     * unreachable file shares the one placeholder, exactly as two clips on a
+     * present file share one SPlainWave.
+     */
+    static SLink *linkToMissingFile( SProject &project, const QString &resolvedPath,
+                                     const QString &storedSpelling,
+                                     length_t durationFrames );
 
     // FIXME: Move this to a factory.
     virtual QWidget *getDetailEditWidget( QWidget *parent );
@@ -127,6 +167,16 @@ private:
 
     std::shared_ptr<twWavInput> cpWave_;
     QString fileName_;
+    // Set by setMissingWave(): this object stands in for a file that could not
+    // be loaded. See setMissingWave() for what a placeholder is and is not.
+    bool    missing_ = false;
+    // The spelling the PROJECT FILE used, kept verbatim so a re-save reproduces
+    // it. Re-encoding fileName_ against this machine's anchor would be right by
+    // accident at best: the reference is unresolvable HERE, so this machine has
+    // no standing to rewrite where it points.
+    QString storedSpelling_;
+    // The duration the project recorded for the absent file, in project frames.
+    length_t missingDuration_ = 0;
     SPlainWaveRendererInline *inlineRenderer_;
     std::shared_ptr<std::atomic<bool>> analyzing_;
     // Proposal 40 M1: the groove-analysis job's own badge (see

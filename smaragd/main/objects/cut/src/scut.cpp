@@ -394,6 +394,16 @@ void SCut::buildCapture_()
     // Check if we need to build a capture:
     // 1. Container-backed cuts (no random source)
     // 2. Grained sample-backed cuts (need to materialize the grain transformation)
+    // A MISSING placeholder has no random source, so every test below would
+    // classify it as CONTAINER-BACKED and this function would render its whole
+    // declared duration into a capture — a full-length buffer of zeros, built
+    // on the UI thread, once per clip on the absent sample. Nothing reads it:
+    // with no capture, rebuildReader builds no reader and the clip is silent,
+    // which is exactly what the capture would have said at whatever cost.
+    if( c.isMissing() ) {
+        return;
+    }
+
     bool isContainerBacked = !c.getRandomSource();
     bool isGrained = !snap.grainParams.isIdentity();
 

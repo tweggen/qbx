@@ -2218,6 +2218,82 @@ identity by design, but no case exercises either); nested containers deeper than
 one wrapper; and the DRAWN composite lane, which needs a container clip to
 preview at all — a separate fix on `fix/take-lane-capture-align`.
 
+## A missing sample keeps its clips, and a project can be made self-contained (fix/missing-sample-placeholder, 2026-08-22)
+
+Two connected things, both found from one user report: a project written on
+Windows into a OneDrive folder, opened on Linux, raised **three modal dialogs
+that each said only "Unable to load file."** and came up **four clips short**.
+Invariants: `main/objects/wave/CONTRACT.md` ("A sample that will not load
+becomes a PLACEHOLDER"), `main/model/CONTRACT.md` ("Missing external files, and
+self-contained"), `main/objects/cut/CONTRACT.md` ("A cut over MISSING content
+builds no capture"), `main/shell/CONTRACT.md` inv. 48-50,
+`main/media/CONTRACT.md` (`collectExternalMedia`), `main/testkit/CONTRACT.md`
+56-57.
+
+**Read this before touching the loader's missing-file path — the DIAGNOSTIC
+half is the obvious complaint and the DATA-LOSS half is the actual defect.**
+The three files really were absent (they were `~`-anchored into
+`~/Documents/Cubase Projects/…`, outside the project folder, and only the
+project folder had been copied). What was wrong was everything the app did
+about it.
+
+| Thing to know | Why |
+|---|---|
+| **An unreachable sample is now a PLACEHOLDER, not a deletion.** `SPlainWave::setMissingWave` keeps the path, the recorded duration and every clip; it owns a **source-less `twWavInput`** and renders SILENCE | `instantiateFromDomElement` returning NULL made the loader drop the wave AND cascade the drop to every `<SCut>` windowing it — "so the rest of the project can load", which is much better than the hard abort it replaced and still means the arrangement is quietly smaller than the user left it, permanently once saved. A file being temporarily out of reach (another machine, an unsynced cloud folder, an external disk) is a NORMAL condition. Measured on the reported project: 3 waves and **4 clips** gone; now **0**. |
+| A source-less `twWavInput` (ctor with an **empty** file name) is what makes it cost nothing | That spelling loads nothing and warns about nothing, and every render path in it already answers "no source" with silence — so the graph, the capture builder, the scheduler, the freeze path and the RT callback need **no missing-file branch anywhere**. |
+| **The duration comes from the ELEMENT's `durationSec`**, read in `instantiateFromDomElement` | There is no file to measure, `twWavInput::getLength()` is -1 with no source, and `SPlainWave` overrides `hasDuration()`/`getDuration()` out of its component — so `SObject::readPreChildrenAttributes`' `duration_` is never consulted for a wave and reading the attribute there is the only way to recover it. |
+| **A placeholder re-serializes the project file's OWN spelling, verbatim** — never `SFilePathRef::toStored` | The reference is unresolvable HERE, so this machine has no standing to rewrite where it points. Re-encoding would take a project carried from another OS and rewrite its unreachable samples relative to a folder they were never in — breaking it on the machine where they DO exist, silently, one save away. |
+| **`SObject::isMissing()` is on the BASE CLASS, and it is load-bearing** | `objects/cut` must ask it about its content without knowing which slice owns it (the `contentKind()` / `resolveEventClip()` rule). `SCut::buildCapture_` short-circuits on it: a placeholder has no random source, so every other test there calls it CONTAINER-BACKED and renders its whole duration into a capture of ZEROS, on the UI thread, once per clip. Measured before the early return: **~17 s of load**, all of it silence. |
+| **ONE dialog per load, naming every file — and it says what was NOT done** | The old one was raised per miss from inside `setWave` and its text carried no path at all, so three unreachable samples were three modal boxes and not one filename between them. Both spellings are reported: what the .qxp says (portable, possibly written on another OS) and what THIS machine searched. It returns immediately under `--test-case` — a modal `exec()` headless is a hang, not a dialog. |
+| **The resources dock says "Project is not self-contained." and offers ONE button** | `SProject::externalMediaPaths()` — every extern file outside the project file's own directory **or any subdirectory of it**. A subdirectory counts as INSIDE (`<projectdir>/media/` is where both the media browser's drop and the collect put things, so the other rule would leave the banner permanently lit); an UNTITLED project reports empty (nothing to be outside OF, and the button would have no destination). |
+| **"Collect external media" is `materialiseIntoProject` applied to a list**, in `app/media` | So the button and the `collect-external-media` verb run the same code, and the sanitising, the never-overwrite `"name (2).ext"` rule and the reuse-identical-bytes rule are the media browser's, not a second set. It does **not save** (`QUndoStack::resetClean()` marks the window dirty instead — a collect is not an action, because no undo step can put a file system back) and it **names the placeholders it skipped** rather than counting them as done. |
+| The banner lives in a CONTAINER widget in the shell, not in `SExternFileList` | That is a `QTreeWidget` in `app_model`, a layer that may include no other app module — it cannot reach the copy helper the button needs. |
+
+**Verbs:** `assert-extern-files` (`count` / `missing` / `external`) and
+`collect-external-media` (`expectCopied` / `expectMissing` / `expectFailed`).
+
+Gates: the qxa cases `sample_missing_survives` and
+`load_missing_sample_placed_survives` (both EXTENDED — their headers now record
+all three behaviours this fixture pair has gated),
+`missing_sample_reference_verbatim` (new, over the new fixture
+`tests/missing_relative_sample.qxp`), `collect_external_media` and
+`collect_external_media_missing` (new), plus `action_roundtrip_test`.
+
+**ONLY `assert-extern-files` CAN BITE THE PLACEHOLDER.** A dropped clip and a
+placeholder are BOTH SILENT, so no audio assertion anywhere can separate them —
+which is exactly how the drop shipped under a green suite for as long as it did.
+Watched failing under four sabotages, each against a different assertion:
+returning NULL instead of a placeholder (3 cases fail), re-encoding the stored
+spelling (only `missing_sample_reference_verbatim` fails — see below), collecting
+a placeholder as if it had bytes, and treating a subdirectory as outside.
+
+**THE VERBATIM GATE NEEDED ITS OWN FIXTURE, and finding that out was the
+substance of the sabotage pass.** `collect_external_media_missing`'s reference is
+`~/…`, whose re-encoding produces the identical string — so that assertion passes
+whether the rule holds or not. `missing_relative_sample.qxp` uses a
+PROJECT-RELATIVE reference to a file that does not exist and is saved three
+levels away, which is the one shape where verbatim and re-encoded differ visibly.
+
+**NOT gated:** every widget of the banner and both dialogs — appearance, wording,
+the button connection, the untitled-project refusal (there is no testkit verb
+that builds the resources dock off screen, the same gap that leaves the Audio
+options page unreachable). What is gated is the NUMBER the banner is computed
+from and the PASS the button runs. Hand-verified on Linux against the reported
+project, through the production `openProjectFile` path: `resources: project is
+NOT self-contained — 3 file(s) outside the project folder` and `load: 3 sample
+file(s) could not be found`. Also not gated: what a placeholder LOOKS like on the
+arranger (solid body, no waveform — `SCut::getPreview` has no capture to build
+peaks from); re-linking through the UI (there is no "Locate…" dialog — put the
+file back and re-open); a placeholder inside a take stack or a fragment; and a
+file that EXISTS but whose format this build cannot decode, which takes the same
+path and has no case of its own.
+
+**A pre-existing limitation this exposed, NOT fixed here:** `load-project` loads
+INTO the existing `SProject` and does not clear `externFileDict_`, so a SECOND
+scripted load in one .qxa counts the first load's files too. The GUI never sees
+it (`openProjectFile` builds a fresh `SProject` per open). It is why the two
+collect cases are separate files rather than two phases of one.
+
 ## Clicking and Alt-dragging a take lane reach the WRAPPED column too (fix/take-lane-click-and-slip, 2026-08-22)
 
 Two user-reported defects on a real project's `SCut -> STakeStack` column, one

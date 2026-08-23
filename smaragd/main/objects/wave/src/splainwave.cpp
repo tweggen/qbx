@@ -33,8 +33,16 @@ int SPlainWave::serializeSelfAttributes( QTextStream &o )
     // the three applies when. The in-memory fileName_ stays absolute; only the
     // on-disk spelling changes.
     SProject *project = qobject_cast<SProject *>( parent() );
-    const QString stored = SFilePathRef::toStored(
-        getFileName(), project ? project->projectFilePath() : QString() );
+    // A MISSING placeholder re-serializes the spelling the file ITSELF used,
+    // untouched. Re-encoding it would anchor an unresolvable reference to THIS
+    // machine — a project carried here from another OS would come back with its
+    // unreachable samples rewritten relative to a folder they were never in,
+    // and would then be broken on the machine where they do exist.
+    const QString stored =
+        missing_ ? storedSpelling_
+                 : SFilePathRef::toStored(
+                       getFileName(),
+                       project ? project->projectFilePath() : QString() );
     o << " filename='" << stored << "'";
     SExternFile::serializeSelfAttributes( o );
     return 0;
@@ -194,6 +202,11 @@ bool SPlainWave::hasDuration() const
 
 length_t SPlainWave::getDuration() const
 {
+    // A placeholder has a component (a silent one) but no file to measure, so
+    // the length it reports is the one the project recorded. Asking the
+    // component would give -1 and every clip built on the absent sample would
+    // load with a nonsense extent.
+    if( missing_ ) return missingDuration_;
     if( cpWave_ ) {
         return cpWave_->getLength();
     } else {
@@ -209,11 +222,25 @@ int SPlainWave::setWave( const QString fileName )
     cpWave_ = std::make_shared<twWavInput>( *(SAppContext::get().get303aEnvironment()), fileName );
     cpWave_->init();
     if( !cpWave_->wasLoaded() ) {
-        // Suppress dialog in headless/test mode; log to stderr instead
-        if( SAppContext::get().testOutputDir().isEmpty() ) {
-            QMessageBox::information( nullptr, "QBX error", "Unable to load file.", QMessageBox::Ok );
-        } else {
-            qWarning() << "SPlainWave: unable to load file:" << fileName;
+        qWarning() << "SPlainWave: unable to load file:" << fileName;
+        // DURING A LOAD, SAY NOTHING HERE. The caller
+        // (instantiateFromDomElement) turns this failure into a MISSING
+        // placeholder and the shell reports the whole set once, by name, when
+        // the load finishes — see SProject::missingFiles(). Raising a dialog
+        // from here gave a project with three unreachable samples three modal
+        // boxes, and the text was "Unable to load file." with no path in it, so
+        // the one thing the user needed was the one thing not said.
+        //
+        // Outside a load (Insert sample..., a drop) there IS no later report to
+        // fold into and the user just picked this file, so the dialog stays —
+        // now naming it.
+        SProject *proj = qobject_cast<SProject *>( parent() );
+        const bool loading = proj && proj->isLoading();
+        if( !loading && SAppContext::get().testOutputDir().isEmpty() ) {
+            QMessageBox::information(
+                nullptr, QObject::tr( "QBX error" ),
+                QObject::tr( "Unable to load this file:\n\n%1" ).arg( fileName ),
+                QMessageBox::Ok );
         }
         cpWave_.reset();
         return -1;
@@ -532,6 +559,69 @@ std::shared_ptr<const SPlainWave::UiOnsets> SPlainWave::onsetsForUi() const
     return published;
 }
 
+int SPlainWave::setMissingWave( const QString &resolvedPath,
+                                const QString &storedSpelling,
+                                length_t durationFrames )
+{
+    if( cpWave_ ) return -2;                 // already bound, same rule as setWave
+    fileName_        = resolvedPath;
+    storedSpelling_  = storedSpelling;
+    missingDuration_ = durationFrames > 0 ? durationFrames : 0;
+    missing_         = true;
+
+    // A SOURCE-LESS twWavInput. Constructing it with an empty name is the one
+    // spelling that loads nothing and warns about nothing (see its ctor), and
+    // what comes out is an ordinary component with real ports whose every
+    // render path already answers "no source" with silence. That is the whole
+    // reason nothing downstream — the capture builder, the scheduler, the
+    // freeze path, the RT callback — needs a missing-file branch.
+    cpWave_ = std::make_shared<twWavInput>(
+        *( SAppContext::get().get303aEnvironment() ), QString() );
+    cpWave_->init();
+
+    // Registered like any other extern file: it must appear in the resources
+    // list (that is where the user sees the miss and fixes it), it must be
+    // found by a second clip on the same absent sample, and ~SPlainWave
+    // deregisters by name whether it loaded or not.
+    if( SProject *proj = qobject_cast<SProject *>( parent() ) )
+        proj->addExternObject( *this );
+    // Deliberately NO enqueueAnalysis(): there is no content to analyse, and
+    // its content hash is null, which every sidecar job already declines.
+    return 0;
+}
+
+bool SPlainWave::relocateTo( const QString &newPath )
+{
+    // A placeholder has no bytes, so there is nothing to have been copied and
+    // nothing to re-point AT. Refusing here is what makes the collect pass
+    // report it as skipped instead of quietly rewriting a reference to a file
+    // that is not there either.
+    if( missing_ ) return false;
+    if( newPath.isEmpty() || newPath == fileName_ ) return false;
+    fileName_ = newPath;
+    return true;
+}
+
+SLink *SPlainWave::linkToMissingFile( SProject &project,
+                                      const QString &resolvedPath,
+                                      const QString &storedSpelling,
+                                      length_t durationFrames )
+{
+    // Share one placeholder per absent file, exactly as linkToFile shares one
+    // SPlainWave per present file — six clips on one missing sample are one
+    // entry in the resources list and one line in the report.
+    if( SExternFile *existing = project.externFiles().value( resolvedPath ) )
+        return new SLink( *existing );
+
+    SPlainWave *w = new SPlainWave( &project );
+    if( w->setMissingWave( resolvedPath, storedSpelling, durationFrames ) < 0 ) {
+        delete w;
+        return NULL;
+    }
+    project.noteMissingFile( storedSpelling, resolvedPath );
+    return new SLink( *w );
+}
+
 SLink *SPlainWave::instantiateFromDomElement( 
     SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
 {
@@ -585,7 +675,31 @@ SLink *SPlainWave::instantiateFromDomElement(
             if( QFileInfo::exists( candidate ) ) resolved = candidate;
         }
     }
-    return project.linkToFile( resolved );
+
+    if( SLink *lk = project.linkToFile( resolved ) )
+        return lk;
+
+    // THE FILE IS NOT REACHABLE FROM THIS MACHINE. Keep the material.
+    //
+    // Returning NULL here made the loader drop this element and cascade the
+    // drop to every <SCut> windowing it (sprojectloader.cpp) — the arrangement
+    // came up short by exactly the clips the user could least afford to lose,
+    // and the next save made that permanent. A placeholder keeps them: same
+    // position, same window, same duration, silent, and it re-links by itself
+    // the moment the file is reachable again.
+    //
+    // The duration comes from the element, because there is no file to ask.
+    // SPlainWave overrides hasDuration()/getDuration() out of its component, so
+    // SObject::readPreChildrenAttributes' `duration_` is never consulted for a
+    // wave and reading the attribute here is the only way to recover it.
+    length_t durationFrames = 0;
+    const QString durationSec = element.attribute( "durationSec" );
+    if( !durationSec.isEmpty() ) {
+        const int srate = project.getSRate() > 0 ? project.getSRate() : 48000;
+        durationFrames = (length_t) ( durationSec.toDouble() * srate + 0.5 );
+    }
+    return SPlainWave::linkToMissingFile( project, resolved, fileName,
+                                          durationFrames );
 }
 
 // Phase 5e: Page cache implementation

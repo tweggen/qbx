@@ -588,6 +588,19 @@ private:
 
     void createDocksToolbars();
     void destroyDocksToolbars();
+    // ONE dialog naming every sample this load could not find (see
+    // SProject::missingFiles). Called at the very end of openProjectFile, after
+    // every dock exists, so it is stacked over a finished window — the same
+    // discipline restoreOpenEditors() follows just above it.
+    void reportMissingSamples_();
+    // The resources dock's "Project is not self-contained" banner: recompute
+    // whether any sample lives outside the project file's own folder, and show
+    // or hide it. Cheap (a string compare per extern file), so it is simply
+    // re-run whenever the file set or the project path changes.
+    void refreshSelfContainedBanner_();
+    // Copy every out-of-folder sample into <projectdir>/media/ and re-point the
+    // project at the copies. Not undoable and not silent — see the definition.
+    void collectExternalMedia_();
     // Point the track-detail dock at the current project's mixer selection (or
     // clear it when there is no project). The dock is persistent and outlives
     // every project, so the mixer connection is (re)made on each open/new and
@@ -709,6 +722,13 @@ private:
     int metronomeLastCountInBars_ = 2;
     QDockWidget *qDockExternFileList_;
     SExternFileList *externFileList_;
+    // The "Project is not self-contained." banner above the resources list, and
+    // its label (the text names the number of outside files, so it is rebuilt
+    // rather than static). Both live in the dock's own container widget:
+    // SExternFileList is a QTreeWidget in app_model, which may include no other
+    // app module and so cannot host a banner of its own.
+    QWidget *selfContainedBanner_ = nullptr;
+    class QLabel *selfContainedLabel_ = nullptr;
 
     // Track detail dock, docked below the extern file list in the left area.
     // Like the file list it is persistent and project-independent; its content

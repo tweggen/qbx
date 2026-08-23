@@ -317,6 +317,24 @@ public:
     virtual SContentKind contentKind() const { return SContentKind::Audio; }
 
     /**
+     * True when this object is a PLACEHOLDER for an external file that could
+     * not be loaded (see SPlainWave::setMissingWave). It has a duration, a
+     * component and a path; what it does not have is audio.
+     *
+     * ON THE BASE CLASS for exactly the reason contentKind(),
+     * resolveEventClip() and isLiveRecording() are: the CUT slice has to ask
+     * this about its content without knowing which object slice that content
+     * belongs to, and objects/cut has no edge to objects/wave.
+     *
+     * Load-bearing, not cosmetic. SCut treats "no random source" as
+     * CONTAINER-BACKED and answers that by RENDERING the content into a
+     * fixed-size capture — over a placeholder that is a full-length render of
+     * silence, on the UI thread, once per clip. Measured on a project with
+     * three unreachable samples: ~17 s of load, all of it producing zeros.
+     */
+    virtual bool isMissing() const { return false; }
+
+    /**
      * Volume (dB) snapshot safe to take while audio runs / UI sliders move:
      * the read holds volumeMutex_ (the paint path races setVolume). Lets
      * renderers stay type-agnostic — the mutex was always SObject's, the

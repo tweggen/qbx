@@ -1155,3 +1155,33 @@ client was unit-tested and had never been driven from the app (gate 4 AC 9).
     not move, then moved again. **Reading a user-settable key is as much a
     -j hazard as writing one**, and the INI-ownership convention above only
     ever covered the writers.
+
+## 56-57. Extern-file verbs (2026-08-22)
+
+**56. `assert-extern-files` is the ONLY thing that can gate the missing-sample
+placeholder.** An unreachable sample used to be dropped together with every clip
+on it; it is now kept as a silent placeholder. A dropped clip and a placeholder
+are **both SILENT**, so no audio assertion anywhere can separate them — which is
+how the drop shipped under a green suite for as long as it did, and why this
+verb reads the project's extern-file dictionary directly (`count`, `missing`,
+`external`) rather than measuring a render. `count="2" missing="1"` fails in
+both directions: a build that drops the file fails the count, one that somehow
+loads it for real fails `missing`.
+
+It goes in `<actions>`, never in `<assertions>` — that block dispatches two
+hardcoded kinds (`assert-track-count`, `assert-project-matches`) and knows no
+verbs at all.
+
+**57. `collect-external-media` runs the production pass**
+(`smediadrop::collectExternalMedia`), the same one the resources dock's button
+runs, with the confirmation and the report replaced by attribute assertions. It
+is NOT undoable, and that is the feature's own contract rather than a testkit
+shortcut: the pass copies files.
+
+A case using it must save the project **into `build/test-output/`** before
+collecting. Two reasons, and both matter: it is what makes the fixture's own
+sample genuinely outside the project folder (a case whose project and sample
+share a directory would pass on a build with no self-containment logic at all),
+and it keeps the collect from creating files under `tests/`, which nothing in
+the suite may do (see "Why `-j` is safe" — `git status tests/` stays clean
+across a full run).
