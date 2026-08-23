@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LOOP RECORDING STARTED PARTWAY INTO THE CYCLE: the cycle region is the TAKE
+  region, and every pass is one take OF IT.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  WHAT THIS CASE EXISTS FOR, and why `record_loop_takes` could not catch it.
+  That case records from the LOOP START, where every pass is a whole one and
+  the wrapped position of every captured frame equals its unwrapped position
+  modulo nothing interesting. Starting PARTWAY IN is the shape that broke:
+  the recorder chopped the performance at each wrap and placed each piece at
+  its own wrapped position, so pieces landing on the same spot became "takes"
+  that were really CONSECUTIVE FRAGMENTS OF ONE PERFORMANCE, and the middle of
+  the performance landed as a PLAIN CLIP that could not be comped at all.
+
+  Reported from a real session  -  a 4-bar cycle, recording begun in its last
+  bar, "takes only in the 4th of four bars, one time from the beginning plus
+  the tail"  -  and reproduced here headlessly at 1/4 scale: a 2 s cycle, the
+  record start at 1.5 s, five seconds sung.
+
+  THE NUMBERS. The locator is 72000 and the compensation is the same -5824
+  `record_offset_zero` derives, so capture frame 0 maps to project frame
+  66176  -  29824 frames short of the wrap. Pass 1 is therefore a LATE pass and
+  its take must open with 66176 frames of nothing, which is a NEGATIVE source
+  offset, i.e. leading silence (proposal 23). Pass 2 is a whole one and covers
+  the region from its first frame.
+
+  WHY THE TAKE COUNT IS A FLOOR. Five seconds over a 2 s cycle is 2.5 passes,
+  plus the partial one at each end  -  and how much material a take actually
+  captures is a WALL-CLOCK quantity that shrinks under load (`record_loop_takes`
+  failed exactly that way before it was relaxed). So the count is a floor, and
+  the part that is not load-sensitive is asserted instead: ONE COLUMN, spanning
+  EXACTLY the cycle region, with as many TAKES as there were PASSES (which
+  `assert-recorded-clip` checks unasked).
+
+  The two energy pairs are the audible half and they are what distinguishes
+  the fix from a cosmetic re-labelling: take 0 (the late pass) must be SILENT
+  over the region the performer had not started singing yet and loud after it,
+  while take 1 (a whole pass) must be loud in that same early region.
+-->
+<SActionScript version="1" name="record_loop_late_start">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- NAME THE INPUT DEVICE, so `audio/recordingOffsetMs/<device>` is read
+         under a name no real device can have rather than under whatever this
+         machine's own calibration is filed as. See record_offset_zero. -->
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+
+    <!-- The cycle region: 0 .. 2 s. set-property takes a JSON ARRAY. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <!-- THE POINT OF THE CASE: start recording in the LAST QUARTER of the
+         cycle, not at its start. -->
+    <set-locator position="72000"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+    <wait-ms ms="5000"/>
+    <record-stop/>
+
+    <!-- ONE column, at the CYCLE START and exactly the cycle long, whatever
+         the pass the recording began in. Pre-fix this read TWO clips - a
+         column in the last quarter and an uncompable plain cut before it. -->
+    <assert-recorded-clip trackPath="0" clips="1" minTakes="2" minPasses="2"
+                          startFrame="0" startTolerance="0"
+                          durationFrames="96000" durationTolerance="0"
+                          inputLatencyFrames="4800"
+                          outputLatencyFrames="1024"
+                          compensationFrames="-5824"/>
+    <assert-take-column clip="0,0" shape="direct"/>
+
+    <!-- THE AUDIBLE HALF. Take 0 is pass 1, which began 29824 frames before
+         the wrap: silent over the first second, singing in the last quarter.
+         The windows stay well clear of 66176 on both sides so the assertion
+         is about the pass boundary, not about the frame the trim landed on. -->
+    <select-take clip="0,0" take="0"/>
+    <render filename="rlls_take0.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="rlls_take0.wav" startFrame="4000"
+                         frameCount="56000" channel="0"
+                         minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="rlls_take0.wav" startFrame="76000"
+                         frameCount="16000" channel="0"
+                         minRms="0.02" maxRms="0.95"/>
+
+    <!-- Take 1 is a WHOLE pass and carries material over the same early
+         window take 0 is silent in. Without this the case would pass on an
+         implementation that simply placed silence everywhere. -->
+    <select-take clip="0,0" take="1"/>
+    <render filename="rlls_take1.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="rlls_take1.wav" startFrame="4000"
+                         frameCount="56000" channel="0"
+                         minRms="0.02" maxRms="0.95"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

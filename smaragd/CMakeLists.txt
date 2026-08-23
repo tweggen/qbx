@@ -499,7 +499,7 @@ endforeach()
 # reads 0.0, the same answer an uncalibrated device gives.
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
-foreach(_rec record_offset_zero record_loop_takes record_punch
+foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_punch
               record_while_monitoring record_stays_armed)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES

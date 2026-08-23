@@ -466,6 +466,27 @@ void SAudioRecorder::commitPlacement_()
     std::vector<Seg> segs;
 
     if( cycle_ ) {
+        // ONE TAKE PER PASS, AND EVERY TAKE SPANS THE WHOLE CYCLE REGION.
+        //
+        // The cycle region is the take region -- what Reaper, Logic and Cubase
+        // all do -- so a pass is the unit and the takes on the resulting column
+        // are ALTERNATIVES for the same bars, which is the only thing comping
+        // between them can mean.
+        //
+        // IT USED TO CHOP THE PERFORMANCE AT EVERY WRAP and place each piece at
+        // its wrapped position, so pieces landing on the same spot became
+        // "takes" that were really CONSECUTIVE FRAGMENTS OF ONE PERFORMANCE.
+        // Reported from a real session and reproduced: a 4-bar cycle recorded
+        // from its LAST bar for just over one pass gave a 2-take column in that
+        // last bar -- "one time from the beginning plus the tail" -- and the
+        // middle of the performance as a PLAIN CLIP that could not be comped at
+        // all. Recording from the loop START never showed it, because there
+        // every pass is a whole one; that is the case the suite had.
+        //
+        // A pass that starts mid-cycle carries a NEGATIVE source offset, which
+        // is leading silence (proposal 23), and one that ends early simply runs
+        // past the end of the capture, which is silence too. Both halves of a
+        // partial pass are therefore the same mechanism.
         const std::int64_t loopLen = (std::int64_t) ( cycleOut_ - cycleIn_ );
         std::int64_t consumed = 0;
         while( consumed < placeable && loopLen > 0 ) {
@@ -473,14 +494,10 @@ void SAudioRecorder::commitPlacement_()
             std::int64_t rel = unwrapped - (std::int64_t) cycleIn_;
             if( rel < 0 ) rel = 0;              // before the loop: one flat pass
             const std::int64_t inLoop = rel % loopLen;
-            const std::int64_t at     = (std::int64_t) cycleIn_ + inLoop;
-            const std::int64_t len =
-                std::min<std::int64_t>( placeable - consumed, loopLen - inLoop );
-            if( len <= 0 ) break;
-            segs.push_back( { (offset_t) at,
-                              (offset_t) ( trimmed_ + consumed ),
-                              (length_t) len } );
-            consumed += len;
+            segs.push_back( { (offset_t) cycleIn_,
+                              (offset_t) ( trimmed_ + consumed - inLoop ),
+                              (length_t) loopLen } );
+            consumed += loopLen - inLoop;       // this pass runs to the wrap
         }
     } else if( punch_ ) {
         const std::int64_t a = std::max<std::int64_t>( firstPlace, punchIn_ );
