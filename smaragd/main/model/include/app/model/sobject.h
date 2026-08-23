@@ -887,6 +887,20 @@ protected:
     // from SObject::serialize() and from every serialize() override that
     // writes its own children (SPluginSlot's `<state>`).
     int serializeAutomation( QTextStream &o );
+
+    /**
+     * Inline non-`SLink` children beyond `<automation>`, written in
+     * `serialize()` right after it and read back by the owner's own
+     * `readPostChildrenAttributes`.
+     *
+     * It exists for the same reason `<automation>` is inline rather than an
+     * `SLink` child (proposal 37 P5): the loader orders and resolves on
+     * `<SLink>` children only, so an inline child of a known element is
+     * invisible to it and an OLDER build ignores it. An owner that has none
+     * writes nothing, which is what keeps every existing file and golden
+     * byte-unchanged.
+     */
+    virtual int serializeInlineChildren( QTextStream &o ) { (void) o; return 0; }
     // Read the inline `<automation>` child. Tolerant: an unparsable target is
     // skipped with a warning, never a load failure.
     int readAutomation( const QDomElement &element );

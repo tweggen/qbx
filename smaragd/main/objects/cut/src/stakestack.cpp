@@ -134,6 +134,20 @@ void STakeStack::setActiveTake( int index )
     emit durationChanged( getDurationBlocking() );
 }
 
+void STakeStack::setCompMap( const twCompMap &map )
+{
+    const twCompMap next = map.normalized();
+    if( next == compMap_ ) return;
+    compMap_ = next;                           // the mutation ...
+    // ... then the notification, in the SAME order and by the SAME route
+    // `setActiveTake` uses (proposal 15 ordering): the track's slot runs
+    // updateClip -- a content-epoch bump and a state-chain reset, because our
+    // component identity just changed -- and invalidateRenderPath. N1 has no
+    // consumer, so this publishes a change nothing hears yet; wiring it now is
+    // what means N2 adds a component and no plumbing.
+    emit durationChanged( getDurationBlocking() );
+}
+
 void STakeStack::setDurationAll( length_t duration )
 {
     forwardSuppressed_ = true;
@@ -316,6 +330,22 @@ int STakeStack::serializeSelfAttributes( QTextStream &o )
     return 0;
 }
 
+int STakeStack::serializeInlineChildren( QTextStream &o )
+{
+    // Written only when non-empty, exactly like `<automation>`: an empty map
+    // is the degenerate "activeTake_ everywhere", so every file written before
+    // proposal 43 -- and every golden -- re-serializes byte-unchanged.
+    if( compMap_.empty() ) return 0;
+    o << "<comp>\n";
+    for( const twCompSegment &s : compMap_.segments() ) {
+        o << "<seg at='" << (qlonglong) s.at << "' take='" << s.take << "'";
+        if( s.xfade != 0 ) o << " xfade='" << (qlonglong) s.xfade << "'";
+        o << "/>\n";
+    }
+    o << "</comp>\n";
+    return 0;
+}
+
 int STakeStack::readPostChildrenAttributes( QDomElement &element )
 {
     // The base call is not decoration: since proposal 37 P5 it is what reads
@@ -323,6 +353,20 @@ int STakeStack::readPostChildrenAttributes( QDomElement &element )
     // (a clip envelope lives on each TAKE), but an override that silently
     // dropped a known payload is exactly the trap the next owner would fall in.
     SObject::readPostChildrenAttributes( element );
+
+    const QDomElement compEl = element.firstChildElement( "comp" );
+    if( !compEl.isNull() ) {
+        std::vector<twCompSegment> segs;
+        for( QDomElement e = compEl.firstChildElement( "seg" ); !e.isNull();
+             e = e.nextSiblingElement( "seg" ) ) {
+            twCompSegment s;
+            s.at    = e.attribute( "at", "0" ).toLongLong();
+            s.take  = e.attribute( "take", "0" ).toInt();
+            s.xfade = e.attribute( "xfade", "0" ).toLongLong();
+            segs.push_back( s );
+        }
+        compMap_ = twCompMap( std::move( segs ) ).normalized();
+    }
 
     int at = element.attribute( "activeTake", "-1" ).toInt();
     if( at < -1 || at >= childCount() ) at = -1;

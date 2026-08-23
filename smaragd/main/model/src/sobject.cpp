@@ -255,6 +255,7 @@ int SObject::serialize( QTextStream &o )
     o  << ">\n";
 
     serializeAutomation( o );
+    serializeInlineChildren( o );
 
     for( SLink *lk : childLinks() ) {
         int res = lk->serialize( o );

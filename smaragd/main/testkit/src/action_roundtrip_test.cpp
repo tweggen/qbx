@@ -37,6 +37,17 @@ struct Fixture {
 // attributes that are only written when non-default (an `absent='false'` say)
 // must NOT appear here — they would legitimately not come back.
 const Fixture kFixtures[] = {
+    // --- the comp-map verbs (proposal 43 N1). Four spellings of one action
+    // type whose op is re-derived from the TAG in readXml, so each needs its
+    // own fixture or the round trip would only ever exercise SetSegment.
+    { "set-comp-segment",
+      "<set-comp-segment clip='0,0' at='48000' take='1' xfade='2400'/>" },
+    { "remove-comp-segment",
+      "<remove-comp-segment clip='0,0' at='48000'/>" },
+    { "move-comp-boundary",
+      "<move-comp-boundary clip='0,0' at='48000' to='36000'/>" },
+    { "set-comp-xfade",
+      "<set-comp-xfade clip='0,0' at='48000' xfade='2400'/>" },
     // --- verbs whose readXml validates required attributes -------------------
     { "assert-audio-energy",
       "<assert-audio-energy filename='r.wav' minRms='0.09' maxRms='0.11'"

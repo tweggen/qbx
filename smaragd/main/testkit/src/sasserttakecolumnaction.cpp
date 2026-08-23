@@ -11,6 +11,7 @@
 #include "app/model/sproject.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "app/objects/cut/stakestack.h"
+#include "tw/events/twcompmap.h"
 
 using namespace strackpath;
 
@@ -39,16 +40,41 @@ SApplyResult SAssertTakeColumnAction::apply( SProject *project )
     const int gotActive = column ? column->activeTakeIndex() : -1;
     const int gotPlace  = column ? column->refCount() : 0;
 
+    // The map as text, in the same spelling the attribute takes.
+    QString gotComp;
+    if( column ) {
+        for( const twCompSegment &sg : column->compMap().segments() ) {
+            if( !gotComp.isEmpty() ) gotComp += ";";
+            gotComp += QString::number( sg.at ) + ":" + QString::number( sg.take );
+            if( sg.xfade ) gotComp += ":" + QString::number( sg.xfade );
+        }
+    }
+
     const QString detail =
         QString( "clip %1: shape=%2 takes=%3 activeTake=%4 placements=%5" )
             .arg( clip_ ).arg( gotShape ).arg( gotTakes ).arg( gotActive )
-            .arg( gotPlace );
+            .arg( gotPlace )
+        + QString( " comp=[%1]" ).arg( gotComp );
 
     if( !shape_.isEmpty()
         && shape_.compare( gotShape, Qt::CaseInsensitive ) != 0 ) {
         qWarning() << "assert-take-column FAILED: shape expected" << shape_
                    << "-" << detail;
         return { false, nullptr };
+    }
+    if( hasComp_ && comp_ != gotComp ) {
+        qWarning() << "assert-take-column FAILED: comp expected" << comp_
+                   << "-" << detail;
+        return { false, nullptr };
+    }
+    if( takeAtPos_ >= 0 && column ) {
+        const int gotAt = column->takeIndexAt( takeAtPos_ );
+        if( gotAt != expectTake_ ) {
+            qWarning() << "assert-take-column FAILED: takeAt" << takeAtPos_
+                       << "expected" << expectTake_ << "got" << gotAt
+                       << "-" << detail;
+            return { false, nullptr };
+        }
     }
     struct Check { const char *what; int want, got; };
     const Check checks[] = {
@@ -76,6 +102,11 @@ void SAssertTakeColumnAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "takes", takes_ );
     elem.setAttribute( "activeTake", activeTake_ );
     elem.setAttribute( "placements", placements_ );
+    if( hasComp_ ) elem.setAttribute( "comp", comp_ );
+    if( takeAtPos_ >= 0 ) {
+        elem.setAttribute( "takeAtPos", QString::number( takeAtPos_ ) );
+        elem.setAttribute( "expectTake", expectTake_ );
+    }
 }
 
 bool SAssertTakeColumnAction::readXml( const QDomElement &elem, int )
@@ -85,6 +116,10 @@ bool SAssertTakeColumnAction::readXml( const QDomElement &elem, int )
     takes_      = elem.attribute( "takes", "-1" ).toInt();
     activeTake_ = elem.attribute( "activeTake", "-2" ).toInt();
     placements_ = elem.attribute( "placements", "-1" ).toInt();
+    hasComp_    = elem.hasAttribute( "comp" );
+    comp_       = elem.attribute( "comp", "" );
+    takeAtPos_  = elem.attribute( "takeAtPos", "-1" ).toLongLong();
+    expectTake_ = elem.attribute( "expectTake", "-2" ).toInt();
     return true;
 }
 

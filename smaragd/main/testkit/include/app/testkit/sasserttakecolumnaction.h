@@ -25,6 +25,16 @@
  *   `shape`       "direct" | "wrapped" | "none" — the STRUCTURAL assertion
  *   `takes`       expected take count
  *   `activeTake`  expected active index (-1 = none active)
+ *   `comp`        the COMP MAP as text: `at:take[:xfade]` segments separated
+ *                 by `;`, or the empty string for "no map" (the degenerate
+ *                 state that means `activeTake_` everywhere). THE ONLY way a
+ *                 script can see the map — proposal 43 N1 gives it no audible
+ *                 effect, so model state is all there is to assert.
+ *   `takeAtPos`   a column position, paired with `expectTake`: what
+ *                 `takeIndexAt()` answers there, WITH the degenerate case
+ *                 folded in. That is the query every future consumer makes,
+ *                 so it is the one worth gating rather than the raw map.
+ *   `expectTake`  see above
  *   `placements`  expected refcount of the COLUMN object. A column belongs to
  *                 exactly ONE placement (proposal 42); two placements share one
  *                 `activeTake_`, so comping either comps both — which is
@@ -48,6 +58,10 @@ private:
     int takes_ = -1;
     int activeTake_ = -2;      // -2 = not asserted (-1 IS a legal value)
     int placements_ = -1;
+    QString comp_;
+    bool hasComp_ = false;
+    qint64 takeAtPos_ = -1;
+    int expectTake_ = -2;
 };
 
 #endif // _SASSERTTAKECOLUMNACTION_H_

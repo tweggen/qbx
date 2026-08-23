@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE COMP MAP IS IN THE MODEL, PERSISTED, AND UNDOABLE — AND NOTHING SOUNDS
+  DIFFERENT YET.
+
+  Proposal 43 N1. A comp map says WHICH TAKE OF A COLUMN SOUNDS WHERE, in the
+  column's own frame domain. N1 puts it in the model only: `twCompColumn` (N2)
+  is what will read it, so every assertion here is model state and the RENDER
+  assertion at the end is the one that says N1 changed no audio.
+
+  THE EMPTY MAP IS THE DEGENERATE CASE AND IT IS LOAD-BEARING. No map means
+  "activeTake_ everywhere", which is why every project written before this
+  proposal, every golden and the whole of proposal 42's gate set stay correct.
+  `takeIndexAt()` is where that substitution is spelled, and `takeAtPos=` is
+  what asserts it — the query every future consumer makes.
+
+  `select-take` means "this take for the WHOLE column", so it CLEARS the map,
+  and its inverse restores it. One undo of a click must not destroy a comp.
+-->
+<SActionScript version="1" name="comp_map_model">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="24000"/>
+
+    <!-- add-take auto-activates take 1. NO MAP yet, so every position answers
+         with the active take. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <assert-take-column clip="0,0" takeAtPos="0" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="150000" expectTake="1"/>
+
+    <!-- comp take 0 from the start, take 1 from 1 s in -->
+    <set-comp-segment clip="0,0" at="0" take="0"/>
+    <set-comp-segment clip="0,0" at="48000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;48000:1"/>
+    <assert-take-column clip="0,0" takeAtPos="0" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="47999" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="48000" expectTake="1"/>
+
+    <!-- a segment written at an EXISTING position REPLACES it. This is the
+         commonest comping gesture there is, and the analogous verb got it
+         wrong once already: SAutomationLane::setPoints used std::unique, which
+         keeps the FIRST of an equal run, so an edit landing on an existing
+         point was silently DROPPED (proposal 37 P6). -->
+    <set-comp-segment clip="0,0" at="48000" take="0"/>
+    <assert-take-column clip="0,0" comp="0:0;48000:0"/>
+    <set-comp-segment clip="0,0" at="48000" take="1"/>
+
+    <!-- OUT OF ORDER writes still sort -->
+    <set-comp-segment clip="0,0" at="24000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;24000:1;48000:1"/>
+
+    <!-- a crossfade belongs to the BOUNDARY -->
+    <set-comp-xfade clip="0,0" at="24000" xfade="2400"/>
+    <assert-take-column clip="0,0" comp="0:0;24000:1:2400;48000:1"/>
+
+    <!-- ...and the FIRST segment has no boundary to fade across, so a
+         crossfade on it is dropped by normalisation rather than stored. -->
+    <set-comp-xfade clip="0,0" at="0" xfade="4800"/>
+    <assert-take-column clip="0,0" comp="0:0;24000:1:2400;48000:1"/>
+
+    <!-- move a boundary: it is ONE object, which is the whole point of
+         choosing a map over splits -->
+    <move-comp-boundary clip="0,0" at="24000" to="36000"/>
+    <assert-take-column clip="0,0" comp="0:0;36000:1:2400;48000:1"/>
+    <assert-take-column clip="0,0" takeAtPos="35999" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="36000" expectTake="1"/>
+
+    <remove-comp-segment clip="0,0" at="48000"/>
+    <assert-take-column clip="0,0" comp="0:0;36000:1:2400"/>
+
+    <!-- every verb is undoable, and the inverse carries the WHOLE previous
+         map: a per-segment inverse would have to name a segment, and a
+         segment's only identity is its position, which move-comp-boundary
+         changes. -->
+    <undo/>
+    <assert-take-column clip="0,0" comp="0:0;36000:1:2400;48000:1"/>
+    <undo/>
+    <assert-take-column clip="0,0" comp="0:0;24000:1:2400;48000:1"/>
+
+    <!-- SELECT-TAKE means the whole column, so it CLEARS the map — and one
+         undo must put the comp back. -->
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" activeTake="0" comp=""/>
+    <assert-take-column clip="0,0" takeAtPos="30000" expectTake="0"/>
+    <undo/>
+    <assert-take-column clip="0,0" activeTake="1"
+                        comp="0:0;24000:1:2400;48000:1"/>
+
+    <!-- PERSISTED: save, reload, same map. -->
+    <save-project path="../../build/comp_map_model.qxp"/>
+    <load-project path="../../build/comp_map_model.qxp"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        comp="0:0;24000:1:2400;48000:1"/>
+
+    <!-- AND N1 IS INAUDIBLE. The map says take 0 for the first half second,
+         but nothing reads it yet, so this is take 1 — the ACTIVE take —
+         throughout, exactly as it was before the map existed. That is the
+         assertion N2 will flip. -->
+    <render filename="comp_map_model.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <assert-audio-energy filename="comp_map_model.wav"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.082" maxRms="0.089"/>
+  </actions>
+
+</SActionScript>
