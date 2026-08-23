@@ -119,7 +119,25 @@ public:
      * copied faithfully (duplicate-clip semantics). The result is unplaced:
      * the caller gives it an `SLink`.
      */
-    virtual SClipWindow *cloneWindowOver( SProject *project ) const = 0;
+    virtual SClipWindow *cloneWindowOver( SProject *project ) const
+    { return cloneWindowOverContent( project, windowContent() ); }
+
+    /**
+     * The same faithful copy, over DIFFERENT content. `cloneWindowOver` is
+     * this with the content unchanged.
+     *
+     * It exists because a window over a TAKE COLUMN cannot be copied by
+     * sharing: two placements of one `STakeStack` share its `activeTake_`, so
+     * comping either comps both (proposal 42). `split-clip` therefore gives
+     * the tail its own clone of the column and re-points the tail window at
+     * it, keeping every window parameter — slip, length, stretch, grain, gain
+     * envelope, volume, pan, transpose — that `cloneWindowOver` already
+     * copies. Re-pointing an EXISTING window's content is deliberately not
+     * offered: a window's content link is set at construction and the tree
+     * has no re-parent protocol for it.
+     */
+    virtual SClipWindow *cloneWindowOverContent( SProject *project,
+                                                 SObject &content ) const = 0;
 
     // --- the wrap factory -------------------------------------------------
 

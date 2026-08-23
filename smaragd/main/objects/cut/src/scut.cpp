@@ -1466,9 +1466,10 @@ SCut::~SCut()
 // rescale the duration we are about to set), then the window in one publish.
 // This is exactly what duplicate-clip did by hand; split-clip narrows the copy
 // afterwards through the interface.
-SClipWindow *SCut::cloneWindowOver( SProject *project ) const
+SClipWindow *SCut::cloneWindowOverContent( SProject *project,
+                                           SObject &content ) const
 {
-    SCut *copy = new SCut( project, getContent() );
+    SCut *copy = new SCut( project, content );
     copy->setGrainParamsRaw( getGrainParams() );
     // Blocking duration read (P19): the copy must mirror the CURRENT window,
     // never the stale try-lock fallback.

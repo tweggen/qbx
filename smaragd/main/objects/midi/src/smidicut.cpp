@@ -414,9 +414,10 @@ twEventClipResolved SMidiCut::resolveEventClip( offset_t )
     return out;
 }
 
-SClipWindow *SMidiCut::cloneWindowOver( SProject *project ) const
+SClipWindow *SMidiCut::cloneWindowOverContent( SProject *project,
+                                               SObject &content ) const
 {
-    SMidiCut *copy = new SMidiCut( project, getContent() );
+    SMidiCut *copy = new SMidiCut( project, content );
     copy->setWindowTicks( getSrcStartTicks(), getLengthTicks(), getLoopTicks(),
                           getRateExact() );
     copy->setTranspose( getTranspose() );

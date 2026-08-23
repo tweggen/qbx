@@ -407,7 +407,8 @@ public:
     void setContentAnchorExact( const Fraction &contentAnchor ) override
     { setSrcStartRaw( contentAnchor ); }
 
-    SClipWindow *cloneWindowOver( SProject *project ) const override;
+    SClipWindow *cloneWindowOverContent( SProject *project,
+                                         SObject &content ) const override;
 
     // Transposition limit, in cents. ±2 octaves; setPitchCents() and the
     // set-pitch action both clamp to it, so no entry point can store a value

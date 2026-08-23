@@ -41,12 +41,17 @@ SApplyResult SAddTakeAction::apply( SProject *project )
         return {false, nullptr};
     }
 
-    STakeStack *stack = dynamic_cast<STakeStack *>( &link->getSObject() );
+    // BOTH SHAPES (proposal 42 M3). The bare cast this replaced matched the
+    // DIRECT one only, so on a WRAPPED column the wrapper looked like a plain
+    // clip and `wrapCutLinkIntoStack` -- which needs only an `SClipWindow` --
+    // happily succeeded on it, producing a COLUMN INSIDE A COLUMN: the new
+    // take became a sibling of the entire old column rather than of its takes.
+    // Measured: a two-take column whose take 0 was itself a two-take column.
+    STakeStack *stack = stakes::columnOfLink( link );
     if( !stack ) {
         // A plain cut becomes a single-take stack first (take 0 = the cut).
         link = stakes::wrapCutLinkIntoStack( project, lane, link );
-        stack = link ? dynamic_cast<STakeStack *>( &link->getSObject() )
-                     : nullptr;
+        stack = stakes::columnOfLink( link );
         if( !stack ) {
             return {false, nullptr};   // clip was not an SCut
         }

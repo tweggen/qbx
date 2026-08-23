@@ -657,3 +657,46 @@ take count, its active take and its PLACEMENT COUNT. `assert-clip-window`
 cannot: it reads the link's own object, so it cannot tell a column from a
 window over one, and its `take=` attribute is silently ignored on the wrapped
 shape.
+
+## Splitting a WINDOW over a take column forks the column
+
+`split-clip`'s generic window branch clones the window; for a take column that
+is not enough, because two placements of one `STakeStack` share its
+`activeTake_`. The head keeps the original column and the tail gets a deep copy
+(`stakes::cloneColumn` + `SClipWindow::cloneWindowOverContent`); each window
+already covers its own region of the column, so no take window has to move.
+
+Before proposal 42 M3 both halves shared one column, and **per-region comping —
+the entire point of splitting a take column — was impossible on the wrapped
+shape**. Measured: comping the HEAD moved the TAIL's audio too. A model
+assertion could not see it, because the split arithmetic was always right; only
+a RENDER can, which is why the gate measures RMS.
+
+The DIRECT shape keeps its own branch, which additionally TRIMS every take to
+the split point. A wrapper must NOT do that: the wrapper does the windowing, and
+trimming the takes as well would window twice.
+
+`add-take` and `remove-take` now resolve through `stakes::columnOfLink` too.
+DIRECT-only, `add-take` saw a wrapper as a plain clip and wrapped it AGAIN —
+producing a COLUMN INSIDE A COLUMN, the new take a sibling of the entire old
+column — and `remove-take` was simply rejected.
+
+**Known, and left to M4:** `collapseSingleTakeStack` is DIRECT-only by
+construction (it replaces a lane's child link), so a WRAPPED column that drops
+to one take stays a one-take column rather than collapsing — `stakestack.h`
+invariant 3 holds on the direct shape only. Collapsing a wrapped one means
+composing the wrapper's window into the remaining take, which is exactly the
+migration M4 does.
+
+## A column EDGE edit keeps the takes aligned with each other
+
+`resize-clip` with **no** take named is an edit to the COLUMN: the extent goes
+to every take (invariant 1) and every take's anchor shifts by the SAME delta.
+With a take named it is the take-lane SLIP and the anchor is that take's alone.
+
+The anchor used to go to the active take alone in both cases. Measured,
+trimming a column's left edge 12000 frames later: the inactive take's anchor
+moved by 0 and the active take's by −12000 — **opposite directions, 24000
+apart** — so switching takes afterwards gave different material at the same
+instant. That is precisely the operation comping needs when a boundary is
+moved, and it is why the desync was invisible until someone tried to comp.
