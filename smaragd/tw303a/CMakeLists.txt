@@ -173,6 +173,7 @@ tw_module(events
         events/include/tw/events/twsmf.h
         events/include/tw/events/twautomationcurve.h
         events/include/tw/events/twcompmap.h
+        events/include/tw/events/twfade.h
         events/src/tweventseq.cc
         events/src/tweventclipset.cc
         events/src/tweventmerge.cc

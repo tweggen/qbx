@@ -10,6 +10,7 @@
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
 #include "app/model/sclipwindow.h"
+#include "tw/events/twfade.h"
 #include "tw/sources/twgrainparams.h"
 #include "tw/core/twfraction.h"
 #include "tw/core/twdomains.h"
@@ -184,6 +185,21 @@ public:
     // never drift it. The warped-domain offset is DERIVED exactly and
     // floored once here — the render-boundary rounding rule.
     const Fraction &getSrcStart() const { return srcStart_; }
+
+    // --- the clip FADE (proposal 43 N5) -----------------------------------
+    //
+    // AUDIO-ONLY, and therefore on `SCut` rather than on `SClipWindow` — the
+    // same rule pitch, formant preservation and warp anchors already follow
+    // (cut/CONTRACT invariant 4). A fade is a gain shape; an event clip's
+    // equivalent is velocity, which is a different thing with a different
+    // domain.
+    //
+    // It reaches the mix through `STrack::refreshClipGainCurves()`, the one
+    // main-thread funnel a clip's gain already travels — NOT through the cut,
+    // which may not know its track (the same reason a `cut:Gain` lane goes
+    // that way, mix/CONTRACT.md inv. 23).
+    const twClipFade &getFade() const { return fade_; }
+    void setFade( const twClipFade &f );
 
     // Proposal 28 W1: THE source<->warped conversion authority for this clip.
     // No anchors -> pure scalar stretch (bit-identical to the historic
@@ -635,6 +651,7 @@ private:
     // loop segment stays a warped/timeline length (musical quantity), the
     // duration a clip-relative length.
     Fraction  srcStart_;
+    twClipFade fade_;      // proposal 43 N5; default = no fade
     WarpedPos loopStart_;
     WarpedLen loopLength_;
     ClipLen   cutDuration_;

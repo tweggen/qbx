@@ -285,6 +285,21 @@ void twTrackMix::setClipGainCurve( const void *key,
     }
 }
 
+twEditRange twTrackMix::setClipFade( const void *key, const twClipFade &fade )
+{
+    std::lock_guard<std::mutex> lock( mutex() );
+    for( ClipEntry &c : clips_ ) {
+        if( c.key != key ) continue;
+        if( c.fade == fade ) return twEditRange{};
+        c.fade = fade;
+        const offset_t end = c.duration > 0
+                             ? c.startTime + (offset_t) c.duration
+                             : c.startTime;
+        return twEditRange{ c.startTime, end };
+    }
+    return twEditRange{};
+}
+
 // THE PER-CLIP STATIC VOLUME. Same protocol as setClipGainCurve: swap under
 // mutex(), read once per clip per page into a local in the freeze loop below
 // (THREADING rule 2).
@@ -620,7 +635,12 @@ length_t twTrackMix::freezePage_nolock(
         // slips and loops with the clip.
         const std::shared_ptr<const twAutomationCurve> gainCurve = clip.gainCurve;
         const double gainScalar = clip.gainScalar;
-        const bool hasGain = gainCurve || gainScalar != 1.0;
+        // THE CLIP'S FADE (proposal 43 N5), a third factor in the same product
+        // and read in the same domain. Copied into a local for the same reason
+        // the curve is: the model may swap it while this page renders.
+        const twClipFade fade = clip.fade;
+        const offset_t fadeClipLen = (offset_t) clip.duration;
+        const bool hasGain = gainCurve || gainScalar != 1.0 || !fade.none();
 
         const idx_t nCh = (idx_t) page->channels();
         for( idx_t c = 0; c < nCh; ++c ) {
@@ -633,8 +653,11 @@ length_t twTrackMix::freezePage_nolock(
                 for( offset_t i = 0; i < framesToMix; ++i ) {
                     const double envelope =
                         gainCurve ? gainCurve->valueAt( childPos + i ) : 1.0;
+                    const double fadeGain =
+                        fade.none() ? 1.0
+                                    : fade.gainAt( childPos + i, fadeClipLen );
                     clipGainScratch_[(std::size_t) i] =
-                        src[i] * (sample_t) ( gainScalar * envelope );
+                        src[i] * (sample_t) ( gainScalar * envelope * fadeGain );
                 }
                 childVec = IOVector::CreateFromBuffer( clipGainScratch_.data(),
                                                        (length_t) framesToMix );

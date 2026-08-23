@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A CLIP HAS A FADE-IN AND A FADE-OUT, AND THEY ARE AUDIBLE.
+
+  Proposal 43 N5. THERE WAS NO FADE PRIMITIVE ANYWHERE IN THIS MODEL before
+  this. The two things that look like one are not: `twGrainParams::crossfadeMs`
+  is a granular-synthesis knob, and the live monitor's 2-3 ms ramp is an RT
+  detail of the device lane. So a comp join could only ever be a hard sum, and
+  ordinary editing had no fade at all.
+
+  WHERE IT LIVES. On `SCut` — AUDIO ONLY, exactly as pitch, formant
+  preservation and warp anchors are (cut/CONTRACT invariant 4); an event clip
+  is REFUSED rather than silently ignored, because a fade is a gain shape and
+  an event clip's equivalent is velocity. It reaches the mix through
+  `STrack::refreshClipGainCurves()`, the one main-thread funnel a clip's gain
+  already travels, and `twTrackMix` applies it as a THIRD FACTOR in the
+  per-frame product it already computes for the gain curve and the static
+  volume — in the CLIP'S OWN domain, so a fade trims, slips and loops with its
+  clip.
+
+  THE NUMBERS ARE CLOSED FORMS over test_gapsaw.wav (a 0.1 -> 0.8 ramp, RMS
+  A/sqrt(3), exact-zero regions at [0.6,0.9) and [2.5,3.0) s), integrated
+  against the fade's own gain:
+
+      no fade,          [0.0,0.5) s  ->  0.08427
+      1 s linear in,    [0.0,0.5) s  ->  0.02775
+      1 s linear in,    [0.0,1.0) s  ->  0.05401
+      no fade,          [3.5,4.0) s  ->  0.43686
+      1 s linear out,   [3.5,4.0) s  ->  0.12243
+      1 s EQUAL-POWER in, [0.0,1.0) s -> 0.06262
+
+  The equal-power number is what makes the SHAPE gateable: it differs from the
+  linear one by 16 %, so a case that got the curve wrong cannot pass. The shape
+  is shared with the crossfade N3 will build — a crossfade is two fades that
+  meet, and two curve families that could disagree about the same join is one
+  more than there should be.
+-->
+<SActionScript version="1" name="clip_fade">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+
+    <!-- BEFORE: no fade. The first half second is the ramp's quiet head. -->
+    <render filename="fade_none.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fade_none.wav" startFrame="0"
+                         frameCount="24000" minRms="0.083" maxRms="0.086"/>
+    <assert-audio-energy filename="fade_none.wav" startFrame="168000"
+                         frameCount="24000" minRms="0.433" maxRms="0.441"/>
+
+    <!-- A ONE-SECOND LINEAR FADE IN. -->
+    <set-clip-fade clip="0,0" fadeIn="48000" fadeOut="0" shape="linear"/>
+    <render filename="fade_in.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fade_in.wav" startFrame="0"
+                         frameCount="24000" minRms="0.0272" maxRms="0.0283"/>
+    <assert-audio-energy filename="fade_in.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0532" maxRms="0.0548"/>
+    <!-- ...and NOTHING past the fade moved. -->
+    <assert-audio-energy filename="fade_in.wav" startFrame="168000"
+                         frameCount="24000" minRms="0.433" maxRms="0.441"/>
+
+    <!-- THE SHAPE IS AUDIBLE: equal-power over the same second reads 0.06262
+         against linear's 0.05401, a 16 % difference. -->
+    <set-clip-fade clip="0,0" fadeIn="48000" fadeOut="0" shape="equalPower"/>
+    <render filename="fade_eq.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fade_eq.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0617" maxRms="0.0636"/>
+
+    <!-- A ONE-SECOND LINEAR FADE OUT, anchored to the clip's END. -->
+    <set-clip-fade clip="0,0" fadeIn="0" fadeOut="48000" shape="linear"/>
+    <render filename="fade_out.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fade_out.wav" startFrame="168000"
+                         frameCount="24000" minRms="0.1206" maxRms="0.1243"/>
+    <!-- ...and the head is back to unity. -->
+    <assert-audio-energy filename="fade_out.wav" startFrame="0"
+                         frameCount="24000" minRms="0.083" maxRms="0.086"/>
+
+    <!-- ABSOLUTE, not a nudge: two in a row do not compound, and ONE undo
+         restores the previous fade exactly. -->
+    <undo/>
+    <render filename="fade_undo.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fade_undo.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0617" maxRms="0.0636"/>
+
+    <!-- PERSISTED. -->
+    <set-clip-fade clip="0,0" fadeIn="48000" fadeOut="48000" shape="linear"/>
+    <save-project path="../../build/clip_fade.qxp"/>
+    <load-project path="../../build/clip_fade.qxp"/>
+    <render filename="fade_reload.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fade_reload.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0532" maxRms="0.0548"/>
+    <assert-audio-energy filename="fade_reload.wav" startFrame="168000"
+                         frameCount="24000" minRms="0.1206" maxRms="0.1243"/>
+  </actions>
+
+</SActionScript>
