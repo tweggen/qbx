@@ -5,6 +5,7 @@
 #include <QString>
 #include <QWidget>
 
+class QAction;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -120,6 +121,10 @@ private:
     QComboBox   *ccCombo_    = nullptr;
     QPushButton *ccButton_   = nullptr;
     QPushButton *quantize_   = nullptr;
+    // "Q" = quantize, scoped to this dock (WidgetWithChildrenShortcut) so it
+    // cannot shadow the virtual keyboard's own Q = note-12 binding when THAT
+    // dock has focus (svirtualkeyboarddock.cpp) — see buildUi().
+    QAction     *actQuantize_ = nullptr;
     QCheckBox   *linkCheck_  = nullptr;
 
     QString    kind_;

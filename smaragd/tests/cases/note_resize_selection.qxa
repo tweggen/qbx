@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fix/editor-ui-and-shortcuts, issue (c): dragging a note's edge to resize it
+  (and, less visibly, moving one or dragging its velocity bar) left EVERY note
+  in the clip selected on release, instead of just the note that was dragged.
+
+  ROOT CAUSE (spianorollview.cpp, commitDrag()'s shared Move/Resize/Velocity
+  tail): the old code was
+
+      const bool wholeSelection = selected_.contains( done.anchor );
+      QSet<QString> keep;
+      for( const SEvent &e : next ) {              // EVERY note in the clip
+          const QString id = idStr( e );
+          if( wholeSelection || id == done.anchor ) keep.insert( id );
+      }
+
+  `wholeSelection` is true whenever the dragged note was already part of the
+  selection before the drag — which is essentially always, because
+  mousePressEvent() already calls selectOnly(id) (or leaves an existing
+  multi-selection alone) before any drag begins. Once true, the condition
+  `wholeSelection || …` is constant-TRUE, so `keep` picked up every note in
+  `next`, regardless of whether previewNotes() actually touched it. It is most
+  visible on Resize because idStr() is (tick,key,channel) and a resize does
+  not change any of those, but the same defect selects everything after a
+  plain Move or a velocity-lane drag too.
+
+  The fix threads the SAME predicate previewNotes() already uses to decide
+  which notes to mutate back out as a `touchedIds` set, and commitDrag() now
+  seeds `keep` from that instead of re-deriving membership from the OLD
+  selection.
+
+  This case exercises C1 (resize one note among several), C2 (move one), C4
+  (velocity-drag one) and C3 (drag a real multi-note selection, built the same
+  way note_copy_drag.qxa's Ctrl-toggle-with-no-movement does, since there is
+  no headless marquee-select verb). Each phase restores state with `undo`
+  before the next, so the fixture stays exactly three notes throughout.
+
+  Frames/tick and grid are the same as piano_roll_edits.qxa's own arithmetic
+  (120 BPM, PPQ 960, 1/16 grid = 240 ticks); every tick used below is a
+  multiple of 240 so nothing here depends on the pixel-quantisation caveat.
+
+  Watched failing on the pre-fix binary: step "C1" reads
+  assert-event-editor contains="selection=1" where the buggy code produced
+  selection=3 (all three notes) after resizing just one.
+-->
+<SActionScript version="1" name="note_resize_selection">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Notes"/>
+    <set-selection paths="0,0"/>
+    <set-locator position="0"/>
+
+    <!-- Three notes, well separated, distinct keys so a key= check identifies
+         each one regardless of tick. -->
+    <add-note clip="0,0" tick="0"    dur="480" key="60" velocity="100"/>
+    <add-note clip="0,0" tick="1920" dur="480" key="64" velocity="100"/>
+    <add-note clip="0,0" tick="3840" dur="480" key="67" velocity="100"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+
+    <!-- ============================ C1: resize =========================== -->
+    <!-- Drag the SECOND note's right edge only. Nothing else was clicked, so
+         mousePressEvent's selectOnly() leaves exactly one note selected
+         before the drag — the case the bug hit hardest, because a resize
+         never changes idStr(). -->
+    <drag-note clip="0,0" tick="1920" key="64" edge="end" toTick="2880"/>
+    <assert-event-editor clip="0,0" contains="selection=1"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+    <assert-midi-events clip="0,0" kind="note" key="64" count="1"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+
+    <!-- ============================= C2: move ============================ -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="960" toKey="62"/>
+    <assert-event-editor clip="0,0" contains="selection=1"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+    <assert-midi-events clip="0,0" kind="note" key="62" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="0"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="1"/>
+
+    <!-- ========================= C4: velocity lane ======================= -->
+    <drag-note clip="0,0" tick="0" key="60" lane="velocity" toValue="40"/>
+    <assert-event-editor clip="0,0" contains="selection=1"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" velocity="40"
+                        velocityTolerance="3" count="1"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" velocity="100"
+                        velocityTolerance="0.5" count="1"/>
+
+    <!-- ========================= C3: multi-note drag ===================== -->
+    <!-- Build a real multi-selection the same way note_copy_drag.qxa's
+         Ctrl-toggle does (no headless marquee verb exists): the velocity drag
+         above left exactly the first note selected, so two no-movement
+         Ctrl-clicks add the other two without disturbing it. -->
+    <drag-note clip="0,0" tick="1920" key="64" toTick="1920" toKey="64"
+              modifiers="ctrl"/>
+    <drag-note clip="0,0" tick="3840" key="67" toTick="3840" toKey="67"
+              modifiers="ctrl"/>
+    <assert-event-editor clip="0,0" contains="selection=3"/>
+
+    <!-- A plain (non-Ctrl) drag on an ALREADY-selected note leaves the whole
+         selection intact and moves it as one group — exactly the anchor +
+         delta rule previewNotes() already applies. -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="480" toKey="61"/>
+    <assert-event-editor clip="0,0" contains="selection=3"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+    <assert-midi-events clip="0,0" kind="note" key="61" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="65" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="68" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="0"/>
+    <assert-midi-events clip="0,0" kind="note" key="64" count="0"/>
+    <assert-midi-events clip="0,0" kind="note" key="67" count="0"/>
+
+    <!-- ONE undo puts all three notes back — the group move is one set-notes,
+         exactly as piano_roll_edits.qxa already gates for a single note. -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="64" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="67" count="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

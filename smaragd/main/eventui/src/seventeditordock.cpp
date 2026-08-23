@@ -1,8 +1,10 @@
 #include "app/eventui/seventeditordock.h"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QHBoxLayout>
+#include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
 #include <QShowEvent>
@@ -97,10 +99,26 @@ void SEventEditorDock::buildUi()
 
     quantize_ = new QPushButton( tr( "Quantize" ), bar );
     quantize_->setToolTip( tr( "Snap every note in this clip to the grid "
-                               "(one undo step)" ) );
+                               "(one undo step) — Q" ) );
     barLayout->addWidget( quantize_ );
     connect( quantize_, &QPushButton::clicked, this,
              &SEventEditorDock::onQuantizeClicked );
+
+    // "Q" = quantize, discoverable from the button's own tooltip above.
+    // WidgetWithChildrenShortcut scopes it to this dock (and its children,
+    // including the piano roll view itself) so it fires only while the event
+    // editor has focus — a window-wide shortcut would collide with the
+    // virtual keyboard's OWN Q = note-12 binding
+    // (svirtualkeyboarddock.cpp:36), which needs bare Q for playing while
+    // that dock has focus instead. SPianoRollView::keyPressEvent's
+    // `default: ignore()` is what lets an unhandled key bubble up here from
+    // the view.
+    actQuantize_ = new QAction( tr( "Quantize" ), this );
+    actQuantize_->setShortcut( QKeySequence( Qt::Key_Q ) );
+    actQuantize_->setShortcutContext( Qt::WidgetWithChildrenShortcut );
+    connect( actQuantize_, &QAction::triggered,
+             this, &SEventEditorDock::onQuantizeClicked );
+    addAction( actQuantize_ );
 
     barLayout->addWidget( new QLabel( tr( "CC:" ), bar ) );
     ccCombo_ = new QComboBox( bar );

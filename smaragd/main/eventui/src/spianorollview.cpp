@@ -519,7 +519,8 @@ void SPianoRollView::mouseReleaseEvent( QMouseEvent *ev )
 }
 
 std::vector<SEvent> SPianoRollView::previewNotes(
-    const Resolved &r, const std::vector<SEvent> &notes ) const
+    const Resolved &r, const std::vector<SEvent> &notes,
+    QSet<QString> *touchedIds ) const
 {
     std::vector<SEvent> out = notes;
     if( !r.valid() ) return out;
@@ -553,6 +554,7 @@ std::vector<SEvent> SPianoRollView::previewNotes(
                                   : idStr( e ) == drag_.anchor ) ) continue;
             e.t = std::max<qint64>( 0, e.t + dTick );
             e.key = std::min( 127, std::max( 0, e.key + dKey ) );
+            if( touchedIds ) touchedIds->insert( idStr( e ) );
         }
     } else if( drag_.kind == DragKind::Resize ) {
         const qint64 minDur = std::max<qint64>( 1, gridTicks( r ) / 8 );
@@ -564,12 +566,14 @@ std::vector<SEvent> SPianoRollView::previewNotes(
             if( !( wholeSelection ? selected_.contains( idStr( e ) )
                                   : idStr( e ) == drag_.anchor ) ) continue;
             e.dur = std::max( minDur, e.dur + dDur );
+            if( touchedIds ) touchedIds->insert( idStr( e ) );
         }
     } else if( drag_.kind == DragKind::Velocity ) {
         for( SEvent &e : out ) {
             if( !( wholeSelection ? selected_.contains( idStr( e ) )
                                   : idStr( e ) == drag_.anchor ) ) continue;
             e.value = drag_.value;
+            if( touchedIds ) touchedIds->insert( idStr( e ) );
         }
     } else if( drag_.kind == DragKind::Copy ) {
         // AC-a2: same delta math as Move, but the ORIGINALS in `out` are left
@@ -691,22 +695,26 @@ void SPianoRollView::commitDrag()
     // model never saw an intermediate position, so there is nothing to undo
     // but the gesture itself.
     const std::vector<SEvent> notes = notesOf( r );
-    const std::vector<SEvent> next = previewNotes( r, notes );
+    QSet<QString> touched;
+    const std::vector<SEvent> next = previewNotes( r, notes, &touched );
     const Drag done = drag_;
     drag_ = Drag();
 
     if( !sameNotes( next, notes ) ) {
-        // Follow the selection to the new ADDRESSES before the action lands, so
-        // the arrangementChanged refresh does not prune it away.
+        // Follow the selection to the new ADDRESSES before the action lands,
+        // so the arrangementChanged refresh does not prune it away.
+        //
+        // `touched` is exactly the set of notes the gesture moved (see
+        // previewNotes()'s doc comment) — NOT "every note whose new address
+        // happens to be in the OLD selection", which was the bug: on a
+        // Resize the id does not depend on duration, so that check was
+        // constant-true across the whole selection and every drag selected
+        // everything in the clip.
         const bool wholeSelection = selected_.contains( done.anchor );
-        QSet<QString> keep;
-        for( const SEvent &e : next ) {
-            const QString id = idStr( e );
-            if( wholeSelection || id == done.anchor ) keep.insert( id );
-        }
+        QSet<QString> keep = touched;
         if( !wholeSelection ) {
-            // A single-note gesture moved exactly one address; everything else
-            // kept its own, so the previous selection still resolves.
+            // A single-note gesture moved exactly one address; everything
+            // else kept its own, so the previous selection still resolves.
             keep.unite( selected_ );
         }
         selected_ = keep;
@@ -746,12 +754,21 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
     const Resolved r = resolve();
     const qint64 g = r.valid() ? gridTicks( r ) : 0;
 
-    // AC-a3: Ctrl/Cmd-A selects every note of the BOUND CLIP. event() below
-    // is what routes the keystroke here instead of into the shell's "Select
-    // All" QAction (which would select clips, not notes) — this handler is
-    // reached only once that ShortcutOverride has already won. View state
-    // only (like every other selection change in this file); nothing to undo.
+    // AC-a3 / issue (f): Ctrl/Cmd-A selects every note of the BOUND CLIP;
+    // Ctrl/Cmd-Shift-A clears this view's OWN note selection and leaves the
+    // arranger's clip selection alone. event() below is what routes BOTH
+    // keystrokes here instead of into the shell's window-level QActions
+    // (which address clips, not notes) — this handler is reached only once
+    // that ShortcutOverride has already won. View state only in either case
+    // (like every other selection change in this file, and per
+    // eventui/CONTRACT.md rule 15); nothing to undo.
     if( ev->key() == Qt::Key_A && hasPrimaryMod( ev->modifiers() ) ) {
+        if( ev->modifiers() & Qt::ShiftModifier ) {
+            selected_.clear();
+            update();
+            ev->accept();
+            return;
+        }
         if( r.valid() ) {
             selected_.clear();
             for( const SEvent &e : notesOf( r ) ) selected_.insert( idStr( e ) );
@@ -786,11 +803,11 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
 
 bool SPianoRollView::event( QEvent *ev )
 {
-    // See the header comment: accepting Ctrl/Cmd-A's ShortcutOverride here is
-    // what stops the shell's window-level "Select All" QAction from firing
-    // instead of keyPressEvent() while this view has focus. Every other key
-    // (Space included) is left alone, so the shell's shortcuts stay reachable
-    // exactly as they were.
+    // See the header comment: accepting Ctrl/Cmd-A's ShortcutOverride here —
+    // Shift held or not — is what stops the shell's window-level "Select
+    // All" / "Select None" QActions from firing instead of keyPressEvent()
+    // while this view has focus. Every other key (Space included) is left
+    // alone, so the shell's shortcuts stay reachable exactly as they were.
     if( ev->type() == QEvent::ShortcutOverride ) {
         QKeyEvent *ke = static_cast<QKeyEvent*>( ev );
         if( ke->key() == Qt::Key_A && hasPrimaryMod( ke->modifiers() ) ) {
