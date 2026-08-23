@@ -81,6 +81,10 @@ public:
     // not include app/timeline (see tools/check_layering.py); shell may.
     // See SStdMixerView::dragClipEdge for the semantics and its limits.
     // grabWhere: 0 = start edge, 1 = end edge, 2 = body (SStdMixerView::ClipGrab).
+    // The HOVER twin of dragClipEdge (proposal 43 N5 UI): one synthesized
+    // MouseMove at the same grab point, so a script can assert what the app
+    // reports is under the pointer.
+    bool hoverClipEdge( int rowIdx, int clipIdx, int grabWhere );
     bool dragClipEdge( int rowIdx, int clipIdx, int grabWhere, offset_t dropTime,
                        bool upperHalf, Qt::KeyboardModifiers mods = Qt::NoModifier );
 
