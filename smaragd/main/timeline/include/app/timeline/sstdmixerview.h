@@ -8,6 +8,7 @@
 #include "tw/core/twfraction.h"
 #include "tw/core/twwarpmap.h"
 #include "tw/events/twtempomap.h"
+#include "tw/events/twfade.h"
 #include "app/model/sobjectrenderer.h"
 // Complete type for the QPointer<STrack> selection anchor below.
 #include "app/objects/track/strack.h"
@@ -386,13 +387,19 @@ private:
     length_t lastClickDuration_;
 
     // Loop-marker grab handles. loopMarkerAt() hit-tests the small boxes the cut
+    int fadeHandleAt( const QPoint &, int rowIdx, SLink * ) const;
     // renderer draws at the top of each loop boundary (scutLoopHandleRect() is
     // shared with the drawing side) and returns the boundary index under `pos`,
     // or 0 for none. Grabbing boundary k and dragging re-tiles the clip so that
     // boundary follows the pointer: segment = (t - clipStart)/k. The clip's
     // duration is NOT touched, so the repetition count changes as you drag.
     int loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) const;
-    int lastClickLoopMarker_ = 0;   // boundary index under the last press (0=none)
+    int lastClickLoopMarker_ = 0;
+    // 1 = fade-in, 2 = fade-out, 0 = neither (proposal 43 N5 UI).
+    int lastClickFadeHandle_ = 0;
+    bool clipDragIsFade_ = false;
+    int clipDragFadeWhich_ = 0;
+    twClipFade clipFade0_;   // boundary index under the last press (0=none)
 
     // proposal 41 D15/M7: THE TAG-FIRST HIT TEST. Used ONLY by
     // updateLastClickVars() (i.e. a PRESS) -- the cursor-feedback and
@@ -606,7 +613,12 @@ public:
     // the clip's OWN declared chip, still comfortably inside whatever a
     // later/occluding clip's body painted over the rest of it. See
     // dragClipEdge's .cpp for the exact geometry.
-    enum ClipGrab { GrabStart = 0, GrabEnd = 1, GrabBody = 2, GrabTag = 3 };
+    // GrabFadeIn / GrabFadeOut (proposal 43 N5 UI): land inside the clip's own
+    // FADE handle, at the geometry the renderer draws it with -- never an
+    // approximation of it, which is how a synthesized gesture starts testing
+    // something other than the control a hand would hit.
+    enum ClipGrab { GrabStart = 0, GrabEnd = 1, GrabBody = 2, GrabTag = 3,
+                    GrabFadeIn = 4, GrabFadeOut = 5 };
     // Testkit: run the REAL Group/Ungroup context-menu slots on `t`. The index
     // arithmetic in those slots is the whole risk, so it must be the thing
     // under test rather than a re-spelling of it in a qxa script.

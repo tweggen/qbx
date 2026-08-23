@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A CLIP'S FADES ARE REACHABLE BY HAND.
+
+  Proposal 43 N5's UI half. N5 built the fade and the verb; until this, a fade
+  could be set from a script and not with the mouse.
+
+  THE HANDLE IS A CONTROL; THE RAMP IS THE TRUTH. A fade of zero — or one only
+  a few pixels long — would put its handle exactly on the clip's own trim/loop
+  edge band, where it would either be unreachable or would SWALLOW a gesture
+  that was there first (this arranger puts loop on the upper half of each edge
+  band, which is where most DAWs put the fade handle). So `scutFadeHandleX`
+  PARKS the handle just clear of that band, while the ramp keeps describing the
+  fade's real length.
+
+  PARKING MOVES THE GRAB, NOT THE RESULT. The press lands on the parked handle
+  and the release decides the fade, so the drag below produces EXACTLY 48000 —
+  measured, not assumed. That is worth stating because the opposite is the
+  plausible guess: an implementation that measured the drag as a DELTA from the
+  press would inherit the parking offset and land a few hundred frames short.
+
+  ONE GEOMETRY FUNCTION serves the renderer, the hit test AND this case's
+  driver — proposal 41 M7's rule, arrived at after paint and hit-test drifted
+  apart for two milestones and shipped green. `drag-clip-edge edge="fadein"`
+  lands in the box the renderer actually drew.
+
+  The audio numbers are N5's own closed forms over test_gapsaw.wav, so the
+  gesture is measured against the same arithmetic the verb was.
+-->
+<SActionScript version="1" name="clip_fade_handles">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+
+    <!-- No fade: the handles are PARKED and grabbing one changes nothing on
+         its own. The first assertion is the unfaded head. -->
+    <render filename="fh_none.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fh_none.wav" startFrame="0"
+                         frameCount="24000" minRms="0.083" maxRms="0.086"/>
+
+    <!-- DRAG THE FADE-IN HANDLE to 1 s. -->
+    <drag-clip-edge track="0" clip="0" edge="fadein" toTime="48000"/>
+    <render filename="fh_in.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fh_in.wav" startFrame="0"
+                         frameCount="24000" minRms="0.0272" maxRms="0.0284"/>
+    <assert-audio-energy filename="fh_in.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0530" maxRms="0.0550"/>
+    <!-- ...and NOTHING past the fade moved: a fade is a gain shape, never a
+         window edit, so the clip's position and length are untouched. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-audio-energy filename="fh_in.wav" startFrame="168000"
+                         frameCount="24000" minRms="0.433" maxRms="0.441"/>
+
+    <!-- ONE UNDO, and the fade is gone — the drag reverted its live shape and
+         committed exactly one `set-clip-fade`. -->
+    <undo/>
+    <render filename="fh_undo.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fh_undo.wav" startFrame="0"
+                         frameCount="24000" minRms="0.083" maxRms="0.086"/>
+
+    <!-- DRAG THE FADE-OUT HANDLE to 1 s from the end. -->
+    <drag-clip-edge track="0" clip="0" edge="fadeout" toTime="144000"/>
+    <render filename="fh_out.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="fh_out.wav" startFrame="168000"
+                         frameCount="24000" minRms="0.1200" maxRms="0.1250"/>
+    <assert-audio-energy filename="fh_out.wav" startFrame="0"
+                         frameCount="24000" minRms="0.083" maxRms="0.086"/>
+    <undo/>
+
+    <!-- THE HANDLE NEVER SWALLOWS THE EDGE BAND. A trim of the same clip's
+         left edge still works with a fade present, which is what the parking
+         rule exists to guarantee. -->
+    <set-clip-fade clip="0,0" fadeIn="48000" fadeOut="0" shape="linear"/>
+    <drag-clip-edge track="0" clip="0" edge="start" toTime="24000" half="lower"/>
+    <assert-clip-window clip="0,0" startTime="24000" duration="168000"/>
+  </actions>
+
+</SActionScript>

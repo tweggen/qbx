@@ -1124,3 +1124,43 @@ and the take-slip revert's exact-`Fraction` anchor setter).
 **Stretch, loop and grain-slip on an EVENT clip are still no-ops** — those
 branches return when the window is not an `SCut`. `SMidiCut` has `rate` and
 `loopTicks` and could express them; no gesture reaches them yet.
+
+### inv. 40 — A FADE HANDLE IS A CONTROL; THE RAMP BESIDE IT IS THE TRUTH
+
+Proposal 43 N5's UI half. Every audio clip carries two fade handles, at the
+fade's END — and the handle's DRAWN position is clamped clear of the clip's own
+edge bands by `scutFadeHandleX`, while the ramp keeps describing the fade's
+real length.
+
+**That clamp is not cosmetic.** This arranger puts LOOP on the upper half of
+each edge band — where most DAWs put the fade handle — so a handle drawn at a
+zero-length fade would sit exactly on it and either be unreachable or swallow a
+gesture that was there first. Parking it costs a few pixels of honesty in the
+handle's position and keeps both gestures reachable; the ramp, drawn per pixel
+from the fade's actual gain, is what a reader measures.
+
+**PARKING MOVES THE GRAB, NOT THE RESULT.** The press lands on the parked
+handle and the RELEASE decides the fade, so a drag to a given time produces
+exactly that fade — measured: 48000 frames, not 48000 minus the parking offset.
+An implementation that measured the drag as a DELTA from the press would
+inherit the offset and land short; that is the plausible wrong version, which
+is why the gate asserts the exact number.
+
+**ONE GEOMETRY FUNCTION** — `scutFadeHandleX` / `scutFadeHandleRect` — serves
+the renderer, `SMVActualView::fadeHandleAt` AND `dragClipEdge`'s
+`edge="fadein"/"fadeout"` driver. That is inv. 32's rule (proposal 41 M7),
+which this codebase arrived at only after paint and hit-test drifted apart for
+two milestones and shipped green: a handle you can see and cannot grab is worse
+than no handle, and a synthesized gesture aiming at an approximation of the box
+tests something a hand never touches.
+
+A fade handle OUTRANKS every edge band it could overlap, exactly as a loop
+marker does (`updateLastClickVars` clears the edge flags for it) — though the
+parking rule means it never actually overlaps one. And a fade drag is a GAIN
+edit, never a window edit: the clip's position and length are untouched, which
+the gate asserts directly.
+
+The drag REVERTS its live shape before submitting one `set-clip-fade`, the same
+rule every other gesture here follows. Skip the revert and the action finds
+nothing to change: its undo step is a no-op and a redo double-applies. The gate
+watches that failing.

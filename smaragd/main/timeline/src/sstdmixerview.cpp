@@ -44,6 +44,7 @@
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/stakehelpers.h"
+#include "app/objects/cut/ssetclipfadeaction.h"
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
@@ -1859,6 +1860,43 @@ int SMVActualView::loopMarkerAt( const QPoint &pos, int rowIdx, SLink *clip ) co
     return ( !box.isNull() && box.contains( pos ) ) ? k : 0;
 }
 
+// WHICH FADE HANDLE IS UNDER THE POINTER: 1 = fade-in, 2 = fade-out, 0 = none
+// (proposal 43 N5 UI). Modelled on loopMarkerAt above, and sharing the SAME
+// geometry functions the renderer draws with (`scutFadeHandleX` /
+// `scutFadeHandleRect`) -- proposal 41 M7's rule, arrived at after paint and
+// hit-test drifted apart for two milestones.
+//
+// It is tested BEFORE the edge bands, exactly as a loop marker is, but it can
+// never steal one: `scutFadeHandleX` parks the handle clear of the band.
+int SMVActualView::fadeHandleAt( const QPoint &pos, int rowIdx,
+                                 SLink *clip ) const
+{
+    if( !clip || !clip->hasStartTime() ) return 0;
+    SCut *cut = dynamic_cast<SCut*>( &clip->getSObject() );
+    if( !cut ) return 0;                       // audio clips only, like the fade
+    const length_t dur = cut->getDuration();
+    if( dur <= 0 ) return 0;
+
+    const offset_t start = clip->getStartTime();
+    const int x0 = getXPosOfOffset( start );
+    const int x1 = getXPosOfOffset( start + (offset_t) dur );
+    // The clip's paint rect, the same one loopMarkerAt reconstructs.
+    QRect clipRect( x0, laneTop( rowIdx )+2, x1-x0, laneHeight( rowIdx )-4 );
+    if( clipRect.width() < 2 ) return 0;
+
+    const twClipFade fade = cut->getFade();
+    const int inTrue  = getXPosOfOffset( start + (offset_t) fade.inLen );
+    const int outTrue = getXPosOfOffset( start + (offset_t)( dur - fade.outLen ) );
+    for( int which = 1; which <= 2; ++which ) {
+        const int hx = scutFadeHandleX( clipRect, which == 1 ? inTrue : outTrue,
+                                        which == 2, SCUT_FADE_EDGE_BAND_PX );
+        if( hx < 0 ) return 0;
+        QRect box = scutFadeHandleRect( clipRect, hx );
+        if( !box.isNull() && box.contains( pos ) ) return which;
+    }
+    return 0;
+}
+
 // proposal 41 D15/M7: THE TAG-FIRST HIT TEST. "Test all tags first, across
 // every clip on the lane, then bodies in z-order" (D15) -- so this walks
 // EVERY clip on the row, not just whichever one a plain time-based lookup
@@ -1943,6 +1981,7 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
     lastClickedEndUpper_ = false;
     lastClickedStartUpper_ = false;
     lastClickLoopMarker_ = 0;
+    lastClickFadeHandle_ = 0;
     lastClickPos_ = pos;
     lastClickTrackIdx_ = rowAtViewY( pos.y() );
     // Y within the clicked lane (its own height, not a global one), used by
@@ -1991,6 +2030,15 @@ void SMVActualView::updateLastClickVars( const QPoint &pos )
             // A loop-marker handle wins over any edge band it overlaps, so a
             // marker sitting near the clip end still re-tiles rather than
             // extending the clip.
+            // A FADE HANDLE outranks every edge band it could overlap, the
+            // same way a loop marker does -- though `scutFadeHandleX` parks it
+            // so it never actually overlaps one.
+            lastClickFadeHandle_ =
+                fadeHandleAt( pos, lastClickTrackIdx_, lastClickSLink_ );
+            if( lastClickFadeHandle_ > 0 ) {
+                lastClickedStart_ = lastClickedEnd_ = false;
+                lastClickedEndUpper_ = lastClickedStartUpper_ = false;
+            }
             lastClickLoopMarker_ =
                 loopMarkerAt( pos, lastClickTrackIdx_, lastClickSLink_ );
             if( lastClickLoopMarker_ > 0 ) {
@@ -2099,6 +2147,29 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
         update();
         clipDragArmed_ = false;
         clipDragIsDuplicate_ = false;
+        return;
+    }
+
+    // Finalize a FADE drag: revert the live shape, then re-apply it as ONE
+    // undoable `set-clip-fade` (proposal 43 N5 UI). Same revert-then-act rule
+    // every other gesture here follows -- skip the revert and the action finds
+    // nothing to change, so its undo step is a no-op and a redo double-applies.
+    if( clipDragArmed_ && clipDragIsFade_ && lastClickSLink_ ) {
+        const ClipEditTarget t = clipEditTargetOf( lastClickSLink_ );
+        if( t.cut && t.cut->getFade() != clipFade0_ ) {
+            const twClipFade next = t.cut->getFade();
+            t.cut->setFade( clipFade0_ );          // revert
+            QList<int> clipPath =
+                strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+            clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+            stimeline::submitActive( new SSetClipFadeAction(
+                strackpath::pathToString( clipPath ),
+                (qint64) next.inLen, (qint64) next.outLen, next.shape, -1 ) );
+            update();
+        }
+        clipDragArmed_ = false;
+        clipDragIsFade_ = false;
+        clipDragFadeWhich_ = 0;
         return;
     }
 
@@ -2928,7 +2999,31 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
             // Live drags below mutate only the fields needed for visual feedback
             // (cheap, no audio rebuild); the release reverts to the snapshot and
             // re-applies the whole window through SResizeClipAction.
-            if( clipDragIsLoopMarker_ ) {
+            if( clipDragIsFade_ ) {
+                // DRAG A FADE HANDLE: the handle marks the fade's END, so its
+                // length is the pointer's distance from the clip's own edge.
+                // The clip's position and length are untouched -- a fade is a
+                // gain shape, not a window edit.
+                SCut *cut = tgt.cut;
+                if( !cut ) return;              // audio clips only
+                const length_t dur = (length_t) cut->getDuration();
+                length_t want = ( clipDragFadeWhich_ == 1 )
+                    ? (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) )
+                          - (length_t) clipDragStart0_
+                    : (length_t) clipDragStart0_ + dur
+                          - (length_t) smv_.alignTime( getTimeOf( ev->pos().x() ) );
+                if( want < 0 ) want = 0;
+                if( want > dur ) want = dur;
+                twClipFade next = clipFade0_;
+                if( clipDragFadeWhich_ == 1 ) next.inLen = want;
+                else                          next.outLen = want;
+                if( next != cut->getFade() ) {
+                    QRect r = getSLinkVisibRect( lastClickTrackIdx_,
+                                                 *lastClickSLink_ );
+                    cut->setFade( next );
+                    update( r );
+                }
+            } else if( clipDragIsLoopMarker_ ) {
                 // Drag a LOOP MARKER: re-tile the clip so the grabbed boundary
                 // k lands under the pointer — segment = (t - clipStart)/k. The
                 // clip's duration is untouched, so shortening the segment fits
@@ -3933,10 +4028,17 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                     // A loop marker sits on the clip body; grabbing one outranks
                     // the body gestures (updateLastClickVars already cleared the
                     // edge flags for it).
-                    clipDragIsLoopMarker_ = ( lastClickLoopMarker_ > 0 );
+                    // A FADE HANDLE outranks every body/edge gesture, like a
+                    // loop marker (proposal 43 N5 UI).
+                    clipDragIsFade_ = ( lastClickFadeHandle_ > 0 );
+                    clipDragFadeWhich_ = lastClickFadeHandle_;
+                    clipDragIsLoopMarker_ = ( !clipDragIsFade_
+                                              && lastClickLoopMarker_ > 0 );
                     clipDragIsSlip_    = ( alt && !onBorder
-                                           && !clipDragIsLoopMarker_ );
-                    clipDragIsStretch_ = ( hasPrimaryMod( modifiers ) && onBorder );
+                                           && !clipDragIsLoopMarker_
+                                           && !clipDragIsFade_ );
+                    clipDragIsStretch_ = ( hasPrimaryMod( modifiers ) && onBorder
+                                           && !clipDragIsFade_ );
                     clipDragIsLoop_    = ( !hasPrimaryMod( modifiers )
                                            && lastClickedEnd_ && lastClickedEndUpper_ );
                     clipDragIsLoopStart_ = ( !hasPrimaryMod( modifiers )
@@ -3953,6 +4055,8 @@ void SMVActualView::mousePressEvent( QMouseEvent *ev )
                         // a stretch of 1 whatever the column actually held.
                         const ClipEditTarget t0 =
                             clipEditTargetOf( lastClickSLink_ );
+                        if( SCut *c0 = t0.cut ) clipFade0_ = c0->getFade();
+                        else clipFade0_ = twClipFade();
                         if( t0.win ) {
                             clipResizeOffset0_ = t0.win->startOffset();
                             clipSrcStart0_     = t0.win->contentAnchorExact();
@@ -4615,7 +4719,27 @@ bool SStdMixerView::dragClipEdge( int rowIdx, int clipIdx, int grabWhere,
     int laneTop = qContent_->laneTop( rowIdx );
 
     int x0, y;
-    if( grabWhere == GrabTag ) {
+    if( grabWhere == GrabFadeIn || grabWhere == GrabFadeOut ) {
+        // proposal 43 N5 UI: land inside the clip's own FADE handle, at the
+        // SAME geometry the renderer draws it with and `fadeHandleAt` grabs
+        // it by -- one function, so a synthesized gesture cannot start testing
+        // a box the user's hand would miss.
+        SCut *cut = dynamic_cast<SCut*>( &clip->getSObject() );
+        if( !cut ) return false;
+        const twClipFade fade = cut->getFade();
+        QRect clipRect( sx, qContent_->laneTop( rowIdx )+2, ex-sx, th-4 );
+        const bool isOut = ( grabWhere == GrabFadeOut );
+        const int trueX = isOut
+            ? qContent_->getXPosOfOffset( start + (offset_t)( dur - fade.outLen ) )
+            : qContent_->getXPosOfOffset( start + (offset_t) fade.inLen );
+        const int hx = scutFadeHandleX( clipRect, trueX, isOut,
+                                        SCUT_FADE_EDGE_BAND_PX );
+        if( hx < 0 ) return false;
+        const QRect box = scutFadeHandleRect( clipRect, hx );
+        if( box.isEmpty() ) return false;
+        x0 = box.center().x();
+        y  = box.center().y();
+    } else if( grabWhere == GrabTag ) {
         // proposal 41 D15/M7: land inside THIS clip's own tag chip -- the
         // SAME geometry tagChipRect()/tagHitTestAt() use, computed from the
         // clip's REAL start/duration rather than an approximation of it.

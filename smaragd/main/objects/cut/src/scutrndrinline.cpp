@@ -216,6 +216,36 @@ QRect scutLoopHandleRect( const QRect &clipRect, int x )
                   SCUT_LOOP_HANDLE_W, h );
 }
 
+QRect scutFadeHandleRect( const QRect &clipRect, int x )
+{
+    // Same size as the loop grip, so the two read as members of one family.
+    QFont f = QGuiApplication::font();
+    f.setPointSize( 7 );
+    int h = QFontMetrics( f ).height();
+    int maxH = clipRect.height() - 2;
+    if( h > maxH ) h = maxH;
+    if( h < 4 ) return QRect();
+    return QRect( x - SCUT_LOOP_HANDLE_W/2, clipRect.y() + 1,
+                  SCUT_LOOP_HANDLE_W, h );
+}
+
+int scutFadeHandleX( const QRect &clipRect, int trueEndX, bool isFadeOut,
+                     int edgeBandPx )
+{
+    const int halfW = SCUT_LOOP_HANDLE_W / 2;
+    const int lo = clipRect.left()  + edgeBandPx + halfW;
+    const int hi = clipRect.right() - edgeBandPx - halfW;
+    if( hi - lo < SCUT_LOOP_HANDLE_W ) return -1;   // no room for a handle
+    int x = trueEndX;
+    if( x < lo ) x = lo;
+    if( x > hi ) x = hi;
+    // The two handles must not overlap each other on a short clip; the
+    // fade-out yields, because a fade-in at the far right is the stranger
+    // state and the user is more likely to be building it from the left.
+    (void) isFadeOut;
+    return x;
+}
+
 namespace {
 // Paint one loop-marker grab handle: a light box with two grip bars, hinting
 // that it drags horizontally.
@@ -233,6 +263,71 @@ void drawLoopHandle( QPainter &p, const QRect &clipRect, int x )
 }
 
 namespace {
+// THE FADE RAMPS AND THEIR GRAB HANDLES (proposal 43 N5 UI).
+//
+// Per-PIXEL, asking the context for each pixel's time, exactly as
+// drawGainEnvelope does — never time->x arithmetic of its own. That is not
+// only consistency: `SRenderContext` offers no time->x, and deriving one from
+// the rect would be a second mapping that a looping or stretched clip could
+// make disagree with the audio.
+//
+// The RAMP is the truth. The HANDLE is a control, and may be PARKED clear of
+// the clip's own edge bands (scutFadeHandleX) so it can never swallow the trim
+// or loop gesture that band already carries.
+void drawFadeHandles( QPainter &p, const QRect &visibRect, SRenderContext &ctx,
+                      SLink &lk, SCut &cut )
+{
+    const twClipFade fade = cut.getFade();
+    const length_t dur = cut.getDuration();
+    if( dur <= 0 || visibRect.width() < 2 ) return;
+
+    const offset_t base = lk.getStartTime();
+    const int span = visibRect.height() - 1;
+    if( span < 2 ) return;
+
+    // The ramp, and the two pixels the handles want, in ONE pass.
+    int inEndX = -1, outStartX = -1;
+    QVector<QPoint> poly;
+    if( !fade.none() ) {
+        poly.reserve( visibRect.width() + 1 );
+        for( int x = visibRect.left(); x <= visibRect.right(); ++x ) {
+            offset_t rel = ctx.getTimeOf( x ) - base;
+            if( rel < 0 ) rel = 0;
+            const double g = fade.gainAt( (int64_t) rel, (int64_t) dur );
+            poly.append( QPoint( x, visibRect.bottom()
+                                     - (int) ( g * span + 0.5 ) ) );
+            if( inEndX < 0 && fade.inLen > 0 && rel >= fade.inLen ) inEndX = x;
+            if( fade.outLen > 0 && rel <= dur - fade.outLen ) outStartX = x;
+        }
+        if( poly.size() >= 2 ) {
+            p.setPen( QPen( QColor( 250, 250, 200, 210 ), 2 ) );
+            p.drawPolyline( poly.constData(), poly.size() );
+        }
+    }
+    if( inEndX < 0 )    inEndX    = visibRect.left();
+    if( outStartX < 0 ) outStartX = visibRect.right();
+
+    struct H { int trueX; bool out; length_t len; };
+    const H hs[2] = { { inEndX, false, fade.inLen },
+                      { outStartX, true, fade.outLen } };
+    for( const H &h : hs ) {
+        const int hx = scutFadeHandleX( visibRect, h.trueX, h.out,
+                                        SCUT_FADE_EDGE_BAND_PX );
+        if( hx < 0 ) return;                    // clip too narrow for handles
+        QRect box = scutFadeHandleRect( visibRect, hx );
+        if( box.isNull() ) return;              // lane too short for a grip
+        p.fillRect( box, h.len > 0 ? QColor( 250, 240, 170 )
+                                   : QColor( 200, 200, 190, 150 ) );
+        p.setPen( QColor( 40, 40, 40 ) );
+        p.drawRect( box );
+        // A DIAGONAL grip, so a fade handle never reads as a loop handle --
+        // which carries two vertical bars and sits in the same family of box.
+        p.setPen( QColor( 90, 90, 90 ) );
+        p.drawLine( box.left() + 2, box.bottom() - 2,
+                    box.right() - 2, box.top() + 2 );
+    }
+}
+
 // A transposed clip looks exactly like an untransposed one (pitch never moves
 // an edge), so it needs a written mark. Whole semitones read as "+2 st"; a
 // fine-nudged clip shows its cents.
@@ -514,6 +609,12 @@ void SCutRendererInline::draw( SLink &lk, SRenderContext &ctx )
     // container-backed cut, same as this used to).
     drawPitchBadge( p, visibRect, cut.getPitchCents(),
                     cut.getPreserveFormants() );
+
+    // THE FADE RAMPS AND THEIR HANDLES (proposal 43 N5 UI). The RAMP is the
+    // truth — a line from silence to unity across the fade's real length — and
+    // the handle is the control that may be parked clear of the edge bands
+    // (scutFadeHandleX). Drawn last, over everything, because it is a control.
+    drawFadeHandles( p, visibRect, ctx, lk, cut );
 }
 
 // ---------------------------------------------------------------------------

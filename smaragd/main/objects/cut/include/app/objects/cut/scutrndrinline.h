@@ -16,6 +16,13 @@ class SObject;
 // Dragging it re-tiles the loop (see SMVActualView::loopMarkerAt).
 #define SCUT_LOOP_HANDLE_W 9
 
+// How far a FADE handle parks from the clip's own edge, so it can never
+// swallow the trim / loop gesture that band already carries. It is the
+// arranger's SMV_LEFT_DRAG_PIXEL, restated here because `objects/cut` may not
+// include `app/timeline` -- and asserted equal by the gate rather than left to
+// drift.
+#define SCUT_FADE_EDGE_BAND_PX 7
+
 // The handle's rect for a boundary at pixel `x` inside `clipRect` (the clip's
 // paint rect, i.e. what SCutRendererInline::draw receives as its visible rect).
 // SHARED between the renderer that draws it and the arranger that hit-tests it,
@@ -27,6 +34,31 @@ class SObject;
 // painter after drawing the time ruler, so an ambient-font handle would be drawn
 // at one size and hit-tested at another.
 QRect scutLoopHandleRect( const QRect &clipRect, int x );
+
+/**
+ * The FADE handle's box (proposal 43 N5 UI). ONE geometry function, shared by
+ * the renderer that draws it and `SMVActualView::fadeHandleAt` that grabs it —
+ * proposal 41 M7's rule, arrived at after paint and hit-test drifted apart for
+ * two milestones: a handle you can see and cannot grab is worse than no handle.
+ *
+ * `x` is the fade's END in view coordinates, ALREADY CLAMPED by the caller
+ * clear of the clip's own edge bands (see `scutFadeHandleX`).
+ */
+QRect scutFadeHandleRect( const QRect &clipRect, int x );
+
+/**
+ * WHERE a fade handle is DRAWN, given the fade's true end and the clip's paint
+ * rect. The handle is a CONTROL and the ramp beside it is the truth: a fade of
+ * zero — or one only a few pixels long — would put the handle exactly on the
+ * trim/loop edge band, where it would either be unreachable or would swallow
+ * a gesture that was there first. So it PARKS just clear of that band, and the
+ * ramp keeps telling the truth about the fade's real length.
+ *
+ * Returns -1 when the clip is too narrow to carry the handle at all, which is
+ * also what stops the two handles from overlapping on a short clip.
+ */
+int scutFadeHandleX( const QRect &clipRect, int trueEndX, bool isFadeOut,
+                     int edgeBandPx );
 
 class SCutRendererInline
     : public SObjectRenderer 
