@@ -1,0 +1,42 @@
+<SProject fileName='' rootId='104897083814464' formatVersion='2' bpmTempo='120' sampleRate='48000' channels='2' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":96000,"rangeStart":0,"rangeValid":true,"rulerMode":"bars","snapToGrid":false,"timelineScrollX":0,"timelineZoomSecondWidth":200}'>
+<SStdMixer id='104897083814944' nRefs='0' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</SStdMixer>
+<SPlainWave filename='../../../../../../.claude/worktrees/take-lane-click-and-slip/smaragd/tests/test_gapsaw.wav' id='104897084097296' nRefs='2' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</SPlainWave>
+<SCut srcStart='24000' startOffset='24000' cutDuration='96000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='104897085240528' nRefs='1' hasDuration='1' durationSec='2' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='104897084097296' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SCut srcStart='0' startOffset='0' cutDuration='192000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='104897085253744' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='104897084097296' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<STakeStack id='104897085269120' nRefs='1' hasDuration='1' durationSec='2' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' activeTake="0">
+<SLink objectId='104897085240528' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='104897085253744' hasStartTime='1' startTime='0'>
+</SLink>
+</STakeStack>
+<SCut srcStart='28800' startOffset='28800' cutDuration='192000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='104897085269664' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='104897085269120' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<STrack pluginChainId='104897085278944' id='104897085301088' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='104897085269664' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='104897085278944' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='104897085309184' id='104897085311568' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</STrack>
+<SPluginChain id='104897085309184' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<SPluginChain id='104897085312736' nRefs='0' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<SStdMixer id='104897083814464' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='104897085301088' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='104897085311568' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+</SProject>
