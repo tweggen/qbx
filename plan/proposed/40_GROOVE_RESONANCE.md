@@ -1016,6 +1016,101 @@ never retroactively.
   a new aspect version, deferred until the lab has shown which families
   matter); and which metric is RIGHT — that is the requester's assessment,
   which this milestone exists to enable, not to preempt.
+- **M3c — TIER B: the pass-2 dynamics exports** (kickoff 2026-08-24, on the
+  requester's go). The metric lab's Tier A derives everything the two
+  shipped aspects can say; the physically direct answers to "does this
+  impulse SUPPORT or DISTURB the established oscillation" — the in-phase
+  and quadrature drive components, phase slip, per-pendulum dissipation —
+  exist only in the pass-1 trajectories, which are never persisted. M3c
+  exports them as a THIRD aspect and appends the Tier B rows to the lab.
+
+  **M3c ACs:**
+  1. **Aspect**: `twAspect::GrooveDyn`/`GrooveDynVersion=1` (id
+     "groove.dyn"), hopFrames = rate/100 (the "groove.res" grid), record =
+     `float32[nUnits*4]` LE, per unit in ensemble order:
+     `{support, tension, slip, dissip}`, where per pendulum hop (computed
+     on the pendulum's own grid, then lerped onto the aspect grid exactly
+     as the res columns are — sin/cos and the derived series are
+     continuous; the wrapped phase itself is never interpolated):
+     `phi = arg z` (the SAME quantity §3.5's counterTension reads),
+     `support = k·F·cos(phi)` (signed in-phase drive — pushes the swing
+     > 0, brakes it < 0), `tension = k·F·sin(phi)` (§3.5's c_p per hop),
+     `slip = |Δ(unwrapped phi)/dt − ω| / ω` (0 at lock), `dissip =
+     2·|α|·|z|²` (the movement outlet, §3.4). NO separate sinPhi or F
+     channel: `k·F ≡ hypot(support, tension)`, so the drive factor and the
+     drive-independent lean are both recoverable read-side — 4 floats per
+     unit, not 6.
+  2. **Jobs**: both analysis jobs (`enqueueGrooveAnalysis`, the bounce)
+     store the third aspect under the SAME params hash, and their
+     skip-the-heavy-pass checks now require all THREE aspects — so a warm
+     pre-M3c store (res+ev present, dyn missing) re-analyzes once and
+     gains dyn, rather than never acquiring it.
+  3. **Metrics**: `twGrooveDeriveMetrics` gains a dyn-record parameter
+     (old signature kept, delegating with empty dyn) and appends the Tier
+     B series — ABSENT (not sentinel-filled) when no dyn records exist,
+     so a pre-M3c store shows exactly the Tier A 13:
+     `support` / `tension` (reference unit, smoothed over `dynSmoothSec`,
+     run-peak-|·|-normalized, mapped 0.5-centered: 0.5 = neutral, green =
+     supports, red = brakes/opposes), `lean` (windowed F-weighted mean of
+     sin φ = Σtension/Σhypot — the §3.5 loudness-confound separation done
+     by construction; sentinel where ⟨F⟩ ≈ 0), `slip` (windowed mean,
+     mapped 1 − clamp(slip/slipCap)), and `move:<unit>` per ensemble unit
+     (dissipation over its own run peak — the §3.4 per-body-part display).
+     22 series total on the default ensemble.
+  4. **ctest** (groove_test section q): closed-form synthetic dyn records
+     — the signed 0.5-centered mapping both directions, the lean closed
+     form (support = tension ⇒ lean = sin 45° ⇒ 0.854), the slip
+     endpoints, per-unit move normalization, dyn-absent ⇒ exactly 13
+     series, determinism; PLUS a full-pipeline consistency gate: build all
+     three payloads from synthetic audio, decode dyn, and check
+     mean(hypot(support,tension))/k against counterTension's own meanF
+     (the export and §3.5 must be the same physics).
+  5. qxa: `feel_flow_metric_lab.qxa` extended — metrics=22, the new rows
+     present in describe(), a band switch to `slip` with the directional
+     LUT gate (a locked steady fixture sits at the green end), measured
+     then pinned. Every pre-existing `feel_flow_*` case green (dyn is
+     additive; nothing existing moves).
+  6. Docs/contracts: twaspects.h normative doc, sidecar CONTRACT,
+     objects/track inv. 30 extended, ACTIONS.md id lists, layering/logging
+     clean, full suite.
+
+  **M3c EXECUTED 2026-08-24.** All ACs green, one AC delta paid for by a
+  failing gate and recorded in the aspect's own doc: **the resample onto
+  the aspect grid is BIN-AVERAGED, not lerped as AC 1 first said.** The
+  consistency gate caught it on its first run — point-sampling a click
+  train's drive overstated the reference's mean by **52 %** (the
+  transients land on exactly the pendulum hops the coarser grid samples;
+  the probe showed the identity exact on the trajectory grid, 0.00209326
+  both sides). Bin-averaged, the export reproduces §3.5's meanF to
+  **0.014 %**, and the gate is pinned at 2 %.
+
+  **Measured on `a_offset15.wav`** (metrics=22 on the default ensemble):
+  `support` 0.659:1.000:0.936 — a metronomic fixture SUPPORTS the
+  established oscillation almost everywhere, the direct physical answer
+  the requester asked the heatmap for; `tension` 0.624:1.000:0.863;
+  `lean` 0.534:0.541:0.538 — a small, STABLE positive lean, and the tight
+  band IS the "consistent feel" statement; `slip` 0.757:0.989:0.962
+  (locked; its band paints LUT 18..23, the directional qxa gate). Payload
+  cost: 4 float32 per unit per 10 ms hop — 80 B/hop at 5 units, ~8 KB per
+  second of analyzed material.
+
+  **Watched failing**: the no-dyn-payload sabotage fails SIX actions at
+  once (metrics=22, the Tier B rows, groove.dyn existence, the slip
+  band's pixel gate); the resample defect was a REAL failure caught by
+  the new consistency gate, not a sabotage. Warm-store transition gated
+  live: a pre-M3c store (res+ev, no dyn) re-analyzes once because both
+  jobs' skip-checks now require all three aspects.
+
+  NOT gated: the Tier B read-side constants beyond their defaults
+  (`dynSmoothSec`/`slipCap`/`leanWindowSec` — M5's Options page, same as
+  Tier A's); ensemble phase COHERENCE and the prediction-error field
+  (named in the Tier B survey, deliberately not built — coherence across
+  units running at different metrical rates needs a common-grid phase
+  definition that is a design question, not an export); a fixture whose
+  support metric goes NEGATIVE (an anti-phase driver — nothing in the
+  fixture set brakes the swing on purpose; the closed-form ctest covers
+  the mapping's negative half synthetically); and which Tier B metric is
+  RIGHT — the requester's assessment, as for Tier A.
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves

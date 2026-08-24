@@ -1476,6 +1476,181 @@ static void section_p_metrics()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Section q — M3c Tier B: the "groove.dyn" export and its derived series.
+// Synthetic dyn records with CLOSED-FORM expectations, plus one full-
+// pipeline consistency gate (the export and section 3.5's summary must be
+// the same physics).
+// ---------------------------------------------------------------------------
+static void section_q_dyn_metrics()
+{
+    const uint32_t rate      = 48000;
+    const uint32_t hopFrames = rate / 100;
+    const size_t   nHops     = 1600;   // 16 s
+    twGrooveReadParams p;
+
+    // --- the synthetic fixture: 2 units, closed forms everywhere ---------
+    std::vector<twGrooveResRecord> res( nHops );
+    for( twGrooveResRecord &r : res ) {
+        r.unitPower  = { 0.5f, 0.5f };
+        r.compliance = 0.8f;
+    }
+    std::vector<twGrooveDynRecord> dyn( nHops );
+    for( size_t i = 0; i < nHops; i++ ) {
+        dyn[i].units.resize( 2 );
+        // reference: support flips sign at the half (the swing is PUSHED,
+        // then BRAKED, at constant magnitude); tension constant, so the
+        // F-weighted lean is sin(45 deg) = 0.70711 in BOTH halves; slip 0
+        // then slipCap/2; dissipation constant.
+        dyn[i].units[0].support = i < nHops / 2 ? 2.0f : -2.0f;
+        dyn[i].units[0].tension = 2.0f;
+        dyn[i].units[0].slip    = i < nHops / 2 ? 0.0f : (float)( p.slipCap / 2.0 );
+        dyn[i].units[0].dissip  = 4.0f;
+        // bounce: a dissipation ramp, for the per-unit move normalization.
+        dyn[i].units[1].dissip  = (float)( (double)i / (double)nHops * 8.0 );
+    }
+    const std::vector<std::string> names = { "reference", "bounce" };
+    const std::vector<twGrooveEvRecord> noEv;
+
+    const std::vector<twGrooveMetricSeries> all =
+        twGrooveDeriveMetrics( res, noEv, dyn, hopFrames, rate, names, p );
+
+    // Tier A for 2 units = 10 series; Tier B adds support/tension/lean/slip
+    // + move per unit = 6 more.
+    CHECK( all.size() == 16, "dyn: 16 series for a 2-unit fixture with dyn" );
+    const char *tierB[] = { "support", "tension", "lean", "slip",
+                            "move:reference", "move:bounce" };
+    for( size_t i = 0; i < 6 && all.size() == 16; i++ )
+        CHECK( all[10 + i].id == tierB[i],
+               std::string( "dyn: Tier B order [" ) + tierB[i] + "]" );
+
+    auto find = [&]( const char *id ) -> const twGrooveMetricSeries * {
+        for( const twGrooveMetricSeries &s : all )
+            if( s.id == id ) return &s;
+        return nullptr;
+    };
+    const twGrooveMetricSeries *sup  = find( "support" );
+    const twGrooveMetricSeries *ten  = find( "tension" );
+    const twGrooveMetricSeries *lean = find( "lean" );
+    const twGrooveMetricSeries *slip = find( "slip" );
+    const twGrooveMetricSeries *mvR  = find( "move:reference" );
+    const twGrooveMetricSeries *mvB  = find( "move:bounce" );
+    CHECK( sup && ten && lean && slip && mvR && mvB, "dyn: Tier B series present" );
+    if( sup && ten && lean && slip && mvR && mvB ) {
+        const size_t h1 = 400, h2 = 1200;   // mid-half probes
+        // The signed 0.5-centered mapping, both directions.
+        CHECK( sup->value[h1] == 1.0f, "dyn: constant positive support maps to 1.0" );
+        CHECK( sup->value[h2] == 0.0f, "dyn: constant negative support maps to 0.0" );
+        CHECK( ten->value[h1] == 1.0f && ten->value[h2] == 1.0f,
+               "dyn: constant positive tension maps to 1.0 in both halves" );
+        // lean = tension / hypot = 2 / (2*sqrt(2)) = sin(45 deg), mapped
+        // 0.5 + 0.5*0.70711 = 0.85355 -- and INDEPENDENT of the support
+        // sign flip (|hypot| is even in it).
+        const double leanExpected = 0.5 + 0.5 * ( 2.0 / std::hypot( 2.0, 2.0 ) );
+        CHECK( std::fabs( lean->value[h1] - leanExpected ) <= 0.005,
+               "dyn: lean closed form (sin 45 deg), first half" );
+        CHECK( std::fabs( lean->value[h2] - leanExpected ) <= 0.005,
+               "dyn: lean closed form, second half (support sign is irrelevant)" );
+        // slip endpoints: 0 -> 1.0 (locked), slipCap/2 -> 0.5.
+        CHECK( slip->value[h1] == 1.0f, "dyn: zero slip maps to 1.0" );
+        CHECK( std::fabs( slip->value[h2] - 0.5f ) <= 0.02f,
+               "dyn: slip at slipCap/2 maps to ~0.5" );
+        // move: per-unit own-peak normalization.
+        CHECK( mvR->value[100] == 1.0f,
+               "dyn: constant dissipation is 1.0 of its own peak" );
+        CHECK( std::fabs( mvB->value[800] - 0.5f ) <= 0.01f,
+               "dyn: the ramp's midpoint is ~0.5 of its own peak" );
+    }
+
+    // --- zero drive: support/tension neutral, lean SENTINEL --------------
+    {
+        std::vector<twGrooveDynRecord> quiet( nHops );
+        for( size_t i = 0; i < nHops; i++ ) quiet[i].units.resize( 2 );
+        const std::vector<twGrooveMetricSeries> all2 =
+            twGrooveDeriveMetrics( res, noEv, quiet, hopFrames, rate, names, p );
+        const twGrooveMetricSeries *s2 = nullptr, *l2 = nullptr;
+        for( const twGrooveMetricSeries &s : all2 ) {
+            if( s.id == "support" ) s2 = &s;
+            if( s.id == "lean" )    l2 = &s;
+        }
+        CHECK( s2 && s2->value[400] == 0.5f,
+               "dyn: zero drive is NEUTRAL support (0.5), not red or green" );
+        CHECK( l2 && l2->value[400] < 0.0f,
+               "dyn: zero drive is the lean SENTINEL, never a number" );
+    }
+
+    // --- a pre-M3c store (no dyn / mismatched grid): Tier A only ---------
+    {
+        const std::vector<twGrooveMetricSeries> a =
+            twGrooveDeriveMetrics( res, noEv, hopFrames, rate, names, p );
+        CHECK( a.size() == 10, "dyn: no dyn records -> exactly the Tier A series" );
+        std::vector<twGrooveDynRecord> shortDyn( dyn.begin(), dyn.begin() + 100 );
+        const std::vector<twGrooveMetricSeries> b =
+            twGrooveDeriveMetrics( res, noEv, shortDyn, hopFrames, rate, names, p );
+        CHECK( b.size() == 10, "dyn: grid-mismatched dyn -> Tier A only, no ghosts" );
+    }
+
+    // --- determinism ------------------------------------------------------
+    {
+        const std::vector<twGrooveMetricSeries> again =
+            twGrooveDeriveMetrics( res, noEv, dyn, hopFrames, rate, names, p );
+        bool same = again.size() == all.size();
+        for( size_t i = 0; same && i < all.size(); i++ )
+            same = again[i].id == all[i].id && again[i].value == all[i].value;
+        CHECK( same, "dyn: byte-deterministic across two runs" );
+    }
+
+    // --- full-pipeline consistency: the export IS section 3.5's physics --
+    // Build all three payloads from a real synthetic signal, decode dyn,
+    // and check that the reference unit's whole-run mean(hypot(support,
+    // tension)) / k reproduces counterTension's own meanF (both read the
+    // SAME trajectory; the only differences are the k factor and the
+    // aspect-grid resampling).
+    {
+        const double prate = 48000.0;
+        std::vector<float> sig = makeClickTrain( prate, 12.0, 120.0 );
+        const float *chans[1] = { sig.data() };
+        const twGrooveAnalysisParams gp;   // the production defaults
+        const twGrooveAspectPayloads built = twGrooveBuildAspectPayloads(
+            chans, 1, sig.size(), (uint32_t)prate, gp );
+        CHECK( built.nUnits > 0 && built.dynRecordCount == built.resRecordCount,
+               "dyn pipeline: dyn produced, record count == res record count" );
+        if( built.nUnits > 0 ) {
+            const std::vector<twGrooveDynRecord> recs = twGrooveDecodeDynPayload(
+                built.dynPayload.data(), built.dynPayload.size(), built.nUnits );
+            CHECK( recs.size() == built.dynRecordCount,
+                   "dyn pipeline: decode round trip record count" );
+            int refIdx = -1;
+            for( size_t u = 0; u < built.counterTension.size(); u++ )
+                if( built.counterTension[u].name == "reference" ) refIdx = (int)u;
+            CHECK( refIdx >= 0, "dyn pipeline: reference unit present" );
+            if( refIdx >= 0 && !recs.empty() ) {
+                double sumHyp = 0.0;
+                for( const twGrooveDynRecord &r : recs )
+                    sumHyp += std::hypot( (double)r.units[(size_t)refIdx].support,
+                                          (double)r.units[(size_t)refIdx].tension );
+                const double meanHyp = sumHyp / (double)recs.size();
+                const twGroovePendulumParams pp;   // the default ensemble's k
+                double kRef = 1.5;
+                for( const twGroovePendulumUnitSpec &u : pp.ensemble )
+                    if( u.name == "reference" ) kRef = u.k;
+                const double meanFExport = meanHyp / kRef;
+                const double meanFSummary =
+                    built.counterTension[(size_t)refIdx].meanF;
+                std::cout << "[groove] dyn pipeline consistency: meanF export "
+                          << meanFExport << " vs summary " << meanFSummary
+                          << " (kRef " << kRef << ")\n";
+                CHECK( meanFSummary > 0.0
+                       && std::fabs( meanFExport - meanFSummary )
+                              <= 0.02 * meanFSummary,
+                       "dyn pipeline: mean(hypot)/k reproduces section 3.5's "
+                       "meanF within 2% (bin-averaged resample; measured "
+                       "0.014% -- point-sampling read +52% on this signal)" );
+            }
+        }
+    }
+}
+
 int main()
 {
     const char *strictEnv = std::getenv( "GROOVE_M0_STRICT" );
@@ -1499,6 +1674,7 @@ int main()
     section_n_ac_i();
     section_o_fixture_determinism();
     section_p_metrics();
+    section_q_dyn_metrics();
 
     if ( g_fails == 0 )
         std::cout << "\nAll groove tests passed.\n";

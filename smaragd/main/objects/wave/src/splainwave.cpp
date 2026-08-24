@@ -430,7 +430,11 @@ void SPlainWave::enqueueGrooveAnalysis()
         content, twAspect::GrooveRes, twAspect::GrooveResVersion, gpHash ) != nullptr;
     const bool haveEv = twSidecarStore::instance().load(
         content, twAspect::GrooveEv, twAspect::GrooveEvVersion, gpHash ) != nullptr;
-    if( haveRes && haveEv ) return;
+    // M3c: all THREE aspects, so a pre-M3c store (res+ev, no dyn)
+    // re-analyzes once and gains "groove.dyn" instead of never acquiring it.
+    const bool haveDyn = twSidecarStore::instance().load(
+        content, twAspect::GrooveDyn, twAspect::GrooveDynVersion, gpHash ) != nullptr;
+    if( haveRes && haveEv && haveDyn ) return;
 
     if( !analyzingGroove_ )
         analyzingGroove_ = std::make_shared<std::atomic<bool>>( false );
@@ -482,6 +486,16 @@ void SPlainWave::enqueueGrooveAnalysis()
                     twSidecarStore::instance().store(
                         qi, built.evPayload.data(),
                         (uint64_t) built.evPayload.size() );
+
+                    // Proposal 40 M3c: the pass-1 dynamics (Tier B).
+                    qi.aspectId      = twAspect::GrooveDyn;
+                    qi.aspectVersion = twAspect::GrooveDynVersion;
+                    qi.recordStride  = (uint64_t) built.nUnits * 4 * 4;
+                    qi.recordCount   = built.dynRecordCount;
+                    qi.hopFrames     = built.hopFrames;
+                    twSidecarStore::instance().store(
+                        qi, built.dynPayload.data(),
+                        (uint64_t) built.dynPayload.size() );
                 }
             }
             flag->store( false, std::memory_order_release );

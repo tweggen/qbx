@@ -67,6 +67,16 @@ struct twGrooveReadParams {
     // Fewer in-category events than this in a window -> the sentinel, not
     // a value: robust statistics over 2 points are noise wearing a number.
     uint32_t minWindowEvents = 4;
+
+    // --- Tier B ("groove.dyn", proposal 40 M3c) read-side constants -------
+    // dynSmoothSec: centered moving-average window over the raw per-hop
+    // support/tension series (impulsive by nature -- the drive IS the
+    // rectified flux) before display normalization. slipCap: a windowed
+    // mean slip at or past this maps the `slip` series to 0.0 (red).
+    // leanWindowSec: the window for the F-weighted lean.
+    double dynSmoothSec  = 1.0;
+    double slipCap       = 0.25;
+    double leanWindowSec = 8.0;
 };
 
 /** One derived per-hop series. `id` is the stable, script-addressable
@@ -112,11 +122,49 @@ struct twGrooveMetricSeries {
  *   density           windowed event count / the run's max windowed count
  *                     -- THE CONFOUND, included on purpose and labeled so
  *
+ * TIER B (proposal 40 M3c), appended AFTER the series above and PRESENT
+ * ONLY when dyn records were supplied and match the res-record count -- a
+ * pre-M3c store (res+ev, no dyn) shows exactly the 13 Tier A series, never
+ * sentinel-filled ghost rows:
+ *
+ *   support           the reference unit's signed in-phase drive, smoothed
+ *                     (centered mean over dynSmoothSec) and normalized by
+ *                     the run peak |smoothed|, mapped 0.5-CENTERED: 0.5 =
+ *                     neutral, green (> 0.5) = the impulse pushes the
+ *                     established oscillation, red (< 0.5) = it brakes it.
+ *                     THE direct answer to the swing question.
+ *   tension           the quadrature twin (section 3.5's c_p): green/red =
+ *                     sustained force shoving the phase ahead/behind of the
+ *                     settling point -- the "held lean", per hop.
+ *   lean              windowed F-WEIGHTED mean of sin(phi) = sum(tension) /
+ *                     sum(hypot(support,tension)) over leanWindowSec --
+ *                     the section 3.5 loudness-confound separation done by
+ *                     construction (a crescendo cannot move it), signed in
+ *                     [-1,1], mapped 0.5-centered. Sentinel where the
+ *                     window's total drive is ~0.
+ *   slip              the reference's windowed mean phase-velocity
+ *                     deviation, mapped 1 - clamp(slip/slipCap): green =
+ *                     locked, red = the swing is being knocked off its
+ *                     rate.
+ *   move:<unit>       per-unit dissipated power over that unit's own run
+ *                     peak -- section 3.4's per-body-part "predicted
+ *                     movement energy" (bounce/sway/limbs/...), [0,1].
+ *
  * Returns an empty vector when res is empty or hopFrames/rate is 0.
  * ev may legitimately be empty (a run with no scored events): the
  * res-derived series still come back and every event-derived hop holds the
  * sentinel (density holds 0.0 -- zero events is a real density).
  */
+std::vector<twGrooveMetricSeries> twGrooveDeriveMetrics(
+    const std::vector<twGrooveResRecord> &res,
+    const std::vector<twGrooveEvRecord>  &ev,
+    const std::vector<twGrooveDynRecord> &dyn,
+    uint32_t hopFrames, uint32_t rate,
+    const std::vector<std::string> &unitNames,
+    const twGrooveReadParams &params );
+
+/** Tier-A-only convenience overload (no dyn records) -- byte-identical to
+ * passing an empty dyn vector. */
 std::vector<twGrooveMetricSeries> twGrooveDeriveMetrics(
     const std::vector<twGrooveResRecord> &res,
     const std::vector<twGrooveEvRecord>  &ev,

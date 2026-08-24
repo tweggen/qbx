@@ -86,7 +86,20 @@ from sigma/mu statistics and counted by the `outliers` series instead
 The series ID SET AND ORDER are contractual (the panel rows, the
 `assert-feel-flow-panel` grammar and `set-feel-flow-metric` all address
 them): compliance, power:<unit>..., rollnorm, sigma, mudrift, outliers,
-evconf, score, density. Gated by `groove_test` section p (closed-form
+evconf, score, density — then, when "groove.dyn" records are supplied and
+match the res grid (proposal 40 M3c), the Tier B rows: support, tension,
+lean, slip, move:<unit>. Tier B rows are ABSENT for a pre-M3c store, never
+sentinel-filled ghosts. Gated by `groove_test` section p (closed-form
 synthetic records, including the density-decorrelation gate that states the
 whole M3b motivation: equal jitter at 2:1 density moves `density` by >= 0.3
-and `sigma` by <= 0.05).
+and `sigma` by <= 0.05) and section q (the Tier B closed forms and the
+pipeline consistency gate).
+
+The "groove.dyn" ENCODER (twgrooveaspect.cc, M3c) has two rules of its own:
+phi = arg z is the SAME per-hop quantity the section 3.5 counterTension
+summary reads — one physics, gated by the consistency check mean(hypot(
+support,tension))/k == counterTension.meanF (measured 0.014 % apart) — and
+resampling onto the aspect grid is BIN-AVERAGED, never point-sampled: the
+drive is impulsive and a click train's transients land on exactly the
+pendulum hops a lerp at the coarser grid would sample (measured: +52 % on
+the reference's mean drive before the bin mean).

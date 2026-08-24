@@ -362,8 +362,106 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
         putU16( out.evPayload, (uint16_t)0 );   // flags: reserved (M2+)
     }
 
+    // --- Proposal 40 M3c (Tier B): the "groove.dyn" dynamics payload ------
+    // Every quantity is computed on the pendulum's OWN hop grid first (the
+    // wrapped phase is never interpolated -- only the derived series are
+    // resampled). phi = arg z is the SAME per-hop quantity the section
+    // 3.5 counterTension summary reads, so the export and the summary are
+    // one physics: whole-run mean(hypot(support,tension))/k reproduces
+    // counterTension's own meanF up to resampling (gated in groove_test).
+    {
+        const std::vector<twGroovePendulumUnitSpec> &specs =
+            useTrained ? params.trained.paramsUsed.ensemble
+                       : params.pendulum.ensemble;
+        const double kPi   = 3.14159265358979323846;
+        const double dtSec = pendulumHopFrames / (double)rate;
+
+        std::vector<std::vector<double>> sup( nUnits ), ten( nUnits ),
+                                          slp( nUnits ), dis( nUnits );
+        for( uint32_t u = 0; u < nUnits; u++ ) {
+            const twGroovePendulumUnitTrajectory &traj =
+                result.unitTrajectories[u];
+            const size_t n = traj.phaseWrapped.size();
+            sup[u].assign( n, 0.0 ); ten[u].assign( n, 0.0 );
+            slp[u].assign( n, 0.0 ); dis[u].assign( n, 0.0 );
+
+            // k/alpha mirror runPass1's own derivation (twgroovependulum.cc)
+            // -- alpha from the unit's dampingCycles against ITS seeded
+            // register, the same fallback for a unit that never seeded.
+            const double k             = u < specs.size() ? specs[u].k : 1.5;
+            const double dampingCycles = u < specs.size() ? specs[u].dampingCycles : 4.0;
+            const double omega0        = traj.omega0;
+            const double alpha         = ( dampingCycles > 0.0 && omega0 > 0.0 )
+                                           ? -omega0 / ( 2.0 * kPi * dampingCycles )
+                                           : -1.0;
+
+            for( size_t t = 0; t < n; t++ ) {
+                const double phi = traj.phaseWrapped[t];
+                const double F   = traj.driveF[t];
+                const double m   = traj.magnitude[t];
+                sup[u][t] = k * F * std::cos( phi );
+                ten[u][t] = k * F * std::sin( phi );
+                dis[u][t] = 2.0 * std::fabs( alpha ) * m * m;
+                if( t > 0 && dtSec > 0.0 ) {
+                    // Instantaneous phase advance: the per-hop wrapped
+                    // difference folded into (-pi, pi] -- valid because one
+                    // hop advances well under pi (omega*dt ~ 0.13 rad at
+                    // the reference's own rate).
+                    double d = phi - traj.phaseWrapped[t - 1];
+                    while( d >  kPi ) d -= 2.0 * kPi;
+                    while( d <= -kPi ) d += 2.0 * kPi;
+                    const double w = traj.omega[t];
+                    slp[u][t] = w > 1e-9
+                                  ? std::fabs( d / dtSec - w ) / w
+                                  : 0.0;
+                }
+            }
+        }
+
+        // BIN-AVERAGED onto the aspect grid, never point-sampled: these are
+        // impulsive, power-like series (the drive IS the rectified flux),
+        // and a click train's transients land on exactly the pendulum hops
+        // a lerp at the coarser grid would sample -- measured on the
+        // consistency gate: point-sampling overstated the reference's
+        // mean drive by 52 % on a plain 120 BPM click train. A bin mean
+        // preserves the mean by construction; an empty bin (an aspect grid
+        // FINER than the pendulum's, a non-default envRateHz) falls back to
+        // the point sample.
+        out.dynRecordCount = nRecs;
+        out.dynPayload.reserve( (size_t)nRecs * (size_t)nUnits * 4 * 4 );
+        for( uint64_t k = 0; k < nRecs; k++ ) {
+            const double binLoF = pendulumHopFrames > 0.0
+                ? (double)( k * (uint64_t)out.hopFrames ) / pendulumHopFrames : 0.0;
+            const double binHiF = pendulumHopFrames > 0.0
+                ? (double)( ( k + 1 ) * (uint64_t)out.hopFrames ) / pendulumHopFrames : 0.0;
+            const long lo = (long)binLoF;
+            const long hi = (long)binHiF;   // exclusive
+            auto emit = [&]( const std::vector<double> &arr ) {
+                double v;
+                if( hi > lo && !arr.empty() ) {
+                    const long a = std::min<long>( std::max<long>( lo, 0 ),
+                                                   (long)arr.size() - 1 );
+                    const long b = std::min<long>( std::max<long>( hi, a + 1 ),
+                                                   (long)arr.size() );
+                    double sum = 0.0;
+                    for( long t = a; t < b; t++ ) sum += arr[(size_t)t];
+                    v = sum / (double)( b - a );
+                } else {
+                    v = lerpArr( arr, binLoF );
+                }
+                putF32( out.dynPayload, (float)v );
+            };
+            for( uint32_t u = 0; u < nUnits; u++ ) {
+                emit( sup[u] );
+                emit( ten[u] );
+                emit( slp[u] );
+                emit( dis[u] );
+            }
+        }
+    }
+
     // Proposal 40 M3: the in-memory-only physical-readout summary (never
-    // part of either wire payload above) -- copied straight from `result`,
+    // part of any wire payload above) -- copied straight from `result`,
     // which already computed it as part of pass 2.
     out.counterTension = result.counterTension;
     out.unitMeanR       = result.unitMeanR;
@@ -391,6 +489,31 @@ std::vector<twGrooveResRecord> twGrooveDecodeResPayload(
         for( uint32_t u = 0; u < nUnits; u++ )
             rec.unitPower[u] = getF32( r + (size_t)u * 4 );
         rec.compliance = getF32( r + (size_t)nUnits * 4 );
+        out.push_back( std::move( rec ) );
+    }
+    return out;
+}
+
+std::vector<twGrooveDynRecord> twGrooveDecodeDynPayload(
+    const uint8_t *payload, uint64_t payloadLen, uint32_t nUnits )
+{
+    std::vector<twGrooveDynRecord> out;
+    if( payload == nullptr || nUnits == 0 ) return out;
+    const uint64_t stride = (uint64_t)nUnits * 4 * 4;
+    if( stride == 0 || payloadLen % stride != 0 ) return out;
+    const uint64_t n = payloadLen / stride;
+    out.reserve( (size_t)n );
+    for( uint64_t k = 0; k < n; k++ ) {
+        const uint8_t *r = payload + k * stride;
+        twGrooveDynRecord rec;
+        rec.units.resize( nUnits );
+        for( uint32_t u = 0; u < nUnits; u++ ) {
+            const uint8_t *s = r + (size_t)u * 16;
+            rec.units[u].support = getF32( s );
+            rec.units[u].tension = getF32( s + 4 );
+            rec.units[u].slip    = getF32( s + 8 );
+            rec.units[u].dissip  = getF32( s + 12 );
+        }
         out.push_back( std::move( rec ) );
     }
     return out;
