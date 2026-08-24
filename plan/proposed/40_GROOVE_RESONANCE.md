@@ -970,6 +970,52 @@ never retroactively.
   8. Gates: `./build.sh`; `groove_test` + new sections; every pre-existing
      `feel_flow_*` case green UNCHANGED (the default band metric is the old
      scalar); `action_roundtrip_test`; layering/logging clean.
+
+  **M3b EXECUTED 2026-08-24.** All ACs green, two grammar deltas recorded
+  rather than silently diverged: the per-series describe() entry carries a
+  FOURTH field (`metric:<id>=<min>:<max>:<mean>:<sentinelHops>` — the
+  sentinel count turned out to be the half a case needs to bound "how much
+  of this series is no-data"), and AC 7's directional assertion needed two
+  new `assert-lane-overlay` attributes (`minLutIndexMin`, `maxLutSpread`,
+  both default-off band-mode additions) because nothing existing could
+  bound WHERE on the ramp a band sits, only how many pixels it holds.
+
+  **Measured, and the fixture states the milestone's whole point**: on
+  `a_offset15.wav` — a STABLE +15 ms high-vs-low offset with sub-JND jitter,
+  i.e. material whose feel is perfectly consistent — the shipped
+  `compliance` series reads 0.000:0.990:0.732 and its band spans the FULL
+  LUT (lutIndexMin=0..lutIndexMax=23: the tint calls consistent material
+  everything from red to green, tracking drive), while the derived `sigma`
+  series reads EXACTLY 1.000:1.000:1.000 with 0 sentinel hops and its band
+  is the single top-of-ramp green (23..23). `density` reads
+  0.407:1.000:0.919 — the confound row, on screen, labeled. The
+  groove_test section-p closed forms: the density-decorrelation gate
+  (equal-jitter 2:1-density halves: density separates by >= 0.3, sigma
+  agrees within 0.05 — measured identical), the alternating +/-10 ms sigma
+  closed form 0.63225 within 0.02, the fusion-ceiling routing, the
+  sub-JND == exactly 1.0 rule, the sentinel/score-fallback behaviour, and
+  byte-determinism.
+
+  **Watched failing, three sabotages biting three different layers**: a
+  setter that stores nothing fails the panel's `bandMetric=sigma` check AND
+  the pixel gate; a renderer that ignores the selection fails ONLY the
+  pixel gate (proving the pixel gate measures the PAINT, not the model —
+  proposal 39's lesson, pre-paid this time); an engine sabotage (sentinel
+  -> 0, ceiling filter dropped) fails exactly the four targeted
+  groove_test checks. One real fix forced by the warm-store path: metric
+  IDS must be stable across warm and cold runs, so an empty
+  `physUnitNames_` (the M3 documented gap) falls back to the DEFAULT
+  ensemble's names when the column count matches — without it
+  `power:reference` became `power:unit0` on every warm-store first bounce
+  and the qxa case caught it on its second run.
+
+  NOT gated: the strip's pixels (the panel PNG is coverage, not an oracle
+  — the LUT gate lives on the arranger band); read-side constants other
+  than the defaults (the `SOpt`/Options wiring is M5's, deliberately);
+  Tier B (signed drive power, per-hop sin Δφ, phase slip — pass-2 exports,
+  a new aspect version, deferred until the lab has shown which families
+  matter); and which metric is RIGHT — that is the requester's assessment,
+  which this milestone exists to enable, not to preempt.
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves
