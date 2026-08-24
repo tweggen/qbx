@@ -130,12 +130,33 @@ persisted. v1 payloads orphan on sight (the aspect version is part of the
 store key) and both analysis jobs' skip-checks re-analyze once on the
 version miss — the same mechanism the pre-M3c res+ev store took.
 
-Gated by `groove_test` section q: per record `hypot(cosPhi,sinPhi) <= 1 +
-1e-4` (measured max **1.000000**), and the PHASE consistency check — the
-UNWEIGHTED whole-run mean of the exported `sinPhi` reproduces
-`counterTension.meanSinDeltaPhi` (an unweighted per-hop mean of
-`sin(phaseWrapped)`, which equal-size bin means preserve up to the ragged
-tail bin) within 0.02 ABSOLUTE; measured delta **1.05e-09** on the click
-train, where the value itself is 0.00423908 and a relative tolerance would
-be meaningless. `assert-groove-aspect aspect="groove.dyn"` re-derives nUnits
-from the v2 stride (`recordStride / 24`) and carries the same hypot bound.
+Gated by `groove_test` section q with FOUR assertions, and it takes all four
+— **the two obvious ones do not bite, which the watched-failing pass is the
+only reason anyone knows**:
+
+1. per record `hypot(cosPhi,sinPhi) <= 1 + 1e-4` (measured range
+   **[0.597804, 1.000000]**). A CEILING — zeros satisfy it.
+2. the mean `hypot >= 0.5` (measured **0.997696**). This is the one that
+   bites an ABSENT channel. It is physical, not tuned: one pendulum hop
+   advances `ω·dt ≈ 0.13 rad` and an aspect bin spans a couple of pendulum
+   hops, so a bin is coherent by construction and the dips to 0.5978 are
+   the few bins that straddle a wrap.
+3. the ALIGNMENT: `Σ(support·cosPhi + tension·sinPhi)` exceeds
+   `2 × |Σ(support·sinPhi + tension·cosPhi)|` (measured **3.75259 vs
+   0.601274**). This is the one that bites a cos/sin SWAP, which 1, 2 and 4
+   all miss — magnitude is symmetric under it. Scale-free: `support ≈
+   k·F·cos φ` and `tension ≈ k·F·sin φ` come from the same φ, so the right
+   pairing sums `Σ k·F` and the wrong one sums `Σ k·F·sin 2φ ≈ 0`; only
+   which pairing wins is asserted.
+4. the PHASE consistency check — the UNWEIGHTED whole-run mean of the
+   exported `sinPhi` reproduces `counterTension.meanSinDeltaPhi` (an
+   unweighted per-hop mean of `sin(phaseWrapped)`, which equal-size bin
+   means preserve up to the ragged tail bin) within 0.02 ABSOLUTE; measured
+   delta **1.05e-09**. Absolute is correct — the value itself is 0.00423908
+   and a relative tolerance would be meaningless — but note that the
+   tolerance is consequently LARGER THAN THE QUANTITY, so on this fixture
+   it passes a channel of zeros (measured delta 0.00423908) and a swapped
+   pair (0.00169453). It states "one physics"; 2 and 3 are what enforce it.
+
+`assert-groove-aspect aspect="groove.dyn"` re-derives nUnits from the v2
+stride (`recordStride / 24`) and carries the same per-record hypot ceiling.

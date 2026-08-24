@@ -1223,7 +1223,8 @@ never retroactively.
 
   | Quantity | Measured | Bound |
   |---|---|---|
-  | max `hypot(cosPhi, sinPhi)` per record | **1.000000** | `<= 1 + 1e-4` |
+  | `hypot(cosPhi, sinPhi)` per record, reference unit | range **[0.597804, 1.000000]**, mean **0.997696** | `<= 1 + 1e-4`, mean `>= 0.5` |
+  | alignment: `Σ(support·cosPhi + tension·sinPhi)` vs `Σ(support·sinPhi + tension·cosPhi)` | **3.75259 vs 0.601274** (ratio 6.2) | aligned `> 2 ×` \|crossed\| |
   | mean exported `sinPhi` vs `counterTension.meanSinDeltaPhi` | 0.00423908 vs 0.00423908, **delta 1.045e-09** | `<= 0.02` absolute |
 
   The phase-consistency delta is nine orders of magnitude inside its bound
@@ -1235,19 +1236,57 @@ never retroactively.
   meaningless. The M3c drive consistency gate was untouched and still reads
   0.00209296 vs 0.00209326.
 
-  **Watched failing.** Sabotage: emit `0.0f` for both phase channels in the
-  encoder (the two `emit( cph[u] ) / emit( sph[u] )` calls replaced by
-  literal zeros), everything else unchanged. `groove_test` then fails
-  exactly the new phase-consistency check —
-  *"dyn v2: the unweighted mean of exported sinPhi reproduces
-  counterTension's meanSinDeltaPhi within 0.02 absolute (one physics, one
-  phase)"* — with the export reading **0** against the summary's
-  **0.00423908**. The hypot bound deliberately does NOT fire on this
-  sabotage (0 <= 1), which is the honest reading: the hypot check bounds a
-  MAGNITUDE and is the one that bites a wrong-offset / stride mismatch,
-  while the consistency check is the one that bites a phase that is absent
-  or wrong. Restored, `groove_test`, `sidecar_test` and all eight
-  `qxa.feel_flow_*` cases are green.
+  **AC 2's TWO SPECIFIED ASSERTIONS DO NOT BITE, AND THE WATCHED-FAILING
+  PASS IS THE ONLY REASON THAT IS KNOWN.** Both were implemented exactly as
+  written and both PASS under the obvious sabotage — emitting `0.0f` for
+  `cosPhi`/`sinPhi`:
+
+  * `hypot <= 1 + 1e-4` is a CEILING, and zeros satisfy it;
+  * the consistency check's 0.02 ABSOLUTE tolerance is correctly reasoned
+    (the quantity sits near 0, so relative is meaningless) and is
+    **larger than the quantity it is checking** — 0.00423908 — so
+    "export == 0" gives delta 0.00423908 and passes.
+
+  Measured under that sabotage: max hypot 0, delta 0.00423908 < 0.02,
+  `groove_test` **exits 0**. And a second, likelier sabotage — SWAPPING the
+  two emissions, the single easiest way to get the wire order wrong —
+  passes all of that plus the magnitude floor, because magnitude is
+  symmetric under a swap: delta reads 0.00169453, still inside 0.02.
+
+  Neither bound was loosened and neither was retuned. Two assertions were
+  ADDED, both physical rather than tuned:
+
+  1. **A magnitude FLOOR** (mean `hypot >= 0.5`). One pendulum hop advances
+     `ω·dt ≈ 0.13 rad` and an aspect bin spans only a couple of pendulum
+     hops, so a bin's phases are coherent BY CONSTRUCTION — measured mean
+     0.997696, with the per-record dips to 0.5978 coming from the few bins
+     that straddle a wrap. A mean near 0 means the channel is absent or
+     read at the wrong offset, never that the physics went incoherent.
+  2. **A scale-free ALIGNMENT check.** `support ≈ k·F·cos φ` and
+     `tension ≈ k·F·sin φ` are built from the SAME φ, so the right pairing
+     sums `Σ k·F > 0` while the wrong one sums `Σ k·F·sin 2φ ≈ 0`. The
+     assertion is only which pairing wins, by 2× — no tolerance in the
+     drive's physical units at all.
+
+  **Watched failing, both sabotages, each against a different assertion:**
+
+  | Sabotage | Fails | Measured |
+  |---|---|---|
+  | emit `0.0f` for both phase channels | *"dyn v2: the mean hypot(cosPhi,sinPhi) is near 1 — the phase channels carry a real phase, not zeros"* | hypot range [0, 0], mean 0 against the 0.5 floor |
+  | swap the `cosPhi`/`sinPhi` emissions | *"dyn v2: sum(support·cosPhi + tension·sinPhi) dominates the crossed pairing"* | aligned 0.601274 vs crossed 3.75259 — the two exchange roles exactly |
+
+  Restored, `groove_test`, `sidecar_test` and all eight `qxa.feel_flow_*`
+  cases are green, and `check_layering` / `check_logging` are clean.
+
+  **NOT gated, named rather than left implied:** a phase error SMALLER than
+  the alignment check's 2× margin or the floor's 0.5 (e.g. a systematic
+  offset of a few degrees) — the consistency check is the only bound that
+  could catch that class and, as measured above, its tolerance exceeds the
+  quantity on this fixture; a fixture whose `meanSinDeltaPhi` is large
+  enough to make 0.02 discriminating has not been built. Also not gated:
+  the phase channels on any unit other than `reference`, and the
+  bin-averaging behaviour under an `envRateHz` that does not divide the
+  aspect grid evenly (the measured 1.045e-09 exactness depends on it).
 
   The v1 -> v2 transition was verified explicitly rather than assumed: a
   genuine v1 store entry (the shipped v2 file's `aspectVersion` patched back
