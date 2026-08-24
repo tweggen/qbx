@@ -1299,4 +1299,10 @@ and the band paint. Gate: `feel_flow_metric_lab.qxa`, watched failing under
 two sabotages biting DIFFERENT layers — a setter that stores nothing fails
 the panel's `bandMetric=` check AND the pixel gate, while a renderer that
 ignores the selection fails ONLY the pixel gate (which is what proves the
-pixel gate measures the paint, not the model).
+pixel gate measures the paint, not the model). Since M3c
+`assert-groove-aspect` also accepts `aspect="groove.dyn"` (decode round
+trip + slip/dissip non-negativity; support/tension are legitimately signed
+and deliberately unbounded), and the M3c sabotage — an encoder that
+produces no dyn payload — was watched failing across SIX actions at once
+(the metrics=22 panel checks, the Tier B row checks, the groove.dyn
+existence check, and the slip band's directional pixel gate).

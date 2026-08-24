@@ -263,6 +263,58 @@ constexpr uint32_t    GrooveResVersion = 1;
 constexpr const char *GrooveEv        = "groove.ev";
 constexpr uint32_t    GrooveEvVersion = 1;
 
+/**
+ * "groove.dyn" — proposal 40 M3c (Tier B): the per-hop PASS-1 DYNAMICS of
+ * the pendulum ensemble, the physically direct "does this impulse SUPPORT
+ * or DISTURB the established oscillation" quantities that exist only in
+ * the unit trajectories and were never persisted before this aspect.
+ *
+ * hopFrames = rate/100 — the SAME fixed aspect grid as "groove.res"; the
+ * encoder computes each quantity on the pendulum's own internal hop grid
+ * first (the wrapped phase itself is NEVER interpolated — only the derived
+ * series are resampled) and BIN-AVERAGES onto this grid — never
+ * point-samples: these are impulsive, power-like series, and a click
+ * train's transients land on exactly the pendulum hops a lerp at the
+ * coarser grid would sample (measured: +52 % on the reference's mean
+ * drive). A bin mean preserves the mean by construction; an empty bin (an
+ * aspect grid finer than the pendulum's) falls back to the point sample.
+ *
+ * Record: float32[nUnits*4] LE, one record per hop; per unit, in ensemble
+ * order (matching the "groove.res" power columns), with phi = arg z — the
+ * SAME per-hop phase quantity section 3.5's counterTension summary reads:
+ *   [u*4+0] support  k·F·cos(phi)  signed in-phase drive: energy pushed
+ *                                   INTO the swing (> 0) or braking it
+ *                                   (< 0). RAW physical units (k times the
+ *                                   region-flux drive), deliberately
+ *                                   unnormalized — normalization is a
+ *                                   READ-side display decision.
+ *   [u*4+1] tension  k·F·sin(phi)  signed quadrature drive — section
+ *                                   3.5's c_p, per hop: force that shoves
+ *                                   the phase rather than feeding the
+ *                                   oscillation.
+ *   [u*4+2] slip     |Δ(unwrapped phi)/dt − ω| / ω   dimensionless phase-
+ *                                   velocity deviation from the unit's own
+ *                                   adaptive ω; 0 at perfect lock. Hop 0
+ *                                   holds 0 (no predecessor to difference).
+ *   [u*4+3] dissip   2·|α|·|z|²    the power the unit dissipates — the
+ *                                   movement outlet of section 3.4, the
+ *                                   per-body-part "predicted movement
+ *                                   energy".
+ * There is deliberately NO separate F or sin(phi) channel:
+ * k·F ≡ hypot(support, tension), so the drive factor and the
+ * drive-independent lean (tension/hypot) are both recoverable read-side —
+ * the section 3.5 loudness-confound separation by construction, at 4
+ * floats per unit instead of 6.
+ *
+ * recordStride = nUnits*4*4, recordCount == the "groove.res" recordCount.
+ * Params blob v1: SHARED with "groove.res"/"groove.ev" — all three aspects
+ * are produced together, from one analysis run, keyed by the same params
+ * hash. A store holding res+ev but not dyn is a PRE-M3c store; both
+ * analysis jobs' skip-checks require all three, so it re-analyzes once.
+ */
+constexpr const char *GrooveDyn        = "groove.dyn";
+constexpr uint32_t    GrooveDynVersion = 1;
+
 } // namespace twAspect
 
 #endif

@@ -14,11 +14,12 @@
   runtime selector pick which one the arranger band paints.
 
   WHAT THIS CASE GATES.
-  (1) The panel describes the FULL series set - metrics=13 on the default
-      5-unit ensemble (compliance + 5x power:<unit> + rollnorm + sigma +
-      mudrift + outliers + evconf + score + density), each with
-      min:max:mean:sentinelCount stats from the SAME arrays the strip and
-      the band paint.
+  (1) The panel describes the FULL series set - metrics=22 on the default
+      5-unit ensemble: Tier A (compliance + 5x power:<unit> + rollnorm +
+      sigma + mudrift + outliers + evconf + score + density) plus, since
+      M3c ("groove.dyn"), Tier B (support + tension + lean + slip + 5x
+      move:<unit>) - each with min:max:mean:sentinelCount stats from the
+      SAME arrays the strip and the band paint.
   (2) The band-metric switch actually changes what the lane paints, in the
       DIRECTION the fixture's construction predicts: a_offset15.wav is a
       STABLE +15 ms high-vs-low offset with sub-JND jitter, so its `sigma`
@@ -46,6 +47,16 @@
   counts 0 - the same reason feel_flow_heatmap already retired its
   minPixels (the LUT gate is the load-bearing one).
 
+  M3c MEASURED (first run, 2026-08-24, same fixture): support =
+  0.659:1.000:0.936 - a metronomic click fixture SUPPORTS the established
+  oscillation almost everywhere, the direct physical answer the requester
+  asked the heatmap for; lean = 0.534:0.541:0.538 (a small, STABLE positive
+  lean - the tight band IS the "consistent feel" statement); slip =
+  0.757:0.989:0.962 (locked). The slip band paints LUT indices 18..23, so
+  the directional switch below reuses minLutIndexMin=12 / maxLutSpread=12 -
+  the same margins that reject compliance's 0..23 - and minPixels="0" for
+  the same all-green-luminance reason as the sigma switch.
+
   Not RUN_SERIAL: no smaragd.ini key is read or written - the metric
   selection is runtime state on the STrack (never serialized, never in
   SSettings), per the M3b design.
@@ -70,7 +81,7 @@
                           expectExists="true" minRecords="1500" maxRecords="1650"/>
 
     <!-- ================= (1) the panel's series set ===================== -->
-    <assert-feel-flow-panel trackPath="0" contains="metrics=13"
+    <assert-feel-flow-panel trackPath="0" contains="metrics=22"
                             grabPng="feel_flow_metric_lab_panel.png"/>
     <assert-feel-flow-panel trackPath="0" contains="bandMetric=compliance"/>
     <!-- The fixture's jitter is sub-JND (stable offsets ARE the feel, not
@@ -81,6 +92,16 @@
     <assert-feel-flow-panel trackPath="0" contains="metric:sigma=1.000:1.000:1.000:0"/>
     <assert-feel-flow-panel trackPath="0" contains="metric:density="/>
     <assert-feel-flow-panel trackPath="0" contains="metric:power:reference="/>
+    <!-- M3c Tier B rows: the lean's MIN field starting "0.5" asserts a
+         small positive stable lean (measured 0.534:0.541); move:<unit> is
+         the section 3.4 per-body-part display. -->
+    <assert-feel-flow-panel trackPath="0" contains="metric:support="/>
+    <assert-feel-flow-panel trackPath="0" contains="metric:lean=0.5"/>
+    <assert-feel-flow-panel trackPath="0" contains="metric:move:reference="/>
+    <!-- The third aspect exists on the same grid as groove.res (measured
+         1622 records on this fixture). -->
+    <assert-groove-aspect aspect="groove.dyn" trackPath="0" stale="0"
+                          expectExists="true" minRecords="1500" maxRecords="1650"/>
 
     <!-- ============ (2) baseline band: compliance (the control) ========= -->
     <!-- The feel_flow_heatmap numbers, unchanged by this milestone by
@@ -103,6 +124,15 @@
                          minLutPixels="8000"
                          minLutIndexMin="12" maxLutSpread="12"
                          grabPng="feel_flow_metric_lab_sigma.png"/>
+
+    <!-- M3c: the slip band - a locked metronomic fixture sits at the green
+         end (measured LUT 18..23); same directional margins as sigma. -->
+    <set-feel-flow-metric trackPath="0" metric="slip"/>
+    <assert-feel-flow-panel trackPath="0" contains="bandMetric=slip"/>
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         bandOnly="true" minPixels="0"
+                         minLutPixels="8000"
+                         minLutIndexMin="12" maxLutSpread="12"/>
 
     <!-- ================== (3) reset: a view preference ================== -->
     <set-feel-flow-metric trackPath="0" metric=""/>

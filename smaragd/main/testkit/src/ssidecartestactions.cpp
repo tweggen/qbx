@@ -706,9 +706,34 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
                 return {false, nullptr};
             }
         }
+    } else if (aspect_ == QStringLiteral("groove.dyn")) {
+        // Proposal 40 M3c. nUnits from this file's own geometry
+        // (recordStride = nUnits*4*4, twaspects.h).
+        const uint32_t nUnits = recordCount > 0
+            ? (uint32_t)( info.recordStride / 16 )
+            : 0;
+        std::vector<twGrooveDynRecord> decoded =
+            twGrooveDecodeDynPayload(payload.data(), payload.size(), nUnits);
+        if (decoded.size() != recordCount) {
+            qWarning() << "assert-groove-aspect: groove.dyn decode mismatch — got"
+                       << (qulonglong)decoded.size() << "records, header says"
+                       << (qulonglong)recordCount;
+            return {false, nullptr};
+        }
+        for (const twGrooveDynRecord &rec : decoded) {
+            for (const twGrooveUnitDynSample &u : rec.units) {
+                // support/tension are legitimately signed; slip and
+                // dissipation are non-negative by construction.
+                if (!(u.slip >= 0.0f) || !(u.dissip >= 0.0f)) {
+                    qWarning() << "assert-groove-aspect: groove.dyn negative"
+                               << "slip/dissip" << u.slip << u.dissip;
+                    return {false, nullptr};
+                }
+            }
+        }
     } else {
         qWarning() << "assert-groove-aspect: unknown aspect" << aspect_
-                   << "(expected groove.res or groove.ev)";
+                   << "(expected groove.res, groove.ev or groove.dyn)";
         return {false, nullptr};
     }
 
