@@ -1632,6 +1632,8 @@ static void section_q_dyn_metrics()
                 // measures in-bin phase spread. A magnitude over 1 is the
                 // signature of a channel read at the wrong offset.
                 double maxPhaseMag = 0.0;
+                double minPhaseMag = 1e30;
+                double sumMag      = 0.0;
                 double sumSin      = 0.0;
                 for( const twGrooveDynRecord &r : recs ) {
                     const twGrooveUnitDynSample &s = r.units[(size_t)refIdx];
@@ -1640,14 +1642,38 @@ static void section_q_dyn_metrics()
                     const double m = std::hypot( (double)s.cosPhi,
                                                  (double)s.sinPhi );
                     if( m > maxPhaseMag ) maxPhaseMag = m;
+                    if( m < minPhaseMag ) minPhaseMag = m;
+                    sumMag += m;
                     sumSin += (double)s.sinPhi;
                 }
-                std::cout << "[groove] dyn phase: max hypot(cosPhi,sinPhi) "
-                          << maxPhaseMag << " over " << recs.size()
-                          << " records\n";
+                const double meanPhaseMag = sumMag / (double)recs.size();
+                std::cout << "[groove] dyn phase: hypot(cosPhi,sinPhi) in ["
+                          << minPhaseMag << ", " << maxPhaseMag
+                          << "], mean " << meanPhaseMag << " over "
+                          << recs.size() << " records\n";
                 CHECK( maxPhaseMag <= 1.0 + 1e-4,
                        "dyn v2: hypot(cosPhi,sinPhi) <= 1 for every record "
                        "(the circular-mean numerator, never renormalized)" );
+
+                // ...and the floor, which is the assertion that actually
+                // bites an ABSENT or misaligned phase channel. The ceiling
+                // above cannot: zeros satisfy it. Nor can the consistency
+                // check below on THIS fixture -- a click train's
+                // meanSinDeltaPhi is 0.0042, well inside its own 0.02
+                // absolute bound, so a channel of zeros passes it (measured
+                // under exactly that sabotage). The floor is physical, not
+                // tuned: one pendulum hop advances omega*dt ~ 0.13 rad and
+                // an aspect bin spans only a couple of pendulum hops, so a
+                // bin's phases are coherent BY CONSTRUCTION and the mean
+                // magnitude sits at ~1 (measured 0.9977; the per-record
+                // minimum is 0.5978, from the few bins that straddle a
+                // wrap). A mean anywhere near 0 means the channel is
+                // absent or read at the wrong offset -- never that the
+                // physics went incoherent.
+                CHECK( meanPhaseMag >= 0.5,
+                       "dyn v2: the mean hypot(cosPhi,sinPhi) is near 1 -- "
+                       "the phase channels carry a real phase, not zeros "
+                       "(measured 0.9977 against a 0.5 floor)" );
 
                 // The PHASE consistency gate: the UNWEIGHTED whole-run mean
                 // of the exported sinPhi must reproduce counterTension's own
