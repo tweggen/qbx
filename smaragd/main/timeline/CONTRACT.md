@@ -580,6 +580,25 @@ long-term shape.
     plus the pre-existing `qxa.tabs_doubleclick_drillin` for the unchanged
     arrangement-tab half.
 
+
+31. **The Feel Flow metric-lab strip is a pure paint over the panel's cached
+    snapshot, and the band-metric combo is a VIEW preference** (proposal 40
+    M3b, `SFeelFlowMetricStrip` in `sfeelflowpanel.cpp`). The strip paints
+    one row per derived series (`SFeelFlowUiData::metrics`) through the SAME
+    24-step LUT the arranger band uses
+    (`STrackRendererInline::feelFlowPalette()` — one authority, never a
+    second ramp), each row spanning the whole analyzed material so the
+    candidates line up column for column; a no-data sentinel (< 0) paints
+    NEUTRAL grey, never red. It reads ONLY the atomically-cached snapshot —
+    no demand, no store access, no model walk (inv. 1) — and `setData()`
+    with the SAME shared_ptr is a no-op, so the meterTick pump costs no
+    repaint churn. A STALE analysis shows an EMPTY strip (the same
+    visibility rule as the band, inv. 25). The combo submits NO action:
+    it calls `STrack::setFeelFlowBandMetricId()` directly (runtime-only,
+    never serialized — `main/objects/track/CONTRACT.md` inv. 30), and
+    `describe()` reports `bandMetric=`/`metrics=`/`metric:<id>=` stats from
+    the SAME arrays the strip paints, never a second computation.
+
 ## The `media:` drop branch (proposal 38 gate 3)
 
 23. **`SMVActualView::dropEvent` has ONE new branch and it is five lines:**

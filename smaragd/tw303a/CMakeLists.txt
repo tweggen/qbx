@@ -641,12 +641,14 @@ tw_module(sidecar
         sidecar/include/tw/sidecar/twgroove.h
         sidecar/include/tw/sidecar/twgroovependulum.h
         sidecar/include/tw/sidecar/twgrooveaspect.h
+        sidecar/include/tw/sidecar/twgroovemetrics.h
         sidecar/src/twqaf.cc
         sidecar/src/twsidecarstore.cc
         sidecar/src/twanalyzers.cc
         sidecar/src/twgroove.cc
         sidecar/src/twgroovependulum.cc
         sidecar/src/twgrooveaspect.cc
+        sidecar/src/twgroovemetrics.cc
     DEPS tw_core)
 
 # --- Audio file format libraries (sinks only) -----------------------------------

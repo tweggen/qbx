@@ -389,6 +389,21 @@ public:
     // read source.
     std::string feelFlowBouncePath() const;
 
+    // --- proposal 40 M3b: the metric-lab band selection -------------------
+    //
+    // WHICH derived metric series (SFeelFlowUiData::metrics, by id) the
+    // arranger's Feel Flow band paints for this track. RUNTIME-ONLY and
+    // never serialized -- a view preference for assessing the metric lab,
+    // not an edit to the arrangement -- so the setter is a plain call (the
+    // panel's combo, the set-feel-flow-metric verb), never an action. The
+    // default "compliance" is the shipped scalar, which keeps every
+    // pre-M3b gate byte-unchanged by construction; an id the current
+    // snapshot does not carry falls back to compliance at PAINT time
+    // (SFeelFlowUiData::metricById's doc), so a stale selection can dim
+    // nothing and break nothing.
+    const std::string &feelFlowBandMetricId() const { return feelFlowBandMetricId_; }
+    void setFeelFlowBandMetricId( const std::string &id );
+
     // --- the folder-sum preview (proposal 39 M3, design D3) ---------------
 
     /**
@@ -608,6 +623,9 @@ private:
     // Feel Flow (see serialize()/readPostChildrenAttributes() in strack.cpp).
     FeelFlowMode feelFlowMode_ = FeelFlowMode::Adaptive;
     std::unique_ptr<twGrooveTrainedStructure> feelFlowTrained_;
+    // Proposal 40 M3b: runtime-only view preference (see the accessor's
+    // doc). Deliberately NOT serialized and NOT part of staleness.
+    std::string feelFlowBandMetricId_ = "compliance";
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
     // Our REFERENCE to that chain, not a child link (a chain is not an SLink
     // child of a track — SObject::childEvent only accepts SLinks, and a chain in

@@ -69,3 +69,24 @@ Known debt:
   beats reading persisted spectra), so it needs no analysis sidecar.
 - The variable-stride seek-table path is unimplemented: writers always emit
   seekTableOffset = 0 and no aspect uses a variable stride yet.
+
+## Read-side metric derivation (proposal 40 M3b)
+
+`tw/sidecar/twgroovemetrics.h` derives the Feel Flow metric lab's per-hop
+series from DECODED "groove.res"/"groove.ev" payloads — pure, deterministic,
+no I/O, no store access, and NEVER part of any wire format or store key: a
+read-side parameter change re-derives from the same bytes, it does not
+re-key or re-run the analysis. Series values are in [0,1] except the
+no-data sentinel (< 0), which every consumer must render NEUTRAL, never as
+low compliance — a window with fewer than `minWindowEvents` in-category
+events is an absence of evidence, not a failure (the design's fill/break
+rule, trap 9, made structural). Events past `fusionCeilingMs` are excluded
+from sigma/mu statistics and counted by the `outliers` series instead
+(section 2.3: past the fusion ceiling "compliance" is the wrong category).
+The series ID SET AND ORDER are contractual (the panel rows, the
+`assert-feel-flow-panel` grammar and `set-feel-flow-metric` all address
+them): compliance, power:<unit>..., rollnorm, sigma, mudrift, outliers,
+evconf, score, density. Gated by `groove_test` section p (closed-form
+synthetic records, including the density-decorrelation gate that states the
+whole M3b motivation: equal jitter at 2:1 density moves `density` by >= 0.3
+and `sigma` by <= 0.05).

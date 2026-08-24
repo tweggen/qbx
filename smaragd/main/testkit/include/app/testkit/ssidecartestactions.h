@@ -122,6 +122,16 @@
 //       section into a PNG -- coverage, not an oracle. Fails if the track
 //       is missing or not an STrack, or any check fails.
 //
+//   <set-feel-flow-metric trackPath="0" metric="sigma"/>
+//       Proposal 40 "Feel Flow" M3b. Sets the addressed track's RUNTIME
+//       band-metric selection (STrack::setFeelFlowBandMetricId) -- the same
+//       plain call the panel's "Band metric" combo makes. NOT an edit and
+//       not undoable: a view preference, never serialized, exactly the
+//       standing feel-flow-analyze has. An empty/omitted metric resets to
+//       "compliance". An id the current analysis does not carry is ACCEPTED
+//       (the band falls back to compliance at paint time) -- the verb fails
+//       only for a missing track.
+//
 // All are transient/test-support actions: not undoable themselves.
 
 class SSidecarRootAction : public SAction {
@@ -280,6 +290,22 @@ private:
     QString grabPng_;
     int     grabWidth_  = 0;
     int     grabHeight_ = 0;
+};
+
+// ------------------------------------------------------ set-feel-flow-metric
+
+class SSetFeelFlowMetricAction : public SAction {
+public:
+    SSetFeelFlowMetricAction() = default;
+
+    QString name() const override { return QStringLiteral("set-feel-flow-metric"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString trackPath_ = QStringLiteral("0");
+    QString metric_;
 };
 
 #endif // SSIDECARTESTACTIONS_H

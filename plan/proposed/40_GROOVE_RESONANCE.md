@@ -896,6 +896,126 @@ never retroactively.
   ~13 serial/`-j4` runs (both before and unrelated to any Feel Flow code —
   arm/record state has no path through this milestone), unreproduced beyond
   that one instance.
+- **M3b — the read-side METRIC LAB** (kickoff 2026-08-24). Motivation, from
+  the requester's own observation on real material: the shipped heatmap tint
+  correlates with rhythmic DENSITY, and that is not a perception error — the
+  M1 packaging choice put `twGroovePendulumResult::confidence` (the reference
+  unit's resonance power, §3.3's R(t) backbone ALONE) into the compliance
+  slot, and `twaspects.h` says so out loud ("full section 3.3 JND-weighted
+  compliance SCORE … is later work"). The residual data that actually
+  encodes support-vs-disturb sits unread in `groove.ev`. Rather than swap
+  one scalar for another by fiat, M3b builds the comparison surface the
+  requester asked for: a DOZEN-plus per-hop metric series derived READ-SIDE
+  from the two existing aspects — no analyzer change, no aspect version
+  bump, no re-analysis — shown stacked in the Feel Flow panel, with a
+  selector for which one drives the arranger band. The §3.5-style
+  pass-2 exports (signed drive power, per-hop sin Δφ, phase slip) are
+  explicitly TIER B, deferred until the read-side lab has shown which
+  families matter.
+
+  **M3b ACs:**
+  1. **Engine**: `tw/sidecar/twgroovemetrics.{h,cc}` — a pure, deterministic
+     `twGrooveDeriveMetrics( resRecords, evRecords, hopFrames, rate,
+     unitNames, twGrooveReadParams )` returning named per-hop series in
+     [0,1] (LUT-ready; a sentinel < 0 = "no data in this window", painted as
+     neutral, never as red — trap 9's fill/break rule made structural).
+     `twGrooveReadParams` carries the §2.3 read-side constants (JND floor
+     6 ms, feel band 30 ms, fusion ceiling 40 ms, window seconds, min
+     events per window), defaults = the literature anchors. Series (id →
+     meaning): `compliance` (the existing scalar, kept verbatim as the
+     control); `power:<unit>` per ensemble unit; `rollnorm` (compliance
+     re-normalized by a rolling-window peak instead of the run peak);
+     `sigma` (windowed drift-corrected robust residual spread, mapped so
+     σ ≤ JND ⇒ 1.0); `mudrift` (windowed |local μ − global μ| against the
+     feel band); `outliers` (1 − fraction of events past the fusion
+     ceiling); `evconf` (windowed mean event confidence); `score` (§3.3
+     composite: compliance × σ-penalty with the ceiling exclusion);
+     `density` (windowed event rate, run-max-normalized — DELIBERATELY
+     included, labeled as such, so every other metric can be judged
+     against the confound by eye).
+  2. **ctest** (`groove_test` gains a metrics section, synthetic res/ev
+     records, closed-form): the density-decorrelation gate — two halves of
+     equal jitter at 2:1 event density: `density` separates the halves by
+     ≥ 0.3 while `sigma` agrees within 0.05; σ recovery and its JND/feel-band
+     mapping at constructed jitter; an event past the fusion ceiling moves
+     `outliers` and does NOT move `sigma`; the empty-window sentinel;
+     byte-determinism across two runs.
+  3. **UI data**: `feelFlowForUi()` additionally decodes `groove.ev`
+     (one more `loadAny` on the same cached reload) and carries the derived
+     series in `SFeelFlowUiData` — computed ONCE per reload, immutable
+     snapshot, so panel strip and lane band read the same arrays and the
+     paint path stays read-only/no-demand (timeline CONTRACT inv. 1).
+  4. **Band selection**: a runtime-only, non-serialized
+     `STrack::feelFlowBandMetricId()` (default `compliance` — every
+     existing gate byte-unchanged by construction); `drawFeelFlowBand`
+     selects the series by id and falls back to compliance; the change
+     repaints through the existing `captureRevalidated` funnel.
+  5. **Panel**: the Feel Flow section gains the METRIC LAB strip — one row
+     per series, same 24-step LUT as the band, row labels, the no-data
+     sentinel drawn as lane-fill grey — plus a band-metric combo driving
+     AC 4. `describe()` gains `metrics=<n>` and per-series
+     `metric:<id>=<min>:<max>:<mean>` (3 decimals) so the gate reads the
+     SAME computation the pixels come from.
+  6. **Verb**: `set-feel-flow-metric` (testkit, non-undoable — a view
+     preference, like `feel-flow-analyze` not an edit) setting AC 4's id;
+     `docs/ACTIONS.md` updated.
+  7. qxa `feel_flow_metric_lab.qxa` (RUN_SERIAL not needed — no INI key is
+     touched; the metric id is runtime state): bounce+analyze the
+     `feel_flow_panel` fixture; assert the panel describes the full series
+     set with sane ranges; switch the band to `sigma` →
+     `assert-lane-overlay` band-mode LUT stats DIFFER from the compliance
+     baseline (and differ in the direction the fixture's construction
+     predicts); switch back → the original measured LUT numbers return
+     exactly. Panel PNG grab. Registered, count reconciled (+1).
+  8. Gates: `./build.sh`; `groove_test` + new sections; every pre-existing
+     `feel_flow_*` case green UNCHANGED (the default band metric is the old
+     scalar); `action_roundtrip_test`; layering/logging clean.
+
+  **M3b EXECUTED 2026-08-24.** All ACs green, two grammar deltas recorded
+  rather than silently diverged: the per-series describe() entry carries a
+  FOURTH field (`metric:<id>=<min>:<max>:<mean>:<sentinelHops>` — the
+  sentinel count turned out to be the half a case needs to bound "how much
+  of this series is no-data"), and AC 7's directional assertion needed two
+  new `assert-lane-overlay` attributes (`minLutIndexMin`, `maxLutSpread`,
+  both default-off band-mode additions) because nothing existing could
+  bound WHERE on the ramp a band sits, only how many pixels it holds.
+
+  **Measured, and the fixture states the milestone's whole point**: on
+  `a_offset15.wav` — a STABLE +15 ms high-vs-low offset with sub-JND jitter,
+  i.e. material whose feel is perfectly consistent — the shipped
+  `compliance` series reads 0.000:0.990:0.732 and its band spans the FULL
+  LUT (lutIndexMin=0..lutIndexMax=23: the tint calls consistent material
+  everything from red to green, tracking drive), while the derived `sigma`
+  series reads EXACTLY 1.000:1.000:1.000 with 0 sentinel hops and its band
+  is the single top-of-ramp green (23..23). `density` reads
+  0.407:1.000:0.919 — the confound row, on screen, labeled. The
+  groove_test section-p closed forms: the density-decorrelation gate
+  (equal-jitter 2:1-density halves: density separates by >= 0.3, sigma
+  agrees within 0.05 — measured identical), the alternating +/-10 ms sigma
+  closed form 0.63225 within 0.02, the fusion-ceiling routing, the
+  sub-JND == exactly 1.0 rule, the sentinel/score-fallback behaviour, and
+  byte-determinism.
+
+  **Watched failing, three sabotages biting three different layers**: a
+  setter that stores nothing fails the panel's `bandMetric=sigma` check AND
+  the pixel gate; a renderer that ignores the selection fails ONLY the
+  pixel gate (proving the pixel gate measures the PAINT, not the model —
+  proposal 39's lesson, pre-paid this time); an engine sabotage (sentinel
+  -> 0, ceiling filter dropped) fails exactly the four targeted
+  groove_test checks. One real fix forced by the warm-store path: metric
+  IDS must be stable across warm and cold runs, so an empty
+  `physUnitNames_` (the M3 documented gap) falls back to the DEFAULT
+  ensemble's names when the column count matches — without it
+  `power:reference` became `power:unit0` on every warm-store first bounce
+  and the qxa case caught it on its second run.
+
+  NOT gated: the strip's pixels (the panel PNG is coverage, not an oracle
+  — the LUT gate lives on the arranger band); read-side constants other
+  than the defaults (the `SOpt`/Options wiring is M5's, deliberately);
+  Tier B (signed drive power, per-hop sin Δφ, phase slip — pass-2 exports,
+  a new aspect version, deferred until the lab has shown which families
+  matter); and which metric is RIGHT — that is the requester's assessment,
+  which this milestone exists to enable, not to preempt.
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves

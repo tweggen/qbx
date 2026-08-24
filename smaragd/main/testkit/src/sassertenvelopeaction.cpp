@@ -339,6 +339,22 @@ SApplyResult SAssertLaneOverlayAction::apply( SProject * )
                    << ( lutMax - lutMin ) << "|" << rep;
         return { false, nullptr };
     }
+    // M3b's directional/narrowness checks: only meaningful over a band that
+    // painted at all (an empty band reports lutIndexMin/Max = -1, which no
+    // bound should be applied to).
+    if( minLutIndexMin_ >= 0 && lutPx > 0 && lutMin < minLutIndexMin_ ) {
+        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                   << "- expected lutIndexMin >=" << minLutIndexMin_
+                   << ", got" << lutMin << "|" << rep;
+        return { false, nullptr };
+    }
+    if( maxLutSpread_ >= 0 && lutPx > 0 && ( lutMax - lutMin ) > maxLutSpread_ ) {
+        qWarning() << "assert-lane-overlay FAILED:" << trackPath_
+                   << "- expected a palette index spread of at most"
+                   << maxLutSpread_ << "(lutIndexMax - lutIndexMin), got"
+                   << ( lutMax - lutMin ) << "|" << rep;
+        return { false, nullptr };
+    }
 
     if( !contains_.isEmpty() && !rep.contains( contains_ ) ) {
         qWarning() << "assert-lane-overlay FAILED:" << trackPath_
@@ -368,6 +384,8 @@ void SAssertLaneOverlayAction::writeXml( QDomElement &elem ) const
     if( minLutPixels_ >= 0 )   elem.setAttribute( "minLutPixels", minLutPixels_ );
     if( maxLutPixels_ >= 0 )   elem.setAttribute( "maxLutPixels", maxLutPixels_ );
     if( minLutSpread_ >= 0 )   elem.setAttribute( "minLutSpread", minLutSpread_ );
+    if( minLutIndexMin_ >= 0 ) elem.setAttribute( "minLutIndexMin", minLutIndexMin_ );
+    if( maxLutSpread_ >= 0 )   elem.setAttribute( "maxLutSpread", maxLutSpread_ );
 }
 
 bool SAssertLaneOverlayAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -384,6 +402,8 @@ bool SAssertLaneOverlayAction::readXml( const QDomElement &elem, int /*version*/
     minLutPixels_  = elem.attribute( "minLutPixels", "-1" ).toInt();
     maxLutPixels_  = elem.attribute( "maxLutPixels", "-1" ).toInt();
     minLutSpread_  = elem.attribute( "minLutSpread", "-1" ).toInt();
+    minLutIndexMin_ = elem.attribute( "minLutIndexMin", "-1" ).toInt();
+    maxLutSpread_   = elem.attribute( "maxLutSpread", "-1" ).toInt();
     return true;
 }
 

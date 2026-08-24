@@ -1280,3 +1280,23 @@ EXIT CODE — the same mechanism `qxa.split_plain_screenshot`'s own teardown
 crash relies on (CLAUDE.md, "Two known crash flakes"). Deliberately violates
 `qxa.plugin_native_editor`'s own "a case that opens one MUST close it" rule;
 that IS the point.
+
+## The metric-lab verbs (proposal 40 M3b)
+
+`set-feel-flow-metric` sets `STrack::setFeelFlowBandMetricId()` — the SAME
+plain call the Feel Flow panel's "Band metric" combo makes, a runtime view
+preference, never an action's edit and never serialized; it fails only for
+a missing track (an unknown metric id is accepted, the band falls back to
+compliance at paint time by design). `assert-lane-overlay` gains
+`minLutIndexMin` (band mode, lower bound on the LOWEST observed palette
+index — the DIRECTIONAL assertion a band-metric switch needs) and
+`maxLutSpread` (`minLutSpread`'s ceiling twin), both default-off, both
+applied only when `lutPixels > 0` — an empty band has no indices to bound.
+`assert-feel-flow-panel`'s describe() grammar grows the
+`bandMetric=<id> metrics=<n> metric:<id>=<min>:<max>:<mean>:<sentinelHops>`
+tail, computed from the SAME `SFeelFlowUiData::metrics` arrays the strip
+and the band paint. Gate: `feel_flow_metric_lab.qxa`, watched failing under
+two sabotages biting DIFFERENT layers — a setter that stores nothing fails
+the panel's `bandMetric=` check AND the pixel gate, while a renderer that
+ignores the selection fails ONLY the pixel gate (which is what proves the
+pixel gate measures the paint, not the model).

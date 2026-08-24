@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "tw/render/render_session.h"
+#include "tw/sidecar/twgroovemetrics.h"
 
 class STrack;
 
@@ -58,6 +59,30 @@ struct SFeelFlowUiData {
     std::vector<float>       meanF;             // the drive factor, reported
                                                  // SEPARATELY (a loudness
                                                  // confound, section 3.5)
+
+    // --- proposal 40 M3b: the METRIC LAB series ------------------------
+    //
+    // The full read-side series set (twGrooveDeriveMetrics -- compliance
+    // verbatim, per-unit powers, and the residual-derived candidates),
+    // computed ONCE per reload from the same decoded payloads the fields
+    // above come from, over the section 2.3 literature defaults
+    // (twGrooveReadParams{}; per-user tuning is M5's Options page). An
+    // immutable snapshot like everything else here, so the panel's stacked
+    // strip and the lane band read the SAME arrays and the paint path
+    // stays read-only/no-demand. Each series value is in [0,1]; a value
+    // < 0 is the no-data sentinel and paints NEUTRAL, never red. Empty
+    // whenever hopFrames == 0.
+    std::vector<twGrooveMetricSeries> metrics;
+
+    /** The series for one metric id, or null (unknown id / no data).
+     * "compliance" always resolves when any data exists -- it is the first
+     * series by contract -- which is what makes it the safe fallback for a
+     * band selector holding a stale id. */
+    const twGrooveMetricSeries *metricById( const std::string &id ) const {
+        for( const twGrooveMetricSeries &s : metrics )
+            if( s.id == id ) return &s;
+        return nullptr;
+    }
 };
 
 // Proposal 40 "Feel Flow" M1b — the internal-bounce consumer for a TRACK's

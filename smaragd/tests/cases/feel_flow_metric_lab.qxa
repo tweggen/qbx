@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M3b - the METRIC LAB.
+
+  WHY THIS EXISTS. The shipped heatmap tint is the M1 packaging placeholder:
+  twGroovePendulumResult::confidence, the reference unit's resonance power
+  ALONE (section 3.3's R(t) backbone), which is monotone in drive energy and
+  event DENSITY - dense material paints green whether or not it supports the
+  entrained oscillation, which is exactly what the requester observed on
+  real material. The residual data that encodes support-vs-disturb sits in
+  "groove.ev" and never reached the tint. M3b derives a dozen-plus candidate
+  series READ-SIDE (twGrooveDeriveMetrics - no analyzer change, no aspect
+  version bump), shows them stacked in the Feel Flow panel, and lets a
+  runtime selector pick which one the arranger band paints.
+
+  WHAT THIS CASE GATES.
+  (1) The panel describes the FULL series set - metrics=13 on the default
+      5-unit ensemble (compliance + 5x power:<unit> + rollnorm + sigma +
+      mudrift + outliers + evconf + score + density), each with
+      min:max:mean:sentinelCount stats from the SAME arrays the strip and
+      the band paint.
+  (2) The band-metric switch actually changes what the lane paints, in the
+      DIRECTION the fixture's construction predicts: a_offset15.wav is a
+      STABLE +15 ms high-vs-low offset with sub-JND jitter, so its `sigma`
+      series sits in the GREEN half of the ramp (bounded via the new
+      minLutIndexMin) and is NARROW (maxLutSpread), where `compliance`
+      legitimately spans the whole 24-step LUT (minLutSpread="10", the
+      feel_flow_heatmap measurement).
+  (3) The switch is a VIEW preference: switching back to compliance restores
+      the exact baseline LUT statistics, and an empty metric= resets to
+      compliance.
+
+  MEASURED (first run, 2026-08-24, this box): the compliance baseline reads
+  lutPixels=9234, lutIndexMin=0, lutIndexMax=23 - identical before the
+  switch and after the reset, byte-for-byte the feel_flow_heatmap numbers.
+  The sigma band reads lutPixels=9234, lutIndexMin=23, lutIndexMax=23:
+  the fixture's jitter is sub-JND, so the sigma series is EXACTLY 1.000 at
+  every hop with 0 sentinel hops (the panel reports
+  metric:sigma=1.000:1.000:1.000:0, asserted below) and the whole band is
+  the single top-of-ramp green - maximally distinct from compliance's full
+  0..23 spread. minLutIndexMin=12 and maxLutSpread=12 sit well clear of
+  both the measured sigma values (23, 0) AND the compliance values they
+  must reject (0, 23), so the assertion bites the switch, not the margins.
+  The sigma assertion carries minPixels="0": an all-green band sits ABOVE
+  the clip-body luminance, so the legacy overlay relation legitimately
+  counts 0 - the same reason feel_flow_heatmap already retired its
+  minPixels (the LUT gate is the load-bearing one).
+
+  Not RUN_SERIAL: no smaragd.ini key is read or written - the metric
+  selection is runtime state on the STrack (never serialized, never in
+  SSettings), per the M3b design.
+-->
+<SActionScript version="1" name="feel_flow_metric_lab">
+
+  <setup project="new"/>
+
+  <actions>
+    <grid-disable/>
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <!-- Pin the lane height: every LUT pixel count below scales with it
+         (feel_flow_heatmap's own rule). -->
+    <set-lane-view trackHeight="100"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+    <assert-groove-aspect aspect="groove.res" trackPath="0" stale="0"
+                          expectExists="true" minRecords="1500" maxRecords="1650"/>
+
+    <!-- ================= (1) the panel's series set ===================== -->
+    <assert-feel-flow-panel trackPath="0" contains="metrics=13"
+                            grabPng="feel_flow_metric_lab_panel.png"/>
+    <assert-feel-flow-panel trackPath="0" contains="bandMetric=compliance"/>
+    <!-- The fixture's jitter is sub-JND (stable offsets ARE the feel, not
+         error), so sigma is EXACTLY 1.000 everywhere with 0 sentinel hops:
+         min:max:mean:sentinels, the strongest per-series claim this fixture
+         supports and the row that states the whole M3b point - the shipped
+         compliance spans 0.000:0.990 on the SAME material. -->
+    <assert-feel-flow-panel trackPath="0" contains="metric:sigma=1.000:1.000:1.000:0"/>
+    <assert-feel-flow-panel trackPath="0" contains="metric:density="/>
+    <assert-feel-flow-panel trackPath="0" contains="metric:power:reference="/>
+
+    <!-- ============ (2) baseline band: compliance (the control) ========= -->
+    <!-- The feel_flow_heatmap numbers, unchanged by this milestone by
+         construction (the default band metric IS the shipped scalar). -->
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         bandOnly="true"
+                         minLutPixels="8000" minLutSpread="10"/>
+
+    <!-- ================== the switch, and its direction ================= -->
+    <set-feel-flow-metric trackPath="0" metric="sigma"/>
+    <assert-feel-flow-panel trackPath="0" contains="bandMetric=sigma"/>
+    <!-- A stable-offset, sub-JND-jitter fixture's sigma sits in the green
+         half of the ramp and is narrow - both bounds REJECT the compliance
+         baseline (lutIndexMin=0, spread 23), so this bites the switch. -->
+    <!-- minPixels="0": see the header - the all-green band is LIGHTER than
+         the clip body, so the legacy luminance relation counts 0 by
+         construction; the LUT gate below is the load-bearing one. -->
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         bandOnly="true" minPixels="0"
+                         minLutPixels="8000"
+                         minLutIndexMin="12" maxLutSpread="12"
+                         grabPng="feel_flow_metric_lab_sigma.png"/>
+
+    <!-- ================== (3) reset: a view preference ================== -->
+    <set-feel-flow-metric trackPath="0" metric=""/>
+    <assert-feel-flow-panel trackPath="0" contains="bandMetric=compliance"/>
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         bandOnly="true"
+                         minLutPixels="8000" minLutSpread="10"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

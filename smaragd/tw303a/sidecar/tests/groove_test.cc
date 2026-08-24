@@ -42,6 +42,7 @@
 
 #include "tw/sidecar/twgroove.h"
 #include "tw/sidecar/twgroovependulum.h"
+#include "tw/sidecar/twgroovemetrics.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1270,6 +1271,211 @@ static void section_o_fixture_determinism()
     std::cout << "  two runs of the full fixture pipeline agree byte-for-byte\n";
 }
 
+// ---------------------------------------------------------------------------
+// Section p — M3b read-side metric derivation (twGrooveDeriveMetrics).
+// Synthetic res/ev records with CLOSED-FORM expectations; no audio, no
+// front end, no estimator — this gates the read-side math alone.
+// ---------------------------------------------------------------------------
+
+// One aspect-domain fixture: constant compliance, one unit, and an ascending
+// event list the caller constructs.
+static std::vector<twGrooveResRecord> metricsMakeRes( size_t nHops, float compliance )
+{
+    std::vector<twGrooveResRecord> res( nHops );
+    for( twGrooveResRecord &r : res ) {
+        r.unitPower  = { 0.5f };
+        r.compliance = compliance;
+    }
+    return res;
+}
+
+static const twGrooveMetricSeries *metricsFind(
+    const std::vector<twGrooveMetricSeries> &all, const std::string &id )
+{
+    for( const twGrooveMetricSeries &s : all )
+        if( s.id == id ) return &s;
+    return nullptr;
+}
+
+static void section_p_metrics()
+{
+    const uint32_t rate      = 48000;
+    const uint32_t hopFrames = rate / 100;   // the aspect's own 10 ms hop
+    twGrooveReadParams p;                     // literature defaults
+
+    // ---- fixture 1: the density-decorrelation gate (M3b AC 2) -----------
+    // 16 s of material. First half: events every 0.125 s (8/s); second
+    // half: every 0.25 s (4/s). Residuals alternate +10/-10 ms in BOTH
+    // halves, so the true jitter is IDENTICAL while the density differs
+    // 2:1. Closed form: window median 0, every |deviation| = 10 ms, so
+    // sigma = 1.4826 * 10 ms = 14.826 ms, mapped to
+    // 1 - (14.826-6)/(30-6) = 0.63225.
+    const double durSec = 16.0;
+    const size_t nHops  = (size_t)( durSec * 100.0 );
+    std::vector<twGrooveResRecord> res = metricsMakeRes( nHops, 0.8f );
+
+    std::vector<twGrooveEvRecord> ev;
+    int alt = 0;
+    for( double t = 0.0; t < durSec; t += ( t < durSec / 2 ? 0.125 : 0.25 ) ) {
+        twGrooveEvRecord e;
+        e.pos        = (uint64_t)std::llround( t * rate );
+        e.residualMs = ( alt++ & 1 ) ? -10.0f : 10.0f;
+        e.confidence = 0.9f;
+        e.region      = 0;
+        ev.push_back( e );
+    }
+
+    const std::vector<twGrooveMetricSeries> all =
+        twGrooveDeriveMetrics( res, ev, hopFrames, rate, { "reference" }, p );
+
+    // The contractual series set, in order (header doc): compliance,
+    // power:* (one unit here), rollnorm, sigma, mudrift, outliers, evconf,
+    // score, density.
+    CHECK( all.size() == 9, "metrics: 9 series for a 1-unit fixture" );
+    const char *expectedIds[] = { "compliance", "power:reference", "rollnorm",
+                                  "sigma", "mudrift", "outliers", "evconf",
+                                  "score", "density" };
+    for( size_t i = 0; i < all.size() && i < 9; i++ )
+        CHECK( all[i].id == expectedIds[i],
+               std::string( "metrics: series order [" ) + expectedIds[i] + "]" );
+
+    const twGrooveMetricSeries *sigma   = metricsFind( all, "sigma" );
+    const twGrooveMetricSeries *density = metricsFind( all, "density" );
+    const twGrooveMetricSeries *score   = metricsFind( all, "score" );
+    const twGrooveMetricSeries *outl    = metricsFind( all, "outliers" );
+    CHECK( sigma && density && score && outl, "metrics: core series present" );
+    if( sigma && density && score && outl ) {
+        for( const twGrooveMetricSeries &s : all )
+            CHECK( s.value.size() == nHops,
+                   "metrics: every series spans every hop (" + s.id + ")" );
+
+        // Mid-half probe hops, clear of the boundary and the run edges.
+        const size_t h1 = (size_t)( 4.0 * 100.0 );    // 4 s into half 1
+        const size_t h2 = (size_t)( 12.0 * 100.0 );   // 4 s into half 2
+
+        // Density separates the halves by construction (2:1) ...
+        CHECK( density->value[h1] - density->value[h2] >= 0.3f,
+               "metrics: density separates equal-jitter halves by >= 0.3" );
+        // ... while sigma, the honest jitter measure, does not move.
+        CHECK( std::fabs( sigma->value[h1] - sigma->value[h2] ) <= 0.05f,
+               "metrics: sigma agrees across the density change (<= 0.05)" );
+
+        // Closed form for the mapped sigma value.
+        const double expected = 1.0 - ( 1.4826 * 10.0 - p.jndFloorMs )
+                                          / ( p.feelBandMs - p.jndFloorMs );
+        CHECK( std::fabs( sigma->value[h1] - expected ) <= 0.02,
+               "metrics: sigma closed form (alternating +/-10 ms)" );
+
+        // score = compliance * sigma-penalty.
+        CHECK( std::fabs( score->value[h1] - 0.8 * expected ) <= 0.03,
+               "metrics: score = compliance x sigma penalty" );
+
+        // No event past the ceiling anywhere in this fixture.
+        CHECK( outl->value[h1] == 1.0f && outl->value[h2] == 1.0f,
+               "metrics: outliers 1.0 with nothing past the ceiling" );
+    }
+
+    // ---- fixture 2: sub-JND jitter is NEVER penalized -------------------
+    {
+        std::vector<twGrooveEvRecord> ev2;
+        int a2 = 0;
+        for( double t = 0.0; t < durSec; t += 0.125 ) {
+            twGrooveEvRecord e;
+            e.pos        = (uint64_t)std::llround( t * rate );
+            e.residualMs = ( a2++ & 1 ) ? -2.0f : 2.0f;   // sigma ~ 2.97 ms < JND
+            e.confidence = 0.9f;
+            ev2.push_back( e );
+        }
+        const std::vector<twGrooveMetricSeries> all2 =
+            twGrooveDeriveMetrics( res, ev2, hopFrames, rate, {}, p );
+        const twGrooveMetricSeries *s2 = metricsFind( all2, "sigma" );
+        CHECK( s2 && s2->value[400] == 1.0f,
+               "metrics: sub-JND jitter maps to exactly 1.0" );
+        const twGrooveMetricSeries *pw = metricsFind( all2, "power:unit0" );
+        CHECK( pw != nullptr, "metrics: empty unitNames falls back to unit<i>" );
+    }
+
+    // ---- fixture 3: the fusion ceiling routes to `outliers`, not sigma --
+    {
+        std::vector<twGrooveEvRecord> ev3 = ev;
+        twGrooveEvRecord far;
+        far.pos        = (uint64_t)std::llround( 4.0 * rate );
+        far.residualMs = 60.0f;   // past the 40 ms ceiling
+        far.confidence = 0.9f;
+        ev3.push_back( far );
+        std::sort( ev3.begin(), ev3.end(),
+                   []( const twGrooveEvRecord &a, const twGrooveEvRecord &b ) {
+                       return a.pos < b.pos;
+                   } );
+        const std::vector<twGrooveMetricSeries> all3 =
+            twGrooveDeriveMetrics( res, ev3, hopFrames, rate, {}, p );
+        const twGrooveMetricSeries *s3 = metricsFind( all3, "sigma" );
+        const twGrooveMetricSeries *o3 = metricsFind( all3, "outliers" );
+        const size_t h1 = 400;
+        if( s3 && sigma )
+            CHECK( std::fabs( s3->value[h1] - sigma->value[h1] ) <= 0.01f,
+                   "metrics: an event past the ceiling does not move sigma" );
+        if( o3 )
+            CHECK( o3->value[h1] < 1.0f,
+                   "metrics: an event past the ceiling moves outliers" );
+    }
+
+    // ---- the empty-window sentinel (a break is not a failure) -----------
+    // Hops well past the last event: sigma/outliers/evconf hold the
+    // sentinel, score falls back to compliance, density reads 0.
+    {
+        std::vector<twGrooveResRecord> resLong = metricsMakeRes( nHops + 600, 0.8f );
+        const std::vector<twGrooveMetricSeries> all4 =
+            twGrooveDeriveMetrics( resLong, ev, hopFrames, rate, {}, p );
+        const size_t tail = nHops + 500;   // 5 s past the material
+        const twGrooveMetricSeries *s4 = metricsFind( all4, "sigma" );
+        const twGrooveMetricSeries *c4 = metricsFind( all4, "evconf" );
+        const twGrooveMetricSeries *k4 = metricsFind( all4, "score" );
+        const twGrooveMetricSeries *d4 = metricsFind( all4, "density" );
+        CHECK( s4 && s4->value[tail] < 0.0f, "metrics: sentinel past the material (sigma)" );
+        CHECK( c4 && c4->value[tail] < 0.0f, "metrics: sentinel past the material (evconf)" );
+        CHECK( k4 && k4->value[tail] == 0.8f, "metrics: score falls back to compliance" );
+        CHECK( d4 && d4->value[tail] == 0.0f, "metrics: zero events is density 0, not a sentinel" );
+    }
+
+    // ---- mudrift: a stable lean scores 1.0, a mid-run excursion 0 -------
+    {
+        std::vector<twGrooveEvRecord> ev5;
+        for( double t = 0.0; t < durSec; t += 0.125 ) {
+            twGrooveEvRecord e;
+            e.pos        = (uint64_t)std::llround( t * rate );
+            // +15 ms lean throughout, except a full-feel-band excursion to
+            // -15 ms over [5,11) s — LONGER than the 8 s mu window, so the
+            // window centered mid-excursion holds an excursion MAJORITY
+            // (the median flips), while the excursion stays a MINORITY of
+            // the whole run (the global mu stays +15). A shorter excursion
+            // is legitimately diluted by the window median — that is the
+            // estimator's bandwidth, not a defect (section 3.3's
+            // tracker-bandwidth rider, here as the window length).
+            e.residualMs = ( t >= 5.0 && t < 11.0 ) ? -15.0f : 15.0f;
+            e.confidence = 0.9f;
+            ev5.push_back( e );
+        }
+        const std::vector<twGrooveMetricSeries> all5 =
+            twGrooveDeriveMetrics( res, ev5, hopFrames, rate, {}, p );
+        const twGrooveMetricSeries *m5 = metricsFind( all5, "mudrift" );
+        CHECK( m5 && m5->value[300] == 1.0f,
+               "metrics: a stable lean is mudrift 1.0 (mu is the feel, not the error)" );
+        CHECK( m5 && m5->value[800] == 0.0f,
+               "metrics: a full-feel-band excursion is mudrift 0.0" );
+    }
+
+    // ---- determinism ------------------------------------------------------
+    {
+        const std::vector<twGrooveMetricSeries> again =
+            twGrooveDeriveMetrics( res, ev, hopFrames, rate, { "reference" }, p );
+        bool same = again.size() == all.size();
+        for( size_t i = 0; same && i < all.size(); i++ )
+            same = again[i].id == all[i].id && again[i].value == all[i].value;
+        CHECK( same, "metrics: byte-deterministic across two runs" );
+    }
+}
+
 int main()
 {
     const char *strictEnv = std::getenv( "GROOVE_M0_STRICT" );
@@ -1292,6 +1498,7 @@ int main()
     section_m_ac_h();
     section_n_ac_i();
     section_o_fixture_determinism();
+    section_p_metrics();
 
     if ( g_fails == 0 )
         std::cout << "\nAll groove tests passed.\n";

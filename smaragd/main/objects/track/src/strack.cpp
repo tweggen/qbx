@@ -543,6 +543,20 @@ std::string STrack::feelFlowBouncePath() const
     return feelFlowBounce_ ? feelFlowBounce_->bouncePath() : std::string();
 }
 
+void STrack::setFeelFlowBandMetricId( const std::string &id )
+{
+    // Empty normalizes to the default so a cleared combo/verb attribute can
+    // never leave the band with an unmatchable id.
+    const std::string want = id.empty() ? std::string( "compliance" ) : id;
+    if( feelFlowBandMetricId_ == want ) return;
+    feelFlowBandMetricId_ = want;
+    // Repaint through the SAME funnel an analysis completion uses (proposal
+    // 40 M2 AC 3: "repaint rides captureRevalidated()"). A view preference
+    // changes pixels, never audio -- no epoch is bumped, nothing is staled.
+    SProject *proj = SAppContext::get().getCurrentProject();
+    if( proj ) proj->notifyCaptureRevalidated();
+}
+
 // A full override, not just serializeSelfAttributes(): the trained structure
 // is an INLINE, non-<SLink> element (the automation-lane discipline, design
 // section 4.4 — "invisible to older loaders, the automation-lane

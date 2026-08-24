@@ -513,6 +513,29 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     every placement of an asset and a remap stored on the content would move
     them all; this closure is the one place that already holds both.
 
+
+30. **The metric-lab series (`SFeelFlowUiData::metrics`) are DERIVED ONCE per
+    UI-cache reload, and the band selection is RUNTIME-ONLY** (proposal 40
+    M3b). `feelFlowForUi()`'s reload additionally does one `loadAny()` for
+    "groove.ev" and calls the pure `twGrooveDeriveMetrics()` over the SAME
+    decoded records everything else on the snapshot comes from — read-side
+    constants are the section 2.3 literature defaults (`twGrooveReadParams{}`;
+    per-user tuning is M5's Options page), so panel strip, panel describe()
+    and lane band all read ONE immutable array set and the paint path stays
+    read-only/no-demand. Metric IDS are stable across warm and cold runs: a
+    warm-store first bounce leaves `physUnitNames_` empty (inv. 25's
+    documented gap), so the per-unit series names fall back to the DEFAULT
+    ensemble's own names when the column count matches it, never to a
+    run-dependent spelling. `STrack::feelFlowBandMetricId()` — which series
+    the arranger band paints — is a plain runtime member, default
+    "compliance" (the shipped scalar, so every pre-M3b gate is byte-unchanged
+    by construction), NEVER serialized, NEVER part of staleness, set only by
+    plain calls (the panel combo, `set-feel-flow-metric`); the setter
+    repaints through `notifyCaptureRevalidated()` and bumps no epoch. A
+    value < 0 in any series is the NO-DATA sentinel: the band skips the
+    column (neutral, never red — trap 9's fill/break rule) and the strip
+    paints it grey.
+
 ## `SPluginSlot::slotDestroying()` fires BEFORE `proc_` dies (fixed 2026-08-23)
 
 `SPluginSlot::~SPluginSlot()` is no longer `= default`: its body's first (and

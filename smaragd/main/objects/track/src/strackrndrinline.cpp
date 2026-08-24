@@ -294,13 +294,28 @@ static void drawFeelFlowBand( QPainter &p, const QRect &visibRect,
     const size_t nHops   = ui->compliance.size();
     const auto &palette  = STrackRendererInline::feelFlowPalette();
 
+    // Proposal 40 M3b: WHICH series the band paints is the track's runtime
+    // metric selection (default "compliance" -- the shipped scalar, so every
+    // pre-M3b caller and gate is byte-unchanged by construction). An id the
+    // snapshot does not carry falls back to compliance rather than painting
+    // nothing -- a stale selection must not read as a stale ANALYSIS.
+    const twGrooveMetricSeries *series =
+        ui->metricById( track.feelFlowBandMetricId() );
+    const std::vector<float> &values =
+        series && series->value.size() == nHops ? series->value : ui->compliance;
+
     for( int i = 0; i < visibRect.width(); ++i ) {
         const offset_t frame = ctx.getTimeOf( x0 + i );
         if( frame < 0 ) continue;               // before the project start
         const uint64_t hop = (uint64_t) frame / (uint64_t) ui->hopFrames;
         if( hop >= nHops ) continue;             // past the analyzed material
-        const int idx = STrackRendererInline::feelFlowPaletteIndex(
-            ui->compliance[hop] );
+        const float v = values[hop];
+        if( v < 0.0f ) continue;                // M3b no-data sentinel: a
+                                                 // break is not a failure --
+                                                 // the column stays NEUTRAL
+                                                 // (whatever is beneath),
+                                                 // never red
+        const int idx = STrackRendererInline::feelFlowPaletteIndex( v );
         p.setPen( QColor::fromRgba( palette[idx] ) );
         p.drawLine( x0 + i, bandTop, x0 + i, visibRect.bottom() );
     }
