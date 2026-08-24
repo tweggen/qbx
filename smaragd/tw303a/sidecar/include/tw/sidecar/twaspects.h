@@ -279,41 +279,75 @@ constexpr uint32_t    GrooveEvVersion = 1;
  * drive). A bin mean preserves the mean by construction; an empty bin (an
  * aspect grid finer than the pendulum's) falls back to the point sample.
  *
- * Record: float32[nUnits*4] LE, one record per hop; per unit, in ensemble
- * order (matching the "groove.res" power columns), with phi = arg z — the
- * SAME per-hop phase quantity section 3.5's counterTension summary reads:
- *   [u*4+0] support  k·F·cos(phi)  signed in-phase drive: energy pushed
+ * Record (VERSION 2, proposal 40 M3e): float32[nUnits*6] LE, one record per
+ * hop; per unit, in ensemble order (matching the "groove.res" power
+ * columns), with phi = arg z — the SAME per-hop phase quantity section
+ * 3.5's counterTension summary reads:
+ *   [u*6+0] support  k·F·cos(phi)  signed in-phase drive: energy pushed
  *                                   INTO the swing (> 0) or braking it
  *                                   (< 0). RAW physical units (k times the
  *                                   region-flux drive), deliberately
  *                                   unnormalized — normalization is a
  *                                   READ-side display decision.
- *   [u*4+1] tension  k·F·sin(phi)  signed quadrature drive — section
+ *   [u*6+1] tension  k·F·sin(phi)  signed quadrature drive — section
  *                                   3.5's c_p, per hop: force that shoves
  *                                   the phase rather than feeding the
  *                                   oscillation.
- *   [u*4+2] slip     |Δ(unwrapped phi)/dt − ω| / ω   dimensionless phase-
+ *   [u*6+2] cosPhi   cos(arg z)    the unit's own PHASE, carried as its
+ *   [u*6+3] sinPhi   sin(arg z)    two Cartesian components. Computed PER
+ *                                   PENDULUM HOP from the trajectory's
+ *                                   phaseWrapped, then bin-averaged onto
+ *                                   this grid exactly like the other four
+ *                                   channels. Averaging cos and sin
+ *                                   SEPARATELY *is* the circular-mean
+ *                                   numerator, so hypot(cosPhi, sinPhi)
+ *                                   <= 1 and the shortfall MEASURES the
+ *                                   in-bin phase spread: 1 = every hop in
+ *                                   the bin agreed, ~0 = the bin's phases
+ *                                   cancelled. A consumer that wants the
+ *                                   mean angle takes atan2(sinPhi,cosPhi);
+ *                                   one that wants coherence takes the
+ *                                   hypot; the M3e puppet uses the RAW
+ *                                   cosPhi un-renormalized, so incoherence
+ *                                   damps the motion by construction.
+ *   [u*6+4] slip     |Δ(unwrapped phi)/dt − ω| / ω   dimensionless phase-
  *                                   velocity deviation from the unit's own
  *                                   adaptive ω; 0 at perfect lock. Hop 0
  *                                   holds 0 (no predecessor to difference).
- *   [u*4+3] dissip   2·|α|·|z|²    the power the unit dissipates — the
+ *   [u*6+5] dissip   2·|α|·|z|²    the power the unit dissipates — the
  *                                   movement outlet of section 3.4, the
  *                                   per-body-part "predicted movement
  *                                   energy".
- * There is deliberately NO separate F or sin(phi) channel:
- * k·F ≡ hypot(support, tension), so the drive factor and the
- * drive-independent lean (tension/hypot) are both recoverable read-side —
- * the section 3.5 loudness-confound separation by construction, at 4
- * floats per unit instead of 6.
  *
- * recordStride = nUnits*4*4, recordCount == the "groove.res" recordCount.
+ * **A WRAPPED PHASE IS NEVER BIN-AVERAGED, and that is WHY the phase is TWO
+ * channels rather than one.** phi lives on a circle: a bin straddling the
+ * ±pi wrap holds values like {+3.14, −3.14} whose arithmetic mean is 0 —
+ * the diametrically OPPOSITE phase. There is no scalar per-bin phase this
+ * encoder could honestly emit, so it emits the vector.
+ *
+ * WHY v2 EXISTS AT ALL. v1 (M3c) deliberately carried no phase channel,
+ * arguing that k·F ≡ hypot(support, tension) makes the drive factor and the
+ * drive-independent lean (tension/hypot) both recoverable read-side. That
+ * is true for the DRIVE-WEIGHTED metrics and FALSE for an ANIMATION:
+ * between impulses the drive F is ~0, so support and tension are both ~0
+ * and the phase is not recoverable from them at ANY precision — while the
+ * pendulum is still swinging, which is precisely the motion the M3e puppet
+ * has to draw. Continuous phase therefore has to be persisted, and it costs
+ * 6 floats per unit per hop instead of 4.
+ *
+ * v1 payloads ORPHAN ON SIGHT (the version is part of the store key), and
+ * both analysis jobs' skip-checks re-analyze on the version miss — they
+ * load() against GrooveDynVersion, so a v1 entry simply misses and the run
+ * re-analyzes once, exactly as the pre-M3c res+ev store did.
+ *
+ * recordStride = nUnits*6*4, recordCount == the "groove.res" recordCount.
  * Params blob v1: SHARED with "groove.res"/"groove.ev" — all three aspects
  * are produced together, from one analysis run, keyed by the same params
  * hash. A store holding res+ev but not dyn is a PRE-M3c store; both
  * analysis jobs' skip-checks require all three, so it re-analyzes once.
  */
 constexpr const char *GrooveDyn        = "groove.dyn";
-constexpr uint32_t    GrooveDynVersion = 1;
+constexpr uint32_t    GrooveDynVersion = 2;
 
 } // namespace twAspect
 

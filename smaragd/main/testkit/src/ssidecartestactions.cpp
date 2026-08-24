@@ -27,6 +27,7 @@
 #include <QDebug>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -707,10 +708,10 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
             }
         }
     } else if (aspect_ == QStringLiteral("groove.dyn")) {
-        // Proposal 40 M3c. nUnits from this file's own geometry
-        // (recordStride = nUnits*4*4, twaspects.h).
+        // Proposal 40 M3c, v2 since M3e. nUnits from this file's own
+        // geometry (recordStride = nUnits*6*4, twaspects.h).
         const uint32_t nUnits = recordCount > 0
-            ? (uint32_t)( info.recordStride / 16 )
+            ? (uint32_t)( info.recordStride / 24 )
             : 0;
         std::vector<twGrooveDynRecord> decoded =
             twGrooveDecodeDynPayload(payload.data(), payload.size(), nUnits);
@@ -727,6 +728,20 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
                 if (!(u.slip >= 0.0f) || !(u.dissip >= 0.0f)) {
                     qWarning() << "assert-groove-aspect: groove.dyn negative"
                                << "slip/dissip" << u.slip << u.dissip;
+                    return {false, nullptr};
+                }
+                // M3e (v2): the phase channels are the bin-averaged
+                // (cos,sin) pair, i.e. the circular-mean NUMERATOR, so
+                // their magnitude can never exceed 1 -- and a magnitude
+                // over 1 is the signature of a channel written at the
+                // wrong offset (a stride/order mismatch), not of a
+                // legitimate phase.
+                const double mag = std::hypot((double)u.cosPhi,
+                                              (double)u.sinPhi);
+                if (!(mag <= 1.0001)) {
+                    qWarning() << "assert-groove-aspect: groove.dyn"
+                               << "hypot(cosPhi,sinPhi)" << mag << "> 1"
+                               << u.cosPhi << u.sinPhi;
                     return {false, nullptr};
                 }
             }

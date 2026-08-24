@@ -74,6 +74,21 @@ struct SFeelFlowUiData {
     // whenever hopFrames == 0.
     std::vector<twGrooveMetricSeries> metrics;
 
+    // --- proposal 40 M3e: the decoded "groove.dyn" records ---------------
+    //
+    // One record per hop, on the SAME grid as `compliance` (the aspect's
+    // fixed rate/100 hop, twaspects.h) and in the same ensemble order as
+    // `perUnitPower`/`unitNames`. EMPTY for a pre-v2 store -- the reload
+    // decodes against GrooveDynVersion, so a v1 entry simply misses and
+    // re-analyzes once.
+    //
+    // The reload already decoded these to derive `metrics` and used to
+    // discard them; they are carried here so the M3e PUPPET POSE can be a
+    // PURE FUNCTION of this one immutable snapshot (the paint path stays
+    // read-only / no-demand, exactly as the level meters' does). Immutable
+    // like everything else in this struct.
+    std::vector<twGrooveDynRecord> dyn;
+
     /** The series for one metric id, or null (unknown id / no data).
      * "compliance" always resolves when any data exists -- it is the first
      * series by contract -- which is what makes it the safe fallback for a

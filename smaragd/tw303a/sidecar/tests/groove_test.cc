@@ -1626,9 +1626,51 @@ static void section_q_dyn_metrics()
             CHECK( refIdx >= 0, "dyn pipeline: reference unit present" );
             if( refIdx >= 0 && !recs.empty() ) {
                 double sumHyp = 0.0;
-                for( const twGrooveDynRecord &r : recs )
-                    sumHyp += std::hypot( (double)r.units[(size_t)refIdx].support,
-                                          (double)r.units[(size_t)refIdx].tension );
+                // M3e (v2): the phase channels are the bin-averaged
+                // (cos,sin) pair -- the circular-mean NUMERATOR -- so
+                // their magnitude can NEVER exceed 1, and the shortfall
+                // measures in-bin phase spread. A magnitude over 1 is the
+                // signature of a channel read at the wrong offset.
+                double maxPhaseMag = 0.0;
+                double sumSin      = 0.0;
+                for( const twGrooveDynRecord &r : recs ) {
+                    const twGrooveUnitDynSample &s = r.units[(size_t)refIdx];
+                    sumHyp += std::hypot( (double)s.support,
+                                          (double)s.tension );
+                    const double m = std::hypot( (double)s.cosPhi,
+                                                 (double)s.sinPhi );
+                    if( m > maxPhaseMag ) maxPhaseMag = m;
+                    sumSin += (double)s.sinPhi;
+                }
+                std::cout << "[groove] dyn phase: max hypot(cosPhi,sinPhi) "
+                          << maxPhaseMag << " over " << recs.size()
+                          << " records\n";
+                CHECK( maxPhaseMag <= 1.0 + 1e-4,
+                       "dyn v2: hypot(cosPhi,sinPhi) <= 1 for every record "
+                       "(the circular-mean numerator, never renormalized)" );
+
+                // The PHASE consistency gate: the UNWEIGHTED whole-run mean
+                // of the exported sinPhi must reproduce counterTension's own
+                // meanSinDeltaPhi. That summary (twgroovependulum.cc) is the
+                // unweighted per-hop mean of sin(phaseWrapped) over the
+                // trajectory, and equal-size bin means preserve an unweighted
+                // mean exactly -- up to the ragged tail bin, which is the
+                // whole error budget here. ABSOLUTE tolerance: on a plain
+                // click train the value sits near 0, so a relative tolerance
+                // would be meaningless.
+                const double meanSinExport  = sumSin / (double)recs.size();
+                const double meanSinSummary =
+                    built.counterTension[(size_t)refIdx].meanSinDeltaPhi;
+                std::cout << "[groove] dyn phase consistency: mean sinPhi "
+                             "export " << meanSinExport << " vs summary "
+                          << meanSinSummary << " (delta "
+                          << std::fabs( meanSinExport - meanSinSummary )
+                          << ")\n";
+                CHECK( std::fabs( meanSinExport - meanSinSummary ) <= 0.02,
+                       "dyn v2: the unweighted mean of exported sinPhi "
+                       "reproduces counterTension's meanSinDeltaPhi within "
+                       "0.02 absolute (one physics, one phase)" );
+
                 const double meanHyp = sumHyp / (double)recs.size();
                 const twGroovePendulumParams pp;   // the default ensemble's k
                 double kRef = 1.5;

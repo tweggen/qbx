@@ -103,3 +103,39 @@ resampling onto the aspect grid is BIN-AVERAGED, never point-sampled: the
 drive is impulsive and a click train's transients land on exactly the
 pendulum hops a lerp at the coarser grid would sample (measured: +52 % on
 the reference's mean drive before the bin mean).
+
+**"groove.dyn" is at VERSION 2 since proposal 40 M3e** — six float32 per
+unit per hop, `{support, tension, cosPhi, sinPhi, slip, dissip}`,
+recordStride `nUnits*6*4`. The two new channels are the unit's own PHASE,
+cos and sin of the SAME `phi = arg z`, computed per PENDULUM hop and then
+bin-averaged by the identical lambda the other four go through.
+
+**A WRAPPED PHASE MAY NEVER BE BIN-AVERAGED, and that is WHY the phase is
+two channels rather than one.** phi lives on a circle: a bin straddling the
+±pi wrap holds values like {+3.14, −3.14} whose arithmetic mean is 0 — the
+diametrically OPPOSITE phase. Averaging cos and sin SEPARATELY is exactly
+the circular-mean NUMERATOR, so `hypot(cosPhi, sinPhi) <= 1` always holds
+and the shortfall MEASURES the in-bin phase spread (1 = every hop in the bin
+agreed; ~0 = they cancelled). A consumer wanting the mean angle takes
+`atan2(sinPhi, cosPhi)`; the M3e puppet uses the raw `cosPhi`
+UN-renormalized, so an incoherent bin damps the motion by construction
+rather than inventing an excursion.
+
+**Why v2 exists at all**: M3c argued sin phi was recoverable read-side from
+`hypot(support, tension)`. That is true for the DRIVE-WEIGHTED metrics and
+FALSE for an animation — between impulses the drive is ~0, so support and
+tension are both ~0 and the phase is unrecoverable at any precision, while
+the pendulum is still swinging. Continuous phase therefore has to be
+persisted. v1 payloads orphan on sight (the aspect version is part of the
+store key) and both analysis jobs' skip-checks re-analyze once on the
+version miss — the same mechanism the pre-M3c res+ev store took.
+
+Gated by `groove_test` section q: per record `hypot(cosPhi,sinPhi) <= 1 +
+1e-4` (measured max **1.000000**), and the PHASE consistency check — the
+UNWEIGHTED whole-run mean of the exported `sinPhi` reproduces
+`counterTension.meanSinDeltaPhi` (an unweighted per-hop mean of
+`sin(phaseWrapped)`, which equal-size bin means preserve up to the ragged
+tail bin) within 0.02 ABSOLUTE; measured delta **1.05e-09** on the click
+train, where the value itself is 0.00423908 and a relative tolerance would
+be meaningless. `assert-groove-aspect aspect="groove.dyn"` re-derives nUnits
+from the v2 stride (`recordStride / 24`) and carries the same hypot bound.

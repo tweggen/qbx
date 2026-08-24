@@ -490,7 +490,9 @@ void SPlainWave::enqueueGrooveAnalysis()
                     // Proposal 40 M3c: the pass-1 dynamics (Tier B).
                     qi.aspectId      = twAspect::GrooveDyn;
                     qi.aspectVersion = twAspect::GrooveDynVersion;
-                    qi.recordStride  = (uint64_t) built.nUnits * 4 * 4;
+                    // v2 (M3e): 6 float32 per unit -- support/tension/
+                    // cosPhi/sinPhi/slip/dissip (twaspects.h).
+                    qi.recordStride  = (uint64_t) built.nUnits * 6 * 4;
                     qi.recordCount   = built.dynRecordCount;
                     qi.hopFrames     = built.hopFrames;
                     twSidecarStore::instance().store(

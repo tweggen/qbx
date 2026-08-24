@@ -361,8 +361,11 @@ void SFeelFlowTrackBounce::start()
                                     // dynamics (Tier B).
                                     qi.aspectId      = twAspect::GrooveDyn;
                                     qi.aspectVersion = twAspect::GrooveDynVersion;
+                                    // v2 (M3e): 6 float32 per unit --
+                                    // support/tension/cosPhi/sinPhi/slip/
+                                    // dissip (twaspects.h).
                                     qi.recordStride  =
-                                        (uint64_t) built.nUnits * 4 * 4;
+                                        (uint64_t) built.nUnits * 6 * 4;
                                     qi.recordCount   = built.dynRecordCount;
                                     qi.hopFrames     = built.hopFrames;
                                     twSidecarStore::instance().store(
@@ -542,6 +545,11 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                             decoded, evRecords, dynRecords, fresh->hopFrames,
                             reader->info().sourceRate, unitNames,
                             twGrooveReadParams{} );
+                        // M3e: keep the records rather than discarding
+                        // them, so the puppet pose is a pure function of
+                        // this snapshot. Moved AFTER the derive call --
+                        // twGrooveDeriveMetrics takes them by const ref.
+                        fresh->dyn = std::move( dynRecords );
                     }
                 }
             }
