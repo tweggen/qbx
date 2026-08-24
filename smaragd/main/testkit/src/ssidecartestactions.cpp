@@ -11,6 +11,8 @@
 #include "app/objects/wave/splainwave.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackpath.h"
+#include "app/objects/track/sfeelflowbounce.h"
+#include "app/objects/track/sfeelflowpose.h"
 
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/sidecar/twsidecarstore.h"
@@ -27,6 +29,7 @@
 #include <QDebug>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -707,10 +710,10 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
             }
         }
     } else if (aspect_ == QStringLiteral("groove.dyn")) {
-        // Proposal 40 M3c. nUnits from this file's own geometry
-        // (recordStride = nUnits*4*4, twaspects.h).
+        // Proposal 40 M3c, v2 since M3e. nUnits from this file's own
+        // geometry (recordStride = nUnits*6*4, twaspects.h).
         const uint32_t nUnits = recordCount > 0
-            ? (uint32_t)( info.recordStride / 16 )
+            ? (uint32_t)( info.recordStride / 24 )
             : 0;
         std::vector<twGrooveDynRecord> decoded =
             twGrooveDecodeDynPayload(payload.data(), payload.size(), nUnits);
@@ -727,6 +730,20 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
                 if (!(u.slip >= 0.0f) || !(u.dissip >= 0.0f)) {
                     qWarning() << "assert-groove-aspect: groove.dyn negative"
                                << "slip/dissip" << u.slip << u.dissip;
+                    return {false, nullptr};
+                }
+                // M3e (v2): the phase channels are the bin-averaged
+                // (cos,sin) pair, i.e. the circular-mean NUMERATOR, so
+                // their magnitude can never exceed 1 -- and a magnitude
+                // over 1 is the signature of a channel written at the
+                // wrong offset (a stride/order mismatch), not of a
+                // legitimate phase.
+                const double mag = std::hypot((double)u.cosPhi,
+                                              (double)u.sinPhi);
+                if (!(mag <= 1.0001)) {
+                    qWarning() << "assert-groove-aspect: groove.dyn"
+                               << "hypot(cosPhi,sinPhi)" << mag << "> 1"
+                               << u.cosPhi << u.sinPhi;
                     return {false, nullptr};
                 }
             }
@@ -951,5 +968,133 @@ static const bool s_reg_set_feel_flow_metric = (
     SActionRegistry::instance().registerType(
         QStringLiteral("set-feel-flow-metric"),
         []{ return new SSetFeelFlowMetricAction; }
+    ), true
+);
+
+// ----------------------------------------------------- assert-feel-flow-pose
+
+SApplyResult SAssertFeelFlowPoseAction::apply( SProject *project )
+{
+    STrack *track = feelFlowTrackAt( project, trackPath_ );
+    if( !track ) {
+        qWarning() << "assert-feel-flow-pose: no STrack at" << trackPath_;
+        return { false, nullptr };
+    }
+
+    // The paint path's rule, mirrored: STALE yields the INVALID pose whatever
+    // is cached. Decided HERE (and in SMainWindow::updateFeelFlowPuppet_),
+    // never inside sFeelFlowPoseAt -- the pose function never sees a track.
+    SFeelFlowPose pose;
+    if( !track->feelFlowStale() ) {
+        if( std::shared_ptr<const SFeelFlowUiData> data = track->feelFlowForUi() )
+            pose = sFeelFlowPoseAt( *data, (offset_t) frame_ );
+    }
+    const QString desc =
+        QString::fromStdString( sFeelFlowPoseDescribe( pose ) );
+
+    // Always logged: this line is how a case MEASURES a bound before pinning
+    // it (the house's measured-then-pinned rule).
+    qDebug().noquote() << "assert-feel-flow-pose: track" << trackPath_
+                       << "frame" << frame_ << "-" << desc;
+
+    if( valid_ >= 0 && ( pose.valid ? 1 : 0 ) != valid_ ) {
+        qWarning() << "assert-feel-flow-pose FAILED: valid is"
+                   << ( pose.valid ? 1 : 0 ) << "expected" << valid_
+                   << "-" << desc;
+        return { false, nullptr };
+    }
+
+    const double absSum = std::fabs( (double) pose.bounceY )
+                        + std::fabs( (double) pose.sway )
+                        + std::fabs( (double) pose.armSwing )
+                        + std::fabs( (double) pose.headNod )
+                        + std::fabs( (double) pose.hipShift );
+    if( minAbsSum_ >= 0.0 && absSum < minAbsSum_ ) {
+        qWarning() << "assert-feel-flow-pose FAILED: absSum" << absSum
+                   << "below minAbsSum" << minAbsSum_ << "-" << desc;
+        return { false, nullptr };
+    }
+    if( maxAbsSum_ >= 0.0 && absSum > maxAbsSum_ ) {
+        qWarning() << "assert-feel-flow-pose FAILED: absSum" << absSum
+                   << "above maxAbsSum" << maxAbsSum_ << "-" << desc;
+        return { false, nullptr };
+    }
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning() << "assert-feel-flow-pose FAILED: reports" << desc
+                   << "which lacks" << contains_;
+        return { false, nullptr };
+    }
+
+    if( !grabPng_.isEmpty() ) {
+        if( grabPng_.contains( '/' ) || grabPng_.contains( '\\' )
+            || grabPng_.contains( ".." ) ) {
+            qWarning() << "assert-feel-flow-pose: grabPng contains path"
+                          " separators:" << grabPng_;
+            return { false, nullptr };
+        }
+        SApplication &app = SApplication::app();
+        if( app.testOutputDir().isEmpty() || !app.ensureOutputDirExists() ) {
+            qWarning() << "assert-feel-flow-pose FAILED: no usable test"
+                          " output directory";
+            return { false, nullptr };
+        }
+        SMainWindow *win = feelFlowMainWindow();
+        if( !win ) {
+            qWarning() << "assert-feel-flow-pose: no main window (grabPng)";
+            return { false, nullptr };
+        }
+        const QString out = QDir( app.testOutputDir() ).filePath( grabPng_ );
+        if( !win->grabFeelFlowPuppet( out, trackPath_, (offset_t) frame_,
+                                      grabWidth_, grabHeight_ ) ) {
+            qWarning() << "assert-feel-flow-pose FAILED: could not grab the"
+                          " puppet into" << out;
+            return { false, nullptr };
+        }
+    }
+    return { true, nullptr };
+}
+
+QStringList SAssertFeelFlowPoseAction::knownAttributes() const
+{
+    return { QStringLiteral("trackPath"), QStringLiteral("frame"),
+             QStringLiteral("valid"), QStringLiteral("minAbsSum"),
+             QStringLiteral("maxAbsSum"), QStringLiteral("contains"),
+             QStringLiteral("grabPng"), QStringLiteral("grabWidth"),
+             QStringLiteral("grabHeight") };
+}
+
+void SAssertFeelFlowPoseAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "frame", QString::number( frame_ ) );
+    elem.setAttribute( "valid", valid_ );
+    elem.setAttribute( "minAbsSum", QString::number( minAbsSum_, 'g', 10 ) );
+    elem.setAttribute( "maxAbsSum", QString::number( maxAbsSum_, 'g', 10 ) );
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( !grabPng_.isEmpty() ) {
+        elem.setAttribute( "grabPng", grabPng_ );
+        if( grabWidth_ > 0 )  elem.setAttribute( "grabWidth", grabWidth_ );
+        if( grabHeight_ > 0 ) elem.setAttribute( "grabHeight", grabHeight_ );
+    }
+}
+
+bool SAssertFeelFlowPoseAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_  = elem.attribute( "trackPath", "0" );
+    frame_      = elem.attribute( "frame", "0" ).toLongLong();
+    valid_      = elem.attribute( "valid", "-1" ).toInt();
+    minAbsSum_  = elem.attribute( "minAbsSum", "-1" ).toDouble();
+    maxAbsSum_  = elem.attribute( "maxAbsSum", "-1" ).toDouble();
+    contains_   = elem.attribute( "contains", "" );
+    grabPng_    = elem.attribute( "grabPng", "" );
+    grabWidth_  = elem.attribute( "grabWidth", "0" ).toInt();
+    grabHeight_ = elem.attribute( "grabHeight", "0" ).toInt();
+    return true;
+}
+
+static const bool s_reg_assert_feel_flow_pose = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-feel-flow-pose"),
+        []{ return new SAssertFeelFlowPoseAction; }
     ), true
 );
