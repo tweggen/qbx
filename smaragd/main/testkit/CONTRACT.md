@@ -1305,4 +1305,11 @@ trip + slip/dissip non-negativity; support/tension are legitimately signed
 and deliberately unbounded), and the M3c sabotage — an encoder that
 produces no dyn payload — was watched failing across SIX actions at once
 (the metrics=22 panel checks, the Tier B row checks, the groove.dyn
-existence check, and the slip band's directional pixel gate).
+existence check, and the slip band's directional pixel gate). Since M3d
+`set-feel-flow-metric`'s `metric` accepts the comma-separated LIST, and the
+two-row gate is a UNION argument: on the lab fixture `sigma` paints the
+single LUT index 23 and `lean` the single index 12, so the pair's observed
+range 12..23 (spread 11) is separable from EITHER row alone (spread 0, via
+`minLutSpread`) AND from a compliance fallback (spread 23, via
+`maxLutSpread`) — watched failing under a renderer sabotage that paints
+only the first id.

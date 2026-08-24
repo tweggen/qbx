@@ -593,9 +593,13 @@ long-term shape.
     no demand, no store access, no model walk (inv. 1) — and `setData()`
     with the SAME shared_ptr is a no-op, so the meterTick pump costs no
     repaint churn. A STALE analysis shows an EMPTY strip (the same
-    visibility rule as the band, inv. 25). The combo submits NO action:
-    it calls `STrack::setFeelFlowBandMetricId()` directly (runtime-only,
-    never serialized — `main/objects/track/CONTRACT.md` inv. 30), and
+    visibility rule as the band, inv. 25). The selector — a compact
+    CHECK-LIST since M3d, one checkable row per series, so a couple of
+    metrics can ride the arranger band as stacked sub-rows — submits NO
+    action: it calls `STrack::setFeelFlowBandMetricId()` directly with the
+    checked ids comma-joined in series order (runtime-only, never
+    serialized — `main/objects/track/CONTRACT.md` inv. 30; an all-unchecked
+    list normalizes back to compliance in the ONE setter), and
     `describe()` reports `bandMetric=`/`metrics=`/`metric:<id>=` stats from
     the SAME arrays the strip paints, never a second computation.
 

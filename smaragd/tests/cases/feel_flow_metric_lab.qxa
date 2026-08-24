@@ -134,6 +134,22 @@
                          minLutPixels="8000"
                          minLutIndexMin="12" maxLutSpread="12"/>
 
+    <!-- M3d: TWO rows at once - "sigma,lean" splits the band into two
+         stacked sub-rows. On this fixture sigma is the single top-of-ramp
+         index 23 and lean the single index 12 (0.534..0.541 * 24), so the
+         UNION 12..23 (spread 11) is measurably different from EITHER row
+         alone (both spread 0) and from compliance (spread 23): the
+         minLutSpread/maxLutSpread PAIR passes only when BOTH rows paint
+         simultaneously - a renderer that draws just the first id fails the
+         floor, one that falls back to compliance fails the ceiling. -->
+    <set-feel-flow-metric trackPath="0" metric="sigma,lean"/>
+    <assert-feel-flow-panel trackPath="0" contains="bandMetric=sigma,lean"/>
+    <assert-lane-overlay trackPath="0" grabWidth="900" grabHeight="300"
+                         bandOnly="true" minPixels="0"
+                         minLutPixels="8000"
+                         minLutIndexMin="6" minLutSpread="8" maxLutSpread="16"
+                         grabPng="feel_flow_metric_lab_tworow.png"/>
+
     <!-- ================== (3) reset: a view preference ================== -->
     <set-feel-flow-metric trackPath="0" metric=""/>
     <assert-feel-flow-panel trackPath="0" contains="bandMetric=compliance"/>

@@ -1111,6 +1111,30 @@ never retroactively.
   fixture set brakes the swing on purpose; the closed-form ctest covers
   the mapping's negative half synthetically); and which Tier B metric is
   RIGHT — the requester's assessment, as for Tier A.
+
+- **M3d — the MULTI-ROW lane band** (requester follow-up, executed
+  2026-08-24 same day): "can I see a couple of the other analyses next to
+  the heatmap I have today?" The band's metric selection became a
+  comma-separated LIST (`STrack::setFeelFlowBandMetricId("sigma,lean")` —
+  normalized in the one setter, empty → compliance), painted as stacked
+  sub-rows splitting the SAME fixed band area, top to bottom in list
+  order, capped so every row keeps ≥ 2 px (the full set stays in the
+  panel strip); one id = one full-height row = the pre-M3d paint
+  byte-for-byte, so every existing gate held unchanged. The panel's
+  selector became a compact CHECK-LIST (one checkable row per series),
+  still a plain call, never an action; `set-feel-flow-metric` passes the
+  list through verbatim; describe() reports `bandMetric=sigma,lean`.
+  Gate: the metric-lab case's two-row phase — a UNION argument: on this
+  fixture `sigma` is the single LUT index 23 and `lean` the single index
+  12, so the pair's measured 12..23 (spread 11) is separable BOTH from
+  either row alone (spread 0, `minLutSpread="8"`) and from a compliance
+  fallback (spread 23, `maxLutSpread="16"`); watched failing under a
+  renderer sabotage painting only the first id. NOT gated: the row CAP
+  itself (deterministic from the pinned lane height, no case selects more
+  rows than fit), the check-list widget's own clicks (the same
+  no-context-menu/no-widget-driving gap every options page has — the
+  verb drives the same setter), and per-row visual separators (none are
+  drawn; adjacent rows meet edge to edge).
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves

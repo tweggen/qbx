@@ -10,9 +10,12 @@
 
 #include "app/objects/track/strackrndrinline.h"   // feelFlowPalette (M3b strip)
 
+#include <algorithm>
+
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -133,18 +136,20 @@ SFeelFlowPanel::SFeelFlowPanel( STrack *track, QWidget *parent )
     tensionLabel_->setWordWrap( true );
     layout->addWidget( tensionLabel_ );
 
-    // Proposal 40 M3b: the metric lab -- band selector + stacked strip.
+    // Proposal 40 M3b/M3d: the metric lab -- band selector + stacked strip.
+    // The selector is a compact CHECK-LIST since M3d: checking rows puts
+    // that metric on the arranger band as one of its stacked sub-rows.
     QHBoxLayout *bandRow = new QHBoxLayout();
-    bandRow->addWidget( new QLabel( tr( "Band metric" ) ) );
-    bandCombo_ = new QComboBox();
-    bandCombo_->addItem( QStringLiteral( "compliance" ) );
-    bandRow->addWidget( bandCombo_, 1 );
+    bandRow->addWidget( new QLabel( tr( "Band metrics" ) ), 0, Qt::AlignTop );
+    bandList_ = new QListWidget();
+    bandList_->setMaximumHeight( 96 );
+    bandRow->addWidget( bandList_, 1 );
     layout->addLayout( bandRow );
     metricStrip_ = new SFeelFlowMetricStrip();
     layout->addWidget( metricStrip_ );
 
-    connect( bandCombo_, QOverload<int>::of( &QComboBox::currentIndexChanged ),
-             this, &SFeelFlowPanel::onBandMetricChanged );
+    connect( bandList_, &QListWidget::itemChanged,
+             this, &SFeelFlowPanel::onBandMetricToggled );
     connect( analyzeButton_, &QPushButton::clicked,
              this, &SFeelFlowPanel::onAnalyzeClicked );
     connect( learnButton_, &QPushButton::clicked,
@@ -190,14 +195,20 @@ void SFeelFlowPanel::onModeChanged( int index )
     refresh();
 }
 
-void SFeelFlowPanel::onBandMetricChanged( int index )
+void SFeelFlowPanel::onBandMetricToggled( QListWidgetItem * )
 {
-    if( applyingExternal_ || !track_ || !bandCombo_ ) return;
-    if( index < 0 ) return;
+    if( applyingExternal_ || !track_ || !bandList_ ) return;
     // A view preference, not an edit: a plain setter, never an action (the
-    // same standing as feel-flow-analyze). The setter repaints the arranger
-    // through the captureRevalidated funnel itself.
-    track_->setFeelFlowBandMetricId( bandCombo_->itemText( index ).toStdString() );
+    // same standing as feel-flow-analyze). The CHECKED rows, in list
+    // (= series) order, comma-joined -- the setter normalizes an empty
+    // selection back to "compliance" and repaints the arranger through the
+    // captureRevalidated funnel itself.
+    QStringList checked;
+    for( int i = 0; i < bandList_->count(); i++ )
+        if( bandList_->item( i )->checkState() == Qt::Checked )
+            checked << bandList_->item( i )->text();
+    track_->setFeelFlowBandMetricId(
+        checked.join( QLatin1Char( ',' ) ).toStdString() );
 }
 
 void SFeelFlowPanel::onMeterTick( offset_t /*pos*/, qint64 /*nowMs*/, bool /*live*/ )
@@ -241,28 +252,37 @@ void SFeelFlowPanel::refresh()
         metricStrip_->setData(
             data && !track_->feelFlowStale() ? data
                                              : std::shared_ptr<const SFeelFlowUiData>() );
-    if( bandCombo_ ) {
+    if( bandList_ ) {
         applyingExternal_ = true;
         const bool haveMetrics = data && !data->metrics.empty();
         const int wantCount = haveMetrics ? (int)data->metrics.size() : 1;
-        bool rebuild = bandCombo_->count() != wantCount;
+        bool rebuild = bandList_->count() != wantCount;
         if( !rebuild && haveMetrics )
             for( int i = 0; i < wantCount && !rebuild; i++ )
-                rebuild = bandCombo_->itemText( i ).toStdString()
+                rebuild = bandList_->item( i )->text().toStdString()
                           != data->metrics[(size_t)i].id;
         if( rebuild ) {
-            bandCombo_->clear();
+            bandList_->clear();
+            auto addRow = [&]( const QString &id ) {
+                QListWidgetItem *it = new QListWidgetItem( id, bandList_ );
+                it->setFlags( it->flags() | Qt::ItemIsUserCheckable );
+                it->setCheckState( Qt::Unchecked );
+            };
             if( haveMetrics )
                 for( const twGrooveMetricSeries &s : data->metrics )
-                    bandCombo_->addItem( QString::fromStdString( s.id ) );
+                    addRow( QString::fromStdString( s.id ) );
             else
-                bandCombo_->addItem( QStringLiteral( "compliance" ) );
+                addRow( QStringLiteral( "compliance" ) );
         }
-        const QString want =
-            QString::fromStdString( track_->feelFlowBandMetricId() );
-        int sel = bandCombo_->findText( want );
-        if( sel < 0 ) sel = 0;   // stale id: SHOW the fallback the band paints
-        bandCombo_->setCurrentIndex( sel );
+        // Check states mirror the track's CURRENT selection (M3d: a list).
+        const std::vector<std::string> &sel = track_->feelFlowBandMetricIds();
+        for( int i = 0; i < bandList_->count(); i++ ) {
+            const std::string id = bandList_->item( i )->text().toStdString();
+            const bool on =
+                std::find( sel.begin(), sel.end(), id ) != sel.end();
+            bandList_->item( i )->setCheckState( on ? Qt::Checked
+                                                    : Qt::Unchecked );
+        }
         applyingExternal_ = false;
     }
 
