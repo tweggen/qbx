@@ -1073,6 +1073,44 @@ never retroactively.
   6. Docs/contracts: twaspects.h normative doc, sidecar CONTRACT,
      objects/track inv. 30 extended, ACTIONS.md id lists, layering/logging
      clean, full suite.
+
+  **M3c EXECUTED 2026-08-24.** All ACs green, one AC delta paid for by a
+  failing gate and recorded in the aspect's own doc: **the resample onto
+  the aspect grid is BIN-AVERAGED, not lerped as AC 1 first said.** The
+  consistency gate caught it on its first run — point-sampling a click
+  train's drive overstated the reference's mean by **52 %** (the
+  transients land on exactly the pendulum hops the coarser grid samples;
+  the probe showed the identity exact on the trajectory grid, 0.00209326
+  both sides). Bin-averaged, the export reproduces §3.5's meanF to
+  **0.014 %**, and the gate is pinned at 2 %.
+
+  **Measured on `a_offset15.wav`** (metrics=22 on the default ensemble):
+  `support` 0.659:1.000:0.936 — a metronomic fixture SUPPORTS the
+  established oscillation almost everywhere, the direct physical answer
+  the requester asked the heatmap for; `tension` 0.624:1.000:0.863;
+  `lean` 0.534:0.541:0.538 — a small, STABLE positive lean, and the tight
+  band IS the "consistent feel" statement; `slip` 0.757:0.989:0.962
+  (locked; its band paints LUT 18..23, the directional qxa gate). Payload
+  cost: 4 float32 per unit per 10 ms hop — 80 B/hop at 5 units, ~8 KB per
+  second of analyzed material.
+
+  **Watched failing**: the no-dyn-payload sabotage fails SIX actions at
+  once (metrics=22, the Tier B rows, groove.dyn existence, the slip
+  band's pixel gate); the resample defect was a REAL failure caught by
+  the new consistency gate, not a sabotage. Warm-store transition gated
+  live: a pre-M3c store (res+ev, no dyn) re-analyzes once because both
+  jobs' skip-checks now require all three aspects.
+
+  NOT gated: the Tier B read-side constants beyond their defaults
+  (`dynSmoothSec`/`slipCap`/`leanWindowSec` — M5's Options page, same as
+  Tier A's); ensemble phase COHERENCE and the prediction-error field
+  (named in the Tier B survey, deliberately not built — coherence across
+  units running at different metrical rates needs a common-grid phase
+  definition that is a design question, not an export); a fixture whose
+  support metric goes NEGATIVE (an anti-phase driver — nothing in the
+  fixture set brakes the swing on purpose; the closed-form ctest covers
+  the mapping's negative half synthetically); and which Tier B metric is
+  RIGHT — the requester's assessment, as for Tier A.
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves

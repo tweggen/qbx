@@ -534,7 +534,11 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     repaints through `notifyCaptureRevalidated()` and bumps no epoch. A
     value < 0 in any series is the NO-DATA sentinel: the band skips the
     column (neutral, never red — trap 9's fill/break rule) and the strip
-    paints it grey.
+    paints it grey. Since M3c the reload ALSO does one `loadAny()` for
+    "groove.dyn" and hands the decoded records to the same derivation —
+    a miss (a pre-M3c store entry) yields the Tier A series only, and both
+    analysis jobs' skip-checks require all THREE aspects so such a store
+    re-analyzes once and gains dyn.
 
 ## `SPluginSlot::slotDestroying()` fires BEFORE `proc_` dies (fixed 2026-08-23)
 
