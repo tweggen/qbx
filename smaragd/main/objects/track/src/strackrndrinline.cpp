@@ -294,30 +294,49 @@ static void drawFeelFlowBand( QPainter &p, const QRect &visibRect,
     const size_t nHops   = ui->compliance.size();
     const auto &palette  = STrackRendererInline::feelFlowPalette();
 
-    // Proposal 40 M3b: WHICH series the band paints is the track's runtime
-    // metric selection (default "compliance" -- the shipped scalar, so every
-    // pre-M3b caller and gate is byte-unchanged by construction). An id the
+    // Proposal 40 M3b/M3d: WHICH series the band paints is the track's
+    // runtime metric selection -- since M3d a LIST, one band SUB-ROW per id,
+    // top to bottom in list order, splitting the SAME fixed band area
+    // (default {"compliance"} = one full-height row, so every pre-M3b
+    // caller and gate is byte-unchanged by construction). An id the
     // snapshot does not carry falls back to compliance rather than painting
-    // nothing -- a stale selection must not read as a stale ANALYSIS.
-    const twGrooveMetricSeries *series =
-        ui->metricById( track.feelFlowBandMetricId() );
-    const std::vector<float> &values =
-        series && series->value.size() == nHops ? series->value : ui->compliance;
+    // nothing -- a stale selection must not read as a stale ANALYSIS. The
+    // row count is CAPPED so every row keeps >= 2 px (the band is a fixed
+    // fraction of the lane; the FULL series set lives in the panel strip)
+    // -- extra ids beyond the cap are simply not drawn, and the cap is a
+    // deterministic function of the lane height a case pins anyway.
+    const std::vector<std::string> &ids = track.feelFlowBandMetricIds();
+    std::vector<const std::vector<float> *> rows;
+    for( const std::string &id : ids ) {
+        const twGrooveMetricSeries *series = ui->metricById( id );
+        rows.push_back( series && series->value.size() == nHops
+                            ? &series->value : &ui->compliance );
+        if( (int)rows.size() >= bandHeight / 2 ) break;
+    }
+    if( rows.empty() ) rows.push_back( &ui->compliance );
+    const int nRows = (int)rows.size();
 
     for( int i = 0; i < visibRect.width(); ++i ) {
         const offset_t frame = ctx.getTimeOf( x0 + i );
         if( frame < 0 ) continue;               // before the project start
         const uint64_t hop = (uint64_t) frame / (uint64_t) ui->hopFrames;
         if( hop >= nHops ) continue;             // past the analyzed material
-        const float v = values[hop];
-        if( v < 0.0f ) continue;                // M3b no-data sentinel: a
+        for( int r = 0; r < nRows; ++r ) {
+            const float v = ( *rows[(size_t)r] )[hop];
+            if( v < 0.0f ) continue;            // M3b no-data sentinel: a
                                                  // break is not a failure --
-                                                 // the column stays NEUTRAL
-                                                 // (whatever is beneath),
-                                                 // never red
-        const int idx = STrackRendererInline::feelFlowPaletteIndex( v );
-        p.setPen( QColor::fromRgba( palette[idx] ) );
-        p.drawLine( x0 + i, bandTop, x0 + i, visibRect.bottom() );
+                                                 // the row's column stays
+                                                 // NEUTRAL (whatever is
+                                                 // beneath), never red
+            // Integer row bounds that tile the band exactly: row r spans
+            // [bandTop + r*H/n, bandTop + (r+1)*H/n), the last row ending
+            // at the lane's bottom by construction.
+            const int y0 = bandTop + ( r * bandHeight ) / nRows;
+            const int y1 = bandTop + ( ( r + 1 ) * bandHeight ) / nRows - 1;
+            const int idx = STrackRendererInline::feelFlowPaletteIndex( v );
+            p.setPen( QColor::fromRgba( palette[idx] ) );
+            p.drawLine( x0 + i, y0, x0 + i, qMin( y1, visibRect.bottom() ) );
+        }
     }
 }
 

@@ -8,6 +8,8 @@
 class QLabel;
 class QPushButton;
 class QComboBox;
+class QListWidget;
+class QListWidgetItem;
 class SFeelFlowMetricStrip;
 
 // Proposal 40 "Feel Flow" M3 -- the Track Detail dock's "Feel Flow" section
@@ -45,7 +47,7 @@ private slots:
     void onAnalyzeClicked();
     void onLearnClicked();
     void onModeChanged( int index );
-    void onBandMetricChanged( int index );
+    void onBandMetricToggled( QListWidgetItem *item );
     void onMeterTick( offset_t pos, qint64 nowMs, bool live );
 
 private:
@@ -60,13 +62,15 @@ private:
     QPushButton *learnButton_   = nullptr;
     QComboBox   *modeCombo_     = nullptr;
 
-    // --- proposal 40 M3b: the metric lab -------------------------------
+    // --- proposal 40 M3b/M3d: the metric lab ---------------------------
     // The stacked strip (one heatmap row per derived series, defined in
-    // the .cpp) and the band-metric selector. The combo writes the
-    // track's RUNTIME feelFlowBandMetricId() -- a view preference, a
-    // plain call, never an action.
+    // the .cpp) and the band-metric selector -- since M3d a compact
+    // CHECK-LIST (one checkable row per series), so a COUPLE of metrics
+    // can ride the arranger band as stacked sub-rows. Toggling writes the
+    // track's RUNTIME feelFlowBandMetricId() (comma-joined, in series
+    // order) -- a view preference, a plain call, never an action.
     SFeelFlowMetricStrip *metricStrip_ = nullptr;
-    QComboBox            *bandCombo_   = nullptr;
+    QListWidget          *bandList_    = nullptr;
 
     // True while onModeChanged() writes modeCombo_ from the model, so the
     // resulting currentIndexChanged never turns a refresh into a new action.

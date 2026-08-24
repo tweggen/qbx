@@ -401,8 +401,16 @@ public:
     // snapshot does not carry falls back to compliance at PAINT time
     // (SFeelFlowUiData::metricById's doc), so a stale selection can dim
     // nothing and break nothing.
+    // Since M3d the selection is a LIST -- a comma-separated spelling in
+    // and out ("sigma,lean"), so the verb, the panel and describe() speak
+    // one dialect; the stored string is NORMALIZED (split, trimmed, empties
+    // dropped, empty list -> "compliance"). feelFlowBandMetricIds() is the
+    // parsed form the painter iterates -- one band SUB-ROW per id, in list
+    // order, top to bottom.
     const std::string &feelFlowBandMetricId() const { return feelFlowBandMetricId_; }
-    void setFeelFlowBandMetricId( const std::string &id );
+    const std::vector<std::string> &feelFlowBandMetricIds() const
+    { return feelFlowBandMetricIds_; }
+    void setFeelFlowBandMetricId( const std::string &idList );
 
     // --- the folder-sum preview (proposal 39 M3, design D3) ---------------
 
@@ -624,8 +632,11 @@ private:
     FeelFlowMode feelFlowMode_ = FeelFlowMode::Adaptive;
     std::unique_ptr<twGrooveTrainedStructure> feelFlowTrained_;
     // Proposal 40 M3b: runtime-only view preference (see the accessor's
-    // doc). Deliberately NOT serialized and NOT part of staleness.
+    // doc). Deliberately NOT serialized and NOT part of staleness. The
+    // string is the normalized comma-joined spelling; the vector is its
+    // parsed form (M3d), kept in step by the ONE setter.
     std::string feelFlowBandMetricId_ = "compliance";
+    std::vector<std::string> feelFlowBandMetricIds_ = { "compliance" };
     SPluginChain *cpPluginChain_;  // Model object for effects inserts
     // Our REFERENCE to that chain, not a child link (a chain is not an SLink
     // child of a track — SObject::childEvent only accepts SLinks, and a chain in

@@ -543,13 +543,32 @@ std::string STrack::feelFlowBouncePath() const
     return feelFlowBounce_ ? feelFlowBounce_->bouncePath() : std::string();
 }
 
-void STrack::setFeelFlowBandMetricId( const std::string &id )
+void STrack::setFeelFlowBandMetricId( const std::string &idList )
 {
-    // Empty normalizes to the default so a cleared combo/verb attribute can
-    // never leave the band with an unmatchable id.
-    const std::string want = id.empty() ? std::string( "compliance" ) : id;
+    // M3d: a comma-separated LIST, normalized here (split, trimmed, empties
+    // dropped) so a cleared selector/verb attribute can never leave the
+    // band with an unmatchable spelling -- an empty list is the default.
+    std::vector<std::string> ids;
+    std::string cur;
+    for( char c : idList ) {
+        if( c == ',' ) {
+            if( !cur.empty() ) ids.push_back( cur );
+            cur.clear();
+        } else if( c != ' ' ) {
+            cur += c;
+        }
+    }
+    if( !cur.empty() ) ids.push_back( cur );
+    if( ids.empty() ) ids.push_back( "compliance" );
+
+    std::string want;
+    for( size_t i = 0; i < ids.size(); i++ ) {
+        if( i > 0 ) want += ',';
+        want += ids[i];
+    }
     if( feelFlowBandMetricId_ == want ) return;
-    feelFlowBandMetricId_ = want;
+    feelFlowBandMetricId_  = want;
+    feelFlowBandMetricIds_ = std::move( ids );
     // Repaint through the SAME funnel an analysis completion uses (proposal
     // 40 M2 AC 3: "repaint rides captureRevalidated()"). A view preference
     // changes pixels, never audio -- no epoch is bumped, nothing is staled.
