@@ -105,6 +105,21 @@ struct twGrooveEvRecord {
     uint16_t flags       = 0;
 };
 
+/** One unit's slice of a decoded "groove.dyn" record (proposal 40 M3c —
+ * twaspects.h's normative doc: phi = arg z, k·F ≡ hypot(support,tension)). */
+struct twGrooveUnitDynSample {
+    float support = 0.0f;   // k·F·cos(phi), signed: pushes (>0) / brakes (<0)
+    float tension = 0.0f;   // k·F·sin(phi), signed: section 3.5's c_p per hop
+    float slip    = 0.0f;   // |dphi/dt − ω|/ω, 0 at lock
+    float dissip  = 0.0f;   // 2·|α|·|z|², the movement outlet (section 3.4)
+};
+
+/** One decoded "groove.dyn" record: one sample per ensemble unit, in the
+ * same order as the "groove.res" power columns. */
+struct twGrooveDynRecord {
+    std::vector<twGrooveUnitDynSample> units;
+};
+
 /**
  * The two aspect payloads plus the geometry a twQafInfo needs, built from
  * one pendulum analysis run.
@@ -116,6 +131,12 @@ struct twGrooveAspectPayloads {
     uint64_t              resRecordCount = 0;   // == ceil(nFrames / hopFrames)
     std::vector<uint8_t>  evPayload;
     uint64_t              evRecordCount  = 0;   // == number of pass-2 scored events (may be 0)
+
+    // Proposal 40 M3c (Tier B): the "groove.dyn" pass-1 dynamics payload,
+    // twaspects.h's normative doc. Same hop grid and record count as
+    // "groove.res"; recordStride = nUnits*4*4.
+    std::vector<uint8_t>  dynPayload;
+    uint64_t              dynRecordCount = 0;   // == resRecordCount
 
     // Proposal 40 M3: the pass-2 physical-readout summary (design section
     // 3.5), copied verbatim from the twGroovePendulumResult this call
@@ -169,5 +190,10 @@ std::vector<twGrooveResRecord> twGrooveDecodeResPayload(
  * Returns empty on a size mismatch (payloadLen not a multiple of 20). */
 std::vector<twGrooveEvRecord> twGrooveDecodeEvPayload(
     const uint8_t *payload, uint64_t payloadLen );
+
+/** Decodes one "groove.dyn" payload (recordStride == nUnits*4*4, proposal
+ * 40 M3c) into records. Returns empty on a stride/size mismatch. */
+std::vector<twGrooveDynRecord> twGrooveDecodeDynPayload(
+    const uint8_t *payload, uint64_t payloadLen, uint32_t nUnits );
 
 #endif

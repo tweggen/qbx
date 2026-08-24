@@ -75,9 +75,51 @@ struct WindowCursor {
 
 } // namespace
 
+namespace {
+
+/** Inclusive-window mean via a prefix sum: mean of v[lo..hi]. */
+struct PrefixMean {
+    std::vector<double> pre;   // pre[i] = sum v[0..i-1]
+    explicit PrefixMean( const std::vector<double> &v )
+    {
+        pre.assign( v.size() + 1, 0.0 );
+        for( size_t i = 0; i < v.size(); i++ ) pre[i + 1] = pre[i] + v[i];
+    }
+    double sum( long lo, long hi ) const   // clamped, inclusive
+    {
+        const long n = (long)pre.size() - 1;
+        if( n <= 0 ) return 0.0;
+        lo = std::max( 0L, lo );
+        hi = std::min( n - 1, hi );
+        if( hi < lo ) return 0.0;
+        return pre[(size_t)hi + 1] - pre[(size_t)lo];
+    }
+    double mean( long lo, long hi ) const
+    {
+        const long n = (long)pre.size() - 1;
+        const long a = std::max( 0L, lo ), b = std::min( n - 1, hi );
+        if( b < a ) return 0.0;
+        return sum( a, b ) / (double)( b - a + 1 );
+    }
+};
+
+} // namespace
+
 std::vector<twGrooveMetricSeries> twGrooveDeriveMetrics(
     const std::vector<twGrooveResRecord> &res,
     const std::vector<twGrooveEvRecord>  &ev,
+    uint32_t hopFrames, uint32_t rate,
+    const std::vector<std::string> &unitNames,
+    const twGrooveReadParams &params )
+{
+    return twGrooveDeriveMetrics( res, ev, std::vector<twGrooveDynRecord>{},
+                                  hopFrames, rate, unitNames, params );
+}
+
+std::vector<twGrooveMetricSeries> twGrooveDeriveMetrics(
+    const std::vector<twGrooveResRecord> &res,
+    const std::vector<twGrooveEvRecord>  &ev,
+    const std::vector<twGrooveDynRecord> &dyn,
     uint32_t hopFrames, uint32_t rate,
     const std::vector<std::string> &unitNames,
     const twGrooveReadParams &params )
@@ -242,5 +284,118 @@ std::vector<twGrooveMetricSeries> twGrooveDeriveMetrics(
     out.push_back( std::move( evConfS ) );
     out.push_back( std::move( scoreS ) );
     out.push_back( std::move( densityS ) );
+
+    // --- Tier B ("groove.dyn", proposal 40 M3c) ---------------------------
+    // Appended ONLY when dyn records exist and cover the same hop grid as
+    // res -- a pre-M3c store shows exactly the Tier A series above, never
+    // sentinel-filled ghost rows. See the header for each series' law.
+    if( !dyn.empty() && dyn.size() == nHops && !dyn[0].units.empty() ) {
+        const uint32_t dynUnits = (uint32_t)dyn[0].units.size();
+        const double   hopSec   = (double)hopFrames / (double)rate;
+
+        // The reference unit: by name when the names are known, else the
+        // first column (the default ensemble's own order).
+        uint32_t refU = 0;
+        for( uint32_t u = 0; u < dynUnits && u < unitNames.size(); u++ )
+            if( unitNames[u] == "reference" ) { refU = u; break; }
+
+        std::vector<double> supRaw( nHops ), tenRaw( nHops ),
+                             slipRaw( nHops ), hypRaw( nHops );
+        for( size_t i = 0; i < nHops; i++ ) {
+            const twGrooveUnitDynSample &s =
+                dyn[i].units[std::min<size_t>( refU, dyn[i].units.size() - 1 )];
+            supRaw[i]  = s.support;
+            tenRaw[i]  = s.tension;
+            slipRaw[i] = s.slip;
+            hypRaw[i]  = std::hypot( (double)s.support, (double)s.tension );
+        }
+        const PrefixMean supPre( supRaw ), tenPre( tenRaw ),
+                          slipPre( slipRaw ), hypPre( hypRaw );
+
+        const long halfSmooth = std::max<long>( 1, (long)std::llround(
+                                    0.5 * params.dynSmoothSec / hopSec ) );
+        const long halfLean   = std::max<long>( 1, (long)std::llround(
+                                    0.5 * params.leanWindowSec / hopSec ) );
+
+        // support / tension: smoothed, run-peak-|.|-normalized, 0.5-centered.
+        auto pushSigned = [&]( const char *id, const char *label,
+                               const PrefixMean &pre ) {
+            std::vector<double> sm( nHops );
+            double peak = 0.0;
+            for( size_t i = 0; i < nHops; i++ ) {
+                sm[i] = pre.mean( (long)i - halfSmooth, (long)i + halfSmooth );
+                peak  = std::max( peak, std::fabs( sm[i] ) );
+            }
+            twGrooveMetricSeries s;
+            s.id    = id;
+            s.label = label;
+            s.value.assign( nHops, 0.5f );
+            if( peak > 0.0 )
+                for( size_t i = 0; i < nHops; i++ )
+                    s.value[i] = (float)( 0.5 + 0.5 * sm[i] / peak );
+            out.push_back( std::move( s ) );
+        };
+        pushSigned( "support", "Drive support (in-phase)", supPre );
+        pushSigned( "tension", "Counter-tension (quadrature)", tenPre );
+
+        // lean: F-weighted mean of sin(phi) -- sum(tension)/sum(k*F) over
+        // the lean window; the confound-free lean, sentinel where the
+        // window carries essentially no drive at all.
+        {
+            twGrooveMetricSeries s;
+            s.id    = "lean";
+            s.label = "Lean (F-weighted sin dphi)";
+            s.value.assign( nHops, kNoData );
+            for( size_t i = 0; i < nHops; i++ ) {
+                const double sumH = hypPre.sum( (long)i - halfLean,
+                                                (long)i + halfLean );
+                if( sumH <= 1e-9 ) continue;
+                const double lean = tenPre.sum( (long)i - halfLean,
+                                                (long)i + halfLean ) / sumH;
+                s.value[i] = (float)( 0.5 + 0.5 * std::max( -1.0,
+                                                 std::min( 1.0, lean ) ) );
+            }
+            out.push_back( std::move( s ) );
+        }
+
+        // slip: windowed mean, 1 - clamp(mean/slipCap).
+        {
+            twGrooveMetricSeries s;
+            s.id    = "slip";
+            s.label = "Phase lock (1 - slip)";
+            s.value.assign( nHops, 0.0f );
+            for( size_t i = 0; i < nHops; i++ ) {
+                const double m = slipPre.mean( (long)i - halfSmooth,
+                                               (long)i + halfSmooth );
+                const double c = params.slipCap > 0.0
+                                   ? std::min( 1.0, std::max( 0.0, m / params.slipCap ) )
+                                   : 1.0;
+                s.value[i] = (float)( 1.0 - c );
+            }
+            out.push_back( std::move( s ) );
+        }
+
+        // move:<unit>: dissipated power over the unit's own run peak --
+        // the section 3.4 per-body-part display.
+        for( uint32_t u = 0; u < dynUnits; u++ ) {
+            const std::string name =
+                u < unitNames.size() && !unitNames[u].empty()
+                    ? unitNames[u] : "unit" + std::to_string( u );
+            twGrooveMetricSeries s;
+            s.id    = "move:" + name;
+            s.label = "Movement " + name;
+            s.value.assign( nHops, 0.0f );
+            double peak = 0.0;
+            for( size_t i = 0; i < nHops; i++ )
+                if( u < dyn[i].units.size() )
+                    peak = std::max( peak, (double)dyn[i].units[u].dissip );
+            if( peak > 0.0 )
+                for( size_t i = 0; i < nHops; i++ )
+                    if( u < dyn[i].units.size() )
+                        s.value[i] = (float)std::min(
+                            1.0, (double)dyn[i].units[u].dissip / peak );
+            out.push_back( std::move( s ) );
+        }
+    }
     return out;
 }

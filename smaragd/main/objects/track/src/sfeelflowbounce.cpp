@@ -287,8 +287,13 @@ void SFeelFlowTrackBounce::start()
                             const bool haveEv = twSidecarStore::instance().load(
                                 content, twAspect::GrooveEv,
                                 twAspect::GrooveEvVersion, gpHash ) != nullptr;
+                            // M3c: all THREE aspects (see
+                            // enqueueGrooveAnalysis's own comment).
+                            const bool haveDyn = twSidecarStore::instance().load(
+                                content, twAspect::GrooveDyn,
+                                twAspect::GrooveDynVersion, gpHash ) != nullptr;
 
-                            if( haveRes && haveEv ) {
+                            if( haveRes && haveEv && haveDyn ) {
                                 // Already valid for this exact bounce
                                 // content -- skip the heavy pass, but this
                                 // IS a fresh, successful bounce: refresh the
@@ -351,6 +356,18 @@ void SFeelFlowTrackBounce::start()
                                     twSidecarStore::instance().store(
                                         qi, built.evPayload.data(),
                                         (uint64_t) built.evPayload.size() );
+
+                                    // Proposal 40 M3c: the pass-1
+                                    // dynamics (Tier B).
+                                    qi.aspectId      = twAspect::GrooveDyn;
+                                    qi.aspectVersion = twAspect::GrooveDynVersion;
+                                    qi.recordStride  =
+                                        (uint64_t) built.nUnits * 4 * 4;
+                                    qi.recordCount   = built.dynRecordCount;
+                                    qi.hopFrames     = built.hopFrames;
+                                    twSidecarStore::instance().store(
+                                        qi, built.dynPayload.data(),
+                                        (uint64_t) built.dynPayload.size() );
 
                                     // Proposal 40 M3: the physical-readout
                                     // summary, IN-MEMORY only (never part of
@@ -484,6 +501,21 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                                 evRecords = twGrooveDecodeEvPayload(
                                     evPayload.data(), evPayload.size() );
                         }
+                        // M3c: the dynamics aspect. A miss (a pre-M3c
+                        // store entry) derives the Tier A series only --
+                        // the Tier B rows are ABSENT, never ghosts.
+                        std::vector<twGrooveDynRecord> dynRecords;
+                        std::unique_ptr<twQafReader> dynReader =
+                            twSidecarStore::instance().loadAny(
+                                content, twAspect::GrooveDyn,
+                                twAspect::GrooveDynVersion );
+                        if( dynReader ) {
+                            std::vector<uint8_t> dynPayload;
+                            if( dynReader->readAllPayload( dynPayload ) )
+                                dynRecords = twGrooveDecodeDynPayload(
+                                    dynPayload.data(), dynPayload.size(),
+                                    nUnits );
+                        }
                         // Metric ids must be STABLE across warm and cold
                         // runs (a qxa script addresses "power:reference"),
                         // but physUnitNames_ is in-memory job state that
@@ -507,7 +539,7 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                         // defaults. Per-user tuning of these is M5's
                         // Options page, deliberately not here.
                         fresh->metrics = twGrooveDeriveMetrics(
-                            decoded, evRecords, fresh->hopFrames,
+                            decoded, evRecords, dynRecords, fresh->hopFrames,
                             reader->info().sourceRate, unitNames,
                             twGrooveReadParams{} );
                     }
