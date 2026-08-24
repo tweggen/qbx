@@ -527,10 +527,14 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     documented gap), so the per-unit series names fall back to the DEFAULT
     ensemble's own names when the column count matches it, never to a
     run-dependent spelling. `STrack::feelFlowBandMetricId()` — which series
-    the arranger band paints — is a plain runtime member, default
-    "compliance" (the shipped scalar, so every pre-M3b gate is byte-unchanged
-    by construction), NEVER serialized, NEVER part of staleness, set only by
-    plain calls (the panel combo, `set-feel-flow-metric`); the setter
+    the arranger band paints, since M3d a comma-separated LIST normalized in
+    the ONE setter (split, trimmed, empty -> {"compliance"}), painted as
+    stacked band sub-rows in list order with the row count capped so every
+    row keeps >= 2 px of the fixed band area — is a plain runtime member,
+    default "compliance" (the shipped scalar, one full-height row, so every
+    pre-M3b gate is byte-unchanged by construction), NEVER serialized, NEVER
+    part of staleness, set only by plain calls (the panel's check-list,
+    `set-feel-flow-metric`); the setter
     repaints through `notifyCaptureRevalidated()` and bumps no epoch. A
     value < 0 in any series is the NO-DATA sentinel: the band skips the
     column (neutral, never red — trap 9's fill/break rule) and the strip
