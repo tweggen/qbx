@@ -1299,6 +1299,74 @@ never retroactively.
   round trip (the same Qt windowState blob every dock shares); and
   whether the mapping FEELS right — that is precisely the requester's
   correlate-with-the-body experiment, which this window exists to run.
+  **M3e ACs 4-7 EXECUTED 2026-08-24** (the PUPPET itself). Four pieces, one
+  per layer: `sFeelFlowPoseAt()` + `sFeelFlowPoseDescribe()` in
+  `main/objects/track` (a pure function of one immutable snapshot — no track,
+  no store, no clock, no demand); `SFeelFlowPuppetWidget` in `main/timeline`
+  (paint only, one `SFeelFlowPose` member, `setPose()` the only way in);
+  the EIGHTH dock plus its `meterTick` pump in `SMainWindow`; and
+  `assert-feel-flow-pose` + `SMainWindow::grabFeelFlowPuppet()`.
+
+  **Measured** (`feel_flow_puppet.qxa` over `a_offset15.wav`, the default
+  5-unit ensemble, hopFrames 480, 1622 hops = 16.22 s of material):
+
+  | Frame | Pose | absSum | Pinned |
+  |---|---|---|---|
+  | 240000 (5.00 s, mid) | `bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=0.9262 hipShift=0.1432 energySum=2.0951` | **1.7818** | `minAbsSum="0.50"` (~3.5x margin) |
+  | 900000 (18.75 s, past) | all components **0.0000**, `valid=1` | **0** exactly | `maxAbsSum="0.0001"` |
+  | 240000, before analysis | all 0, `valid=0` | 0 | `valid="0"` |
+  | 240000, after `set-track-volume` | all 0, `valid=0` | 0 | `valid="0"` |
+
+  The mid-material line is pinned in FULL as the determinism assertion (the
+  same frame asserted twice), and was verified identical on the COLD run and
+  on three consecutive WARM runs. The margin on `minAbsSum` is deliberately
+  loose: the quantity is a sum of five oscillating components, so pinning it
+  near 1.78 would be pinning a PHASE rather than "the figure is moving".
+
+  **A REAL DEFECT THE CASE FOUND ON ITS SECOND RUN, and it is the reason a
+  determinism phase earns its place.** The M3b default-ensemble fallback for
+  unit NAMES was applied to a LOCAL used only for the metric ids. The pose
+  maps units onto body parts BY NAME out of `SFeelFlowUiData::unitNames`,
+  which stayed EMPTY on a warm-store first bounce (`physUnitNames_` is
+  in-memory job state — the documented M3 gap) — so **every warm run produced
+  `valid=1` with all five components at exactly 0** while every metric row
+  read fine. The puppet simply stood still on the second run of any case, and
+  nothing before this read `unitNames` closely enough to notice. Fixed by
+  resolving the fallback into `fresh->unitNames` itself, beside `nUnits`, so
+  the metric ids and the pose are built from ONE list.
+
+  **Watched failing** — the pose function sabotaged to return a constant
+  nonzero pose (`valid=true`, every component 0.5, ignoring the data)
+  produced **4 of the 7 pose assertions failing**, and the split is exactly
+  the one that sabotage should produce:
+
+  | Action | Result under sabotage |
+  |---|---|
+  | #4 before-analysis `valid="0"` | **FAILS** (valid is 1, expected 0) |
+  | #8 mid-material `minAbsSum="0.50"` | passes (2.5 clears the floor) — a floor cannot catch a constant |
+  | #9 past-material `maxAbsSum="0.0001"` | **FAILS** (absSum 2.5 against 0.0001) |
+  | #10/#11 determinism `contains=` | **FAIL** (the constant line lacks the pinned one) |
+  | #13 post-stale `valid="0"` | **FAILS** (valid is 1) |
+
+  Restored, `qxa.feel_flow_puppet` and all eight other `qxa.feel_flow_*`
+  cases plus `action_roundtrip_test` are green, and `check_layering` /
+  `check_logging` are clean.
+
+  NOT gated, confirming and extending the list above: the ANIMATION itself
+  and its smoothness (the pose AT a frame is gated; the motion BETWEEN frames
+  is the meterTick cadence, and nothing measures it); every aesthetic of the
+  figure (the joint excursion constants, the palette, the proportions, the
+  antiphase choice); the dock's float/dock/close round trip through Qt's
+  opaque `ui/windowState` blob and its View-menu item; the pump's
+  ACTIVE-LANE-with-fallback track resolution under a project with several
+  analyzed tracks (implemented, no case — a `--test-case` run never shows the
+  dock, so `updateFeelFlowPuppet_` returns at its first statement and the
+  pump is exercised only by hand); the repaint THROTTLE (`kEpsilon`, no case);
+  a trained ensemble whose unit set is not the default five (the pose leaves
+  every part at 0 by design, no case); and whether the mapping FEELS right —
+  precisely the requester's correlate-with-the-body experiment, which this
+  window exists to run.
+
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves

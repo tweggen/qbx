@@ -474,6 +474,25 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                     // -- the ONLY new thing this read path does is stop
                     // discarding the unitPower columns M2 already decoded.
                     fresh->nUnits = nUnits;
+                    // Metric ids must be STABLE across warm and cold runs (a
+                    // qxa script addresses "power:reference"), but
+                    // physUnitNames_ is in-memory job state that stays EMPTY
+                    // when the first bounce of a process hits a warm store
+                    // (the documented M3 gap). Fall back to the default
+                    // ensemble's own names when the column count matches it
+                    // -- every current caller analyzes with exactly that
+                    // ensemble; a future custom ensemble of a different size
+                    // leaves the list EMPTY, so derive falls to its own
+                    // unit<i> naming and the pose leaves every part at 0
+                    // rather than guessing which unit is somebody's pelvis.
+                    fresh->unitNames = physUnitNames_;
+                    if( fresh->unitNames.empty() ) {
+                        const std::vector<twGroovePendulumUnitSpec> def =
+                            twGrooveDefaultEnsemble();
+                        if( def.size() == nUnits )
+                            for( const twGroovePendulumUnitSpec &u : def )
+                                fresh->unitNames.push_back( u.name );
+                    }
                     fresh->perUnitPower.reserve( decoded.size() * (size_t) nUnits );
                     for( const twGrooveResRecord &rec : decoded ) {
                         fresh->compliance.push_back( rec.compliance );
@@ -530,14 +549,19 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                         // future custom ensemble of a different size drops
                         // to derive's own unit<i> naming rather than
                         // guessing.
-                        std::vector<std::string> unitNames = physUnitNames_;
-                        if( unitNames.empty() ) {
-                            const std::vector<twGroovePendulumUnitSpec> def =
-                                twGrooveDefaultEnsemble();
-                            if( def.size() == nUnits )
-                                for( const twGroovePendulumUnitSpec &u : def )
-                                    unitNames.push_back( u.name );
-                        }
+                        //
+                        // M3e: the fallback is applied to `fresh->unitNames`
+                        // ITSELF (below, where it used to be a bare copy of
+                        // physUnitNames_) rather than to a local, so the
+                        // PUPPET POSE -- which maps ensemble units onto body
+                        // parts BY NAME out of this very snapshot -- resolves
+                        // exactly the units the metric ids are built from.
+                        // With the fallback local, a warm-store first bounce
+                        // gave the pose an EMPTY name list and every part sat
+                        // at 0 while the metric rows read fine: a puppet that
+                        // stood still on the second run of the same case.
+                        const std::vector<std::string> &unitNames =
+                            fresh->unitNames;
                         // Read-side constants: the section 2.3 literature
                         // defaults. Per-user tuning of these is M5's
                         // Options page, deliberately not here.
@@ -561,7 +585,10 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
         // process that has bounced at least once always shows what it has,
         // even on a "skip the heavy pass" re-bounce that left these members
         // exactly as a prior real pass set them.
-        fresh->unitNames       = physUnitNames_;
+        // unitNames is resolved ABOVE, next to nUnits, so the default-ensemble
+        // fallback reaches the metric ids AND the puppet pose from one list.
+        // This is the "the sidecar read missed entirely" path.
+        if( fresh->unitNames.empty() ) fresh->unitNames = physUnitNames_;
         fresh->meanSinDeltaPhi = physMeanSinDeltaPhi_;
         fresh->varSinDeltaPhi  = physVarSinDeltaPhi_;
         fresh->meanF           = physMeanF_;

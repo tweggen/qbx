@@ -89,6 +89,9 @@
 #include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/strackdetailpanel.h"
 #include "app/timeline/sfeelflowpanel.h"
+#include "app/timeline/sfeelflowpuppet.h"
+#include "app/objects/track/sfeelflowbounce.h"
+#include "app/objects/track/sfeelflowpose.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptionsdialog.h"
 #include "app/servicesui/scleanupdialog.h"
@@ -1652,6 +1655,35 @@ SMainWindow::SMainWindow()
     if( SApplication::app().isTestCaseMode() )
         qDockMediaBrowser_->hide();
 
+    // The FEEL FLOW PUPPET (proposal 40 M3e AC 5) -- the EIGHTH dock. Created
+    // here in the ctor for the reason every dock above is (shell CONTRACT
+    // inv. 4 fixes the restore order, and restoreState() can only place docks
+    // that already exist), persisted entirely by its objectName through the
+    // existing ui/windowState blob, and HIDDEN on a first run: it is a lab
+    // instrument for a feature under development, not something every user
+    // should meet on launch. Under --test-case it is hidden as well, the media
+    // browser's own rule (trap T10) -- a headless run must not start showing a
+    // window it did not show before. Note the main window is never shown at
+    // all in a --test-case run, so this is belt AND braces; the verb's PNG
+    // grab builds its own parentless instance rather than touching this one.
+    qDockFeelFlowPuppet_ = new QDockWidget( tr( "Feel Flow Puppet" ), this );
+    qDockFeelFlowPuppet_->setObjectName( "dock_feel_flow_puppet" );
+    feelFlowPuppet_ = new SFeelFlowPuppetWidget( qDockFeelFlowPuppet_ );
+    qDockFeelFlowPuppet_->setWidget( feelFlowPuppet_ );
+    addDockWidget( Qt::RightDockWidgetArea, qDockFeelFlowPuppet_ );
+    tabifyDockWidget( qDockMediaBrowser_, qDockFeelFlowPuppet_ );
+    qDockFeelFlowPuppet_->hide();
+
+    // The pump. meterTick is the one main-thread tick that keeps running at a
+    // standing playhead and for a tail after a stop (proposal 34), which is
+    // exactly what an animation driven BY POSITION needs -- and it is the same
+    // tick the Feel Flow panel's own readouts ride. A HIDDEN dock does no work
+    // at all: the visibility check comes first, before any model read.
+    QObject::connect( &SApplication::app(), &SApplication::meterTick, this,
+                      [this]( offset_t pos, qint64, bool ) {
+                          updateFeelFlowPuppet_( pos );
+                      } );
+
     // Proposal 38 gate 3: a deferred `media:` drop has things to say -- it is
     // fetching, it could not fetch, the target track went away, the project is
     // unsaved so the clip references a machine-local cache. app/media is
@@ -1694,6 +1726,11 @@ SMainWindow::SMainWindow()
     QAction *actMedia = qDockMediaBrowser_->toggleViewAction();
     actMedia->setText( tr( "&Media browser" ) );
     viewMenu->addAction( actMedia );
+    // No shortcut, for the media browser's own reason: a binding nobody chose
+    // is worse than none, and this is a lab instrument besides.
+    QAction *actPuppet = qDockFeelFlowPuppet_->toggleViewAction();
+    actPuppet->setText( tr( "Feel Flow &puppet" ) );
+    viewMenu->addAction( actPuppet );
     menuBar()->insertMenu( qTestMenu_->menuAction(), viewMenu );
 
     // F2 (default) opens the clip properties panel. There is no keybinding UI,
@@ -3042,6 +3079,94 @@ bool SMainWindow::grabFeelFlow( const QString &path, const QString &trackPath,
     panel.resize( w > 0 ? w : 320, h > 0 ? h : 200 );
     if( panel.layout() ) panel.layout()->activate();
     const QPixmap pm = panel.grab();
+    if( pm.isNull() ) return false;
+    return pm.save( path, "PNG" );
+}
+
+// --- proposal 40 "Feel Flow" M3e: the puppet dock -------------------------
+
+namespace {
+
+// The first STrack in `node`'s subtree (node itself included) that has a
+// completed, non-stale analysis. The DOCK's fallback when the active lane is
+// not a track (or has nothing to show) -- a puppet that goes blank because
+// the user clicked the master lane would be read as a bug, and the one thing
+// a lab instrument must do is show the data that exists.
+STrack *firstFeelFlowTrack( SObject *node )
+{
+    if( !node ) return nullptr;
+    if( STrack *t = dynamic_cast<STrack *>( node ) ) {
+        if( t->feelFlowHasResult() && !t->feelFlowStale() ) return t;
+    }
+    for( SLink *lk : node->childLinks() ) {
+        if( STrack *t = firstFeelFlowTrack( &lk->getSObject() ) ) return t;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+void SMainWindow::updateFeelFlowPuppet_( offset_t pos )
+{
+    // A hidden dock does NO work -- not even the model walk below. This check
+    // is first for exactly that reason (the Feel Flow panel's own rule).
+    if( !feelFlowPuppet_ || !qDockFeelFlowPuppet_
+        || !qDockFeelFlowPuppet_->isVisible() )
+        return;
+
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject  *root = proj ? proj->getRootComponent() : nullptr;
+
+    // The ACTIVE lane when it is a track (the lane the user is working on --
+    // the same activeLane() STrackRendererInline::laneFillColor reads), else
+    // the first track with a fresh result.
+    STrack *track = root ? dynamic_cast<STrack *>( root->activeLane() ) : nullptr;
+    if( !track || !track->feelFlowHasResult() )
+        track = firstFeelFlowTrack( root );
+
+    // STALE == INVALID, and that rule lives HERE rather than inside
+    // sFeelFlowPoseAt(): the pose function never sees the track, and the
+    // painter's own visibility rule stays the single place staleness is
+    // decided (SFeelFlowTrackBounce::feelFlowForUi()'s own split). The verb
+    // MIRRORS this, so the gate and the paint agree by construction.
+    if( !track || track->feelFlowStale() ) {
+        feelFlowPuppet_->setPose( SFeelFlowPose() );
+        return;
+    }
+    std::shared_ptr<const SFeelFlowUiData> data = track->feelFlowForUi();
+    if( !data ) {
+        feelFlowPuppet_->setPose( SFeelFlowPose() );
+        return;
+    }
+    // One cached, lock-free read plus one pure function. No demand, no store
+    // access, no freeze -- the level meters' discipline verbatim.
+    feelFlowPuppet_->setPose( sFeelFlowPoseAt( *data, pos ) );
+}
+
+bool SMainWindow::grabFeelFlowPuppet( const QString &path,
+                                      const QString &trackPath,
+                                      offset_t frame, int w, int h )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return false;
+
+    // The pose from the SAME function the docked instance paints and the
+    // verb asserts, under the SAME stale rule -- never a third answer.
+    SFeelFlowPose pose;
+    if( !track->feelFlowStale() ) {
+        if( std::shared_ptr<const SFeelFlowUiData> data = track->feelFlowForUi() )
+            pose = sFeelFlowPoseAt( *data, frame );
+    }
+
+    // Parentless and never shown, the grabFeelFlow/describeTrackHead shape.
+    SFeelFlowPuppetWidget puppet( nullptr );
+    puppet.resize( w > 0 ? w : 220, h > 0 ? h : 260 );
+    puppet.setPose( pose );
+    const QPixmap pm = puppet.grab();
     if( pm.isNull() ) return false;
     return pm.save( path, "PNG" );
 }
