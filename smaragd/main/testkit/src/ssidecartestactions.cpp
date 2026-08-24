@@ -890,3 +890,41 @@ static const bool s_reg_assert_feel_flow_panel = (
         []{ return new SAssertFeelFlowPanelAction; }
     ), true
 );
+
+// ------------------------------------------------------ set-feel-flow-metric
+
+SApplyResult SSetFeelFlowMetricAction::apply( SProject *project )
+{
+    STrack *track = feelFlowTrackAt( project, trackPath_ );
+    if( !track ) {
+        qWarning() << "set-feel-flow-metric: no STrack at" << trackPath_;
+        return { false, nullptr };
+    }
+    // The SAME plain call the panel's combo makes (M3b): a runtime view
+    // preference, never an action's edit. An unknown id is accepted -- the
+    // band falls back to compliance at paint time by design.
+    track->setFeelFlowBandMetricId( metric_.toStdString() );
+    qDebug() << "set-feel-flow-metric: track" << trackPath_ << "metric"
+             << QString::fromStdString( track->feelFlowBandMetricId() );
+    return { true, nullptr };
+}
+
+void SSetFeelFlowMetricAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "metric", metric_ );
+}
+
+bool SSetFeelFlowMetricAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    metric_    = elem.attribute( "metric", "" );
+    return true;
+}
+
+static const bool s_reg_set_feel_flow_metric = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("set-feel-flow-metric"),
+        []{ return new SSetFeelFlowMetricAction; }
+    ), true
+);

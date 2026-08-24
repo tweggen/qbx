@@ -208,6 +208,20 @@ private:
  *                  carries `lutIndexMin=`/`lutIndexMax=` (both -1 when
  *                  `lutPixels` is 0) so a case can also read them via
  *                  `contains=` for a specific value.
+ * - minLutIndexMin,
+ *   maxLutSpread:  proposal 40 M3b (the metric lab), optional, default -1
+ *                  (unset, no check). BAND MODE ONLY, strictly additive like
+ *                  the other LUT attributes. `minLutIndexMin` requires
+ *                  `lutIndexMin >= minLutIndexMin` -- the DIRECTIONAL
+ *                  assertion the band-metric switch needs (e.g. a low-jitter
+ *                  fixture's `sigma` metric must sit in the green half of
+ *                  the ramp, so its lowest observed index is bounded from
+ *                  below, where compliance legitimately reaches 0).
+ *                  `maxLutSpread` is `minLutSpread`'s ceiling twin:
+ *                  `lutIndexMax - lutIndexMin <= maxLutSpread` (a
+ *                  near-uniform metric's ramp is NARROW where compliance's
+ *                  spans all 24 steps). Both are checked only when
+ *                  `lutPixels > 0` -- an empty band has no indices to bound.
  */
 class SAssertLaneOverlayAction : public SAction
 {
@@ -222,7 +236,8 @@ public:
                  QStringLiteral( "grabHeight" ), QStringLiteral( "grabPng" ),
                  QStringLiteral( "contains" ),   QStringLiteral( "bandOnly" ),
                  QStringLiteral( "maxPixels" ),  QStringLiteral( "minLutPixels" ),
-                 QStringLiteral( "maxLutPixels" ), QStringLiteral( "minLutSpread" ) };
+                 QStringLiteral( "maxLutPixels" ), QStringLiteral( "minLutSpread" ),
+                 QStringLiteral( "minLutIndexMin" ), QStringLiteral( "maxLutSpread" ) };
     }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -241,6 +256,8 @@ private:
     int     minLutPixels_  = -1;   // -1 = unset -> no floor check (band mode only)
     int     maxLutPixels_  = -1;   // -1 = unset -> no ceiling check (band mode only)
     int     minLutSpread_  = -1;   // -1 = unset -> no distinct-index-spread check
+    int     minLutIndexMin_ = -1;  // -1 = unset -> no lower bound on lutIndexMin (M3b)
+    int     maxLutSpread_   = -1;  // -1 = unset -> no spread ceiling (M3b)
 };
 
 /**

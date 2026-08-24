@@ -463,6 +463,54 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                     }
                     if( !decoded.empty() )
                         fresh->hopFrames = (uint32_t) reader->info().hopFrames;
+
+                    // Proposal 40 M3b: the metric lab. One more loadAny on
+                    // the SAME cached reload -- "groove.ev" was written by
+                    // the same job that wrote "groove.res", so a res hit
+                    // with an ev miss is legitimate only for a pre-M1 store
+                    // entry and derives the res-only series with an empty
+                    // event list (every event-derived hop holds the
+                    // sentinel). Derived HERE, once per reload, so the
+                    // paint path and the panel read one immutable snapshot.
+                    if( fresh->hopFrames != 0 && reader->info().sourceRate != 0 ) {
+                        std::vector<twGrooveEvRecord> evRecords;
+                        std::unique_ptr<twQafReader> evReader =
+                            twSidecarStore::instance().loadAny(
+                                content, twAspect::GrooveEv,
+                                twAspect::GrooveEvVersion );
+                        if( evReader ) {
+                            std::vector<uint8_t> evPayload;
+                            if( evReader->readAllPayload( evPayload ) )
+                                evRecords = twGrooveDecodeEvPayload(
+                                    evPayload.data(), evPayload.size() );
+                        }
+                        // Metric ids must be STABLE across warm and cold
+                        // runs (a qxa script addresses "power:reference"),
+                        // but physUnitNames_ is in-memory job state that
+                        // stays EMPTY when the first bounce of a process
+                        // hits a warm store (the documented M3 gap). Fall
+                        // back to the default ensemble's own names when
+                        // the column count matches it -- every current
+                        // caller analyzes with exactly that ensemble; a
+                        // future custom ensemble of a different size drops
+                        // to derive's own unit<i> naming rather than
+                        // guessing.
+                        std::vector<std::string> unitNames = physUnitNames_;
+                        if( unitNames.empty() ) {
+                            const std::vector<twGroovePendulumUnitSpec> def =
+                                twGrooveDefaultEnsemble();
+                            if( def.size() == nUnits )
+                                for( const twGroovePendulumUnitSpec &u : def )
+                                    unitNames.push_back( u.name );
+                        }
+                        // Read-side constants: the section 2.3 literature
+                        // defaults. Per-user tuning of these is M5's
+                        // Options page, deliberately not here.
+                        fresh->metrics = twGrooveDeriveMetrics(
+                            decoded, evRecords, fresh->hopFrames,
+                            reader->info().sourceRate, unitNames,
+                            twGrooveReadParams{} );
+                    }
                 }
             }
         }

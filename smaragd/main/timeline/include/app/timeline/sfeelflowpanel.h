@@ -8,6 +8,7 @@
 class QLabel;
 class QPushButton;
 class QComboBox;
+class SFeelFlowMetricStrip;
 
 // Proposal 40 "Feel Flow" M3 -- the Track Detail dock's "Feel Flow" section
 // (design section 4.4's "tuning device" readout + controls). Mounted from
@@ -44,6 +45,7 @@ private slots:
     void onAnalyzeClicked();
     void onLearnClicked();
     void onModeChanged( int index );
+    void onBandMetricChanged( int index );
     void onMeterTick( offset_t pos, qint64 nowMs, bool live );
 
 private:
@@ -57,6 +59,14 @@ private:
     QPushButton *analyzeButton_ = nullptr;
     QPushButton *learnButton_   = nullptr;
     QComboBox   *modeCombo_     = nullptr;
+
+    // --- proposal 40 M3b: the metric lab -------------------------------
+    // The stacked strip (one heatmap row per derived series, defined in
+    // the .cpp) and the band-metric selector. The combo writes the
+    // track's RUNTIME feelFlowBandMetricId() -- a view preference, a
+    // plain call, never an action.
+    SFeelFlowMetricStrip *metricStrip_ = nullptr;
+    QComboBox            *bandCombo_   = nullptr;
 
     // True while onModeChanged() writes modeCombo_ from the model, so the
     // resulting currentIndexChanged never turns a refresh into a new action.
