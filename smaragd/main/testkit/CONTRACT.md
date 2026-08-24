@@ -1347,8 +1347,23 @@ The describe line is ALWAYS `qDebug()`'d, pass or fail. That is how a case
 measures a bound before pinning it, which is this repo's rule and is how
 `feel_flow_puppet.qxa`'s `minAbsSum="0.50"` (measured 1.7818) was arrived at.
 
-Gate: `qxa.feel_flow_puppet` plus `action_roundtrip_test`. **Watched failing**
-under a pose function returning a constant nonzero pose: the past-material
-`maxAbsSum` and both `valid="0"` phases bite; the mid-material floor and the
-grab do not, which is exactly the split a constant-return sabotage should
-produce.
+Gate: `qxa.feel_flow_puppet` plus `action_roundtrip_test`. **Watched failing
+under TWO sabotages, one per layer, and the SPLIT is the finding.** A pose
+function returning a constant nonzero pose fails THREE of the seven pose
+assertions — the past-material `maxAbsSum` and both determinism `contains=`
+lines — while the mid-material `minAbsSum` floor passes (a floor cannot catch
+a constant that clears it) and **neither `valid="0"` phase fires at all**,
+because the verb applies the stale rule BEFORE calling the pose function, so a
+sabotaged function is unreachable from them by construction. The mirror
+therefore needs its own sabotage: dropping the stale check from this verb
+fails the post-`set-track-volume` phase, which then reports the exact pre-edit
+pose where the dock would show the dim "no fresh analysis" figure. The
+BEFORE-analysis `valid="0"` passes even then, honestly — there is no result
+yet, so the snapshot is empty and the pose is invalid by the DATA rather than
+by the rule; only the post-edit phase can separate "stale" from "absent".
+
+NOT gated: the WIDGET's own use of the pose. `grabPng` is coverage, never an
+oracle — a `paintEvent` that ignored its member entirely would still produce a
+file and still pass, and nothing here classifies those pixels the way
+`assert-take-lane` classifies a take row. A pixel gate on a stick figure would
+be pinning aesthetics, which M3e explicitly does not.

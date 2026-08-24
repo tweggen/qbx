@@ -1335,18 +1335,31 @@ never retroactively.
   resolving the fallback into `fresh->unitNames` itself, beside `nUnits`, so
   the metric ids and the pose are built from ONE list.
 
-  **Watched failing** — the pose function sabotaged to return a constant
-  nonzero pose (`valid=true`, every component 0.5, ignoring the data)
-  produced **4 of the 7 pose assertions failing**, and the split is exactly
-  the one that sabotage should produce:
+  **Watched failing, TWO sabotages, one per layer — and the SPLIT is the
+  finding, not the failure count.**
 
-  | Action | Result under sabotage |
-  |---|---|
-  | #4 before-analysis `valid="0"` | **FAILS** (valid is 1, expected 0) |
-  | #8 mid-material `minAbsSum="0.50"` | passes (2.5 clears the floor) — a floor cannot catch a constant |
-  | #9 past-material `maxAbsSum="0.0001"` | **FAILS** (absSum 2.5 against 0.0001) |
-  | #10/#11 determinism `contains=` | **FAIL** (the constant line lacks the pinned one) |
-  | #13 post-stale `valid="0"` | **FAILS** (valid is 1) |
+  *Sabotage 1: the POSE FUNCTION returns a constant* (`valid=true`, every
+  component 0.5, the data ignored). **Three of the seven pose assertions
+  fail** — #9 (past-material `maxAbsSum`: absSum 2.5 against 0.0001) and
+  #10/#11 (the determinism `contains=`, the constant line lacking the
+  pinned one). The mid-material `minAbsSum` floor PASSES (2.5 clears 0.50),
+  which is what a floor is for and why the determinism phase carries the
+  per-component claim rather than the floor.
+
+  **Neither `valid="0"` phase fires under sabotage 1, and the reason is the
+  design rather than a hole**: both are STALE phases, and the verb applies
+  the paint path's stale rule BEFORE calling the pose function at all — so a
+  sabotaged pose function is unreachable from them by construction. Those
+  two assertions gate the MIRROR, which needs its own sabotage:
+
+  *Sabotage 2: the VERB drops the stale rule* and reads whatever is cached.
+  **Action #13 fails** — the post-`set-track-volume` phase reports
+  `valid=1 bounceY=0.4274 …`, the exact pre-edit pose, where the dock would
+  show the dim "no fresh analysis" figure. The BEFORE-analysis `valid="0"`
+  (#4) still passes even here, honestly: there is no result at all yet, so
+  `feelFlowForUi()` hands back an empty snapshot and the pose is invalid by
+  the data rather than by the rule. Only the post-edit phase can separate
+  "stale" from "absent", and it does.
 
   Restored, `qxa.feel_flow_puppet` and all eight other `qxa.feel_flow_*`
   cases plus `action_roundtrip_test` are green, and `check_layering` /
@@ -1363,7 +1376,12 @@ never retroactively.
   dock, so `updateFeelFlowPuppet_` returns at its first statement and the
   pump is exercised only by hand); the repaint THROTTLE (`kEpsilon`, no case);
   a trained ensemble whose unit set is not the default five (the pose leaves
-  every part at 0 by design, no case); and whether the mapping FEELS right —
+  every part at 0 by design, no case); **the WIDGET's own use of the pose** —
+  the PNG grab is coverage, never an oracle, so a `paintEvent` that ignored
+  its member entirely would still produce a file and still pass, and nothing
+  here classifies those pixels the way `assert-take-lane` classifies a take
+  row (a pixel gate on a stick figure would be pinning aesthetics, which this
+  milestone explicitly does not); and whether the mapping FEELS right —
   precisely the requester's correlate-with-the-body experiment, which this
   window exists to run.
 
