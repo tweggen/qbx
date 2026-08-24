@@ -376,13 +376,20 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
         const double kPi   = 3.14159265358979323846;
         const double dtSec = pendulumHopFrames / (double)rate;
 
+        // cph/sph are the M3e (v2) PHASE channels: cos/sin of the same phi,
+        // computed here on the pendulum's own hop grid and bin-averaged
+        // below by the identical lambda. Averaging cos and sin separately
+        // IS the circular-mean numerator; a wrapped phase itself may never
+        // be bin-averaged as one scalar (twaspects.h's normative doc).
         std::vector<std::vector<double>> sup( nUnits ), ten( nUnits ),
+                                          cph( nUnits ), sph( nUnits ),
                                           slp( nUnits ), dis( nUnits );
         for( uint32_t u = 0; u < nUnits; u++ ) {
             const twGroovePendulumUnitTrajectory &traj =
                 result.unitTrajectories[u];
             const size_t n = traj.phaseWrapped.size();
             sup[u].assign( n, 0.0 ); ten[u].assign( n, 0.0 );
+            cph[u].assign( n, 0.0 ); sph[u].assign( n, 0.0 );
             slp[u].assign( n, 0.0 ); dis[u].assign( n, 0.0 );
 
             // k/alpha mirror runPass1's own derivation (twgroovependulum.cc)
@@ -399,8 +406,12 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
                 const double phi = traj.phaseWrapped[t];
                 const double F   = traj.driveF[t];
                 const double m   = traj.magnitude[t];
-                sup[u][t] = k * F * std::cos( phi );
-                ten[u][t] = k * F * std::sin( phi );
+                const double cp = std::cos( phi );
+                const double sp = std::sin( phi );
+                sup[u][t] = k * F * cp;
+                ten[u][t] = k * F * sp;
+                cph[u][t] = cp;
+                sph[u][t] = sp;
                 dis[u][t] = 2.0 * std::fabs( alpha ) * m * m;
                 if( t > 0 && dtSec > 0.0 ) {
                     // Instantaneous phase advance: the per-hop wrapped
@@ -428,7 +439,7 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
         // FINER than the pendulum's, a non-default envRateHz) falls back to
         // the point sample.
         out.dynRecordCount = nRecs;
-        out.dynPayload.reserve( (size_t)nRecs * (size_t)nUnits * 4 * 4 );
+        out.dynPayload.reserve( (size_t)nRecs * (size_t)nUnits * 6 * 4 );
         for( uint64_t k = 0; k < nRecs; k++ ) {
             const double binLoF = pendulumHopFrames > 0.0
                 ? (double)( k * (uint64_t)out.hopFrames ) / pendulumHopFrames : 0.0;
@@ -452,8 +463,12 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
                 putF32( out.dynPayload, (float)v );
             };
             for( uint32_t u = 0; u < nUnits; u++ ) {
+                // The WIRE order (twaspects.h): support, tension, cosPhi,
+                // sinPhi, slip, dissip.
                 emit( sup[u] );
                 emit( ten[u] );
+                emit( cph[u] );
+                emit( sph[u] );
                 emit( slp[u] );
                 emit( dis[u] );
             }
@@ -499,7 +514,7 @@ std::vector<twGrooveDynRecord> twGrooveDecodeDynPayload(
 {
     std::vector<twGrooveDynRecord> out;
     if( payload == nullptr || nUnits == 0 ) return out;
-    const uint64_t stride = (uint64_t)nUnits * 4 * 4;
+    const uint64_t stride = (uint64_t)nUnits * 6 * 4;
     if( stride == 0 || payloadLen % stride != 0 ) return out;
     const uint64_t n = payloadLen / stride;
     out.reserve( (size_t)n );
@@ -508,11 +523,13 @@ std::vector<twGrooveDynRecord> twGrooveDecodeDynPayload(
         twGrooveDynRecord rec;
         rec.units.resize( nUnits );
         for( uint32_t u = 0; u < nUnits; u++ ) {
-            const uint8_t *s = r + (size_t)u * 16;
+            const uint8_t *s = r + (size_t)u * 24;
             rec.units[u].support = getF32( s );
             rec.units[u].tension = getF32( s + 4 );
-            rec.units[u].slip    = getF32( s + 8 );
-            rec.units[u].dissip  = getF32( s + 12 );
+            rec.units[u].cosPhi  = getF32( s + 8 );
+            rec.units[u].sinPhi  = getF32( s + 12 );
+            rec.units[u].slip    = getF32( s + 16 );
+            rec.units[u].dissip  = getF32( s + 20 );
         }
         out.push_back( std::move( rec ) );
     }

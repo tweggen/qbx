@@ -27,6 +27,7 @@ class SClipPropertiesPanel;
 class SEventEditorDock;
 class SVirtualKeyboardDock;
 class SMediaBrowserPanel;
+class SFeelFlowPuppetWidget;
 
 class SMainWindow
     : public QMainWindow
@@ -368,6 +369,16 @@ public:
     // real click on the docked panel would make. `button` = "analyze" |
     // "learn". False for an unknown button or track.
     bool clickFeelFlowPanel( const QString &trackPath, const QString &button );
+
+    // TEST ENTRY POINT (proposal 40 "Feel Flow" M3e AC 6): paint the puppet
+    // for the named track at `frame` into a PNG, from a parentless off-screen
+    // SFeelFlowPuppetWidget -- here rather than in the testkit for the usual
+    // reason (testkit may not include app/timeline). Coverage, not an oracle:
+    // `assert-feel-flow-pose` asserts the NUMBERS from the same pose function
+    // this fills the widget with, and applies the SAME stale rule, so the
+    // grab only proves the figure draws. False when the path names no track.
+    bool grabFeelFlowPuppet( const QString &path, const QString &trackPath,
+                             offset_t frame, int w, int h );
 
     // TEST ENTRY POINTS for automation (proposal 37 P6). All four go through
     // the shell for the usual reason: testkit may not include app/timeline
@@ -809,6 +820,19 @@ private:
     // existing ui/windowState blob and needs no settings key.
     QDockWidget        *qDockMediaBrowser_ = nullptr;
     SMediaBrowserPanel *mediaBrowser_      = nullptr;
+
+    // The EIGHTH dock (proposal 40 M3e AC 5) -- the Feel Flow puppet. Same
+    // standing as every dock above: created in the ctor, persisted by its
+    // objectName alone, hidden on a first run. It is PAINT ONLY (see
+    // SFeelFlowPuppetWidget): everything it knows arrives through setPose().
+    QDockWidget           *qDockFeelFlowPuppet_ = nullptr;
+    SFeelFlowPuppetWidget *feelFlowPuppet_      = nullptr;
+
+    // The meterTick pump for the dock above. Resolves the track (active lane
+    // when it is a track, else the first with a fresh result), maps STALE to
+    // the INVALID pose, and hands one pose to the widget. Does NOTHING at all
+    // when the dock is hidden -- the visibility check is the first statement.
+    void updateFeelFlowPuppet_( offset_t pos );
     QAction *actClipProps_ = nullptr;   // the F2 (default) binding
 
     // Permanent mode indicator on the right of the status bar.

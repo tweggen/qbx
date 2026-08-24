@@ -1313,3 +1313,57 @@ range 12..23 (spread 11) is separable from EITHER row alone (spread 0, via
 `minLutSpread`) AND from a compliance fallback (spread 23, via
 `maxLutSpread`) — watched failing under a renderer sabotage that paints
 only the first id.
+
+## The puppet verb (proposal 40 M3e AC 6)
+
+`assert-feel-flow-pose` (`ssidecartestactions.cpp`) — `trackPath`, `frame`,
+`valid` (-1/0/1), `minAbsSum` / `maxAbsSum` (-1 = don't check), `contains`,
+`grabPng` / `grabWidth` / `grabHeight`.
+
+**It computes the pose DIRECTLY** — `sFeelFlowPoseAt` over
+`STrack::feelFlowForUi()`, testkit already having the `app/objects/track` edge —
+rather than through the shell. The shell is used only for the PNG
+(`SMainWindow::grabFeelFlowPuppet`), because that needs `app/timeline`, which
+testkit may not include (inv. 5).
+
+**IT MIRRORS THE PAINT PATH'S STALE RULE, AND THAT IS THE POINT OF THE VERB.**
+`STrack::feelFlowStale()` ⇒ the INVALID pose, whatever is still cached —
+line for line what `SMainWindow::updateFeelFlowPuppet_` does. Staleness is
+decided by the PAINTER, never inside the pose function
+(`main/objects/track/CONTRACT.md` inv. 31), so putting the same decision in the
+verb is what makes the gate a statement about what is on screen rather than
+about a library call. A verb that skipped it would report a moving figure while
+the dock showed the dim "no fresh analysis" one.
+
+**ONE SUMMED BOUND, not ten per-component ones.** `minAbsSum`/`maxAbsSum` bound
+`|bounceY|+|sway|+|armSwing|+|headNod|+|hipShift|`. What a case actually needs to
+separate is "the figure is MOVING" from "the figure is STILL", and any single
+joint can legitimately sit near zero at a given phase while the body as a whole
+is in motion — a per-component floor would be pinning a phase. `contains=`
+against the full `sFeelFlowPoseDescribe` line is the DETERMINISM claim: the same
+frame twice, every component at 4 decimals.
+
+The describe line is ALWAYS `qDebug()`'d, pass or fail. That is how a case
+measures a bound before pinning it, which is this repo's rule and is how
+`feel_flow_puppet.qxa`'s `minAbsSum="0.50"` (measured 1.7818) was arrived at.
+
+Gate: `qxa.feel_flow_puppet` plus `action_roundtrip_test`. **Watched failing
+under TWO sabotages, one per layer, and the SPLIT is the finding.** A pose
+function returning a constant nonzero pose fails THREE of the seven pose
+assertions — the past-material `maxAbsSum` and both determinism `contains=`
+lines — while the mid-material `minAbsSum` floor passes (a floor cannot catch
+a constant that clears it) and **neither `valid="0"` phase fires at all**,
+because the verb applies the stale rule BEFORE calling the pose function, so a
+sabotaged function is unreachable from them by construction. The mirror
+therefore needs its own sabotage: dropping the stale check from this verb
+fails the post-`set-track-volume` phase, which then reports the exact pre-edit
+pose where the dock would show the dim "no fresh analysis" figure. The
+BEFORE-analysis `valid="0"` passes even then, honestly — there is no result
+yet, so the snapshot is empty and the pose is invalid by the DATA rather than
+by the rule; only the post-edit phase can separate "stale" from "absent".
+
+NOT gated: the WIDGET's own use of the pose. `grabPng` is coverage, never an
+oracle — a `paintEvent` that ignored its member entirely would still produce a
+file and still pass, and nothing here classifies those pixels the way
+`assert-take-lane` classifies a take row. A pixel gate on a stick figure would
+be pinning aesthetics, which M3e explicitly does not.

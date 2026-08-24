@@ -105,11 +105,19 @@ struct twGrooveEvRecord {
     uint16_t flags       = 0;
 };
 
-/** One unit's slice of a decoded "groove.dyn" record (proposal 40 M3c —
- * twaspects.h's normative doc: phi = arg z, k·F ≡ hypot(support,tension)). */
+/** One unit's slice of a decoded "groove.dyn" record (proposal 40 M3c, v2
+ * since M3e — twaspects.h's normative doc: phi = arg z, k·F ≡
+ * hypot(support,tension)). Field order matches the WIRE order. */
 struct twGrooveUnitDynSample {
     float support = 0.0f;   // k·F·cos(phi), signed: pushes (>0) / brakes (<0)
     float tension = 0.0f;   // k·F·sin(phi), signed: section 3.5's c_p per hop
+    // The unit's own PHASE as two channels (M3e / v2), each bin-averaged
+    // SEPARATELY -- which IS the circular-mean numerator, so
+    // hypot(cosPhi,sinPhi) <= 1 and the shortfall measures the in-bin phase
+    // spread. A wrapped phase may NEVER be bin-averaged as one scalar (a
+    // wrap makes the mean the opposite phase), which is why there are two.
+    float cosPhi  = 0.0f;   // cos(arg z), bin-averaged
+    float sinPhi  = 0.0f;   // sin(arg z), bin-averaged
     float slip    = 0.0f;   // |dphi/dt − ω|/ω, 0 at lock
     float dissip  = 0.0f;   // 2·|α|·|z|², the movement outlet (section 3.4)
 };
@@ -134,7 +142,8 @@ struct twGrooveAspectPayloads {
 
     // Proposal 40 M3c (Tier B): the "groove.dyn" pass-1 dynamics payload,
     // twaspects.h's normative doc. Same hop grid and record count as
-    // "groove.res"; recordStride = nUnits*4*4.
+    // "groove.res"; recordStride = nUnits*6*4 since the M3e v2 phase
+    // channels.
     std::vector<uint8_t>  dynPayload;
     uint64_t              dynRecordCount = 0;   // == resRecordCount
 
@@ -191,8 +200,11 @@ std::vector<twGrooveResRecord> twGrooveDecodeResPayload(
 std::vector<twGrooveEvRecord> twGrooveDecodeEvPayload(
     const uint8_t *payload, uint64_t payloadLen );
 
-/** Decodes one "groove.dyn" payload (recordStride == nUnits*4*4, proposal
- * 40 M3c) into records. Returns empty on a stride/size mismatch. */
+/** Decodes one "groove.dyn" payload (recordStride == nUnits*6*4, proposal
+ * 40 M3c, v2 since M3e) into records. Returns empty on a stride/size
+ * mismatch -- which is also what a v1 payload handed here produces, and it
+ * cannot arrive: the aspect VERSION is part of the store key, so a v1 entry
+ * misses the load() rather than being decoded at the wrong stride. */
 std::vector<twGrooveDynRecord> twGrooveDecodeDynPayload(
     const uint8_t *payload, uint64_t payloadLen, uint32_t nUnits );
 

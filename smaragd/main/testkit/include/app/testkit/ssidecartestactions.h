@@ -132,6 +132,44 @@
 //       (the band falls back to compliance at paint time) -- the verb fails
 //       only for a missing track.
 //
+//   <assert-feel-flow-pose trackPath="0" frame="0" valid="-1"
+//                          minAbsSum="-1" maxAbsSum="-1" contains=""
+//                          grabPng="" grabWidth="0" grabHeight="0"/>
+//       Proposal 40 "Feel Flow" M3e AC 6 -- THE PUPPET's gate. Computes the
+//       pose the puppet dock would paint for the addressed track at `frame`,
+//       through the SAME pure function it paints from (sFeelFlowPoseAt over
+//       STrack::feelFlowForUi()), and asserts it.
+//
+//       IT MIRRORS THE PAINT PATH'S STALE RULE: a track whose analysis is
+//       STALE yields the INVALID pose regardless of what data is cached,
+//       exactly as SMainWindow::updateFeelFlowPuppet_ does -- staleness is
+//       decided by the painter, never inside the pose function, so the gate
+//       and the screen can never disagree about it.
+//
+//         valid      0/1, -1 = don't check. `SFeelFlowPose::valid`.
+//         minAbsSum  floor on |bounceY|+|sway|+|armSwing|+|headNod|+
+//         maxAbsSum  |hipShift|; -1 = don't check. ONE bound over all five
+//                    components rather than ten per-component ones: what a
+//                    case actually needs to separate is "the figure is
+//                    MOVING" from "the figure is STILL", and any single
+//                    component can legitimately be near zero at a given
+//                    phase while the body as a whole is in motion.
+//         contains   substring of the describe line
+//                    "pose: valid=1 bounceY=... sway=... armSwing=...
+//                    headNod=... hipShift=... energySum=..." (4 decimals,
+//                    sFeelFlowPoseDescribe -- the ONE spelling, shared with
+//                    the widget). Use it for DETERMINISM: asserting the same
+//                    full line at the same frame twice pins every component
+//                    at once.
+//         grabPng    additionally paints the puppet for that same track and
+//                    frame into a PNG in the test output dir
+//                    (SMainWindow::grabFeelFlowPuppet, a parentless
+//                    off-screen widget, grabWidth/grabHeight default to
+//                    220x260). Coverage, not an oracle.
+//       Fails if the track is missing or not an STrack, or any check fails.
+//       The describe line is always qDebug()'d, which is how a case MEASURES
+//       a bound before pinning it.
+//
 // All are transient/test-support actions: not undoable themselves.
 
 class SSidecarRootAction : public SAction {
@@ -306,6 +344,30 @@ public:
 private:
     QString trackPath_ = QStringLiteral("0");
     QString metric_;
+};
+
+// ------------------------------------------------------ assert-feel-flow-pose
+
+class SAssertFeelFlowPoseAction : public SAction {
+public:
+    SAssertFeelFlowPoseAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-feel-flow-pose"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+    QStringList knownAttributes() const override;
+
+private:
+    QString trackPath_ = QStringLiteral("0");
+    qint64  frame_     = 0;
+    int     valid_     = -1;    // -1 = don't check, else 0/1
+    double  minAbsSum_ = -1.0;  // -1 = don't check
+    double  maxAbsSum_ = -1.0;  // -1 = don't check
+    QString contains_;
+    QString grabPng_;
+    int     grabWidth_  = 0;
+    int     grabHeight_ = 0;
 };
 
 #endif // SSIDECARTESTACTIONS_H

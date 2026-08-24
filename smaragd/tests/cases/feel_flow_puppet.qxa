@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 40 "Feel Flow" M3e ACs 4-7 - THE PUPPET.
+
+  WHY THIS EXISTS. Section 3.4 asked for a "per-body-part display"; M3e gives
+  it a body - a dockable stick figure whose joints are driven, BY POSITION,
+  from the pendulum ensemble's own exported state. The one thing that makes
+  it worth having rather than merely pretty is that NOTHING in it is
+  synthesized: a part's displacement is sqrt(unitPower) * cosPhi, both read
+  from the decoded aspects at the frame's hop, with no oscillator and no
+  nominal frequency anywhere in the paint path. A puppet animated from a
+  tempo would move beautifully and mean nothing.
+
+  WHAT THIS CASE GATES.
+  (1) THE THREE OUTCOMES ARE DISTINCT, which is the whole shape of the
+      feature and the only thing a script can actually separate:
+        - no analysis yet          -> valid=0, everything 0
+        - mid-material             -> valid=1, JOINTLY nonzero (minAbsSum)
+        - past the material's end  -> valid=1, everything ~0 (maxAbsSum)
+        - after a staling edit     -> valid=0 again
+      Note the second and third differ ONLY in the numbers: "valid but
+      still" is a real answer (the material ended; the puppet stands still),
+      deliberately not the same answer as "no analysis".
+  (2) THE STALE RULE IS THE PAINT PATH'S, not the pose function's. The verb
+      mirrors SMainWindow::updateFeelFlowPuppet_ exactly - a stale track
+      yields the INVALID pose whatever is still cached - so the gate and the
+      screen cannot disagree about it. That is what the last phase asserts.
+  (3) DETERMINISM: the same frame asserted twice with the same full
+      describe line. The pose is a pure function of an immutable snapshot,
+      so anything else would mean something is being recomputed.
+  (4) The widget PAINTS (a PNG grab mid-material). Coverage, not an oracle -
+      aesthetics are explicitly not gated (M3e AC 7).
+
+  MEASURED (first run, 2026-08-24, this box), a_offset15.wav, the default
+  5-unit ensemble, hopFrames=480 (1622 hops = 16.22 s of material):
+
+    frame 240000 (5.00 s, mid-material):
+      pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561
+            headNod=0.9262 hipShift=0.1432 energySum=2.0951
+      -> absSum = 1.7818.  PINNED minAbsSum="0.50", a floor with ~3.5x
+         margin: the quantity is a sum of five oscillating components, so
+         it legitimately dips as the ensemble passes through a
+         near-quadrature moment, and pinning it near the measurement would
+         be pinning a PHASE rather than "the figure is moving". Note the
+         five components carry BOTH signs (armSwing is negative here) and
+         four of the five are well away from zero, which is what makes
+         "jointly nonzero" a fair reading of one summed bound.
+    frame 900000 (18.75 s, past the 16.22 s of material):
+      pose: valid=1 bounceY=0.0000 sway=0.0000 armSwing=0.0000
+            headNod=0.0000 hipShift=0.0000 energySum=0.0000
+      -> absSum = 0 EXACTLY (the past-material branch returns before any
+         component is written), so maxAbsSum="0.0001" is a tolerance
+         against nothing rather than a measurement margin.
+
+  The determinism phase pins the FULL mid-material line above, all five
+  components at 4 decimals - the strongest per-frame claim available, and
+  the one that fails loudest if anything in the read path stops being pure.
+  Verified identical on the COLD run (empty store) and on three consecutive
+  WARM runs, which matters here for a reason worth recording:
+
+  A REAL DEFECT THIS CASE FOUND ON ITS SECOND RUN. The default-ensemble
+  fallback for unit NAMES (M3b, added because physUnitNames_ is in-memory
+  job state that stays empty when the first bounce of a process hits a warm
+  store) was applied to a LOCAL used only for the metric ids. The pose maps
+  units onto body parts BY NAME out of the snapshot's own unitNames, which
+  stayed EMPTY - so every warm run produced valid=1 with all five
+  components at exactly 0, while every metric row read fine. The puppet
+  simply stood still on the second run of any case, and nothing before this
+  one read unitNames closely enough to notice. Fixed by resolving the
+  fallback into SFeelFlowUiData::unitNames itself, beside nUnits, so the
+  metric ids and the pose are built from ONE list.
+
+  Not RUN_SERIAL: no smaragd.ini key is read or written (the puppet owns no
+  preference at all; the dock's placement rides the existing ui/windowState
+  blob, which a test-case run never writes because it never shows the
+  window).
+-->
+<SActionScript version="1" name="feel_flow_puppet">
+
+  <setup project="new"/>
+
+  <actions>
+    <sidecar-root/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <!-- ============ (1a) BEFORE any analysis: the invalid pose ========== -->
+    <!-- No bounce has ever completed, so the track is stale by definition
+         (STrack::feelFlowStale()'s own "never bounced" answer) AND there is
+         no snapshot to read. Either alone would produce valid=0; the point
+         is that the puppet shows the neutral figure with its note rather
+         than a body driven by nothing. -->
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="0"
+                           maxAbsSum="0.0001"/>
+
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- The v2 phase channels are what the pose reads; without groove.dyn
+         (or with a pre-M3e v1 store, which decodes to an EMPTY dyn) every
+         pose below would be INVALID. Asserting the aspect here is what
+         makes the valid=1 assertions statements about the POSE rather than
+         about whether the analysis ran. -->
+    <assert-groove-aspect aspect="groove.dyn" trackPath="0" stale="0"
+                          expectExists="true" minRecords="1500" maxRecords="1650"/>
+
+    <!-- ============ (1b) MID-MATERIAL: valid and genuinely moving ======= -->
+    <!-- 240000 frames = 5.00 s at 48 kHz, comfortably inside the 16.22 s of
+         material. minAbsSum is the "the figure is MOVING" claim - a floor
+         over the SUM of all five |components|, because any single joint can
+         legitimately sit near zero at a given phase while the body is in
+         motion. See the header for the measurement and the margin. -->
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
+                           minAbsSum="0.50"
+                           grabPng="feel_flow_puppet_mid.png"/>
+
+    <!-- ============ (1c) PAST the material: valid, but STILL ============ -->
+    <!-- 900000 frames = 18.75 s, past the last analyzed hop. This must NOT
+         be the invalid pose (there IS an analysis) and must NOT hold the
+         last pose (which would read as "still grooving" over silence). -->
+    <assert-feel-flow-pose trackPath="0" frame="900000" valid="1"
+                           maxAbsSum="0.0001"/>
+
+    <!-- ================== (3) determinism ============================== -->
+    <!-- The same frame, twice, pinned to the full line: a pure function of
+         an immutable snapshot has exactly one answer. -->
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
+                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=0.9262 hipShift=0.1432 energySum=2.0951"/>
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
+                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=0.9262 hipShift=0.1432 energySum=2.0951"/>
+
+    <!-- ============ (2) a staling edit: back to the invalid pose ======== -->
+    <!-- The gain moves the track root's content epoch (proposal 37 P3a put
+         twGainStage between the plugin chain and the rewire precisely so a
+         volume change is observed on every path), so the bounce no longer
+         describes this chain. The cached snapshot is STILL THERE and still
+         decodable - which is exactly why this bites: only the painter's own
+         stale rule, mirrored by the verb, turns it into an invalid pose. -->
+    <set-track-volume trackPath="0" volume="-6.0"/>
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="0"
+                           maxAbsSum="0.0001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

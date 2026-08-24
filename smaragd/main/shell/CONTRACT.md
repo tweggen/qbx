@@ -1164,3 +1164,49 @@ watched crashing with this drain reverted (and the `slotDestroying()` fix
 kept) — a DIFFERENT stack trace than reverting `slotDestroying()` alone,
 confirming the two fixes address genuinely separate failure points rather
 than one bug wearing two disguises.
+
+## inv. 55 — the Feel Flow puppet dock (proposal 40 M3e AC 5)
+
+The EIGHTH dock. `qDockFeelFlowPuppet_` / `feelFlowPuppet_`, objectName
+`dock_feel_flow_puppet`, created in the ctor beside the other seven for inv. 4's
+reason (the restore order is fixed — `openMostRecent()` → `restoreWindowLayout()`
+→ `show()`, and `restoreState()` can only place docks that already exist), a
+View-menu `toggleViewAction()` with no shortcut, persisted entirely by its
+objectName through the existing `ui/windowState` blob. **Hidden on a first run**
+— it is a lab instrument for a feature under development, not something every
+user should meet on launch — and hidden under `--test-case` as well, the media
+browser's own trap-T10 rule; the main window is never shown in a `--test-case`
+run at all, so that is belt AND braces, and the PNG-grab verb builds its own
+parentless instance rather than touching this one.
+
+**`updateFeelFlowPuppet_( offset_t pos )` is the whole pump, and its order is
+load-bearing:**
+
+1. **A HIDDEN DOCK DOES NO WORK.** The visibility check is the FIRST statement,
+   before any model walk — the Feel Flow panel's own rule.
+2. **Track resolution is the ACTIVE LANE, with a fallback.** The active lane
+   when it is an `STrack` (the same `activeLane()` `STrackRendererInline::
+   laneFillColor` reads), else the first `STrack` in the tree with a completed,
+   non-stale result. A puppet that goes blank because the user clicked the
+   master lane would be read as a bug; the one thing a lab instrument must do is
+   show the data that exists.
+3. **STALE ⇒ THE INVALID POSE**, and that decision lives HERE rather than inside
+   `sFeelFlowPoseAt` (`main/objects/track/CONTRACT.md` inv. 31: the pose function
+   never sees a track). `assert-feel-flow-pose` MIRRORS this line for line, which
+   is what makes the gate a statement about what is painted.
+4. One cached, lock-free `feelFlowForUi()` read plus one pure function. No
+   demand, no store access, no freeze — the level meters' discipline verbatim.
+
+The pump rides `SApplication::meterTick`, never a timer of its own: it is the one
+main-thread tick that keeps running at a standing playhead and for a tail after a
+stop, which is exactly what an animation driven BY POSITION needs.
+
+`grabFeelFlowPuppet( path, trackPath, frame, w, h )` is the test seam, here for
+the standing reason (testkit may not include `app/timeline`). It builds a
+parentless, never-shown `SFeelFlowPuppetWidget`, fills it from the SAME pose
+function under the SAME stale rule, and saves a PNG — coverage, never an oracle.
+
+Gate: `qxa.feel_flow_puppet`. NOT gated: the dock's docked/floating/closed round
+trip through Qt's opaque `ui/windowState` blob (the media browser's own unrun
+manual gap), the View-menu item itself, and the pump's track-resolution fallback
+under a project with several analyzed tracks.

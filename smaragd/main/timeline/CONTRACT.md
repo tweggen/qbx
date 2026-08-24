@@ -1342,3 +1342,35 @@ hit-test bug) plus `action_roundtrip_test`. `loop_asset_extend.qxa`,
 `loop_start_edge_drag.qxa` and `fragment_midi_loop.qxa` stay green with
 their exact pre-existing numbers (audio and MIDI-fragment looping
 unchanged).
+
+## THE PUPPET WIDGET IS PAINT ONLY (proposal 40 M3e AC 5)
+
+### inv. 43 — `SFeelFlowPuppetWidget` READS NOTHING; IT DRAWS THE POSE IT WAS HANDED
+
+`app/timeline/sfeelflowpuppet.h` includes `app/objects/track/sfeelflowpose.h`
+and nothing else from the model. It holds one `SFeelFlowPose`, `setPose()` is
+the only way one gets in, and `paintEvent` reads that member and the widget's
+own geometry. There is no track pointer, no project, no locator, no store
+access — so there is no path from a repaint to a demand, a freeze or a blocking
+read, and no future edit can add one without first adding an include. This is
+inv. 1's rule stated as a TYPE rather than as a discipline.
+
+WHICH track, WHEN to read it, and whether the analysis is STALE are all the
+DOCK's decisions (`main/shell/CONTRACT.md`). A stale analysis arrives here as
+an INVALID pose, exactly as "no analysis" does — one rule for both, which is
+what lets `assert-feel-flow-pose` mirror it exactly.
+
+### inv. 44 — A REPAINT IS THROTTLED BY MATERIAL CHANGE, NOT BY THE TICK
+
+`setPose()` stores unconditionally and calls `update()` only when validity or
+some component moved by more than `kEpsilon` (0.001 of a normalized joint
+excursion — well under a pixel at any plausible dock size). The pump is
+`meterTick`, which keeps running at a standing playhead and for a tail after a
+stop; without this, a stick figure that is not moving would repaint ~30 times a
+second forever.
+
+An invalid pose needs no separate "neutral figure" code path: every component
+of a default-constructed pose is 0, and 0 IS the rest position, so the invalid
+case is the same drawing in the dim palette plus a one-line note. Aesthetics —
+the joint excursion constants, the palette, the figure's proportions — are
+explicitly NOT gated; only that it paints (a PNG grab) is.

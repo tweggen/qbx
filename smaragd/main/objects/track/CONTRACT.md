@@ -573,3 +573,77 @@ process-exit ordering issue) found chasing the first fix.
 to act "before this slot's plugin is gone" must connect to `slotDestroying()`,
 never to `QObject::destroyed()` — the base class fires last, not first, and a
 plugin's own resources are members, which are gone well before that.
+
+## The PUPPET POSE (proposal 40 M3e AC 4)
+
+`app/objects/track/sfeelflowpose.h` — `sFeelFlowPoseAt( const SFeelFlowUiData&,
+offset_t ) -> SFeelFlowPose`, plus `sFeelFlowPoseDescribe()`, the ONE spelling
+of a pose's describe line (the widget's note, the testkit's assertion and the
+PNG grab all read that one function, so a gate and a paint cannot drift apart —
+proposal 41 M7's `tagChipRect()` lesson).
+
+31. **THE POSE IS A PURE FUNCTION OF ONE IMMUTABLE SNAPSHOT.** It takes an
+    `SFeelFlowUiData` and a frame; it reads no track, no project, no store and
+    no clock, and it never demands, freezes or blocks. That is what lets the
+    paint path (`main/timeline/CONTRACT.md`) and the gate
+    (`main/testkit/CONTRACT.md`) call the SAME function and be guaranteed the
+    same answer — and it is why STALENESS is deliberately NOT consulted here:
+    this function never sees the track. **Stale is the PAINTER's decision**,
+    made identically in `SMainWindow::updateFeelFlowPuppet_` and in
+    `assert-feel-flow-pose`, exactly as inv. 25 already documents for
+    `feelFlowForUi()`'s own caller.
+
+    Nothing is synthesized. A part's displacement is `sqrt(unitPower) * cosPhi`,
+    both read from the decoded aspects at the frame's hop and linearly
+    interpolated between adjacent hops; there is no oscillator and no nominal
+    frequency anywhere in it. A puppet animated from a tempo would move
+    beautifully and mean nothing, which is the failure mode a feature about
+    honest physical correlation cannot afford — the level meters', MIDI-out's
+    and the metronome's rule, a fourth time.
+
+32. **`cosPhi` IS USED RAW, UN-RENORMALIZED, AND THAT IS THE FEATURE.** The
+    aspect's cos/sin channels are BIN-AVERAGED separately, which IS the
+    circular mean's numerator, so `hypot(cosPhi,sinPhi) <= 1` and the shortfall
+    MEASURES the in-bin phase spread (measured range on `a_offset15.wav`:
+    [0.598, 1]). Dividing by that magnitude to recover a "pure" phase would
+    invent full-amplitude motion out of a bin whose phase was incoherent. Left
+    raw, an incoherent bin damps the excursion by construction: the display
+    gets quieter exactly where the physics is less certain, for free.
+
+33. **THE UNIT→PART MAPPING IS BY NAME, AND THE NAME LIST IS ONE LIST.**
+    `bounce`→pelvis vertical, `sway`→torso lean, `limbs`→arm swing (drawn in
+    antiphase), `reference`→head nod, `twobar`→hip x-shift, resolved out of
+    `SFeelFlowUiData::unitNames`. An unknown or absent name leaves that part at
+    0 — never a fallback to a neighbouring unit, and never an index-based
+    mapping: a trained structure can carry a different unit set in a different
+    order, and a puppet silently driven by whatever happened to be at index 2
+    is worse than one that stands still.
+
+    **`SFeelFlowUiData::unitNames` therefore carries the M3b default-ensemble
+    FALLBACK, resolved once beside `nUnits` in the reload.** That fallback used
+    to live in a LOCAL used only for the metric ids, and the pose exposed the
+    gap on its second run: `physUnitNames_` is in-memory job state that stays
+    empty when the first bounce of a process hits a warm store (inv. 25), so
+    every warm run produced a `valid=1` pose with all five components at
+    exactly 0 while every metric row read fine. Metric ids and the pose are now
+    built from ONE list; a custom ensemble whose size does not match the
+    default leaves the list EMPTY, so derive falls to its own `unit<i>` naming
+    and the pose leaves every part at 0 rather than guessing which unit is
+    somebody's pelvis.
+
+34. **PAST THE MATERIAL IS `valid=true` AND ALL ZEROS.** Three "no motion"
+    outcomes, deliberately distinct because a caller has to tell them apart:
+    **invalid** (no snapshot at all — `hopFrames == 0`, an empty or mismatched
+    `dyn`, a negative frame; the widget draws the neutral figure dimmed with a
+    note); **past the material** (`valid = true`, everything 0 — the puppet
+    STANDS STILL; it does not freeze on the last pose, which would read as
+    "still grooving" over silence, and it does not go invalid, which would read
+    as "no analysis"); and a genuinely still moment inside the material, which
+    is the same all-zero answer and deliberately indistinguishable — both mean
+    "this part is not moving right now".
+
+    `dyn.size() != compliance.size()` is an INVALID, not a clamp: the two
+    payloads are then not on one grid, and indexing them with one hop number
+    would silently pair a power with somebody else's phase.
+
+Gates: `qxa.feel_flow_puppet`, `action_roundtrip_test`.

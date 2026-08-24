@@ -1135,6 +1135,256 @@ never retroactively.
   no-context-menu/no-widget-driving gap every options page has — the
   verb drives the same setter), and per-row visual separators (none are
   drawn; adjacent rows meet edge to edge).
+- **M3e — THE PUPPET** (kickoff 2026-08-24, requester: "a small
+  floating/dockable window containing a realtime rendition of a puppet
+  using the computed limb motions"). Section 3.4's per-body-part display
+  given a body: a dockable window animating a 2D stick figure from the
+  pendulum ensemble's own state at the playhead, read BY POSITION from the
+  decoded aspects — never computed at paint time, never a demand (the
+  meters' rule, again).
+
+  **The one design decision that matters: the puppet needs PHASE, and
+  "groove.dyn" v1 deliberately does not carry it.** M3c dropped sin φ
+  because the metrics recover the drive-weighted lean from
+  hypot(support,tension) — but between impulses the drive is ~0 and the
+  phase is unrecoverable, and synthesizing it from a nominal frequency
+  would be fake motion in a feature whose whole point is honest physical
+  correlation. Resolution: **"groove.dyn" v2**, record
+  `float32[nUnits*6]` per hop, per unit
+  `{support, tension, cosPhi, sinPhi, slip, dissip}` — cos/sin of arg z,
+  BIN-AVERAGED like the rest (the circular-mean NUMERATOR: averaging cos
+  and sin separately is exactly that, and |(cos,sin)| < 1 then measures
+  in-bin phase spread, which the pose mapping exploits: an incoherent bin
+  naturally damps the excursion instead of inventing one). A wrapped
+  phase itself must NEVER be bin-averaged (a wrap makes the mean garbage)
+  — that is WHY it is two channels. v1 orphans on sight and both jobs'
+  skip-checks re-analyze on the version miss, the existing mechanism.
+
+  **M3e ACs:**
+  1. Aspect v2 (`GrooveDynVersion = 2`): twaspects.h normative doc,
+     `twGrooveUnitDynSample` gains cosPhi/sinPhi, encoder emits them on
+     the pendulum grid (cos/sin computed per pendulum hop from
+     phaseWrapped, THEN bin-averaged), decoder stride nUnits*6*4.
+     Metrics derivation unchanged in output (it reads neither channel).
+  2. groove_test section q extended: per-record hypot(cosPhi,sinPhi)
+     <= 1 + 1e-4; the phase consistency gate — the UNWEIGHTED whole-run
+     mean of exported sinPhi reproduces counterTension's own
+     meanSinDeltaPhi (absolute tolerance, the value is near 0 on the
+     click train); the synthetic fixtures gain cos/sin closed forms.
+     `assert-groove-aspect aspect="groove.dyn"` re-derives nUnits from
+     the v2 stride and additionally checks the hypot bound.
+  3. `SFeelFlowUiData` carries the decoded dyn records (the reload
+     already decodes them for the metrics; stop discarding them), so the
+     pose is a pure function of the snapshot.
+  4. **The POSE is one pure function**, `sfeelflowpose.h` in
+     `main/objects/track` beside the bounce holder:
+     `sFeelFlowPoseAt( const SFeelFlowUiData&, offset_t frame ) -> Pose
+     { valid; bounceY, sway, armSwing, headNod, hipShift in [-1,1];
+     energy[unit] in [0,1] }` — per unit, displacement =
+     sqrt(unitPower) * cosPhi (both read at the frame's hop, lerped
+     between adjacent hops; the raw bin-averaged cosPhi is used
+     UN-renormalized, so in-bin incoherence damps motion by
+     construction). Unit-to-part mapping BY NAME (the Burger/Toiviainen
+     seeding the ensemble was built from): bounce -> pelvis vertical,
+     sway -> torso lean, limbs -> arm swing (left/right in antiphase),
+     reference -> head nod, twobar -> hip x-shift; unknown names ignored;
+     no analysis / stale / past-material -> the NEUTRAL standing pose
+     with valid=false.
+  5. **The window**: `SFeelFlowPuppetWidget` (paint only, no model read)
+     + a dockable `QDockWidget` in `SMainWindow` following the house dock
+     pattern (View-menu toggle, floating/dockable, NOT shown in a
+     `--test-case` run), showing the ACTIVE lane's track (fallback: the
+     first STrack with a fresh result), pumped from `meterTick` — the
+     tick that runs during playback and for a tail after stop — with a
+     repaint only when the pose materially changed. Part brightness
+     scales with the unit's energy; a stale/absent analysis draws the
+     neutral figure dimmed with a one-line note.
+  6. Verbs: `assert-feel-flow-pose` (trackPath, frame, component bounds/
+     expectations + valid=, describe grammar `pose: valid=.. bounceY=..
+     ...` from the SAME function the widget paints) and a PNG grab of the
+     widget built off screen (coverage). qxa `feel_flow_puppet.qxa`:
+     invalid before analysis; valid + components in [-1,1] and JOINTLY
+     nonzero mid-material after; neutral (all ~0, valid still true) past
+     the material's end; back to invalid after a staling edit;
+     determinism (same frame twice, identical describe). Measured then
+     pinned; watched failing under at least one sabotage per layer (a
+     pose function returning constants; a widget ignoring the pose).
+  7. Docs/contracts/ACTIONS.md; layering/logging; full suite.
+
+  **M3e ACs 1-3 EXECUTED 2026-08-24** (the ENGINE half; ACs 4-7 are the
+  puppet itself). `GrooveDynVersion` 1 -> 2, record `float32[nUnits*6]`
+  `{support, tension, cosPhi, sinPhi, slip, dissip}`, stride `nUnits*6*4`;
+  both writers (`sfeelflowbounce.cpp`, `splainwave.cpp`) stamp the new
+  `recordStride`; `SFeelFlowUiData::dyn` carries the decoded records the
+  reload already produced and used to discard.
+
+  **Measured** (`groove_test` section q, over the 12 s / 120 BPM click
+  train, the default ensemble's `reference` unit, 1200 records):
+
+  | Quantity | Measured | Bound |
+  |---|---|---|
+  | `hypot(cosPhi, sinPhi)` per record, reference unit | range **[0.597804, 1.000000]**, mean **0.997696** | `<= 1 + 1e-4`, mean `>= 0.5` |
+  | alignment: `Σ(support·cosPhi + tension·sinPhi)` vs `Σ(support·sinPhi + tension·cosPhi)` | **3.75259 vs 0.601274** (ratio 6.2) | aligned `> 2 ×` \|crossed\| |
+  | mean exported `sinPhi` vs `counterTension.meanSinDeltaPhi` | 0.00423908 vs 0.00423908, **delta 1.045e-09** | `<= 0.02` absolute |
+
+  The phase-consistency delta is nine orders of magnitude inside its bound
+  and that is the POINT rather than luck: `meanSinDeltaPhi` is the
+  unweighted per-hop mean of `sin(phaseWrapped)`, and equal-size bin means
+  preserve an unweighted mean EXACTLY — the whole error budget is the one
+  ragged tail bin. The tolerance stays at 0.02 ABSOLUTE anyway, because the
+  value sits near 0 on a click train and a relative tolerance there is
+  meaningless. The M3c drive consistency gate was untouched and still reads
+  0.00209296 vs 0.00209326.
+
+  **AC 2's TWO SPECIFIED ASSERTIONS DO NOT BITE, AND THE WATCHED-FAILING
+  PASS IS THE ONLY REASON THAT IS KNOWN.** Both were implemented exactly as
+  written and both PASS under the obvious sabotage — emitting `0.0f` for
+  `cosPhi`/`sinPhi`:
+
+  * `hypot <= 1 + 1e-4` is a CEILING, and zeros satisfy it;
+  * the consistency check's 0.02 ABSOLUTE tolerance is correctly reasoned
+    (the quantity sits near 0, so relative is meaningless) and is
+    **larger than the quantity it is checking** — 0.00423908 — so
+    "export == 0" gives delta 0.00423908 and passes.
+
+  Measured under that sabotage: max hypot 0, delta 0.00423908 < 0.02,
+  `groove_test` **exits 0**. And a second, likelier sabotage — SWAPPING the
+  two emissions, the single easiest way to get the wire order wrong —
+  passes all of that plus the magnitude floor, because magnitude is
+  symmetric under a swap: delta reads 0.00169453, still inside 0.02.
+
+  Neither bound was loosened and neither was retuned. Two assertions were
+  ADDED, both physical rather than tuned:
+
+  1. **A magnitude FLOOR** (mean `hypot >= 0.5`). One pendulum hop advances
+     `ω·dt ≈ 0.13 rad` and an aspect bin spans only a couple of pendulum
+     hops, so a bin's phases are coherent BY CONSTRUCTION — measured mean
+     0.997696, with the per-record dips to 0.5978 coming from the few bins
+     that straddle a wrap. A mean near 0 means the channel is absent or
+     read at the wrong offset, never that the physics went incoherent.
+  2. **A scale-free ALIGNMENT check.** `support ≈ k·F·cos φ` and
+     `tension ≈ k·F·sin φ` are built from the SAME φ, so the right pairing
+     sums `Σ k·F > 0` while the wrong one sums `Σ k·F·sin 2φ ≈ 0`. The
+     assertion is only which pairing wins, by 2× — no tolerance in the
+     drive's physical units at all.
+
+  **Watched failing, both sabotages, each against a different assertion:**
+
+  | Sabotage | Fails | Measured |
+  |---|---|---|
+  | emit `0.0f` for both phase channels | *"dyn v2: the mean hypot(cosPhi,sinPhi) is near 1 — the phase channels carry a real phase, not zeros"* | hypot range [0, 0], mean 0 against the 0.5 floor |
+  | swap the `cosPhi`/`sinPhi` emissions | *"dyn v2: sum(support·cosPhi + tension·sinPhi) dominates the crossed pairing"* | aligned 0.601274 vs crossed 3.75259 — the two exchange roles exactly |
+
+  Restored, `groove_test`, `sidecar_test` and all eight `qxa.feel_flow_*`
+  cases are green, and `check_layering` / `check_logging` are clean.
+
+  **NOT gated, named rather than left implied:** a phase error SMALLER than
+  the alignment check's 2× margin or the floor's 0.5 (e.g. a systematic
+  offset of a few degrees) — the consistency check is the only bound that
+  could catch that class and, as measured above, its tolerance exceeds the
+  quantity on this fixture; a fixture whose `meanSinDeltaPhi` is large
+  enough to make 0.02 discriminating has not been built. Also not gated:
+  the phase channels on any unit other than `reference`, and the
+  bin-averaging behaviour under an `envRateHz` that does not divide the
+  aspect grid evenly (the measured 1.045e-09 exactness depends on it).
+
+  The v1 -> v2 transition was verified explicitly rather than assumed: a
+  genuine v1 store entry (the shipped v2 file's `aspectVersion` patched back
+  to 1 with its header CRC recomputed, so it is well-formed, not corrupt) is
+  MISSED by the skip-check and the run re-analyzes once, then passes.
+
+  NOT gated (named now): the ANIMATION itself and its smoothness (the
+  pose at a frame is gated; the motion between frames is the meterTick
+  cadence); every aesthetic of the figure; the dock's float/dock/close
+  round trip (the same Qt windowState blob every dock shares); and
+  whether the mapping FEELS right — that is precisely the requester's
+  correlate-with-the-body experiment, which this window exists to run.
+  **M3e ACs 4-7 EXECUTED 2026-08-24** (the PUPPET itself). Four pieces, one
+  per layer: `sFeelFlowPoseAt()` + `sFeelFlowPoseDescribe()` in
+  `main/objects/track` (a pure function of one immutable snapshot — no track,
+  no store, no clock, no demand); `SFeelFlowPuppetWidget` in `main/timeline`
+  (paint only, one `SFeelFlowPose` member, `setPose()` the only way in);
+  the EIGHTH dock plus its `meterTick` pump in `SMainWindow`; and
+  `assert-feel-flow-pose` + `SMainWindow::grabFeelFlowPuppet()`.
+
+  **Measured** (`feel_flow_puppet.qxa` over `a_offset15.wav`, the default
+  5-unit ensemble, hopFrames 480, 1622 hops = 16.22 s of material):
+
+  | Frame | Pose | absSum | Pinned |
+  |---|---|---|---|
+  | 240000 (5.00 s, mid) | `bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=0.9262 hipShift=0.1432 energySum=2.0951` | **1.7818** | `minAbsSum="0.50"` (~3.5x margin) |
+  | 900000 (18.75 s, past) | all components **0.0000**, `valid=1` | **0** exactly | `maxAbsSum="0.0001"` |
+  | 240000, before analysis | all 0, `valid=0` | 0 | `valid="0"` |
+  | 240000, after `set-track-volume` | all 0, `valid=0` | 0 | `valid="0"` |
+
+  The mid-material line is pinned in FULL as the determinism assertion (the
+  same frame asserted twice), and was verified identical on the COLD run and
+  on three consecutive WARM runs. The margin on `minAbsSum` is deliberately
+  loose: the quantity is a sum of five oscillating components, so pinning it
+  near 1.78 would be pinning a PHASE rather than "the figure is moving".
+
+  **A REAL DEFECT THE CASE FOUND ON ITS SECOND RUN, and it is the reason a
+  determinism phase earns its place.** The M3b default-ensemble fallback for
+  unit NAMES was applied to a LOCAL used only for the metric ids. The pose
+  maps units onto body parts BY NAME out of `SFeelFlowUiData::unitNames`,
+  which stayed EMPTY on a warm-store first bounce (`physUnitNames_` is
+  in-memory job state — the documented M3 gap) — so **every warm run produced
+  `valid=1` with all five components at exactly 0** while every metric row
+  read fine. The puppet simply stood still on the second run of any case, and
+  nothing before this read `unitNames` closely enough to notice. Fixed by
+  resolving the fallback into `fresh->unitNames` itself, beside `nUnits`, so
+  the metric ids and the pose are built from ONE list.
+
+  **Watched failing, TWO sabotages, one per layer — and the SPLIT is the
+  finding, not the failure count.**
+
+  *Sabotage 1: the POSE FUNCTION returns a constant* (`valid=true`, every
+  component 0.5, the data ignored). **Three of the seven pose assertions
+  fail** — #9 (past-material `maxAbsSum`: absSum 2.5 against 0.0001) and
+  #10/#11 (the determinism `contains=`, the constant line lacking the
+  pinned one). The mid-material `minAbsSum` floor PASSES (2.5 clears 0.50),
+  which is what a floor is for and why the determinism phase carries the
+  per-component claim rather than the floor.
+
+  **Neither `valid="0"` phase fires under sabotage 1, and the reason is the
+  design rather than a hole**: both are STALE phases, and the verb applies
+  the paint path's stale rule BEFORE calling the pose function at all — so a
+  sabotaged pose function is unreachable from them by construction. Those
+  two assertions gate the MIRROR, which needs its own sabotage:
+
+  *Sabotage 2: the VERB drops the stale rule* and reads whatever is cached.
+  **Action #13 fails** — the post-`set-track-volume` phase reports
+  `valid=1 bounceY=0.4274 …`, the exact pre-edit pose, where the dock would
+  show the dim "no fresh analysis" figure. The BEFORE-analysis `valid="0"`
+  (#4) still passes even here, honestly: there is no result at all yet, so
+  `feelFlowForUi()` hands back an empty snapshot and the pose is invalid by
+  the data rather than by the rule. Only the post-edit phase can separate
+  "stale" from "absent", and it does.
+
+  Restored, `qxa.feel_flow_puppet` and all eight other `qxa.feel_flow_*`
+  cases plus `action_roundtrip_test` are green, and `check_layering` /
+  `check_logging` are clean.
+
+  NOT gated, confirming and extending the list above: the ANIMATION itself
+  and its smoothness (the pose AT a frame is gated; the motion BETWEEN frames
+  is the meterTick cadence, and nothing measures it); every aesthetic of the
+  figure (the joint excursion constants, the palette, the proportions, the
+  antiphase choice); the dock's float/dock/close round trip through Qt's
+  opaque `ui/windowState` blob and its View-menu item; the pump's
+  ACTIVE-LANE-with-fallback track resolution under a project with several
+  analyzed tracks (implemented, no case — a `--test-case` run never shows the
+  dock, so `updateFeelFlowPuppet_` returns at its first statement and the
+  pump is exercised only by hand); the repaint THROTTLE (`kEpsilon`, no case);
+  a trained ensemble whose unit set is not the default five (the pose leaves
+  every part at 0 by design, no case); **the WIDGET's own use of the pose** —
+  the PNG grab is coverage, never an oracle, so a `paintEvent` that ignored
+  its member entirely would still produce a file and still pass, and nothing
+  here classifies those pixels the way `assert-take-lane` classifies a take
+  row (a pixel gate on a stick figure would be pinning aesthetics, which this
+  milestone explicitly does not); and whether the mapping FEELS right —
+  precisely the requester's correlate-with-the-body experiment, which this
+  window exists to run.
+
 - **M4 — `suggest-groove-warp`** composing the warp verbs; gate: on fixture
   (b), suggestions at strength 1.0 reduce measured σ to ~0 while leaving μ
   untouched, one undo restores byte-identical anchors, and the RENDER moves

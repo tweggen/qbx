@@ -1626,9 +1626,106 @@ static void section_q_dyn_metrics()
             CHECK( refIdx >= 0, "dyn pipeline: reference unit present" );
             if( refIdx >= 0 && !recs.empty() ) {
                 double sumHyp = 0.0;
-                for( const twGrooveDynRecord &r : recs )
-                    sumHyp += std::hypot( (double)r.units[(size_t)refIdx].support,
-                                          (double)r.units[(size_t)refIdx].tension );
+                // M3e (v2): the phase channels are the bin-averaged
+                // (cos,sin) pair -- the circular-mean NUMERATOR -- so
+                // their magnitude can NEVER exceed 1, and the shortfall
+                // measures in-bin phase spread. A magnitude over 1 is the
+                // signature of a channel read at the wrong offset.
+                double maxPhaseMag = 0.0;
+                double minPhaseMag = 1e30;
+                double sumMag      = 0.0;
+                double sumSin      = 0.0;
+                // The ALIGNMENT sums (below): support ~ k*F*cos and
+                // tension ~ k*F*sin are built from the SAME phi the phase
+                // channels carry, so pairing them the right way round sums
+                // k*F*(cos^2+sin^2) = k*F > 0, while pairing them the wrong
+                // way round sums k*F*2*cos*sin = k*F*sin(2 phi), which
+                // averages toward 0. Scale-free by construction.
+                double aligned     = 0.0;
+                double crossed     = 0.0;
+                for( const twGrooveDynRecord &r : recs ) {
+                    const twGrooveUnitDynSample &s = r.units[(size_t)refIdx];
+                    sumHyp += std::hypot( (double)s.support,
+                                          (double)s.tension );
+                    aligned += (double)s.support * (double)s.cosPhi
+                             + (double)s.tension * (double)s.sinPhi;
+                    crossed += (double)s.support * (double)s.sinPhi
+                             + (double)s.tension * (double)s.cosPhi;
+                    const double m = std::hypot( (double)s.cosPhi,
+                                                 (double)s.sinPhi );
+                    if( m > maxPhaseMag ) maxPhaseMag = m;
+                    if( m < minPhaseMag ) minPhaseMag = m;
+                    sumMag += m;
+                    sumSin += (double)s.sinPhi;
+                }
+                const double meanPhaseMag = sumMag / (double)recs.size();
+                std::cout << "[groove] dyn phase: hypot(cosPhi,sinPhi) in ["
+                          << minPhaseMag << ", " << maxPhaseMag
+                          << "], mean " << meanPhaseMag << " over "
+                          << recs.size() << " records\n";
+                CHECK( maxPhaseMag <= 1.0 + 1e-4,
+                       "dyn v2: hypot(cosPhi,sinPhi) <= 1 for every record "
+                       "(the circular-mean numerator, never renormalized)" );
+
+                // ...and the floor, which is the assertion that actually
+                // bites an ABSENT or misaligned phase channel. The ceiling
+                // above cannot: zeros satisfy it. Nor can the consistency
+                // check below on THIS fixture -- a click train's
+                // meanSinDeltaPhi is 0.0042, well inside its own 0.02
+                // absolute bound, so a channel of zeros passes it (measured
+                // under exactly that sabotage). The floor is physical, not
+                // tuned: one pendulum hop advances omega*dt ~ 0.13 rad and
+                // an aspect bin spans only a couple of pendulum hops, so a
+                // bin's phases are coherent BY CONSTRUCTION and the mean
+                // magnitude sits at ~1 (measured 0.9977; the per-record
+                // minimum is 0.5978, from the few bins that straddle a
+                // wrap). A mean anywhere near 0 means the channel is
+                // absent or read at the wrong offset -- never that the
+                // physics went incoherent.
+                CHECK( meanPhaseMag >= 0.5,
+                       "dyn v2: the mean hypot(cosPhi,sinPhi) is near 1 -- "
+                       "the phase channels carry a real phase, not zeros "
+                       "(measured 0.9977 against a 0.5 floor)" );
+
+                // ...and the ALIGNMENT, which is what states "one physics"
+                // in a form a script can enforce: the phase channels are
+                // the SAME phi the drive channels are built from, in the
+                // SAME slot order. Neither of the two bounds above can see
+                // a cos/sin SWAP -- the magnitude is symmetric under it and
+                // the consistency check below reads 0.00169 against its own
+                // 0.02 (measured under exactly that sabotage). This one is
+                // scale-free: no tolerance in the drive's physical units,
+                // just which pairing wins.
+                std::cout << "[groove] dyn phase alignment: aligned "
+                          << aligned << " vs crossed " << crossed << "\n";
+                CHECK( aligned > 2.0 * std::fabs( crossed ),
+                       "dyn v2: sum(support*cosPhi + tension*sinPhi) "
+                       "dominates the crossed pairing -- the phase channels "
+                       "are the same phi, in the same order, as the drive "
+                       "channels" );
+
+                // The PHASE consistency gate: the UNWEIGHTED whole-run mean
+                // of the exported sinPhi must reproduce counterTension's own
+                // meanSinDeltaPhi. That summary (twgroovependulum.cc) is the
+                // unweighted per-hop mean of sin(phaseWrapped) over the
+                // trajectory, and equal-size bin means preserve an unweighted
+                // mean exactly -- up to the ragged tail bin, which is the
+                // whole error budget here. ABSOLUTE tolerance: on a plain
+                // click train the value sits near 0, so a relative tolerance
+                // would be meaningless.
+                const double meanSinExport  = sumSin / (double)recs.size();
+                const double meanSinSummary =
+                    built.counterTension[(size_t)refIdx].meanSinDeltaPhi;
+                std::cout << "[groove] dyn phase consistency: mean sinPhi "
+                             "export " << meanSinExport << " vs summary "
+                          << meanSinSummary << " (delta "
+                          << std::fabs( meanSinExport - meanSinSummary )
+                          << ")\n";
+                CHECK( std::fabs( meanSinExport - meanSinSummary ) <= 0.02,
+                       "dyn v2: the unweighted mean of exported sinPhi "
+                       "reproduces counterTension's meanSinDeltaPhi within "
+                       "0.02 absolute (one physics, one phase)" );
+
                 const double meanHyp = sumHyp / (double)recs.size();
                 const twGroovePendulumParams pp;   // the default ensemble's k
                 double kRef = 1.5;
