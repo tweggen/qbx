@@ -1635,10 +1635,22 @@ static void section_q_dyn_metrics()
                 double minPhaseMag = 1e30;
                 double sumMag      = 0.0;
                 double sumSin      = 0.0;
+                // The ALIGNMENT sums (below): support ~ k*F*cos and
+                // tension ~ k*F*sin are built from the SAME phi the phase
+                // channels carry, so pairing them the right way round sums
+                // k*F*(cos^2+sin^2) = k*F > 0, while pairing them the wrong
+                // way round sums k*F*2*cos*sin = k*F*sin(2 phi), which
+                // averages toward 0. Scale-free by construction.
+                double aligned     = 0.0;
+                double crossed     = 0.0;
                 for( const twGrooveDynRecord &r : recs ) {
                     const twGrooveUnitDynSample &s = r.units[(size_t)refIdx];
                     sumHyp += std::hypot( (double)s.support,
                                           (double)s.tension );
+                    aligned += (double)s.support * (double)s.cosPhi
+                             + (double)s.tension * (double)s.sinPhi;
+                    crossed += (double)s.support * (double)s.sinPhi
+                             + (double)s.tension * (double)s.cosPhi;
                     const double m = std::hypot( (double)s.cosPhi,
                                                  (double)s.sinPhi );
                     if( m > maxPhaseMag ) maxPhaseMag = m;
@@ -1674,6 +1686,23 @@ static void section_q_dyn_metrics()
                        "dyn v2: the mean hypot(cosPhi,sinPhi) is near 1 -- "
                        "the phase channels carry a real phase, not zeros "
                        "(measured 0.9977 against a 0.5 floor)" );
+
+                // ...and the ALIGNMENT, which is what states "one physics"
+                // in a form a script can enforce: the phase channels are
+                // the SAME phi the drive channels are built from, in the
+                // SAME slot order. Neither of the two bounds above can see
+                // a cos/sin SWAP -- the magnitude is symmetric under it and
+                // the consistency check below reads 0.00169 against its own
+                // 0.02 (measured under exactly that sabotage). This one is
+                // scale-free: no tolerance in the drive's physical units,
+                // just which pairing wins.
+                std::cout << "[groove] dyn phase alignment: aligned "
+                          << aligned << " vs crossed " << crossed << "\n";
+                CHECK( aligned > 2.0 * std::fabs( crossed ),
+                       "dyn v2: sum(support*cosPhi + tension*sinPhi) "
+                       "dominates the crossed pairing -- the phase channels "
+                       "are the same phi, in the same order, as the drive "
+                       "channels" );
 
                 // The PHASE consistency gate: the UNWEIGHTED whole-run mean
                 // of the exported sinPhi must reproduce counterTension's own
