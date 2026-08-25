@@ -1149,6 +1149,36 @@ TestFactory gFactory;
 
 // --- module entry points ------------------------------------------------------
 
+#if defined( __APPLE__ ) && defined( TWTEST_REQUIRE_BUNDLE )
+#include <CoreFoundation/CoreFoundation.h>
+#include <cstdio>
+static CFBundleRef gBundleRef = nullptr;
+
+// A CHATTY MODULE INITIALISER, on purpose.
+//
+// The out-of-process probe carries its JSON result on stdout, and a plugin
+// loaded into that process shares the fd. Real ones use it: an iPlug2 VST3
+// prints a ten-line "BEGIN IPLUG CHANNEL IO PARSER" banner from exactly here,
+// which made the host's fromJson() fail and cached a working plugin as a STICKY
+// FAILURE. Nothing in the tree could reproduce that, because every fixture was
+// silent. This one is not, so the probe-based section of scan_test gates the
+// framing that fixes it.
+namespace {
+struct TwTestChatter {
+    TwTestChatter()
+    {
+        std::fputs( "\nBEGIN TWTEST NOISE ---------------------------------\n"
+                    "this line is not JSON and neither is the next one\n"
+                    "{ \"looks\": \"like json\", \"but\": \"is not the result\" }\n"
+                    "END TWTEST NOISE -----------------------------------\n",
+                    stdout );
+        std::fflush( stdout );
+    }
+};
+TwTestChatter gChatter;
+}  // namespace
+#endif
+
 #if defined( _WIN32 )
 #define TWTEST_EXPORT extern "C" __declspec( dllexport )
 #else
@@ -1159,8 +1189,37 @@ TestFactory gFactory;
 TWTEST_EXPORT bool InitDll() { return true; }
 TWTEST_EXPORT bool ExitDll() { return true; }
 #elif defined( __APPLE__ )
-TWTEST_EXPORT bool bundleEntry( void * ) { return true; }
-TWTEST_EXPORT bool bundleExit() { return true; }
+// bundleEntry's argument is a CFBundleRef. The FLAT build ignores it — a dylib
+// renamed .vst3 has no bundle, and null is the honest answer there.
+//
+// The BUNDLE build (TWTEST_REQUIRE_BUNDLE, the twtestvst3bundle target) REFUSES
+// anything that is not a real CFBundle, and that refusal is the entire point of
+// the target's existence. Every stock-SDK and iPlug2 plugin CFRetains this ref
+// on sight, so a host that passes null — or, worse, passes its dlopen handle —
+// crashes inside the plugin with no diagnostic. A fixture that merely accepted
+// the argument could not tell the two hosts apart; this one fails CLEANLY
+// instead of crashing, which is what makes it usable as a gate rather than as
+// a segfault. `GetPluginFactory` still answers, so what the scanner observes is
+// a module that probes and yields no classes.
+TWTEST_EXPORT bool bundleEntry( void *ref )
+{
+#if defined( TWTEST_REQUIRE_BUNDLE )
+    if( !ref ) return false;
+    if( CFGetTypeID( (CFTypeRef)ref ) != CFBundleGetTypeID() ) return false;
+    CFRetain( (CFTypeRef)ref );          // exactly what a real plugin does
+    gBundleRef = (CFBundleRef)ref;
+#else
+    (void)ref;
+#endif
+    return true;
+}
+TWTEST_EXPORT bool bundleExit()
+{
+#if defined( TWTEST_REQUIRE_BUNDLE )
+    if( gBundleRef ) { CFRelease( gBundleRef ); gBundleRef = nullptr; }
+#endif
+    return true;
+}
 #else
 TWTEST_EXPORT bool ModuleEntry( void * ) { return true; }
 TWTEST_EXPORT bool ModuleExit() { return true; }

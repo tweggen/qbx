@@ -475,6 +475,77 @@ int main( int argc, char **argv )
             }
         }
     }
+
+    // ---- 9b: a macOS .vst3 BUNDLE loads (fix/mac-vst3-loading) -------------
+    //
+    // The section above uses the FLAT fixture — a dylib renamed .vst3 — and
+    // that is the ONE shape for which passing null to bundleEntry is correct.
+    // Every .vst3 a mac user installs is a BUNDLE, whose bundleEntry takes a
+    // CFBundleRef the plugin CFRetains on sight, so the loader has to open the
+    // .vst3 as a CFBundle and hand over the real reference. It used to pass
+    // null with a comment claiming plugins "use it only for resource lookup";
+    // measured, that segfaults inside the plugin, three frames deep:
+    //
+    //   frame #0: CoreFoundation`CFRetain + 24    EXC_BAD_ACCESS
+    //   frame #1: NassauEQ`bundleEntry + 52
+    //   frame #2: twVst3Module::load()
+    //
+    // twtestvst3bundle is the same fixture laid out as a bundle and built with
+    // TWTEST_REQUIRE_BUNDLE, so its bundleEntry REFUSES a null or non-CFBundle
+    // argument instead of crashing on it — a clean failure a test can assert.
+    // Pre-fix this section reports 0 classes; post-fix it reports the same two
+    // the flat fixture yields, through the production scanner.
+#ifdef TW_TESTVST3_BUNDLE_PATH
+    std::cout << "=== .vst3 macOS BUNDLE load ===" << std::endl;
+    {
+        const QString bDir   = QDir( root ).filePath( "vst3bundle" );
+        const QString bCache = QDir( root ).filePath( "plugincache_vst3bundle.json" );
+        QDir().mkpath( bDir );
+
+        // A bundle is a DIRECTORY, so this is a recursive copy rather than the
+        // QFile::copy the flat fixture needs. Copied (not scanned in place) for
+        // the same reason the flat one is: the scan tree must hold exactly the
+        // modules this section asserts a count over.
+        const QString src = QString( TW_TESTVST3_BUNDLE_PATH );
+        const QString dst = QDir( bDir ).filePath( "testbundle.vst3" );
+        bool copied = QDir().mkpath( dst + "/Contents/MacOS" );
+        copied = copied && QFile::copy( src + "/Contents/Info.plist",
+                                        dst + "/Contents/Info.plist" );
+        copied = copied && QFile::copy( src + "/Contents/MacOS/twtestvst3bundle",
+                                        dst + "/Contents/MacOS/testbundle" );
+
+        if( audio::check( copied, "copied the twtestvst3 BUNDLE fixture into a scan tree" ) ) {
+            twPluginRegistry reg;
+            reg.setSearchPaths( { bDir.toStdString() } );
+            reg.setCachePath( bCache.toStdString() );
+            // OUT OF PROCESS, deliberately, unlike section 9 above: this
+            // fixture PRINTS to stdout from its module initialiser, and stdout
+            // is the channel the probe's JSON result travels on. That makes
+            // this one section gate both halves of the macOS VST3 fix — the
+            // CFBundleRef, and the framing that keeps a chatty plugin from
+            // corrupting its own scan result.
+#ifdef TW_PLUGINPROBE_PATH
+            reg.setProbeExecutable( TW_PLUGINPROBE_PATH );
+#endif
+            reg.rescan( false );
+
+            const twPluginScanStats s = reg.scanStats();
+            std::cout << "       bundle: " << audio::statsLine( s ) << std::endl;
+            audio::check( s.modulesFound == 1, "the scanner reports the .vst3 BUNDLE" );
+            audio::check( s.modulesProbed == 1, "...and probes it" );
+
+            // THE ASSERTION THAT BITES. With bundleEntry refused, the module
+            // yields no classes at all — the factory is never reached.
+            int nVst3 = 0;
+            for( const twPluginDescriptor &d : reg.plugins() )
+                if( d.format == "vst3" ) ++nVst3;
+            audio::check( nVst3 == 2,
+                          "both classes came out of a BUNDLE probed out of process, so "
+                          "bundleEntry got a real CFBundleRef AND the plugin's stdout "
+                          "noise did not corrupt the result" );
+        }
+    }
+#endif
 #else
     std::cout << "  note this build has no VST3 support; .vst3 discovery is skipped"
               << std::endl;

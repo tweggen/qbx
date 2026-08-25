@@ -946,6 +946,18 @@ set_tests_properties(plugin_editor_geometry_test PROPERTIES
 # and never references SSettings::instance() (AC 6a), so unlike the two
 # RUN_SERIAL qxa cases in gate 5b that DO touch the shared smaragd.ini, this
 # binary needs no RUN_SERIAL and is safe under `ctest -j4`.
+# The stale-INI plugin search-path merge (fix/mac-vst3-loading). A pure
+# function over two string lists, so it needs no QSettings and no platform --
+# the test states the macOS/Windows default shapes itself.
+add_executable(plugin_search_paths_test shell/tests/plugin_search_paths_test.cpp)
+target_link_libraries(plugin_search_paths_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME plugin_search_paths_test COMMAND plugin_search_paths_test)
+set_tests_properties(plugin_search_paths_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(secret_store_test shell/tests/secret_store_test.cpp)
 target_link_libraries(secret_store_test
     PRIVATE

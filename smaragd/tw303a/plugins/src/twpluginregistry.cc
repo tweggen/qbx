@@ -102,8 +102,26 @@ std::vector<twPluginDescriptor> parseProbeJson( const QByteArray &raw,
 {
     std::vector<twPluginDescriptor> out;
 
+    // Take only what is between the probe's markers. The probe process has a
+    // third-party plugin loaded into it and a plugin may print to stdout, so
+    // the raw buffer is NOT assumed to be JSON and never has been safe to treat
+    // as such -- measured: an iPlug2 VST3's 10-line startup banner made
+    // fromJson() fail on a probe that had exited 0 with a perfectly valid
+    // result, and the module was cached as a STICKY FAILURE.
+    //
+    // A probe too old to frame its output (or one that died before the closing
+    // marker) falls back to the whole buffer, which is exactly the old
+    // behaviour -- so this can only ever parse MORE than it used to.
+    QByteArray body = raw;
+    const int b = raw.lastIndexOf( TW_PROBE_JSON_BEGIN );
+    if( b >= 0 ) {
+        const int from = b + (int)sizeof( TW_PROBE_JSON_BEGIN ) - 1;
+        const int e    = raw.indexOf( TW_PROBE_JSON_END, from );
+        body = ( e >= 0 ) ? raw.mid( from, e - from ) : raw.mid( from );
+    }
+
     QJsonParseError err{};
-    const QJsonDocument doc = QJsonDocument::fromJson( raw, &err );
+    const QJsonDocument doc = QJsonDocument::fromJson( body, &err );
     if( err.error != QJsonParseError::NoError || !doc.isObject() ) {
         TW_LOGW( "plugins", "[scan] probe output for '%s' is not valid JSON (%s)",
                  modulePath.c_str(), err.errorString().toUtf8().constData() );

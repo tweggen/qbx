@@ -32,6 +32,10 @@
 #include <sys/stat.h>
 #endif
 
+#if defined( __APPLE__ )
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 using namespace Steinberg;
 
 namespace audio {
@@ -382,16 +386,61 @@ bool twVst3Module::load( const std::string &path )
 #endif
 #endif
 
+#if defined( __APPLE__ )
+    // bundleEntry's argument is a CFBundleRef and it is NOT optional in
+    // practice, however much the spec's wording suggests a host may skip it.
+    // This used to pass null unconditionally, with a comment claiming plugins
+    // "use it only for resource lookup" — that is wrong for every plugin built
+    // on the stock VST3 SDK or on iPlug2, both of which CFRetain the ref the
+    // moment they are handed it. Measured: passing null SEGFAULTS inside the
+    // plugin, three frames deep and with no diagnostic a user could act on —
+    //
+    //   frame #0: CoreFoundation`CFRetain + 24     EXC_BAD_ACCESS
+    //   frame #1: NassauEQ`bundleEntry + 52
+    //   frame #2: twVst3Module::load()
+    //
+    // — so on macOS a bundle is now opened AS a bundle and named honestly.
+    // The executable is still brought in by dlopen above (that half always
+    // worked, and it keeps symbol resolution identical on every platform);
+    // CFBundleCreate here is purely so bundleEntry has something real to
+    // retain and to look its resources up in. The ref is held for the module's
+    // lifetime and released in unload(), because the plugin keeps a retain on
+    // it until bundleExit.
+    //
+    // A FLAT module — a dylib renamed .vst3, which is exactly what the in-repo
+    // twtestvst3 fixture is — has no bundle, so cfBundle_ stays null and the
+    // call below is byte-for-byte the old one. That is deliberate: it is also
+    // the only shape any headless gate on this platform can reach.
+    if( isDir( path ) ) {
+        if( CFStringRef sp = CFStringCreateWithCString( kCFAllocatorDefault,
+                                                        path.c_str(),
+                                                        kCFStringEncodingUTF8 ) ) {
+            if( CFURLRef url = CFURLCreateWithFileSystemPath(
+                    kCFAllocatorDefault, sp, kCFURLPOSIXPathStyle, true ) ) {
+                cfBundle_ = (void *)CFBundleCreate( kCFAllocatorDefault, url );
+                CFRelease( url );
+            }
+            CFRelease( sp );
+        }
+        if( !cfBundle_ )
+            TW_LOGW( "plugins", "[vst3] '%s' is a bundle but CFBundleCreate failed; "
+                     "calling bundleEntry with no bundle reference",
+                     path.c_str() );
+    }
+#endif
+
     // The entry point is optional in the spec and universal in practice. A
     // plugin that has one and does not get it called usually crashes later
     // rather than here, so a miss is worth a line in the log.
     if( void *entry = symbolOf( handle_, initName ) ) {
 #if defined( _WIN32 )
         inited_ = ( (bool ( * )())entry )();
+#elif defined( __APPLE__ )
+        // bundleEntry( CFBundleRef ) — the real ref for a bundle, null for a
+        // flat module, per the note above.
+        inited_ = ( (bool ( * )( void * ))entry )( cfBundle_ );
 #else
-        // The macOS signature is bundleEntry(CFBundleRef). We do not link
-        // CoreFoundation (and neither does the CLAP loader), so we pass null —
-        // what every CF-free host does; plugins use it only for resource lookup.
+        // ModuleEntry( void* ) on Linux; the argument is unused there.
         inited_ = ( (bool ( * )( void * ))entry )( nullptr );
 #endif
         if( !inited_ ) {
@@ -440,6 +489,14 @@ void twVst3Module::unload()
 #endif
         handle_ = nullptr;
     }
+#if defined( __APPLE__ )
+    // Released only AFTER bundleExit above: the plugin holds its own retain
+    // until then, so ours is what keeps the ref alive across the exit call.
+    if( cfBundle_ ) {
+        CFRelease( (CFBundleRef)cfBundle_ );
+        cfBundle_ = nullptr;
+    }
+#endif
     inited_   = false;
     exitName_ = nullptr;
 }

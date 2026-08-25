@@ -2504,6 +2504,72 @@ production and every qxa gate run with the scheduler attached, which is what
 the qxa case actually exercises end to end — real device latency and jitter
 are not covered by either.
 
+## VST3 plugins on macOS: three bugs, none of them the UID (fix/mac-vst3-loading, 2026-08-25)
+
+A project authored on Windows opened on macOS with **every VST3 slot dark**.
+The reported hypothesis was a cross-platform UID mismatch. It was not — that
+was fixed long ago (`589b4b1`) and verified still working here. Three
+independent bugs were, in three different layers. Invariants:
+`tw303a/plugins/CONTRACT.md` 54-55, `main/shell/CONTRACT.md` inv. 56.
+
+**Read this before debugging any "my plugins are missing" report — and measure
+the UIDs before believing a UID theory.** Loading the four installed mac VST3s
+and printing what our own encoder produces gave, against the `.qxp` written on
+Windows:
+
+| Plugin | Stored in the .qxp | Reported on macOS |
+|---|---|---|
+| Mangrove | `0DE7AEF2DE004E4F4E7373324D6E6735` | identical |
+| NassauAnalogue | `0DE7AEF2DE004E4F4E6173734E616E31` | identical |
+| NassauEQ | `0DE7AEF2DE004E4F4E6173734E657131` | identical |
+| NassauZermatt | `0DE7AEF2DE004E4F4E6173734E7A6D31` | identical |
+
+Byte for byte, all four. **A name/vendor fallback lookup would have fixed
+nothing** — nothing VST3 was in the registry at all.
+
+| Bug | Layer | What it was |
+|---|---|---|
+| **The VST3 folders were never scanned** | `SSettings` | `plugins/searchPaths` is stored once and then wins forever (the default is read only when the key is ABSENT, so an emptied list can mean "search nowhere"). An INI written before VST3 hosting existed pins the scanner to the CLAP folders for good. Measured: 4 CLAP + 30 AU modules in the cache and **zero VST3 records, not even failed ones**. Fixed by merging in the defaults of any format the stored list does not mention AT ALL — per FORMAT, never per directory, so a deliberate deletion stands. |
+| **`bundleEntry` got a null `CFBundleRef`** | `twVst3Module` | Even with the paths fixed, every real plugin segfaults: the macOS entry point takes a `CFBundleRef` and every stock-SDK / iPlug2 plugin `CFRetain`s it on sight. The loader passed `nullptr` under a comment claiming plugins "use it only for resource lookup". `CFRetain + 24`, `EXC_BAD_ACCESS`, three frames deep. **The only VST3 fixture in the tree was a FLAT dylib — the one shape for which null is correct** — which is exactly why this survived. |
+| **A chatty plugin corrupted its own scan result** | `plugin_probe` / `twPluginRegistry` | The out-of-process probe carries its JSON on stdout, and that process has a third-party plugin loaded into it. An iPlug2 VST3 prints a ten-line banner from its module initialiser, so `fromJson()` failed and a working plugin was cached as a **sticky FAILED** module. The probe exited 0 with valid JSON; only the channel was dirty. The result is now framed with `TW_PROBE_JSON_BEGIN`/`_END`. |
+
+**The second and third are invisible without the first**, and the first is
+invisible without a stale INI — which is why this presented as one symptom.
+Each was fixed and each was watched failing.
+
+Gates: `plugin_search_paths_test` (new — the field INI verbatim, the
+deletion-stands rule, "search nowhere", path spellings, custom directories) and
+`plugins_scan_test`'s new ".vst3 macOS BUNDLE load" section, which probes **out
+of process** against `twtestvst3bundle` — a macOS-only bundle twin of the
+fixture, built with `TWTEST_REQUIRE_BUNDLE` so its `bundleEntry` REFUSES a null
+or non-`CFBundle` argument (cleanly, so a test can assert rather than crash) and
+whose module initialiser deliberately PRINTS NOISE to stdout. That one section
+therefore bites both engine fixes. **Watched failing under three sabotages**:
+passing `nullptr` again (`failed=1`, only the 2 built-ins survive), parsing the
+raw buffer again (same shape), and — for the merge — never merging (5
+assertions) and merging per-directory (5 different ones).
+
+Verified end to end on the reporting user's own project: a cold rescan now
+records all four VST3 modules `ok`, with the UIDs above matching the `.qxp`
+exactly.
+
+**NOT gated:** a real third-party plugin (the gates use in-repo fixtures — the
+four Nassau plugins are HAND-verified, through both `vst3_probe` and a cold
+app rescan); the flat-vs-bundle split on Windows and Linux (unchanged code, and
+`bundleEntry` is macOS-only); `CFBundleCreate` FAILING on a malformed bundle
+(the loader logs and passes null, no case); a plugin that prints noise **after**
+its JSON (the frame handles it by construction, nothing exercises it); and
+whether a merged directory is one the user would want — the merge is per format
+and cannot know.
+
+**Also found and NOT fixed:** this macOS box has **13 pre-existing test
+failures on `main`**, identical before and after this branch (verified by
+running the same set in the untouched main checkout). One of them is inside
+`plugins_scan_test` itself — "the scanner-v2 fields round-trip through
+plugincache.json" — so that test stays red here for a reason unrelated to this
+work, while the new section inside it passes. macOS has never had a green
+suite; this repo's regular box is Windows.
+
 ## Dependencies
 
 ### Core

@@ -1210,3 +1210,41 @@ Gate: `qxa.feel_flow_puppet`. NOT gated: the dock's docked/floating/closed round
 trip through Qt's opaque `ui/windowState` blob (the media browser's own unrun
 manual gap), the View-menu item itself, and the pump's track-resolution fallback
 under a project with several analyzed tracks.
+
+## inv. 56 — a stored plugin search-path list is merged with missing-format defaults
+
+`plugins/searchPaths` is written into the user's INI once and then wins forever:
+`SSettings::pluginSearchPaths()` consults `SOpt::def()` only when the key is
+ABSENT, deliberately, so that an emptied list can mean "search nowhere" rather
+than "give me the defaults back".
+
+The cost is that a stored list is frozen at the set of **FORMATS** that existed
+the day it was written. Found in the field on macOS (2026-08-25), where an INI
+predating VST3 hosting (proposal 08 M6) read exactly
+
+    searchPaths=/Library/Audio/Plug-Ins/CLAP, /Users/…/Library/Audio/Plug-Ins/CLAP
+
+so the scanner never walked a VST3 directory, every VST3 slot in every project
+resolved to the transparent placeholder, and **the user was told nothing** — the
+plugins were simply, silently absent. Measured on that box: the plugin cache
+held 4 CLAP and 30 AudioUnit modules and **zero VST3 records, not even failed
+ones**.
+
+`spluginpaths::mergeMissingFormatDefaults` (`app/shell/spluginsearchpathmerge.h`)
+appends the defaults of every format the stored list does not mention AT ALL.
+Three properties are contractual and each is gated by
+`plugin_search_paths_test`:
+
+1. **The test is PER FORMAT, never per directory.** A user who deleted ONE of a
+   format's two standard folders still mentions that format, so their deletion
+   stands. A per-directory rule would silently undo every such deletion on the
+   next launch.
+2. **An EMPTY stored list is returned untouched.** "Search nowhere" is the one
+   thing the absent/empty distinction exists to express.
+3. **Nothing is written back.** This is a read-time merge, so it cannot rewrite
+   a preference the user never touched.
+
+It lives as a pure function on two string lists precisely so the gate needs no
+`QSettings`, no config directory and no platform — the test STATES the macOS and
+Windows default shapes rather than asserting whatever the box it runs on
+produces.
