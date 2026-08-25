@@ -79,6 +79,10 @@
 #include <sys/stat.h>
 #endif
 
+#if defined( __APPLE__ )
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 // --- interface IIDs -----------------------------------------------------------
 //
 // The VST module's IIDs used to be defined right here, inline. That was the
@@ -513,6 +517,26 @@ public:
             std::printf( "  FAILED: dlopen: %s\n", dlerror() );
             return false;
         }
+        // bundleEntry takes a CFBundleRef. This tool used to hand it the
+        // DLOPEN HANDLE, which is not a CF object at all — so the first thing
+        // a stock-SDK or iPlug2 plugin does with it (CFRetain) dereferenced
+        // garbage and the probe died before printing a single class. That made
+        // the one tool meant to triage "this plugin will not load" unusable on
+        // exactly the plugins worth triaging.
+        if( isDirectory( path ) ) {
+            if( CFStringRef sp = CFStringCreateWithCString(
+                    kCFAllocatorDefault, path.c_str(), kCFStringEncodingUTF8 ) ) {
+                if( CFURLRef url = CFURLCreateWithFileSystemPath(
+                        kCFAllocatorDefault, sp, kCFURLPOSIXPathStyle, true ) ) {
+                    cfBundle_ = (void *)CFBundleCreate( kCFAllocatorDefault, url );
+                    CFRelease( url );
+                }
+                CFRelease( sp );
+            }
+            if( !cfBundle_ )
+                std::printf( "  note   : CFBundleCreate failed; "
+                             "bundleEntry gets no bundle reference\n" );
+        }
         const char *initName = "bundleEntry";
         const char *exitName = "bundleExit";
 #else
@@ -534,8 +558,10 @@ public:
         if( entry ) {
 #if defined( _WIN32 )
             inited_ = ( (bool ( * )())entry )();
+#elif defined( __APPLE__ )
+            inited_ = ( (bool ( * )( void * ))entry )( cfBundle_ );
 #else
-            inited_ = ( (bool ( * )( void * ))entry )( handle_ );
+            inited_ = ( (bool ( * )( void * ))entry )( nullptr );
 #endif
             if( !inited_ ) {
                 std::printf( "  FAILED: %s() returned false\n", initName );
@@ -678,10 +704,18 @@ private:
 #endif
             handle_ = nullptr;
         }
+#if defined( __APPLE__ )
+        if( cfBundle_ ) {                       // after bundleExit, as in the engine
+            CFRelease( (CFBundleRef)cfBundle_ );
+            cfBundle_ = nullptr;
+        }
+#endif
         inited_ = false;
     }
 
     void           *handle_   = nullptr;
+    // macOS: the CFBundleRef passed to bundleEntry; null for a flat module.
+    void           *cfBundle_ = nullptr;
     IPluginFactory *factory_  = nullptr;
     const char     *exitName_ = nullptr;
     bool            inited_   = false;

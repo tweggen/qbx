@@ -1,6 +1,18 @@
 #ifndef _TWPLUGINSCANCACHE_H_
 #define _TWPLUGINSCANCACHE_H_
 
+// The frame the out-of-process probe wraps its JSON result in, and the host
+// unwraps. Shared here because plugin_probe.cc and twpluginregistry.cc are the
+// only two files that may ever know these strings, and they MUST agree.
+//
+// It exists because the probe process has a third-party plugin loaded into it
+// and a plugin may write to stdout -- which is the channel the result travels
+// on. See the comment at the emit site in plugin_probe.cc for the measured
+// case (an iPlug2 VST3 whose banner turned a good plugin into a sticky FAILED
+// cache record).
+#define TW_PROBE_JSON_BEGIN "---TW-PROBE-JSON-BEGIN---"
+#define TW_PROBE_JSON_END   "---TW-PROBE-JSON-END---"
+
 // PRIVATE header of the plugin scanner (proposal 08 M2).
 //
 // The scan cache is <configDir>/plugincache.v<kScannerVersion>.json -- the name

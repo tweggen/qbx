@@ -56,6 +56,13 @@ private:
 
     std::string                path_;
     void                      *handle_   = nullptr;  // HMODULE / dlopen handle
+    // macOS only: the CFBundleRef the .vst3 bundle was opened as, retained for
+    // this module's lifetime and released in unload(). Held as void* so that
+    // CoreFoundation stays out of this header — nothing but the .cc needs it.
+    // Null for a FLAT module (a dylib renamed .vst3, which is what the in-repo
+    // twtestvst3 fixture is): there is no bundle to name, and bundleEntry's
+    // argument is then legitimately null.
+    void                      *cfBundle_ = nullptr;
     Steinberg::IPluginFactory *factory_  = nullptr;
     const char                *exitName_ = nullptr;
     bool                       inited_   = false;

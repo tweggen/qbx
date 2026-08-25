@@ -2,6 +2,8 @@
 #include "app/shell/ssettings.h"
 #include "app/servicesui/soptions.h"
 
+#include "app/shell/spluginsearchpathmerge.h"
+
 #include <QFileInfo>
 
 SSettings &SSettings::instance()
@@ -267,6 +269,7 @@ void SSettings::removeRecentProject( const QString &path )
     if( changed ) setValue( kRecentKey, list );
 }
 
+
 QStringList SSettings::pluginSearchPaths() const
 {
     // A user who removes every entry means "search nowhere"; that is stored as
@@ -274,7 +277,15 @@ QStringList SSettings::pluginSearchPaths() const
     // "never configured".
     if( !settings_.contains( SOpt::PluginSearchPaths ) )
         return SOpt::def( SOpt::PluginSearchPaths ).toStringList();
-    return value( SOpt::PluginSearchPaths ).toStringList();
+
+    // Merge in the defaults of any format the stored list does not mention at
+    // all. The rule, and why it is per-format rather than per-directory, is in
+    // app/shell/spluginsearchpathmerge.h — where it lives as a pure function so
+    // that plugin_search_paths_test can gate it with no QSettings and no
+    // platform.
+    return spluginpaths::mergeMissingFormatDefaults(
+        value( SOpt::PluginSearchPaths ).toStringList(),
+        SOpt::def( SOpt::PluginSearchPaths ).toStringList() );
 }
 
 void SSettings::setPluginSearchPaths( const QStringList &dirs )

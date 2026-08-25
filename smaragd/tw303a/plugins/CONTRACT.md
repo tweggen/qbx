@@ -1080,3 +1080,55 @@ different views of the same type.
     `qxa.plugin_restart_no_livelock` gates; this half has NO fixture, because
     `twtestvst3.cpp`'s `createView` returns nullptr and there is no headless
     route to a VST3 editor poll at all.
+
+54. **ON macOS A `.vst3` BUNDLE IS OPENED AS A BUNDLE, AND `bundleEntry` GETS A
+    REAL `CFBundleRef`** (found 2026-08-25 from a user report, fix/mac-vst3-loading).
+    The macOS entry point is `bundleEntry( CFBundleRef )`, and the argument is
+    NOT optional in practice however much the spec's wording suggests a host may
+    skip it: every plugin built on the stock VST3 SDK or on iPlug2 `CFRetain`s
+    the reference the moment it is handed one. This loader used to pass `nullptr`
+    unconditionally, under a comment claiming plugins "use it only for resource
+    lookup" — measured, that SEGFAULTS inside the plugin, with no diagnostic a
+    user could act on:
+
+        frame #0: CoreFoundation`CFRetain + 24     EXC_BAD_ACCESS
+        frame #1: NassauEQ`bundleEntry + 52
+        frame #2: twVst3Module::load()
+
+    `twVst3Module::load` therefore `CFBundleCreate`s the `.vst3` when the path is
+    a DIRECTORY, holds the ref for the module's lifetime and releases it in
+    `unload()` **after** `bundleExit` (the plugin holds its own retain until
+    then). The executable is still brought in by `dlopen` — that half always
+    worked, and keeping it makes symbol resolution identical on every platform;
+    the CFBundle exists so `bundleEntry` has something real to retain.
+
+    A **FLAT** module — a dylib renamed `.vst3`, which is exactly what the
+    in-repo `twtestvst3` fixture is — has no bundle, so `cfBundle_` stays null
+    and the call is byte-for-byte the old one. That asymmetry is why the defect
+    survived: **the only VST3 fixture in the tree was the one shape for which
+    passing null is correct.** `twtestvst3bundle` (macOS only,
+    `TWTEST_REQUIRE_BUNDLE`) is the bundle twin whose `bundleEntry` REFUSES a
+    null or non-`CFBundle` argument — cleanly, so a test can assert on it rather
+    than crash — and `plugins_scan_test`'s ".vst3 macOS BUNDLE load" section is
+    the gate.
+
+55. **THE OUT-OF-PROCESS PROBE'S RESULT IS FRAMED, BECAUSE ITS stdout IS SHARED
+    WITH A THIRD-PARTY PLUGIN** (same branch). `plugin_probe` carries its JSON on
+    stdout and the host parsed the whole buffer. But that process has a plugin
+    loaded into it, and plugins write to stdout: measured, an iPlug2 VST3
+    (Mangrove) prints a ten-line `BEGIN IPLUG CHANNEL IO PARSER` banner from its
+    module initialiser, so `QJsonDocument::fromJson()` saw banner + JSON, failed,
+    and the registry recorded a **perfectly good plugin as a FAILED module** —
+    sticky in `plugincache.json`, so it stayed missing until someone force-
+    rescanned. The probe exited 0 and its JSON was valid; only the channel was
+    dirty.
+
+    The result is now wrapped in `TW_PROBE_JSON_BEGIN` / `TW_PROBE_JSON_END`
+    (`twpluginscancache.h` — the one header both sides include, so they cannot
+    drift) and `parseProbeJson` takes what is between them. Anything the plugin
+    prints, before or after, is noise by construction. A buffer with no markers
+    falls back to the whole thing, i.e. exactly the old behaviour, so this can
+    only ever parse MORE than it used to. Redirecting the plugin's stdout is not
+    an option — it writes to the same fd, and a plugin may legitimately want a
+    console. Gate: the same "BUNDLE load" section, which probes OUT OF PROCESS
+    against a deliberately CHATTY fixture.

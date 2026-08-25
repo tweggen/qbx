@@ -380,6 +380,11 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src
     )
     set_target_properties(vst3_probe PROPERTIES AUTOMOC OFF)
+    # tw_plugins links CoreFoundation PRIVATE, so the probe needs its own: it
+    # opens the bundle itself, to hand bundleEntry a real CFBundleRef.
+    if(SMARAGD_MACOS)
+        target_link_libraries(vst3_probe PRIVATE ${TW_VST3_COREFOUNDATION})
+    endif()
 
     # Build-time test fixture: a real 2-in/2-out VST3 module built from this
     # repo, so plugins_test can exercise the actual VST3 load path without anyone
@@ -413,6 +418,53 @@ if(EXISTS ${TW_VST3_DIR}/base/funknown.h)
                 $<TARGET_FILE:twtestvst3>
                 ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/twtestvst3.vst3
         COMMENT "Copying the twtestvst3 fixture next to the app binary (qxa cases)")
+
+    # --- the macOS BUNDLE twin of the fixture ---------------------------------
+    #
+    # Every .vst3 a mac user actually installs is a BUNDLE, and the loader's
+    # bundle path is a different code path from the flat one: it must open the
+    # .vst3 as a CFBundle and hand bundleEntry a real CFBundleRef. Passing null
+    # there segfaults inside every stock-SDK and iPlug2 plugin (measured: all
+    # four installed on the box this was found on), and NOTHING IN THE TREE
+    # COULD DETECT THAT, because the only VST3 fixture is a flat dylib for
+    # which null is the correct argument.
+    #
+    # So this target is the same sources laid out as a real bundle, compiled
+    # with TWTEST_REQUIRE_BUNDLE so its bundleEntry REFUSES anything that is not
+    # a CFBundle. It fails cleanly rather than crashing, which is what lets a
+    # test assert on it. The flat twtestvst3 target above is untouched and still
+    # covers the flat path.
+    if(SMARAGD_MACOS)
+        add_library(twtestvst3bundle MODULE
+            plugins/tests/twtestvst3.cpp
+            ${TW_VST3_SDK_SOURCES}
+        )
+        target_include_directories(twtestvst3bundle PRIVATE ${TW_VST3_INC})
+        target_compile_definitions(twtestvst3bundle PRIVATE TWTEST_REQUIRE_BUNDLE)
+        set_target_properties(twtestvst3bundle PROPERTIES
+            PREFIX ""
+            SUFFIX ""
+            OUTPUT_NAME "twtestvst3bundle"
+            AUTOMOC OFF
+        )
+        target_link_libraries(twtestvst3bundle PRIVATE ${TW_VST3_COREFOUNDATION})
+
+        # Contents/MacOS/<name> + a minimal Info.plist is all CFBundleCreate
+        # needs; resolveBinary() already prefers Contents/MacOS, so the
+        # production loader finds the binary with no special casing.
+        set(TW_TESTVST3_BUNDLE
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/twtestvst3bundle.vst3)
+        add_custom_command(TARGET twtestvst3bundle POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                    ${TW_TESTVST3_BUNDLE}/Contents/MacOS
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:twtestvst3bundle>
+                    ${TW_TESTVST3_BUNDLE}/Contents/MacOS/twtestvst3bundle
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CMAKE_CURRENT_SOURCE_DIR}/plugins/tests/twtestvst3bundle.plist
+                    ${TW_TESTVST3_BUNDLE}/Contents/Info.plist
+            COMMENT "Laying out the twtestvst3 BUNDLE fixture (macOS bundle load path)")
+    endif()
 else()
     message(WARNING "tw_plugins: third_party/vst3_pluginterfaces not checked out; VST3 plugin hosting DISABLED. Run 'git submodule update --init --recursive' (or ./build.sh, which does it).")
 endif()
@@ -1030,6 +1082,11 @@ if(TARGET twtestvst3)
     add_dependencies(plugins_scan_test twtestvst3)
     target_compile_definitions(plugins_scan_test PRIVATE
         TW_TESTVST3_PATH="$<TARGET_FILE:twtestvst3>")
+endif()
+if(TARGET twtestvst3bundle)
+    add_dependencies(plugins_scan_test twtestvst3bundle)
+    target_compile_definitions(plugins_scan_test PRIVATE
+        TW_TESTVST3_BUNDLE_PATH="${TW_TESTVST3_BUNDLE}")
 endif()
 if(TARGET smaragd_pluginprobe)
     add_dependencies(plugins_scan_test smaragd_pluginprobe)

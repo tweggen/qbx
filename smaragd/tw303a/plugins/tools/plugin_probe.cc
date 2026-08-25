@@ -122,8 +122,24 @@ int main( int argc, char **argv )
     root["plugins"] = plugins;
 
     const QByteArray json = QJsonDocument( root ).toJson( QJsonDocument::Compact );
+
+    // THE SENTINEL IS NOT DECORATION. This process has a THIRD-PARTY PLUGIN
+    // loaded into it, and a plugin may write to stdout — which is the channel
+    // this result travels on. Measured on an iPlug2-based VST3 (Mangrove): the
+    // plugin prints a 10-line "BEGIN IPLUG CHANNEL IO PARSER" banner from its
+    // module initialiser, so the host's QJsonDocument::fromJson() saw banner +
+    // JSON, failed to parse, and recorded a perfectly good plugin as a FAILED
+    // module — sticky in plugincache.json, so it stayed missing until someone
+    // force-rescanned. The probe exited 0 and its JSON was valid; only the
+    // channel was dirty.
+    //
+    // Redirecting the plugin's stdout is not available to us (it writes to the
+    // same fd, and a plugin may legitimately want a console), so the result is
+    // FRAMED instead and the host takes what is between the markers. Anything
+    // the plugin prints, before or after, is then noise by construction.
+    std::fputs( "\n" TW_PROBE_JSON_BEGIN "\n", stdout );
     std::fwrite( json.constData(), 1, (std::size_t) json.size(), stdout );
-    std::fputc( '\n', stdout );
+    std::fputs( "\n" TW_PROBE_JSON_END "\n", stdout );
     std::fflush( stdout );
     return 0;
 }
