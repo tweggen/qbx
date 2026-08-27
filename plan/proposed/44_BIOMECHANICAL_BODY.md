@@ -11,6 +11,12 @@
 > every number against the primary literature, the same two-pass survey
 > discipline proposal 40 §2 used.
 
+> **Measured verification of the CURRENT model (2026-08-27):**
+> `plan/proposed/44_BIOMECHANICAL_BODY_VERIFICATION.md` — the puppet's missing
+> kinematic chain, the head's 4 Hz frequency assignment, the inertia/gravity
+> ratios, the three anatomical axes (only one of which the model has), and a
+> gap in §4's own DOF table. Read it before scoping §7.
+
 Prerequisite reading: `plan/proposed/40_GROOVE_RESONANCE.md` §3.2–§3.5 and
 M3c/M3e (the pendulum ensemble, the exported dynamics, the puppet's Pose
 seam — deliberately built as the display boundary this proposal plugs into).

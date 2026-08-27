@@ -775,6 +775,18 @@ else()
     target_link_libraries(gen_channel_fixture PRIVATE PkgConfig::SNDFILE)
 endif()
 
+# --- body_probe: what the feel-flow puppet's motion actually IS ------------------
+# An offline probe (the analog of clap_probe / vst3_probe / asio_probe), NOT a
+# gate: it runs the REAL shipped groove chain over a committed fixture and
+# reports the kinematics of the five-part pose the puppet draws, plus the forces
+# that motion would demand of a real body. Built because proposal 40's puppet
+# was reported as not honouring body physics, and this repo measures such a
+# claim rather than arguing about it. Links tw_sidecar only -- no Qt, no audio
+# file library -- which is also why tools/build_body_probe.sh can build it with
+# a bare compiler, without configuring Qt/vcpkg at all.
+add_executable(body_probe sidecar/tools/body_probe.cc)
+target_link_libraries(body_probe PRIVATE tw_sidecar)
+
 # --- Platform audio backends (devices only) --------------------------------------
 if(SMARAGD_LINUX AND ENABLE_ALSA)
     find_package(ALSA REQUIRED)
