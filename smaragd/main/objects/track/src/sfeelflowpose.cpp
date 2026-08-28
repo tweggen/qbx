@@ -86,7 +86,7 @@ inline double unitDispAt( const SFeelFlowUiData &ui, size_t unit, size_t hop )
     if( unit >= ui.dyn[hop].units.size() ) return 0.0;
     const double power = ui.perUnitPower[i];
     const double e     = power > 0.0 ? std::sqrt( power ) : 0.0;
-    return e * (double) ui.dyn[hop].units[unit].cosPhi;
+    return e * (double) ui.dyn[hop].units[unit].cosMet;
 }
 
 /**
@@ -185,9 +185,14 @@ SFeelFlowPose sFeelFlowPoseAt( const SFeelFlowUiData &ui, offset_t frame )
         const float powerB = ui.perUnitPower[iB];
         const float power  = powerA + ( powerB - powerA ) * frac;
 
-        // The raw, UN-renormalized bin-averaged cosine -- header point 2.
-        const float cosA   = recA.units[unit].cosPhi;
-        const float cosB   = recB.units[unit].cosPhi;
+        // The raw, UN-renormalized bin-averaged cosine of the METRICAL phase
+        // (proposal 44 C1a) -- header point 2 applies to it unchanged. NOT
+        // cosPhi: arg(z) is DRIVE-LOCKED, so cos(arg z) oscillates at the drive
+        // rate however slow the unit is (measured up to 16x its seeded metrical
+        // level), which made every body part move at roughly the tatum. |z| was
+        // never affected, so nothing else that reads these aspects moves.
+        const float cosA   = recA.units[unit].cosMet;
+        const float cosB   = recB.units[unit].cosMet;
         const float cosPhi = cosA + ( cosB - cosA ) * frac;
 
         const float energy = power > 0.0f ? std::sqrt( power ) : 0.0f;

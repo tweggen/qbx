@@ -342,6 +342,20 @@ component is `A(t)cos(phi(t))` BY CONSTRUCTION), 9.5 (the break behaviour), 9.6
 sagittal DOF). Those are properties of the code or of measured series, and none
 of them rests on a seeded frequency.
 
+### 9.11 RESOLVED (2026-08-28): 9.10's defect is fixed, and 9.3's numbers stand
+
+Proposal 44 C1a moved the pose off `arg(z)` and onto a METRICAL phase exported
+as `groove.dyn` v3's `cosMet`. Every part now oscillates at its own metrical
+level -- bounceY 2.00 Hz against a 2.0 seed, sway 0.50/0.5, armSwing 0.99/1.0,
+hipShift 0.25/0.25 -- so the "drawn" column of 9.10's table is now the "seeded"
+column, and 9.3's ratios, computed at the seeded frequencies, are correct AFTER
+the fix even though they were wrong when written.
+
+Measured in WORLD space, both rotational DOFs are now CARRIED: head ratio
+0.15-0.21, trunk 0.38-0.39, over three fixtures. `groove.res` and `groove.ev`
+are byte-identical across all 12 fixtures -- the resonance never lived in the
+phase, which is why nothing that reads the magnitude moved.
+
 ### 9.9 What this verification does NOT establish
 
 The §3 anthropometrics are still quoted from memory and **VERIFY**-flagged; §9.3's

@@ -351,7 +351,7 @@ int main( int argc, char **argv )
             const double power = res[h].unitPower[unit];
             const double e     = power > 0 ? std::sqrt( power ) : 0.0;
             ener[p][h] = e;
-            disp[p][h] = std::max( -1.0, std::min( 1.0, e * dyn[h].units[unit].cosPhi ) );
+            disp[p][h] = std::max( -1.0, std::min( 1.0, e * dyn[h].units[unit].cosMet ) );
         }
     }
 
@@ -391,15 +391,30 @@ int main( int argc, char **argv )
         // an abduction with no defined tau_gravity here.
         const Row rows[] = { { "head",  3, 1.264 }, { "trunk", 1, 0.800 } };
         int bad = 0;
+        // THE HEAD IS MEASURED IN WORLD SPACE, not in the trunk's frame.
+        // f_cross asks what a segment's own motion costs, and the head's motion
+        // is the trunk's PLUS its small relative offset -- since C1 the pose
+        // carries only the offset. Measuring the offset alone reports a
+        // near-zero signal's noise as a frequency, which is exactly the trap
+        // this comment exists to stop the next reader falling into.
+        // Both series in DEGREES of world angle, so the rms column compares.
+        std::vector<double> headWorld( nHops, 0.0 ), trunkWorld( nHops, 0.0 );
+        for( size_t h = 0; h < nHops; h++ ) {
+            trunkWorld[h] = disp[1][h] * kSwayDeg;
+            headWorld[h]  = disp[1][h] * kSwayDeg + disp[3][h] * kNodDeg;
+        }
         for( const Row &r : rows ) {
+            const std::vector<double> &sig = ( r.part == 3 ) ? headWorld : trunkWorld;
             size_t zc = 0;
             for( size_t h = 1; h < nHops; h++ )
-                if( disp[r.part][h - 1] * disp[r.part][h] < 0.0 ) zc++;
+                if( sig[h - 1] * sig[h] < 0.0 ) zc++;
             const double dur = (double) nHops * dt;
             const double f   = dur > 0 ? (double) zc / 2.0 / dur : 0.0;
             const double ratio = ( f / r.fCross ) * ( f / r.fCross );
-            printf( "%-6s drawn %.3f Hz  f_cross %.3f Hz  ratio %.2f  %s\n",
+            double s2 = 0; for( double v : sig ) s2 += v * v;
+            printf( "%-6s drawn %.3f Hz  f_cross %.3f Hz  ratio %.2f  rms %.3f deg  %s\n",
                     r.what, f, r.fCross, ratio,
+                    nHops ? std::sqrt( s2 / (double) nHops ) : 0.0,
                     ratio > 3.0 ? "FLUNG (over 3.0)" : "ok" );
             if( ratio > 3.0 ) bad++;
         }

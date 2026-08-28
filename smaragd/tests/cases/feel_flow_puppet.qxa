@@ -31,6 +31,28 @@
   (4) The widget PAINTS (a PNG grab mid-material). Coverage, not an oracle -
       aesthetics are explicitly not gated (M3e AC 7).
 
+  RE-PINNED AGAIN 2026-08-28 by proposal 44 C1a, which moved the pose off the
+  DRIVE-LOCKED phase arg(z) and onto the METRICAL phase (groove.dyn v3's
+  cosMet). Every component moved, because every part had been oscillating at
+  roughly the tatum regardless of its own metrical level - measured up to 16x
+  its seed. They now land on their levels: bounceY 2.00 Hz against a 2.0 seed,
+  sway 0.50 against 0.5, armSwing 0.99 against 1.0, hipShift 0.25 against 0.25.
+
+      was:  bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=-0.2210 hipShift=0.1432
+      now:  bounceY=0.4317 sway=-0.2301 armSwing=0.3214 headNod=0.0983  hipShift=0.0003
+
+  energySum is UNCHANGED at 1.3862 - C1a moved the phase and not the envelope,
+  which is exactly the claim that |z| was never the problem. hipShift at 0.0003
+  is not a dead unit: twobar is a 0.25 Hz oscillation and frame 240000 happens
+  to sit near its zero crossing, where before the drive-locked phase would have
+  put it anywhere.
+
+  The head's own relative offset is now SMALL (0.0983) and that is correct
+  physics rather than a regression: the trunk oscillates at 0.5 Hz, well below
+  the neck's 1.264 Hz corner, so a head with this much inertia simply goes with
+  it. Measured in WORLD space the head moves at 0.58 Hz with ratio 0.21 -
+  carried, not flung.
+
   RE-PINNED 2026-08-28 by proposal 44 C1, which stopped driving the head from
   the "reference" unit and DERIVES it from the trunk instead (a one-pole lag,
   option D). Only the head moved; the other four components are bit-identical.
@@ -139,9 +161,9 @@
     <!-- The same frame, twice, pinned to the full line: a pure function of
          an immutable snapshot has exactly one answer. -->
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=-0.2210 hipShift=0.1432 energySum=1.3862"/>
+                           contains="pose: valid=1 bounceY=0.4317 sway=-0.2301 armSwing=0.3214 headNod=0.0983 hipShift=0.0003 energySum=1.3862"/>
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=-0.2210 hipShift=0.1432 energySum=1.3862"/>
+                           contains="pose: valid=1 bounceY=0.4317 sway=-0.2301 armSwing=0.3214 headNod=0.0983 hipShift=0.0003 energySum=1.3862"/>
 
     <!-- ============ (2) a staling edit: back to the invalid pose ======== -->
     <!-- The gain moves the track root's content epoch (proposal 37 P3a put

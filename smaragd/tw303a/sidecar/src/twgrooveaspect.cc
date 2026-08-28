@@ -383,7 +383,8 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
         // be bin-averaged as one scalar (twaspects.h's normative doc).
         std::vector<std::vector<double>> sup( nUnits ), ten( nUnits ),
                                           cph( nUnits ), sph( nUnits ),
-                                          slp( nUnits ), dis( nUnits );
+                                          slp( nUnits ), dis( nUnits ),
+                                          cmt( nUnits ), smt( nUnits );
         for( uint32_t u = 0; u < nUnits; u++ ) {
             const twGroovePendulumUnitTrajectory &traj =
                 result.unitTrajectories[u];
@@ -391,6 +392,7 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
             sup[u].assign( n, 0.0 ); ten[u].assign( n, 0.0 );
             cph[u].assign( n, 0.0 ); sph[u].assign( n, 0.0 );
             slp[u].assign( n, 0.0 ); dis[u].assign( n, 0.0 );
+            cmt[u].assign( n, 0.0 ); smt[u].assign( n, 0.0 );
 
             // k/alpha mirror runPass1's own derivation (twgroovependulum.cc)
             // -- alpha from the unit's dampingCycles against ITS seeded
@@ -412,6 +414,12 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
                 ten[u][t] = k * F * sp;
                 cph[u][t] = cp;
                 sph[u][t] = sp;
+                // The METRICAL phase (v3): same two-channel treatment and for
+                // the same reason -- a wrapped phase may never be bin-averaged
+                // as one scalar.
+                const double pm = t < traj.phaseMetric.size() ? traj.phaseMetric[t] : 0.0;
+                cmt[u][t] = std::cos( pm );
+                smt[u][t] = std::sin( pm );
                 dis[u][t] = 2.0 * std::fabs( alpha ) * m * m;
                 if( t > 0 && dtSec > 0.0 ) {
                     // Instantaneous phase advance: the per-hop wrapped
@@ -439,7 +447,7 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
         // FINER than the pendulum's, a non-default envRateHz) falls back to
         // the point sample.
         out.dynRecordCount = nRecs;
-        out.dynPayload.reserve( (size_t)nRecs * (size_t)nUnits * 6 * 4 );
+        out.dynPayload.reserve( (size_t)nRecs * (size_t)nUnits * 8 * 4 );
         for( uint64_t k = 0; k < nRecs; k++ ) {
             const double binLoF = pendulumHopFrames > 0.0
                 ? (double)( k * (uint64_t)out.hopFrames ) / pendulumHopFrames : 0.0;
@@ -464,13 +472,16 @@ twGrooveAspectPayloads twGrooveBuildAspectPayloads(
             };
             for( uint32_t u = 0; u < nUnits; u++ ) {
                 // The WIRE order (twaspects.h): support, tension, cosPhi,
-                // sinPhi, slip, dissip.
+                // sinPhi, slip, dissip, then v3's cosMet, sinMet -- APPENDED,
+                // so the first six offsets are unchanged.
                 emit( sup[u] );
                 emit( ten[u] );
                 emit( cph[u] );
                 emit( sph[u] );
                 emit( slp[u] );
                 emit( dis[u] );
+                emit( cmt[u] );
+                emit( smt[u] );
             }
         }
     }
@@ -514,7 +525,7 @@ std::vector<twGrooveDynRecord> twGrooveDecodeDynPayload(
 {
     std::vector<twGrooveDynRecord> out;
     if( payload == nullptr || nUnits == 0 ) return out;
-    const uint64_t stride = (uint64_t)nUnits * 6 * 4;
+    const uint64_t stride = (uint64_t)nUnits * 8 * 4;
     if( stride == 0 || payloadLen % stride != 0 ) return out;
     const uint64_t n = payloadLen / stride;
     out.reserve( (size_t)n );
@@ -523,13 +534,20 @@ std::vector<twGrooveDynRecord> twGrooveDecodeDynPayload(
         twGrooveDynRecord rec;
         rec.units.resize( nUnits );
         for( uint32_t u = 0; u < nUnits; u++ ) {
-            const uint8_t *s = r + (size_t)u * 24;
+            // 8 floats per unit since v3 -- MUST track the record stride
+            // above. These two numbers are the same fact written twice and are
+            // exactly what a channel-append gets wrong: with u*24 against a
+            // 32-byte unit the channels scramble across units and decode to
+            // values outside [-1,1], which is how this was caught.
+            const uint8_t *s = r + (size_t)u * 8 * 4;
             rec.units[u].support = getF32( s );
             rec.units[u].tension = getF32( s + 4 );
             rec.units[u].cosPhi  = getF32( s + 8 );
             rec.units[u].sinPhi  = getF32( s + 12 );
             rec.units[u].slip    = getF32( s + 16 );
             rec.units[u].dissip  = getF32( s + 20 );
+            rec.units[u].cosMet  = getF32( s + 24 );
+            rec.units[u].sinMet  = getF32( s + 28 );
         }
         out.push_back( std::move( rec ) );
     }

@@ -302,7 +302,46 @@ for C4 and are stated as such.
 
 ---
 
-## C1a — The drawn phase is drive-locked, not metrical (NEW, from C1's measurement)
+## C1a — The drawn phase is drive-locked, not metrical — **DONE 2026-08-28**
+
+> **Executed as the omega branch, chosen by the requester, and the DECIDE below
+> is settled.** The export is a PHASE, not raw omega: pass 1 runs a
+> power-weighted PLL (`phi += omega*dt + K*sin(arg(z) - phi)*dt`, K = omega/(2*pi*8))
+> and `groove.dyn` **v3** appends `cosMet`/`sinMet`. Computing it in the
+> analysis, where omega and z are both in hand, keeps the pose O(1) and pure --
+> exporting omega would have forced the consumer to integrate with state.
+>
+> The lock term is SELF-LIMITING, which is what makes a fixed gain safe: an
+> unlocked unit's `arg(z)` wobbles about a fixed point, so `sin(arg z - phi)`
+> averages to ~0 over a cycle of phi and the correction cancels itself.
+>
+> **AC-INV EXCEPTION, exercised exactly as scoped:** measured over all 12
+> fixtures, `groove.res` and `groove.ev` are **byte-identical** (0 differing
+> lines) and `groove.dyn` changed on all 12 (24 lines). `GrooveDynVersion`
+> 2 -> 3; v2 entries orphan on sight and re-analyse once, as the M3c bump
+> already did.
+>
+> **Measured.** Every part lands on its metrical level: bounceY **2.00** against
+> a 2.0 seed, sway **0.50**/0.5, armSwing **0.99**/1.0, hipShift **0.25**/0.25,
+> on both fixtures. AC1a.1 met: `--assert-crossover` passes on `h_fill_break`,
+> `a0_broadband_grid` and `a_offset15` -- head ratio **0.15-0.21**, trunk
+> **0.38-0.39**, both CARRIED. The PLL holds alignment to a few ms where a unit
+> is genuinely entrained (reference: -5.1 / -4.3 / +7.8 ms end error on a 250 ms
+> period, max 16.7 ms) across three fixtures including the tempo-drift one.
+>
+> **Two bugs found and fixed on the way, both worth knowing:** the decoder's
+> per-unit offset stayed at the old 6-float stride (`u * 24`) while the record
+> grew to 8, so channels scrambled ACROSS units and decoded to values outside
+> [-1,1] -- caught because a cosine's rms must be 0.707 and one unit read 4.37.
+> And `--assert-crossover` measured the head's TRUNK-RELATIVE offset, which
+> after C1 is correctly near zero, so it was reporting a near-zero signal's
+> noise as a frequency; `f_cross` asks what a segment's motion in WORLD space
+> costs.
+>
+> AC1a.2 is VOID: the time constants come from the unit's own omega, so C1a did
+> not need C2 after all. AC1a.3 met -- `feel_flow_puppet.qxa` re-pinned with old
+> and new values and the reason.
+
 
 **The defect, stated as physics.** A unit's resonance lives in `|z|`; its
 `arg(z)` off resonance is dominated by the forced response at the drive rate.
@@ -320,10 +359,18 @@ own one-pole lag with a time constant from its OWN f_cross, so each body part
 low-passes its drive the way a mass would. C1's neck is that mechanism applied
 to one joint. Cheap, display-side, no aspect change.
 
-**DECIDE — requester.** Whether to generalise the lag (recommended), or export
-each unit's `omega` so the pose can integrate a coherent metrical phase instead
-(principled, but adds a `groove.dyn` field and therefore a version bump, which
-AC-INV forbids without an explicit exception).
+**DECIDED (requester, 2026-08-28): the omega branch.** Measured before choosing,
+three ways of turning a unit's state into a drawn displacement, over three
+fixtures:
+
+| | drawn rate | amplitude | verdict |
+|---|---|---|---|
+| raw `cos(arg z)` | drive rate for every unit | — | what shipped |
+| one-pole lag | material-dependent: good for sway/twobar on one fixture, **no change** for bounce on another (3.884 Hz against a 2.0 seed) | collapses (sway rms 0.216 -> 0.055) | rejected |
+| resonator at omega | partial: sway/twobar good, **bounce 3.297 Hz** against 2.0 | preserved | rejected |
+| **coherent/PLL phase** | **every unit within ~2% of its seed** | preserved | **chosen** |
+
+The lag was the plan's own recommendation and the measurement rejected it.
 
 **AC1a.1** `--assert-crossover` reports every rotational DOF under **3.0** on
 `h_fill_break` and `a0_broadband_grid`. Pre-fix it reads head 7.02, trunk 10.48.
