@@ -182,7 +182,34 @@ correct-but-crude and is C4's job); pixel aesthetics.
 
 ---
 
-## C1 — The head's metrical level
+## C1 — The head's metrical level — **DONE 2026-08-28, with AC1.2 NOT MET**
+
+> **Executed as option D.** The head is no longer mapped to any unit
+> (`kPartUnitName`'s head entry is empty); it is DERIVED from the trunk through
+> a one-pole lag, tau = 0.126 s, gain 0.5, integrated from the start of the
+> material on every call so the pose stays a pure function of the immutable
+> snapshot. `reference` goes back to being the pure residual gauge. The head
+> borrows the trunk's energy. Re-pinned `feel_flow_puppet.qxa`: headNod
+> **0.9262 -> -0.2210**, energySum **2.0951 -> 1.3862**, the other four
+> components bit-identical. AC-INV verified across **all 12 fixtures**, all
+> three payloads byte-identical.
+>
+> **AC1.2 IS NOT MET AND THAT IS THE MILESTONE'S MAIN RESULT.** It expected the
+> head to read ~2.50 (option A) or ~0.39 (option D) against a 3.0 bound. The
+> `--assert-crossover` mode, once written to measure what is DRAWN rather than
+> the seeded omega, reports **head 7.02 and trunk 10.48** on `h_fill_break` --
+> both FLUNG. The AC was written on the premise that the trunk oscillates at its
+> seeded 0.500 Hz. It does not: see the verification note's new 9.10. Every part
+> is drawn oscillating near the tatum rate because `arg(z)` is drive-locked off
+> resonance, so deriving the head from the trunk cannot get it under a bound the
+> trunk itself misses by 10x.
+>
+> C1 still delivers the reported symptom -- the head is subordinate to the torso,
+> at half its amplitude and lagging it -- and the neck lag turns out to be the
+> first thing in this feature that says "a heavy thing cannot follow fast
+> wiggles". But the bound needs the JITTER addressed, which is a new milestone;
+> see "C1a" below.
+
 
 **The defect.** The head is driven by `reference`, the tatum-rate gauge — the
 FASTEST unit in the ensemble. Measured 3.999 Hz against the torso's 0.500 Hz,
@@ -274,6 +301,38 @@ D, the choice of `neckGain` and the one-pole form, which are an interim stand-in
 for C4 and are stated as such.
 
 ---
+
+## C1a — The drawn phase is drive-locked, not metrical (NEW, from C1's measurement)
+
+**The defect, stated as physics.** A unit's resonance lives in `|z|`; its
+`arg(z)` off resonance is dominated by the forced response at the drive rate.
+The pose draws `sqrt(power) * cosPhi`, so every body part oscillates at roughly
+the tatum however slow its metrical level -- measured up to **16x** its seed
+(verification 9.10). The design's claim that the parts move at their metrical
+levels holds for the ENVELOPE and not for the DISPLACEMENT.
+
+**Do not "fix" this in the analysis.** `arg(z)` is correct for what pass 2 uses
+it for (scoring an event against a common reference phase) and the payloads are
+under AC-INV. This is a READ-SIDE defect.
+
+**Candidate fix, and it generalises what C1 already built:** give every part its
+own one-pole lag with a time constant from its OWN f_cross, so each body part
+low-passes its drive the way a mass would. C1's neck is that mechanism applied
+to one joint. Cheap, display-side, no aspect change.
+
+**DECIDE — requester.** Whether to generalise the lag (recommended), or export
+each unit's `omega` so the pose can integrate a coherent metrical phase instead
+(principled, but adds a `groove.dyn` field and therefore a version bump, which
+AC-INV forbids without an explicit exception).
+
+**AC1a.1** `--assert-crossover` reports every rotational DOF under **3.0** on
+`h_fill_break` and `a0_broadband_grid`. Pre-fix it reads head 7.02, trunk 10.48.
+
+**AC1a.2** The per-part time constants come from `twBodyCrossoverHz` (C2), not
+from hardcoded numbers -- so this milestone lands AFTER C2.
+
+**AC1a.3** AC-INV holds; `feel_flow_puppet.qxa` re-pinned once more, with the
+old and new values and the reason, as C1 did.
 
 ## C2 — The measures (44 B0): anthropometrics and closed forms, no motion
 

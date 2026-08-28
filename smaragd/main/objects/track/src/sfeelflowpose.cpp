@@ -1,5 +1,10 @@
 #include "app/objects/track/sfeelflowpose.h"
 
+// For kSwayDeg / kNodDeg only -- see kNeckGain's note on why the pose has to
+// know them. objects/track already declares `model` in check_layering's
+// APP_DEPS, so this needs no new edge.
+#include "app/model/sfeelflowskeleton.h"
+
 #include <QString>
 
 #include <algorithm>
@@ -7,20 +12,121 @@
 
 namespace {
 
-// The unit NAMES the five parts are driven by, in SFeelFlowPose::Part order.
+// The unit NAMES the parts are driven by, in SFeelFlowPose::Part order.
 // By name, never by ensemble index -- see the header's point 3.
+//
+// PartReference IS DELIBERATELY EMPTY since proposal 44 C1. The head used to be
+// driven by "reference" -- the tatum-rate gauge, the FASTEST unit in the
+// ensemble -- which put it at 3.999 Hz against the trunk's 0.500 Hz, three
+// octaves apart and statistically independent (corr +0.024). Its inertial
+// torque was TEN TIMES its gravity term: driven 3.16x above its own
+// inertia/gravity crossover of 1.264 Hz, i.e. flung rather than carried.
+//
+// It is NOT re-pointed at another unit, because every unit is already taken
+// one-per-part: bounce->pelvis, sway->trunk, limbs->arms, twobar->hip. Any
+// re-mapping would make two body parts draw the IDENTICAL series -- same
+// power, same cosPhi, same displacement -- which is a loss of information, not
+// a fix. The head is instead DERIVED from the trunk (deriveHeadNod below), and
+// "reference" goes back to being the pure residual gauge section 3.2 designed
+// it as. It is already surfaced as confidence/compliance in the panel, so
+// nothing is lost from the readout -- only from the puppet.
 const char *const kPartUnitName[SFeelFlowPose::PartCount] = {
     "bounce",      // PartBounce    -> pelvis vertical
     "sway",        // PartSway      -> torso lean
     "limbs",       // PartLimbs     -> arm swing (drawn in antiphase)
-    "reference",   // PartReference -> head nod
+    "",            // PartReference -> DERIVED from the trunk, see above
     "twobar"       // PartTwobar    -> hip x-shift
 };
+
+// --- the neck, as a one-pole lag (proposal 44 C1, option D) ----------------
+//
+// The head's world angle is the trunk's plus a small LAGGING offset:
+//
+//     headWorld(t) = (1-g)*trunk(t) + g*lowpass(trunk, tau)(t)
+//
+// so what the pose carries -- headNod, which the skeleton applies RELATIVE to
+// the trunk -- is g*(lowpass(trunk) - trunk), negative while the trunk is
+// moving away and positive as it settles back. That is the head falling behind
+// going in and catching up coming back, which is what "the head is subordinate
+// to the torso" means kinematically.
+//
+// WHAT THIS IS NOT. A first-order lag is not a plant: there is no mass, no
+// gravity, no overshoot and no arrest. C4 replaces it with the real
+// second-order response, whose missing term is m*d*a_base. This is the
+// smallest change that makes the head follow the trunk at all while costing no
+// ensemble change and no aspect bump.
+//
+// tau is the head's own inertia/gravity CROSSOVER period, 1/(2*pi*1.264 Hz) --
+// the frequency at which its inertial demand equals its weight moment. Below
+// it a head is carried; above it, flung. Using it as the neck's time constant
+// is the one principled number available before C2's measures exist.
+constexpr double kNeckTauSec = 0.126;
+constexpr double kNeckGain   = 0.5;    // the plan's bound; 0 would weld the
+                                       // head to the trunk (C0's behaviour)
+
+// The aspect hop is FIXED at rate/100 by twaspects.h ("groove.res" is a 10 ms
+// hop whatever the sample rate), so dt is 0.01 s and does not need the rate --
+// which SFeelFlowUiData does not carry.
+constexpr double kHopSec = 0.01;
 
 inline float clamp11( float v )
 {
     if( !( v == v ) ) return 0.0f;    // NaN: a joint angle we cannot draw
     return std::max( -1.0f, std::min( 1.0f, v ) );
+}
+
+/** One unit's displacement at one hop -- `sqrt(power) * cosPhi`, the same
+ * quantity the per-part loop computes, factored out so the neck's history walk
+ * reads EXACTLY what the trunk part reads. Two spellings of this would be two
+ * chances for the head to lag a trunk that is not the drawn one. */
+inline double unitDispAt( const SFeelFlowUiData &ui, size_t unit, size_t hop )
+{
+    const size_t i = hop * ui.nUnits + unit;
+    if( i >= ui.perUnitPower.size() || hop >= ui.dyn.size() ) return 0.0;
+    if( unit >= ui.dyn[hop].units.size() ) return 0.0;
+    const double power = ui.perUnitPower[i];
+    const double e     = power > 0.0 ? std::sqrt( power ) : 0.0;
+    return e * (double) ui.dyn[hop].units[unit].cosPhi;
+}
+
+/**
+ * The head's excursion RELATIVE TO THE TRUNK at `hop`, from the trunk's own
+ * history: `g * (lowpass(trunk, tau) - trunk)`, converted from the trunk's
+ * display scale into the head's.
+ *
+ * O(hop) -- the one-pole is integrated from the start of the material on every
+ * call, which is what keeps the pose a PURE function of the immutable snapshot
+ * with no cached state anywhere. Measured cost is negligible: a 10-minute track
+ * is 60000 hops of two array reads and three flops, well under 100 us, against
+ * a repaint that happens at most ~30 times a second. Caching it would buy
+ * microseconds and cost an invalidation protocol.
+ *
+ * THE DEGREE CONVERSION IS DELIBERATE AND IS THE ONE WART. `sway` is
+ * normalized against kSwayDeg and `headNod` against kNodDeg, so expressing "the
+ * head's world angle is the trunk's plus a lagging offset" -- an equation in
+ * DEGREES -- requires their ratio. It couples the pose to two display
+ * constants, which is why they are named here rather than duplicated: change
+ * kNodDeg and the pinned pose numbers move, by design rather than by accident.
+ */
+inline double deriveHeadNod( const SFeelFlowUiData &ui, size_t swayUnit,
+                             size_t hop, double frac )
+{
+    const double alpha = kHopSec / ( kNeckTauSec + kHopSec );
+    double lag = unitDispAt( ui, swayUnit, 0 );
+    for( size_t h = 1; h <= hop && h < ui.dyn.size(); h++ )
+        lag += alpha * ( unitDispAt( ui, swayUnit, h ) - lag );
+
+    // Interpolate the trunk the same way the per-part loop does, and advance
+    // the lag by the same fraction of a hop, so the head does not step while
+    // the trunk slides.
+    const size_t hopNext = std::min( hop + 1, ui.dyn.size() - 1 );
+    const double trunkA  = unitDispAt( ui, swayUnit, hop );
+    const double trunkB  = unitDispAt( ui, swayUnit, hopNext );
+    const double trunk   = trunkA + ( trunkB - trunkA ) * frac;
+    const double lagI    = lag + alpha * ( trunkB - lag ) * frac;
+
+    const double ratio = sfeelflowskel::kSwayDeg / sfeelflowskel::kNodDeg;
+    return kNeckGain * ( lagI - trunk ) * ratio;
 }
 
 } // namespace
@@ -60,6 +166,7 @@ SFeelFlowPose sFeelFlowPoseAt( const SFeelFlowUiData &ui, offset_t frame )
         for( size_t u = 0; u < ui.unitNames.size(); u++ ) {
             if( ui.unitNames[u] == kPartUnitName[p] ) { unit = u; break; }
         }
+        if( kPartUnitName[p][0] == '\0' ) continue;   // derived, not mapped
         if( unit >= ui.unitNames.size() || unit >= ui.nUnits ) continue;
 
         // Power comes from the "groove.res" columns (hop-major), phase from
@@ -94,6 +201,25 @@ SFeelFlowPose sFeelFlowPoseAt( const SFeelFlowUiData &ui, offset_t frame )
             case SFeelFlowPose::PartReference: pose.headNod  = disp; break;
             case SFeelFlowPose::PartTwobar:    pose.hipShift = disp; break;
             default: break;
+        }
+    }
+
+    // --- the head, DERIVED from the trunk (C1 option D) --------------------
+    // After the loop, so the trunk's own unit is already resolved and the head
+    // can never be computed from a stale or absent sway.
+    {
+        size_t swayUnit = ui.unitNames.size();
+        for( size_t u = 0; u < ui.unitNames.size(); u++ )
+            if( ui.unitNames[u] == kPartUnitName[SFeelFlowPose::PartSway] ) {
+                swayUnit = u; break;
+            }
+        if( swayUnit < ui.unitNames.size() && swayUnit < ui.nUnits ) {
+            pose.headNod = clamp11( (float) deriveHeadNod( ui, swayUnit, hop, frac ) );
+            // The head is exactly as "participating" as the trunk it hangs on,
+            // so it borrows the trunk's energy rather than inventing one or
+            // keeping the retired reference unit's.
+            pose.energy[SFeelFlowPose::PartReference] =
+                pose.energy[SFeelFlowPose::PartSway];
         }
     }
 

@@ -269,6 +269,9 @@ int main( int argc, char **argv )
     bool hashOnly = false;
     for( int i = 2; i < argc; i++ )
         if( !strcmp( argv[i], "--hash-payloads" ) ) hashOnly = true;
+    bool assertCrossover = false;
+    for( int i = 2; i < argc; i++ )
+        if( !strcmp( argv[i], "--assert-crossover" ) ) assertCrossover = true;
 
     uint32_t rate = 0;
     std::vector<float> sig = readWav16( path, &rate );
@@ -325,7 +328,11 @@ int main( int argc, char **argv )
     // ---- the EXACT sFeelFlowPoseAt mapping, BY NAME --------------------------
     // REPLICA of kPartUnitName in main/objects/track/src/sfeelflowpose.cpp.
     // Goes stale the moment C1 re-points the head; update in the same commit.
-    const char *partUnit[5] = { "bounce", "sway", "limbs", "reference", "twobar" };
+    // REPLICA of kPartUnitName in main/objects/track/src/sfeelflowpose.cpp.
+    // "" for the head since C1: it is DERIVED from the trunk (a one-pole lag),
+    // not mapped to a unit. The probe reproduces that derivation below so its
+    // headNod column keeps meaning what the puppet draws.
+    const char *partUnit[5] = { "bounce", "sway", "limbs", "", "twobar" };
     const char *partName[5] = { "bounceY(pelvis)", "sway(torso)", "armSwing",
                                 "headNod", "hipShift" };
     std::vector<std::vector<double>> disp( 5 ), ener( 5 );
@@ -346,6 +353,57 @@ int main( int argc, char **argv )
             ener[p][h] = e;
             disp[p][h] = std::max( -1.0, std::min( 1.0, e * dyn[h].units[unit].cosPhi ) );
         }
+    }
+
+    // The head, DERIVED from the trunk exactly as sFeelFlowPoseAt does
+    // (proposal 44 C1 option D). REPLICA of deriveHeadNod().
+    {
+        const double tau = 0.126, gain = 0.5, ratio = 20.0 / 10.0;
+        const double alpha = dt / ( tau + dt );
+        double lag = nHops ? disp[1][0] : 0.0;
+        for( size_t h = 0; h < nHops; h++ ) {
+            lag += alpha * ( disp[1][h] - lag );
+            disp[3][h] = std::max( -1.0, std::min( 1.0,
+                             gain * ( lag - disp[1][h] ) * ratio ) );
+            ener[3][h] = ener[1][h];
+        }
+        partHz[3] = partHz[1];
+    }
+
+    // --assert-crossover: is a rotational DOF being FLUNG or CARRIED?
+    // Uses the ZERO-CROSSING rate of what is actually DRAWN, never the unit's
+    // seeded omega0. Measured while building C1: every part's displacement
+    // crosses zero ~4 times a second regardless of its seed, because arg(z)
+    // JITTERS with the drive even while its mean drift stays near omega. The
+    // seed describes the mean drift; the body would have to execute the
+    // jitter, so the jitter is what a torque demand must be computed from.
+    if( assertCrossover ) {
+        if( std::fabs( pr.tatumPeriodSec - 0.25 ) > 0.02 ) {
+            printf( "body_probe: REFUSING -- recovered tatum %.4f s is not the "
+                    "0.25 s regime; the ladder is mis-seeded and the kinematics "
+                    "measure that, not the model.\n", pr.tatumPeriodSec );
+            return 2;
+        }
+        struct Row { const char *what; int part; double fCross; };
+        // f_cross = sqrt(m*g*d*sin(amp)/(I*amp))/2pi at the DRAWN amplitude,
+        // 75 kg / 1.75 m. Only the two ROTATIONAL DOFs: bounce is a force ratio
+        // in g under its own bound, and hipShift/armSwing are translations and
+        // an abduction with no defined tau_gravity here.
+        const Row rows[] = { { "head",  3, 1.264 }, { "trunk", 1, 0.800 } };
+        int bad = 0;
+        for( const Row &r : rows ) {
+            size_t zc = 0;
+            for( size_t h = 1; h < nHops; h++ )
+                if( disp[r.part][h - 1] * disp[r.part][h] < 0.0 ) zc++;
+            const double dur = (double) nHops * dt;
+            const double f   = dur > 0 ? (double) zc / 2.0 / dur : 0.0;
+            const double ratio = ( f / r.fCross ) * ( f / r.fCross );
+            printf( "%-6s drawn %.3f Hz  f_cross %.3f Hz  ratio %.2f  %s\n",
+                    r.what, f, r.fCross, ratio,
+                    ratio > 3.0 ? "FLUNG (over 3.0)" : "ok" );
+            if( ratio > 3.0 ) bad++;
+        }
+        return bad ? 1 : 0;
     }
 
     if( csvPath ) {

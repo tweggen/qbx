@@ -285,6 +285,63 @@ is worth showing.
   drive step to zero, a body must reach rest within about one movement cycle, and
   no part may increase its excursion. The current model fails both, measurably.
 
+### 9.10 CORRECTION (2026-08-28): the frequencies in 9.2 and 9.3 were SEEDS
+
+**Found while executing C1, and it supersedes part of this note.** The "measured
+f" column in 9.2, and every frequency in 9.3's force table, were read from each
+unit's `omega0` -- its SEEDED register -- not from the series the puppet draws.
+That was wrong, and the difference is large.
+
+What a unit's displacement `sqrt(power)*cosPhi` actually does, measured by
+zero-crossing rate over the whole run:
+
+| part | seeded | drawn (a_offset15) | drawn (h_fill_break) |
+|---|---|---|---|
+| headNod (`reference`) | 4.000 Hz | 4.010 Hz | 4.004 Hz |
+| bounceY (`bounce`) | 2.000 Hz | **3.948 Hz** | **3.664 Hz** |
+| armSwing (`limbs`) | 1.000 Hz | **3.856 Hz** | **3.363 Hz** |
+| sway (`sway`) | 0.500 Hz | **3.948 Hz** | **2.591 Hz** |
+| hipShift (`twobar`) | 0.250 Hz | **3.917 Hz** | **2.068 Hz** |
+
+Only `reference` -- seeded AT the tatum -- matches its seed. Every other part is
+drawn oscillating near the tatum rate, up to **16x** its seeded metrical level.
+
+**The mechanism, and it is not a mis-seed.** The mean UNWRAPPED phase advance
+does track omega (h_fill_break: sway 0.526 Hz against a 0.500 Hz seed, twobar
+0.258 against 0.250; the omega clamp is working). What the display sees is not
+the mean drift but the JITTER around it: `arg(z)` of a linear oscillator driven
+far off its resonance is dominated by the FORCED response at the drive rate, and
+the drive is impulsive on the tatum grid. So `cos(arg z)` crosses zero at the
+drive rate however slow the unit is.
+
+**|z| is not affected, and that matters.** The resonance lives in the MAGNITUDE
+-- which is what `unitPower`, the compliance scalar, the heatmap tint and the
+whole metric lab read, and which is the part of proposal 40 that measured well.
+It is only the PHASE, and therefore only the drawn DISPLACEMENT, that is
+drive-locked. `arg(z)` is exactly the right quantity for pass 2's residual
+scoring (an event's timing against a common reference phase), which is what it
+was built for; using it as a BODY oscillator is the part that does not follow.
+
+**What this changes.** 9.3's ratios were computed at the seeded frequencies and
+are therefore understated for every DOF except the head. Re-measured at the
+DRAWN rate on `h_fill_break`, at the same amplitudes and the same f_cross:
+
+| DOF | f_cross | drawn | ratio | 9.3 said |
+|---|---|---|---|---|
+| head | 1.264 Hz | 3.349 Hz | **7.02** | 10.00 (seed) |
+| trunk | 0.800 Hz | 2.590 Hz | **10.48** | 0.39 (seed) |
+
+So the trunk is not "carried" at all -- 9.3's one physically sane row was an
+artifact of quoting a seed. **Both rotational DOFs are flung.** The direction of
+9.3's argument survives (inertia goes as omega^2; frequency assignment is what
+costs); its most reassuring number does not.
+
+**What does NOT change:** 9.1 (the kinematic chain, pure geometry), 9.4 (a pose
+component is `A(t)cos(phi(t))` BY CONSTRUCTION), 9.5 (the break behaviour), 9.6
+(no cross-unit coupling, confirmed at the integration loop) and 9.7 (the missing
+sagittal DOF). Those are properties of the code or of measured series, and none
+of them rests on a seeded frequency.
+
 ### 9.9 What this verification does NOT establish
 
 The §3 anthropometrics are still quoted from memory and **VERIFY**-flagged; §9.3's

@@ -31,6 +31,19 @@
   (4) The widget PAINTS (a PNG grab mid-material). Coverage, not an oracle -
       aesthetics are explicitly not gated (M3e AC 7).
 
+  RE-PINNED 2026-08-28 by proposal 44 C1, which stopped driving the head from
+  the "reference" unit and DERIVES it from the trunk instead (a one-pole lag,
+  option D). Only the head moved; the other four components are bit-identical.
+
+      was:  headNod=0.9262  energySum=2.0951   (head <- "reference", the tatum gauge)
+      now:  headNod=-0.2210 energySum=1.3862   (head <- trunk, lagging)
+
+  The sign flip is the point: the head is now displaced OPPOSITE to the trunk's
+  current lean, which is what lagging behind it means in the trunk's own frame.
+  energySum fell because the head borrows the TRUNK's energy rather than the
+  retired reference unit's - it is exactly as "participating" as the trunk it
+  hangs on. absSum is 1.0766, still comfortably over the pinned minAbsSum=0.50.
+
   MEASURED (first run, 2026-08-24, this box), a_offset15.wav, the default
   5-unit ensemble, hopFrames=480 (1622 hops = 16.22 s of material):
 
@@ -126,9 +139,9 @@
     <!-- The same frame, twice, pinned to the full line: a pure function of
          an immutable snapshot has exactly one answer. -->
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=0.9262 hipShift=0.1432 energySum=2.0951"/>
+                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=-0.2210 hipShift=0.1432 energySum=1.3862"/>
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=0.9262 hipShift=0.1432 energySum=2.0951"/>
+                           contains="pose: valid=1 bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=-0.2210 hipShift=0.1432 energySum=1.3862"/>
 
     <!-- ============ (2) a staling edit: back to the invalid pose ======== -->
     <!-- The gain moves the track root's content epoch (proposal 37 P3a put
