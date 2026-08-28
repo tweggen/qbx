@@ -89,7 +89,23 @@ out there.
 
 ---
 
-## C0 — The kinematic chain (display only)
+## C0 — The kinematic chain (display only) — **DONE 2026-08-28**
+
+> **Executed.** `app/model/sfeelflowskeleton.{h,cpp}` is the one pure function;
+> `sfeelflowpuppet.cpp` computes no geometry (no `rotateAbout`, no trig, no
+> `M_PI`); `assert-puppet-skeleton` + `qxa.feel_flow_puppet_chain` gate it;
+> `body_probe --hash-payloads` exists and its SHA-256 is validated against three
+> coreutils vectors including a multi-block one. Measured at the default 200x400
+> box: sway 0 / ±0.5 / ±1.0 gives trunk 0 / ±10 / ±20 with head stub, shoulder
+> bar and both arms EQUAL to it at every angle, and the same angles out of a
+> 90x140 box. Composition is a sum: sway=nod=arm=1 gives trunk 20, headStub 30,
+> armL 55, armR −15. **Watched failing** by rebuilding head/shoulders/arms
+> against 0 (the shipped world-coordinate construction): actions #2–#7 fail
+> reporting 0.0000 against a trunk of ±10/±20, while sway=0 still passes —
+> which is why the case sweeps five angles instead of asserting one.
+> Suite: 324 registered / 319 run / 5 disabled, **319 passed**, 299 s at `-j4`,
+> Qt 6.4.2 / Ubuntu 24.04.
+
 
 **The defect.** `sfeelflowpuppet.cpp` rotates the neck about the pelvis, then
 builds every segment above it in WORLD coordinates from the neck's new position,

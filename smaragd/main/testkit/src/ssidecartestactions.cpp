@@ -13,6 +13,7 @@
 #include "app/objects/track/strackpath.h"
 #include "app/objects/track/sfeelflowbounce.h"
 #include "app/objects/track/sfeelflowpose.h"
+#include "app/model/sfeelflowskeleton.h"
 
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/sidecar/twsidecarstore.h"
@@ -1091,6 +1092,130 @@ bool SAssertFeelFlowPoseAction::readXml( const QDomElement &elem, int /*version*
     grabHeight_ = elem.attribute( "grabHeight", "0" ).toInt();
     return true;
 }
+
+// -------------------------------------------------- assert-puppet-skeleton
+
+SApplyResult SAssertPuppetSkeletonAction::apply( SProject * /*project*/ )
+{
+    SFeelFlowJoints j;
+    j.sway     = (float) sway_;
+    j.headNod  = (float) nod_;
+    j.armSwing = (float) arm_;
+    j.bounceY  = (float) bounce_;
+    j.hipShift = (float) hip_;
+
+    const SFeelFlowSkeleton sk =
+        sFeelFlowSkeletonFor( j, QRectF( 0.0, 0.0, boxW_, boxH_ ) );
+    const QString desc = sFeelFlowSkeletonDescribe( sk );
+
+    // Always logged: this line is how a case MEASURES before it pins.
+    qDebug().noquote() << "assert-puppet-skeleton: sway" << sway_ << "nod" << nod_
+                       << "arm" << arm_ << "-" << desc;
+
+    // Validity is ASSERTED, not assumed: a box too small to lay out is a real,
+    // reachable answer (the widget returns early on it) and a case must be able
+    // to pin that rather than only the happy path.
+    if( ( sk.valid ? 1 : 0 ) != expectValid_ ) {
+        qWarning() << "assert-puppet-skeleton FAILED: valid is"
+                   << ( sk.valid ? 1 : 0 ) << "expected" << expectValid_
+                   << "for box" << boxW_ << "x" << boxH_ << "-" << desc;
+        return { false, nullptr };
+    }
+    if( !sk.valid ) {
+        // Nothing else is meaningful; the describe line is still checkable.
+        if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+            qWarning() << "assert-puppet-skeleton FAILED: reports" << desc
+                       << "which lacks" << contains_;
+            return { false, nullptr };
+        }
+        return { true, nullptr };
+    }
+
+    if( expectTrunk_ > -999.0
+        && std::fabs( sk.trunkLeanDeg - expectTrunk_ ) > tol_ ) {
+        qWarning() << "assert-puppet-skeleton FAILED: trunk" << sk.trunkLeanDeg
+                   << "expected" << expectTrunk_ << "tol" << tol_ << "-" << desc;
+        return { false, nullptr };
+    }
+
+    // THE C0 ASSERTION. Every segment above the neck must carry the trunk's
+    // lean. Only meaningful with nod/arm at 0, which the case supplies.
+    if( inheritTol_ >= 0.0 ) {
+        struct Row { const char *what; double got; };
+        const Row rows[] = {
+            { "headStub",    sk.headStubLeanDeg },
+            { "shoulderBar", sk.shoulderBarDeg  },
+            { "armL",        sk.armLeanLDeg     },
+            { "armR",        sk.armLeanRDeg     },
+        };
+        for( const Row &r : rows ) {
+            if( std::fabs( r.got - sk.trunkLeanDeg ) > inheritTol_ ) {
+                qWarning() << "assert-puppet-skeleton FAILED:" << r.what
+                           << r.got << "does not carry the trunk's"
+                           << sk.trunkLeanDeg << "within" << inheritTol_
+                           << "-" << desc;
+                return { false, nullptr };
+            }
+        }
+    }
+
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning() << "assert-puppet-skeleton FAILED: reports" << desc
+                   << "which lacks" << contains_;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+QStringList SAssertPuppetSkeletonAction::knownAttributes() const
+{
+    return { QStringLiteral("sway"), QStringLiteral("nod"), QStringLiteral("arm"),
+             QStringLiteral("bounce"), QStringLiteral("hip"),
+             QStringLiteral("boxW"), QStringLiteral("boxH"),
+             QStringLiteral("expectValid"), QStringLiteral("expectTrunk"),
+             QStringLiteral("inheritTol"),
+             QStringLiteral("tol"), QStringLiteral("contains") };
+}
+
+void SAssertPuppetSkeletonAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "sway",   QString::number( sway_,   'g', 10 ) );
+    elem.setAttribute( "nod",    QString::number( nod_,    'g', 10 ) );
+    elem.setAttribute( "arm",    QString::number( arm_,    'g', 10 ) );
+    elem.setAttribute( "bounce", QString::number( bounce_, 'g', 10 ) );
+    elem.setAttribute( "hip",    QString::number( hip_,    'g', 10 ) );
+    elem.setAttribute( "boxW",   QString::number( boxW_,   'g', 10 ) );
+    elem.setAttribute( "boxH",   QString::number( boxH_,   'g', 10 ) );
+    elem.setAttribute( "expectValid", expectValid_ );
+    elem.setAttribute( "expectTrunk", QString::number( expectTrunk_, 'g', 10 ) );
+    elem.setAttribute( "inheritTol",  QString::number( inheritTol_,  'g', 10 ) );
+    elem.setAttribute( "tol",         QString::number( tol_,         'g', 10 ) );
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+}
+
+bool SAssertPuppetSkeletonAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    sway_        = elem.attribute( "sway",   "0" ).toDouble();
+    nod_         = elem.attribute( "nod",    "0" ).toDouble();
+    arm_         = elem.attribute( "arm",    "0" ).toDouble();
+    bounce_      = elem.attribute( "bounce", "0" ).toDouble();
+    hip_         = elem.attribute( "hip",    "0" ).toDouble();
+    boxW_        = elem.attribute( "boxW",   "200" ).toDouble();
+    boxH_        = elem.attribute( "boxH",   "400" ).toDouble();
+    expectValid_ = elem.attribute( "expectValid", "1" ).toInt();
+    expectTrunk_ = elem.attribute( "expectTrunk", "-1000" ).toDouble();
+    inheritTol_  = elem.attribute( "inheritTol",  "-1" ).toDouble();
+    tol_         = elem.attribute( "tol",         "0.01" ).toDouble();
+    contains_    = elem.attribute( "contains", "" );
+    return true;
+}
+
+static const bool s_reg_assert_puppet_skeleton = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-puppet-skeleton"),
+        []{ return new SAssertPuppetSkeletonAction; }
+    ), true
+);
 
 static const bool s_reg_assert_feel_flow_pose = (
     SActionRegistry::instance().registerType(
