@@ -1,0 +1,518 @@
+// body_probe -- what the puppet's motion actually IS, measured, not asserted.
+//
+// An offline probe (the analog of clap_probe / vst3_probe / asio_probe), NOT a
+// gate: it runs the REAL shipped chain
+//
+//     twGrooveAnalyzeFrontEnd -> twGrooveBuildAspectPayloads
+//         -> twGrooveDecode{Res,Dyn}Payload
+//         -> the EXACT sFeelFlowPoseAt formula (energy * cosPhi, by unit NAME)
+//
+// over a committed groove fixture, and reports the KINEMATICS of the resulting
+// five-part pose plus the forces that motion would demand of a real body. It
+// exists because proposal 40's puppet was reported (2026-08-27) as "not
+// honouring the physics of the human body -- the head is not subordinate to
+// the torso, and the movement is linear, without weight or sudden stops", and
+// this repo's rule is to MEASURE such a claim rather than argue about it.
+//
+// Read this before trusting a number out of it -- three things are deliberate:
+//
+//  1. **It reads the SHIPPED aspect payloads, not the trajectories directly.**
+//     The puppet sees `sqrt(unitPower) * cosPhi` out of the decoded "groove.res"
+//     and "groove.dyn" records, with cosPhi BIN-AVERAGED onto the 100 Hz aspect
+//     grid. Measuring the pendulum's own `magnitude`/`phaseWrapped` instead
+//     would measure a signal nothing draws, and would miss the bin-average's
+//     own damping of an incoherent bin (sfeelflowpose.h point 2).
+//
+//  2. **Every "expected" figure printed beside a measurement is a CLOSED FORM
+//     for a pure sinusoid**, not a taste judgement: dwell10% = (2/pi)*asin(0.1)
+//     = 0.0638, crest factor of the acceleration = sqrt(2), skewness = 0,
+//     kurtosis = 1.5. A pose component IS `A(t)*cos(phi(t))` by construction,
+//     so those are the values the current model must produce once its envelope
+//     A(t) is held still -- which is what section A2 does by restricting to the
+//     longest stretch where the part's own energy stays above 60% of its run
+//     peak. Section A (the whole run) and section A2 (steady stretches) answer
+//     DIFFERENT questions and disagreeing is the point: A is dominated by the
+//     envelope collapsing and recharging, A2 by the shape of one movement cycle.
+//
+//  3. **The fixture must be in the ensemble's HEALTHY regime or the numbers mean
+//     nothing.** The seeded periods are all multiples of the recovered tatum, so
+//     a fixture whose tatum comes back at the wrong metrical level puts every
+//     unit at the wrong rate and the kinematics measure the mis-seed rather than
+//     the model. The committed groove fixtures recover tatum = 0.25 s at 120 BPM
+//     (reference 4 Hz / bounce 2 Hz / limbs 1 Hz / sway 0.5 Hz / twobar 0.25 Hz);
+//     the probe PRINTS the recovered tatum and every unit's period first, and a
+//     run whose header does not show that ladder should be discarded, not read.
+//     (Measured while building this: a hand-written backbeat at 120 BPM -- kick
+//     on 1 and 3, snare on 2 and 4, hats on eighths -- recovers tatum = 1.0 s,
+//     four metrical levels too slow, because the kick-snare alternation is a
+//     stronger autocorrelation peak than the hats. That is the octave/meter
+//     ambiguity the design already names as genuinely hard, not a defect found
+//     here; it is why this tool takes a fixture path rather than synthesising.)
+//
+// Usage:  body_probe <fixture.wav> [breakStartSec breakEndSec] [trace.csv]
+//   e.g.  body_probe tests/groove/h_fill_break.wav 18.22 22.22
+//
+// Build:  the CMake target `body_probe` (tw303a/CMakeLists.txt), or -- because
+//   it links tw_sidecar's three groove sources and nothing else, no Qt and no
+//   audio file library -- with a bare compiler and no configure step at all:
+//     sh smaragd/tw303a/sidecar/tools/build_body_probe.sh [outdir]
+
+#include "tw/sidecar/twgroove.h"
+#include "tw/sidecar/twgroovependulum.h"
+#include "tw/sidecar/twgrooveaspect.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+namespace {
+
+const double kPi = 3.14159265358979323846;
+
+// The puppet's own display constants (sfeelflowpuppet.cpp) -- quoted here so
+// section F's force figures describe what is actually DRAWN, not a guess.
+const double kSwayDeg    = 20.0;
+const double kNodDeg     = 10.0;
+const double kBounceFrac = 0.06;
+
+// ---- a minimal 16-bit WAV reader (the fixtures are all 16-bit) -------------
+std::vector<float> readWav16( const char *path, uint32_t *outRate )
+{
+    std::vector<float> out;
+    FILE *f = fopen( path, "rb" );
+    if( !f ) return out;
+    char riff[12];
+    if( fread( riff, 1, 12, f ) != 12 ) { fclose( f ); return out; }
+    uint16_t nch = 1, bits = 16;
+    uint32_t sr = 48000;
+    bool haveFmt = false;
+    std::vector<int16_t> pcm;
+    for( ;; ) {
+        char id[4];
+        uint32_t sz;
+        if( fread( id, 1, 4, f ) != 4 ) break;
+        if( fread( &sz, 4, 1, f ) != 1 ) break;
+        if( !memcmp( id, "fmt ", 4 ) ) {
+            std::vector<uint8_t> b( sz );
+            if( fread( b.data(), 1, sz, f ) != sz ) break;
+            if( sz >= 16 ) {
+                memcpy( &nch, b.data() + 2, 2 );
+                memcpy( &sr, b.data() + 4, 4 );
+                memcpy( &bits, b.data() + 14, 2 );
+                haveFmt = true;
+            }
+        } else if( !memcmp( id, "data", 4 ) ) {
+            pcm.resize( sz / 2 );
+            if( fread( pcm.data(), 1, sz, f ) != sz ) break;
+        } else {
+            fseek( f, (long) sz + ( sz & 1 ), SEEK_CUR );
+        }
+    }
+    fclose( f );
+    if( !haveFmt || bits != 16 || nch == 0 || pcm.empty() ) return out;
+    if( outRate ) *outRate = sr;
+    const size_t n = pcm.size() / nch;
+    out.resize( n );
+    for( size_t i = 0; i < n; i++ ) {
+        double a = 0.0;
+        for( int c = 0; c < nch; c++ ) a += pcm[i * nch + c] / 32768.0;
+        out[i] = (float) ( a / nch );
+    }
+    return out;
+}
+
+// ---- statistics ------------------------------------------------------------
+double mean( const std::vector<double> &v )
+{ double s = 0; for( double x : v ) s += x; return v.empty() ? 0 : s / v.size(); }
+
+double rms( const std::vector<double> &v )
+{ double s = 0; for( double x : v ) s += x * x; return v.empty() ? 0 : std::sqrt( s / v.size() ); }
+
+double maxabs( const std::vector<double> &v )
+{ double m = 0; for( double x : v ) m = std::max( m, std::fabs( x ) ); return m; }
+
+double corr( const std::vector<double> &a, const std::vector<double> &b )
+{
+    const size_t n = std::min( a.size(), b.size() );
+    if( n < 2 ) return 0.0;
+    double ma = 0, mb = 0;
+    for( size_t i = 0; i < n; i++ ) { ma += a[i]; mb += b[i]; }
+    ma /= n; mb /= n;
+    double sab = 0, sa = 0, sb = 0;
+    for( size_t i = 0; i < n; i++ ) {
+        const double da = a[i] - ma, db = b[i] - mb;
+        sab += da * db; sa += da * da; sb += db * db;
+    }
+    return ( sa > 0 && sb > 0 ) ? sab / std::sqrt( sa * sb ) : 0.0;
+}
+
+double skewness( const std::vector<double> &v )
+{
+    const double m = mean( v );
+    double s2 = 0, s3 = 0;
+    for( double x : v ) { const double d = x - m; s2 += d * d; s3 += d * d * d; }
+    if( v.empty() || s2 <= 0 ) return 0.0;
+    s2 /= v.size(); s3 /= v.size();
+    return s3 / std::pow( s2, 1.5 );
+}
+
+// 1.5 for a pure sinusoid, 3.0 for a Gaussian, >> 3 for a spiky impulsive signal.
+double kurtosis( const std::vector<double> &v )
+{
+    const double m = mean( v );
+    double s2 = 0, s4 = 0;
+    for( double x : v ) { const double d = x - m; s2 += d * d; s4 += d * d * d * d; }
+    if( v.empty() || s2 <= 0 ) return 0.0;
+    s2 /= v.size(); s4 /= v.size();
+    return s4 / ( s2 * s2 );
+}
+
+std::vector<double> deriv( const std::vector<double> &v, double dt )
+{
+    std::vector<double> d( v.size(), 0.0 );
+    for( size_t i = 1; i + 1 < v.size(); i++ ) d[i] = ( v[i + 1] - v[i - 1] ) / ( 2 * dt );
+    if( v.size() > 1 ) { d[0] = d[1]; d[v.size() - 1] = d[v.size() - 2]; }
+    return d;
+}
+
+// Fraction of the time the speed sits under `frac` of its own peak -- the DWELL.
+// A pure sinusoid's closed form is (2/pi)*asin(frac); a body that hangs at the
+// top of a movement and then drops reads much higher.
+double dwellFraction( const std::vector<double> &vel, double frac )
+{
+    const double m = maxabs( vel );
+    if( m <= 0 ) return 1.0;
+    size_t n = 0;
+    for( double x : vel ) if( std::fabs( x ) < frac * m ) n++;
+    return (double) n / (double) vel.size();
+}
+
+} // namespace
+
+int main( int argc, char **argv )
+{
+    if( argc < 2 ) {
+        printf( "usage: body_probe <fixture.wav> [breakStartSec breakEndSec] [trace.csv]\n" );
+        return 2;
+    }
+    const char  *path    = argv[1];
+    const double breakS  = argc > 2 ? atof( argv[2] ) : -1.0;
+    const double breakE  = argc > 3 ? atof( argv[3] ) : -1.0;
+    const char  *csvPath = argc > 4 ? argv[4] : nullptr;
+
+    uint32_t rate = 0;
+    std::vector<float> sig = readWav16( path, &rate );
+    if( sig.empty() ) { printf( "body_probe: cannot read %s (16-bit WAV only)\n", path ); return 1; }
+    const float *chans[1] = { sig.data() };
+
+    twGrooveFrontEndParams fp;
+    fp.nBands = 64; fp.fMinHz = 40.0f; fp.fMaxHz = 16000.0f; fp.envRateHz = 200.0f;
+    fp.nRegions = 10; fp.medianHalfWidthSec = 0.5f; fp.thresholdFactor = 1.5f;
+    fp.energyFloorFraction = 0.05f; fp.minSeparationSec = 0.03f;
+
+    twGrooveField field = twGrooveAnalyzeFrontEnd( chans, 1, sig.size(), rate, fp );
+
+    twGrooveAnalysisParams ap;
+    twGrooveAspectPayloads pay =
+        twGrooveBuildAspectPayloads( chans, 1, (uint64_t) sig.size(), rate, ap );
+    if( pay.nUnits == 0 ) { printf( "body_probe: no analysis (no recoverable tatum)\n" ); return 1; }
+
+    const std::vector<twGrooveResRecord> res =
+        twGrooveDecodeResPayload( pay.resPayload.data(), pay.resPayload.size(), pay.nUnits );
+    const std::vector<twGrooveDynRecord> dyn =
+        twGrooveDecodeDynPayload( pay.dynPayload.data(), pay.dynPayload.size(), pay.nUnits );
+    const twGroovePendulumResult pr = twGroovePendulumAnalyze( field, ap.pendulum );
+
+    std::vector<std::string> names;
+    for( const auto &t : pr.unitTrajectories ) names.push_back( t.name );
+
+    const size_t nHops = std::min( res.size(), dyn.size() );
+    const double dt    = (double) pay.hopFrames / (double) rate;
+
+    printf( "fixture: %s  (%zu frames @ %u Hz = %.2f s)\n",
+            path, sig.size(), rate, sig.size() / (double) rate );
+    printf( "hops=%zu  dt=%.4f s  units=%u  recovered tatum=%.4f s\n",
+            nHops, dt, pay.nUnits, pr.tatumPeriodSec );
+    printf( "seeded ladder:" );
+    for( size_t u = 0; u < names.size(); u++ )
+        printf( " %s=%.3fHz", names[u].c_str(),
+                pr.unitTrajectories[u].omega0 > 0 ? pr.unitTrajectories[u].omega0 / ( 2 * kPi ) : 0.0 );
+    printf( "\n\n" );
+
+    // ---- the EXACT sFeelFlowPoseAt mapping, BY NAME --------------------------
+    const char *partUnit[5] = { "bounce", "sway", "limbs", "reference", "twobar" };
+    const char *partName[5] = { "bounceY(pelvis)", "sway(torso)", "armSwing",
+                                "headNod", "hipShift" };
+    std::vector<std::vector<double>> disp( 5 ), ener( 5 );
+    double partHz[5] = { 0, 0, 0, 0, 0 };
+    for( int p = 0; p < 5; p++ ) {
+        size_t unit = names.size();
+        for( size_t u = 0; u < names.size(); u++ )
+            if( names[u] == partUnit[p] ) { unit = u; break; }
+        disp[p].assign( nHops, 0.0 );
+        ener[p].assign( nHops, 0.0 );
+        if( unit >= names.size() ) continue;
+        if( pr.unitTrajectories[unit].omega0 > 0 )
+            partHz[p] = pr.unitTrajectories[unit].omega0 / ( 2 * kPi );
+        for( size_t h = 0; h < nHops; h++ ) {
+            if( unit >= res[h].unitPower.size() || unit >= dyn[h].units.size() ) continue;
+            const double power = res[h].unitPower[unit];
+            const double e     = power > 0 ? std::sqrt( power ) : 0.0;
+            ener[p][h] = e;
+            disp[p][h] = std::max( -1.0, std::min( 1.0, e * dyn[h].units[unit].cosPhi ) );
+        }
+    }
+
+    if( csvPath ) {
+        FILE *f = fopen( csvPath, "w" );
+        if( f ) {
+            fprintf( f, "t,bounceY,sway,armSwing,headNod,hipShift,eB,eS,eL,eR,eT\n" );
+            for( size_t h = 0; h < nHops; h++ ) {
+                fprintf( f, "%.3f", h * dt );
+                for( int p = 0; p < 5; p++ ) fprintf( f, ",%.6f", disp[p][h] );
+                for( int p = 0; p < 5; p++ ) fprintf( f, ",%.6f", ener[p][h] );
+                fprintf( f, "\n" );
+            }
+            fclose( f );
+            printf( "trace: %s\n\n", csvPath );
+        }
+    }
+
+    const double sinDwell = 2.0 / kPi * std::asin( 0.10 );
+
+    // ---- A. whole-run kinematics --------------------------------------------
+    printf( "== A. per-part kinematics, WHOLE RUN ==\n" );
+    printf( "%-16s %7s %8s %8s %9s %9s %9s %9s %9s\n", "part", "f(Hz)", "rms",
+            "peak", "dwell10%", "crestAcc", "skew(v)", "skew(a)", "kurt(a)" );
+    for( int p = 0; p < 5; p++ ) {
+        const std::vector<double> v = deriv( disp[p], dt );
+        const std::vector<double> a = deriv( v, dt );
+        printf( "%-16s %7.3f %8.4f %8.4f %9.3f %9.3f %9.3f %9.3f %9.3f\n",
+                partName[p], partHz[p], rms( disp[p] ), maxabs( disp[p] ),
+                dwellFraction( v, 0.10 ), rms( a ) > 0 ? maxabs( a ) / rms( a ) : 0.0,
+                skewness( v ), skewness( a ), kurtosis( a ) );
+    }
+    printf( "  PURE SINUSOID: dwell10%%=%.4f crestAcc=1.4142 skew=0 kurt(a)=1.5000\n"
+            "  A BODY WITH WEIGHT: dwell HIGH (it hangs at the top of a movement),\n"
+            "  crestAcc HIGH (a short hard stance), skew(a) STRONGLY nonzero (gravity\n"
+            "  acts one way only), kurt(a) >> 1.5 (rare impulses among long coasts).\n\n",
+            sinDwell );
+
+    // ---- A2. the shape of ONE movement cycle --------------------------------
+    printf( "== A2. waveform SHAPE on the longest steady, high-energy stretch ==\n" );
+    printf( "%-16s %8s %9s %9s %9s %9s %9s\n", "part", "hops", "dwell10%",
+            "crestAcc", "skew(v)", "skew(a)", "kurt(a)" );
+    for( int p = 0; p < 5; p++ ) {
+        double pk = 0;
+        for( double e : ener[p] ) pk = std::max( pk, e );
+        if( pk <= 0 ) { printf( "%-16s %8s\n", partName[p], "-" ); continue; }
+        size_t bestA = 0, bestN = 0, curA = 0, curN = 0;
+        for( size_t h = 0; h < nHops; h++ ) {
+            if( ener[p][h] > 0.60 * pk ) { if( curN == 0 ) curA = h; curN++; }
+            else { if( curN > bestN ) { bestN = curN; bestA = curA; } curN = 0; }
+        }
+        if( curN > bestN ) { bestN = curN; bestA = curA; }
+        if( bestN < 100 ) {
+            printf( "%-16s %8zu   (never steady for 1 s -- its ENVELOPE is the motion)\n",
+                    partName[p], bestN );
+            continue;
+        }
+        const std::vector<double> x( disp[p].begin() + bestA, disp[p].begin() + bestA + bestN );
+        const std::vector<double> v = deriv( x, dt );
+        const std::vector<double> a = deriv( v, dt );
+        printf( "%-16s %8zu %9.3f %9.3f %9.3f %9.3f %9.3f\n", partName[p], bestN,
+                dwellFraction( v, 0.10 ), rms( a ) > 0 ? maxabs( a ) / rms( a ) : 0.0,
+                skewness( v ), skewness( a ), kurtosis( a ) );
+    }
+    printf( "  Same closed forms: dwell10%%=%.4f crestAcc=1.4142 skew=0 kurt(a)=1.5000\n\n",
+            sinDwell );
+
+    // ---- B. head vs torso ----------------------------------------------------
+    printf( "== B. head / torso subordination ==\n" );
+    const std::vector<double> &torso = disp[1];
+    const std::vector<double> &head  = disp[3];
+    printf( "frequency ratio head:torso        = %.3f : 1\n",
+            partHz[1] > 0 ? partHz[3] / partHz[1] : 0.0 );
+    printf( "corr(headNod, sway), zero lag     = %+.4f\n", corr( head, torso ) );
+    double bestC = 0; int bestL = 0;
+    for( int L = -100; L <= 100; L++ ) {
+        std::vector<double> a, b;
+        for( size_t i = 0; i < nHops; i++ ) {
+            const long j = (long) i + L;
+            if( j < 0 || j >= (long) nHops ) continue;
+            a.push_back( head[i] );
+            b.push_back( torso[(size_t) j] );
+        }
+        const double c = corr( a, b );
+        if( std::fabs( c ) > std::fabs( bestC ) ) { bestC = c; bestL = L; }
+    }
+    printf( "best |corr| over lag +-1000 ms    = %+.4f at lag %+d ms\n", bestC, bestL * 10 );
+    printf( "  A neck is a CONSTRAINT, not a correlation: whatever the drive, a real\n"
+            "  head's world angle is the torso's PLUS a small, LAGGING neck angle. The\n"
+            "  numbers above are what two independent oscillators produce.\n\n" );
+
+    // ---- C. cross-part coupling ---------------------------------------------
+    printf( "== C. cross-part coupling matrix, corr of displacement ==\n" );
+    printf( "%-16s", "" );
+    for( int q = 0; q < 5; q++ ) printf( "%12.12s", partName[q] );
+    printf( "\n" );
+    for( int p = 0; p < 5; p++ ) {
+        printf( "%-16s", partName[p] );
+        for( int q = 0; q < 5; q++ ) printf( "%12.3f", corr( disp[p], disp[q] ) );
+        printf( "\n" );
+    }
+    printf( "  The ensemble integrates each unit in its OWN loop with no reference to\n"
+            "  any other unit's state (twgroovependulum.cc runPass1), so every entry\n"
+            "  off the diagonal is SHARED DRIVE, never a force one part exerts on\n"
+            "  another. There is no momentum to conserve because there is no mass.\n\n" );
+
+    // ---- D. the sudden stop --------------------------------------------------
+    if( breakS >= 0 && breakE > breakS ) {
+        const long bIn = (long) ( breakS / dt ), bOut = (long) ( breakE / dt );
+        printf( "== D. the sudden stop: SILENCE over [%.2f, %.2f] s ==\n", breakS, breakE );
+        printf( "%-16s %9s %11s %11s %9s %12s\n", "part", "rms pre", "rms 1sthalf",
+                "rms 2ndhalf", "rms post", "1sthalf/pre" );
+        for( int p = 0; p < 5; p++ ) {
+            auto win = [&]( long a, long b ) {
+                std::vector<double> w;
+                for( long i = std::max( 0L, a ); i < std::min( (long) nHops, b ); i++ )
+                    w.push_back( disp[p][(size_t) i] );
+                return w;
+            };
+            const long   mid  = ( bIn + bOut ) / 2;
+            const double pre  = rms( win( bIn - 200, bIn ) );
+            const double h1   = rms( win( bIn, mid ) );
+            const double h2   = rms( win( mid, bOut ) );
+            const double post = rms( win( bOut, bOut + 200 ) );
+            printf( "%-16s %9.4f %11.4f %11.4f %9.4f %11.1f%%\n",
+                    partName[p], pre, h1, h2, post, pre > 0 ? 100.0 * h1 / pre : 0.0 );
+        }
+        printf( "  A real body ARRESTS itself in about one movement cycle -- that arrest\n"
+                "  is muscular work, and it is the single most legible thing a dancer\n"
+                "  does at a break. A linear damped resonator can only ring DOWN, over\n"
+                "  its own dampingCycles (4-8 periods), whatever the material does.\n\n" );
+    }
+
+    // ---- E. gravity signature on the vertical -------------------------------
+    printf( "== E. gravity signature on the pelvis ==\n" );
+    {
+        const std::vector<double> v = deriv( disp[0], dt );
+        size_t up = 0, down = 0;
+        for( double s : v ) { if( s > 0 ) up++; else if( s < 0 ) down++; }
+        const std::vector<double> a = deriv( v, dt );
+        double aUp = 0, aDown = 0; size_t nu = 0, nd = 0;
+        for( double x : a ) { if( x > 0 ) { aUp += x; nu++; } else { aDown += -x; nd++; } }
+        printf( "time rising = %.1f%%   time falling = %.1f%%\n",
+                100.0 * up / (double) ( up + down ), 100.0 * down / (double) ( up + down ) );
+        printf( "mean |accel| up = %.3f   down = %.3f   ratio = %.3f\n",
+                nu ? aUp / nu : 0.0, nd ? aDown / nd : 0.0,
+                ( nu && nd ) ? ( aUp / nu ) / ( aDown / nd ) : 0.0 );
+        printf( "  A bouncing body is BALLISTIC going up and down (one constant -g) and\n"
+                "  pays for it in a short, high-force stance. Its vertical acceleration\n"
+                "  is therefore strongly one-sided. A sinusoid's is exactly symmetric.\n\n" );
+    }
+
+    // ---- F. the forces the DRAWN motion would demand ------------------------
+    // The one question proposal 44 says the present model cannot answer. Segment
+    // values are de Leva 1996 / Winter as quoted in proposal 44 section 3 and
+    // carry that section's own VERIFY flag: these are order-of-magnitude demands
+    // for a 75 kg / 1.75 m body, not validated biomechanics.
+    {
+        const double M = 75.0, H = 1.75, g = 9.81;
+        const double mHead = 0.069 * M, dHead = 0.5 * 0.130 * H, rHead = 0.30 * 0.130 * H;
+        const double IHead = mHead * ( rHead * rHead + dHead * dHead );
+        const double mTrunk = 0.435 * M, dTrunk = 0.45 * 0.288 * H, rTrunk = 0.37 * 0.288 * H;
+        const double ITrunk = mTrunk * ( rTrunk * rTrunk + dTrunk * dTrunk );
+        const double swayAmp = kSwayDeg * kPi / 180.0, nodAmp = kNodDeg * kPi / 180.0;
+        const double bounceAmpM = kBounceFrac * H;
+
+        printf( "== F. what the DRAWN motion would demand of a 75 kg / 1.75 m body ==\n" );
+        printf( "   (VERIFY-flagged segment values, proposal 44 section 3;\n"
+                "    amplitudes are the puppet's OWN display constants)\n" );
+        printf( "%-24s %7s %9s %11s %13s %13s %8s %10s\n", "DOF", "f(Hz)", "amp(deg)",
+                "I(kg m^2)", "tau_inertial", "tau_gravity", "ratio", "f_cross" );
+        struct Row { const char *what; double I, amp, hz, mgd; };
+        const Row rows[] = {
+            { "head nod   (reference)", IHead,  nodAmp,  partHz[3], mHead  * g * dHead  },
+            { "torso lean (sway)",      ITrunk, swayAmp, partHz[1], mTrunk * g * dTrunk },
+        };
+        for( const Row &r : rows ) {
+            const double w  = 2 * kPi * r.hz;
+            const double ti = r.I * r.amp * w * w;
+            const double tg = r.mgd * std::sin( r.amp );
+            // The frequency at which this DOF's INERTIAL demand equals its own
+            // gravity moment: I*amp*w^2 = m*g*d*sin(amp)  =>  a closed form, and
+            // the single most actionable number here -- it says which metrical
+            // level a body part may physically occupy. Above it the part is
+            // being flung; below it, carried.
+            const double fx = ( r.I * r.amp > 0 )
+                                ? std::sqrt( r.mgd * std::sin( r.amp ) / ( r.I * r.amp ) ) / ( 2 * kPi )
+                                : 0.0;
+            printf( "%-24s %7.3f %9.1f %11.4f %10.2f Nm %10.2f Nm %8.2f %8.3fHz\n",
+                    r.what, r.hz, r.amp * 180 / kPi, r.I, ti, tg, tg > 0 ? ti / tg : 0.0, fx );
+        }
+        const double wB = 2 * kPi * partHz[0];
+        printf( "%-24s %7.3f %9.3f %11s %10.2f N  %10.2f N  %8.2f %10s\n",
+                "pelvis bounce (bounce)", partHz[0], bounceAmpM, "(m amp)",
+                M * bounceAmpM * wB * wB, M * g,
+                ( M * g ) > 0 ? ( bounceAmpM * wB * wB ) / g : 0.0,
+                "1g@1.54Hz" );
+        printf( "   peak vertical acceleration = %.2f g\n", bounceAmpM * wB * wB / g );
+        printf( "  f_cross is where I*amp*w^2 == m*g*d*sin(amp): BELOW it a part is carried by\n"
+                "  muscles working against its own weight, ABOVE it the motion is inertial\n"
+                "  and the weight is beside the point. A DOF driven far above its own\n"
+                "  f_cross is being flung,\n"
+                "  not carried -- and inertia goes as omega^2, so halving a part's\n"
+                "  frequency quarters what it costs. That factor is the whole argument\n"
+                "  for asking which METRICAL LEVEL each body part belongs to.\n" );
+    }
+
+    // ---- G. the puppet's own kinematic chain, replicated exactly -------------
+    // Not a property of the analysis at all -- a property of paintEvent's
+    // geometry, and the direct cause of "the head is not subordinate to the
+    // torso". Replicates sfeelflowpuppet.cpp's segment construction for a
+    // 200x400 dock and reports the WORLD orientation of every drawn segment.
+    {
+        struct Pt { double x, y; };
+        auto rot = []( Pt pivot, Pt p, double deg ) {
+            const double r = deg * kPi / 180.0, c = std::cos( r ), s = std::sin( r );
+            const double dx = p.x - pivot.x, dy = p.y - pivot.y;
+            return Pt{ pivot.x + dx * c - dy * s, pivot.y + dx * s + dy * c };
+        };
+        // lean from world-up, degrees, positive = clockwise on screen
+        auto lean = []( Pt a, Pt b ) { return std::atan2( b.x - a.x, a.y - b.y ) * 180.0 / kPi; };
+
+        const double L = 6, T = 6, R = 194, B = 394;
+        const double bw = R - L, bh = B - T, cx = ( L + R ) / 2;
+        const double groundY = B - bh * 0.04;
+        const double legLen = bh * 0.30, torsoLen = bh * 0.30, headR = bh * 0.070;
+        const double shoulderW = bw * 0.12;
+
+        printf( "\n== G. the puppet's kinematic chain (paintEvent geometry, replicated) ==\n" );
+        printf( "%8s %12s %16s %14s\n", "sway", "torso lean", "neck->head lean", "shoulder bar" );
+        const double swayVals[] = { 0.0, 0.5, 1.0, -1.0 };
+        for( double sway : swayVals ) {
+            const Pt pelvis{ cx, groundY - legLen };
+            const Pt neck  = rot( pelvis, { pelvis.x, pelvis.y - torsoLen }, sway * kSwayDeg );
+            const Pt headC = rot( neck, { neck.x, neck.y - headR * 1.35 }, 0.0 );
+            const Pt headBase{ headC.x, headC.y + headR };
+            const Pt shL{ neck.x - shoulderW, neck.y + torsoLen * 0.06 };
+            const Pt shR{ neck.x + shoulderW, neck.y + torsoLen * 0.06 };
+            printf( "%8.2f %11.3f%s %15.3f%s %13.3f%s\n", sway,
+                    lean( pelvis, neck ), "\u00b0", lean( neck, headBase ), "\u00b0",
+                    std::atan2( shR.y - shL.y, shR.x - shL.x ) * 180.0 / kPi, "\u00b0" );
+        }
+        printf( "  Every segment ABOVE the neck is built at (neck.x, neck.y - r) -- straight\n"
+                "  up in the WORLD, not along the torso axis -- so the head, the shoulder\n"
+                "  bar and both arms inherit the neck's TRANSLATION and none of its\n"
+                "  ROTATION. A torso at 20 deg with a head and shoulders at 0.000 deg is a\n"
+                "  figure with no spine, and it is fixable without any of proposal 44:\n"
+                "  build the segments in TORSO-LOCAL coordinates.\n" );
+    }
+    return 0;
+}
