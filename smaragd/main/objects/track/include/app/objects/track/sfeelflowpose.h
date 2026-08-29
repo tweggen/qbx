@@ -16,7 +16,7 @@
  * honest readout and a plausible-looking animation:
  *
  *  1. **Nothing is computed here that the analysis did not already export.**
- *     The displacement of a part is `sqrt(unitPower) * cosPhi` -- the unit's
+ *     The displacement of a part is `sqrt(unitPower) * cosMet` -- the unit's
  *     own amplitude times the cosine of its own phase, both read from the
  *     decoded aspects at the frame's hop. There is no oscillator, no
  *     nominal frequency, no free-running clock: a puppet whose motion is
@@ -27,7 +27,7 @@
  *     time) and the metronome's (a pure function of the position, so a
  *     seek, a wrap or a repaint can never leave it out of step).
  *
- *  2. **`cosPhi` is used RAW -- deliberately UN-renormalized.** The aspect's
+ *  2. **`cosMet` is used RAW -- deliberately UN-renormalized.** The aspect's
  *     cos/sin channels are BIN-AVERAGED separately, which IS the circular
  *     mean's numerator, so `hypot(cosPhi,sinPhi) <= 1` and the shortfall
  *     MEASURES the in-bin phase spread (measured range on the a_offset15

@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 44 execution plan, C0 - THE PUPPET'S KINEMATIC CHAIN.
+
+  WHY THIS EXISTS. The shipped puppet rotated the neck about the pelvis
+  correctly and then built EVERY segment above it in WORLD coordinates from
+  the neck's new position:
+
+      headC     = rotateAbout( neck, QPointF( neck.x(), neck.y() - r ), nod );
+      shoulderL = QPointF( neck.x() - shoulderW, neck.y() + torsoLen*0.06 );
+
+  `(neck.x, neck.y - r)` is straight up on the SCREEN, not along the torso
+  axis, so the head, the shoulder bar and both arms inherited the neck's
+  TRANSLATION and none of its ROTATION. A torso at 20 degrees with a
+  bolt-upright head and a perfectly level shoulder bar is a figure with no
+  spine - the head reads as gimbal-mounted. That is the defect a user
+  reported as "the head is not subordinate to the bending of the torso", and
+  it is a DRAWING bug: it waits on no analysis change and no plant.
+
+  WHY THE VERB TAKES EXPLICIT JOINT SCALARS. Nothing in this repo can drive
+  an analysis-derived pose to a chosen angle: the pose is a pure function of
+  decoded aspects, `assert-feel-flow-pose` only READS it, and no fixture can
+  be authored to land `sway` on exactly 0.5 of full scale. So the gate
+  supplies the geometry's own inputs and asserts the geometry - a unit gate
+  reached through the verb. The painter and this verb call ONE function
+  (`sFeelFlowSkeletonFor`), which is the discipline proposal 41 M7 paid for
+  with `tagChipRect()` and the take-lane fix paid for again with
+  `fillBodyByMaterial()`: two implementations of one layout drift, and they
+  drift silently.
+
+  THE ANGLES ARE RECOVERED FROM THE POINTS, never echoed back from the
+  inputs that produced them. An assertion against a number the function was
+  TOLD would be tautological; one recovered from the resulting geometry
+  fails when the construction is wrong.
+
+  MEASURED (first run, 2026-08-28, this box, Qt 6.4.2 / Ubuntu 24.04),
+  default 200x400 box:
+
+    sway= 0.0            trunk   0.0000  headStub   0.0000  bar   0.0000  armL   0.0000  armR   0.0000
+    sway= 0.5            trunk  10.0000  headStub  10.0000  bar  10.0000  armL  10.0000  armR  10.0000
+    sway= 1.0            trunk  20.0000  headStub  20.0000  bar  20.0000  armL  20.0000  armR  20.0000
+    sway=-0.5            trunk -10.0000  headStub -10.0000  bar -10.0000  armL -10.0000  armR -10.0000
+    sway=-1.0            trunk -20.0000  headStub -20.0000  bar -20.0000  armL -20.0000  armR -20.0000
+    sway=1 nod=1 arm=1   trunk  20.0000  headStub  30.0000  bar  20.0000  armL  55.0000  armR -15.0000
+
+  The last row is what proves the composition is a SUM and not a
+  replacement: 20+10 for the head's own nod, 20+35 and 20-35 for the two
+  arms in antiphase. And the same angles come out of a 90x140 box, so the
+  identity is scale-free - it is a rotation, not a pixel coincidence.
+
+  WATCHED FAILING. Reverted `sFeelFlowSkeletonFor` to compose the head,
+  shoulders and arms against 0 instead of the trunk angle (i.e. the shipped
+  world-coordinate construction): every `inheritTol` row FAILS, reporting
+  headStub/bar/armL/armR at 0.0000 against a trunk of +-10 or +-20. The
+  sway=0 row still passes, as it must - at zero lean the broken and the
+  correct construction coincide, which is exactly why the case sweeps five
+  angles rather than asserting one.
+
+  NOT GATED. What the figure LOOKS like (aesthetics are not gated anywhere
+  in this feature); the head still follows the trunk RIGIDLY, with no neck
+  lag, no counter-rotation and no inertia - that is C4's `m*d*a_base` term
+  and C0 deliberately does not promise it; and the pose numbers themselves,
+  which C0 does not touch (`feel_flow_puppet.qxa` still pins those).
+-->
+<SActionScript version="1" name="feel_flow_puppet_chain">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- (1) THE CHAIN. With the head's own nod and the arms' own swing at
+         zero, every segment above the neck must carry EXACTLY the trunk's
+         lean. Five angles including zero and both signs: at sway=0 the
+         broken construction and the correct one agree, so a single-angle
+         assertion could not tell them apart. -->
+    <assert-puppet-skeleton sway="0"    nod="0" arm="0" expectTrunk="0"   inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="0.5"  nod="0" arm="0" expectTrunk="10"  inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="1.0"  nod="0" arm="0" expectTrunk="20"  inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="-0.5" nod="0" arm="0" expectTrunk="-10" inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="-1.0" nod="0" arm="0" expectTrunk="-20" inheritTol="0.01"/>
+
+    <!-- (2) THE COMPOSITION IS A SUM. The head's nod and each arm's swing
+         are RELATIVE to the trunk, so their world angles are trunk + own.
+         Pinned exactly: a construction that replaced the trunk's angle
+         instead of adding to it would read 10 / 35 / -35 here. -->
+    <assert-puppet-skeleton sway="1.0" nod="1.0" arm="1.0"
+                            expectTrunk="20"
+                            contains="headStub=30.0000 shoulderBar=20.0000 armL=55.0000 armR=-15.0000"/>
+
+    <!-- (3) SCALE-FREE. The same lean out of a box less than half the size
+         in both axes - it is a rotation, not a pixel coincidence. -->
+    <assert-puppet-skeleton sway="0.5" nod="0" arm="0" boxW="90" boxH="140"
+                            expectTrunk="10" inheritTol="0.01"/>
+
+    <!-- (4) THE DEGENERATE BOX still answers, and answers INVALID rather
+         than dividing by a zero-height figure. -->
+    <assert-puppet-skeleton sway="1.0" boxW="4" boxH="4" expectValid="0" contains="valid=0"/>
+  </actions>
+</SActionScript>

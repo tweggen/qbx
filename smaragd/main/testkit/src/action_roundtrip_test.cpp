@@ -669,14 +669,32 @@ bool testActionRoundTrip(const QString &actionName, QString &error)
     QDomDocument fixtureDoc;
     QDomElement fixtureElem;
     if (const char *xml = fixtureFor(actionName)) {
+        // Qt 6.5 introduced QDomDocument::ParseResult and deprecated the
+        // out-parameter overloads; Ubuntu 24.04 ships Qt 6.4.2, and
+        // docs/BUILD.md names a Debian/Ubuntu qt6-base-dev prefix as
+        // supported. Both spellings therefore have to compile -- this was the
+        // ONLY site in the tree using the 6.5 API (every other setContent call
+        // uses an overload present in both), so one guard restores the build
+        // on the older prefix.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         const QDomDocument::ParseResult parsed =
             fixtureDoc.setContent(QString::fromLatin1(xml));
-        if (!parsed) {
+        const bool    parseOk  = bool(parsed);
+        const QString parseErr = parsed.errorMessage;
+        const auto    parseLine = parsed.errorLine;
+        const auto    parseCol  = parsed.errorColumn;
+#else
+        QString    parseErr;
+        int        parseLine = 0, parseCol = 0;
+        const bool parseOk = fixtureDoc.setContent(QString::fromLatin1(xml),
+                                                   &parseErr, &parseLine, &parseCol);
+#endif
+        if (!parseOk) {
             error = QString("Fixture for %1 is not well-formed XML at %2:%3: %4")
                         .arg(actionName)
-                        .arg(parsed.errorLine)
-                        .arg(parsed.errorColumn)
-                        .arg(parsed.errorMessage);
+                        .arg(parseLine)
+                        .arg(parseCol)
+                        .arg(parseErr);
             delete action1;
             return false;
         }

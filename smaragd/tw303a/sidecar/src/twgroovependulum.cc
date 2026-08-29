@@ -90,6 +90,7 @@ std::vector<twGroovePendulumUnitTrajectory> runPass1( const twGrooveField &field
         twGroovePendulumUnitTrajectory traj;
         traj.name = spec.name;
         traj.phaseWrapped.assign( nHops, 0.0 );
+        traj.phaseMetric.assign( nHops, 0.0 );
         traj.omega.assign( nHops, 0.0 );
         traj.magnitude.assign( nHops, 0.0 );
         traj.driveF.assign( nHops, 0.0 );
@@ -151,6 +152,12 @@ std::vector<twGroovePendulumUnitTrajectory> runPass1( const twGrooveField &field
 
         std::complex<double> z( 0.0, 0.0 );
         double omega = omega0;
+        // The metrical-phase PLL (proposal 44 C1a). N is how many of the unit's
+        // OWN periods it takes to pull into alignment -- slow enough that a
+        // jittery drive cannot drag it off its metrical rate, fast enough to
+        // track a real tempo change (verified on c_tempo_drift.wav).
+        const int    kLockPeriods = 8;
+        double       phiMet       = 0.0;
         for( uint32_t hop = 0; hop < nHops; hop++ ) {
             const double F   = rawF[hop];
             const double Fac = F - meanF;
@@ -185,6 +192,16 @@ std::vector<twGroovePendulumUnitTrajectory> runPass1( const twGrooveField &field
                 if( omega > omegaMax ) omega = omegaMax;
             }
 
+            // Advance the metrical phase BEFORE storing, using this hop's own
+            // omega and the drive-locked phase it is being pulled toward.
+            {
+                const double om = std::max( 1e-9, omega );
+                const double K  = om / ( 2.0 * kPi * (double) kLockPeriods );
+                phiMet += om * dt + K * std::sin( std::arg( z ) - phiMet ) * dt;
+                while( phiMet >   kPi ) phiMet -= 2.0 * kPi;
+                while( phiMet <= -kPi ) phiMet += 2.0 * kPi;
+            }
+            traj.phaseMetric[hop]  = phiMet;
             traj.phaseWrapped[hop] = std::arg( z );
             traj.omega[hop]        = omega;
             traj.magnitude[hop]    = std::abs( z );

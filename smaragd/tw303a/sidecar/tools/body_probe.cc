@@ -50,7 +50,13 @@
 //     here; it is why this tool takes a fixture path rather than synthesising.)
 //
 // Usage:  body_probe <fixture.wav> [breakStartSec breakEndSec] [trace.csv]
+//         body_probe <fixture.wav> --hash-payloads
 //   e.g.  body_probe tests/groove/h_fill_break.wav 18.22 22.22
+//
+// --hash-payloads prints exactly three lines -- the SHA-256 of resPayload,
+// evPayload and dynPayload -- and nothing else. That is proposal 44's AC-INV
+// check ("the entrainment ensemble does not move"), kept separate from the
+// human-readable sections precisely so those may change freely.
 //
 // Build:  the CMake target `body_probe` (tw303a/CMakeLists.txt), or -- because
 //   it links tw_sidecar's three groove sources and nothing else, no Qt and no
@@ -60,6 +66,7 @@
 #include "tw/sidecar/twgroove.h"
 #include "tw/sidecar/twgroovependulum.h"
 #include "tw/sidecar/twgrooveaspect.h"
+#include "tw/body/twbodymeasures.h"   // proposal 44 C2: the measures, not magic numbers
 
 #include <algorithm>
 #include <cmath>
@@ -72,10 +79,64 @@
 
 namespace {
 
+// ---- SHA-256, in-tree, because the probe links tw_sidecar and nothing else -
+// Used ONLY by --hash-payloads. Deliberately not a crypto claim: this is a
+// change detector for three byte buffers.
+struct Sha256 {
+    uint32_t h[8] = { 0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+                      0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u };
+    static uint32_t ror( uint32_t x, int n ) { return ( x >> n ) | ( x << ( 32 - n ) ); }
+    void block( const uint8_t *p ) {
+        static const uint32_t k[64] = {
+            0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+            0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+            0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+            0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+            0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+            0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+            0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+            0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
+        uint32_t w[64];
+        for( int i = 0; i < 16; i++ )
+            w[i] = ( (uint32_t) p[i*4] << 24 ) | ( (uint32_t) p[i*4+1] << 16 )
+                 | ( (uint32_t) p[i*4+2] << 8 ) | (uint32_t) p[i*4+3];
+        for( int i = 16; i < 64; i++ ) {
+            const uint32_t s0 = ror( w[i-15], 7 ) ^ ror( w[i-15], 18 ) ^ ( w[i-15] >> 3 );
+            const uint32_t s1 = ror( w[i-2], 17 ) ^ ror( w[i-2], 19 ) ^ ( w[i-2] >> 10 );
+            w[i] = w[i-16] + s0 + w[i-7] + s1;
+        }
+        uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],hh=h[7];
+        for( int i = 0; i < 64; i++ ) {
+            const uint32_t S1 = ror(e,6) ^ ror(e,11) ^ ror(e,25);
+            const uint32_t ch = ( e & f ) ^ ( ~e & g );
+            const uint32_t t1 = hh + S1 + ch + k[i] + w[i];
+            const uint32_t S0 = ror(a,2) ^ ror(a,13) ^ ror(a,22);
+            const uint32_t mj = ( a & b ) ^ ( a & c ) ^ ( b & c );
+            const uint32_t t2 = S0 + mj;
+            hh=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+        }
+        h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=d; h[4]+=e; h[5]+=f; h[6]+=g; h[7]+=hh;
+    }
+    std::string of( const std::vector<uint8_t> &data ) {
+        std::vector<uint8_t> m( data );
+        const uint64_t bits = (uint64_t) data.size() * 8;
+        m.push_back( 0x80 );
+        while( m.size() % 64 != 56 ) m.push_back( 0 );
+        for( int i = 7; i >= 0; i-- ) m.push_back( (uint8_t) ( bits >> ( i * 8 ) ) );
+        for( size_t i = 0; i < m.size(); i += 64 ) block( m.data() + i );
+        char out[65];
+        for( int i = 0; i < 8; i++ ) snprintf( out + i * 8, 9, "%08x", h[i] );
+        return std::string( out, 64 );
+    }
+};
+
 const double kPi = 3.14159265358979323846;
 
-// The puppet's own display constants (sfeelflowpuppet.cpp) -- quoted here so
-// section F's force figures describe what is actually DRAWN, not a guess.
+// REPLICA of app/model/sfeelflowskeleton.h's sfeelflowskel:: constants --
+// quoted here so section F's force figures describe what is actually DRAWN,
+// not a guess. The probe is ENGINE-side (it links tw_sidecar and no Qt) and
+// check_layering rule 1 forbids a tw303a file including an app/ header, so it
+// cannot share the real ones. Update in the same commit that changes them.
 const double kSwayDeg    = 20.0;
 const double kNodDeg     = 10.0;
 const double kBounceFrac = 0.06;
@@ -205,6 +266,14 @@ int main( int argc, char **argv )
     const double breakE  = argc > 3 ? atof( argv[3] ) : -1.0;
     const char  *csvPath = argc > 4 ? argv[4] : nullptr;
 
+    // --hash-payloads may appear in any argument position.
+    bool hashOnly = false;
+    for( int i = 2; i < argc; i++ )
+        if( !strcmp( argv[i], "--hash-payloads" ) ) hashOnly = true;
+    bool assertCrossover = false;
+    for( int i = 2; i < argc; i++ )
+        if( !strcmp( argv[i], "--assert-crossover" ) ) assertCrossover = true;
+
     uint32_t rate = 0;
     std::vector<float> sig = readWav16( path, &rate );
     if( sig.empty() ) { printf( "body_probe: cannot read %s (16-bit WAV only)\n", path ); return 1; }
@@ -221,6 +290,19 @@ int main( int argc, char **argv )
     twGrooveAspectPayloads pay =
         twGrooveBuildAspectPayloads( chans, 1, (uint64_t) sig.size(), rate, ap );
     if( pay.nUnits == 0 ) { printf( "body_probe: no analysis (no recoverable tatum)\n" ); return 1; }
+
+    // AC-INV's check: exactly three lines, the SHA-256 of each payload and
+    // NOTHING else -- no fixture path, no geometry, nothing that could drift
+    // when the probe's human-readable sections are edited. That separation is
+    // the point: AC0.4 and AC1.2 both REQUIRE those sections to change, and a
+    // hash over the whole stdout would then go red on a green milestone.
+    if( hashOnly ) {
+        Sha256 a, b, c;
+        printf( "groove.res %s\n", a.of( pay.resPayload ).c_str() );
+        printf( "groove.ev  %s\n", b.of( pay.evPayload ).c_str() );
+        printf( "groove.dyn %s\n", c.of( pay.dynPayload ).c_str() );
+        return 0;
+    }
 
     const std::vector<twGrooveResRecord> res =
         twGrooveDecodeResPayload( pay.resPayload.data(), pay.resPayload.size(), pay.nUnits );
@@ -245,7 +327,13 @@ int main( int argc, char **argv )
     printf( "\n\n" );
 
     // ---- the EXACT sFeelFlowPoseAt mapping, BY NAME --------------------------
-    const char *partUnit[5] = { "bounce", "sway", "limbs", "reference", "twobar" };
+    // REPLICA of kPartUnitName in main/objects/track/src/sfeelflowpose.cpp.
+    // Goes stale the moment C1 re-points the head; update in the same commit.
+    // REPLICA of kPartUnitName in main/objects/track/src/sfeelflowpose.cpp.
+    // "" for the head since C1: it is DERIVED from the trunk (a one-pole lag),
+    // not mapped to a unit. The probe reproduces that derivation below so its
+    // headNod column keeps meaning what the puppet draws.
+    const char *partUnit[5] = { "bounce", "sway", "limbs", "", "twobar" };
     const char *partName[5] = { "bounceY(pelvis)", "sway(torso)", "armSwing",
                                 "headNod", "hipShift" };
     std::vector<std::vector<double>> disp( 5 ), ener( 5 );
@@ -264,8 +352,82 @@ int main( int argc, char **argv )
             const double power = res[h].unitPower[unit];
             const double e     = power > 0 ? std::sqrt( power ) : 0.0;
             ener[p][h] = e;
-            disp[p][h] = std::max( -1.0, std::min( 1.0, e * dyn[h].units[unit].cosPhi ) );
+            disp[p][h] = std::max( -1.0, std::min( 1.0, e * dyn[h].units[unit].cosMet ) );
         }
+    }
+
+    // The head, DERIVED from the trunk exactly as sFeelFlowPoseAt does
+    // (proposal 44 C1 option D). REPLICA of deriveHeadNod().
+    {
+        const double tau = 0.126, gain = 0.5, ratio = 20.0 / 10.0;
+        const double alpha = dt / ( tau + dt );
+        double lag = nHops ? disp[1][0] : 0.0;
+        for( size_t h = 0; h < nHops; h++ ) {
+            lag += alpha * ( disp[1][h] - lag );
+            disp[3][h] = std::max( -1.0, std::min( 1.0,
+                             gain * ( lag - disp[1][h] ) * ratio ) );
+            ener[3][h] = ener[1][h];
+        }
+        partHz[3] = partHz[1];
+    }
+
+    // --assert-crossover: is a rotational DOF being FLUNG or CARRIED?
+    // Uses the ZERO-CROSSING rate of what is actually DRAWN, never the unit's
+    // seeded omega0. Measured while building C1: every part's displacement
+    // crosses zero ~4 times a second regardless of its seed, because arg(z)
+    // JITTERS with the drive even while its mean drift stays near omega. The
+    // seed describes the mean drift; the body would have to execute the
+    // jitter, so the jitter is what a torque demand must be computed from.
+    if( assertCrossover ) {
+        if( std::fabs( pr.tatumPeriodSec - 0.25 ) > 0.02 ) {
+            printf( "body_probe: REFUSING -- recovered tatum %.4f s is not the "
+                    "0.25 s regime; the ladder is mis-seeded and the kinematics "
+                    "measure that, not the model.\n", pr.tatumPeriodSec );
+            return 2;
+        }
+        // f_cross now comes from tw_body (proposal 44 C2), not from two
+        // constants copied out of a document. AC2.3's whole point: the closed
+        // form and the amplitude live in ONE place, and the probe reads it.
+        const twBodyMeasures body;                       // 75 kg / 1.75 m
+        const double d10 = 10.0 * kPi / 180.0, d20 = 20.0 * kPi / 180.0;
+        struct Row { const char *what; int part; double fCross; };
+        // Only the two ROTATIONAL DOFs: bounce is a force ratio in g under its
+        // own bound, and hipShift/armSwing are translations and an abduction
+        // with no defined tau_gravity here. The amplitudes are the puppet's own
+        // display constants, and the crossover DEPENDS on them.
+        const Row rows[] = {
+            { "head",  3, twBodyCrossoverHz( body.segment( twBodySeg::HeadNeck ), d10 ) },
+            { "trunk", 1, twBodyCrossoverHz( body.segment( twBodySeg::Trunk ),    d20 ) },
+        };
+        int bad = 0;
+        // THE HEAD IS MEASURED IN WORLD SPACE, not in the trunk's frame.
+        // f_cross asks what a segment's own motion costs, and the head's motion
+        // is the trunk's PLUS its small relative offset -- since C1 the pose
+        // carries only the offset. Measuring the offset alone reports a
+        // near-zero signal's noise as a frequency, which is exactly the trap
+        // this comment exists to stop the next reader falling into.
+        // Both series in DEGREES of world angle, so the rms column compares.
+        std::vector<double> headWorld( nHops, 0.0 ), trunkWorld( nHops, 0.0 );
+        for( size_t h = 0; h < nHops; h++ ) {
+            trunkWorld[h] = disp[1][h] * kSwayDeg;
+            headWorld[h]  = disp[1][h] * kSwayDeg + disp[3][h] * kNodDeg;
+        }
+        for( const Row &r : rows ) {
+            const std::vector<double> &sig = ( r.part == 3 ) ? headWorld : trunkWorld;
+            size_t zc = 0;
+            for( size_t h = 1; h < nHops; h++ )
+                if( sig[h - 1] * sig[h] < 0.0 ) zc++;
+            const double dur = (double) nHops * dt;
+            const double f   = dur > 0 ? (double) zc / 2.0 / dur : 0.0;
+            const double ratio = ( f / r.fCross ) * ( f / r.fCross );
+            double s2 = 0; for( double v : sig ) s2 += v * v;
+            printf( "%-6s drawn %.3f Hz  f_cross %.3f Hz  ratio %.2f  rms %.3f deg  %s\n",
+                    r.what, f, r.fCross, ratio,
+                    nHops ? std::sqrt( s2 / (double) nHops ) : 0.0,
+                    ratio > 3.0 ? "FLUNG (over 3.0)" : "ok" );
+            if( ratio > 3.0 ) bad++;
+        }
+        return bad ? 1 : 0;
     }
 
     if( csvPath ) {
@@ -473,10 +635,13 @@ int main( int argc, char **argv )
     }
 
     // ---- G. the puppet's own kinematic chain, replicated exactly -------------
-    // Not a property of the analysis at all -- a property of paintEvent's
-    // geometry, and the direct cause of "the head is not subordinate to the
-    // torso". Replicates sfeelflowpuppet.cpp's segment construction for a
-    // 200x400 dock and reports the WORLD orientation of every drawn segment.
+    // REPLICA of app/model/sfeelflowskeleton.cpp's sFeelFlowSkeletonFor, for a
+    // 200x400 dock. Not a property of the analysis at all -- a property of the
+    // GEOMETRY, and the direct cause of "the head is not subordinate to the
+    // torso". This is a replica and can only ever be one: the probe is
+    // engine-side and cannot include an app/ header (check_layering rule 1),
+    // so the REAL gate on this is qxa.feel_flow_puppet_chain, which drives
+    // the production function through assert-puppet-skeleton. Keep in step.
     {
         struct Pt { double x, y; };
         auto rot = []( Pt pivot, Pt p, double deg ) {

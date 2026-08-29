@@ -120,6 +120,15 @@ struct twGrooveUnitDynSample {
     float sinPhi  = 0.0f;   // sin(arg z), bin-averaged
     float slip    = 0.0f;   // |dphi/dt − ω|/ω, 0 at lock
     float dissip  = 0.0f;   // 2·|α|·|z|², the movement outlet (section 3.4)
+    // The METRICAL phase as two channels (proposal 44 C1a, v3), bin-averaged
+    // separately for the same reason cosPhi/sinPhi are. THIS, not cosPhi, is
+    // what a BODY readout must use: arg(z) is drive-locked, so cos(arg z)
+    // oscillates at the drive rate however slow the unit is (measured up to 16x
+    // a unit's seeded metrical level), whereas this phase advances at the
+    // unit's own adaptive omega and locks to the material only in proportion to
+    // how strongly the unit actually resonates.
+    float cosMet  = 0.0f;   // cos(metrical phase), bin-averaged
+    float sinMet  = 0.0f;   // sin(metrical phase), bin-averaged
 };
 
 /** One decoded "groove.dyn" record: one sample per ensemble unit, in the

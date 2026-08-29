@@ -340,14 +340,23 @@ constexpr uint32_t    GrooveEvVersion = 1;
  * load() against GrooveDynVersion, so a v1 entry simply misses and the run
  * re-analyzes once, exactly as the pre-M3c res+ev store did.
  *
- * recordStride = nUnits*6*4, recordCount == the "groove.res" recordCount.
+ * recordStride = nUnits*8*4 since v3, recordCount == "groove.res"'s.
+ *
+ * v3 (proposal 44 C1a) APPENDS two channels per unit, cosMet/sinMet -- the
+ * METRICAL phase, cos and sin bin-averaged separately like cosPhi/sinPhi. The
+ * first six offsets are unchanged, so the wire layout is a pure extension; only
+ * the stride moved. A body readout must use cosMet, never cosPhi: arg(z) is
+ * DRIVE-LOCKED, and for a unit driven far off resonance cos(arg z) oscillates
+ * at the drive rate however slow the unit is. |z| was never affected -- the
+ * resonance lives in the MAGNITUDE -- which is why "groove.res", the compliance
+ * scalar, the heatmap tint and the whole metric lab are byte-unchanged by v3.
  * Params blob v1: SHARED with "groove.res"/"groove.ev" — all three aspects
  * are produced together, from one analysis run, keyed by the same params
  * hash. A store holding res+ev but not dyn is a PRE-M3c store; both
  * analysis jobs' skip-checks require all three, so it re-analyzes once.
  */
 constexpr const char *GrooveDyn        = "groove.dyn";
-constexpr uint32_t    GrooveDynVersion = 2;
+constexpr uint32_t    GrooveDynVersion = 3;
 
 } // namespace twAspect
 

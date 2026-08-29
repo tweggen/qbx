@@ -27,6 +27,11 @@ TW = os.path.join('smaragd', 'tw303a')
 DEPS = {
     'core':     [],
     'pages':    ['core'],
+    # body (proposal 44 C2): anthropometrics and the closed forms. Deliberately
+    # core-only -- it knows masses and lengths, not pages, not the graph. The
+    # plant (C4) lands here too, and keeping the edge at 'core' is what stops an
+    # ODE reaching sideways into the dataflow.
+    'body':     ['core'],
     'graph':    ['core', 'pages'],
     # sources → sidecar since proposal 27 M2: twGrainSource caches its
     # finished warp (warp.pcm) in the derived-data store.

@@ -89,7 +89,23 @@ out there.
 
 ---
 
-## C0 — The kinematic chain (display only)
+## C0 — The kinematic chain (display only) — **DONE 2026-08-28**
+
+> **Executed.** `app/model/sfeelflowskeleton.{h,cpp}` is the one pure function;
+> `sfeelflowpuppet.cpp` computes no geometry (no `rotateAbout`, no trig, no
+> `M_PI`); `assert-puppet-skeleton` + `qxa.feel_flow_puppet_chain` gate it;
+> `body_probe --hash-payloads` exists and its SHA-256 is validated against three
+> coreutils vectors including a multi-block one. Measured at the default 200x400
+> box: sway 0 / ±0.5 / ±1.0 gives trunk 0 / ±10 / ±20 with head stub, shoulder
+> bar and both arms EQUAL to it at every angle, and the same angles out of a
+> 90x140 box. Composition is a sum: sway=nod=arm=1 gives trunk 20, headStub 30,
+> armL 55, armR −15. **Watched failing** by rebuilding head/shoulders/arms
+> against 0 (the shipped world-coordinate construction): actions #2–#7 fail
+> reporting 0.0000 against a trunk of ±10/±20, while sway=0 still passes —
+> which is why the case sweeps five angles instead of asserting one.
+> Suite: 324 registered / 319 run / 5 disabled, **319 passed**, 299 s at `-j4`,
+> Qt 6.4.2 / Ubuntu 24.04.
+
 
 **The defect.** `sfeelflowpuppet.cpp` rotates the neck about the pelvis, then
 builds every segment above it in WORLD coordinates from the neck's new position,
@@ -166,7 +182,34 @@ correct-but-crude and is C4's job); pixel aesthetics.
 
 ---
 
-## C1 — The head's metrical level
+## C1 — The head's metrical level — **DONE 2026-08-28, with AC1.2 NOT MET**
+
+> **Executed as option D.** The head is no longer mapped to any unit
+> (`kPartUnitName`'s head entry is empty); it is DERIVED from the trunk through
+> a one-pole lag, tau = 0.126 s, gain 0.5, integrated from the start of the
+> material on every call so the pose stays a pure function of the immutable
+> snapshot. `reference` goes back to being the pure residual gauge. The head
+> borrows the trunk's energy. Re-pinned `feel_flow_puppet.qxa`: headNod
+> **0.9262 -> -0.2210**, energySum **2.0951 -> 1.3862**, the other four
+> components bit-identical. AC-INV verified across **all 12 fixtures**, all
+> three payloads byte-identical.
+>
+> **AC1.2 IS NOT MET AND THAT IS THE MILESTONE'S MAIN RESULT.** It expected the
+> head to read ~2.50 (option A) or ~0.39 (option D) against a 3.0 bound. The
+> `--assert-crossover` mode, once written to measure what is DRAWN rather than
+> the seeded omega, reports **head 7.02 and trunk 10.48** on `h_fill_break` --
+> both FLUNG. The AC was written on the premise that the trunk oscillates at its
+> seeded 0.500 Hz. It does not: see the verification note's new 9.10. Every part
+> is drawn oscillating near the tatum rate because `arg(z)` is drive-locked off
+> resonance, so deriving the head from the trunk cannot get it under a bound the
+> trunk itself misses by 10x.
+>
+> C1 still delivers the reported symptom -- the head is subordinate to the torso,
+> at half its amplitude and lagging it -- and the neck lag turns out to be the
+> first thing in this feature that says "a heavy thing cannot follow fast
+> wiggles". But the bound needs the JITTER addressed, which is a new milestone;
+> see "C1a" below.
+
 
 **The defect.** The head is driven by `reference`, the tatum-rate gauge — the
 FASTEST unit in the ensemble. Measured 3.999 Hz against the torso's 0.500 Hz,
@@ -259,7 +302,129 @@ for C4 and are stated as such.
 
 ---
 
-## C2 — The measures (44 B0): anthropometrics and closed forms, no motion
+## C1a — The drawn phase is drive-locked, not metrical — **DONE 2026-08-28**
+
+> **Executed as the omega branch, chosen by the requester, and the DECIDE below
+> is settled.** The export is a PHASE, not raw omega: pass 1 runs a
+> power-weighted PLL (`phi += omega*dt + K*sin(arg(z) - phi)*dt`, K = omega/(2*pi*8))
+> and `groove.dyn` **v3** appends `cosMet`/`sinMet`. Computing it in the
+> analysis, where omega and z are both in hand, keeps the pose O(1) and pure --
+> exporting omega would have forced the consumer to integrate with state.
+>
+> The lock term is SELF-LIMITING, which is what makes a fixed gain safe: an
+> unlocked unit's `arg(z)` wobbles about a fixed point, so `sin(arg z - phi)`
+> averages to ~0 over a cycle of phi and the correction cancels itself.
+>
+> **AC-INV EXCEPTION, exercised exactly as scoped:** measured over all 12
+> fixtures, `groove.res` and `groove.ev` are **byte-identical** (0 differing
+> lines) and `groove.dyn` changed on all 12 (24 lines). `GrooveDynVersion`
+> 2 -> 3; v2 entries orphan on sight and re-analyse once, as the M3c bump
+> already did.
+>
+> **Measured.** Every part lands on its metrical level: bounceY **2.00** against
+> a 2.0 seed, sway **0.50**/0.5, armSwing **0.99**/1.0, hipShift **0.25**/0.25,
+> on both fixtures. AC1a.1 met: `--assert-crossover` passes on `h_fill_break`,
+> `a0_broadband_grid` and `a_offset15` -- head ratio **0.15-0.21**, trunk
+> **0.38-0.39**, both CARRIED. The PLL holds alignment to a few ms where a unit
+> is genuinely entrained (reference: -5.1 / -4.3 / +7.8 ms end error on a 250 ms
+> period, max 16.7 ms) across three fixtures including the tempo-drift one.
+>
+> **Two bugs found and fixed on the way, both worth knowing:** the decoder's
+> per-unit offset stayed at the old 6-float stride (`u * 24`) while the record
+> grew to 8, so channels scrambled ACROSS units and decoded to values outside
+> [-1,1] -- caught because a cosine's rms must be 0.707 and one unit read 4.37.
+> And `--assert-crossover` measured the head's TRUNK-RELATIVE offset, which
+> after C1 is correctly near zero, so it was reporting a near-zero signal's
+> noise as a frequency; `f_cross` asks what a segment's motion in WORLD space
+> costs.
+>
+> AC1a.2 is VOID: the time constants come from the unit's own omega, so C1a did
+> not need C2 after all. AC1a.3 met -- `feel_flow_puppet.qxa` re-pinned with old
+> and new values and the reason.
+
+
+**The defect, stated as physics.** A unit's resonance lives in `|z|`; its
+`arg(z)` off resonance is dominated by the forced response at the drive rate.
+The pose draws `sqrt(power) * cosPhi`, so every body part oscillates at roughly
+the tatum however slow its metrical level -- measured up to **16x** its seed
+(verification 9.10). The design's claim that the parts move at their metrical
+levels holds for the ENVELOPE and not for the DISPLACEMENT.
+
+**Do not "fix" this in the analysis.** `arg(z)` is correct for what pass 2 uses
+it for (scoring an event against a common reference phase) and the payloads are
+under AC-INV. This is a READ-SIDE defect.
+
+**Candidate fix, and it generalises what C1 already built:** give every part its
+own one-pole lag with a time constant from its OWN f_cross, so each body part
+low-passes its drive the way a mass would. C1's neck is that mechanism applied
+to one joint. Cheap, display-side, no aspect change.
+
+**DECIDED (requester, 2026-08-28): the omega branch.** Measured before choosing,
+three ways of turning a unit's state into a drawn displacement, over three
+fixtures:
+
+| | drawn rate | amplitude | verdict |
+|---|---|---|---|
+| raw `cos(arg z)` | drive rate for every unit | — | what shipped |
+| one-pole lag | material-dependent: good for sway/twobar on one fixture, **no change** for bounce on another (3.884 Hz against a 2.0 seed) | collapses (sway rms 0.216 -> 0.055) | rejected |
+| resonator at omega | partial: sway/twobar good, **bounce 3.297 Hz** against 2.0 | preserved | rejected |
+| **coherent/PLL phase** | **every unit within ~2% of its seed** | preserved | **chosen** |
+
+The lag was the plan's own recommendation and the measurement rejected it.
+
+**AC1a.1** `--assert-crossover` reports every rotational DOF under **3.0** on
+`h_fill_break` and `a0_broadband_grid`. Pre-fix it reads head 7.02, trunk 10.48.
+
+**AC1a.2** The per-part time constants come from `twBodyCrossoverHz` (C2), not
+from hardcoded numbers -- so this milestone lands AFTER C2.
+
+**AC1a.3** AC-INV holds; `feel_flow_puppet.qxa` re-pinned once more, with the
+old and new values and the reason, as C1 did.
+
+## C2 — The measures (44 B0) — **DONE 2026-08-28, with AC2.1 NOT MET**
+
+> **Executed.** New `tw_body` module (`tw_module(body … DEPS tw_core)`,
+> `'body': ['core']` in `check_layering.py`) with `twBodyMeasures`,
+> `twBodyPendulumHz`, `twBodyCrossoverHz` and a `compound()` that composes
+> consecutive segments by the parallel-axis theorem. `body_measures_test`
+> registered; `body_probe` now LINKS tw_body and its two hardcoded crossover
+> constants are gone.
+>
+> **AC2.1 IS NOT MET AND CANNOT BE MET IN THIS ENVIRONMENT.** The VERIFY gate
+> is the point of this milestone, and it needs primary literature. Every route
+> was refused by the egress proxy: the de Leva 1996 PDF, Winter's anthropometry
+> chapter, the HAS-Motion Visual3D wiki, an NCBI/PMC reference table, ExRx,
+> arxiv and Wikipedia. Web SEARCH works but returns model-written summaries;
+> taking a number from a summary launders a memory rather than checking it, so
+> none was taken. **Every constant is marked `VERIFY` with the search recorded
+> beside it**, which is the branch AC2.1 itself allows. Finishing it needs a box
+> with journal access; a value that moves will move a test, by design.
+>
+> **AC2.2 is RECORDED, not validated**, for the same reason and per this plan's
+> own correction: section 4's 0.9-1.1 Hz arm range is itself a VERIFY-flagged
+> memory, and the closed form over these constants gives **0.7346 Hz** for the
+> full arm (upper + fore + hand, which is what section 4 defines) against
+> **1.0332 Hz** for the upper arm alone. Both are pinned as regression values
+> with an explicit "not validated" label, and the test asserts the SANITY
+> relation (the longer compound is slower) so the 40 % gap is believable rather
+> than a transcription slip. Asserting an unverified range is exactly what made
+> the v1 milestone unresolvable.
+>
+> **AC2.3 MET:** head **1.2640 Hz at 10°**, trunk **0.8002 Hz at 20°**,
+> reproducing the verification note to 0.01 Hz — and the amplitudes are now
+> asserted alongside, since the crossover depends on them through sin θ/θ and a
+> crossover quoted without one is unreproducible.
+>
+> **AC2.4 MET:** monotone in M and H at (50, 1.55) and (110, 2.00), plus two
+> sharper claims — pendulum frequency is **independent of body mass** (1e-9) and
+> scales as **1/sqrt(H)** exactly.
+>
+> **Watched failing** under two sabotages: dropping sin θ/θ from the crossover
+> fails the amplitude-monotonicity assertion; dropping the parallel-axis d²
+> term fails four assertions at once (head 2.457 against 1.264, upper arm 2.376
+> against 1.033). Suite 325 registered / 320 run / 5 disabled, **320 passed**,
+> 285 s at `-j4`.
+
 
 **New module** `tw303a/body/` → `tw_body`, linking `tw_core` only. Pure,
 deterministic, no Qt, no threads, no I/O — the sidecar rules. Register in

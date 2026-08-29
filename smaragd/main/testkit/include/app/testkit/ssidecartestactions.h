@@ -348,6 +348,45 @@ private:
 
 // ------------------------------------------------------ assert-feel-flow-pose
 
+/**
+ * `assert-puppet-skeleton` -- proposal 44 execution plan, C0.
+ *
+ * Evaluates `sFeelFlowSkeletonFor` on EXPLICIT joint scalars and asserts the
+ * world angles it recovers. It deliberately reads no track, no analysis and no
+ * sidecar: nothing in this repo can drive an analysis-derived pose to a chosen
+ * angle (the pose is a pure function of decoded aspects, `assert-feel-flow-pose`
+ * only READS it, and no fixture can be authored to land `sway` on exactly 0.5),
+ * so a gate on the GEOMETRY has to supply the geometry's inputs.
+ *
+ * That makes it a unit gate reached through the verb, which is the same
+ * discipline `tagChipRect()` established: the painter and this verb call ONE
+ * function, so paint and assertion cannot drift.
+ *
+ * `inheritTol` is the C0 assertion proper: with `arm` and `nod` at 0, the head
+ * stub, the shoulder bar and both arms must each carry the TRUNK's lean to
+ * within that tolerance. On the pre-C0 build they read 0.0000 at every trunk
+ * angle, because every segment above the neck was built in world coordinates.
+ */
+class SAssertPuppetSkeletonAction : public SAction {
+public:
+    SAssertPuppetSkeletonAction() = default;
+
+    QString name() const override { return QStringLiteral("assert-puppet-skeleton"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+    QStringList knownAttributes() const override;
+
+private:
+    double  sway_ = 0.0, nod_ = 0.0, arm_ = 0.0, bounce_ = 0.0, hip_ = 0.0;
+    double  boxW_ = 200.0, boxH_ = 400.0;
+    int     expectValid_ = 1;         // the box lays out; 0 = assert it does NOT
+    double  expectTrunk_ = -1000.0;   // -1000 = don't check
+    double  inheritTol_  = -1.0;      // -1    = don't check
+    double  tol_         = 0.01;
+    QString contains_;
+};
+
 class SAssertFeelFlowPoseAction : public SAction {
 public:
     SAssertFeelFlowPoseAction() = default;

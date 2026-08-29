@@ -683,6 +683,14 @@ tw_module(metering
     DEPS tw_core tw_pages tw_graph
 )
 
+# --- body: anthropometrics and the closed forms (proposal 44 C2) ----------------
+# Pure, tw_core only. The plant (C4) lands here too; this is the measures half.
+tw_module(body
+    SOURCES
+        body/include/tw/body/twbodymeasures.h
+        body/src/twbodymeasures.cc
+    DEPS tw_core)
+
 # --- sidecar: derived-data QAF container + LRU store (proposal 27) --------------
 tw_module(sidecar
     SOURCES
@@ -785,7 +793,7 @@ endif()
 # file library -- which is also why tools/build_body_probe.sh can build it with
 # a bare compiler, without configuring Qt/vcpkg at all.
 add_executable(body_probe sidecar/tools/body_probe.cc)
-target_link_libraries(body_probe PRIVATE tw_sidecar)
+target_link_libraries(body_probe PRIVATE tw_sidecar tw_body)
 
 # --- Platform audio backends (devices only) --------------------------------------
 if(SMARAGD_LINUX AND ENABLE_ALSA)
@@ -1060,6 +1068,7 @@ tw_module_test(graph_test                   graph/tests/graph_test.cc           
 # so neither the byte-exactness gate nor the grep can tell them apart.
 tw_module_test(page_channels_test           graph/tests/page_channels_test.cc           tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
+tw_module_test(body_measures_test           body/tests/body_measures_test.cc            tw_body)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
 if(TARGET twtestclap)

@@ -146,6 +146,32 @@ struct twGroovePendulumParams {
 struct twGroovePendulumUnitTrajectory {
     std::string         name;
     std::vector<double> phaseWrapped;     // arg(z), radians, (-pi,pi]
+    // The METRICAL phase (proposal 44 C1a), radians, (-pi,pi]. A power-weighted
+    // phase-locked loop: it advances at the unit's own adaptive omega and is
+    // pulled toward arg(z) in proportion to how strongly the unit is actually
+    // resonating.
+    //
+    //     phi += omega*dt + K*sin(arg(z) - phi)*dt,   K = omega/(2*pi*N)
+    //
+    // WHY THIS EXISTS. arg(z) is the DRIVE-LOCKED phase: for a unit driven far
+    // off its resonance it is dominated by the forced response, so cos(arg z)
+    // oscillates at the DRIVE rate however slow the unit is -- measured up to
+    // 16x a unit's seeded metrical level. That is correct for what pass 2 uses
+    // arg(z) for (scoring an event against a common reference phase) and wrong
+    // for anything that wants the unit's METRICAL oscillation, which is what a
+    // body readout wants. |z| was never affected: the resonance lives in the
+    // MAGNITUDE, which is why compliance, the heatmap and the metric lab are
+    // untouched by this.
+    //
+    // The lock term is SELF-LIMITING, which is what makes a fixed gain safe: an
+    // unlocked unit's arg(z) wobbles about a fixed point, so sin(arg z - phi)
+    // averages to ~0 over a cycle of phi and the correction cancels itself. A
+    // locked unit is pulled into alignment. Measured over three fixtures: every
+    // unit lands within ~2% of its seeded rate, and the one unit that is
+    // genuinely entrained (reference) holds alignment to a few ms on its own
+    // 250 ms period.
+    std::vector<double> phaseMetric;
+
     std::vector<double> omega;            // rad/sec
     std::vector<double> magnitude;        // |z|
     std::vector<double> driveF;           // F_p(t)
