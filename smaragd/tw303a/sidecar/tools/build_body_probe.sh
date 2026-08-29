@@ -15,10 +15,11 @@ sidecar=$(dirname "$here")
 tw303a=$(dirname "$sidecar")
 out=${1:-.}
 ${CXX:-g++} -O2 -std=c++17 \
-    -I"$sidecar/include" -I"$tw303a/core/include" \
+    -I"$sidecar/include" -I"$tw303a/core/include" -I"$tw303a/body/include" \
     -o "$out/body_probe" \
     "$here/body_probe.cc" \
     "$sidecar/src/twgroove.cc" \
     "$sidecar/src/twgroovependulum.cc" \
-    "$sidecar/src/twgrooveaspect.cc"
+    "$sidecar/src/twgrooveaspect.cc" \
+    "$tw303a/body/src/twbodymeasures.cc"
 echo "built $out/body_probe"

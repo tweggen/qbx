@@ -381,7 +381,50 @@ from hardcoded numbers -- so this milestone lands AFTER C2.
 **AC1a.3** AC-INV holds; `feel_flow_puppet.qxa` re-pinned once more, with the
 old and new values and the reason, as C1 did.
 
-## C2 — The measures (44 B0): anthropometrics and closed forms, no motion
+## C2 — The measures (44 B0) — **DONE 2026-08-28, with AC2.1 NOT MET**
+
+> **Executed.** New `tw_body` module (`tw_module(body … DEPS tw_core)`,
+> `'body': ['core']` in `check_layering.py`) with `twBodyMeasures`,
+> `twBodyPendulumHz`, `twBodyCrossoverHz` and a `compound()` that composes
+> consecutive segments by the parallel-axis theorem. `body_measures_test`
+> registered; `body_probe` now LINKS tw_body and its two hardcoded crossover
+> constants are gone.
+>
+> **AC2.1 IS NOT MET AND CANNOT BE MET IN THIS ENVIRONMENT.** The VERIFY gate
+> is the point of this milestone, and it needs primary literature. Every route
+> was refused by the egress proxy: the de Leva 1996 PDF, Winter's anthropometry
+> chapter, the HAS-Motion Visual3D wiki, an NCBI/PMC reference table, ExRx,
+> arxiv and Wikipedia. Web SEARCH works but returns model-written summaries;
+> taking a number from a summary launders a memory rather than checking it, so
+> none was taken. **Every constant is marked `VERIFY` with the search recorded
+> beside it**, which is the branch AC2.1 itself allows. Finishing it needs a box
+> with journal access; a value that moves will move a test, by design.
+>
+> **AC2.2 is RECORDED, not validated**, for the same reason and per this plan's
+> own correction: section 4's 0.9-1.1 Hz arm range is itself a VERIFY-flagged
+> memory, and the closed form over these constants gives **0.7346 Hz** for the
+> full arm (upper + fore + hand, which is what section 4 defines) against
+> **1.0332 Hz** for the upper arm alone. Both are pinned as regression values
+> with an explicit "not validated" label, and the test asserts the SANITY
+> relation (the longer compound is slower) so the 40 % gap is believable rather
+> than a transcription slip. Asserting an unverified range is exactly what made
+> the v1 milestone unresolvable.
+>
+> **AC2.3 MET:** head **1.2640 Hz at 10°**, trunk **0.8002 Hz at 20°**,
+> reproducing the verification note to 0.01 Hz — and the amplitudes are now
+> asserted alongside, since the crossover depends on them through sin θ/θ and a
+> crossover quoted without one is unreproducible.
+>
+> **AC2.4 MET:** monotone in M and H at (50, 1.55) and (110, 2.00), plus two
+> sharper claims — pendulum frequency is **independent of body mass** (1e-9) and
+> scales as **1/sqrt(H)** exactly.
+>
+> **Watched failing** under two sabotages: dropping sin θ/θ from the crossover
+> fails the amplitude-monotonicity assertion; dropping the parallel-axis d²
+> term fails four assertions at once (head 2.457 against 1.264, upper arm 2.376
+> against 1.033). Suite 325 registered / 320 run / 5 disabled, **320 passed**,
+> 285 s at `-j4`.
+
 
 **New module** `tw303a/body/` → `tw_body`, linking `tw_core` only. Pure,
 deterministic, no Qt, no threads, no I/O — the sidecar rules. Register in

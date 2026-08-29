@@ -66,6 +66,7 @@
 #include "tw/sidecar/twgroove.h"
 #include "tw/sidecar/twgroovependulum.h"
 #include "tw/sidecar/twgrooveaspect.h"
+#include "tw/body/twbodymeasures.h"   // proposal 44 C2: the measures, not magic numbers
 
 #include <algorithm>
 #include <cmath>
@@ -384,12 +385,20 @@ int main( int argc, char **argv )
                     "measure that, not the model.\n", pr.tatumPeriodSec );
             return 2;
         }
+        // f_cross now comes from tw_body (proposal 44 C2), not from two
+        // constants copied out of a document. AC2.3's whole point: the closed
+        // form and the amplitude live in ONE place, and the probe reads it.
+        const twBodyMeasures body;                       // 75 kg / 1.75 m
+        const double d10 = 10.0 * kPi / 180.0, d20 = 20.0 * kPi / 180.0;
         struct Row { const char *what; int part; double fCross; };
-        // f_cross = sqrt(m*g*d*sin(amp)/(I*amp))/2pi at the DRAWN amplitude,
-        // 75 kg / 1.75 m. Only the two ROTATIONAL DOFs: bounce is a force ratio
-        // in g under its own bound, and hipShift/armSwing are translations and
-        // an abduction with no defined tau_gravity here.
-        const Row rows[] = { { "head",  3, 1.264 }, { "trunk", 1, 0.800 } };
+        // Only the two ROTATIONAL DOFs: bounce is a force ratio in g under its
+        // own bound, and hipShift/armSwing are translations and an abduction
+        // with no defined tau_gravity here. The amplitudes are the puppet's own
+        // display constants, and the crossover DEPENDS on them.
+        const Row rows[] = {
+            { "head",  3, twBodyCrossoverHz( body.segment( twBodySeg::HeadNeck ), d10 ) },
+            { "trunk", 1, twBodyCrossoverHz( body.segment( twBodySeg::Trunk ),    d20 ) },
+        };
         int bad = 0;
         // THE HEAD IS MEASURED IN WORLD SPACE, not in the trunk's frame.
         // f_cross asks what a segment's own motion costs, and the head's motion
