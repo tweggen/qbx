@@ -1334,13 +1334,82 @@ produces — only how large they are.
 > `twAspect::BodyPose` v1, `SFeelFlowUiData::pose`, `feelflow_pose_test`,
 > `sidecar_test` section 8.
 >
-> **What did NOT land, and it is the larger half: NOTHING PRODUCES A
-> `body.pose` PAYLOAD.** The plant pass — driving seven joints from five units
-> through `twBodyUrgeSmoother`, `twBodyJointStep` and the objective, per hop,
-> inside `SFeelFlowTrackBounce`'s existing analysis job — is not written. So
-> every run today takes the fallback, which is exactly the state AC5.4 exists
-> to make safe, and the puppet is still C3's. **Do not read "C5 executed" off
-> this heading.**
+### THE PLANT PASS — **DONE 2026-08-30**, and the chain closes
+
+`tw/sidecar/twbodyplant.h`, gated by `body_plant_test` over a REAL analysis:
+the production front end and ensemble run over a click train, then the plant.
+It is the first gate that can fail for a reason none of the others can see.
+
+**Four joints, seven DOF**, which the per-axis work of C4a's correction is what
+makes possible:
+
+| joint | segment | axes → DOF |
+|---|---|---|
+| LEG | compound(Thigh…Foot) at the hip | Flex ← "bounce" → BounceY; Lateral ← "twobar" → HipShift |
+| TRUNK | Trunk at the pelvis | Lateral ← "sway" → Sway; Flex/Axial undriven |
+| ARM | compound(UpperArm…Hand), levered off the trunk | Flex ← "limbs" → ArmSwing |
+| NECK | HeadNeck at the atlas, levered off the trunk | Lateral ← **NOTHING** → HeadNod |
+
+**THE HEAD IS MAPPED TO NO UNIT AT ALL, and that is the whole proposal in one
+line of a table.** The requester's report (2026-08-27) was that the head moved
+with the tatum gauge rather than with the torso. C1 took it off that gauge and
+hung it on the trunk through a first-order lag; C4a showed a lag CANNOT produce
+the described nod because it has no momentum. Here the head is a real segment
+on a real joint whose PARENT IS THE TRUNK. **Measured: peak head nod 0.0212 rad
+(1.21°), head/trunk correlation 0.9289** — related, and not welded. A rigid
+pair reads exactly 1.0000.
+
+**THE TORQUE SCALE IS DERIVED, NOT CHOSEN**, so the plant adds no free
+parameter: `torqueScale = rom·k/Q`, i.e. **full urge at the joint's own
+resonance is exactly full range of motion** — which ties the plant's output to
+`maxUrge`'s own anchor ("full range, three times a second") by construction.
+Measured to 1e-9 against the closed form: **47.990319 N·m** for sway.
+
+**Measured, end to end:** 1200 hops, 4 driven DOF, peak urge 0.1621, peak sway
+0.0542 rad; a 110 kg / 1.95 m body gives 0.0555 and 0.0232 against 0.0542 and
+0.0212, so **M and H really are key material** and AC5.1's nesting argument is
+not decoration; silence gives **exactly 0.000e+00** on every DOF; the payload
+is byte-deterministic across two runs.
+
+**And the METRICAL LADDER SURVIVES THE PLANT:** drawn rates **sway 0.625 Hz,
+bounce 1.958 Hz** against a seeded ladder of 0.5 and 2.0, with the fixture's
+tatum at 4.0 Hz. Nothing is dragged up to the tatum by the machinery in
+between.
+
+**Watched failing, seven sabotages.** Three bit immediately: the neck given no
+parent (the head reads 0.0000), the head welded to the trunk (correlation
+exactly 1.0000), and the body ignored as a parameter. **Two did NOT, and both
+needed a better gate rather than a better sabotage** — a flat torque scale of
+60 N·m moved peak sway from 0.0542 to 0.0793 rad, comfortably inside any
+plausible excursion bound, and leaving the coupling in the drive breaks no
+bound at all. Both are now asserted AS CLOSED FORMS (the scale against
+`rom·k/Q` to 1e-9; the peak urge against an independent recompute over the
+mapped units), and both then bit. **An excursion bound cannot catch a wrong
+scale**, and that is the lesson.
+
+**A SEVENTH DOES NOT BITE AND THE REASON IS A FINDING, not a gap.** Swapping
+`cosMet` for `cosPhi` — C1a's own defect — moves the drawn rates only from
+0.625 / 1.958 to 0.542 / 2.583 Hz, nowhere near the tatum. **The plant filters
+the defect out**: a joint is itself a resonator with a low natural frequency,
+so a 4 Hz forcing produces a response dominated by the joint's own omega
+whatever phase channel drove it. The plant is strictly MORE ROBUST to C1a's
+defect than the direct mapping was — which is why the direct mapping needed
+C1a and this does not. The phase choice stays gated where it is observable, at
+C1a's mapping, and is recorded here as not gated at this level.
+
+**WHICH SEGMENT STANDS FOR WHICH DOF IS PROVISIONAL and says so.** A bounce is
+really knee flexion carrying the upper body; a hip shift is really a standing
+sway about the ankles. Both are modelled as axes of the leg's own compound
+pendulum. What is NOT provisional is the physics on each axis — a real
+segment's inertia, the right gravity sign, absolute damping, postural tone, and
+a parent that actually drives its child. An anatomically exact chain needs the
+child-to-parent reaction `tw/body`'s CONTRACT already names as missing.
+
+**STILL NOT DONE: the STORE PLUMBING.** `SFeelFlowTrackBounce` does not yet run
+the plant, store the payload, or decode it back into `SFeelFlowUiData::pose`.
+So the chain is complete and gated end to end in the engine, and the PUPPET is
+still C3's — every run takes AC5.4's fallback. That is the last piece of C5 and
+it is plumbing rather than design: the producer, the store key, the reload.
 >
 > **AC5.6's OWN PRESCRIPTION IS BACKWARDS, and the sabotage proved it.** The AC
 > says to compare `twGrooveAnalysisParams::serialize()` at defaults and at
