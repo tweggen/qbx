@@ -256,7 +256,45 @@ Invariants:
     respectively. Recorded because a gate that cannot fail is worse than none —
     it reports coverage that does not exist.
 
-30. **This module never computes `urgeNorm`.** Deciding which ensemble quantity
+30. **`urgeNorm`'s SOURCE is the DRIVE, and the three obvious candidates are
+    all circular.** `perUnitPower` (|z|²) and `dissip` (2|α||z|²) are the
+    resonator's RESPONSE, so either as "what the music asks for" makes urge and
+    achieved the same quantity and match trivially 1. What survives is
+    `hypot(support, tension)` — the two `groove.dyn` phase channels are
+    `k·F·cos φ` and `k·F·sin φ`, so their magnitude divides the resonator's
+    phase, and with it its response, straight out.
+
+31. **THEN DIVIDE BY `k`, because `k` is OURS and `F` is the music.** Measured
+    across six committed fixtures: twobar's raw drive reads ~2× every other
+    unit's and its coupling is 3.5 against their 1.5. On `a0_broadband_grid`
+    the raw p99s are 0.02915 / 0.02896 / 0.06757 for reference / sway / twobar
+    and after the divide **0.01944 / 0.01931 / 0.01931** — the same number
+    three times. The whole apparent difference was a model constant presented
+    as a property of the material. `twGrooveCounterTension::k` carries it, in
+    memory only, needing no aspect bump.
+
+32. **Urge is a LEVEL, not an onset train.** Raw `F` is a half-wave-rectified
+    envelope difference, so its MEDIAN over every committed fixture is exactly
+    0.00000 — zero between onsets. A per-hop urge would be zero nearly always
+    and every window mean meaningless. `twBodyUrgeTauSec` = 1 s is DERIVED:
+    longer than the fastest metrical period (reference at ~4 Hz, 0.25 s) so it
+    does not track onsets, shorter than the 8 s sustainment sub-window so a
+    build-up inside a phrase is visible. **A single sample of the smoother is
+    not its level** — the ripple is ~exp(−period/τ), measured 24 % of the mean
+    at 4 Hz onsets, and asserting an instantaneous sample equals the mean is a
+    mistake this file's own gate made and failed 11 % low on.
+
+33. **`twBodyUrgeReference` is a THIRD free parameter and it is the weakest.**
+    Unlike `maxUrge` and `effortBudget` it is a CALIBRATION, not a physiology.
+    Derived from a measurement (smoothed p99 drive 0.00030–0.00262 across 30
+    unit/fixture pairs) plus one stated and arguable assumption (the fixtures
+    run −19…−23 dBFS RMS; a commercial master at ~−10 carries ~3× the linear
+    envelope). It cannot change WHICH motions the model produces — it
+    multiplies every unit's urge equally — only how much of the ceiling a track
+    reaches. A full-scale broadband onset-train calibration fixture would
+    replace the assumption with a measurement and is **not in the tree**.
+
+34. **This module never computes `urgeNorm` from the analysis.** Deciding which ensemble quantity
     means "urge" is a modelling claim and belongs where it can be argued with,
     not buried in an accumulator. It is an input (C5 supplies it).
 

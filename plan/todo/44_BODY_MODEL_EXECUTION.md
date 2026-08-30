@@ -1111,8 +1111,58 @@ watched-failing rule exists to catch, and it caught it here only because the
 sabotage pass was run on the NEW assertions rather than assumed from the old
 ones.
 
-**STILL OPEN:** `urgeNorm`'s source — which ensemble quantity, normalised how
-(C5). And the metrics are per JOINT and per WINDOW; combining joints into one
+### `urgeNorm`'s SOURCE — proposed, measured and implemented 2026-08-30
+
+**The three obvious candidates are all circular.** `perUnitPower` (|z|²) and
+`dissip` (2|α||z|²) are the resonator's RESPONSE, so using either as "what the
+music asks for" makes urge and achieved the same quantity and match trivially 1.
+
+**What survives is the DRIVE**, and the two `groove.dyn` phase channels were
+already storing it: `support = k·F·cos φ`, `tension = k·F·sin φ`, so
+
+```
+music(t)  =  hypot( support, tension ) / k
+```
+
+— the magnitude divides the resonator's phase, and with it its response,
+straight out; the divide removes the model's own coupling constant.
+
+**THE DIVIDE IS NOT COSMETIC, and the measurement is the argument.** Across six
+committed fixtures twobar's raw drive reads about twice every other unit's, and
+its `k` is 3.5 against their 1.5. On `a0_broadband_grid` the raw p99s are
+**0.02915 / 0.02896 / 0.06757** for reference / sway / twobar and after the
+divide **0.01944 / 0.01931 / 0.01931** — the same number three times. The whole
+apparent difference was a model constant presented as a property of the
+material. `twGrooveCounterTension::k` now carries it; in-memory only, **no
+aspect bump**, and AC-INV verified byte-identical on three fixtures.
+
+**Urge is a LEVEL, not an onset train.** Raw `F` is a half-wave-rectified
+envelope difference and its MEDIAN over every fixture is exactly **0.00000** —
+zero between onsets — so a per-hop urge would be zero nearly always. Smoothed
+with a one-pole at `twBodyUrgeTauSec` = **1 s**, DERIVED: longer than the
+fastest metrical period (0.25 s) so it does not track onsets, shorter than the
+8 s sustainment sub-window so a build-up inside a phrase is visible — which is
+exactly what the requester's account of a rock intro is about.
+
+**The calibration, and it is the weakest number in the model.**
+`twBodyUrgeReference` = **0.008** is a THIRD free parameter, and unlike the
+other two it is a calibration rather than a physiology. Measured: the smoothed
+p99 drive spans **0.00030–0.00262** across 30 unit/fixture pairs. Assumed, and
+this is the arguable half: the fixtures run −19…−23 dBFS RMS while a commercial
+master at ~−10 carries ~3× the linear envelope. So the committed fixtures land
+at urgeNorm **0.037–0.327** and a loud master near 1. It cannot change WHICH
+motions the model produces — it multiplies every unit's urge equally.
+
+**Watched failing, four sabotages:** the coupling not divided out (6 failures),
+the drive taken from `support` alone so the phase is not removed (4), no
+smoothing (2), and `urgeNorm` unclamped (1).
+
+**NOT done:** a proper calibration fixture — a full-scale broadband onset train
+— which would replace the mastering-level assumption with a measurement. And
+the plumbing: `SFeelFlowUiData` does not yet carry `k` through to the app, which
+is C5's.
+
+**STILL OPEN:** nothing in `urgeNorm`'s definition. And the metrics are per JOINT and per WINDOW; combining joints into one
 body-wide objective, and running it as a sliding window rather than a block, are
 both AC4b.1's business.
 

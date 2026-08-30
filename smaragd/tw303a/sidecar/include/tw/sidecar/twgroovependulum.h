@@ -163,10 +163,14 @@ struct twGroovePendulumUnitTrajectory {
     // MAGNITUDE, which is why compliance, the heatmap and the metric lab are
     // untouched by this.
     //
-    // The lock term is SELF-LIMITING, which is what makes a fixed gain safe: an
-    // unlocked unit's arg(z) wobbles about a fixed point, so sin(arg z - phi)
-    // averages to ~0 over a cycle of phi and the correction cancels itself. A
-    // locked unit is pulled into alignment. Measured over three fixtures: every
+    // The lock term is SELF-LIMITING because |K sin(.)| <= K, so no drive can
+    // drag a unit's metrical rate more than K (2% of its omega) off. An
+    // earlier edition of this comment claimed the pull "averages to ~0" for an
+    // unlocked unit; it does NOT -- outside the lock range the mean pull is
+    // Delta - sqrt(Delta^2 - K^2), measured at 0.49 of full scale at 2.5%
+    // detuning, so such a unit phase-SLIPS with a slow beat rather than
+    // cancelling. The BOUND is the guarantee, not a zero mean. A locked unit
+    // is pulled into alignment. Measured over three fixtures: every
     // unit lands within ~2% of its seeded rate, and the one unit that is
     // genuinely entrained (reference) holds alignment to a few ms on its own
     // 250 ms period.
@@ -176,6 +180,9 @@ struct twGroovePendulumUnitTrajectory {
     std::vector<double> magnitude;        // |z|
     std::vector<double> driveF;           // F_p(t)
     double              omega0 = 0.0;     // the seed register (rad/sec)
+    /** The unit's coupling constant, copied from its spec so a consumer of
+     *  "groove.dyn" can divide it out -- see twGrooveCounterTension::k. */
+    double              k      = 0.0;
 };
 
 /** Proposal 40 section 3.5: the pass-2-only counter-tension readout. */
@@ -185,6 +192,22 @@ struct twGrooveCounterTension {
     double      varSinDeltaPhi  = 0.0;   // the "jitter cost" (corrective tension)
     double      meanF           = 0.0;   // the drive factor, reported SEPARATELY
                                           // (section 3.5: a loudness confound)
+    /**
+     * The unit's COUPLING CONSTANT k, copied from its spec. In-memory only,
+     * like every other field here -- it is not in the "groove.res"/"groove.ev"
+     * wire format and adding it needed no aspect bump.
+     *
+     * Carried because a READ-SIDE consumer that wants the MUSIC rather than
+     * the model has to divide it out. "groove.dyn" stores k*F*cos(phi) and
+     * k*F*sin(phi), so the magnitude of that pair is |k*F| -- the drive with
+     * the resonator's response removed, which is the useful part -- but it
+     * still carries k, and k is OURS. Measured: twobar's drive reads about
+     * twice every other unit's across four fixtures, and its k is 3.5 against
+     * their 1.5. Dividing by k collapses the five units from a 3x spread to a
+     * 1.4x one, which is what says the difference was the constant and not the
+     * material. Proposal 44 C4b's `urgeNorm` is built on the quotient.
+     */
+    double      k               = 0.0;
 };
 
 /**

@@ -2,6 +2,30 @@
 
 #include <cmath>
 
+double twBodyDrive( double support, double tension, double coupling )
+{
+    // hypot() removes the resonator's phase, hence its response; the divide
+    // removes the model's own coupling constant. What is left is the music.
+    if( coupling <= 0.0 ) return 0.0;
+    return std::sqrt( support * support + tension * tension ) / coupling;
+}
+
+double twBodyUrgeSmoother::step( double drive, double dt )
+{
+    if( dt > 0.0 && tauSec > 0.0 ) {
+        // One pole, in the form that is exact for a constant input held over
+        // the step rather than the dt/(tau+dt) approximation -- the hop grid
+        // is 10 ms against a 1 s constant so the two agree to 0.005%, but a
+        // caller feeding it a coarser grid should not silently get a
+        // different time constant.
+        const double a = 1.0 - std::exp( -dt / tauSec );
+        state += a * ( drive - state );
+    }
+    if( reference <= 0.0 ) return 0.0;
+    const double u = state / reference;
+    return u < 0.0 ? 0.0 : ( u > 1.0 ? 1.0 : u );
+}
+
 double twBodyAchievedRate( const twBodyMotionSample *samples, int count,
                            double dt, double romRad )
 {

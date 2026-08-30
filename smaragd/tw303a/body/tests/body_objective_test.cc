@@ -327,6 +327,121 @@ int main()
               " track, rather than being charged for the excess" );
     }
 
+    // --- 4d. WHERE urgeNorm COMES FROM (C4b's last modelling claim) ---------
+    // The three obvious sources are all wrong the same way: perUnitPower and
+    // dissip are the resonator's RESPONSE, so using either would make urge and
+    // achieved the same quantity and match trivially 1. What survives is the
+    // DRIVE, recovered from the two "groove.dyn" phase channels.
+    {
+        // hypot(support,tension) is |k*F|, so the phase -- and with it the
+        // response -- divides out. Any phase, same answer.
+        const double kF = 0.03;
+        for( double phi : { 0.0, 0.7, 1.9, 3.0, -2.2 } )
+            near( twBodyDrive( kF * std::cos( phi ), kF * std::sin( phi ), 1.5 ),
+                  kF / 1.5, 1e-12,
+                  "the drive is the MAGNITUDE -- the resonator's phase, and so"
+                  " its response, divides out" );
+
+        // AND k IS OURS, F IS THE MUSIC. Measured on a0_broadband_grid: the
+        // raw p99 drive reads 0.02896 for sway (k 1.5) and 0.06757 for twobar
+        // (k 3.5) -- twice as much, purely because of a model constant. The
+        // divide collapses them onto the same number, and these two literals
+        // are that measurement.
+        const double sway   = twBodyDrive( 0.02896, 0.0, 1.5 );
+        const double twobar = twBodyDrive( 0.06757, 0.0, 3.5 );
+        std::printf( "  DRIVE: sway raw 0.02896 / k 1.5 = %.5f;"
+                     " twobar raw 0.06757 / k 3.5 = %.5f\n", sway, twobar );
+        near( twobar / sway, 1.0, 0.01,
+              "MEASURED: two units whose raw drives differ 2.3x report the SAME"
+              " music once their couplings are divided out" );
+        near( twBodyDrive( 1.0, 0.0, 0.0 ), 0.0, 0.0,
+              "and a zero coupling is refused rather than dividing by it" );
+    }
+
+    // --- 4e. URGE IS A LEVEL, NOT AN ONSET TRAIN ---------------------------
+    // Raw F is a half-wave-rectified envelope difference: measured, its MEDIAN
+    // over every committed fixture is exactly 0.00000, because it is zero
+    // between onsets. A per-hop urge would be zero nearly always and every
+    // window mean would be meaningless.
+    {
+        const double dt = 0.001;
+        // Step response: a one-pole reaches 1 - 1/e of its target in exactly
+        // one time constant, and that is what says tau is what it claims.
+        {
+            twBodyUrgeSmoother sm;
+            sm.reference = 1.0;                 // read the raw smoothed value
+            double out = 0.0;
+            for( double t = 0.0; t < sm.tauSec - 1e-9; t += dt )
+                out = sm.step( 1.0, dt );
+            near( out, 1.0 - std::exp( -1.0 ), 1e-3,
+                  "one time constant reaches exactly 1 - 1/e" );
+        }
+        // An ONSET TRAIN of duty d and height A smooths to A*d -- so a sparse
+        // loud track and a dense quiet one with the same energy read alike,
+        // which is what makes urge a property of the passage rather than of
+        // whichever hop you sampled.
+        {
+            twBodyUrgeSmoother sm; sm.reference = 1.0;
+            const double A = 0.02, period = 0.25, duty = 0.04;   // 4 Hz onsets
+            double lo = 1e30, hi = -1e30, sum = 0.0; int n = 0;
+            for( double t = 0.0; t < 12.0; t += dt ) {
+                const double out =
+                    sm.step( std::fmod( t, period ) < duty * period ? A : 0.0, dt );
+                if( t >= 11.0 ) {           // one settled second
+                    lo = std::min( lo, out ); hi = std::max( hi, out );
+                    sum += out; n++;
+                }
+            }
+            const double mean = sum / (double) n;
+            const double ripple = ( hi - lo ) / mean;
+            std::printf( "  ONSET TRAIN: A %.3f at duty %.2f -> mean %.5f"
+                         " (closed form %.5f), ripple %.1f%% of mean\n",
+                         A, duty, mean, A * duty, 100.0 * ripple );
+            near( mean, A * duty, A * duty * 0.02,
+                  "an onset train smooths to its own DUTY-WEIGHTED MEAN" );
+            // THE RIPPLE IS REAL AND IS WHY tau MUST EXCEED THE ONSET PERIOD.
+            // A single instantaneous sample is NOT the mean -- asserting that
+            // was this section's first version, and it failed 11% low because
+            // the loop happened to end in the gap between onsets. At tau 1 s
+            // against a 0.25 s period the swing is exp(-0.25) either side.
+            check( ripple > 0.15 && ripple < 0.35,
+                   "and RIPPLES by roughly exp(-period/tau) -- which is why a"
+                   " single sample of urge is not its level" );
+        }
+        // The normalisation and its clamp, against the calibration constant.
+        {
+            twBodyUrgeSmoother sm;              // reference 0.008
+            double out = 0.0;
+            for( double t = 0.0; t < 12.0; t += dt ) out = sm.step( 0.004, dt );
+            near( out, 0.5, 1e-3, "half the reference drive is urgeNorm 0.5" );
+            twBodyUrgeSmoother hot;
+            for( double t = 0.0; t < 12.0; t += dt ) out = hot.step( 0.040, dt );
+            near( out, 1.0, 0.0,
+                  "and a track FIVE TIMES the reference clamps at 1 -- which an"
+                  " absolute scale makes reachable and the ceiling makes"
+                  " harmless" );
+        }
+        // What the committed fixtures actually read, so the calibration is
+        // visible rather than buried: measured smoothed p99 drives, 0.00030 to
+        // 0.00262 across 30 unit/fixture pairs.
+        {
+            twBodyUrgeSmoother lo, hi;
+            double a = 0.0, b = 0.0;
+            for( double t = 0.0; t < 12.0; t += dt ) {
+                a = lo.step( 0.00030, dt );
+                b = hi.step( 0.00262, dt );
+            }
+            std::printf( "  CALIBRATION: the committed fixtures span urgeNorm"
+                         " %.3f to %.3f against reference %.4f\n",
+                         a, b, twBodyUrgeReference );
+            check( a > 0.0 && b < 1.0,
+                   "the committed fixtures sit INSIDE the scale -- neither"
+                   " floored at nothing nor clamped at the ceiling" );
+            check( b > 0.2,
+                   "and high enough to be a usable fraction of it" );
+        }
+    }
+
     // --- 5. GAMED ONE WAY: buying match with unsustainable effort -----------
     // The budget is what stops it, and `budgetBound` is what SAYS so. Which
     // ceiling bound is an observation, not a setting: it is the difference

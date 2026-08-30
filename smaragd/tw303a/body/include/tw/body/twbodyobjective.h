@@ -68,6 +68,97 @@
  * =========================================================================
  */
 
+/**
+ * ===================== WHERE `urgeNorm` COMES FROM =======================
+ *
+ * The last modelling claim in C4b, and the three obvious sources are all
+ * WRONG in the same way. `perUnitPower` (|z|^2) and `dissip` (2|alpha||z|^2)
+ * are the resonator's RESPONSE, so using either as "what the music asks for"
+ * makes urge and achieved the same quantity and match trivially 1. Circular.
+ *
+ * What is left, and what the two "groove.dyn" channels were stored for:
+ *
+ *     support = k*F*cos(phi),  tension = k*F*sin(phi)
+ *     =>  hypot( support, tension )  ==  |k * F|
+ *
+ * The magnitude divides the resonator's own phase -- and therefore its
+ * response -- straight out, leaving the DRIVE. That is the property that makes
+ * it a candidate at all.
+ *
+ * **THEN DIVIDE BY k, BECAUSE k IS OURS AND F IS THE MUSIC.** Measured across
+ * six committed groove fixtures: twobar's raw drive reads about twice every
+ * other unit's, and its coupling is 3.5 against their 1.5. On
+ * a0_broadband_grid the raw p99s are 0.02915 / 0.02896 / 0.06757 for
+ * reference / sway / twobar, and after the divide they are 0.01944 / 0.01931 /
+ * 0.01931 -- the same number three times. The whole apparent difference was a
+ * model constant presented as a property of the material.
+ *
+ * **URGE IS A LEVEL, NOT AN ONSET TRAIN.** Raw F is a half-wave-rectified
+ * envelope difference, so its MEDIAN over a fixture is exactly 0.00000: it is
+ * zero between onsets. A per-hop urge would therefore be zero nearly always
+ * and every window mean would be meaningless. It is smoothed with a one-pole,
+ * and the time constant is DERIVED rather than picked: it must be longer than
+ * the fastest metrical level's period (the reference unit at ~4 Hz, 0.25 s) so
+ * it does not track individual onsets, and shorter than the sustainment
+ * sub-window (8 s) so a BUILD-UP inside a phrase is visible -- which is the
+ * thing the requester's own account of a rock intro is about. 1 s sits an
+ * octave inside both bounds.
+ * =========================================================================
+ */
+
+/** The MUSIC ALONE at one hop: the drive magnitude with the resonator's
+ * response and the model's own coupling both divided out. */
+double twBodyDrive( double support, double tension, double coupling );
+
+/**
+ * FREE PARAMETER 3, and the only one that is a CALIBRATION rather than a
+ * physiology: the smoothed drive that counts as full urge.
+ *
+ * **VERIFY, and more provisional than the other two.** It is derived from a
+ * measurement plus one stated assumption, both of which are arguable:
+ *
+ *   - Measured, `body_probe --urge` over six committed groove fixtures: the
+ *     smoothed (tau 1 s) 99th-percentile drive ranges 0.00030 to 0.00262
+ *     across 30 unit/fixture pairs, with the dense loud ones clustering
+ *     0.0015-0.0026.
+ *   - Those fixtures peak at -0.9 dBFS but run -19 to -23 dBFS RMS. A
+ *     commercial master at about -10 dBFS RMS carries roughly three times the
+ *     linear envelope, so the drive a real track produces is around 3x these.
+ *
+ * 0.008 therefore puts the committed fixtures at urgeNorm 0.19-0.33 and a
+ * loud modern master near 1. **The assumption that deserves the scrutiny is
+ * the second one**, which is a claim about mastering practice rather than
+ * about this code; a proper calibration fixture (a full-scale broadband onset
+ * train) would replace it with a measurement and is not in the tree.
+ *
+ * It CANNOT change which motions the model produces -- it multiplies every
+ * unit's urge equally, so it moves only how much of the ceiling a given track
+ * reaches. That is the same argument that makes the musical torque's SCALE
+ * provisional while its SHAPE is not.
+ */
+constexpr double twBodyUrgeReference = 0.008;
+
+/** The derived time constant, seconds. See the block above: longer than the
+ * fastest metrical period, shorter than the sustainment sub-window. */
+constexpr double twBodyUrgeTauSec = 1.0;
+
+/**
+ * Turns a per-hop drive into `urgeNorm`. STREAMING and stateful, because the
+ * smoother is, and because the analysis produces hops one at a time.
+ *
+ * The output is clamped to [0,1]: on an ABSOLUTE scale (the requester's
+ * decision) a track louder than the reference really does exceed it, and the
+ * ceiling makes that harmless -- past full urge, more urge earns nothing.
+ */
+struct twBodyUrgeSmoother {
+    double tauSec    = twBodyUrgeTauSec;
+    double reference = twBodyUrgeReference;
+    double state     = 0.0;              // the smoothed drive, pre-normalisation
+
+    /** Advance by `dt` with this hop's drive; returns urgeNorm in [0,1]. */
+    double step( double drive, double dt );
+};
+
 /** One hop of one joint's history, as the objective sees it. */
 struct twBodyMotionSample {
     double angVel         = 0.0;   // rad/s, the joint's own rate

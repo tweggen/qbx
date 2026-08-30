@@ -89,6 +89,7 @@ std::vector<twGroovePendulumUnitTrajectory> runPass1( const twGrooveField &field
     for( const twGroovePendulumUnitSpec &spec : params.ensemble ) {
         twGroovePendulumUnitTrajectory traj;
         traj.name = spec.name;
+        traj.k    = spec.k;
         traj.phaseWrapped.assign( nHops, 0.0 );
         traj.phaseMetric.assign( nHops, 0.0 );
         traj.omega.assign( nHops, 0.0 );
@@ -379,6 +380,9 @@ twGroovePendulumResult twGroovePendulumAnalyze( const twGrooveField &field,
         result.counterTension[u].meanSinDeltaPhi  = meanSin;
         result.counterTension[u].varSinDeltaPhi    = varSin;
         result.counterTension[u].meanF             = meanF;
+        // The unit's own coupling, so a read-side consumer can divide it out
+        // and get the MUSIC rather than the model -- see twGrooveCounterTension.
+        result.counterTension[u].k                 = trajs[u].k;
     }
 
     return result;
