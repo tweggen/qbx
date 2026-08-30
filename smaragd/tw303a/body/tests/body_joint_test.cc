@@ -6,6 +6,16 @@
 // the model shipped, which can never go forward at all. Those two together are
 // the whole argument, stated as a pair so neither can pass by accident.
 //
+// SECTION 3a IS THE SECOND FALSIFIER, added after an adversarial review found
+// the first build's equation missing a term that is O(100%) of the response.
+// Gravity acts on a segment's ABSOLUTE angle, and the first build applied it to
+// the joint's RELATIVE angle only -- so a freely hanging arm on a leaning trunk
+// settled PARALLEL TO THE LEANING TRUNK instead of hanging plumb. One sentence,
+// no constants, no tolerance argument, and it cannot be satisfied by tuning.
+// It is written before the requester's own test in reading order for a reason:
+// section 3's headline number is a CONSEQUENCE of the equation being right,
+// and section 3a is the thing that says the equation is right.
+//
 // Every stiffness here rests on tw_body's UNSOURCED constants (AC2.1 is open),
 // so a natural frequency is arithmetic over provisional data. The tests are
 // therefore written to assert SIGNS, RELATIONS and CONSERVATION -- things that
@@ -28,6 +38,7 @@ static void near( double got, double want, double tol, const char *what )
     g_fail++; } }
 
 static const double kPi = 3.14159265358979323846;
+static const int kFlex  = (int) twBodyAxis::Flex;
 
 /** The neck: the head segment on a near-spherical joint, levered off the trunk. */
 static twBodyJoint neckJoint( double zeta = 0.30, double ks = 2.0 )
@@ -55,12 +66,31 @@ static double trunkPhi( double t, double ramp, double amp )
     const double u = t / ramp;
     return amp * ( u - std::sin( 2.0 * kPi * u ) / ( 2.0 * kPi ) );
 }
+static double trunkPhiD( double t, double ramp, double amp )
+{
+    const double h = 1e-5;
+    return ( trunkPhi( t + h, ramp, amp ) - trunkPhi( t - h, ramp, amp ) ) / ( 2.0 * h );
+}
 static double trunkPhiDD( double t, double ramp, double amp )
 {
     const double h = 1e-5;
     return ( trunkPhi( t + h, ramp, amp ) - 2.0 * trunkPhi( t, ramp, amp )
              + trunkPhi( t - h, ramp, amp ) ) / ( h * h );
 }
+
+/** The full parent state for the flex axis at time t. All three fields, which
+ * is the point of the struct: the first build passed only the acceleration. */
+static twBodyParentMotion trunkAt( double t, double ramp, double amp )
+{
+    twBodyParentMotion p;
+    p.angle [kFlex] = trunkPhi  ( t, ramp, amp );
+    p.angVel[kFlex] = trunkPhiD ( t, ramp, amp );
+    p.angAcc[kFlex] = trunkPhiDD( t, ramp, amp );
+    return p;
+}
+
+/** A parent standing perfectly still. */
+static twBodyParentMotion still() { return twBodyParentMotion(); }
 
 int main()
 {
@@ -70,12 +100,11 @@ int main()
     {
         twBodyJoint j = neckJoint( 0.0 );        // no damping, no drive
         twBodyJointState st;
-        st.angle[(int) twBodyAxis::Flex] = 0.2;
+        st.angle[kFlex] = 0.2;
         const double e0 = twBodyJointEnergy( j, st, twBodyAxis::Flex );
-        const double zero[3] = { 0.0, 0.0, 0.0 };
         double eMin = e0, eMax = e0;
         for( long n = 0; n < (long) ( 60.0 / dt ); n++ ) {
-            twBodyJointStep( j, st, zero, nullptr, dt );
+            twBodyJointStep( j, st, still(), nullptr, dt );
             const double e = twBodyJointEnergy( j, st, twBodyAxis::Flex );
             eMin = std::min( eMin, e ); eMax = std::max( eMax, e );
         }
@@ -103,7 +132,7 @@ int main()
         // itself up, and the model must say so rather than quietly taking the
         // square root of a negative number.
         twBodyJoint weak = neckJoint( 0.3, 0.6 );      // passive < gravity
-        check( twBodyJointStiffness( weak ) < 0.0,
+        check( twBodyJointStiffness( weak, twBodyAxis::Flex ) < 0.0,
                "an inverted joint with passive stiffness below its gravity moment"
                " has NEGATIVE total stiffness" );
         check( twBodyJointNaturalHz( weak, twBodyAxis::Flex ) == 0.0,
@@ -113,33 +142,115 @@ int main()
         arm.segment = mm.compound( twBodySeg::UpperArm, 3 );
         arm.invertedPendulum = false;                  // an arm HANGS
         arm.stiffnessScale   = 0.0;                    // no passive tissue at all
-        check( twBodyJointStiffness( arm ) > 0.0,
+        check( twBodyJointStiffness( arm, twBodyAxis::Flex ) > 0.0,
                "a HANGING segment is stable on gravity alone -- opposite sign" );
+    }
+
+    // --- 2a. AN UNSTABLE JOINT ACTUALLY FALLS -----------------------------
+    // The first build folded k < 0 into "no stiffness", which ALSO discarded
+    // the damping, so a head below its own stability threshold -- displaced and
+    // then left completely alone -- sat exactly where it was put, forever. It
+    // reported the instability (section 2) and did not exhibit it. The exact
+    // step's hyperbolic branch is what makes the two agree.
+    {
+        twBodyJoint j = neckJoint( 0.30, 0.6 );        // below threshold
+        twBodyJointState st;
+        st.angle[kFlex] = 0.2;                         // displaced, no drive
+        const double k = twBodyJointStiffness( j, twBodyAxis::Flex );
+        const double I = twBodyJointInertia( j, twBodyAxis::Flex );
+        const double lambda = std::sqrt( -k / I );     // the divergence rate
+        for( long n = 0; n < (long) ( 1.0 / dt ); n++ )
+            twBodyJointStep( j, st, still(), nullptr, dt );
+        std::printf( "  unstable (ks=0.6): 0.2000 rad -> %.4f rad after 1 s"
+                     " (undamped cosh rate lambda = %.2f /s)\n",
+                     st.angle[kFlex], lambda );
+        check( st.angle[kFlex] > 1.0,
+               "an inverted joint below its threshold FALLS -- it does not sit still" );
+        check( st.vel[kFlex] > 0.0, "and it is still accelerating away" );
+    }
+
+    // --- 3a. THE SECOND FALSIFIER: A HANGING ARM HANGS PLUMB --------------
+    // Gravity acts on a segment's ABSOLUTE angle. Lean the trunk and hold it
+    // there; a shoulder with no passive tissue at all must settle so the arm
+    // points DOWN, i.e. at exactly minus the trunk's lean. Under the truncated
+    // equation gravity saw only the relative angle, and the arm settled at 0 --
+    // parallel to the leaning trunk, sticking out at 25 degrees from vertical
+    // and perfectly happy there. No constant in this section, and no tuning
+    // can produce -phi from an equation that has no phi in it.
+    {
+        const twBodyMeasures m;
+        twBodyJoint arm;
+        arm.segment          = m.compound( twBodySeg::UpperArm, 3 );
+        arm.freeAxes         = twBodySpherical();
+        arm.invertedPendulum = false;                  // it HANGS
+        arm.stiffnessScale   = 0.0;                    // no passive tissue
+        arm.dampingRatio     = 0.7;
+        arm.parentLever      = 0.0;                    // isolate gravity alone
+
+        const double lean = 25.0 * kPi / 180.0;
+        twBodyParentMotion p;                          // leaning, and STILL
+        p.angle[kFlex] = lean;
+
+        twBodyJointState st;
+        for( long n = 0; n < (long) ( 30.0 / dt ); n++ )
+            twBodyJointStep( arm, st, p, nullptr, dt );
+        const double rel = st.angle[kFlex];
+        std::printf( "  trunk holds a %.1f deg lean: a free arm settles at"
+                     " %+.4f deg relative -> %+.4f deg absolute\n",
+                     lean * 180.0 / kPi, rel * 180.0 / kPi,
+                     ( lean + rel ) * 180.0 / kPi );
+        near( rel, -lean, 1e-4, "A FREE ARM HANGS PLUMB: relative angle = -lean" );
+        near( lean + rel, 0.0, 1e-4, "i.e. its ABSOLUTE angle is vertical" );
+        // And the equilibrium query agrees with where it actually went.
+        near( twBodyJointEquilibrium( arm, twBodyAxis::Flex, p ), -lean, 1e-9,
+              "and twBodyJointEquilibrium() says so without integrating" );
     }
 
     // --- 3. THE REQUESTER'S TEST ------------------------------------------
     // Move the torso forward, then stop. The head has momentum; it must keep
     // going forward, i.e. the relative angle must go POSITIVE, then ring down.
-    double fwdSecond = 0.0;
+    //
+    // WHAT IT RINGS DOWN *TO* IS NOT ZERO, and the first build asserted that it
+    // was. With gravity acting on the absolute angle, an inverted head on a
+    // leaning trunk DROOPS: it settles at a positive relative angle, and the
+    // ringing is about THAT. Measuring the ring about zero is what made the
+    // truncated equation look like it was behaving.
+    double fwdSecond = 0.0, restRel = 0.0;
     {
         twBodyJoint j = neckJoint( 0.30 );
         twBodyJointState st;
         const double ramp = 0.25, amp = 25.0 * kPi / 180.0;
         std::vector<double> rel;
-        for( double t = 0.0; t < 1.5; t += dt ) {
-            const double acc[3] = { trunkPhiDD( t, ramp, amp ), 0.0, 0.0 };
-            twBodyJointStep( j, st, acc, nullptr, dt );
-            rel.push_back( st.angle[(int) twBodyAxis::Flex] );
+        for( double t = 0.0; t < 6.0; t += dt ) {
+            twBodyJointStep( j, st, trunkAt( t, ramp, amp ), nullptr, dt );
+            rel.push_back( st.angle[kFlex] );
         }
         double mx = 0.0; for( double v : rel ) mx = std::max( mx, v );
         fwdSecond = mx;
+        restRel   = rel.back();
+
+        // The equilibrium the trunk's HELD lean implies, once it has stopped.
+        twBodyParentMotion held; held.angle[kFlex] = amp;
+        const double eq = twBodyJointEquilibrium( j, twBodyAxis::Flex, held );
+
         int crossings = 0;
         for( size_t i = 1; i < rel.size(); i++ )
-            if( rel[i-1] * rel[i] < 0.0 ) crossings++;
+            if( ( rel[i-1] - eq ) * ( rel[i] - eq ) < 0.0 ) crossings++;
         std::printf( "  torso flexes 25 deg then STOPS: head forward overshoot"
-                     " %.3f deg, %d zero crossings\n", mx * 180.0 / kPi, crossings );
+                     " %.3f deg, settles at %+.3f deg (equilibrium %+.3f),"
+                     " %d crossings of it\n",
+                     mx * 180.0 / kPi, restRel * 180.0 / kPi,
+                     eq * 180.0 / kPi, crossings );
         check( mx > 0.01, "THE HEAD NODS FORWARD after the torso stops" );
-        check( crossings >= 2, "and it RINGS -- an overshoot, not a drift" );
+        check( mx > eq + 0.01,
+               "and it OVERSHOOTS its own resting droop -- momentum, not a lean" );
+        check( crossings >= 2,
+               "and it RINGS about that equilibrium -- an overshoot, not a drift" );
+        near( restRel, eq, 1e-3,
+              "and it comes to rest exactly where the equilibrium says" );
+        check( eq > 0.0,
+               "which for an INVERTED head on a leaning trunk is a forward DROOP,"
+               " not trunk-aligned" );
     }
 
     // --- 4. THE CONTROL: the same input through a FIRST-ORDER lag ----------
@@ -167,21 +278,30 @@ int main()
     }
 
     // --- 5. ARREST: once the drive stops, it comes to rest -----------------
+    // MEASURED FROM THE EQUILIBRIUM, not from zero. A driven joint's resting
+    // place is set by where its parent is holding, and "has the ringing died"
+    // is a question about the distance from THAT. The first build measured
+    // from zero, which is only the same question when the equilibrium happens
+    // to be zero -- i.e. only under the equation that had no parent angle in it.
     {
         twBodyJoint j = neckJoint( 0.30 );
         twBodyJointState st;
         const double ramp = 0.25, amp = 25.0 * kPi / 180.0;
+        twBodyParentMotion held; held.angle[kFlex] = amp;
+        const double eq = twBodyJointEquilibrium( j, twBodyAxis::Flex, held );
+
         double peak = 0.0; double t = 0.0;
         for( ; t < 0.6; t += dt ) {
-            const double acc[3] = { trunkPhiDD( t, ramp, amp ), 0.0, 0.0 };
-            twBodyJointStep( j, st, acc, nullptr, dt );
-            peak = std::max( peak, std::fabs( st.angle[(int) twBodyAxis::Flex] ) );
+            twBodyJointStep( j, st, trunkAt( t, ramp, amp ), nullptr, dt );
+            peak = std::max( peak, std::fabs( st.angle[kFlex] - eq ) );
         }
-        const double zero[3] = { 0.0, 0.0, 0.0 };
         const double cycles = 6.0 / std::max( 1e-6, twBodyJointNaturalHz( j, twBodyAxis::Flex ) );
-        for( double u = 0.0; u < cycles; u += dt ) twBodyJointStep( j, st, zero, nullptr, dt );
-        const double left = std::fabs( st.angle[(int) twBodyAxis::Flex] ) / peak;
-        std::printf( "  arrest: %.4f%% of peak left after 6 natural periods\n", 100.0 * left );
+        for( double u = 0.0; u < cycles; u += dt )
+            twBodyJointStep( j, st, held, nullptr, dt );
+        const double left = std::fabs( st.angle[kFlex] - eq ) / peak;
+        std::printf( "  arrest: %.4f%% of peak DEVIATION left after 6 natural"
+                     " periods (equilibrium %+.3f deg)\n",
+                     100.0 * left, eq * 180.0 / kPi );
         check( left < 0.05, "a damped joint ARRESTS -- under 5%% of peak after 6 periods" );
     }
 
@@ -192,9 +312,10 @@ int main()
         twBodyJoint j = neckJoint();
         j.freeAxes = twBodyHinge( twBodyAxis::Flex );      // sagittal only
         twBodyJointState st;
-        const double acc[3] = { 40.0, 40.0, 40.0 };        // drive ALL three hard
-        for( long n = 0; n < 5000; n++ ) twBodyJointStep( j, st, acc, nullptr, dt );
-        check( std::fabs( st.angle[(int) twBodyAxis::Flex] ) > 1e-4,
+        twBodyParentMotion p;
+        for( int i = 0; i < 3; i++ ) p.angAcc[i] = 40.0;   // drive ALL three hard
+        for( long n = 0; n < 5000; n++ ) twBodyJointStep( j, st, p, nullptr, dt );
+        check( std::fabs( st.angle[kFlex] ) > 1e-4,
                "the FREE axis of a hinge moves" );
         near( st.angle[(int) twBodyAxis::Lateral], 0.0, 0.0, "a hinge does not move laterally" );
         near( st.angle[(int) twBodyAxis::Axial],   0.0, 0.0, "a hinge does not twist" );
@@ -203,67 +324,172 @@ int main()
                "a constrained axis reports no natural frequency" );
     }
 
+    // --- 6a. THE LONG AXIS IS NOT THE SAGITTAL PLANE ----------------------
+    // Twisting a segment neither raises nor lowers its centre of mass, so
+    // gravity exerts NO moment about its long axis -- no +/- m*g*d term, no
+    // stability threshold, no crossover -- and the inertia it turns against is
+    // its own longitudinal one, with no parallel-axis term because the CoM sits
+    // ON that axis. The first build gave twist the sagittal plane's inertia,
+    // stiffness and drive wholesale, which made a head as slow to turn as it is
+    // to nod. Every claim here is a RELATION, so none of it rests on the girth
+    // column's provisional value.
+    {
+        const twBodyJoint j = neckJoint();             // inverted, ks = 2
+        const double iFlex = twBodyJointInertia( j, twBodyAxis::Flex );
+        const double iAx   = twBodyJointInertia( j, twBodyAxis::Axial );
+        const double kFl   = twBodyJointStiffness( j, twBodyAxis::Flex );
+        const double kAx   = twBodyJointStiffness( j, twBodyAxis::Axial );
+        std::printf( "  axes: I_flex %.5f vs I_axial %.5f kg m^2;"
+                     " k_flex %.3f vs k_axial %.3f N m/rad;"
+                     " %.3f Hz vs %.3f Hz\n", iFlex, iAx, kFl, kAx,
+                     twBodyJointNaturalHz( j, twBodyAxis::Flex ),
+                     twBodyJointNaturalHz( j, twBodyAxis::Axial ) );
+        check( iAx < iFlex * 0.25,
+               "twist inertia is far below flexion inertia -- no parallel-axis term" );
+        // ks = 2 inverted: flexion keeps (2-1) x m*g*d, twist keeps the full 2x.
+        near( kAx / kFl, 2.0, 1e-9,
+              "twist carries NO gravity term: k_axial / k_flex = ks / (ks-1)" );
+        check( twBodyJointNaturalHz( j, twBodyAxis::Axial )
+               > twBodyJointNaturalHz( j, twBodyAxis::Flex ),
+               "so a segment twists FASTER than it flexes" );
+        // The stability threshold is a flexion-plane fact only.
+        twBodyJoint weak = neckJoint( 0.3, 0.6 );
+        check( twBodyJointStiffness( weak, twBodyAxis::Flex ) < 0.0
+               && twBodyJointStiffness( weak, twBodyAxis::Axial ) > 0.0,
+               "a joint unstable in FLEXION is still perfectly stable in TWIST" );
+        // And the parent's lever does not reach the long axis: this joint sits
+        // ON it, so a parent twisting produces no linear acceleration here.
+        twBodyJoint jj = neckJoint();
+        twBodyParentMotion p; p.angVel[(int) twBodyAxis::Axial] = 12.0;
+        near( twBodyJointStiffnessAt( jj, twBodyAxis::Axial, p ),
+              twBodyJointStiffness( jj, twBodyAxis::Axial ), 1e-12,
+              "and a fast parent twist adds NO centripetal stiffening about it" );
+    }
+
+    // --- 6b. CENTRIPETAL STIFFENING GROWS AS THE SQUARE OF THE RATE -------
+    // A segment hanging off a rotating parent is flung outward, and the
+    // restoring part of that scales with the parent's angular rate squared. It
+    // is negligible at a slow sway and DOMINANT at the rates this feature is
+    // about, which is why it cannot be left out of a model that claims to work
+    // at 2-4 Hz. It always stiffens, never softens.
+    {
+        const twBodyJoint j = neckJoint();
+        const double k0 = twBodyJointStiffness( j, twBodyAxis::Flex );
+        std::printf( "  centripetal stiffening of the neck at a 25 deg sway,"
+                     " against k = %.3f N m/rad:\n", k0 );
+        double prev = 0.0;
+        for( double hz : { 0.5, 1.0, 2.0, 4.0 } ) {
+            const double amp = 25.0 * kPi / 180.0;
+            const double w   = 2.0 * kPi * hz * amp;      // peak dphi/dt
+            twBodyParentMotion p; p.angVel[kFlex] = w;
+            const double add = twBodyJointStiffnessAt( j, twBodyAxis::Flex, p ) - k0;
+            std::printf( "    %.1f Hz -> +%.3f N m/rad (%.0f%% of k)\n",
+                         hz, add, 100.0 * add / k0 );
+            check( add > 0.0, "centripetal stiffening always ADDS" );
+            if( prev > 0.0 )
+                near( add / prev, 4.0, 1e-6,
+                      "and quadruples for each doubling of the rate" );
+            prev = add;
+        }
+        check( prev > k0, "at 4 Hz it EXCEEDS the joint's own stiffness" );
+    }
+
+    // --- 6c. DAMPING DOES NOT MOVE WHEN STIFFNESS DOES --------------------
+    // Damping is a property of tissue. Parameterising it as a RATIO ties the
+    // absolute coefficient to sqrt(k), so a joint whose stiffness is modulated
+    // -- centripetally here, by co-contraction once C4b lands -- would silently
+    // modulate its own damping too, and c would VANISH exactly at the stability
+    // threshold, where an inverted joint needs it most.
+    {
+        const twBodyJoint j = neckJoint();
+        const double c0 = twBodyJointDamping( j, twBodyAxis::Flex );
+        twBodyParentMotion fast; fast.angVel[kFlex] = 8.0;
+        near( twBodyJointDamping( j, twBodyAxis::Flex ), c0, 0.0,
+              "damping is unchanged by centripetal stiffening" );
+        check( c0 > 0.0, "and is positive" );
+        // At the threshold the TOTAL stiffness is zero; the damping is not.
+        twBodyJoint edge = neckJoint( 0.30, 1.0 );
+        near( twBodyJointStiffness( edge, twBodyAxis::Flex ), 0.0, 1e-9,
+              "ks = 1 is exactly the stability threshold for an inverted joint" );
+        check( twBodyJointDamping( edge, twBodyAxis::Flex ) > 0.0,
+               "AND ITS DAMPING DOES NOT VANISH THERE" );
+        // Flipping the inverted flag changes the stiffness, never the damping.
+        twBodyJoint hang = neckJoint(); hang.invertedPendulum = false;
+        check( twBodyJointStiffness( hang, twBodyAxis::Flex )
+               != twBodyJointStiffness( j, twBodyAxis::Flex ),
+               "the inverted flag moves the stiffness" );
+        near( twBodyJointDamping( hang, twBodyAxis::Flex ), c0, 1e-12,
+              "and leaves the damping exactly where it was" );
+    }
+
     // --- 7. RANGE OF MOTION: the stop is dissipative ----------------------
     {
         twBodyJoint j = neckJoint( 0.05 );
-        j.limitRad[(int) twBodyAxis::Flex] = 15.0 * kPi / 180.0;
+        j.limitRad[kFlex] = 15.0 * kPi / 180.0;
         twBodyJointState st;
-        const double acc[3] = { 60.0, 0.0, 0.0 };
+        twBodyParentMotion p; p.angAcc[kFlex] = 60.0;
         double worst = 0.0;
         for( long n = 0; n < 20000; n++ ) {
-            twBodyJointStep( j, st, acc, nullptr, dt );
-            worst = std::max( worst, std::fabs( st.angle[(int) twBodyAxis::Flex] ) );
+            twBodyJointStep( j, st, p, nullptr, dt );
+            worst = std::max( worst, std::fabs( st.angle[kFlex] ) );
         }
         std::printf( "  range of motion: worst |angle| %.4f deg against a 15.0 limit,"
-                     " %u hits\n", worst * 180.0 / kPi, st.limitHits );
+                     " %u steps spent at the stop\n", worst * 180.0 / kPi, st.limitHits );
         check( worst <= 15.0 * kPi / 180.0 + 1e-12, "the joint never exceeds its limit" );
         check( st.limitHits > 0, "and the stop was actually reached" );
     }
 
-    // --- 8. an OVERDAMPED joint cannot overshoot --------------------------
-    // The damping ratio is the knob that decides whether a nod exists at all,
-    // so both sides of it are asserted rather than one.
+    // --- 8. an OVERDAMPED joint overshoots FAR LESS -----------------------
+    // The damping ratio is the knob that decides how big a nod is, so both
+    // sides of it are asserted rather than one. Note the claim is comparative:
+    // an overdamped joint CANNOT overshoot in free decay, but under a bipolar
+    // drive -- accelerate, then decelerate, which is exactly the torso stop --
+    // it crosses its equilibrium perfectly happily. The header used to state
+    // the absolute, and this test's own numbers contradicted it.
     {
         twBodyJoint j = neckJoint( 1.4 );
         twBodyJointState st;
         const double ramp = 0.25, amp = 25.0 * kPi / 180.0;
         double mx = -1e9;
         for( double t = 0.0; t < 1.5; t += dt ) {
-            const double acc[3] = { trunkPhiDD( t, ramp, amp ), 0.0, 0.0 };
-            twBodyJointStep( j, st, acc, nullptr, dt );
-            mx = std::max( mx, st.angle[(int) twBodyAxis::Flex] );
+            twBodyJointStep( j, st, trunkAt( t, ramp, amp ), nullptr, dt );
+            mx = std::max( mx, st.angle[kFlex] );
         }
         std::printf( "  overdamped (zeta=1.4): max forward %.6f deg\n", mx * 180.0 / kPi );
         check( mx < fwdSecond * 0.5, "an OVERDAMPED joint overshoots far less" );
     }
 
     // --- 9. INFORMATIONAL: what stiffness and damping actually imply -------
-    // NOT assertions. The 45 deg overshoot section 3 reports is a consequence
-    // of stiffnessScale = 1.0, which is GRAVITY ALONE -- a deliberate floor,
-    // not a realistic neck. Real passive joint stiffness is one of the numbers
-    // proposal 44 section 3 flags VERIFY and this environment could not source.
-    // Recorded here so whoever wires a joint to the display picks from data
-    // instead of guessing, and so the choice is visible when AC2.1 closes.
+    // NOT assertions. Two numbers per row, because with gravity acting on the
+    // absolute angle they are different questions: the joint settles at a
+    // DROOP set by the trunk's held lean, and the overshoot is measured on top
+    // of that. A soft neck droops a long way and rings a long way; a stiff one
+    // does neither. Real passive joint stiffness is one of the numbers proposal
+    // 44 section 3 flags VERIFY and this environment could not source.
     {
+        const double amp = 25.0 * kPi / 180.0;
         std::printf( "\n  PASSIVE stiffness (x the head's own gravity moment) and damping\n"
-                     "  -> natural Hz, forward overshoot for a 25 deg torso stop.\n"
-                     "  Note ks = 1.0 is the STABILITY THRESHOLD for this inverted\n"
-                     "  joint, not a soft setting: there, passive tissue exactly\n"
-                     "  cancels gravity and the neck holds nothing up.\n" );
+                     "  -> natural Hz, resting DROOP, and peak forward overshoot for a\n"
+                     "  25 deg torso stop. Note ks = 1.0 is the STABILITY THRESHOLD for\n"
+                     "  this inverted joint, not a soft setting: there, passive tissue\n"
+                     "  exactly cancels gravity and the neck holds nothing up.\n" );
         for( double ks : { 1.5, 2.0, 5.0, 10.0, 17.0 } ) {
             for( double z : { 0.2, 0.4, 0.7 } ) {
                 twBodyJoint j = neckJoint( z );
                 j.stiffnessScale = ks;
                 twBodyJointState st;
                 double mx = -1e9;
-                for( double t = 0.0; t < 1.5; t += dt ) {
-                    const double acc[3] = { trunkPhiDD( t, 0.25, 25.0 * kPi / 180.0 ), 0.0, 0.0 };
-                    twBodyJointStep( j, st, acc, nullptr, dt );
-                    mx = std::max( mx, st.angle[(int) twBodyAxis::Flex] );
+                for( double t = 0.0; t < 6.0; t += dt ) {
+                    twBodyJointStep( j, st, trunkAt( t, 0.25, amp ), nullptr, dt );
+                    mx = std::max( mx, st.angle[kFlex] );
                 }
-                std::printf( "    k x%-5.1f zeta %.1f -> %6.3f Hz  %8.2f deg\n",
+                twBodyParentMotion held; held.angle[kFlex] = amp;
+                const double eq = twBodyJointEquilibrium( j, twBodyAxis::Flex, held );
+                std::printf( "    k x%-5.1f zeta %.1f -> %6.3f Hz  droop %6.2f deg"
+                             "  peak %6.2f deg (+%.2f over droop)\n",
                              ks, z, twBodyJointNaturalHz( j, twBodyAxis::Flex ),
-                             mx * 180.0 / kPi );
+                             eq * 180.0 / kPi, mx * 180.0 / kPi,
+                             ( mx - eq ) * 180.0 / kPi );
             }
         }
         std::printf( "\n" );

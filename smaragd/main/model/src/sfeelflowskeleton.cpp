@@ -26,7 +26,22 @@ inline SFeelFlowVec3 rotLateral( SFeelFlowVec3 v, double deg )
     return { v.x * c + v.y * s, -v.x * s + v.y * c, v.z };
 }
 
-/** Axial rotation: about y (longitudinal). + turns the body's left toward us. */
+/**
+ * Axial rotation: about y (longitudinal).
+ *
+ * + sends +x AWAY from the viewer (x -> z = -x*sin), i.e. it turns the
+ * VIEWER-RIGHT side of the body away and brings the viewer-left side forward.
+ * This header said "+ turns the body's left toward us", which contradicts the
+ * arithmetic under this file's own conventions (+x = the viewer's right, per
+ * frontalDeg; +z = toward the viewer, per rotFlex's "+ = forward").
+ *
+ * CONSEQUENCE, because it surprises people and is pinned in the qxa case: the
+ * shoulder-bar TRANSVERSE READOUT comes out with the OPPOSITE SIGN to the
+ * commanded twist. shoulderTwistDeg is atan2(zR - zL, xR - xL) over a bar
+ * lying along +x, so a +20 degree twist reads -20. That inversion is a
+ * property of measuring a heading rather than echoing an input, which is the
+ * whole point of recovering the angles geometrically.
+ */
 inline SFeelFlowVec3 rotAxial( SFeelFlowVec3 v, double deg )
 {
     const double c = std::cos( rad( deg ) ), s = std::sin( rad( deg ) );
@@ -181,7 +196,13 @@ std::vector<SFeelFlowWire> sFeelFlowProject( const SFeelFlowSkeleton &sk,
         const double yr =  v.y * ce - zr * se;
         return QPointF( cx + xr, baseY - yr );
     };
-    auto depthOf = [&]( SFeelFlowVec3 v ) { return -v.x * sa + v.z * ca; };
+    // Camera-space depth, LARGER = NEARER: the yaw-rotated z, then the
+    // elevation's own contribution. The elevation term was missing, so with the
+    // camera raised the painter order was that of a camera at eye level -- only
+    // ever a question of which line crosses which, but wrong for free.
+    auto depthOf = [&]( SFeelFlowVec3 v ) {
+        return v.y * se + ( -v.x * sa + v.z * ca ) * ce;
+    };
 
     auto seg = [&]( SFeelFlowWire::Part p, SFeelFlowVec3 a, SFeelFlowVec3 b ) {
         SFeelFlowWire w;

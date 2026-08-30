@@ -52,11 +52,38 @@ struct twBodySegment {
     double mass          = 0.0;   // kg
     double length        = 0.0;   // m
     double comFromProx   = 0.0;   // m, along the segment from its proximal end
-    double radiusGyrCom  = 0.0;   // m, about the segment's own CoM
+    double radiusGyrCom  = 0.0;   // m, about a TRANSVERSE axis through the CoM
     /** About the PROXIMAL joint, by the parallel-axis theorem:
      *  I = m*(r_gyr^2 + d^2). This is the quantity a hinged-segment torque
-     *  balance wants, which is why it is stored rather than re-derived. */
+     *  balance wants, which is why it is stored rather than re-derived.
+     *  TRANSVERSE only -- see radiusGyrLong for why that qualifier matters. */
     double inertiaProx   = 0.0;   // kg m^2
+
+    /**
+     * m, about the segment's OWN LONG AXIS -- the axis it twists about.
+     *
+     * A SEPARATE NUMBER, and treating it as the same one is a real error the
+     * first build of tw_body made: `inertiaProx` is a transverse inertia and
+     * carries a parallel-axis `d^2` term that DOES NOT EXIST for twist, because
+     * the segment's CoM sits ON its long axis. So the inertia a twisting joint
+     * feels is `m * radiusGyrLong^2` and nothing more -- for the head that is
+     * about a twentieth of `inertiaProx`, which is why twisting a segment is
+     * fast where flexing it is slow. Same reasoning as the flex/lateral split:
+     * one number per axis, never one number reused.
+     *
+     * VERIFY, and by a DIFFERENT route from the rows above: the standard tables
+     * do carry three radii of gyration per segment, but this build has no
+     * access to them (see the header comment). Rather than quote a remembered
+     * third column, this is computed from a STATED GEOMETRIC MODEL -- a uniform
+     * solid cylinder of radius R, for which r_long = R/sqrt(2) -- over an
+     * assumed slenderness R/length per segment. That is an assumption written
+     * down, not a citation, and it is flagged as such. Replacing it with the
+     * sourced longitudinal column is part of AC2.1.
+     */
+    double radiusGyrLong = 0.0;   // m
+
+    /** m*radiusGyrLong^2, the inertia about the segment's own long axis. */
+    double inertiaLong   = 0.0;   // kg m^2
 };
 
 /** Which segment. Ordered proximal-to-distal within a limb. */
@@ -101,10 +128,24 @@ double twBodyPendulumHz( const twBodySegment &seg );
  *     I*theta*w^2 == m*g*d*sin(theta)   =>   f = sqrt( m*g*d*sin(t)/(I*t) )/2pi
  *
  * BELOW it a part is CARRIED -- muscles working against its own weight. ABOVE
- * it the motion is inertial and the weight is beside the point. It is the most
+ * it the OSCILLATORY torque budget is dominated by inertia. It is the most
  * actionable number this module produces, because it says which metrical level
  * a body part may physically occupy, and it needs nothing but the measures and
  * an amplitude.
+ *
+ * **READ "ABOVE IT THE WEIGHT IS BESIDE THE POINT" AS FALSE FOR AN INVERTED
+ * SEGMENT.** For a HANGING part -- an arm off a shoulder -- gravity really is
+ * one term in an oscillating budget and above the crossover it stops mattering.
+ * For a part whose mass sits ABOVE its joint -- the head, the trunk -- gravity
+ * is a BIAS, not an oscillation: it must be met by tissue and muscle at every
+ * frequency including DC, and no rate makes it irrelevant. What the comparison
+ * means there is the narrower claim that inertia dominates the OSCILLATORY
+ * part of the torque, with a standing offset underneath it that this number
+ * says nothing about. See twBodyJoint::invertedPendulum.
+ *
+ * It is also meaningless about a segment's LONG AXIS: twisting a segment
+ * neither raises nor lowers its CoM, so there is no gravity moment to cross
+ * over. Ask it about flexion and lateral flexion only.
  *
  * It DEPENDS ON AMPLITUDE, through sin(theta)/theta -- a fact worth stating
  * because the plan's first draft quoted crossover values with no amplitude

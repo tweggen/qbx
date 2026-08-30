@@ -42,8 +42,16 @@
  *    counterswing gate (its AC4.2) is NOT met by this module. That is the
  *    remaining half of C4 and it is deliberately not faked here.
  *  - **Per-axis decoupled.** Each free axis integrates its own second-order
- *    equation. There are no gyroscopic or centrifugal cross-terms, so a joint
- *    turning fast about two axes at once is approximated, not solved.
+ *    equation, with its OWN inertia, stiffness and drive (see twBodyAxis) --
+ *    but there are no gyroscopic cross-terms BETWEEN axes, so a joint turning
+ *    fast about two axes at once is approximated, not solved.
+ *  - **Linearised in the joint angle.** Gravity enters as `m*g*d*theta`, not
+ *    `m*g*d*sin(theta)`, which is what lets the step below be a closed form
+ *    rather than a numerical integration. The linear model OVERSTATES a large
+ *    droop: at the stiffnesses this module defaults to, a 25 degree trunk lean
+ *    settles the head 25 degrees relative where the nonlinear equation gives
+ *    about 20. Exactness of the INTEGRATOR is not exactness of the MODEL and
+ *    the tests say which is which.
  *  - **Torque-actuator muscles**, per proposal 44 section 6's standing limit.
  *  - **Every stiffness rests on tw_body's UNSOURCED constants** -- see
  *    twbodymeasures.cc. AC2.1 is still open, so a natural frequency here is
@@ -80,6 +88,15 @@ struct twBodyJoint {
      * Joint stiffness, in units of this segment's own gravity moment m*g*d.
      * Not the total: gravity adds to it or fights it depending on which side
      * of the joint the mass sits (see invertedPendulum).
+     *
+     * ABOUT THE LONG AXIS THIS SCALE IS BORROWED, and that is a modelling
+     * choice rather than physics. Twisting a segment neither raises nor lowers
+     * its CoM, so gravity supplies no moment about that axis and therefore no
+     * natural unit to express a stiffness in. Using m*g*d there anyway keeps
+     * axial stiffness the same ORDER as sagittal without inventing a second
+     * unsourced constant; what it does NOT do is add or subtract a gravity
+     * term, so an axial axis has stiffness `stiffnessScale * m*g*d` flat, no
+     * inverted-pendulum threshold, and no crossover.
      *
      * ---------------------------------------------------------------------
      * **THIS IS A CONSTANT ONLY BECAUSE C4's FIRST BUILD MAKES IT ONE. It is
@@ -130,8 +147,27 @@ struct twBodyJoint {
      */
     bool invertedPendulum = false;
 
-    /** Damping ratio. Below 1 the joint OVERSHOOTS, which is the whole point;
-     * at or above 1 it cannot, and the tests assert both sides. */
+    /**
+     * Damping ratio, referred to the joint's REFERENCE stiffness (see
+     * twBodyJointDamping) rather than to whatever stiffness the joint has at
+     * this instant. Below 1 the joint rings; above it, free decay is monotone.
+     *
+     * **"Overdamped cannot overshoot" is only true of FREE DECAY, and this
+     * header used to state it as an absolute.** Under a bipolar drive --
+     * accelerate, then decelerate, which is exactly the requester's torso stop
+     * -- an overdamped joint crosses its equilibrium perfectly happily;
+     * body_joint_test's own zeta = 1.4 run does. What damping above 1 buys is
+     * *far less* overshoot, and that is what the test asserts.
+     *
+     * THE RATIO IS A CONVENIENCE, NOT THE STORED QUANTITY. What the equation
+     * uses is an absolute damping COEFFICIENT c in N*m*s/rad, computed once
+     * from this ratio and the reference stiffness. That indirection is load
+     * bearing: a ratio ties c to sqrt(k), so a joint whose stiffness is
+     * modulated -- by the centripetal term below, or per hop once C4b makes
+     * co-contraction a control variable -- would silently modulate its own
+     * damping too, and c would VANISH as an inverted joint approached its
+     * stability threshold. Muscle and tissue viscosity does neither.
+     */
     double dampingRatio = 0.30;
 
     /** Hard range of motion per axis, radians. 0 = unlimited. A joint at its
@@ -145,45 +181,135 @@ struct twBodyJoint {
     double parentLever = 0.0;
 };
 
-/** The joint's TOTAL stiffness about any axis, N*m/rad: passive tissue, plus
- * or minus this segment's own gravity moment per invertedPendulum. Zero or
- * negative means the joint cannot hold itself up. */
-double twBodyJointStiffness( const twBodyJoint &j );
+/**
+ * The joint's TOTAL stiffness about `a`, N*m/rad -- passive tissue, plus or
+ * minus this segment's own gravity moment per invertedPendulum. Zero or
+ * negative means the joint cannot hold itself up about that axis.
+ *
+ * PER AXIS, and the axis argument is not decoration. About the LONG axis there
+ * is no gravity moment at all (see stiffnessScale), so the +/- m*g*d term is
+ * absent, an axial axis has no stability threshold, and a joint that is
+ * unstable in flexion may be perfectly stable in twist.
+ *
+ * This is the NOMINAL stiffness. The stiffness the step actually integrates
+ * also carries the centripetal term `m*d*L*phiVel^2`, which depends on how
+ * fast the parent is turning and so cannot live in a function of the joint
+ * alone -- twBodyJointStiffnessAt() is that one.
+ */
+double twBodyJointStiffness( const twBodyJoint &j, twBodyAxis a );
+
+/** The inertia the joint feels about `a`, kg*m^2: the segment's transverse
+ * inertia about the joint for flexion and lateral flexion, its LONGITUDINAL
+ * inertia for twist. Those differ by more than an order of magnitude. */
+double twBodyJointInertia( const twBodyJoint &j, twBodyAxis a );
+
+/** The absolute damping coefficient about `a`, N*m*s/rad. Computed from
+ * dampingRatio at the joint's REFERENCE stiffness -- passive tissue plus the
+ * magnitude of the gravity moment, which is positive whichever side the mass
+ * sits -- so it is independent of the inverted flag, does not vanish at the
+ * stability threshold, and does not move when the stiffness is modulated. */
+double twBodyJointDamping( const twBodyJoint &j, twBodyAxis a );
+
+/**
+ * THE PARENT'S MOTION, which is the whole input to a joint.
+ *
+ * All three fields are needed and each buys a different term. The first build
+ * of this module passed only the acceleration, and the omission was not a
+ * refinement: with no parent ANGLE, gravity can only be applied to the joint's
+ * RELATIVE angle, and a freely hanging arm on a leaning trunk then settles
+ * PARALLEL TO THE LEANING TRUNK instead of hanging plumb. That is the
+ * one-sentence falsifier for the truncated equation, and it is section 3a of
+ * body_joint_test.
+ */
+struct twBodyParentMotion {
+    /** The parent segment's ABSOLUTE angle from the vertical, rad, per axis --
+     * NOT its angle relative to ITS parent. Gravity acts on where a segment
+     * actually points, and the child's absolute angle is parent + relative. */
+    double angle[(int) twBodyAxis::Count] = { 0.0, 0.0, 0.0 };
+    /** rad/s. Buys the centripetal stiffening `m*d*L*phiVel^2`, which is 2.2
+     * N*m/rad at 1 Hz and 35.7 at 4 Hz for a head on a 25-degree trunk sway,
+     * against a total stiffness of about 5.8 -- negligible at a slow sway and
+     * DOMINANT at the rates this feature is about. It always stiffens, so the
+     * effective resonance under a fast drive sits above twBodyJointNaturalHz. */
+    double angVel[(int) twBodyAxis::Count] = { 0.0, 0.0, 0.0 };
+    /** rad/s^2. The requester's term: the reaction to the parent's own angular
+     * deceleration, plus its joint accelerating this one linearly through the
+     * lever. This is what a first-order lag has no way to feel. */
+    double angAcc[(int) twBodyAxis::Count] = { 0.0, 0.0, 0.0 };
+};
+
+/** The stiffness the step integrates about `a`, including the parent's
+ * centripetal contribution. Equals twBodyJointStiffness() at rest. */
+double twBodyJointStiffnessAt( const twBodyJoint &j, twBodyAxis a,
+                               const twBodyParentMotion &p );
 
 struct twBodyJointState {
     double angle[(int) twBodyAxis::Count] = { 0.0, 0.0, 0.0 };   // rad, vs parent
     double vel  [(int) twBodyAxis::Count] = { 0.0, 0.0, 0.0 };   // rad/s
-    uint32_t limitHits = 0;   // how often a hard stop was reached
+    /** Steps spent pressed against a hard stop -- DWELL, not events. A joint
+     * held at its limit for a second at dt = 0.2 ms scores 5000. Useful as
+     * "did it ever reach the stop" and as a rough occupancy; never as a count
+     * of arrivals. */
+    uint32_t limitHits = 0;
 };
 
 /** True if this joint may turn about `a`. */
 bool twBodyAxisIsFree( const twBodyJoint &j, twBodyAxis a );
 
 /** The joint's undamped natural frequency about `a`, Hz. 0 for a constrained
- * axis or a degenerate segment. */
+ * axis, a degenerate segment, or a non-positive stiffness. */
 double twBodyJointNaturalHz( const twBodyJoint &j, twBodyAxis a );
 
 /**
- * One step of `dt` seconds.
+ * The joint's EQUILIBRIUM angle about `a` under a given parent motion, rad --
+ * where it settles once the ringing has died, which for a driven joint is NOT
+ * zero. A hanging arm on a trunk leaning phi settles at -phi (plumb); an
+ * inverted head on a trunk leaning phi DROOPS to +phi*mgd/k.
  *
- * `parentAngAcc` is the PARENT segment's angular acceleration about each axis,
- * rad/s^2 -- the only driving term, and the one the shipped first-order lag
- * had no way to feel. `muscleTorque` is an optional active torque per axis,
- * N*m, for a caller that has one; pass nullptr for a purely passive joint.
+ * Exposed because a gate that measures "has it come to rest" must measure the
+ * distance from THIS, not from zero. Measuring from zero is how the first
+ * build's arrest test came to assert something the corrected equation cannot
+ * satisfy.
+ */
+double twBodyJointEquilibrium( const twBodyJoint &j, twBodyAxis a,
+                               const twBodyParentMotion &p,
+                               const double *muscleTorque = nullptr );
+
+/**
+ * One step of `dt` seconds. The equation, per free axis:
  *
- * Integration is the EXACT solution of the linear second-order system for a
- * forcing held constant across the step, not a forward-Euler approximation.
+ *     I th'' + c th' + [ k_pass -/+ m g d + m d L phiVel^2 ] th
+ *                       = -( I + m d L ) phiAcc  +/-  m g d phi  + tau_muscle
+ *
+ * with the upper sign for an inverted segment. Reading the four terms right to
+ * left: the parent's acceleration drives the joint through its own inertia and
+ * through the lever L; gravity pulls on the child's ABSOLUTE angle, which
+ * splits into a stiffness term in `th` and a FORCING term in `phi`; the
+ * parent's rotation stiffens the joint centripetally.
+ *
+ * `muscleTorque` is an optional active torque per axis, N*m; nullptr for a
+ * purely passive joint.
+ *
+ * Integration is the EXACT solution of that linear system for coefficients
+ * held constant across the step, not a forward-Euler approximation, in all
+ * four regimes -- underdamped, critical, overdamped, and NEGATIVE STIFFNESS.
+ * That last one is the analytic continuation of the overdamped branch and it
+ * is the reason an unstable joint actually falls over here: the first build
+ * folded k < 0 into "no stiffness", which held a joint that should have
+ * diverged as cosh(5.04 t) perfectly still.
+ *
  * Proposal 40 section 11.5's forward-Euler lesson is a standing house rule and
  * twgroovependulum.cc records what it cost there: an integrator whose own
  * per-step gain exceeded 1 injected unbounded growth independent of any real
  * drive. Exactness here costs one exp() and two trig calls per axis.
  */
 void twBodyJointStep( const twBodyJoint &j, twBodyJointState &st,
-                      const double parentAngAcc[(int) twBodyAxis::Count],
+                      const twBodyParentMotion &parent,
                       const double *muscleTorque, double dt );
 
-/** Mechanical energy about `a`: 0.5*I*w^2 + 0.5*k*theta^2, joules. The
- * conservation gate reads this. */
+/** Mechanical energy about `a`: 0.5*I*w^2 + 0.5*k*theta^2, joules, over the
+ * NOMINAL stiffness and the axis's own inertia. The conservation gate reads
+ * this. Meaningful only where the stiffness is positive. */
 double twBodyJointEnergy( const twBodyJoint &j, const twBodyJointState &st,
                           twBodyAxis a );
 

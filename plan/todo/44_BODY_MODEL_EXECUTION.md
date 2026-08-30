@@ -311,9 +311,29 @@ for C4 and are stated as such.
 > analysis, where omega and z are both in hand, keeps the pose O(1) and pure --
 > exporting omega would have forced the consumer to integrate with state.
 >
-> The lock term is SELF-LIMITING, which is what makes a fixed gain safe: an
-> unlocked unit's `arg(z)` wobbles about a fixed point, so `sin(arg z - phi)`
-> averages to ~0 over a cycle of phi and the correction cancels itself.
+> The lock term is SELF-LIMITING, which is what makes a fixed gain safe: `|K
+> sin(...)| <= K`, so an unlocked unit's metrical rate can never be dragged more
+> than **K = 2.0% of its own omega** off, under any drive whatever.
+>
+> **THAT BOUND IS THE CLAIM. The first version of this line said the pull term
+> "averages to ~0 over a cycle of phi and the correction cancels itself", and
+> that is FALSE near the lock edge** -- found by an adversarial review of C4a's
+> maths, 2026-08-30. Analytically the mean pull for a detuning `Delta` outside
+> the lock range is `Delta - sqrt(Delta^2 - K^2)`, which is a maximum, not a
+> zero, exactly where `Delta` is a little above `K`: simulated, the mean of
+> `sin(eps)` is **0.49 at 2.5% detuning** and 0.21 at 5%, falling to 0.05 only
+> by 20%. So a unit detuned by a few lock ranges (roughly 2-6% of its omega)
+> phase-SLIPS, with long near-locked dwells and a beat as slow as
+> `sqrt(Delta^2 - K^2)` -- a sub-0.1 Hz breathing of `phaseMetric` rather than a
+> cancellation. `omega` itself adapts within `[omega0/sqrt(2), omega0*sqrt(2)]`,
+> so a unit can be CARRIED INTO that window by its own adaptation.
+>
+> The design is sound on the bounded reading and the measured lock behaviour
+> below is unaffected -- what is retired is the zero-mean argument for why. The
+> other two properties the review confirmed independently: the lock range is
+> `|Delta| <= K` (2.0% of omega) and the linearised pull-in time constant is
+> `1/K` = exactly the 8 periods the constant names, with `K` proportional to
+> `omega` making both period-invariant as intended.
 >
 > **AC-INV EXCEPTION, exercised exactly as scoped:** measured over all 12
 > fixtures, `groove.res` and `groove.ev` are **byte-identical** (0 differing
@@ -599,25 +619,34 @@ so do not spend a decision on an interim mapping); deep-view aesthetics.
 
 ---
 
-## C4a — The plant, first half: a joint with inertia — **DONE 2026-08-28**
+## C4a — The plant, first half: a joint with inertia — **DONE 2026-08-28,
+## CORRECTED 2026-08-30 after an adversarial review of the maths**
 
+> **READ THE CORRECTION SECTION BELOW BEFORE THE ORIGINAL NOTES.** The first
+> build's equation of motion was missing a term that is O(100 %) of its own
+> headline number, and three of the numbers quoted in this section were
+> properties of the truncated equation rather than of a neck. They are kept,
+> struck through in prose, because knowing which number moved and why is the
+> only way the next person can tell a regression from the fix.
+>
 > **Executed.** `tw/body/twbodyjoint.h` — a joint carrying the segment below
-> it, driven by its PARENT's angular acceleration, with per-axis DOF masks
+> it, driven by its PARENT's motion, with per-axis DOF masks
 > (`twBodySpherical()` for a neck, `twBodyHinge()` for a knee), hard range-of-
 > motion limits with dissipative stops, and an EXACT closed-form step for the
-> linear second-order system in all three damping regimes.
+> linear second-order system in every damping regime.
 >
 > **The requester's own test is the central AC**: torso flexes 25° then STOPS →
-> the head nods **forward 44.985°** and rings (3 zero crossings). Its control is
-> the same input through the shipped FIRST-ORDER lag: **max forward +0.000000°**
-> across τ ∈ {0.03, 0.126, 0.5}. A lag is a filter; what the requester describes
-> is a mass. That pair is the whole argument and neither half can pass alone.
+> the head nods **forward 57.800°** (was 44.985° before the correction) and
+> rings — 13 crossings of its own equilibrium. Its control is the same input
+> through the shipped FIRST-ORDER lag: **max forward +0.000000°** across
+> τ ∈ {0.03, 0.126, 0.5}. A lag is a filter; what the requester describes is a
+> mass. That pair is the whole argument and neither half can pass alone.
 >
 > Also gated: energy conserved to **1.281e-11** over 60 s AND pointwise flat
 > (band [0.115455, 0.115455] J — the step is exact, not merely stable); arrest
-> to 0.0004 % of peak in 6 natural periods; a hinge does not move on its
-> constrained axes under a 40 rad/s² drive on all three; limits never exceeded;
-> an overdamped joint overshoots far less.
+> to **0.0000 %** of peak DEVIATION in 6 natural periods; a hinge does not move
+> on its constrained axes under a 40 rad/s² drive on all three; limits never
+> exceeded; an overdamped joint overshoots far less (23.157° against 57.800°).
 >
 > **A sign error found and fixed via the requester's pushback on 45°:** stiffness
 > used `m·g·d` as RESTORING, but the head's mass sits ABOVE the atlanto-occipital
@@ -630,8 +659,122 @@ so do not spend a decision on an interim mapping); deep-view aesthetics.
 >
 > **NOT met, deliberately:** proposal 44's counterswing gate (AC4.2). This build
 > has parent→child driving and no child→parent reaction, so an arm cannot yet
-> counter-rotate the trunk. Named, not faked. Also per-axis decoupled — no
-> gyroscopic cross-terms. And not wired to the pose: C4a is the mechanism.
+> counter-rotate the trunk. Named, not faked. Also per-axis decoupled — each
+> axis has its own inertia, stiffness and drive, but there are no gyroscopic
+> cross-terms BETWEEN axes. And not wired to the pose: C4a is the mechanism.
+
+### THE CORRECTION (2026-08-30) — what an adversarial review found
+
+A Fable instance was asked to review the mathematics of `tw/body` and
+`sfeelflowskeleton` adversarially, deriving everything itself rather than
+taking the comments' word for anything. Verdict: **HAS ERRORS**. It confirmed
+`exactStep` to **≤ 2e-15** against a 200 000-step RK4 in all three damping
+regimes, confirmed `compound`, confirmed the `driveCoef` coefficient and its
+sign, confirmed the inverted-pendulum sign and the `ks = 1` threshold, and
+reproduced independently every pinned number in `body_measures_test` and
+`feel_flow_puppet_chain` (0.7346, 1.0332, 1.2640, 0.8002, 21.8802, 25.0000,
+−8.7447, 36.6915). What it found wrong was the EQUATION, not the arithmetic.
+
+**1. Gravity was applied to the RELATIVE angle. It acts on the ABSOLUTE one.**
+The correct planar EOM carries a second forcing term the first build had no
+way to express, because `twBodyJointStep` was passed only the parent's
+acceleration:
+
+```
+I th'' + c th' + [ k_pass -/+ mgd + m d L phi'^2 ] th
+                  = -( I + m d L ) phi''  +/-  m g d phi
+                                               ^^^^^^^^^ missing
+```
+
+The one-sentence falsifier, and it needs no constants: **a freely hanging arm
+on a leaning trunk settled PARALLEL TO THE LEANING TRUNK instead of hanging
+plumb.** It is now section 3a of `body_joint_test` — measured −25.0000°
+relative, 0.0000° absolute, against a 25° trunk lean — and it fails on the
+pre-correction equation by exactly the lean.
+
+The consequence for C4a's own headline: an inverted head on a held lean does
+not ring down to trunk-aligned, it **DROOPS**. Peak 44.985° → **57.800°**, and
+the resting relative angle 0 → **+25.000°** (= φ/(ks−1) at ks = 2). Section 3
+now asserts the ring about that equilibrium and asserts the equilibrium is
+positive; the arrest gate (section 5) measures deviation FROM it, because
+measuring from zero is only the same question under the truncated equation.
+
+The reviewer's own nonlinear integration gives **62.3° / +20.4°**; this module
+is LINEAR in the joint angle (which is what allows a closed-form step at all)
+and gives 57.800° / +25.000°. The linear model OVERSTATES a large droop, and
+the header now says so — exactness of the INTEGRATOR is not exactness of the
+MODEL.
+
+**2. Centripetal stiffening `m d L phi'^2 th` was absent, and it dominates at
+the rates this feature is about.** Measured against the neck's k = 5.773
+N·m/rad, at a 25° sway: **+10 % at 0.5 Hz, +39 % at 1 Hz, +155 % at 2 Hz,
++618 % at 4 Hz**, quadrupling per doubling exactly. It always stiffens, so the
+effective resonance under a fast drive sits ABOVE `twBodyJointNaturalHz` — a
+fact C4b has to build on rather than discover.
+
+**3. `exactStep`'s negative-stiffness branch hid the instability it existed to
+model.** `k < 0 → w = 0` discarded the stiffness AND the damping, so an
+inverted head below its own threshold, displaced 0.2 rad and left completely
+alone, **sat at exactly 0.200000 forever** while the true system diverges as
+cosh(λt) with λ = 5.04 /s. The module reported the instability and did not
+exhibit it. The branch is now the analytic continuation of the overdamped one
+(`wd = sqrt(σ² − k/I)`, cosh/sinh, one root positive) and section 2a measures
+0.2 rad → **2.6210 rad in 1 s**.
+
+**4. Damping as a RATIO tied c to √k.** So c would vanish exactly at the
+stability threshold, where an inverted joint needs it most, and — the reason
+this is structural rather than cosmetic — modulating stiffness would silently
+modulate damping, which is precisely what C4b makes a per-hop control. The
+stored quantity is now an absolute coefficient computed once from the ratio at
+a REFERENCE stiffness (passive tissue plus the MAGNITUDE of the gravity
+moment, positive whichever side the mass sits). Section 6c asserts c is
+unchanged by centripetal stiffening, is non-zero at ks = 1, and does not move
+when the inverted flag flips.
+
+**5. The axial axis was given sagittal-plane physics wholesale** — an error
+the reviewer found unasked. Gravity exerts no moment about a segment's own long
+axis (twisting the head neither raises nor lowers its CoM), the parent's lever
+is zero there (this joint sits ON the parent's long axis), and `inertiaProx` is
+a TRANSVERSE inertia carrying a parallel-axis `d²` term that does not exist for
+twist. Every quantity is now per-axis: `twBodyJointInertia`,
+`twBodyJointStiffness` and `twBodyJointDamping` all take a `twBodyAxis`.
+Measured on the neck: **I 0.09107 vs 0.01641 kg·m²**, k ratio **exactly 2.0**
+(= ks/(ks−1), i.e. twist carries no gravity term), **4.222 Hz vs 1.267 Hz** —
+a head twists 3.3× faster than it nods, which it does. A joint unstable in
+flexion is still perfectly stable in twist, and section 6a asserts that pair.
+
+`twBodySegment` gained `radiusGyrLong` / `inertiaLong` to support this. It is
+**VERIFY by a weaker route than the four columns beside it**: the standard
+tables carry a real longitudinal gyration column and this environment cannot
+reach it, so the value comes from a STATED GEOMETRIC MODEL — a uniform solid
+cylinder, r_long = R/√2, over an assumed slenderness per segment. An assumption
+written down, not a citation. Everything `body_measures_test` asserts about it
+is a relation or an identity (I_long = m·r², strictly below I_prox, a colinear
+compound is a PLAIN SUM, M·H² scaling, a slender shank's ratio 37.5 exceeds a
+stubby head's 5.6), so no gate rests on the number itself.
+
+**Watched failing, six sabotages, one per fix** — each reverting exactly one
+correction and each biting only its own assertions: dropping the `±mgd·φ`
+forcing (4 failures, the plumb arm among them), restoring `k < 0 → w = 0`
+(2), reusing the transverse inertia for twist (1), giving the long axis a
+gravity moment (2), dropping the centripetal term (5), and tying damping back
+to √k (2).
+
+**Two doc-level defects the review also found, both fixed:**
+`twbodyjoint.h` said an overdamped joint "cannot overshoot" as an absolute,
+which the module's own ζ = 1.4 run contradicts (**23.157° forward** — true of
+free decay, false under a bipolar drive); and `limitHits` counts DWELL, not
+arrivals (19 770 steps at the stop in section 7). Also
+`sfeelflowskeleton.cpp`'s `rotAxial` comment stated a sign the arithmetic
+contradicts, and `depthOf` dropped the elevation term from the painter order.
+
+**Still not fixed, and named:** the model stays LINEAR in the joint angle (a
+hanging joint softens ~1.2 % at 25°, an inverted one with linear tissue hardens
+~4.6 %) and there is still no child→parent reaction. The reviewer's caveat that
+the crossover's "above it the weight is beside the point" narrative is false
+for an INVERTED joint — gravity there is a bias that must be met at DC — is
+recorded in `twbodymeasures.h` rather than fixed, because the formula is right
+and only the prose was wrong.
 
 ## C4 — The plant (44 B1): gravity, coupling, arrest
 
@@ -743,10 +886,38 @@ settled `twBodyJointNaturalHz` is within a stated band of the driving rate.
 **Watched failing:** a constant stiffness cannot converge on anything, so the
 test must be shown to fail against C4a's model.
 
+> **THE BAND IS ONE-SIDED, AND THREE CORRECTIONS TO THE PROSE ABOVE (adversarial
+> review, 2026-08-30).** The claim was checked and it HOLDS for the stated
+> effort measure — for `I th'' + c th' + k th = tau` at amplitude A and rate ω,
+> the peak torque `A·√((k−Iω²)² + (cω)²)` really is minimised at `k = Iω²`, with
+> floor `cωA`. Three things the claim as written does not carry:
+>
+> 1. **Co-contraction has a cost of its own, and it biases the optimum BELOW
+>    resonance.** With effort = `½⟨τ²⟩ + β(k − k_pass)²`, the optimum moves
+>    `k/k_res` = 0.999 → 0.986 → **0.883** as β grows. And a joint whose PASSIVE
+>    stiffness already exceeds `Iω²` cannot tune down at all — co-contraction
+>    only adds — so it stays detuned high. AC4b.2 must therefore expect a
+>    one-sided, below-drive band, not a symmetric one.
+> 2. **Co-contraction also raises damping** (muscle viscosity scales with
+>    activation), which raises the resonant torque floor `cωA` itself and
+>    flattens the optimum further. Ignored by the claim.
+> 3. **The centripetal term (see C4a's correction) means the effective
+>    resonance under a large fast drive is NOT `twBodyJointNaturalHz`.** The
+>    tuning target for an inverted joint is `k_pass = Iω² + mgd` plus that
+>    contribution, and at 2–4 Hz the contribution is 155–618 % of k.
+
 **AC4b.3** The effort criterion is explicit and its units stated — an integral
 of squared muscle torque over a window, minimised subject to the motion
 remaining bounded. Whatever is chosen, it is ONE function and both the
 simulation and the assertion call it.
+
+> **AC4b.3 MUST BE SETTLED BEFORE AC4b.2 MEANS ANYTHING, and the review is why.**
+> The resonance conclusion is MEASURE-DEPENDENT, not merely measure-flavoured:
+> squared torque supports it and so does non-recoverable work (`|τθ′|` with the
+> negatives unrecovered), but for **net mechanical work with perfect elastic
+> recovery the mean power is `½cω²A²` independent of k — there is no resonance
+> incentive at all.** Picking the measure is picking whether the claim is even
+> testable, so it is a prerequisite rather than a parallel task.
 
 **AC4b.4** AC-INV holds; if this reaches the pose, `feel_flow_puppet.qxa` is
 re-pinned with old and new values and the reason, as C1/C1a did.
