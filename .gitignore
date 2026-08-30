@@ -65,3 +65,8 @@ smaragd/third_party/asiosdk/
 # ARE tracked here and are fixtures the qxa cases depend on.
 /testspur.wav
 /testspur.ogg
+
+# The proposal 44 verification probe, built at the repo root by
+# smaragd/tw303a/sidecar/tools/build_body_probe.sh. A BINARY, and it was
+# committed once by an over-broad `git add -A` before this line existed.
+/body_probe
