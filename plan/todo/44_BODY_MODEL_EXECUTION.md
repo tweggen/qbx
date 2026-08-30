@@ -488,7 +488,53 @@ a torque-actuator idealization is adequate (44 §6 names it as a standing limit)
 
 ---
 
-## C3 — The DOF set: the three anatomical axes, and a neck
+## C3 — The DOF set: the three anatomical axes, and a neck — **MODEL + PROJECTION DONE 2026-08-28**
+
+> **DECIDE 2 settled by the requester: neither of the plan's two options.** The
+> plan offered a 3/4 OBLIQUE PROJECTION of a 2D figure or TWO ORTHOGONAL VIEWS.
+> The requester asked instead for the model to be **technically 3D** with a
+> **wireframe projection** — which is better than either, because an oblique
+> projection of a 2D figure still has no third axis to project.
+>
+> **Done:** every joint is a point in body space; the three anatomical
+> rotations are named by what they do (`rotFlex` about x = flexion/extension,
+> `rotLateral` about z = lateral flexion, `rotAxial` about y = axial rotation)
+> and compose through one `trunkFrame`, so a child inherits its parent's
+> orientation as a transform rather than by copying an angle.
+> `sFeelFlowProject` is a separate orthographic camera producing wireframe
+> polylines — orthographic on purpose: a verification device should not add
+> perspective foreshortening to the thing being verified. The head is a real
+> wireframe sphere (three great circles, generated in 3D and projected), so
+> head facing is readable; the ground is a plate so the vertical bounce has
+> something to read against; painter's-algorithm ordering by depth.
+>
+> **THE ARMS MOVED PLANE, and that is a correctness fix the verification note
+> called for:** an arm swing is SAGITTAL and was drawn as lateral abduction, a
+> jumping-jack. `armL`/`armR` now stay at the trunk's inherited lean and the
+> swing appears in `armSwingL`/`R`.
+>
+> **Still NOT driven:** `trunkFlex` and `trunkTwist` exist, default 0, and are
+> wired through the model, the projection and the verb — but no pose component
+> commands them. C3's remaining half is finding a drive, not building an axis.
+> A reader must not mistake "the axis exists" for "the body bends forward".
+>
+> **Measured.** Three axes independently observable: `sway=1` → trunk 20 / flex
+> 0 / twist 0; `flex=1` → 0 / 25 / 0; `twist=1` → 0 / 0 / −20. And they COMPOSE
+> as rotations, not as numbers: `sway=1 flex=1` gives **21.8802 / 25.0000 /
+> −8.7447** — a cross-term neither command asked for, which is the signature of
+> real composition. An arm commanded 35° under a 20° lean reads **36.6915°** in
+> world space (`atan2(sin35, cos35·cos20)`), where a componentwise fake would
+> read exactly 35. C0's inheritance identity survives the rewrite unchanged.
+>
+> **Watched failing:** replacing the composed `trunkFrame` with two independent
+> flat angles fails five assertions. One bug found and fixed: `shoulderBarDeg`
+> sign-flipped, because body space is y-UP while the 2D original measured it in
+> screen space, y-down.
+>
+> Suite 320 passed, 274 s at `-j4`. **NOT gated:** what the figure looks like,
+> the camera angle, and whether a wireframe is a better verification device than
+> a filled one — that is the requester's judgement and the reason this was built.
+
 
 **The defect.** All five shipped DOF live in one screen plane, so the model
 **side-bends about the fore-aft axis** and has neither sagittal flexion nor axial

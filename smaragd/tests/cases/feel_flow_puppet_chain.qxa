@@ -78,13 +78,46 @@
     <assert-puppet-skeleton sway="-0.5" nod="0" arm="0" expectTrunk="-10" inheritTol="0.01"/>
     <assert-puppet-skeleton sway="-1.0" nod="0" arm="0" expectTrunk="-20" inheritTol="0.01"/>
 
-    <!-- (2) THE COMPOSITION IS A SUM. The head's nod and each arm's swing
-         are RELATIVE to the trunk, so their world angles are trunk + own.
-         Pinned exactly: a construction that replaced the trunk's angle
-         instead of adding to it would read 10 / 35 / -35 here. -->
+    <!-- (2) THE COMPOSITION IS A SUM, in the plane each DOF acts in. The
+         head's nod is lateral like the trunk's lean, so it ADDS: 20 + 10.
+         The arms are SAGITTAL since the model went 3D, so they no longer
+         change armL/armR at all - those stay at the trunk's inherited 20 -
+         and appear in armSwingL/R instead. On the 2D model this row read
+         armL=55 armR=-15, which was the jumping-jack plane. -->
     <assert-puppet-skeleton sway="1.0" nod="1.0" arm="1.0"
                             expectTrunk="20"
-                            contains="headStub=30.0000 shoulderBar=20.0000 armL=55.0000 armR=-15.0000"/>
+                            contains="headStub=30.0000 shoulderBar=20.0000 armL=20.0000 armR=20.0000"/>
+
+    <!-- (2b) 36.6915, NOT 35. The arm is commanded 35 degrees in the TRUNK's
+         frame and the trunk is also leaning 20 laterally, so its world-space
+         sagittal angle is atan2(sin35, cos35*cos20) = 36.6915. A model that
+         treated the two rotations as independent 2D angles would read exactly
+         35 here, so this one number is the difference between a 3D body and
+         two flat drawings stacked. -->
+    <assert-puppet-skeleton sway="1.0" arm="1.0" expectSwingL="36.6915" tol="0.001"/>
+
+    <!-- (3) THE THREE ANATOMICAL AXES ARE DISTINCT. This is what "technically
+         3D" has to mean: each rotation moves its own plane and leaves the
+         other two alone. The shipped model had only the first row, and the
+         requester's stated core interaction - bending FORWARD - is the
+         second, which a front-facing 2D figure foreshortens to nothing. -->
+    <assert-puppet-skeleton sway="1.0"  expectTrunk="20" expectFlex="0"  expectTwist="0"/>
+    <assert-puppet-skeleton flex="1.0"  expectTrunk="0"  expectFlex="25" expectTwist="0"/>
+    <assert-puppet-skeleton twist="1.0" expectTrunk="0"  expectFlex="0"  expectTwist="-20"/>
+
+    <!-- (3b) AND THEY COMPOSE AS ROTATIONS, NOT AS NUMBERS. Lateral 20 plus
+         sagittal 25 does NOT give 20 and 25: it gives 21.8802 and 25.0000,
+         with a twist of -8.7447 that neither command asked for. That
+         cross-term is the signature of real rotation composition, and it is
+         pinned precisely because a componentwise implementation would read a
+         clean 20 / 25 / 0 and look plausible. -->
+    <assert-puppet-skeleton sway="1.0" flex="1.0"
+                            expectTrunk="21.8802" expectFlex="25.0000"
+                            expectTwist="-8.7447" tol="0.001"/>
+
+    <!-- (3c) The arms hang from the trunk, so a FORWARD lean carries them
+         forward with it even with no swing commanded. -->
+    <assert-puppet-skeleton flex="1.0" arm="0" expectSwingL="25.0" tol="0.001"/>
 
     <!-- (3) SCALE-FREE. The same lean out of a box less than half the size
          in both axes - it is a rotation, not a pixel coincidence. -->

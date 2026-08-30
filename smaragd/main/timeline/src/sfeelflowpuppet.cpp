@@ -7,6 +7,8 @@
 #include <QPen>
 #include <QPolygonF>
 
+#include <vector>
+
 #include <algorithm>
 #include <cmath>
 
@@ -73,45 +75,35 @@ void SFeelFlowPuppetWidget::paintEvent( QPaintEvent * )
     j.hipShift = pose_.hipShift;
     const SFeelFlowSkeleton sk = sFeelFlowSkeletonFor( j, box );
     if( !sk.valid ) return;
+    const std::vector<SFeelFlowWire> wires = sFeelFlowProject( sk, box, camera_ );
 
     p.fillRect( rect(), QColor( 26, 28, 32 ) );
-
     const bool dimmed = !pose_.valid;
 
-    // --- the ground ----------------------------------------------------
-    p.setPen( QPen( QColor( dimmed ? 52 : 78, dimmed ? 52 : 78,
-                            dimmed ? 56 : 86 ), 1.0 ) );
-    p.drawLine( QPointF( box.left(), sk.groundY ),
-                QPointF( box.right(), sk.groundY ) );
+    // Which pose energy lights which wire. The ground has none -- it is not a
+    // body part and must not brighten when the body does.
+    auto energyFor = [&]( SFeelFlowWire::Part part ) -> float {
+        switch( part ) {
+            case SFeelFlowWire::Legs:  return pose_.energy[SFeelFlowPose::PartBounce];
+            case SFeelFlowWire::Trunk: return pose_.energy[SFeelFlowPose::PartSway];
+            case SFeelFlowWire::Arms:  return pose_.energy[SFeelFlowPose::PartLimbs];
+            case SFeelFlowWire::Head:  return pose_.energy[SFeelFlowPose::PartReference];
+            case SFeelFlowWire::Hips:  return pose_.energy[SFeelFlowPose::PartTwobar];
+            default:                   return 0.0f;
+        }
+    };
 
-    // --- legs: the feet stay planted, the pelvis's travel is what a leg
-    //     expresses ---------------------------------------------------------
-    p.setPen( partPen( pose_.energy[SFeelFlowPose::PartBounce], dimmed ) );
-    p.drawLine( sk.pelvis, sk.footL );
-    p.drawLine( sk.pelvis, sk.footR );
-
-    // --- torso ---------------------------------------------------------
-    p.setPen( partPen( pose_.energy[SFeelFlowPose::PartSway], dimmed ) );
-    p.drawLine( sk.pelvis, sk.neck );
-
-    // --- arms, in ANTIPHASE, and now carrying the trunk's lean -----------
-    // One unit drives BOTH arms and a dancing body swings them opposite;
-    // drawing them in phase would be a jumping-jack and would also make the
-    // one component unreadable off the figure.
-    p.setPen( partPen( pose_.energy[SFeelFlowPose::PartLimbs], dimmed ) );
-    p.drawLine( sk.shoulderL, sk.armEndL );
-    p.drawLine( sk.shoulderR, sk.armEndR );
-    p.drawLine( sk.shoulderL, sk.shoulderR );
-
-    // --- head ----------------------------------------------------------
-    p.setPen( partPen( pose_.energy[SFeelFlowPose::PartReference], dimmed ) );
-    p.setBrush( Qt::NoBrush );
-    p.drawEllipse( sk.headCentre, sk.headRadius, sk.headRadius );
-    p.drawLine( sk.neck, sk.headBase );
-
-    // --- the hip marker (the twobar unit's own part) --------------------
-    p.setPen( partPen( pose_.energy[SFeelFlowPose::PartTwobar], dimmed ) );
-    p.drawLine( sk.hipL, sk.hipR );
+    // Back to front, as the projection ordered them.
+    for( const SFeelFlowWire &w : wires ) {
+        if( w.pts.size() < 2 ) continue;
+        if( w.part == SFeelFlowWire::Ground ) {
+            p.setPen( QPen( QColor( dimmed ? 44 : 58, dimmed ? 44 : 58,
+                                    dimmed ? 48 : 66 ), 1.0 ) );
+        } else {
+            p.setPen( partPen( energyFor( w.part ), dimmed ) );
+        }
+        p.drawPolyline( w.pts.data(), (int) w.pts.size() );
+    }
 
     // --- the one-line note, only when there is nothing to show ----------
     if( !pose_.valid ) {

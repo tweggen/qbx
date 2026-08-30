@@ -379,9 +379,13 @@ public:
 
 private:
     double  sway_ = 0.0, nod_ = 0.0, arm_ = 0.0, bounce_ = 0.0, hip_ = 0.0;
+    double  flex_ = 0.0, twist_ = 0.0;      // the two axes 2D could not express
     double  boxW_ = 200.0, boxH_ = 400.0;
     int     expectValid_ = 1;         // the box lays out; 0 = assert it does NOT
     double  expectTrunk_ = -1000.0;   // -1000 = don't check
+    double  expectFlex_  = -1000.0;
+    double  expectSwingL_ = -1000.0;
+    double  expectTwist_  = -1000.0;
     double  inheritTol_  = -1.0;      // -1    = don't check
     double  tol_         = 0.01;
     QString contains_;
