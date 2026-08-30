@@ -15,8 +15,10 @@
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sidecar/twaspects.h"
 #include "tw/sidecar/twgrooveaspect.h"
+#include "tw/sidecar/twbodyposeaspect.h"
 #include "tw/core/twcontenthash.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -662,6 +664,190 @@ static std::vector<float> grooveClickTrain( uint32_t rate, double totalSec,
     return buf;
 }
 
+static void section8_bodyPose( const fs::path &pidDir ) {
+    std::cout << "\n== Section 8: body.pose aspect (proposal 44 C5) ==\n";
+
+    // ============ AC5.6: THE SHARED PARAMS BLOB IS NOT TOUCHED =============
+    //
+    // THE SHARPEST HAZARD IN PROPOSAL 44, AND THE ONE THAT WOULD HAVE PASSED
+    // EVERY OTHER GATE. All three groove aspects share ONE params hash, so
+    // appending the body's mass and stature to twGrooveAnalysisParams::
+    // serialize -- the natural implementation -- silently re-keys groove.res,
+    // groove.ev and groove.dyn too, and the first user who sets M = 80 kg
+    // triggers a full groove re-analysis for a parameter the ensemble does not
+    // consume anywhere.
+    //
+    // It is invisible to every fixture: proposal 44's additive-when-non-default
+    // rule means nothing is written at defaults, so the whole committed corpus
+    // stays byte-identical. **Only the M = 80 comparison below can fail**,
+    // which is exactly why both are made.
+    {
+        twGrooveAnalysisParams gp;                    // defaults
+        std::vector<uint8_t> grooveAtDefaults;
+        gp.serialize( grooveAtDefaults );
+
+        twBodyPoseParams bpDefault;
+        bpDefault.groove = gp;                        // 75 kg / 1.75 m
+        twBodyPoseParams bpHeavy;
+        bpHeavy.groove   = gp;
+        bpHeavy.body.massKg   = 80.0;                 // a different BODY
+        bpHeavy.body.statureM = 1.90;
+
+        std::vector<uint8_t> bodyBlob, heavyBlob;
+        bpDefault.serialize( bodyBlob );
+        bpHeavy.serialize( heavyBlob );
+
+        // ==================================================================
+        // **AC5.6's OWN PRESCRIPTION IS BACKWARDS, AND THE SABOTAGE PROVED
+        // IT.** The plan says: compare `twGrooveAnalysisParams::serialize()`
+        // pre/post at defaults AND at M = 80, and "the M = 80 comparison fails
+        // while the defaults comparison still passes, which is the whole
+        // point". Built and run, the hazard implementation does the OPPOSITE.
+        //
+        // Two reasons, and both are worth knowing:
+        //
+        //  1. A groove params object does not HAVE an M. Asking its serializer
+        //     to be unchanged across a body change asks it to ignore a field
+        //     it does not carry, so that comparison passes under the very
+        //     sabotage it exists to catch. Vacuous. (Written that way first
+        //     here, and caught only by running the sabotage.)
+        //
+        //  2. At M = 80 the hazard's bytes are IDENTICAL to the correct
+        //     design's -- both produce the groove blob followed by two f64s.
+        //     The two differ only AT DEFAULTS, because the hazard has to be
+        //     additive-when-non-default to stay invisible to the fixture
+        //     corpus, so at 75 kg it appends NOTHING while the correct design
+        //     appends M and H unconditionally.
+        //
+        // **So the discriminator is the length at DEFAULTS**, and being
+        // invisible at defaults is exactly the property that made the hazard
+        // dangerous. Recorded rather than quietly corrected, because the plan
+        // states the opposite and a reader would otherwise trust it.
+        // ==================================================================
+        CHECK( heavyBlob.size() == grooveAtDefaults.size() + 16,
+              "AC5.6: at M = 80 the body blob is the groove blob plus exactly"
+              " two f64s (necessary, but NOT the check that bites)" );
+        const bool prefixHolds =
+            heavyBlob.size() >= grooveAtDefaults.size()
+            && std::equal( grooveAtDefaults.begin(), grooveAtDefaults.end(),
+                           heavyBlob.begin() );
+        CHECK( prefixHolds,
+              "AC5.6: and its GROOVE PREFIX is byte-identical to a default"
+              " groove blob -- THE COMPARISON THAT CAN FAIL" );
+        std::vector<uint8_t> heavyGroovePart(
+            heavyBlob.begin(),
+            heavyBlob.begin() + (long) std::min( heavyBlob.size(),
+                                                 grooveAtDefaults.size() ) );
+        CHECK( twSidecarStore::hashParams( heavyGroovePart.data(),
+                                           heavyGroovePart.size() )
+                  == twSidecarStore::hashParams( grooveAtDefaults.data(),
+                                                 grooveAtDefaults.size() ),
+              "AC5.6: so the groove.res store key survives an M/H change -- a"
+              " body parameter never re-analyses the ensemble" );
+
+        // THE CHECK THAT BITES. At the DEFAULT body the correct design still
+        // writes M and H -- unconditionally, because they are its own params,
+        // not an additive tail on somebody else's. The hazard writes nothing
+        // here, which is what keeps it invisible to every fixture, and is
+        // therefore the one place the two designs differ in bytes.
+        CHECK( bodyBlob.size() == grooveAtDefaults.size() + 16,
+              "AC5.6: AT DEFAULTS the body blob is STILL groove + exactly two"
+              " f64s -- THE COMPARISON THAT FAILS UNDER THE HAZARD, because a"
+              " body appended to the SHARED serializer must be additive-when-"
+              "non-default to stay invisible, and so writes nothing here" );
+        CHECK( std::equal( grooveAtDefaults.begin(), grooveAtDefaults.end(),
+                           bodyBlob.begin() ),
+              "AC5.1: and it CONTAINS the groove blob verbatim, as its prefix" );
+
+        // Containment in BOTH directions, which is the point of nesting.
+        CHECK( heavyBlob != bodyBlob,
+              "AC5.1: a BODY change re-keys body.pose" );
+        twBodyPoseParams bpOtherGroove = bpDefault;
+        bpOtherGroove.groove.frontEnd.nBands += 1;
+        std::vector<uint8_t> otherBlob;
+        bpOtherGroove.serialize( otherBlob );
+        CHECK( otherBlob != bodyBlob,
+              "AC5.1: and a GROOVE change re-keys it too -- the plant IS driven"
+              " by the ensemble, so that direction must propagate" );
+    }
+
+    // ------------------------------- the payload round-trips, and its stride
+    {
+        const int nDof = (int) twBodyPoseDof::Count;
+        std::vector<twBodyPoseRecord> recs( 37 );
+        for( size_t h = 0; h < recs.size(); h++ )
+            for( int d = 0; d < nDof; d++ ) {
+                recs[h].dof[d].angle        = (float) ( 0.001 * (double) ( h * 7 + d ) );
+                recs[h].dof[d].velocity     = (float) ( -0.01 * (double) ( h + d ) );
+                recs[h].dof[d].muscleTorque = (float) ( 0.5 * (double) d - (double) h );
+            }
+        std::vector<uint8_t> payload;
+        twBodyPoseEncode( recs, payload );
+        CHECK( payload.size() == recs.size() * (size_t) nDof * 3 * 4,
+              "AC5.1: recordStride is nDof*3*4" );
+        std::vector<twBodyPoseRecord> back =
+            twBodyPoseDecode( payload.data(), payload.size() );
+        CHECK( back.size() == recs.size(), "body.pose decodes every record" );
+        bool same = back.size() == recs.size();
+        for( size_t h = 0; same && h < recs.size(); h++ )
+            for( int d = 0; d < nDof; d++ )
+                same = same && back[h].dof[d].angle        == recs[h].dof[d].angle
+                            && back[h].dof[d].velocity     == recs[h].dof[d].velocity
+                            && back[h].dof[d].muscleTorque == recs[h].dof[d].muscleTorque;
+        CHECK( same, "and round-trips every DOF channel exactly" );
+
+        // A payload at the wrong stride is REFUSED, never decoded shifted --
+        // the same discipline twGrooveDecodeDynPayload has, and the reason the
+        // aspect VERSION is part of the store key.
+        CHECK( twBodyPoseDecode( payload.data(), payload.size() - 1 ).empty(),
+              "AC5.2: a payload that is not a whole number of records is"
+              " REFUSED, never decoded at an offset" );
+        CHECK( twBodyPoseDecode( nullptr, 0 ).empty(), "and null is refused" );
+    }
+
+    // ------------- AC5.2: V1-ORPHAN DISCIPLINE, exactly as PreviewPeaks' is
+    // An entry written at one aspect version MISSES at another and is deleted,
+    // never adopted at the wrong stride.
+    {
+        twSidecarStore store;
+        store.setRoot( ( pidDir / "bodypose" ).string() );
+        const twContentHash ch = hashOfInt( 0xB0DEu );
+
+        twBodyPoseParams bp;
+        std::vector<uint8_t> blob;
+        bp.serialize( blob );
+        const uint64_t ph = twSidecarStore::hashParams( blob.data(), blob.size() );
+
+        std::vector<twBodyPoseRecord> recs( 8 );
+        std::vector<uint8_t> payload;
+        twBodyPoseEncode( recs, payload );
+
+        twQafInfo qi;
+        qi.contentHash   = ch;
+        qi.aspectId      = twAspect::BodyPose;
+        qi.aspectVersion = twAspect::BodyPoseVersion;
+        qi.params        = blob;
+        qi.sourceRate    = 48000;
+        qi.channels      = 1;
+        qi.sourceFrames  = 8 * 480;
+        qi.hopFrames     = 480;
+        qi.recordStride  = (uint32_t) ( (int) twBodyPoseDof::Count * 3 * 4 );
+        qi.recordCount   = recs.size();
+        CHECK( store.store( qi, payload.data(), payload.size() ),
+              "AC5.2: a body.pose entry stores" );
+        CHECK( store.load( ch, twAspect::BodyPose, twAspect::BodyPoseVersion, ph )
+                  != nullptr,
+              "and loads back at its own version" );
+        CHECK( store.load( ch, twAspect::BodyPose,
+                           twAspect::BodyPoseVersion + 1, ph ) == nullptr,
+              "AC5.2: a NEWER version MISSES it -- it orphans, it is never"
+              " adopted at the wrong stride" );
+        CHECK( store.load( ch, twAspect::BodyPose, twAspect::BodyPoseVersion,
+                           ph + 1 ) == nullptr,
+              "and a different params hash misses it too" );
+    }
+}
+
 static void section7_groove( const fs::path &pidDir ) {
     std::cout << "== Section 7: groove.res / groove.ev aspects (proposal 40 M1) ==\n";
 
@@ -843,6 +1029,7 @@ int main() {
     section5_eviction( pidDir );
     section6_pathFor( pidDir );
     section7_groove( pidDir );
+    section8_bodyPose( pidDir );
 
     if ( g_fails == 0 )
         std::cout << "\nAll sidecar tests passed.\n";

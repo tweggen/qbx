@@ -5,117 +5,178 @@
 #include <QRectF>
 #include <QString>
 
+#include <vector>
+
 /**
- * Proposal 44 execution plan, C0 -- THE PUPPET'S SKELETON, as ONE pure
- * function.
+ * Proposal 44 C0 + C3 -- THE PUPPET'S SKELETON: a genuinely THREE-DIMENSIONAL
+ * body, and a separate orthographic projection of it to a wireframe.
  *
- * Read this before touching the puppet's geometry: it lives here, in
- * `app/model`, rather than inside `SFeelFlowPuppetWidget::paintEvent`, and
- * that placement is the whole point.
+ * Read this before touching the puppet's geometry.
  *
- *  1. **The painter and the gate must not be able to disagree.** The widget
- *     draws what this returns and computes no geometry of its own; the
- *     `assert-puppet-skeleton` verb evaluates this same function. Two
- *     implementations of one layout is exactly how proposal 41 M7's hit-test
- *     drifted from its paint for two whole milestones (`tagChipRect()`), and
- *     how the take lane came to fill its body by a different rule than the
- *     composite lane (`fillBodyByMaterial()`). ONE spelling, both callers.
- *  2. **`app/model` is the lowest app layer**, so `timeline` (the widget) and
- *     `testkit` (the verb) can both reach it -- they already declare `model`
- *     in `check_layering.py`'s APP_DEPS, so this needs no new edge.
- *  3. **It takes plain joint scalars, never `SFeelFlowPose`.** That type lives
- *     in `app/objects/track`, which `app/model` may not include. The same
- *     argument `sclipwindowgeometry.h` makes, and it has a second benefit: the
- *     geometry is testable with no analysis, no fixture and no sidecar at all,
- *     which is what makes C0's gate possible (nothing in this repo can drive
- *     an analysis-derived pose to a chosen angle).
+ * ---------------------------------------------------------------------------
+ * WHY 3D, WHEN THE POSE STILL HAS FIVE SCALARS
  *
- * **THE DEFECT THIS FIXES.** The widget used to rotate the neck about the
- * pelvis correctly and then build every segment above it in WORLD
- * coordinates from the neck's new position:
+ * The shipped puppet was drawn front-facing with every DOF a rotation or
+ * translation in the single SCREEN plane. That made three of its parts
+ * anatomically wrong by construction, and the requester's own stated core
+ * interaction -- the trunk bending FORWARD and returning upright -- had no
+ * degree of freedom at all, because a front view foreshortens sagittal motion
+ * to nothing. A 2D figure cannot be fixed by choosing better numbers; the
+ * missing thing is an axis.
  *
- *     headC     = rotateAbout( neck, QPointF( neck.x(), neck.y() - r ), nod );
- *     shoulderL = QPointF( neck.x() - shoulderW, neck.y() + torsoLen*0.06 );
+ * So the MODEL is 3D and the CAMERA is display. Every joint is a point in body
+ * space; every rotation names the anatomical axis it turns about:
  *
- * `(neck.x, neck.y - r)` is straight up on the SCREEN, not along the torso
- * axis, so the head, the shoulder bar and both arms inherited the neck's
- * TRANSLATION and none of its ROTATION. Measured on the shipped build: at a
- * trunk lean of 20 degrees the head stub and the shoulder bar both read
- * **0.000 degrees** -- a figure with no spine, the head effectively
- * gimbal-mounted. Every segment here is therefore built in TORSO-LOCAL
- * coordinates: its own rotation is composed ON TOP of the trunk's.
+ *     x  to the subject's LEFT-RIGHT   (mediolateral)   -> sagittal rotations
+ *     y  UP                            (longitudinal)   -> axial rotations
+ *     z  toward the VIEWER             (anteroposterior)-> frontal rotations
  *
- * **What this is NOT.** The head now follows the trunk RIGIDLY -- no neck lag,
- * no counter-rotation, no inertia. That is correct-but-crude and is
- * deliberately all C0 promises; the dynamics are C4's `m*d*a_base` term. The
- * difference this makes is between a wrong drawing and a crude one.
+ * A rotation "about x" is therefore flexion/extension (bending forward and
+ * back); "about z" is lateral flexion (leaning toward a shoulder); "about y"
+ * is axial rotation (twisting). Those three are distinct motions and the
+ * shipped model had only the middle one -- see the verification note's 9.7.
  *
- * Pure: no widget, no model, no clock, no allocation beyond the return value.
+ * ---------------------------------------------------------------------------
+ * WHAT THIS BUYS TODAY, AND WHAT IT DOES NOT
+ *
+ * BUYS: the arm swing moves to the SAGITTAL plane, where an arm swing actually
+ * happens. It was drawn as lateral abduction -- a jumping-jack -- which the
+ * verification note named and which no amount of 2D drawing could fix. And a
+ * three-quarter camera shows depth, so a sagittal DOF is legible the moment
+ * one is driven.
+ *
+ * DOES NOT BUY: a driven trunk flexion. The pose carries five scalars and none
+ * of them is a fore-aft trunk command; `trunkFlex` exists in the joint set,
+ * defaults to 0, and is wired all the way through the model and the projection
+ * so that C3's remaining half is a matter of driving it, not of building it.
+ * A reader should not mistake "the axis exists" for "the body bends forward".
+ *
+ * ---------------------------------------------------------------------------
+ * THE TWO STANDING RULES, UNCHANGED FROM C0
+ *
+ *  1. **ONE function, two callers.** The painter draws what this returns and
+ *     computes no geometry; `assert-puppet-skeleton` evaluates this same
+ *     function. Two implementations of one layout drift, and they drift
+ *     silently -- proposal 41 M7 paid for that with `tagChipRect()` and the
+ *     take-lane fix paid for it again with `fillBodyByMaterial()`.
+ *  2. **Every segment above the pelvis is built in PARENT-LOCAL coordinates**,
+ *     so its own rotation composes ON TOP of its parent's. The shipped bug was
+ *     the opposite: the head, shoulder bar and arms were rebuilt in WORLD
+ *     coordinates from the neck's new position, so at a 20 degree trunk lean
+ *     they all read 0.000 degrees -- a figure with no spine.
+ *
+ * `app/model` is the lowest app layer, so `timeline` (the widget) and `testkit`
+ * (the verb) both reach it with no new edge. It takes plain scalars, never
+ * `SFeelFlowPose` (which lives in `app/objects/track` and may not be included
+ * here) -- the `sclipwindowgeometry.h` argument, with the same second benefit:
+ * the geometry is testable with no analysis, no fixture and no sidecar.
+ *
+ * Pure: no widget, no model, no clock.
  */
 
-/** The five normalized joint excursions, each nominally in [-1,1]. Names match
- * `SFeelFlowPose`'s fields so a caller can copy them across one-for-one; the
- * type is deliberately separate so this header needs no `objects/track`. */
-struct SFeelFlowJoints {
-    float bounceY  = 0.0f;   // pelvis vertical, + is a LIFT
-    float sway     = 0.0f;   // trunk lean
-    float armSwing = 0.0f;   // arm swing, drawn in antiphase
-    float headNod  = 0.0f;   // head angle RELATIVE TO THE TRUNK
-    float hipShift = 0.0f;   // pelvis horizontal
+/** A point or direction in BODY space. See the axis convention above. */
+struct SFeelFlowVec3 {
+    double x = 0.0, y = 0.0, z = 0.0;
 };
 
 /**
- * Every point the puppet draws, plus the world angle of every segment whose
- * orientation is contractual.
- *
- * The angles are computed GEOMETRICALLY, from the returned points, never
- * echoed back from the inputs that produced them. That is what lets a gate on
- * them bite: an assertion against a number this function was told would be
- * tautological, while an assertion against a number recovered from the
- * resulting geometry fails when the construction is wrong.
- *
- * Sign convention, one for the whole struct: degrees from the segment's own
- * REST direction, POSITIVE = clockwise on screen (screen y grows downward).
- * A trunk at +20 leans to the viewer's right.
+ * The joint excursions. The five that the pose drives are normalized to
+ * [-1,1]; `trunkFlex` and `trunkTwist` are the two axes the shipped model did
+ * not have, present and wired but not yet driven (see "what this does not buy").
  */
+struct SFeelFlowJoints {
+    float bounceY    = 0.0f;   // pelvis vertical, + is a LIFT
+    float sway       = 0.0f;   // trunk LATERAL flexion  (about z, frontal)
+    float armSwing   = 0.0f;   // arm swing, SAGITTAL    (about x), antiphase
+    float headNod    = 0.0f;   // head angle RELATIVE TO THE TRUNK, lateral
+    float hipShift   = 0.0f;   // pelvis lateral translation
+    float trunkFlex  = 0.0f;   // trunk SAGITTAL flexion (about x)  -- undriven
+    float trunkTwist = 0.0f;   // trunk AXIAL rotation   (about y)  -- undriven
+};
+
+/** The skeleton in BODY space, plus the angles a gate asserts. */
 struct SFeelFlowSkeleton {
-    bool valid = false;      // false: the box is too small to lay out
+    bool valid = false;
 
-    QPointF pelvis, neck, headCentre, headBase;
-    QPointF shoulderL, shoulderR, armEndL, armEndR;
-    QPointF footL, footR, hipL, hipR;
-    double  headRadius = 0.0;
-    double  groundY    = 0.0;
+    SFeelFlowVec3 pelvis, neck, headCentre, headBase;
+    SFeelFlowVec3 shoulderL, shoulderR, armEndL, armEndR;
+    SFeelFlowVec3 footL, footR, hipL, hipR;
+    double headRadius = 0.0;
+    double groundY    = 0.0;
 
-    // Geometric, from the points above. With armSwing and headNod at 0 these
-    // four are all EQUAL to trunkLeanDeg -- that identity is what C0 gates.
-    double trunkLeanDeg    = 0.0;   // pelvis -> neck, from world up
-    double headStubLeanDeg = 0.0;   // neck -> head base, from world up
-    double shoulderBarDeg  = 0.0;   // shoulderL -> shoulderR, from horizontal
-    double armLeanLDeg     = 0.0;   // shoulderL -> arm end, from world down
-    double armLeanRDeg     = 0.0;   // shoulderR -> arm end, from world down
+    /**
+     * Recovered GEOMETRICALLY from the points above, never echoed back from the
+     * inputs that produced them -- an assertion against a number the function
+     * was told would be tautological.
+     *
+     * Each is measured in the plane that segment's own DOF acts in, and the
+     * LATERAL ones are what the kinematic-chain gate uses: with `armSwing`,
+     * `headNod`, `trunkFlex` and `trunkTwist` all zero, the four below are all
+     * EQUAL to `trunkLeanDeg`. That identity is C0's gate and it survives the
+     * move to 3D unchanged, which is the point of keeping these scalars.
+     */
+    double trunkLeanDeg    = 0.0;   // frontal:  pelvis -> neck, from world up
+    double headStubLeanDeg = 0.0;   // frontal:  neck -> head base
+    double shoulderBarDeg  = 0.0;   // frontal:  shoulderL -> shoulderR
+    double armLeanLDeg     = 0.0;   // frontal:  shoulder -> arm end
+    double armLeanRDeg     = 0.0;
+
+    /** Sagittal components. `trunkFlexDeg` is 0 until something drives it;
+     * the arm swings are the DOF that actually moved plane in C3. */
+    double trunkFlexDeg    = 0.0;
+    double armSwingLDeg    = 0.0;
+    double armSwingRDeg    = 0.0;
+
+    /** Axial rotation, read off the shoulder bar in the TRANSVERSE (x-z)
+     * plane. Nothing else reports it: a twist leaves both the frontal and the
+     * sagittal angles at zero and only changes which way the bar POINTS, so
+     * without this the third axis would be present in the model and invisible
+     * to every assertion. It is also the foreshortening a front view cannot
+     * show, which is half of why the shipped figure could not express it. */
+    double shoulderTwistDeg = 0.0;
+};
+
+/** Where the camera looks from. Orthographic on purpose: a verification device
+ * should not add perspective foreshortening to the thing being verified, and an
+ * orthographic projection keeps every measurement on screen linear in the
+ * model. Depth reads from the three-quarter angle instead. */
+struct SFeelFlowCamera {
+    double azimuthDeg   = 28.0;   // 0 = straight on; + turns the body's left toward us
+    double elevationDeg = 10.0;   // + looks down on the figure
+};
+
+/** A projected wireframe: polylines in widget coordinates. One polyline per
+ * drawn element, so the painter neither knows nor decides what a "limb" is. */
+struct SFeelFlowWire {
+    enum Part { Legs = 0, Trunk, Arms, Head, Hips, Ground, PartCount };
+    Part                 part = Legs;
+    std::vector<QPointF> pts;          // >= 2 points
+    double               depth = 0.0;  // mean z in body space, for painter order
 };
 
 /** The full excursion of each joint, in degrees or as a fraction of the box.
- * Display constants: nothing downstream reads them and no gate pins them
- * (aesthetics are explicitly not gated). They live here rather than in the
- * widget so the ONE function that uses them owns them. */
+ * Display constants: nothing downstream reads them and no gate pins them. */
 namespace sfeelflowskel {
 constexpr double kSwayDeg    = 20.0;
 constexpr double kNodDeg     = 10.0;
 constexpr double kArmDeg     = 35.0;
+constexpr double kFlexDeg    = 25.0;   // trunk sagittal, when driven
+constexpr double kTwistDeg   = 20.0;   // trunk axial, when driven
 constexpr double kBounceFrac = 0.06;
 constexpr double kHipFrac    = 0.08;
 }
 
-/** The skeleton for `j` laid out inside `box`. `valid` is false, and every
- * point zero, when the box cannot hold a figure. */
+/** The 3D skeleton for `j`, in body space, scaled to `box`. */
 SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &box );
+
+/** Projects `sk` into `box` through `cam`, back-to-front by depth. */
+std::vector<SFeelFlowWire> sFeelFlowProject( const SFeelFlowSkeleton &sk,
+                                             const QRectF &box,
+                                             const SFeelFlowCamera &cam );
 
 /** The describe() grammar the verb and any diagnostic share -- ONE spelling,
  * 4 decimals, C locale unconditionally (this box's LC_NUMERIC is de_DE and a
- * decimal COMMA would break every `contains=` downstream, the same trap
- * `sFeelFlowPoseDescribe` documents). */
+ * decimal COMMA would break every `contains=` downstream). */
 QString sFeelFlowSkeletonDescribe( const SFeelFlowSkeleton &s );
 
 #endif // SFEELFLOWSKELETON_H

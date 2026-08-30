@@ -273,6 +273,12 @@ int main( int argc, char **argv )
     bool assertCrossover = false;
     for( int i = 2; i < argc; i++ )
         if( !strcmp( argv[i], "--assert-crossover" ) ) assertCrossover = true;
+    // Proposal 44 C4b/C5: report the per-unit DRIVE MAGNITUDE, which is the
+    // candidate for `urgeNorm`'s source. Measurement first, then the constant
+    // -- the same order proposal 44 has used for every number in it.
+    bool urgeMode = false;
+    for( int i = 2; i < argc; i++ )
+        if( !strcmp( argv[i], "--urge" ) ) urgeMode = true;
 
     uint32_t rate = 0;
     std::vector<float> sig = readWav16( path, &rate );
@@ -369,6 +375,72 @@ int main( int argc, char **argv )
             ener[3][h] = ener[1][h];
         }
         partHz[3] = partHz[1];
+    }
+
+    // --urge: WHAT DOES THE MUSIC ACTUALLY ASK FOR? -------------------------
+    //
+    // `urgeNorm` needs a source, and the candidates are not equal. The one
+    // this mode measures is
+    //
+    //     drive = hypot( support, tension )   ==   |k * F_p(t)|
+    //
+    // because `support` and `tension` are k*F*cos(phi) and k*F*sin(phi), so
+    // their MAGNITUDE is the drive with the resonator's own phase -- and
+    // therefore its response -- divided straight out. That is the property
+    // that makes it a candidate at all: `perUnitPower` and `dissip` are both
+    // the body's RESPONSE, so using either as "what the music asks for" makes
+    // urge and achieved the same quantity and match trivially 1. Circular.
+    //
+    // Reported as PERCENTILES over the whole fixture rather than as a mean,
+    // because what a reference constant has to be calibrated against is the
+    // LOUD part of a track, not its average.
+    if( urgeMode ) {
+        std::vector<twGrooveDynRecord> dyn = twGrooveDecodeDynPayload(
+            pay.dynPayload.data(), (uint64_t) pay.dynPayload.size(), pay.nUnits );
+        if( dyn.empty() ) { printf( "body_probe: no dyn payload\n" ); return 1; }
+        printf( "urge probe: %s  %u units, %zu hops\n", path, pay.nUnits, dyn.size() );
+        printf( "  unit          k     rawP99   F=drive/k p99   SMOOTHED F p99"
+                " (tau 1 s)\n" );
+        for( uint32_t u = 0; u < pay.nUnits; u++ ) {
+            std::vector<double> d; d.reserve( dyn.size() );
+            // The same one-pole the read side would apply: urge is a LEVEL,
+            // not an onset train. Between onsets the raw flux is ~0, so a
+            // per-hop urge would be zero most of the time and the window mean
+            // would be meaningless.
+            const double kk = ( u < pay.counterTension.size()
+                                && pay.counterTension[u].k > 0.0 )
+                              ? pay.counterTension[u].k : 1.0;
+            const double dt = 0.01, tau = 1.0;
+            const double a  = dt / ( tau + dt );
+            double sm = 0.0;
+            std::vector<double> smv; smv.reserve( dyn.size() );
+            for( const twGrooveDynRecord &r : dyn ) {
+                if( u >= r.units.size() ) continue;
+                // DIVIDE THE COUPLING OUT. hypot(support,tension) is |k*F|;
+                // k is OURS, F is the music. Without the divide, twobar reads
+                // twice everything else purely because its k is 3.5 to their
+                // 1.5 -- a property of the model presented as a property of
+                // the material.
+                const double v = std::hypot( (double) r.units[u].support,
+                                             (double) r.units[u].tension ) / kk;
+                d.push_back( v );
+                sm += a * ( v - sm );
+                smv.push_back( sm );
+            }
+            if( d.empty() ) continue;
+            std::sort( d.begin(), d.end() );
+            std::sort( smv.begin(), smv.end() );
+            auto pct = []( const std::vector<double> &v, double q ) {
+                return v[ (size_t) std::min( (double) v.size() - 1.0,
+                                             q * (double) v.size() ) ];
+            };
+            const char *nm = u < pay.counterTension.size()
+                           ? pay.counterTension[u].name.c_str() : "?";
+            printf( "  %-10s %4.1f  %9.5f     %9.5f        %9.5f\n",
+                    nm, kk, pct( d, 0.99 ) * kk, pct( d, 0.99 ),
+                    pct( smv, 0.99 ) );
+        }
+        return 0;
     }
 
     // --assert-crossover: is a rotational DOF being FLUNG or CARRIED?

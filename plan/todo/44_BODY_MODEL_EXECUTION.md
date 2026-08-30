@@ -311,9 +311,29 @@ for C4 and are stated as such.
 > analysis, where omega and z are both in hand, keeps the pose O(1) and pure --
 > exporting omega would have forced the consumer to integrate with state.
 >
-> The lock term is SELF-LIMITING, which is what makes a fixed gain safe: an
-> unlocked unit's `arg(z)` wobbles about a fixed point, so `sin(arg z - phi)`
-> averages to ~0 over a cycle of phi and the correction cancels itself.
+> The lock term is SELF-LIMITING, which is what makes a fixed gain safe: `|K
+> sin(...)| <= K`, so an unlocked unit's metrical rate can never be dragged more
+> than **K = 2.0% of its own omega** off, under any drive whatever.
+>
+> **THAT BOUND IS THE CLAIM. The first version of this line said the pull term
+> "averages to ~0 over a cycle of phi and the correction cancels itself", and
+> that is FALSE near the lock edge** -- found by an adversarial review of C4a's
+> maths, 2026-08-30. Analytically the mean pull for a detuning `Delta` outside
+> the lock range is `Delta - sqrt(Delta^2 - K^2)`, which is a maximum, not a
+> zero, exactly where `Delta` is a little above `K`: simulated, the mean of
+> `sin(eps)` is **0.49 at 2.5% detuning** and 0.21 at 5%, falling to 0.05 only
+> by 20%. So a unit detuned by a few lock ranges (roughly 2-6% of its omega)
+> phase-SLIPS, with long near-locked dwells and a beat as slow as
+> `sqrt(Delta^2 - K^2)` -- a sub-0.1 Hz breathing of `phaseMetric` rather than a
+> cancellation. `omega` itself adapts within `[omega0/sqrt(2), omega0*sqrt(2)]`,
+> so a unit can be CARRIED INTO that window by its own adaptation.
+>
+> The design is sound on the bounded reading and the measured lock behaviour
+> below is unaffected -- what is retired is the zero-mean argument for why. The
+> other two properties the review confirmed independently: the lock range is
+> `|Delta| <= K` (2.0% of omega) and the linearised pull-in time constant is
+> `1/K` = exactly the 8 periods the constant names, with `K` proportional to
+> `omega` making both period-invariant as intended.
 >
 > **AC-INV EXCEPTION, exercised exactly as scoped:** measured over all 12
 > fixtures, `groove.res` and `groove.ev` are **byte-identical** (0 differing
@@ -488,7 +508,53 @@ a torque-actuator idealization is adequate (44 §6 names it as a standing limit)
 
 ---
 
-## C3 — The DOF set: the three anatomical axes, and a neck
+## C3 — The DOF set: the three anatomical axes, and a neck — **MODEL + PROJECTION DONE 2026-08-28**
+
+> **DECIDE 2 settled by the requester: neither of the plan's two options.** The
+> plan offered a 3/4 OBLIQUE PROJECTION of a 2D figure or TWO ORTHOGONAL VIEWS.
+> The requester asked instead for the model to be **technically 3D** with a
+> **wireframe projection** — which is better than either, because an oblique
+> projection of a 2D figure still has no third axis to project.
+>
+> **Done:** every joint is a point in body space; the three anatomical
+> rotations are named by what they do (`rotFlex` about x = flexion/extension,
+> `rotLateral` about z = lateral flexion, `rotAxial` about y = axial rotation)
+> and compose through one `trunkFrame`, so a child inherits its parent's
+> orientation as a transform rather than by copying an angle.
+> `sFeelFlowProject` is a separate orthographic camera producing wireframe
+> polylines — orthographic on purpose: a verification device should not add
+> perspective foreshortening to the thing being verified. The head is a real
+> wireframe sphere (three great circles, generated in 3D and projected), so
+> head facing is readable; the ground is a plate so the vertical bounce has
+> something to read against; painter's-algorithm ordering by depth.
+>
+> **THE ARMS MOVED PLANE, and that is a correctness fix the verification note
+> called for:** an arm swing is SAGITTAL and was drawn as lateral abduction, a
+> jumping-jack. `armL`/`armR` now stay at the trunk's inherited lean and the
+> swing appears in `armSwingL`/`R`.
+>
+> **Still NOT driven:** `trunkFlex` and `trunkTwist` exist, default 0, and are
+> wired through the model, the projection and the verb — but no pose component
+> commands them. C3's remaining half is finding a drive, not building an axis.
+> A reader must not mistake "the axis exists" for "the body bends forward".
+>
+> **Measured.** Three axes independently observable: `sway=1` → trunk 20 / flex
+> 0 / twist 0; `flex=1` → 0 / 25 / 0; `twist=1` → 0 / 0 / −20. And they COMPOSE
+> as rotations, not as numbers: `sway=1 flex=1` gives **21.8802 / 25.0000 /
+> −8.7447** — a cross-term neither command asked for, which is the signature of
+> real composition. An arm commanded 35° under a 20° lean reads **36.6915°** in
+> world space (`atan2(sin35, cos35·cos20)`), where a componentwise fake would
+> read exactly 35. C0's inheritance identity survives the rewrite unchanged.
+>
+> **Watched failing:** replacing the composed `trunkFrame` with two independent
+> flat angles fails five assertions. One bug found and fixed: `shoulderBarDeg`
+> sign-flipped, because body space is y-UP while the 2D original measured it in
+> screen space, y-down.
+>
+> Suite 320 passed, 274 s at `-j4`. **NOT gated:** what the figure looks like,
+> the camera angle, and whether a wireframe is a better verification device than
+> a filled one — that is the requester's judgement and the reason this was built.
+
 
 **The defect.** All five shipped DOF live in one screen plane, so the model
 **side-bends about the fore-aft axis** and has neither sagittal flexion nor axial
@@ -552,6 +618,163 @@ aspect changes.
 so do not spend a decision on an interim mapping); deep-view aesthetics.
 
 ---
+
+## C4a — The plant, first half: a joint with inertia — **DONE 2026-08-28,
+## CORRECTED 2026-08-30 after an adversarial review of the maths**
+
+> **READ THE CORRECTION SECTION BELOW BEFORE THE ORIGINAL NOTES.** The first
+> build's equation of motion was missing a term that is O(100 %) of its own
+> headline number, and three of the numbers quoted in this section were
+> properties of the truncated equation rather than of a neck. They are kept,
+> struck through in prose, because knowing which number moved and why is the
+> only way the next person can tell a regression from the fix.
+>
+> **Executed.** `tw/body/twbodyjoint.h` — a joint carrying the segment below
+> it, driven by its PARENT's motion, with per-axis DOF masks
+> (`twBodySpherical()` for a neck, `twBodyHinge()` for a knee), hard range-of-
+> motion limits with dissipative stops, and an EXACT closed-form step for the
+> linear second-order system in every damping regime.
+>
+> **The requester's own test is the central AC**: torso flexes 25° then STOPS →
+> the head nods **forward 57.800°** (was 44.985° before the correction) and
+> rings — 13 crossings of its own equilibrium. Its control is the same input
+> through the shipped FIRST-ORDER lag: **max forward +0.000000°** across
+> τ ∈ {0.03, 0.126, 0.5}. A lag is a filter; what the requester describes is a
+> mass. That pair is the whole argument and neither half can pass alone.
+>
+> Also gated: energy conserved to **1.281e-11** over 60 s AND pointwise flat
+> (band [0.115455, 0.115455] J — the step is exact, not merely stable); arrest
+> to **0.0000 %** of peak DEVIATION in 6 natural periods; a hinge does not move
+> on its constrained axes under a 40 rad/s² drive on all three; limits never
+> exceeded; an overdamped joint overshoots far less (23.157° against 57.800°).
+>
+> **A sign error found and fixed via the requester's pushback on 45°:** stiffness
+> used `m·g·d` as RESTORING, but the head's mass sits ABOVE the atlanto-occipital
+> joint — gravity is DESTABILISING, an inverted pendulum. Treating it as
+> restoring makes an upright head appear stable with no muscle tone at all.
+> `invertedPendulum` now carries the sign, and both sides of the stability
+> threshold are asserted: below 1× the gravity moment an inverted joint has
+> NEGATIVE total stiffness and reports no natural frequency, while a hanging
+> segment is stable on gravity alone.
+>
+> **NOT met, deliberately:** proposal 44's counterswing gate (AC4.2). This build
+> has parent→child driving and no child→parent reaction, so an arm cannot yet
+> counter-rotate the trunk. Named, not faked. Also per-axis decoupled — each
+> axis has its own inertia, stiffness and drive, but there are no gyroscopic
+> cross-terms BETWEEN axes. And not wired to the pose: C4a is the mechanism.
+
+### THE CORRECTION (2026-08-30) — what an adversarial review found
+
+A Fable instance was asked to review the mathematics of `tw/body` and
+`sfeelflowskeleton` adversarially, deriving everything itself rather than
+taking the comments' word for anything. Verdict: **HAS ERRORS**. It confirmed
+`exactStep` to **≤ 2e-15** against a 200 000-step RK4 in all three damping
+regimes, confirmed `compound`, confirmed the `driveCoef` coefficient and its
+sign, confirmed the inverted-pendulum sign and the `ks = 1` threshold, and
+reproduced independently every pinned number in `body_measures_test` and
+`feel_flow_puppet_chain` (0.7346, 1.0332, 1.2640, 0.8002, 21.8802, 25.0000,
+−8.7447, 36.6915). What it found wrong was the EQUATION, not the arithmetic.
+
+**1. Gravity was applied to the RELATIVE angle. It acts on the ABSOLUTE one.**
+The correct planar EOM carries a second forcing term the first build had no
+way to express, because `twBodyJointStep` was passed only the parent's
+acceleration:
+
+```
+I th'' + c th' + [ k_pass -/+ mgd + m d L phi'^2 ] th
+                  = -( I + m d L ) phi''  +/-  m g d phi
+                                               ^^^^^^^^^ missing
+```
+
+The one-sentence falsifier, and it needs no constants: **a freely hanging arm
+on a leaning trunk settled PARALLEL TO THE LEANING TRUNK instead of hanging
+plumb.** It is now section 3a of `body_joint_test` — measured −25.0000°
+relative, 0.0000° absolute, against a 25° trunk lean — and it fails on the
+pre-correction equation by exactly the lean.
+
+The consequence for C4a's own headline: an inverted head on a held lean does
+not ring down to trunk-aligned, it **DROOPS**. Peak 44.985° → **57.800°**, and
+the resting relative angle 0 → **+25.000°** (= φ/(ks−1) at ks = 2). Section 3
+now asserts the ring about that equilibrium and asserts the equilibrium is
+positive; the arrest gate (section 5) measures deviation FROM it, because
+measuring from zero is only the same question under the truncated equation.
+
+The reviewer's own nonlinear integration gives **62.3° / +20.4°**; this module
+is LINEAR in the joint angle (which is what allows a closed-form step at all)
+and gives 57.800° / +25.000°. The linear model OVERSTATES a large droop, and
+the header now says so — exactness of the INTEGRATOR is not exactness of the
+MODEL.
+
+**2. Centripetal stiffening `m d L phi'^2 th` was absent, and it dominates at
+the rates this feature is about.** Measured against the neck's k = 5.773
+N·m/rad, at a 25° sway: **+10 % at 0.5 Hz, +39 % at 1 Hz, +155 % at 2 Hz,
++618 % at 4 Hz**, quadrupling per doubling exactly. It always stiffens, so the
+effective resonance under a fast drive sits ABOVE `twBodyJointNaturalHz` — a
+fact C4b has to build on rather than discover.
+
+**3. `exactStep`'s negative-stiffness branch hid the instability it existed to
+model.** `k < 0 → w = 0` discarded the stiffness AND the damping, so an
+inverted head below its own threshold, displaced 0.2 rad and left completely
+alone, **sat at exactly 0.200000 forever** while the true system diverges as
+cosh(λt) with λ = 5.04 /s. The module reported the instability and did not
+exhibit it. The branch is now the analytic continuation of the overdamped one
+(`wd = sqrt(σ² − k/I)`, cosh/sinh, one root positive) and section 2a measures
+0.2 rad → **2.6210 rad in 1 s**.
+
+**4. Damping as a RATIO tied c to √k.** So c would vanish exactly at the
+stability threshold, where an inverted joint needs it most, and — the reason
+this is structural rather than cosmetic — modulating stiffness would silently
+modulate damping, which is precisely what C4b makes a per-hop control. The
+stored quantity is now an absolute coefficient computed once from the ratio at
+a REFERENCE stiffness (passive tissue plus the MAGNITUDE of the gravity
+moment, positive whichever side the mass sits). Section 6c asserts c is
+unchanged by centripetal stiffening, is non-zero at ks = 1, and does not move
+when the inverted flag flips.
+
+**5. The axial axis was given sagittal-plane physics wholesale** — an error
+the reviewer found unasked. Gravity exerts no moment about a segment's own long
+axis (twisting the head neither raises nor lowers its CoM), the parent's lever
+is zero there (this joint sits ON the parent's long axis), and `inertiaProx` is
+a TRANSVERSE inertia carrying a parallel-axis `d²` term that does not exist for
+twist. Every quantity is now per-axis: `twBodyJointInertia`,
+`twBodyJointStiffness` and `twBodyJointDamping` all take a `twBodyAxis`.
+Measured on the neck: **I 0.09107 vs 0.01641 kg·m²**, k ratio **exactly 2.0**
+(= ks/(ks−1), i.e. twist carries no gravity term), **4.222 Hz vs 1.267 Hz** —
+a head twists 3.3× faster than it nods, which it does. A joint unstable in
+flexion is still perfectly stable in twist, and section 6a asserts that pair.
+
+`twBodySegment` gained `radiusGyrLong` / `inertiaLong` to support this. It is
+**VERIFY by a weaker route than the four columns beside it**: the standard
+tables carry a real longitudinal gyration column and this environment cannot
+reach it, so the value comes from a STATED GEOMETRIC MODEL — a uniform solid
+cylinder, r_long = R/√2, over an assumed slenderness per segment. An assumption
+written down, not a citation. Everything `body_measures_test` asserts about it
+is a relation or an identity (I_long = m·r², strictly below I_prox, a colinear
+compound is a PLAIN SUM, M·H² scaling, a slender shank's ratio 37.5 exceeds a
+stubby head's 5.6), so no gate rests on the number itself.
+
+**Watched failing, six sabotages, one per fix** — each reverting exactly one
+correction and each biting only its own assertions: dropping the `±mgd·φ`
+forcing (4 failures, the plumb arm among them), restoring `k < 0 → w = 0`
+(2), reusing the transverse inertia for twist (1), giving the long axis a
+gravity moment (2), dropping the centripetal term (5), and tying damping back
+to √k (2).
+
+**Two doc-level defects the review also found, both fixed:**
+`twbodyjoint.h` said an overdamped joint "cannot overshoot" as an absolute,
+which the module's own ζ = 1.4 run contradicts (**23.157° forward** — true of
+free decay, false under a bipolar drive); and `limitHits` counts DWELL, not
+arrivals (19 770 steps at the stop in section 7). Also
+`sfeelflowskeleton.cpp`'s `rotAxial` comment stated a sign the arithmetic
+contradicts, and `depthOf` dropped the elevation term from the painter order.
+
+**Still not fixed, and named:** the model stays LINEAR in the joint angle (a
+hanging joint softens ~1.2 % at 25°, an inverted one with linear tissue hardens
+~4.6 %) and there is still no child→parent reaction. The reviewer's caveat that
+the crossover's "above it the weight is beside the point" narrative is false
+for an INVERTED joint — gravity there is a bias that must be met at DC — is
+recorded in `twbodymeasures.h` rather than fixed, because the formula is right
+and only the prose was wrong.
 
 ## C4 — The plant (44 B1): gravity, coupling, arrest
 
@@ -630,6 +853,605 @@ which this repo has actually hit.
 limit); subject-fitted PD gains; feet leaving the ground; steps; full 3D.
 
 ---
+
+## C4c — The postural / musical torque split — **DONE 2026-08-30**
+
+> **The first consequence of §8 q3, executed.** `twBodyJoint::posturalGain`
+> (0..1, default **0** — an unactivated joint, which is what every other field
+> in that struct describes) plus `twBodyPosturalTorque()`. Both gravity terms
+> are scaled by `(1 − gain)`, so `tau_muscle = tau_postural + tau_active` with
+> the postural half exact at any `dt` and the ensemble's output reaching
+> `activeTorque` alone. Invariants: `tw303a/body/CONTRACT.md` 13-15.
+>
+> **A GAIN, not a torque, and that is the design.** Postural tone is feedback
+> on the same absolute angle gravity acts on, so it belongs beside the term it
+> cancels. Applied as an explicit torque sampled at the top of a step it leaves
+> a residual growing with `dt`, "fully compensated" would not hold still, and
+> nothing could be gated.
+>
+> **The gate is a PAIR**, because either half alone is satisfiable by a
+> constant: at gain 0 a free arm HANGS PLUMB (−25.0000° against a 25° lean); at
+> gain 1 the same arm STAYS WHERE IT IS PUT (0.6000 rad → **0.6000 rad** after
+> 30 s). No model that ignores the gain produces both.
+>
+> **One property worth knowing because it surprises:** a PARTLY toned free
+> joint still settles plumb, at every gain from 0 to 0.75. Scaling both gravity
+> terms alike changes the strength of the pull, not its direction — only at
+> gain 1 does the preferred position vanish. Compensating the stiffness alone
+> moves the equilibrium, which is the natural mistake, and is watched failing
+> (S8 below: −0.582 / −0.873 / −1.745 rad instead of −0.436).
+>
+> **`ks > 1` is now explicitly a claim about LIGAMENT, not about a person.**
+> The ks = 0.6 joint section 2a watches fall over (0.2 → 2.6210 rad in 1 s) is
+> perfectly stable once toned: 0.2 → **0.0017 rad**. Section 3c asserts the
+> pair, so the threshold cannot be misread as a statement about people.
+>
+> **And the hold COSTS torque**, which C4b's objective must count: a fully toned
+> head on a 25° lean holds **−2.5188 N·m**, half the tone exactly half the
+> torque, an unactivated joint exactly zero (it droops instead), an upright one
+> exactly zero (nothing to hold). An effort term counting only the active torque
+> would report a body straining against a beat as cheaper than one standing
+> leant over.
+>
+> **Watched failing, three sabotages:** ignoring the gain (5 failures),
+> compensating the stiffness but not the parent-angle forcing (4), and a
+> postural-torque readout that ignores how much is actually compensated (2).
+>
+> **NOT done:** nothing yet SUPPLIES `tau_active` — the ensemble is not wired to
+> a joint at all, which is C5. And `posturalGain` is a per-joint constant here;
+> whether tone is itself modulated by the drive is C4b's question — **now
+> answered YES, see C4b below.**
+
+### C4c/2 — CAN THE PLANT DO WHAT THE REQUESTER DESCRIBES? Asked BEFORE C4b
+
+Because a controller that optimises toward a motion the plant cannot produce is
+built on sand. The description, verbatim (2026-08-30, on the *Enter Sandman*
+build-up): raise postural tone between trunk and head, drive the head down HARD,
+and have it *"bounce up again like a ball thrown forcefully on the floor"*, to
+then push it down again — the bounce being what enables a **harsher next
+strike**. Sections 10 and 11 of `body_joint_test` measure exactly that.
+
+**Yes, and here is the number.** Same 6 N·m strike for 60 ms, trunk held at 20°:
+
+| | rests at | travels down | back to rest |
+|---|---|---|---|
+| braced (ks 8, tone 1.0) | **0.00°** (trunk-aligned) | 7.44° | **78 ms** |
+| slack (ks 1.5, tone 0) | **+40.00°** (already drooped) | 25.94° | **361 ms** |
+
+**MY FIRST READING OF THE CLAIM WAS WRONG AND IS RECORDED SO IT IS NOT
+RE-TRIED.** I wrote it as *"a braced head bounces, a slack one does not — its
+own weight eats the return"*, and the model says otherwise: an underdamped joint
+RINGS whether or not it is toned, so the slack head comes back past its resting
+place too. What actually separates them is **where they rest** and **how fast
+they turn around** — 4.6× here — and those are the two things "hard and sudden"
+names. The braced head also travels LESS far, so the bounce is not the same
+motion done harder.
+
+**And the mechanism is resonance, measured against closed forms** so nothing
+rests on a provisional constant. Resonant amplification over the static
+deflection is exactly `1/(2·zeta_eff)`:
+
+| | f_n | zeta_eff | static | at f_n | Q | closed form |
+|---|---|---|---|---|---|---|
+| ks 2, untoned | 1.267 Hz | 0.2598 | 19.85° | 38.20° | **1.925** | 1.925 |
+| ks 2, toned | 1.792 Hz | 0.1837 | 9.93° | 27.01° | **2.722** | 2.722 |
+| ks 8, toned | 3.584 Hz | 0.1591 | 2.48° | 7.80° | **3.143** | 3.143 |
+
+**A SECOND WRONG READING, also recorded:** asserting that the peak beats the
+response at HALF the rate does not work and was tried — a soft joint's
+quasi-static response at `f_n/2` is large simply because it is soft, giving a
+ratio of 1.5× that says nothing about resonance. The amplification over the
+STATIC deflection is the honest measure.
+
+**Two consequences that matter for C4b:**
+
+- **Postural tone alone raises the resonance**, by exactly `sqrt(ks/(ks−1))` —
+  here `sqrt(2)`, 1.267 → 1.792 Hz. For an INVERTED joint, cancelling gravity IS
+  stiffening it. Co-contraction takes it to 3.584 Hz, 2.83× the untoned rate.
+  **That range is what C4b tunes across**, and without it "the body tunes toward
+  the beat" would not be a thing a body could do.
+- **A softer joint is effectively MORE damped** (`zeta_eff = dampingRatio ·
+  sqrt(kRef/k)`, because `c` is absolute — invariant 5). So stiffening does two
+  things at once: it moves the resonance up AND sharpens it. Both help the
+  bounce. **C4b's optimiser must read `twBodyJointDampingRatioAt()`, never the
+  stored ratio** — the new accessor exists for exactly that.
+
+Watched failing: a `zeta_eff` that reports the stored ratio (5 failures), and
+postural tone reaching the forcing but not the stiffness (9).
+
+## C4b — Stiffness is EMERGENT, not a constant (requester, 2026-08-28)
+
+**The correction.** C4a treats joint stiffness as a per-joint constant. It is
+not a property of the joint: a dancing body's stiffness is dominated by ACTIVE
+muscle co-contraction, driven by the rhythmic excitation the sound produces, and
+the body settles on the least muscle action that still does the job.
+
+**Two consequences, and the second is the interesting one.**
+
+1. **Do not source it from the literature.** Passive joint stiffness is measured
+   on a RELAXED joint, which is the wrong regime, so AC2.1's sourcing task does
+   not apply to this field the way it applies to a mass or a limb length. C4a's
+   header now says so at the constant.
+2. **If stiffness tracks the drive, so does each joint's natural frequency** —
+   and a body minimising muscle effort has a reason to tune omega_n TOWARD the
+   rate driving it, because a driven oscillator needs least torque for a given
+   amplitude at resonance. That would make **resonance with the music an
+   EMERGENT property of impedance modulation** rather than something seeded into
+   an ensemble. That is a materially different claim from proposal 40's, and it
+   is closer to what the van Noorden & Moelants ~2 Hz body-resonance anchor
+   would predict if the anchor is a consequence rather than an input.
+
+### The two open questions, ANSWERED by the requester 2026-08-30
+
+**Q1 — is postural TONE itself modulated by the drive? YES, and ANTICIPATORY.**
+In the requester's words, on a rock build-up: tone is raised *in anticipation of*
+a heavy movement — high tone between trunk and head, legs supporting — *in order
+to* make the hard sudden nod possible and have the head bounce back up, so that
+the next strike can be harsher still.
+
+Three things follow, and the third is the one that constrains the design:
+
+1. `posturalGain` is a CONTROL VARIABLE, not a per-joint constant. It joins
+   `stiffnessScale` in AC4b.1 rather than sitting outside it.
+2. It is not a separate knob from stiffness in its EFFECT — C4c/2 measured tone
+   alone moving the resonance by `sqrt(2)` — but it IS separate in its MEANING:
+   tone cancels gravity, co-contraction adds spring. They compose.
+3. **IT LEADS THE DRIVE. It is FEED-FORWARD, not a response to the current
+   excitation.** A body braces during the build-up, before the hit. That makes
+   it a genuinely different claim from a reactive controller, and it is
+   testable: the tone envelope should RISE AHEAD of the excitation it is bracing
+   for. The natural non-opinion source is the ensemble's own aggregate power
+   integrated over a window, which leads any individual hit by construction —
+   but WHICH signal is chosen is an AC of its own, because picking one that
+   already contains the answer would be circular.
+
+**Q2 — what is MATCH? NOT phase coherence.** The requester's definition:
+*enabling the body to express its urge to move as intensely as it likes to, over
+an extended period of time — tens of seconds.* That is a materially different
+quantity from either candidate I proposed, and better:
+
+- It is an **achieved-intensity** measure, not an alignment measure. The reward
+  is how much movement the body actually gets, not how well-timed it is.
+- **"As intense as it LIKES TO"** means there is a target set by the music — an
+  urge — and a natural CEILING. Exceeding the urge is not extra reward. So the
+  sensible form is a ratio: **the fraction of the available drive the body
+  converts into sustained movement.** That is dimensionless, which is what keeps
+  it body- and species-independent, which is the whole reason §8 q3 went to
+  torque.
+- **"Over an extended period"** is what makes the effort term BITE. Effort is
+  not a secondary penalty to be weighed against the reward — it is a BUDGET over
+  the window. You cannot thrash at maximum effort for thirty seconds. So the
+  natural form is constrained rather than weighted:
+
+  ```
+  maximise   integral over window of  min( achieved, urge )
+  subject to integral over window of  effort  <=  budget
+  ```
+
+  with `lambda` as its Lagrange multiplier rather than as a free taste
+  parameter — which is a materially better answer to "declare the one free
+  parameter" than tuning `lambda` directly.
+
+**THIS RESOLVES THE MEASURE-DEPENDENCE COMPLETELY, and by a stronger route than
+the one recorded above.** The reviewer's escape route — elastic recovery making
+mean power independent of `k` — was an argument about the EFFORT term. Under
+this objective the reward is sustained AMPLITUDE and the constraint is a
+METABOLIC BUDGET, and **resonance is precisely what lets a body hold a large
+amplitude inside a fixed budget.** Off resonance you either move less or run
+out. The resonance incentive is now structural rather than an artefact of which
+effort integral was picked.
+
+### AC4b.3 — the metrics, PROPOSED and IMPLEMENTED 2026-08-30
+
+`tw/body/twbodyobjective.h`, gated by `body_objective_test`. Pure, no ensemble
+needed, so the definitions can be argued with before anything is wired to them.
+Invariants: `tw303a/body/CONTRACT.md` 18-26.
+
+| Quantity | Definition | Why |
+|---|---|---|
+| **achieved** | mean `\|dθ/dt\|` over the joint's own ROM — **range-lengths per second** | A ratio, so a mouse and a person can both do "three a second"; §8 q3 went to torque exactly so nothing would be body-specific, and an objective in radians voids that. TRAVEL, not excursion: "hard and sudden" is the requester's phrase and peak angle cannot express it. Closed form **`4·f·(A/ROM)`** |
+| **urge** | `urgeNorm(t) × maxUrge`, `urgeNorm` ∈ [0,1] on an **ABSOLUTE scale comparable across tracks** — full scale, never the track's own peak | Requester, 2026-08-30. Per-track normalisation makes a gentle ambient piece and a rock build-up equally demanding at their own loudest moment, so *"this music demands more movement than that music"* becomes inexpressible — while being exactly the claim proposal 44 exists to test. `twbodyobjective` never computes `urgeNorm`: which ensemble quantity means "urge" is a modelling claim and belongs where it can be argued with (C5) |
+| **effort** | mean squared **total** muscle torque in units of the segment's own `m·g·d` | Dimensionless and body-normalised. The review settled squared torque as one of the two measures that support the resonance conclusion, and it is the standard metabolic proxy. **Includes the postural torque** — the one term that cannot be recovered from the trajectory later |
+| **match** | `Σ min(achieved_i, urge_i) / Σ urge_i` over **sub-windows** | `min()` is "as intense as it LIKES to" — overshoot earns nothing. Sub-windows are "over an extended period": a window MEAN cannot tell a steady body from one that thrashed for a third of the time |
+| **window** | **24 s**, sub-window **8 s** | Both DERIVED from constraints meeting, not picked. 24 is SIX periods of the ensemble's slowest unit (twobar, 0.25 Hz) — the shortest window in which that unit is a sustained fact rather than an event — AND exactly three sub-windows, so no sub-window is ragged. **8 s is the requester's value and the SCALE IS A CLAIM**: at 120 BPM it is four bars, a PHRASE, so pausing within a phrase is free and sitting out a phrase is not |
+
+**Exactly TWO free parameters, both physiological, both stated as ANCHORS rather
+than numbers** so a reader can disagree with them precisely — `maxUrge` = **12.0**
+= *full range, three times a second* (requester's value); `effortBudget` = 1.0 =
+*a torque equal to the segment's own weight moment*. Both VERIFY. Worth knowing
+when reading any match: a full-range 2 Hz head-bang is **8.0**, so at 12 the
+ceiling is OFF most of the time and the BUDGET is what binds — which is the
+point of choosing 12 over 4. **Only one binds at a time** — the
+budget when the body cannot keep up, the urge when the music is not asking much
+— and which one bound is an OBSERVATION (`budgetBound`), not a setting.
+
+**`lambda` is the constraint's LAGRANGE MULTIPLIER, not a weight**, and that is
+the substantive change from the form C4b was first written with. It prices the
+budget VIOLATION, never the effort itself, so **the ranking is independent of it
+once it binds** — swept over 1 … 400 in the test. Nobody has to source it.
+
+**NO PHASE TERM ANYWHERE**, and adding one would make AC4b.2 circular: resonance
+is expected to EMERGE from the budget (it is what lets a body hold a large
+amplitude inside a fixed cost), so rewarding alignment directly would assume the
+conclusion.
+
+**Measured** (`body_objective_test`): achieved is `4·f·(A/ROM)` to 0.01 at every
+rate and amplitude tried; half the range at 2 Hz (**4.000**) beats full range at
+0.5 Hz (**2.000**); doubling the movement past the urge scores **exactly the
+same** match as meeting it; two bodies with **identical total travel** (both
+6.000 rl/s) score **1.000 against 0.333**, the bursting one having danced 8 s of
+24 with a `weakestSub` of **0.000**; and the phrasing pair is what gates the 8 s
+scale — a dancer who pauses 2 s in every 8 reads **1.000** at an 8 s sub-window
+and **0.750** at a 1 s one.
+
+**Watched failing, ten sabotages, one per design decision:** achieved as peak
+excursion (20 failures), no ceiling (3), one window mean instead of sub-windows
+(3), effort ignoring the postural torque (2), lambda pricing the effort rather
+than the violation (1), silence scoring a perfect match (1), sub-windows
+unweighted (2), `urgeNorm` unclamped (2), a 1 s sub-window (3), and `maxUrge`
+back at 4.0 (2).
+
+### A DEFECT THE RETUNE EXPOSED, and a lesson about gates
+
+**A ragged trailing sub-window was scored against a WHOLE sub-window's urge**, so
+a 24.001 s run of a 24 s window lost **a quarter of its match to one
+millisecond**. Not an edge case waiting to happen: a real hop grid will almost
+never divide a window evenly, so every run would have paid it. Found by the
+sustainment case reading **0.250** where the closed form says **0.333** — and
+the module's own header had already warned about exactly this failure mode while
+the code committed it. A sub-window is now worth its own LENGTH.
+
+**And the first versions of two new gates PASSED UNDER THEIR OWN SABOTAGE**,
+which is the more useful finding. The ragged-tail case appended a tail that MET
+its urge, so weighted and unweighted both scored 1; the clamp case never fed a
+`urgeNorm` above 1, so clamping was unobservable. Both now under-deliver and
+over-ask respectively. Recorded because a gate that cannot fail is worse than no
+gate — it reports coverage that does not exist, which is the thing this repo's
+watched-failing rule exists to catch, and it caught it here only because the
+sabotage pass was run on the NEW assertions rather than assumed from the old
+ones.
+
+### `urgeNorm`'s SOURCE — proposed, measured and implemented 2026-08-30
+
+**The three obvious candidates are all circular.** `perUnitPower` (|z|²) and
+`dissip` (2|α||z|²) are the resonator's RESPONSE, so using either as "what the
+music asks for" makes urge and achieved the same quantity and match trivially 1.
+
+**What survives is the DRIVE**, and the two `groove.dyn` phase channels were
+already storing it: `support = k·F·cos φ`, `tension = k·F·sin φ`, so
+
+```
+music(t)  =  hypot( support, tension ) / k
+```
+
+— the magnitude divides the resonator's phase, and with it its response,
+straight out; the divide removes the model's own coupling constant.
+
+**THE DIVIDE IS NOT COSMETIC, and the measurement is the argument.** Across six
+committed fixtures twobar's raw drive reads about twice every other unit's, and
+its `k` is 3.5 against their 1.5. On `a0_broadband_grid` the raw p99s are
+**0.02915 / 0.02896 / 0.06757** for reference / sway / twobar and after the
+divide **0.01944 / 0.01931 / 0.01931** — the same number three times. The whole
+apparent difference was a model constant presented as a property of the
+material. `twGrooveCounterTension::k` now carries it; in-memory only, **no
+aspect bump**, and AC-INV verified byte-identical on three fixtures.
+
+**Urge is a LEVEL, not an onset train.** Raw `F` is a half-wave-rectified
+envelope difference and its MEDIAN over every fixture is exactly **0.00000** —
+zero between onsets — so a per-hop urge would be zero nearly always. Smoothed
+with a one-pole at `twBodyUrgeTauSec` = **1 s**, DERIVED: longer than the
+fastest metrical period (0.25 s) so it does not track onsets, shorter than the
+8 s sustainment sub-window so a build-up inside a phrase is visible — which is
+exactly what the requester's account of a rock intro is about.
+
+**The calibration, and it is the weakest number in the model.**
+`twBodyUrgeReference` = **0.008** is a THIRD free parameter, and unlike the
+other two it is a calibration rather than a physiology. Measured: the smoothed
+p99 drive spans **0.00030–0.00262** across 30 unit/fixture pairs. Assumed, and
+this is the arguable half: the fixtures run −19…−23 dBFS RMS while a commercial
+master at ~−10 carries ~3× the linear envelope. So the committed fixtures land
+at urgeNorm **0.037–0.327** and a loud master near 1. It cannot change WHICH
+motions the model produces — it multiplies every unit's urge equally.
+
+**Watched failing, four sabotages:** the coupling not divided out (6 failures),
+the drive taken from `support` alone so the phase is not removed (4), no
+smoothing (2), and `urgeNorm` unclamped (1).
+
+**NOT done:** a proper calibration fixture — a full-scale broadband onset train
+— which would replace the mastering-level assumption with a measurement. And
+the plumbing: `SFeelFlowUiData` does not yet carry `k` through to the app, which
+is C5's.
+
+**STILL OPEN:** nothing in `urgeNorm`'s definition. And the metrics are per JOINT and per WINDOW; combining joints into one
+body-wide objective, and running it as a sliding window rather than a block, are
+both AC4b.1's business.
+
+**AC4b.1** Stiffness AND postural tone become per-hop control variables driven
+by the same excitation that drives the motion, not `twBodyJoint` constants. Tone
+is FEED-FORWARD and must be shown to lead.
+
+**AC4b.2 — THE CLAIM WORTH TESTING.** Given a fixed metrical drive, the settled
+stiffness lands where the joint's natural frequency is NEAR the drive rate.
+Assert convergence from both sides (start too stiff and too floppy) and that the
+settled `twBodyJointNaturalHz` is within a stated band of the driving rate.
+**Watched failing:** a constant stiffness cannot converge on anything, so the
+test must be shown to fail against C4a's model.
+
+> **THE BAND IS ONE-SIDED, AND THREE CORRECTIONS TO THE PROSE ABOVE (adversarial
+> review, 2026-08-30).** The claim was checked and it HOLDS for the stated
+> effort measure — for `I th'' + c th' + k th = tau` at amplitude A and rate ω,
+> the peak torque `A·√((k−Iω²)² + (cω)²)` really is minimised at `k = Iω²`, with
+> floor `cωA`. Three things the claim as written does not carry:
+>
+> 1. **Co-contraction has a cost of its own, and it biases the optimum BELOW
+>    resonance.** With effort = `½⟨τ²⟩ + β(k − k_pass)²`, the optimum moves
+>    `k/k_res` = 0.999 → 0.986 → **0.883** as β grows. And a joint whose PASSIVE
+>    stiffness already exceeds `Iω²` cannot tune down at all — co-contraction
+>    only adds — so it stays detuned high. AC4b.2 must therefore expect a
+>    one-sided, below-drive band, not a symmetric one.
+> 2. **Co-contraction also raises damping** (muscle viscosity scales with
+>    activation), which raises the resonant torque floor `cωA` itself and
+>    flattens the optimum further. Ignored by the claim.
+> 3. **The centripetal term (see C4a's correction) means the effective
+>    resonance under a large fast drive is NOT `twBodyJointNaturalHz`.** The
+>    tuning target for an inverted joint is `k_pass = Iω² + mgd` plus that
+>    contribution, and at 2–4 Hz the contribution is 155–618 % of k.
+
+**AC4b.3** The effort criterion is explicit and its units stated — an integral
+of squared muscle torque over a window, minimised subject to the motion
+remaining bounded. Whatever is chosen, it is ONE function and both the
+simulation and the assertion call it.
+
+> **AC4b.3 MUST BE SETTLED BEFORE AC4b.2 MEANS ANYTHING, and the review is why.**
+> The resonance conclusion is MEASURE-DEPENDENT, not merely measure-flavoured:
+> squared torque supports it and so does non-recoverable work (`|τθ′|` with the
+> negatives unrecovered), but for **net mechanical work with perfect elastic
+> recovery the mean power is `½cω²A²` independent of k — there is no resonance
+> incentive at all.** Picking the measure is picking whether the claim is even
+> testable, so it is a prerequisite rather than a parallel task.
+>
+> **THE REQUESTER'S OWN ASSUMPTION SUPPLIES IT, AND IT IS NOT AN EFFORT MEASURE
+> AT ALL** (2026-08-30, alongside the §8 q3 decision). The objective is
+>
+> ```
+> maximise   MATCH( ongoing movement , trigger )   −   lambda * EFFORT
+> ```
+>
+> — *"a match of ongoing movement with trigger is satisfying, and the brain
+> maximises this satisfaction incrementally"*, together with the earlier
+> *"the body would gravitate to an energy saving amount of muscle action"*. Two
+> statements, one two-term objective, and it is exactly the β-weighted form the
+> reviewer simulated for co-contraction cost — so its finding (the optimum sits
+> BELOW resonance, one-sidedly, `k/k_res` down to 0.883 as the cost term grows)
+> transfers directly and is what AC4b.2's band must expect.
+>
+> **What this changes is that the measure-dependence problem no longer bites the
+> conclusion.** The reviewer's escape route — elastic recovery making mean power
+> independent of `k` — was an argument about the EFFORT term alone. The reward
+> term is not an effort measure: at resonance the body gets the largest excursion
+> per unit torque and the most stable phase relation to the drive, so a
+> match-maximising objective has a resonance incentive whatever the effort
+> measure turns out to be. Effort only decides HOW FAR BELOW resonance the
+> optimum settles, not whether one exists.
+>
+> **Still to define concretely, and it is AC4b.3's remaining work:** what MATCH
+> is, quantitatively. The natural candidates are the phase coherence between the
+> joint's motion and its driving unit, or the correlation of the two over a
+> window. Whichever is chosen it is ONE function, called by both the simulation
+> and the assertion, per the AC as originally written. `lambda` is the one free
+> parameter of the whole scheme and it must be declared as such rather than
+> tuned quietly.
+
+**AC4b.4** AC-INV holds; if this reaches the pose, `feel_flow_puppet.qxa` is
+re-pinned with old and new values and the reason, as C1/C1a did.
+
+### 44 §8 q3 — SETTLED 2026-08-30: **TORQUE (option A)**
+
+**The requester's decision, and the reasoning is the load-bearing part**, because
+it constrains what this model may and may not contain from here on:
+
+> The thesis is that a particular set of dance moves is an effect of NEUROLOGICAL
+> PROGRAMMING and not a consequence of socialisation. Grounding the motion on
+> muscle ACTIVATION, with the stimulus derived from literature, is what keeps the
+> requester's own opinion out of the model — a posture target would be a claim
+> about what a body is *trying to look like*, which is exactly the thing the
+> thesis is trying to show is not chosen. And the mechanism is not assumed to be
+> homo sapiens only: humans alone vary in size and mass by age, so a primitive
+> expressed in RADIANS OF POSTURE is species- and body-specific, while a
+> primitive expressed as an ACTIVATION is not.
+
+**THE ONE ASSUMPTION THE MODEL IS ALLOWED**, in the requester's own words: *a
+match of ongoing movement with trigger is satisfying, and the brain maximises
+this satisfaction incrementally.* Everything else must be derived. Anything a
+future milestone wants to add is measured against that sentence.
+
+**This needs NO engine change.** `twBodyJointStep`'s `muscleTorque` parameter is
+already exactly option A, and always was; option B is what would have needed a
+new field. The decision costs nothing to implement, which is worth knowing before
+weighing the three consequences below.
+
+**Consequence 1 — the postural hold must be SPLIT OUT, and doing so does not
+break the no-opinion property.** Under a torque reading, an inverted segment
+needs a standing DC torque simply to stay upright (C4a's correction made that
+bias explicit and measurable: a head on a 25° lean droops 25° at ks = 2 with no
+muscle at all). That torque cannot come from the ensemble — the ensemble knows
+nothing about gravity, and a musical signal riding on a large DC offset would be
+an opinion smuggled in as a constant. So the total is
+
+```
+tau_muscle = tau_postural( body, current pose )   +   tau_musical( ensemble )
+```
+
+and the first term is **DERIVED, with no free parameter**: it is whatever
+cancels `m·g·d·sin(absolute angle)` at each joint, a quantity the measures module
+already computes. It is gravity compensation, a physical requirement, not a
+stylistic choice — which is what keeps it out of scope for the socialisation
+objection. Only `tau_musical` carries the ensemble's output.
+
+**Consequence 2 — a "sudden stop" is a NEGATIVE torque, not the absence of one,
+and the requester's own assumption supplies it.** Under a set-point reading a
+stop is free (the target simply stops moving and the joint is pulled to rest).
+Under a torque reading, drive going to zero means the segment COASTS and then
+settles at its gravitational equilibrium — for a head, a droop, not a stop. So
+an arrest has to be an ACTIVE BRAKING torque. That is not a problem the decision
+creates, it is a prediction it makes: under "maximise the match, incrementally",
+a body that anticipates a stop invests torque in arriving stopped, and the size
+of that investment is a measurable consequence rather than an animation
+parameter. **This is now the sharpest observable the whole model produces**, and
+it is what the requester's original report (2026-08-27, "movement seemed linear
+to me and not honoring weight, sudden stops that people do") was about.
+
+**Consequence 3 — amplitude now scales INVERSELY with stiffness, which makes
+C4b's optimisation sharper rather than weaker.** Under option B, doubling the
+stiffness leaves the amplitude alone and only tightens the tracking; under A it
+HALVES the motion. So stiffness is no longer a free dial that changes only the
+feel — it trades directly against excursion, which is what gives
+"least muscle action that still does the job" something to be least *about*.
+
+**Consequence 4 — BODY SIZE BECOMES A PREDICTION, and that is an asset.** Under
+A the same torque on a heavier body produces less motion and a lower crossover
+frequency, so `twBodyMeasures`'s M and H stop being cosmetic and become the
+independent variable of a real experiment — proposal 44 §3's
+"correlate-with-my-body" idea, but as a falsifiable claim rather than a
+convenience. It is also the reading under which the cross-species argument above
+is even expressible.
+
+**The honest cost, stated plainly:** "derive the stimulus from literature" is now
+a sourcing task on TORQUE magnitudes — EMG-scale numbers — and AC2.1 is already
+open and already blocked in this environment for the far easier case of segment
+masses. Expect the musical torque's SCALE to be provisional for some time. What
+is NOT provisional, and this is the point of the decision, is its SHAPE: the
+time course comes from the ensemble, and a scale factor is one number that
+multiplies everything equally, so it cannot change which motions the model
+produces — only how large they are.
+
+## C5 — The `body.pose` aspect and the puppet switch — **THE SEAM IS DONE
+## 2026-08-30; THE PLANT PASS THAT FILLS IT IS NOT**
+
+> **What landed:** the aspect, its own params blob, the orphan discipline, the
+> pose seam's one new branch, the layering edges, and every gate above except
+> the ones that need a producer. `tw/sidecar/twbodyposeaspect.h`,
+> `twAspect::BodyPose` v1, `SFeelFlowUiData::pose`, `feelflow_pose_test`,
+> `sidecar_test` section 8.
+>
+### THE PLANT PASS — **DONE 2026-08-30**, and the chain closes
+
+`tw/sidecar/twbodyplant.h`, gated by `body_plant_test` over a REAL analysis:
+the production front end and ensemble run over a click train, then the plant.
+It is the first gate that can fail for a reason none of the others can see.
+
+**Four joints, seven DOF**, which the per-axis work of C4a's correction is what
+makes possible:
+
+| joint | segment | axes → DOF |
+|---|---|---|
+| LEG | compound(Thigh…Foot) at the hip | Flex ← "bounce" → BounceY; Lateral ← "twobar" → HipShift |
+| TRUNK | Trunk at the pelvis | Lateral ← "sway" → Sway; Flex/Axial undriven |
+| ARM | compound(UpperArm…Hand), levered off the trunk | Flex ← "limbs" → ArmSwing |
+| NECK | HeadNeck at the atlas, levered off the trunk | Lateral ← **NOTHING** → HeadNod |
+
+**THE HEAD IS MAPPED TO NO UNIT AT ALL, and that is the whole proposal in one
+line of a table.** The requester's report (2026-08-27) was that the head moved
+with the tatum gauge rather than with the torso. C1 took it off that gauge and
+hung it on the trunk through a first-order lag; C4a showed a lag CANNOT produce
+the described nod because it has no momentum. Here the head is a real segment
+on a real joint whose PARENT IS THE TRUNK. **Measured: peak head nod 0.0212 rad
+(1.21°), head/trunk correlation 0.9289** — related, and not welded. A rigid
+pair reads exactly 1.0000.
+
+**THE TORQUE SCALE IS DERIVED, NOT CHOSEN**, so the plant adds no free
+parameter: `torqueScale = rom·k/Q`, i.e. **full urge at the joint's own
+resonance is exactly full range of motion** — which ties the plant's output to
+`maxUrge`'s own anchor ("full range, three times a second") by construction.
+Measured to 1e-9 against the closed form: **47.990319 N·m** for sway.
+
+**Measured, end to end:** 1200 hops, 4 driven DOF, peak urge 0.1621, peak sway
+0.0542 rad; a 110 kg / 1.95 m body gives 0.0555 and 0.0232 against 0.0542 and
+0.0212, so **M and H really are key material** and AC5.1's nesting argument is
+not decoration; silence gives **exactly 0.000e+00** on every DOF; the payload
+is byte-deterministic across two runs.
+
+**And the METRICAL LADDER SURVIVES THE PLANT:** drawn rates **sway 0.625 Hz,
+bounce 1.958 Hz** against a seeded ladder of 0.5 and 2.0, with the fixture's
+tatum at 4.0 Hz. Nothing is dragged up to the tatum by the machinery in
+between.
+
+**Watched failing, seven sabotages.** Three bit immediately: the neck given no
+parent (the head reads 0.0000), the head welded to the trunk (correlation
+exactly 1.0000), and the body ignored as a parameter. **Two did NOT, and both
+needed a better gate rather than a better sabotage** — a flat torque scale of
+60 N·m moved peak sway from 0.0542 to 0.0793 rad, comfortably inside any
+plausible excursion bound, and leaving the coupling in the drive breaks no
+bound at all. Both are now asserted AS CLOSED FORMS (the scale against
+`rom·k/Q` to 1e-9; the peak urge against an independent recompute over the
+mapped units), and both then bit. **An excursion bound cannot catch a wrong
+scale**, and that is the lesson.
+
+**A SEVENTH DOES NOT BITE AND THE REASON IS A FINDING, not a gap.** Swapping
+`cosMet` for `cosPhi` — C1a's own defect — moves the drawn rates only from
+0.625 / 1.958 to 0.542 / 2.583 Hz, nowhere near the tatum. **The plant filters
+the defect out**: a joint is itself a resonator with a low natural frequency,
+so a 4 Hz forcing produces a response dominated by the joint's own omega
+whatever phase channel drove it. The plant is strictly MORE ROBUST to C1a's
+defect than the direct mapping was — which is why the direct mapping needed
+C1a and this does not. The phase choice stays gated where it is observable, at
+C1a's mapping, and is recorded here as not gated at this level.
+
+**WHICH SEGMENT STANDS FOR WHICH DOF IS PROVISIONAL and says so.** A bounce is
+really knee flexion carrying the upper body; a hip shift is really a standing
+sway about the ankles. Both are modelled as axes of the leg's own compound
+pendulum. What is NOT provisional is the physics on each axis — a real
+segment's inertia, the right gravity sign, absolute damping, postural tone, and
+a parent that actually drives its child. An anatomically exact chain needs the
+child-to-parent reaction `tw/body`'s CONTRACT already names as missing.
+
+**STILL NOT DONE: the STORE PLUMBING.** `SFeelFlowTrackBounce` does not yet run
+the plant, store the payload, or decode it back into `SFeelFlowUiData::pose`.
+So the chain is complete and gated end to end in the engine, and the PUPPET is
+still C3's — every run takes AC5.4's fallback. That is the last piece of C5 and
+it is plumbing rather than design: the producer, the store key, the reload.
+>
+> **AC5.6's OWN PRESCRIPTION IS BACKWARDS, and the sabotage proved it.** The AC
+> says to compare `twGrooveAnalysisParams::serialize()` at defaults and at
+> M = 80, and that "the M = 80 comparison fails while the defaults comparison
+> still passes, which is the whole point". Built and run, the hazard does the
+> OPPOSITE, for two reasons: a groove params object has no M, so asking its
+> serializer to ignore one is vacuous and passes under the sabotage; and at
+> M = 80 the hazard's bytes are IDENTICAL to the correct design's — both give
+> the groove blob followed by two f64s. They differ only **AT DEFAULTS**,
+> because a body appended to the SHARED serializer has to be
+> additive-when-non-default to stay invisible to the fixture corpus, so at
+> 75 kg it writes nothing while the correct design writes M and H
+> unconditionally. **Being invisible at defaults is precisely what made the
+> hazard dangerous, and it is what the defaults length check sees.** Corrected
+> in `sidecar_test` with the reasoning beside it; the AC text above is left as
+> written so the correction is legible.
+>
+> **Measured / verified:** AC-INV holds — all three groove payloads
+> byte-identical across three fixtures against the pre-branch build (nine
+> hashes). The body blob is the groove blob's bytes verbatim plus exactly two
+> f64s, at defaults and at M = 80. A groove change re-keys `body.pose` too
+> (correct — the plant is driven by the ensemble); a body change re-keys only
+> `body.pose` (also correct — the ensemble does not know the body exists). Full
+> suite **323 run, 0 failures**.
+>
+> **Watched failing.** AC5.6: the prescribed sabotage (M/H appended to the
+> shared serializer) — 1 failure, the defaults length check. AC5.3/AC5.4, four
+> sabotages: the branch never taken (6 failures), two DOF indices swapped (2),
+> the ragged-grid guard removed (1), the plant angle unclamped (1). A fifth —
+> "the branch always taken" — is **not constructible**: `pose.size() == nHops`
+> already implies non-empty (nHops is proven non-zero upstream), so removing
+> the `!empty()` guard produces equivalent code. Recorded rather than dressed
+> up as a passing sabotage; the guard is kept as documentation of intent.
+>
+> **NOT gated:** anything that needs a producer — the plant's own trajectories,
+> the encoder, the store round-trip through a real analysis, and AC5.4 against
+> a REAL re-analysis rather than against the same snapshot with and without a
+> pose vector. The C++ test is the strongest form available without one, and it
+> is stronger than a `.qxa` would be for this particular question: a script
+> cannot construct an `SFeelFlowUiData`, only reach a pose through a real
+> analysis, which would make the comparison depend on the analysis rather than
+> on the branch.
 
 ## C5 — The `body.pose` aspect and the puppet switch
 
@@ -736,7 +1558,7 @@ C3; C5 and C6 are strictly serial after C4.
 |---|---|---|---|
 | 1 | What drives the head | C1 | **D** — the TRUNK, through a one-pole lag. Every unit is already taken, so A/B are degenerate and C costs an aspect bump |
 | 2 | Projection: 3/4 oblique, or two orthogonal views | C3 | **(i)** 3/4 oblique |
-| 3 | Torque drive vs moving set-point (44 §8 q3) | C4 | A/B once the puppet can show both |
+| 3 | Torque drive vs moving set-point (44 §8 q3) | C4 | **SETTLED 2026-08-30 — TORQUE (A).** See C4b; needs no engine change, and it makes body size a prediction rather than a parameter |
 | 4 | M/H global or per-project (44 §8 q2) | C6 | global first, per-project later |
 
 ## What the review changed (v1 → v2)

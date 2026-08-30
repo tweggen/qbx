@@ -1103,6 +1103,8 @@ SApplyResult SAssertPuppetSkeletonAction::apply( SProject * /*project*/ )
     j.armSwing = (float) arm_;
     j.bounceY  = (float) bounce_;
     j.hipShift = (float) hip_;
+    j.trunkFlex  = (float) flex_;
+    j.trunkTwist = (float) twist_;
 
     const SFeelFlowSkeleton sk =
         sFeelFlowSkeletonFor( j, QRectF( 0.0, 0.0, boxW_, boxH_ ) );
@@ -1131,11 +1133,19 @@ SApplyResult SAssertPuppetSkeletonAction::apply( SProject * /*project*/ )
         return { true, nullptr };
     }
 
-    if( expectTrunk_ > -999.0
-        && std::fabs( sk.trunkLeanDeg - expectTrunk_ ) > tol_ ) {
-        qWarning() << "assert-puppet-skeleton FAILED: trunk" << sk.trunkLeanDeg
-                   << "expected" << expectTrunk_ << "tol" << tol_ << "-" << desc;
-        return { false, nullptr };
+    struct Expect { const char *what; double got; double want; };
+    const Expect expects[] = {
+        { "trunk",     sk.trunkLeanDeg, expectTrunk_  },
+        { "trunkFlex", sk.trunkFlexDeg, expectFlex_   },
+        { "armSwingL", sk.armSwingLDeg, expectSwingL_ },
+        { "twist",     sk.shoulderTwistDeg, expectTwist_ },
+    };
+    for( const Expect &e : expects ) {
+        if( e.want > -999.0 && std::fabs( e.got - e.want ) > tol_ ) {
+            qWarning() << "assert-puppet-skeleton FAILED:" << e.what << e.got
+                       << "expected" << e.want << "tol" << tol_ << "-" << desc;
+            return { false, nullptr };
+        }
     }
 
     // THE C0 ASSERTION. Every segment above the neck must carry the trunk's
@@ -1171,6 +1181,9 @@ QStringList SAssertPuppetSkeletonAction::knownAttributes() const
 {
     return { QStringLiteral("sway"), QStringLiteral("nod"), QStringLiteral("arm"),
              QStringLiteral("bounce"), QStringLiteral("hip"),
+             QStringLiteral("flex"), QStringLiteral("twist"),
+             QStringLiteral("expectFlex"), QStringLiteral("expectSwingL"),
+             QStringLiteral("expectTwist"),
              QStringLiteral("boxW"), QStringLiteral("boxH"),
              QStringLiteral("expectValid"), QStringLiteral("expectTrunk"),
              QStringLiteral("inheritTol"),
@@ -1184,6 +1197,11 @@ void SAssertPuppetSkeletonAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "arm",    QString::number( arm_,    'g', 10 ) );
     elem.setAttribute( "bounce", QString::number( bounce_, 'g', 10 ) );
     elem.setAttribute( "hip",    QString::number( hip_,    'g', 10 ) );
+    elem.setAttribute( "flex",   QString::number( flex_,   'g', 10 ) );
+    elem.setAttribute( "twist",  QString::number( twist_,  'g', 10 ) );
+    elem.setAttribute( "expectFlex",   QString::number( expectFlex_,   'g', 10 ) );
+    elem.setAttribute( "expectSwingL", QString::number( expectSwingL_, 'g', 10 ) );
+    elem.setAttribute( "expectTwist",  QString::number( expectTwist_,  'g', 10 ) );
     elem.setAttribute( "boxW",   QString::number( boxW_,   'g', 10 ) );
     elem.setAttribute( "boxH",   QString::number( boxH_,   'g', 10 ) );
     elem.setAttribute( "expectValid", expectValid_ );
@@ -1200,6 +1218,11 @@ bool SAssertPuppetSkeletonAction::readXml( const QDomElement &elem, int /*versio
     arm_         = elem.attribute( "arm",    "0" ).toDouble();
     bounce_      = elem.attribute( "bounce", "0" ).toDouble();
     hip_         = elem.attribute( "hip",    "0" ).toDouble();
+    flex_        = elem.attribute( "flex",   "0" ).toDouble();
+    twist_       = elem.attribute( "twist",  "0" ).toDouble();
+    expectFlex_   = elem.attribute( "expectFlex",   "-1000" ).toDouble();
+    expectSwingL_ = elem.attribute( "expectSwingL", "-1000" ).toDouble();
+    expectTwist_  = elem.attribute( "expectTwist",  "-1000" ).toDouble();
     boxW_        = elem.attribute( "boxW",   "200" ).toDouble();
     boxH_        = elem.attribute( "boxH",   "400" ).toDouble();
     expectValid_ = elem.attribute( "expectValid", "1" ).toInt();

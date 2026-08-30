@@ -9,6 +9,7 @@
 
 #include "tw/render/render_session.h"
 #include "tw/sidecar/twgroovemetrics.h"
+#include "tw/sidecar/twbodyposeaspect.h"
 
 class STrack;
 
@@ -88,6 +89,19 @@ struct SFeelFlowUiData {
     // read-only / no-demand, exactly as the level meters' does). Immutable
     // like everything else in this struct.
     std::vector<twGrooveDynRecord> dyn;
+
+    // --- proposal 44 C5: the decoded "body.pose" records ------------------
+    //
+    // One record per hop, on the SAME grid as `compliance` and `dyn`. EMPTY
+    // whenever no "body.pose" entry exists for this content -- which is the
+    // NORMAL case until the plant pass has run, and is what makes AC5.4's
+    // fallback safe by CONSTRUCTION rather than by tolerance: with this empty
+    // sFeelFlowPoseAt takes the M3e direct mapping unchanged, so every pose
+    // number is byte-identical to C3's.
+    //
+    // DOF order is twBodyPoseDof's, which is the skeleton's own.
+    std::vector<twBodyPoseRecord> pose;
+
 
     /** The series for one metric id, or null (unknown id / no data).
      * "compliance" always resolves when any data exists -- it is the first

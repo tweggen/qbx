@@ -89,6 +89,7 @@ std::vector<twGroovePendulumUnitTrajectory> runPass1( const twGrooveField &field
     for( const twGroovePendulumUnitSpec &spec : params.ensemble ) {
         twGroovePendulumUnitTrajectory traj;
         traj.name = spec.name;
+        traj.k    = spec.k;
         traj.phaseWrapped.assign( nHops, 0.0 );
         traj.phaseMetric.assign( nHops, 0.0 );
         traj.omega.assign( nHops, 0.0 );
@@ -155,7 +156,20 @@ std::vector<twGroovePendulumUnitTrajectory> runPass1( const twGrooveField &field
         // The metrical-phase PLL (proposal 44 C1a). N is how many of the unit's
         // OWN periods it takes to pull into alignment -- slow enough that a
         // jittery drive cannot drag it off its metrical rate, fast enough to
-        // track a real tempo change (verified on c_tempo_drift.wav).
+        // track a real tempo change (verified on c_tempo_drift.wav). With
+        // K = omega/(2*pi*N) the lock range is |detuning| <= K and the
+        // linearised pull-in time constant is 1/K, i.e. exactly N periods;
+        // both scale with omega, so the behaviour is period-invariant.
+        //
+        // WHAT MAKES A FIXED GAIN SAFE IS THE BOUND |K sin(.)| <= K, NOT A
+        // ZERO MEAN. An earlier note here claimed the pull term "averages to
+        // ~0" for an unlocked unit; it does not. Outside the lock range the
+        // mean pull is `Delta - sqrt(Delta^2 - K^2)`, largest just past the
+        // edge -- measured mean sin(eps) = 0.49 at 2.5% detuning, 0.21 at 5%.
+        // Such a unit phase-SLIPS with a slow beat rather than cancelling. The
+        // guarantee that survives, and the only one relied on, is that no
+        // drive can drag a unit's metrical rate more than K (2% of its omega)
+        // off. Found by an adversarial review of the C4 maths, 2026-08-30.
         const int    kLockPeriods = 8;
         double       phiMet       = 0.0;
         for( uint32_t hop = 0; hop < nHops; hop++ ) {
@@ -366,6 +380,9 @@ twGroovePendulumResult twGroovePendulumAnalyze( const twGrooveField &field,
         result.counterTension[u].meanSinDeltaPhi  = meanSin;
         result.counterTension[u].varSinDeltaPhi    = varSin;
         result.counterTension[u].meanF             = meanF;
+        // The unit's own coupling, so a read-side consumer can divide it out
+        // and get the MUSIC rather than the model -- see twGrooveCounterTension.
+        result.counterTension[u].k                 = trajs[u].k;
     }
 
     return result;

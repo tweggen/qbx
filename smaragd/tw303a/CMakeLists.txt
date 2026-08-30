@@ -688,7 +688,11 @@ tw_module(metering
 tw_module(body
     SOURCES
         body/include/tw/body/twbodymeasures.h
+        body/include/tw/body/twbodyjoint.h
+        body/include/tw/body/twbodyobjective.h
         body/src/twbodymeasures.cc
+        body/src/twbodyjoint.cc
+        body/src/twbodyobjective.cc
     DEPS tw_core)
 
 # --- sidecar: derived-data QAF container + LRU store (proposal 27) --------------
@@ -701,6 +705,8 @@ tw_module(sidecar
         sidecar/include/tw/sidecar/twgroove.h
         sidecar/include/tw/sidecar/twgroovependulum.h
         sidecar/include/tw/sidecar/twgrooveaspect.h
+        sidecar/include/tw/sidecar/twbodyposeaspect.h
+        sidecar/include/tw/sidecar/twbodyplant.h
         sidecar/include/tw/sidecar/twgroovemetrics.h
         sidecar/src/twqaf.cc
         sidecar/src/twsidecarstore.cc
@@ -708,8 +714,13 @@ tw_module(sidecar
         sidecar/src/twgroove.cc
         sidecar/src/twgroovependulum.cc
         sidecar/src/twgrooveaspect.cc
+        sidecar/src/twbodyposeaspect.cc
+        sidecar/src/twbodyplant.cc
         sidecar/src/twgroovemetrics.cc
-    DEPS tw_core)
+    # tw_body since proposal 44 C5: the "body.pose" aspect's params blob
+    # NESTS the groove one and its DOF trajectories are the plant's. Acyclic --
+    # tw_body depends on tw_core alone and knows nothing of the sidecar.
+    DEPS tw_core tw_body)
 
 # --- Audio file format libraries (sinks only) -----------------------------------
 # On Windows these come from vcpkg (CMake config packages); on macOS/Linux the
@@ -1069,6 +1080,9 @@ tw_module_test(graph_test                   graph/tests/graph_test.cc           
 tw_module_test(page_channels_test           graph/tests/page_channels_test.cc           tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(body_measures_test           body/tests/body_measures_test.cc            tw_body)
+tw_module_test(body_joint_test              body/tests/body_joint_test.cc               tw_body)
+tw_module_test(body_objective_test          body/tests/body_objective_test.cc           tw_body)
+tw_module_test(body_plant_test              sidecar/tests/body_plant_test.cc            tw_sidecar)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
 if(TARGET twtestclap)

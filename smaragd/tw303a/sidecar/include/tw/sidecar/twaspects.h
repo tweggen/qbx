@@ -358,6 +358,61 @@ constexpr uint32_t    GrooveEvVersion = 1;
 constexpr const char *GrooveDyn        = "groove.dyn";
 constexpr uint32_t    GrooveDynVersion = 3;
 
+/**
+ * "body.pose" -- proposal 44 C5: the BODY's own trajectory, as a plant driven
+ * by the ensemble rather than as a display mapping of it.
+ *
+ * Same hop grid and record count as "groove.res" (rate/100), so a consumer
+ * indexes it exactly as it indexes compliance -- position / hopFrames, never a
+ * separate lookup.
+ *
+ * Record: float32[nDof*3] LE, one record per hop, DOF-major:
+ *   [d*3 + 0]  angle          rad (or metres for a translational DOF)
+ *   [d*3 + 1]  velocity       rad/s (m/s)
+ *   [d*3 + 2]  muscleTorque   N*m, the TOTAL -- postural tone plus the
+ *                             ensemble's own active torque, which is the sum
+ *                             an effort measure has to see (tw/body's
+ *                             CONTRACT invariant 22)
+ * recordStride = nDof*3*4, recordCount == "groove.res"'s.
+ *
+ * DOF order is the skeleton's own (app/model/sfeelflowskeleton.h's
+ * SFeelFlowJoints): bounceY, sway, armSwing, headNod, hipShift, trunkFlex,
+ * trunkTwist. nDof is NOT in the header -- it is in the params blob, and
+ * derivable as payloadLen / recordCount / 12.
+ *
+ * ===================== THE PARAMS BLOB IS ITS OWN =======================
+ *
+ * **`twBodyPoseParams::serialize` -- the groove blob's bytes, then M and H.
+ * `twGrooveAnalysisParams::serialize` IS NOT TOUCHED, and that is the whole
+ * design of this entry rather than an implementation detail.**
+ *
+ * The groove params blob is SHARED by all three groove aspects above -- same
+ * params, same hash, same store key. So the natural implementation, appending
+ * M and H to that serializer, silently RE-KEYS "groove.res", "groove.ev" and
+ * "groove.dyn" as well: the first user who sets M = 80 kg triggers a full
+ * groove re-analysis for a parameter the ensemble does not consume anywhere.
+ *
+ * **It would have passed every gate in this plan.** The additive-when-
+ * non-default rule means nothing is serialized at defaults, so every committed
+ * fixture stays byte-identical and every existing assertion holds. Only a user
+ * with a non-default body would ever see it, as an unexplained re-analysis.
+ * That is exactly the plant-changes-the-neural-layer coupling proposal 44's
+ * AC-INV exists to forbid, and it is invisible without a gate written for it:
+ * `sidecar_test` compares `twGrooveAnalysisParams::serialize()` pre/post at
+ * defaults AND at M = 80, because only the second comparison can fail.
+ *
+ * Nesting rather than appending is what makes the containment structural: the
+ * body params blob CONTAINS the groove one, so a groove parameter change
+ * re-keys both (correct -- the plant is driven by the ensemble) while a body
+ * parameter change re-keys only this aspect (also correct -- the ensemble does
+ * not know the body exists).
+ *
+ * Header sourceRate/channels/sourceFrames = the analyzed wave's geometry, as
+ * "groove.res".
+ */
+constexpr const char *BodyPose        = "body.pose";
+constexpr uint32_t    BodyPoseVersion = 1;
+
 } // namespace twAspect
 
 #endif

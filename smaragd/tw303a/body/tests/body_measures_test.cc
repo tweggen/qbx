@@ -54,6 +54,47 @@ int main()
               1e-12, "I_prox is the parallel-axis composition" );
     }
 
+    // --- 1a. THE LONGITUDINAL INERTIA IS A DIFFERENT NUMBER ---------------
+    // inertiaProx is TRANSVERSE and carries a parallel-axis d^2 term. About the
+    // segment's own long axis -- the axis it TWISTS about -- the centre of mass
+    // sits ON the axis, so that term does not exist and the inertia is much
+    // smaller. Reusing one for the other made a head as slow to turn as it is
+    // to nod. Everything asserted here is a RELATION or an identity, so none of
+    // it rests on the provisional girth column's value.
+    {
+        for( int i = 0; i < (int) twBodySeg::Count; i++ ) {
+            const twBodySegment s = ref.segment( (twBodySeg) i );
+            near( s.inertiaLong, s.mass * s.radiusGyrLong * s.radiusGyrLong,
+                  1e-15, "I_long = m*r_long^2, with NO parallel-axis term" );
+            check( s.inertiaLong > 0.0 && s.inertiaLong < s.inertiaProx,
+                   "and it is positive and strictly below the transverse one" );
+        }
+        const twBodySegment h = ref.segment( twBodySeg::HeadNeck );
+        const twBodySegment sh = ref.segment( twBodySeg::Shank );
+        std::printf( "  head  I_prox %.5f  I_long %.5f  (ratio %.1f)\n",
+                     h.inertiaProx, h.inertiaLong, h.inertiaProx / h.inertiaLong );
+        std::printf( "  shank I_prox %.5f  I_long %.5f  (ratio %.1f)\n",
+                     sh.inertiaProx, sh.inertiaLong, sh.inertiaProx / sh.inertiaLong );
+        // A SLENDER segment's two inertias differ far more than a STUBBY one's.
+        // That ordering is geometry, not a table value.
+        check( sh.inertiaProx / sh.inertiaLong > h.inertiaProx / h.inertiaLong,
+               "a slender shank's transverse/longitudinal ratio exceeds a stubby head's" );
+        // A COLINEAR compound sums longitudinal inertias with no parallel-axis
+        // term at all -- every segment shares the one axis.
+        const twBodySegment arm = ref.compound( twBodySeg::UpperArm, 3 );
+        double sum = 0.0;
+        for( int i = (int) twBodySeg::UpperArm; i <= (int) twBodySeg::Hand; i++ )
+            sum += ref.segment( (twBodySeg) i ).inertiaLong;
+        near( arm.inertiaLong, sum, 1e-15,
+              "a colinear compound's longitudinal inertia is a PLAIN SUM" );
+        near( arm.inertiaLong, arm.mass * arm.radiusGyrLong * arm.radiusGyrLong,
+              1e-15, "and the compound stays self-consistent" );
+        // Both scale as M*H^2, like every inertia here.
+        twBodyMeasures big; big.massKg = 150.0; big.statureM = 3.50;
+        near( big.segment( twBodySeg::HeadNeck ).inertiaLong,
+              h.inertiaLong * 2.0 * 4.0, 1e-9, "I_long scales as M*H^2" );
+    }
+
     // --- 2. AC2.3: the crossover, at the amplitudes that produce it -------
     // These are the two numbers proposal 44's verification note quotes, and
     // they are reproduced here to 0.01 Hz. NOTE THE AMPLITUDES: the crossover

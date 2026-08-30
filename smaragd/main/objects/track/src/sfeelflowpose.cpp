@@ -159,6 +159,62 @@ SFeelFlowPose sFeelFlowPoseAt( const SFeelFlowUiData &ui, offset_t frame )
     const size_t hopNext = std::min( hop + 1, nHops - 1 );
     const float  frac    = (float) ( h - (double) hop );
 
+    // --- proposal 44 C5 (AC5.3): PREFER THE PLANT WHEN IT HAS RUN ---------
+    //
+    // ONE branch, and the Pose seam was built for exactly this swap: below it
+    // is the M3e DIRECT MAPPING, which turns each unit's own resonance into a
+    // displacement; here is the "body.pose" aspect, which is a real body's
+    // trajectory under torques the ensemble applied. The seam's SHAPE does not
+    // change -- the caller still gets one immutable, clamped SFeelFlowPose and
+    // still never blocks, demands or touches the store.
+    //
+    // **The fallback is safe BY CONSTRUCTION, not by tolerance** (AC5.4): with
+    // no "body.pose" on disk `ui.pose` is empty, this branch is not taken, and
+    // the code below is bit-for-bit the C3 path. That is what makes the aspect
+    // shippable before a single fixture has been re-analysed.
+    // The size equality is the load-bearing half and the emptiness check is
+    // belt-and-braces: nHops is ui.dyn.size(), which the guard above has
+    // already proved non-zero, so an EMPTY pose cannot satisfy the equality.
+    // (Found by sabotaging it: dropping `!empty()` produces equivalent code,
+    // so that half is documentation of intent rather than a gate. It is kept
+    // because a future change to the early return above would otherwise turn
+    // an empty pose into an out-of-bounds index rather than a fallback.)
+    if( !ui.pose.empty() && ui.pose.size() == nHops ) {
+        const twBodyPoseRecord &pa = ui.pose[hop];
+        const twBodyPoseRecord &pb = ui.pose[hopNext];
+        auto lerpAngle = [&]( twBodyPoseDof d ) {
+            const float a = pa.dof[(int) d].angle, b = pb.dof[(int) d].angle;
+            return clamp11( a + ( b - a ) * frac );
+        };
+        pose.bounceY  = lerpAngle( twBodyPoseDof::BounceY  );
+        pose.sway     = lerpAngle( twBodyPoseDof::Sway     );
+        pose.armSwing = lerpAngle( twBodyPoseDof::ArmSwing );
+        pose.headNod  = lerpAngle( twBodyPoseDof::HeadNod  );
+        pose.hipShift = lerpAngle( twBodyPoseDof::HipShift );
+        // ENERGY STILL COMES FROM THE ENSEMBLE, deliberately. It is "how much
+        // is this metrical level participating", which is a property of the
+        // MUSIC and not of the body -- the plant changes how far a joint
+        // moves, never how strongly the level it hangs on is resonating. So
+        // the brightness/weight a widget draws from it means the same thing on
+        // both sides of this branch, which is what lets a reader compare them.
+        for( int p = 0; p < SFeelFlowPose::PartCount; p++ ) {
+            if( kPartUnitName[p][0] == '\0' ) continue;
+            size_t unit = ui.unitNames.size();
+            for( size_t u = 0; u < ui.unitNames.size(); u++ )
+                if( ui.unitNames[u] == kPartUnitName[p] ) { unit = u; break; }
+            if( unit >= ui.unitNames.size() || unit >= ui.nUnits ) continue;
+            const size_t iA = (size_t) hop * ui.nUnits + unit;
+            if( iA >= ui.perUnitPower.size() ) continue;
+            const float power = ui.perUnitPower[iA];
+            pose.energy[p] = power > 0.0f
+                           ? std::max( 0.0f, std::min( 1.0f, std::sqrt( power ) ) )
+                           : 0.0f;
+        }
+        pose.energy[SFeelFlowPose::PartReference] =
+            pose.energy[SFeelFlowPose::PartSway];
+        return pose;
+    }
+
     // Resolve each part's unit ONCE, by name. An absent name leaves the part
     // at 0 -- never a fallback to a neighbouring unit.
     for( int p = 0; p < SFeelFlowPose::PartCount; p++ ) {
