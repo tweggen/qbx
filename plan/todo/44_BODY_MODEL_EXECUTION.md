@@ -1325,6 +1325,65 @@ time course comes from the ensemble, and a scale factor is one number that
 multiplies everything equally, so it cannot change which motions the model
 produces — only how large they are.
 
+## C5 — The `body.pose` aspect and the puppet switch — **THE SEAM IS DONE
+## 2026-08-30; THE PLANT PASS THAT FILLS IT IS NOT**
+
+> **What landed:** the aspect, its own params blob, the orphan discipline, the
+> pose seam's one new branch, the layering edges, and every gate above except
+> the ones that need a producer. `tw/sidecar/twbodyposeaspect.h`,
+> `twAspect::BodyPose` v1, `SFeelFlowUiData::pose`, `feelflow_pose_test`,
+> `sidecar_test` section 8.
+>
+> **What did NOT land, and it is the larger half: NOTHING PRODUCES A
+> `body.pose` PAYLOAD.** The plant pass — driving seven joints from five units
+> through `twBodyUrgeSmoother`, `twBodyJointStep` and the objective, per hop,
+> inside `SFeelFlowTrackBounce`'s existing analysis job — is not written. So
+> every run today takes the fallback, which is exactly the state AC5.4 exists
+> to make safe, and the puppet is still C3's. **Do not read "C5 executed" off
+> this heading.**
+>
+> **AC5.6's OWN PRESCRIPTION IS BACKWARDS, and the sabotage proved it.** The AC
+> says to compare `twGrooveAnalysisParams::serialize()` at defaults and at
+> M = 80, and that "the M = 80 comparison fails while the defaults comparison
+> still passes, which is the whole point". Built and run, the hazard does the
+> OPPOSITE, for two reasons: a groove params object has no M, so asking its
+> serializer to ignore one is vacuous and passes under the sabotage; and at
+> M = 80 the hazard's bytes are IDENTICAL to the correct design's — both give
+> the groove blob followed by two f64s. They differ only **AT DEFAULTS**,
+> because a body appended to the SHARED serializer has to be
+> additive-when-non-default to stay invisible to the fixture corpus, so at
+> 75 kg it writes nothing while the correct design writes M and H
+> unconditionally. **Being invisible at defaults is precisely what made the
+> hazard dangerous, and it is what the defaults length check sees.** Corrected
+> in `sidecar_test` with the reasoning beside it; the AC text above is left as
+> written so the correction is legible.
+>
+> **Measured / verified:** AC-INV holds — all three groove payloads
+> byte-identical across three fixtures against the pre-branch build (nine
+> hashes). The body blob is the groove blob's bytes verbatim plus exactly two
+> f64s, at defaults and at M = 80. A groove change re-keys `body.pose` too
+> (correct — the plant is driven by the ensemble); a body change re-keys only
+> `body.pose` (also correct — the ensemble does not know the body exists). Full
+> suite **323 run, 0 failures**.
+>
+> **Watched failing.** AC5.6: the prescribed sabotage (M/H appended to the
+> shared serializer) — 1 failure, the defaults length check. AC5.3/AC5.4, four
+> sabotages: the branch never taken (6 failures), two DOF indices swapped (2),
+> the ragged-grid guard removed (1), the plant angle unclamped (1). A fifth —
+> "the branch always taken" — is **not constructible**: `pose.size() == nHops`
+> already implies non-empty (nHops is proven non-zero upstream), so removing
+> the `!empty()` guard produces equivalent code. Recorded rather than dressed
+> up as a passing sabotage; the guard is kept as documentation of intent.
+>
+> **NOT gated:** anything that needs a producer — the plant's own trajectories,
+> the encoder, the store round-trip through a real analysis, and AC5.4 against
+> a REAL re-analysis rather than against the same snapshot with and without a
+> pose vector. The C++ test is the strongest form available without one, and it
+> is stronger than a `.qxa` would be for this particular question: a script
+> cannot construct an `SFeelFlowUiData`, only reach a pose through a real
+> analysis, which would make the comparison depend on the analysis rather than
+> on the branch.
+
 ## C5 — The `body.pose` aspect and the puppet switch
 
 **AC5.1** New aspect `body.pose` v1 in `twaspects.h`: per hop, per DOF

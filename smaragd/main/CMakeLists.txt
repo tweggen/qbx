@@ -976,6 +976,20 @@ set_tests_properties(secret_store_test PROPERTIES
 # synthetic component — the paint path is otherwise the only consumer, and a
 # screenshot cannot localise any of them. Needs a QApplication (offscreen) for
 # the app object libraries' static registrars, like the two tests above.
+# Proposal 44 C5 (AC5.3 / AC5.4): the pose seam's one new branch. A C++ test
+# because both halves are questions about ONE function given TWO snapshots that
+# differ in exactly one field -- a script cannot construct an SFeelFlowUiData,
+# only reach a pose through a real analysis, which would make the comparison
+# depend on the analysis rather than on the branch.
+add_executable(feelflow_pose_test testkit/src/feelflow_pose_test.cpp)
+target_link_libraries(feelflow_pose_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME feelflow_pose_test COMMAND feelflow_pose_test)
+set_tests_properties(feelflow_pose_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(preview_container_test testkit/src/preview_container_test.cpp)
 target_link_libraries(preview_container_test
     PRIVATE

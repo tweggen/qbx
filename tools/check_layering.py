@@ -69,7 +69,9 @@ DEPS = {
     'record':   ['core', 'devices', 'sinks', 'sources'],
     'schedule': ['core', 'pages', 'graph'],
     'analysis': ['core'],
-    'sidecar':  ['core'],
+    # tw_body since proposal 44 C5 -- the "body.pose" aspect. Acyclic:
+    # tw_body depends on tw_core alone and knows nothing of the sidecar.
+    'sidecar':  ['core', 'body'],
     # events (proposal 37 P0b): the MIDI/event model leaf - one twEvent, the
     # event sequence, the tempo map (the only tick<->frame converter), SMF I/O,
     # the automation curve, the event clip set and the feed merge. CORE ONLY and
@@ -328,7 +330,11 @@ APP_ENG = {
     # gainStageComponent()) for AC 3's per-chain pruning scope, and objects/
     # wave may not depend on objects/track (the wave<cut<track<mixer DAG runs
     # the other way).
-    'objects/track':  _ENG_BASE | {'events', 'mix', 'plugins', 'render',
+    # body since proposal 44 C5: objects/track is the "body.pose" aspect's HOST,
+    # the M1b precedent -- SFeelFlowTrackBounce already owns the analysis job
+    # this pose rides on, so the plant belongs beside it rather than in a new
+    # module. tw_body is a pure leaf on tw_core, so the edge adds no cycle.
+    'objects/track':  _ENG_BASE | {'body', 'events', 'mix', 'plugins', 'render',
                                    'schedule', 'sidecar', 'sources'},
     # objects/fragment + mix (proposal 41 M1): SLaneFragment's root component
     # is ONE twTrackMix at unity (D1) — the minimal engine set that actually

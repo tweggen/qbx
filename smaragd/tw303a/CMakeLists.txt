@@ -705,6 +705,7 @@ tw_module(sidecar
         sidecar/include/tw/sidecar/twgroove.h
         sidecar/include/tw/sidecar/twgroovependulum.h
         sidecar/include/tw/sidecar/twgrooveaspect.h
+        sidecar/include/tw/sidecar/twbodyposeaspect.h
         sidecar/include/tw/sidecar/twgroovemetrics.h
         sidecar/src/twqaf.cc
         sidecar/src/twsidecarstore.cc
@@ -712,8 +713,12 @@ tw_module(sidecar
         sidecar/src/twgroove.cc
         sidecar/src/twgroovependulum.cc
         sidecar/src/twgrooveaspect.cc
+        sidecar/src/twbodyposeaspect.cc
         sidecar/src/twgroovemetrics.cc
-    DEPS tw_core)
+    # tw_body since proposal 44 C5: the "body.pose" aspect's params blob
+    # NESTS the groove one and its DOF trajectories are the plant's. Acyclic --
+    # tw_body depends on tw_core alone and knows nothing of the sidecar.
+    DEPS tw_core tw_body)
 
 # --- Audio file format libraries (sinks only) -----------------------------------
 # On Windows these come from vcpkg (CMake config packages); on macOS/Linux the
