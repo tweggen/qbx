@@ -46,7 +46,7 @@ twBodyObjectiveResult twBodyObjective( const twBodyMotionSample *samples,
     // second. A gap therefore costs exactly the urge it failed to meet.
     int per = (int) ( p.subWindowSec / dt + 0.5 );
     if( per < 1 ) per = 1;
-    double metSum = 0.0, urgeSum = 0.0;
+    double metSum = 0.0, urgeSum = 0.0, weight = 0.0;
     double weakest = 1.0;
     bool sawUrge = false;
     for( int a = 0; a < count; a += per ) {
@@ -54,14 +54,30 @@ twBodyObjectiveResult twBodyObjective( const twBodyMotionSample *samples,
         const int n = b - a;
         const double got = twBodyAchievedRate( samples + a, n, dt, romRad );
         double urgeNorm = 0.0;
-        for( int i = a; i < b; i++ ) urgeNorm += samples[i].urgeNorm;
+        for( int i = a; i < b; i++ ) {
+            // CLAMPED, because urgeNorm is an ABSOLUTE scale now and a track
+            // louder than the reference really can exceed 1. Harmless because
+            // of the ceiling below: past full urge, more urge earns nothing.
+            const double u = samples[i].urgeNorm;
+            urgeNorm += u < 0.0 ? 0.0 : ( u > 1.0 ? 1.0 : u );
+        }
         urgeNorm /= (double) n;
         const double want = urgeNorm * p.maxUrge;
         // "as intense as it LIKES to" -- there is a ceiling and exceeding it is
         // not extra reward, which is what min() is doing and why match cannot
         // be gamed by simply moving more.
-        metSum  += ( got < want ? got : want );
-        urgeSum += want;
+        //
+        // WEIGHTED BY THE SUB-WINDOW'S ACTUAL LENGTH, which is not a rounding
+        // detail. A trailing sub-window holding one sample used to be scored
+        // against a WHOLE sub-window's urge, so a 24.001 s run of a 24 s window
+        // lost a QUARTER of its match to a millisecond -- found by this file's
+        // own sustainment case reading 0.250 where the closed form says 0.333,
+        // and worth recording because the header warned about exactly this
+        // failure mode while the code committed it.
+        const double wt = (double) n;
+        metSum  += ( got < want ? got : want ) * wt;
+        urgeSum += want * wt;
+        weight  += wt;
         if( want > 1e-12 ) {
             sawUrge = true;
             const double frac = ( got < want ? got : want ) / want;
@@ -69,7 +85,7 @@ twBodyObjectiveResult twBodyObjective( const twBodyMotionSample *samples,
         }
         out.subWindows++;
     }
-    out.urge  = urgeSum / (double) ( out.subWindows > 0 ? out.subWindows : 1 );
+    out.urge  = weight > 0.0 ? urgeSum / weight : 0.0;
     out.match = urgeSum > 1e-12 ? metSum / urgeSum : 0.0;
     // Silence is not a performance, and neither is it a failure.
     out.weakestSub  = sawUrge ? weakest : 0.0;

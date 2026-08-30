@@ -52,9 +52,13 @@
  * stated as anchors rather than as numbers so that a reader can disagree with
  * them precisely:
  *
- *   `maxUrge`      = 4.0 range-lengths/s = **exactly full range, once a
- *                    second** (see twBodyAchievedRate's closed form). How hard
- *                    this body will ever want to go.
+ *   `maxUrge`      = 12.0 range-lengths/s = **exactly full range, THREE times
+ *                    a second** (see twBodyAchievedRate's closed form). How
+ *                    hard this body will ever want to go. Requester's value,
+ *                    2026-08-30; the anchor is what makes it arguable, and the
+ *                    thing to note is that a hard 2 Hz head-bang at full range
+ *                    is 8.0, so this leaves the ceiling OFF most of the time
+ *                    and lets the budget be what binds.
  *   `effortBudget` = 1.0 = **sustaining a torque equal to the segment's own
  *                    gravity moment**. How hard it can keep going.
  *
@@ -70,11 +74,27 @@ struct twBodyMotionSample {
     double activeTorque   = 0.0;   // N m, the ensemble's contribution
     double posturalTorque = 0.0;   // N m, twBodyPosturalTorque()
     /**
-     * The music's excitation at this hop, RELATIVE TO THIS TRACK'S OWN
-     * maximum: 0..1, no units, no free parameter. Supplied by the analysis
-     * (C5); this module never computes it, because deciding which ensemble
-     * quantity means "urge" is a modelling claim and belongs where it can be
-     * argued with, not buried in an accumulator.
+     * The music's excitation at this hop, 0..1. Supplied by the analysis (C5);
+     * this module never computes it, because deciding which ensemble quantity
+     * means "urge" is a modelling claim and belongs where it can be argued
+     * with, not buried in an accumulator.
+     *
+     * **IT MUST BE AN ABSOLUTE SCALE, COMPARABLE ACROSS TRACKS** (requester,
+     * 2026-08-30). The first draft normalised each track against ITS OWN
+     * maximum, which is wrong for what this model is FOR: under that rule a
+     * gentle ambient piece and a rock build-up both drive the body to its
+     * ceiling at their own loudest moment, and the claim that *this* music
+     * demands more movement than *that* music becomes inexpressible -- while
+     * being exactly the claim proposal 44 exists to test. An absolute
+     * reference (full scale, not the track's peak) is what makes a quietly
+     * mastered track genuinely offer less.
+     *
+     * ONE CONSEQUENCE OF THE CHANGE, and it is why this field is clamped
+     * rather than trusted: with a per-track normalisation, values above 1 were
+     * impossible BY CONSTRUCTION. With an absolute one they are not -- a track
+     * louder than the reference produces them. They are clamped to 1 here, and
+     * the CEILING is what makes that harmless: past full urge, more urge earns
+     * the body nothing anyway.
      */
     double urgeNorm       = 0.0;
 };
@@ -82,26 +102,37 @@ struct twBodyMotionSample {
 struct twBodyObjectiveParams {
     /**
      * The window the objective is evaluated over. The requester says tens of
-     * seconds; 20 is DERIVED rather than picked -- it is five periods of the
-     * slowest unit in proposal 40's ensemble (twobar, 0.25 Hz, a 4 s period),
-     * which is the shortest window in which that unit's contribution is a
-     * sustained fact rather than a single event.
+     * seconds, and 24 is DERIVED from two constraints meeting rather than
+     * picked: it is SIX periods of the slowest unit in proposal 40's ensemble
+     * (twobar, 0.25 Hz, a 4 s period) -- the shortest window in which that
+     * unit's contribution is a sustained fact rather than an event -- and it
+     * is exactly THREE sub-windows at the 8 s below, so no sub-window is
+     * ragged. It was 20 s while the sub-window was 1 s, which divided 20
+     * evenly; 8 does not, and a ragged trailing sub-window is scored against a
+     * full sub-window's urge, which quietly penalises the end of every run.
      */
-    double windowSec    = 20.0;
+    double windowSec    = 24.0;
 
     /**
      * The resolution at which SUSTAINMENT is judged. Without it "over an
-     * extended period" has no force: a body that thrashes for five seconds and
-     * stops for fifteen has the same window MEAN as one going steadily, and
-     * the requester's sentence is plainly about the second. Scoring each
+     * extended period" has no force: a body that thrashes for a third of the
+     * window and stops has the same window MEAN as one going steadily, and the
+     * requester's sentence is plainly about the second. Scoring each
      * sub-window against the urge in that sub-window and summing is what makes
-     * a gap cost. Should be about one bar or one drive period.
+     * a gap cost.
+     *
+     * **8 s, the requester's value (2026-08-30), and the scale is the claim.**
+     * At 120 BPM that is four bars -- a PHRASE, not a bar and not a beat. The
+     * consequence is deliberate and is gated as a pair: a dancer who pauses
+     * for two seconds inside every eight is scored as sustaining perfectly,
+     * while one who sits out a whole phrase is not. Judging at 1 s would score
+     * the first at 0.75 and call ordinary phrasing a failure.
      */
-    double subWindowSec = 1.0;
+    double subWindowSec = 8.0;
 
     /** FREE PARAMETER 1, physiological. Range-lengths per second at full urge.
-     * 4.0 is exactly "full range of motion, once a second". VERIFY. */
-    double maxUrge      = 4.0;
+     * 12.0 is exactly "full range of motion, THREE times a second". VERIFY. */
+    double maxUrge      = 12.0;
 
     /** FREE PARAMETER 2, physiological. Mean effort the body can SUSTAIN across
      * the window, in units of (segment gravity moment)^2. 1.0 is exactly
@@ -143,8 +174,8 @@ struct twBodyObjectiveResult {
  *
  *     achieved = 4 * f * ( A / romRad )      range-lengths per second
  *
- * -- full range once a second is exactly 4.0, which is where maxUrge's anchor
- * comes from.
+ * -- full range once a second is exactly 4.0, and three times a second exactly
+ * 12.0, which is where maxUrge's anchor comes from.
  *
  * NO PHASE TERM, deliberately. Alignment with the beat is not measured here and
  * must not be: the reward is what the body GOT, and resonance is expected to

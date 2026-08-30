@@ -213,18 +213,50 @@ Invariants:
 
 24. **Exactly TWO free parameters, both physiological, both stated as ANCHORS
     rather than numbers** so a reader can disagree with them precisely:
-    `maxUrge` = 4.0 = *full range, once a second*; `effortBudget` = 1.0 =
-    *a torque equal to the segment's own weight moment*. Both VERIFY. Only one
+    `maxUrge` = 12.0 = *full range, three times a second*; `effortBudget` = 1.0
+    = *a torque equal to the segment's own weight moment*. Both VERIFY. Only one
     binds at a time — the budget when the body cannot keep up, the urge when
     the music is not asking much — and **which one bound is an OBSERVATION**
-    (`budgetBound`), not a setting.
+    (`budgetBound`), not a setting. Worth knowing when reading any match: a
+    full-range 2 Hz head-bang is 8.0, so at `maxUrge` 12 the ceiling is OFF most
+    of the time and the BUDGET is what binds.
 
 25. **Silence is not a performance, and it is not a failure either.** A window
     with no urge scores match 0 and blames nobody. Scoring it 1 would make
     standing still through a quiet passage optimal and would dominate any long
     window containing silence.
 
-26. **This module never computes `urgeNorm`.** Deciding which ensemble quantity
+26. **`urgeNorm` IS AN ABSOLUTE SCALE, COMPARABLE ACROSS TRACKS** — not each
+    track against its own peak. Under a per-track rule a gentle ambient piece
+    and a rock build-up both drive the body to its ceiling at their own loudest
+    moment, and *"this music demands more movement than that music"* becomes
+    inexpressible — while being exactly the claim proposal 44 exists to test.
+    Consequence, and it is why the field is clamped rather than trusted: values
+    above 1 were impossible under the old rule BY CONSTRUCTION and are not
+    under this one. They clamp to 1, which the ceiling makes harmless.
+
+27. **The sub-window is 8 s and the SCALE IS A CLAIM, not a tolerance.** At
+    120 BPM that is four bars — a PHRASE. A dancer who pauses two seconds in
+    every eight is scored as sustaining perfectly; one who sits out a whole
+    phrase is not. At a 1 s sub-window the same dancer reads **0.75** and
+    ordinary phrasing would register as failure. Gated as that pair.
+
+28. **A sub-window is worth its own LENGTH, never one share of the window.** A
+    ragged tail scored against a full sub-window's urge cost a 24.001 s run a
+    QUARTER of its match — to one millisecond. Not an edge case: a real hop grid
+    will almost never divide a window evenly, so every run would have paid it.
+    Found by the sustainment case reading 0.250 where the closed form says
+    0.333, *after* this contract had already warned about the failure mode.
+    `windowSec` 24 and `subWindowSec` 8 divide evenly on purpose as well.
+
+29. **A GATE FOR A CLAMP OR A WEIGHTING MUST DRIVE THE CASE IT PROTECTS.** The
+    first versions of 26's and 28's gates passed under their own sabotage: the
+    ragged tail MET its urge (so weighted and unweighted both scored 1) and no
+    sample ever carried `urgeNorm > 1`. Both now under-deliver and over-ask
+    respectively. Recorded because a gate that cannot fail is worse than none —
+    it reports coverage that does not exist.
+
+30. **This module never computes `urgeNorm`.** Deciding which ensemble quantity
     means "urge" is a modelling claim and belongs where it can be argued with,
     not buried in an accumulator. It is an input (C5 supplies it).
 

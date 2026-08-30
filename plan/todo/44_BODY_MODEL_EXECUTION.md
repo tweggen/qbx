@@ -1050,15 +1050,18 @@ Invariants: `tw303a/body/CONTRACT.md` 18-26.
 | Quantity | Definition | Why |
 |---|---|---|
 | **achieved** | mean `\|dθ/dt\|` over the joint's own ROM — **range-lengths per second** | A ratio, so a mouse and a person can both do "three a second"; §8 q3 went to torque exactly so nothing would be body-specific, and an objective in radians voids that. TRAVEL, not excursion: "hard and sudden" is the requester's phrase and peak angle cannot express it. Closed form **`4·f·(A/ROM)`** |
-| **urge** | `urgeNorm(t) × maxUrge`, where `urgeNorm` ∈ [0,1] is the music's excitation against **that track's own maximum** | The normalisation is derived and free of parameters; the one constant is physiological and belongs beside M and H. `twbodyobjective` never computes `urgeNorm` — deciding which ensemble quantity means "urge" is a modelling claim and belongs where it can be argued with (C5) |
+| **urge** | `urgeNorm(t) × maxUrge`, `urgeNorm` ∈ [0,1] on an **ABSOLUTE scale comparable across tracks** — full scale, never the track's own peak | Requester, 2026-08-30. Per-track normalisation makes a gentle ambient piece and a rock build-up equally demanding at their own loudest moment, so *"this music demands more movement than that music"* becomes inexpressible — while being exactly the claim proposal 44 exists to test. `twbodyobjective` never computes `urgeNorm`: which ensemble quantity means "urge" is a modelling claim and belongs where it can be argued with (C5) |
 | **effort** | mean squared **total** muscle torque in units of the segment's own `m·g·d` | Dimensionless and body-normalised. The review settled squared torque as one of the two measures that support the resonance conclusion, and it is the standard metabolic proxy. **Includes the postural torque** — the one term that cannot be recovered from the trajectory later |
 | **match** | `Σ min(achieved_i, urge_i) / Σ urge_i` over **sub-windows** | `min()` is "as intense as it LIKES to" — overshoot earns nothing. Sub-windows are "over an extended period": a window MEAN cannot tell a steady body from one that thrashed for a third of the time |
-| **window** | **20 s**, sub-window **1 s** | 20 is DERIVED, not picked: five periods of the ensemble's slowest unit (twobar, 0.25 Hz), the shortest window in which that unit is a sustained fact rather than an event |
+| **window** | **24 s**, sub-window **8 s** | Both DERIVED from constraints meeting, not picked. 24 is SIX periods of the ensemble's slowest unit (twobar, 0.25 Hz) — the shortest window in which that unit is a sustained fact rather than an event — AND exactly three sub-windows, so no sub-window is ragged. **8 s is the requester's value and the SCALE IS A CLAIM**: at 120 BPM it is four bars, a PHRASE, so pausing within a phrase is free and sitting out a phrase is not |
 
 **Exactly TWO free parameters, both physiological, both stated as ANCHORS rather
-than numbers** so a reader can disagree with them precisely — `maxUrge` = 4.0 =
-*full range, once a second*; `effortBudget` = 1.0 = *a torque equal to the
-segment's own weight moment*. Both VERIFY. **Only one binds at a time** — the
+than numbers** so a reader can disagree with them precisely — `maxUrge` = **12.0**
+= *full range, three times a second* (requester's value); `effortBudget` = 1.0 =
+*a torque equal to the segment's own weight moment*. Both VERIFY. Worth knowing
+when reading any match: a full-range 2 Hz head-bang is **8.0**, so at 12 the
+ceiling is OFF most of the time and the BUDGET is what binds — which is the
+point of choosing 12 over 4. **Only one binds at a time** — the
 budget when the body cannot keep up, the urge when the music is not asking much
 — and which one bound is an OBSERVATION (`budgetBound`), not a setting.
 
@@ -1075,15 +1078,38 @@ conclusion.
 **Measured** (`body_objective_test`): achieved is `4·f·(A/ROM)` to 0.01 at every
 rate and amplitude tried; half the range at 2 Hz (**4.000**) beats full range at
 0.5 Hz (**2.000**); doubling the movement past the urge scores **exactly the
-same** match as meeting it; and the sustainment gate is the sharp one — two
-bodies with **identical total travel** (both 2.000 rl/s) score **1.000 against
-0.318**, the bursting one having danced 7 s of 21 (0.333) with a `weakestSub` of
-**0.000**.
+same** match as meeting it; two bodies with **identical total travel** (both
+6.000 rl/s) score **1.000 against 0.333**, the bursting one having danced 8 s of
+24 with a `weakestSub` of **0.000**; and the phrasing pair is what gates the 8 s
+scale — a dancer who pauses 2 s in every 8 reads **1.000** at an 8 s sub-window
+and **0.750** at a 1 s one.
 
-**Watched failing, six sabotages, one per design decision:** achieved as peak
+**Watched failing, ten sabotages, one per design decision:** achieved as peak
 excursion (20 failures), no ceiling (3), one window mean instead of sub-windows
 (3), effort ignoring the postural torque (2), lambda pricing the effort rather
-than the violation (1), and silence scoring a perfect match (1).
+than the violation (1), silence scoring a perfect match (1), sub-windows
+unweighted (2), `urgeNorm` unclamped (2), a 1 s sub-window (3), and `maxUrge`
+back at 4.0 (2).
+
+### A DEFECT THE RETUNE EXPOSED, and a lesson about gates
+
+**A ragged trailing sub-window was scored against a WHOLE sub-window's urge**, so
+a 24.001 s run of a 24 s window lost **a quarter of its match to one
+millisecond**. Not an edge case waiting to happen: a real hop grid will almost
+never divide a window evenly, so every run would have paid it. Found by the
+sustainment case reading **0.250** where the closed form says **0.333** — and
+the module's own header had already warned about exactly this failure mode while
+the code committed it. A sub-window is now worth its own LENGTH.
+
+**And the first versions of two new gates PASSED UNDER THEIR OWN SABOTAGE**,
+which is the more useful finding. The ragged-tail case appended a tail that MET
+its urge, so weighted and unweighted both scored 1; the clamp case never fed a
+`urgeNorm` above 1, so clamping was unobservable. Both now under-deliver and
+over-ask respectively. Recorded because a gate that cannot fail is worse than no
+gate — it reports coverage that does not exist, which is the thing this repo's
+watched-failing rule exists to catch, and it caught it here only because the
+sabotage pass was run on the NEW assertions rather than assumed from the old
+ones.
 
 **STILL OPEN:** `urgeNorm`'s source — which ensemble quantity, normalised how
 (C5). And the metrics are per JOINT and per WINDOW; combining joints into one

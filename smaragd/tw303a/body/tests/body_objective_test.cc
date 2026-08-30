@@ -41,9 +41,13 @@ sine( double A, double f, double sec, double dt, double urge, double tau = 0.0 )
 {
     std::vector<twBodyMotionSample> v;
     const double w = 2.0 * kPi * f;
-    for( double t = 0.0; t < sec - 1e-12; t += dt ) {
+    // Integer sample count, never an accumulated float: at dt = 1 ms the drift
+    // over 24 s is enough to add a sample, and one extra sample used to cost a
+    // quarter of the match (see twbodyobjective.cc's sub-window weighting).
+    const long n = (long) ( sec / dt + 0.5 );
+    for( long i = 0; i < n; i++ ) {
         twBodyMotionSample s;
-        s.angVel       = A * w * std::cos( w * t );
+        s.angVel       = A * w * std::cos( w * (double) i * dt );
         s.activeTorque = tau;
         s.urgeNorm     = urge;
         v.push_back( s );
@@ -78,8 +82,20 @@ int main()
         }
         const auto full1 = sine( rom, 1.0, 8.0, dt, 0.0 );
         near( twBodyAchievedRate( full1.data(), (int) full1.size(), dt, rom ),
-              4.0, 0.01, "and FULL RANGE ONCE A SECOND is exactly 4.0 -- the"
-                         " anchor maxUrge is stated as" );
+              4.0, 0.01, "FULL RANGE ONCE A SECOND is exactly 4.0" );
+        const auto full3 = sine( rom, 3.0, 8.0, dt, 0.0 );
+        near( twBodyAchievedRate( full3.data(), (int) full3.size(), dt, rom ),
+              12.0, 0.01, "and THREE TIMES A SECOND exactly 12.0 -- the anchor"
+                          " maxUrge is stated as" );
+        // Worth knowing when reading any match below: a hard 2 Hz head-bang at
+        // full range is 8.0, so at maxUrge 12 the ceiling is OFF most of the
+        // time and the BUDGET is what binds. That is a consequence of the
+        // requester's value, not of the metric.
+        const auto bang = sine( rom, 2.0, 8.0, dt, 0.0 );
+        std::printf( "    a full-range 2 Hz head-bang = %.3f, against"
+                     " maxUrge %.1f\n",
+                     twBodyAchievedRate( bang.data(), (int) bang.size(), dt, rom ),
+                     twBodyObjectiveParams().maxUrge );
 
         // A BIG SLOW sway and a SMALL FAST one are not the same intensity, and
         // that is the choice this metric makes. "Hard and sudden" is the
@@ -151,12 +167,12 @@ int main()
     // becomes "as intense as possible" -- a different claim, and not the
     // requester's.
     {
-        twBodyObjectiveParams p;                    // maxUrge 4.0
-        const double halfUrge = 0.5;                // -> want 2.0 rl/s
-        // Exactly meeting it: 4*f*(A/rom) = 2.0 at f = 1 Hz needs A = rom/2.
-        const auto met  = sine( rom * 0.50, 1.0, 20.0, dt, halfUrge );
-        const auto over = sine( rom * 1.00, 1.0, 20.0, dt, halfUrge );  // 2x
-        const auto under= sine( rom * 0.25, 1.0, 20.0, dt, halfUrge );  // 0.5x
+        twBodyObjectiveParams p;                    // maxUrge 12.0
+        const double halfUrge = 0.5;                // -> want 6.0 rl/s
+        // Exactly meeting it: 4*f*(A/rom) = 6.0 at f = 3 Hz needs A = rom/2.
+        const auto met  = sine( rom * 0.50, 3.0, 24.0, dt, halfUrge );
+        const auto over = sine( rom * 1.00, 3.0, 24.0, dt, halfUrge );  // 2x
+        const auto under= sine( rom * 0.25, 3.0, 24.0, dt, halfUrge );  // 0.5x
         const auto rm = twBodyObjective( met.data(),   (int) met.size(),   dt, rom, mgd, p );
         const auto ro = twBodyObjective( over.data(),  (int) over.size(),  dt, rom, mgd, p );
         const auto ru = twBodyObjective( under.data(), (int) under.size(), dt, rom, mgd, p );
@@ -173,21 +189,20 @@ int main()
     }
 
     // --- 4. OVER AN EXTENDED PERIOD: a GAP costs what it missed -------------
-    // THE SECTION THAT MAKES THE SENTENCE MEAN ANYTHING. A body that thrashes
-    // for a third of the window and stops has the same window MEAN as one going
-    // steadily at a third the rate; scoring sub-windows separates them, and
-    // separates them by exactly the urge that went unmet.
+    // THE SECTION THAT MAKES THE SENTENCE MEAN ANYTHING. A body that dances a
+    // third of the window and stops has the same window MEAN as one going
+    // steadily at a third the rate; scoring sub-windows separates them, and by
+    // exactly the urge that went unmet.
     {
-        twBodyObjectiveParams p;
-        const double urge = 0.5;                    // want 2.0 rl/s
-        // (a) steady, meeting it the whole way.
-        const auto steady = sine( rom * 0.5, 1.0, 21.0, dt, urge );
+        twBodyObjectiveParams p;                    // window 24 s, sub 8 s
+        const double urge = 0.5;                    // want 6.0 rl/s
+        // (a) steady, meeting it the whole way: 4*f*(A/rom) = 6 at 3 Hz.
+        const auto steady = sine( rom * 0.5, 3.0, 24.0, dt, urge );
         // (b) the SAME TOTAL TRAVEL, done in the first third at treble rate.
         std::vector<twBodyMotionSample> burst;
         {
-            const auto hot = sine( rom * 1.5, 1.0, 7.0, dt, urge );
-            burst = hot;
-            for( double t = 0.0; t < 14.0 - 1e-12; t += dt ) {
+            burst = sine( rom * 1.5, 3.0, 8.0, dt, urge );
+            for( long i = 0; i < (long) ( 16.0 / dt + 0.5 ); i++ ) {
                 twBodyMotionSample s; s.urgeNorm = urge;   // still asked for
                 burst.push_back( s );
             }
@@ -206,9 +221,110 @@ int main()
         near( rs.match, 1.0, 1e-3, "the steady body meets the urge throughout" );
         near( rb.weakestSub, 0.0, 1e-9,
               "and the bursting one has a sub-window where it delivered NOTHING" );
-        near( rb.match, 7.0 / 21.0, 0.02,
+        near( rb.match, 1.0 / 3.0, 0.02,
               "scoring exactly the fraction of the window it was actually"
               " dancing in -- a gap costs precisely the urge it missed" );
+        near( (double) rs.subWindows, 3.0, 0.0,
+              "and the window divides into a whole number of sub-windows, so"
+              " no ragged tail is scored against a full sub-window's urge" );
+    }
+
+    // --- 4a. WHY 8 SECONDS: PHRASING IS FREE, SITTING OUT A PHRASE IS NOT ---
+    // The requester's sub-window is 8 s, which at 120 BPM is FOUR BARS -- a
+    // phrase, not a bar and not a beat. That scale is a claim about dancing and
+    // this is the pair that gates it: a dancer who pauses two seconds in every
+    // eight is sustaining perfectly; one who sits out a whole phrase is not.
+    // At a 1 s sub-window the first would score 0.75 and ordinary phrasing
+    // would read as failure, so the two readings are separated here rather
+    // than left to be discovered.
+    {
+        twBodyObjectiveParams p;
+        const double urge = 0.5;                    // want 6.0 rl/s
+        // Dances 6 s of every 8, hard enough that the 8 s block still meets the
+        // urge: 8*6.0/6 = 8.0 rl/s while moving, i.e. 4*f*(A/rom) = 8 at 3 Hz.
+        std::vector<twBodyMotionSample> phrased;
+        for( int blk = 0; blk < 3; blk++ ) {
+            const auto on = sine( rom * ( 8.0 / 12.0 ), 3.0, 6.0, dt, urge );
+            phrased.insert( phrased.end(), on.begin(), on.end() );
+            for( long i = 0; i < (long) ( 2.0 / dt + 0.5 ); i++ ) {
+                twBodyMotionSample s; s.urgeNorm = urge;
+                phrased.push_back( s );
+            }
+        }
+        const auto rp = twBodyObjective( phrased.data(), (int) phrased.size(),
+                                         dt, rom, mgd, p );
+        twBodyObjectiveParams beat = p; beat.subWindowSec = 1.0;
+        const auto rbeat = twBodyObjective( phrased.data(), (int) phrased.size(),
+                                            dt, rom, mgd, beat );
+        std::printf( "  PHRASING (dances 6 s of every 8): match %.3f at an 8 s"
+                     " sub-window, %.3f at a 1 s one\n", rp.match, rbeat.match );
+        near( rp.match, 1.0, 1e-3,
+              "AT 8 SECONDS, PAUSING WITHIN A PHRASE IS FREE" );
+        near( rbeat.match, 0.75, 0.01,
+              "at 1 second the SAME dancer reads 0.75 -- which is why the"
+              " sub-window length is a claim about dancing, not a tolerance" );
+        check( rp.weakestSub > 0.99,
+               "and no phrase was under-delivered" );
+    }
+
+    // --- 4b. A RAGGED TAIL COSTS ONLY WHAT IT IS -- found the hard way -------
+    // A trailing sub-window shorter than the rest used to be scored against a
+    // WHOLE sub-window's urge, so a 24.001 s run of a 24 s window lost A
+    // QUARTER of its match to one millisecond. The header had warned about
+    // exactly this failure mode while the code committed it; it was caught by
+    // section 4 reading 0.250 where the closed form says 0.333.
+    //
+    // It is not an edge case waiting to happen -- a real hop grid will almost
+    // never divide a window evenly, so EVERY run would have paid it.
+    {
+        twBodyObjectiveParams p;
+        const double urge = 0.5;
+        const auto whole = sine( rom * 0.5, 3.0, 24.0,  dt, urge );
+        auto ragged = whole;
+        // The tail must UNDER-deliver, or the defect is invisible: a tail that
+        // meets its urge scores 1 whether it is weighted or not, which is how
+        // a first version of this section passed under its own sabotage.
+        for( int i = 0; i < 5; i++ ) {              // 5 ms of nothing
+            twBodyMotionSample x; x.urgeNorm = urge;
+            ragged.push_back( x );
+        }
+        const auto rw = twBodyObjective( whole.data(),  (int) whole.size(),  dt, rom, mgd, p );
+        const auto rr = twBodyObjective( ragged.data(), (int) ragged.size(), dt, rom, mgd, p );
+        std::printf( "  RAGGED TAIL: 24.000 s -> match %.4f (%d sub-windows);"
+                     " 24.005 s -> %.4f (%d)\n",
+                     rw.match, rw.subWindows, rr.match, rr.subWindows );
+        check( rr.subWindows == rw.subWindows + 1,
+               "five extra milliseconds really do open a new sub-window" );
+        near( rr.match, rw.match, 1e-3,
+               "AND COST ALMOST NOTHING -- a sub-window is worth its own"
+               " LENGTH, not one whole share of the window" );
+        check( rr.match > 0.99,
+               "specifically: five silent milliseconds do not cost a QUARTER of"
+               " the run, which is what an unweighted sub-window charges" );
+    }
+
+    // --- 4c. AN ABSOLUTE URGE SCALE CAN EXCEED 1, AND IS CLAMPED ------------
+    // urgeNorm was per-track at first, so values above 1 were impossible BY
+    // CONSTRUCTION. The requester's decision (2026-08-30) made it an ABSOLUTE
+    // scale comparable across tracks -- which is the whole point, since "this
+    // music demands more movement than that music" is the claim proposal 44
+    // exists to test -- and a track louder than the reference now produces
+    // them. Unclamped, such a track would demand a superhuman rate and every
+    // body would read as failing it.
+    {
+        twBodyObjectiveParams p;                    // maxUrge 12.0
+        // A body moving at exactly full urge, under a track asking for 3x it.
+        const auto v = sine( rom * 1.0, 3.0, 24.0, dt, 3.0 );   // achieved 12.0
+        const auto r = twBodyObjective( v.data(), (int) v.size(), dt, rom, mgd, p );
+        std::printf( "  ABSOLUTE URGE: track asks urgeNorm 3.0, body delivers"
+                     " %.2f rl/s -> urge %.2f, match %.3f\n",
+                     r.achieved, r.urge, r.match );
+        near( r.urge, p.maxUrge, 1e-9,
+              "urgeNorm above 1 is CLAMPED -- maxUrge is the ceiling on what"
+              " any track may ask for" );
+        near( r.match, 1.0, 1e-3,
+              "so a body at full urge scores 1 against a louder-than-reference"
+              " track, rather than being charged for the excess" );
     }
 
     // --- 5. GAMED ONE WAY: buying match with unsustainable effort -----------
@@ -217,8 +333,8 @@ int main()
     // between a body held back by the music and one held back by itself.
     {
         twBodyObjectiveParams p;
-        const auto cheap = sine( rom * 0.5, 1.0, 20.0, dt, 0.5, 0.4 * mgd );
-        const auto dear  = sine( rom * 0.5, 1.0, 20.0, dt, 1.0, 3.0 * mgd );
+        const auto cheap = sine( rom * 0.5, 3.0, 24.0, dt, 0.5, 0.4 * mgd );
+        const auto dear  = sine( rom * 0.5, 3.0, 24.0, dt, 1.0, 3.0 * mgd );
         const auto rc = twBodyObjective( cheap.data(), (int) cheap.size(), dt, rom, mgd, p );
         const auto rd = twBodyObjective( dear.data(),  (int) dear.size(),  dt, rom, mgd, p );
         std::printf( "  BUDGET: effort %.3f (within) vs %.3f (over) -> score"
@@ -243,8 +359,8 @@ int main()
     // it; nobody has to source it.
     {
         twBodyObjectiveParams p;
-        const auto good = sine( rom * 0.5, 1.0, 20.0, dt, 0.5, 0.4 * mgd );
-        const auto bad  = sine( rom * 0.5, 1.0, 20.0, dt, 0.5, 3.0 * mgd );
+        const auto good = sine( rom * 0.5, 3.0, 24.0, dt, 0.5, 0.4 * mgd );
+        const auto bad  = sine( rom * 0.5, 3.0, 24.0, dt, 0.5, 3.0 * mgd );
         const auto rg = twBodyObjective( good.data(), (int) good.size(), dt, rom, mgd, p );
         const auto rb = twBodyObjective( bad.data(),  (int) bad.size(),  dt, rom, mgd, p );
         near( twBodyObjectiveScore( rg, p, 1.0 ),
@@ -262,7 +378,7 @@ int main()
     // performance and would dominate any long window with silence in it.
     {
         twBodyObjectiveParams p;
-        std::vector<twBodyMotionSample> quiet( 20000 );   // 20 s, no urge, no motion
+        std::vector<twBodyMotionSample> quiet( 24000 );   // 24 s, no urge, no motion
         const auto rq = twBodyObjective( quiet.data(), (int) quiet.size(), dt, rom, mgd, p );
         near( rq.match, 0.0, 0.0, "SILENCE IS NOT A PERFORMANCE -- match 0" );
         near( rq.weakestSub, 0.0, 0.0, "nor a failure to be blamed on the body" );
