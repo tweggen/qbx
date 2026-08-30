@@ -1,0 +1,95 @@
+#include "tw/body/twbodyobjective.h"
+
+#include <cmath>
+
+double twBodyAchievedRate( const twBodyMotionSample *samples, int count,
+                           double dt, double romRad )
+{
+    if( !samples || count <= 0 || dt <= 0.0 || romRad <= 0.0 ) return 0.0;
+    double travel = 0.0;                      // radians actually covered
+    for( int i = 0; i < count; i++ )
+        travel += std::fabs( samples[i].angVel ) * dt;
+    const double seconds = (double) count * dt;
+    return ( travel / romRad ) / seconds;     // range-lengths per second
+}
+
+double twBodyEffort( const twBodyMotionSample *samples, int count,
+                     double gravityMoment )
+{
+    if( !samples || count <= 0 || gravityMoment <= 0.0 ) return 0.0;
+    double sum = 0.0;
+    for( int i = 0; i < count; i++ ) {
+        // TOTAL muscle torque. Counting only the active half would report a
+        // body straining against a beat as cheaper than one standing leant
+        // over -- see the header.
+        const double tau = ( samples[i].activeTorque + samples[i].posturalTorque )
+                           / gravityMoment;
+        sum += tau * tau;
+    }
+    return sum / (double) count;
+}
+
+twBodyObjectiveResult twBodyObjective( const twBodyMotionSample *samples,
+                                       int count, double dt, double romRad,
+                                       double gravityMoment,
+                                       const twBodyObjectiveParams &p )
+{
+    twBodyObjectiveResult out;
+    if( !samples || count <= 0 || dt <= 0.0 || romRad <= 0.0 ) return out;
+
+    out.achieved = twBodyAchievedRate( samples, count, dt, romRad );
+    out.effort   = twBodyEffort( samples, count, gravityMoment );
+
+    // SUSTAINMENT. Scored per sub-window and summed, never as one window mean:
+    // a body that thrashes for five seconds and stops for fifteen has the same
+    // mean as one going steadily, and the requester's sentence is about the
+    // second. A gap therefore costs exactly the urge it failed to meet.
+    int per = (int) ( p.subWindowSec / dt + 0.5 );
+    if( per < 1 ) per = 1;
+    double metSum = 0.0, urgeSum = 0.0;
+    double weakest = 1.0;
+    bool sawUrge = false;
+    for( int a = 0; a < count; a += per ) {
+        int b = a + per; if( b > count ) b = count;
+        const int n = b - a;
+        const double got = twBodyAchievedRate( samples + a, n, dt, romRad );
+        double urgeNorm = 0.0;
+        for( int i = a; i < b; i++ ) urgeNorm += samples[i].urgeNorm;
+        urgeNorm /= (double) n;
+        const double want = urgeNorm * p.maxUrge;
+        // "as intense as it LIKES to" -- there is a ceiling and exceeding it is
+        // not extra reward, which is what min() is doing and why match cannot
+        // be gamed by simply moving more.
+        metSum  += ( got < want ? got : want );
+        urgeSum += want;
+        if( want > 1e-12 ) {
+            sawUrge = true;
+            const double frac = ( got < want ? got : want ) / want;
+            if( frac < weakest ) weakest = frac;
+        }
+        out.subWindows++;
+    }
+    out.urge  = urgeSum / (double) ( out.subWindows > 0 ? out.subWindows : 1 );
+    out.match = urgeSum > 1e-12 ? metSum / urgeSum : 0.0;
+    // Silence is not a performance, and neither is it a failure.
+    out.weakestSub  = sawUrge ? weakest : 0.0;
+    out.withinBudget = out.effort <= p.effortBudget;
+    // WHICH CEILING BOUND, which is an observation rather than a setting: the
+    // budget if the body could not keep up, the urge if the music was not
+    // asking for much. Only meaningful where the body fell short at all.
+    out.budgetBound = sawUrge && out.match < 0.999 && !out.withinBudget;
+    return out;
+}
+
+double twBodyObjectiveScore( const twBodyObjectiveResult &r,
+                             const twBodyObjectiveParams &p,
+                             double lambda )
+{
+    // A LAGRANGE MULTIPLIER, not a weight: it prices the CONSTRAINT VIOLATION
+    // only, so the optimum is independent of it once it is large enough to
+    // bind. Pricing the effort itself (`match - lambda*effort`) would make the
+    // answer depend on a number nobody can source, which is the form C4b was
+    // first written with and the review's measure-dependence finding is about.
+    const double over = r.effort - p.effortBudget;
+    return r.match - ( over > 0.0 ? lambda * over : 0.0 );
+}

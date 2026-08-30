@@ -171,6 +171,63 @@ Invariants:
     response at `f_n/2` is large simply because it is soft; that ratio was
     measured at 1.5× and says nothing about resonance. Tried, wrong, recorded.
 
+### The objective (`twbodyobjective.h`, C4b)
+
+18. **The objective implements ONE SENTENCE and it is the requester's**, not a
+    modelling convenience: *match is enabling the body to express its urge to
+    move as intensely as it likes to, over an extended period of time.* Three
+    words in it are load-bearing and each is a separate gate — **intensely**
+    (the reward is achieved MOVEMENT, never alignment), **as it likes to** (a
+    ceiling; overshoot earns nothing), **over an extended period** (effort is a
+    BUDGET across a long window, so sustainment is the thing optimised).
+
+19. **THERE IS NO PHASE TERM ANYWHERE, and adding one would make AC4b.2
+    circular.** Resonance is expected to EMERGE from the budget — it is what
+    lets a body hold a large amplitude inside a fixed metabolic cost — so
+    rewarding alignment directly would be assuming the conclusion.
+
+20. **Every quantity is a RATIO, because otherwise §8 q3's reasoning is void.**
+    That decision went to torque so the model would rest on nothing body- or
+    species-specific; an objective measured in radians or joules would smuggle
+    it straight back. Movement is in RANGE-LENGTHS PER SECOND (travel over the
+    joint's own ROM), effort in units of the segment's own `m·g·d`, urge in
+    fractions of that track's own maximum.
+
+21. **Movement is TRAVEL, not excursion** — `mean|θ̇|`, not peak angle. "Hard
+    and sudden" is the requester's phrase and peak excursion cannot express it:
+    half the range at 2 Hz is twice as intense as full range at 0.5 Hz, and the
+    metric says so. Closed form: `achieved = 4·f·(A/ROM)`, so **full range once
+    a second is exactly 4.0** — which is what `maxUrge`'s anchor IS.
+
+22. **Effort counts the POSTURAL torque, and this is the one thing that cannot
+    be recovered later from the trajectory.** Omit it and a body straining
+    against a beat scores cheaper than one merely standing leant over. The two
+    torques ADD before squaring — muscle does not know which half of its own
+    tension is postural.
+
+23. **`lambda` is a LAGRANGE MULTIPLIER, not a weight.** It prices the budget
+    VIOLATION, never the effort itself, so the ranking is independent of it once
+    it binds — swept over 1 … 400 in the test. This is the substantive
+    difference from the `match − lambda·effort` form C4b was first written with,
+    and the reason the review's measure-dependence finding does not reach it.
+
+24. **Exactly TWO free parameters, both physiological, both stated as ANCHORS
+    rather than numbers** so a reader can disagree with them precisely:
+    `maxUrge` = 4.0 = *full range, once a second*; `effortBudget` = 1.0 =
+    *a torque equal to the segment's own weight moment*. Both VERIFY. Only one
+    binds at a time — the budget when the body cannot keep up, the urge when
+    the music is not asking much — and **which one bound is an OBSERVATION**
+    (`budgetBound`), not a setting.
+
+25. **Silence is not a performance, and it is not a failure either.** A window
+    with no urge scores match 0 and blames nobody. Scoring it 1 would make
+    standing still through a quiet passage optimal and would dominate any long
+    window containing silence.
+
+26. **This module never computes `urgeNorm`.** Deciding which ensemble quantity
+    means "urge" is a modelling claim and belongs where it can be argued with,
+    not buried in an accumulator. It is an input (C5 supplies it).
+
 Known debt:
 
 - **No child→parent reaction.** A parent drives its child; the child's reaction
@@ -181,5 +238,5 @@ Known debt:
 - **Torque-actuator muscles**, per proposal 44 section 6's standing limit.
 - **AC2.1 open** — see the header note above.
 
-How to test: `ctest -R "body_measures_test|body_joint_test"`. Both are plain
+How to test: `ctest -R "body_measures_test|body_joint_test|body_objective_test"`. Both are plain
 executables with no fixtures and no Qt; either can be built and run alone.

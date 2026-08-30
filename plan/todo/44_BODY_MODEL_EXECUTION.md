@@ -1041,11 +1041,54 @@ amplitude inside a fixed budget.** Off resonance you either move less or run
 out. The resonance incentive is now structural rather than an artefact of which
 effort integral was picked.
 
-**Still to be made concrete, and it is AC4b.3's remaining work:** the numeric
-definition of `achieved` (excursion amplitude per joint? summed kinetic energy?)
-and of `urge` (which ensemble quantity, in what units), the window length (the
-requester says tens of seconds, so ~10-30 s), and the budget. Each is ONE
-function called by both the simulation and the assertion.
+### AC4b.3 — the metrics, PROPOSED and IMPLEMENTED 2026-08-30
+
+`tw/body/twbodyobjective.h`, gated by `body_objective_test`. Pure, no ensemble
+needed, so the definitions can be argued with before anything is wired to them.
+Invariants: `tw303a/body/CONTRACT.md` 18-26.
+
+| Quantity | Definition | Why |
+|---|---|---|
+| **achieved** | mean `\|dθ/dt\|` over the joint's own ROM — **range-lengths per second** | A ratio, so a mouse and a person can both do "three a second"; §8 q3 went to torque exactly so nothing would be body-specific, and an objective in radians voids that. TRAVEL, not excursion: "hard and sudden" is the requester's phrase and peak angle cannot express it. Closed form **`4·f·(A/ROM)`** |
+| **urge** | `urgeNorm(t) × maxUrge`, where `urgeNorm` ∈ [0,1] is the music's excitation against **that track's own maximum** | The normalisation is derived and free of parameters; the one constant is physiological and belongs beside M and H. `twbodyobjective` never computes `urgeNorm` — deciding which ensemble quantity means "urge" is a modelling claim and belongs where it can be argued with (C5) |
+| **effort** | mean squared **total** muscle torque in units of the segment's own `m·g·d` | Dimensionless and body-normalised. The review settled squared torque as one of the two measures that support the resonance conclusion, and it is the standard metabolic proxy. **Includes the postural torque** — the one term that cannot be recovered from the trajectory later |
+| **match** | `Σ min(achieved_i, urge_i) / Σ urge_i` over **sub-windows** | `min()` is "as intense as it LIKES to" — overshoot earns nothing. Sub-windows are "over an extended period": a window MEAN cannot tell a steady body from one that thrashed for a third of the time |
+| **window** | **20 s**, sub-window **1 s** | 20 is DERIVED, not picked: five periods of the ensemble's slowest unit (twobar, 0.25 Hz), the shortest window in which that unit is a sustained fact rather than an event |
+
+**Exactly TWO free parameters, both physiological, both stated as ANCHORS rather
+than numbers** so a reader can disagree with them precisely — `maxUrge` = 4.0 =
+*full range, once a second*; `effortBudget` = 1.0 = *a torque equal to the
+segment's own weight moment*. Both VERIFY. **Only one binds at a time** — the
+budget when the body cannot keep up, the urge when the music is not asking much
+— and which one bound is an OBSERVATION (`budgetBound`), not a setting.
+
+**`lambda` is the constraint's LAGRANGE MULTIPLIER, not a weight**, and that is
+the substantive change from the form C4b was first written with. It prices the
+budget VIOLATION, never the effort itself, so **the ranking is independent of it
+once it binds** — swept over 1 … 400 in the test. Nobody has to source it.
+
+**NO PHASE TERM ANYWHERE**, and adding one would make AC4b.2 circular: resonance
+is expected to EMERGE from the budget (it is what lets a body hold a large
+amplitude inside a fixed cost), so rewarding alignment directly would assume the
+conclusion.
+
+**Measured** (`body_objective_test`): achieved is `4·f·(A/ROM)` to 0.01 at every
+rate and amplitude tried; half the range at 2 Hz (**4.000**) beats full range at
+0.5 Hz (**2.000**); doubling the movement past the urge scores **exactly the
+same** match as meeting it; and the sustainment gate is the sharp one — two
+bodies with **identical total travel** (both 2.000 rl/s) score **1.000 against
+0.318**, the bursting one having danced 7 s of 21 (0.333) with a `weakestSub` of
+**0.000**.
+
+**Watched failing, six sabotages, one per design decision:** achieved as peak
+excursion (20 failures), no ceiling (3), one window mean instead of sub-windows
+(3), effort ignoring the postural torque (2), lambda pricing the effort rather
+than the violation (1), and silence scoring a perfect match (1).
+
+**STILL OPEN:** `urgeNorm`'s source — which ensemble quantity, normalised how
+(C5). And the metrics are per JOINT and per WINDOW; combining joints into one
+body-wide objective, and running it as a sliding window rather than a block, are
+both AC4b.1's business.
 
 **AC4b.1** Stiffness AND postural tone become per-hop control variables driven
 by the same excitation that drives the motion, not `twBodyJoint` constants. Tone
