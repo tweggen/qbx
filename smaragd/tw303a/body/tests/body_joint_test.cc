@@ -555,6 +555,182 @@ int main()
         check( mx < fwdSecond * 0.5, "an OVERDAMPED joint overshoots far less" );
     }
 
+    // --- 10. THE BRACED BOUNCE: can the plant do what the requester DESCRIBES?
+    // Asked before C4b builds a controller on top, because a controller that
+    // optimises toward a motion the plant cannot produce is built on sand.
+    //
+    // The description (requester, 2026-08-30, on the Enter Sandman build-up):
+    // raise postural tone between trunk and head, drive the head down HARD, and
+    // have it "bounce up again like a ball thrown forcefully on the floor", to
+    // then push it down again -- the bounce being what enables a HARSHER next
+    // strike.
+    //
+    // **THE FIRST READING OF THAT WAS WRONG AND IS RECORDED SO IT IS NOT
+    // RE-TRIED.** It was written as "a braced head bounces, a slack one does
+    // not -- its own weight eats the return", and the model says otherwise:
+    // an underdamped joint RINGS whether or not it is toned, so the slack head
+    // comes back past its resting place too. What actually separates them is
+    // WHERE THEY REST and HOW FAST THEY TURN AROUND, and those are the two
+    // things "hard and sudden" names.
+    {
+        const double lean  = 20.0 * kPi / 180.0;
+        const double pulse = 0.06;                 // s, the strike
+        const double tau   = 6.0;                  // N m, downward (+ = forward)
+        twBodyParentMotion held; held.angle[kFlex] = lean;
+
+        struct Result { double rest, down, backMs; };
+        auto strike = [&]( double ks, double gain ) {
+            twBodyJoint j = neckJoint( 0.15, ks );
+            j.posturalGain = gain;
+            twBodyJointState st;
+            // Settle where the body is ALREADY holding: the strike is a
+            // departure from that, not from an arbitrary zero.
+            for( long n = 0; n < (long) ( 20.0 / dt ); n++ )
+                twBodyJointStep( j, st, held, nullptr, dt );
+            const double start = st.angle[kFlex];
+            double down = start, tDown = -1.0, backMs = -1.0;
+            for( double t = 0.0; t < 3.0; t += dt ) {
+                const double act[3] = { t < pulse ? tau : 0.0, 0.0, 0.0 };
+                twBodyJointStep( j, st, held, act, dt );
+                if( st.angle[kFlex] > down ) { down = st.angle[kFlex]; tDown = t; }
+                else if( tDown >= 0.0 && backMs < 0.0
+                         && st.angle[kFlex] <= start )
+                    backMs = ( t - tDown ) * 1000.0;
+            }
+            return Result{ start, down - start, backMs };
+        };
+
+        const Result braced = strike( 8.0, 1.0 );   // toned, stiff
+        const Result slack  = strike( 1.5, 0.0 );   // untoned, floppy
+        std::printf( "\n  THE BRACED BOUNCE (same %.1f N m strike for %.0f ms,"
+                     " trunk held at %.0f deg):\n", tau, pulse * 1000.0,
+                     lean * 180.0 / kPi );
+        std::printf( "    braced (ks 8, tone 1.0): rests %+6.2f deg, travels"
+                     " %5.2f deg down, %5.0f ms back to rest\n",
+                     braced.rest * 180.0 / kPi, braced.down * 180.0 / kPi,
+                     braced.backMs );
+        std::printf( "    slack  (ks 1.5, tone 0 ): rests %+6.2f deg, travels"
+                     " %5.2f deg down, %5.0f ms back to rest\n",
+                     slack.rest * 180.0 / kPi, slack.down * 180.0 / kPi,
+                     slack.backMs );
+
+        // WHERE IT RESTS. A toned head sits trunk-aligned however far the trunk
+        // leans; an untoned one is already hanging 40 degrees below it before
+        // the strike lands -- half its range spent on nothing.
+        near( braced.rest, 0.0, 1e-9,
+              "a toned head rests TRUNK-ALIGNED whatever the lean" );
+        check( slack.rest > lean,
+               "an untoned head hangs BELOW the trunk before the strike lands" );
+
+        // HOW FAST IT TURNS AROUND. This is what "hard and sudden" means, and
+        // it is a quarter period, so it is the resonance shift of section 11
+        // showing up in the time domain.
+        check( braced.backMs > 0.0 && slack.backMs > 0.0,
+               "BOTH ring -- an underdamped joint returns whether toned or not,"
+               " which is the correction to this section's first reading" );
+        check( braced.backMs * 3.0 < slack.backMs,
+               "but the BRACED turnaround is at least 3x faster: that, not the"
+               " existence of a return, is what makes the bounce SUDDEN" );
+        check( braced.down < slack.down,
+               "and the braced head travels LESS far -- the bounce is not the"
+               " same motion done harder" );
+    }
+
+    // --- 11. WHY THE BRACE HELPS: the joint resonates, and TONE MOVES IT ----
+    // The requester's account of the bounce -- an elastic return that enables a
+    // harsher NEXT strike -- is the single-joint statement of resonance, and it
+    // is the premise C4b optimises against. Measured, not assumed, and against
+    // CLOSED FORMS so nothing here rests on a provisional constant.
+    //
+    // The gate is the resonant amplification over the STATIC deflection, which
+    // is exactly 1/(2*zeta_eff). Asserting instead that the peak beats the
+    // response at half the rate does NOT work and was tried: a soft joint's
+    // quasi-static response at f_n/2 is large simply because it is soft, so the
+    // ratio there is 1.5x and says nothing about resonance.
+    {
+        auto amplitudeAt = [&]( const twBodyJoint &j, double drive, double hz ) {
+            twBodyJointState st;
+            const double w = 2.0 * kPi * hz;
+            double lo = 1e30, hi = -1e30;
+            for( double t = 0.0; t < 14.0; t += dt ) {
+                const double act[3] = { drive * std::sin( w * t ), 0.0, 0.0 };
+                twBodyJointStep( j, st, still(), act, dt );
+                if( t >= 10.0 ) {                       // steady state only
+                    lo = std::min( lo, st.angle[kFlex] );
+                    hi = std::max( hi, st.angle[kFlex] );
+                }
+            }
+            return 0.5 * ( hi - lo );
+        };
+
+        std::printf( "\n  RESONANCE, and that TONE MOVES IT (2 N m sinusoid,"
+                     " steady state):\n" );
+        struct Cfg { double ks, gain; const char *name; };
+        const Cfg cfgs[] = { { 2.0, 0.0, "ks 2, untoned" },
+                             { 2.0, 1.0, "ks 2, toned  " },
+                             { 8.0, 1.0, "ks 8, toned  " } };
+        const double drive = 2.0;
+        for( const Cfg &cf : cfgs ) {
+            twBodyJoint j = neckJoint( 0.15, cf.ks );
+            j.posturalGain = cf.gain;
+            const double fn   = twBodyJointNaturalHz( j, twBodyAxis::Flex );
+            const double k    = twBodyJointStiffness( j, twBodyAxis::Flex );
+            const double zEff = twBodyJointDampingRatioAt( j, twBodyAxis::Flex,
+                                                           still() );
+            const double statc = drive / k;             // DC deflection
+            const double aOn   = amplitudeAt( j, drive, fn );
+            const double Q     = 1.0 / ( 2.0 * zEff );
+            std::printf( "    %s  f_n %5.3f Hz  zeta_eff %.4f  static %5.2f deg"
+                         " -> %6.2f deg at f_n  (Q %.3f, closed form %.3f)\n",
+                         cf.name, fn, zEff, statc * 180.0 / kPi,
+                         aOn * 180.0 / kPi, aOn / statc, Q );
+            near( aOn / statc, Q, 0.02,
+                  "the resonant amplification is exactly 1/(2*zeta_eff) over"
+                  " the static deflection" );
+            check( Q > 1.5, "and it IS an amplification -- there is a bounce"
+                            " to be had at this tone" );
+        }
+
+        // A SOFTER JOINT IS EFFECTIVELY MORE DAMPED, because c is absolute and
+        // does not follow sqrt(k) (invariant 5). So stiffening does TWO things:
+        // it moves the resonance up AND sharpens it. Both help the requester's
+        // bounce, and C4b's optimiser has to read zeta_eff rather than the
+        // stored ratio.
+        {
+            twBodyJoint soft = neckJoint( 0.15, 2.0 ); soft.posturalGain = 0.0;
+            twBodyJoint hard = neckJoint( 0.15, 8.0 ); hard.posturalGain = 1.0;
+            const double zs = twBodyJointDampingRatioAt( soft, twBodyAxis::Flex, still() );
+            const double zh = twBodyJointDampingRatioAt( hard, twBodyAxis::Flex, still() );
+            check( zs > 0.15 && zh < zs,
+                   "a SOFTER joint is effectively more damped -- stiffening both"
+                   " raises the resonance and sharpens it" );
+            near( zs, 0.15 * std::sqrt( ( 2.0 + 1.0 ) / ( 2.0 - 1.0 ) ), 1e-9,
+                  "zeta_eff is the closed form dampingRatio*sqrt(kRef/k)" );
+        }
+
+        // THE C4b PREMISE, stated as the relation it is: tone and stiffness are
+        // what a body has to move its own resonance WITH. Without a range to
+        // tune across, "the body tunes toward the beat" is not a thing a body
+        // could do.
+        twBodyJoint a = neckJoint( 0.15, 2.0 ); a.posturalGain = 0.0;
+        twBodyJoint b = neckJoint( 0.15, 2.0 ); b.posturalGain = 1.0;
+        twBodyJoint c = neckJoint( 0.15, 8.0 ); c.posturalGain = 1.0;
+        const double fa = twBodyJointNaturalHz( a, twBodyAxis::Flex );
+        const double fb = twBodyJointNaturalHz( b, twBodyAxis::Flex );
+        const double fc = twBodyJointNaturalHz( c, twBodyAxis::Flex );
+        std::printf( "    -> tone alone moves f_n %.3f -> %.3f Hz (%.2fx);"
+                     " with co-contraction, to %.3f Hz (%.2fx)\n",
+                     fa, fb, fb / fa, fc, fc / fa );
+        check( fb > fa * 1.3,
+               "POSTURAL TONE ALONE RAISES THE RESONANCE -- for an INVERTED"
+               " joint, cancelling gravity IS stiffening it" );
+        near( fb / fa, std::sqrt( 2.0 ), 1e-9,
+              "and by the closed form sqrt(ks/(ks-1)), here exactly sqrt(2)" );
+        check( fc > fb * 1.5,
+               "co-contraction raises it further, so a body has a real RANGE to"
+               " tune across. That range is what C4b optimises in" );
+    }
+
     // --- 9. INFORMATIONAL: what stiffness and damping actually imply -------
     // NOT assertions. Two numbers per row, because with gravity acting on the
     // absolute angle they are different questions: the joint settles at a

@@ -899,8 +899,65 @@ limit); subject-fitted PD gains; feet leaving the ground; steps; full 3D.
 >
 > **NOT done:** nothing yet SUPPLIES `tau_active` — the ensemble is not wired to
 > a joint at all, which is C5. And `posturalGain` is a per-joint constant here;
-> whether tone is itself modulated by the drive is C4b's question, not this
-> one's.
+> whether tone is itself modulated by the drive is C4b's question — **now
+> answered YES, see C4b below.**
+
+### C4c/2 — CAN THE PLANT DO WHAT THE REQUESTER DESCRIBES? Asked BEFORE C4b
+
+Because a controller that optimises toward a motion the plant cannot produce is
+built on sand. The description, verbatim (2026-08-30, on the *Enter Sandman*
+build-up): raise postural tone between trunk and head, drive the head down HARD,
+and have it *"bounce up again like a ball thrown forcefully on the floor"*, to
+then push it down again — the bounce being what enables a **harsher next
+strike**. Sections 10 and 11 of `body_joint_test` measure exactly that.
+
+**Yes, and here is the number.** Same 6 N·m strike for 60 ms, trunk held at 20°:
+
+| | rests at | travels down | back to rest |
+|---|---|---|---|
+| braced (ks 8, tone 1.0) | **0.00°** (trunk-aligned) | 7.44° | **78 ms** |
+| slack (ks 1.5, tone 0) | **+40.00°** (already drooped) | 25.94° | **361 ms** |
+
+**MY FIRST READING OF THE CLAIM WAS WRONG AND IS RECORDED SO IT IS NOT
+RE-TRIED.** I wrote it as *"a braced head bounces, a slack one does not — its
+own weight eats the return"*, and the model says otherwise: an underdamped joint
+RINGS whether or not it is toned, so the slack head comes back past its resting
+place too. What actually separates them is **where they rest** and **how fast
+they turn around** — 4.6× here — and those are the two things "hard and sudden"
+names. The braced head also travels LESS far, so the bounce is not the same
+motion done harder.
+
+**And the mechanism is resonance, measured against closed forms** so nothing
+rests on a provisional constant. Resonant amplification over the static
+deflection is exactly `1/(2·zeta_eff)`:
+
+| | f_n | zeta_eff | static | at f_n | Q | closed form |
+|---|---|---|---|---|---|---|
+| ks 2, untoned | 1.267 Hz | 0.2598 | 19.85° | 38.20° | **1.925** | 1.925 |
+| ks 2, toned | 1.792 Hz | 0.1837 | 9.93° | 27.01° | **2.722** | 2.722 |
+| ks 8, toned | 3.584 Hz | 0.1591 | 2.48° | 7.80° | **3.143** | 3.143 |
+
+**A SECOND WRONG READING, also recorded:** asserting that the peak beats the
+response at HALF the rate does not work and was tried — a soft joint's
+quasi-static response at `f_n/2` is large simply because it is soft, giving a
+ratio of 1.5× that says nothing about resonance. The amplification over the
+STATIC deflection is the honest measure.
+
+**Two consequences that matter for C4b:**
+
+- **Postural tone alone raises the resonance**, by exactly `sqrt(ks/(ks−1))` —
+  here `sqrt(2)`, 1.267 → 1.792 Hz. For an INVERTED joint, cancelling gravity IS
+  stiffening it. Co-contraction takes it to 3.584 Hz, 2.83× the untoned rate.
+  **That range is what C4b tunes across**, and without it "the body tunes toward
+  the beat" would not be a thing a body could do.
+- **A softer joint is effectively MORE damped** (`zeta_eff = dampingRatio ·
+  sqrt(kRef/k)`, because `c` is absolute — invariant 5). So stiffening does two
+  things at once: it moves the resonance up AND sharpens it. Both help the
+  bounce. **C4b's optimiser must read `twBodyJointDampingRatioAt()`, never the
+  stored ratio** — the new accessor exists for exactly that.
+
+Watched failing: a `zeta_eff` that reports the stored ratio (5 failures), and
+postural tone reaching the forcing but not the stiffness (9).
 
 ## C4b — Stiffness is EMERGENT, not a constant (requester, 2026-08-28)
 
@@ -924,8 +981,75 @@ the body settles on the least muscle action that still does the job.
    is closer to what the van Noorden & Moelants ~2 Hz body-resonance anchor
    would predict if the anchor is a consequence rather than an input.
 
-**AC4b.1** Stiffness becomes a per-hop control variable driven by the same
-excitation that drives the motion, not a `twBodyJoint` constant.
+### The two open questions, ANSWERED by the requester 2026-08-30
+
+**Q1 — is postural TONE itself modulated by the drive? YES, and ANTICIPATORY.**
+In the requester's words, on a rock build-up: tone is raised *in anticipation of*
+a heavy movement — high tone between trunk and head, legs supporting — *in order
+to* make the hard sudden nod possible and have the head bounce back up, so that
+the next strike can be harsher still.
+
+Three things follow, and the third is the one that constrains the design:
+
+1. `posturalGain` is a CONTROL VARIABLE, not a per-joint constant. It joins
+   `stiffnessScale` in AC4b.1 rather than sitting outside it.
+2. It is not a separate knob from stiffness in its EFFECT — C4c/2 measured tone
+   alone moving the resonance by `sqrt(2)` — but it IS separate in its MEANING:
+   tone cancels gravity, co-contraction adds spring. They compose.
+3. **IT LEADS THE DRIVE. It is FEED-FORWARD, not a response to the current
+   excitation.** A body braces during the build-up, before the hit. That makes
+   it a genuinely different claim from a reactive controller, and it is
+   testable: the tone envelope should RISE AHEAD of the excitation it is bracing
+   for. The natural non-opinion source is the ensemble's own aggregate power
+   integrated over a window, which leads any individual hit by construction —
+   but WHICH signal is chosen is an AC of its own, because picking one that
+   already contains the answer would be circular.
+
+**Q2 — what is MATCH? NOT phase coherence.** The requester's definition:
+*enabling the body to express its urge to move as intensely as it likes to, over
+an extended period of time — tens of seconds.* That is a materially different
+quantity from either candidate I proposed, and better:
+
+- It is an **achieved-intensity** measure, not an alignment measure. The reward
+  is how much movement the body actually gets, not how well-timed it is.
+- **"As intense as it LIKES TO"** means there is a target set by the music — an
+  urge — and a natural CEILING. Exceeding the urge is not extra reward. So the
+  sensible form is a ratio: **the fraction of the available drive the body
+  converts into sustained movement.** That is dimensionless, which is what keeps
+  it body- and species-independent, which is the whole reason §8 q3 went to
+  torque.
+- **"Over an extended period"** is what makes the effort term BITE. Effort is
+  not a secondary penalty to be weighed against the reward — it is a BUDGET over
+  the window. You cannot thrash at maximum effort for thirty seconds. So the
+  natural form is constrained rather than weighted:
+
+  ```
+  maximise   integral over window of  min( achieved, urge )
+  subject to integral over window of  effort  <=  budget
+  ```
+
+  with `lambda` as its Lagrange multiplier rather than as a free taste
+  parameter — which is a materially better answer to "declare the one free
+  parameter" than tuning `lambda` directly.
+
+**THIS RESOLVES THE MEASURE-DEPENDENCE COMPLETELY, and by a stronger route than
+the one recorded above.** The reviewer's escape route — elastic recovery making
+mean power independent of `k` — was an argument about the EFFORT term. Under
+this objective the reward is sustained AMPLITUDE and the constraint is a
+METABOLIC BUDGET, and **resonance is precisely what lets a body hold a large
+amplitude inside a fixed budget.** Off resonance you either move less or run
+out. The resonance incentive is now structural rather than an artefact of which
+effort integral was picked.
+
+**Still to be made concrete, and it is AC4b.3's remaining work:** the numeric
+definition of `achieved` (excursion amplitude per joint? summed kinetic energy?)
+and of `urge` (which ensemble quantity, in what units), the window length (the
+requester says tens of seconds, so ~10-30 s), and the budget. Each is ONE
+function called by both the simulation and the assertion.
+
+**AC4b.1** Stiffness AND postural tone become per-hop control variables driven
+by the same excitation that drives the motion, not `twBodyJoint` constants. Tone
+is FEED-FORWARD and must be shown to lead.
 
 **AC4b.2 — THE CLAIM WORTH TESTING.** Given a fixed metrical drive, the settled
 stiffness lands where the joint's natural frequency is NEAR the drive rate.

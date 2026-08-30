@@ -152,6 +152,17 @@ double twBodyJointDamping( const twBodyJoint &j, twBodyAxis a )
     return 2.0 * j.dampingRatio * std::sqrt( kRef / I ) * I;
 }
 
+double twBodyJointDampingRatioAt( const twBodyJoint &j, twBodyAxis a,
+                                  const twBodyParentMotion &p )
+{
+    const double I = twBodyJointInertia( j, a );
+    const double k = twBodyJointStiffnessAt( j, a, p );
+    if( I <= 0.0 || k <= 0.0 ) return 0.0;
+    // zeta = c / (2*sqrt(k*I)) -- read off the coefficient that is actually
+    // there, rather than the reference ratio it was derived from.
+    return twBodyJointDamping( j, a ) / ( 2.0 * std::sqrt( k * I ) );
+}
+
 double twBodyJointStiffnessAt( const twBodyJoint &j, twBodyAxis a,
                                const twBodyParentMotion &p )
 {

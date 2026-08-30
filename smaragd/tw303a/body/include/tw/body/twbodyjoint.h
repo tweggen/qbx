@@ -283,6 +283,27 @@ struct twBodyParentMotion {
     double angAcc[(int) twBodyAxis::Count] = { 0.0, 0.0, 0.0 };
 };
 
+/**
+ * The EFFECTIVE damping ratio about `a` -- what the joint's response actually
+ * behaves like, as against `dampingRatio`, which is a reference value.
+ *
+ * These differ ON PURPOSE and the difference is invariant 5 working. Damping is
+ * stored as an absolute coefficient against a REFERENCE stiffness, so as the
+ * joint's real stiffness changes -- with postural tone, with co-contraction,
+ * with the parent's rotation rate -- `c` stays put and the ratio moves as
+ * `dampingRatio * sqrt(kRef/k)`. Consequences worth knowing rather than
+ * rediscovering:
+ *
+ *  - A SOFTER joint is effectively MORE damped and resonates less sharply; a
+ *    stiffer one resonates more sharply. So stiffening does two things at once
+ *    -- it moves the resonance up AND raises its peak.
+ *  - The resonant amplification is `1 / (2 * zeta_eff)` over the static
+ *    deflection, which is a closed form and is what body_joint_test asserts.
+ *  - C4b's optimiser must read THIS, not `dampingRatio`.
+ */
+double twBodyJointDampingRatioAt( const twBodyJoint &j, twBodyAxis a,
+                                  const twBodyParentMotion &p );
+
 /** The stiffness the step integrates about `a`, including the parent's
  * centripetal contribution. Equals twBodyJointStiffness() at rest. */
 double twBodyJointStiffnessAt( const twBodyJoint &j, twBodyAxis a,

@@ -157,6 +157,20 @@ Invariants:
     true sine would not cancel what the equation integrates, and the two must
     agree or nothing is gateable.
 
+16. **`dampingRatio` is NOT the effective damping ratio, and a resonance claim
+    must read `twBodyJointDampingRatioAt()`.** Because `c` is absolute
+    (invariant 5), the ratio the joint actually behaves with is
+    `dampingRatio · sqrt(kRef/k)`. A softer joint is therefore effectively MORE
+    damped and resonates less sharply. Consequence worth stating: stiffening
+    does two things at once — it moves the resonance up AND sharpens it — and
+    the resonant amplification over the static deflection is exactly
+    `1/(2·zeta_eff)`, which is what the tests assert.
+
+17. **A resonance gate measures amplification over the STATIC deflection, never
+    against the response at some other frequency.** A soft joint's quasi-static
+    response at `f_n/2` is large simply because it is soft; that ratio was
+    measured at 1.5× and says nothing about resonance. Tried, wrong, recorded.
+
 Known debt:
 
 - **No child→parent reaction.** A parent drives its child; the child's reaction
