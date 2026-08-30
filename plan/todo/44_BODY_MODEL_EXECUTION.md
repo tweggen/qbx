@@ -918,16 +918,121 @@ simulation and the assertion call it.
 > recovery the mean power is `½cω²A²` independent of k — there is no resonance
 > incentive at all.** Picking the measure is picking whether the claim is even
 > testable, so it is a prerequisite rather than a parallel task.
+>
+> **THE REQUESTER'S OWN ASSUMPTION SUPPLIES IT, AND IT IS NOT AN EFFORT MEASURE
+> AT ALL** (2026-08-30, alongside the §8 q3 decision). The objective is
+>
+> ```
+> maximise   MATCH( ongoing movement , trigger )   −   lambda * EFFORT
+> ```
+>
+> — *"a match of ongoing movement with trigger is satisfying, and the brain
+> maximises this satisfaction incrementally"*, together with the earlier
+> *"the body would gravitate to an energy saving amount of muscle action"*. Two
+> statements, one two-term objective, and it is exactly the β-weighted form the
+> reviewer simulated for co-contraction cost — so its finding (the optimum sits
+> BELOW resonance, one-sidedly, `k/k_res` down to 0.883 as the cost term grows)
+> transfers directly and is what AC4b.2's band must expect.
+>
+> **What this changes is that the measure-dependence problem no longer bites the
+> conclusion.** The reviewer's escape route — elastic recovery making mean power
+> independent of `k` — was an argument about the EFFORT term alone. The reward
+> term is not an effort measure: at resonance the body gets the largest excursion
+> per unit torque and the most stable phase relation to the drive, so a
+> match-maximising objective has a resonance incentive whatever the effort
+> measure turns out to be. Effort only decides HOW FAR BELOW resonance the
+> optimum settles, not whether one exists.
+>
+> **Still to define concretely, and it is AC4b.3's remaining work:** what MATCH
+> is, quantitatively. The natural candidates are the phase coherence between the
+> joint's motion and its driving unit, or the correlation of the two over a
+> window. Whichever is chosen it is ONE function, called by both the simulation
+> and the assertion, per the AC as originally written. `lambda` is the one free
+> parameter of the whole scheme and it must be declared as such rather than
+> tuned quietly.
 
 **AC4b.4** AC-INV holds; if this reaches the pose, `feel_flow_puppet.qxa` is
 re-pinned with old and new values and the reason, as C1/C1a did.
 
-**OPEN, and it needs the requester:** whether the ensemble's output should be
-read as a muscle TORQUE or as a moving SET-POINT the impedance tracks. Proposal
-44 section 8 question 3 asked this and it is now load-bearing — under the
-emergent-stiffness reading the set-point interpretation is the more natural one,
-because impedance modulation is exactly how the motor system is described as
-tracking a target.
+### 44 §8 q3 — SETTLED 2026-08-30: **TORQUE (option A)**
+
+**The requester's decision, and the reasoning is the load-bearing part**, because
+it constrains what this model may and may not contain from here on:
+
+> The thesis is that a particular set of dance moves is an effect of NEUROLOGICAL
+> PROGRAMMING and not a consequence of socialisation. Grounding the motion on
+> muscle ACTIVATION, with the stimulus derived from literature, is what keeps the
+> requester's own opinion out of the model — a posture target would be a claim
+> about what a body is *trying to look like*, which is exactly the thing the
+> thesis is trying to show is not chosen. And the mechanism is not assumed to be
+> homo sapiens only: humans alone vary in size and mass by age, so a primitive
+> expressed in RADIANS OF POSTURE is species- and body-specific, while a
+> primitive expressed as an ACTIVATION is not.
+
+**THE ONE ASSUMPTION THE MODEL IS ALLOWED**, in the requester's own words: *a
+match of ongoing movement with trigger is satisfying, and the brain maximises
+this satisfaction incrementally.* Everything else must be derived. Anything a
+future milestone wants to add is measured against that sentence.
+
+**This needs NO engine change.** `twBodyJointStep`'s `muscleTorque` parameter is
+already exactly option A, and always was; option B is what would have needed a
+new field. The decision costs nothing to implement, which is worth knowing before
+weighing the three consequences below.
+
+**Consequence 1 — the postural hold must be SPLIT OUT, and doing so does not
+break the no-opinion property.** Under a torque reading, an inverted segment
+needs a standing DC torque simply to stay upright (C4a's correction made that
+bias explicit and measurable: a head on a 25° lean droops 25° at ks = 2 with no
+muscle at all). That torque cannot come from the ensemble — the ensemble knows
+nothing about gravity, and a musical signal riding on a large DC offset would be
+an opinion smuggled in as a constant. So the total is
+
+```
+tau_muscle = tau_postural( body, current pose )   +   tau_musical( ensemble )
+```
+
+and the first term is **DERIVED, with no free parameter**: it is whatever
+cancels `m·g·d·sin(absolute angle)` at each joint, a quantity the measures module
+already computes. It is gravity compensation, a physical requirement, not a
+stylistic choice — which is what keeps it out of scope for the socialisation
+objection. Only `tau_musical` carries the ensemble's output.
+
+**Consequence 2 — a "sudden stop" is a NEGATIVE torque, not the absence of one,
+and the requester's own assumption supplies it.** Under a set-point reading a
+stop is free (the target simply stops moving and the joint is pulled to rest).
+Under a torque reading, drive going to zero means the segment COASTS and then
+settles at its gravitational equilibrium — for a head, a droop, not a stop. So
+an arrest has to be an ACTIVE BRAKING torque. That is not a problem the decision
+creates, it is a prediction it makes: under "maximise the match, incrementally",
+a body that anticipates a stop invests torque in arriving stopped, and the size
+of that investment is a measurable consequence rather than an animation
+parameter. **This is now the sharpest observable the whole model produces**, and
+it is what the requester's original report (2026-08-27, "movement seemed linear
+to me and not honoring weight, sudden stops that people do") was about.
+
+**Consequence 3 — amplitude now scales INVERSELY with stiffness, which makes
+C4b's optimisation sharper rather than weaker.** Under option B, doubling the
+stiffness leaves the amplitude alone and only tightens the tracking; under A it
+HALVES the motion. So stiffness is no longer a free dial that changes only the
+feel — it trades directly against excursion, which is what gives
+"least muscle action that still does the job" something to be least *about*.
+
+**Consequence 4 — BODY SIZE BECOMES A PREDICTION, and that is an asset.** Under
+A the same torque on a heavier body produces less motion and a lower crossover
+frequency, so `twBodyMeasures`'s M and H stop being cosmetic and become the
+independent variable of a real experiment — proposal 44 §3's
+"correlate-with-my-body" idea, but as a falsifiable claim rather than a
+convenience. It is also the reading under which the cross-species argument above
+is even expressible.
+
+**The honest cost, stated plainly:** "derive the stimulus from literature" is now
+a sourcing task on TORQUE magnitudes — EMG-scale numbers — and AC2.1 is already
+open and already blocked in this environment for the far easier case of segment
+masses. Expect the musical torque's SCALE to be provisional for some time. What
+is NOT provisional, and this is the point of the decision, is its SHAPE: the
+time course comes from the ensemble, and a scale factor is one number that
+multiplies everything equally, so it cannot change which motions the model
+produces — only how large they are.
 
 ## C5 — The `body.pose` aspect and the puppet switch
 
@@ -1034,7 +1139,7 @@ C3; C5 and C6 are strictly serial after C4.
 |---|---|---|---|
 | 1 | What drives the head | C1 | **D** — the TRUNK, through a one-pole lag. Every unit is already taken, so A/B are degenerate and C costs an aspect bump |
 | 2 | Projection: 3/4 oblique, or two orthogonal views | C3 | **(i)** 3/4 oblique |
-| 3 | Torque drive vs moving set-point (44 §8 q3) | C4 | A/B once the puppet can show both |
+| 3 | Torque drive vs moving set-point (44 §8 q3) | C4 | **SETTLED 2026-08-30 — TORQUE (A).** See C4b; needs no engine change, and it makes body size a prediction rather than a parameter |
 | 4 | M/H global or per-project (44 §8 q2) | C6 | global first, per-project later |
 
 ## What the review changed (v1 → v2)
