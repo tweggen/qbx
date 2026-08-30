@@ -688,7 +688,9 @@ tw_module(metering
 tw_module(body
     SOURCES
         body/include/tw/body/twbodymeasures.h
+        body/include/tw/body/twbodyjoint.h
         body/src/twbodymeasures.cc
+        body/src/twbodyjoint.cc
     DEPS tw_core)
 
 # --- sidecar: derived-data QAF container + LRU store (proposal 27) --------------
@@ -1069,6 +1071,7 @@ tw_module_test(graph_test                   graph/tests/graph_test.cc           
 tw_module_test(page_channels_test           graph/tests/page_channels_test.cc           tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(body_measures_test           body/tests/body_measures_test.cc            tw_body)
+tw_module_test(body_joint_test              body/tests/body_joint_test.cc               tw_body)
 tw_module_test(plugins_test                 plugins/tests/test_plugin_insert.cc         tw_plugins)
 target_compile_definitions(plugins_test PRIVATE TEST_PLUGIN_INSERT_MAIN=1)
 if(TARGET twtestclap)

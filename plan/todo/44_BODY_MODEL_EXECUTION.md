@@ -599,6 +599,40 @@ so do not spend a decision on an interim mapping); deep-view aesthetics.
 
 ---
 
+## C4a — The plant, first half: a joint with inertia — **DONE 2026-08-28**
+
+> **Executed.** `tw/body/twbodyjoint.h` — a joint carrying the segment below
+> it, driven by its PARENT's angular acceleration, with per-axis DOF masks
+> (`twBodySpherical()` for a neck, `twBodyHinge()` for a knee), hard range-of-
+> motion limits with dissipative stops, and an EXACT closed-form step for the
+> linear second-order system in all three damping regimes.
+>
+> **The requester's own test is the central AC**: torso flexes 25° then STOPS →
+> the head nods **forward 44.985°** and rings (3 zero crossings). Its control is
+> the same input through the shipped FIRST-ORDER lag: **max forward +0.000000°**
+> across τ ∈ {0.03, 0.126, 0.5}. A lag is a filter; what the requester describes
+> is a mass. That pair is the whole argument and neither half can pass alone.
+>
+> Also gated: energy conserved to **1.281e-11** over 60 s AND pointwise flat
+> (band [0.115455, 0.115455] J — the step is exact, not merely stable); arrest
+> to 0.0004 % of peak in 6 natural periods; a hinge does not move on its
+> constrained axes under a 40 rad/s² drive on all three; limits never exceeded;
+> an overdamped joint overshoots far less.
+>
+> **A sign error found and fixed via the requester's pushback on 45°:** stiffness
+> used `m·g·d` as RESTORING, but the head's mass sits ABOVE the atlanto-occipital
+> joint — gravity is DESTABILISING, an inverted pendulum. Treating it as
+> restoring makes an upright head appear stable with no muscle tone at all.
+> `invertedPendulum` now carries the sign, and both sides of the stability
+> threshold are asserted: below 1× the gravity moment an inverted joint has
+> NEGATIVE total stiffness and reports no natural frequency, while a hanging
+> segment is stable on gravity alone.
+>
+> **NOT met, deliberately:** proposal 44's counterswing gate (AC4.2). This build
+> has parent→child driving and no child→parent reaction, so an arm cannot yet
+> counter-rotate the trunk. Named, not faked. Also per-axis decoupled — no
+> gyroscopic cross-terms. And not wired to the pose: C4a is the mechanism.
+
 ## C4 — The plant (44 B1): gravity, coupling, arrest
 
 The ODE, in `tw/body`, driven by RECORDED entrainment output. Semi-implicit
@@ -676,6 +710,53 @@ which this repo has actually hit.
 limit); subject-fitted PD gains; feet leaving the ground; steps; full 3D.
 
 ---
+
+## C4b — Stiffness is EMERGENT, not a constant (requester, 2026-08-28)
+
+**The correction.** C4a treats joint stiffness as a per-joint constant. It is
+not a property of the joint: a dancing body's stiffness is dominated by ACTIVE
+muscle co-contraction, driven by the rhythmic excitation the sound produces, and
+the body settles on the least muscle action that still does the job.
+
+**Two consequences, and the second is the interesting one.**
+
+1. **Do not source it from the literature.** Passive joint stiffness is measured
+   on a RELAXED joint, which is the wrong regime, so AC2.1's sourcing task does
+   not apply to this field the way it applies to a mass or a limb length. C4a's
+   header now says so at the constant.
+2. **If stiffness tracks the drive, so does each joint's natural frequency** —
+   and a body minimising muscle effort has a reason to tune omega_n TOWARD the
+   rate driving it, because a driven oscillator needs least torque for a given
+   amplitude at resonance. That would make **resonance with the music an
+   EMERGENT property of impedance modulation** rather than something seeded into
+   an ensemble. That is a materially different claim from proposal 40's, and it
+   is closer to what the van Noorden & Moelants ~2 Hz body-resonance anchor
+   would predict if the anchor is a consequence rather than an input.
+
+**AC4b.1** Stiffness becomes a per-hop control variable driven by the same
+excitation that drives the motion, not a `twBodyJoint` constant.
+
+**AC4b.2 — THE CLAIM WORTH TESTING.** Given a fixed metrical drive, the settled
+stiffness lands where the joint's natural frequency is NEAR the drive rate.
+Assert convergence from both sides (start too stiff and too floppy) and that the
+settled `twBodyJointNaturalHz` is within a stated band of the driving rate.
+**Watched failing:** a constant stiffness cannot converge on anything, so the
+test must be shown to fail against C4a's model.
+
+**AC4b.3** The effort criterion is explicit and its units stated — an integral
+of squared muscle torque over a window, minimised subject to the motion
+remaining bounded. Whatever is chosen, it is ONE function and both the
+simulation and the assertion call it.
+
+**AC4b.4** AC-INV holds; if this reaches the pose, `feel_flow_puppet.qxa` is
+re-pinned with old and new values and the reason, as C1/C1a did.
+
+**OPEN, and it needs the requester:** whether the ensemble's output should be
+read as a muscle TORQUE or as a moving SET-POINT the impedance tracks. Proposal
+44 section 8 question 3 asked this and it is now load-bearing — under the
+emergent-stiffness reading the set-point interpretation is the more natural one,
+because impedance modulation is exactly how the motor system is described as
+tracking a target.
 
 ## C5 — The `body.pose` aspect and the puppet switch
 
