@@ -118,6 +118,45 @@ Invariants:
     its VALUE — `body_measures_test` asserts only identities, orderings and
     scaling laws over it.
 
+13. **`tau_muscle` is SPLIT, and the postural half is a GAIN, not a torque.**
+    Proposal 44 §8 q3 settled the ensemble as driving the plant with TORQUE, so
+    nothing in the musical signal knows which way is down, and an inverted
+    segment needs a standing hold just to stay up. Left in one lump that hold
+    rides inside the musical torque as a DC offset — an opinion about posture
+    smuggled in as a constant, in a model built to answer exactly that
+    objection. So:
+
+    ```
+    tau_muscle = tau_postural( body, pose )  +  tau_active( ensemble )
+    ```
+
+    `tau_postural` is DERIVED with no free parameter — whatever cancels
+    `m·g·d` — and it lives in `posturalGain` rather than in the `activeTorque`
+    array **because it is feedback on the same absolute angle gravity acts on**.
+    Scaling BOTH gravity terms (the stiffness one and the parent-angle forcing
+    one) by `(1 − gain)` makes the cancellation exact at any `dt`; an explicit
+    torque sampled at the top of a step leaves a residual that grows with `dt`,
+    and "fully compensated" would then not hold still, so nothing could gate it.
+
+    **Scale BOTH or neither.** Compensating only the stiffness moves the
+    equilibrium, which is the natural mistake and is watched failing. A
+    correctly *partly* toned free joint still settles plumb — the gain changes
+    the strength of the pull, not its direction — and only at gain 1 does the
+    preferred position disappear altogether.
+
+14. **`stiffnessScale > 1` is a claim about an UNACTIVATED joint and about
+    nothing else.** With postural tone an inverted joint has no stability
+    threshold at all: a live person's head is held up by muscle, not by
+    ligament. Never quote the threshold as a fact about people.
+
+15. **The postural hold COSTS torque, and an effort term must count it.**
+    `twBodyPosturalTorque()` exists for C4b's objective: an effort measure
+    counting only the active torque would report a body straining against a
+    beat as cheaper than one merely standing leant over. It is LINEARISED to
+    match what the coefficients apply — a compensation computed against the
+    true sine would not cancel what the equation integrates, and the two must
+    agree or nothing is gateable.
+
 Known debt:
 
 - **No child→parent reaction.** A parent drives its child; the child's reaction

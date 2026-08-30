@@ -253,6 +253,102 @@ int main()
                " not trunk-aligned" );
     }
 
+    // --- 3b. POSTURAL TONE: THE OTHER HALF OF tau_muscle ------------------
+    // Proposal 44 section 8 question 3 was settled as TORQUE drive, so nothing
+    // in the musical signal knows which way is down -- and an inverted segment
+    // needs a standing torque simply to stay up. That hold is SPLIT OUT as
+    // posturalGain rather than left to ride inside the musical torque as a DC
+    // offset, and it is DERIVED (whatever cancels m*g*d) rather than chosen.
+    //
+    // The gate is a PAIR, because either half alone is satisfiable by a
+    // constant. At gain 0 a free arm HANGS PLUMB (section 3a); at gain 1 the
+    // same arm STAYS WHERE IT IS PUT, which is what holding your arm out IS.
+    // No model that ignores the gain can produce both.
+    {
+        const twBodyMeasures m;
+        twBodyJoint arm;
+        arm.segment          = m.compound( twBodySeg::UpperArm, 3 );
+        arm.freeAxes         = twBodySpherical();
+        arm.invertedPendulum = false;
+        arm.stiffnessScale   = 0.0;              // no passive tissue at all
+        arm.dampingRatio     = 0.7;
+        arm.parentLever      = 0.0;
+        arm.posturalGain     = 1.0;              // ...but muscle IS holding it
+
+        const double lean = 25.0 * kPi / 180.0;
+        twBodyParentMotion p; p.angle[kFlex] = lean;
+
+        twBodyJointState st;
+        st.angle[kFlex] = 0.6;                   // put it somewhere deliberate
+        for( long n = 0; n < (long) ( 30.0 / dt ); n++ )
+            twBodyJointStep( arm, st, p, nullptr, dt );
+        std::printf( "  fully toned arm, placed at %.4f rad on a %.1f deg lean:"
+                     " %.4f rad after 30 s (postural torque %.3f N m)\n",
+                     0.6, lean * 180.0 / kPi, st.angle[kFlex],
+                     twBodyPosturalTorque( arm, twBodyAxis::Flex, p, st ) );
+        near( st.angle[kFlex], 0.6, 1e-9,
+              "AT FULL POSTURAL TONE A FREE JOINT STAYS WHERE IT IS PUT" );
+        near( twBodyJointStiffness( arm, twBodyAxis::Flex ), 0.0, 1e-12,
+              "-- gravity is gone from the stiffness entirely" );
+        // ...and the same joint at gain 0 is section 3a's plumb arm. Half a
+        // gain gives half the pull, exactly: the compensation is linear.
+        for( double gain : { 0.0, 0.25, 0.5, 0.75 } ) {
+            twBodyJoint a2 = arm; a2.posturalGain = gain;
+            twBodyJointState s2;
+            for( long n = 0; n < (long) ( 40.0 / dt ); n++ )
+                twBodyJointStep( a2, s2, p, nullptr, dt );
+            near( s2.angle[kFlex], -lean, 1e-4,
+                  "a PARTLY toned free arm still settles plumb -- scaling both"
+                  " gravity terms alike moves the equilibrium not at all" );
+        }
+
+        // THE HOLD COSTS MUSCLE, and C4b's objective has to see it. An effort
+        // term counting only the active torque would report a body straining
+        // against a beat as cheaper than one merely standing leant over.
+        twBodyJoint head = neckJoint(); head.posturalGain = 1.0;
+        twBodyJointState hs;
+        twBodyParentMotion hp; hp.angle[kFlex] = lean;
+        const double tp = twBodyPosturalTorque( head, twBodyAxis::Flex, hp, hs );
+        std::printf( "  a fully toned head on a %.1f deg lean holds %.4f N m\n",
+                     lean * 180.0 / kPi, tp );
+        check( std::fabs( tp ) > 1e-3, "holding a head up on a lean COSTS torque" );
+        twBodyJoint limp = neckJoint();          // gain 0
+        twBodyJointState ls;
+        near( twBodyPosturalTorque( limp, twBodyAxis::Flex, hp, ls ), 0.0, 0.0,
+              "and an unactivated joint spends none -- it droops instead" );
+        // Proportional to how much is being held, and to how far over it is.
+        twBodyJoint half = neckJoint(); half.posturalGain = 0.5;
+        near( twBodyPosturalTorque( half, twBodyAxis::Flex, hp, hs ), tp * 0.5,
+              1e-12, "half the tone is exactly half the torque" );
+        twBodyParentMotion up;                   // upright: nothing to hold
+        near( twBodyPosturalTorque( head, twBodyAxis::Flex, up, hs ), 0.0, 0.0,
+              "and an upright segment costs nothing to hold" );
+    }
+
+    // --- 3c. THE STABILITY THRESHOLD IS A CLAIM ABOUT AN UNACTIVATED JOINT --
+    // ks > 1 says an inverted segment cannot hold itself up on LIGAMENT alone.
+    // A live person's head is held up by MUSCLE, so under postural tone the
+    // threshold does not apply -- and a joint that section 2a watched fall over
+    // is perfectly stable once it is being held. Stating this as a test is what
+    // stops the threshold being read as a claim about people.
+    {
+        twBodyJoint weak = neckJoint( 0.30, 0.6 );        // below threshold
+        check( twBodyJointStiffness( weak, twBodyAxis::Flex ) < 0.0,
+               "UNACTIVATED, a ks = 0.6 inverted joint has negative stiffness" );
+        twBodyJoint toned = weak; toned.posturalGain = 1.0;
+        check( twBodyJointStiffness( toned, twBodyAxis::Flex ) > 0.0,
+               "TONED, the same joint is stable -- the threshold is about"
+               " ligament, not about a person" );
+        twBodyJointState st;
+        st.angle[kFlex] = 0.2;
+        for( long n = 0; n < (long) ( 1.0 / dt ); n++ )
+            twBodyJointStep( toned, st, still(), nullptr, dt );
+        std::printf( "  the SAME joint section 2a watched fall: toned, 0.2000"
+                     " -> %.4f rad after 1 s\n", st.angle[kFlex] );
+        check( std::fabs( st.angle[kFlex] ) < 0.2,
+               "and it returns toward upright instead of falling over" );
+    }
+
     // --- 4. THE CONTROL: the same input through a FIRST-ORDER lag ----------
     // This is what shipped. It is not that the lag nods too little; it CANNOT
     // nod at all, at any tau, because it has no state that carries motion past

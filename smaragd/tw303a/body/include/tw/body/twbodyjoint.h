@@ -170,6 +170,49 @@ struct twBodyJoint {
      */
     double dampingRatio = 0.30;
 
+    /**
+     * POSTURAL TONE: the fraction of this joint's own gravity moment that
+     * muscle is holding, 0..1. **0 = an UNACTIVATED joint** -- passive tissue
+     * and nothing else, which is what every other field here describes and
+     * therefore the default. 1 = gravity fully cancelled at this joint.
+     *
+     * WHY THIS EXISTS, and it is proposal 44 section 8 question 3's decision
+     * made concrete. The ensemble's output drives the plant as a TORQUE, not
+     * as a posture target, so nothing in the musical signal knows which way is
+     * down -- and an inverted segment needs a standing torque simply to stay
+     * up. Left in one lump, that hold would have to ride inside the musical
+     * torque as a large DC offset, which is an opinion about posture smuggled
+     * in as a constant. Split out, it is
+     *
+     *     tau_muscle = tau_postural( body, pose )  +  tau_active( ensemble )
+     *
+     * and the first term is DERIVED WITH NO FREE PARAMETER: it is whatever
+     * cancels m*g*d at this joint, a quantity the measures module already
+     * computes. Gravity compensation is a physical requirement, not a style
+     * choice, which is exactly what keeps it out of the socialisation
+     * objection the whole model is built to answer.
+     *
+     * **IT IS A GAIN AND NOT A TORQUE, DELIBERATELY.** Postural tone is
+     * feedback proportional to the segment's ABSOLUTE angle -- the same
+     * quantity gravity itself acts on -- so it belongs in the coefficients,
+     * beside the term it cancels, not in the forcing array. Applied as an
+     * explicit torque sampled at the top of a step it would leave a residual
+     * within the step that grows with dt, and "fully compensated" would not
+     * hold still exactly, so nothing could gate it. Here it is exact at any dt
+     * by construction: both gravity terms are simply scaled by (1 - gain).
+     *
+     * TWO CONSEQUENCES WORTH KNOWING BEFORE READING ANY OTHER NUMBER HERE.
+     * At gain 1 an inverted joint has NO stability threshold at all -- a live
+     * person's head is held up by muscle, not by ligament, so `ks > 1` is a
+     * claim about an UNACTIVATED neck and about nothing else. And at gain 1 a
+     * hanging joint with no passive tissue no longer hangs plumb: it stays
+     * where it is put, which is what "holding your arm out" IS.
+     *
+     * About the LONG AXIS this is inert, because there is no gravity moment
+     * there to compensate (invariant 3).
+     */
+    double posturalGain = 0.0;
+
     /** Hard range of motion per axis, radians. 0 = unlimited. A joint at its
      * limit stops dead: the outward velocity is killed, not reflected, because
      * ligament stops are dissipative rather than springy. */
@@ -183,8 +226,10 @@ struct twBodyJoint {
 
 /**
  * The joint's TOTAL stiffness about `a`, N*m/rad -- passive tissue, plus or
- * minus this segment's own gravity moment per invertedPendulum. Zero or
- * negative means the joint cannot hold itself up about that axis.
+ * minus the UNCOMPENSATED part of this segment's gravity moment (see
+ * posturalGain) per invertedPendulum. Zero or negative means the joint cannot
+ * hold itself up about that axis WITHOUT MUSCLE, which is a different claim
+ * from "cannot hold itself up".
  *
  * PER AXIS, and the axis argument is not decoration. About the LONG axis there
  * is no gravity moment at all (see stiffnessScale), so the +/- m*g*d term is
@@ -273,7 +318,7 @@ double twBodyJointNaturalHz( const twBodyJoint &j, twBodyAxis a );
  */
 double twBodyJointEquilibrium( const twBodyJoint &j, twBodyAxis a,
                                const twBodyParentMotion &p,
-                               const double *muscleTorque = nullptr );
+                               const double *activeTorque = nullptr );
 
 /**
  * One step of `dt` seconds. The equation, per free axis:
@@ -287,8 +332,11 @@ double twBodyJointEquilibrium( const twBodyJoint &j, twBodyAxis a,
  * splits into a stiffness term in `th` and a FORCING term in `phi`; the
  * parent's rotation stiffens the joint centripetally.
  *
- * `muscleTorque` is an optional active torque per axis, N*m; nullptr for a
- * purely passive joint.
+ * `activeTorque` is the ACTIVE torque per axis, N*m -- for proposal 44, the
+ * ensemble's own output and nothing else. **POSTURAL TONE IS NOT IN HERE**:
+ * it is `posturalGain`, because it is feedback on the absolute angle and has
+ * to sit beside the gravity term it cancels to be exact. nullptr for a joint
+ * that is doing nothing beyond holding itself up.
  *
  * Integration is the EXACT solution of that linear system for coefficients
  * held constant across the step, not a forward-Euler approximation, in all
@@ -305,7 +353,23 @@ double twBodyJointEquilibrium( const twBodyJoint &j, twBodyAxis a,
  */
 void twBodyJointStep( const twBodyJoint &j, twBodyJointState &st,
                       const twBodyParentMotion &parent,
-                      const double *muscleTorque, double dt );
+                      const double *activeTorque, double dt );
+
+/**
+ * The POSTURAL torque this joint's muscle is supplying about `a`, N*m -- the
+ * cost of holding the segment up in its current pose. Signed, in the joint's
+ * own sense, and LINEARISED to match exactly what the step applies (a
+ * compensation that cancelled the true sine would not cancel what the equation
+ * actually integrates, and the two must agree or nothing can be gated).
+ *
+ * Exposed because C4b's objective needs it: holding a head up while the trunk
+ * leans costs real muscle, and an effort term that counted only the active
+ * torque would report a body straining against a beat as cheaper than one
+ * standing still. Zero at posturalGain 0, and zero about the long axis.
+ */
+double twBodyPosturalTorque( const twBodyJoint &j, twBodyAxis a,
+                             const twBodyParentMotion &p,
+                             const twBodyJointState &st );
 
 /** Mechanical energy about `a`: 0.5*I*w^2 + 0.5*k*theta^2, joules, over the
  * NOMINAL stiffness and the axis's own inertia. The conservation gate reads

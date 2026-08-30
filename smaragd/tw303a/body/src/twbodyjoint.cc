@@ -18,6 +18,19 @@ inline double gravityMoment( const twBodyJoint &j )
 inline double gravityMomentAxis( const twBodyJoint &j, twBodyAxis a )
 { return a == twBodyAxis::Axial ? 0.0 : gravityMoment( j ); }
 
+/** The UNCOMPENSATED fraction of the gravity moment about `a` -- what the
+ * equation actually sees. Postural tone is feedback on the same absolute angle
+ * gravity acts on, so cancelling a fraction of it is exactly scaling BOTH
+ * gravity terms (the stiffness one and the parent-angle forcing one) by the
+ * same (1 - gain). Applying it here, in one place, is what makes the
+ * cancellation exact at any dt rather than a per-step approximation. */
+inline double gravityMomentNet( const twBodyJoint &j, twBodyAxis a )
+{
+    const double g = j.posturalGain < 0.0 ? 0.0
+                   : ( j.posturalGain > 1.0 ? 1.0 : j.posturalGain );
+    return ( 1.0 - g ) * gravityMomentAxis( j, a );
+}
+
 /** The sign of the gravity torque on the child's ABSOLUTE angle. An inverted
  * segment is pushed further over (+); a hanging one is pulled back (-). One
  * sign, used in two places -- as -sign on the stiffness and as +sign on the
@@ -119,7 +132,7 @@ double twBodyJointStiffness( const twBodyJoint &j, twBodyAxis a )
     // long axis that unit is BORROWED (there is no gravity moment there) and
     // no gravity term is added or subtracted -- see the header.
     const double passive = j.stiffnessScale * gravityMoment( j );
-    return passive - gravitySign( j ) * gravityMomentAxis( j, a );
+    return passive - gravitySign( j ) * gravityMomentNet( j, a );
 }
 
 double twBodyJointDamping( const twBodyJoint &j, twBodyAxis a )
@@ -174,7 +187,7 @@ namespace {
  * of the equation. Shared by the step and by the equilibrium query so the two
  * can never disagree about what the joint is being pulled by. */
 double forcingTorque( const twBodyJoint &j, twBodyAxis a,
-                      const twBodyParentMotion &p, const double *muscleTorque )
+                      const twBodyParentMotion &p, const double *activeTorque )
 {
     const int i = (int) a;
     const double I = twBodyJointInertia( j, a );
@@ -192,8 +205,8 @@ double forcingTorque( const twBodyJoint &j, twBodyAxis a,
     // angle phi + theta; the theta half is the stiffness term, and THIS is the
     // other half. Omitting it is not a refinement: without it a freely hanging
     // arm settles parallel to a leaning trunk instead of hanging plumb.
-    tau += gravitySign( j ) * gravityMomentAxis( j, a ) * p.angle[i];
-    if( muscleTorque ) tau += muscleTorque[i];
+    tau += gravitySign( j ) * gravityMomentNet( j, a ) * p.angle[i];
+    if( activeTorque ) tau += activeTorque[i];
     return tau;
 }
 
@@ -201,7 +214,7 @@ double forcingTorque( const twBodyJoint &j, twBodyAxis a,
 
 double twBodyJointEquilibrium( const twBodyJoint &j, twBodyAxis a,
                                const twBodyParentMotion &p,
-                               const double *muscleTorque )
+                               const double *activeTorque )
 {
     if( !twBodyAxisIsFree( j, a ) ) return 0.0;
     const double k = twBodyJointStiffnessAt( j, a, p );
@@ -210,12 +223,12 @@ double twBodyJointEquilibrium( const twBodyJoint &j, twBodyAxis a,
     // joint RESTS; its acceleration is transient by definition.
     twBodyParentMotion still = p;
     for( int i = 0; i < (int) twBodyAxis::Count; i++ ) still.angAcc[i] = 0.0;
-    return forcingTorque( j, a, still, muscleTorque ) / k;
+    return forcingTorque( j, a, still, activeTorque ) / k;
 }
 
 void twBodyJointStep( const twBodyJoint &j, twBodyJointState &st,
                       const twBodyParentMotion &parent,
-                      const double *muscleTorque, double dt )
+                      const double *activeTorque, double dt )
 {
     if( dt <= 0.0 ) return;
 
@@ -233,7 +246,7 @@ void twBodyJointStep( const twBodyJoint &j, twBodyJointState &st,
         if( I <= 0.0 ) continue;
         const double k   = twBodyJointStiffnessAt( j, ax, parent );
         const double c   = twBodyJointDamping( j, ax );
-        const double tau = forcingTorque( j, ax, parent, muscleTorque );
+        const double tau = forcingTorque( j, ax, parent, activeTorque );
         exactStep( st.angle[i], st.vel[i], I, k, c, tau, dt );
 
         // Hard range of motion: the stop is DISSIPATIVE, not springy. A
@@ -246,6 +259,21 @@ void twBodyJointStep( const twBodyJoint &j, twBodyJointState &st,
             st.limitHits++;
         }
     }
+}
+
+double twBodyPosturalTorque( const twBodyJoint &j, twBodyAxis a,
+                             const twBodyParentMotion &p,
+                             const twBodyJointState &st )
+{
+    if( !twBodyAxisIsFree( j, a ) ) return 0.0;
+    const int i = (int) a;
+    // What muscle supplies is exactly the compensated part of the gravity
+    // torque, negated. LINEARISED in the absolute angle, matching what the
+    // coefficients apply -- a compensation computed against the true sine
+    // would not cancel what the equation integrates, and the two must agree.
+    const double compensated = gravityMomentAxis( j, a ) - gravityMomentNet( j, a );
+    const double absolute    = p.angle[i] + st.angle[i];
+    return -gravitySign( j ) * compensated * absolute;
 }
 
 double twBodyJointEnergy( const twBodyJoint &j, const twBodyJointState &st,

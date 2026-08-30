@@ -854,6 +854,54 @@ limit); subject-fitted PD gains; feet leaving the ground; steps; full 3D.
 
 ---
 
+## C4c — The postural / musical torque split — **DONE 2026-08-30**
+
+> **The first consequence of §8 q3, executed.** `twBodyJoint::posturalGain`
+> (0..1, default **0** — an unactivated joint, which is what every other field
+> in that struct describes) plus `twBodyPosturalTorque()`. Both gravity terms
+> are scaled by `(1 − gain)`, so `tau_muscle = tau_postural + tau_active` with
+> the postural half exact at any `dt` and the ensemble's output reaching
+> `activeTorque` alone. Invariants: `tw303a/body/CONTRACT.md` 13-15.
+>
+> **A GAIN, not a torque, and that is the design.** Postural tone is feedback
+> on the same absolute angle gravity acts on, so it belongs beside the term it
+> cancels. Applied as an explicit torque sampled at the top of a step it leaves
+> a residual growing with `dt`, "fully compensated" would not hold still, and
+> nothing could be gated.
+>
+> **The gate is a PAIR**, because either half alone is satisfiable by a
+> constant: at gain 0 a free arm HANGS PLUMB (−25.0000° against a 25° lean); at
+> gain 1 the same arm STAYS WHERE IT IS PUT (0.6000 rad → **0.6000 rad** after
+> 30 s). No model that ignores the gain produces both.
+>
+> **One property worth knowing because it surprises:** a PARTLY toned free
+> joint still settles plumb, at every gain from 0 to 0.75. Scaling both gravity
+> terms alike changes the strength of the pull, not its direction — only at
+> gain 1 does the preferred position vanish. Compensating the stiffness alone
+> moves the equilibrium, which is the natural mistake, and is watched failing
+> (S8 below: −0.582 / −0.873 / −1.745 rad instead of −0.436).
+>
+> **`ks > 1` is now explicitly a claim about LIGAMENT, not about a person.**
+> The ks = 0.6 joint section 2a watches fall over (0.2 → 2.6210 rad in 1 s) is
+> perfectly stable once toned: 0.2 → **0.0017 rad**. Section 3c asserts the
+> pair, so the threshold cannot be misread as a statement about people.
+>
+> **And the hold COSTS torque**, which C4b's objective must count: a fully toned
+> head on a 25° lean holds **−2.5188 N·m**, half the tone exactly half the
+> torque, an unactivated joint exactly zero (it droops instead), an upright one
+> exactly zero (nothing to hold). An effort term counting only the active torque
+> would report a body straining against a beat as cheaper than one standing
+> leant over.
+>
+> **Watched failing, three sabotages:** ignoring the gain (5 failures),
+> compensating the stiffness but not the parent-angle forcing (4), and a
+> postural-torque readout that ignores how much is actually compensated (2).
+>
+> **NOT done:** nothing yet SUPPLIES `tau_active` — the ensemble is not wired to
+> a joint at all, which is C5. And `posturalGain` is a per-joint constant here;
+> whether tone is itself modulated by the drive is C4b's question, not this
+> one's.
+
 ## C4b — Stiffness is EMERGENT, not a constant (requester, 2026-08-28)
 
 **The correction.** C4a treats joint stiffness as a per-joint constant. It is
