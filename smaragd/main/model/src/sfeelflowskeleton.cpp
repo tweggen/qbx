@@ -120,8 +120,14 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
                   legLen + (double) j.bounceY * box.height() * kBounceFrac,
                   0.0 };
 
-    const double flexDeg    = (double) j.trunkFlex  * kFlexDeg;
-    const double lateralDeg = (double) j.sway       * kSwayDeg;
+    // The `sway` scalar's PLANE is one declared switch (kTrunkSagittal), and
+    // the whole of the plane decision lives at that constant rather than being
+    // spread across a mapping. `trunkFlex` keeps its own axis either way: it is
+    // an independent DOF, not an alias for this one.
+    const double swayDeg    = (double) j.sway       * kSwayDeg;
+    const double flexDeg    = (double) j.trunkFlex  * kFlexDeg
+                              + ( kTrunkSagittal ? swayDeg : 0.0 );
+    const double lateralDeg = kTrunkSagittal ? 0.0 : swayDeg;
     const double twistDeg   = (double) j.trunkTwist * kTwistDeg;
 
     auto fromTrunk = [&]( SFeelFlowVec3 local ) {
@@ -133,9 +139,15 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
     // The head's own nod is RELATIVE to the trunk, so it is applied in
     // TRUNK-LOCAL space and then carried out by the trunk's frame -- which is
     // exactly what "the head is subordinate to the torso" means as a transform.
+    // IN THE SAME PLANE AS THE TRUNK IT HANGS ON. A head that nodded laterally
+    // off a trunk bending fore-aft would be a shrug, not a nod -- and the
+    // requester's own account of the motion ("pulling it suddenly back up,
+    // letting it fall with torso movement") is unambiguously sagittal.
     const double nodDeg = (double) j.headNod * kNodDeg;
     auto fromNeck = [&]( SFeelFlowVec3 local ) {
-        return add( sk.neck, fromTrunk( rotLateral( local, nodDeg ) ) );
+        const SFeelFlowVec3 nodded = kTrunkSagittal ? rotFlex( local, nodDeg )
+                                                    : rotLateral( local, nodDeg );
+        return add( sk.neck, fromTrunk( nodded ) );
     };
     sk.headCentre = fromNeck( { 0.0, headR * 1.35, 0.0 } );
     sk.headBase   = fromNeck( { 0.0, headR * 0.35, 0.0 } );

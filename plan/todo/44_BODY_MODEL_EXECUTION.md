@@ -1502,6 +1502,150 @@ acyclic since `tw_body` depends only on `tw_core`.
 
 ---
 
+## C7 — THE PLANE, AND WHY THE HEAD IS INVISIBLE (requester, 2026-08-31)
+
+Two user reports on a slow hip-hop track: **no observable head movement**, and
+**circular / left-right hip motion with no forward-back upper body** — "moving
+the upper body half looks like the number-one reaction for a standing person."
+
+### Cache was ruled out first, and it is not the cause
+
+Three independent reasons: `GrooveDynVersion` went to **3** on this branch
+(C1a), and the aspect version is part of the store key, so an older sidecar
+MISSES and re-analyses; the head reads **no aspect channel at all** (since C1 it
+is derived from the trunk by read-side code); and `body.pose` is new, with the
+plant unwired regardless.
+
+### What is actually visible, measured
+
+`body_probe` now reports the DRAWN nod in degrees — the head's WORLD angle looks
+healthy while the RELATIVE nod, the only thing an eye reads as "the head
+moving", is what matters. Across the committed fixtures: **nod 0.86–1.04° rms
+(peak 3.0–3.9°) against a sway of 3.5–5.1° rms (peak 10.5–18.4°)** — the head
+nods 20–25 % as many degrees as the trunk leans. Sub-pixel on a wireframe.
+
+And it is **worse on a slow track by construction**, because the shipped neck is
+a one-pole lag whose output is proportional to the trunk's RATE:
+
+| trunk rate | drawn nod, as % of the sway in degrees |
+|---|---|
+| 0.25 Hz | 9.7 % |
+| 0.33 Hz (slow hip-hop) | 12.6 % |
+| 0.50 Hz (the fixtures) | 18.4 % |
+| 2.00 Hz | 42.3 % |
+
+### THE PLANE: the cited literature is SILENT on it
+
+`plan/proposed/40_GROOVE_RESONANCE.md` carries every citation this model rests
+on. Grepped for `sagittal`, `frontal`, `lateral`, `fore-aft`, `anteroposterior`,
+`mediolateral`: **zero occurrences.** Toiviainen 2010 fixes a metrical LEVEL,
+Burger 2013 and Hove 2014 fix a band→PART mapping, van Noorden & Moelants fix a
+TEMPO. **Not one fixes a PLANE.**
+
+So the lateral trunk was never the evidence-based default — it is what C0
+happened to build, with incumbency rather than support. Both readings sit at the
+same evidential level: none. Toiviainen's eigenmovements come from a PCA over
+marker positions and therefore DO carry a direction; that table is not in this
+repo and the egress proxy refuses Frontiers, PMC, doi.org and Wikipedia. It is
+an AC2.1-class task.
+
+`sfeelflowskel::kTrunkSagittal` is the one switch, with all of the above beside
+it. **Requester decision: SAGITTAL. It ships `false` until its gate exists** —
+see the constant, and the next section.
+
+### A GATE THAT WOULD HAVE PASSED VACUOUSLY, caught before shipping
+
+Flipping the switch makes `feel_flow_puppet_chain`'s five inheritance rows plus
+three axis rows assert **0 against 0**: every readout they compare
+(`headStubLeanDeg`, `shoulderBarDeg`, `armLeanL/RDeg`) is FRONTAL, and a
+sagittally-driven trunk leaves them all at zero. Eight assertions passing while
+measuring nothing. **Blocked on that rather than shipped.**
+
+What has to land first is small and specific: a **sagittal head-stub readout**
+on `SFeelFlowSkeleton`, the twin of `headStubLeanDeg`. `trunkFlexDeg` and
+`armSwingL/RDeg` already exist; only the head stub is missing. Then the constant
+flips and the case re-pins onto the sagittal columns.
+
+### THE LOOSE NECK: tried, MEASURED, and it does not work on this path
+
+Requester: *the head is no stiffly jointed limb but a rather loosely jointed one
+with a considerable mass* — so it should visibly overshoot. The physics agrees,
+and the mechanism is BAND, not scale:
+
+| neck `stiffnessScale` | its own resonance | gain at a 0.5 Hz trunk sway |
+|---|---|---|
+| 2.0 (C4a's default) | 1.267 Hz | r = 0.39, **1.17** |
+| 1.2 | 0.567 Hz | r = 0.88, **2.90** |
+
+At the stiff setting the neck sits far ABOVE the rate that drives it, responds
+quasi-statically, and the head simply RIDES the trunk. That is why nothing was
+visible.
+
+**But replacing the one-pole with `twBodyJointStep` on this path FAILS, and the
+measurement is decisive.** The head pegged at the clamp (**nod rms 8.4°, peak
+10.000° = exactly the range**) at EVERY stiffness from 0.2 to 3.0, with rms
+barely moving — saturation, not resonance. The cause:
+
+| | rad/s² |
+|---|---|
+| angular acceleration the DRAWN trunk series delivers | **mean 55.1, peak 1973.8** |
+| what a clean 0.5 Hz / 18° sway demands | **3.10** |
+
+**~640× the real motion, and all of it envelope noise.** The drawn trunk is
+`sqrt(power) · cosMet` and `sqrt(power)` steps between 10 ms hops; its second
+derivative is dominated by those steps. A second-order joint is an
+acceleration-driven device, so it hears the noise and nothing else. (This was
+found once already on this branch, retracted a "9° nod" result, and was walked
+into a second time — hence recording it here rather than in a commit message.)
+
+**The consequence is architectural: the neck cannot be bolted onto the drawn
+series.** It needs the trunk's angle to come out of an INTEGRATOR — smooth by
+construction — which is exactly what `twBodyPlantRun` produces and why the
+plant's own head nod behaved sensibly. **So the head is blocked on C5's store
+plumbing, and that is now measured rather than argued.**
+
+### THE ONE-WAY CASCADE: named in standard terms, and its error sized
+
+Requester's concern: is a multi-mass system coupled by differential equations
+not chaotic, and does the neck's finite length not convert the head's momentum
+into reaction on the body?
+
+**On chaos: no, and provably not.** The model is LINEAR (small-angle) and
+ONE-WAY (parent drives child, no reaction). A linear system has no sensitive
+dependence on initial conditions and cannot be chaotic. A fully-coupled
+nonlinear double pendulum can be; this is not one, by construction.
+
+**On the reaction: the concern is exactly right and here is its size.** From our
+own segment table — head 5.175 kg, `I` about the atlas 0.09107 kg·m²; trunk
+32.625 kg, `I` about the hip 2.81270 kg·m²; neck lever 0.504 m — per 1 rad/s² of
+head angular acceleration the reaction on the trunk is **0.321 N·m**, perturbing
+the trunk's own acceleration by **11.4 %** of the head's. Not negligible, not
+dominant. **11.4 % is the honest error bar on the one-way cascade at this
+joint.**
+
+**And the gap has a standard name.** Featherstone's Articulated Body Algorithm —
+what every ragdoll runs underneath (PhysX, Bullet, Havok, ODE) and what OpenSim
+and AnyBody use with real muscle models — has an OUTWARD pass (velocities and
+accelerations propagate parent → child) and an INWARD pass (forces propagate
+child → parent).
+
+> **We have implemented the outward pass and not the inward one.**
+
+That is not an approximation invented here; it is half of a standard algorithm,
+and the missing half is precisely the reaction and constraint forces the
+requester described. It also makes the upgrade a known algorithm with open-source
+reference implementations to validate against, rather than an open question —
+which is the same argument that made the Fable review worth commissioning.
+
+### Order of work
+
+1. The sagittal head-stub readout, then flip `kTrunkSagittal` and re-pin.
+2. C5's store plumbing — now the measured blocker for a visible head.
+3. Only then the inward pass, gated against Bullet or OpenSim, with the 11.4 %
+   figure as the thing to show is actually fixed.
+
+---
+
 ## C6 — The derived groove computations become dimensioned
 
 **The defect.** Proposal 44 §1: the counter-tension is a narration. `c_p` is an

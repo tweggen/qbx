@@ -157,6 +157,68 @@ struct SFeelFlowWire {
 /** The full excursion of each joint, in degrees or as a fraction of the box.
  * Display constants: nothing downstream reads them and no gate pins them. */
 namespace sfeelflowskel {
+/**
+ * WHICH ANATOMICAL PLANE the trunk's driven flexion and the head's nod are
+ * applied in. **VERIFY, and it is unsourced in BOTH directions.**
+ *
+ * Requester decision, 2026-08-31: SAGITTAL. Recorded with its provenance
+ * because the evidence situation is unusual and a later reader must not
+ * mistake this for a sourced value.
+ *
+ * WHAT THE LITERATURE THIS PROJECT CITES ACTUALLY SAYS: nothing. Proposal 40
+ * carries every citation the model rests on -- Toiviainen/Luck/Thompson 2010,
+ * Burger 2013, Hove 2014, van Noorden & Moelants 2001 -- and the words
+ * "sagittal", "frontal", "lateral", "fore-aft", "anteroposterior" and
+ * "mediolateral" appear in it ZERO times. Every one of those citations fixes
+ * a metrical LEVEL (Toiviainen), an audio band to a body PART (Burger, Hove)
+ * or a TEMPO (van Noorden & Moelants). Not one fixes a PLANE.
+ *
+ * So the lateral trunk this replaces was NOT the evidence-based default -- it
+ * was what C0 happened to build, with incumbency rather than support. Both
+ * readings sat at exactly the same evidential level, which was none.
+ *
+ * THE QUESTION IS ANSWERABLE AND THIS ENVIRONMENT CANNOT ANSWER IT.
+ * Toiviainen 2010's eigenmovements come from a PCA over marker positions, so
+ * each one has a DIRECTION by construction -- the plane information is in that
+ * paper's own tables and this repo's paraphrase simply did not record it.
+ * Frontiers, PMC, doi.org and Wikipedia are all refused by the egress proxy
+ * here, the same wall AC2.1 has been behind since C2. Resolving this is an
+ * AC2.1-class task: replace this comment with an author/year/TABLE citation.
+ *
+ * ONE LEAD, FLAGGED AS A LEAD AND NOT AS EVIDENCE: the phrase this repo
+ * records is "torso SWAY at the bar", and "sway" in the mocap literature
+ * conventionally means lateral. Reading a plane off one English word in a
+ * second-hand paraphrase is the same laundering that was refused for de Leva's
+ * segment masses. Check the source; do not cite this sentence.
+ *
+ * **IT IS STILL false, AND THE DECISION IS STILL SAGITTAL. That is not a
+ * contradiction -- it is the gate not existing yet.** Flipping this constant
+ * makes `feel_flow_puppet_chain`'s inheritance rows VACUOUS: they assert that
+ * the head stub, the shoulder bar and both arms carry the trunk's lean, and
+ * every one of those readouts (`headStubLeanDeg`, `shoulderBarDeg`,
+ * `armLeanL/RDeg`) is FRONTAL. With the trunk driven sagittally they all read
+ * 0 against a trunk of 0, so eight assertions would pass while measuring
+ * nothing. A gate that cannot fail is worse than no gate -- it reports
+ * coverage that does not exist -- and that lesson has been paid for three
+ * times already on this branch.
+ *
+ * WHAT HAS TO LAND FIRST, and it is small: a SAGITTAL head-stub readout on
+ * `SFeelFlowSkeleton` (the sagittal twin of `headStubLeanDeg`), so the
+ * inheritance chain can be asserted in the plane it actually acts in.
+ * `trunkFlexDeg` and `armSwingL/RDeg` already exist; only the head stub is
+ * missing. Then this constant flips and the case re-pins onto the sagittal
+ * columns -- a real re-pin, not a renumbering.
+ *
+ * WHAT THE DECISION IS ACTUALLY BASED ON, stated so it can be weighed: a
+ * dated, single-subject introspective report -- the requester, twice
+ * independently, that fore-aft upper-body motion is the primary reaction of a
+ * standing listener and that the shipped model showed circular/left-right hip
+ * motion with no forward-back trunk motion at all. Weak evidence, but recorded
+ * AS n=1 rather than laundered into the model as fact, which is the
+ * distinction proposal 44's whole thesis depends on.
+ */
+constexpr bool   kTrunkSagittal = false;
+
 constexpr double kSwayDeg    = 20.0;
 constexpr double kNodDeg     = 10.0;
 constexpr double kArmDeg     = 35.0;
