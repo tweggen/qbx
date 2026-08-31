@@ -194,6 +194,11 @@ private:
     int           slotIndex_  = 0;
     std::uint32_t paramId_    = 0;
     double        value_      = 0.0;
+    // gesture="drag" (the default) moves the slider to `value`; "double-click"
+    // sends a real MouseButtonDblClick to it instead and ignores `value`, so a
+    // case can gate the RESET gesture (sdefaultreset::onDoubleClick -> the
+    // plugin's own declared default) through the production filter.
+    QString       gesture_    = QStringLiteral( "drag" );
     QString       expectValueText_;
     int           expectValueRow_ = 0;
 };

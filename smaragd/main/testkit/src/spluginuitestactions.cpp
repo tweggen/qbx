@@ -190,9 +190,14 @@ SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
     // moves the slider, which submits a set-plugin-param action of its own. That
     // nested action is what lands on the undo stack — this verb is not undoable
     // itself, so `<undo count="1"/>` after it undoes the parameter edit.
-    if( !strip->editorSetParam( slotIndex_, paramId_, value_ ) ) {
+    const bool reached =
+        gesture_ == QLatin1String( "double-click" )
+            ? strip->editorDoubleClickParam( slotIndex_, paramId_ )
+            : strip->editorSetParam( slotIndex_, paramId_, value_ );
+    if( !reached ) {
         qWarning() << "plugin-editor-set-param FAILED: slot" << slotIndex_
-                   << "has no editable parameter id" << paramId_;
+                   << "has no editable parameter id" << paramId_
+                   << "(gesture" << gesture_ << ")";
         return { false, nullptr };
     }
 
@@ -216,6 +221,7 @@ void SPluginEditorSetParamAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "slotIndex", slotIndex_ );
     elem.setAttribute( "paramId", (qulonglong) paramId_ );
     elem.setAttribute( "value", QString::number( value_, 'g', 17 ) );
+    elem.setAttribute( "gesture", gesture_ );
     if( !expectValueText_.isEmpty() ) {
         elem.setAttribute( "expectValueText", expectValueText_ );
         elem.setAttribute( "expectValueRow", expectValueRow_ );
@@ -230,6 +236,7 @@ bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
     slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
     paramId_    = (std::uint32_t) elem.attribute( "paramId", "0" ).toUInt();
     value_      = elem.attribute( "value", "0" ).toDouble();
+    gesture_    = elem.attribute( "gesture", "drag" );
     expectValueText_ = elem.attribute( "expectValueText" );
     expectValueRow_  = elem.attribute( "expectValueRow", "0" ).toInt();
     return true;

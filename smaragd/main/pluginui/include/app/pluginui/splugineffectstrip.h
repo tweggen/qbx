@@ -86,6 +86,10 @@ public:
 
     bool editorSetParam( int slotIndex, std::uint32_t paramId, double value );
 
+    // ...and DOUBLE-CLICK that parameter's slider, which the production filter
+    // turns into "back to the plugin's declared default". Same no-window rule.
+    bool editorDoubleClickParam( int slotIndex, std::uint32_t paramId );
+
     // Headless readback for a qxa case: the text the editor's value label DISPLAYS
     // for parameter `row` of `slotIndex` (after the plugin's own value-to-text).
     // Empty if there is no such editor/row. Pairs with editorSetParam() to prove

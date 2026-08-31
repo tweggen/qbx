@@ -187,7 +187,7 @@ const Fixture kFixtures[] = {
       " contains='state=Missing' absent='reload=0'/>" },
     { "plugin-editor-set-param",
       "<plugin-editor-set-param trackIndex='0' slotIndex='0' paramId='1'"
-      " value='0.25'/>" },
+      " value='0.25' gesture='double-click'/>" },
 
     // --- the P3b instrument verb -------------------------------------------
     { "assert-instrument-slot",
@@ -402,6 +402,14 @@ const Fixture kFixtures[] = {
       "<assert-track-head trackPath='1,0' headHeight='132'"
       " contains='density=Full' absent='I=1' grabPng='head.png'"
       " grabWidth='160' grabHeight='160'/>" },
+
+    // --- the detail-pane verbs (fix/detail-pane-layout) ---------------------
+    { "assert-track-detail-layout",
+      "<assert-track-detail-layout trackPath='1,0' panelWidth='280'"
+      " panelHeight='240' maxCrushed='0' maxOverlap='0'"
+      " contains='scrollNeeded=1'/>" },
+    { "double-click-control",
+      "<double-click-control control='clip-volume' trackPath='0,1'/>" },
 
     // --- the automation UI verbs (proposal 37 P6) ---------------------------
     // `take` rather than `slotIndex` here, because a `cut:` target is the one

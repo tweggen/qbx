@@ -579,3 +579,31 @@ the property without knowing which window slice is in front of it.
 It is deliberately NOT on `SClipWindow`. A fade is AUDIO-specific, and that
 interface's contract already lists pitch, warp anchors and the grain params as
 absent for exactly that reason.
+
+### `sdefaultreset` — the double-click-to-default gesture, and why it lives here
+
+`app/model/sdefaultreset.h` installs one event filter that runs a caller-
+supplied restore on a left `MouseButtonDblClick`. It is in the LOWEST app
+layer for the same reason `sclipcolors.h` and `sclipwindowgeometry.h` are:
+`app/timeline` (the Track Detail fader, the Clip Detail fields) and
+`app/pluginui` (the generic parameter sliders) both need it and are peers in
+`app_ui` that may not include each other in that direction. It reaches nothing
+in the model — it is a Qt event filter and nothing more.
+
+It takes a `std::function`, not a value, and that is not generality for its own
+sake: the three call sites commit in three different ways (a slider's
+`valueChanged`; a quantising handler that may be inside an automation write
+pass; a spin box that commits on `editingFinished` ALONE). A helper that wrote
+the value itself would silently no-op on the third — the field would show the
+default and the model would keep the old value.
+
+It also watches a spin box's embedded `QLineEdit`, because `QAbstractSpinBox`
+never sees a double-click over its own text: the child line edit consumes it,
+so filtering the spin box alone leaves the gesture working on the arrows and
+dead over the number. The cost is that double-click-to-select-a-word inside
+those fields becomes reset-to-default; that is the requested trade, and the
+text is still selectable by dragging, by Ctrl-A and by tabbing in.
+
+And it SWALLOWS the event. On a QSlider the second press would otherwise start
+another drag or jump the handle to the click position, moving the control off
+the default it was just asked for.

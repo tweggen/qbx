@@ -55,6 +55,13 @@ public:
     // editor has no such parameter. Never synthesizes OS input.
     bool setParamFromUi( std::uint32_t paramId, double value );
 
+    // Headless seam for plugin-editor-set-param gesture="double-click": send a
+    // real MouseButtonDblClick to `paramId`'s SLIDER, so what runs is the
+    // production reset filter (sdefaultreset::onDoubleClick) and the reset
+    // reaches the model the way a user's double-click does. Returns false if
+    // this editor has no such parameter.
+    bool doubleClickParam( std::uint32_t paramId );
+
     // Headless seam for a qxa case to read back what the value label DISPLAYS
     // (after the plugin's own value-to-text formatting), so a test proves units /
     // enum names reach the screen and not just the model. Empty for an out-of-range

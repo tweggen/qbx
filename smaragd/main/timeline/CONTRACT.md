@@ -1374,3 +1374,71 @@ of a default-constructed pose is 0, and 0 IS the rest position, so the invalid
 case is the same drawing in the dim palette plus a one-line note. Aesthetics —
 the joint excursion constants, the palette, the figure's proportions — are
 explicitly NOT gated; only that it paints (a PNG grab) is.
+
+### inv. 45 — THE TRACK DETAIL PANEL SCROLLS; IT NEVER COMPRESSES
+
+`STrackDetailPanel` holds its content (the FX strip, the Feel Flow section) in
+a `QScrollArea`, with the volume row and its meter OUTSIDE that area, and
+neither the panel nor anything it owns sets an explicit `minimumHeight` on a
+widget that carries a layout.
+
+**The explicit minimum is the defect, not the safeguard.** Qt's
+`qSmartMinSize()` REPLACES a widget's layout-derived minimum with its
+`minimumSize()` when one is set — it does not take the larger of the two. The
+panel set a 100 px floor on its content widget and `SPluginEffectStrip` set
+another on itself, so a section that needs ~450 px reported that it fitted in
+100; a `QBoxLayout` handed less than its minimum does not refuse, it
+distributes the shortfall, and the children are then drawn on top of each
+other. Reported from a screenshot: the Feel Flow header on the Analyze
+buttons, "compliance:" on "counter-tension:", the FX strip's "+ Add Effect"
+button over the plugin list.
+
+Consequences a change here must preserve:
+
+- **One scroll surface, not two.** The FX strip lost its own inner
+  `QScrollArea` in the same fix. Nested scroll areas give a short dock two
+  scrollbars and pin the strip at its own inner minimum while the outer
+  viewport has room to spare.
+- **The volume row stays out of the scroll.** The fader and the meter are what
+  a user watches while the transport runs; scrolling the chain must not carry
+  them off the bottom.
+- **A dead spacer is not free.** The panel carried an unused `pluginContainer`
+  — added with stretch 1 and a 100 px minimum, never populated, never removed —
+  competing for height with the strip that superseded it.
+
+Gate: `qxa.track_detail_layout` (`assert-track-detail-layout`), which counts
+crushed widgets and overlapping pairs at several panel sizes. Watched failing
+on the pre-fix binary: 13 crushed / 7 overlapping at 200 px and at 260 px,
+`worst=QWidget(200<447)`.
+
+### inv. 46 — A VALUE CONTROL RESETS TO ITS DEFAULT ON DOUBLE-CLICK
+
+The Track Detail fader and the Clip Detail pane's value fields (volume, pan,
+pitch, stretch, formant shift, transpose, velocity scale) restore their
+default on a left double-click, through the one helper
+`sdefaultreset::onDoubleClick` (`app/model/sdefaultreset.h` — that layer
+because `app/timeline` and `app/pluginui` both need it and are peers). The
+arranger track head's own fader has had this gesture since long before, in its
+own `eventFilter`, and is deliberately left there: it is one branch of a filter
+this widget already owns.
+
+Two rules that are not obvious:
+
+- **The reset COMMITS; it does not only move the widget.** The Clip Detail
+  pane commits on `editingFinished` alone — its standing rule, so that a
+  refresh can never turn into an edit — which a programmatic `setValue()` does
+  not raise. Each field's reset therefore calls `markEdited()` and then the
+  field's own commit slot. A helper that "just set the value" leaves the field
+  showing the default and the model holding the old value.
+- **The fader resets to EXACTLY 0.0 dB, not to the fader tick nearest it.**
+  `sDbToFader( 0.0 )` is tick -191 and `sFaderToDb` of that is +0.0625 dB, so a
+  reset routed through the slider's `valueChanged` misses unity. It writes the
+  widget with signals blocked and calls `applyVolumeDb( 0.0 )` — which is why
+  that method is split out of `onVolumeSliderMoved`, mirroring
+  `SSMVMixerControl::applyVolume_`.
+
+The window GEOMETRY fields (start, duration, slip, loop length) are
+deliberately NOT wired: a clip's start time has no default to revert to.
+
+Gate: `qxa.detail_pane_reset_defaults`, watched failing with each pane's
+wiring removed independently.

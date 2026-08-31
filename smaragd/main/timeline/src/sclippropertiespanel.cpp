@@ -25,6 +25,7 @@
 
 #include "app/shell/sapplication.h"
 
+#include "app/model/sdefaultreset.h"
 #include "app/model/sexternfile.h"
 #include "app/model/slink.h"
 #include "app/model/splacements.h"
@@ -411,6 +412,66 @@ void SClipPropertiesPanel::buildUi()
     // so a refresh can never turn into an edit (the panel's standing rule).
     connect( timebaseCombo_, &QComboBox::activated,
              this, &SClipPropertiesPanel::commitTimebase );
+
+    // --- Double-click a value field = back to its neutral default ----------
+    //
+    // The fader gesture, applied to the fields that HAVE a neutral value:
+    // volume 0 dB, pan centre, pitch 0, stretch 1x, formant shift 0,
+    // transpose 0, velocity scale 1x. The window GEOMETRY fields (start,
+    // duration, slip, loop length) are deliberately absent — a clip's start
+    // time has no default to revert to, and offering one would mean inventing
+    // a number rather than restoring one.
+    //
+    // The reset has to CALL THE COMMIT ITSELF: this panel commits on
+    // editingFinished alone (see the note above), which a programmatic
+    // setValue() does not raise — a reset that only wrote the widget would
+    // show the default and leave the model untouched, i.e. lie. markEdited()
+    // first, because the commit slots consume that mark to tell a real edit
+    // from a refresh, and setValue() cannot be relied on to raise textChanged
+    // when the field already reads the default.
+    const auto resetOnDblClick = [this]( QAbstractSpinBox *sp, double def,
+                                         void ( SClipPropertiesPanel::*commit )(),
+                                         const QString &shown ) {
+        sdefaultreset::onDoubleClick( sp, [this, sp, def, commit] {
+            if( updating_ || !sp->isEnabled() ) return;
+            markEdited( sp );
+            if( QDoubleSpinBox *d = qobject_cast<QDoubleSpinBox *>( sp ) )
+                d->setValue( def );
+            else if( QSpinBox *i = qobject_cast<QSpinBox *>( sp ) )
+                i->setValue( (int) def );
+            ( this->*commit )();
+        } );
+        const QString had = sp->toolTip();
+        sp->setToolTip( had.isEmpty()
+                            ? tr( "Double-click to reset to %1." ).arg( shown )
+                            : had + tr( "\n\nDouble-click to reset to %1." ).arg( shown ) );
+    };
+    // Object names so a test seam can address one field by name without this
+    // panel having to publish its widgets (SMainWindow::doubleClickDetailControl
+    // finds them with findChild) — the same trick the FX strip's
+    // "paramEditor" name plays for the generic plugin editor dialog.
+    volumeSpin_->setObjectName( QStringLiteral( "clipVolumeSpin" ) );
+    panSpin_->setObjectName( QStringLiteral( "clipPanSpin" ) );
+    pitchSpin_->setObjectName( QStringLiteral( "clipPitchSpin" ) );
+    stretchSpin_->setObjectName( QStringLiteral( "clipStretchSpin" ) );
+    formantShiftSpin_->setObjectName( QStringLiteral( "clipFormantShiftSpin" ) );
+    transposeSpin_->setObjectName( QStringLiteral( "clipTransposeSpin" ) );
+    velScaleSpin_->setObjectName( QStringLiteral( "clipVelScaleSpin" ) );
+
+    resetOnDblClick( volumeSpin_,       0.0, &SClipPropertiesPanel::commitVolume,
+                     tr( "0 dB" ) );
+    resetOnDblClick( panSpin_,          0.0, &SClipPropertiesPanel::commitPan,
+                     tr( "centre" ) );
+    resetOnDblClick( pitchSpin_,        0.0, &SClipPropertiesPanel::commitPitch,
+                     tr( "0 cents" ) );
+    resetOnDblClick( stretchSpin_,      1.0, &SClipPropertiesPanel::commitStretch,
+                     tr( "1.0x" ) );
+    resetOnDblClick( formantShiftSpin_, 0.0, &SClipPropertiesPanel::commitFormantShift,
+                     tr( "0 st" ) );
+    resetOnDblClick( transposeSpin_,    0.0, &SClipPropertiesPanel::commitMidiCut,
+                     tr( "0 semitones" ) );
+    resetOnDblClick( velScaleSpin_,     1.0, &SClipPropertiesPanel::commitMidiCut,
+                     tr( "1.0x" ) );
 }
 
 // ---------------------------------------------------------------------------

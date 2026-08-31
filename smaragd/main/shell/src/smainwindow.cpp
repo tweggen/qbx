@@ -28,6 +28,10 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QPushButton>
+#include <QAbstractSpinBox>
+#include <QMouseEvent>
+#include <QScrollArea>
+#include <QSlider>
 
 #include <iostream>
 
@@ -3039,6 +3043,196 @@ QString SMainWindow::describeTrackHead( const QString &trackPath,
     return head.describeHead();
 }
 
+
+// --- fix/detail-pane-layout test seams ------------------------------------
+
+namespace {
+
+// Every widget a layout TREE positions inside one parent widget. Sub-layouts
+// are flattened deliberately: their items live in the SAME parent coordinate
+// space, so "no two of these may overlap" is one statement about the whole
+// tree, not one per QBoxLayout.
+void sCollectLayoutWidgets( QLayout *l, QList<QWidget *> &out )
+{
+    for( int i = 0; i < l->count(); ++i ) {
+        QLayoutItem *item = l->itemAt( i );
+        if( QWidget *w = item->widget() ) {
+            if( !w->isHidden() ) out << w;
+        } else if( QLayout *sub = item->layout() ) {
+            sCollectLayoutWidgets( sub, out );
+        }
+    }
+}
+
+struct SDetailLayoutStats {
+    int     crushed = 0;
+    int     overlap = 0;
+    QString worst;          // the first offender, named so a failure is readable
+};
+
+// The HONEST minimum: the larger of what the widget's own layout needs and
+// what it was explicitly given. Qt's qSmartMinSize() REPLACES the first with
+// the second when the second is set, which is precisely the mechanism that let
+// a 100 px floor hide a 400 px section — so the audit must not repeat it.
+int sHonestMinHeight( const QWidget *w )
+{
+    return qMax( w->minimumHeight(), w->minimumSizeHint().height() );
+}
+
+void sAuditLayout( QWidget *w, SDetailLayoutStats &st )
+{
+    if( QLayout *l = w->layout() ) {
+        QList<QWidget *> kids;
+        sCollectLayoutWidgets( l, kids );
+        for( int i = 0; i < kids.size(); ++i ) {
+            QWidget *a = kids.at( i );
+            const int minH = sHonestMinHeight( a );
+            if( minH > 0 && a->height() < minH ) {
+                ++st.crushed;
+                if( st.worst.isEmpty() )
+                    st.worst = QStringLiteral( "%1(%2<%3)" )
+                                   .arg( a->metaObject()->className() )
+                                   .arg( a->height() ).arg( minH );
+            }
+            for( int j = i + 1; j < kids.size(); ++j ) {
+                if( a->geometry().intersects( kids.at( j )->geometry() ) ) {
+                    ++st.overlap;
+                    if( st.worst.isEmpty() )
+                        st.worst = QStringLiteral( "%1^%2" )
+                                       .arg( a->metaObject()->className(),
+                                             kids.at( j )->metaObject()->className() );
+                }
+            }
+        }
+    }
+    for( QObject *o : w->children() )
+        if( QWidget *c = qobject_cast<QWidget *>( o ) )
+            if( !c->isHidden() ) sAuditLayout( c, st );
+}
+
+// Bring a never-shown widget to the state a docked one is in, at a chosen
+// size, WITHOUT putting anything on a screen.
+//
+// THE `show()` IS LOAD-BEARING AND SO IS `WA_DontShowOnScreen`. A widget that
+// is not visible does not RECEIVE a resize event at all — QWidgetPrivate::
+// setGeometry_sys only sets WA_PendingResizeEvent and defers it to the show —
+// and a QScrollArea lays its viewport and its held widget out from its own
+// resizeEvent. So a resize() + layout()->activate() on a hidden panel measures
+// a layout that never ran: the first version of this audit reported the SAME
+// crushed/overlap counts at 200 px and at 900 px, which is the tell.
+// WA_DontShowOnScreen is what makes show() safe here — the widget becomes
+// visible to Qt (events, layout, geometry) and is never mapped by the window
+// system, so a qxa run on the developer's real platform plugin still puts no
+// window on their desktop. Nothing is grabbed and nothing is raised.
+void sSettleLayout( QWidget *w, int width, int height )
+{
+    w->setAttribute( Qt::WA_DontShowOnScreen, true );
+    w->resize( width, height );
+    w->show();
+    for( int pass = 0; pass < 3; ++pass ) {
+        if( QLayout *l = w->layout() ) l->activate();
+        QCoreApplication::sendPostedEvents( nullptr, QEvent::LayoutRequest );
+        QCoreApplication::sendPostedEvents();
+    }
+}
+
+void sSendDoubleClick( QWidget *target )
+{
+    const QPointF c( target->width() / 2.0, target->height() / 2.0 );
+    const QPointF g = target->mapToGlobal( c.toPoint() );
+    QMouseEvent press( QEvent::MouseButtonPress, c, g, Qt::LeftButton,
+                       Qt::LeftButton, Qt::NoModifier );
+    QMouseEvent dbl( QEvent::MouseButtonDblClick, c, g, Qt::LeftButton,
+                     Qt::LeftButton, Qt::NoModifier );
+    // The PRESS is deliberately not sent: on a QSlider the style may jump the
+    // handle to the click position, which would move the value the double
+    // click is about to restore and make the assertion measure two gestures.
+    // What is under test is the MouseButtonDblClick filter.
+    Q_UNUSED( press );
+    QCoreApplication::sendEvent( target, &dbl );
+}
+
+}  // namespace
+
+QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
+                                                int w, int h )
+{
+    // The APP's project, describeFeelFlow's own reason.
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return QString();
+
+    SObject *root = splacements::rootContainer( proj );
+    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) return QString();
+
+    // Parentless and never shown, exactly as describeTrackHead builds its head:
+    // the panel under test is the REAL one, with the REAL FX strip and Feel
+    // Flow section inside it, and nothing appears on screen.
+    STrackDetailPanel panel( nullptr );
+    panel.setTrack( track );
+    sSettleLayout( &panel, w > 0 ? w : 320, h > 0 ? h : 260 );
+
+    SDetailLayoutStats st;
+    sAuditLayout( &panel, st );
+
+    bool scrollNeeded = false;
+    if( QScrollArea *sa = panel.findChild<QScrollArea *>() )
+        scrollNeeded = sa->widget()
+                    && sa->widget()->height() > sa->viewport()->height();
+
+    return QStringLiteral( "w=%1|h=%2|crushed=%3|overlap=%4|scrollNeeded=%5|worst=%6" )
+        .arg( panel.width() ).arg( panel.height() )
+        .arg( st.crushed ).arg( st.overlap )
+        .arg( scrollNeeded ? 1 : 0 )
+        .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
+}
+
+bool SMainWindow::doubleClickDetailControl( const QString &which,
+                                            const QString &trackPath )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+
+    if( which == QLatin1String( "track-volume" ) ) {
+        SObject *root = splacements::rootContainer( proj );
+        SObject *lane =
+            splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
+        STrack *track = dynamic_cast<STrack *>( lane );
+        if( !track ) return false;
+        STrackDetailPanel panel( nullptr );
+        panel.setTrack( track );
+        sSettleLayout( &panel, 320, 400 );
+        QSlider *fader =
+            panel.findChild<QSlider *>( QStringLiteral( "trackDetailVolumeSlider" ) );
+        if( !fader ) return false;
+        sSendDoubleClick( fader );
+        return true;
+    }
+
+    static const QHash<QString, QString> kClipFields = {
+        { QStringLiteral( "clip-volume" ),    QStringLiteral( "clipVolumeSpin" ) },
+        { QStringLiteral( "clip-pan" ),       QStringLiteral( "clipPanSpin" ) },
+        { QStringLiteral( "clip-pitch" ),     QStringLiteral( "clipPitchSpin" ) },
+        { QStringLiteral( "clip-stretch" ),   QStringLiteral( "clipStretchSpin" ) },
+        { QStringLiteral( "clip-formant" ),   QStringLiteral( "clipFormantShiftSpin" ) },
+        { QStringLiteral( "clip-transpose" ), QStringLiteral( "clipTransposeSpin" ) },
+        { QStringLiteral( "clip-velocity" ),  QStringLiteral( "clipVelScaleSpin" ) },
+    };
+    const QString field = kClipFields.value( which );
+    if( field.isEmpty() ) return false;
+
+    // The Clip Detail panel has no setter: it reads the current SELECTION, so
+    // a throwaway instance built here is bound to exactly what the user (or
+    // the script's select-clip) has selected, the same way the docked one is.
+    SClipPropertiesPanel panel( nullptr );
+    panel.refresh();
+    sSettleLayout( &panel, 320, 600 );
+    QAbstractSpinBox *sp = panel.findChild<QAbstractSpinBox *>( field );
+    if( !sp || !sp->isEnabled() ) return false;
+    sSendDoubleClick( sp );
+    return true;
+}
 
 // --- proposal 40 "Feel Flow" M3 test seams --------------------------------
 
