@@ -1104,6 +1104,12 @@ SApplyResult SAssertPuppetSkeletonAction::apply( SProject * /*project*/ )
     j.bounceY  = (float) bounce_;
     j.hipShift = (float) hip_;
     j.trunkFlex  = (float) flex_;
+    // WHICH PLANE `sway` acts in. Defaults to the project-wide decision
+    // (sfeelflowskel::kTrunkSagittal); `plane="lateral"` is what keeps the 3D
+    // cross-term pins alive, since with sway sagittal it is coplanar with
+    // trunkFlex and the pair merely adds.
+    if( plane_ == QLatin1String( "sagittal" ) )     j.sagittalTrunk = true;
+    else if( plane_ == QLatin1String( "lateral" ) ) j.sagittalTrunk = false;
     j.trunkTwist = (float) twist_;
 
     const SFeelFlowSkeleton sk =
@@ -1151,21 +1157,57 @@ SApplyResult SAssertPuppetSkeletonAction::apply( SProject * /*project*/ )
     // THE C0 ASSERTION. Every segment above the neck must carry the trunk's
     // lean. Only meaningful with nod/arm at 0, which the case supplies.
     if( inheritTol_ >= 0.0 ) {
+        // PLANE-AWARE since proposal 44 C7. The `sway` scalar drives whichever
+        // plane sfeelflowskel::kTrunkSagittal names, so the chain has to be
+        // asserted in THAT plane -- comparing frontal readouts against a
+        // frontal trunk while the trunk is driven sagittally is 0 against 0,
+        // and eight rows of this case would have passed measuring nothing.
+        //
+        // NO SAGITTAL SHOULDER-BAR ROW, and that is geometry rather than an
+        // omission: the bar lies ALONG the axis sagittal flexion rotates
+        // about, so a forward lean carries it forward without turning it.
         struct Row { const char *what; double got; };
-        const Row rows[] = {
+        const bool sag = j.sagittalTrunk;
+        const double trunk = sag ? sk.trunkFlexDeg : sk.trunkLeanDeg;
+        const Row sagRows[] = {
+            { "headStubFlex", sk.headStubFlexDeg },
+            { "armSwingL",    sk.armSwingLDeg    },
+            { "armSwingR",    sk.armSwingRDeg    },
+        };
+        const Row latRows[] = {
             { "headStub",    sk.headStubLeanDeg },
             { "shoulderBar", sk.shoulderBarDeg  },
             { "armL",        sk.armLeanLDeg     },
             { "armR",        sk.armLeanRDeg     },
         };
-        for( const Row &r : rows ) {
-            if( std::fabs( r.got - sk.trunkLeanDeg ) > inheritTol_ ) {
-                qWarning() << "assert-puppet-skeleton FAILED:" << r.what
-                           << r.got << "does not carry the trunk's"
-                           << sk.trunkLeanDeg << "within" << inheritTol_
+        const Row *rows = sag ? sagRows : latRows;
+        const int  nRows = sag ? 3 : 4;
+        for( int i = 0; i < nRows; i++ ) {
+            if( std::fabs( rows[i].got - trunk ) > inheritTol_ ) {
+                qWarning() << "assert-puppet-skeleton FAILED:" << rows[i].what
+                           << rows[i].got << "does not carry the trunk's"
+                           << trunk << "within" << inheritTol_
                            << "-" << desc;
                 return { false, nullptr };
             }
+        }
+        // AND THE OTHER PLANES STAY AT ZERO.
+        //
+        // **NOT "strictly stronger", and that claim was made here and then
+        // measured false.** A 0.4-degree lateral leak injected on a sagittal
+        // command is caught with this check AND without it, because the
+        // explicit three-axis rows in section (3) of the case already pin all
+        // three readouts for those commands. What this adds is coverage on the
+        // inheritTol rows, which otherwise assert ONE axis: a leak appearing
+        // only at 0.5 or at a small box would have no other assertion to trip.
+        // Contrived, cheap, and kept on that basis rather than on a stronger
+        // one.
+        const double offA = sag ? sk.trunkLeanDeg : sk.trunkFlexDeg;
+        if( std::fabs( offA ) > inheritTol_ || std::fabs( sk.shoulderTwistDeg ) > inheritTol_ ) {
+            qWarning() << "assert-puppet-skeleton FAILED: a lean leaked into a"
+                          " plane nothing commanded - off-plane" << offA
+                       << "twist" << sk.shoulderTwistDeg << "-" << desc;
+            return { false, nullptr };
         }
     }
 
@@ -1187,7 +1229,8 @@ QStringList SAssertPuppetSkeletonAction::knownAttributes() const
              QStringLiteral("boxW"), QStringLiteral("boxH"),
              QStringLiteral("expectValid"), QStringLiteral("expectTrunk"),
              QStringLiteral("inheritTol"),
-             QStringLiteral("tol"), QStringLiteral("contains") };
+             QStringLiteral("tol"), QStringLiteral("contains"),
+             QStringLiteral("plane") };
 }
 
 void SAssertPuppetSkeletonAction::writeXml( QDomElement &elem ) const
@@ -1208,6 +1251,7 @@ void SAssertPuppetSkeletonAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "expectTrunk", QString::number( expectTrunk_, 'g', 10 ) );
     elem.setAttribute( "inheritTol",  QString::number( inheritTol_,  'g', 10 ) );
     elem.setAttribute( "tol",         QString::number( tol_,         'g', 10 ) );
+    if( !plane_.isEmpty() )    elem.setAttribute( "plane", plane_ );
     if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
 }
 
@@ -1227,6 +1271,7 @@ bool SAssertPuppetSkeletonAction::readXml( const QDomElement &elem, int /*versio
     boxH_        = elem.attribute( "boxH",   "400" ).toDouble();
     expectValid_ = elem.attribute( "expectValid", "1" ).toInt();
     expectTrunk_ = elem.attribute( "expectTrunk", "-1000" ).toDouble();
+    plane_       = elem.attribute( "plane", "" );
     inheritTol_  = elem.attribute( "inheritTol",  "-1" ).toDouble();
     tol_         = elem.attribute( "tol",         "0.01" ).toDouble();
     contains_    = elem.attribute( "contains", "" );

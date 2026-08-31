@@ -126,8 +126,8 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
     // an independent DOF, not an alias for this one.
     const double swayDeg    = (double) j.sway       * kSwayDeg;
     const double flexDeg    = (double) j.trunkFlex  * kFlexDeg
-                              + ( kTrunkSagittal ? swayDeg : 0.0 );
-    const double lateralDeg = kTrunkSagittal ? 0.0 : swayDeg;
+                              + ( j.sagittalTrunk ? swayDeg : 0.0 );
+    const double lateralDeg = j.sagittalTrunk ? 0.0 : swayDeg;
     const double twistDeg   = (double) j.trunkTwist * kTwistDeg;
 
     auto fromTrunk = [&]( SFeelFlowVec3 local ) {
@@ -145,8 +145,8 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
     // letting it fall with torso movement") is unambiguously sagittal.
     const double nodDeg = (double) j.headNod * kNodDeg;
     auto fromNeck = [&]( SFeelFlowVec3 local ) {
-        const SFeelFlowVec3 nodded = kTrunkSagittal ? rotFlex( local, nodDeg )
-                                                    : rotLateral( local, nodDeg );
+        const SFeelFlowVec3 nodded = j.sagittalTrunk ? rotFlex( local, nodDeg )
+                                                     : rotLateral( local, nodDeg );
         return add( sk.neck, fromTrunk( nodded ) );
     };
     sk.headCentre = fromNeck( { 0.0, headR * 1.35, 0.0 } );
@@ -174,6 +174,7 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
     sk.trunkLeanDeg    = frontalDeg( sk.pelvis, sk.neck );
     sk.trunkFlexDeg    = sagittalDeg( sk.pelvis, sk.neck );
     sk.headStubLeanDeg = frontalDeg( sk.neck, sk.headBase );
+    sk.headStubFlexDeg = sagittalDeg( sk.neck, sk.headBase );
     // NEGATED because body space is y-UP while the 2D original measured this in
     // SCREEN space, y-down. Same geometry, opposite sign; the inheritance gate
     // compares this against trunkLeanDeg and would have read -20 against +20.
@@ -285,10 +286,12 @@ QString sFeelFlowSkeletonDescribe( const SFeelFlowSkeleton &s )
     auto f4 = []( double v ) { return QString::number( v, 'f', 4 ); };
     return QStringLiteral( "skeleton: valid=%1 trunk=%2 headStub=%3"
                            " shoulderBar=%4 armL=%5 armR=%6"
-                           " trunkFlex=%7 armSwingL=%8 armSwingR=%9 twist=%10" )
+                           " trunkFlex=%7 headStubFlex=%8 armSwingL=%9"
+                           " armSwingR=%10 twist=%11" )
         .arg( s.valid ? 1 : 0 )
         .arg( f4( s.trunkLeanDeg ), f4( s.headStubLeanDeg ),
               f4( s.shoulderBarDeg ), f4( s.armLeanLDeg ), f4( s.armLeanRDeg ),
-              f4( s.trunkFlexDeg ), f4( s.armSwingLDeg ), f4( s.armSwingRDeg ),
+              f4( s.trunkFlexDeg ), f4( s.headStubFlexDeg ),
+              f4( s.armSwingLDeg ), f4( s.armSwingRDeg ),
               f4( s.shoulderTwistDeg ) );
 }

@@ -1637,9 +1637,50 @@ requester described. It also makes the upgrade a known algorithm with open-sourc
 reference implementations to validate against, rather than an open question —
 which is the same argument that made the Fable review worth commissioning.
 
+### C7 step 1 — **DONE 2026-08-31: the plane is SAGITTAL and gated**
+
+`headStubFlexDeg` (the sagittal twin of `headStubLeanDeg`), a PLANE-AWARE
+inheritance check, and `kTrunkSagittal` flipped to **true**.
+
+**THE PLANE BECAME A FIELD, NOT A CONSTANT, AND THAT WAS FORCED BY A
+MEASUREMENT.** Done as a compile-time fork it costs two 3D-composition gates:
+with `sway` sagittal it is COPLANAR with `trunkFlex`, so the pair merely adds
+(**20 + 25 = 45.0000**, measured) and the cross-term proving rotations compose
+as ROTATIONS rather than as numbers — **21.8802 / 25.0000 / −8.7447** — has
+nothing left to measure. The arm's **36.6915** collapses to a plain 55 the same
+way. Those pins are the difference between a 3D body and two flat drawings
+stacked. `SFeelFlowJoints::sagittalTrunk` keeps both planes reachable, so every
+one survives verbatim under `plane="lateral"` while the shipped default is
+sagittal — and the plane decision itself becomes testable instead of being a
+constant nothing can exercise.
+
+**A NEW cross-term in the shipped plane**, since the old one moved: `sway=1
+twist=1` gives twist **−18.8817**, not −20, and tilts the shoulder bar
+**−7.0960** out of a plane neither command names.
+
+**NO SAGITTAL SHOULDER-BAR ROW**, and that is geometry rather than an omission:
+the bar lies ALONG the axis sagittal flexion rotates about, so a forward lean
+carries it forward without turning it. Three inheritance rows sagittally, four
+laterally.
+
+**Watched failing, five sabotages.** Three bit: the inheritance check not
+plane-aware (the vacuity trap this whole step exists to close), the head and
+arms composed against 0 instead of the trunk, and `sway` routed laterally
+regardless of the field.
+
+**TWO DID NOT, and both are recorded rather than dressed up.** Removing the
+off-plane leak assertion changes nothing, because no row leaks; and when a
+0.4° leak IS injected, the case fails **with** that assertion (row 19) and
+**without** it (row 16), since section (3)'s explicit three-axis rows already
+pin all three readouts. **So the claim "strictly stronger" — which was written
+into the code, the case header and this plan before being checked — is FALSE.**
+Corrected in all three. What the off-plane assertion genuinely adds is coverage
+on the `inheritTol` rows, which otherwise assert one axis each; it is kept on
+that weaker basis.
+
 ### Order of work
 
-1. The sagittal head-stub readout, then flip `kTrunkSagittal` and re-pin.
+1. ~~The sagittal head-stub readout, then flip `kTrunkSagittal` and re-pin.~~ **DONE.**
 2. C5's store plumbing — now the measured blocker for a visible head.
 3. Only then the inward pass, gated against Bullet or OpenSim, with the 11.4 %
    figure as the thing to show is actually fixed.

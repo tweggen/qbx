@@ -388,6 +388,9 @@ private:
     double  expectTwist_  = -1000.0;
     double  inheritTol_  = -1.0;      // -1    = don't check
     double  tol_         = 0.01;
+    /** "sagittal" | "lateral" | "" (the project default). See
+     *  SFeelFlowJoints::sagittalTrunk for why the plane is a field. */
+    QString plane_;
     QString contains_;
 };
 

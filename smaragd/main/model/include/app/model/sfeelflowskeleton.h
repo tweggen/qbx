@@ -79,84 +79,8 @@ struct SFeelFlowVec3 {
     double x = 0.0, y = 0.0, z = 0.0;
 };
 
-/**
- * The joint excursions. The five that the pose drives are normalized to
- * [-1,1]; `trunkFlex` and `trunkTwist` are the two axes the shipped model did
- * not have, present and wired but not yet driven (see "what this does not buy").
- */
-struct SFeelFlowJoints {
-    float bounceY    = 0.0f;   // pelvis vertical, + is a LIFT
-    float sway       = 0.0f;   // trunk LATERAL flexion  (about z, frontal)
-    float armSwing   = 0.0f;   // arm swing, SAGITTAL    (about x), antiphase
-    float headNod    = 0.0f;   // head angle RELATIVE TO THE TRUNK, lateral
-    float hipShift   = 0.0f;   // pelvis lateral translation
-    float trunkFlex  = 0.0f;   // trunk SAGITTAL flexion (about x)  -- undriven
-    float trunkTwist = 0.0f;   // trunk AXIAL rotation   (about y)  -- undriven
-};
-
-/** The skeleton in BODY space, plus the angles a gate asserts. */
-struct SFeelFlowSkeleton {
-    bool valid = false;
-
-    SFeelFlowVec3 pelvis, neck, headCentre, headBase;
-    SFeelFlowVec3 shoulderL, shoulderR, armEndL, armEndR;
-    SFeelFlowVec3 footL, footR, hipL, hipR;
-    double headRadius = 0.0;
-    double groundY    = 0.0;
-
-    /**
-     * Recovered GEOMETRICALLY from the points above, never echoed back from the
-     * inputs that produced them -- an assertion against a number the function
-     * was told would be tautological.
-     *
-     * Each is measured in the plane that segment's own DOF acts in, and the
-     * LATERAL ones are what the kinematic-chain gate uses: with `armSwing`,
-     * `headNod`, `trunkFlex` and `trunkTwist` all zero, the four below are all
-     * EQUAL to `trunkLeanDeg`. That identity is C0's gate and it survives the
-     * move to 3D unchanged, which is the point of keeping these scalars.
-     */
-    double trunkLeanDeg    = 0.0;   // frontal:  pelvis -> neck, from world up
-    double headStubLeanDeg = 0.0;   // frontal:  neck -> head base
-    double shoulderBarDeg  = 0.0;   // frontal:  shoulderL -> shoulderR
-    double armLeanLDeg     = 0.0;   // frontal:  shoulder -> arm end
-    double armLeanRDeg     = 0.0;
-
-    /** Sagittal components. `trunkFlexDeg` is 0 until something drives it;
-     * the arm swings are the DOF that actually moved plane in C3. */
-    double trunkFlexDeg    = 0.0;
-    double armSwingLDeg    = 0.0;
-    double armSwingRDeg    = 0.0;
-
-    /** Axial rotation, read off the shoulder bar in the TRANSVERSE (x-z)
-     * plane. Nothing else reports it: a twist leaves both the frontal and the
-     * sagittal angles at zero and only changes which way the bar POINTS, so
-     * without this the third axis would be present in the model and invisible
-     * to every assertion. It is also the foreshortening a front view cannot
-     * show, which is half of why the shipped figure could not express it. */
-    double shoulderTwistDeg = 0.0;
-};
-
-/** Where the camera looks from. Orthographic on purpose: a verification device
- * should not add perspective foreshortening to the thing being verified, and an
- * orthographic projection keeps every measurement on screen linear in the
- * model. Depth reads from the three-quarter angle instead. */
-struct SFeelFlowCamera {
-    double azimuthDeg   = 28.0;   // 0 = straight on; + turns the body's left toward us
-    double elevationDeg = 10.0;   // + looks down on the figure
-};
-
-/** A projected wireframe: polylines in widget coordinates. One polyline per
- * drawn element, so the painter neither knows nor decides what a "limb" is. */
-struct SFeelFlowWire {
-    enum Part { Legs = 0, Trunk, Arms, Head, Hips, Ground, PartCount };
-    Part                 part = Legs;
-    std::vector<QPointF> pts;          // >= 2 points
-    double               depth = 0.0;  // mean z in body space, for painter order
-};
-
-/** The full excursion of each joint, in degrees or as a fraction of the box.
- * Display constants: nothing downstream reads them and no gate pins them. */
 namespace sfeelflowskel {
+
 /**
  * WHICH ANATOMICAL PLANE the trunk's driven flexion and the head's nod are
  * applied in. **VERIFY, and it is unsourced in BOTH directions.**
@@ -191,23 +115,19 @@ namespace sfeelflowskel {
  * second-hand paraphrase is the same laundering that was refused for de Leva's
  * segment masses. Check the source; do not cite this sentence.
  *
- * **IT IS STILL false, AND THE DECISION IS STILL SAGITTAL. That is not a
- * contradiction -- it is the gate not existing yet.** Flipping this constant
- * makes `feel_flow_puppet_chain`'s inheritance rows VACUOUS: they assert that
- * the head stub, the shoulder bar and both arms carry the trunk's lean, and
- * every one of those readouts (`headStubLeanDeg`, `shoulderBarDeg`,
- * `armLeanL/RDeg`) is FRONTAL. With the trunk driven sagittally they all read
- * 0 against a trunk of 0, so eight assertions would pass while measuring
- * nothing. A gate that cannot fail is worse than no gate -- it reports
- * coverage that does not exist -- and that lesson has been paid for three
- * times already on this branch.
+ * **IT SHIPPED `false` FOR ONE COMMIT, AND THE REASON IS WORTH KEEPING.**
+ * Flipping it made `feel_flow_puppet_chain`'s inheritance rows VACUOUS: they
+ * assert that the head stub, the shoulder bar and both arms carry the trunk's
+ * lean, and every one of those readouts was FRONTAL. With the trunk driven
+ * sagittally they all read 0 against a trunk of 0 -- eight assertions passing
+ * while measuring nothing. A gate that cannot fail is worse than no gate.
  *
- * WHAT HAS TO LAND FIRST, and it is small: a SAGITTAL head-stub readout on
- * `SFeelFlowSkeleton` (the sagittal twin of `headStubLeanDeg`), so the
- * inheritance chain can be asserted in the plane it actually acts in.
- * `trunkFlexDeg` and `armSwingL/RDeg` already exist; only the head stub is
- * missing. Then this constant flips and the case re-pins onto the sagittal
- * columns -- a real re-pin, not a renumbering.
+ * The fix was `headStubFlexDeg` plus a PLANE-AWARE inheritance check. It also
+ * asserts that the other two planes stay at zero -- which was claimed here as
+ * "strictly stronger" and then MEASURED FALSE: an injected 0.4-degree leak is
+ * caught with that assertion and without it, because the case's explicit
+ * three-axis rows already pin all three readouts. It adds coverage only on the
+ * inheritTol rows, which otherwise assert one axis. Kept on that basis.
  *
  * WHAT THE DECISION IS ACTUALLY BASED ON, stated so it can be weighed: a
  * dated, single-subject introspective report -- the requester, twice
@@ -217,7 +137,124 @@ namespace sfeelflowskel {
  * AS n=1 rather than laundered into the model as fact, which is the
  * distinction proposal 44's whole thesis depends on.
  */
-constexpr bool   kTrunkSagittal = false;
+constexpr bool   kTrunkSagittal = true;
+
+}   // namespace sfeelflowskel
+
+/**
+ * The joint excursions. The five that the pose drives are normalized to
+ * [-1,1]; `trunkFlex` and `trunkTwist` are the two axes the shipped model did
+ * not have, present and wired but not yet driven (see "what this does not buy").
+ */
+struct SFeelFlowJoints {
+    float bounceY    = 0.0f;   // pelvis vertical, + is a LIFT
+    float sway       = 0.0f;   // trunk LATERAL flexion  (about z, frontal)
+    float armSwing   = 0.0f;   // arm swing, SAGITTAL    (about x), antiphase
+    float headNod    = 0.0f;   // head angle RELATIVE TO THE TRUNK, lateral
+    float hipShift   = 0.0f;   // pelvis lateral translation
+    float trunkFlex  = 0.0f;   // trunk SAGITTAL flexion (about x)  -- undriven
+    float trunkTwist = 0.0f;   // trunk AXIAL rotation   (about y)  -- undriven
+
+    /**
+     * WHICH PLANE the `sway` scalar (and with it `headNod`) acts in. Defaults
+     * to sfeelflowskel::kTrunkSagittal, which is the project-wide decision.
+     *
+     * IT IS A FIELD AND NOT JUST THAT CONSTANT, because making the plane a
+     * compile-time fork COSTS TWO 3D-COMPOSITION GATES. With `sway` sagittal
+     * it becomes COPLANAR with `trunkFlex`, so the pair simply adds (20 + 25 =
+     * 45.0000, measured) and the cross-term that proved rotations compose as
+     * rotations rather than as numbers -- 21.8802 / 25.0000 / -8.7447 -- has
+     * nothing left to measure. Same for the arm: 36.6915 becomes a plain
+     * 20 + 35 = 55. Those pins are the difference between a 3D body and two
+     * flat drawings stacked, and losing them to a plane decision would be a
+     * bad trade.
+     *
+     * As a field, every one of them survives verbatim at `false` while the
+     * shipped default is `true` -- and the plane decision itself becomes
+     * testable both ways instead of being a constant nobody can exercise.
+     */
+    bool  sagittalTrunk = sfeelflowskel::kTrunkSagittal;
+};
+
+/** The skeleton in BODY space, plus the angles a gate asserts. */
+struct SFeelFlowSkeleton {
+    bool valid = false;
+
+    SFeelFlowVec3 pelvis, neck, headCentre, headBase;
+    SFeelFlowVec3 shoulderL, shoulderR, armEndL, armEndR;
+    SFeelFlowVec3 footL, footR, hipL, hipR;
+    double headRadius = 0.0;
+    double groundY    = 0.0;
+
+    /**
+     * Recovered GEOMETRICALLY from the points above, never echoed back from the
+     * inputs that produced them -- an assertion against a number the function
+     * was told would be tautological.
+     *
+     * Each is measured in the plane that segment's own DOF acts in, and the
+     * LATERAL ones are what the kinematic-chain gate uses: with `armSwing`,
+     * `headNod`, `trunkFlex` and `trunkTwist` all zero, the four below are all
+     * EQUAL to `trunkLeanDeg`. That identity is C0's gate and it survives the
+     * move to 3D unchanged, which is the point of keeping these scalars.
+     */
+    double trunkLeanDeg    = 0.0;   // frontal:  pelvis -> neck, from world up
+    double headStubLeanDeg = 0.0;   // frontal:  neck -> head base
+    double shoulderBarDeg  = 0.0;   // frontal:  shoulderL -> shoulderR
+    double armLeanLDeg     = 0.0;   // frontal:  shoulder -> arm end
+    double armLeanRDeg     = 0.0;
+
+    /** Sagittal components. `trunkFlexDeg` is 0 until something drives it;
+     * the arm swings are the DOF that actually moved plane in C3. */
+    double trunkFlexDeg    = 0.0;
+    /**
+     * SAGITTAL: neck -> head base. The twin of `headStubLeanDeg`, added for
+     * proposal 44 C7 because without it the plane switch could not be GATED:
+     * every readout the inheritance assertion compares was frontal, so a
+     * sagittally-driven trunk left all four at zero and eight assertions would
+     * have passed while measuring nothing.
+     *
+     * NOTE WHAT IS DELIBERATELY ABSENT: there is no sagittal shoulder-BAR
+     * twin, and that is geometry rather than an omission. The bar lies ALONG
+     * the x axis, which is the axis sagittal flexion rotates about, so a
+     * forward lean carries the bar forward without turning it -- its angle is
+     * invariant by construction. The sagittal inheritance set is therefore
+     * {head stub, both arms}, three rows where the frontal set has four.
+     */
+    double headStubFlexDeg = 0.0;
+    double armSwingLDeg    = 0.0;
+    double armSwingRDeg    = 0.0;
+
+    /** Axial rotation, read off the shoulder bar in the TRANSVERSE (x-z)
+     * plane. Nothing else reports it: a twist leaves both the frontal and the
+     * sagittal angles at zero and only changes which way the bar POINTS, so
+     * without this the third axis would be present in the model and invisible
+     * to every assertion. It is also the foreshortening a front view cannot
+     * show, which is half of why the shipped figure could not express it. */
+    double shoulderTwistDeg = 0.0;
+};
+
+/** Where the camera looks from. Orthographic on purpose: a verification device
+ * should not add perspective foreshortening to the thing being verified, and an
+ * orthographic projection keeps every measurement on screen linear in the
+ * model. Depth reads from the three-quarter angle instead. */
+struct SFeelFlowCamera {
+    double azimuthDeg   = 28.0;   // 0 = straight on; + turns the body's left toward us
+    double elevationDeg = 10.0;   // + looks down on the figure
+};
+
+/** A projected wireframe: polylines in widget coordinates. One polyline per
+ * drawn element, so the painter neither knows nor decides what a "limb" is. */
+struct SFeelFlowWire {
+    enum Part { Legs = 0, Trunk, Arms, Head, Hips, Ground, PartCount };
+    Part                 part = Legs;
+    std::vector<QPointF> pts;          // >= 2 points
+    double               depth = 0.0;  // mean z in body space, for painter order
+};
+
+/** The full excursion of each joint, in degrees or as a fraction of the box.
+ * Display constants: nothing downstream reads them and no gate pins them. */
+namespace sfeelflowskel {
+
 
 constexpr double kSwayDeg    = 20.0;
 constexpr double kNodDeg     = 10.0;
