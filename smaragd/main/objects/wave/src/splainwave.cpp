@@ -492,7 +492,7 @@ void SPlainWave::enqueueGrooveAnalysis()
                     qi.aspectVersion = twAspect::GrooveDynVersion;
                     // v2 (M3e): 6 float32 per unit -- support/tension/
                     // cosPhi/sinPhi/slip/dissip (twaspects.h).
-                    qi.recordStride  = (uint64_t) built.nUnits * 6 * 4;
+                    qi.recordStride  = (uint64_t) built.nUnits * 8 * 4;
                     qi.recordCount   = built.dynRecordCount;
                     qi.hopFrames     = built.hopFrames;
                     twSidecarStore::instance().store(

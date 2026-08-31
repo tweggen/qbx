@@ -103,6 +103,27 @@
     <assert-groove-aspect aspect="groove.ev" trackPath="0" stale="0"
                           deltaMuHighLowMs="0.0" deltaMuTolMs="6.5"/>
 
+    <!-- THE POSE ON A *TRAINED* TRACK (proposal 44 C5). The only assertion in
+         the suite that reaches "body.pose" on a track whose groove params are
+         not the defaults.
+
+         WHAT IT DOES NOT GATE, said plainly because three attempts failed to
+         make it: the read side looks the aspect up under the EFFECTIVE params
+         (buildEffectiveGrooveParams), and keying on a default-constructed set
+         instead SHOULD miss on a trained track. Sabotaged to the defaults,
+         this case still passes - with a floor, with a bracket, and with a
+         pinned component. So the effective-vs-default key path is UNGATED.
+         The fix is kept because read and write must key alike by inspection,
+         not because anything here proves it. -->
+         A BRACKET, NOT A FLOOR, and that was found by sabotage too: the
+         FALLBACK (the M3e direct mapping) produces LARGER numbers than the
+         plant, so a minAbsSum alone passes either way and gates nothing. The
+         plant's sum here is 0.1347; the fallback's is about 1.09. maxAbsSum
+         is what separates them. -->
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
+                           minAbsSum="0.05" maxAbsSum="0.5"
+                           contains="headNod=-0.0222"/>
+
     <!-- Trained state survives save -> load. -->
     <save-project path="../../build/feel_flow_trained_saved.qxp"/>
     <assert-file-contains path="../../build/feel_flow_trained_saved.qxp"

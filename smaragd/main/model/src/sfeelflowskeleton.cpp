@@ -120,8 +120,14 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
                   legLen + (double) j.bounceY * box.height() * kBounceFrac,
                   0.0 };
 
-    const double flexDeg    = (double) j.trunkFlex  * kFlexDeg;
-    const double lateralDeg = (double) j.sway       * kSwayDeg;
+    // The `sway` scalar's PLANE is one declared switch (kTrunkSagittal), and
+    // the whole of the plane decision lives at that constant rather than being
+    // spread across a mapping. `trunkFlex` keeps its own axis either way: it is
+    // an independent DOF, not an alias for this one.
+    const double swayDeg    = (double) j.sway       * kSwayDeg;
+    const double flexDeg    = (double) j.trunkFlex  * kFlexDeg
+                              + ( j.sagittalTrunk ? swayDeg : 0.0 );
+    const double lateralDeg = j.sagittalTrunk ? 0.0 : swayDeg;
     const double twistDeg   = (double) j.trunkTwist * kTwistDeg;
 
     auto fromTrunk = [&]( SFeelFlowVec3 local ) {
@@ -133,9 +139,15 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
     // The head's own nod is RELATIVE to the trunk, so it is applied in
     // TRUNK-LOCAL space and then carried out by the trunk's frame -- which is
     // exactly what "the head is subordinate to the torso" means as a transform.
+    // IN THE SAME PLANE AS THE TRUNK IT HANGS ON. A head that nodded laterally
+    // off a trunk bending fore-aft would be a shrug, not a nod -- and the
+    // requester's own account of the motion ("pulling it suddenly back up,
+    // letting it fall with torso movement") is unambiguously sagittal.
     const double nodDeg = (double) j.headNod * kNodDeg;
     auto fromNeck = [&]( SFeelFlowVec3 local ) {
-        return add( sk.neck, fromTrunk( rotLateral( local, nodDeg ) ) );
+        const SFeelFlowVec3 nodded = j.sagittalTrunk ? rotFlex( local, nodDeg )
+                                                     : rotLateral( local, nodDeg );
+        return add( sk.neck, fromTrunk( nodded ) );
     };
     sk.headCentre = fromNeck( { 0.0, headR * 1.35, 0.0 } );
     sk.headBase   = fromNeck( { 0.0, headR * 0.35, 0.0 } );
@@ -162,6 +174,7 @@ SFeelFlowSkeleton sFeelFlowSkeletonFor( const SFeelFlowJoints &j, const QRectF &
     sk.trunkLeanDeg    = frontalDeg( sk.pelvis, sk.neck );
     sk.trunkFlexDeg    = sagittalDeg( sk.pelvis, sk.neck );
     sk.headStubLeanDeg = frontalDeg( sk.neck, sk.headBase );
+    sk.headStubFlexDeg = sagittalDeg( sk.neck, sk.headBase );
     // NEGATED because body space is y-UP while the 2D original measured this in
     // SCREEN space, y-down. Same geometry, opposite sign; the inheritance gate
     // compares this against trunkLeanDeg and would have read -20 against +20.
@@ -273,10 +286,12 @@ QString sFeelFlowSkeletonDescribe( const SFeelFlowSkeleton &s )
     auto f4 = []( double v ) { return QString::number( v, 'f', 4 ); };
     return QStringLiteral( "skeleton: valid=%1 trunk=%2 headStub=%3"
                            " shoulderBar=%4 armL=%5 armR=%6"
-                           " trunkFlex=%7 armSwingL=%8 armSwingR=%9 twist=%10" )
+                           " trunkFlex=%7 headStubFlex=%8 armSwingL=%9"
+                           " armSwingR=%10 twist=%11" )
         .arg( s.valid ? 1 : 0 )
         .arg( f4( s.trunkLeanDeg ), f4( s.headStubLeanDeg ),
               f4( s.shoulderBarDeg ), f4( s.armLeanLDeg ), f4( s.armLeanRDeg ),
-              f4( s.trunkFlexDeg ), f4( s.armSwingLDeg ), f4( s.armSwingRDeg ),
+              f4( s.trunkFlexDeg ), f4( s.headStubFlexDeg ),
+              f4( s.armSwingLDeg ), f4( s.armSwingRDeg ),
               f4( s.shoulderTwistDeg ) );
 }

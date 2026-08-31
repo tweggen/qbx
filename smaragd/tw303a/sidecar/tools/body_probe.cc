@@ -375,6 +375,30 @@ int main( int argc, char **argv )
             ener[3][h] = ener[1][h];
         }
         partHz[3] = partHz[1];
+
+        // WHAT THE PUPPET ACTUALLY DRAWS, in degrees, for the head RELATIVE to
+        // the trunk -- which is the only thing an eye can see as "the head
+        // moving". Reported next to the trunk's own lean so the two are
+        // comparable, because the head's WORLD angle is dominated by the trunk
+        // carrying it and looks perfectly healthy while the relative nod is
+        // invisible.
+        double nodSq = 0.0, nodPk = 0.0, swaySq = 0.0, swayPk = 0.0;
+        for( size_t h = 0; h < nHops; h++ ) {
+            const double nod  = disp[3][h] * kNodDeg;
+            const double sway = disp[1][h] * kSwayDeg;
+            nodSq  += nod * nod;   nodPk  = std::max( nodPk,  std::fabs( nod ) );
+            swaySq += sway * sway; swayPk = std::max( swayPk, std::fabs( sway ) );
+        }
+        if( nHops ) {
+            printf( "DRAWN HEAD NOD (relative to the trunk, which is what an eye"
+                    " can see):\n" );
+            printf( "  nod  rms %6.3f deg  peak %6.3f deg\n",
+                    std::sqrt( nodSq / (double) nHops ), nodPk );
+            printf( "  sway rms %6.3f deg  peak %6.3f deg   -> the head nods"
+                    " %.1f%% as many degrees as the trunk leans\n\n",
+                    std::sqrt( swaySq / (double) nHops ), swayPk,
+                    swaySq > 0.0 ? 100.0 * std::sqrt( nodSq / swaySq ) : 0.0 );
+        }
     }
 
     // --urge: WHAT DOES THE MUSIC ACTUALLY ASK FOR? -------------------------

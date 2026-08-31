@@ -33,99 +33,150 @@
   TOLD would be tautological; one recovered from the resulting geometry
   fails when the construction is wrong.
 
-  MEASURED (first run, 2026-08-28, this box, Qt 6.4.2 / Ubuntu 24.04),
-  default 200x400 box:
+  MEASURED (2026-08-28; re-pinned 2026-08-31 for proposal 44 C7's plane
+  decision), default 200x400 box.
 
-    sway= 0.0            trunk   0.0000  headStub   0.0000  bar   0.0000  armL   0.0000  armR   0.0000
-    sway= 0.5            trunk  10.0000  headStub  10.0000  bar  10.0000  armL  10.0000  armR  10.0000
-    sway= 1.0            trunk  20.0000  headStub  20.0000  bar  20.0000  armL  20.0000  armR  20.0000
-    sway=-0.5            trunk -10.0000  headStub -10.0000  bar -10.0000  armL -10.0000  armR -10.0000
-    sway=-1.0            trunk -20.0000  headStub -20.0000  bar -20.0000  armL -20.0000  armR -20.0000
-    sway=1 nod=1 arm=1   trunk  20.0000  headStub  30.0000  bar  20.0000  armL  55.0000  armR -15.0000
+  THE PLANE IS NOW A FIELD, not a compile-time constant, and this case is why.
+  C7 moved the `sway` scalar to the SAGITTAL plane on the requester's decision.
+  Done as a constant it would have cost two 3D-composition gates: with sway
+  sagittal it is COPLANAR with trunkFlex, so the pair merely adds (20 + 25 =
+  45.0000, measured) and the cross-term proving that rotations compose as
+  ROTATIONS rather than as numbers - 21.8802 / 25.0000 / -8.7447 - has
+  nothing left to measure; likewise the arm's 36.6915 collapses to 20 + 35.
+  Those pins are the whole difference between a 3D body and two flat drawings
+  stacked. `SFeelFlowJoints::sagittalTrunk` keeps both planes reachable, so
+  every one of them survives verbatim under plane="lateral" while the SHIPPED
+  default is sagittal.
 
-  The last row is what proves the composition is a SUM and not a
-  replacement: 20+10 for the head's own nod, 20+35 and 20-35 for the two
-  arms in antiphase. And the same angles come out of a 90x140 box, so the
-  identity is scale-free - it is a rotation, not a pixel coincidence.
+    plane="sagittal" (the default)
+      sway= 0.5           trunkFlex 10.0000  headStubFlex 10.0000  armSwingL/R 10.0000
+      sway= 1.0           trunkFlex 20.0000  headStubFlex 20.0000  armSwingL/R 20.0000
+      sway=-1.0           trunkFlex-20.0000  headStubFlex-20.0000  armSwingL/R-20.0000
+      sway=1 nod=1 arm=1  trunkFlex 20.0000  headStubFlex 30.0000  armSwingL 55.0000 armSwingR -15.0000
+      sway=1 twist=1      trunkFlex 20.0000  twist -18.8817  shoulderBar -7.0960
+
+    plane="lateral" (retained so the 3D cross-terms stay measurable)
+      sway=1 flex=1       trunk 21.8802  trunkFlex 25.0000  twist -8.7447
+      sway=1 arm=1        armSwingL 36.6915
+      sway=1 nod=1 arm=1  trunk 20.0000  headStub 30.0000
+
+  THE INHERITANCE CHECK IS PLANE-AWARE. It asserts the DRIVEN plane's chain -
+  {head stub, both arms} sagittally, {head stub, shoulder bar, both arms}
+  laterally - and additionally that the other two planes stay at zero.
+
+  THAT LAST PART IS NOT "STRICTLY STRONGER", THOUGH IT WAS WRITTEN THAT WAY
+  FIRST AND THEN MEASURED. A 0.4 degree lateral leak injected on a sagittal
+  command fails this case WITH the off-plane assertion (row 19) and WITHOUT it
+  (row 16), because section (3)'s explicit three-axis rows already pin all
+  three readouts for those commands. What it genuinely adds is coverage on the
+  inheritTol rows, which otherwise assert one axis each: a leak that appeared
+  only at sway=0.5 or in the small box would have nothing else to trip. Kept on
+  that basis, which is a weaker one than first claimed.
+
+  NO SAGITTAL SHOULDER-BAR ROW, and that is geometry rather than an omission:
+  the bar lies ALONG the axis sagittal flexion rotates about, so a forward lean
+  carries it forward without turning it. Three rows sagittally, four laterally.
 
   WATCHED FAILING. Reverted `sFeelFlowSkeletonFor` to compose the head,
   shoulders and arms against 0 instead of the trunk angle (i.e. the shipped
-  world-coordinate construction): every `inheritTol` row FAILS, reporting
-  headStub/bar/armL/armR at 0.0000 against a trunk of +-10 or +-20. The
-  sway=0 row still passes, as it must - at zero lean the broken and the
-  correct construction coincide, which is exactly why the case sweeps five
-  angles rather than asserting one.
+  world-coordinate construction): every `inheritTol` row FAILS. The sway=0 row
+  still passes, as it must - at zero lean the broken and the correct
+  construction coincide, which is exactly why the case sweeps five angles
+  rather than asserting one. Separately: flipping the plane WITHOUT the
+  plane-aware check made eight rows pass while measuring nothing (0 against 0),
+  which is what forced `headStubFlexDeg` and the off-plane assertion.
 
-  NOT GATED. What the figure LOOKS like (aesthetics are not gated anywhere
-  in this feature); the head still follows the trunk RIGIDLY, with no neck
-  lag, no counter-rotation and no inertia - that is C4's `m*d*a_base` term
-  and C0 deliberately does not promise it; and the pose numbers themselves,
-  which C0 does not touch (`feel_flow_puppet.qxa` still pins those).
+  NOT GATED. What the figure LOOKS like (aesthetics are not gated anywhere in
+  this feature); the head still follows the trunk RIGIDLY, with no neck lag, no
+  counter-rotation and no inertia - that is C4's `m*d*a_base` term, and C7
+  measured why it cannot simply be bolted onto the drawn series (the trunk's
+  own second derivative there is ~640x the real motion, all envelope noise); and
+  the pose numbers themselves, which this case does not touch
+  (`feel_flow_puppet.qxa` still pins those).
 -->
 <SActionScript version="1" name="feel_flow_puppet_chain">
 
   <setup project="new"/>
 
   <actions>
-    <!-- (1) THE CHAIN. With the head's own nod and the arms' own swing at
-         zero, every segment above the neck must carry EXACTLY the trunk's
-         lean. Five angles including zero and both signs: at sway=0 the
-         broken construction and the correct one agree, so a single-angle
-         assertion could not tell them apart. -->
-    <assert-puppet-skeleton sway="0"    nod="0" arm="0" expectTrunk="0"   inheritTol="0.01"/>
-    <assert-puppet-skeleton sway="0.5"  nod="0" arm="0" expectTrunk="10"  inheritTol="0.01"/>
-    <assert-puppet-skeleton sway="1.0"  nod="0" arm="0" expectTrunk="20"  inheritTol="0.01"/>
-    <assert-puppet-skeleton sway="-0.5" nod="0" arm="0" expectTrunk="-10" inheritTol="0.01"/>
-    <assert-puppet-skeleton sway="-1.0" nod="0" arm="0" expectTrunk="-20" inheritTol="0.01"/>
+    <!-- (1) THE CHAIN, IN THE SHIPPED (SAGITTAL) PLANE. With the head's own
+         nod and the arms' own swing at zero, every segment above the neck must
+         carry EXACTLY the trunk's lean. Five angles including zero and both
+         signs: at sway=0 the broken construction and the correct one agree, so
+         a single-angle assertion could not tell them apart. -->
+    <assert-puppet-skeleton sway="0"    nod="0" arm="0" expectFlex="0"   inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="0.5"  nod="0" arm="0" expectFlex="10"  inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="1.0"  nod="0" arm="0" expectFlex="20"  inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="-0.5" nod="0" arm="0" expectFlex="-10" inheritTol="0.01"/>
+    <assert-puppet-skeleton sway="-1.0" nod="0" arm="0" expectFlex="-20" inheritTol="0.01"/>
 
-    <!-- (2) THE COMPOSITION IS A SUM, in the plane each DOF acts in. The
-         head's nod is lateral like the trunk's lean, so it ADDS: 20 + 10.
-         The arms are SAGITTAL since the model went 3D, so they no longer
-         change armL/armR at all - those stay at the trunk's inherited 20 -
-         and appear in armSwingL/R instead. On the 2D model this row read
-         armL=55 armR=-15, which was the jumping-jack plane. -->
-    <assert-puppet-skeleton sway="1.0" nod="1.0" arm="1.0"
-                            expectTrunk="20"
-                            contains="headStub=30.0000 shoulderBar=20.0000 armL=20.0000 armR=20.0000"/>
+    <!-- (1b) AND THE SAME CHAIN LATERALLY, so the plane switch itself is
+         exercised rather than being a constant nobody can reach. Identical
+         numbers in the other plane's columns - which is the point: the
+         construction is a rotation, and a rotation does not care which axis. -->
+    <assert-puppet-skeleton plane="lateral" sway="1.0"  nod="0" arm="0"
+                            expectTrunk="20"  inheritTol="0.01"/>
+    <assert-puppet-skeleton plane="lateral" sway="-0.5" nod="0" arm="0"
+                            expectTrunk="-10" inheritTol="0.01"/>
 
-    <!-- (2b) 36.6915, NOT 35. The arm is commanded 35 degrees in the TRUNK's
-         frame and the trunk is also leaning 20 laterally, so its world-space
-         sagittal angle is atan2(sin35, cos35*cos20) = 36.6915. A model that
-         treated the two rotations as independent 2D angles would read exactly
-         35 here, so this one number is the difference between a 3D body and
-         two flat drawings stacked. -->
-    <assert-puppet-skeleton sway="1.0" arm="1.0" expectSwingL="36.6915" tol="0.001"/>
+    <!-- (2) THE COMPOSITION IS A SUM, in the plane each DOF acts in. The head's
+         nod is sagittal like the trunk's lean, so it ADDS: 20 + 10. The arms
+         are sagittal too, so their own 35 adds and subtracts in antiphase. -->
+    <assert-puppet-skeleton sway="1.0" nod="1.0" arm="1.0" expectFlex="20"
+                            contains="headStubFlex=30.0000 armSwingL=55.0000 armSwingR=-15.0000"/>
 
-    <!-- (3) THE THREE ANATOMICAL AXES ARE DISTINCT. This is what "technically
-         3D" has to mean: each rotation moves its own plane and leaves the
-         other two alone. The shipped model had only the first row, and the
-         requester's stated core interaction - bending FORWARD - is the
-         second, which a front-facing 2D figure foreshortens to nothing. -->
-    <assert-puppet-skeleton sway="1.0"  expectTrunk="20" expectFlex="0"  expectTwist="0"/>
+    <!-- (2b) 36.6915, NOT 35 - retained under plane="lateral" because it is
+         exactly the pin the plane move would otherwise have destroyed. The arm
+         is commanded 35 degrees in the TRUNK's frame while the trunk leans 20
+         LATERALLY, so its world-space sagittal angle is
+         atan2(sin35, cos35*cos20) = 36.6915. Two flat drawings stacked read 35.
+         With both in the sagittal plane the same row reads a plain 55. -->
+    <assert-puppet-skeleton plane="lateral" sway="1.0" arm="1.0"
+                            expectSwingL="36.6915" tol="0.001"/>
+    <assert-puppet-skeleton plane="lateral" sway="1.0" nod="1.0" arm="1.0"
+                            expectTrunk="20" contains="headStub=30.0000"/>
+
+    <!-- (3) THE THREE ANATOMICAL AXES ARE DISTINCT. Each rotation moves its own
+         plane and leaves the other two alone. The requester's stated core
+         interaction - bending FORWARD - is the first row now, which is the
+         whole of C7. -->
+    <assert-puppet-skeleton sway="1.0"  expectTrunk="0"  expectFlex="20" expectTwist="0"/>
     <assert-puppet-skeleton flex="1.0"  expectTrunk="0"  expectFlex="25" expectTwist="0"/>
     <assert-puppet-skeleton twist="1.0" expectTrunk="0"  expectFlex="0"  expectTwist="-20"/>
+    <assert-puppet-skeleton plane="lateral" sway="1.0"
+                            expectTrunk="20" expectFlex="0" expectTwist="0"/>
 
-    <!-- (3b) AND THEY COMPOSE AS ROTATIONS, NOT AS NUMBERS. Lateral 20 plus
-         sagittal 25 does NOT give 20 and 25: it gives 21.8802 and 25.0000,
-         with a twist of -8.7447 that neither command asked for. That
-         cross-term is the signature of real rotation composition, and it is
-         pinned precisely because a componentwise implementation would read a
-         clean 20 / 25 / 0 and look plausible. -->
-    <assert-puppet-skeleton sway="1.0" flex="1.0"
+    <!-- (3b) AND THEY COMPOSE AS ROTATIONS, NOT AS NUMBERS - in BOTH planes,
+         which is what the field buys. Laterally: 20 plus a sagittal 25 gives
+         21.8802 and 25.0000 with a twist of -8.7447 nobody asked for.
+         Sagittally: 20 plus an axial 20 gives a twist of -18.8817, NOT -20, and
+         tilts the shoulder bar -7.0960 out of a plane neither command names.
+         A componentwise implementation reads clean round numbers for both and
+         looks entirely plausible. -->
+    <assert-puppet-skeleton plane="lateral" sway="1.0" flex="1.0"
                             expectTrunk="21.8802" expectFlex="25.0000"
                             expectTwist="-8.7447" tol="0.001"/>
+    <assert-puppet-skeleton sway="1.0" twist="1.0"
+                            expectFlex="20.0000" expectTwist="-18.8817" tol="0.001"
+                            contains="shoulderBar=-7.0960"/>
 
-    <!-- (3c) The arms hang from the trunk, so a FORWARD lean carries them
-         forward with it even with no swing commanded. -->
+    <!-- (3c) sway and trunkFlex are COPLANAR in the shipped plane, so they add
+         to exactly 45. Pinned because it is the reason the lateral rows above
+         have to exist at all. -->
+    <assert-puppet-skeleton sway="1.0" flex="1.0" expectFlex="45.0000" tol="0.001"/>
+
+    <!-- (3d) The arms hang from the trunk, so a lean carries them with it even
+         with no swing commanded. -->
     <assert-puppet-skeleton flex="1.0" arm="0" expectSwingL="25.0" tol="0.001"/>
 
-    <!-- (3) SCALE-FREE. The same lean out of a box less than half the size
-         in both axes - it is a rotation, not a pixel coincidence. -->
+    <!-- (4) SCALE-FREE. The same lean out of a box less than half the size in
+         both axes - it is a rotation, not a pixel coincidence. -->
     <assert-puppet-skeleton sway="0.5" nod="0" arm="0" boxW="90" boxH="140"
-                            expectTrunk="10" inheritTol="0.01"/>
+                            expectFlex="10" inheritTol="0.01"/>
 
-    <!-- (4) THE DEGENERATE BOX still answers, and answers INVALID rather
-         than dividing by a zero-height figure. -->
+    <!-- (5) THE DEGENERATE BOX still answers, and answers INVALID rather than
+         dividing by a zero-height figure. -->
     <assert-puppet-skeleton sway="1.0" boxW="4" boxH="4" expectValid="0" contains="valid=0"/>
+
   </actions>
 </SActionScript>

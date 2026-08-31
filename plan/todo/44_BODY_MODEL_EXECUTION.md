@@ -1502,6 +1502,262 @@ acyclic since `tw_body` depends only on `tw_core`.
 
 ---
 
+## C7 — THE PLANE, AND WHY THE HEAD IS INVISIBLE (requester, 2026-08-31)
+
+Two user reports on a slow hip-hop track: **no observable head movement**, and
+**circular / left-right hip motion with no forward-back upper body** — "moving
+the upper body half looks like the number-one reaction for a standing person."
+
+### Cache was ruled out first, and it is not the cause
+
+Three independent reasons: `GrooveDynVersion` went to **3** on this branch
+(C1a), and the aspect version is part of the store key, so an older sidecar
+MISSES and re-analyses; the head reads **no aspect channel at all** (since C1 it
+is derived from the trunk by read-side code); and `body.pose` is new, with the
+plant unwired regardless.
+
+### What is actually visible, measured
+
+`body_probe` now reports the DRAWN nod in degrees — the head's WORLD angle looks
+healthy while the RELATIVE nod, the only thing an eye reads as "the head
+moving", is what matters. Across the committed fixtures: **nod 0.86–1.04° rms
+(peak 3.0–3.9°) against a sway of 3.5–5.1° rms (peak 10.5–18.4°)** — the head
+nods 20–25 % as many degrees as the trunk leans. Sub-pixel on a wireframe.
+
+And it is **worse on a slow track by construction**, because the shipped neck is
+a one-pole lag whose output is proportional to the trunk's RATE:
+
+| trunk rate | drawn nod, as % of the sway in degrees |
+|---|---|
+| 0.25 Hz | 9.7 % |
+| 0.33 Hz (slow hip-hop) | 12.6 % |
+| 0.50 Hz (the fixtures) | 18.4 % |
+| 2.00 Hz | 42.3 % |
+
+### THE PLANE: the cited literature is SILENT on it
+
+`plan/proposed/40_GROOVE_RESONANCE.md` carries every citation this model rests
+on. Grepped for `sagittal`, `frontal`, `lateral`, `fore-aft`, `anteroposterior`,
+`mediolateral`: **zero occurrences.** Toiviainen 2010 fixes a metrical LEVEL,
+Burger 2013 and Hove 2014 fix a band→PART mapping, van Noorden & Moelants fix a
+TEMPO. **Not one fixes a PLANE.**
+
+So the lateral trunk was never the evidence-based default — it is what C0
+happened to build, with incumbency rather than support. Both readings sit at the
+same evidential level: none. Toiviainen's eigenmovements come from a PCA over
+marker positions and therefore DO carry a direction; that table is not in this
+repo and the egress proxy refuses Frontiers, PMC, doi.org and Wikipedia. It is
+an AC2.1-class task.
+
+`sfeelflowskel::kTrunkSagittal` is the one switch, with all of the above beside
+it. **Requester decision: SAGITTAL. It ships `false` until its gate exists** —
+see the constant, and the next section.
+
+### A GATE THAT WOULD HAVE PASSED VACUOUSLY, caught before shipping
+
+Flipping the switch makes `feel_flow_puppet_chain`'s five inheritance rows plus
+three axis rows assert **0 against 0**: every readout they compare
+(`headStubLeanDeg`, `shoulderBarDeg`, `armLeanL/RDeg`) is FRONTAL, and a
+sagittally-driven trunk leaves them all at zero. Eight assertions passing while
+measuring nothing. **Blocked on that rather than shipped.**
+
+What has to land first is small and specific: a **sagittal head-stub readout**
+on `SFeelFlowSkeleton`, the twin of `headStubLeanDeg`. `trunkFlexDeg` and
+`armSwingL/RDeg` already exist; only the head stub is missing. Then the constant
+flips and the case re-pins onto the sagittal columns.
+
+### THE LOOSE NECK: tried, MEASURED, and it does not work on this path
+
+Requester: *the head is no stiffly jointed limb but a rather loosely jointed one
+with a considerable mass* — so it should visibly overshoot. The physics agrees,
+and the mechanism is BAND, not scale:
+
+| neck `stiffnessScale` | its own resonance | gain at a 0.5 Hz trunk sway |
+|---|---|---|
+| 2.0 (C4a's default) | 1.267 Hz | r = 0.39, **1.17** |
+| 1.2 | 0.567 Hz | r = 0.88, **2.90** |
+
+At the stiff setting the neck sits far ABOVE the rate that drives it, responds
+quasi-statically, and the head simply RIDES the trunk. That is why nothing was
+visible.
+
+**But replacing the one-pole with `twBodyJointStep` on this path FAILS, and the
+measurement is decisive.** The head pegged at the clamp (**nod rms 8.4°, peak
+10.000° = exactly the range**) at EVERY stiffness from 0.2 to 3.0, with rms
+barely moving — saturation, not resonance. The cause:
+
+| | rad/s² |
+|---|---|
+| angular acceleration the DRAWN trunk series delivers | **mean 55.1, peak 1973.8** |
+| what a clean 0.5 Hz / 18° sway demands | **3.10** |
+
+**~640× the real motion, and all of it envelope noise.** The drawn trunk is
+`sqrt(power) · cosMet` and `sqrt(power)` steps between 10 ms hops; its second
+derivative is dominated by those steps. A second-order joint is an
+acceleration-driven device, so it hears the noise and nothing else. (This was
+found once already on this branch, retracted a "9° nod" result, and was walked
+into a second time — hence recording it here rather than in a commit message.)
+
+**The consequence is architectural: the neck cannot be bolted onto the drawn
+series.** It needs the trunk's angle to come out of an INTEGRATOR — smooth by
+construction — which is exactly what `twBodyPlantRun` produces and why the
+plant's own head nod behaved sensibly. **So the head is blocked on C5's store
+plumbing, and that is now measured rather than argued.**
+
+### THE ONE-WAY CASCADE: named in standard terms, and its error sized
+
+Requester's concern: is a multi-mass system coupled by differential equations
+not chaotic, and does the neck's finite length not convert the head's momentum
+into reaction on the body?
+
+**On chaos: no, and provably not.** The model is LINEAR (small-angle) and
+ONE-WAY (parent drives child, no reaction). A linear system has no sensitive
+dependence on initial conditions and cannot be chaotic. A fully-coupled
+nonlinear double pendulum can be; this is not one, by construction.
+
+**On the reaction: the concern is exactly right and here is its size.** From our
+own segment table — head 5.175 kg, `I` about the atlas 0.09107 kg·m²; trunk
+32.625 kg, `I` about the hip 2.81270 kg·m²; neck lever 0.504 m — per 1 rad/s² of
+head angular acceleration the reaction on the trunk is **0.321 N·m**, perturbing
+the trunk's own acceleration by **11.4 %** of the head's. Not negligible, not
+dominant. **11.4 % is the honest error bar on the one-way cascade at this
+joint.**
+
+**And the gap has a standard name.** Featherstone's Articulated Body Algorithm —
+what every ragdoll runs underneath (PhysX, Bullet, Havok, ODE) and what OpenSim
+and AnyBody use with real muscle models — has an OUTWARD pass (velocities and
+accelerations propagate parent → child) and an INWARD pass (forces propagate
+child → parent).
+
+> **We have implemented the outward pass and not the inward one.**
+
+That is not an approximation invented here; it is half of a standard algorithm,
+and the missing half is precisely the reaction and constraint forces the
+requester described. It also makes the upgrade a known algorithm with open-source
+reference implementations to validate against, rather than an open question —
+which is the same argument that made the Fable review worth commissioning.
+
+### C7 step 1 — **DONE 2026-08-31: the plane is SAGITTAL and gated**
+
+`headStubFlexDeg` (the sagittal twin of `headStubLeanDeg`), a PLANE-AWARE
+inheritance check, and `kTrunkSagittal` flipped to **true**.
+
+**THE PLANE BECAME A FIELD, NOT A CONSTANT, AND THAT WAS FORCED BY A
+MEASUREMENT.** Done as a compile-time fork it costs two 3D-composition gates:
+with `sway` sagittal it is COPLANAR with `trunkFlex`, so the pair merely adds
+(**20 + 25 = 45.0000**, measured) and the cross-term proving rotations compose
+as ROTATIONS rather than as numbers — **21.8802 / 25.0000 / −8.7447** — has
+nothing left to measure. The arm's **36.6915** collapses to a plain 55 the same
+way. Those pins are the difference between a 3D body and two flat drawings
+stacked. `SFeelFlowJoints::sagittalTrunk` keeps both planes reachable, so every
+one survives verbatim under `plane="lateral"` while the shipped default is
+sagittal — and the plane decision itself becomes testable instead of being a
+constant nothing can exercise.
+
+**A NEW cross-term in the shipped plane**, since the old one moved: `sway=1
+twist=1` gives twist **−18.8817**, not −20, and tilts the shoulder bar
+**−7.0960** out of a plane neither command names.
+
+**NO SAGITTAL SHOULDER-BAR ROW**, and that is geometry rather than an omission:
+the bar lies ALONG the axis sagittal flexion rotates about, so a forward lean
+carries it forward without turning it. Three inheritance rows sagittally, four
+laterally.
+
+**Watched failing, five sabotages.** Three bit: the inheritance check not
+plane-aware (the vacuity trap this whole step exists to close), the head and
+arms composed against 0 instead of the trunk, and `sway` routed laterally
+regardless of the field.
+
+**TWO DID NOT, and both are recorded rather than dressed up.** Removing the
+off-plane leak assertion changes nothing, because no row leaks; and when a
+0.4° leak IS injected, the case fails **with** that assertion (row 19) and
+**without** it (row 16), since section (3)'s explicit three-axis rows already
+pin all three readouts. **So the claim "strictly stronger" — which was written
+into the code, the case header and this plan before being checked — is FALSE.**
+Corrected in all three. What the off-plane assertion genuinely adds is coverage
+on the `inheritTol` rows, which otherwise assert one axis each; it is kept on
+that weaker basis.
+
+### Order of work
+
+1. ~~The sagittal head-stub readout, then flip `kTrunkSagittal` and re-pin.~~ **DONE.**
+2. ~~C5's store plumbing.~~ **DONE 2026-08-31 — see below. THE CHAIN IS CLOSED.**
+3. The inward pass, gated against Bullet or OpenSim, with the 11.4 % figure as
+   the thing to show is actually fixed.
+
+### C5 step 2 — THE STORE PLUMBING, and the puppet is a body
+
+`SFeelFlowTrackBounce` runs the plant beside the groove aspects, stores
+`body.pose`, and decodes it back into `SFeelFlowUiData::pose`. `sFeelFlowPoseAt`
+already had the branch (C5 step 1) and now takes it.
+
+**The plant runs on the ANALYSIS side, not the read side, because that is where
+the units' COUPLINGS are.** Recovering the music from the drive needs `k`
+divided out, and a reader reconstructing it would be a second implementation of
+a decision that belongs to one.
+
+**Measured, `feel_flow_puppet.qxa` at frame 240000** — the pose is now a body's
+joint angles under torque rather than a display mapping of five resonators:
+
+| | direct mapping | plant |
+|---|---|---|
+| bounceY | 0.4317 | −0.0099 |
+| sway | −0.2301 | −0.0604 |
+| armSwing | 0.3214 | −0.0027 |
+| **headNod** | 0.0983 | **−0.0229** |
+| hipShift | 0.0003 | 0.0059 |
+| energySum | 1.3862 | **1.3862** |
+
+**Energy is bit-identical across the switch, deliberately** — it answers "how
+much is this metrical level participating", a property of the MUSIC, so the
+plant changes how far a joint moves and never how strongly its level resonates.
+That it did not move is the cheapest available check that the branch swapped the
+angles and nothing else.
+
+**The excursions are much smaller and that is the torque scale being honest.**
+It is derived as "full urge at the joint's own resonance is full range"
+(`rom·k/Q`), and this fixture's peak urge is **0.1621** with the joints driven
+off resonance — a few percent of range is the correct answer for it. What moves
+it is the DRIVE: `twBodyUrgeReference` (VERIFY) is the calibration, and a
+louder, denser track reaches more of the ceiling. Not a display gain.
+
+**And the head is genuinely relative at last**: −0.0229 against a sway of
+−0.0604, from a joint mapped to NO ensemble unit, with head/trunk correlation
+**0.9289** over a full run (a rigid pair reads exactly 1.0000).
+
+#### A PAIR OF ERRORS THAT WERE CANCELLING, found on the way
+
+C1a grew `groove.dyn` to **8 floats per unit** and updated neither the two
+store sites (`recordStride = nUnits*6*4`) nor `assert-groove-aspect`'s
+`nUnits = recordStride / 24`. **The two agreed with each other** — 120/24 gives
+exactly the 5 units the fixture has — so every assertion passed. Correcting
+either one ALONE breaks the pair, which is what happened: with the stride fixed
+and the divisor still 24, 160/24 read 6 units and the decode mismatched. Both
+fixed together, which is the only way this could be fixed at all.
+
+The stored stride was never harmless: `twQafReader::readRecords()` seeks by
+`first*stride`, so any caller addressing `groove.dyn` by record would have read
+at 24-byte offsets into a 32-byte grid. Latent only because every current
+reader takes `readAllPayload()`.
+
+#### Watched failing, and one sabotage that would not bite
+
+Two bit: the plant never storing a payload, and the reload never decoding one —
+both fail `feel_flow_puppet` outright.
+
+**The third did not, after three attempts, and it is recorded as ungated
+rather than dressed up.** The read side must look `body.pose` up under the
+EFFECTIVE groove params (`buildEffectiveGrooveParams`); keying on a
+default-constructed set should MISS on a trained track. `feel_flow_puppet`
+cannot see it at all — its track is Adaptive, so both spellings agree. A pose
+assertion was added to `feel_flow_trained` and sabotaged against with a floor,
+then a bracket (the FALLBACK produces LARGER numbers, ~1.09 against the plant's
+0.13, so a floor alone gates nothing), then a pinned component. **It passes
+under all three.** The fix is kept because read and write must key alike by
+inspection, not because anything proves it.
+
+---
+
 ## C6 — The derived groove computations become dimensioned
 
 **The defect.** Proposal 44 §1: the counter-tension is a narration. `c_p` is an

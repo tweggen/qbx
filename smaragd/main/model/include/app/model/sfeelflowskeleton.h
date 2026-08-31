@@ -79,6 +79,68 @@ struct SFeelFlowVec3 {
     double x = 0.0, y = 0.0, z = 0.0;
 };
 
+namespace sfeelflowskel {
+
+/**
+ * WHICH ANATOMICAL PLANE the trunk's driven flexion and the head's nod are
+ * applied in. **VERIFY, and it is unsourced in BOTH directions.**
+ *
+ * Requester decision, 2026-08-31: SAGITTAL. Recorded with its provenance
+ * because the evidence situation is unusual and a later reader must not
+ * mistake this for a sourced value.
+ *
+ * WHAT THE LITERATURE THIS PROJECT CITES ACTUALLY SAYS: nothing. Proposal 40
+ * carries every citation the model rests on -- Toiviainen/Luck/Thompson 2010,
+ * Burger 2013, Hove 2014, van Noorden & Moelants 2001 -- and the words
+ * "sagittal", "frontal", "lateral", "fore-aft", "anteroposterior" and
+ * "mediolateral" appear in it ZERO times. Every one of those citations fixes
+ * a metrical LEVEL (Toiviainen), an audio band to a body PART (Burger, Hove)
+ * or a TEMPO (van Noorden & Moelants). Not one fixes a PLANE.
+ *
+ * So the lateral trunk this replaces was NOT the evidence-based default -- it
+ * was what C0 happened to build, with incumbency rather than support. Both
+ * readings sat at exactly the same evidential level, which was none.
+ *
+ * THE QUESTION IS ANSWERABLE AND THIS ENVIRONMENT CANNOT ANSWER IT.
+ * Toiviainen 2010's eigenmovements come from a PCA over marker positions, so
+ * each one has a DIRECTION by construction -- the plane information is in that
+ * paper's own tables and this repo's paraphrase simply did not record it.
+ * Frontiers, PMC, doi.org and Wikipedia are all refused by the egress proxy
+ * here, the same wall AC2.1 has been behind since C2. Resolving this is an
+ * AC2.1-class task: replace this comment with an author/year/TABLE citation.
+ *
+ * ONE LEAD, FLAGGED AS A LEAD AND NOT AS EVIDENCE: the phrase this repo
+ * records is "torso SWAY at the bar", and "sway" in the mocap literature
+ * conventionally means lateral. Reading a plane off one English word in a
+ * second-hand paraphrase is the same laundering that was refused for de Leva's
+ * segment masses. Check the source; do not cite this sentence.
+ *
+ * **IT SHIPPED `false` FOR ONE COMMIT, AND THE REASON IS WORTH KEEPING.**
+ * Flipping it made `feel_flow_puppet_chain`'s inheritance rows VACUOUS: they
+ * assert that the head stub, the shoulder bar and both arms carry the trunk's
+ * lean, and every one of those readouts was FRONTAL. With the trunk driven
+ * sagittally they all read 0 against a trunk of 0 -- eight assertions passing
+ * while measuring nothing. A gate that cannot fail is worse than no gate.
+ *
+ * The fix was `headStubFlexDeg` plus a PLANE-AWARE inheritance check. It also
+ * asserts that the other two planes stay at zero -- which was claimed here as
+ * "strictly stronger" and then MEASURED FALSE: an injected 0.4-degree leak is
+ * caught with that assertion and without it, because the case's explicit
+ * three-axis rows already pin all three readouts. It adds coverage only on the
+ * inheritTol rows, which otherwise assert one axis. Kept on that basis.
+ *
+ * WHAT THE DECISION IS ACTUALLY BASED ON, stated so it can be weighed: a
+ * dated, single-subject introspective report -- the requester, twice
+ * independently, that fore-aft upper-body motion is the primary reaction of a
+ * standing listener and that the shipped model showed circular/left-right hip
+ * motion with no forward-back trunk motion at all. Weak evidence, but recorded
+ * AS n=1 rather than laundered into the model as fact, which is the
+ * distinction proposal 44's whole thesis depends on.
+ */
+constexpr bool   kTrunkSagittal = true;
+
+}   // namespace sfeelflowskel
+
 /**
  * The joint excursions. The five that the pose drives are normalized to
  * [-1,1]; `trunkFlex` and `trunkTwist` are the two axes the shipped model did
@@ -92,6 +154,26 @@ struct SFeelFlowJoints {
     float hipShift   = 0.0f;   // pelvis lateral translation
     float trunkFlex  = 0.0f;   // trunk SAGITTAL flexion (about x)  -- undriven
     float trunkTwist = 0.0f;   // trunk AXIAL rotation   (about y)  -- undriven
+
+    /**
+     * WHICH PLANE the `sway` scalar (and with it `headNod`) acts in. Defaults
+     * to sfeelflowskel::kTrunkSagittal, which is the project-wide decision.
+     *
+     * IT IS A FIELD AND NOT JUST THAT CONSTANT, because making the plane a
+     * compile-time fork COSTS TWO 3D-COMPOSITION GATES. With `sway` sagittal
+     * it becomes COPLANAR with `trunkFlex`, so the pair simply adds (20 + 25 =
+     * 45.0000, measured) and the cross-term that proved rotations compose as
+     * rotations rather than as numbers -- 21.8802 / 25.0000 / -8.7447 -- has
+     * nothing left to measure. Same for the arm: 36.6915 becomes a plain
+     * 20 + 35 = 55. Those pins are the difference between a 3D body and two
+     * flat drawings stacked, and losing them to a plane decision would be a
+     * bad trade.
+     *
+     * As a field, every one of them survives verbatim at `false` while the
+     * shipped default is `true` -- and the plane decision itself becomes
+     * testable both ways instead of being a constant nobody can exercise.
+     */
+    bool  sagittalTrunk = sfeelflowskel::kTrunkSagittal;
 };
 
 /** The skeleton in BODY space, plus the angles a gate asserts. */
@@ -124,6 +206,21 @@ struct SFeelFlowSkeleton {
     /** Sagittal components. `trunkFlexDeg` is 0 until something drives it;
      * the arm swings are the DOF that actually moved plane in C3. */
     double trunkFlexDeg    = 0.0;
+    /**
+     * SAGITTAL: neck -> head base. The twin of `headStubLeanDeg`, added for
+     * proposal 44 C7 because without it the plane switch could not be GATED:
+     * every readout the inheritance assertion compares was frontal, so a
+     * sagittally-driven trunk left all four at zero and eight assertions would
+     * have passed while measuring nothing.
+     *
+     * NOTE WHAT IS DELIBERATELY ABSENT: there is no sagittal shoulder-BAR
+     * twin, and that is geometry rather than an omission. The bar lies ALONG
+     * the x axis, which is the axis sagittal flexion rotates about, so a
+     * forward lean carries the bar forward without turning it -- its angle is
+     * invariant by construction. The sagittal inheritance set is therefore
+     * {head stub, both arms}, three rows where the frontal set has four.
+     */
+    double headStubFlexDeg = 0.0;
     double armSwingLDeg    = 0.0;
     double armSwingRDeg    = 0.0;
 
@@ -157,6 +254,8 @@ struct SFeelFlowWire {
 /** The full excursion of each joint, in degrees or as a fraction of the box.
  * Display constants: nothing downstream reads them and no gate pins them. */
 namespace sfeelflowskel {
+
+
 constexpr double kSwayDeg    = 20.0;
 constexpr double kNodDeg     = 10.0;
 constexpr double kArmDeg     = 35.0;

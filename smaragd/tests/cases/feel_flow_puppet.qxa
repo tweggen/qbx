@@ -38,6 +38,37 @@
   its seed. They now land on their levels: bounceY 2.00 Hz against a 2.0 seed,
   sway 0.50 against 0.5, armSwing 0.99 against 1.0, hipShift 0.25 against 0.25.
 
+  RE-PINNED A THIRD TIME 2026-08-31 by proposal 44 C5, and this is the big one:
+  THE POSE NOW COMES FROM THE PLANT. `body.pose` is produced by the analysis
+  job and consumed by sFeelFlowPoseAt's branch, so these five numbers are a
+  BODY's joint angles under torque rather than a display mapping of five
+  resonators. Old / new at frame 240000:
+
+    bounceY   0.4317 -> -0.0099      armSwing  0.3214 -> -0.0027
+    sway     -0.2301 -> -0.0604      headNod   0.0983 -> -0.0229
+    hipShift  0.0003 ->  0.0059      energySum 1.3862 -> 1.3862 (unchanged)
+
+  ENERGY IS DELIBERATELY UNCHANGED. It answers "how much is this metrical
+  level participating", which is a property of the MUSIC: the plant changes how
+  far a joint moves, never how strongly the level it hangs on resonates. That
+  it is bit-identical across the switch is the cheapest available check that
+  the branch swapped the angles and nothing else.
+
+  THE EXCURSIONS ARE MUCH SMALLER, AND THAT IS THE TORQUE SCALE BEING HONEST
+  rather than a regression. It is DERIVED as "full urge at the joint's own
+  resonance is full range of motion" (rom*k/Q), and this fixture's peak urge is
+  0.1621 with the joints driven off resonance - so a few percent of range is
+  the correct answer for it. What moves it is the drive, not a display gain:
+  twBodyUrgeReference (tw/body, VERIFY) is the calibration, and a louder, denser
+  track reaches a larger fraction of the ceiling. minAbsSum drops 0.50 -> 0.05
+  for the same reason; the measured sum is 0.1018.
+
+  AND THE HEAD IS NOW GENUINELY RELATIVE. headNod -0.0229 against a sway of
+  -0.0604 is not a scaled copy: the head is mapped to NO ensemble unit at all
+  and its angle comes entirely from the trunk driving the neck joint
+  (head/trunk correlation 0.9289 over a full run, measured in body_plant_test;
+  a rigid pair reads exactly 1.0000).
+
       was:  bounceY=0.4274 sway=0.2289 armSwing=-0.0561 headNod=-0.2210 hipShift=0.1432
       now:  bounceY=0.4317 sway=-0.2301 armSwing=0.3214 headNod=0.0983  hipShift=0.0003
 
@@ -147,7 +178,7 @@
          legitimately sit near zero at a given phase while the body is in
          motion. See the header for the measurement and the margin. -->
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           minAbsSum="0.50"
+                           minAbsSum="0.05"
                            grabPng="feel_flow_puppet_mid.png"/>
 
     <!-- ============ (1c) PAST the material: valid, but STILL ============ -->
@@ -161,9 +192,9 @@
     <!-- The same frame, twice, pinned to the full line: a pure function of
          an immutable snapshot has exactly one answer. -->
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=0.4317 sway=-0.2301 armSwing=0.3214 headNod=0.0983 hipShift=0.0003 energySum=1.3862"/>
+                           contains="pose: valid=1 bounceY=-0.0099 sway=-0.0604 armSwing=-0.0027 headNod=-0.0229 hipShift=0.0059 energySum=1.3862"/>
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=0.4317 sway=-0.2301 armSwing=0.3214 headNod=0.0983 hipShift=0.0003 energySum=1.3862"/>
+                           contains="pose: valid=1 bounceY=-0.0099 sway=-0.0604 armSwing=-0.0027 headNod=-0.0229 hipShift=0.0059 energySum=1.3862"/>
 
     <!-- ============ (2) a staling edit: back to the invalid pose ======== -->
     <!-- The gain moves the track root's content epoch (proposal 37 P3a put
