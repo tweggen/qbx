@@ -23,7 +23,6 @@
 #include <QEvent>
 #include <QPushButton>
 #include <QLabel>
-#include <QScrollArea>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -127,24 +126,30 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
     pluginChain_ = track ? track->getPluginChain() : nullptr;
 
     setAcceptDrops(true);
-    setMinimumHeight(100);  // Ensure plugin strip is always visible
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
+    // NO EXPLICIT MINIMUM HEIGHT, deliberately, and no scroll area of its own.
+    //
+    // This used to be `setMinimumHeight(100)` around a QScrollArea with
+    // `setMinimumHeight(80)`, and both were wrong in the same way. Qt's
+    // qSmartMinSize() REPLACES a widget's layout-derived minimum with an
+    // explicit minimumSize() rather than taking the larger of the two, so a
+    // 100 px floor over a row list + an "+ Add Effect" button row (~114 px at
+    // the smallest) told the parent the whole strip fitted in 100 px — and the
+    // button row was then laid out ON TOP of the list. Reporting what the rows
+    // actually need is what lets STrackDetailPanel's scroll area do its job.
+    //
+    // The inner scroll area went with it: the panel above now scrolls as ONE
+    // surface, and a scroll area nested inside a scroll area gives a short dock
+    // two scrollbars and an FX list stuck at its own 80 px minimum while the
+    // outer viewport has room to spare.
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
 
-    // Plugin list container with scroll area
-    QWidget *scrollContent = new QWidget();
-    scrollContent->setAcceptDrops(true);
-    pluginsLayout_ = new QVBoxLayout(scrollContent);
+    pluginsLayout_ = new QVBoxLayout();
     pluginsLayout_->setContentsMargins(4, 4, 4, 4);
     pluginsLayout_->setSpacing(4);
-
-    QScrollArea *scrollArea = new QScrollArea();
-    scrollArea->setWidget(scrollContent);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setMinimumHeight(80);  // Ensure scroll area is always visible
-    mainLayout->addWidget(scrollArea, 1);  // Stretch factor 1
+    mainLayout->addLayout(pluginsLayout_, 1);  // Stretch factor 1
 
     // Add button
     QHBoxLayout *addLayout = new QHBoxLayout();
@@ -664,6 +669,13 @@ bool SPluginEffectStrip::editorSetParam(int slotIndex, std::uint32_t paramId,
     // the real platform plugin, and a test must not put a window on screen.
     SPluginParamEditor *editor = ensureParamEditor(slotIndex, /*showWindow=*/false);
     return editor && editor->setParamFromUi(paramId, value);
+}
+
+bool SPluginEffectStrip::editorDoubleClickParam(int slotIndex,
+                                               std::uint32_t paramId)
+{
+    SPluginParamEditor *editor = ensureParamEditor(slotIndex, /*showWindow=*/false);
+    return editor && editor->doubleClickParam(paramId);
 }
 
 QString SPluginEffectStrip::editorValueText(int slotIndex, int row)

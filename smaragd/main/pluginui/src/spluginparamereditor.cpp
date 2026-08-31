@@ -5,11 +5,14 @@
 #include "app/shell/sapplication.h"
 #include "app/shell/sautomationrecorder.h"
 #include "app/model/sautomationlane.h"
+#include "app/model/sdefaultreset.h"
 #include "app/model/sobjectpath.h"
 #include "tw/plugins/twplugin.h"
 #include "tw/plugins/twpluginslotproc.h"
 
+#include <QCoreApplication>
 #include <QHBoxLayout>
+#include <QMouseEvent>
 #include <QLabel>
 #include <QSlider>
 #include <QVBoxLayout>
@@ -131,6 +134,26 @@ void SPluginParamEditor::buildUI()
         slider->setMinimum( 0 );
         slider->setMaximum( kTicks );
         slider->setValue( valueToTicks( info, plugin->getParam( info.id ) ) );
+        // Double-click = the PLUGIN's own declared default, through the same
+        // quantisation a drag goes through (valueToTicks), so the reset lands
+        // on exactly the value a hand could have dragged to and reaches the
+        // model through onParamSliderChanged like any other move — one
+        // SSetPluginParamAction, or one tick of an automation pass.
+        //
+        // setParamFromUi() rather than slider->setValue(): a parameter already
+        // AT its default quantises to the same tick, setValue() then emits
+        // nothing, and the reset would silently do nothing on a control the
+        // user may have moved between two values that share a tick. That seam
+        // exists precisely to run the handler in that case.
+        {
+            const std::uint32_t pid = info.id;
+            const double def = info.defaultValue;
+            sdefaultreset::onDoubleClick( slider,
+                                          [this, pid, def] { setParamFromUi( pid, def ); } );
+        }
+        slider->setToolTip(
+            QObject::tr( "Double-click to reset to the plugin's default (%1)." )
+                .arg( formatValue( info, info.defaultValue ) ) );
         paramLayout->addWidget( slider );
 
         QLabel *valueLabel = new QLabel();
@@ -223,6 +246,21 @@ void SPluginParamEditor::onPluginReloaded()
     // Active, or a newer version of the same one), so the parameter list itself
     // has to be rebuilt — CONTRACT invariant 5.
     buildUI();
+}
+
+bool SPluginParamEditor::doubleClickParam( std::uint32_t paramId )
+{
+    for( ParamWidget &pw : params_ ) {
+        if( pw.info.id != paramId ) continue;
+        QSlider *slider = pw.slider;
+        const QPointF c( slider->width() / 2.0, slider->height() / 2.0 );
+        QMouseEvent dbl( QEvent::MouseButtonDblClick, c,
+                         slider->mapToGlobal( c.toPoint() ), Qt::LeftButton,
+                         Qt::LeftButton, Qt::NoModifier );
+        QCoreApplication::sendEvent( slider, &dbl );
+        return true;
+    }
+    return false;
 }
 
 bool SPluginParamEditor::setParamFromUi( std::uint32_t paramId, double value )

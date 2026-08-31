@@ -1367,3 +1367,54 @@ oracle — a `paintEvent` that ignored its member entirely would still produce a
 file and still pass, and nothing here classifies those pixels the way
 `assert-take-lane` classifies a take row. A pixel gate on a stick figure would
 be pinning aesthetics, which M3e explicitly does not.
+
+## The detail-pane verbs (fix/detail-pane-layout, 2026-08-31)
+
+`assert-track-detail-layout` and `double-click-control`
+(`testkit/src/sdetailpanetestactions.cpp`), both routed through
+`SMainWindow` — testkit may not include `app/timeline` (inv. 5), the same
+reason `assert-track-head` and `describeFeelFlow` go that way.
+
+**A CRUSHED LAYOUT IS A GEOMETRY DEFECT, WHICH IS THE ONE KIND OF PAINT
+PROBLEM A HEADLESS RUN CAN MEASURE DIRECTLY.** `screenshot` grabs the SCREEN's
+root window, blank under `QT_QPA_PLATFORM=offscreen`, and the pixel verbs
+(`assert-track-head`, `assert-lane-alignment`, `assert-take-lane`) each build
+one specific widget and classify its rendered colours. Neither is needed here:
+"this widget was given less height than it says it needs" and "these two
+rectangles intersect" are questions about `QWidget::geometry()`, and the audit
+asks them over the panel's whole layout tree.
+
+Three things the verb does that a naive version would get wrong:
+
+- **It measures the HONEST minimum**, `qMax( minimumHeight(),
+  minimumSizeHint().height() )` — deliberately NOT what Qt's `qSmartMinSize()`
+  computes, which REPLACES the layout-derived minimum with an explicit one.
+  Repeating Qt's rule here would repeat the bug and the audit would report a
+  crushed panel as healthy.
+- **It flattens sub-layouts.** Every widget in one parent's layout TREE shares
+  that parent's coordinate space, so "no two may overlap" is one statement
+  about the tree, not one per `QBoxLayout`.
+- **It SHOWS the panel, with `WA_DontShowOnScreen`.** A widget that is not
+  visible never RECEIVES a resize event — `QWidgetPrivate::setGeometry_sys`
+  only sets `WA_PendingResizeEvent` and defers it to the show — and a
+  `QScrollArea` lays its viewport out from its own `resizeEvent`. The first
+  version of this audit did `resize()` + `layout()->activate()` on a hidden
+  panel and reported the SAME counts at 200 px and at 900 px, which is the
+  tell. `WA_DontShowOnScreen` is what keeps that safe: Qt treats the widget as
+  visible, the window system never maps it, and a qxa run on a real platform
+  plugin still puts nothing on the developer's desktop.
+
+`double-click-control` sends a real `MouseButtonDblClick` and NOT a press
+first: on a QSlider the style may jump the handle to the click position, which
+would move the value the double-click is about to restore and make the
+assertion measure two gestures. What is under test is the
+`MouseButtonDblClick` filter.
+
+It carries no `expectReject` of its own — it REJECTS (returns failure) when the
+control cannot be reached, and the script's own `expectReject="true"` is what
+turns that into an assertion. An earlier version answered "could not reach it"
+with success plus a private flag, and the framework's marker then fought it.
+
+Both verbs assert the MODEL after the gesture, never the widget: the Clip
+Detail pane's whole failure mode is a field that shows the default while the
+model keeps the old value.

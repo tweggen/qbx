@@ -23,6 +23,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sclipcolors.h
     model/include/app/model/sclipwindow.h
     model/include/app/model/sclipwindowgeometry.h
+    model/include/app/model/sdefaultreset.h
     model/include/app/model/sfeelflowskeleton.h
     model/include/app/model/sdetaileditors.h
     model/include/app/model/sexternfile.h
@@ -43,6 +44,7 @@ set(APP_MODEL_FILES
     model/src/sclipcolors.cpp
     model/src/sclipwindow.cpp
     model/src/sclipwindowgeometry.cpp
+    model/src/sdefaultreset.cpp
     model/src/sfeelflowskeleton.cpp
     model/src/sdetaileditors.cpp
     model/src/sexternfile.cpp
@@ -457,6 +459,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertclipwindowaction.h
     testkit/include/app/testkit/sasserthovermodeaction.h
+    testkit/include/app/testkit/sdetailpanetestactions.h
     testkit/include/app/testkit/sasserttakecolumnaction.h
     testkit/include/app/testkit/sassertclipmixaction.h
     testkit/include/app/testkit/sassertenvelopeaction.h
@@ -502,6 +505,7 @@ set(APP_UI_FILES
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertclipwindowaction.cpp
     testkit/src/sasserthovermodeaction.cpp
+    testkit/src/sdetailpanetestactions.cpp
     testkit/src/sasserttakecolumnaction.cpp
     testkit/src/sassertclipmixaction.cpp
     testkit/src/sassertenvelopeaction.cpp

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DOUBLE-CLICK A VALUE CONTROL = BACK TO ITS DEFAULT (fix/detail-pane-layout).
+
+  Requested with the layout fix: "have Volume sliders (and slider-like
+  properties in the Track Detail and Clip Detail panes) revert to default on
+  double-click". The arranger track head's fader has had this gesture since
+  long before (SSMVMixerControl::eventFilter); nothing else did.
+
+  The gesture is ONE helper — sdefaultreset::onDoubleClick, in app/model
+  because it is the only layer app/timeline and app/pluginui can BOTH see —
+  and each call site hands it the restore it already knows how to perform.
+  That indirection is not decoration: the three panes commit in three
+  different ways, and the difference is exactly what a "just set the value"
+  helper would get wrong.
+
+    Track Detail fader     commits from QSlider::valueChanged
+    plugin param slider    quantises through its own tick helpers, and may be
+                           inside a Touch/Latch/Write automation pass
+    Clip Detail fields     commit on editingFinished ALONE (their standing
+                           rule: valueChanged/textChanged fire while the user
+                           is still typing, so a programmatic write must never
+                           be able to reach a commit through them)
+
+  The third is the one a naive helper silently no-ops on: the field would show
+  the default and the model would keep the old value. Which is why every
+  assertion below reads the MODEL after the gesture, never the widget.
+
+  WHAT THE VERB DOES. double-click-control sends a real MouseButtonDblClick to
+  one control of a pane built off screen and bound to the real model, so the
+  filter that runs is the production one and what lands on the undo stack is
+  the production action. It is not undoable itself (a gesture, like
+  `fader-key`): the <undo/> after it undoes what the control submitted.
+
+  WATCHED FAILING with the wiring removed (sdefaultreset::onDoubleClick call
+  sites commented out, one pane at a time): the gesture is accepted, the model
+  is unchanged, and every assertion below reports the pre-gesture value.
+
+  NOT GATED: the CLIP PITCH field's reset is gated AUDIBLY here (there is no
+  value-assertion verb for pitch); the MIDI page's transpose and velocity-scale
+  fields are wired the same way and have no case (this fixture holds no event
+  clip); stretch and formant shift are wired and have no case; the geometry
+  fields (start, duration, slip, loop) are deliberately NOT wired at all — a
+  clip's start time has no default to revert to. Nor is the double-click's
+  effect on a spin box's own text selection gated: it replaces
+  select-a-word-under-the-cursor inside these seven fields, which is the
+  requested trade.
+-->
+<SActionScript version="1" name="detail_pane_reset_defaults">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <!-- The Clip Detail pane has no setter: it reads the SELECTION, exactly as
+         the docked one does. -->
+    <set-selection paths="0,0"/>
+
+    <!-- ============ 1. the Track Detail fader ========================== -->
+    <set-track-volume trackPath="0" volume="-12.5"/>
+    <assert-track-volume trackPath="0" volumeDb="-12.5" tolerance="0.2"/>
+
+    <!-- An intervening edit on ANOTHER property, so the reset cannot merge
+         with the set-track-volume above: set-track-volume coalesces
+         consecutive edits on one lane into a single undo entry (its mergeKey
+         is the path), which is correct for a drag and would make the undo
+         below prove nothing. -->
+    <set-clip-pan clip="0,0" pan="0.25"/>
+
+    <double-click-control control="track-volume" trackPath="0"/>
+    <!-- EXACTLY 0, at tolerance 1e-3. The fader is an integer control whose
+         curve does not round-trip — sDbToFader(0.0) is tick -191 and
+         sFaderToDb of that is +0.0625 dB — so a reset routed through the
+         slider's own valueChanged lands 0.0625 dB off unity. It commits the
+         dB value directly instead, which is what the arranger head's own
+         double-click has always done. This tolerance is what pins that. -->
+    <assert-track-volume trackPath="0" volumeDb="0" tolerance="0.001"/>
+
+    <!-- ...and it is ONE ordinary undo entry, not a silent model write. -->
+    <undo count="1"/>
+    <assert-track-volume trackPath="0" volumeDb="-12.5" tolerance="0.2"/>
+    <undo count="1"/>   <!-- the pan, back to 0 -->
+
+    <!-- ============ 2. the Clip Detail pane's Volume =================== -->
+    <set-clip-volume clip="0,0" volumeDb="-6.0206"/>
+    <assert-clip-mix clip="0,0" expectVolumeDb="-6.0206" volumeTolerance="1e-4"/>
+    <double-click-control control="clip-volume"/>
+    <assert-clip-mix clip="0,0" expectVolumeDb="0" volumeTolerance="1e-6"/>
+    <undo count="1"/>
+    <assert-clip-mix clip="0,0" expectVolumeDb="-6.0206" volumeTolerance="1e-4"/>
+    <undo count="1"/>
+
+    <!-- ============ 3. ...and its Pan ================================== -->
+    <set-clip-pan clip="0,0" pan="0.75"/>
+    <assert-clip-mix clip="0,0" expectPan="0.75" panTolerance="1e-4"/>
+    <double-click-control control="clip-pan"/>
+    <assert-clip-mix clip="0,0" expectPan="0" panTolerance="1e-6"/>
+    <undo count="1"/>
+    <assert-clip-mix clip="0,0" expectPan="0.75" panTolerance="1e-4"/>
+    <undo count="1"/>
+
+    <!-- ============ 4. ...and its Pitch, asserted AUDIBLY ============== -->
+    <!-- There is no value-assertion verb for pitch, so the assertion is the
+         strongest one available: a render of the reset clip must be
+         BYTE-IDENTICAL to the render taken before the pitch was ever set. A
+         reset that moved the widget and not the model would leave a clip
+         transposed 7 semitones, which no byte compare can miss. -->
+    <render filename="reset_unpitched.wav" format="wav" quality="10" durationSec="2.0"/>
+    <set-pitch clip="0,0" cents="700"/>
+    <render filename="reset_pitched.wav" format="wav" quality="10" durationSec="2.0"/>
+    <!-- The pitched render MUST differ, or the byte compare after the reset
+         would pass over a set-pitch that never did anything. expectReject is
+         the framework's own "this action must fail" marker. -->
+    <assert-file-identical actual="reset_pitched.wav" expected="reset_unpitched.wav"
+                           expectReject="true"/>
+    <double-click-control control="clip-pitch"/>
+    <render filename="reset_repitched.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="reset_repitched.wav" expected="reset_unpitched.wav"/>
+
+    <!-- ============ 5. a plugin parameter slider ======================= -->
+    <!-- The generic plugin editor is reached FROM the Track Detail pane's FX
+         strip, and its sliders are the other "slider-like property" there.
+         The default here is the PLUGIN's declared one, not a hardcoded zero:
+         tw.test.clap.gain's Gain defaults to 1.0, which its own formatter
+         shows as "100". -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <plugin-editor-set-param trackPath="0" slotIndex="0" paramId="0" value="2.5"
+                             expectValueText="250" expectValueRow="0"/>
+    <plugin-editor-set-param trackPath="0" slotIndex="0" paramId="0"
+                             gesture="double-click"
+                             expectValueText="100" expectValueRow="0"/>
+    <!-- ...through the same undoable action a drag submits. -->
+    <undo count="1"/>
+    <plugin-editor-set-param trackPath="0" slotIndex="0" paramId="0" value="2.5"
+                             expectValueText="250" expectValueRow="0"/>
+
+    <!-- ============ 6. an unknown control is REFUSED =================== -->
+    <!-- So a case cannot pass by naming a control that does not exist. -->
+    <double-click-control control="clip-nonsuch" expectReject="true"/>
+  </actions>
+</SActionScript>

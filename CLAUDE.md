@@ -2570,6 +2570,71 @@ plugincache.json" — so that test stays red here for a reason unrelated to this
 work, while the new section inside it passes. macOS has never had a green
 suite; this repo's regular box is Windows.
 
+## The Track Detail dock stopped crushing itself, and value controls reset on double-click (fix/detail-pane-layout, 2026-08-31)
+
+Two user-reported items, one branch. Invariants: `main/timeline/CONTRACT.md`
+inv. 45-46, `main/pluginui/CONTRACT.md`, `main/model/CONTRACT.md`
+(`sdefaultreset`), `main/testkit/CONTRACT.md` ("The detail-pane verbs").
+
+**(a) The dock drew its sections on top of each other.** From a screenshot: the
+Feel Flow header on the Analyze / Learn buttons, "compliance:" on
+"counter-tension:", the FX strip's "+ Add Effect" over the plugin list —
+"minimum heights appear not to be respected".
+
+**Read this before touching any panel's minimum height — the safeguard IS the
+defect.** Qt's `qSmartMinSize()` **REPLACES** a widget's layout-derived minimum
+with an explicit `minimumSize()` when one is set; it does not take the larger of
+the two. `STrackDetailPanel` put a 100 px floor on its content widget and
+`SPluginEffectStrip` put another on itself, so a section genuinely needing
+~450 px reported that it fitted in 100 — and a `QBoxLayout` handed less than its
+minimum does not refuse, it distributes the shortfall and the children overlap.
+A third contributor was a DEAD `pluginContainer` spacer, added with stretch 1
+and a 100 px minimum, never populated and never removed since the FX strip
+superseded it.
+
+| Thing to know | Why |
+|---|---|
+| The content now lives in a **`QScrollArea`** — the shape `SClipPropertiesPanel` has always had — and no widget carrying a layout sets an explicit minimum height | `widgetResizable` resizes the content to `viewport.expandedTo( qSmartMinSize( content ) )`, so a short dock SCROLLS instead of compressing. That only works if the minimum is honest, which is why the two floors had to go rather than be raised |
+| The FX strip lost its OWN inner scroll area | One surface, not two: nested scroll areas give a short dock two scrollbars and pin the strip at its own 80 px inner minimum while the outer viewport has room to spare |
+| The **volume row and its meter sit OUTSIDE the scroll area** | They are what a user watches while the transport runs; scrolling the FX chain must not carry them off the bottom |
+| The gate is a **GEOMETRY** gate, not a screenshot | `screenshot` grabs the SCREEN's root window, blank under `QT_QPA_PLATFORM=offscreen`. "This widget got less height than it needs" and "these two rectangles intersect" are questions about `QWidget::geometry()` — the one class of paint defect a headless run can measure directly |
+| The audit **shows the panel with `WA_DontShowOnScreen`** | A widget that is not visible never RECEIVES a resize event (`setGeometry_sys` only sets `WA_PendingResizeEvent`), and a `QScrollArea` lays out from its own `resizeEvent`. The first version measured a layout that had never run and reported identical counts at 200 px and 900 px — that identity is the tell |
+
+**(b) Double-click a value control = back to its default.** The arranger track
+head's fader has had this since long before; nothing else did. One helper,
+`sdefaultreset::onDoubleClick` (`app/model` — the only layer `app/timeline` and
+`app/pluginui` can BOTH see), now carries it to the Track Detail fader (0 dB),
+the generic plugin editor's parameter sliders (the plugin's OWN declared
+default) and the Clip Detail pane's volume, pan, pitch, stretch, formant shift,
+transpose and velocity-scale fields.
+
+| Thing to know | Why |
+|---|---|
+| The helper takes a **`std::function`**, not a value | The three call sites commit three different ways — a slider's `valueChanged`; a quantising handler that may be inside an automation write pass; a spin box that commits on **`editingFinished` alone**. A "just set the value" helper silently no-ops on the third: the field shows the default and the model keeps the old value |
+| It also filters the spin box's **embedded `QLineEdit`** | `QAbstractSpinBox` never sees a double-click over its own text — the child line edit consumes it — so filtering the box alone leaves the gesture live on the arrows and dead over the number, which is where a user clicks |
+| The fader resets to **exactly 0.0 dB**, committed directly | The fader is an integer control whose curve does not round-trip: `sDbToFader( 0.0 )` is tick -191 and `sFaderToDb` of that is **+0.0625 dB**. Hence `applyVolumeDb()`, split out of the slider handler exactly as `SSMVMixerControl::applyVolume_` is |
+| A plugin slider restores through **`setParamFromUi()`**, never `setValue()` | A parameter already at its default quantises to the tick it already holds, `setValue()` emits nothing, and the reset would do nothing on a control moved between two values sharing one tick |
+| The window GEOMETRY fields (start, duration, slip, loop) are **deliberately not wired** | A clip's start time has no default to revert to; offering one would mean inventing a number rather than restoring one |
+
+Gates: the qxa cases `track_detail_layout` (`assert-track-detail-layout`) and
+`detail_pane_reset_defaults` (`double-click-control`, plus
+`plugin-editor-set-param gesture="double-click"`), plus
+`action_roundtrip_test`. **Watched failing**: the layout case reports
+**crushed=13 / overlap=7** at 200 px and at 260 px on the pre-fix binary
+(`worst=QWidget(200<447)` — 200 px handed to 447 px of content) and 0/0 at
+500 px and above, which is why the defect only showed in a short dock; the
+reset case was watched failing with each pane's wiring removed independently
+(the track fader, the clip fields, the plugin slider), each biting its own
+assertions and no others.
+
+**NOT gated:** what any of it LOOKS like (a geometry relation, never a
+palette); the dock's docked/floating/closed round trip through Qt's opaque
+`ui/windowState` blob; the Clip Detail pane's own layout (it already had the
+scroll area, and no verb builds it for measurement); the clip pane's stretch,
+formant-shift, transpose and velocity-scale resets (wired, no case — this
+fixture holds no event clip); and the double-click's effect on a spin box's
+text selection, which it replaces inside those seven fields.
+
 ## Dependencies
 
 ### Core

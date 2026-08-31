@@ -10,6 +10,7 @@ class SLevelMeter;
 class SPluginEffectStrip;
 class SFeelFlowPanel;
 class QVBoxLayout;
+class QScrollArea;
 class QSlider;
 class QLabel;
 
@@ -47,11 +48,25 @@ private slots:
 
 private:
     void rebuildUI();
+    // The volume commit, in dB. Split out of onVolumeSliderMoved so the
+    // double-click reset can ask for exactly 0.0 dB — a value the integer
+    // fader's own curve cannot round-trip (ctor, sdefaultreset wiring).
+    void applyVolumeDb( double dB );
     // Index of currentTrack_ in the mixer, or -1.
 
     STrack *currentTrack_ = nullptr;
 
-    // UI components
+    // UI components.
+    //
+    // contentWidget_ lives INSIDE scroll_ and carries no explicit minimum of
+    // its own: the sum of what the FX strip and the Feel Flow section need is
+    // what it reports, and the scroll area is what absorbs a dock too short to
+    // show it. An explicit setMinimumHeight() here is exactly the bug this
+    // panel shipped with — qSmartMinSize() REPLACES the layout-derived minimum
+    // with an explicit one rather than taking the larger of the two, so a
+    // 100 px floor told the dock the whole section fitted in 100 px and the
+    // children were then laid out on top of each other.
+    QScrollArea *scroll_ = nullptr;
     QWidget *contentWidget_;
     QVBoxLayout *contentLayout_;
     SPluginEffectStrip *pluginStrip_;
@@ -59,6 +74,10 @@ private:
     // every track switch (rebuildUI() owns nothing long-lived — the state it
     // reads lives on the track, sfeelflowpanel.h's own doc).
     SFeelFlowPanel *feelFlowPanel_ = nullptr;
+    // The volume row sits OUTSIDE the scroll area: the fader and the meter are
+    // what a user looks at while the transport runs, so they stay put however
+    // far the FX/Feel Flow content above them is scrolled.
+    QWidget *volumeRow_ = nullptr;
     QSlider *volumeSlider_;
     QLabel *volumeLabel_;
     QLabel *placeholder_;   // shown instead of the content when no track is set

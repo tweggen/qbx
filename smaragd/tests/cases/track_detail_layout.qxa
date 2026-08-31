@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE TRACK DETAIL DOCK MUST NOT CRUSH ITS CONTENTS (fix/detail-pane-layout).
+
+  Reported from a screenshot: in a dock about 500 px tall the Feel Flow
+  header sat ON the Analyze / Learn buttons, "compliance:" sat on
+  "counter-tension:", and the FX strip's "+ Add Effect" button was drawn over
+  the plugin list. Minimum heights, in the reporter's words, "appear not to be
+  respected".
+
+  THEY WERE NOT, AND THE MECHANISM IS THE POINT. Qt's qSmartMinSize() REPLACES
+  a widget's layout-derived minimum with an explicit minimumSize() when one is
+  set — it does not take the larger of the two. STrackDetailPanel set a 100 px
+  floor on its content widget and SPluginEffectStrip set another on itself, so
+  a section that genuinely needs ~450 px told the dock it fitted in 100, and a
+  QBoxLayout handed less space than its minimum does not refuse: it distributes
+  the shortfall and the children end up drawn on top of one another. The fix is
+  an honest minimum plus a QScrollArea — the shape SClipPropertiesPanel has
+  always had — so a short dock SCROLLS instead of compressing.
+
+  WHY A GEOMETRY GATE AND NOT A SCREENSHOT. `screenshot` grabs the SCREEN's
+  root window, blank under QT_QPA_PLATFORM=offscreen, and proves nothing about
+  one dock's paint (main/testkit/CONTRACT.md's standing note). Crushing is a
+  GEOMETRY defect, and geometry is exactly what a headless run can measure:
+  assert-track-detail-layout builds the REAL panel — the real FX strip, the
+  real Feel Flow section, bound to the real track — off screen at a given size
+  and counts (a) widgets given less height than they report needing and
+  (b) pairs of widgets in one layout tree whose rectangles intersect.
+
+  WATCHED FAILING on the pre-fix binary, which is what makes the numbers below
+  mean anything:
+
+    height 200:  crushed=13  overlap=7  scrollNeeded=0  worst=QWidget(200<447)
+    height 260:  crushed=13  overlap=7  scrollNeeded=0  worst=QWidget(260<447)
+    height 500:  crushed=0   overlap=0                      (tall enough: fine)
+    height 900:  crushed=0   overlap=0                      (tall enough: fine)
+
+  i.e. the content widget was handed 200 px for 447 px of content and thirteen
+  widgets were squeezed, seven of them into each other — and the panel did not
+  scroll, because nothing could scroll. Post-fix every height reads 0 / 0, and
+  the two short ones report scrollNeeded=1 instead.
+
+  NOT GATED: what any of this LOOKS like (a geometry relation, not a palette),
+  the dock's own resize/float/close round trip through Qt's opaque
+  ui/windowState blob, and the Clip Detail pane's layout — it already had the
+  scroll area this fix gives the Track Detail pane, and no verb builds it for
+  measurement.
+-->
+<SActionScript version="1" name="track_detail_layout">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- A plugin row, so the FX strip has real content to be crushed. The
+         Feel Flow section below it is unconditional — every track has one. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- ============ 1. a dock far too short for the content ============ -->
+    <!-- The failing configuration. Nothing may be compressed and nothing may
+         overlap; the overflow becomes a scrollbar instead. -->
+    <assert-track-detail-layout trackPath="0" panelWidth="320" panelHeight="200"
+                                maxCrushed="0" maxOverlap="0"
+                                contains="scrollNeeded=1"/>
+
+    <!-- The height the reported screenshot's dock was near. -->
+    <assert-track-detail-layout trackPath="0" panelWidth="320" panelHeight="260"
+                                maxCrushed="0" maxOverlap="0"
+                                contains="scrollNeeded=1"/>
+
+    <!-- ============ 2. a dock with room needs no scrollbar ============= -->
+    <!-- The other half of the statement: the scroll area is not a permanent
+         fixture that steals space, it engages only when the content does not
+         fit. A fix that simply always scrolled would pass part 1 and fail
+         here. -->
+    <assert-track-detail-layout trackPath="0" panelWidth="320" panelHeight="900"
+                                maxCrushed="0" maxOverlap="0"
+                                contains="scrollNeeded=0"/>
+
+    <!-- ============ 3. a NARROW dock, at the reported height =========== -->
+    <!-- Width matters too: a narrower panel wraps labels and pushes rows
+         taller, which is what turns a marginal height into a crushed one. -->
+    <assert-track-detail-layout trackPath="0" panelWidth="240" panelHeight="260"
+                                maxCrushed="0" maxOverlap="0"/>
+
+    <!-- ============ 4. a SECOND plugin: more content, same rule ======== -->
+    <insert-plugin trackPath="0" slotIndex="1"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <assert-plugin-strip trackIndex="0" slotCount="2"/>
+    <assert-track-detail-layout trackPath="0" panelWidth="320" panelHeight="260"
+                                maxCrushed="0" maxOverlap="0"
+                                contains="scrollNeeded=1"/>
+    <!-- ...and with two rows, even a tall dock now overflows. -->
+    <assert-track-detail-layout trackPath="0" panelWidth="320" panelHeight="380"
+                                maxCrushed="0" maxOverlap="0"/>
+  </actions>
+</SActionScript>

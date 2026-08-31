@@ -461,3 +461,34 @@ tried FIRST and did not reproduce reliably: a use-after-free's crash depends
 on allocator state, so it can silently read stale-but-harmless memory once
 the heap shape changes underneath it. The committed gate is deliberately the
 smallest script that reproduces every time.
+
+### A parameter slider resets to the PLUGIN'S declared default on double-click
+
+`SPluginParamEditor` wires every slider through `sdefaultreset::onDoubleClick`
+(`app/model/sdefaultreset.h`, shared with the two detail panes — see
+`main/timeline/CONTRACT.md` inv. 46) to `info.defaultValue`, the value the
+plugin itself reports.
+
+It restores through `setParamFromUi()`, never `slider->setValue()`. A
+parameter already at its default quantises to the SAME tick it currently
+holds, `setValue()` then emits nothing, and the reset would silently do
+nothing on a control the user had moved between two values sharing one tick.
+`setParamFromUi()` exists precisely to run the handler in that case, so the
+reset always travels the production path: the quantisation, the automation
+write-pass offer, and the `set-plugin-param` action that broadcasts to every
+instance and stales the slot's pages.
+
+Gate: `qxa.detail_pane_reset_defaults` section 5, through
+`plugin-editor-set-param gesture="double-click"` — watched failing with the
+wiring removed (the label still read the moved value, "250", where the
+plugin's default is "100").
+
+### The FX strip has no scroll area and no minimum height of its own
+
+Both were removed in the same fix as `main/timeline/CONTRACT.md` inv. 45, and
+for the reasons stated there: an explicit `minimumHeight` REPLACES the
+layout-derived one (so a 100 px floor over a row list plus a button row laid
+the button row on top of the list), and the panel above now scrolls as ONE
+surface. The strip reports what its rows actually need and lets that panel's
+scroll area absorb the rest. A strip that reintroduces either will crush again
+at exactly the sizes `qxa.track_detail_layout` measures.

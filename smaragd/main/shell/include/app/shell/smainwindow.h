@@ -356,6 +356,39 @@ public:
     // assert-track-head shape (a single widget, not a whole dialog page),
     // here for the same reason: testkit may not include app/timeline
     // (testkit CONTRACT inv. 5). Empty string when the path names no track.
+    // TEST ENTRY POINTS (fix/detail-pane-layout): build the REAL Track Detail
+    // panel off screen at (w, h), bind it to `trackPath`'s track and report
+    // whether its layout SURVIVED that size, as
+    // "w=..|h=..|crushed=N|overlap=N|scrollNeeded=0|1|worst=<widget>".
+    //
+    //   crushed = widgets a layout gave LESS height than they report needing
+    //             (max of the explicit minimumHeight and minimumSizeHint).
+    //   overlap = pairs of widgets in ONE widget's layout tree whose
+    //             geometries intersect.
+    //
+    // Both are 0 in a healthy panel at ANY height, because the section scrolls
+    // rather than compressing. They were NOT 0 before the fix: an explicit
+    // minimumHeight REPLACES a layout's own minimum instead of raising it
+    // (Qt's qSmartMinSize), so a 100 px floor on the content told the dock
+    // that a strip + a Feel Flow section + a fader fitted in 100 px, and Qt
+    // duly laid them out on top of each other. Here rather than in the testkit
+    // for the standing reason: testkit may not include app/timeline (testkit
+    // CONTRACT inv. 5). Empty string when the path names no track.
+    QString describeTrackDetailLayout( const QString &trackPath, int w, int h );
+
+    // ...and double-click ONE control of a detail pane, off screen, through
+    // the real filter installed by sdefaultreset::onDoubleClick — so what it
+    // exercises is the production gesture and the production commit path, not
+    // a shortcut to the model. `which` is
+    //   "track-volume"                                   (Track Detail fader)
+    //   "clip-volume" | "clip-pan" | "clip-pitch" | "clip-stretch"
+    //   "clip-formant" | "clip-transpose" | "clip-velocity"   (Clip Detail)
+    // The clip fields read the CURRENT SELECTION (the panel has no setter —
+    // it refreshes from the project), so a case must select the clip first.
+    // False for an unknown control, a Track Detail path that names no track,
+    // or a Clip Detail field the current selection does not show.
+    bool doubleClickDetailControl( const QString &which, const QString &trackPath );
+
     QString describeFeelFlow( const QString &trackPath );
     // ...and paint that same off-screen section into a PNG. Coverage, not
     // oracle: describe() is the numbers, this only proves it draws.
