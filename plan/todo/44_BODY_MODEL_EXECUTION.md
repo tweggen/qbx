@@ -1681,9 +1681,80 @@ that weaker basis.
 ### Order of work
 
 1. ~~The sagittal head-stub readout, then flip `kTrunkSagittal` and re-pin.~~ **DONE.**
-2. C5's store plumbing — now the measured blocker for a visible head.
-3. Only then the inward pass, gated against Bullet or OpenSim, with the 11.4 %
-   figure as the thing to show is actually fixed.
+2. ~~C5's store plumbing.~~ **DONE 2026-08-31 — see below. THE CHAIN IS CLOSED.**
+3. The inward pass, gated against Bullet or OpenSim, with the 11.4 % figure as
+   the thing to show is actually fixed.
+
+### C5 step 2 — THE STORE PLUMBING, and the puppet is a body
+
+`SFeelFlowTrackBounce` runs the plant beside the groove aspects, stores
+`body.pose`, and decodes it back into `SFeelFlowUiData::pose`. `sFeelFlowPoseAt`
+already had the branch (C5 step 1) and now takes it.
+
+**The plant runs on the ANALYSIS side, not the read side, because that is where
+the units' COUPLINGS are.** Recovering the music from the drive needs `k`
+divided out, and a reader reconstructing it would be a second implementation of
+a decision that belongs to one.
+
+**Measured, `feel_flow_puppet.qxa` at frame 240000** — the pose is now a body's
+joint angles under torque rather than a display mapping of five resonators:
+
+| | direct mapping | plant |
+|---|---|---|
+| bounceY | 0.4317 | −0.0099 |
+| sway | −0.2301 | −0.0604 |
+| armSwing | 0.3214 | −0.0027 |
+| **headNod** | 0.0983 | **−0.0229** |
+| hipShift | 0.0003 | 0.0059 |
+| energySum | 1.3862 | **1.3862** |
+
+**Energy is bit-identical across the switch, deliberately** — it answers "how
+much is this metrical level participating", a property of the MUSIC, so the
+plant changes how far a joint moves and never how strongly its level resonates.
+That it did not move is the cheapest available check that the branch swapped the
+angles and nothing else.
+
+**The excursions are much smaller and that is the torque scale being honest.**
+It is derived as "full urge at the joint's own resonance is full range"
+(`rom·k/Q`), and this fixture's peak urge is **0.1621** with the joints driven
+off resonance — a few percent of range is the correct answer for it. What moves
+it is the DRIVE: `twBodyUrgeReference` (VERIFY) is the calibration, and a
+louder, denser track reaches more of the ceiling. Not a display gain.
+
+**And the head is genuinely relative at last**: −0.0229 against a sway of
+−0.0604, from a joint mapped to NO ensemble unit, with head/trunk correlation
+**0.9289** over a full run (a rigid pair reads exactly 1.0000).
+
+#### A PAIR OF ERRORS THAT WERE CANCELLING, found on the way
+
+C1a grew `groove.dyn` to **8 floats per unit** and updated neither the two
+store sites (`recordStride = nUnits*6*4`) nor `assert-groove-aspect`'s
+`nUnits = recordStride / 24`. **The two agreed with each other** — 120/24 gives
+exactly the 5 units the fixture has — so every assertion passed. Correcting
+either one ALONE breaks the pair, which is what happened: with the stride fixed
+and the divisor still 24, 160/24 read 6 units and the decode mismatched. Both
+fixed together, which is the only way this could be fixed at all.
+
+The stored stride was never harmless: `twQafReader::readRecords()` seeks by
+`first*stride`, so any caller addressing `groove.dyn` by record would have read
+at 24-byte offsets into a 32-byte grid. Latent only because every current
+reader takes `readAllPayload()`.
+
+#### Watched failing, and one sabotage that would not bite
+
+Two bit: the plant never storing a payload, and the reload never decoding one —
+both fail `feel_flow_puppet` outright.
+
+**The third did not, after three attempts, and it is recorded as ungated
+rather than dressed up.** The read side must look `body.pose` up under the
+EFFECTIVE groove params (`buildEffectiveGrooveParams`); keying on a
+default-constructed set should MISS on a trained track. `feel_flow_puppet`
+cannot see it at all — its track is Adaptive, so both spellings agree. A pose
+assertion was added to `feel_flow_trained` and sabotaged against with a floor,
+then a bracket (the FALLBACK produces LARGER numbers, ~1.09 against the plant's
+0.13, so a floor alone gates nothing), then a pinned component. **It passes
+under all three.** The fix is kept because read and write must key alike by
+inspection, not because anything proves it.
 
 ---
 

@@ -22,6 +22,7 @@
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/sidecar/twaspects.h"
 #include "tw/sidecar/twgrooveaspect.h"
+#include "tw/sidecar/twbodyplant.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sources/twsamplesource.h"
 
@@ -365,12 +366,73 @@ void SFeelFlowTrackBounce::start()
                                     // support/tension/cosPhi/sinPhi/slip/
                                     // dissip (twaspects.h).
                                     qi.recordStride  =
-                                        (uint64_t) built.nUnits * 6 * 4;
+                                        (uint64_t) built.nUnits * 8 * 4;
                                     qi.recordCount   = built.dynRecordCount;
                                     qi.hopFrames     = built.hopFrames;
                                     twSidecarStore::instance().store(
                                         qi, built.dynPayload.data(),
                                         (uint64_t) built.dynPayload.size() );
+
+                                    // ---- proposal 44 C5: "body.pose" ----
+                                    // THE PLANT RUNS HERE, on the ANALYSIS
+                                    // side, because this is where the units'
+                                    // COUPLINGS are. The read side has no `k`
+                                    // and must not: recovering the music from
+                                    // the drive needs it divided out
+                                    // (tw/body CONTRACT 31), and a reader that
+                                    // had to reconstruct it would be a second
+                                    // implementation of a decision that
+                                    // belongs to one.
+                                    //
+                                    // ITS PARAMS BLOB NESTS THE GROOVE ONE
+                                    // rather than extending it -- gpBlob is
+                                    // untouched, so a body change re-keys this
+                                    // aspect and NOTHING ELSE (twaspects.h's
+                                    // "body.pose" entry has the argument).
+                                    {
+                                        twBodyPlantInput in;
+                                        in.nUnits = built.nUnits;
+                                        in.dyn = twGrooveDecodeDynPayload(
+                                            built.dynPayload.data(),
+                                            (uint64_t) built.dynPayload.size(),
+                                            built.nUnits );
+                                        for( const twGrooveCounterTension &ct
+                                             : built.counterTension ) {
+                                            in.unitNames.push_back( ct.name );
+                                            in.unitK.push_back( ct.k );
+                                        }
+                                        in.dtSec = built.hopFrames && rate
+                                                 ? (double) built.hopFrames
+                                                   / (double) rate
+                                                 : 0.01;
+                                        // M and H are the ONE body input and
+                                        // are still defaults: proposal 44
+                                        // section 8 question 2 (global or
+                                        // per-project) is unanswered, so
+                                        // nothing writes them yet. When it
+                                        // does, only this aspect re-keys.
+                                        twBodyPoseParams bp;
+                                        bp.groove = gp;
+                                        std::vector<uint8_t> bpBlob;
+                                        bp.serialize( bpBlob );
+                                        std::vector<twBodyPoseRecord> poseRecs =
+                                            twBodyPlantRun( in, bp.body );
+                                        if( !poseRecs.empty() ) {
+                                            std::vector<uint8_t> posePayload;
+                                            twBodyPoseEncode( poseRecs, posePayload );
+                                            twQafInfo pi = qi;
+                                            pi.params        = bpBlob;
+                                            pi.aspectId      = twAspect::BodyPose;
+                                            pi.aspectVersion = twAspect::BodyPoseVersion;
+                                            pi.recordStride  =
+                                                (uint64_t) twBodyPoseDof::Count * 3 * 4;
+                                            pi.recordCount   = poseRecs.size();
+                                            pi.hopFrames     = built.hopFrames;
+                                            twSidecarStore::instance().store(
+                                                pi, posePayload.data(),
+                                                (uint64_t) posePayload.size() );
+                                        }
+                                    }
 
                                     // Proposal 40 M3: the physical-readout
                                     // summary, IN-MEMORY only (never part of
@@ -574,6 +636,38 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                         // this snapshot. Moved AFTER the derive call --
                         // twGrooveDeriveMetrics takes them by const ref.
                         fresh->dyn = std::move( dynRecords );
+
+                        // Proposal 44 C5: "body.pose". A MISS is the normal
+                        // case for any content analysed before this aspect
+                        // existed, and it is not a failure -- sFeelFlowPoseAt
+                        // falls back to the M3e direct mapping and every
+                        // number is byte-identical to C3's (AC5.4). The
+                        // params blob NESTS the groove one, so this loadAny
+                        // deliberately does not reuse gpHash.
+                        {
+                            // THE EFFECTIVE groove params, not the defaults.
+                            // The write side keys on buildEffectiveGrooveParams
+                            // (which is Trained mode for a track carrying a
+                            // frozen structure), so looking up under a
+                            // default-constructed one would MISS on exactly
+                            // those tracks -- silently, and only for them.
+                            twBodyPoseParams bp;
+                            bp.groove = buildEffectiveGrooveParams( track_ );
+                            std::vector<uint8_t> bpBlob;
+                            bp.serialize( bpBlob );
+                            std::unique_ptr<twQafReader> poseReader =
+                                twSidecarStore::instance().load(
+                                    content, twAspect::BodyPose,
+                                    twAspect::BodyPoseVersion,
+                                    twSidecarStore::hashParams(
+                                        bpBlob.data(), bpBlob.size() ) );
+                            if( poseReader ) {
+                                std::vector<uint8_t> posePayload;
+                                if( poseReader->readAllPayload( posePayload ) )
+                                    fresh->pose = twBodyPoseDecode(
+                                        posePayload.data(), posePayload.size() );
+                            }
+                        }
                     }
                 }
             }

@@ -711,10 +711,26 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
             }
         }
     } else if (aspect_ == QStringLiteral("groove.dyn")) {
-        // Proposal 40 M3c, v2 since M3e. nUnits from this file's own
-        // geometry (recordStride = nUnits*6*4, twaspects.h).
+        // Proposal 40 M3c; v3 since proposal 44 C1a added the two METRICAL
+        // phase channels. nUnits from this file's own geometry
+        // (recordStride = nUnits*8*4, twaspects.h).
+        //
+        // **THIS DIVISOR AND THE STORED STRIDE WERE BOTH LEFT AT v2's 6
+        // FLOATS, AND THEY CANCELLED.** C1a grew the payload to 8 floats per
+        // unit and updated neither the two store sites nor this line, so the
+        // header advertised nUnits*24 bytes for a record that was really
+        // nUnits*32 -- and 120/24 gives exactly the 5 units the fixture has,
+        // so every assertion passed. Correcting either one ALONE breaks the
+        // pair: with the stride fixed and this still at 24, 160/24 reads 6
+        // units and the decode mismatches. Both are fixed together, which is
+        // the only way this can be fixed at all.
+        //
+        // The stored stride was never harmless: twQafReader::readRecords()
+        // seeks by first*stride, so any future caller addressing groove.dyn
+        // by record would have read at 24-byte offsets into a 32-byte grid.
+        // Latent only because every current reader takes readAllPayload().
         const uint32_t nUnits = recordCount > 0
-            ? (uint32_t)( info.recordStride / 24 )
+            ? (uint32_t)( info.recordStride / 32 )
             : 0;
         std::vector<twGrooveDynRecord> decoded =
             twGrooveDecodeDynPayload(payload.data(), payload.size(), nUnits);
