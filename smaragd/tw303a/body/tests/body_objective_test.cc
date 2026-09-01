@@ -20,6 +20,7 @@
 #include "tw/body/twbodyobjective.h"
 #include "tw/body/twbodymeasures.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>

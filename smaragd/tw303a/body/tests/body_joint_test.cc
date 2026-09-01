@@ -25,6 +25,7 @@
 #include "tw/body/twbodyjoint.h"
 #include "tw/body/twbodymeasures.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>

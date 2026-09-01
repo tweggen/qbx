@@ -181,6 +181,29 @@ brew install qt@5 cmake libsndfile libvorbis
 > picker. The build scripts also work here — `./rebuild.sh $HOME/Qt/6.11.1/macos`
 > (uses Ninja + clang). The Xcode generator above remains a valid alternative.
 
+### macOS is the strictest compiler this project sees, and it is not a warning level
+
+Apple clang uses **libc++**, and libc++'s headers include far less
+transitively than libstdc++'s do. So a translation unit that uses `std::max`
+with only `<cmath>` and `<cstdio>` compiles cleanly on the Linux and Windows
+boxes this project is developed on and **fails to compile on macOS**:
+
+```
+error: no member named 'max' in namespace 'std'; did you mean 'fmax'?
+```
+
+`<algorithm>` (`max`/`min`/`sort`/`clamp`/`swap`/`fill`/`copy`), `<cstdint>`
+(the fixed-width integer types) and `<cstddef>` (`size_t`) are the three that
+bite. There is no CI, and nothing on a Linux or Windows box will ever catch
+this — the only defence is **include what you use**, written down here because
+a file can pick the habit up by accident and keep it for years: on `main` today
+`body_joint_test.cc` uses `std::max` twelve times and got away with it purely
+because it also includes `<vector>`.
+
+Adding a new source or test file? Check its `std::` symbols against its
+includes before pushing. A one-line grep over the file is cheaper than a
+round trip through somebody else's machine.
+
 ## Windows
 
 **Verified working:** Qt 6.11.1 + MinGW 13.1 + Ninja, both bundled by the Qt
