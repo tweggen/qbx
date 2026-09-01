@@ -5,6 +5,8 @@
 
 #include <QDebug>
 
+#include "tw/core/twlog.h"
+
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twmixer.h"
 
@@ -748,21 +750,23 @@ SLink *SStdMixer::instantiateFromDomElement(
         projectLoader.deferResolve( [loader, mixer, laneId]() {
             SLink *laneLink = loader->getObjectDictionary().value( laneId );
             if( !laneLink ) {
-                qWarning() << "SStdMixer: master lane" << laneId
-                           << "not found in the project; keeping the fresh one";
+                TW_LOGW( "model", "[MASTER] masterLaneId %s not found in the "
+                                  "project; keeping the fresh one",
+                         laneId.toStdString().c_str() );
                 return;
             }
             STrack *lane = dynamic_cast<STrack *>( &laneLink->getSObject() );
             if( !lane ) {
-                qWarning() << "SStdMixer: masterLaneId" << laneId
-                           << "does not name a track; keeping the fresh one";
+                TW_LOGW( "model", "[MASTER] masterLaneId %s does not name a "
+                                  "track; keeping the fresh one",
+                         laneId.toStdString().c_str() );
                 return;
             }
             if( lane->systemRole() != SSystemRole::Master ) {
-                qWarning() << "SStdMixer: masterLaneId" << laneId
-                           << "names a track whose systemRole is not master"
-                           << "(an older build may have re-saved this project);"
-                           << "keeping the fresh one";
+                TW_LOGW( "model", "[MASTER] masterLaneId %s names a track whose "
+                                  "systemRole is not master (an older build may "
+                                  "have re-saved this project); keeping the "
+                                  "fresh one", laneId.toStdString().c_str() );
                 return;
             }
             mixer->adoptMasterLane( lane );

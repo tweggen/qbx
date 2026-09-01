@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M1, AC1.5: a masterLaneId that does not name a MASTER-roled
+  track is REFUSED and announced, never adopted.
+
+  THE FIXTURE IS THE POINT, and it is not hypothetical. Serialization in this
+  tree is regenerated from live objects and there is no unknown-attribute
+  passthrough, so an OLDER build opening a project written by this one drops
+  systemRole= (it does not know it) while writing everything else back. The
+  committed fixture is exactly that: master_lane.qxp with systemRole='master'
+  stripped from the lane and masterLaneId= left pointing at it.
+
+  Adopting that track would hand the user a master lane that answers
+  systemRole() == None, and therefore one that accepts clips, can be armed,
+  and would be summed as an ordinary track the moment M2 routes the sum
+  through it. Keeping the constructor's own fresh lane is the safe answer.
+
+  What the fresh lane must NOT have is the file's state: the fixture's lane
+  carries one insert and a −6 dB fader, so plugins="0" volume="0" below is
+  what separates "refused" from "adopted anyway".
+
+  The role-lost track survives the load as an orphan referenced by nothing,
+  which is the same thing that happens to any object no link names. It is not
+  addressable and not audible; nothing here asserts it away.
+-->
+<SActionScript version="1" name="master_lane_bad_reference">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../master_lane_role_lost.qxp"/>
+
+    <!-- It is announced, not silent. assert-log examines only the window
+         since the action it FOLLOWS, so this has to sit directly under the
+         load rather than at the end of the case. -->
+    <assert-log contains="systemRole is not master" minCount="1"/>
+
+    <!-- The user tracks loaded normally: the refusal is scoped to the master
+         reference and takes nothing else down with it. -->
+    <assert-track-count arrangement="" count="2"/>
+
+    <!-- A master lane exists, and it is the CONSTRUCTOR's, not the file's. -->
+    <assert-system-lane trackPath="$master" role="master" hidden="1"
+                        acceptsClips="0" name="Master"
+                        expectPath="$master" inChildLinks="0"
+                        plugins="0" volume="0.0"/>
+
+  </actions>
+
+</SActionScript>
