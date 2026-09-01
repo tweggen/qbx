@@ -121,6 +121,12 @@ public:
     // Writes masterLaneId= (see masterLane()).
     int serializeSelfAttributes( QTextStream &o ) override;
 
+    // System-lane addressing (proposal 45 D9): the two halves of "-1 means
+    // the master lane". The generic path code in app/model calls these, which
+    // is how it resolves a system lane without knowing what a mixer is.
+    SObject *systemLaneAt( int sentinel ) const override;
+    int systemLaneSentinelOf( const SObject *lane ) const override;
+
     virtual int seekTo( offset_t ) override;
 
     virtual length_t getDuration() const override;

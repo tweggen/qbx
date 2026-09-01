@@ -416,6 +416,28 @@ public:
     virtual bool acceptsClips() const { return true; }
 
     /**
+     * SYSTEM-LANE ADDRESSING (proposal 45 D9), the two directions.
+     *
+     * A system lane is deliberately NOT among its root's childLinks() (see
+     * SStdMixer::masterLane() for why that is forced), so an index path cannot
+     * reach it. It is addressed instead by a NEGATIVE index step -- the
+     * sentinels in app/model/sobjectpath.h -- and these two virtuals are how
+     * the generic path code resolves one without knowing what a mixer is.
+     *
+     * `systemLaneAt` answers a negative step; `systemLaneSentinelOf` is its
+     * inverse, returning 0 when `lane` is not a system lane of ours. The
+     * inverse is not optional: `strackpath::pathOf()` walks childLinks() and
+     * would otherwise return {} for the master lane -- which is ALSO the
+     * address of the root itself, and every track head derives its commit
+     * address that way. A fader that moves and commits to the wrong object is
+     * worse than one that refuses.
+     */
+    virtual SObject *systemLaneAt( int sentinel ) const
+    { (void) sentinel; return nullptr; }
+    virtual int systemLaneSentinelOf( const SObject *lane ) const
+    { (void) lane; return 0; }
+
+    /**
      * The kind of material this object carries (proposal 37 D8b). Audio by
      * default — every object that existed before event clips is audio, and a
      * container's kind is the kind of what it renders, which is audio too.

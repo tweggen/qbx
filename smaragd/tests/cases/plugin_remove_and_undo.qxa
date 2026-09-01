@@ -32,7 +32,7 @@
 
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+    <insert-plugin trackPath="0" slotIndex="0"
                    format="clap" uid="tw.test.clap.stereoskew"
                    name="Smaragd Test Stereo Skew" vendor="Smaragd"
                    path="twtestclap.clap" nIn="2" nOut="2"/>
@@ -42,7 +42,7 @@
                          startFrame="0" frameCount="48000"
                          channel="0" minRms="0.090" maxRms="0.110"/>
 
-    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+    <remove-plugin trackPath="0" slotIndex="0"/>
 
     <render filename="plugin_rm_without.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="plugin_rm_without.wav"

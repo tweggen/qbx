@@ -46,7 +46,7 @@
 
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+    <insert-plugin trackPath="0" slotIndex="0"
                    format="clap" uid="tw.test.clap.stereoskew"
                    name="Smaragd Test Stereo Skew" vendor="Smaragd"
                    path="twtestclap.clap" nIn="2" nOut="2"/>

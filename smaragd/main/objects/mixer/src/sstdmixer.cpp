@@ -13,6 +13,7 @@
 #include "app/objects/track/strack.h"   // upcast of the selected track
 #include "app/model/sdetaileditors.h"
 #include "app/model/ssolorules.h"       // the one mute/solo audibility rule
+#include "app/model/sobjectpath.h"     // the system-lane sentinels (proposal 45 D9)
 #include "app/persistence/sprojectloader.h"
 #include "app/model/sappcontext.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
@@ -502,6 +503,23 @@ QList<SLink *> SStdMixer::ownedRefLinks() const
     QList<SLink *> out;
     if( masterLaneRef_ ) out.append( masterLaneRef_ );
     return out;
+}
+
+SObject *SStdMixer::systemLaneAt( int sentinel ) const
+{
+    // -1 is the master. The send sentinels (-2, -3, ...) are RESERVED and
+    // answer null until proposal 45 M7 builds them, which is also what stops
+    // strackpath::findPathRec's descending scan before it runs off the end.
+    if( sentinel == strackpath::SPATH_MASTER )
+        return static_cast<SObject *>( masterLane_ );
+    return nullptr;
+}
+
+int SStdMixer::systemLaneSentinelOf( const SObject *lane ) const
+{
+    if( lane && lane == static_cast<const SObject *>( masterLane_ ) )
+        return strackpath::SPATH_MASTER;
+    return 0;
 }
 
 void SStdMixer::adoptMasterLane( STrack *lane )
