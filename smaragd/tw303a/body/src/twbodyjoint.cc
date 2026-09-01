@@ -45,6 +45,30 @@ inline double leverAxis( const twBodyJoint &j, twBodyAxis a )
 { return a == twBodyAxis::Axial ? 0.0 : j.parentLever; }
 
 /**
+ * The SIGNED lever coupling `sigma * m * d * L` about `a`, kg*m^2 -- the
+ * off-diagonal mass term between this joint and its parent.
+ *
+ * THE SIGN IS NOT DECORATION AND ITS ABSENCE WAS A DEFECT. Writing the
+ * two-segment Lagrangian in ABSOLUTE angles gives the coupling
+ * `m * (sigma_p * L) * (sigma_c * d)`, where sigma is +1 for a segment that
+ * extends UPWARD from its joint and -1 for one that hangs. This term carried
+ * no sign at all, which is the INVERTED answer applied to every joint -- so a
+ * hanging arm on an accelerating trunk swung the wrong WAY and, at the arm's
+ * own L/d, about three times too FAR (body_joint_test section 3d, a point-mass
+ * closed form). It is the same class of error as the missing absolute-angle
+ * gravity term section 3a found, in the other half of the same equation.
+ *
+ * `sigma_p` IS ASSUMED +1, i.e. the parent segment points up. That holds for
+ * every joint of the body twBodyPlantRun builds -- an arm and a head both hang
+ * off the TRUNK, which rises from the hip -- and a twBodyJoint has no handle on
+ * its parent's geometry to check it with. twBodyChain, which does, computes the
+ * product properly; this is the single-joint model's stated limit.
+ */
+inline double leverCoupling( const twBodyJoint &j, twBodyAxis a )
+{ return gravitySign( j ) * j.segment.mass * j.segment.comFromProx
+       * leverAxis( j, a ); }
+
+/**
  * EXACT step of  I*th'' + c*th' + k*th = tau  for tau constant over dt, in ALL
  * FOUR regimes including k < 0.
  *
@@ -173,8 +197,13 @@ double twBodyJointStiffnessAt( const twBodyJoint &j, twBodyAxis a,
     // flung outward, and the restoring component of that scales with the
     // parent's angular RATE squared -- so it always adds stiffness, and it
     // grows as f^2. Small at a slow sway, dominant at 2-4 Hz.
+    // The SIGN is the same off-diagonal one the forcing carries (leverCoupling):
+    // an inverted child flung outward is pushed back toward straight, so it
+    // stiffens; a HANGING child flung outward is pushed AWAY from plumb, so it
+    // softens, and at a high enough rate the total can legitimately go
+    // negative -- an arm flung out by a fast spin is unstable about hanging.
     const double w = p.angVel[(int) a];
-    return k + j.segment.mass * j.segment.comFromProx * L * w * w;
+    return k + leverCoupling( j, a ) * w * w;
 }
 
 bool twBodyAxisIsFree( const twBodyJoint &j, twBodyAxis a )
@@ -202,7 +231,6 @@ double forcingTorque( const twBodyJoint &j, twBodyAxis a,
 {
     const int i = (int) a;
     const double I = twBodyJointInertia( j, a );
-    const double L = leverAxis( j, a );
     // The parent's acceleration, through this joint's own inertia AND through
     // the lever. The two terms are physically distinct and both are the
     // requester's effect:
@@ -211,7 +239,7 @@ double forcingTorque( const twBodyJoint &j, twBodyAxis a,
     //                   LINEARLY through the lever L.
     // About the long axis L is zero and only the first survives: a segment
     // resists being twisted by its own inertia alone.
-    double tau = -( I + j.segment.mass * j.segment.comFromProx * L ) * p.angAcc[i];
+    double tau = -( I + leverCoupling( j, a ) ) * p.angAcc[i];
     // GRAVITY ON THE PARENT'S ANGLE. Gravity acts on the child's ABSOLUTE
     // angle phi + theta; the theta half is the stiffness term, and THIS is the
     // other half. Omitting it is not a refinement: without it a freely hanging

@@ -349,6 +349,66 @@ int main()
                "and it returns toward upright instead of falling over" );
     }
 
+    // --- 3d. THE LEVER COUPLING IS SIGNED, AND A HANGING SEGMENT IS THE
+    // --- CASE THAT SHOWS IT -----------------------------------------------
+    // Found by DERIVING the coupled chain (C8) rather than by reading this
+    // file: writing the two-segment Lagrangian in ABSOLUTE angles gives an
+    // off-diagonal mass term  m * (sigma_p * L) * (sigma_c * d), and the sign
+    // of a HANGING child is NEGATIVE. `forcingTorque` carried `-(I + m*d*L)`
+    // unsigned, which is the INVERTED answer applied to every joint.
+    //
+    // The falsifier needs no constant and no tolerance argument. Strip the
+    // joint to pure kinematics -- a POINT MASS (inertiaProx = m*d^2), no
+    // passive stiffness, no damping, gravity fully compensated -- and the
+    // answer is arithmetic:
+    //
+    //     psi_child'' = -sigma_p*sigma_c * (L/d) * phi''
+    //
+    // i.e. a mass that is simply left behind while its joint is carried away.
+    // In the joint's own RELATIVE angle that is
+    //
+    //     theta'' = -( 1 + sigma * L/d ) * phi''      (sigma_p = +1 here)
+    //
+    // At L/d = 2 the inverted child reads -3*phi'' and the hanging one +1*phi''
+    // -- opposite in SIGN and three times apart in MAGNITUDE, so no tuning of
+    // any other term can stand in for the sign.
+    {
+        const double m = 4.0, d = 0.25, L = 0.5;   // L/d = 2 exactly
+        const double A = 3.0;                      // rad/s^2, the parent's step
+        for( int inv = 0; inv < 2; inv++ ) {
+            twBodyJoint j;
+            j.segment.mass        = m;
+            j.segment.length      = 2.0 * d;
+            j.segment.comFromProx = d;
+            j.segment.radiusGyrCom = 0.0;          // A POINT MASS: I_com = 0,
+            j.segment.inertiaProx  = m * d * d;    // so I about the joint is m*d^2
+            j.segment.radiusGyrLong = 0.0;
+            j.segment.inertiaLong   = 0.0;
+            j.freeAxes         = twBodySpherical();
+            j.invertedPendulum = ( inv != 0 );
+            j.stiffnessScale   = 0.0;              // no passive tissue
+            j.dampingRatio     = 0.0;              // no damping
+            j.posturalGain     = 1.0;              // gravity fully cancelled
+            j.parentLever      = L;
+
+            twBodyParentMotion p;
+            p.angAcc[kFlex] = A;
+            twBodyJointState st;
+            const double dt = 1e-4;
+            twBodyJointStep( j, st, p, nullptr, dt );
+            const double got  = st.vel[kFlex] / dt;             // theta''
+            const double sig  = j.invertedPendulum ? +1.0 : -1.0;
+            const double want = -( 1.0 + sig * ( L / d ) ) * A;
+            std::printf( "  point mass, %s, L/d = 2: theta'' = %+.4f"
+                         " (kinematic closed form %+.4f)\n",
+                         j.invertedPendulum ? "INVERTED" : "HANGING ", got, want );
+            near( got, want, 1e-6 * std::fabs( want ) + 1e-9,
+                  j.invertedPendulum
+                      ? "an inverted point mass is left behind by its joint"
+                      : "a HANGING point mass is left behind by its joint" );
+        }
+    }
+
     // --- 4. THE CONTROL: the same input through a FIRST-ORDER lag ----------
     // This is what shipped. It is not that the lag nods too little; it CANNOT
     // nod at all, at any tau, because it has no state that carries motion past

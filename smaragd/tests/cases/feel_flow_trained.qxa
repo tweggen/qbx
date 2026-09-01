@@ -118,11 +118,13 @@
          A BRACKET, NOT A FLOOR, and that was found by sabotage too: the
          FALLBACK (the M3e direct mapping) produces LARGER numbers than the
          plant, so a minAbsSum alone passes either way and gates nothing. The
-         plant's sum here is 0.1347; the fallback's is about 1.09. maxAbsSum
-         is what separates them. -->
+         plant's sum here is 0.1155; the fallback's is about 1.09. maxAbsSum
+         is what separates them.
+         RE-PINNED at proposal 44 C8 (the coupled chain): headNod was -0.0222
+         and the sum 0.1347. See feel_flow_puppet.qxa for what moved and why. -->
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
                            minAbsSum="0.05" maxAbsSum="0.5"
-                           contains="headNod=-0.0222"/>
+                           contains="headNod=-0.0069"/>
 
     <!-- Trained state survives save -> load. -->
     <save-project path="../../build/feel_flow_trained_saved.qxp"/>

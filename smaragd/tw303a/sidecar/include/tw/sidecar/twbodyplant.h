@@ -7,6 +7,7 @@
 #include "tw/sidecar/twbodyposeaspect.h"
 #include "tw/sidecar/twgrooveaspect.h"
 #include "tw/body/twbodyjoint.h"
+#include "tw/body/twbodychain.h"
 #include "tw/body/twbodyobjective.h"
 
 /**
@@ -58,8 +59,24 @@
  * axes of the leg's own compound pendulum. What is NOT provisional is the
  * physics on each axis -- a real segment's inertia, the right gravity sign, an
  * absolute damping, postural tone, and a parent that actually drives its child.
- * An anatomically exact chain is later work and needs the child-to-parent
- * reaction tw/body's CONTRACT already names as missing.
+ * An anatomically exact chain is still later work; the child-to-parent
+ * REACTION is not, and has not been since C8.
+ *
+ * ==================== ONE COUPLED SOLVE, SINCE C8 ========================
+ *
+ * The four joints are a `twBodyChain` and are stepped TOGETHER. What that
+ * replaced was a parent-first walk that finite-differenced each parent's
+ * velocity to get its acceleration -- so the drive a child felt was one hop
+ * stale, and the reaction it exerted did not exist at all. Now an arm swing
+ * counter-rotates the trunk, and the trunk's inertia is its own PLUS the two
+ * arms and the head it carries (`I_prox + (m_arm + m_head)*L^2`, which moved
+ * its ring from 2.08 Hz to 1.67 Hz). See tw/body's CONTRACT 35-39.
+ *
+ * THE TORQUE SCALE BELOW WAS NOT RE-DERIVED FOR THIS, deliberately. It is
+ * still `rom*k/Q` over each JOINT's own stiffness and damping, so "full urge
+ * at resonance is exactly full range of motion" is now APPROXIMATE -- the
+ * chain moved every resonance. Left alone so the C8 re-pin has one cause; a
+ * chain-effective scale is its own change with its own gate.
  *
  * ================= THE TORQUE SCALE IS DERIVED, NOT CHOSEN ===============
  *

@@ -298,15 +298,91 @@ Invariants:
     means "urge" is a modelling claim and belongs where it can be argued with,
     not buried in an accumulator. It is an input (C5 supplies it).
 
+35. **THE LEVER COUPLING IS SIGNED, AND ITS SIGN IS THE CHILD'S OWN.** The
+    off-diagonal mass term between a joint and its parent is
+    `m · (σ_p · L) · (σ_c · d)`, with σ = +1 for a segment that extends UPWARD
+    from its joint and −1 for one that hangs. `twBodyJointStep`'s
+    `−(I + m·d·L)·φ″` carried no sign at all until C8, which is the INVERTED
+    answer applied to every joint — so a hanging arm on an accelerating trunk
+    swung the wrong WAY and, at the arm's own L/d, about three times too FAR.
+    Found by DERIVING the coupled chain, not by reading the file. The
+    falsifier is a point mass and pure kinematics: `θ″ = −(1 + σ·L/d)·φ″`,
+    which at L/d = 2 reads −3φ″ inverted and +1φ″ hanging (`body_joint_test`
+    section 3d). The **centripetal** term carries the same sign, for the same
+    reason: an inverted child flung outward is pushed back toward straight, a
+    hanging one away from plumb. `twBodyJoint` assumes σ_p = +1 because it has
+    no handle on its parent; `twBodyChain` computes the product.
+
+36. **`twBodyChain` IS Featherstone's missing half, and the reduction is a
+    GATE, not an argument.** The one-way model implements the outward pass
+    (velocities and accelerations parent → child) and not the inward one
+    (forces child → parent). The chain assembles the linearised mass, damping
+    and stiffness matrices in ABSOLUTE joint angles and integrates them
+    exactly. ABSOLUTE, not relative, and that is load-bearing: gravity is then
+    DIAGONAL, while stiffness and damping — which act on relative angles —
+    carry the off-diagonals.
+
+37. **THE TWO MODELS CANNOT AGREE EXACTLY UNDER A MOVING PARENT, and the
+    reduction is stated as four separate claims because of it.** They do not
+    carry the same quantity across a step boundary (`twBodyJointStep` keeps the
+    RELATIVE velocity continuous, the chain keeps the ABSOLUTE one) and do not
+    make the same assumption inside one (the joint freezes the parent's angle
+    and rate; the chain carries its quadratic motion). Measured:
+    identical to **1e-14** with a static parent; **O(dt³)** per step from a
+    matched state; **O(dt)** free-running. The chain is the exact one, and that
+    is asserted as SUBDIVISION INVARIANCE on the axial axis — where there is no
+    lever, hence no frozen coefficient — with `twBodyJointStep`'s own
+    non-invariance as the control.
+
+38. **ONE COEFFICIENT IS FROZEN AND IT IS NAMED.** The centripetal stiffening
+    depends on the parent's rate SQUARED and is held at its top-of-step value,
+    exactly as the one-way model held it. Its residual is therefore LINEAR in
+    that rate — measured 6.06e-8 / 6.44e-9 / 4.17e-10 at φ′ = 1.30 / 0.13 / 0,
+    which is what ATTRIBUTES it rather than merely bounding it. No other
+    candidate term moves with φ′.
+
+39. **THE REACTION RATIO IS 10.5 %, NOT 11.4 %.** The execution plan sized the
+    one-way gap as "per 1 rad/s² of head angular acceleration the reaction on
+    the trunk is 0.321 N·m, perturbing the trunk's own acceleration by 11.4 %".
+    Recomputed against this module it is **0.29668 N·m and 10.5 %**: the plan's
+    arithmetic used a head CoM of 0.1231 m above the atlas where
+    `twBodyMeasures` says **0.11375 m**. Its other three inputs — head
+    5.175 kg, trunk I 2.81270 kg·m², neck lever 0.504 m — match to every digit
+    it quoted, so the slip is that one number. And the HONEST ratio is smaller
+    still — **5.9 %** — because `M[trunk][trunk]` is not the trunk's own
+    inertia: it is that plus `(m_arm + m_head)·L²`, a term the one-way model
+    omitted ENTIRELY. A trunk that does not know it is carrying two arms and a
+    head is lighter than a trunk, and rings correspondingly too fast (measured
+    2.08 Hz against 1.67 Hz).
+
 Known debt:
 
-- **No child→parent reaction.** A parent drives its child; the child's reaction
-  torque does not act back. So an arm swing cannot counter-rotate the trunk, and
-  proposal 44's counterswing gate (AC4.2) is NOT met. Named, not faked.
+- ~~No child→parent reaction.~~ **CLOSED at C8** by `twBodyChain` — invariants
+  35-39. `twBodyJointStep` remains, is still one-way, and is still what a
+  single joint with an EXTERNALLY IMPOSED parent means; the plant runs the
+  chain.
 - **No gyroscopic cross-terms BETWEEN axes.** A joint turning fast about two
-  axes at once is approximated.
+  axes at once is approximated. The chain is three independent planar problems,
+  exactly as the single joint was.
+- **The centripetal coefficient is frozen per step** (invariant 38) — the one
+  nonlinearity, sized and attributed rather than removed.
+- **A joint LIMIT is applied after the coupled solve**, so a clamp is not fed
+  back into the parent within the same step. The same approximation the one-way
+  model made, stated rather than hidden.
+- **Every joint's EFFECTIVE damping ratio moved when the chain landed**, and
+  that follows invariant 5 rather than contradicting it. `c` is an absolute
+  coefficient computed from the joint's OWN segment inertia, so a trunk whose
+  effective inertia grew by `(m_arm + m_head)·L²` keeps the same `c` against a
+  larger `I` and is therefore less damped. That is what "damping is a property
+  of tissue, not a shadow of stiffness" implies once the inertia is no longer
+  the segment's alone — but it is a behaviour change nothing gates, and a
+  chain-effective `dampingRatio` would be its own decision with its own gate.
+- **The plant's torque scale is still derived from each JOINT's own k and Q**
+  (`rom·k/Q`), not from the chain's effective inertia — so "full urge at
+  resonance is full range of motion" is now approximate, since the chain moved
+  every resonance. Left deliberately at C8 so the re-pin has ONE cause.
 - **Torque-actuator muscles**, per proposal 44 section 6's standing limit.
 - **AC2.1 open** — see the header note above.
 
-How to test: `ctest -R "body_measures_test|body_joint_test|body_objective_test"`. Both are plain
-executables with no fixtures and no Qt; either can be built and run alone.
+How to test: `ctest -R "body_measures_test|body_joint_test|body_objective_test|body_chain_test"`.
+All are plain executables with no fixtures and no Qt; any can be built and run alone.
