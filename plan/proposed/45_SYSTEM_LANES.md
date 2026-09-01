@@ -1,23 +1,48 @@
 # Proposal 45 — System lanes: the master track, its inserts, and the shape send tracks will take
 
 > **Status: PROPOSED.** Nothing here is executed. The milestones below are
-> ordered so that the one genuinely dangerous change (M3) lands *before* any UI
-> can reach the feature that would trigger it.
+> ordered so that the two genuinely dangerous changes (M2's shape check and M3's
+> Closure wiring) land before any UI can reach the situation they cover.
+>
+> **Revision 2** after an adversarial review against the tree. Three claims in
+> revision 1 were WRONG and are corrected in place rather than quietly dropped,
+> because each of them was the reason for a design decision:
+>
+> - **D4/T1 said the first master insert would silently turn monitoring OFF.**
+>   It would not. `twlive::checkMasterShape` inspects only the `twMixer`'s input
+>   levels and the `twRewire`'s channel map, so a plugin chain interposed
+>   *between* them is **invisible to it** — monitoring stays on in LinearSplit,
+>   the live rung bypasses the master chain, and the user hears a wet/dry
+>   mismatch with no log line. Silently wrong is worse than off, and the fix
+>   moves into **M2** (D4a).
+> - **D6 said the clip policy could be enforced at one existing seam,
+>   `splacements::laneAt()`.** It cannot: `laneAt(` has **71 call sites across
+>   45 files** and is the general lane resolver for `set-track-volume`,
+>   `arm-track`, the automation verbs and the meter test verbs — a refusal
+>   inside it would break the master fader this proposal exists to ship. A
+>   distinct placement seam is needed (D6).
+> - **D9 said "the parse gains one branch".** Paths are `QList<int>` end to end
+>   (`sobjectpath.h:45-51`), `"$master".toInt()` is **0** — it silently resolves
+>   to the first user track — and `pathOf()` walks `childLinks()`, so it returns
+>   `{}` for the master lane, which is the address of **the root mixer**. Every
+>   head control derives its commit address that way. D9 is redesigned and
+>   promoted into M1.
 
 Prerequisite reading, in this order — the first two are not optional, because
-each of them contains a sentence that invalidates the obvious design:
+each contains a sentence that invalidates the obvious design:
 
 1. `smaragd/main/shell/CONTRACT.md` **inv. 18a** — "The `Closure` master mode is
    REFUSED, not approximated … whoever adds a master insert chain lands here
    first." That is this proposal.
-2. `smaragd/tw303a/playback/include/tw/playback/twliveplan.h:180-209` — the
-   algebra the live lane rests on, and why a master insert breaks it.
+2. `smaragd/tw303a/playback/include/tw/playback/twliveplan.h:180-209` and
+   `smaragd/tw303a/playback/src/twliveplan.cc:76-124` — the algebra the live
+   lane rests on, **and the exact two components the check looks at**.
 3. `smaragd/main/objects/mixer/CONTRACT.md` (inv. 1, 5, 6),
    `smaragd/main/objects/track/CONTRACT.md`,
    `smaragd/main/timeline/CONTRACT.md` (inv. 1, 10, 28),
    `plan/proposed/41_LANE_FRAGMENTS.md` §D3 (why `isPathContainer()` and
-   `isLane()` are two questions), `plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md`
-   D3.
+   `isLane()` are two questions),
+   `plan/proposed/21_REALTIME_DATAFLOW_INTEGRATION.md` D2/D3.
 
 ---
 
@@ -26,20 +51,19 @@ each of them contains a sentence that invalidates the obvious design:
 **1. There is no master track, and the object standing in for it cannot grow
 one.** The root of an arrangement is an `SStdMixer`: one `twMixer` summing every
 top-level track, feeding one `twRewire`
-(`main/objects/mixer/src/sstdmixer.cpp:499-518`). That chain has **no plugin
+(`main/objects/mixer/src/sstdmixer.cpp:489-520`, and `setNBusses` wiring
+`cpRewire_->setInput( i, mix->linkOutput( 0 ) )`). That chain has **no plugin
 chain and no gain stage**. There is nowhere to put a master limiter, a master EQ
 or a master fader, and no amount of UI work creates one — the components are not
 there.
 
 **2. The master already has a fader field, and it is dead.** `SStdMixer`
 inherits `SObject::volume_` and answers `isLane()` true (proposal 41 D3: "the
-root mixer is itself a lane — it carries solo, mute and edit-group state exactly
-as a track does"). Nothing applies that volume to anything: the only comment in
-`sstdmixer.cpp` that mentions it says "Volume needs no connection: `twTrackMix`
-reads `getVolume()` live each buffer" — which is true of a *track's* mix and
-false of the master's, because the master's sum is a `twMixer`, not a
-`twTrackMix`. **Dragging a master fader today would move a number nobody reads.**
-Any design that leaves this field in place has two master faders in it.
+root mixer is itself a lane"). Nothing applies it — `set-track-volume`'s own
+source says so in a comment: *"Volume is an STrack property (the root mixer is a
+lane but has no fader)"* (`ssettrackvolumeaction.cpp:48-49`). **Dragging a master
+fader today would move a number nobody reads.** Any design that leaves the field
+in place ships two master faders.
 
 **3. There are no send tracks, and no shape for one.** `grep -rni
 "sendtrack\|auxsend\|send bus"` over `main/` returns nothing. A send lane needs
@@ -50,7 +74,7 @@ avoid.
 **4. Nothing that is not a top-level `STrack` can be a row in the arranger.**
 `SStdMixerView::appendRowsFor` (`sstdmixerview.cpp:4358-4381`) iterates
 `childLinks()` and `continue`s on anything that is not an `STrack`;
-`STrackRow::track` is typed `STrack *`; the head widget is
+`STrackRow::track` is typed `STrack *` (`sstdmixerview.h:66`); the head widget is
 `SSMVMixerControl( …, STrack & )`. So "represent the master in the arrangement"
 is, concretely, "make the master something those three already accept".
 
@@ -62,20 +86,29 @@ is, concretely, "make the master something those three already accept".
 > than `None`. It is not a new kind of object; it is a track the project owns
 > rather than the user, with a policy attached.**
 
-Everything below follows from that one decision, and the reason for it is
-measured rather than aesthetic: **`dynamic_cast<STrack *>` appears 98 times
-across 40 files** in `main/`. Every one of those sites is a place where a
-new lane *type* would have to be audited, and the repo's own history says what
-happens when a pair of parallel implementations is introduced and only one half
-is later changed (proposal 41 M7: paint and hit-test disagreed on z-order, green
-for two milestones; proposal 39 M2: the fader multiply; proposal 37 P6: the
-`slots:` access specifier). A system lane that IS an `STrack` inherits, for
-free and already gated: the plugin chain and all five plugin verbs, the gain
-stage and its automation, level metering, the automation lane UI, the FX strip,
-the Track Detail dock, the arranger row, the head, and serialization.
+The reason is measured rather than aesthetic: **`dynamic_cast<STrack *>` appears
+98 times across exactly 40 files** in `main/`. Every one is a site a new lane
+*type* would have to be audited at, and this repo's record says what happens
+when parallel implementations are introduced and only one half is later changed
+(proposal 41 M7: paint and hit-test disagreed on z-order, green for two
+milestones; proposal 39 M2: the fader multiply; proposal 37 P6: the `slots:`
+access specifier). A system lane that IS an `STrack` inherits, already gated:
+the plugin chain and all five plugin verbs, the gain stage and its automation,
+level metering, the automation lane UI, the FX strip, the Track Detail dock, the
+arranger row, the head, and serialization.
 
-The cost of the rule is a *policy* surface — a track that must refuse things
-ordinary tracks accept — and that surface is D6.
+The rule has **two** costs, and the proposal is honest that the second one is
+structural:
+
+- a **policy** surface — a track that must refuse things ordinary tracks accept
+  (D6);
+- a **default-open blacklist**. Every track-addressed verb written after this
+  proposal ships *accepting* system lanes unless someone remembers to refuse
+  them. `fix/take-lane-click-and-slip` found ~10 verbs that had silently missed
+  an analogous case for years. AC5.6 is the mitigation: an enumerated
+  accept/refuse row for *every* registered track-addressed verb, checked by
+  `action_roundtrip_test`, so a new verb with no row is a failing test rather
+  than a latent hole.
 
 ---
 
@@ -88,62 +121,62 @@ enum class SSystemRole { None = 0, Master, Send, Conductor };
 virtual SSystemRole systemRole() const;   // default None
 ```
 
-On `SObject` for exactly the reason `contentKind()`, `resolveEventClip()`,
-`isMissing()` and `isLaneFragment()` are: the *arranger* has to ask the question
-(it pins system rows to the bottom and refuses them as drop targets) and
-`app/timeline` may not include `app/objects/track`'s policy headers, and the
-*placement service* in `app/model` has to ask it while sitting below
-`objects/track` entirely.
+On `SObject` for the reason `contentKind()`, `resolveEventClip()`, `isMissing()`
+and `isLaneFragment()` are: **`app/model` must ask it** — the placement service
+(`splacements`) and the path resolver (`sobjectpath.h`) both sit below
+`objects/track` and cannot see an `STrack` policy header.
+
+(Revision 1 also justified this by claiming `app/timeline` cannot include
+`objects/track`. That is false — the edge is declared in
+`tools/check_layering.py:194-197` and `sstdmixerview.h:14` includes `strack.h`
+today. The `app/model` leg is the real one and is sufficient.)
 
 Stored as a field on `STrack`, set once at construction and **immutable** — a
 lane does not become the master. Serialized as `systemRole='master'` only when
-it is not `None`, which is the same non-default-only discipline `editGroup`,
-`midiRouting`, `collapsed` and `colorIndex` already follow and what keeps every
+it is not `None`, the same non-default-only discipline `editGroup`,
+`midiRouting`, `collapsed` and `colorIndex` follow, and what keeps every
 existing project file and both goldens byte-unchanged.
 
-`isLaneFragment()`'s own doc comment is the warning to heed here: this must NOT
-be spelled as a conjunction of existing predicates. "A lane that is not in
-`childLinks()`" happens to describe the master today and would describe nothing
-else — an accidental agreement, which is what proposal 41 M0 exists to stop
+It must NOT be spelled as a conjunction of existing predicates. "A lane that is
+not in `childLinks()`" happens to describe the master today and nothing else —
+an accidental agreement, which is exactly what proposal 41 M0 exists to stop
 relying on.
 
 ### D2. The master lane is NOT a `childLinks()` member
 
-This is the load-bearing structural decision and it is forced, not chosen.
+The load-bearing structural decision, and it is forced rather than chosen.
 
 Tracks are addressed by an **index path from the arrangement root**
-(`app/model/sobjectpath.h`; `strackpath.h`: "`[]` is the root, `{2}` its 3rd
-child"). Every `.qxa` case, every `trackPath=` attribute in `docs/ACTIONS.md`,
-every committed `.qxp` fixture and both goldens are written against the current
-indices. A master lane inserted as a child of `SStdMixer` shifts every one of
-them by one, and `main/objects/mixer/CONTRACT.md` **inv. 1** ("`getNTracks()`
-counts TOP-LEVEL children only — assertions in tests rely on this") would become
-false in the same edit.
+(`main/model/include/app/model/sobjectpath.h`; "`[]` is the root, `{2}` its 3rd
+child"). Every `.qxa` case, every `trackPath=` in `docs/ACTIONS.md`, every
+committed `.qxp` fixture and both goldens are written against the current
+indices. A master lane inserted as a child of `SStdMixer` shifts all of them, and
+`main/objects/mixer/CONTRACT.md` **inv. 1** ("`getNTracks()` counts TOP-LEVEL
+children only — assertions in tests rely on this") becomes false in the same
+edit.
 
-It also breaks the audio, twice: `SStdMixer::reconnectTracksToMixer()` wires
-*every* child into the sum, so a master lane placed there would be summed
-alongside the tracks it is supposed to process; and `ssolo::anySoloInTree`
-walks the root's `childLinks()` for lanes, so the master would join the solo
-set.
+It also breaks the audio twice: `reconnectTracksToMixer()` wires **every** child
+into the sum (`sstdmixer.cpp:192-238`), so a master lane there would be summed
+alongside the tracks it is meant to process; and `ssolo::anySoloInTree` walks the
+root's `childLinks()` for lanes, so the master would join the solo set.
 
-So the master lane is an **owned reference link**, exactly the shape
-`STrack` already uses for its plugin chain:
+So the master lane is an **owned reference link**, the shape `STrack` already
+uses for its plugin chain:
 
-- `SStdMixer` holds `SLink *masterLaneRef_`, published through
-  `ownedRefLinks()` and **not** through `childLinks()`
-  (`strack.cpp:1303`, and the header comment at `strack.h:70-77` explaining why
-  publishing it matters for `~SProject`'s survivor ordering — the same trap
-  applies here and killed a build once already).
-- The lane object is a QObject child of `SProject`, so
-  `SProject::serialize()`'s child loop writes it as a top-level element
-  (`sproject.cpp:58-64`) — the mechanism `SPluginChain` already uses.
-- `<SStdMixer masterLaneId='…'>` references it, and the reference is resolved in
+- `SStdMixer` holds `SLink *masterLaneRef_`, published through `ownedRefLinks()`
+  and **not** through `childLinks()` (`strack.cpp:1297`; the header comment at
+  `strack.h:73-80` explains why publishing matters for `~SProject`'s survivor
+  ordering — a trap that already killed a build once).
+- The lane object is a QObject child of `SProject`, so `SProject::serialize()`'s
+  child loop writes it as a top-level element (`sproject.cpp:59-65`) — the
+  mechanism `SPluginChain` already uses.
+- `<SStdMixer masterLaneId='…'>` references it, resolved in
   `SProjectLoader::deferResolve`, because a plain attribute is invisible to the
-  loader's `<SLink>`-based dependency ordering (`strack.cpp:1492-1501` says this
-  in as many words about `pluginChainId`).
+  loader's `<SLink>`-based dependency ordering (`strack.cpp:1492-1503` says this
+  about `pluginChainId`).
 
-**Consequence to accept rather than discover:** paths do not reach the master.
-D9 gives it a name instead.
+**Consequence, and it is not small: index paths cannot reach the master.** D9 is
+what answers that, and it is a prerequisite of M1 rather than a footnote.
 
 ### D3. The audio topology, and why the goldens do not move
 
@@ -161,90 +194,141 @@ tracks → twMixer (sum) → twPluginChain → twGainStage → twRewire → [roo
                             owned by the master lane
 ```
 
-Three properties make this safe:
-
-- **The root component is still the `twRewire`.** `SApplication`'s master meter
-  (`sapplication.cpp:135`), `RenderSession`, `AudioEngine` and
-  `twSpeaker` all reach the graph through
-  `SProject::getRootComponent()->getRootComponent()`. None of them changes, and
-  the master meter becomes post-master-FX by construction rather than by a
-  second tap.
+- **The root component is still the `twRewire`.** The master meter
+  (`sapplication.cpp:492-506`, `masterLevel` tapping `rootComponent()`),
+  `RenderSession`, `AudioEngine` and `twSpeaker` all reach the graph through
+  `SProject::getRootComponent()->getRootComponent()`. None changes, and the
+  master meter becomes post-master-FX by construction rather than by a second
+  tap.
 - **An empty chain and 0 dB are arithmetically identical to today.**
   `twPluginChain::freezePage` forwards to its last insert and, with no inserts,
-  forwards its input page verbatim (CLAUDE.md, metering table); `twGainStage`
-  "at 0 dB unmuted does no arithmetic at all" (proposal 37 P5). That is the
-  same argument P5 used to keep every golden byte-unchanged, and it is why
-  **AC2.1 is a `cmp`, not a tolerance.**
-- **The master lane's own `twTrackMix` is not in the path.** An `STrack`
+  forwards its input page verbatim; `twGainStage` at 0 dB unmuted does no
+  arithmetic (proposal 37 P5). That is the same argument P5 used to keep every
+  golden byte-unchanged. Note `twGainStage::renderPageWide` does render its
+  **own** page rather than forwarding one (`twgainstage.cc:317-355`), so
+  **AC2.1's `cmp` is a real measurement, not a formality** — keep it.
+- **The master lane's own `twTrackMix` and `twRewire` are inert.** An `STrack`
   builds `twTrackMix → twPluginChain → twGainStage → twRewire`
-  (`strack.cpp:1070-1096`). The master lane's `twTrackMix` has no clips (D6
-  forbids them) and its `twRewire` is redundant with the mixer's. M2 therefore
-  wires the *mixer's* sum into the *lane's* chain and takes the lane's gain
-  stage output back into the *mixer's* rewire, leaving the lane's own head and
-  tail components unwired and inert. The alternative — making the master lane's
-  rewire the project root — moves the root component and is rejected: it would
-  change what every tap above resolves to, for no gain.
+  (`strack.cpp:1076-1097`). The master lane's `twTrackMix` has no clips (D6) and
+  its `twRewire` is redundant with the mixer's. M2 wires the *mixer's* sum into
+  the *lane's* chain and takes the lane's gain-stage output back into the
+  *mixer's* rewire. Making the master lane's rewire the project root is rejected:
+  it moves what every tap above resolves to, for nothing.
 
-### D4. **THE LIVE-MONITORING PRECONDITION IS THE HARD PART OF THIS PROPOSAL**
+### D3a. Invalidation must travel THROUGH the master chain, and today it cannot
 
-Read `main/shell/src/slivemonitor.cpp:773-800` before designing anything here.
+`SStdMixer::bumpRenderChainEpoch()` bumps `cpMixers_` and `cpRewire_` and
+nothing else (`sstdmixer.cpp:156-177`); `bumpRenderChainEpochRange` likewise.
+After D3 the master lane's `twPluginChain` and `twGainStage` sit **between**
+them, each with its own page cache, and each bumped by **nobody** on an ordinary
+clip or track edit. The rewire re-freezes, `fetchInputPage` serves the gain
+stage's still-valid stale page, and **the edit is inaudible**.
 
-Live monitoring rests on one algebraic identity:
+This is the commonest path in the app — every user has an empty master chain and
+edits clips — and it is silent. `SStdMixer::bumpRenderChainEpoch[Range]` must
+extend to the master lane's components, and the gate for it is an *ordinary*
+edit with the master wired and its chain **empty** (AC2.5). It is a different
+edge from D11's "invalidation *from* the master" and neither subsumes the other.
+
+### D4. Live monitoring: the algebra, and what actually breaks
+
+Live monitoring rests on one identity:
 
 ```
 master(unarmed ∪ live) == master(unarmed) + master(live)
 ```
 
-which holds sample-for-sample **iff the master is a unity sum followed by an
-identity map**. `twlive::checkMasterShape` verifies exactly that on every plan
-build. A master insert, or a master fader at anything but unity, makes it false
-— and today the app's response is to **turn live monitoring off entirely**, with
-one log line, because the `Closure` alternative is only half-built: the plan
-builder can express it (`sliveplanbuilder.cpp:329-349` already assembles the
-master node with the unarmed tracks as `frozenInputs`), but **nothing reads
-`twLivePlan::masterLinear`** outside those two files — `twSpeaker` adds the
-frozen root page whenever the frozen lane is playing, so a Closure plan would be
-summed on top of a root page that already contains those tracks and the user
-would hear the arrangement **doubled**.
+true sample-for-sample **iff the master is a unity sum followed by an identity
+map**. `twlive::checkMasterShape` is asked on every plan build, and today a
+non-linear answer turns monitoring **off** with one log line, because the
+`Closure` alternative is half-built: the plan builder can express it
+(`sliveplanbuilder.cpp:329-349` assembles the master node with the unarmed
+tracks as `frozenInputs`), but **nothing outside those two files reads
+`twLivePlan::masterLinear`** — `twSpeaker` adds the frozen root page whenever the
+frozen lane is playing, so a Closure plan would be summed on top of a root page
+that already contains those tracks and the arrangement would be heard
+**doubled**.
 
-So: **the first master insert a user drops silently kills their monitoring.**
-That is a worse outcome than not shipping the feature, which is why M3 is a
-milestone of its own, is sequenced before the UI that makes the situation
-reachable (M4/M5), and carries the only gate in this proposal that measures
-audio continuity rather than a model fact.
+### D4a. **The shape check is BLIND to a master chain, and that is the real bug**
 
-The fix is the one `shell/CONTRACT.md` inv. 18a names: `twSpeaker` must stop
-adding the frozen root page while a non-linear plan is live, and the pump — which
-already renders the master node when `masterLinear` is false — becomes the sole
-producer of the master's audio for the duration. Two things follow that the
-milestone must handle rather than assume:
+`checkMasterShape( const twMixer *, const twRewire *, idx_t width )` reads
+exactly three things (`twliveplan.cc:76-124`): the two components' widths, every
+`twMixer` input level, and the `twRewire` channel map. **A plugin chain and a
+gain stage interposed between them are not arguments and are not inspected.**
 
-- **The frozen lane must not merely be muted; the demands must keep running.**
-  The readahead is what keeps the *unarmed* tracks' pages warm, and under
-  Closure those pages are read by the pump as `frozenInputs`. A `twSpeaker` that
-  stops the frozen lane rather than stopping its *summing* starves the pump.
-- **The transition is a transport-edge and an arm-edge event.** `SLiveMonitor`
-  already rebuilds on both (`transportAboutToChange` / `transportChanged`,
-  shell inv. 12-18) and already pays a documented one-reposition cost at a
-  stopped→playing edge. Flipping between linear and Closure *while playing* —
-  which is what dropping an insert on the master during playback is — is a new
-  edge and needs the same treatment: measured, not assumed.
+So after D3's re-wiring, a user who drops a limiter on the master gets
+`LinearSplit` — monitoring stays **on**, the RT adds the frozen root page (now
+processed by the limiter) to a live ring that **bypassed the master chain
+entirely**, and the two halves no longer belong to the same signal. A master
+fader at −6 dB does the same thing to the split. There is no log line, because
+nothing detected anything.
+
+Revision 1 got this backwards and it changes the milestone plan:
+
+- **M2 must extend the check** so that a non-empty master chain, a non-unity
+  master gain, or a master mute reports `Closure`. That restores today's honest
+  refusal (inv. 18a) for the whole window between M2 and M3, and it is a gate
+  in M2 rather than a note in M3.
+- **M3 then wires Closure**, at which point the refusal becomes audible
+  monitoring.
+
+### D4b. **Closure's hard part is not the summing — it is who owns the
+processors**
+
+"`twSpeaker` stops adding the frozen root page" is necessary and **not
+sufficient**. The AudioEngine readahead demands **root** pages
+(`audio_engine.cc:861,971`; `synthOutput_` is the mixer's rewire), and so does
+`twSpeaker::warmFrozenLane` (`twspeaker.cc:353`, the count-in priming). Under
+D3, freezing a root page runs the master lane's `twPluginSlotProcessor`s — and
+under Closure the *pump* must render those same instances, on its own thread, to
+produce the master's audio at all. Two threads, one plugin instance: exactly
+what proposal 21's ownership protocol exists to prevent, and the master has **no
+null-able input plug** for the closure exclusion to work through.
+
+A related gap: the plan builder's master node today carries **no processors** —
+`sliveplanbuilder.cpp:334-349` sets only `liveChildren`, `frozenInputs` and
+`channelMap`. Attaching the master lane's inserts, gain envelope and mute to it
+is unwritten work that M3 owns.
+
+Three options, and M3 must **pick one in the design**, not discover one:
+
+1. **Re-root the frozen demand below the master chain.** While a Closure plan is
+   live, the readahead and `warmFrozenLane` demand the `twMixer`'s pages rather
+   than the rewire's; the pump reads those as `frozenInputs` and runs the master
+   processors itself. One owner at a time, which is the protocol's own rule.
+   Cost: `AudioEngine`'s buffering-ready check and `startPlayback`'s frontier
+   wait are expressed against `synthOutput_` and must follow the re-rooting —
+   the same class of change `fix/loop-behaviour` (h) had to make when the
+   frontier stopped being linear.
+2. **Live-own the master's processors** the way an armed track's are owned. This
+   contradicts AC3.3 as revision 1 wrote it (`liveOwnedRefusals == 0`), because
+   root freezes would then legitimately refuse.
+3. **Give the pump second instances.** Rejected: two DSP streams over one patch
+   diverge in state, and D2's own measured hand-back cost (one phase step) is
+   the evidence.
+
+**Recommendation: option 1**, with option 2's refusal counter kept as the
+diagnostic. AC3.3 is rewritten accordingly.
 
 ### D5. The master fader is the gain stage, and `SStdMixer::volume_` is retired
 
 `twGainStage` is already the fader for every track, already post-FX, already
-automatable via `self:Volume`, already ramped at transitions, and already the
-one thing `set-track-volume` writes. The master lane owning one means there is
-exactly one master fader and it is the same object as every other fader.
+automatable via `self:Volume`, already ramped, and already the one thing
+`set-track-volume` writes. The master lane owning one means there is exactly one
+master fader and it is the same object as every other fader.
 
-`SStdMixer`'s inherited `volume_` is therefore **explicitly retired** as a
-master level: M1 asserts (by grep, in the gate) that nothing reads
-`SStdMixer::getVolume()`, and the Track Detail / head mounts for the root are
-routed to the master lane. Leaving it in place is the "two spellings" defect
-this codebase has paid for repeatedly; leaving it *and* adding a gain stage is
-that defect with a fader on each.
+**"Retired" must be behavioural, not a grep.** `getVolume()` is inherited, not
+overridden — there is no `SStdMixer::getVolume` text to find, and
+`SObject::serializeSelfAttributes` reads `getVolume()` on every object including
+the mixer (`sobject.cpp:157`). So the retirement is defined as:
 
-### D6. Policy: a system lane refuses clips, at ONE seam, and says so
+- `set-track-volume` with an **empty** path (which today resolves the root mixer
+  — `laneAt(root,{})` returns the root, whose `isLane()` is true) is
+  **redirected to the master lane**, and a case proves the redirect is *heard*;
+- the mixer's `volume_` keeps serializing as it does today (changing that moves
+  existing files), and a CONTRACT line records that it is inert.
+
+### D6. Policy: a system lane refuses clips — at a NEW seam, not an existing one
 
 The requester's rule — *a master track must not directly contain sample or MIDI
 cuts, but may have child tracks* — becomes:
@@ -253,64 +337,63 @@ cuts, but may have child tracks* — becomes:
 virtual bool acceptsClips() const;      // SObject, default true
 ```
 
-false for every `systemRole() != None` lane, and consulted in **one** place:
-the placement destination resolver, `splacements::laneAt()`. That is already
-the single seam every placement verb funnels through (`place-clip`,
-`move-clip`, `pack-clips`' own lane check, the arranger's `dropEvent`) — proposal
-41 M2b widened its *parent* resolution to `containerAt()` while deliberately
-leaving `laneAt()`, "the placement DESTINATION resolver", strict. Adding the
-check at each verb instead is how the tenth verb ships without it.
+false for every `systemRole() != None` lane.
 
-Three more refusals, same mechanism, same milestone (M5):
+Revision 1 placed the check inside `splacements::laneAt()` on the grounds that it
+is "the placement destination resolver". **It is not only that.** `laneAt(` has
+**71 call sites across 45 files**, and they include `set-track-volume`
+(`ssettrackvolumeaction.cpp:43`), `set-track-mute`, `set-track-name`,
+`arm-track` (`sliveinputactions.cpp:22`), the automation verbs, the MIDI record
+verbs and the meter test verbs. A refusal there would break the master fader
+this proposal exists to ship.
 
-- **No arm.** `arm-track` on a system lane is refused. A master lane that could
-  be armed would enter the live closure and be handed to the pump as a
-  monitored track, which is a second, contradictory answer to D4.
-- **No instrument.** Slot 0 of a system lane's chain may not be an instrument
-  (`SPluginChain` already distinguishes them). An instrument on the master
-  produces audio from an event feed the master does not have.
-- **No structural edit.** `remove-track`, `reparent-track` and `move-track`
-  refuse a system lane. It is not the user's object.
+So the seam is **new and narrow**: `splacements::placementLaneAt()` — `laneAt()`
+plus the `acceptsClips()` test — and M5's first job is to **enumerate the
+placement callers** (`place-clip`, `move-clip`, `place-recording`,
+`place-midi-recording`, `add-sample`, `place-asset`, `pack-clips`' lane check,
+and the arranger's `dropEvent`) and convert exactly those. That enumeration is
+an audit, and AC5.1 says so instead of claiming the callers are untouched.
+
+Three more refusals, same milestone:
+
+- **No arm, and no monitor.** `arm-track` **and `set-monitor-mode on`** are
+  refused: the live set is `{armed && monitorEffective} ∪ {monitor == on}`, so
+  refusing only the first leaves a second door to the same contradiction with
+  D4. `set-track-input` likewise.
+- **No instrument.** Slot 0 of a system lane's chain may not be an instrument.
+- **No structural edit.** `remove-track`, `reparent-track`, `move-track` refuse.
+  It is not the user's object.
 
 Every refusal is **announced** — a message naming the lane and the reason,
-reaching the status bar and `TW_LOG` — never a silent no-op. The repo's own
-standard: "A bound is ANNOUNCED, never silent" (proposal 38).
+reaching the status line and `TW_LOG` — never a silent no-op ("A bound is
+ANNOUNCED, never silent", proposal 38).
 
-Mute and solo need a decision each, and they differ:
+Mute and solo differ:
 
-- **Mute on the master is legitimate and means "silence the output".** It is
-  already exactly what `twGainStage`'s audio mute does, and a `self:Muted`
-  automation lane on the master is a usable feature (a hard mute at the end of a
-  mix).
-- **Solo on the master is meaningless** — `ssolo::isLaneAudible`'s rule is about
-  a lane relative to its siblings, and the master has none. Refused, with the
-  same message discipline. Note it is not merely useless: the master lane is not
-  in `childLinks()`, so `anySoloInTree` cannot see it, and a solo flag set there
-  would be a state nothing reads — the `SStdMixer::volume_` defect again.
+- **Mute on the master is legitimate** and is what `twGainStage`'s audio mute
+  already does; a `self:Muted` lane on the master is a usable feature.
+- **Solo on the master is meaningless and must be refused** — not merely
+  useless: the master is not in `childLinks()`, so `anySoloInTree` cannot see
+  it, and a solo flag there would be state nothing reads. That is the
+  `SStdMixer::volume_` defect again, in a new field.
 
 ### D7. Conductor lanes are the *framework* here, not the content
 
-The requester names "child tracks like time or time signature". Those are
-**conductor lanes**: `systemRole() == Conductor`, children of the master lane,
-`acceptsClips()` false, hidden by default like their parent.
+"Child tracks like time or time signature" become **conductor lanes**:
+`systemRole() == Conductor`, children of the master lane, `acceptsClips()` false,
+hidden by default.
 
-What this proposal builds is the ability for them to *exist, nest, hide, show
-and round-trip*. What it deliberately does **not** build is their content, and
-the reason is a hard invariant this tree already holds:
+This proposal builds their ability to *exist, nest, hide, show, be addressed and
+round-trip*. It deliberately does **not** build their content:
 
-> `twTempoMap` is THE tempo authority, and `SProject::getBPMTempo()` is a
-> derived view — "tempo is stored as SMF's own unit, µs per quarter (an
-> integer), so BPM and the map cannot disagree" (proposal 37 P1). `set-tempo` is
-> the ONLY tempo write, and it is an action.
+> `twTempoMap` is THE tempo authority and `SProject::getBPMTempo()` a derived
+> view — "tempo is stored as SMF's own unit, µs per quarter (an integer), so BPM
+> and the map cannot disagree" (proposal 37 P1). `set-tempo` is the ONLY tempo
+> write, and it is an action.
 
-A tempo lane must therefore be a **VIEW of `twTempoMap`**, never a second store
-of tempo events, and its edit verbs must funnel into `set-tempo`. Building that
-correctly is a proposal of its own (it needs a curve model for ramps, and
-`set-tempo`'s re-derivation of every `timebase=beats` link is already the
-expensive part). M6 gates the *container*: a conductor lane exists under the
-master, is addressable, hides and shows, holds no clips, and contributes no
-audio. Anything that would store a tempo number on it is out of scope and the
-milestone's ACs say so.
+A tempo lane must be a **VIEW of `twTempoMap`**, never a second store, and its
+edits must funnel into `set-tempo`. Doing that properly needs a curve model for
+ramps and is a proposal of its own. M6 gates the container.
 
 ### D8. Hiding is ONE mechanism: `isHidden()`, serialized when true, undoable
 
@@ -320,211 +403,268 @@ bool isHidden() const;                  // SObject; false by default
 
 Serialized `hidden='true'` only when true — the `collapsed` precedent
 (`strack.cpp:125`, `1449`). A system lane is *constructed* hidden, so the
-attribute is present in the file for it and absent everywhere else.
+attribute is present for it and absent everywhere else.
 
-Toggled by one undoable verb, `set-lane-hidden`, and the menu item **Show system
-lanes** is a `SCompositeAction` of that verb over the arrangement's system lanes
-— one undo step, the `pack-selection` shape (`objects/mixer/CONTRACT.md` inv. 7).
+**One departure from that precedent, stated rather than smuggled:** `collapsed`
+is serialized but its toggle is *not* undoable (`collapse-track` drives
+`toggleTrackCollapsed()` directly). Hiding **is** undoable here, because hiding a
+lane that carries inserts and automation is closer to an arrangement edit than to
+a fold. The menu item **Show system lanes** is one `SCompositeAction` over the
+per-lane verb — the `pack-selection` shape (`objects/mixer` inv. 7).
 
-The alternative considered and rejected: a per-user `SSettings` view toggle
-("show system lanes") *alongside* a per-lane serialized flag. That is two
-authorities for one question, and proposal 33 D2's split (project state vs.
-machine-local state) does not apply — *whether the master lane is on screen* is
-a property of the arrangement the user is editing, not of the monitor it is
-displayed on, and it should travel with the project the way `collapsed` does.
+Rejected alternative: a per-user `SSettings` toggle *alongside* the serialized
+flag. Two authorities for one question; and proposal 33 D2's split does not apply
+— whether the master lane is on screen belongs to the arrangement, not to the
+monitor.
 
 **Hidden is a VIEW property and never an audio one.** A hidden master lane is
-fully in the signal path. Stating that is not pedantry: `isLiveOwnedLane()`,
-`ssolo::isLaneAudible` and `STrack::isCollapsed()` are three existing flags that
-each look like they might mean "not heard" and do not, and the CONTRACT for this
-one has to say which it is.
+fully in the signal path. That needs saying: `isLiveOwnedLane()`,
+`ssolo::isLaneAudible` and `isCollapsed()` are three existing flags that look
+like they might mean "not heard" and do not.
 
-### D9. Addressing: a reserved path token, because index paths cannot reach it
+### D9. Addressing — redesigned, and it is a milestone, not a footnote
 
-D2 puts the master outside `childLinks()`, so `strackpath::resolveByPath` cannot
-find it. `strackpath::parseQualified` already supports a qualified spelling
-(`"Drums:0"` names an arrangement root, proposal 09 D21), so the extension is
-additive:
+D2 puts the master outside `childLinks()`, so it is unaddressable. Revision 1
+proposed a `"$master"` string token and claimed "the parse gains one branch".
+Three measured facts kill that as written:
+
+- **Paths are `QList<int>` end to end.** `stringToPath` does `p.toInt()`
+  (`sobjectpath.h:45-51`), `resolveByPath` takes `const QList<int> &`, and many
+  action classes store a `QList<int>` member. A string token has no
+  representation in the type.
+- **`"$master"` today resolves to track 0.** `toInt()` on a non-numeric string
+  is 0 — the "resolved against the wrong root SUCCEEDS" silent-corruption class
+  `sobjectpath.h`'s own comment warns about.
+- **The WRITE side aliases the master to the root mixer.** `pathOf()` walks
+  `childLinks()` and returns `{}` — which is *also* "the root itself"
+  (`sobjectpath.h:128-135`). `SSMVMixerControl` derives every commit address that
+  way (volume, mute, solo, edit-group, the automation recorder's `ownerPath`)
+  and already carries a guard for that exact ambiguity. So D11's "the head works
+  unchanged because a system lane IS an `STrack`" was **false**: the master
+  head's fader would move and commit nothing, or commit to the mixer.
+
+**The recommended mechanism keeps the type.** A **negative index sentinel** in
+the existing `QList<int>`:
 
 ```
-"$master"            the master lane of the default arrangement
-"Drums:$master"      the master lane of the "Drums" arrangement
-"$master,0"          its first conductor child
-"$send:Reverb"       a send lane by name (D10)
+{-1}          the arrangement's master lane
+{-1, 0}       its first conductor child   (ordinary indices below the master)
+{-2 - k}      the k-th send lane
+"$master", "$master,0", "$send:Reverb"     surface spellings only
 ```
 
-`$` is chosen because it cannot begin a decimal index and cannot begin an
-arrangement name in any existing fixture — a bare `master` could collide with a
-user's track named "master" in the qualified form. The parse gains one branch;
-`spluginaction::chainFor`, `arm-track`, `set-track-volume` and every other
-`trackPath=` verb then reach the master **with no change of their own**, which
-is the whole return on D1.
+- `resolveByPath` gains one branch **before** `childAt()`: a negative step at an
+  `SStdMixer` resolves a system lane.
+- `pathOf` gains the matching branch, so the master lane has a representable,
+  non-aliasing address.
+- `stringToPath`/`pathToString` map the surface spelling to and from the
+  sentinel, and `stringToPath` **rejects** an unrecognised `$`-token rather than
+  `toInt()`-ing it to 0.
+- **Every stored `QList<int>` action member is unchanged**, which is the whole
+  return.
+
+The cost is an audit: every consumer that indexes with a path step must reject
+negatives rather than passing them to `childAt()`. That audit is **AC1.7**, and
+it is the reason D9 belongs to M1 — M1's own AC ("round-trips with its inserts")
+cannot be written without it.
+
+The alternative — carrying the system role as a separate field on
+`strackpath::QualifiedPath` — is viable and is *cleaner in the abstract*, but
+every action that stores a bare `QList<int>` would have to grow a second member.
+Recorded here so the decision is not re-litigated silently.
 
 ### D10. Send lanes: the shape is fixed here, the routing is NOT built
 
-A send lane is a system lane (`systemRole() == Send`) with:
+A send lane is a system lane (`systemRole() == Send`) with a plugin chain, a gain
+stage, `acceptsClips()` false, a **name** (there can be several; D9 addresses one
+by `$send:<name>`), and an output reaching the master sum.
 
-- a plugin chain and a gain stage — identical to the master's, which is the
-  point of doing them together;
-- `acceptsClips()` false;
-- a **name**, because unlike the master there can be several, and D9's
-  `$send:<name>` addresses one;
-- an output that reaches the master sum.
-
-What this proposal does **not** build, and what the later one must:
+**Not built here, and each of these is real work:**
 
 - the **send itself** — a per-track, per-destination tap with a level and a
-  pre/post-fader choice. That is a new component on the track side
-  (`twTrackMix`/`twGainStage` grow an auxiliary output), a new model object, new
-  verbs, and a new invalidation edge, and it is at least the size of this
-  proposal.
-- **feedback prevention.** Send A → send B → send A is a cycle in the audio
-  graph and the scheduler's dependency counting will deadlock or spin on it
-  rather than fail cleanly. The cycle guard `place-asset` already has
-  (`objects/mixer` AC2.6) is the precedent for what is needed and is not
-  transferable as written.
-- **latency compensation across a send.** PDC is not implemented anywhere
-  (proposal 37 P9), so a send through a latency-reporting plugin will be late by
-  exactly that amount, as the live lane already is.
+  pre/post-fader choice: a new auxiliary output on the track side, a model
+  object, verbs, and an invalidation edge. At least the size of this proposal.
+- **feedback prevention.** Send A → B → A is a graph cycle, and the scheduler's
+  dependency counting will deadlock or spin on it rather than fail cleanly.
+- **latency compensation across a send** (PDC is unimplemented, proposal 37 P9).
+- **`reconnectTracksToMixer` must learn about system inputs.** It sets the
+  mixer's input count from the track count and rewires **all** inputs on every
+  audibility, solo or arm change (`sstdmixer.cpp:196-238`), so a send lane wired
+  into a spare input is **clobbered by the next pass**. And `checkMasterShape`
+  iterates `getNInputs()` levels, so a send input must be unity or monitoring
+  dies for a new reason.
 
-M7 is therefore written as *shape only*: a send lane can be created, carries
-inserts and a fader, sums into the master, hides and shows, refuses clips, and
-round-trips — with **no source able to feed it**. That is deliberately a lane
-that does nothing audible yet, and the milestone's ACs say so out loud rather
-than implying coverage. It may be executed with this proposal or split out; the
-design above is what makes splitting it cheap.
+M7 is therefore *shape only*: a send lane exists, carries inserts and a fader,
+sums into the master, hides, refuses clips and round-trips — with **nothing able
+to feed it**. Deliberately a lane that does nothing audible yet, said out loud.
 
-### D11. The arranger: system rows are pinned, and they are not drop targets
+### D11. Invalidation FROM the master, and the arranger
 
-`appendRowsFor` gains a second phase, after the recursive walk over
-`childLinks()`: the arrangement's system lanes, in a fixed order (master last,
-sends above it, conductor lanes as the master's children under the existing
-`depth+1` recursion), each appended only when `!isHidden()`.
+**Invalidation from a master edit.** `SObject::invalidateRenderPathRange()` walks
+**down from the project root through `childLinks()`** — the pitfall
+`objects/track` inv. 13 records for an `SPluginSlot`, whose fix was to have the
+*track* do the walk. The master lane is not in `childLinks()`, so **`SStdMixer`
+must issue its invalidation**. Untested this is silent: the fader moves and the
+render does not change — the shape proposal 41's
+`fragment_nested_edit_reaches_all_placements` found, which only a RENDERED-audio
+assertion caught.
 
-Four properties, each of which has a specific way of going wrong in this
-codebase:
+**The arranger.** `appendRowsFor` gains a second phase after the recursive walk:
+the arrangement's system lanes, in a fixed order (sends above, master last,
+conductor lanes as the master's children under the existing `depth+1`
+recursion), each appended only when `!isHidden()`, each followed by
+`appendAutomationRowsFor` exactly as a user track is.
 
-- **`STrackRow::track` stays non-null.** Every consumer of `rows_` assumes it
-  (`rowHeightOf`, `drawTakeLane`, `pruneUiState`, the control column). Because a
-  system lane IS an `STrack`, none of them change. This is the single largest
-  piece of evidence for D1.
-- **Reorder is refused, and the refusal is in the model, not the head.**
-  `SSMVMixerControl`'s grip strip initiates a drag; the drop resolves through
-  `move-track`, which D6 already refuses. The head *additionally* draws no grip
-  for a system lane — but the head is cosmetic and the verb is the gate.
-- **The system rows are not a drop target for clips.** The `dropEvent` path
-  resolves its destination through `laneAt()` (D6), so the refusal is already
-  there; what M4 adds is that the drop is not *accepted* visually either, since
-  a cursor that promises a gesture the model then refuses is precisely the
-  defect `fix/loop-behaviour` (b) fixed for the loop-drag hover.
-- **A pinned row must not break `assert-lane-alignment`.** The head spans a
-  track's whole lane group (`timeline/CONTRACT.md` inv. 5), and the system rows
-  are appended after the user rows, so the group geometry is unchanged for every
-  existing case. The gate for that is the existing verb run over a project that
-  now has a visible master.
+Four properties, each with a specific way of going wrong here:
 
-### D12. Colour, metering and automation come for free, and one of them needs a note
+- **`STrackRow::track` stays non-null**, so `rowHeightOf`, `drawTakeLane`,
+  `pruneUiState` and the control column are unchanged. The largest single piece
+  of evidence for D1.
+- **`pruneUiState` walks the MODEL** to decide which per-track UI keys survive
+  (there was no pruning before proposal 37 P6, and a removed track left a
+  dangling key a later track at the same address inherited). It walks
+  `childLinks()`. **A master lane outside that walk would have its height scale,
+  fold state and shown-automation set pruned on every rebuild.**
+- **Reorder is refused in the MODEL, not in the head.** The grip drag resolves
+  through `move-track`, which D6 refuses; the head additionally draws no grip,
+  but the head is cosmetic and the verb is the gate.
+- **The system rows are not a clip drop target**, and the drop is not *accepted*
+  visually either — a cursor promising a gesture the model then refuses is
+  precisely the defect `fix/loop-behaviour` (b) fixed for the loop drag.
 
-The master lane resolves a clip colour like any lane (`app/model/sclipcolors.h`),
-meters like any lane (its tap is `getRootComponent()`, which for the master lane
-is its own — *unwired* — rewire, **not** the mixer's).
+### D12. Metering: the tap, decided
 
-That last clause is a trap, not a detail: after D3 the audio the user hears
-leaves the master's **gain stage** and enters the **mixer's** rewire, so a level
-probe pointed at the master lane's own rewire would read silence forever
-(`twLevelProbe` answers a miss by decaying, so it would look like a broken meter
-rather than a wiring bug — proposal 34's table: "A page miss must DECAY the
-meter"). M2 must therefore point the master lane's meter at the mixer's rewire,
-which is already what the transport master meter reads. **One master meter,
-already correct, mounted in a second place** — not a second probe.
+Both meter mounts call `track.getRootComponent()` uniformly
+(`ssmvmixercontrol.cpp`, `strackdetailpanel.cpp`). After D3 the audible signal
+leaves the master's **gain stage** and enters the **mixer's** rewire, so a probe
+pointed at the master lane's own (inert) rewire reads silence forever — and
+`twLevelProbe` answers a miss by **decaying**, so it looks like a broken meter
+rather than a wiring bug (proposal 34: "A page miss must DECAY the meter").
+
+**Decision: `STrack::getRootComponent()` is overridden for the master role** to
+return the mixer's rewire, rather than special-casing the two mounts. One
+answer, at the one place every consumer already asks. The consequences are named
+so they are not discovered: that override is also what `resolveClip()`, preview
+building and the live plan builder's `channelMap` read, and for the master lane
+each of those is *correct* under D3 — the mixer's rewire genuinely is that
+lane's output. **T5** records that the lane's own trackmix and rewire stay inert
+and must not be "wired for consistency" later.
+
+### D13. Arrangement lifecycle
+
+Arrangement roots are `SStdMixer` instances created and destroyed at runtime —
+`create-arrangement` (`screatearrangementaction.cpp:45`),
+`extract-arrangement` (`sextractarrangementaction.cpp:195`),
+`remove-arrangement`, `dissolve-arrangement`. "Every arrangement root owns
+exactly one master lane" therefore means those verbs **mint and destroy master
+lanes**, and D2 parents the lane to `SProject` rather than to the mixer — so
+**deleting an arrangement root does not delete its master lane**: it survives as
+an orphan that serializes forever.
+
+M1 owns this: creation mints, removal destroys (or explicitly re-parents), and
+**undo of `remove-arrangement` resurrects the lane with its chain, gain and
+automation intact** — an inverse built from a path is not enough, because the
+lane is not at a path in the removed tree.
 
 ---
 
 ## Non-goals
 
 - Sends themselves (D10). A send lane with nothing feeding it is the deliverable.
-- Tempo, time-signature and marker *content* (D7). The container is.
-- Plugin delay compensation (still proposal 37 P9).
-- A master-lane **input**: the master is not armable and not recordable (D6).
-- Changing `SStdMixer::isLane()`. It stays true; the master *lane* is a
-  different object with a different job, and M1's gate is what proves nothing
-  reads both for the same question.
+- Tempo, time-signature and marker *content* (D7).
+- Plugin delay compensation (proposal 37 P9).
+- A master-lane **input**: not armable, not monitorable, not recordable (D6).
+- Changing `SStdMixer::isLane()`. It stays true; the master *lane* is a different
+  object with a different job.
 - Multi-output routing / hardware output busses. One master per arrangement.
-- Retiring `SStdMixer` in favour of a master `STrack` at the root. That is a
-  much larger refactor with the same D2 path problem and no user-visible gain.
+- Retiring `SStdMixer` in favour of a master `STrack` at the root — a much larger
+  refactor with the same D2 path problem and no user-visible gain.
 
 ---
 
 ## Traps
 
-Numbered so a milestone can cite one. Each was found by reading the tree, not
-by anticipating.
+**T1. The shape check is blind to a master chain (D4a).** Between M2's re-wiring
+and an extended `checkMasterShape`, a master insert leaves monitoring **on and
+wrong**, with no log line. This is the single most dangerous window in the plan.
 
-**T1. The Closure refusal (D4).** The first master insert turns off live
-monitoring today. M3 or the feature is a regression.
+**T2. Index paths shift if the master is a child link (D2).** Every `.qxa`, every
+fixture, both goldens, and `objects/mixer` inv. 1.
 
-**T2. Index paths shift if the master is a child link (D2).** Every `.qxa`,
-every fixture, both goldens, and `objects/mixer` inv. 1.
-
-**T3. `reconnectTracksToMixer` sums every child.** A master lane in
-`childLinks()` is summed into the thing it is supposed to process.
+**T3. `reconnectTracksToMixer` sums every child**, and rewires **all** inputs on
+every audibility change (D10) — so it both mis-sums a child master and clobbers
+a send wired into a spare input.
 
 **T4. `SStdMixer::volume_` is a live field nothing reads (D5).** Ship a master
-fader without retiring it and there are two.
+fader without retiring it behaviourally and there are two.
 
-**T5. The master lane's own `twTrackMix` and `twRewire` are inert (D3).** A
-future reader will wire one of them "for consistency" and either double the
-sum or move the root component.
+**T5. The master lane's own `twTrackMix` and `twRewire` are inert (D3, D12).** A
+future reader wires one "for consistency" and either doubles the sum or moves the
+root component. Note also that `STrack::bumpRenderChainEpoch` will bump those
+inert components on every master edit — harmless, and a red herring for whoever
+debugs D3a next.
 
-**T6. The master lane's meter tap is not its own root component (D12).** It
-would decay silently.
+**T6. Invalidation THROUGH the master chain (D3a)** — silent, and it hits the
+*empty*-chain case that every user has.
 
-**T7. `ownedRefLinks()` must publish the master link.** `strack.h:70-77` records
+**T7. `ownedRefLinks()` must publish the master link.** `strack.h:73-80` records
 what happened when the plugin-chain link was not published: `~SProject`'s
 survivor ordering deleted the chain first and the destructor `removeRef()`'d
 freed memory.
 
-**T8. An older build round-tripping the file drops the master's FX.** The lane
-is a top-level element referenced by an attribute, so an older loader
-instantiates it, links it to nothing, and writes it back — but a *newer* file
-opened, saved and returned by an older build keeps the element and loses
-nothing; a file whose master lane is *created* by the new build and then edited
-by an old one keeps it as an orphan. This is the same exposure `SPluginChain`
-has carried since proposal 08 and is accepted, but it must be **stated in the
-CONTRACT** rather than discovered.
+**T8. An older build DROPS the master lane's identity on a round trip.**
+Serialization is regenerated from live objects; there is **no unknown-attribute
+passthrough** (`sobject.cpp:131ff` writes an enumerated list). An old build
+instantiates the top-level `<STrack>` with no parent, then re-saves it **without**
+`systemRole` and **without** `hidden`, and re-saves `<SStdMixer>` **without**
+`masterLaneId`. On return to a new build the reference is severed and the role is
+gone: either a fresh master lane is minted beside a role-less orphan track, or
+`masterLaneId` points at a `systemRole() == None` track that accepts clips and
+can be armed. **A defensive load rule is required** — a `masterLaneId` target
+that does not answer `Master` is coerced or rejected, never adopted as-is — and
+it needs a hand-crafted fixture.
 
-**T9. `pruneUiState` walks the MODEL to decide which per-track UI keys survive**
-(`sstdmixerview.cpp`, proposal 37 P6: there was no pruning before, and a removed
-track left a dangling key a later track at the same address inherited). It walks
-`childLinks()`. A master lane outside that walk would have its height scale,
-fold state and shown-automation set pruned away on every rebuild.
+**T9. `pruneUiState` walks `childLinks()` (D11).** A master lane outside it loses
+its UI state on every rebuild.
 
-**T10. `SMidiOutPump` reads every track's `eventFeed()`.** A master lane with a
-`midiOutPort` set would emit; D6's instrument refusal does not cover this, and
-the field is settable by verb. Refuse it in the same place.
+**T10. `SMidiOutPump` cannot see the master — and that is the hazard.**
+`collectTracks` walks `childLinks()` from the root
+(`smidioutpump.cpp:311-321`), so a master lane with `midiOutPort` set would
+**never emit**. The refusal is still right; the reason is the *inverse* of what
+revision 1 wrote — it is the `volume_` defect shape, a settable field that
+silently does nothing. `set-monitor-mode` and `set-track-input` are the same
+shape (D6).
 
-**T11. Automation invalidation from a system lane.** A `self:Volume` lane on the
-master invalidates through `SObject::invalidateRenderPathRange()`, whose walk
-"goes down from the project root through `childLinks()`" — the exact pitfall
-`objects/track` inv. 13 records for an `SPluginSlot`, whose fix was to have the
-*track* do the walk. The master lane is not in `childLinks()`, so **its
-invalidation must be issued by `SStdMixer`**, and the automation and plugin
-edits it owns must reach it. Untested, this is silent: the fader moves and the
-render does not change (proposal 41's `fragment_nested_edit_reaches_all_placements`
-found exactly this shape, and only a RENDERED-audio assertion caught it).
+**T11. Invalidation FROM the master (D11)** — the root-down walk cannot reach it.
 
 **T12. `render_while_armed` byte-identity.** Proposal 21's gate asserts an armed
-render equals an unarmed one. M3 changes what `twSpeaker` does while a live
-plan is up; the render path suspends live lanes, so the gate should hold — which
-is a prediction and therefore something to check, not to assume.
+render equals an unarmed one. M3 changes what `twSpeaker` does while a live plan
+is up; renders suspend live lanes, so it should hold — a prediction, and
+therefore something to check.
 
-**T13. `getNTracks()` and `assert-arrangements`.** Anything that counts tracks
-must keep counting user tracks. The master is not one.
+**T13. `getNTracks()` and `assert-arrangements`** must keep counting user tracks.
 
-**T14. Goldens.** Byte-identical is claimed only while the master chain is empty
-and its gain is 0 dB (D3). Any milestone that ships a *default* master insert
-(none is planned) re-freezes them under a recorded licence, the way B4 and B5
-did.
+**T14. Goldens** are byte-identical only while the master chain is empty and its
+gain is 0 dB (D3). Any milestone shipping a default master insert (none is
+planned) re-freezes them under a recorded licence, as B4 and B5 did.
+
+**T15. Arrangement lifecycle leaks (D13).** A `SProject`-parented lane does not
+die with its mixer.
+
+**T16. `pathOf` aliasing inside the master subtree.** A conductor lane at
+`{-1,0}` is invisible to `findPathRec`, so a UI gesture on a conductor row that
+derives its address the usual way gets `{}` → the mixer. D9's `pathOf` branch has
+to descend into the master lane too.
+
+**T17. The count-in and a record start under Closure.** `warmFrozenLane` demands
+the **root** explicitly, and `startPlayback` waits on the readahead frontier of
+the root; D4b option 1 re-roots both. A count-in with a master insert up is a
+distinct case from plain playback and needs its own gate.
+
+**T18. The mid-play flip has no trigger yet.** `pumpEdits`' plan signature covers
+closure members' chains; a master insert or removal must reach
+`SLiveMonitor::refresh` through some master-lane analogue of
+`SAppContext::liveLanesChanged`.
 
 ---
 
@@ -536,188 +676,227 @@ Every milestone ends green on: `./build.sh`, `python3 tools/check_layering.py`,
 never quote it), and **byte-identical goldens** (`smaragd/tests/goldens/`,
 16-bit PCM, `cmp`) unless the milestone says otherwise.
 
-**Every new gate must be watched FAILING on the pre-fix binary before the fix
-lands**, and the PR must say which sabotage bit which assertion. This repo has
-shipped a green gate over a broken paint three times (proposal 39 M2, proposal
-41 M5, `fix/take-lane-domain`); the rule exists because of that.
+**Every new gate must be watched FAILING on the pre-fix binary**, and the PR must
+say which sabotage bit which assertion — a single sabotage that fails everything
+proves nothing. This repo has shipped a green gate over a broken paint or a
+broken audio path four times (proposal 39 M2, proposal 41 M5,
+`fix/take-lane-domain`, `fix/take-lane-capture-align`).
 
 ### M0 — `systemRole`, `isHidden`, `acceptsClips` on `SObject` (pure refactor)
 
-- **AC0.1** All three exist on `SObject` with the defaults `None` / `false` /
-  `true`; nothing overrides them yet.
+- **AC0.1** All three exist on `SObject` with defaults `None` / `false` / `true`;
+  nothing overrides them yet.
 - **AC0.2** No caller spells any of them as a conjunction of existing predicates
-  (proposal 41 D3's rule), and no new `dynamic_cast` is introduced.
-- **AC0.3** Zero behaviour change: full suite green, both goldens byte-identical.
-- **Gate:** full `ctest`; `cmp` on both goldens; `grep` showing the three
-  predicates have exactly one definition each.
+  (proposal 41 D3) and no new `dynamic_cast` is introduced. *This is a review
+  item, not a grep-able gate, and is listed as one.*
+- **AC0.3** Zero behaviour change.
+- **Gate:** full `ctest`; `cmp` on both goldens; one definition each by grep.
 
-### M1 — The master lane exists, is owned, and round-trips (still silent)
+### M1 — Addressing, the master lane, ownership, lifecycle (still silent)
 
-- **AC1.1** Every arrangement root owns exactly one master lane: an `STrack`
-  with `systemRole() == Master`, reachable through `SStdMixer::masterLane()`,
+D9 lands here because M1's own round-trip AC cannot be written without it.
+
+- **AC1.1** Every arrangement root owns exactly one master lane: an `STrack` with
+  `systemRole() == Master`, reachable through `SStdMixer::masterLane()`,
   published in `ownedRefLinks()` (T7) and **absent from `childLinks()`** (D2).
-- **AC1.2** `getNTracks()`, every existing `trackPath`, `assert-arrangements`
-  and both goldens are unchanged — the lane is in the file and in no signal path
+- **AC1.2** `getNTracks()`, every existing `trackPath`, `assert-arrangements` and
+  both goldens are unchanged — the lane is in the file and in no signal path
   (T2, T13).
-- **AC1.3** It serializes as a top-level element with
+- **AC1.3** **Addressing (D9).** `resolveByPath` and `pathOf` handle the sentinel;
+  `pathOf( root, masterLane )` returns `{-1}` and **not** `{}`; `stringToPath`
+  maps `"$master"` to it and **rejects** an unknown `$`-token instead of
+  resolving it to track 0.
+- **AC1.4** It serializes as a top-level element with
   `<SStdMixer masterLaneId='…'>`, resolved in `deferResolve`, and round-trips
-  with its inserts, its gain, its automation lanes and its `hidden` flag.
-- **AC1.4** A project written by an older build (no `masterLaneId`) loads and is
-  given a fresh master lane; saving it adds the element and changes nothing
-  audible. A committed pre-M1 fixture proves it.
-- **AC1.5** Nothing reads `SStdMixer::getVolume()` (D5, T4).
-- **AC1.6** An existing arrangement's master lane survives `pruneUiState` (T9).
-- **Gate:** new `systemlane_test` (ctest) for ownership, serialization,
-  teardown order (T7 — construct, save, destroy, under ASAN if available);
-  `action_roundtrip_test`; a new qxa `master_lane_roundtrip`; `cmp` on both
-  goldens; the AC1.5 grep.
+  with its inserts, gain, automation lanes and `hidden` flag.
+- **AC1.5** **Defensive load (T8).** A hand-crafted fixture whose `masterLaneId`
+  points at a track that does **not** answer `Master` is coerced or rejected,
+  never adopted; and a pre-M1 project (no `masterLaneId`) is given a fresh master
+  lane with nothing audible changed.
+- **AC1.6** **Lifecycle (D13, T15).** `create-arrangement` and
+  `extract-arrangement` mint a master lane; `remove-arrangement` and
+  `dissolve-arrangement` destroy it; **undo of a removal restores the lane with
+  its chain, gain and automation.**
+- **AC1.7** **The negative-index audit.** Every consumer that indexes with a path
+  step rejects a negative rather than passing it to `childAt()`; enumerated in
+  the PR.
+- **AC1.8** The master lane survives `pruneUiState` across a rebuild (T9) —
+  asserted by setting a height scale, forcing a rebuild, reading it back.
+- **AC1.9** `set-track-volume` with an empty path is redirected to the master
+  lane (D5); the mixer's own `volume_` is documented inert.
+- **Gate:** new `systemlane_test` (ownership, serialization, the sentinel's
+  resolve/`pathOf` round trip, teardown order under ASAN where available);
+  new qxa `master_lane_roundtrip`, `master_lane_lifecycle`,
+  `master_lane_bad_reference`; `action_roundtrip_test`; `cmp` on both goldens.
+- **Watched failing:** `pathOf` without its branch must make
+  `master_lane_roundtrip` report the master's address as the mixer's — the
+  assertion that would bite today.
 
-### M2 — The master lane is in the signal path
+### M2 — The master lane is in the signal path, and the shape check learns about it
 
-- **AC2.1** With an empty chain and 0 dB, a render is **byte-identical** to the
-  pre-M2 render of the same project — `cmp`, not a tolerance (D3).
-- **AC2.2** A gain plugin (`tw.test.clap.gain`) inserted on the master at 2.5×
-  is heard: the rendered RMS is 2.5× the pre-insert RMS, to a closed form over
-  `tests/test_autosaw.wav`, and it is heard on **both** paths — the offline
-  render and the playback capture backend.
-- **AC2.3** The master fader is heard, and it is `twGainStage`: a −6 dB master
-  fader halves the rendered amplitude, and a `self:Volume` automation ramp on
-  the master is heard per second in closed form (the `automation_volume_ramp`
-  shape).
-- **AC2.4** A master edit **invalidates** (T11): render, then insert a master
-  plugin, then render again *in the same process*, and the second render
-  reflects it. A case that renders only afterwards cannot see this failure and
-  is not the gate (the `fix/take-lane-click-and-slip` lesson).
-- **AC2.5** The master meter reads post-master-FX and is ONE probe (D12, T6):
-  after AC2.2's insert the transport master meter and the master lane's head
-  meter report the same level, and neither decays.
-- **AC2.6** The master's own `twTrackMix` and `twRewire` are unwired and
-  asserted so, structurally (T5).
+- **AC2.1** With an empty chain at 0 dB, a render is **byte-identical** to the
+  pre-M2 render — `cmp`, not a tolerance (D3).
+- **AC2.2** A gain plugin (`tw.test.clap.gain`) on the master at 2.5× is heard:
+  rendered RMS is 2.5× the pre-insert RMS to a closed form over
+  `tests/test_autosaw.wav`, on **both** paths — the offline render and the
+  playback capture backend.
+- **AC2.3** The master fader is heard and it is `twGainStage`: −6 dB halves the
+  amplitude, and a `self:Volume` ramp on the master is heard per second in closed
+  form (the `automation_volume_ramp` shape).
+- **AC2.4** A **master** edit invalidates (T11): render, insert a master plugin,
+  render again *in the same process*, second render reflects it. A case that
+  renders only afterwards cannot see this and is not the gate.
+- **AC2.5** An **ordinary** edit invalidates **through** an empty master chain
+  (D3a, T6): render, change a clip and a track fader, render again in-process,
+  second render reflects both. This is the commonest path in the app and it is
+  silent when wrong.
+- **AC2.6** The master meter reads post-master-FX and is ONE probe (D12): after
+  AC2.2's insert the transport meter and the master head meter agree, and neither
+  decays.
+- **AC2.7** **`checkMasterShape` learns the chain (D4a, T1).** A non-empty master
+  chain, a non-unity master gain, or a master mute reports `Closure`, so
+  `SLiveMonitor` refuses monitoring exactly as inv. 18a does today — an honest
+  refusal for the whole M2→M3 window rather than silent wrongness.
+- **AC2.8** The master lane's own `twTrackMix`/`twRewire` are unwired, asserted
+  through accessors read by `systemlane_test` (T5) — not "asserted structurally".
 - **Gate:** new qxa `master_insert_heard`, `master_fader_heard`,
-  `master_edit_invalidates`, `master_meter_postfx`; `cmp` on both goldens for
-  AC2.1; `metering_test`.
+  `master_edit_invalidates`, `track_edit_invalidates_through_master`,
+  `master_meter_postfx`, `master_insert_refuses_monitoring`; `cmp` on both
+  goldens for AC2.1; `metering_test`; `playback_test` for AC2.7's predicate.
+- **Watched failing:** AC2.7 by reverting the check extension (monitoring stays
+  on with an insert up); AC2.5 by reverting the epoch extension (the second
+  render is byte-identical to the first when it must not be).
 
-### M3 — **The `Closure` master mode, wired** (the blocker; T1)
+### M3 — **The `Closure` master mode, wired** (T1, D4b)
 
-This milestone exists because of `main/shell/CONTRACT.md` inv. 18a and must land
-before M4/M5 make a master insert reachable from the UI.
-
-- **AC3.1** `twSpeaker` reads the live plan's `masterLinear` and stops adding
-  the frozen root page while a non-linear plan is live; the pump's master node
-  is the sole producer for that duration.
-- **AC3.2** The unarmed tracks are **not** doubled and **not** lost. Measured
-  with `assert-audio-continuity` over a monitored run with a master insert up:
-  `maxStep` bounds the "summed twice" failure and `maxGapFrames` bounds the
-  "lost" one — the verb's own header says these are two independent failures and
-  neither subsumes the other, which is why both are asserted.
-- **AC3.3** The readahead keeps running under Closure: the pump's
-  `frozenInputs` are served, and `liveOwnedRefusals` and `liveThreadRefusals`
-  are **0** (the number every proposal-21 case reports).
-- **AC3.4** `SLiveMonitor` no longer refuses a non-linear master: the refusal
-  message is absent from the log for a master carrying an insert, and monitoring
-  is audible — asserted, not merely un-refused.
-- **AC3.5** Flipping linear ↔ Closure **while the transport runs** (drop an
-  insert on the master mid-playback, then remove it) costs at most the
-  documented one-device-block gap. The house bound for a live lane is **1024
-  frames** (proposal 21 L2); anything tighter asserts something the design does
-  not offer.
-- **AC3.6** `render_while_armed` still produces a byte-identical render (T12).
-- **Gate:** `playback_test` gains a Closure case at widths 1/2/6 (no device
-  opened, the `twmonitor::pullChannels` precedent); new qxa
-  `monitor_master_insert`, `monitor_master_flip_midplay` — both `RUN_SERIAL` at
-  `SMARAGD_CAPTURE_SPEED=1` against the paced `file:` input, like every other
-  proposal-21 case; `render_while_armed` unchanged and green.
-- **Watched failing:** with AC3.1 reverted, `monitor_master_insert` must show
-  the doubling through `maxStep` — recorded in the PR with the measured numbers,
-  because "it would have been doubled" is a claim, not a measurement.
+- **AC3.1** The processor-ownership question is **answered in the design**: the
+  frozen demand is re-rooted below the master chain while a Closure plan is live
+  (D4b option 1), `AudioEngine`'s buffering-ready check and frontier wait follow
+  the re-rooting, and `twSpeaker` stops adding the frozen root page.
+- **AC3.2** The plan builder's master node carries the master lane's **inserts,
+  gain envelope and mute** (absent today, `sliveplanbuilder.cpp:334-349`).
+- **AC3.3** The unarmed tracks are neither **doubled** nor **lost**, measured
+  three ways because they are three different failures: a closed-form **RMS**
+  level (a doubling is present from the first frame and produces no *step*, so
+  `maxStep` alone would not bite), plus `assert-audio-continuity`'s `maxStep`
+  for the flip transient and `maxGapFrames` for the dropout.
+- **AC3.4** No two-thread access to one plugin instance: root freezes and pump
+  renders never overlap on the master's processors, with `liveThreadRefusals`
+  **0**. `liveOwnedRefusals` is **reported, not asserted zero** — under D4b that
+  number is a diagnostic of the chosen option, and asserting 0 would push an
+  implementer toward the racy one.
+- **AC3.5** `SLiveMonitor` no longer refuses a master carrying an insert: the
+  refusal message is absent and monitoring is **audible**, asserted.
+- **AC3.6** Flipping linear ↔ Closure **while the transport runs** costs at most
+  the house bound of **1024 frames** (proposal 21 L2) — anything tighter asserts
+  what the design does not offer — and the flip has a **trigger** (T18).
+- **AC3.7** **Count-in and record start under Closure** (T17): a count-in with a
+  master insert up still primes (proposal 21 L5's "0 buffering polls" shape), and
+  a record start places its take at the same frame as with a linear master.
+- **AC3.8** `render_while_armed` still produces a byte-identical render (T12).
+- **Gate:** `playback_test` gains a Closure case at widths 1/2/6 with no device
+  opened (the `twmonitor::pullChannels` precedent); new qxa
+  `monitor_master_insert`, `monitor_master_flip_midplay`,
+  `record_count_in_master_insert` — all `RUN_SERIAL` at
+  `SMARAGD_CAPTURE_SPEED=1` against the paced `file:` input;
+  `render_while_armed` unchanged.
+- **Watched failing:** with AC3.1 reverted, `monitor_master_insert`'s **RMS**
+  assertion must show the doubling, with the measured numbers in the PR.
 
 ### M4 — The master lane on screen
 
-- **AC4.1** The master lane is a row in the arranger when shown, pinned below
-  every user lane, with a head carrying its fader, meter, mute and FX access
-  (D11).
-- **AC4.2** It is **hidden by default** and `set-lane-hidden` toggles it as one
-  undo step; **Show system lanes** is one composite over all of them (D8).
-- **AC4.3** Hidden ≠ silent: with the master lane hidden and a master insert up,
-  AC2.2's level assertion still holds (D8's last paragraph).
-- **AC4.4** Existing lane geometry is unchanged: `assert-lane-alignment` passes
-  over a project with a visible master, and the take/automation sub-lane groups
-  of user tracks are unmoved (T9, D11).
-- **AC4.5** `pruneUiState` keeps the master lane's UI state across a rebuild
-  (T9) — asserted by setting a height scale, forcing a rebuild, and reading it
-  back.
-- **Gate:** new qxa `master_lane_rows` (row count and order at hidden/shown,
-  through the real `rebuildRows`), `master_lane_hidden_still_audible`;
-  `assert-track-head` over the master head; `assert-lane-alignment`;
-  `action_roundtrip_test` for `set-lane-hidden`.
+- **AC4.1** A row in the arranger when shown, pinned below every user lane, with
+  a head carrying its fader, meter, mute and FX access (D11).
+- **AC4.2** Hidden by default; `set-lane-hidden` toggles as one undo step; **Show
+  system lanes** is one composite (D8).
+- **AC4.3** Hidden ≠ silent: with the lane hidden and a master insert up, AC2.2's
+  level assertion still holds.
+- **AC4.4** **The head's fader commit is HEARD**, through the real
+  `applyVolumeDb`/`applyVolume_` handler (the `automation_write_pass` shape).
+  This is the assertion that bites D9's write-side defect — a head whose slider
+  moves and whose action never fires.
+- **AC4.5** Existing lane geometry unchanged: `assert-lane-alignment` passes with
+  a visible master, and user tracks' take/automation groups are unmoved.
+- **AC4.6** The master's own automation sub-lanes appear and honour the
+  shown-automation set keyed by `STrack *`.
+- **Gate:** new qxa `master_lane_rows`, `master_lane_hidden_still_audible`,
+  `master_head_fader_heard`; `assert-track-head`; `assert-lane-alignment`;
+  `action_roundtrip_test`.
 
 ### M5 — The policies, each refused and each announced
 
 - **AC5.1** A clip dropped on, moved to, or placed on a system lane is REFUSED
-  with a message naming the lane; the refusal is in `splacements::laneAt()` and
-  reached by `place-clip`, `move-clip`, `place-recording`, `add-sample` and the
-  arranger's `dropEvent` **without any of them being edited** (D6).
-- **AC5.2** `arm-track`, `remove-track`, `reparent-track`, `move-track`,
-  `set-track-solo` and `set-track-midi-output` are refused on a system lane,
-  each with its own message (D6, T10).
-- **AC5.3** An **instrument** in slot 0 of a system lane's chain is refused;
-  an ordinary effect is accepted.
-- **AC5.4** Mute IS accepted on the master and is audible (D6), including as a
+  with a message naming the lane. The check lives in the new
+  `splacements::placementLaneAt()`, and the PR **enumerates the placement callers
+  converted** (D6) rather than claiming none were edited.
+- **AC5.2** `arm-track`, **`set-monitor-mode`**, **`set-track-input`**,
+  `remove-track`, `reparent-track`, `move-track`, `set-track-solo` and
+  `set-track-midi-output` are refused on a system lane, each with its own message
+  (D6, T10).
+- **AC5.3** An instrument in slot 0 of a system lane's chain is refused; an
+  ordinary effect is accepted.
+- **AC5.4** Mute IS accepted on the master and is audible, including as a
   `self:Muted` automation lane.
-- **AC5.5** Every refusal leaves the model untouched and puts nothing on the
-  undo stack (the "an applied-but-empty action would put a no-op on the undo
-  stack" rule, `objects/mixer` inv. 7).
+- **AC5.5** Every refusal leaves the model untouched and puts nothing on the undo
+  stack.
+- **AC5.6** **The enumerated verb table.** Every registered track-addressed verb
+  has an explicit accept/refuse row, checked by `action_roundtrip_test`, so a
+  verb added later with no row fails the suite rather than silently accepting a
+  system lane (the default-open-blacklist mitigation).
 - **Gate:** new qxa `master_refuses_clips`, `master_refuses_arm_and_structure`,
-  `master_refuses_instrument`, `master_mute_audible`; each refusal watched
-  failing by removing its check individually and confirming which assertion
-  bites — a single sabotage that fails everything proves nothing.
+  `master_refuses_instrument`, `master_mute_audible`; each refusal watched failing
+  by removing **its own** check and confirming which assertion bites.
 
 ### M6 — Conductor lanes: the container only
 
-- **AC6.1** A conductor lane exists as a child of the master lane, addressable
-  as `$master,0`, hidden by default, refusing clips, contributing no audio, and
-  round-tripping.
-- **AC6.2** It carries **no tempo state of any kind**. `twTempoMap` remains the
-  one authority and `set-tempo` the one write (D7) — asserted by grep in the
-  gate, the way the P1 gate asserts `bpmTempo_` has exactly two writers.
-- **AC6.3** Nesting it does not change `getNTracks()`, any user `trackPath`, or
-  the goldens.
-- **Gate:** new qxa `conductor_lane_container`; the AC6.2 grep;
-  `action_roundtrip_test`; `cmp` on both goldens.
+- **AC6.1** A conductor lane exists as a child of the master lane, addressable as
+  `$master,0` (`{-1,0}`), hidden by default, refusing clips, contributing no
+  audio, round-tripping.
+- **AC6.2** It carries **no tempo state of any kind** — `twTempoMap` stays the one
+  authority and `set-tempo` the one write (D7), asserted by grep the way the P1
+  gate asserts `bpmTempo_`'s writers.
+- **AC6.3** **A gesture on a conductor row commits to the conductor lane** (T16),
+  not to the mixer — the `pathOf`-descent half of D9.
+- **AC6.4** Nesting changes no `getNTracks()`, no user `trackPath`, no golden.
+- **Gate:** new qxa `conductor_lane_container`, `conductor_lane_addressing`; the
+  AC6.2 grep; `action_roundtrip_test`; `cmp` on both goldens.
 
 ### M7 — Send lanes: shape only, routing explicitly NOT built
 
-- **AC7.1** A send lane can be created by verb, is named, is a system lane,
-  carries a plugin chain and a gain stage, sums into the master, hides and
-  shows, refuses clips, and round-trips.
-- **AC7.2** It is addressable as `$send:<name>` and the five plugin verbs reach
-  it unchanged (D9).
-- **AC7.3** **Nothing feeds it.** With no source, a send lane contributes
-  silence and both goldens are byte-identical. The milestone asserts the absence
-  of routing rather than implying its presence (D10).
-- **AC7.4** Two send lanes coexist; names are unique and a collision is refused.
-- **Gate:** new qxa `send_lane_shape`, `send_lane_silent`; `cmp` on both
+- **AC7.1** A send lane can be created by verb, is named, carries a plugin chain
+  and a gain stage, sums into the master, hides and shows, refuses clips, and
+  round-trips.
+- **AC7.2** Addressable as `$send:<name>`; the five plugin verbs reach it
+  unchanged (D9).
+- **AC7.3** **Nothing feeds it**: with no source it contributes silence and both
+  goldens are byte-identical. The milestone asserts the absence of routing rather
+  than implying its presence.
+- **AC7.4** **The send survives a `reconnectTracksToMixer` pass** (T3, D10): the
+  gate toggles a solo or an arm — which forces a full rewire — **before**
+  rendering. Without that step this gate goes green over the clobbering defect.
+- **AC7.5** Two send lanes coexist; a name collision is refused.
+- **Gate:** new qxa `send_lane_shape`, `send_lane_survives_rewire`; `cmp` on both
   goldens; `action_roundtrip_test`.
-- **Splittable.** If M7 is deferred to its own proposal, M0-M6 stand alone and
-  nothing above depends on it.
+- **Splittable.** If M7 becomes its own proposal, M0-M6 stand alone.
 
 ### M8 — Contracts, docs, and the CLAUDE.md section
 
-- **AC8.1** `main/objects/mixer/CONTRACT.md` gains the master-lane ownership
-  invariants (D2, T7, T8); `main/objects/track/CONTRACT.md` gains the system-role
-  and policy invariants (D6); `main/timeline/CONTRACT.md` gains the pinned-row
-  and hidden≠silent invariants (D11, D8); `main/shell/CONTRACT.md` **inv. 18a is
-  rewritten** — it currently says the Closure mode is refused and names this
+- **AC8.1** `main/objects/mixer/CONTRACT.md` gains the ownership, lifecycle and
+  epoch-extension invariants (D2, D3a, D13, T7, T8, T15);
+  `main/objects/track/CONTRACT.md` the system-role and policy invariants (D6);
+  `main/model/CONTRACT.md` the sentinel addressing (D9);
+  `main/timeline/CONTRACT.md` the pinned-row and hidden≠silent invariants;
+  `main/shell/CONTRACT.md` **inv. 18a is rewritten** — it currently names this
   proposal as the thing that lands there.
-- **AC8.2** `docs/ACTIONS.md` gains `set-lane-hidden`, `create-send-lane` and
-  the `$master` / `$send:` path spellings, and every refusal above is documented
-  as a refusal.
+- **AC8.2** `docs/ACTIONS.md` gains `set-lane-hidden`, `create-send-lane`, the
+  `$master` / `$send:` spellings, and every refusal above documented as a
+  refusal.
 - **AC8.3** `CLAUDE.md` gains a section in the house style — the "read this
   before touching X, the obvious design is wrong" table — whose first row is
-  D4/T1.
-- **AC8.4** The PR body says what was gated **and what was not** (the list
-  below), names every unreproduced flake, and reports the measured
-  registered/run/skipped counts rather than quoting any figure from CLAUDE.md.
+  D4a/T1: *the shape check cannot see a master chain.*
+- **AC8.4** The PR body says what was gated **and what was not**, names every
+  unreproduced flake, and reports measured registered/run/skipped counts rather
+  than quoting any figure from `CLAUDE.md`.
 - **Gate:** documentation review; `docs/ACTIONS.md` rows verified against the
   registered verbs by `action_roundtrip_test`.
 
@@ -725,33 +904,27 @@ before M4/M5 make a master insert reachable from the UI.
 
 ## What this proposal will NOT gate
 
-Stated here so a green suite cannot be read as coverage it does not have.
-
 - **Real device latency and jitter** under a Closure-mode live lane. Every
-  proposal-21 measurement is against the capture backend, and this one is too.
-- **ASIO and WASAPI under load** with a master insert up. The `-j` gate's own
+  proposal-21 measurement is against the capture backend and so is this one.
+- **ASIO and WASAPI under load** with a master insert up. The `-j` gate's
   wall-clock caveats apply (`twlog_test`, `qxa.log_dock_scale`,
   `monitor_latency`): confirm the box is idle before reading a timing failure as
   a regression.
-- **Sends** — no source can feed a send lane (D10, AC7.3). Feedback cycles,
-  pre/post-fader taps and send-path latency are entirely out of scope.
+- **Sends** — nothing can feed a send lane (D10, AC7.3). Feedback cycles,
+  pre/post-fader taps and send-path latency are out of scope.
 - **Tempo, time-signature and marker content** (D7, AC6.2).
 - **Plugin delay compensation** on the master (proposal 37 P9). A
-  latency-reporting master insert is heard late by exactly its reported amount,
-  and every mount that shows a latency already says so.
-- **Pixel aesthetics** of the master head and row. What is gated is a geometry
-  relation and a luminance relation, never a palette — the standing rule since
-  proposal 39.
+  latency-reporting master insert is heard late by exactly its reported amount.
+- **Pixel aesthetics** of the master head and row — a geometry relation and a
+  luminance relation, never a palette.
 - **The Show-system-lanes MENU ITEM.** There is no testkit verb for a context
   menu anywhere in this repo, so what is gated is the VERB it submits and the
   predicate its enabled state reads. The wiring is hand-verified.
-- **An older build's round trip** (T8). The exposure is stated in the CONTRACT
-  and not exercised — there is no second build in the gate.
+- **An older build's round trip** (T8). The defensive *load* rule is gated; the
+  old build itself is not — there is no second build in the gate.
 - **A master lane inside a nested arrangement asset.** Arrangements can be
-  windowed as assets (proposal 09); what a placed arrangement's master lane does
-  inside another arrangement's sum is a real question, it is answered by D3's
-  topology (it is simply part of that arrangement's output), and **no case
-  exercises it.**
+  windowed as assets (proposal 09); D3's topology answers what a placed
+  arrangement's master does, and **no case exercises it.**
 - **More than one arrangement's master lanes at once.** The design is per-root
   throughout; nothing measures two.
 
@@ -759,8 +932,10 @@ Stated here so a green suite cannot be read as coverage it does not have.
 
 ## Sub-agent assignment
 
-M3 is the milestone that must not be delegated without the reading list at the
-top of this document: it is the only one where the failure mode is *audible
-doubling* rather than a refused verb, and the only one whose gate is a
-continuity measurement. M0/M1 and M8 are mechanical. M5 is a good parallel
-track once M0 has landed, because its ACs are independent refusals.
+**M3 must not be delegated without the reading list at the top**, and neither
+must **M2's AC2.7**: those two are the only places where the failure mode is
+audibly wrong output rather than a refused verb, and D4b's ownership question has
+to be *decided* before code is written. **M1 is larger than it looks** — it
+carries D9's addressing audit and D13's lifecycle work, either of which could be
+its own branch. M0 and M8 are mechanical. M5 parallelises well once M0 has
+landed, because its ACs are independent refusals.
