@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 44 C8: THE POSE REGENERATES WHEN A WARM STORE HAS NONE.
+
+  THE DEFECT THIS GATES SHIPPED IN C5 AND WAS INVISIBLE THERE. The plant runs
+  on the ANALYSIS side (that is where the units' couplings are), and a warm
+  sidecar store is precisely what SKIPS the analysis. So a store holding valid
+  groove aspects but no "body.pose" never produced one: `sFeelFlowPoseAt` fell
+  back to the M3e direct mapping, silently and permanently, and only a cleared
+  cache would ever have shown otherwise.
+
+  Two populations are in exactly that shape:
+    * every store written before C5 existed, and
+    * EVERY store at all, the first time BodyPoseVersion is bumped, which C8
+      does, because the coupled chain makes every angle a different number.
+
+  It was found by bumping that version and watching feel_flow_puppet pass COLD
+  and fail WARM, which is the one difference no single run can show.
+
+  THE SHAPE IS BUILT, NOT WAITED FOR. `sidecar-drop` removes just the pose
+  sidecar; then the track is removed and rebuilt over the SAME audio, so the
+  new SFeelFlowTrackBounce has no in-memory result and its analysis hits the
+  warm store. Clearing the whole store instead would make the run cold and test
+  nothing; a staling EDIT would change the audio and mint a different content
+  hash, which is also not this shape.
+
+  WHAT SEPARATES PASS FROM FAIL IS THE PINNED LINE, NOT A FLOOR. The fallback
+  produces LARGER numbers than the plant (about 1.09 against 0.10 summed), so a
+  minAbsSum passes either way, the same trap feel_flow_trained.qxa records.
+  The line below is the plant's, byte for byte the one feel_flow_puppet pins.
+-->
+<SActionScript version="1">
+  <actions>
+    <sidecar-root/>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+
+    <!-- (1) COLD: the plant runs on the analysis side and stores its pose. -->
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+    <assert-groove-aspect aspect="body.pose" expectExists="true" minRecords="1500"/>
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
+                           contains="pose: valid=1 bounceY=0.0015 sway=-0.0519 armSwing=0.0052 headNod=-0.0073 hipShift=0.0339 energySum=1.3862"/>
+
+    <!-- (2) Make the store look like a pre-C5 one: groove aspects intact,
+             body.pose gone. expectDropped is not pinned to a number because
+             the count depends on how many keys the run above minted. -->
+    <sidecar-drop aspect="body.pose"/>
+    <assert-groove-aspect aspect="body.pose" expectExists="false"/>
+    <assert-groove-aspect aspect="groove.dyn" expectExists="true" minRecords="1500"/>
+
+    <!-- (3) A FRESH TRACK over the SAME audio: no in-memory result, so the
+             analysis takes the warm-store path and never runs the plant. -->
+    <remove-track trackPath="0"/>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../groove/a_offset15.wav" timePos="0"/>
+    <feel-flow-analyze target="track" trackPath="0"/>
+    <wait-analysis timeoutMs="60000"/>
+
+    <!-- (4) The pose must be the PLANT's, identical to (1), which means the
+             read side regenerated it from the loaded dynamics and the
+             ensemble's own coupling constants. On the pre-fix binary this
+             reads the fallback's numbers instead. -->
+    <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
+                           contains="pose: valid=1 bounceY=0.0015 sway=-0.0519 armSwing=0.0052 headNod=-0.0073 hipShift=0.0339 energySum=1.3862"/>
+
+    <!-- (5) And it was WRITTEN BACK, so the next process does not pay for it
+             again. This is the half that makes the fix a repair rather than a
+             per-run workaround. -->
+    <assert-groove-aspect aspect="body.pose" expectExists="true" minRecords="1500"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

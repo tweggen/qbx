@@ -667,6 +667,69 @@ std::shared_ptr<const SFeelFlowUiData> SFeelFlowTrackBounce::feelFlowForUi() con
                                     fresh->pose = twBodyPoseDecode(
                                         posePayload.data(), posePayload.size() );
                             }
+
+                            // A MISS ON A WARM STORE REGENERATES THE POSE HERE,
+                            // and leaving that out was a real defect, found the
+                            // moment C8 bumped BodyPoseVersion.
+                            //
+                            // The plant runs on the ANALYSIS side, and the
+                            // analysis is exactly what a warm store SKIPS. So a
+                            // store holding valid groove aspects but no
+                            // body.pose -- which is every store written before
+                            // C5, and every store at all after any body.pose
+                            // version bump -- never regenerated one: the puppet
+                            // fell back to the M3e direct mapping silently and
+                            // permanently, and only a cleared cache would ever
+                            // have shown otherwise. Measured: the qxa cases
+                            // passed cold and failed warm.
+                            //
+                            // WHY THE READ SIDE CAN DO THIS AT ALL, given that
+                            // tw/body CONTRACT 31 says recovering the music
+                            // needs `k` divided out and `k` is not in the wire
+                            // format: `k` is a property of the ENSEMBLE SPEC,
+                            // not of the audio, and `bp.groove` right above IS
+                            // that spec. So this is the same k the analysis
+                            // used, read from the same place, rather than a
+                            // second derivation of it. Units are matched BY
+                            // NAME, never by index, because unitNames may have
+                            // come from the default-ensemble fallback.
+                            if( fresh->pose.empty() && !fresh->dyn.empty()
+                                && nUnits > 0 && !fresh->unitNames.empty() ) {
+                                twBodyPlantInput bin;
+                                bin.nUnits    = nUnits;
+                                bin.unitNames = fresh->unitNames;
+                                bin.dyn       = fresh->dyn;
+                                bin.dtSec     = fresh->hopFrames
+                                                && reader->info().sourceRate
+                                              ? (double) fresh->hopFrames
+                                                / (double) reader->info().sourceRate
+                                              : 0.01;
+                                for( const std::string &un : fresh->unitNames ) {
+                                    double k = 0.0;
+                                    for( const twGroovePendulumUnitSpec &us
+                                         : bp.groove.pendulum.ensemble )
+                                        if( us.name == un ) { k = us.k; break; }
+                                    bin.unitK.push_back( k );
+                                }
+                                std::vector<twBodyPoseRecord> recs =
+                                    twBodyPlantRun( bin, bp.body );
+                                if( !recs.empty() ) {
+                                    fresh->pose = recs;
+                                    std::vector<uint8_t> payload;
+                                    twBodyPoseEncode( recs, payload );
+                                    twQafInfo pi   = reader->info();
+                                    pi.params        = bpBlob;
+                                    pi.aspectId      = twAspect::BodyPose;
+                                    pi.aspectVersion = twAspect::BodyPoseVersion;
+                                    pi.recordStride  =
+                                        (uint64_t) twBodyPoseDof::Count * 3 * 4;
+                                    pi.recordCount   = recs.size();
+                                    pi.hopFrames     = fresh->hopFrames;
+                                    twSidecarStore::instance().store(
+                                        pi, payload.data(),
+                                        (uint64_t) payload.size() );
+                                }
+                            }
                         }
                     }
                 }

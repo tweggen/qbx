@@ -19,6 +19,7 @@
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/sidecar/twqaf.h"
 #include "tw/sidecar/twgrooveaspect.h"
+#include "tw/sidecar/twbodyposeaspect.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -96,6 +97,80 @@ static const bool s_reg_sidecar_root = (
     SActionRegistry::instance().registerType(
         QStringLiteral("sidecar-root"),
         []{ return new SSidecarRootAction; }
+    ), true
+);
+
+// ---------------------------------------------------------------- sidecar-drop
+
+SApplyResult SSidecarDropAction::apply(SProject * /*project*/)
+{
+    if (aspect_.isEmpty()) {
+        qWarning() << "sidecar-drop: missing aspect";
+        return {false, nullptr};
+    }
+    SApplication &app = SApplication::app();
+    const QString outputDir = app.testOutputDir();
+    if (outputDir.isEmpty()) {
+        qWarning() << "sidecar-drop: no test output directory configured";
+        return {false, nullptr};
+    }
+    // Through testOutputDir like every other artifact verb, so a case can
+    // never reach the developer's own cache.
+    const std::filesystem::path root = (outputDir + "/sidecars").toStdString();
+    const std::string needle = "." + aspect_.toStdString() + ".";
+    int dropped = 0;
+    std::error_code ec;
+    if (std::filesystem::exists(root, ec)) {
+        std::vector<std::filesystem::path> doomed;
+        for (std::filesystem::recursive_directory_iterator
+                 it(root, ec), end; it != end; it.increment(ec)) {
+            if (ec) break;
+            if (!it->is_regular_file(ec)) continue;
+            const std::string fn = it->path().filename().string();
+            if (fn.size() < 4 || fn.substr(fn.size() - 4) != ".qaf") continue;
+            if (fn.find(needle) == std::string::npos) continue;
+            doomed.push_back(it->path());
+        }
+        // Collected first, removed after: erasing under a recursive iterator
+        // is not defined behaviour anybody should rely on.
+        for (const std::filesystem::path &p : doomed) {
+            std::error_code rc;
+            if (std::filesystem::remove(p, rc)) dropped++;
+        }
+    }
+    qDebug() << "sidecar-drop:" << aspect_ << "->" << dropped << "file(s) removed";
+    if (expectDropped_ >= 0 && dropped != expectDropped_) {
+        qWarning() << "sidecar-drop:" << aspect_ << "removed" << dropped
+                   << "expected" << expectDropped_;
+        return {false, nullptr};
+    }
+    return {true, nullptr};
+}
+
+void SSidecarDropAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute(QStringLiteral("aspect"), aspect_);
+    if (expectDropped_ >= 0)
+        elem.setAttribute(QStringLiteral("expectDropped"), expectDropped_);
+}
+
+bool SSidecarDropAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    aspect_ = elem.attribute(QStringLiteral("aspect"));
+    expectDropped_ = elem.hasAttribute(QStringLiteral("expectDropped"))
+                   ? elem.attribute(QStringLiteral("expectDropped")).toInt()
+                   : -1;
+    // TRUE even with no aspect, matching assert-groove-aspect: a missing
+    // required attribute is refused in apply(), not here. readXml also has to
+    // survive a DEFAULT-CONSTRUCTED round trip, which is what
+    // action_roundtrip_test does to every registered verb.
+    return true;
+}
+
+static const bool s_reg_sidecar_drop = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("sidecar-drop"),
+        []{ return new SSidecarDropAction; }
     ), true
 );
 
@@ -765,9 +840,29 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
                 }
             }
         }
+    } else if (aspect_ == QLatin1String("body.pose")) {
+        // EXISTENCE AND GEOMETRY ONLY, deliberately. The pose payload's own
+        // numbers are asserted through assert-feel-flow-pose, which reads them
+        // the way the puppet does; decoding them a second time here would be a
+        // second implementation of the same read. What this branch is for is
+        // the question assert-feel-flow-pose cannot answer -- whether the
+        // aspect is ON DISK -- which is exactly what feel_flow_pose_regen.qxa
+        // needs to distinguish a regenerated pose from one merely computed in
+        // memory and thrown away.
+        const uint64_t wantStride =
+            (uint64_t) twBodyPoseDof::Count * 3 * 4;
+        if (info.recordStride != wantStride) {
+            qWarning() << "assert-groove-aspect: body.pose recordStride"
+                       << (qulonglong)info.recordStride
+                       << "expected" << (qulonglong)wantStride;
+            return {false, nullptr};
+        }
+        qDebug() << "assert-groove-aspect: body.pose" << (qulonglong)recordCount
+                 << "records, stride" << (qulonglong)wantStride << "OK";
     } else {
         qWarning() << "assert-groove-aspect: unknown aspect" << aspect_
-                   << "(expected groove.res, groove.ev or groove.dyn)";
+                   << "(expected groove.res, groove.ev, groove.dyn or"
+                      " body.pose)";
         return {false, nullptr};
     }
 

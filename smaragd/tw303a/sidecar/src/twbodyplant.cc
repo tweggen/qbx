@@ -64,7 +64,17 @@ std::vector<twBodyPoseRecord> twBodyPlantRun( const twBodyPlantInput &in,
     const size_t nHops = in.dyn.size();
     if( nHops == 0 || in.nUnits == 0 || in.dtSec <= 0.0 ) return out;
 
-    // --- the four joints ---------------------------------------------------
+    // --- the four joints, AS A CHAIN --------------------------------------
+    // Since C8 this is one COUPLED system, not four joints stepped in order:
+    // a child's reaction acts back on its parent, so an arm swing
+    // counter-rotates the trunk and a trunk knows it is carrying two arms and
+    // a head. The joint table below is unchanged -- only who solves it moved.
+    twBodyChain chain;
+    chain.n = JCount;
+    chain.joints[JLeg].parent   = -1;
+    chain.joints[JTrunk].parent = JLeg;
+    chain.joints[JArm].parent   = JTrunk;
+    chain.joints[JNeck].parent  = JTrunk;
     twBodyJoint joints[JCount];
     {
         twBodyJoint &leg = joints[JLeg];
@@ -93,6 +103,7 @@ std::vector<twBodyPoseRecord> twBodyPlantRun( const twBodyPlantInput &in,
             joints[j].posturalGain   = posturalGain;
         }
     }
+    for( int j = 0; j < JCount; j++ ) chain.joints[j].joint = joints[j];
 
     // --- each DOF's unit, its smoother, and its DERIVED torque scale --------
     struct DofState {
@@ -121,8 +132,7 @@ std::vector<twBodyPoseRecord> twBodyPlantRun( const twBodyPlantInput &in,
     }
 
     // --- integrate ---------------------------------------------------------
-    twBodyJointState js[JCount];
-    double prevVel[JCount][(int) twBodyAxis::Count] = {};
+    twBodyChainState cs;
     out.resize( nHops );
     double peakUrge = 0.0, peakNod = 0.0, peakSway = 0.0;
 
@@ -147,32 +157,26 @@ std::vector<twBodyPoseRecord> twBodyPlantRun( const twBodyPlantInput &in,
                 st[d].torqueScale * urge * (double) rec.units[u].cosMet;
         }
 
-        // The chain, PARENT FIRST. Each child is driven by its parent's angle,
-        // velocity and acceleration -- the acceleration by finite difference of
-        // the parent's own velocity, which is the only place a derivative is
-        // taken and is why the order below matters.
+        // ONE COUPLED SOLVE, and there is no order to get right any more. The
+        // parent-first walk this replaced also finite-differenced each parent's
+        // velocity to get its acceleration -- so the drive a child felt was one
+        // hop stale, and the reaction it exerted did not exist at all.
+        twBodyChainStep( chain, cs, &tau[0][0], in.dtSec );
+
+        // The parent's motion, for the postural-torque report only. It is read
+        // from the state the solve just produced, so it is the same quantity
+        // the equation used rather than a second derivation of it.
         auto parentOf = [&]( int joint ) {
             twBodyParentMotion p;
-            int par = -1;
-            if( joint == JTrunk ) par = JLeg;
-            else if( joint == JArm || joint == JNeck ) par = JTrunk;
+            const int par = chain.joints[joint].parent;
             if( par < 0 ) return p;
             for( int a = 0; a < (int) twBodyAxis::Count; a++ ) {
-                p.angle[a]  = js[par].angle[a];
-                p.angVel[a] = js[par].vel[a];
-                p.angAcc[a] = ( js[par].vel[a] - prevVel[par][a] ) / in.dtSec;
+                p.angle[a]  = cs.angle[par][a];
+                p.angVel[a] = cs.vel[par][a];
+                p.angAcc[a] = cs.acc[par][a];
             }
             return p;
         };
-
-        const int order[JCount] = { JLeg, JTrunk, JArm, JNeck };
-        for( int oi = 0; oi < JCount; oi++ ) {
-            const int j = order[oi];
-            const twBodyParentMotion p = parentOf( j );
-            for( int a = 0; a < (int) twBodyAxis::Count; a++ )
-                prevVel[j][a] = js[j].vel[a];
-            twBodyJointStep( joints[j], js[j], p, tau[j], in.dtSec );
-        }
 
         // Report every DOF: angle, velocity, and the TOTAL muscle torque --
         // postural tone PLUS the active half, because an effort measure that
@@ -183,15 +187,26 @@ std::vector<twBodyPoseRecord> twBodyPlantRun( const twBodyPlantInput &in,
             const DofMap &m = kDofs[d];
             const int a = (int) m.axis;
             const twBodyParentMotion p = parentOf( m.joint );
-            r.dof[(int) m.dof].angle    = (float) js[m.joint].angle[a];
-            r.dof[(int) m.dof].velocity = (float) js[m.joint].vel[a];
+            // RELATIVE, because that is what a joint angle IS and what the
+            // puppet draws. The chain solves in absolute angles; converting
+            // here, through the one function that knows the parent, is what
+            // keeps the payload's meaning unchanged across C8.
+            const double rel = twBodyChainRelative( chain, cs, m.joint, m.axis );
+            twBodyJointState js;
+            for( int ax = 0; ax < (int) twBodyAxis::Count; ax++ )
+                js.angle[ax] = twBodyChainRelative( chain, cs, m.joint,
+                                                    (twBodyAxis) ax );
+            r.dof[(int) m.dof].angle    = (float) rel;
+            r.dof[(int) m.dof].velocity =
+                (float) twBodyChainRelativeVel( chain, cs, m.joint, m.axis );
             r.dof[(int) m.dof].muscleTorque =
                 (float) ( tau[m.joint][a]
-                          + twBodyPosturalTorque( joints[m.joint], m.axis, p,
-                                                  js[m.joint] ) );
+                          + twBodyPosturalTorque( joints[m.joint], m.axis, p, js ) );
         }
-        peakNod  = std::max( peakNod,  std::fabs( js[JNeck].angle[kLateral] ) );
-        peakSway = std::max( peakSway, std::fabs( js[JTrunk].angle[kLateral] ) );
+        peakNod  = std::max( peakNod, std::fabs(
+            twBodyChainRelative( chain, cs, JNeck, twBodyAxis::Lateral ) ) );
+        peakSway = std::max( peakSway, std::fabs(
+            twBodyChainRelative( chain, cs, JTrunk, twBodyAxis::Lateral ) ) );
     }
 
     if( report ) {

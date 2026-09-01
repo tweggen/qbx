@@ -1682,8 +1682,137 @@ that weaker basis.
 
 1. ~~The sagittal head-stub readout, then flip `kTrunkSagittal` and re-pin.~~ **DONE.**
 2. ~~C5's store plumbing.~~ **DONE 2026-08-31 — see below. THE CHAIN IS CLOSED.**
-3. The inward pass, gated against Bullet or OpenSim, with the 11.4 % figure as
-   the thing to show is actually fixed.
+3. ~~The inward pass, with the 11.4 % figure as the thing to show is actually
+   fixed.~~ **DONE 2026-09-01 as C8 — see below. NOT gated against Bullet or
+   OpenSim, and the reason is recorded there: a reference implementation would
+   have been a second approximation to agree with, where subdivision
+   invariance is a self-contained exactness statement.**
+
+## C8 — THE INWARD PASS — **DONE 2026-09-01**
+
+`twBodyChain` (`tw/body/twbodychain.h`): the linearised mass, damping and
+stiffness matrices in ABSOLUTE joint angles, integrated exactly by an augmented
+matrix exponential. The plant runs it. Invariants: `tw303a/body/CONTRACT.md`
+35-39.
+
+**FOUR DEFECTS, and only the first was the one this milestone set out to fix.**
+
+**(1) The gap itself.** We had Featherstone's outward pass and not the inward
+one. `twBodyChain` is the coupled solve; the plant no longer steps four joints
+in order. Proposal 44's AC4.2 — "an arm swing counter-rotates the trunk" — is
+MET, and gated as a two-by-two closed form with the one-way model's answer
+(exactly zero) as the control.
+
+**(2) A SIGN ERROR IN THE SHIPPED ONE-WAY MODEL, found by deriving the chain
+rather than by reading the file.** The off-diagonal mass term is
+`m·(σ_p·L)·(σ_c·d)` and `forcingTorque` carried `−(I + m·d·L)·φ″` UNSIGNED —
+the inverted answer applied to every joint. So a hanging arm on an
+accelerating trunk swung the wrong WAY and about three times too FAR. The
+falsifier is a point mass and pure kinematics, needs no constant, and was
+watched failing at −9.0000 against a closed form of +3.0000
+(`body_joint_test` section 3d). The centripetal term carries the same sign for
+the same reason.
+
+**(3) THE 11.4 % FIGURE WAS WRONG.** This document sized the one-way gap at
+0.321 N·m and 11.4 %. Recomputed against `twBodyMeasures` it is **0.29668 N·m
+and 10.5 %**: the arithmetic used a head CoM of **0.1231 m** above the atlas
+where the module says **0.11375 m**. The other three inputs — head 5.175 kg,
+trunk I 2.81270 kg·m², neck lever 0.504 m — match to every digit quoted, so
+the slip is that one number and nothing else. And the honest ratio is smaller
+still, **5.9 %**, because `M[trunk][trunk]` is `I_prox + (m_arm + m_head)·L²`
+— the carried mass the one-way model omitted ENTIRELY. Measured consequence: a
+trunk that knows what it carries rings at **1.67 Hz** against **2.08 Hz**.
+
+**(4) A WARM STORE NEVER REGENERATED THE POSE.** The plant runs on the ANALYSIS
+side, and a warm sidecar store is precisely what SKIPS the analysis — so a
+store holding valid groove aspects but no `body.pose` never produced one, and
+`sFeelFlowPoseAt` fell back to the M3e direct mapping silently and
+permanently. That is every store written before C5, and EVERY store at all the
+first time `BodyPoseVersion` is bumped, which C8 does. Found by the version
+bump making `feel_flow_puppet` pass COLD and fail WARM — the one difference no
+single run can show. The read side now regenerates and writes back; it can,
+because `k` is a property of the ENSEMBLE SPEC rather than of the audio, so
+`bp.groove.pendulum.ensemble` is the same `k` the analysis used, read from the
+same place. Gated by the new `feel_flow_pose_regen.qxa` over the new
+`sidecar-drop` verb, watched failing under two sabotages that bite different
+assertions.
+
+### The reduction is FOUR claims, not one, and finding that out was the work
+
+A single "the chain equals the single joint to machine precision" gate is not
+available, and the reason is not a bug in either: they do not carry the same
+quantity across a step boundary (`twBodyJointStep` keeps the RELATIVE velocity
+continuous, the chain the ABSOLUTE one) and do not make the same assumption
+inside one (the joint freezes the parent's angle and rate; the chain carries
+its quadratic motion, which cost three extra rows in the state-space form).
+
+| Claim | Measured |
+|---|---|
+| 1a STATIC parent: the two are IDENTICAL | peak Δθ **1e-14**, all four damping regimes, inverted and hanging |
+| 1b MOVING parent, matched state | **O(dt³)** — ratios 7.99, 8.00. The section header predicted O(dt²); the prediction was corrected, not the tolerance |
+| 1c the CHAIN is the exact one | subdivision-invariant to **1e-15** on the axial axis, with `twBodyJointStep`'s own non-invariance (2.7e-7) as the CONTROL |
+| 1d free-running | converges **first order** — ratios 2.000, 2.000 |
+
+**Why not Bullet or OpenSim.** Gating against a third-party integrator would
+have compared two approximations and made agreement the claim. Subdivision
+invariance is self-contained: an integrator exact for the forcing it is given
+returns the identical state whether it takes one step or four. The axial axis
+is where that can be asserted cleanly, because there is no lever about the long
+axis and so no frozen coefficient.
+
+**The one frozen coefficient is NAMED AND ATTRIBUTED, not merely bounded.** The
+centripetal stiffening depends on the parent's rate squared and is held at its
+top-of-step value. Its residual is therefore LINEAR in that rate — measured
+**6.06e-8 / 6.44e-9 / 4.17e-10** at φ′ = 1.30 / 0.13 / 0. No other candidate
+term moves with φ′, which is what makes that an attribution.
+
+### AC-INV holds
+
+All nine payload hashes (`groove.res`/`ev`/`dyn` over `a_offset15`,
+`d_twobar`, `test_sawtooth`) byte-identical against a `body_probe` built from
+`origin/main`. `BodyPoseVersion` 1 → 2 is the only aspect bump, and it is
+required: the payload's LAYOUT is unchanged while every number in it is
+different, which is exactly the case a reader cannot detect for itself.
+
+### Re-pinned
+
+`feel_flow_puppet.qxa` and `feel_flow_trained.qxa`. At frame 240000:
+
+| | pre-C8 | C8 |
+|---|---|---|
+| bounceY | −0.0099 | **+0.0015** |
+| sway | −0.0604 | **−0.0519** |
+| armSwing | −0.0027 | **+0.0052** (SIGN, per defect 2) |
+| headNod | −0.0229 | **−0.0073** (a third — the trunk is heavier) |
+| hipShift | 0.0059 | **0.0339** |
+| energySum | 1.3862 | 1.3862 (unchanged BY CONSTRUCTION — read from the ensemble, not the body) |
+
+### Watched failing
+
+`body_chain_test` under five sabotages, each biting its own claim: drop the
+polynomial forcing (1c, 16 assertions), unsigned lever (1a + both coupling
+signs + counter-rotation), no off-diagonal coupling at all (the one-way model —
+1b, 1d, AC4.2), the trunk not carrying its arms and head (12 assertions), and a
+muscle torque with no reaction on its parent (the two closed forms, and ONLY
+those — the trunk still moves, dragged by the arm's inertia, which is why the
+closed form rather than the excursion is what bites). `body_joint_test`
+section 3d for defect 2, `feel_flow_pose_regen.qxa` under two sabotages for
+defect 4.
+
+### NOT gated
+
+The torque scale is still derived from each JOINT's own `k` and `Q` (`rom·k/Q`)
+rather than from the chain's effective inertia, so "full urge at resonance is
+full range of motion" is now approximate — the chain moved every resonance.
+Left deliberately, so the re-pin above has ONE cause. A joint LIMIT is applied
+AFTER the coupled solve, so a clamp is not fed back into the parent within the
+same step (the same approximation the one-way model made). Every joint's
+EFFECTIVE damping ratio also moved, because `c` is an absolute coefficient over
+the joint's OWN segment inertia (tw/body CONTRACT 5) and the effective inertia
+grew — principled, unmeasured, ungated. Still no gyroscopic
+cross-terms between axes. Still torque-actuator muscles. AC2.1 is still open,
+and defect 3 is a reminder of what that costs: a figure quoted from arithmetic
+over unsourced constants was wrong by 8 % for two milestones.
 
 ### C5 step 2 — THE STORE PLUMBING, and the puppet is a body
 

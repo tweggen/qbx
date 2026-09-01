@@ -411,7 +411,12 @@ constexpr uint32_t    GrooveDynVersion = 3;
  * "groove.res".
  */
 constexpr const char *BodyPose        = "body.pose";
-constexpr uint32_t    BodyPoseVersion = 1;
+/** 2 since proposal 44 C8: the plant runs the COUPLED chain -- a child's
+ * reaction acts back on its parent -- so every angle in the payload is a
+ * different number from a v1 one. The version is what orphans the old files;
+ * a payload whose MEANING changed while its LAYOUT did not is exactly the
+ * case a reader cannot detect for itself. */
+constexpr uint32_t    BodyPoseVersion = 2;
 
 } // namespace twAspect
 

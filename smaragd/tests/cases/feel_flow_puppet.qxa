@@ -190,11 +190,26 @@
 
     <!-- ================== (3) determinism ============================== -->
     <!-- The same frame, twice, pinned to the full line: a pure function of
-         an immutable snapshot has exactly one answer. -->
+         an immutable snapshot has exactly one answer.
+
+         RE-PINNED at proposal 44 C8, when the plant stopped stepping four
+         joints in order and started solving them as ONE COUPLED CHAIN. Every
+         component moved, and two of them are worth naming rather than
+         diffing. armSwing changed SIGN (from minus 0.0027 to plus 0.0052),
+         because the lever coupling a hanging segment feels is NEGATIVE and
+         the one-way model applied the inverted sign to every joint. And
+         headNod fell by a factor of three (minus 0.0229 to minus 0.0073),
+         because the trunk now knows it is carrying two arms and a head and
+         so moves less for the same torque. Previous line, for whoever
+         bisects here:
+           bounceY=-0.0099 sway=-0.0604 armSwing=-0.0027 headNod=-0.0229
+           hipShift=0.0059 energySum=1.3862
+         energySum is unchanged BY CONSTRUCTION: it is read from the
+         ensemble, not from the body. -->
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=-0.0099 sway=-0.0604 armSwing=-0.0027 headNod=-0.0229 hipShift=0.0059 energySum=1.3862"/>
+                           contains="pose: valid=1 bounceY=0.0015 sway=-0.0519 armSwing=0.0052 headNod=-0.0073 hipShift=0.0339 energySum=1.3862"/>
     <assert-feel-flow-pose trackPath="0" frame="240000" valid="1"
-                           contains="pose: valid=1 bounceY=-0.0099 sway=-0.0604 armSwing=-0.0027 headNod=-0.0229 hipShift=0.0059 energySum=1.3862"/>
+                           contains="pose: valid=1 bounceY=0.0015 sway=-0.0519 armSwing=0.0052 headNod=-0.0073 hipShift=0.0339 energySum=1.3862"/>
 
     <!-- ============ (2) a staling edit: back to the invalid pose ======== -->
     <!-- The gain moves the track root's content epoch (proposal 37 P3a put

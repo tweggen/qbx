@@ -182,6 +182,38 @@ public:
     bool readXml(const QDomElement &elem, int version) override;
 };
 
+/**
+ * `sidecar-drop aspect="body.pose"` -- delete every stored sidecar for ONE
+ * aspect under the test store root, and report how many went.
+ *
+ * It exists to make a specific store SHAPE reachable from a script: valid
+ * groove aspects with the body pose MISSING. That is what every store written
+ * before proposal 44 C5 looks like, and what every store looks like the first
+ * time BodyPoseVersion is bumped -- and it is the shape in which the plant's
+ * output silently stopped regenerating, because the plant runs on the ANALYSIS
+ * side and a warm store is precisely what skips the analysis. Nothing else in
+ * the testkit can produce it: clearing the whole store makes the run cold, and
+ * a staling edit changes the audio and so mints a different content hash.
+ *
+ * Deliberately NOT a general "clear the store" verb. A verb that could empty
+ * the cache would be reached for whenever a case looked flaky, and the cases
+ * that are ABOUT the warm path (feel_flow_bounce_parity) would quietly stop
+ * testing it.
+ */
+class SSidecarDropAction : public SAction {
+public:
+    SSidecarDropAction() = default;
+
+    QString name() const override { return QStringLiteral("sidecar-drop"); }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString aspect_;
+    int     expectDropped_ = -1;   // -1 = do not check
+};
+
 class SWaitAnalysisAction : public SAction {
 public:
     SWaitAnalysisAction() = default;
