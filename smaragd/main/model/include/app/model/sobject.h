@@ -66,6 +66,35 @@ enum class SContentKind {
 
 
 /**
+ * Whether an object is a lane the PROJECT owns rather than the user
+ * (proposal 45 D1).
+ *
+ * `None` is every ordinary track and is the default for every object. The
+ * others are lanes that exist because the arrangement needs them to: the
+ * post-sum master, a send destination, and the conductor lanes (tempo, time
+ * signature, markers) that hang off the master.
+ *
+ * On SObject, and NOT a `dynamic_cast`, for the reason contentKind(),
+ * resolveEventClip(), isMissing() and isLaneFragment() are: `app/model` has to
+ * ask the question. The placement service (splacements) and the path resolver
+ * (sobjectpath.h) both sit BELOW app/objects/track and cannot see a track
+ * policy header, and they are exactly the two that must know.
+ *
+ * It must never be spelled as a conjunction of existing predicates. "A lane
+ * that is not among its root's childLinks()" happens to describe the master
+ * today and nothing else -- an ACCIDENT of there being one such lane so far,
+ * and relying on an accidental agreement between two predicates is precisely
+ * what proposal 41 M0 split isPathContainer()/isLane() up to stop doing.
+ */
+enum class SSystemRole {
+    None = 0,
+    Master = 1,
+    Send = 2,
+    Conductor = 3
+};
+
+
+/**
  * This is QBX generic data container.
  * All data containers are children of the project object.
  * They linked together by SLink objects.
@@ -308,6 +337,51 @@ public:
      * what proposal 41 M0 split them up to stop doing.
      */
     virtual bool isLaneFragment() const { return false; }
+
+    /**
+     * This object's SYSTEM ROLE (proposal 45 D1). `None` for everything the
+     * user made; see SSystemRole above for why this lives here and why it may
+     * not be derived from any other predicate.
+     *
+     * Immutable for the life of the object: a lane does not become the master.
+     */
+    virtual SSystemRole systemRole() const { return SSystemRole::None; }
+
+    /** Convenience: is this a lane the project owns? */
+    bool isSystemLane() const { return systemRole() != SSystemRole::None; }
+
+    /**
+     * VIEW state: whether the arranger draws a lane for this object
+     * (proposal 45 D8). System lanes are constructed hidden; everything else
+     * is visible.
+     *
+     * **Hidden is a VIEW property and NEVER an audio one.** A hidden master
+     * lane is fully in the signal path. That needs saying out loud, because
+     * isLiveOwnedLane(), ssolo::isLaneAudible() and STrack::isCollapsed() are
+     * three existing flags that look like they might mean "not heard" and do
+     * not.
+     *
+     * Serialized only when true, the `collapsed` discipline -- with one
+     * deliberate departure recorded in proposal 45 D8: `collapse-track` is a
+     * direct model write, while hiding IS undoable, because hiding a lane that
+     * carries inserts and automation is closer to an arrangement edit than to
+     * a fold.
+     */
+    bool isHidden() const { return hidden_; }
+    void setHidden( bool h ) { hidden_ = h; }
+
+    /**
+     * May a CLIP be placed on this object (proposal 45 D6)?
+     *
+     * False for every system lane: a master track must not directly carry
+     * sample or event material, though it may carry child lanes. Consulted at
+     * ONE narrow seam, `splacements::placementLaneAt()` -- deliberately NOT at
+     * `splacements::laneAt()`, which has 71 call sites across 45 files and is
+     * the general lane resolver for `set-track-volume`, `arm-track` and the
+     * automation verbs. A refusal there would break the master fader proposal
+     * 45 exists to ship.
+     */
+    virtual bool acceptsClips() const { return true; }
 
     /**
      * The kind of material this object carries (proposal 37 D8b). Audio by
@@ -1013,6 +1087,8 @@ private:
     bool armed_;
     int editGroup_ = 0;   // 0 = ungrouped (proposal 17 phase 4)
     int colorIndex_ = -1; // -1 = auto, by lane order (sclipcolors.h)
+    // VIEW state only -- see isHidden(). Never consulted by anything audio.
+    bool hidden_ = false;   // proposal 45 D8
     double volume_;
     // Recording channel selection: bitmask of channels (bit 0 = ch 0, etc).
     // 0 means "all channels"; the default is the first input alone — see
