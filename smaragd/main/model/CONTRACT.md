@@ -607,3 +607,58 @@ text is still selectable by dragging, by Ctrl-A and by tabbing in.
 And it SWALLOWS the event. On a QSlider the second press would otherwise start
 another drag or jump the handle to the click position, moving the control off
 the default it was just asked for.
+
+## System lanes and their addressing (proposal 45 D1/D8/D9)
+
+Three predicates on `SObject`, all on the base class for the reason
+`contentKind()`, `resolveEventClip()`, `isMissing()` and `isLaneFragment()` are
+— `app/model` itself has to ask them. The placement service (`splacements`) and
+the path resolver (`sobjectpath.h`) sit BELOW `app/objects/track` and cannot see
+a track policy header, and they are exactly the two that must know.
+
+- **`systemRole()`** — `None` / `Master` / `Send` / `Conductor`. Never spelled
+  as a conjunction of existing predicates: "a lane that is not among its root's
+  `childLinks()`" happens to describe the master lane and nothing else, and
+  relying on an accidental agreement between two predicates is what proposal 41
+  M0 split `isPathContainer()`/`isLane()` up to stop doing.
+- **`isHidden()`** — VIEW state, serialized only when true. **Never an audio
+  property**: a hidden master lane is fully in the signal path. Worth saying out
+  loud, because `isLiveOwnedLane()`, `ssolo::isLaneAudible()` and
+  `STrack::isCollapsed()` are three existing flags that look like they might
+  mean "not heard" and do not.
+- **`acceptsClips()`** — the placement policy, consulted at one narrow seam and
+  deliberately NOT at `splacements::laneAt()`, which has 71 call sites across 45
+  files and is the general lane resolver for `set-track-volume`, `arm-track` and
+  the automation verbs. A refusal there would break the master fader.
+
+**The sentinel.** A system lane is not among its root's `childLinks()`, so no
+non-negative index reaches it. It is addressed by a NEGATIVE step —
+`SPATH_MASTER` (-1), with `-2 - k` reserved for sends — which keeps a path a
+plain `QList<int>`: every action storing one as a member, every serialized
+`trackPath` and every existing call site is unchanged. Resolution goes through
+`SObject::systemLaneAt()` / `systemLaneSentinelOf()`, so this layer needs no
+knowledge of what a mixer is.
+
+Both directions are load-bearing:
+
+- **The write side would ship broken.** `strackpath::pathOf()` walks
+  `childLinks()`, so without its sentinel branch it answers `{}` for a system
+  lane — which is ALSO the address of "the root itself". Every track head
+  derives its commit address that way. No assertion about a lane's own
+  PROPERTIES can see this; only a `pathOf()` round trip can.
+- **The read side fails CLOSED.** `QString::toInt()` answers 0 for any
+  non-numeric text, so before the sentinel `"$master"` resolved silently to the
+  FIRST USER TRACK. An unparsable component is now `SPATH_INVALID` and resolves
+  to nothing. That change immediately found three fossils: three plugin cases
+  addressed `trackPath="/mixer/0"`, a spelling that exists nowhere in the code
+  and only ever worked because `toInt()` answered 0.
+
+**A negative step can never index out of bounds.** Every path consumer in
+`main/` indexes through `SObject::childAt(int)`, which returns nullptr for a
+negative index, so a sentinel or an `SPATH_INVALID` reaching an ordinary
+indexing site fails closed at that one accessor.
+
+**A send name may not be spelled with a colon.** `parseQualified` splits the
+root qualifier on the FIRST ':' (`"Drums:0"`), so `$send:<name>` would be parsed
+as root `$send`. The reserved surface spelling is index-based (`$send0`) until
+proposal 45 M7 decides the name form.

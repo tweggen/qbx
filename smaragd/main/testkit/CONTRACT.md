@@ -1418,3 +1418,21 @@ with success plus a private flag, and the framework's marker then fought it.
 Both verbs assert the MODEL after the gesture, never the widget: the Clip
 Detail pane's whole failure mode is a field that shows the default while the
 model keeps the old value.
+
+**`assert-system-lane` (proposal 45 M1)** is the only verb that can see a
+system lane at all: such a lane is not among its root's `childLinks()`, so
+`assert-track-count` cannot count it and no index path addresses it.
+
+The attribute that BITES is `expectPath`, and the reason is the pattern this
+repo has now paid for four times (proposal 39 M2, proposal 41 M5,
+`fix/take-lane-domain`, `fix/take-lane-capture-align`): the obvious assertion
+sits below the defect. `role`, `hidden`, `name`, `plugins` and `volume` are all
+perfectly correct while `strackpath::pathOf()` — the call every track head
+derives its commit address from — answers `{}`, the address of the root mixer.
+Only the round trip through `pathOf()` can see that.
+
+Two testkit facts learned while writing that case, recorded so they are not
+rediscovered: **an XML comment may not contain `--`** (it cost three parse
+failures before the first run), and **`assert-log` examines only the window
+since the action it FOLLOWS**, so an assertion about what a `load-project`
+logged has to sit directly under the load rather than at the end of the case.

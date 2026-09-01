@@ -1,6 +1,6 @@
 # Proposal 45 — System lanes: the master track, its inserts, and the shape send tracks will take
 
-> **Status: PROPOSED.** Nothing here is executed. The milestones below are
+> **Status: M0 and M1 EXECUTED (2026-09-01); M2 onward proposed.** The milestones below are
 > ordered so that the two genuinely dangerous changes (M2's shape check and M3's
 > Closure wiring) land before any UI can reach the situation they cover.
 >
@@ -473,6 +473,22 @@ The alternative — carrying the system role as a separate field on
 every action that stores a bare `QList<int>` would have to grow a second member.
 Recorded here so the decision is not re-litigated silently.
 
+**EXECUTED (M1), and two things came out of it that the design did not
+anticipate:**
+
+- **A send name may not contain a colon.** `parseQualified` splits the root
+  qualifier on the first ':' (`"Drums:0"`), so `$send:Reverb` parses as root
+  `$send`. The reserved spelling is index-based (`$send0`) until M7 picks the
+  name form; `$master` is unaffected.
+- **Failing closed immediately found three fossils.**
+  `plugin_order_divergence`, `plugin_remove_and_undo` and
+  `plugin_stereo_chain` addressed `trackPath="/mixer/0"` — a spelling that
+  exists nowhere in the code and worked only because `toInt()` answers 0. They
+  had meant "track 0" by coincidence for years, and would have gone on
+  silently addressing track 0 whatever they meant. This is the read-side
+  hazard the sentinel exists to close, found in production data on its first
+  run rather than argued for.
+
 ### D10. Send lanes: the shape is fixed here, the routing is NOT built
 
 A send lane is a system lane (`systemRole() == Send`) with a plugin chain, a gain
@@ -720,17 +736,38 @@ D9 lands here because M1's own round-trip AC cannot be written without it.
 - **AC1.7** **The negative-index audit.** Every consumer that indexes with a path
   step rejects a negative rather than passing it to `childAt()`; enumerated in
   the PR.
-- **AC1.8** The master lane survives `pruneUiState` across a rebuild (T9) —
-  asserted by setting a height scale, forcing a rebuild, reading it back.
-- **AC1.9** `set-track-volume` with an empty path is redirected to the master
-  lane (D5); the mixer's own `volume_` is documented inert.
+- **AC1.8** *(MOVED TO M4.)* The master lane has no arranger row until M4, so
+  there is no per-track UI state for `pruneUiState` to keep or drop yet.
+  Asserting it here would assert nothing.
+- **AC1.9** *(RESOLVED WITHOUT A CODE CHANGE.)* The retirement of
+  `SStdMixer::volume_` is behavioural, per D5 — and the behaviour was already
+  correct: `set-track-volume` resolves its lane and then requires an `STrack`
+  (`ssettrackvolumeaction.cpp:48-52`, whose own comment reads "the root mixer
+  is a lane but has no fader"), so an EMPTY path is REFUSED rather than
+  silently writing a number nobody reads. `$master` is therefore the one
+  spelling of the master fader, no verb ever writes the mixer's `volume_`, and
+  the field is documented inert in `objects/mixer/CONTRACT.md`. Redirecting
+  the empty path was considered and rejected: it would give the master fader a
+  second address for no gain.
 - **Gate:** new `systemlane_test` (ownership, serialization, the sentinel's
   resolve/`pathOf` round trip, teardown order under ASAN where available);
   new qxa `master_lane_roundtrip`, `master_lane_lifecycle`,
   `master_lane_bad_reference`; `action_roundtrip_test`; `cmp` on both goldens.
-- **Watched failing:** `pathOf` without its branch must make
-  `master_lane_roundtrip` report the master's address as the mixer's — the
-  assertion that would bite today.
+- **Watched failing (DONE, three independent sabotages, each isolated):**
+  (1) `pathOf`'s sentinel branch removed → exactly the three `expectPath`
+  assertions fail (#9, #15, #18) and nothing else; (2) `"$master"` no longer
+  parsed and unparsable text back to `toInt()` → `role` (#3) and
+  `inChildLinks` (#7) fail, and the negative control (#8) reports *"applied
+  but expectReject was set"* — the mistyped `$mastr` SUCCEEDS, resolving to
+  track 0, which is the silent corruption D9 exists to prevent, demonstrated
+  rather than argued; (3) the defensive role check deleted → `assert-log` and
+  the `plugins`/`volume` assertions of `master_lane_bad_reference` fail while
+  `master_lane_roundtrip` stays green.
+- **Measured:** suite 330/330 green (335 registered, 5 disabled — the 3 macOS
+  `au_*` plus the 2 Windows-only media cases), both goldens byte-identical.
+  AC1.7 resolved by construction: every path consumer indexes through
+  `SObject::childAt(int)`, which bounds-checks negatives, so a sentinel fails
+  closed at one accessor and no call site needed changing.
 
 ### M2 — The master lane is in the signal path, and the shape check learns about it
 

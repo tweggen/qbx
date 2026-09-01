@@ -647,3 +647,30 @@ proposal 41 M7's `tagChipRect()` lesson).
     would silently pair a power with somebody else's phase.
 
 Gates: `qxa.feel_flow_puppet`, `action_roundtrip_test`.
+
+**A SYSTEM LANE is an ordinary `STrack`** (proposal 45 D1). `systemRole()`
+returns `Master`, `Send` or `Conductor` for a lane the PROJECT owns rather than
+the user; `None` for every track a user made. It is IMMUTABLE — set once at
+construction by whoever mints the lane, with no verb and no undo entry — and it
+is serialized only when it is not `None`, so every project written before
+system lanes re-serializes byte-identically.
+
+Being an `STrack` rather than a new type is the whole design, and the reason is
+measured: `dynamic_cast<STrack *>` appears 98 times across 40 files in `main/`,
+and every one is a site a second lane type would have to be audited at. What it
+buys, already gated: the plugin chain and all five plugin verbs, the gain
+stage and its automation, level metering, the automation lane UI, the FX strip,
+the arranger row, the head, and serialization — all reached through the
+ordinary `trackPath`, with no change of their own.
+
+The cost is a POLICY surface. `acceptsClips()` is false for every system lane
+(a master must not directly carry sample or event material, though it may carry
+child lanes), and it is consulted at ONE narrow seam rather than at each verb.
+The surface is a DEFAULT-OPEN BLACKLIST: a track verb written later accepts a
+system lane unless someone remembers to refuse it, which is why proposal 45
+AC5.6 requires an enumerated accept/refuse row per registered track-addressed
+verb rather than trusting the list to stay complete.
+
+An UNKNOWN `systemRole` spelling loads as `None`, deliberately: a file naming a
+role this build does not have describes a track the user can still see, move
+and delete, rather than an untouchable lane nothing understands.
