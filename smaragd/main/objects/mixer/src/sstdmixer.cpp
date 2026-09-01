@@ -482,8 +482,42 @@ void SStdMixer::mixerChildDurationChanged( length_t )
 
 SStdMixer::~SStdMixer()
 {
+    // Drop our reference to the master lane FIRST. The lane is a Qt child of
+    // SProject, so this is what stops a removed arrangement leaving an orphan
+    // lane behind that would serialize forever: the refcount reaches zero and
+    // SObject::removeRef() posts the deleteLater.
+    delete masterLaneRef_;
+    masterLaneRef_ = nullptr;
+    masterLane_    = nullptr;
+
     cpMixers_.resize(0);
     cpRewire_.reset();
+}
+
+QList<SLink *> SStdMixer::ownedRefLinks() const
+{
+    // See the declaration: the master-lane reference is an owned link that is
+    // NOT a child link, so it has to be published here to be part of the
+    // reference graph at all.
+    QList<SLink *> out;
+    if( masterLaneRef_ ) out.append( masterLaneRef_ );
+    return out;
+}
+
+void SStdMixer::adoptMasterLane( STrack *lane )
+{
+    if( !lane || lane == masterLane_ ) return;
+
+    // Dropping our reference is what retires the constructor's fresh lane: its
+    // refcount reaches zero and SObject::removeRef() posts the deleteLater. It
+    // must go BEFORE the new link is made, or a save between the two would
+    // write both lanes and the mixer would name only one -- the exact ordering
+    // STrack::adoptPluginChain() spells out for the same reason.
+    delete masterLaneRef_;
+    masterLaneRef_ = nullptr;
+
+    masterLane_    = lane;
+    masterLaneRef_ = new SLink( *lane, nullptr );
 }
 
 SStdMixer::SStdMixer( SProject *project )
@@ -516,6 +550,22 @@ SStdMixer::SStdMixer( SProject *project )
     // bus mixer existed, so reconnectTracksToMixer's outer loop did
     // nothing and tracks were never wired.
     setNBusses( 1 );
+
+    // THE MASTER LANE (proposal 45 D1/D2). Minted here rather than lazily so
+    // masterLane() is never null and no caller needs a "what if there is no
+    // master" branch; every arrangement root created at runtime
+    // (create-arrangement, extract-arrangement) therefore gets one for free.
+    //
+    // Constructed HIDDEN (D8): it is available, not in the way. Hiding is a
+    // VIEW property and never an audio one -- a hidden master lane is fully in
+    // the signal path.
+    masterLane_ = new STrack( project );
+    masterLane_->setSystemRole( SSystemRole::Master );
+    masterLane_->setSName( QStringLiteral( "Master" ) );
+    masterLane_->setHidden( true );
+    // Our own reference. Without one the lane, which hangs off no child link,
+    // has a refcount of zero and is deleted the moment anything looks at it.
+    masterLaneRef_ = new SLink( *masterLane_, nullptr );
 }
 
 // --- track selection --------------------------------------------------------
@@ -610,6 +660,20 @@ void SStdMixer::toggleTrackSelection( STrack *track )
     }
 }
 
+int SStdMixer::serializeSelfAttributes( QTextStream &o )
+{
+    // The master lane (proposal 45 D2). A plain attribute, not an <SLink>
+    // child: SObject::childEvent treats every child link as a track placement
+    // and the loader's dependency ordering is built on child links -- which is
+    // exactly why the load side has to defer. The lane object itself is a Qt
+    // child of SProject, so SProject::serialize()'s own child loop writes it.
+    if( masterLane_ )
+        o << " masterLaneId='"
+          << reinterpret_cast<std::uintptr_t>( (SObject *) masterLane_ ) << "'";
+    SObject::serializeSelfAttributes( o );
+    return 0;
+}
+
 SLink *SStdMixer::instantiateFromDomElement(
     SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
 {
@@ -646,6 +710,46 @@ SLink *SStdMixer::instantiateFromDomElement(
     const QString arrName = element.attribute( "arrangementName" );
     if( !arrName.isEmpty() )
         projectLoader.getProject().registerArrangement( arrName, mixer );
+
+    // Adopt our serialized master lane -- DEFERRED (proposal 45 D2), for the
+    // reason STrack::instantiateFromDomElement spells out for pluginChainId:
+    // masterLaneId is a plain attribute, so the loader's dependency ordering
+    // (which only looks at <SLink objectId> children) gives no guarantee the
+    // lane's own <STrack> element has been instantiated by the time we are
+    // built. deferResolve runs the lookup when the dictionary is complete.
+    //
+    // A REFERENCE THAT DOES NOT NAME A MASTER LANE IS REFUSED, not adopted
+    // (AC1.5). An older build re-saving this file drops systemRole= along with
+    // masterLaneId=, so a file can legitimately come back naming a track that
+    // is now an ordinary one; adopting it would make a user track the master
+    // -- silently accepting clips, arming, and being summed twice. Keeping the
+    // constructor's own lane is the safe answer, and it is announced.
+    const QString laneId = element.attribute( "masterLaneId" );
+    if( !laneId.isEmpty() ) {
+        SProjectLoader *loader = &projectLoader;
+        projectLoader.deferResolve( [loader, mixer, laneId]() {
+            SLink *laneLink = loader->getObjectDictionary().value( laneId );
+            if( !laneLink ) {
+                qWarning() << "SStdMixer: master lane" << laneId
+                           << "not found in the project; keeping the fresh one";
+                return;
+            }
+            STrack *lane = dynamic_cast<STrack *>( &laneLink->getSObject() );
+            if( !lane ) {
+                qWarning() << "SStdMixer: masterLaneId" << laneId
+                           << "does not name a track; keeping the fresh one";
+                return;
+            }
+            if( lane->systemRole() != SSystemRole::Master ) {
+                qWarning() << "SStdMixer: masterLaneId" << laneId
+                           << "names a track whose systemRole is not master"
+                           << "(an older build may have re-saved this project);"
+                           << "keeping the fresh one";
+                return;
+            }
+            mixer->adoptMasterLane( lane );
+        } );
+    }
 
     // Construct with parent=NULL, then setParent (slink.h rule): the parent's
     // childEvent must never see a half-constructed SLink.

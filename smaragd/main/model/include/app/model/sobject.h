@@ -93,6 +93,38 @@ enum class SSystemRole {
     Conductor = 3
 };
 
+/**
+ * The ONE spelling of a system role in a project file, both directions.
+ *
+ * Beside the enum rather than on STrack because `app/model` writes it
+ * (SObject::serializeSelfAttributes' neighbours live here) and app/persistence
+ * reads it, and neither may include a track header. An unknown spelling reads
+ * as `None` -- a forward-compatible file naming a role this build does not
+ * have describes an ordinary track, which is the safe answer: it can be seen,
+ * moved and deleted rather than being an untouchable lane nothing understands.
+ */
+inline const char *systemRoleToString( SSystemRole r )
+{
+    switch( r ) {
+        case SSystemRole::Master:    return "master";
+        case SSystemRole::Send:      return "send";
+        case SSystemRole::Conductor: return "conductor";
+        case SSystemRole::None:      break;
+    }
+    return "none";
+}
+
+inline SSystemRole systemRoleFromString( const QString &s, bool *ok = nullptr )
+{
+    if( ok ) *ok = true;
+    if( s == QLatin1String( "master" ) )    return SSystemRole::Master;
+    if( s == QLatin1String( "send" ) )      return SSystemRole::Send;
+    if( s == QLatin1String( "conductor" ) ) return SSystemRole::Conductor;
+    if( s == QLatin1String( "none" ) || s.isEmpty() ) return SSystemRole::None;
+    if( ok ) *ok = false;
+    return SSystemRole::None;
+}
+
 
 /**
  * This is QBX generic data container.

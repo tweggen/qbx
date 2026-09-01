@@ -111,6 +111,29 @@ public:
 
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
 
+    // --- system role (proposal 45 D1) -------------------------------------
+    //
+    // A SYSTEM LANE is an ordinary track the PROJECT owns rather than the
+    // user: the post-sum master, a send destination, or a conductor lane
+    // (tempo, time signature, markers) hanging off the master. It is not a
+    // new type -- `dynamic_cast<STrack *>` appears 98 times across 40 files
+    // in main/, and every one of them is a site a second lane type would
+    // have to be audited at. Being an STrack is what makes the plugin chain,
+    // the gain stage, metering, automation, the row and the head work with
+    // no change of their own.
+    //
+    // IMMUTABLE: set once, at construction, by whoever mints the lane. A
+    // lane does not become the master. There is deliberately no verb and no
+    // undo entry for it.
+    void setSystemRole( SSystemRole r ) { systemRole_ = r; }
+    SSystemRole systemRole() const override { return systemRole_; }
+
+    // A system lane carries no clips of its own (proposal 45 D6): a master
+    // track must not directly hold sample or event material, though it may
+    // hold child lanes. Enforced at ONE narrow seam,
+    // splacements::placementLaneAt().
+    bool acceptsClips() const override { return systemRole_ == SSystemRole::None; }
+
     // --- events (proposal 37 3.2 / 3.2.1) ---------------------------------
     //
     // A track holds no KIND (D3): it takes whatever clips it is given, and it
@@ -671,6 +694,8 @@ private:
     offset_t deferredDirtyEnd_   = 0;
     int                             midiOutChannel_ = -1;
     int                             midiOutOffsetMs_ = 0;
+    // See setSystemRole(): immutable after construction.
+    SSystemRole                     systemRole_ = SSystemRole::None;
     // Fold state (fix/track-list-polish m). See isCollapsed()/setCollapsed().
     bool                            collapsed_ = false;
 

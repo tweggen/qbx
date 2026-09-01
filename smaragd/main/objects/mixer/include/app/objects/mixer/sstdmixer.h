@@ -77,6 +77,50 @@ public:
     virtual SObject *activeLane() const override;
     virtual SLink *getTrackAt( int idx );
 
+    // --- the master lane (proposal 45 D2) ---------------------------------
+    //
+    // Every arrangement root owns exactly one, from construction. It is an
+    // ordinary STrack answering systemRole() == Master, and it is where the
+    // master's inserts, fader, automation and meter live -- SStdMixer has a
+    // twMixer and a twRewire and no chain and no gain stage, so before this
+    // there was nowhere to put any of them.
+    //
+    // IT IS DELIBERATELY NOT A CHILD LINK, and that is forced rather than
+    // chosen. Tracks are addressed by an INDEX PATH from this root
+    // (app/model/sobjectpath.h), so a master lane among childLinks() would
+    // shift every path in every .qxa, every fixture and both goldens by one,
+    // and would make mixer inv. 1 ("getNTracks() counts TOP-LEVEL children
+    // only -- assertions in tests rely on this") false in the same edit. It
+    // would also be summed by reconnectTracksToMixer() alongside the tracks it
+    // is meant to PROCESS, and joined to the solo set by ssolo::anySoloInTree.
+    //
+    // So it is an OWNED REFERENCE LINK, exactly the shape STrack already uses
+    // for its plugin chain: published through ownedRefLinks() (never
+    // childLinks()), with the lane object itself a Qt child of SProject so the
+    // project's own serialize loop writes it, and <SStdMixer masterLaneId=…>
+    // naming it. Because index paths cannot reach it, it is addressed by the
+    // NEGATIVE-INDEX SENTINEL app/model/sobjectpath.h defines (spelled
+    // "$master" on the surface).
+    //
+    // Never null after construction.
+    STrack *masterLane() const { return masterLane_; }
+
+    // Take over a master lane that came out of a project file, retiring the
+    // constructor's fresh one. The adoptPluginChain() shape, and for the same
+    // reason: the loader cannot hand us the lane until every object exists, so
+    // the constructor has already made one by then.
+    void adoptMasterLane( STrack *lane );
+
+    // Owned, and NOT a child link -- so it has to be published here or the
+    // reference graph is wrong for everyone who walks it. STrack's own header
+    // records what happened when the plugin-chain link was not published:
+    // ~SProject's survivor ordering deleted the chain first and the destructor
+    // removeRef()'d freed memory.
+    QList<SLink *> ownedRefLinks() const override;
+
+    // Writes masterLaneId= (see masterLane()).
+    int serializeSelfAttributes( QTextStream &o ) override;
+
     virtual int seekTo( offset_t ) override;
 
     virtual length_t getDuration() const override;
@@ -240,6 +284,13 @@ private:
 
     // See the selection block above. selectedTracks_ always contains
     // selectedTrack_ while the latter is non-null.
+    // The master lane and our reference to it (see masterLane()). The lane is
+    // a Qt child of SProject; this link is what keeps it alive, so deleting it
+    // in ~SStdMixer is what stops a removed arrangement leaving an orphan lane
+    // behind that would serialize forever.
+    STrack *masterLane_ = nullptr;
+    SLink  *masterLaneRef_ = nullptr;
+
     QPointer<STrack> selectedTrack_;
     QList<QPointer<STrack> > selectedTracks_;
 };
