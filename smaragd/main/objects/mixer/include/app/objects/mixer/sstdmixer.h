@@ -279,6 +279,20 @@ private slots:
 
 private:
     void checkDurationChanged();
+    /** Puts the master lane's plugin chain and gain stage between the bus sum
+     * and the rewire (proposal 45 M2 / D3). Idempotent, and safe to call
+     * before a lane exists -- it then wires the pre-M2 topology instead of
+     * leaving the rewire unfed. Called from the constructor (after minting)
+     * and from adoptMasterLane (after replacing). */
+    void wireMasterChain();
+
+    /** D3a: bump the master lane's own component caches, which sit BETWEEN the
+     * bus sum and the rewire and are bumped by nobody else. Split out so the
+     * two epoch entry points cannot drift, and so D11's master-side
+     * invalidation has one place to call. */
+    void bumpMasterChainEpoch();
+    void bumpMasterChainEpochRange( offset_t start, offset_t end );
+
     void reconnectTracksToMixer();
     std::vector<std::shared_ptr<twMixer> > cpMixers_;
     std::shared_ptr<twRewire> cpRewire_;

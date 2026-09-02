@@ -24,6 +24,7 @@ class twTrackMix;
 class twRewire;
 class twGainStage;
 class twPluginChain;
+class twMixer;
 class SLink;
 class SProjectLoader;
 
@@ -314,6 +315,33 @@ public:
     // out as shared_ptr because the plan outlives any single call and the pump
     // reads them from another thread; the plan holds no raw component pointer
     // except the frozen-input roots it reads pages off.
+    /** PROPOSAL 45 D11. Set by SStdMixer for the lane it owns; null for every
+     * ordinary track. See SObject::renderPathOwner() for why this exists and
+     * what goes silent without it. Stored as an SObject* rather than an
+     * SStdMixer* because objects/track sits BELOW objects/mixer in the module
+     * DAG and may not name it -- the same reason systemRole() is on SObject. */
+    /**
+     * PROPOSAL 45 M2 / D3 -- put THIS track's plugin chain and gain stage into
+     * the master signal path: `sum -> chain -> gain -> rewire`.
+     *
+     * IT LIVES HERE AND NOT IN SStdMixer BECAUSE OF THE MODULE DAG, and that
+     * is a rule with a checker behind it: `app/objects/mixer` may include
+     * tw/core, tw/graph, tw/mix and tw/schedule and NOT tw/plugins, so the
+     * mixer cannot so much as name `twPluginChain`. `app/objects/track`
+     * already owns both halves. The mixer passes its two endpoints and this
+     * decides what goes between them, which is also the right division: the
+     * chain's internals are the track's business.
+     *
+     * The lane's own twTrackMix and twRewire go INERT as a result (T5) -- the
+     * chain's input is re-pointed away from the trackmix, and the gain's
+     * output is taken by the caller's rewire instead of this track's.
+     */
+    void wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
+                           const std::shared_ptr<twRewire> &rewire );
+
+    void setRenderPathOwner( SObject *owner ) { renderPathOwner_ = owner; }
+    SObject *renderPathOwner() const override { return renderPathOwner_; }
+
     const std::shared_ptr<twTrackMix>  &trackMixComponent() const { return cpTrackMix_; }
     const std::shared_ptr<twGainStage> &gainStageComponent() const { return cpGainStage_; }
     const std::shared_ptr<twPluginChain> &pluginChainComponent() const { return cpDspChain_; }
@@ -633,6 +661,8 @@ private:
     SEndTimeList endTimeList_;
     STrackRendererInline *inlineRenderer_;
     int channels_;                                  // see setChannels()
+    SObject *renderPathOwner_ = nullptr;            // proposal 45 D11
+
     std::shared_ptr<twTrackMix> cpTrackMix_;        // ONE, channels_ wide
     // THE FADER (proposal 37 P3a). Sits between the DSP chain and the rewire,
     // so the scalar is applied POST-FX: trackmix -> chain -> gain -> rewire.

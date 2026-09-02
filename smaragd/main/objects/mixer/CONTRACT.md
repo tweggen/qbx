@@ -132,3 +132,43 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
    side fails CLOSED: an unparsable component becomes `SPATH_INVALID` rather
    than `QString::toInt()`'s 0, because before that a mistyped `"$mastr"`
    resolved silently to the FIRST USER TRACK.
+
+11. **THE MASTER LANE'S CHAIN IS IN THE SIGNAL PATH, AND THE ROOT COMPONENT IS
+    STILL THE `twRewire`** (proposal 45 M2 / D3). `wireMasterChain()` puts the
+    lane's `twPluginChain` and `twGainStage` between the bus sum and the
+    rewire. What every consumer resolves — the master meter, `RenderSession`,
+    `AudioEngine`, `twSpeaker`, all through
+    `SProject::getRootComponent()->getRootComponent()` — does not move, and
+    the master meter becomes post-master-FX by construction rather than by a
+    second tap. Making the LANE's own rewire the project root was rejected: it
+    moves what all of those resolve to, for nothing.
+
+12. **THE LANE'S OWN `twTrackMix` AND `twRewire` ARE INERT AND MUST NOT BE
+    "WIRED FOR CONSISTENCY"** (T5). An `STrack` builds trackmix → chain → gain
+    → rewire; M2 re-points the CHAIN's input at the mixer's sum and takes the
+    GAIN's output into the mixer's rewire. The lane has no clips (D6), so its
+    trackmix has nothing to sum; a second rewire in the path would be a second
+    page cache to invalidate.
+
+13. **INVALIDATION MUST BE ISSUED AT THREE LEVELS, NOT TWO, AND THE THIRD IS
+    SILENT WHEN MISSING** (D3a). `bumpRenderChainEpoch[Range]()` covers the bus
+    mixers and the rewire; the master lane's chain and gain stage sit BETWEEN
+    them and carry their own page caches. Without `bumpMasterChainEpoch[Range]`
+    the rewire re-freezes, `fetchInputPage` serves the gain stage's still-valid
+    stale page, and an ordinary clip or track edit is **inaudible** — no error,
+    no log line. This is the commonest path in the app (every user has an empty
+    master chain and edits clips). Measured: `mc_golden_stereo`'s own mute
+    negative control flipped, its re-render coming back byte-identical to the
+    unmuted golden.
+
+14. **THE MIXER OWNS ITS MASTER LANE'S RENDER PATH, and says so through
+    `SObject::renderPathOwner()`** (D11). `invalidateRenderPath()` walks down
+    from the project root through `childLinks()`, and a system lane is
+    deliberately not among them, so the walk does not find it and bumps only
+    the lane's own caches — the fader moves and the render does not change.
+    The mixer sets itself as the owner when it mints the lane and again when it
+    adopts one from a file; a lane that lost that pointer would go silent in
+    exactly this way. It is a DIFFERENT edge from invariant 13 and neither
+    subsumes the other: 13 carries an ordinary track edit PAST the master, 14
+    carries a master edit DOWN to the rewire. Each is watched failing with the
+    other reverted.

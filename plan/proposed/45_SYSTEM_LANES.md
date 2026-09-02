@@ -804,6 +804,81 @@ D9 lands here because M1's own round-trip AC cannot be written without it.
   on with an insert up); AC2.5 by reverting the epoch extension (the second
   render is byte-identical to the first when it must not be).
 
+#### M2 PART 1 — **DONE 2026-09-02: the lane is in the path and every edge invalidates**
+
+D3, D3a and D11 are executed; AC2.1-AC2.5 are met and gated. AC2.6, AC2.7 and
+AC2.8 are **NOT** started — see the bottom of this block.
+
+**D3, the wiring.** `SStdMixer::wireMasterChain()` puts the master lane's
+`twPluginChain` and `twGainStage` between the bus sum and the rewire, called
+from the constructor (after minting) and from `adoptMasterLane` (after
+replacing — without it the sum keeps running through the RETIRED lane's chain,
+which is about to be deleted). The lane's own `twTrackMix` and `twRewire` go
+inert, as T5 requires.
+
+**AC2.1 HOLDS AND IT IS A REAL MEASUREMENT.** `mc_stereo.wav` is byte-identical
+to the committed golden with the chain in the path — an empty `twPluginChain`
+forwards its input page verbatim and `twGainStage` at 0 dB unmuted does no
+arithmetic, exactly as proposal 37 P5 argued. Both goldens `cmp` clean.
+
+**D3a WAS FOUND BY AN EXISTING GATE, NOT BY READING.** With the wiring in and
+the epoch extension missing, `mc_golden_stereo`'s own negative control flipped:
+its `set-track-mute` plus re-render produced a file **byte-identical to the
+unmuted golden**, so the assertion that exists to prove the comparison can fail
+reported *"applied but expectReject was set"*. A mute had stopped being
+audible. `bumpMasterChainEpoch[Range]()` fixes it.
+
+**D11 NEEDED A NEW SEAM ON `SObject`, and the milestone plan did not say so.**
+`SObject::invalidateRenderPath()` walks DOWN from the project root through
+`childLinks()`; a system lane is deliberately not among them, so the walk does
+not find it and only the lane's OWN caches are bumped. New virtual
+`SObject::renderPathOwner()` (null for every ordinary object; the mixer for its
+master lane, set at mint and at adopt) is consulted in the existing `!found`
+branch of both invalidation entry points. Delegating there rather than at every
+call site is what stops the next edit kind from being silently inaudible.
+
+**Measured, all closed forms over `tests/test_autosaw.wav`** (480 Hz sawtooth,
+period exactly 100 frames, so a whole-second window is an exact number of
+periods and its RMS is `A/sqrt(3)` with no windowing error). Base over
+[48000, 96000) channel 0: **0.230956**, i.e. A = 0.40003.
+
+| | closed form | measured |
+|---|---|---|
+| master insert at 2.5x (AC2.2) | 0.577390 | **0.577391** |
+| master fader at −6 dB (AC2.3) | 0.115747 | **0.115754** |
+| master fader at −12 dB | 0.058013 | (banded) |
+
+2.5x peaks at **0.99999**, inside full scale, so the gain this proposal names
+is usable as written rather than needing headroom — checked rather than
+assumed, because the render is 16-bit PCM and would have clipped silently.
+
+**Watched failing, two sabotages, each isolated — neither edge subsumes the
+other, demonstrated rather than argued:**
+
+| Sabotage | Fails | Stays green |
+|---|---|---|
+| D3a reverted (the master chain is not bumped) | `track_edit_invalidates_through_master`, both goldens | `master_insert_heard`, `master_fader_heard` |
+| D11 reverted (a master edit reaches nothing downstream) | `master_insert_heard`, `master_fader_heard` | `track_edit_invalidates_through_master`, both goldens |
+
+**A TRAP THAT COST TWO WRONG DIAGNOSES and belongs in any new plugin case:**
+`insert-plugin` without `path="twtestclap.clap"` finds no module, quietly builds
+the **transparent placeholder**, and every level assertion then reads the base
+RMS. That failure looks exactly like a broken signal path and is not one.
+
+**NOT DONE in this part**, and each is a gate the milestone still owes:
+AC2.6 (the master meter post-FX — D12's `getRootComponent()` override for the
+master role is not written, so a probe pointed at the lane reads its inert
+rewire and decays), AC2.7 (`checkMasterShape` still cannot see a master chain,
+so a limiter on the master leaves monitoring ON and the two halves of the split
+no longer belong to the same signal — the honest refusal inv. 18a used to give
+is absent for the whole M2→M3 window), and AC2.8 (the lane's own trackmix and
+rewire are inert by construction but nothing asserts it).
+
+**Also settled here:** D5's body text (line ~327) still says `set-track-volume`
+with an empty path "is **redirected to the master lane**". AC1.9 rejected that
+redirect. `master_fader_heard.qxa` now asserts the refusal, so the two cannot
+drift apart silently; D5's sentence is the stale one.
+
 ### M3 — **The `Closure` master mode, wired** (T1, D4b)
 
 - **AC3.1** The processor-ownership question is **answered in the design**: the

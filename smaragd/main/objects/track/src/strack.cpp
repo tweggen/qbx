@@ -13,6 +13,7 @@
 #include <qobject.h>
 
 #include "tw/mix/twtrackmix.h"
+#include "tw/mix/twmixer.h"
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twgainstage.h"
 #include "tw/plugins/twpluginchain.h"
@@ -659,6 +660,16 @@ int STrack::seekTo( offset_t ofs )
     // seekTo(), being internal to the mix.
     if( cpTrackMix_ ) cpTrackMix_->seek( ofs );
     return 0;
+}
+
+void STrack::wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
+                               const std::shared_ptr<twRewire> &rewire )
+{
+    if( !sum || !rewire || !cpDspChain_ || !cpGainStage_ ) return;
+    cpDspChain_->setInput( 0, sum->linkOutput( 0 ) );
+    cpDspChain_->rebuildWiring();
+    cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+    rewire->setInput( 0, cpGainStage_->linkOutput( 0 ) );
 }
 
 void STrack::bumpRenderChainEpoch()

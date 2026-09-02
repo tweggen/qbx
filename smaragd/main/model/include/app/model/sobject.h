@@ -933,6 +933,28 @@ public slots:
     void invalidateRenderPath();
 
     /**
+     * The object whose render chain carries this one's audio when this object
+     * is NOT reachable from any arrangement root through `childLinks()`, or
+     * nullptr (the default, and the answer for every ordinary object).
+     *
+     * PROPOSAL 45 D11. `invalidateRenderPath()` walks DOWN from the project
+     * root through `childLinks()`; a system lane is deliberately not among
+     * them (D2), so the walk does not find it and only its OWN caches get
+     * bumped -- the mixer's rewire, which is what actually plays, keeps
+     * serving the page it already had. The fader moves and the render does not
+     * change, with no error and no log line.
+     *
+     * This is the same pitfall `objects/track` inv. 13 records for an
+     * `SPluginSlot`, whose fix was to have the TRACK do the walk, and the same
+     * one proposal 41 found for a fragment-nested clip -- where, both times,
+     * only a RENDERED-AUDIO assertion caught it. Measured here too: with the
+     * master lane wired but this hook missing, a master insert and a -6 dB
+     * master fader both left the render byte-unchanged, while the very same
+     * fader set BEFORE the first freeze was audible to five digits.
+     */
+    virtual SObject *renderPathOwner() const { return nullptr; }
+
+    /**
      * How many SLinks (plus any explicit pin, e.g. SProject::registerAsset's
      * addRef()) currently reference this object — main-thread read of the
      * same counter addRef()/removeRef() maintain (proposal 41 M2). A

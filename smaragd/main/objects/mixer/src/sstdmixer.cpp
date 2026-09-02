@@ -158,12 +158,14 @@ void SStdMixer::setChannels( int n )
 
 void SStdMixer::bumpRenderChainEpoch()
 {
-    // The summed mix is cached at TWO levels: the per-bus twMixer (sums the
-    // track outputs) and the rewire behind it (the engine's synthOutput_).
+    // The summed mix is cached at THREE levels since proposal 45 M2: the
+    // per-bus twMixer (sums the track outputs), the master lane's chain and
+    // gain stage, and the rewire behind them (the engine's synthOutput_).
     for( int bus=0; bus<nBusses_; ++bus ) {
         if( cpMixers_[bus] )
             cpMixers_[bus]->bumpContentEpoch();
     }
+    bumpMasterChainEpoch();
     if( cpRewire_ )
         cpRewire_->bumpContentEpoch();
 }
@@ -176,8 +178,41 @@ void SStdMixer::bumpRenderChainEpochRange( offset_t start, offset_t end )
         if( cpMixers_[bus] )
             cpMixers_[bus]->invalidatePagesInRange(start, end);
     }
+    bumpMasterChainEpochRange( start, end );
     if( cpRewire_ )
         cpRewire_->invalidatePagesInRange(start, end);
+}
+
+// --- D3a: invalidation must travel THROUGH the master chain ------------------
+//
+// THIS IS THE COMMONEST PATH IN THE APP AND IT IS SILENT WHEN WRONG. Every
+// user has an EMPTY master chain and edits clips; after M2 put the master
+// lane's twPluginChain and twGainStage between the bus sum and the rewire,
+// each carries its own page cache and neither was bumped by anybody on an
+// ordinary edit. The rewire re-freezes, fetchInputPage serves the gain
+// stage's still-valid stale page, and the edit is INAUDIBLE -- no error, no
+// log line, just the old audio.
+//
+// Measured, not predicted: with the wiring in and this missing,
+// mc_golden_stereo's own negative control flipped. Its `set-track-mute` +
+// re-render produced a file BYTE-IDENTICAL to the unmuted golden, so the
+// assertion that exists to prove the comparison can fail reported "applied
+// but expectReject was set". A mute stopped being audible.
+//
+// It is a DIFFERENT edge from D11's "invalidation FROM the master" and
+// neither subsumes the other: this one carries an ordinary track edit PAST
+// the master, that one carries a master edit DOWN to the rewire.
+// STrack::bumpRenderChainEpoch already bumps its trackmix, chain, gain stage
+// and rewire -- exactly the set that needs bumping, and the two inert ones cost
+// nothing. Calling it is also what keeps this module free of tw/plugins.
+void SStdMixer::bumpMasterChainEpoch()
+{
+    if( masterLane_ ) masterLane_->bumpRenderChainEpoch();
+}
+
+void SStdMixer::bumpMasterChainEpochRange( offset_t start, offset_t end )
+{
+    if( masterLane_ ) masterLane_->bumpRenderChainEpochRange( start, end );
 }
 
 int SStdMixer::seekTo( offset_t off )
@@ -524,6 +559,55 @@ int SStdMixer::systemLaneSentinelOf( const SObject *lane ) const
     return 0;
 }
 
+void SStdMixer::wireMasterChain()
+{
+    // PROPOSAL 45 M2 / D3 -- the master lane enters the signal path:
+    //
+    //   tracks -> twMixer (sum) -> twPluginChain -> twGainStage -> twRewire
+    //                              \____________________________/
+    //                                owned by the master lane
+    //
+    // THE ROOT COMPONENT IS STILL THE twRewire, and that is the point. The
+    // master meter, RenderSession, AudioEngine and twSpeaker all reach the
+    // graph through SProject::getRootComponent()->getRootComponent(); none of
+    // them changes, and the master meter becomes post-master-FX by
+    // construction rather than by a second tap. Making the master LANE's own
+    // rewire the project root was rejected: it moves what every one of those
+    // resolves to, for nothing.
+    //
+    // THE LANE'S OWN twTrackMix AND twRewire GO INERT HERE, deliberately (T5).
+    // An STrack builds trackmix -> chain -> gain -> rewire in its constructor;
+    // this re-points the CHAIN's input at the mixer's sum, so the lane's
+    // trackmix drives nothing, and takes the GAIN's output into the mixer's
+    // rewire, so the lane's own rewire is redundant with it. Neither is to be
+    // "wired for consistency" later: the master lane has no clips (D6), and a
+    // second rewire in the path would be a second page cache to invalidate.
+    if( cpMixers_.empty() || !cpMixers_[0] || !cpRewire_ ) return;
+
+    // WHAT GOES BETWEEN THE TWO ENDPOINTS IS THE TRACK'S BUSINESS, and it has
+    // to be: app/objects/mixer may include tw/core, tw/graph, tw/mix and
+    // tw/schedule and NOT tw/plugins, so this module cannot name
+    // twPluginChain at all (tools/check_layering.py enforces it). The mixer
+    // hands over its sum and its rewire; STrack wires its own internals.
+    if( !masterLane_ || !masterLane_->pluginChainComponent()
+                     || !masterLane_->gainStageComponent() ) {
+        // No lane yet (the constructor wires the busses BEFORE minting one) or
+        // a lane whose components have not been built. Fall back to the
+        // pre-M2 topology rather than leaving the rewire unfed -- silence is
+        // the one outcome that must not be reachable from a missing lane.
+        // ANNOUNCED, never silent: reaching here after the constructor has
+        // minted a lane means the lane lost its components, and the symptom
+        // downstream would be a master fader and master inserts that do
+        // nothing at all.
+        TW_LOGW( "model", "[MASTER] no lane components -- the master chain is "
+                          "NOT in the signal path" );
+        cpRewire_->setInput( 0, cpMixers_[0]->linkOutput( 0 ) );
+        return;
+    }
+
+    masterLane_->wireAsMasterLane( cpMixers_[0], cpRewire_ );
+}
+
 void SStdMixer::adoptMasterLane( STrack *lane )
 {
     if( !lane || lane == masterLane_ ) return;
@@ -538,6 +622,13 @@ void SStdMixer::adoptMasterLane( STrack *lane )
 
     masterLane_    = lane;
     masterLaneRef_ = new SLink( *lane, nullptr );
+    masterLane_->setRenderPathOwner( this );   // D11
+
+    // The file's lane replaces the constructor's, so the graph must follow it.
+    // Without this the sum keeps running through the RETIRED lane's chain --
+    // which is about to be deleted, and whose inserts are not the ones the
+    // user saved.
+    wireMasterChain();
 }
 
 SStdMixer::SStdMixer( SProject *project )
@@ -586,6 +677,12 @@ SStdMixer::SStdMixer( SProject *project )
     // Our own reference. Without one the lane, which hangs off no child link,
     // has a refcount of zero and is deleted the moment anything looks at it.
     masterLaneRef_ = new SLink( *masterLane_, nullptr );
+    masterLane_->setRenderPathOwner( this );   // D11
+
+    // setNBusses(1) above ran before the lane existed and wired the sum
+    // straight into the rewire; now that there is a lane, put its chain in
+    // between (D3).
+    wireMasterChain();
 }
 
 // --- track selection --------------------------------------------------------
