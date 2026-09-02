@@ -204,10 +204,52 @@ struct twMasterShape {
     bool linear() const { return mode == twMasterMode::LinearSplit; }
 };
 
+/**
+ * What the MASTER LANE'S chain is doing, as three plain facts.
+ *
+ * PROPOSAL 45 M2 / D4a. `checkMasterShape` reads two components' widths, the
+ * mixer's input levels and the rewire's channel map -- and after M2 wired the
+ * master lane's `twPluginChain` and `twGainStage` BETWEEN those two, none of
+ * that sees them. A user who drops a limiter on the master would get
+ * `LinearSplit`: monitoring stays ON, the RT adds the frozen root page (now
+ * processed by the limiter) to a live ring that BYPASSED the master chain
+ * entirely, and the two halves no longer belong to the same signal. With no
+ * log line, because nothing detected anything.
+ *
+ * PASSED AS VALUES, NOT AS COMPONENTS, and that is the module DAG again:
+ * `tw/playback` may not include `tw/plugins`, so it cannot be handed a
+ * `twPluginChain`. The app reads the lane -- which it can, having the model --
+ * and hands over what the algebra actually needs.
+ */
+struct twMasterChainState {
+    /** Inserts on the master lane. Any at all breaks the split: an insert is
+     * a function of the whole sum, and `master(a u b) == master(a) + master(b)`
+     * holds only for a linear one. Bypassed slots are NOT excluded -- a bypass
+     * is a runtime state the plan would have to re-read on every change. */
+    int    insertCount = 0;
+    /** The master fader, dB. Non-zero is a scale, and a scale grows curves. */
+    double gainDb      = 0.0;
+    /** The master's audio mute (`self:Muted`), not the structural one. */
+    bool   muted       = false;
+    /** An automation lane on the master's own volume or mute. A CONSTANT scale
+     * would at least be a fixed factor; an automated one is not even that, so
+     * this is checked separately rather than folded into gainDb. */
+    bool   automated   = false;
+
+    bool unity() const
+    { return insertCount == 0 && !muted && !automated
+             && gainDb > -1e-9 && gainDb < 1e-9; }
+};
+
 // `width` is the project's channel count. A null component, a non-unity input
-// level, a non-identity channel map or a width disagreement all mean Closure.
+// level, a non-identity channel map, a width disagreement -- or a master lane
+// doing anything at all (D4a) -- all mean Closure.
+//
+// `chain` is REQUIRED and has no default ON PURPOSE. A defaulted "no chain"
+// argument is exactly how a future caller would silently get the pre-M2 answer
+// and leave monitoring on over a signal that no longer matches.
 twMasterShape checkMasterShape( const twMixer *mixer, const twRewire *root,
-                                idx_t width );
+                                idx_t width, const twMasterChainState &chain );
 
 }  // namespace twlive
 

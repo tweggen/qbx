@@ -92,6 +92,18 @@ struct SLiveClosure {
 namespace sliveplan {
 
 /**
+ * Read the master lane's chain state off a mixer, for `checkMasterShape`
+ * (proposal 45 M2 / D4a).
+ *
+ * ONE spelling, shared by the plan builder and SLiveMonitor. Both ask the same
+ * question on every plan build and every refresh; two copies would be two
+ * chances for the refusal and the plan to disagree about whether monitoring is
+ * legal — and the disagreement would be silent, because the plan is what the
+ * RT reads and the refusal is what the user sees.
+ */
+twlive::twMasterChainState masterChainStateOf( const SStdMixer *mixer );
+
+/**
  * The live set: `{armed && monitorEffective} ∪ {monitorMode == on}`, closed
  * upward to the master (design D9).
  *

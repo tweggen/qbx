@@ -790,7 +790,8 @@ void SLiveMonitor::refresh()
         const twlive::twMasterShape shape = twlive::checkMasterShape(
             mixer->masterMixComponent().get(),
             mixer->masterRewireComponent().get(),
-            (idx_t) app_->masterChannels() );
+            (idx_t) app_->masterChannels(),
+            sliveplan::masterChainStateOf( mixer ) );
         if( !shape.linear() ) {
             if( lastRefusal_.isEmpty() ) {
                 lastRefusal_ = QStringLiteral(

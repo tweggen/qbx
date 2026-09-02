@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M2, AC2.7 / D4a: with anything on the master lane, live
+  monitoring is REFUSED, loudly.
+
+  THE PROPOSAL'S FIRST REVISION GOT THIS BACKWARDS, and the correction changed
+  the milestone plan. checkMasterShape reads two components' widths, the
+  mixer's input levels and the rewire's channel map. After M2 wired the master
+  lane's twPluginChain and twGainStage BETWEEN those two components, none of
+  that sees them - a plugin chain and a gain stage interposed there are not
+  arguments and are not inspected.
+
+  So without this check a user who drops a limiter on the master gets
+  LinearSplit: monitoring stays ON, the RT adds the frozen root page (now
+  processed by the limiter) to a live ring that BYPASSED the master chain
+  entirely, and the two halves no longer belong to the same signal. There is
+  no log line, because nothing detected anything. A master fader at -6 dB does
+  the same thing to the split.
+
+  Closure is not WIRED until M3, so the honest answer for the whole M2 to M3
+  window is the refusal inv. 18a already gives for every other non-linear
+  master - a log line naming the reason, and the arrangement playing
+  untouched. That is what this case asserts.
+
+  EACH CONTROL IS ASSERTED SEPARATELY. A single "anything non-default refuses"
+  check would pass with three of the four unread, which is exactly the shape
+  of the defect being fixed.
+-->
+<SActionScript version="1" name="master_insert_refuses_monitoring">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+
+    <!-- (1) A CLEAN master monitors. Without this the case cannot tell
+             "refused for the right reason" from "never monitored at all". -->
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (2) AN INSERT ON THE MASTER refuses, and says which control did it. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the master lane has inserts" minCount="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- ...and removing it restores monitoring. A refusal that latched would
+             pass every assertion above and leave the user unable to monitor
+             for the rest of the session. -->
+    <remove-plugin trackPath="$master" index="0"/>
+    <assert-system-lane trackPath="$master" plugins="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (3) A NON-UNITY MASTER FADER refuses, with its own reason. -->
+    <set-track-volume trackPath="$master" volume="-6.0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the master fader is not at unity" minCount="1"/>
+    <arm-track trackPath="0" armed="0"/>
+    <set-track-volume trackPath="$master" volume="0.0"/>
+    <!-- CLEARING THE REFUSAL IS PART OF THE GATE, not housekeeping. The
+         monitor logs a refusal only when it is not already holding one, so a
+         phase that never returns to a monitoring master would make the NEXT
+         phase's assertion vacuous - it would be asserting the previous
+         phase's log line. Arming once with a clean master is what proves the
+         refusal is not latched, and it is what makes each assertion below
+         about its own control. -->
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (4) A MUTED MASTER refuses. Monitoring through a muted master would
+             put the live signal through a path the frozen half is silent in. -->
+    <set-track-mute trackPath="$master" muted="1"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the master lane is muted" minCount="1"/>
+    <arm-track trackPath="0" armed="0"/>
+    <set-track-mute trackPath="$master" muted="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (5) AN AUTOMATED master volume refuses. A constant scale would at
+             least be a fixed factor; an automated one is not even that - so it
+             is checked separately rather than folded into the fader, and the
+             point below is deliberately at 0.0 dB: a lane that HAPPENS to sit
+             at unity right now must still refuse. -->
+    <add-automation-point owner="$master" target="self:Volume"
+                          time="0" value="0.0"/>
+    <assert-system-lane trackPath="$master" volume="0.0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="automated" minCount="1"/>
+    <arm-track trackPath="0" armed="0"/>
+  </actions>
+
+</SActionScript>

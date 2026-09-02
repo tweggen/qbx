@@ -22,6 +22,26 @@ bool SLiveClosure::contains( const STrack *t ) const
 
 namespace sliveplan {
 
+twlive::twMasterChainState masterChainStateOf( const SStdMixer *mixer )
+{
+    twlive::twMasterChainState out;
+    if( !mixer ) return out;
+    const STrack *lane = mixer->masterLane();
+    if( !lane ) return out;
+
+    if( const SPluginChain *chain = lane->getPluginChain() )
+        out.insertCount = chain->childCount();
+    out.gainDb = lane->getVolume();
+    out.muted  = lane->isMuted();
+    // A lane on the master's OWN volume or mute. `param:` lanes are covered by
+    // insertCount (an automated plugin implies a plugin), and a `cut:` lane
+    // cannot exist here because a system lane holds no clips (D6).
+    out.automated = lane->automationLane( QStringLiteral( "self:Volume" ) ) != nullptr
+                 || lane->automationLane( QStringLiteral( "self:Muted" ) )  != nullptr;
+    return out;
+}
+
+
 bool isAudioInput( const STrack *t )
 {
     return t && t->getTrackInput().startsWith( QStringLiteral( "audio:" ) );
@@ -246,7 +266,8 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
     const std::shared_ptr<twMixer>  masterMix  = params.mixer->masterMixComponent();
     const std::shared_ptr<twRewire> masterRoot = params.mixer->masterRewireComponent();
     const twlive::twMasterShape shape =
-        twlive::checkMasterShape( masterMix.get(), masterRoot.get(), params.width );
+        twlive::checkMasterShape( masterMix.get(), masterRoot.get(), params.width,
+                                  sliveplan::masterChainStateOf( params.mixer ) );
     plan->masterLinear = shape.linear();
 
     std::map<const STrack *, int> indexOf;

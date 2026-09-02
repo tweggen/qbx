@@ -1567,32 +1567,83 @@ int main()
         mixer->setInputLevel(0, 0.0);
         mixer->setInputLevel(1, 0.0);
 
-        twlive::twMasterShape sh = twlive::checkMasterShape(mixer.get(), root.get(), 2);
+        // Every case below is about the SUM and the MAP, so the master lane is
+        // doing nothing in all of them. Named once rather than repeated.
+        const twlive::twMasterChainState kNoChain;
+        CHECK(kNoChain.unity(), "a default master chain state is unity");
+
+        twlive::twMasterShape sh = twlive::checkMasterShape(mixer.get(), root.get(), 2, kNoChain);
         CHECK(sh.linear(),
               "L1a AC3: a unity twMixer into an identity twRewire is the LINEAR SPLIT");
 
         // A non-unity input level: the master is no longer a plain sum.
         mixer->setInputLevel(1, -6.0);
-        sh = twlive::checkMasterShape(mixer.get(), root.get(), 2);
+        sh = twlive::checkMasterShape(mixer.get(), root.get(), 2, kNoChain);
         CHECK(!sh.linear() && sh.mode == twlive::twMasterMode::Closure,
               "L1a AC3: a non-unity master input level selects CLOSURE mode");
         mixer->setInputLevel(1, 0.0);
 
         // A non-identity channel map: addition no longer commutes with it.
         root->setChannelMap({ 1, 0 });
-        sh = twlive::checkMasterShape(mixer.get(), root.get(), 2);
+        sh = twlive::checkMasterShape(mixer.get(), root.get(), 2, kNoChain);
         CHECK(!sh.linear(), "L1a AC3: a swapped master channel map selects CLOSURE mode");
         root->setChannelMap({ 0, 1 });
-        CHECK(twlive::checkMasterShape(mixer.get(), root.get(), 2).linear(),
+        CHECK(twlive::checkMasterShape(mixer.get(), root.get(), 2, kNoChain).linear(),
               "L1a AC3: an EXPLICIT identity map is still the linear split");
 
         // A width disagreement, and the null cases.
-        CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 6).linear(),
+        CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 6, kNoChain).linear(),
               "L1a AC3: a master narrower than the project selects CLOSURE mode");
-        CHECK(!twlive::checkMasterShape(nullptr, root.get(), 2).linear(),
+        CHECK(!twlive::checkMasterShape(nullptr, root.get(), 2, kNoChain).linear(),
               "L1a AC3: no mixer at all selects CLOSURE mode");
-        CHECK(!twlive::checkMasterShape(mixer.get(), nullptr, 2).linear(),
+        CHECK(!twlive::checkMasterShape(mixer.get(), nullptr, 2, kNoChain).linear(),
               "L1a AC3: no root rewire selects CLOSURE mode");
+
+        // --- proposal 45 M2 / AC2.7: the check SEES the master lane ---------
+        // Before M2 a plugin chain and a gain stage interposed between the two
+        // components were not arguments and were not inspected, so a limiter on
+        // the master read LinearSplit: monitoring stayed on and the RT added a
+        // frozen root page the live ring had never been through. Each control
+        // is asserted SEPARATELY -- one combined "anything non-default" check
+        // would pass with three of the four unread.
+        {
+            twlive::twMasterChainState c;
+            c.insertCount = 1;
+            CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 2, c).linear(),
+                  "45 AC2.7: an insert on the master selects CLOSURE mode");
+        }
+        {
+            twlive::twMasterChainState c;
+            c.gainDb = -6.0;
+            CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 2, c).linear(),
+                  "45 AC2.7: a non-unity master fader selects CLOSURE mode");
+        }
+        {
+            twlive::twMasterChainState c;
+            c.gainDb = 6.0;
+            CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 2, c).linear(),
+                  "45 AC2.7: a master fader ABOVE unity selects CLOSURE mode");
+        }
+        {
+            twlive::twMasterChainState c;
+            c.muted = true;
+            CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 2, c).linear(),
+                  "45 AC2.7: a muted master selects CLOSURE mode");
+        }
+        {
+            twlive::twMasterChainState c;
+            c.automated = true;
+            CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 2, c).linear(),
+                  "45 AC2.7: an automated master volume selects CLOSURE mode");
+        }
+        // ...and the boundary: a fader at exactly unity is NOT a refusal, or
+        // every project would monitor in Closure mode.
+        {
+            twlive::twMasterChainState c;
+            c.gainDb = 0.0;
+            CHECK(twlive::checkMasterShape(mixer.get(), root.get(), 2, c).linear(),
+                  "45 AC2.7: a master at unity with an empty chain stays LINEAR");
+        }
     }
 
     // --- AC1: the speaker's two-lane transitions -----------------------

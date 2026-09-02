@@ -874,6 +874,54 @@ no longer belong to the same signal — the honest refusal inv. 18a used to give
 is absent for the whole M2→M3 window), and AC2.8 (the lane's own trackmix and
 rewire are inert by construction but nothing asserts it).
 
+#### M2 PART 2 — **DONE 2026-09-02: AC2.6 and AC2.7; AC2.8 is DISPROVED**
+
+**AC2.7 (D4a) — the shape check learns the chain.** `checkMasterShape` gains a
+required `twMasterChainState` argument (insert count, gain dB, mute, and an
+automation flag). **Required, with no default, on purpose**: a defaulted "no
+chain" is exactly how a future caller would silently get the pre-M2 answer and
+leave monitoring on over a signal that no longer matches. Passed as VALUES
+because `tw/playback` may not include `tw/plugins`. One shared reader,
+`sliveplan::masterChainStateOf()`, so the plan builder and `SLiveMonitor`
+cannot disagree about whether monitoring is legal — a disagreement that would
+be silent, since the plan is what the RT reads and the refusal is what the user
+sees. Four distinct reasons, not one, so the status line names which control
+turned monitoring off. `automated` is checked SEPARATELY from `gainDb`: a
+constant scale is at least a fixed factor, an automated one is not even that,
+and a lane that happens to sit at unity right now must still refuse.
+
+Watched failing twice: the whole block disabled (pre-M2 behaviour), and — the
+one that matters — **only `insertCount` read**, which fails too, so the four
+controls are shown to be checked separately rather than one standing for all.
+
+**AC2.6 (D12) — the master meter.** `STrack::getRootComponent()` returns the
+mixer's rewire for the master role. Measured: with a 2.5x master insert the
+master meter reads **0.568995** against a base of 0.227598 (exactly 2.5x)
+while the TRACK meter stays at 0.227598, and a −6 dB master fader moves it
+again. A render sits between the edit and the probe because proposal 34
+deliberately ACCEPTS stale-but-frozen pages.
+
+**AC2.8 IS DISPROVED, AND THE SABOTAGE FOR AC2.6 IS WHAT DISPROVED IT.**
+Removing the D12 override leaves `master_meter_postfx` **green**. The reason is
+that the master lane's own `twRewire` is **not inert**, as D12 and T5 both
+assume: `STrack`'s constructor wires `rewire.input = gainStage.output`, and
+`wireAsMasterLane()` does not disconnect it — it only takes the gain stage's
+output into the MIXER's rewire *as well*. So the lane's rewire is **REDUNDANT,
+carrying the same signal**, not silent, and a probe pointed at it would read
+correct audio rather than decaying.
+
+Consequences, none of them fixed here:
+- **AC2.8 as written ("the lane's own twTrackMix/twRewire are unwired") is
+  FALSE.** The trackmix genuinely is unwired; the rewire is not.
+- The override is kept on the **weaker basis** that it is the one correct
+  answer — the mixer's rewire is the page cache the invalidation path actually
+  bumps, so the lane's own is a second cache nobody invalidates and could go
+  stale — not because anything proves it necessary today.
+- T5's "must not be wired for consistency later" should read "must be
+  DISCONNECTED", and that is a change with its own blast radius (the lane's
+  rewire is what `getRootComponent()` returned before the override, so
+  anything still reaching it would go silent).
+
 **Also settled here:** D5's body text (line ~327) still says `set-track-volume`
 with an empty path "is **redirected to the master lane**". AC1.9 rejected that
 redirect. `master_fader_heard.qxa` now asserts the refusal, so the two cannot
