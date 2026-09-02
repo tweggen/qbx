@@ -998,29 +998,63 @@ summed the closure and the frozen siblings and then applied NOTHING).
 `SLiveMonitor` still refuses **every** non-linear master. One line changes when
 this is enabled, and it is commented in place.
 
-**IT IS HELD BACK ON A MEASUREMENT I CANNOT EXPLAIN, and that is the finding.**
-One monitored armed track plus one unarmed track carrying `test_autosaw.wav`,
-transport running, over [48000, 72000) on channel 0:
+**HELD BACK, AND THE DIAGNOSTIC THAT FOLLOWED CORRECTED EVERY NUMBER IN THE
+FIRST WRITE-UP OF THIS SECTION.** Recorded in full, because three of the four
+things it originally claimed were artifacts of my own measurement.
+
+**What was wrong.** The "linear reference" of 0.23158 came from a probe built
+with `grep -v`, which stripped the first line of a two-line `<insert-plugin>`
+element and left the continuation line orphaned — a malformed script. The
+"ratio 3.07" was computed against it. And the "AC3.1 reverted is SMALLER, not
+larger" result sat inside run-to-run noise. **None of the three stands.**
+
+**The harness that replaced it** is four uniformly-generated cases over
+`test_autosaw.wav` (RMS 0.230956, A = 0.40003): one unarmed track carrying the
+fixture, one armed+monitored track on the paced `file:` input, transport
+running.
 
 | | measured |
 |---|---|
-| linear master, no insert (the reference) | **0.23158** |
-| Closure, 2.0x master insert | **0.709752** — ratio **3.07** |
-| Closure, 2.0x, AC3.1 reverted | **0.680091** — **SMALLER**, not larger |
+| root alone, no live lane | **0.230956** |
+| ring alone, linear (unarmed track muted) | **0.230956** |
+| ring alone, CLOSURE with a 2.0x master insert | **0.461913** — *exactly* 2x |
+| root + ring, linear | **~0.2313** |
+| root + ring, CLOSURE with a 2.0x master insert | **~0.5578** |
 
-A correct Closure is **2.0x** the linear reference. 3.07 is not that. And the
-AC3.1-reverted figure is **not the doubling D4b predicts** — it is *smaller*,
-which reads as partial cancellation between the root page and the ring at
-different latencies rather than a coherent sum. Two things follow:
+**Three findings, and the third redirects M3.**
 
-1. **AC3.3 cannot be honestly asserted from here.** It is the AC that decides
-   whether Closure is correct, and no closed form I can defend produces 3.07.
-2. **D4b's own prediction needs re-deriving.** "The user would hear the
-   arrangement doubled" is the stated reason for the refusal; the measurement
-   says the failure mode is interference, not doubling. Whoever finishes M3
-   should start by explaining the linear reference itself — 0.23158 is about
-   ONE fixture RMS where the linear split should carry the unarmed track AND
-   the monitored input, i.e. two sawtooths.
+1. **AC3.2 works.** Logged from the builder: the master node receives
+   `1 insert slot(s), 1 non-null`.
+2. **THE MASTER CHAIN IS APPLIED UNDER CLOSURE, EXACTLY.** Ring-only Closure
+   reads **0.461913**, which is 2 x 0.230956 to six digits, in half the runs
+   and 0.457063 (−1.05 %) in the rest. That was the thing most in doubt and it
+   is not in doubt.
+3. **THE OPEN PROBLEM IS THE *LINEAR* SPLIT, NOT CLOSURE.** Root + ring on the
+   LINEAR path reads **~0.2313** where the two halves should sum to **~0.4619**.
+   One of them is largely missing, in every run, past the priming lag. That is
+   M2-and-earlier behaviour with no M3 code involved — and it matters here
+   because **AC3.3 measures Closure against exactly that reference**. Explain
+   the linear level first; a Closure gate written against a reference that is
+   itself half the expected value would pin the wrong number.
+
+**And a methodological finding worth as much as the others: THE MEASUREMENT
+WINDOW WAS INSIDE THE PRIMING LAG.** `twSpeaker` defers the device start until
+the readahead is primed (~2.3 s on a real project; CLAUDE.md records it), and
+the original window at [48000, 72000) — 1.0 to 1.5 s — sat inside it. That
+produced a BIMODAL reading (0.23158 four times, 0.461913 once for the same
+binary and script) which is what made the first pass look like a doubling
+question. Windows moved to [168000, 216000) after a 5.2 s run; the readings
+above are the late ones. Any M3 gate must do the same.
+
+**Not dropouts:** the pump reported **4** frozen-input misses and 8 input
+shortfalls over 2.6 s — about 3 %, an order of magnitude too few to explain a
+24 % shortfall.
+
+**A gate for AC3.3 must not use the same signal on both halves.** Root and ring
+here are both `test_autosaw.wav`, so their sum's RMS depends on a relative
+phase that is not deterministic across runs, and no closed form survives it.
+Give the unarmed track different material (`test_gapsaw.wav`'s exact-zero
+windows separate the two contributions cleanly) or a different level.
 
 Also **not started**: AC3.1's ENGINE half (the readahead and `warmFrozenLane`
 still demand root pages, which under Closure would run the master lane's

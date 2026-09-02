@@ -815,20 +815,29 @@ void SLiveMonitor::refresh()
         // inserts and gain (AC3.2), and twSpeaker::setLiveMasterClosure stops
         // the RT adding the frozen root page (AC3.1's speaker half).
         //
-        // IT IS HELD BACK ON A MEASUREMENT. With the narrowing in, a project of
-        // one monitored armed track plus one unarmed track carrying the fixture
-        // measured, over [48000, 72000) on channel 0:
+        // IT IS HELD BACK ON THE *LINEAR* SPLIT, NOT ON CLOSURE. Measured over
+        // [168000, 216000) -- past the priming lag, which is where a first
+        // attempt at this went wrong -- with one unarmed track carrying
+        // test_autosaw.wav (RMS 0.230956) and one armed, monitored track on the
+        // paced file input:
         //
-        //   linear master (no insert)          0.23158
-        //   Closure, 2.0x master insert        0.709752   -- ratio 3.07
-        //   Closure, 2.0x, AC3.1 reverted      0.680091   -- SMALLER, not larger
+        //   root alone, no live lane                     0.230956
+        //   ring alone, linear                           0.230956
+        //   ring alone, CLOSURE + a 2.0x master insert   0.461913  <- exactly 2x
+        //   root + ring, LINEAR                          ~0.2313   <- should be ~0.4619
+        //   root + ring, CLOSURE + 2.0x                  ~0.5578
         //
-        // A correct Closure is 2.0x the linear reference. 3.07 is not that, and
-        // the reverted figure is not the DOUBLING D4b predicts either -- it is
-        // smaller, which reads as partial cancellation between the root page
-        // and the ring at different latencies rather than a coherent sum. Until
-        // that is explained, enabling Closure would trade an honest refusal for
-        // unverified audio, which is the one thing inv. 18a exists to prevent.
+        // So the master chain IS applied correctly under Closure: ring-only
+        // reads 2 x 0.230956 to six digits. What does NOT add up is the LINEAR
+        // reference on the line above it -- root plus ring delivers about ONE
+        // source where it should deliver two, in every run, with no M3 code
+        // involved. AC3.3 measures Closure AGAINST that reference, so pinning a
+        // Closure number now would pin it to a reference that is itself half
+        // what it should be.
+        //
+        // Enabling Closure here before that is explained would trade an honest
+        // refusal for audio nobody has verified, which is the one thing
+        // inv. 18a exists to prevent.
         if( !shape.linear() ) {
             if( lastRefusal_.isEmpty() ) {
                 lastRefusal_ = QStringLiteral(
