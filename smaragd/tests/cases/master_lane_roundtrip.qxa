@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M1: every arrangement root owns exactly one MASTER LANE, it is
+  addressable as "$master", it is NOT a child link, and it round-trips with
+  its inserts and its fader.
+
+  THE ASSERTION THAT ACTUALLY BITES IS expectPath (D9's write side).
+
+  A system lane is deliberately not among its root's childLinks(), so
+  strackpath::pathOf() — which walks exactly those — answered {} for it, and
+  {} is ALSO the address of "the root itself". Every track head derives its
+  commit address from pathOf(), so before the sentinel branch the master's own
+  fader would have moved and then committed to the MIXER, or to nothing at
+  all. No assertion about the lane's own PROPERTIES can see that: role,
+  hidden, name and the insert count are all perfectly correct while the write
+  side is broken. Only the round trip through pathOf() can.
+
+  The mirror-image trap is on the READ side and is gated below too: paths are
+  QList<int> and QString::toInt() answers 0 for any non-numeric text, so
+  before the sentinel the spelling "$master" resolved SILENTLY TO THE FIRST
+  USER TRACK. A mistyped one must fail closed, never land somewhere plausible.
+
+  Nothing here is audible. The master lane is in the file and in no signal
+  path until M2 routes the sum through it, which is why this case renders
+  nothing and asserts no level.
+
+  This case OWNS the project file build/test-output/master_lane_roundtrip/
+  master_lane.qxp.
+-->
+<SActionScript version="1" name="master_lane_roundtrip">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- AC1.1: it exists, it is the master, it is hidden, it takes no clips. -->
+    <assert-system-lane trackPath="$master" role="master"
+                        hidden="1" acceptsClips="0" name="Master"/>
+
+    <!-- AC1.2: it is invisible to everything that counts USER tracks, and
+         adding it shifted no index path: track 0 and track 1 are still the
+         two tracks that were added. -->
+    <assert-track-count arrangement="" count="2"/>
+    <assert-system-lane trackPath="0" role="none" acceptsClips="1"/>
+    <assert-system-lane trackPath="1" role="none" acceptsClips="1"/>
+
+    <!-- AC1.3, the READ side: it is NOT reachable by any index, and a
+         mistyped sentinel resolves to nothing rather than to track 0. -->
+    <assert-system-lane trackPath="$master" inChildLinks="0"/>
+    <assert-system-lane trackPath="$mastr" role="none" expectReject="true"/>
+
+    <!-- AC1.3, the WRITE side: pathOf() must name the lane, not the root. -->
+    <assert-system-lane trackPath="$master" expectPath="$master"/>
+
+    <!-- AC1.4: the five plugin verbs and the fader verb reach it through the
+         ordinary trackPath, with no change of their own — which is the whole
+         return on "a system lane IS an STrack". -->
+    <insert-plugin trackPath="$master" format="clap"
+                   uid="tw.test.clap.gain" index="-1"/>
+    <set-track-volume trackPath="$master" volume="-6.0"/>
+    <assert-system-lane trackPath="$master" plugins="1" volume="-6.0"/>
+
+    <!-- ...and both survive a save/load round trip, together with the role,
+         the hidden flag and the name. -->
+    <save-project path="../../build/test-output/master_lane_roundtrip/master_lane.qxp"/>
+    <load-project path="../../build/test-output/master_lane_roundtrip/master_lane.qxp"/>
+
+    <assert-system-lane trackPath="$master" role="master" hidden="1"
+                        acceptsClips="0" name="Master"
+                        plugins="1" volume="-6.0"
+                        expectPath="$master" inChildLinks="0"/>
+    <assert-track-count arrangement="" count="2"/>
+
+    <!-- A named arrangement gets its own master lane, and it is a DIFFERENT
+         one: create-arrangement mints it for free because the constructor
+         does (D13). -->
+    <create-arrangement name="Drums"/>
+    <assert-system-lane trackPath="Drums:$master" role="master" hidden="1"
+                        plugins="0" expectPath="$master"/>
+    <assert-system-lane trackPath="$master" plugins="1"/>
+  </actions>
+
+</SActionScript>

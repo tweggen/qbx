@@ -43,12 +43,12 @@
 
     <!-- ============ Part 1: reorder, then remove ============ -->
 
-    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+    <insert-plugin trackPath="0" slotIndex="0"
                    format="clap" uid="tw.test.clap.stereoskew"
                    name="Smaragd Test Stereo Skew" vendor="Smaragd"
                    path="twtestclap.clap" nIn="2" nOut="2"/>
 
-    <insert-plugin trackPath="/mixer/0" slotIndex="1"
+    <insert-plugin trackPath="0" slotIndex="1"
                    format="clap" uid="tw.nobody.ships.this.plugin"
                    name="Nonexistent Reverb" vendor="Acme"
                    path="nosuchmodule.clap" nIn="2" nOut="2"/>
@@ -60,7 +60,7 @@
                          channel="0" minRms="0.090" maxRms="0.110"/>
 
     <!-- Model order becomes [missing, skew]. plugins_ must follow. -->
-    <reorder-plugin trackPath="/mixer/0" fromIndex="1" toIndex="0"/>
+    <reorder-plugin trackPath="0" fromIndex="1" toIndex="0"/>
 
     <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
                          contains="state=Missing"/>
@@ -75,7 +75,7 @@
 
     <!-- Remove the TRANSPARENT slot, now at model index 0. Before the fix this
          erased plugins_[0] — the SKEW — and the level fell to 0.0665. -->
-    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+    <remove-plugin trackPath="0" slotIndex="0"/>
 
     <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
                          contains="state=Active"/>
@@ -99,7 +99,7 @@
     <!-- ============ Part 2: insert at the FRONT, then remove ============ -->
 
     <!-- Back to a single Active slot, so the next insert lands in front of it. -->
-    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+    <remove-plugin trackPath="0" slotIndex="0"/>
     <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
                          contains="state=Active"/>
 
@@ -107,7 +107,7 @@
          the action then has to move it. If that move skips the DSP, plugins_ is
          [skew, missing] while the model is [missing, skew] — the same drift the
          reorder used to cause, from a completely different verb. -->
-    <insert-plugin trackPath="/mixer/0" slotIndex="0"
+    <insert-plugin trackPath="0" slotIndex="0"
                    format="clap" uid="tw.nobody.ships.this.plugin"
                    name="Nonexistent Reverb" vendor="Acme"
                    path="nosuchmodule.clap" nIn="2" nOut="2"/>
@@ -117,7 +117,7 @@
     <assert-plugin-strip trackIndex="0" slotIndex="1" contains="state=Active"/>
 
     <!-- Removing the transparent front slot must, again, not move the level. -->
-    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+    <remove-plugin trackPath="0" slotIndex="0"/>
 
     <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
                          contains="state=Active"/>
@@ -143,7 +143,7 @@
          Order here is [skew, missing]. Removing the skew (index 0, the head)
          leaves the transparent placeholder, so the level must fall to the
          no-plugin baseline — and specifically NOT to zero. -->
-    <insert-plugin trackPath="/mixer/0" slotIndex="1"
+    <insert-plugin trackPath="0" slotIndex="1"
                    format="clap" uid="tw.nobody.ships.this.plugin"
                    name="Nonexistent Reverb" vendor="Acme"
                    path="nosuchmodule.clap" nIn="2" nOut="2"/>
@@ -151,7 +151,7 @@
     <assert-plugin-strip trackIndex="0" slotCount="2" slotIndex="0"
                          contains="state=Active"/>
 
-    <remove-plugin trackPath="/mixer/0" slotIndex="0"/>
+    <remove-plugin trackPath="0" slotIndex="0"/>
 
     <assert-plugin-strip trackIndex="0" slotCount="1" slotIndex="0"
                          contains="state=Missing"/>

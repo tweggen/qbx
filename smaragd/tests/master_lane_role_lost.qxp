@@ -1,0 +1,24 @@
+<SProject fileName='' rootId='94321406762432' formatVersion='2' bpmTempo='120' sampleRate='48000' channels='2' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true,"timelineScrollX":0,"timelineZoomSecondWidth":30}'>
+<SStdMixer masterLaneId='94321409365440' id='94321406762432' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='94321409362464' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='94321409387632' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack pluginChainId='94321409161488' id='94321409365440' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='-6' pan='0' delay='0' hidden='true' sName='Master'>
+</STrack>
+<SPluginChain id='94321409161488' nRefs='1' hasDuration='1' durationSec='4.16667e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+<SLink objectId='94321409383376' hasStartTime='1' startTime='0'>
+</SLink>
+</SPluginChain>
+<STrack pluginChainId='94321409345904' id='94321409362464' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='GrumpyNarwhal'>
+</STrack>
+<SPluginChain id='94321409345904' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='94321409388592' id='94321409387632' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='GrumpyWaffle'>
+</STrack>
+<SPluginChain id='94321409388592' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<SPluginSlot id='94321409383376' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' bypassed='false' format='clap' uid='tw.test.clap.gain' name='' vendor='' path='' nIn='0' nOut='0' isInstrument='false'>
+</SPluginSlot>
+</SProject>

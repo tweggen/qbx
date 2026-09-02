@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M2, AC2.5 / D3a: an ORDINARY edit invalidates THROUGH an empty
+  master chain.
+
+  THIS IS THE COMMONEST PATH IN THE APP AND IT IS SILENT WHEN WRONG. Every
+  user has an empty master chain and edits clips. After M2 put the master
+  lane's twPluginChain and twGainStage between the bus sum and the rewire,
+  each carries its own page cache and neither was bumped by anybody on an
+  ordinary edit: SStdMixer::bumpRenderChainEpoch() knew about the bus mixers
+  and the rewire and nothing in between. The rewire re-freezes, fetchInputPage
+  serves the gain stage's still-valid stale page, and THE EDIT IS INAUDIBLE -
+  no error, no log line, just the old audio.
+
+  It is a DIFFERENT edge from D11's "invalidation FROM the master", which
+  master_insert_heard.qxa gates, and neither subsumes the other: this one
+  carries an ordinary TRACK edit past the master, that one carries a MASTER
+  edit down to the rewire. Reverting either leaves the other green.
+
+  MEASURED, NOT PREDICTED: with the wiring in and the epoch extension missing,
+  mc_golden_stereo's own negative control flipped - its set-track-mute plus
+  re-render produced a file BYTE-IDENTICAL to the unmuted golden, so the
+  assertion that exists to prove the comparison CAN fail reported "applied but
+  expectReject was set". A mute had stopped being audible.
+
+  Closed form over ../test_autosaw.wav as in master_fader_heard.qxa: base
+  0.230956 over [48000, 96000) channel 0; at -6.0 dB, 0.115747.
+
+  THE MASTER CHAIN IS EMPTY THROUGHOUT, deliberately. An insert on the master
+  would give the edit a second way to reach the rewire and would stop this
+  case from being about the empty-chain path every user actually has.
+-->
+<SActionScript version="1" name="track_edit_invalidates_through_master">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <assert-system-lane trackPath="$master" role="master" plugins="0" volume="0.0"/>
+
+    <!-- Freeze the pages first. Without this render there is nothing stale to
+         serve and the case cannot fail. -->
+    <render filename="teim_base.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="teim_base.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.2300" maxRms="0.2320"/>
+
+    <!-- (1) A TRACK fader edit, in the same process, must reach the render
+             through the master's empty chain and gain stage. -->
+    <set-track-volume trackPath="0" volume="-6.0"/>
+    <render filename="teim_fader.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="teim_fader.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.1152" maxRms="0.1163"/>
+
+    <!-- (2) A CLIP edit, which travels the range-scoped path
+             (bumpRenderChainEpochRange) rather than the whole-chain one. The
+             two are separate functions and were separately blind, so one
+             assertion cannot stand for both: muting the clip's track silences
+             the window entirely. -->
+    <set-track-volume trackPath="0" volume="0.0"/>
+    <set-track-mute trackPath="0" muted="1"/>
+    <render filename="teim_muted.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="teim_muted.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+
+    <!-- ...and back to exactly the base. -->
+    <set-track-mute trackPath="0" muted="0"/>
+    <render filename="teim_back.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="teim_back.wav" expected="teim_base.wav"/>
+  </actions>
+
+</SActionScript>

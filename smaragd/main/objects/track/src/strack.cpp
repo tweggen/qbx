@@ -13,6 +13,7 @@
 #include <qobject.h>
 
 #include "tw/mix/twtrackmix.h"
+#include "tw/mix/twmixer.h"
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twgainstage.h"
 #include "tw/plugins/twpluginchain.h"
@@ -124,6 +125,12 @@ int STrack::serializeSelfAttributes( QTextStream &o )
     // existed means, so an unfolded track re-serializes byte-identically.
     if( collapsed_ )
         o << " collapsed='true'";
+    // The SYSTEM ROLE (proposal 45 D1), written only when it is not None --
+    // every ordinary track omits it, so every project written before system
+    // lanes re-serializes byte-identically. It is IMMUTABLE, so unlike every
+    // other attribute here there is no verb that can change it after a load.
+    if( systemRole_ != SSystemRole::None )
+        o << " systemRole='" << systemRoleToString( systemRole_ ) << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -653,6 +660,16 @@ int STrack::seekTo( offset_t ofs )
     // seekTo(), being internal to the mix.
     if( cpTrackMix_ ) cpTrackMix_->seek( ofs );
     return 0;
+}
+
+void STrack::wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
+                               const std::shared_ptr<twRewire> &rewire )
+{
+    if( !sum || !rewire || !cpDspChain_ || !cpGainStage_ ) return;
+    cpDspChain_->setInput( 0, sum->linkOutput( 0 ) );
+    cpDspChain_->rebuildWiring();
+    cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+    rewire->setInput( 0, cpGainStage_->linkOutput( 0 ) );
 }
 
 void STrack::bumpRenderChainEpoch()
@@ -1447,6 +1464,21 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     // Fold state (fix/track-list-polish m). Absent = expanded, which is what
     // every project written before this attribute existed means.
     setCollapsed( element.attribute( "collapsed", "false" ).startsWith( "true" ) );
+
+    // The SYSTEM ROLE (proposal 45 D1). Absent = None = an ordinary track,
+    // which is what every project written before system lanes means. An
+    // UNKNOWN spelling also reads as None, deliberately: a file naming a role
+    // this build does not have describes a track the user can still see, move
+    // and delete, rather than an untouchable lane nothing understands.
+    {
+        const QString roleText = element.attribute( "systemRole" );
+        bool roleOk = false;
+        const SSystemRole role = systemRoleFromString( roleText, &roleOk );
+        if( !roleOk )
+            qWarning() << "STrack: unknown systemRole=" << roleText
+                       << "- loading as an ordinary track.";
+        setSystemRole( role );
+    }
 
     return 0;
 }

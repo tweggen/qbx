@@ -91,3 +91,84 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
    proposal 41 M7 already paid for what happens when two call sites each
    derive the same rule separately (paint and hit-test disagreeing on z-order,
    green for two milestones).
+
+8. **Every arrangement root owns exactly one MASTER LANE, and it is NOT a
+   child link** (proposal 45 D1/D2). It is an ordinary `STrack` answering
+   `systemRole() == Master`, minted by the constructor — so `masterLane()` is
+   never null, no caller needs a "what if there is no master" branch, and every
+   root created at runtime (`create-arrangement`, `extract-arrangement`) gets
+   one for free. It is constructed HIDDEN.
+
+   Keeping it out of `childLinks()` is FORCED, not chosen, and a change that
+   moves it in breaks four things at once: every index path in every `.qxa`,
+   every fixture and both goldens shifts by one; inv. 1 above becomes false;
+   `reconnectTracksToMixer()` sums it alongside the tracks it is meant to
+   PROCESS; and `ssolo::anySoloInTree` joins it to the solo set.
+
+   So it is an OWNED REFERENCE LINK published through `ownedRefLinks()`, the
+   shape `STrack` already uses for its plugin chain — *including* the reason
+   that shape must be published at all (objects/track's header records the
+   `~SProject` survivor-ordering crash that came of not publishing one).
+   Dropping the ref in `~SStdMixer` is also what stops a removed arrangement
+   leaving an orphan lane behind that would serialize forever: the lane is a Qt
+   child of `SProject`, so nothing else would collect it.
+
+9. **`masterLaneId` is refused when it does not name a master-roled track.**
+   Serialization is regenerated from live objects and there is no
+   unknown-attribute passthrough, so an OLDER build re-saving a project drops
+   `systemRole=` and `masterLaneId=` alike; a file can legitimately come back
+   naming a track that is now an ordinary one. Adopting it would make a user
+   track the master — silently accepting clips, arming, and being summed twice.
+   The constructor's own lane is kept, and the refusal is ANNOUNCED
+   (`TW_LOGW`), never silent. Gate: `master_lane_bad_reference.qxa` over the
+   committed fixture `tests/master_lane_role_lost.qxp`.
+
+10. **The master lane is addressed by a NEGATIVE INDEX SENTINEL**, spelled
+   `$master` (`app/model/sobjectpath.h`, proposal 45 D9). Both directions are
+   load-bearing and the WRITE side is the one that would ship broken:
+   `strackpath::pathOf()` walks `childLinks()`, so without its sentinel branch
+   it answers `{}` for the master lane — which is also the address of the root
+   itself, and every track head derives its commit address from it. The READ
+   side fails CLOSED: an unparsable component becomes `SPATH_INVALID` rather
+   than `QString::toInt()`'s 0, because before that a mistyped `"$mastr"`
+   resolved silently to the FIRST USER TRACK.
+
+11. **THE MASTER LANE'S CHAIN IS IN THE SIGNAL PATH, AND THE ROOT COMPONENT IS
+    STILL THE `twRewire`** (proposal 45 M2 / D3). `wireMasterChain()` puts the
+    lane's `twPluginChain` and `twGainStage` between the bus sum and the
+    rewire. What every consumer resolves — the master meter, `RenderSession`,
+    `AudioEngine`, `twSpeaker`, all through
+    `SProject::getRootComponent()->getRootComponent()` — does not move, and
+    the master meter becomes post-master-FX by construction rather than by a
+    second tap. Making the LANE's own rewire the project root was rejected: it
+    moves what all of those resolve to, for nothing.
+
+12. **THE LANE'S OWN `twTrackMix` AND `twRewire` ARE INERT AND MUST NOT BE
+    "WIRED FOR CONSISTENCY"** (T5). An `STrack` builds trackmix → chain → gain
+    → rewire; M2 re-points the CHAIN's input at the mixer's sum and takes the
+    GAIN's output into the mixer's rewire. The lane has no clips (D6), so its
+    trackmix has nothing to sum; a second rewire in the path would be a second
+    page cache to invalidate.
+
+13. **INVALIDATION MUST BE ISSUED AT THREE LEVELS, NOT TWO, AND THE THIRD IS
+    SILENT WHEN MISSING** (D3a). `bumpRenderChainEpoch[Range]()` covers the bus
+    mixers and the rewire; the master lane's chain and gain stage sit BETWEEN
+    them and carry their own page caches. Without `bumpMasterChainEpoch[Range]`
+    the rewire re-freezes, `fetchInputPage` serves the gain stage's still-valid
+    stale page, and an ordinary clip or track edit is **inaudible** — no error,
+    no log line. This is the commonest path in the app (every user has an empty
+    master chain and edits clips). Measured: `mc_golden_stereo`'s own mute
+    negative control flipped, its re-render coming back byte-identical to the
+    unmuted golden.
+
+14. **THE MIXER OWNS ITS MASTER LANE'S RENDER PATH, and says so through
+    `SObject::renderPathOwner()`** (D11). `invalidateRenderPath()` walks down
+    from the project root through `childLinks()`, and a system lane is
+    deliberately not among them, so the walk does not find it and bumps only
+    the lane's own caches — the fader moves and the render does not change.
+    The mixer sets itself as the owner when it mints the lane and again when it
+    adopts one from a file; a lane that lost that pointer would go silent in
+    exactly this way. It is a DIFFERENT edge from invariant 13 and neither
+    subsumes the other: 13 carries an ordinary track edit PAST the master, 14
+    carries a master edit DOWN to the rewire. Each is watched failing with the
+    other reverted.

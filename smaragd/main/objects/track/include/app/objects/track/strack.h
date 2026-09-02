@@ -24,6 +24,7 @@ class twTrackMix;
 class twRewire;
 class twGainStage;
 class twPluginChain;
+class twMixer;
 class SLink;
 class SProjectLoader;
 
@@ -110,6 +111,29 @@ public:
     int getChannels() const { return channels_; }
 
     SPluginChain *getPluginChain() const { return cpPluginChain_; }
+
+    // --- system role (proposal 45 D1) -------------------------------------
+    //
+    // A SYSTEM LANE is an ordinary track the PROJECT owns rather than the
+    // user: the post-sum master, a send destination, or a conductor lane
+    // (tempo, time signature, markers) hanging off the master. It is not a
+    // new type -- `dynamic_cast<STrack *>` appears 98 times across 40 files
+    // in main/, and every one of them is a site a second lane type would
+    // have to be audited at. Being an STrack is what makes the plugin chain,
+    // the gain stage, metering, automation, the row and the head work with
+    // no change of their own.
+    //
+    // IMMUTABLE: set once, at construction, by whoever mints the lane. A
+    // lane does not become the master. There is deliberately no verb and no
+    // undo entry for it.
+    void setSystemRole( SSystemRole r ) { systemRole_ = r; }
+    SSystemRole systemRole() const override { return systemRole_; }
+
+    // A system lane carries no clips of its own (proposal 45 D6): a master
+    // track must not directly hold sample or event material, though it may
+    // hold child lanes. Enforced at ONE narrow seam,
+    // splacements::placementLaneAt().
+    bool acceptsClips() const override { return systemRole_ == SSystemRole::None; }
 
     // --- events (proposal 37 3.2 / 3.2.1) ---------------------------------
     //
@@ -291,6 +315,33 @@ public:
     // out as shared_ptr because the plan outlives any single call and the pump
     // reads them from another thread; the plan holds no raw component pointer
     // except the frozen-input roots it reads pages off.
+    /** PROPOSAL 45 D11. Set by SStdMixer for the lane it owns; null for every
+     * ordinary track. See SObject::renderPathOwner() for why this exists and
+     * what goes silent without it. Stored as an SObject* rather than an
+     * SStdMixer* because objects/track sits BELOW objects/mixer in the module
+     * DAG and may not name it -- the same reason systemRole() is on SObject. */
+    /**
+     * PROPOSAL 45 M2 / D3 -- put THIS track's plugin chain and gain stage into
+     * the master signal path: `sum -> chain -> gain -> rewire`.
+     *
+     * IT LIVES HERE AND NOT IN SStdMixer BECAUSE OF THE MODULE DAG, and that
+     * is a rule with a checker behind it: `app/objects/mixer` may include
+     * tw/core, tw/graph, tw/mix and tw/schedule and NOT tw/plugins, so the
+     * mixer cannot so much as name `twPluginChain`. `app/objects/track`
+     * already owns both halves. The mixer passes its two endpoints and this
+     * decides what goes between them, which is also the right division: the
+     * chain's internals are the track's business.
+     *
+     * The lane's own twTrackMix and twRewire go INERT as a result (T5) -- the
+     * chain's input is re-pointed away from the trackmix, and the gain's
+     * output is taken by the caller's rewire instead of this track's.
+     */
+    void wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
+                           const std::shared_ptr<twRewire> &rewire );
+
+    void setRenderPathOwner( SObject *owner ) { renderPathOwner_ = owner; }
+    SObject *renderPathOwner() const override { return renderPathOwner_; }
+
     const std::shared_ptr<twTrackMix>  &trackMixComponent() const { return cpTrackMix_; }
     const std::shared_ptr<twGainStage> &gainStageComponent() const { return cpGainStage_; }
     const std::shared_ptr<twPluginChain> &pluginChainComponent() const { return cpDspChain_; }
@@ -610,6 +661,8 @@ private:
     SEndTimeList endTimeList_;
     STrackRendererInline *inlineRenderer_;
     int channels_;                                  // see setChannels()
+    SObject *renderPathOwner_ = nullptr;            // proposal 45 D11
+
     std::shared_ptr<twTrackMix> cpTrackMix_;        // ONE, channels_ wide
     // THE FADER (proposal 37 P3a). Sits between the DSP chain and the rewire,
     // so the scalar is applied POST-FX: trackmix -> chain -> gain -> rewire.
@@ -671,6 +724,8 @@ private:
     offset_t deferredDirtyEnd_   = 0;
     int                             midiOutChannel_ = -1;
     int                             midiOutOffsetMs_ = 0;
+    // See setSystemRole(): immutable after construction.
+    SSystemRole                     systemRole_ = SSystemRole::None;
     // Fold state (fix/track-list-polish m). See isCollapsed()/setCollapsed().
     bool                            collapsed_ = false;
 

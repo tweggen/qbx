@@ -162,6 +162,12 @@ int SObject::serializeSelfAttributes( QTextStream &o )
     // index keeps those files -- and the committed goldens -- byte-unchanged.
     if( colorIndex_ >= 0 )
         o << " colorIndex='" << colorIndex_ << "'";
+    // VIEW state (proposal 45 D8), written only when true -- visible is what
+    // every project written before system lanes means, so nothing existing
+    // moves. Hidden is NEVER an audio property: a hidden master lane is fully
+    // in the signal path.
+    if( hidden_ )
+        o << " hidden='true'";
     // Written only when the object carries a name the USER chose. Every
     // SObject is constructed with DEFAULT_SNAME, so serializing unconditionally
     // would stamp a meaningless sName on every object in every project file;
@@ -238,6 +244,7 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
     // Absent = -1 = auto (sclipcolors.h), which is what every project written
     // before the palette means.
     setColorIndex( element.attribute( "colorIndex", "-1" ).toInt() );
+    setHidden( element.attribute( "hidden", "false" ).startsWith( "true" ) );
     // Absent on projects saved before proposal 31, and absent for unnamed
     // objects. Only assign when there is something to assign: setSName("")
     // means "(untitled)", which would turn every unnamed object into a named
@@ -1059,6 +1066,12 @@ void SObject::invalidateRenderPath()
         // here used to be indistinguishable from "no project at all", which is
         // precisely how the detached case became silent.
         bumpRenderChainEpoch();
+        // ...unless something OWNS our render path (proposal 45 D11): a system
+        // lane is unreachable by design rather than by accident, and its audio
+        // is carried by its mixer's chain. Delegating here rather than at every
+        // call site is what stops the next edit kind from being silently
+        // inaudible again.
+        if (SObject *owner = renderPathOwner()) owner->invalidateRenderPath();
     }
 }
 
@@ -1130,6 +1143,12 @@ void SObject::invalidateRenderPathRange( offset_t start, offset_t end )
     }
     if (!found) {
         bumpRenderChainEpoch();
+        // The range twin of the D11 delegation above. The owner is asked for
+        // the SAME range: a system lane sits in its mixer's chain at the same
+        // positions, so no mapping is needed -- unlike a clip window, which is
+        // why mapChildRangesToSelf exists for the ordinary walk.
+        if (SObject *owner = renderPathOwner())
+            owner->invalidateRenderPathRange( start, end );
     }
 }
 

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M2, AC2.3: the master fader is heard, and it IS twGainStage.
+
+  D5's claim is that there is exactly ONE master fader and it is the same
+  object as every other fader: twGainStage, already post-FX, already ramped,
+  already automatable through self:Volume, already the one thing
+  set-track-volume writes. This case is that claim measured rather than
+  argued - the same verb, the same curve, on "$master".
+
+  THE CLOSED FORM, over ../test_autosaw.wav (480 Hz sawtooth, period exactly
+  100 frames, so a whole-second window is an exact number of periods and its
+  RMS is A/sqrt(3) with no windowing error): base 0.230956 over [48000,
+  96000) on channel 0; at -6.0 dB that is 0.230956 x 10^(-6/20) = 0.115747.
+
+  AC1.9 IS SETTLED AND THIS CASE DOES NOT RE-OPEN IT. "$master" is the one
+  spelling of the master fader; set-track-volume with an EMPTY path is refused
+  (it resolves the root mixer, which is a lane with no fader) rather than
+  redirected here. Proposal 45 D5's body text still describes a redirect; the
+  M1 review rejected it as a second address for the same fader, and AC1.9
+  records that. Asserted below so the two cannot drift apart silently.
+-->
+<SActionScript version="1" name="master_fader_heard">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <render filename="mfh_base.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="mfh_base.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.2300" maxRms="0.2320"/>
+
+    <!-- AC2.3: -6 dB on the master halves the amplitude, on a position that
+         was already frozen by the render above. -->
+    <set-track-volume trackPath="$master" volume="-6.0"/>
+    <assert-system-lane trackPath="$master" volume="-6.0"/>
+    <render filename="mfh_6db.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="mfh_6db.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.1152" maxRms="0.1163"/>
+
+    <!-- It is a FADER, not an on/off: a second, independent point on the same
+         curve. -12 dB is a quarter of the amplitude, 0.230956 x 0.251189 =
+         0.058013. Two points is what separates "the gain stage is wired" from
+         "something attenuates". -->
+    <set-track-volume trackPath="$master" volume="-12.0"/>
+    <render filename="mfh_12db.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="mfh_12db.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.0577" maxRms="0.0584"/>
+
+    <!-- ...and back to unity is byte-identical to the base. An attenuation
+         that does not fully undo would pass both bands above. -->
+    <set-track-volume trackPath="$master" volume="0.0"/>
+    <render filename="mfh_unity.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="mfh_unity.wav" expected="mfh_base.wav"/>
+
+    <!-- AC1.9, asserted so D5's stale sentence cannot quietly become true: the
+         EMPTY path is refused, never redirected to the master. -->
+    <set-track-volume trackPath="" volume="-6.0" expectReject="true"/>
+    <assert-system-lane trackPath="$master" volume="0.0"/>
+  </actions>
+
+</SActionScript>

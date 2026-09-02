@@ -5,6 +5,8 @@
 
 #include <QDebug>
 
+#include "tw/core/twlog.h"
+
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twmixer.h"
 
@@ -13,6 +15,7 @@
 #include "app/objects/track/strack.h"   // upcast of the selected track
 #include "app/model/sdetaileditors.h"
 #include "app/model/ssolorules.h"       // the one mute/solo audibility rule
+#include "app/model/sobjectpath.h"     // the system-lane sentinels (proposal 45 D9)
 #include "app/persistence/sprojectloader.h"
 #include "app/model/sappcontext.h"
 #include "tw/schedule/capture_aspects.h"  // Preview/Playback/... bits
@@ -155,12 +158,14 @@ void SStdMixer::setChannels( int n )
 
 void SStdMixer::bumpRenderChainEpoch()
 {
-    // The summed mix is cached at TWO levels: the per-bus twMixer (sums the
-    // track outputs) and the rewire behind it (the engine's synthOutput_).
+    // The summed mix is cached at THREE levels since proposal 45 M2: the
+    // per-bus twMixer (sums the track outputs), the master lane's chain and
+    // gain stage, and the rewire behind them (the engine's synthOutput_).
     for( int bus=0; bus<nBusses_; ++bus ) {
         if( cpMixers_[bus] )
             cpMixers_[bus]->bumpContentEpoch();
     }
+    bumpMasterChainEpoch();
     if( cpRewire_ )
         cpRewire_->bumpContentEpoch();
 }
@@ -173,8 +178,41 @@ void SStdMixer::bumpRenderChainEpochRange( offset_t start, offset_t end )
         if( cpMixers_[bus] )
             cpMixers_[bus]->invalidatePagesInRange(start, end);
     }
+    bumpMasterChainEpochRange( start, end );
     if( cpRewire_ )
         cpRewire_->invalidatePagesInRange(start, end);
+}
+
+// --- D3a: invalidation must travel THROUGH the master chain ------------------
+//
+// THIS IS THE COMMONEST PATH IN THE APP AND IT IS SILENT WHEN WRONG. Every
+// user has an EMPTY master chain and edits clips; after M2 put the master
+// lane's twPluginChain and twGainStage between the bus sum and the rewire,
+// each carries its own page cache and neither was bumped by anybody on an
+// ordinary edit. The rewire re-freezes, fetchInputPage serves the gain
+// stage's still-valid stale page, and the edit is INAUDIBLE -- no error, no
+// log line, just the old audio.
+//
+// Measured, not predicted: with the wiring in and this missing,
+// mc_golden_stereo's own negative control flipped. Its `set-track-mute` +
+// re-render produced a file BYTE-IDENTICAL to the unmuted golden, so the
+// assertion that exists to prove the comparison can fail reported "applied
+// but expectReject was set". A mute stopped being audible.
+//
+// It is a DIFFERENT edge from D11's "invalidation FROM the master" and
+// neither subsumes the other: this one carries an ordinary track edit PAST
+// the master, that one carries a master edit DOWN to the rewire.
+// STrack::bumpRenderChainEpoch already bumps its trackmix, chain, gain stage
+// and rewire -- exactly the set that needs bumping, and the two inert ones cost
+// nothing. Calling it is also what keeps this module free of tw/plugins.
+void SStdMixer::bumpMasterChainEpoch()
+{
+    if( masterLane_ ) masterLane_->bumpRenderChainEpoch();
+}
+
+void SStdMixer::bumpMasterChainEpochRange( offset_t start, offset_t end )
+{
+    if( masterLane_ ) masterLane_->bumpRenderChainEpochRange( start, end );
 }
 
 int SStdMixer::seekTo( offset_t off )
@@ -482,8 +520,115 @@ void SStdMixer::mixerChildDurationChanged( length_t )
 
 SStdMixer::~SStdMixer()
 {
+    // Drop our reference to the master lane FIRST. The lane is a Qt child of
+    // SProject, so this is what stops a removed arrangement leaving an orphan
+    // lane behind that would serialize forever: the refcount reaches zero and
+    // SObject::removeRef() posts the deleteLater.
+    delete masterLaneRef_;
+    masterLaneRef_ = nullptr;
+    masterLane_    = nullptr;
+
     cpMixers_.resize(0);
     cpRewire_.reset();
+}
+
+QList<SLink *> SStdMixer::ownedRefLinks() const
+{
+    // See the declaration: the master-lane reference is an owned link that is
+    // NOT a child link, so it has to be published here to be part of the
+    // reference graph at all.
+    QList<SLink *> out;
+    if( masterLaneRef_ ) out.append( masterLaneRef_ );
+    return out;
+}
+
+SObject *SStdMixer::systemLaneAt( int sentinel ) const
+{
+    // -1 is the master. The send sentinels (-2, -3, ...) are RESERVED and
+    // answer null until proposal 45 M7 builds them, which is also what stops
+    // strackpath::findPathRec's descending scan before it runs off the end.
+    if( sentinel == strackpath::SPATH_MASTER )
+        return static_cast<SObject *>( masterLane_ );
+    return nullptr;
+}
+
+int SStdMixer::systemLaneSentinelOf( const SObject *lane ) const
+{
+    if( lane && lane == static_cast<const SObject *>( masterLane_ ) )
+        return strackpath::SPATH_MASTER;
+    return 0;
+}
+
+void SStdMixer::wireMasterChain()
+{
+    // PROPOSAL 45 M2 / D3 -- the master lane enters the signal path:
+    //
+    //   tracks -> twMixer (sum) -> twPluginChain -> twGainStage -> twRewire
+    //                              \____________________________/
+    //                                owned by the master lane
+    //
+    // THE ROOT COMPONENT IS STILL THE twRewire, and that is the point. The
+    // master meter, RenderSession, AudioEngine and twSpeaker all reach the
+    // graph through SProject::getRootComponent()->getRootComponent(); none of
+    // them changes, and the master meter becomes post-master-FX by
+    // construction rather than by a second tap. Making the master LANE's own
+    // rewire the project root was rejected: it moves what every one of those
+    // resolves to, for nothing.
+    //
+    // THE LANE'S OWN twTrackMix AND twRewire GO INERT HERE, deliberately (T5).
+    // An STrack builds trackmix -> chain -> gain -> rewire in its constructor;
+    // this re-points the CHAIN's input at the mixer's sum, so the lane's
+    // trackmix drives nothing, and takes the GAIN's output into the mixer's
+    // rewire, so the lane's own rewire is redundant with it. Neither is to be
+    // "wired for consistency" later: the master lane has no clips (D6), and a
+    // second rewire in the path would be a second page cache to invalidate.
+    if( cpMixers_.empty() || !cpMixers_[0] || !cpRewire_ ) return;
+
+    // WHAT GOES BETWEEN THE TWO ENDPOINTS IS THE TRACK'S BUSINESS, and it has
+    // to be: app/objects/mixer may include tw/core, tw/graph, tw/mix and
+    // tw/schedule and NOT tw/plugins, so this module cannot name
+    // twPluginChain at all (tools/check_layering.py enforces it). The mixer
+    // hands over its sum and its rewire; STrack wires its own internals.
+    if( !masterLane_ || !masterLane_->pluginChainComponent()
+                     || !masterLane_->gainStageComponent() ) {
+        // No lane yet (the constructor wires the busses BEFORE minting one) or
+        // a lane whose components have not been built. Fall back to the
+        // pre-M2 topology rather than leaving the rewire unfed -- silence is
+        // the one outcome that must not be reachable from a missing lane.
+        // ANNOUNCED, never silent: reaching here after the constructor has
+        // minted a lane means the lane lost its components, and the symptom
+        // downstream would be a master fader and master inserts that do
+        // nothing at all.
+        TW_LOGW( "model", "[MASTER] no lane components -- the master chain is "
+                          "NOT in the signal path" );
+        cpRewire_->setInput( 0, cpMixers_[0]->linkOutput( 0 ) );
+        return;
+    }
+
+    masterLane_->wireAsMasterLane( cpMixers_[0], cpRewire_ );
+}
+
+void SStdMixer::adoptMasterLane( STrack *lane )
+{
+    if( !lane || lane == masterLane_ ) return;
+
+    // Dropping our reference is what retires the constructor's fresh lane: its
+    // refcount reaches zero and SObject::removeRef() posts the deleteLater. It
+    // must go BEFORE the new link is made, or a save between the two would
+    // write both lanes and the mixer would name only one -- the exact ordering
+    // STrack::adoptPluginChain() spells out for the same reason.
+    delete masterLaneRef_;
+    masterLaneRef_ = nullptr;
+
+    masterLane_    = lane;
+    masterLaneRef_ = new SLink( *lane, nullptr );
+    masterLane_->setRenderPathOwner( this );   // D11
+
+    // The file's lane replaces the constructor's, so the graph must follow it.
+    // Without this the sum keeps running through the RETIRED lane's chain --
+    // which is about to be deleted, and whose inserts are not the ones the
+    // user saved.
+    wireMasterChain();
 }
 
 SStdMixer::SStdMixer( SProject *project )
@@ -516,6 +661,28 @@ SStdMixer::SStdMixer( SProject *project )
     // bus mixer existed, so reconnectTracksToMixer's outer loop did
     // nothing and tracks were never wired.
     setNBusses( 1 );
+
+    // THE MASTER LANE (proposal 45 D1/D2). Minted here rather than lazily so
+    // masterLane() is never null and no caller needs a "what if there is no
+    // master" branch; every arrangement root created at runtime
+    // (create-arrangement, extract-arrangement) therefore gets one for free.
+    //
+    // Constructed HIDDEN (D8): it is available, not in the way. Hiding is a
+    // VIEW property and never an audio one -- a hidden master lane is fully in
+    // the signal path.
+    masterLane_ = new STrack( project );
+    masterLane_->setSystemRole( SSystemRole::Master );
+    masterLane_->setSName( QStringLiteral( "Master" ) );
+    masterLane_->setHidden( true );
+    // Our own reference. Without one the lane, which hangs off no child link,
+    // has a refcount of zero and is deleted the moment anything looks at it.
+    masterLaneRef_ = new SLink( *masterLane_, nullptr );
+    masterLane_->setRenderPathOwner( this );   // D11
+
+    // setNBusses(1) above ran before the lane existed and wired the sum
+    // straight into the rewire; now that there is a lane, put its chain in
+    // between (D3).
+    wireMasterChain();
 }
 
 // --- track selection --------------------------------------------------------
@@ -610,6 +777,20 @@ void SStdMixer::toggleTrackSelection( STrack *track )
     }
 }
 
+int SStdMixer::serializeSelfAttributes( QTextStream &o )
+{
+    // The master lane (proposal 45 D2). A plain attribute, not an <SLink>
+    // child: SObject::childEvent treats every child link as a track placement
+    // and the loader's dependency ordering is built on child links -- which is
+    // exactly why the load side has to defer. The lane object itself is a Qt
+    // child of SProject, so SProject::serialize()'s own child loop writes it.
+    if( masterLane_ )
+        o << " masterLaneId='"
+          << reinterpret_cast<std::uintptr_t>( (SObject *) masterLane_ ) << "'";
+    SObject::serializeSelfAttributes( o );
+    return 0;
+}
+
 SLink *SStdMixer::instantiateFromDomElement(
     SProjectLoader &projectLoader, QDomElement &element, SObject *parent )
 {
@@ -646,6 +827,48 @@ SLink *SStdMixer::instantiateFromDomElement(
     const QString arrName = element.attribute( "arrangementName" );
     if( !arrName.isEmpty() )
         projectLoader.getProject().registerArrangement( arrName, mixer );
+
+    // Adopt our serialized master lane -- DEFERRED (proposal 45 D2), for the
+    // reason STrack::instantiateFromDomElement spells out for pluginChainId:
+    // masterLaneId is a plain attribute, so the loader's dependency ordering
+    // (which only looks at <SLink objectId> children) gives no guarantee the
+    // lane's own <STrack> element has been instantiated by the time we are
+    // built. deferResolve runs the lookup when the dictionary is complete.
+    //
+    // A REFERENCE THAT DOES NOT NAME A MASTER LANE IS REFUSED, not adopted
+    // (AC1.5). An older build re-saving this file drops systemRole= along with
+    // masterLaneId=, so a file can legitimately come back naming a track that
+    // is now an ordinary one; adopting it would make a user track the master
+    // -- silently accepting clips, arming, and being summed twice. Keeping the
+    // constructor's own lane is the safe answer, and it is announced.
+    const QString laneId = element.attribute( "masterLaneId" );
+    if( !laneId.isEmpty() ) {
+        SProjectLoader *loader = &projectLoader;
+        projectLoader.deferResolve( [loader, mixer, laneId]() {
+            SLink *laneLink = loader->getObjectDictionary().value( laneId );
+            if( !laneLink ) {
+                TW_LOGW( "model", "[MASTER] masterLaneId %s not found in the "
+                                  "project; keeping the fresh one",
+                         laneId.toStdString().c_str() );
+                return;
+            }
+            STrack *lane = dynamic_cast<STrack *>( &laneLink->getSObject() );
+            if( !lane ) {
+                TW_LOGW( "model", "[MASTER] masterLaneId %s does not name a "
+                                  "track; keeping the fresh one",
+                         laneId.toStdString().c_str() );
+                return;
+            }
+            if( lane->systemRole() != SSystemRole::Master ) {
+                TW_LOGW( "model", "[MASTER] masterLaneId %s names a track whose "
+                                  "systemRole is not master (an older build may "
+                                  "have re-saved this project); keeping the "
+                                  "fresh one", laneId.toStdString().c_str() );
+                return;
+            }
+            mixer->adoptMasterLane( lane );
+        } );
+    }
 
     // Construct with parent=NULL, then setParent (slink.h rule): the parent's
     // childEvent must never see a half-constructed SLink.

@@ -66,6 +66,67 @@ enum class SContentKind {
 
 
 /**
+ * Whether an object is a lane the PROJECT owns rather than the user
+ * (proposal 45 D1).
+ *
+ * `None` is every ordinary track and is the default for every object. The
+ * others are lanes that exist because the arrangement needs them to: the
+ * post-sum master, a send destination, and the conductor lanes (tempo, time
+ * signature, markers) that hang off the master.
+ *
+ * On SObject, and NOT a `dynamic_cast`, for the reason contentKind(),
+ * resolveEventClip(), isMissing() and isLaneFragment() are: `app/model` has to
+ * ask the question. The placement service (splacements) and the path resolver
+ * (sobjectpath.h) both sit BELOW app/objects/track and cannot see a track
+ * policy header, and they are exactly the two that must know.
+ *
+ * It must never be spelled as a conjunction of existing predicates. "A lane
+ * that is not among its root's childLinks()" happens to describe the master
+ * today and nothing else -- an ACCIDENT of there being one such lane so far,
+ * and relying on an accidental agreement between two predicates is precisely
+ * what proposal 41 M0 split isPathContainer()/isLane() up to stop doing.
+ */
+enum class SSystemRole {
+    None = 0,
+    Master = 1,
+    Send = 2,
+    Conductor = 3
+};
+
+/**
+ * The ONE spelling of a system role in a project file, both directions.
+ *
+ * Beside the enum rather than on STrack because `app/model` writes it
+ * (SObject::serializeSelfAttributes' neighbours live here) and app/persistence
+ * reads it, and neither may include a track header. An unknown spelling reads
+ * as `None` -- a forward-compatible file naming a role this build does not
+ * have describes an ordinary track, which is the safe answer: it can be seen,
+ * moved and deleted rather than being an untouchable lane nothing understands.
+ */
+inline const char *systemRoleToString( SSystemRole r )
+{
+    switch( r ) {
+        case SSystemRole::Master:    return "master";
+        case SSystemRole::Send:      return "send";
+        case SSystemRole::Conductor: return "conductor";
+        case SSystemRole::None:      break;
+    }
+    return "none";
+}
+
+inline SSystemRole systemRoleFromString( const QString &s, bool *ok = nullptr )
+{
+    if( ok ) *ok = true;
+    if( s == QLatin1String( "master" ) )    return SSystemRole::Master;
+    if( s == QLatin1String( "send" ) )      return SSystemRole::Send;
+    if( s == QLatin1String( "conductor" ) ) return SSystemRole::Conductor;
+    if( s == QLatin1String( "none" ) || s.isEmpty() ) return SSystemRole::None;
+    if( ok ) *ok = false;
+    return SSystemRole::None;
+}
+
+
+/**
  * This is QBX generic data container.
  * All data containers are children of the project object.
  * They linked together by SLink objects.
@@ -308,6 +369,73 @@ public:
      * what proposal 41 M0 split them up to stop doing.
      */
     virtual bool isLaneFragment() const { return false; }
+
+    /**
+     * This object's SYSTEM ROLE (proposal 45 D1). `None` for everything the
+     * user made; see SSystemRole above for why this lives here and why it may
+     * not be derived from any other predicate.
+     *
+     * Immutable for the life of the object: a lane does not become the master.
+     */
+    virtual SSystemRole systemRole() const { return SSystemRole::None; }
+
+    /** Convenience: is this a lane the project owns? */
+    bool isSystemLane() const { return systemRole() != SSystemRole::None; }
+
+    /**
+     * VIEW state: whether the arranger draws a lane for this object
+     * (proposal 45 D8). System lanes are constructed hidden; everything else
+     * is visible.
+     *
+     * **Hidden is a VIEW property and NEVER an audio one.** A hidden master
+     * lane is fully in the signal path. That needs saying out loud, because
+     * isLiveOwnedLane(), ssolo::isLaneAudible() and STrack::isCollapsed() are
+     * three existing flags that look like they might mean "not heard" and do
+     * not.
+     *
+     * Serialized only when true, the `collapsed` discipline -- with one
+     * deliberate departure recorded in proposal 45 D8: `collapse-track` is a
+     * direct model write, while hiding IS undoable, because hiding a lane that
+     * carries inserts and automation is closer to an arrangement edit than to
+     * a fold.
+     */
+    bool isHidden() const { return hidden_; }
+    void setHidden( bool h ) { hidden_ = h; }
+
+    /**
+     * May a CLIP be placed on this object (proposal 45 D6)?
+     *
+     * False for every system lane: a master track must not directly carry
+     * sample or event material, though it may carry child lanes. Consulted at
+     * ONE narrow seam, `splacements::placementLaneAt()` -- deliberately NOT at
+     * `splacements::laneAt()`, which has 71 call sites across 45 files and is
+     * the general lane resolver for `set-track-volume`, `arm-track` and the
+     * automation verbs. A refusal there would break the master fader proposal
+     * 45 exists to ship.
+     */
+    virtual bool acceptsClips() const { return true; }
+
+    /**
+     * SYSTEM-LANE ADDRESSING (proposal 45 D9), the two directions.
+     *
+     * A system lane is deliberately NOT among its root's childLinks() (see
+     * SStdMixer::masterLane() for why that is forced), so an index path cannot
+     * reach it. It is addressed instead by a NEGATIVE index step -- the
+     * sentinels in app/model/sobjectpath.h -- and these two virtuals are how
+     * the generic path code resolves one without knowing what a mixer is.
+     *
+     * `systemLaneAt` answers a negative step; `systemLaneSentinelOf` is its
+     * inverse, returning 0 when `lane` is not a system lane of ours. The
+     * inverse is not optional: `strackpath::pathOf()` walks childLinks() and
+     * would otherwise return {} for the master lane -- which is ALSO the
+     * address of the root itself, and every track head derives its commit
+     * address that way. A fader that moves and commits to the wrong object is
+     * worse than one that refuses.
+     */
+    virtual SObject *systemLaneAt( int sentinel ) const
+    { (void) sentinel; return nullptr; }
+    virtual int systemLaneSentinelOf( const SObject *lane ) const
+    { (void) lane; return 0; }
 
     /**
      * The kind of material this object carries (proposal 37 D8b). Audio by
@@ -805,6 +933,28 @@ public slots:
     void invalidateRenderPath();
 
     /**
+     * The object whose render chain carries this one's audio when this object
+     * is NOT reachable from any arrangement root through `childLinks()`, or
+     * nullptr (the default, and the answer for every ordinary object).
+     *
+     * PROPOSAL 45 D11. `invalidateRenderPath()` walks DOWN from the project
+     * root through `childLinks()`; a system lane is deliberately not among
+     * them (D2), so the walk does not find it and only its OWN caches get
+     * bumped -- the mixer's rewire, which is what actually plays, keeps
+     * serving the page it already had. The fader moves and the render does not
+     * change, with no error and no log line.
+     *
+     * This is the same pitfall `objects/track` inv. 13 records for an
+     * `SPluginSlot`, whose fix was to have the TRACK do the walk, and the same
+     * one proposal 41 found for a fragment-nested clip -- where, both times,
+     * only a RENDERED-AUDIO assertion caught it. Measured here too: with the
+     * master lane wired but this hook missing, a master insert and a -6 dB
+     * master fader both left the render byte-unchanged, while the very same
+     * fader set BEFORE the first freeze was audible to five digits.
+     */
+    virtual SObject *renderPathOwner() const { return nullptr; }
+
+    /**
      * How many SLinks (plus any explicit pin, e.g. SProject::registerAsset's
      * addRef()) currently reference this object — main-thread read of the
      * same counter addRef()/removeRef() maintain (proposal 41 M2). A
@@ -1013,6 +1163,8 @@ private:
     bool armed_;
     int editGroup_ = 0;   // 0 = ungrouped (proposal 17 phase 4)
     int colorIndex_ = -1; // -1 = auto, by lane order (sclipcolors.h)
+    // VIEW state only -- see isHidden(). Never consulted by anything audio.
+    bool hidden_ = false;   // proposal 45 D8
     double volume_;
     // Recording channel selection: bitmask of channels (bit 0 = ch 0, etc).
     // 0 means "all channels"; the default is the first input alone — see
