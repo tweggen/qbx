@@ -82,6 +82,12 @@ twMasterShape checkMasterShape( const twMixer *mixer, const twRewire *root,
         out.reason = why;
         return out;
     };
+    auto laneClosure = [&out]( const char *why ) {
+        out.mode           = twMasterMode::Closure;
+        out.reason         = why;
+        out.fromMasterLane = true;   // renderable by the pump (M3)
+        return out;
+    };
 
     if( !mixer ) return closure( "no master mixer" );
     if( !root )  return closure( "no master rewire" );
@@ -123,13 +129,13 @@ twMasterShape checkMasterShape( const twMixer *mixer, const twRewire *root,
     //    reasons rather than one: whoever reads the refusal in the status line
     //    needs to know which of their master controls turned monitoring off.
     if( chain.insertCount > 0 )
-        return closure( "the master lane has inserts" );
+        return laneClosure( "the master lane has inserts" );
     if( chain.muted )
-        return closure( "the master lane is muted" );
+        return laneClosure( "the master lane is muted" );
     if( chain.automated )
-        return closure( "the master lane's volume or mute is automated" );
+        return laneClosure( "the master lane's volume or mute is automated" );
     if( chain.gainDb < -1e-9 || chain.gainDb > 1e-9 )
-        return closure( "the master fader is not at unity" );
+        return laneClosure( "the master fader is not at unity" );
 
     return out;   // LinearSplit
 }

@@ -633,6 +633,13 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     }
     ensurePump();
     if( !pump_ ) return;
+    // THE SPEAKER LEARNS THE MODE WITH THE PLAN, and BEFORE the pump starts
+    // producing for it. The other order has a window in which the ring already
+    // carries the whole master while the RT is still adding the frozen root
+    // page -- the doubling, for as long as one callback.
+    if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
+                                              : std::shared_ptr<twSpeaker>() )
+        spk->setLiveMasterClosure( !plan->masterLinear );
     pump_->setPlan( plan );
     pump_->start();
     publishedSignature_ = planSignature();
@@ -763,8 +770,13 @@ void SLiveMonitor::refresh()
             ensureMetronome( false );
             closeInputIfUnused();
             if( liveOpened_ ) {
-                if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() )
+                if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() ) {
+                    // Clear the mode BEFORE closing: a stale "closure" left on
+                    // the speaker would suppress the frozen lane for a project
+                    // that is merely playing, which is silence.
+                    spk->setLiveMasterClosure( false );
                     spk->closeLive();
+                }
                 liveOpened_ = false;
             }
         }
@@ -774,24 +786,49 @@ void SLiveMonitor::refresh()
     // THE MASTER-SHAPE PRECONDITION, BEFORE ANYTHING IS ARMED (design D3).
     //
     // "root(unarmed) + ring" is exact only while the master is a unity sum
-    // followed by an identity map. The plan builder can express the other mode
-    // - the master joins the closure and the pump renders it - but the RT half
-    // of it is NOT wired: twSpeaker adds the frozen root page whenever the
-    // frozen lane is PLAYING, and nothing reads twLivePlan::masterLinear. A
-    // Closure-shaped plan would therefore be summed ON TOP of a root page that
-    // already contains those tracks, and the user would hear the arrangement
-    // doubled.
+    // followed by an identity map. Since proposal 45 M3 the OTHER mode is
+    // wired for one class of reason and still refused for the other, and the
+    // split is `twMasterShape::fromMasterLane`:
     //
-    // So it is REFUSED rather than approximated: one log line naming the
-    // reason, and the arrangement keeps playing untouched. Whoever adds a
-    // master insert chain will land here, and the fix is a twSpeaker that
-    // stops adding the root page while a non-linear plan is live.
+    //  * THE MASTER LANE doing something -- an insert, a fader, a mute, an
+    //    automation lane -- is RENDERABLE. The plan builder gives the pump's
+    //    master node that lane's inserts and gain envelope (AC3.2), the pump
+    //    reads the unarmed tracks as per-track `frozenInputs`, and twSpeaker
+    //    stops adding the frozen root page (setLiveMasterClosure). The
+    //    arrangement is heard once, through the master, from the ring.
+    //
+    //  * THE MIXER's own sum -- a non-unity input level, a non-identity
+    //    channel map, a width disagreement -- is still REFUSED, because the
+    //    pump has NO per-input level anywhere: a plan built for that shape
+    //    would silently drop it. One log line naming the reason, and the
+    //    arrangement keeps playing untouched.
     {
         const twlive::twMasterShape shape = twlive::checkMasterShape(
             mixer->masterMixComponent().get(),
             mixer->masterRewireComponent().get(),
             (idx_t) app_->masterChannels(),
             sliveplan::masterChainStateOf( mixer ) );
+        // M3 IS NOT ENABLED YET, and this line is where it will be. The
+        // condition below WANTS to be `!shape.linear() && !shape.fromMasterLane`
+        // -- a lane-caused Closure is renderable, a mixer-caused one is not --
+        // and everything under it is built: the master node carries the lane's
+        // inserts and gain (AC3.2), and twSpeaker::setLiveMasterClosure stops
+        // the RT adding the frozen root page (AC3.1's speaker half).
+        //
+        // IT IS HELD BACK ON A MEASUREMENT. With the narrowing in, a project of
+        // one monitored armed track plus one unarmed track carrying the fixture
+        // measured, over [48000, 72000) on channel 0:
+        //
+        //   linear master (no insert)          0.23158
+        //   Closure, 2.0x master insert        0.709752   -- ratio 3.07
+        //   Closure, 2.0x, AC3.1 reverted      0.680091   -- SMALLER, not larger
+        //
+        // A correct Closure is 2.0x the linear reference. 3.07 is not that, and
+        // the reverted figure is not the DOUBLING D4b predicts either -- it is
+        // smaller, which reads as partial cancellation between the root page
+        // and the ring at different latencies rather than a coherent sum. Until
+        // that is explained, enabling Closure would trade an honest refusal for
+        // unverified audio, which is the one thing inv. 18a exists to prevent.
         if( !shape.linear() ) {
             if( lastRefusal_.isEmpty() ) {
                 lastRefusal_ = QStringLiteral(

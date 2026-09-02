@@ -717,7 +717,16 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
     std::shared_ptr<audio::AudioEngine> engine = std::atomic_load(&audioEngine_);
     const bool liveOn = liveActive();
 
+    // PROPOSAL 45 M3 / D4b: under a CLOSURE plan the pump renders the master
+    // itself, so the frozen root page is not a second half to add -- it is the
+    // SAME arrangement, unprocessed. Adding it would play everything twice.
+    // Suppressed here rather than in the engine because this is the one place
+    // that decides what reaches the device, and because the engine's readahead
+    // has its own, separate reason to stand down (setFrozenDemandSuspended).
+    const bool closureLive = liveOn && liveMasterClosure();
+
     const bool frozenPlaying =
+        !closureLive &&
         engine && engine->getPlaybackState() == audio::PlaybackState::PLAYING &&
         outputState_.load(std::memory_order_relaxed) == OutputState::PLAYING;
 

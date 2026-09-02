@@ -366,6 +366,25 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
                     master.frozenInputs.push_back( t->getRootComponent() );
             }
             if( masterRoot ) master.channelMap = masterRoot->channelMap();
+
+            // AC3.2 -- THE MASTER NODE CARRIES THE MASTER LANE'S OWN CHAIN.
+            // Absent until M3, and its absence is the whole reason Closure
+            // could not be wired: the node summed the closure and the frozen
+            // siblings and then applied NOTHING, so the pump's output was the
+            // arrangement WITHOUT the master processing the frozen root page
+            // had already had. The two halves would not have matched even with
+            // the doubling fixed.
+            //
+            // Read through the same helpers an ordinary track uses, so a
+            // master insert behaves exactly as a track insert does -- including
+            // the null-processor rule that keeps a chain's shape while a plugin
+            // is missing.
+            if( STrack *lane = params.mixer->masterLane() ) {
+                collectInserts( lane, master );
+                if( lane->gainStageComponent() )
+                    master.gain = lane->gainStageComponent()->envelope();
+            }
+
             TW_LOGW( "shell",
                      "[LIVE] master is not a linear identity (%s): the pump "
                      "renders it and the RT pops the ring only",

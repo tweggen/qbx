@@ -201,6 +201,21 @@ struct twMasterShape {
     twMasterMode mode   = twMasterMode::LinearSplit;
     const char  *reason = "unity sum, identity map";
 
+    /**
+     * TRUE when the reason is the MASTER LANE doing something -- an insert, a
+     * fader, a mute, an automation lane -- rather than the mixer's own sum or
+     * the rewire's map.
+     *
+     * The distinction is not cosmetic and it is why this flag exists rather
+     * than a caller matching on `reason`. Proposal 45 M3 wires Closure by
+     * giving the pump's master node the master LANE's inserts and gain
+     * envelope, so a lane-caused Closure is renderable. A non-unity mixer INPUT
+     * LEVEL is not: the pump sums its `frozenInputs` and `liveChildren` with no
+     * per-input level anywhere, so a plan built for that shape would silently
+     * drop the level. Those reasons are still REFUSED.
+     */
+    bool fromMasterLane = false;
+
     bool linear() const { return mode == twMasterMode::LinearSplit; }
 };
 

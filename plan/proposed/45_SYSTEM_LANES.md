@@ -986,6 +986,49 @@ drift apart silently; D5's sentence is the stale one.
 - **Watched failing:** with AC3.1 reverted, `monitor_master_insert`'s **RMS**
   assertion must show the doubling, with the measured numbers in the PR.
 
+#### M3 — **GROUNDWORK ONLY, 2026-09-02. CLOSURE IS BUILT AND NOT ENABLED.**
+
+Built and inert: `twMasterShape::fromMasterLane` (which CLASS of reason caused
+Closure), `twSpeaker::setLiveMasterClosure()` (AC3.1's speaker half — the RT
+stops adding the frozen root page), and AC3.2 (the plan builder's master node
+now carries the master lane's inserts and gain envelope, which it did not
+before and whose absence is why Closure could never have been right: the node
+summed the closure and the frozen siblings and then applied NOTHING).
+
+`SLiveMonitor` still refuses **every** non-linear master. One line changes when
+this is enabled, and it is commented in place.
+
+**IT IS HELD BACK ON A MEASUREMENT I CANNOT EXPLAIN, and that is the finding.**
+One monitored armed track plus one unarmed track carrying `test_autosaw.wav`,
+transport running, over [48000, 72000) on channel 0:
+
+| | measured |
+|---|---|
+| linear master, no insert (the reference) | **0.23158** |
+| Closure, 2.0x master insert | **0.709752** — ratio **3.07** |
+| Closure, 2.0x, AC3.1 reverted | **0.680091** — **SMALLER**, not larger |
+
+A correct Closure is **2.0x** the linear reference. 3.07 is not that. And the
+AC3.1-reverted figure is **not the doubling D4b predicts** — it is *smaller*,
+which reads as partial cancellation between the root page and the ring at
+different latencies rather than a coherent sum. Two things follow:
+
+1. **AC3.3 cannot be honestly asserted from here.** It is the AC that decides
+   whether Closure is correct, and no closed form I can defend produces 3.07.
+2. **D4b's own prediction needs re-deriving.** "The user would hear the
+   arrangement doubled" is the stated reason for the refusal; the measurement
+   says the failure mode is interference, not doubling. Whoever finishes M3
+   should start by explaining the linear reference itself — 0.23158 is about
+   ONE fixture RMS where the linear split should carry the unarmed track AND
+   the monitored input, i.e. two sawtooths.
+
+Also **not started**: AC3.1's ENGINE half (the readahead and `warmFrozenLane`
+still demand root pages, which under Closure would run the master lane's
+processors on a worker while the pump renders the same instances — D4b's
+two-thread hazard), AC3.6, AC3.7, AC3.8. `liveThreadRefusals` and
+`liveOwnedRefusals` both read **0** in the probes above, but with the frozen
+demand unre-rooted that is not yet evidence of AC3.4.
+
 ### M4 — The master lane on screen
 
 - **AC4.1** A row in the arranger when shown, pinned below every user lane, with
