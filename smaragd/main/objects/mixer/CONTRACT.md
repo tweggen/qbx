@@ -172,3 +172,13 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
     subsumes the other: 13 carries an ordinary track edit PAST the master, 14
     carries a master edit DOWN to the rewire. Each is watched failing with the
     other reverted.
+
+15. **`remove-arrangement` PINS ITS ROOT, and its inverse re-registers THE SAME
+    object** (proposal 45 AC1.6). Rebuilding an empty root by name loses every
+    piece of state that hangs off the root rather than off a child link — which
+    since M1 means the MASTER LANE and everything on it: inserts, fader,
+    automation, hidden flag. The `childCount() > 0` refusal cannot cover that,
+    because a system lane is deliberately not a child link. The pin lives on
+    the REMOVE action, not on the inverse, so it survives an undo/redo cycle;
+    the inverse releases it once the registry has taken its own reference, or
+    the arrangement could never be destroyed again.

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M1, AC1.6 / D13: an arrangement's master lane is minted with it,
+  destroyed with it, and RESTORED BY UNDO WITH ITS CHAIN, GAIN AND AUTOMATION.
+
+  THE LAST CLAUSE WAS FALSE WHEN THIS CASE WAS WRITTEN, and the shape of the
+  defect is the reason M1's own gate list named a case that did not exist.
+  remove-arrangement's inverse was SCreateArrangementAction, which does
+  `new SStdMixer` - a FRESH, EMPTY master lane. Its guard refuses a root with
+  childCount() > 0 precisely so that undo cannot lose lanes, and its comment
+  says so ("dropping one that still holds lanes would lose them on undo -
+  silently, which is the failure mode this whole proposal exists to avoid") -
+  but the master lane is NOT a child link (D2), so childCount() does not see
+  it and the guard never fired. Measured before the fix: insert a plugin and
+  pull the fader on a named arrangement's master, remove the arrangement,
+  undo, and the lane comes back with plugins=0 volume=0.
+
+  It was LATENT while the master lane was in no signal path and had no UI. M2
+  put it in the signal path, so the state being lost is now audible state.
+
+  THE FIX IS THE REPO'S EXISTING PIN PATTERN, not a wider guard:
+  SRemoveTrackAction pins the removed track on the action object and hands its
+  inverse a pointer to itself. remove-arrangement now does the same, so undo
+  re-registers THE SAME mixer rather than building a new one - which is also
+  the only way the automation lane below could survive, since nothing
+  reconstructs those from a name.
+-->
+<SActionScript version="1" name="master_lane_lifecycle">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- AC1.6, minting: create-arrangement gets a master lane for free,
+         because the SStdMixer constructor mints one. -->
+    <create-arrangement name="Drums"/>
+    <assert-system-lane trackPath="Drums:$master" role="master" hidden="1"
+                        acceptsClips="0" plugins="0" volume="0.0"
+                        expectPath="$master" inChildLinks="0"/>
+
+    <!-- Give it state worth losing: an insert, a fader and an automation lane.
+         All three are separately reconstructible ONLY by keeping the object -
+         a fresh lane would have none of them. -->
+    <insert-plugin trackPath="Drums:$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-track-volume trackPath="Drums:$master" volume="-6.0"/>
+    <add-automation-point owner="Drums:$master" target="self:Volume"
+                          time="96000" value="-3.0"/>
+    <assert-system-lane trackPath="Drums:$master" plugins="1" volume="-6.0"/>
+
+    <!-- AC1.6, destroying: the arrangement goes, and so does its lane. -->
+    <remove-arrangement name="Drums"/>
+    <assert-arrangements names=""/>
+
+    <!-- AC1.6, THE CLAUSE THAT BIT: undo restores the lane WITH its state.
+         On the pre-fix binary this reads plugins=0 volume=0 - a fresh lane. -->
+    <undo count="1"/>
+    <assert-arrangements names="Drums"/>
+    <assert-system-lane trackPath="Drums:$master" role="master" hidden="1"
+                        acceptsClips="0" plugins="1" volume="-6.0"
+                        expectPath="$master" inChildLinks="0"/>
+    <assert-automation-value owner="Drums:$master" target="self:Volume"
+                             time="96000" value="-3.0" tolerance="1e-9"/>
+
+    <!-- ...and REDO removes it again. A pin that were released on undo would
+         pass everything above and then crash or resurrect nothing here; the
+         pin has to persist across the undo/redo cycle, which is the reason
+         SRemoveTrackAction's own comment gives for holding it on the action
+         rather than on the inverse. -->
+    <redo count="1"/>
+    <assert-arrangements names=""/>
+    <undo count="1"/>
+    <assert-arrangements names="Drums"/>
+    <assert-system-lane trackPath="Drums:$master" plugins="1" volume="-6.0"/>
+
+    <!-- The DEFAULT arrangement's master is untouched throughout: removing and
+         restoring one arrangement must not reach another's lane. -->
+    <assert-system-lane trackPath="$master" role="master" plugins="0" volume="0.0"/>
+  </actions>
+
+</SActionScript>

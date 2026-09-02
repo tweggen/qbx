@@ -45,7 +45,15 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
 
     // Parse the track path (format: "/mixer/N" where N is track index)
     auto path = strackpath::parseInto( pathRoot_, trackPath_ );
-    SObject *root = project->getRootComponent();
+    // THE ARRANGEMENT QUALIFIER IS HONOURED, and it was not until proposal 45
+    // M2. `parseInto` peels a "Name:" qualifier into pathRoot_ and this then
+    // resolved against project->getRootComponent() -- THE DEFAULT ROOT --
+    // unconditionally, so `trackPath="Drums:0"` silently edited the DEFAULT
+    // arrangement's track 0. That is the "resolved against the wrong root
+    // SUCCEEDS" class sobjectpath.h's own comment warns about: no error, no
+    // log line, the wrong object edited. splacements::rootNamed() is what
+    // set-track-volume has always used.
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *trackObj = strackpath::resolveByPath(root, path);
     STrack *track = dynamic_cast<STrack*>(trackObj);
     if (!track) {

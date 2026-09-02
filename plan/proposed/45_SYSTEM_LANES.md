@@ -729,7 +729,30 @@ D9 lands here because M1's own round-trip AC cannot be written without it.
   points at a track that does **not** answer `Master` is coerced or rejected,
   never adopted; and a pre-M1 project (no `masterLaneId`) is given a fresh master
   lane with nothing audible changed.
-- **AC1.6** **Lifecycle (D13, T15).** `create-arrangement` and
+- **AC1.6** **DONE 2026-09-02, and the last clause was FALSE when it was
+  written.** `remove-arrangement`'s inverse was `SCreateArrangementAction`,
+  which does `new SStdMixer` — a fresh, EMPTY master lane. Its
+  `childCount() > 0` guard exists precisely so undo cannot lose lanes (its own
+  comment says so), but a master lane is not a child link (D2) so the guard
+  never saw it. Measured: insert a plugin and pull the fader on a named
+  arrangement's master, remove, undo → `plugins=0 volume=0`. Latent while the
+  lane was in no signal path; **audible state since M2**.
+  Fixed with the repo's existing PIN pattern (`SRemoveTrackAction`): the action
+  `addRef()`s the root before unregistering and hands its inverse a pointer to
+  itself, so `SRestoreArrangementAction` re-registers THE SAME mixer. Widening
+  the refusal instead was rejected — it makes an ordinary undo impossible
+  rather than correct, and would need widening again for every future system
+  lane. Gate: `master_lane_lifecycle.qxa`.
+  **A PRE-EXISTING DEFECT BLOCKED THE GATE AND HAD TO BE FIXED TO WRITE IT:**
+  `insert-plugin` and `remove-plugin` peeled the arrangement qualifier into
+  `pathRoot_` and then resolved against `project->getRootComponent()` — the
+  DEFAULT root — unconditionally, so `trackPath="Drums:$master"` silently
+  edited the DEFAULT arrangement's master. That is the "resolved against the
+  wrong root SUCCEEDS" class `sobjectpath.h` warns about. Both now use
+  `splacements::rootNamed()`, as `set-track-volume` always has.
+  `smovetrackaction.cpp` and `sreparenttrackaction.cpp` have the same shape and
+  are **NOT** fixed here — no case needs them yet and each deserves its own.
+- **AC1.6 (original text)** **Lifecycle (D13, T15).** `create-arrangement` and
   `extract-arrangement` mint a master lane; `remove-arrangement` and
   `dissolve-arrangement` destroy it; **undo of a removal restores the lane with
   its chain, gain and automation.**
