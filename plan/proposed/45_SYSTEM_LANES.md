@@ -998,63 +998,92 @@ summed the closure and the frozen siblings and then applied NOTHING).
 `SLiveMonitor` still refuses **every** non-linear master. One line changes when
 this is enabled, and it is commented in place.
 
-**HELD BACK, AND THE DIAGNOSTIC THAT FOLLOWED CORRECTED EVERY NUMBER IN THE
-FIRST WRITE-UP OF THIS SECTION.** Recorded in full, because three of the four
-things it originally claimed were artifacts of my own measurement.
+**HELD BACK. THE DIAGNOSTIC RAN IN TWO ROUNDS; THE FIRST ROUND'S FINDINGS WERE
+ALL MEASUREMENT ARTIFACTS AND THE SECOND FOUND THE REAL DEFECT.** Both rounds
+are recorded, because the artifacts are instructive: every one of them was a
+plausible-looking number produced by a broken harness.
 
-**What was wrong.** The "linear reference" of 0.23158 came from a probe built
-with `grep -v`, which stripped the first line of a two-line `<insert-plugin>`
-element and left the continuation line orphaned — a malformed script. The
-"ratio 3.07" was computed against it. And the "AC3.1 reverted is SMALLER, not
-larger" result sat inside run-to-run noise. **None of the three stands.**
+**Round 1 — three artifacts, none of them real.**
 
-**The harness that replaced it** is four uniformly-generated cases over
-`test_autosaw.wav` (RMS 0.230956, A = 0.40003): one unarmed track carrying the
-fixture, one armed+monitored track on the paced `file:` input, transport
-running.
+| claimed | what it actually was |
+|---|---|
+| "linear reference 0.23158" | a probe built with `grep -v`, which stripped the first line of a two-line `<insert-plugin>` and orphaned the continuation. A malformed script. |
+| "ratio 3.07" | computed against that reference |
+| "AC3.1 reverted is SMALLER, not doubled" | inside run-to-run noise (0.709752 x4, 0.653316 x1 for one binary) |
+| "the LINEAR split delivers one source, not two" | the measurement window ran **past the end of the 4-second fixture**, halving the root and leaving a number that looked like "ring alone" |
+
+**Two windowing traps, and any M3 gate must avoid both.** The window has to sit
+AFTER the monitor priming lag (`twSpeaker` defers the device start until the
+readahead is primed, ~2.3 s) and BEFORE the end of the material. Between them
+`test_autosaw.wav` gives about 1.5 usable seconds; the harness below places the
+fixture twice to get 8 s.
+
+**Round 2 — the corrected harness, and the linear split is CORRECT.** Sources
+made UNCORRELATED (root `test_autosaw.wav`, ring `test_sawtooth.wav`) so the
+sum is a closed form regardless of relative phase, root at −12 dB so the two
+are separable, 8 s of material, window [168000, 216000):
+
+| | measured | closed form |
+|---|---|---|
+| root alone, no live lane | **0.0580135** | 0.230956 x 0.2512 = 0.05801 |
+| ring alone (root muted) | **0.328284** | — |
+| **root + ring, LINEAR** | **0.333388** | sqrt(0.0580135² + 0.328284²) = **0.333371** |
+
+**Five significant figures.** There is no missing source; the linear split adds
+both exactly. Round 1's headline finding is withdrawn.
+
+**Round 2 — and under CLOSURE the unarmed track IS lost.**
 
 | | measured |
 |---|---|
-| root alone, no live lane | **0.230956** |
-| ring alone, linear (unarmed track muted) | **0.230956** |
-| ring alone, CLOSURE with a 2.0x master insert | **0.461913** — *exactly* 2x |
-| root + ring, linear | **~0.2313** |
-| root + ring, CLOSURE with a 2.0x master insert | **~0.5578** |
+| Closure, 2.0x master, ring only | 0.586859 |
+| Closure, 2.0x master, root + ring | 0.586992 |
+| Closure, 2.0x master, root **raised 12 dB** | 0.589537 |
 
-**Three findings, and the third redirects M3.**
+A present root at 0 dB gives `2 x sqrt(0.230956² + 0.328284²) = 0.802806`.
+Raising the root by 12 dB moved the output by **0.46 %**. It is not there.
 
-1. **AC3.2 works.** Logged from the builder: the master node receives
-   `1 insert slot(s), 1 non-null`.
-2. **THE MASTER CHAIN IS APPLIED UNDER CLOSURE, EXACTLY.** Ring-only Closure
-   reads **0.461913**, which is 2 x 0.230956 to six digits, in half the runs
-   and 0.457063 (−1.05 %) in the rest. That was the thing most in doubt and it
-   is not in doubt.
-3. **THE OPEN PROBLEM IS THE *LINEAR* SPLIT, NOT CLOSURE.** Root + ring on the
-   LINEAR path reads **~0.2313** where the two halves should sum to **~0.4619**.
-   One of them is largely missing, in every run, past the priming lag. That is
-   M2-and-earlier behaviour with no M3 code involved — and it matters here
-   because **AC3.3 measures Closure against exactly that reference**. Explain
-   the linear level first; a Closure gate written against a reference that is
-   itself half the expected value would pin the wrong number.
+**One number in that table is unexplained and is left so.** Ring-only under
+Closure reads 0.586859, which is ~11 % BELOW 2 x its own linear counterpart
+(2 x 0.328284 = 0.656568). It was not chased, because the presence
+discriminator above does not rest on it: the 12 dB test compares Closure
+against Closure and is indifferent to any constant factor the Closure path
+carries. Anyone writing AC3.3's gate has to account for it; anyone reading
+this table should not treat 0.586859 as a verified level.
 
-**And a methodological finding worth as much as the others: THE MEASUREMENT
-WINDOW WAS INSIDE THE PRIMING LAG.** `twSpeaker` defers the device start until
-the readahead is primed (~2.3 s on a real project; CLAUDE.md records it), and
-the original window at [48000, 72000) — 1.0 to 1.5 s — sat inside it. That
-produced a BIMODAL reading (0.23158 four times, 0.461913 once for the same
-binary and script) which is what made the first pass look like a doubling
-question. Windows moved to [168000, 216000) after a 5.2 s run; the readings
-above are the late ones. Any M3 gate must do the same.
+**THE ROOT CAUSE, and it is in AC3.1's speaker half as this branch implemented
+it.** Instrumenting the demand pump:
 
-**Not dropouts:** the pump reported **4** frozen-input misses and 8 input
-shortfalls over 2.6 s — about 3 %, an order of magnitude too few to explain a
-24 % shortfall.
+| | `start=` | `frozenMisses` | output |
+|---|---|---|---|
+| suppression ON (as committed) | **0 for the whole 5.2 s run** | **62** | 0.589537 |
+| suppression OFF (sabotage) | **196608** (advancing) | **4** | 0.77812 |
 
-**A gate for AC3.3 must not use the same signal on both halves.** Root and ring
-here are both `test_autosaw.wav`, so their sum's RMS depends on a relative
-phase that is not deterministic across runs, and no closed form survives it.
-Give the unarmed track different material (`test_gapsaw.wav`'s exact-zero
-windows separate the two contributions cleanly) or a different level.
+**And the sabotage row is the confirmation:** with the pull restored the output
+reads **0.77812** against the 0.802806 closed form — 3 % low, consistent with
+the 4 remaining misses — i.e. the root IS there the moment the frozen lane is
+pulled again.
+
+`twSpeaker` publishes the transport position from `engine->currentPosition()`
+**after** pulling the frozen lane. Suppress the pull and **nothing advances the
+playhead**: `SLiveMonitor::pumpDemands()` then re-demands page 0 for ever while
+the pump reads at its own advancing position, so every frozen input past the
+first page misses and the unarmed track goes silent.
+
+> **AC3.1 CANNOT BE IMPLEMENTED AS "STOP PULLING THE FROZEN LANE". The
+> transport clock is a side effect of that pull.** D4b option 1 has to keep the
+> engine pulling — so the position advances and the demands follow it — and
+> suppress only the SUMMING of its output into the device buffer. Or the
+> position has to be advanced by something else, which is a new owner for the
+> clock and a decision in its own right.
+
+D4b did not anticipate this: it framed the problem as processor ownership, and
+the clock is a second thing the frozen lane owns.
+
+**A recipe for AC3.3's gate, from the above:** uncorrelated sources, a window
+inside the material and past the priming lag, and a level change on one source
+as the presence discriminator — a level BAND alone cannot tell "present" from
+"absent" when the two sources are the same signal at an unknown phase.
 
 Also **not started**: AC3.1's ENGINE half (the readahead and `warmFrozenLane`
 still demand root pages, which under Closure would run the master lane's

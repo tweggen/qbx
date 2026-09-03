@@ -828,16 +828,32 @@ void SLiveMonitor::refresh()
         //   root + ring, CLOSURE + 2.0x                  ~0.5578
         //
         // So the master chain IS applied correctly under Closure: ring-only
-        // reads 2 x 0.230956 to six digits. What does NOT add up is the LINEAR
-        // reference on the line above it -- root plus ring delivers about ONE
-        // source where it should deliver two, in every run, with no M3 code
-        // involved. AC3.3 measures Closure AGAINST that reference, so pinning a
-        // Closure number now would pin it to a reference that is itself half
-        // what it should be.
+        // reads 2 x 0.230956 to six digits, and the LINEAR split adds its two
+        // halves to five significant figures (0.333388 against a closed form of
+        // 0.333371, with uncorrelated sources). Neither of those is the problem.
         //
-        // Enabling Closure here before that is explained would trade an honest
-        // refusal for audio nobody has verified, which is the one thing
-        // inv. 18a exists to prevent.
+        // WHAT IS: under Closure the UNARMED track is LOST. Raising it by 12 dB
+        // moves the captured output by 0.46 %, where a present root would move
+        // it from 0.5869 to 0.8028.
+        //
+        // AND THE CAUSE IS AC3.1's SPEAKER HALF ITSELF -- twSpeaker::
+        // setLiveMasterClosure, which suppresses the frozen-lane PULL. The
+        // transport position is published from engine->currentPosition() AFTER
+        // that pull, so suppressing it stops the playhead: measured, the demand
+        // position stays at 0 for a whole 5.2 s run and the pump's frozen-input
+        // misses climb to 62, against start=196608 and 4 misses with the
+        // suppression off.
+        //
+        //   AC3.1 CANNOT BE "STOP PULLING THE FROZEN LANE". The transport clock
+        //   is a side effect of that pull. D4b option 1 has to keep the engine
+        //   pulling -- so the position advances and the demands follow it --
+        //   and suppress only the SUMMING into the device buffer.
+        //
+        // D4b framed this as processor ownership; the clock is a SECOND thing
+        // the frozen lane owns, and it did not anticipate that. Until the
+        // suppression is rebuilt on that basis, enabling Closure here would
+        // trade an honest refusal for audio that demonstrably loses the
+        // arrangement -- which is the one thing inv. 18a exists to prevent.
         if( !shape.linear() ) {
             if( lastRefusal_.isEmpty() ) {
                 lastRefusal_ = QStringLiteral(
