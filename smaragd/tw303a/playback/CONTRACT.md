@@ -271,6 +271,25 @@ Invariants:
     see it. It is the model's price, not a defect — recorded so the next reader
     does not diagnose it twice.
 
+21. THE CLOSURE SUPPRESSION DROPS THE SUM, NEVER THE PULL (proposal 45 M3).
+    `setLiveMasterClosure(true)` says the pump renders the master itself, so
+    the frozen root page is the SAME arrangement unprocessed and must not be
+    ADDED. It must still be PULLED. `renderCallbackBody`'s `frozenPlaying`
+    gates three separate things - `engine->pullBlock()`, the position
+    publication plus the engine-clock stamp at the bottom of the callback, and
+    the live gate's position authority (`gate.haveRoot`, `gate.wantPos =
+    blockStart`) - and only the AUDIO may stand down. The suppression therefore
+    zeroes the planar scratch after the pull; folding `closureLive` into
+    `frozenPlaying` instead is what the first implementation did, and it STOPS
+    THE PLAYHEAD, because the transport position is published from
+    `engine->currentPosition()` AFTER the pull. Measured: the demand position
+    stayed at 0 for a whole 5.2 s run, `SLiveMonitor::pumpDemands()` re-demanded
+    page 0 for ever, the pump's frozen-input misses climbed to 62 against 4, and
+    the unarmed tracks were LOST - raising one by 12 dB moved the captured
+    output by 0.46 %, against the 41 % the closed form calls for. Design D4b
+    framed this as processor ownership; the CLOCK is a second thing the frozen
+    lane owns, and it did not anticipate that.
+
 How to test: manual GUI playback (scripted toggle-playback segfaults under
 the runner — pre-existing, see the headless-testing notes); the render path
 shares the graph but not this module.

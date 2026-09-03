@@ -223,17 +223,39 @@ Phase 6 splits it into narrow context interfaces.
     thread. "Fresh" is the point: the closure is recomputed from the model as
     it then stands, never restored from a snapshot.
 
-18a. **The `Closure` master mode is REFUSED, not approximated.**
-    `twlive::checkMasterShape` is asked BEFORE anything is re-wired, and a
-    master that is not a unity sum with an identity map turns monitoring OFF
-    with one log line and a tooltip. The plan builder can express the other
-    mode, but the RT half of it is not wired — `twSpeaker` adds the frozen
-    root page whenever the frozen lane is PLAYING and nothing reads
-    `twLivePlan::masterLinear` — so a Closure-shaped plan would be summed on
-    top of a root page that already contains those tracks and the arrangement
-    would be heard DOUBLED. Unreachable today (`SStdMixer` builds exactly the
-    linear shape); whoever adds a master insert chain lands here first, and the
-    fix belongs in `twSpeaker`.
+18a. **A LANE-caused Closure is RENDERED; a MIXER-caused one is still
+    REFUSED** (proposal 45 M3). `twlive::checkMasterShape` is asked BEFORE
+    anything is re-wired. A master lane doing something — an insert, a fader, a
+    mute, an automation lane — sets `twMasterShape::fromMasterLane` and the
+    pump renders the arrangement through that lane; the MIXER's own sum (a
+    non-unity input level, a non-identity channel map, a width disagreement)
+    turns monitoring OFF with one log line and a tooltip, because the pump has
+    no per-input level anywhere and a plan built for that shape would silently
+    drop it.
+
+18b. **The shape is asked on EVERY route to `publishPlan()`, which is why it is
+    `masterShapeRefusesMonitoring()` and not an inline block.** `refresh()`
+    reaches `publishPlan()` twice: through the full arm/disarm path, and
+    through the `sameSet` fast path taken whenever the closure MEMBERSHIP did
+    not move. The check lived only on the first, and a track whose monitor mode
+    is **on** is in the live set BEFORE it is armed — so arming it never
+    changed the membership, the fast path was taken, and the master shape was
+    never consulted at all. Under the refuse-everything rule this replaced,
+    that meant a limiter dropped on the master while a track was monitoring
+    silently kept the LINEAR split: the RT went on adding a frozen root page
+    the master had processed to a ring that had bypassed it — the doubling
+    D4a exists to prevent, with no log line because nothing had looked.
+
+18c. **The Closure suppression drops the SUM, never the PULL.**
+    `twSpeaker::renderCallbackBody`'s `frozenPlaying` gates three things: the
+    `pullBlock`, the position publication plus the engine-clock stamp, and the
+    live gate's position authority. Only the audio may stand down, so
+    `liveMasterClosure()` zeroes the planar scratch AFTER the pull rather than
+    folding into that flag. Suppressing the pull stops the playhead — measured,
+    the demand position stayed at 0 for a whole 5.2 s run and the unarmed
+    tracks went silent, because the transport position is published from
+    `engine->currentPosition()` after the pull. D4b framed the problem as
+    processor ownership; the clock is a second thing the frozen lane owns.
 
 18. **The app never touches the ring and never renders on the pump.** Plans are
     built on the main thread and published with one `setPlan()`; the pump is

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M3, AC3.3 / D4b: THE ROOT-PRESENCE DISCRIMINATOR. Identical to master_closure_heard_root but for the unarmed track at -6 dB: 2 x sqrt(0.082071^2 + 0.115752^2) = 0.283790, a factor of 1.4118. The two bands do not overlap.
+
+  ONE MEASUREMENT PER CASE, AND THAT IS NOT STYLE. The playback capture is
+  CUMULATIVE across phases in one process - arming, playing, stopping and
+  disarming does not restart the device, so the recording grows (measured:
+  256000, 535552, 815104, 1094656 frames over four phases) and a fixed window
+  reads the FIRST phase every time. A four-phase version of this gate returned
+  the identical 0.100520 four times over and would have passed while measuring
+  nothing. The four cases below therefore share a fixture and a window and
+  differ in one setting each.
+
+  THE FOUR RELATED CASES, whose bands are DISJOINT by construction - that is
+  what makes them a discriminator rather than four sanity checks:
+
+    master_closure_linear_ring            ring alone, no master   0.082071
+    master_closure_heard_ring             ring alone, 2.0x master 0.164142
+    master_closure_heard_root             + root at -12 dB        0.201010
+    master_closure_heard_root_raised      + root at  -6 dB        0.283790
+
+  Rows 1 vs 2 are the mode itself: under the LINEAR split the ring bypasses the
+  master, under CLOSURE it goes through it. Same fixture, same window, one
+  master insert apart. Rows 3 vs 4 are the ROOT-PRESENCE
+  discriminator - raising the unarmed track 6 dB must move the level by
+  1.4118. Before AC3.1 was rebuilt to suppress the frozen SUM rather than the
+  frozen PULL, the same change moved it by 1.0046: the arrangement was absent,
+  because twSpeaker publishes the transport position from
+  engine->currentPosition() AFTER the pull it had stopped making, so the
+  playhead never advanced.
+
+  THE MEASUREMENT WINDOW IS THE HARD PART, and a first attempt got it wrong in
+  both directions. TOO EARLY sits inside the monitor priming lag (twSpeaker
+  defers the device start until the readahead is primed) and read BIMODALLY -
+  0.23158 four times and 0.461913 once, same binary, same script. TOO LATE
+  runs past the end of the material, halves one source, and reads exactly like
+  the other source alone; that artifact was very nearly written up as an
+  engine defect. Hence: the fixture is placed TWICE for 8 s and the window is
+  [168000, 216000) - 3.5 to 4.5 s.
+
+  THE SOURCES ARE UNCORRELATED ON PURPOSE: the root carries test_autosaw.wav
+  and the ring test_sawtooth.wav, so their sum is sqrt of the sum of squares
+  regardless of a relative phase nothing here controls. Two copies of one
+  signal have no closed-form sum, and every band would have to widen until it
+  separated nothing.
+
+  HEADROOM IS PART OF THE MEASUREMENT, NOT HOUSEKEEPING. The armed track runs
+  through a 0.25 gain so the 2.0x master does not clip. An earlier probe put
+  that master over full-scale sources, clipped the 16-bit capture at peak
+  exactly 1.0000, and read as an unexplained ~11 % shortfall.
+-->
+<SActionScript version="1" name="master_closure_heard_root_raised">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: armed and monitored, on the paced file input carrying
+         test_sawtooth.wav (RMS 0.328284), through a 0.25 gain = 0.082071. -->
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <!-- Track 1: NEVER armed. test_autosaw.wav (RMS 0.230956) placed twice for
+         8 s of material. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-6"/>
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="5200"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="master_closure_heard_root_raised.wav" minFrames="216000"/>
+    <assert-audio-energy filename="master_closure_heard_root_raised.wav" startFrame="168000" frameCount="48000"
+                         channel="0" minRms="0.2753" maxRms="0.2923"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- AC3.4: nobody rendered where they were not allowed to. Under Closure
+         the pump runs the master lane's OWN processor instances, so a freeze
+         worker touching one of them is exactly the two-thread hazard D4b
+         names. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

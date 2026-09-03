@@ -995,12 +995,14 @@ now carries the master lane's inserts and gain envelope, which it did not
 before and whose absence is why Closure could never have been right: the node
 summed the closure and the frozen siblings and then applied NOTHING).
 
-`SLiveMonitor` still refuses **every** non-linear master. One line changes when
-this is enabled, and it is commented in place.
+**M3 IS ENABLED.** A LANE-caused non-linear master is now rendered as a
+Closure; a MIXER-caused one is still refused. What follows is the diagnostic
+that got here, kept in full because three of its four first-round findings were
+artifacts of my own harness and the shape of each is instructive.
 
-**HELD BACK. THE DIAGNOSTIC RAN IN TWO ROUNDS; THE FIRST ROUND'S FINDINGS WERE
-ALL MEASUREMENT ARTIFACTS AND THE SECOND FOUND THE REAL DEFECT.** Both rounds
-are recorded, because the artifacts are instructive: every one of them was a
+**THE DIAGNOSTIC RAN IN TWO ROUNDS; THE FIRST ROUND'S FINDINGS WERE ALL
+MEASUREMENT ARTIFACTS AND THE SECOND FOUND THE REAL DEFECT.** Both rounds are
+recorded, because the artifacts are instructive: every one of them was a
 plausible-looking number produced by a broken harness.
 
 **Round 1 — three artifacts, none of them real.**
@@ -1085,12 +1087,90 @@ inside the material and past the priming lag, and a level change on one source
 as the presence discriminator — a level BAND alone cannot tell "present" from
 "absent" when the two sources are the same signal at an unknown phase.
 
-Also **not started**: AC3.1's ENGINE half (the readahead and `warmFrozenLane`
-still demand root pages, which under Closure would run the master lane's
-processors on a worker while the pump renders the same instances — D4b's
-two-thread hazard), AC3.6, AC3.7, AC3.8. `liveThreadRefusals` and
-`liveOwnedRefusals` both read **0** in the probes above, but with the frozen
-demand unre-rooted that is not yet evidence of AC3.4.
+**AC3.1 REBUILT: THE SUPPRESSION DROPS THE SUM AND KEEPS THE PULL.** In
+`twSpeaker::renderCallbackBody`, `frozenPlaying` gates three things — the
+`pullBlock`, the position publication plus the engine-clock stamp, and the live
+gate's position authority (`gate.haveRoot` / `gate.wantPos = blockStart`). Only
+the audio may stand down, so `closureLive` no longer folds into that flag; it
+zeroes the planar scratch after the pull instead. Re-measured with an 8-second
+corpus, uncorrelated sources, the armed track through a 0.25 gain and the root
+at −12 dB (headroom, so the 2.0× master does not clip), window
+[168000, 216000):
+
+| | measured | closed form |
+|---|---|---|
+| ring alone, Closure ×2 | **0.164143** | 0.164142 |
+| root + ring, LINEAR | 0.101661 | 0.100505 |
+| root + ring, Closure ×2 | **0.201039** | 0.201010 |
+| root at −6 dB + ring, Closure ×2 | **0.283832** | 0.283790 |
+
+The root-presence discriminator — raise the unarmed track 6 dB, watch the
+output — reads **1.4118 against a closed form of 1.4118**. It read **1.0046**
+before the rebuild.
+
+**AND THE ~11 % "UNEXPLAINED" SHORTFALL ABOVE WAS CLIPPING**, not a mystery:
+that probe put a 2.0× master over full-scale sources and the 16-bit capture
+peaked at exactly 1.0000. Recorded because it very nearly went into this
+document as an engine finding.
+
+**A SEPARATE, PRE-EXISTING DEFECT THE GATE EXPOSED, NOW FIXED.**
+`SLiveMonitor::refresh()` reaches `publishPlan()` by two routes: the full
+arm/disarm path, and a `sameSet` fast path taken whenever the closure
+MEMBERSHIP did not move. The master-shape check lived only on the first. A
+track whose monitor mode is **on** is in the live set *before* it is armed, so
+arming it never changed the membership, the fast path was taken, and the master
+shape **was never consulted at all**. Under M2 — where every non-linear master
+was refused — that meant a limiter dropped on the master while a track was
+monitoring silently kept the LINEAR split: the RT went on adding a frozen root
+page the master had processed to a ring that had bypassed it. That is exactly
+the doubling D4a exists to prevent, with no log line because nothing had
+looked. The check is now `SLiveMonitor::masterShapeRefusesMonitoring()` and
+both routes ask it.
+
+**Gates** (all `RUN_SERIAL`, `SMARAGD_CAPTURE_SPEED=1`, the paced `file:` input
+carrying `test_sawtooth.wav`): `master_lane_closure_monitoring` (which PATH is
+taken — the rewritten, no-longer-vacuous successor to
+`master_insert_refuses_monitoring`), `master_closure_linear_ring`,
+`master_closure_heard_ring`, `master_closure_heard_root`,
+`master_closure_heard_root_raised`.
+
+**Watched failing, one sabotage per claim:**
+
+| sabotage | fails |
+|---|---|
+| AC3.1 reverted to suppressing the PULL | the three Closure audible cases |
+| Closure enabling reverted (`!shape.linear()` alone) | those three **and** the path case |
+| the same, with the `sameSet` extraction also reverted | **only the path case** — which is the measurement of what the extraction is worth |
+| `twSpeaker`'s closure mode latched on | nothing — see below |
+| a CLEAN master reports Closure | only the path case |
+
+**NOT GATED, and the list is longer than I would like:**
+
+- **A LATCHED closure mode.** A case that inserts a 2.0× master, arms, disarms,
+  removes the insert and measures was written and abandoned for two measured
+  reasons. The playback capture is **cumulative within one process**, so the arm
+  that enters the closure puts its own monitored audio in front of the window
+  (0.105867 where the clean run reads 0.082071) — this is also why every audible
+  case above is ONE measurement in its own file, after a four-phase version
+  returned the identical 0.100520 four times over. And **a master insert made
+  while a lane is already monitoring does not rebuild the live plan at all**, so
+  the closure is never entered and the latch sabotage passes. That second fact
+  is itself an ungated gap in design section 3's rebuild triggers, found here
+  and not fixed.
+- **The MIXER-caused refusal branch.** No verb in this repo can set a master
+  input level or a master channel map, so the path that is still refused has no
+  headless gate. `master_insert_refuses_monitoring`'s old name implied
+  otherwise.
+- **`master_closure_linear_ring` does not bite on its own**, by construction: a
+  Closure whose master node has no inserts and unity gain is a no-op, which is
+  why the linear split is legitimate. It is the reference half of a 2× pair
+  whose other half is gated.
+- **AC3.1's ENGINE half** (the readahead and `warmFrozenLane` still demand root
+  pages, which under Closure runs the master lane's processors on a worker while
+  the pump renders the same instances — D4b's two-thread hazard), **AC3.6,
+  AC3.7, AC3.8**. `liveThreadRefusals` and `liveOwnedRefusals` read **0** in
+  every case above, but with the frozen demand unre-rooted that is not yet
+  evidence of AC3.4.
 
 ### M4 — The master lane on screen
 

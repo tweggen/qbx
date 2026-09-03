@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M3, AC3.3 / D4a / D4b: with anything on the MASTER LANE, live
+  monitoring switches to CLOSURE rather than being refused.
+
+  THIS CASE WAS master_insert_refuses_monitoring AND IT WAS VACUOUS FROM THE
+  MOMENT M3 LANDED - worth recording, because the shape of the mistake is
+  general. It asserted `assert-log contains="the master lane has inserts"`,
+  believing that string could only come from SLiveMonitor's refusal. It also
+  appears in sliveplanbuilder.cpp's Closure line, because both interpolate the
+  SAME twMasterShape::reason. So the case passed identically whether
+  monitoring was refused or a Closure plan was built, and it went on passing
+  through the change that inverted its own subject.
+
+  A REASON STRING IS NOT AN OUTCOME. Every phase below therefore asserts a
+  PAIR: the outcome-specific sentence that must be present, and the
+  outcome-specific sentence that must be ABSENT. Neither alone can tell the
+  two paths apart.
+
+  WHAT IS STILL REFUSED, AND IS NOT GATED HERE: a MIXER-caused non-linearity
+  (a non-unity master input level, a non-identity channel map, a width
+  disagreement). The pump has no per-input level anywhere, so a plan built for
+  that shape would silently drop it - but no verb in this repo can set a
+  master input level or a master channel map, so the refusal branch has no
+  headless gate at all. Said plainly rather than implied by this file's old
+  name.
+
+  The AUDIBLE half of AC3.3 is master_closure_heard.qxa; this case is about
+  which PATH is taken, and deliberately never starts the transport.
+-->
+<SActionScript version="1" name="master_lane_closure_monitoring">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+
+    <!-- (1) A CLEAN master monitors on the LINEAR split. Without this the case
+             cannot tell "took the right path" from "never monitored at all",
+             and it is what proves the two sentences below are distinguishing:
+             here NEITHER of them may appear. -->
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <assert-log level="warn" contains="the RT pops the ring only"
+                minCount="0" maxCount="0"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (2) AN INSERT ON THE MASTER goes to Closure, naming which control did
+             it. The reason string is asserted too - it is what the user reads
+             - but it is the THIRD assertion, never the only one. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <assert-log level="warn" contains="the master lane has inserts" minCount="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- ...and removing it returns to the LINEAR split. THAT IS NOT ASSERTED
+             HERE, and the reason is the same one that made this file's
+             predecessor vacuous: the linear split logs NOTHING of its own, so
+             the only thing a log assertion could do is count the Closure
+             sentence, and its count is not a stable property of one arm. The
+             latch check is made with AUDIO instead, in
+             master_closure_linear_ring - which reads the ring at 0.082071 against the
+             0.164142 master_closure_heard_ring reads over the identical
+             fixture. What IS asserted here
+             is that the removal reaches the model at all. -->
+    <remove-plugin trackPath="$master" index="0"/>
+    <assert-system-lane trackPath="$master" plugins="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (3) A NON-UNITY MASTER FADER, with its own reason. -->
+    <set-track-volume trackPath="$master" volume="-6.0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the master fader is not at unity" minCount="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <arm-track trackPath="0" armed="0"/>
+    <set-track-volume trackPath="$master" volume="0.0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (4) A MUTED MASTER. -->
+    <set-track-mute trackPath="$master" muted="1"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the master lane is muted" minCount="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <arm-track trackPath="0" armed="0"/>
+    <set-track-mute trackPath="$master" muted="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- (5) AN AUTOMATED master volume. A constant scale would at least be a
+             fixed factor; an automated one is not even that - so it is checked
+             separately rather than folded into the fader, and the point below
+             is deliberately at 0.0 dB: a lane that HAPPENS to sit at unity
+             right now must still leave the linear split. -->
+    <add-automation-point owner="$master" target="self:Volume"
+                          time="0" value="0.0"/>
+    <assert-system-lane trackPath="$master" volume="0.0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="automated" minCount="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <arm-track trackPath="0" armed="0"/>
+  </actions>
+
+</SActionScript>

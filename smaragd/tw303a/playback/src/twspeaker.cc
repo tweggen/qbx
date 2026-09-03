@@ -721,12 +721,26 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
     // itself, so the frozen root page is not a second half to add -- it is the
     // SAME arrangement, unprocessed. Adding it would play everything twice.
     // Suppressed here rather than in the engine because this is the one place
-    // that decides what reaches the device, and because the engine's readahead
-    // has its own, separate reason to stand down (setFrozenDemandSuspended).
+    // that decides what reaches the device. (AC3.1's ENGINE half -- standing
+    // the readahead and warmFrozenLane down from demanding root pages, so the
+    // master lane's processors are not run on a worker while the pump renders
+    // the same instances -- is a separate, unstarted piece of work.)
     const bool closureLive = liveOn && liveMasterClosure();
 
+    // AND IT SUPPRESSES THE SUM, NOT THE PULL. `frozenPlaying` below gates
+    // THREE things -- the pullBlock, the position publication + clock stamp at
+    // the bottom of this function, and the live gate's position authority
+    // (`gate.haveRoot` / `gate.wantPos = blockStart`) -- and only the AUDIO may
+    // stand down. The first attempt folded `closureLive` into this flag and
+    // suppressed all three; the transport position is published from
+    // engine->currentPosition() AFTER the pull, so THE PLAYHEAD STOPPED.
+    // Measured: the demand position stayed at 0 for a whole 5.2 s run,
+    // SLiveMonitor::pumpDemands() re-demanded page 0 for ever, the pump's
+    // frozen-input misses climbed to 62 against 4, and the unarmed track went
+    // silent -- raising it 12 dB moved the captured output by 0.46 %.
+    // D4b framed this as processor ownership; the CLOCK is a second thing the
+    // frozen lane owns. See plan/proposed/45_SYSTEM_LANES.md, M3.
     const bool frozenPlaying =
-        !closureLive &&
         engine && engine->getPlaybackState() == audio::PlaybackState::PLAYING &&
         outputState_.load(std::memory_order_relaxed) == OutputState::PLAYING;
 
@@ -791,6 +805,17 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
         }
         // pullBlock() writes every buffer for the full nFrames on every path,
         // including the misses — so the planar scratch is defined either way.
+
+        // THE CLOSURE SUPPRESSION, and this is the whole of it: drop the
+        // AUDIO the pull produced and keep everything else it produced --
+        // `blockStart`, `haveRoot`, `rootEpoch`, and (below) the position
+        // publication and the clock stamp. The engine has advanced, so the
+        // demands follow the playhead and the pages stay warm; the device
+        // simply does not hear this copy of the arrangement.
+        if (closureLive) {
+            std::fill(cbBuf_.begin(),
+                      cbBuf_.begin() + (std::ptrdiff_t)(pullCh * frames), 0.0f);
+        }
     } else {
         std::fill(cbBuf_.begin(), cbBuf_.begin() + (std::ptrdiff_t)(pullCh * frames), 0.0f);
     }
