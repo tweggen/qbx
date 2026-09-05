@@ -584,8 +584,12 @@ void SMVActualView::paintEvent( QPaintEvent * )
                 p.fillRect( QRect( 0, top+1, myRect.width(), lh-2 ),
                             QColor( 15, 23, 33 ) );   // halved with the field
             }
-            // Draw the track's clips.
-            row->track->getInlineRenderer()->draw( *row->link, ctx );
+            // Draw the track's clips. A SYSTEM LANE HAS NO SLink -- it is not
+            // a childLinks() member (D2), so rebuildRows() appends its row with
+            // a null link -- and it carries no clips to draw either (AC5.1
+            // refuses them). The background above is the whole of its lane.
+            if( row->link )
+                row->track->getInlineRenderer()->draw( *row->link, ctx );
         }
     }
 
@@ -4392,9 +4396,28 @@ void SStdMixerView::toggleTrackTakesExpanded( STrack *t )
 // Applied actions (add-take, remove-take, split of a stack …) can change an
 // expanded track's take-row count without any track-structure signal. Rebuild
 // the rows; only a changed count needs the full (control column) refresh.
+// Proposal 45 AC4.2: is the master lane's row out of step with the model?
+// set-lane-hidden changes the ROW COUNT with no track-structure signal, which
+// is exactly the situation this slot already exists for (a take-stack edit).
+bool SStdMixerView::systemRowsOutOfDate() const
+{
+    SStdMixer *mix = dynamic_cast<SStdMixer *>( model_ );
+    if( !mix ) return false;
+    STrack *lane = mix->masterLane();
+    const bool want = lane && !lane->laneHidden();
+    bool have = false;
+    for( const STrackRow &r : rows_ )
+        if( r.track == lane ) { have = true; break; }
+    return want != have;
+}
+
 void SStdMixerView::onArrangementChangedRows()
 {
-    if( takesExpanded_.isEmpty() ) return;   // canvas repaint happens anyway
+    // The take-lane guard, WIDENED: without the second test a set-lane-hidden
+    // on a project with no expanded take stack would change the model and
+    // never reach the rows, so the master lane would appear only after some
+    // unrelated edit happened to force a rebuild.
+    if( takesExpanded_.isEmpty() && !systemRowsOutOfDate() ) return;
     const int before = rows_.size();
     // Capture the scroll FRACTION before the rebuild (fix/arranger-ui-fixes C
     // item 7): scroll is pixel-granular now, and a row boundary does not
@@ -4427,7 +4450,41 @@ void SStdMixerView::rebuildRows()
     pruneUiState();          // one walk, every per-track UI-state set (P6)
     rows_.clear();
     if( model_ ) appendRowsFor( model_, 0 );
+    appendSystemRows();      // proposal 45 AC4.1: pinned BELOW every user lane
     rebuildRowGeometry();
+}
+
+// PROPOSAL 45 AC4.1 -- THE MASTER LANE'S ROW, AND WHY IT IS APPENDED RATHER
+// THAN WALKED TO.
+//
+// appendRowsFor() walks childLinks(), and D2 keeps the master lane out of that
+// list on purpose: it is not a child of the mixer, it is the mixer's own
+// output stage. So there is nothing to find and the row is APPENDED, once, at
+// the end -- which is also exactly what "pinned below every user lane" means.
+// A user lane cannot be dragged below it because there is no row after it to
+// drop onto, and the ordering needs no separate rule to enforce.
+//
+// THE ROW CARRIES A NULL `link`, deliberately. Everything that reads it is
+// guarded (the lane paint, above); the alternative -- minting a synthetic
+// SLink so the view has something to hold -- would put a model object into
+// existence for the view's convenience and then have to keep it out of every
+// walk that enumerates children.
+//
+// HIDDEN IS THE DEFAULT for a system lane and it is the MODEL's answer, not
+// this view's (SObject::laneHidden). Two arrangers open on one project agree
+// about what is shown, and the toggle is one undo step because it is an action.
+void SStdMixerView::appendSystemRows()
+{
+    SStdMixer *mix = dynamic_cast<SStdMixer *>( model_ );
+    if( !mix ) return;
+    STrack *lane = mix->masterLane();
+    if( !lane || lane->laneHidden() ) return;
+
+    rows_.append( STrackRow{ lane, nullptr, mix, 0, false, false } );
+    // ...and its own automation sub-lanes, under the same rule every user
+    // track's follow (proposal 37 P6): no head of their own, keyed by STrack*,
+    // so the shown-automation set needs no system-lane special case (AC4.6).
+    appendAutomationRowsFor( lane, nullptr, mix, 0 );
 }
 
 // --- row geometry -------------------------------------------------------

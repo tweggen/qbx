@@ -1446,6 +1446,55 @@ removing the pump's `applyGain`.
   `master_head_fader_heard`; `assert-track-head`; `assert-lane-alignment`;
   `action_roundtrip_test`.
 
+#### M4 PART 1 — **the row, the flag and the verb. DONE 2026-09-05.**
+
+**AC4.1, AC4.2 and AC4.5 are done. AC4.3, AC4.4 and AC4.6 are NOT started.**
+
+**The row is APPENDED, not walked to.** `appendRowsFor()` walks `childLinks()`
+and D2 keeps the master lane out of that list on purpose, so there is nothing to
+find. `appendSystemRows()` adds it once at the end — which is also exactly what
+"pinned below every user lane" means: there is no row after it to drop onto, so
+the ordering needs no rule to enforce it.
+
+**The row carries a null `link`**, deliberately. Only one thing read it (the
+lane paint) and it is guarded; a system lane carries no clips to draw anyway.
+The alternative — minting a synthetic `SLink` so the view has something to hold
+— would put a model object into existence for the view's convenience and then
+have to be kept out of every walk that enumerates children.
+
+**Hidden is MODEL state, because AC4.2 asks for one undo step** and an undo step
+is an action. The consequence is deliberate: visibility travels with the
+PROJECT, not the machine, as the metronome switch does. The default is **per
+role** (`laneHiddenByDefault()`), so "hidden by default" needs no minting step,
+and `laneHidden` serializes only when it differs from that default — which keeps
+every project file written since M1 byte-unchanged.
+
+**THE ROW COUNT HAD TO BE INVENTED AS AN OBSERVABLE.** `assert-track-head`
+cannot gate AC4.1: `describeTrackHead` builds a THROWAWAY head straight from the
+model lane and never consults the arranger's rows, so it answers identically
+whether the row exists or not — a case built on it would pass on the pre-M4
+binary. `assert-lane-alignment` gained an exact `rows` count, and that is the
+one number separating the two binaries.
+
+**`set-lane-hidden` is REFUSED on an ordinary track**, and that is a scope guard
+rather than a policy. `appendRowsFor()` does not consult the flag, so honouring
+it for a user lane would change the model and nothing on screen — a verb
+reporting success and doing nothing, the worst of the three options. Widening it
+is one line plus a blast radius M4 does not ask for: selection, drag targets,
+the reorder drop rules, and what a hidden FOLDER does to its children.
+
+**Watched failing** — and the two halves are NOT separable by this case, which
+is worth saying rather than implying: removing `appendSystemRows()` and leaving
+the refresh guard un-widened each fail the SAME three `rows="4"` assertions
+(#6, #10, #12), while both leave the `rows="3"` ones green.
+
+Gate: `master_lane_rows.qxa`, plus `action_roundtrip_test`.
+
+**Still open in M4:** AC4.3 (hidden ≠ silent), AC4.4 (the head's fader commit is
+HEARD — the assertion that bites D9's write-side defect), AC4.6 (the master's
+own automation sub-lanes; `appendSystemRows()` already calls
+`appendAutomationRowsFor()` for the lane, but nothing gates it).
+
 ### M5 — The policies, each refused and each announced
 
 - **AC5.1** A clip dropped on, moved to, or placed on a system lane is REFUSED

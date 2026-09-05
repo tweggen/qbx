@@ -1125,6 +1125,11 @@ private:
     bool trackHeaderDragActive_ = false;
     int trackHeaderDragStartX_ = 0;
     int trackHeaderDragStartWidth_ = 0;
+    /// Proposal 45 AC4.1: the master lane's row, appended after every user
+    /// lane rather than walked to (it is not a childLinks() member, D2).
+    void appendSystemRows();
+    /// Proposal 45 AC4.2: the master row's presence disagrees with the model.
+    bool systemRowsOutOfDate() const;
     void appendRowsFor( SObject *container, int depth );
     // Resolve a drag drop at control-column y: *onto = the lane's track if the
     // pointer is over a lane's middle (nest), else NULL; *topSlot = insertion

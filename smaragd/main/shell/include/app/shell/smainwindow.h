@@ -118,6 +118,8 @@ public:
     bool arrangerSetZoomPan( double secondWidth, qlonglong scrollX );
     // "" when aligned, else a description of the first mismatch. A null
     // QString with no arranger at all is reported as an error by the caller.
+    /// Proposal 45 AC4.1: the arranger's LANE ROW count; -1 with no arranger.
+    int arrangerRowCount();
     QString arrangerLaneAlignment();
 
     // TEST ENTRY POINT (fix/track-list-polish l): scroll the vertical

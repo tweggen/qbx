@@ -122,6 +122,14 @@ SApplyResult SAssertLaneAlignmentAction::apply(SProject * /*project*/)
         qWarning() << "assert-lane-alignment FAILED:" << problem;
         return {false, nullptr};
     }
+    if (rows_ >= 0) {
+        const int have = win->arrangerRowCount();
+        if (have != rows_) {
+            qWarning() << "assert-lane-alignment: rows" << have
+                       << "but expected" << rows_;
+            return {false, nullptr};
+        }
+    }
 
     // The PNG is coverage, never an oracle (design 6.4): it is the only thing
     // that proves drawAutomationLane paints at all.
@@ -155,6 +163,7 @@ void SAssertLaneAlignmentAction::writeXml(QDomElement &elem) const
         if (grabWidth_ > 0)  elem.setAttribute("grabWidth", grabWidth_);
         if (grabHeight_ > 0) elem.setAttribute("grabHeight", grabHeight_);
     }
+    if (rows_ >= 0) elem.setAttribute("rows", rows_);
 }
 
 bool SAssertLaneAlignmentAction::readXml(const QDomElement &elem, int /*version*/)
@@ -162,6 +171,7 @@ bool SAssertLaneAlignmentAction::readXml(const QDomElement &elem, int /*version*
     grabPng_    = elem.attribute("grabPng", "");
     grabWidth_  = elem.attribute("grabWidth", "0").toInt();
     grabHeight_ = elem.attribute("grabHeight", "0").toInt();
+    rows_       = elem.attribute("rows", "-1").toInt();
     return true;
 }
 

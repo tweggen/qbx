@@ -3017,6 +3017,17 @@ QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeigh
 
 // --- proposal 37 P4 test seams -------------------------------------------
 
+// Proposal 45 AC4.1: how many LANE ROWS the arranger is showing. There was no
+// row-count observable at all before this, which is why the master lane's row
+// could not be gated: describeTrackHead builds a THROWAWAY head straight from
+// the model and never consults rows_, so it answers the same whether the row
+// exists or not. -1 = no arranger.
+int SMainWindow::arrangerRowCount()
+{
+    SStdMixerView *v = ensureArranger_();
+    return v ? v->rowCount() : -1;
+}
+
 QString SMainWindow::describeTrackHead( const QString &trackPath,
                                         int headHeight )
 {

@@ -101,6 +101,11 @@ private:
     QString grabPng_;
     int     grabWidth_ = 0;
     int     grabHeight_ = 0;
+    // Proposal 45 AC4.1: the EXACT number of lane rows, -1 = not checked.
+    // There was no row-count observable in the suite before this, which is why
+    // the master lane's row had none: describeTrackHead builds its head from
+    // the MODEL and answers the same whether the row exists or not.
+    int     rows_ = -1;
 };
 
 
