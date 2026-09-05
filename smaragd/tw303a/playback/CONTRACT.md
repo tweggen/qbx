@@ -472,3 +472,55 @@ unconditionally), which is the path `qxa.playback_loop_wrap_continuity`
 exercises end to end. Real device latency, jitter, and a loop shorter than
 one page combined with heavy concurrent scheduler load are not covered by
 either gate.
+
+## The frozen lane RE-ROOTS below the master chain under a Closure (proposal 45 AC3.1)
+
+`AudioEngine`'s readahead and its RT frozen-page read normally address
+`synthOutput_` — the mixer's REWIRE, which is everything, master chain included.
+Under a **Closure** plan that is design D4b's two-thread hazard: freezing a root
+page runs the master lane's `twPluginSlotProcessor`s on a revalidation worker,
+while the PUMP renders those same instances to produce the master's audio at
+all. One plugin instance, two threads, and the master has no null-able input
+plug for the closure exclusion to work through.
+
+`AudioEngine::setFrozenDemandRoot()` installs the mixer's `twMixer` — the bus
+sum, BELOW the master chain — and every frozen-lane use of `synthOutput_` goes
+through one `frozenRoot()` accessor. Five properties are contractual:
+
+1. **`graphChannels()` still reports `synthOutput_`'s width.** That number is
+   the PROJECT's width and feeds twSpeaker's device rule. A re-rooting says
+   which component's pages are demanded, never how wide the project is.
+2. **`startPlayback()`'s readiness check needs no re-rooting of its own.** It
+   reads `readaheadComputedUpTo_`, a frontier the readahead maintains against
+   whatever root it demands, so it follows for free. D4b expected a cost here
+   and there is none; do not add one.
+3. **A root change goes through the pending-SEEK seam.** The held page belongs
+   to the pull thread and the frontier to the readahead thread, and neither is
+   the caller's to clear. Without it the RT would serve REWIRE pages while the
+   readahead filled the MIXER's — the two lanes disagreeing about what a page at
+   a position contains.
+4. **The root is held on `twSpeaker`, not pushed at the engine.** A transport
+   start from stopped MINTS a new `AudioEngine` (D5's handle swap); a root
+   pushed at the previous one would be silently lost and the new engine would
+   freeze root pages through the master again, with no log line. Every engine
+   the speaker attaches inherits it — `warmFrozenLane`'s count-in priming
+   included, which demands through a DIFFERENT accessor
+   (`context_->rootComponent()`) and therefore needs its own line.
+5. **It must be cleared on EVERY route out of a Closure.** The speaker's
+   `closureLive` is `liveOn && liveMasterClosure()`, so a stale FLAG is harmless
+   — `liveOn` is false on a closed lane. The ROOT has no such gate: an engine
+   left rooted at the bus sum keeps reading pages that stop short of the master
+   chain, so ordinary playback would lose the master's inserts and fader
+   entirely, silently, for the rest of the session.
+
+**Ownership order is asymmetric**, because the guard fires on whoever is not the
+pump: **entering** a closure re-roots FIRST and then takes ownership; **leaving**
+one releases ownership FIRST and then re-roots back.
+
+**What makes AC3.4 a real assertion.** `twPluginSlotProcessor` already counted
+`liveOwnedRefusals`, but the master lane's processors were never live-owned — so
+every M3 case asserted `liveOwnedRefusals="0"` and would have gone on asserting
+it with the hazard fully present. They are owned under a Closure now, and the
+sabotage measurement is the pair: re-rooted it reads **0**; ownership on with
+the re-rooting REVERTED, `assert-render-policy` FAILS on both
+`master_closure_heard_ring` and `master_insert_while_monitoring`.

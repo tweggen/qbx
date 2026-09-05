@@ -1187,12 +1187,8 @@ taken — the rewritten, no-longer-vacuous successor to
   Closure whose master node has no inserts and unity gain is a no-op, which is
   why the linear split is legitimate. It is the reference half of a 2× pair
   whose other half is gated.
-- **AC3.1's ENGINE half** (the readahead and `warmFrozenLane` still demand root
-  pages, which under Closure runs the master lane's processors on a worker while
-  the pump renders the same instances — D4b's two-thread hazard), **AC3.6,
-  AC3.7, AC3.8**. `liveThreadRefusals` and `liveOwnedRefusals` read **0** in
-  every case above, but with the frozen demand unre-rooted that is not yet
-  evidence of AC3.4.
+- **AC3.6, AC3.7, AC3.8.** (AC3.1's ENGINE half and AC3.4 are **DONE** — see
+  the section below.)
 
 ### M3a — A master edit made while a lane is ALREADY live
 
@@ -1242,6 +1238,98 @@ significant figures: the insert was **completely inaudible** on the live lane.
    case green, because no verb in this repo can produce a mixer-caused
    non-linear master (the same gap the row below already records). It is kept
    on reasoning, not on evidence, and this paragraph is the honest label.
+
+### M3b — AC3.1's ENGINE half, and what made AC3.4 real
+
+**Done 2026-09-05, as D4b option 1: re-root the frozen demand below the master
+chain.**
+
+The speaker half alone was never sufficient and D4b said so. The readahead and
+`warmFrozenLane` demand ROOT pages (`synthOutput_` is the mixer's rewire), and
+under D3 freezing a root page runs the master lane's `twPluginSlotProcessor`s —
+while under Closure the PUMP must render those same instances to produce the
+master's audio at all. One plugin instance, two threads.
+
+**`AudioEngine::setFrozenDemandRoot()`** installs the mixer's `twMixer` — the bus
+sum, BELOW the master chain — as what the frozen lane demands and reads. Every
+frozen-lane use of `synthOutput_` went through one `frozenRoot()` accessor: the
+readahead's probes and demands, the legacy synchronous path, and the RT's own
+`updateFrozenPage` epoch/width/page reads.
+
+**Two things it deliberately does NOT change**, each for a reason:
+
+- **`graphChannels()` still reports `synthOutput_`'s width.** That number is the
+  PROJECT's width and feeds twSpeaker's device rule. A re-rooting is about which
+  component's pages are demanded, never about how wide the project is.
+- **`startPlayback()`'s buffering-ready check needed no change at all**, which
+  D4b expected to be a cost ("expressed against `synthOutput_` and must follow
+  the re-rooting"). It reads `readaheadComputedUpTo_` — a frontier counter the
+  readahead maintains against whatever root it demands — so it follows the
+  re-rooting for free. The `fix/loop-behaviour` (h) comparison does not apply.
+
+**THE ROOT IS HELD ON THE SPEAKER, NOT PUSHED AT THE ENGINE**, and that is not
+tidiness. A transport start from stopped MINTS A NEW `AudioEngine` (D5's handle
+swap). An app that had pushed the re-rooting at the old engine would silently
+lose it and the new one would freeze root pages through the master again, with
+no log line. `twSpeaker::setLiveMasterClosure` now carries the flag and the root
+together, and every engine the speaker attaches inherits it.
+
+#### What turned AC3.4 from a vacuous assertion into a real one
+
+D4b's recommendation was "option 1, **with option 2's refusal counter kept as
+the diagnostic**", and that second clause is the whole of AC3.4.
+
+`twPluginSlotProcessor` already counts `liveOwnedRefusals` — "somebody who is
+not the pump rendered a live-owned processor". The master lane's processors were
+never marked live-owned, so the counter could not see this hazard at all: every
+M3 case asserted `liveOwnedRefusals="0"` and would have gone on asserting it
+with the hazard fully present.
+
+They are now live-owned while a Closure plan is live (`setMasterLaneOwned`), so:
+
+| | `liveOwnedRefusals` |
+|---|---|
+| re-rooted (as landed) | **0** |
+| ownership on, re-rooting REVERTED | **nonzero** — the assertion fails |
+
+Measured by sabotage: reverting `frozenRoot()` to `synthOutput_` fails
+`assert-render-policy` on BOTH `master_closure_heard_ring` and
+`master_insert_while_monitoring`. The exact count is not quoted because it
+reaches the log ring rather than stdout; what is measured is that the assertion
+flips, which is the claim.
+
+**ORDER IS LOAD-BEARING AND ASYMMETRIC**, for the same reason proposal 21 L1a's
+disarm order is: the guard fires on whoever is not the pump.
+
+- **Entering** a closure: re-root FIRST, then take ownership.
+- **Leaving** one: release ownership FIRST, then re-root back.
+
+**A hazard the re-rooting introduced, and the one this cost most care.** The
+speaker's `closureLive` is `liveOn && liveMasterClosure()`, so a STALE flag on a
+closed lane is harmless — `liveOn` is false and the frozen lane resumes by
+itself. Two of the three lane-close paths relied on exactly that and never
+cleared the flag. **The re-rooting has no such gate**: it lives on the ENGINE,
+and an engine left rooted at the bus sum keeps reading pages that stop short of
+the master chain — so an ordinary playback would lose the master's inserts and
+fader entirely, silently, for the rest of the session. `endMasterClosure()` is
+therefore called on **every** route out: the empty-set branch, `finishDisarm`,
+`suspendForRender` and the refusal teardown.
+
+**NOT gated, and named rather than implied:**
+
+- **The count-in's priming is covered, and a first draft of this section
+  wrongly called it unreachable.** `warmFrozenLane` demands through
+  `context_->rootComponent()` — a different accessor from the readahead's, so
+  it needed its own line. It IS reachable in the hazardous state: monitor AUTO
+  is "input while stopped OR recording", so a track monitored through a master
+  carrying an insert has a Closure plan live with the transport STOPPED, and a
+  record start with a count-in demands priming pages from exactly there. It now
+  re-roots from the same stored root. **Not gated** — a case would have to
+  combine a count-in, a monitored track and a master insert, and the count-in
+  cases take a different input fixture.
+- **The mixer-caused refusal branch**, unchanged and still unreachable from a
+  script.
+- **AC3.6, AC3.7, AC3.8.**
 
 ### M4 — The master lane on screen
 

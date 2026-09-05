@@ -23,6 +23,7 @@
 #include "tw/devices/audio_input.h"
 #include "tw/record/capture_bridge.h"
 #include "tw/graph/twcomponent.h"
+#include "tw/mix/twmixer.h"
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twtrackmix.h"
 #include "tw/plugins/twpluginchain.h"
@@ -139,6 +140,52 @@ void SLiveMonitor::retireClosureNodes( const SLiveClosure &closure )
         if( t->getRootComponent() )     comps.push_back( t->getRootComponent().get() );
     }
     sched->retireComponentNodes( comps );
+}
+
+void SLiveMonitor::endMasterClosure()
+{
+    // EVERY route out of a Closure comes through here, and it must, for a
+    // reason the pre-existing code did not have to care about. The speaker's
+    // `closureLive` is `liveOn && liveMasterClosure()`, so a STALE flag left on
+    // a closed lane is harmless -- liveOn is false and the frozen lane resumes
+    // by itself. AC3.1's re-rooting has no such gate: it lives on the ENGINE,
+    // and an engine left rooted at the bus sum keeps reading pages that stop
+    // short of the master chain, so an ordinary playback would lose the
+    // master's inserts and fader entirely, silently, for the rest of the
+    // session.
+    //
+    // Ownership is released BEFORE the flag and the root, because the guard
+    // fires on whoever is not the pump: re-rooting back above the master while
+    // its processors are still owned makes the next root freeze refuse.
+    SStdMixer *mixer = rootMixer();
+    setMasterLaneOwned( mixer, false );
+    if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
+                                              : std::shared_ptr<twSpeaker>() )
+        spk->setLiveMasterClosure( false, std::shared_ptr<twComponent>() );
+}
+
+void SLiveMonitor::setMasterLaneOwned( SStdMixer *mixer, bool owned )
+{
+    // AC3.1 / D4b: under a Closure the PUMP renders the master lane's own
+    // processors, so they are live-owned exactly as an armed track's are. That
+    // is what turns `liveOwnedRefusals == 0` from a vacuous assertion into a
+    // real one: with the re-rooting in place nobody else renders them, and
+    // WITHOUT it a revalidation worker freezing a root page does -- and is
+    // counted, by name, at the one guard that already exists for this.
+    if( !mixer ) return;
+    STrack *lane = mixer->masterLane();
+    if( !lane ) return;
+    SPluginChain *chain = lane->getPluginChain();
+    if( !chain ) return;
+    const int n = chain->getSlotCount();
+    for( int i = 0; i < n; ++i ) {
+        SPluginSlot *slot = chain->getSlotAt( i );
+        if( !slot ) continue;
+        const std::shared_ptr<audio::twPluginSlotProcessor> &proc = slot->getProcessor();
+        if( !proc ) continue;
+        if( !owned ) proc->forgetContinuity();
+        proc->setLiveOwned( owned );
+    }
 }
 
 void SLiveMonitor::setClosureOwned( const SLiveClosure &closure, bool owned )
@@ -637,9 +684,28 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     // producing for it. The other order has a window in which the ring already
     // carries the whole master while the RT is still adding the frozen root
     // page -- the doubling, for as long as one callback.
+    //
+    // AC3.1's ENGINE HALF travels with it. Under a Closure the frozen lane is
+    // RE-ROOTED to the mixer's bus sum -- BELOW the master chain -- so that
+    // freezing a root page stops running the master lane's processors on a
+    // revalidation worker while the pump renders those same instances (design
+    // D4b option 1). The speaker holds the root rather than the engine, so an
+    // engine minted later by a transport start inherits it.
+    const bool closureNow = !plan->masterLinear;
+    SStdMixer *rootMix = rootMixer();
     if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
-                                              : std::shared_ptr<twSpeaker>() )
-        spk->setLiveMasterClosure( !plan->masterLinear );
+                                              : std::shared_ptr<twSpeaker>() ) {
+        std::shared_ptr<twComponent> underMaster;
+        if( closureNow && rootMix ) underMaster = rootMix->masterMixComponent();
+        // LEAVING a closure releases OWNERSHIP FIRST, because the guard fires
+        // on whoever is not the pump: re-rooting back above the master while
+        // its processors are still owned would make the next root freeze
+        // refuse and count. Entering is the mirror image and is handled inside
+        // setLiveMasterClosure, which pushes the root before raising the flag.
+        if( !closureNow ) setMasterLaneOwned( rootMix, false );
+        spk->setLiveMasterClosure( closureNow, underMaster );
+        if( closureNow ) setMasterLaneOwned( rootMix, true );
+    }
     pump_->setPlan( plan );
     pump_->start();
     publishedSignature_ = planSignature();
@@ -866,7 +932,7 @@ void SLiveMonitor::refresh()
                     // Clear the mode BEFORE closing: a stale "closure" left on
                     // the speaker would suppress the frozen lane for a project
                     // that is merely playing, which is silence.
-                    spk->setLiveMasterClosure( false );
+                    endMasterClosure();
                     spk->closeLive();
                 }
                 liveOpened_ = false;
@@ -980,6 +1046,7 @@ void SLiveMonitor::finishDisarm()
         demands_.clear();
         closeInputIfUnused();
         if( liveOpened_ ) {
+            endMasterClosure();
             if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() ) spk->closeLive();
             liveOpened_ = false;
         }
@@ -1038,6 +1105,7 @@ void SLiveMonitor::suspendForRender()
     demands_.clear();
     closeInputIfUnused();
     if( liveOpened_ ) {
+        endMasterClosure();
         if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() ) spk->closeLive();
         liveOpened_ = false;
     }
@@ -1126,6 +1194,7 @@ void SLiveMonitor::pumpEdits()
 
 void SLiveMonitor::tearDownLiveForRefusal()
 {
+    endMasterClosure();
     detachLiveEvents( current_ );
     current_ = SLiveClosure();
 }

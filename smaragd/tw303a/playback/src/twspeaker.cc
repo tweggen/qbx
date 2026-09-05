@@ -174,6 +174,13 @@ bool twSpeaker::startOutput()
         std::atomic_store(&audioEngine_, engine);
     }
 
+    // AC3.1: a NEWLY MINTED engine inherits the frozen lane's re-rooting. A
+    // transport start from stopped mints one, so an app that pushed the
+    // re-rooting at the previous engine would lose it here -- and the new
+    // engine would go back to freezing ROOT pages through the master chain
+    // while the pump renders the same processors, with nothing to say so.
+    if (engine) engine->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
+
     // Rate diagnostics
     {
         std::uint32_t wireRate = (!pInputPlugs_.empty() && pInputPlugs_[0] != nullptr)
@@ -327,12 +334,52 @@ bool twSpeaker::isPlaying()
     return isPlaying_;
 }
 
+void twSpeaker::setLiveMasterClosure(
+    bool closure, const std::shared_ptr<twComponent> &frozenRootUnderMaster)
+{
+    // ORDER IS LOAD-BEARING AND IT IS NOT SYMMETRIC, for the same reason
+    // proposal 21 L1a's disarm order is not: the guard fires on whoever is NOT
+    // the pump, so the window to avoid is one in which the master's processors
+    // are owned while the frozen lane is still rooted ABOVE them.
+    //
+    //   ENTERING a closure: re-root FIRST, then let the caller take ownership.
+    //   LEAVING one:        the caller releases ownership first, then we
+    //                       re-root back.
+    //
+    // Both directions therefore push the ROOT before the flag when entering and
+    // after it when leaving, which is what the two branches below spell out.
+    const bool entering = closure && !liveMasterClosure_.load(std::memory_order_acquire);
+    if (entering) {
+        liveFrozenRootUnderMaster_ = frozenRootUnderMaster;
+        if (auto e = std::atomic_load(&audioEngine_))
+            e->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
+        liveMasterClosure_.store(closure, std::memory_order_release);
+        return;
+    }
+    liveMasterClosure_.store(closure, std::memory_order_release);
+    liveFrozenRootUnderMaster_ = closure ? frozenRootUnderMaster
+                                         : std::shared_ptr<twComponent>();
+    if (auto e = std::atomic_load(&audioEngine_))
+        e->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
+}
+
 void twSpeaker::warmFrozenLane(offset_t pos)
 {
     // MAIN THREAD ONLY, and never from the RT callback or the live pump: this
     // issues a DEMAND, which is exactly what those two may not do.
     if (!pageScheduler_ || !context_) return;
-    std::shared_ptr<twComponent> root = context_->rootComponent();
+    // AC3.1: THE COUNT-IN'S PRIMING RE-ROOTS TOO. This is reachable in the
+    // hazardous state, and a first draft of the M3b write-up wrongly called it
+    // unreachable: monitor AUTO is "input while stopped OR recording", so a
+    // track monitored through a master carrying an insert has a CLOSURE plan
+    // live while the transport is stopped -- and a record start with a count-in
+    // then demands priming pages from exactly here. Rooted above the master
+    // those freezes would run the master lane's processors on a worker while
+    // the pump owns them, which is the whole hazard, arriving through the one
+    // demand site the readahead's re-rooting does not cover.
+    std::shared_ptr<twComponent> root = liveFrozenRootUnderMaster_
+                                            ? liveFrozenRootUnderMaster_
+                                            : context_->rootComponent();
     if (!root) return;
 
     const offset_t page  = (offset_t) twOutputPage::FRAME_CAPACITY;

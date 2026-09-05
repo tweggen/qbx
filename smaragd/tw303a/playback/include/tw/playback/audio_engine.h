@@ -210,8 +210,45 @@ public:
     std::uint64_t servedContentEpoch() const
     { return servedEpoch_.load( std::memory_order_relaxed ); }
 
+    /**
+     * RE-ROOT THE FROZEN LANE BELOW THE MASTER CHAIN (proposal 45 M3, AC3.1's
+     * engine half; design D4b option 1).
+     *
+     * The readahead and the RT's frozen-page read normally address
+     * `synthOutput_`, which is the mixer's REWIRE -- everything, master chain
+     * included. Under a CLOSURE plan that is the two-thread hazard D4b names:
+     * freezing a root page runs the master lane's twPluginSlotProcessors on a
+     * revalidation worker while the PUMP renders those same instances to
+     * produce the master's audio at all. One plugin instance, two threads.
+     *
+     * Handed the mixer's twMixer (the bus sum, BELOW the master chain), the
+     * frozen lane demands and reads pages that stop short of the master, and
+     * the pump is the only renderer of the master's processors. `nullptr`
+     * restores `synthOutput_`.
+     *
+     * WHAT THIS DELIBERATELY DOES NOT CHANGE: `graphChannels()` still reports
+     * `synthOutput_`'s declared width. That number is the PROJECT's width and
+     * feeds twSpeaker's device rule; a re-rooting is about which component's
+     * pages are demanded, never about how wide the project is.
+     *
+     * Main thread only, and it is NOT hot -- it moves exactly when a live plan
+     * flips between Linear and Closure. The held page and the readahead
+     * frontier belong to the OLD root, so a change drops both through the same
+     * seek-pending seam a locator jump uses; without that the RT would go on
+     * serving rewire pages while the readahead filled the mixer's.
+     */
+    void setFrozenDemandRoot( const std::shared_ptr<twComponent> &root );
+
+    /// The component the FROZEN lane demands and reads. See
+    /// setFrozenDemandRoot; `synthOutput_` unless one was installed.
+    const std::shared_ptr<twComponent> &frozenRoot() const
+    { return frozenDemandRoot_ ? frozenDemandRoot_ : synthOutput_; }
+
 private:
     std::shared_ptr<twComponent> synthOutput_;
+    // See setFrozenDemandRoot(). Null means "synthOutput_", which is what every
+    // path did unconditionally before proposal 45 M3.
+    std::shared_ptr<twComponent> frozenDemandRoot_;
     uint32_t engineSampleRate_;  // The engine's native sample rate
 
     // Frozen page rendering state (Tier 1 enhancement)
