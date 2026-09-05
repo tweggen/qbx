@@ -1562,6 +1562,56 @@ rather than half-honours.
   `master_refuses_instrument`, `master_mute_audible`; each refusal watched failing
   by removing **its own** check and confirming which assertion bites.
 
+#### M5 as executed (2026-09-05) — four findings the design did not anticipate
+
+1. **THE THREE STRUCTURAL REFUSALS DO NOT BITE AS BEHAVIOUR, AND SAYING SO IS
+   THE GATE.** `remove-track`, `move-track` and `reparent-track` address a
+   track as "its parent, plus its index in that parent". A master lane is not
+   a `childLinks()` member (D2), so `$master` splits into an empty parent path
+   and the index `-1`, `childAt(-1)` answers null, and all three ALREADY
+   refused before this milestone — silently, by an accident of the sentinel's
+   numeric value. Measured: with each explicit check deleted the case stayed
+   green on `expectReject` and `assert-system-lane` alone. What the accident
+   does not do is ANNOUNCE, so the gate is D6's own "a bound is ANNOUNCED,
+   never silent": one `assert-log` per verb. The accident also stops holding
+   the moment M6 nests a conductor lane one level down or M7 gives a send a
+   name form, which is why the explicit checks stay.
+2. **AC5.4 NEEDED WIRING, NOT JUST PERMISSION.** A user track's mute is
+   STRUCTURAL — the summing parent nulls its plug (`SStdMixer`) or mutes its
+   clip entry (a folder `STrack`). **The master lane has no summing parent**,
+   so neither reacts, and `set-track-mute` on `$master` set a flag no render
+   path ever read: a control that appears to work and changes nothing, i.e.
+   the exact `SStdMixer::volume_` defect D6 refuses SOLO to avoid. It now
+   drives `twGainStage`'s AUDIO mute, which P3a built and left unwired for
+   everything but P5's `self:Muted` lane. `invalidateRenderPath()`, not
+   `bumpRenderChainEpoch()` — measured: with the epoch bump alone the muted
+   render came back byte-identical to the unmuted one.
+3. **AC5.6's FIRST DETECTOR REPRODUCED THE HOLE IT GUARDS.** Reading
+   `knownAttributes()` to decide "is this verb track-addressed" is
+   default-OPEN, because that method is an optional override — so
+   `set-track-solo`, `set-track-mute`, `remove-track`, `move-track`,
+   `reparent-track` and `insert-plugin`, the verbs M5 is *about*, all reported
+   "not track-addressed" and escaped the audit. Measured: 37 verbs detected
+   that way against **80** when the question is put to `readXml()` instead —
+   hand the verb an element naming `$master` and see whether it writes that
+   address back. Watched: with the declarative detector restored, the table
+   passes with `set-track-solo` unrowed.
+4. **AC5.3's CHECK POSITION IS LOAD-BEARING.** It sits after
+   `desc.isInstrument` is settled, not beside the resolve, because the refusal
+   is on the FLAG: the master insert chain is the gesture M3's whole Closure
+   path exists to serve. A check placed earlier refuses the effect too, and a
+   refusal-only case would still pass. `master_refuses_instrument` asserts
+   both halves over the same lane in one run.
+
+**NOT gated in M5, and named rather than implied:** whether a USER track may be
+reparented INTO a system lane (AC5.2 asks about the ADDRESSED object; D3 gives
+the master child tracks, so a destination refusal is a design decision, not a
+policy one); `group-track` / `set-edit-group` / `set-track-midi-routing` on a
+system lane, which carry `NotApplicable` rows — decisions recorded, behaviour
+not proved; the twenty-two read-only `assert-*` rows, which are classification
+rather than assertion; and the ~1.5 ms mute ramp itself, which both
+`master_mute_audible` windows deliberately sit far away from.
+
 ### M6 — Conductor lanes: the container only
 
 - **AC6.1** A conductor lane exists as a child of the master lane, addressable as
