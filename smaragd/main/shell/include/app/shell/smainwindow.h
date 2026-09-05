@@ -182,6 +182,9 @@ public:
     // ...and a synthetic Home/End key press straight to that lane's LIVE
     // fader (item j), through the shell for the same reason. `key` is
     // "Home" or "End"; false for an unknown track path or key name.
+    /// Proposal 45 AC4.4: drive a lane's HEAD fader to `db`; false when the
+    /// lane has no head (hidden, or inside a collapsed folder).
+    bool setHeadFaderDb( const QString &trackPath, double db );
     bool sendFaderKey( const QString &trackPath, const QString &key );
 
     // TEST ENTRY POINT: a real click (press+release, no move) into a track's

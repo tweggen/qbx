@@ -212,6 +212,10 @@ public:
     // focused widget — this is what exercises eventFilter()'s Home/End
     // interception under QT_QPA_PLATFORM=offscreen, where nothing ever really
     // has OS-level keyboard focus. Returns false for an unknown key name.
+    /// Proposal 45 AC4.4: drive this head's fader to `db` through the REAL
+    /// valueChanged chain. False when there is no fader or the tick is
+    /// unchanged (setValue would emit nothing and assert nothing).
+    bool tkSetFaderDb( double db );
     bool tkSendFaderKey( const QString &key );
 
 private slots:

@@ -689,6 +689,9 @@ public:
     // exactly as tkToggleTrackHead's button does. Exercises
     // SSMVMixerControl::eventFilter's Home/End interception without needing
     // real OS-level keyboard focus under QT_QPA_PLATFORM=offscreen.
+    /// Proposal 45 AC4.4: drive one lane's HEAD fader. False when that lane
+    /// has no head, which is what a hidden lane means.
+    bool tkSetFaderDb( STrack *t, double db );
     bool tkSendFaderKey( STrack *t, const QString &key );
     // Grip-drag `t`'s head and drop it on a LANE ROW: `nestOnto` drops on the
     // middle of that row (nest into it), otherwise on its top boundary (insert

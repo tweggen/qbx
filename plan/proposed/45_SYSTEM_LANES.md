@@ -1490,10 +1490,53 @@ the refresh guard un-widened each fail the SAME three `rows="4"` assertions
 
 Gate: `master_lane_rows.qxa`, plus `action_roundtrip_test`.
 
-**Still open in M4:** AC4.3 (hidden ≠ silent), AC4.4 (the head's fader commit is
-HEARD — the assertion that bites D9's write-side defect), AC4.6 (the master's
-own automation sub-lanes; `appendSystemRows()` already calls
-`appendAutomationRowsFor()` for the lane, but nothing gates it).
+#### M4 PART 2 — **AC4.3, AC4.4 and AC4.6. M4 IS COMPLETE, 2026-09-05.**
+
+**AC4.4 found what it was written to find.** `SSMVMixerControl::applyVolume_`
+derives its commit address from `strackpath::pathOf( mixer, &tk_ )`, and D9's
+sentinel branch is the only reason that answers anything for a system lane —
+without it `pathOf()` returns `{}`, which is ALSO the address of "the root
+itself", so the fader would move on screen and commit to the mixer or to
+nothing. **That path became reachable for the first time in M4**, because the
+head exists only once the lane has a row, and it had never been exercised.
+Watched failing: removing D9's branch leaves the fader moving and the render
+unchanged — `master_head_fader_heard` fails its −6 dB assertion.
+
+The new `head-fader` verb drives the SLIDER, not `applyVolume_`, so the whole
+real chain runs (`valueChanged` → `sliderToDB` → `applyVolume_` → `pathOf()` →
+`set-track-volume`). Calling the handler directly would skip precisely the part
+that was in doubt. It is REFUSED on a lane with no head, which is what a hidden
+lane is — and the case asserts that refusal first, so the later success means
+"the head exists and its fader committed" rather than "some path resolved".
+
+**AC4.6 FOUND A SECOND, LARGER DEFECT, and the automation lane was only the
+symptom.** `pruneUiState()` prunes every per-track UI-state set against
+`collectTracks()`, which walked `childLinks()` only — so the master lane was
+never in the "live" set and its UI state was pruned on **every row rebuild**.
+Shown automation lanes were what surfaced it; the same walk also governs take
+expansion and the **lane height scale**, each of which would have looked like a
+separate bug. `collectTracks()` now sweeps the system-lane sentinels first, the
+way `findPathRec()` does. Watched failing: reverting that sweep fails the
+AC4.6 assertion while everything else stays green.
+
+**AC4.3** asserts the level on BOTH sides of a visibility change against the
+same closed form, plus a byte compare of the two renders — the stronger
+statement, that showing a lane changes nothing rendered rather than nothing the
+band can resolve. It would be easy to call this covered already and wrong to:
+every pre-M4 master case ran with the lane hidden because there was no row to
+hide it from, and none of them can say the level is the same on both sides of a
+change that did not exist.
+
+Gates: `master_lane_rows` (extended with AC4.6), `master_head_fader_heard`,
+`master_lane_hidden_still_audible`.
+
+**NOT gated in M4:** the head's METER, MUTE and FX access as pixels (AC4.1
+names them; what is gated is that the head exists, sits on its lane and that its
+FADER commits — `SSMVMixerControl` builds the rest from the same track either
+way); the "Show system lanes" COMPOSITE of AC4.2 (there is one verb per lane and
+no composite yet, and no menu item — there is no testkit verb for a context menu
+anywhere in this repo); and user-lane hiding, which `set-lane-hidden` refuses
+rather than half-honours.
 
 ### M5 — The policies, each refused and each announced
 

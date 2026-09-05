@@ -164,6 +164,45 @@ bool SDragTrackAction::readXml( const QDomElement &elem, int /*version*/ )
 
 // --- fader-key ---------------------------------------------------------------
 
+SApplyResult SHeadFaderAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "head-fader: no main window";
+        return { false, nullptr };
+    }
+    if( !win->setHeadFaderDb( trackPath_, db_ ) ) {
+        qWarning() << "head-fader: no head for" << trackPath_
+                   << "(a hidden lane has none), or the fader already holds"
+                      " that tick";
+        return { false, nullptr };
+    }
+    // NOT undoable itself: the fader's own handler submits the real
+    // set-track-volume (or an automation write tick while playing), and THAT
+    // is the undo step -- exactly as the automation UI gestures are.
+    return { true, nullptr };
+}
+
+void SHeadFaderAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "db", QString::number( db_ ) );
+}
+
+bool SHeadFaderAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    db_        = elem.attribute( "db", "0" ).toDouble();
+    return true;
+}
+
+static const bool s_reg_headfader = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("head-fader"),
+        []{ return new SHeadFaderAction; }
+    ), true
+);
+
 SApplyResult SFaderKeyAction::apply( SProject * /*project*/ )
 {
     SMainWindow *win = mainWindow();

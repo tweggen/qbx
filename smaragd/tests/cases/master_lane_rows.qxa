@@ -70,6 +70,22 @@
          again afterwards because a refusal must leave the model untouched. -->
     <set-lane-hidden trackPath="1" hidden="1" expectReject="true"/>
     <assert-lane-alignment rows="4"/>
+
+    <!-- AC4.6: THE MASTER'S OWN AUTOMATION SUB-LANES. They need no system-lane
+         special case anywhere, and that is the claim: appendSystemRows() calls
+         the SAME appendAutomationRowsFor() every user track goes through, and
+         the shown-automation set is keyed by STrack* rather than by a path, so
+         a lane outside childLinks() is not a different kind of key. One more
+         row, under the master's own lane and still below every user lane. -->
+    <add-automation-lane owner="$master" target="self:Volume" mode="read"/>
+    <set-lane-view automationTrack="$master" automationTarget="self:Volume"
+                   showAutomation="1"/>
+    <assert-lane-alignment rows="5"/>
+
+    <!-- ...and hiding the master takes its sub-lane with it, because the
+         sub-lane is appended by the same call that appends the lane. -->
+    <set-lane-hidden trackPath="$master" hidden="1"/>
+    <assert-lane-alignment rows="3"/>
   </actions>
 
   <assertions>

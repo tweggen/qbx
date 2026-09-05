@@ -2894,6 +2894,15 @@ bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
     return v->tkSendFaderKey( track, key );
 }
 
+bool SMainWindow::setHeadFaderDb( const QString &trackPath, double db )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkSetFaderDb( track, db );
+}
+
 bool SMainWindow::clickLane( const QString &trackPath, offset_t time,
                              Qt::KeyboardModifiers mods )
 {

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M4, AC4.4: THE MASTER HEAD'S FADER COMMIT IS HEARD.
+
+  This is the assertion the plan singles out as the one that bites D9's
+  WRITE-SIDE defect: a head whose slider moves and whose action never fires.
+  Nothing about the widget can tell those apart, which is why the measurement
+  is a RENDER and not a describeHead() string.
+
+  THE MECHANISM UNDER TEST. SSMVMixerControl::applyVolume_ derives its commit
+  address from strackpath::pathOf( mixer, &tk_ ). A system lane is NOT among
+  childLinks(), so without D9's sentinel branch pathOf() answers {} for the
+  master lane, which is ALSO the address of "the root itself". The fader would
+  then move on screen and commit to the mixer, or to nothing at all. The head
+  exists only because M4 gave the lane a ROW, so this path became reachable for
+  the first time in M4 and had never been exercised.
+
+  head-fader drives the SLIDER, not applyVolume_ directly, so the whole real
+  chain runs: valueChanged -> sliderToDB -> applyVolume_ -> pathOf() ->
+  set-track-volume. Calling the handler directly would skip precisely the part
+  that was in doubt.
+
+  THE CLOSED FORM. test_autosaw.wav is 0.230956 RMS and the master fader is
+  moved to -6 dB, so the render must read 0.230956 x 10^(-6/20) = 0.115760.
+  The band is +-3 %, which covers the fader curve's own rounding: it is an
+  INTEGER control whose curve does not round-trip (sDbToFader(0.0) is tick -191,
+  whose dB is +0.0625), so asking for -6 dB lands NEAR -6 dB and an exact
+  assertion would be asserting the tick table rather than the commit.
+
+  A HIDDEN LANE HAS NO HEAD, and the case says so first: head-fader is REFUSED
+  before set-lane-hidden shows the lane. That is not a courtesy check; it is
+  what makes the later success mean "the head exists and its fader committed"
+  rather than "some path resolved somewhere".
+
+  ONE UNDO STEP takes the level back, because the head's own handler submits an
+  ordinary set-track-volume: the verb itself is not undoable and does not need
+  to be.
+-->
+<SActionScript version="1" name="master_head_fader_heard">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- THE REFERENCE: a clean master, nothing touched. -->
+    <render filename="head_fader_ref.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="head_fader_ref.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+
+    <!-- HIDDEN MEANS NO HEAD, so the gesture is refused. -->
+    <head-fader trackPath="$master" db="-6" expectReject="true"/>
+
+    <!-- Show the lane; now it has a row, and therefore a head. -->
+    <set-lane-hidden trackPath="$master" hidden="0"/>
+    <assert-lane-alignment rows="2"/>
+
+    <!-- THE GESTURE: the master head's own fader, through the real chain. -->
+    <head-fader trackPath="$master" db="-6"/>
+
+    <!-- ...and it is HEARD. 0.230956 x 10^(-6/20) = 0.115760, +-3 %. -->
+    <render filename="head_fader_down.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="head_fader_down.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.1123" maxRms="0.1193"/>
+
+    <!-- The commit landed on the MASTER LANE and nowhere else: the source
+         track's own fader is untouched. Without D9's sentinel branch pathOf()
+         would answer {} and the write would go somewhere else entirely. -->
+    <assert-track-volume trackPath="0" volumeDb="0" tolerance="0.001"/>
+
+    <!-- ONE undo step, because the handler submitted an ordinary
+         set-track-volume: the level comes back. -->
+    <undo count="1"/>
+    <render filename="head_fader_undo.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="head_fader_undo.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
