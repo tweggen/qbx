@@ -122,6 +122,23 @@ SProject *projectOf()
 void collectTracks( SObject *container, QSet<const STrack *> &out )
 {
     if( !container ) return;
+    // SYSTEM LANES FIRST, and their absence here was a real defect (proposal 45
+    // AC4.6). A system lane is not among childLinks() (D2), so the walk below
+    // never reached the master lane -- and this set is what pruneUiState()
+    // treats as "every LIVE track". The master's per-track UI state was
+    // therefore pruned on EVERY row rebuild: its shown automation lanes (the
+    // symptom that found this), its take expansion, and its lane HEIGHT SCALE.
+    // Each would have looked like a separate bug.
+    //
+    // The sentinel sweep is findPathRec()'s, for the same reason: there is no
+    // list of system lanes to iterate, only an accessor answering one sentinel
+    // at a time.
+    for( int sentinel = strackpath::SPATH_MASTER; sentinel > -64; --sentinel ) {
+        STrack *sys = dynamic_cast<STrack *>( container->systemLaneAt( sentinel ) );
+        if( !sys ) continue;
+        out.insert( sys );
+        collectTracks( sys, out );
+    }
     for( SLink *lk : container->childLinks() ) {
         STrack *tk = dynamic_cast<STrack *>( &lk->getSObject() );
         if( !tk ) continue;

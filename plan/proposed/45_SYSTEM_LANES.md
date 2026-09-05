@@ -1446,6 +1446,98 @@ removing the pump's `applyGain`.
   `master_head_fader_heard`; `assert-track-head`; `assert-lane-alignment`;
   `action_roundtrip_test`.
 
+#### M4 PART 1 — **the row, the flag and the verb. DONE 2026-09-05.**
+
+**AC4.1, AC4.2 and AC4.5 are done. AC4.3, AC4.4 and AC4.6 are NOT started.**
+
+**The row is APPENDED, not walked to.** `appendRowsFor()` walks `childLinks()`
+and D2 keeps the master lane out of that list on purpose, so there is nothing to
+find. `appendSystemRows()` adds it once at the end — which is also exactly what
+"pinned below every user lane" means: there is no row after it to drop onto, so
+the ordering needs no rule to enforce it.
+
+**The row carries a null `link`**, deliberately. Only one thing read it (the
+lane paint) and it is guarded; a system lane carries no clips to draw anyway.
+The alternative — minting a synthetic `SLink` so the view has something to hold
+— would put a model object into existence for the view's convenience and then
+have to be kept out of every walk that enumerates children.
+
+**Hidden is MODEL state, because AC4.2 asks for one undo step** and an undo step
+is an action. The consequence is deliberate: visibility travels with the
+PROJECT, not the machine, as the metronome switch does. The default is **per
+role** (`laneHiddenByDefault()`), so "hidden by default" needs no minting step,
+and `laneHidden` serializes only when it differs from that default — which keeps
+every project file written since M1 byte-unchanged.
+
+**THE ROW COUNT HAD TO BE INVENTED AS AN OBSERVABLE.** `assert-track-head`
+cannot gate AC4.1: `describeTrackHead` builds a THROWAWAY head straight from the
+model lane and never consults the arranger's rows, so it answers identically
+whether the row exists or not — a case built on it would pass on the pre-M4
+binary. `assert-lane-alignment` gained an exact `rows` count, and that is the
+one number separating the two binaries.
+
+**`set-lane-hidden` is REFUSED on an ordinary track**, and that is a scope guard
+rather than a policy. `appendRowsFor()` does not consult the flag, so honouring
+it for a user lane would change the model and nothing on screen — a verb
+reporting success and doing nothing, the worst of the three options. Widening it
+is one line plus a blast radius M4 does not ask for: selection, drag targets,
+the reorder drop rules, and what a hidden FOLDER does to its children.
+
+**Watched failing** — and the two halves are NOT separable by this case, which
+is worth saying rather than implying: removing `appendSystemRows()` and leaving
+the refresh guard un-widened each fail the SAME three `rows="4"` assertions
+(#6, #10, #12), while both leave the `rows="3"` ones green.
+
+Gate: `master_lane_rows.qxa`, plus `action_roundtrip_test`.
+
+#### M4 PART 2 — **AC4.3, AC4.4 and AC4.6. M4 IS COMPLETE, 2026-09-05.**
+
+**AC4.4 found what it was written to find.** `SSMVMixerControl::applyVolume_`
+derives its commit address from `strackpath::pathOf( mixer, &tk_ )`, and D9's
+sentinel branch is the only reason that answers anything for a system lane —
+without it `pathOf()` returns `{}`, which is ALSO the address of "the root
+itself", so the fader would move on screen and commit to the mixer or to
+nothing. **That path became reachable for the first time in M4**, because the
+head exists only once the lane has a row, and it had never been exercised.
+Watched failing: removing D9's branch leaves the fader moving and the render
+unchanged — `master_head_fader_heard` fails its −6 dB assertion.
+
+The new `head-fader` verb drives the SLIDER, not `applyVolume_`, so the whole
+real chain runs (`valueChanged` → `sliderToDB` → `applyVolume_` → `pathOf()` →
+`set-track-volume`). Calling the handler directly would skip precisely the part
+that was in doubt. It is REFUSED on a lane with no head, which is what a hidden
+lane is — and the case asserts that refusal first, so the later success means
+"the head exists and its fader committed" rather than "some path resolved".
+
+**AC4.6 FOUND A SECOND, LARGER DEFECT, and the automation lane was only the
+symptom.** `pruneUiState()` prunes every per-track UI-state set against
+`collectTracks()`, which walked `childLinks()` only — so the master lane was
+never in the "live" set and its UI state was pruned on **every row rebuild**.
+Shown automation lanes were what surfaced it; the same walk also governs take
+expansion and the **lane height scale**, each of which would have looked like a
+separate bug. `collectTracks()` now sweeps the system-lane sentinels first, the
+way `findPathRec()` does. Watched failing: reverting that sweep fails the
+AC4.6 assertion while everything else stays green.
+
+**AC4.3** asserts the level on BOTH sides of a visibility change against the
+same closed form, plus a byte compare of the two renders — the stronger
+statement, that showing a lane changes nothing rendered rather than nothing the
+band can resolve. It would be easy to call this covered already and wrong to:
+every pre-M4 master case ran with the lane hidden because there was no row to
+hide it from, and none of them can say the level is the same on both sides of a
+change that did not exist.
+
+Gates: `master_lane_rows` (extended with AC4.6), `master_head_fader_heard`,
+`master_lane_hidden_still_audible`.
+
+**NOT gated in M4:** the head's METER, MUTE and FX access as pixels (AC4.1
+names them; what is gated is that the head exists, sits on its lane and that its
+FADER commits — `SSMVMixerControl` builds the rest from the same track either
+way); the "Show system lanes" COMPOSITE of AC4.2 (there is one verb per lane and
+no composite yet, and no menu item — there is no testkit verb for a context menu
+anywhere in this repo); and user-lane hiding, which `set-lane-hidden` refuses
+rather than half-honours.
+
 ### M5 — The policies, each refused and each announced
 
 - **AC5.1** A clip dropped on, moved to, or placed on a system lane is REFUSED

@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M4, AC4.1 / AC4.2 / AC4.5: THE MASTER LANE HAS A ROW IN THE
+  ARRANGER, PINNED BELOW EVERY USER LANE, HIDDEN BY DEFAULT.
+
+  THE ROW COUNT IS THE OBSERVABLE, AND IT DID NOT EXIST BEFORE THIS CASE.
+  assert-track-head cannot gate AC4.1: describeTrackHead builds a THROWAWAY
+  head straight from the MODEL lane and never consults the arranger's rows, so
+  it answers exactly the same whether the row is there or not. A case built on
+  it would have passed on the pre-M4 binary. assert-lane-alignment gained an
+  exact `rows` count for this, which is the one number that separates the two
+  binaries.
+
+  PINNED BELOW EVERY USER LANE IS STRUCTURAL, NOT A SORT. appendRowsFor() walks
+  childLinks() and the master lane is deliberately not in that list (D2), so
+  the row is APPENDED once at the end. There is no row after it to drop onto,
+  so no ordering rule has to be enforced anywhere.
+
+  HIDDEN BY DEFAULT IS PER ROLE, not a minting step: SObject::laneHidden()
+  falls back to laneHiddenByDefault(), which is true for any systemRole other
+  than None. That is what keeps every project file written since M1
+  byte-unchanged, because laneHidden is serialized ONLY when it differs from
+  the role's own default.
+
+  AC4.5 IS THE assert-lane-alignment CALL ITSELF, unchanged in meaning: every
+  track head must sit exactly on its lane, row tops must be the running sum of
+  the row heights, and the y-to-row lookup must invert at both edges of every
+  lane. A master row that got its geometry wrong fails it without any new
+  assertion having to describe how.
+
+  THE UNDO STEP IS ONE, and the inverse restores the EXPLICITNESS rather than a
+  value equal to the default: a lane that carried no attribute before carries
+  none afterwards, so the project file is byte-identical across a
+  show/undo pair. Nothing here asserts that byte identity (there is no verb for
+  it on an unsaved project), and it is stated rather than implied.
+-->
+<SActionScript version="1" name="master_lane_rows">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- HIDDEN BY DEFAULT: three user lanes, and the master is not among them. -->
+    <assert-lane-alignment rows="3"/>
+
+    <!-- SHOW IT. One undo step, and the row lands BELOW the user lanes. -->
+    <set-lane-hidden trackPath="$master" hidden="0"/>
+    <assert-lane-alignment rows="4"/>
+
+    <!-- AC4.5: the head still sits exactly on its lane, and every user track's
+         geometry is unmoved. That is what assert-lane-alignment checks, so the
+         call above is the whole assertion. -->
+
+    <!-- ONE undo step takes it away again. -->
+    <undo count="1"/>
+    <assert-lane-alignment rows="3"/>
+
+    <redo count="1"/>
+    <assert-lane-alignment rows="4"/>
+
+    <!-- AN ORDINARY TRACK IS REFUSED, and that is a scope guard rather than a
+         policy. appendRowsFor() walks childLinks() and does not consult
+         laneHidden(), so honouring the flag for a user lane would change the
+         model and nothing on screen. Refusing says so; M4 does not ask for
+         user-lane hiding, whose blast radius is selection, drag targets and
+         what a hidden FOLDER does to its children. The row count is asserted
+         again afterwards because a refusal must leave the model untouched. -->
+    <set-lane-hidden trackPath="1" hidden="1" expectReject="true"/>
+    <assert-lane-alignment rows="4"/>
+
+    <!-- AC4.6: THE MASTER'S OWN AUTOMATION SUB-LANES. They need no system-lane
+         special case anywhere, and that is the claim: appendSystemRows() calls
+         the SAME appendAutomationRowsFor() every user track goes through, and
+         the shown-automation set is keyed by STrack* rather than by a path, so
+         a lane outside childLinks() is not a different kind of key. One more
+         row, under the master's own lane and still below every user lane. -->
+    <add-automation-lane owner="$master" target="self:Volume" mode="read"/>
+    <set-lane-view automationTrack="$master" automationTarget="self:Volume"
+                   showAutomation="1"/>
+    <assert-lane-alignment rows="5"/>
+
+    <!-- ...and hiding the master takes its sub-lane with it, because the
+         sub-lane is appended by the same call that appends the lane. -->
+    <set-lane-hidden trackPath="$master" hidden="1"/>
+    <assert-lane-alignment rows="3"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include <optional>
 #include "app/model/sautomationlane.h"
 #include "tw/events/tweventclipset.h"
 #include "tw/events/twfade.h"
@@ -761,6 +762,36 @@ public:
     // written to the file ONLY when it is not -1, so every project saved
     // before the palette existed -- and every committed golden -- serializes
     // byte-unchanged.
+    /**
+     * IS THIS LANE HIDDEN FROM THE ARRANGER? (proposal 45 AC4.2.)
+     *
+     * The DEFAULT IS PER ROLE, not a constant: an ordinary track is shown, a
+     * SYSTEM lane is hidden. That is what makes "hidden by default" true of a
+     * master lane without a minting step that would then have to serialize --
+     * and it is what keeps every project file written since M1 byte-unchanged,
+     * because the attribute is written ONLY when it differs from the role's own
+     * default (the `editGroup` / `midiRouting` / `colorIndex` rule).
+     *
+     * It is MODEL state and not a view preference, because AC4.2 requires the
+     * toggle to be ONE UNDO STEP: an undo step is an action, and an action
+     * mutates the model. The consequence is deliberate and worth knowing:
+     * showing the master lane travels with the project rather than with the
+     * machine, exactly as the metronome switch does.
+     */
+    bool laneHiddenByDefault() const
+        { return systemRole() != SSystemRole::None; }
+    bool laneHidden() const
+        { return laneHidden_.value_or( laneHiddenByDefault() ); }
+    void setLaneHidden( bool hidden )
+        { laneHidden_ = hidden; }
+    /// True when this lane's visibility has been set explicitly, i.e. differs
+    /// from the role default and must therefore be serialized.
+    bool laneHiddenIsExplicit() const
+        { return laneHidden_.has_value() && *laneHidden_ != laneHiddenByDefault(); }
+    /// Forget an explicit setting; the role default applies again.
+    void clearLaneHidden()
+        { laneHidden_.reset(); }
+
     int colorIndex() const
         { return colorIndex_; }
     void setColorIndex( int i )
@@ -1163,6 +1194,11 @@ private:
     bool armed_;
     int editGroup_ = 0;   // 0 = ungrouped (proposal 17 phase 4)
     int colorIndex_ = -1; // -1 = auto, by lane order (sclipcolors.h)
+    // Unset = "the role's default" (see laneHidden()). An optional rather than
+    // a bool so that "never touched" and "explicitly set to the default value"
+    // stay distinguishable, which is what the non-default-only serialization
+    // needs to stay byte-stable.
+    std::optional<bool> laneHidden_;
     // VIEW state only -- see isHidden(). Never consulted by anything audio.
     bool hidden_ = false;   // proposal 45 D8
     double volume_;

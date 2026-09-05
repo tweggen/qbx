@@ -1279,6 +1279,34 @@ bool SSMVMixerControl::tkClickToggle( const QString &which, bool on )
     return true;
 }
 
+// Proposal 45 AC4.4: move THIS HEAD's fader to `db` and let it commit.
+//
+// It drives the SLIDER rather than calling applyVolume_ directly, so the real
+// chain runs -- valueChanged -> sliderToDB -> applyVolume_ -> pathOf() ->
+// set-track-volume (or an automation write tick while playing). That chain is
+// the thing under test: a head whose slider moves and whose action never fires
+// is D9's write-side defect, and only a HEARD level can tell the two apart.
+//
+// The head exists only because the lane has a ROW, so this verb cannot reach a
+// hidden lane at all -- which is the point rather than a limitation.
+//
+// THE CURVE DOES NOT ROUND-TRIP (the fader is an integer control:
+// sDbToFader(0.0) is tick -191 and sFaderToDb of that is +0.0625 dB), so a
+// caller asserts a BAND around the dB it asked for, never an exact value.
+bool SSMVMixerControl::tkSetFaderDb( double db )
+{
+    if( !qVolume_ ) return false;
+    const int tick = dbToSlider( db );
+    if( qVolume_->value() == tick ) {
+        // setValue() emits nothing when the tick is unchanged, so a case that
+        // asked for a value the fader already holds would silently assert
+        // nothing. Say so rather than reporting success.
+        return false;
+    }
+    qVolume_->setValue( tick );
+    return true;
+}
+
 bool SSMVMixerControl::tkSendFaderKey( const QString &key )
 {
     Qt::Key k = Qt::Key_unknown;

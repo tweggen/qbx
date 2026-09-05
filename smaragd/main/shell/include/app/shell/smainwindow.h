@@ -118,6 +118,8 @@ public:
     bool arrangerSetZoomPan( double secondWidth, qlonglong scrollX );
     // "" when aligned, else a description of the first mismatch. A null
     // QString with no arranger at all is reported as an error by the caller.
+    /// Proposal 45 AC4.1: the arranger's LANE ROW count; -1 with no arranger.
+    int arrangerRowCount();
     QString arrangerLaneAlignment();
 
     // TEST ENTRY POINT (fix/track-list-polish l): scroll the vertical
@@ -180,6 +182,9 @@ public:
     // ...and a synthetic Home/End key press straight to that lane's LIVE
     // fader (item j), through the shell for the same reason. `key` is
     // "Home" or "End"; false for an unknown track path or key name.
+    /// Proposal 45 AC4.4: drive a lane's HEAD fader to `db`; false when the
+    /// lane has no head (hidden, or inside a collapsed folder).
+    bool setHeadFaderDb( const QString &trackPath, double db );
     bool sendFaderKey( const QString &trackPath, const QString &key );
 
     // TEST ENTRY POINT: a real click (press+release, no move) into a track's

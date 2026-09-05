@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M4, AC4.3: HIDDEN IS NOT SILENT.
+
+  A master insert is heard whether or not the master lane has a row in the
+  arranger. Visibility is a VIEW question; the chain is wired by
+  SStdMixer::wireMasterChain() at mint and adopt, and nothing in the arranger
+  touches it.
+
+  IT WOULD BE EASY TO CALL THIS COVERED ALREADY and wrong to do so. Every
+  existing master case runs with the lane hidden, because before M4 the lane had
+  no row at all and there was nothing to hide it FROM. What none of them can say
+  is that the level is the SAME on both sides of a visibility change, which is
+  the only form of the claim that has content now that the flag exists.
+
+  THE MEASUREMENT IS A CLOSED FORM ON BOTH SIDES, not a comparison of two
+  renders: test_autosaw.wav is 0.230956 RMS, a 2.0x master insert makes it
+  0.461913, and both renders are asserted against that same band. A
+  render-versus-render compare would pass if BOTH were wrong in the same way.
+
+  THE ORDER IS HIDDEN FIRST, deliberately: the hidden reading is the one that
+  matches every pre-M4 case, so if the two disagree it is the SHOWN one that
+  changed something, and the case says which.
+-->
+<SActionScript version="1" name="master_lane_hidden_still_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <!-- HIDDEN (the default): one user lane, no master row, and the insert is
+         heard. 0.230956 x 2.0 = 0.461913, +-3 %. -->
+    <assert-lane-alignment rows="1"/>
+    <render filename="master_hidden.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="master_hidden.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.4481" maxRms="0.4758"/>
+
+    <!-- SHOWN: two lanes now, and the SAME closed form. -->
+    <set-lane-hidden trackPath="$master" hidden="0"/>
+    <assert-lane-alignment rows="2"/>
+    <render filename="master_shown.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="master_shown.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.4481" maxRms="0.4758"/>
+
+    <!-- ...and the two renders are byte-identical, which is the stronger
+         statement the closed forms above cannot make on their own: showing a
+         lane changes NOTHING about what is rendered, not merely nothing the
+         band can resolve. -->
+    <assert-file-identical actual="master_shown.wav" expected="master_hidden.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

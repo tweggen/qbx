@@ -107,6 +107,38 @@ private:
     QString key_       = QStringLiteral( "Home" );
 };
 
+// head-fader — drive a lane's HEAD fader to a dB value (proposal 45 AC4.4).
+//
+//   trackPath = "0"   index-path from the root mixer; `$master` reaches the
+//                     master lane, which is the case this verb exists for
+//   db        = "0"   the dB to move the fader to
+//
+// It drives the SLIDER, so the real chain runs: valueChanged -> sliderToDB ->
+// applyVolume_ -> strackpath::pathOf() -> set-track-volume. That chain is what
+// is under test -- a head whose slider moves and whose action never fires is
+// D9's write-side defect, and only a HEARD level separates the two.
+//
+// REFUSED when the lane has no head, which is exactly what a HIDDEN lane means,
+// and when the fader already holds the requested tick (setValue would emit
+// nothing, so the case would assert nothing while reporting success).
+//
+// NOT undoable itself: the handler submits the real set-track-volume, and that
+// is the undo step -- the automation-UI-gesture rule.
+//
+// THE CURVE DOES NOT ROUND-TRIP (sDbToFader(0.0) is tick -191, whose dB is
+// +0.0625), so assert a BAND around what you asked for, never an exact value.
+class SHeadFaderAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "head-fader" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    double  db_        = 0.0;
+};
+
 // assert-track-volume — a track's fader value, in dB.
 //
 //   trackPath = "0"       index-path from the root mixer

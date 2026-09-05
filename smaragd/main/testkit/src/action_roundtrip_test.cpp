@@ -175,6 +175,14 @@ const Fixture kFixtures[] = {
     { "set-track-name",
       "<set-track-name trackPath='1,1' name='Drum bus'/>" },
 
+    // Proposal 45 AC4.2. `$master` is the SPATH_MASTER sentinel, which is the
+    // only spelling that reaches a lane outside childLinks() -- so the round
+    // trip is also what proves qualifiedToString() puts it back verbatim.
+    // `clear` is the INVERSE-only form and is deliberately absent here: a
+    // hand-written element must round-trip without it.
+    { "set-lane-hidden",
+      "<set-lane-hidden trackPath='$master' hidden='0'/>" },
+
     // A NON-default width, deliberately: the default (2) is what an unread
     // attribute also produces, so a fixture of 2 would round-trip through a
     // readXml that ignored the attribute entirely.

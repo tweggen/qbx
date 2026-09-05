@@ -2894,6 +2894,15 @@ bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
     return v->tkSendFaderKey( track, key );
 }
 
+bool SMainWindow::setHeadFaderDb( const QString &trackPath, double db )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkSetFaderDb( track, db );
+}
+
 bool SMainWindow::clickLane( const QString &trackPath, offset_t time,
                              Qt::KeyboardModifiers mods )
 {
@@ -3016,6 +3025,17 @@ QString SMainWindow::describeTrackMeter( const QString &trackPath, int headHeigh
 }
 
 // --- proposal 37 P4 test seams -------------------------------------------
+
+// Proposal 45 AC4.1: how many LANE ROWS the arranger is showing. There was no
+// row-count observable at all before this, which is why the master lane's row
+// could not be gated: describeTrackHead builds a THROWAWAY head straight from
+// the model and never consults rows_, so it answers the same whether the row
+// exists or not. -1 = no arranger.
+int SMainWindow::arrangerRowCount()
+{
+    SStdMixerView *v = ensureArranger_();
+    return v ? v->rowCount() : -1;
+}
 
 QString SMainWindow::describeTrackHead( const QString &trackPath,
                                         int headHeight )
