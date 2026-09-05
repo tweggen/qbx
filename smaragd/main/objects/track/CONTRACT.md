@@ -674,3 +674,42 @@ verb rather than trusting the list to stay complete.
 An UNKNOWN `systemRole` spelling loads as `None`, deliberately: a file naming a
 role this build does not have describes a track the user can still see, move
 and delete, rather than an untouchable lane nothing understands.
+
+## The MASTER lane's own `twRewire` is DISCONNECTED (proposal 45 AC2.8, T5)
+
+`STrack::wireAsMasterLane()` puts the lane's `twPluginChain` and `twGainStage`
+between the mixer's bus sum and the MIXER's `twRewire`, and then disconnects the
+lane's OWN `cpRewire_` input. `getRootComponent()` answers with the mixer's
+rewire for the Master role (D12), so the lane's own carries nothing and is read
+by nobody.
+
+**It was NOT disconnected for two milestones, and the AC that says it was is how
+that got noticed — the wrong way round.** `STrack`'s constructor wires
+`cpRewire_.input = cpGainStage_.output`, and `wireAsMasterLane()` originally
+only ALSO fed the mixer's rewire from the same gain stage. The lane's rewire
+therefore carried the IDENTICAL signal: **redundant, not inert**. Nothing was
+audibly wrong, which is exactly why it survived.
+
+**What made it worth fixing is that it left D12's override unprovable.**
+Removing `getRootComponent()`'s Master branch used to leave
+`master_meter_postfx` fully green — the lane's own rewire answered with the same
+audio the mixer's would have — so the override was kept on the argument that it
+is the one correct answer (the mixer's rewire is the page cache the invalidation
+path actually bumps; the lane's own is a second cache nobody invalidates and
+could only go stale), never on evidence. With the disconnect in, the same
+sabotage **fails three `assert-meter` assertions**: the probe reads a miss and
+DECAYS, which is what proposal 34 says a miss must do.
+
+Two properties a change here must preserve:
+
+1. **`cpRewire_->setInput` has exactly ONE other call site**, inside the
+   one-time component-creation block of `setChannels()`. That is what makes the
+   disconnect stick — a second wiring site would silently restore it.
+2. **The component stays ALIVE.** It goes on taking `setChannels()` and
+   `bumpContentEpoch()` from `bumpRenderChainEpoch()`; only its INPUT is
+   cleared. `twComponent::setInput( idx, nullptr )` is a real disconnect — it
+   deletes the plug from the producing latch, decrements `inputsSet_` and clears
+   the parent tracking — not a dangling pointer.
+
+Gate: `master_meter_postfx`, whose D12 sabotage is now load-bearing rather than
+decorative.

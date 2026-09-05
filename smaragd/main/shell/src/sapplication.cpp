@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 
+#include <algorithm>
 #include <memory>
 
 #include "tw/graph/tw303aenv.h"

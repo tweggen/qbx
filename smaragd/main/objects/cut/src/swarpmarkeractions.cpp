@@ -1,5 +1,7 @@
 #include "app/objects/cut/swarpmarkeractions.h"
 
+#include <algorithm>
+
 #include <QDebug>
 #include <QDomElement>
 

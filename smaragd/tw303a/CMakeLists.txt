@@ -1252,4 +1252,19 @@ if(TARGET twtestclap)
     target_compile_definitions(playback_test PRIVATE
         TW_TESTCLAP_PATH="$<TARGET_FILE:twtestclap>")
 endif()
+# RUN_SERIAL, for the same reason twlog_test and devices_input_test are: this
+# binary carries a WALL-CLOCK-SHAPED assertion. L1a T2 -- "a steady run causes
+# NO repositions" -- is a claim about a pump keeping up with a clock, and a
+# loaded box makes it reposition legitimately. It is not an isolation bug: the
+# test shares no file, no key and no device with anything.
+#
+# MEASURED on a 4-core box, same binary, no code change: 10 of 10 idle, and
+# 4 of 8 with six spinners running. It surfaced under `ctest -j4`, which on
+# 4 cores is full saturation rather than the comfortable setting CLAUDE.md's
+# 16-core table describes.
+#
+# The assertion is NOT weakened to buy this back. It is the one thing standing
+# between the current pump and the fill-until-full pump it replaced, which
+# repositioned on every clock stamp.
+set_tests_properties(playback_test PROPERTIES RUN_SERIAL TRUE)
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)

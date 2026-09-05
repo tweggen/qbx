@@ -23,6 +23,7 @@
 #include "tw/devices/audio_input.h"
 #include "tw/record/capture_bridge.h"
 #include "tw/graph/twcomponent.h"
+#include "tw/mix/twmixer.h"
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twtrackmix.h"
 #include "tw/plugins/twpluginchain.h"
@@ -139,6 +140,85 @@ void SLiveMonitor::retireClosureNodes( const SLiveClosure &closure )
         if( t->getRootComponent() )     comps.push_back( t->getRootComponent().get() );
     }
     sched->retireComponentNodes( comps );
+}
+
+void SLiveMonitor::retireMasterLaneNodes( SStdMixer *mixer )
+{
+    // THE IN-FLIGHT ROOT FREEZE IS THE RACE THIS EXISTS FOR, and a qxa case
+    // found it rather than a reading: monitor_master_flip_midplay failed its
+    // ENTERING-flip assertion in 5 runs of 8 before this call.
+    //
+    // Re-rooting the frozen lane (AC3.1) stops the readahead DEMANDING root
+    // pages, but it cannot un-queue the ones already demanded. Those nodes are
+    // sitting in the scheduler at priority 9, and they execute on worker
+    // threads AFTER the re-rooting -- freezing REWIRE pages, which runs the
+    // master lane's processors, which by then are live-owned. The guard fires,
+    // the frames come back silence, and the counter climbs.
+    //
+    // The same shape and the same fix as retireClosureNodes(): the exclusion
+    // has always had to retire a departing member's queued nodes for exactly
+    // this reason. The master lane's getRootComponent() is the MIXER's rewire
+    // (D12), so the root freeze is retired by naming the lane's own components.
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    CaptureRevalidator *sched = p ? p->getRevalidator() : nullptr;
+    if( !sched || !mixer ) return;
+    STrack *lane = mixer->masterLane();
+    if( !lane ) return;
+
+    std::vector<const twComponent *> comps;
+    if( lane->trackMixComponent() )    comps.push_back( lane->trackMixComponent().get() );
+    if( lane->pluginChainComponent() ) comps.push_back( lane->pluginChainComponent().get() );
+    if( lane->gainStageComponent() )   comps.push_back( lane->gainStageComponent().get() );
+    if( lane->getRootComponent() )     comps.push_back( lane->getRootComponent().get() );
+    if( mixer->masterRewireComponent() )
+        comps.push_back( mixer->masterRewireComponent().get() );
+    sched->retireComponentNodes( comps );
+}
+
+void SLiveMonitor::endMasterClosure()
+{
+    // EVERY route out of a Closure comes through here, and it must, for a
+    // reason the pre-existing code did not have to care about. The speaker's
+    // `closureLive` is `liveOn && liveMasterClosure()`, so a STALE flag left on
+    // a closed lane is harmless -- liveOn is false and the frozen lane resumes
+    // by itself. AC3.1's re-rooting has no such gate: it lives on the ENGINE,
+    // and an engine left rooted at the bus sum keeps reading pages that stop
+    // short of the master chain, so an ordinary playback would lose the
+    // master's inserts and fader entirely, silently, for the rest of the
+    // session.
+    //
+    // Ownership is released BEFORE the flag and the root, because the guard
+    // fires on whoever is not the pump: re-rooting back above the master while
+    // its processors are still owned makes the next root freeze refuse.
+    SStdMixer *mixer = rootMixer();
+    setMasterLaneOwned( mixer, false );
+    if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
+                                              : std::shared_ptr<twSpeaker>() )
+        spk->setLiveMasterClosure( false, std::shared_ptr<twComponent>() );
+}
+
+void SLiveMonitor::setMasterLaneOwned( SStdMixer *mixer, bool owned )
+{
+    // AC3.1 / D4b: under a Closure the PUMP renders the master lane's own
+    // processors, so they are live-owned exactly as an armed track's are. That
+    // is what turns `liveOwnedRefusals == 0` from a vacuous assertion into a
+    // real one: with the re-rooting in place nobody else renders them, and
+    // WITHOUT it a revalidation worker freezing a root page does -- and is
+    // counted, by name, at the one guard that already exists for this.
+    if( !mixer ) return;
+    STrack *lane = mixer->masterLane();
+    if( !lane ) return;
+    SPluginChain *chain = lane->getPluginChain();
+    if( !chain ) return;
+    const int n = chain->getSlotCount();
+    for( int i = 0; i < n; ++i ) {
+        SPluginSlot *slot = chain->getSlotAt( i );
+        if( !slot ) continue;
+        const std::shared_ptr<audio::twPluginSlotProcessor> &proc = slot->getProcessor();
+        if( !proc ) continue;
+        if( !owned ) proc->forgetContinuity();
+        proc->setLiveOwned( owned );
+    }
 }
 
 void SLiveMonitor::setClosureOwned( const SLiveClosure &closure, bool owned )
@@ -637,9 +717,35 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     // producing for it. The other order has a window in which the ring already
     // carries the whole master while the RT is still adding the frozen root
     // page -- the doubling, for as long as one callback.
+    //
+    // AC3.1's ENGINE HALF travels with it. Under a Closure the frozen lane is
+    // RE-ROOTED to the mixer's bus sum -- BELOW the master chain -- so that
+    // freezing a root page stops running the master lane's processors on a
+    // revalidation worker while the pump renders those same instances (design
+    // D4b option 1). The speaker holds the root rather than the engine, so an
+    // engine minted later by a transport start inherits it.
+    const bool closureNow = !plan->masterLinear;
+    SStdMixer *rootMix = rootMixer();
     if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
-                                              : std::shared_ptr<twSpeaker>() )
-        spk->setLiveMasterClosure( !plan->masterLinear );
+                                              : std::shared_ptr<twSpeaker>() ) {
+        std::shared_ptr<twComponent> underMaster;
+        if( closureNow && rootMix ) underMaster = rootMix->masterMixComponent();
+        // LEAVING a closure releases OWNERSHIP FIRST, because the guard fires
+        // on whoever is not the pump: re-rooting back above the master while
+        // its processors are still owned would make the next root freeze
+        // refuse and count. Entering is the mirror image and is handled inside
+        // setLiveMasterClosure, which pushes the root before raising the flag.
+        if( !closureNow ) setMasterLaneOwned( rootMix, false );
+        spk->setLiveMasterClosure( closureNow, underMaster );
+        if( closureNow ) {
+            // BETWEEN the re-rooting and the ownership, never outside it: the
+            // re-root stops new root demands and this kills the ones already
+            // queued, so that by the time the processors are owned there is no
+            // worker on its way to them. See retireMasterLaneNodes.
+            retireMasterLaneNodes( rootMix );
+            setMasterLaneOwned( rootMix, true );
+        }
+    }
     pump_->setPlan( plan );
     pump_->start();
     publishedSignature_ = planSignature();
@@ -773,8 +879,7 @@ void SLiveMonitor::refresh()
             // takes, because such a track was in the live set before it was
             // armed.
             if( masterShapeRefusesMonitoring() ) {
-                detachLiveEvents( current_ );
-                current_ = SLiveClosure();
+                tearDownLiveForRefusal();
                 return;
             }
             attachLiveEvents( current_ );
@@ -867,7 +972,7 @@ void SLiveMonitor::refresh()
                     // Clear the mode BEFORE closing: a stale "closure" left on
                     // the speaker would suppress the frozen lane for a project
                     // that is merely playing, which is silence.
-                    spk->setLiveMasterClosure( false );
+                    endMasterClosure();
                     spk->closeLive();
                 }
                 liveOpened_ = false;
@@ -981,6 +1086,7 @@ void SLiveMonitor::finishDisarm()
         demands_.clear();
         closeInputIfUnused();
         if( liveOpened_ ) {
+            endMasterClosure();
             if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() ) spk->closeLive();
             liveOpened_ = false;
         }
@@ -1039,6 +1145,7 @@ void SLiveMonitor::suspendForRender()
     demands_.clear();
     closeInputIfUnused();
     if( liveOpened_ ) {
+        endMasterClosure();
         if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() ) spk->closeLive();
         liveOpened_ = false;
     }
@@ -1110,7 +1217,26 @@ void SLiveMonitor::pumpEdits()
     if( current_.empty() || suspendedForRender_ || !departing_.empty() ) return;
     const std::vector<std::uintptr_t> sig = planSignature();
     if( sig == publishedSignature_ ) return;
+    // THE REFUSAL IS RE-ASKED HERE, not only on arm/disarm/transport. An edit
+    // that changes the signature can also change whether monitoring is LEGAL
+    // at all -- a mixer-caused non-linear master (a non-unity input level, a
+    // non-identity channel map) has no representable plan, so republishing one
+    // would hand the pump a shape it silently mis-renders.
+    //
+    // NOT GATED, and it is the one half of this fix that is not: no verb in
+    // this repo can set a master input level or a channel map, so the
+    // mixer-caused branch is unreachable from a script. What the new case
+    // master_insert_while_monitoring bites is the OTHER half, the signature
+    // below.
+    if( masterShapeRefusesMonitoring() ) { tearDownLiveForRefusal(); return; }
     publishPlan( current_, 0, 0 );
+}
+
+void SLiveMonitor::tearDownLiveForRefusal()
+{
+    endMasterClosure();
+    detachLiveEvents( current_ );
+    current_ = SLiveClosure();
 }
 
 // --- state ------------------------------------------------------------------
@@ -1141,33 +1267,59 @@ double SLiveMonitor::takeInputPeak( const STrack *track )
     return 0.0;
 }
 
+// ONE SPELLING OF "what about this track can make a published plan stale",
+// used for a closure member and for the MASTER LANE alike. It was inlined in
+// planSignature() and the master lane simply was not asked; a second, hand-
+// written copy for the master would be the same bug waiting on a third
+// property being added to only one of them.
+static void appendTrackSignature( std::vector<std::uintptr_t> &sig, STrack *t )
+{
+    if( !t ) { sig.push_back( 0u ); return; }
+    sig.push_back( (std::uintptr_t) t );
+    sig.push_back( (std::uintptr_t) t->getChannels() );
+    if( SPluginChain *chain = t->getPluginChain() ) {
+        const int n = chain->getSlotCount();
+        for( int i = 0; i < n; ++i ) {
+            SPluginSlot *slot = chain->getSlotAt( i );
+            sig.push_back( slot ? (std::uintptr_t) slot->getProcessor().get() : 0u );
+        }
+    }
+    if( t->gainStageComponent() ) {
+        // The fader, as bits: the pump replays an Envelope SNAPSHOT, so a
+        // gain that moved is a plan that is out of date.
+        const twGainStage::Envelope e = t->gainStageComponent()->envelope();
+        std::uintptr_t bits = 0;
+        std::memcpy( &bits, &e.base, sizeof( bits ) < sizeof( e.base )
+                                          ? sizeof( bits ) : sizeof( e.base ) );
+        sig.push_back( bits );
+        sig.push_back( e.muted ? 1u : 0u );
+        sig.push_back( (std::uintptr_t) e.vol.get() );
+        sig.push_back( (std::uintptr_t) e.mute.get() );
+    }
+    sig.push_back( 0xFFFFu );   // a member separator, so two shapes cannot alias
+}
+
 std::vector<std::uintptr_t> SLiveMonitor::planSignature() const
 {
     std::vector<std::uintptr_t> sig;
-    for( STrack *t : current_.ordered ) {
-        sig.push_back( (std::uintptr_t) t );
-        sig.push_back( (std::uintptr_t) t->getChannels() );
-        if( SPluginChain *chain = t->getPluginChain() ) {
-            const int n = chain->getSlotCount();
-            for( int i = 0; i < n; ++i ) {
-                SPluginSlot *slot = chain->getSlotAt( i );
-                sig.push_back( slot ? (std::uintptr_t) slot->getProcessor().get() : 0u );
-            }
-        }
-        if( t->gainStageComponent() ) {
-            // The fader, as bits: the pump replays an Envelope SNAPSHOT, so a
-            // gain that moved is a plan that is out of date.
-            const twGainStage::Envelope e = t->gainStageComponent()->envelope();
-            std::uintptr_t bits = 0;
-            std::memcpy( &bits, &e.base, sizeof( bits ) < sizeof( e.base )
-                                              ? sizeof( bits ) : sizeof( e.base ) );
-            sig.push_back( bits );
-            sig.push_back( e.muted ? 1u : 0u );
-            sig.push_back( (std::uintptr_t) e.vol.get() );
-            sig.push_back( (std::uintptr_t) e.mute.get() );
-        }
-        sig.push_back( 0xFFFFu );   // a member separator, so two shapes cannot alias
-    }
+    for( STrack *t : current_.ordered )
+        appendTrackSignature( sig, t );
+
+    // THE MASTER LANE, WHICH IS NOT A CLOSURE MEMBER AND WAS THEREFORE INVISIBLE
+    // HERE. D2 keeps the master lane out of childLinks(), so it is in no
+    // closure and the loop above never reaches it -- which meant an insert, a
+    // fader move, a mute or an automation lane on the MASTER changed nothing
+    // in this signature and pumpEdits() never fired. The live plan then kept
+    // whatever master shape it was built with for the whole life of the arm.
+    //
+    // Under the LINEAR split that is not cosmetic: the freeze path applies the
+    // new master insert to the frozen root page while the ring bypasses it, and
+    // the RT adds the two together. The halves stop belonging to the same
+    // signal -- the mismatch D4a's shape check exists to prevent, undetected
+    // because nothing re-asked. Gate: master_insert_while_monitoring.
+    sig.push_back( 0xEEEEu );
+    if( SStdMixer *mixer = rootMixer() )
+        appendTrackSignature( sig, mixer->masterLane() );
     // THE CLICK, so a TEMPO or TIME-SIGNATURE edit republishes (design section
     // 3's rebuild triggers). Asked rather than wired, exactly like the fader:
     // `set-tempo` re-derives every beats-timebase link in the project and would

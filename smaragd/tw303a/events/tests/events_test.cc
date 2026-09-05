@@ -20,6 +20,7 @@
 #include "tw/events/twsmf.h"
 #include "tw/events/twautomationcurve.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>

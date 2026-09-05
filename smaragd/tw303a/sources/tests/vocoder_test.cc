@@ -9,6 +9,7 @@
 
 #include "tw/sources/twpagedvocoder.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>

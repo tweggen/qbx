@@ -231,7 +231,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
                         cachedPageValidFrames_,
                         currentFrozenPage_ ? currentFrozenPage_->validFrames : 0u,
                         currentFrozenPage_ ? (unsigned long long)currentFrozenPage_->contentEpoch.load() : 0ULL,
-                        synthOutput_ ? (unsigned long long)synthOutput_->contentEpochNow() : 0ULL,
+                        frozenRoot() ? (unsigned long long)frozenRoot()->contentEpochNow() : 0ULL,
                         (unsigned long long)readaheadComputedUpTo_,
                         (int)cycleEnabled_.load(std::memory_order_relaxed),
                         (unsigned long long)loopEnd_.load(std::memory_order_relaxed) );
@@ -411,7 +411,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
 
     // Current content epoch: pages rendered before the last edit are stale
     // even though their validAspects are still set (lock-free atomic read).
-    const uint64_t epochNow = synthOutput_->contentEpochNow();
+    const uint64_t epochNow = frozenRoot()->contentEpochNow();
 
     // A generation change means the page object was invalidated/repurposed
     // (invalidateAllPages) — its buffer cannot be trusted at all; drop hard.
@@ -429,7 +429,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // geometry; serving it would be reading the wrong bytes on the audio
     // thread. Dropping the held page here also covers the heldStillCovers fast
     // path below without a second test.
-    const idx_t widthNow = synthOutput_->getOutputChannels();
+    const idx_t widthNow = frozenRoot()->getOutputChannels();
     if (currentFrozenPage_ && !twPageWidthUsable(currentFrozenPage_.get(), widthNow)) {
         currentFrozenPage_ = nullptr;
         prevFrozenPage_ = nullptr;
@@ -456,7 +456,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         // Lock-free cache lookup (read-only audio thread).
         // Audio thread never allocates pages, only reads existing ones.
         // Read-ahead thread allocates and freezes pages; this just reads the cache.
-        auto page = synthOutput_->getPageIfExists(pageStartPos);
+        auto page = frozenRoot()->getPageIfExists(pageStartPos);
         if (page && page->validAspects != 0 &&
             page->contentEpoch.load() >= epochNow &&
             twPageWidthUsable(page.get(), widthNow) &&
@@ -639,6 +639,35 @@ void AudioEngine::configureResampling(uint32_t inRate, uint32_t outRate) {
     ensureResampleBuffers(width, (std::size_t) maxInputFrames);
 }
 
+void AudioEngine::setFrozenDemandRoot( const std::shared_ptr<twComponent> &root )
+{
+    // Main thread. A no-op when nothing moves, because the drop below is not
+    // free: it costs the RT its held page and the readahead its frontier.
+    if( frozenDemandRoot_ == root ) return;
+    frozenDemandRoot_ = root;
+
+    TW_LOGI( "playback", "[PLAYBACK] frozen lane re-rooted %s the master chain "
+             "(proposal 45 AC3.1 / D4b option 1)",
+             root ? "BELOW" : "back ABOVE" );
+
+    // THE HELD PAGE AND THE FRONTIER BELONG TO THE OLD ROOT, and neither is
+    // ours to clear from here: currentFrozenPage_ is the PULL thread's and
+    // readaheadComputedUpTo_ is the readahead thread's. Reuse the one seam that
+    // already means "both of you, restart from this position" -- the pending
+    // seek a locator jump raises. The pull adopts it on its next block (drops
+    // the held page, resets the resamplers) and the readahead sees the
+    // currentPos_ store on its next tick and rebuilds its chain from there.
+    //
+    // Without this the RT would go on serving REWIRE pages -- the whole
+    // arrangement, master chain included -- while the readahead filled the
+    // MIXER's, which is the doubling this re-rooting exists to prevent, with
+    // the two lanes disagreeing about what a page at a position even contains.
+    seekTarget_.store( currentPos_.load( std::memory_order_relaxed ),
+                       std::memory_order_relaxed );
+    seekPending_.store( true, std::memory_order_release );
+    readaheadCv_.notify_one();
+}
+
 PlaybackState AudioEngine::startPlayback() {
     // Phase 6b: Delay playback start until readahead has built minimum buffer
     uint64_t readaheadPos = readaheadComputedUpTo_;  // Plain uint64_t, no .load() needed
@@ -728,7 +757,7 @@ void AudioEngine::readaheadLoop() {
         firstPass = false;
         lk.unlock();
 
-        if (!synthOutput_ || !readaheadRunning_.load(std::memory_order_relaxed)) continue;
+        if (!frozenRoot() || !readaheadRunning_.load(std::memory_order_relaxed)) continue;
 
         uint64_t currentPos = currentPos_.load(std::memory_order_relaxed);
         offset_t pageStart = twFloorAlign( (offset_t) currentPos, (offset_t) pageSize );
@@ -808,7 +837,7 @@ void AudioEngine::readaheadLoop() {
             // invalidate pages BEHIND readaheadComputedUpTo_ (content epoch
             // bump), and those must be re-frozen. Validity is re-checked per
             // page instead, which self-heals under any edit/playback ordering.
-            const uint64_t epochNow = synthOutput_->contentEpochNow();
+            const uint64_t epochNow = frozenRoot()->contentEpochNow();
 
             // PROBE, don't allocate. getOrAllocatePage() inserts an empty
             // placeholder for a position that has none, and freezePage() later
@@ -818,7 +847,7 @@ void AudioEngine::readaheadLoop() {
             // across an edit) has nothing to fall back TO at that position. The
             // readahead only wants to know whether a current page already
             // exists; asking non-destructively is both correct and cheaper.
-            auto existing = synthOutput_->getPageIfExists(pos);
+            auto existing = frozenRoot()->getPageIfExists(pos);
             if (existing && existing->validAspects != 0 &&
                 existing->contentEpoch.load() >= epochNow) {
                 // Already frozen and current; update prevPage and move on
@@ -859,7 +888,7 @@ void AudioEngine::readaheadLoop() {
                 if (!covered) {
                     const int n = (int)((wantEnd - pos) / pageSize);
                     pendingDemand_ = scheduler_->requestGraphPages(
-                        synthOutput_, pos, n, /*priority*/ 9);
+                        frozenRoot(), pos, n, /*priority*/ 9);
                     pendingDemandStart_ = pos;
                     pendingDemandEnd_ = wantEnd;
                     pendingDemandEpoch_ = epochNow;
@@ -874,7 +903,7 @@ void AudioEngine::readaheadLoop() {
             // Compute this page (blocking, may take milliseconds). Via
             // requestPage (Phase 2a): dedups against concurrent revalidation of
             // the same page rather than double-rendering it.
-            auto page = synthOutput_->requestPage(
+            auto page = frozenRoot()->requestPage(
                 pos, nullptr, 0, (length_t)pageSize,
                 engineSampleRate_, readaheadPrevPage_);
 
@@ -912,7 +941,7 @@ void AudioEngine::readaheadLoop() {
                     auto start_skip = std::chrono::steady_clock::now();
 
                     // Try to freeze skip-ahead page with NO prior state (fresh chain)
-                    auto skipPage = synthOutput_->requestPage(
+                    auto skipPage = frozenRoot()->requestPage(
                         skipPos, nullptr, 0, (length_t)pageSize,
                         engineSampleRate_, nullptr);  // Fresh state!
 
@@ -952,8 +981,8 @@ void AudioEngine::readaheadLoop() {
                                 std::shared_ptr<CaptureRevalidator::GraphDemand> &pending,
                                 uint64_t &pendingStart, uint64_t &pendingEnd,
                                 uint64_t &pendingEpoch ) -> bool {
-                const uint64_t epochNow = synthOutput_->contentEpochNow();
-                auto existing = synthOutput_->getPageIfExists(pos);
+                const uint64_t epochNow = frozenRoot()->contentEpochNow();
+                auto existing = frozenRoot()->getPageIfExists(pos);
                 if (existing && existing->validAspects != 0 &&
                     existing->contentEpoch.load() >= epochNow) {
                     prevPage = existing;
@@ -969,7 +998,7 @@ void AudioEngine::readaheadLoop() {
                         const int n = (int)((wantEnd - pos) / pageSize);
                         if (n > 0) {
                             pending = scheduler_->requestGraphPages(
-                                synthOutput_, pos, n, /*priority*/ 9);
+                                frozenRoot(), pos, n, /*priority*/ 9);
                             pendingStart = pos;
                             pendingEnd = wantEnd;
                             pendingEpoch = epochNow;
@@ -978,7 +1007,7 @@ void AudioEngine::readaheadLoop() {
                     return false;   // frontier advances on later ticks as pages land
                 }
                 // Legacy synchronous path (no scheduler — SMARAGD_REVAL_WORKERS=0).
-                auto page = synthOutput_->requestPage(
+                auto page = frozenRoot()->requestPage(
                     pos, nullptr, 0, (length_t)pageSize, engineSampleRate_, prevPage);
                 if (page && page->validAspects != 0) {
                     prevPage = page;
@@ -987,7 +1016,7 @@ void AudioEngine::readaheadLoop() {
                 }
                 if (prevPage != nullptr) {
                     uint64_t skipPos = pos + (uint64_t)SKIP_DISTANCE * pageSize;
-                    auto skipPage = synthOutput_->requestPage(
+                    auto skipPage = frozenRoot()->requestPage(
                         skipPos, nullptr, 0, (length_t)pageSize, engineSampleRate_, nullptr);
                     if (skipPage && skipPage->validAspects != 0) {
                         prevPage = skipPage;

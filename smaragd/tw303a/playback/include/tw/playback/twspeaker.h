@@ -412,7 +412,27 @@ public:
      * Set from the main thread when a plan is published; read on the RT.
      */
     void setLiveMasterClosure( bool closure )
-    { liveMasterClosure_.store( closure, std::memory_order_release ); }
+    { setLiveMasterClosure( closure, std::shared_ptr<twComponent>() ); }
+    /**
+     * The Closure flag AND the frozen lane's re-rooting, together, because
+     * they are one decision (proposal 45 AC3.1; design D4b option 1).
+     *
+     * `frozenRootUnderMaster` is the component the frozen lane must demand and
+     * read WHILE this closure is live -- the mixer's bus sum, BELOW the master
+     * chain -- so that freezing a root page stops running the master lane's
+     * processors on a revalidation worker while the PUMP renders those same
+     * instances. Null keeps the engine's own `synthOutput_`.
+     *
+     * IT IS STORED HERE RATHER THAN PUSHED STRAIGHT AT THE ENGINE because a
+     * transport start from stopped MINTS A NEW AudioEngine (design D5's handle
+     * swap, twspeaker.cc's atomic_store). An app that had pushed the re-rooting
+     * at the old engine would silently lose it, and the new engine would freeze
+     * root pages through the master again -- the hazard back, with no log line.
+     * Holding it on the speaker means every engine this speaker attaches gets
+     * it, including one minted after the plan was published.
+     */
+    void setLiveMasterClosure( bool closure,
+                               const std::shared_ptr<twComponent> &frozenRootUnderMaster );
     bool liveMasterClosure() const
     { return liveMasterClosure_.load( std::memory_order_acquire ); }
 
@@ -466,6 +486,9 @@ private:
 
     std::atomic<DeviceState>   deviceState_{ DeviceState::CLOSED };
     std::atomic<bool>          liveMasterClosure_{ false };  // proposal 45 M3
+    // The re-rooting that travels with that flag (AC3.1). Main-thread only:
+    // written by setLiveMasterClosure, read when an engine is attached.
+    std::shared_ptr<twComponent> liveFrozenRootUnderMaster_;
     std::atomic<bool>          deviceRunning_{ false };   // backend_->startOutput() done
     std::atomic<LiveLaneState> liveLane_{ LiveLaneState::OFF };
 

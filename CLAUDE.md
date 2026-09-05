@@ -36,8 +36,11 @@ the action-verb reference is `docs/ACTIONS.md`.
   still (like "no widget in `app/media`") is a contract plus a grep.
 - Before committing: `python tools/check_layering.py` (module boundaries),
   `python tools/check_logging.py` (no direct stderr/stdout writes — everything
-  goes through `TW_LOG*` / `syslog()`, proposal 24) and the qxa suite from
-  `tests/cases/` must be green.
+  goes through `TW_LOG*` / `syslog()`, proposal 24), `python
+  tools/check_includes.py` (a file using `std::max`/`sort`/`fill` includes
+  `<algorithm>` ITSELF — libstdc++ hands it over transitively and Apple clang's
+  libc++ does not, which is how a macOS build broke on code that had compiled
+  here for years) and the qxa suite from `tests/cases/` must be green.
 - Key-file paths below predate the split; the classes are unchanged — find
   headers at `tw303a/<module>/include/tw/<module>/…` and
   `main/<module>/include/app/<module>/…`.
@@ -349,6 +352,7 @@ token: `claude mcp remove youtrack -s user`, then add again.
 ./build.sh                                   # re-configures: required, see below
 python3 tools/check_layering.py              # module boundaries
 python3 tools/check_logging.py               # no direct stderr/stdout writes
+python3 tools/check_includes.py              # <algorithm> users include it (macOS/libc++)
 ctest --test-dir smaragd/build -j4 --output-on-failure     # THE routine gate
 ```
 
@@ -461,14 +465,19 @@ argument for `-j`.
 - **Anything timing-shaped you are actually investigating** — latency, underruns,
   readahead behaviour. Under `-j` the rest of the suite IS the load.
 
-**A `-j` failure is not automatically an isolation bug.** Two tests assert a
+**A `-j` failure is not automatically an isolation bug.** Three tests assert a
 wall-clock LATENCY BOUND, so they measure the machine rather than the code, and
-both carry `RUN_SERIAL` (CTest runs them alone within the invocation):
+all carry `RUN_SERIAL` (CTest runs them alone within the invocation).
+**And `-j4` is not a safe default on a small box**: the table above was measured
+on 16 logical cores, where `-j4` leaves headroom. On a **4-core** box `-j4` is
+full saturation, and that is where `playback_test` started failing — scale `-j`
+to the machine, not to the recommendation:
 
 | Test | Asserts | Why it moves |
 |---|---|---|
 | `twlog_test` | one non-blocking `TW_LOG` from a pretend-RT thread completes in **< 2000 µs** while 4 threads contend the logger lock | 137–191 µs on an idle box; **4 000–51 000 µs at ~100 % CPU**, failing 6 runs in 10 — same binary, no code change |
 | `qxa.log_dock_scale` | **no single event-loop pump exceeds 50 ms** while the log dock drains 300 k records | a stall cap is a latency bound on the GUI thread; same shape |
+| `playback_test` | **L1a T2: a steady run causes NO repositions** — the live pump keeps up with the clock instead of repositioning on every stamp | a loaded box makes the pump reposition legitimately. Measured on a **4-core** box, same binary, no code change: **10 of 10 idle, 4 of 8 under six spinners**. Marked RUN_SERIAL 2026-09-05; the assertion was NOT weakened, because it is the one thing separating the current pump from the fill-until-full pump it replaced |
 
 `RUN_SERIAL` only excludes *other tests in this ctest run*. It cannot protect
 them from load outside it — a second worktree building, or another agent's suite.

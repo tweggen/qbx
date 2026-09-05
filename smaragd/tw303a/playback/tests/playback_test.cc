@@ -2715,6 +2715,86 @@ int main()
         CHECK(spk->deviceState() == DeviceState::CLOSED, "L1a T4: everything closes");
     }
 
+    // --- proposal 45 M3, AC3.6's unit half: A CLOSURE PLAN RENDERS AT EVERY
+    // --- WIDTH, WITH NO DEVICE OPENED --------------------------------------
+    //
+    // The qxa cases measure a Closure through a real capture backend at the
+    // project's own width and nothing else. This is the twmonitor::pullChannels
+    // precedent applied to the master node: a pure statement about widths 1, 2
+    // and 6, made against the pump alone.
+    //
+    // THE CLAIM. A plan whose OUTPUT track is a master node carrying a gain
+    // envelope and summing one live child must deliver, on EVERY channel,
+    // child x masterGain. That is the arithmetic AC3.2 put there and it is what
+    // "the pump renders the master itself" means; a master node that summed its
+    // children and applied nothing would read 0.5 here instead of 0.25, which
+    // is precisely the defect the M3 diagnostic found in the plan builder.
+    {
+        const float kChild  = 0.5f;
+        const float kMaster = 0.5f;
+        for (idx_t width : { (idx_t)1, (idx_t)2, (idx_t)6 }) {
+            const std::size_t BLOCK = 256;
+
+            auto plan = std::make_shared<twLivePlan>();
+            plan->blockFrames = (length_t) BLOCK;
+            plan->sampleRate  = 48000;
+            plan->transport.playing = true;
+
+            // Track 0: the live child, a constant at kChild.
+            twLiveTrackPlan child;
+            child.name     = "child";
+            child.channels = width;
+            child.input    = std::make_shared<ConstInput>(kChild);
+            plan->tracks.push_back(std::move(child));
+
+            // Track 1: the MASTER node. It sums track 0 and applies its own
+            // fader -- no inserts, because a gain is the one thing whose
+            // closed form needs no plugin fixture.
+            twLiveTrackPlan master;
+            master.name     = "master";
+            master.channels = width;
+            master.gain.base  = kMaster;
+            master.gain.muted = false;
+            master.liveChildren.push_back(0);
+            plan->outputTrack = (int) plan->tracks.size();
+            plan->tracks.push_back(std::move(master));
+
+            plan->masterLinear = false;   // a CLOSURE
+            CHECK(plan->finalize(), "M3 T-w: a Closure plan finalizes");
+
+            twLiveMixRing ring;
+            ring.reset(width, (std::uint32_t) BLOCK, 4);
+            twEngineClock clock;
+            clock.invalidate();
+            LiveGraphPump pump(ring, clock);
+            pump.setPlan(plan);
+
+            float lo = 2.0f, hi = -2.0f;
+            idx_t sawChannels = 0;
+            std::thread th([&] {
+                pump.renderOneBlock();
+                twLiveRingEntry e;
+                if (ring.peek(e)) {
+                    sawChannels = (idx_t) e.channels;
+                    for (idx_t c = 0; c < (idx_t) e.channels; ++c)
+                        for (std::uint32_t i = 0; i < e.frames; ++i) {
+                            lo = std::min(lo, e.channel(c)[i]);
+                            hi = std::max(hi, e.channel(c)[i]);
+                        }
+                    ring.pop();
+                }
+            });
+            th.join();
+
+            const float want = kChild * kMaster;
+            CHECK(sawChannels == width,
+                  "M3 T-w: a Closure delivers the plan's full width");
+            CHECK(std::fabs(lo - want) < 1e-6f && std::fabs(hi - want) < 1e-6f,
+                  "M3 T-w: EVERY channel carries child x masterGain "
+                  "(the master node applies its own fader, AC3.2)");
+        }
+    }
+
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall playback tests passed\n",
            failures);
     return failures ? 1 : 0;

@@ -256,6 +256,26 @@ private:
      * Returns true when monitoring must stand down; logs the reason ONCE.
      */
     bool masterShapeRefusesMonitoring();
+    /**
+     * Stand the live lane down because the master shape now refuses it.
+     * Extracted so refresh()'s fast path and the pumpEdits() tick cannot
+     * drift: they are the two routes a master change reaches, and a teardown
+     * spelled twice is a teardown that will one day be spelled differently.
+     */
+    void tearDownLiveForRefusal();
+    /// AC3.1 / D4b: the master lane's own processors are live-owned while a
+    /// Closure plan is live, so the pump is their only legal renderer and the
+    /// existing ownership guard counts anybody else.
+    void setMasterLaneOwned( SStdMixer *mixer, bool owned );
+    /// Every route OUT of a Closure: release the master lane's processors,
+    /// clear the speaker's flag and put the frozen lane's root back above the
+    /// master chain. See the definition for why the root, unlike the flag,
+    /// cannot be left stale.
+    void endMasterClosure();
+    /// Retire the scheduler nodes that would freeze a page THROUGH the master
+    /// chain, called between the re-rooting and taking ownership. See the
+    /// definition: a demand issued before the re-root still executes after it.
+    void retireMasterLaneNodes( SStdMixer *mixer );
     /// The click, rebuilt only when its snapshot actually changed (a plan is
     /// republished every time a fader moves; the source holds click waveforms).
     std::shared_ptr<twLiveInputSource> ensureMetronome( bool want );

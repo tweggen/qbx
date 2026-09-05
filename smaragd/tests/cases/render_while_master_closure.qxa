@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M3, AC3.8 / T12: A RENDER TAKEN WHILE A CLOSURE IS LIVE IS
+  BYTE-IDENTICAL TO THE SAME PROJECT'S RENDER WITH NOTHING ARMED.
+
+  render_while_armed with one thing added: a 2.0x insert on the master, so
+  arming produces a CLOSURE rather than a linear split. Both renders carry that
+  insert, because it is part of the project; what must not change the bytes is
+  the LIVE LANE.
+
+  WHY THE BYTE COMPARE BITES HERE, and it is not the same reason it bites in
+  render_while_armed. Under a Closure the master lane's own processors are
+  LIVE-OWNED (AC3.4), and the ownership guard answers SILENCE to any renderer
+  that is not the pump. A render freezes pages on worker threads. So if
+  startRender's suspend did not release that ownership, every page the render
+  froze through the master would come back silent and the two files would
+  differ by the whole master chain. `SLiveMonitor::suspendForRender` calls
+  endMasterClosure() for exactly this, and this case is what says so.
+
+  The reference render is taken FIRST, with the master insert already in place
+  and nothing armed, so the comparison isolates the lane and not the chain.
+
+  A RENDER SHARES NO CODE WITH THE MONITOR PATH (proposal 36 B5), so AC3.1's
+  re-rooting of the frozen lane cannot reach RenderSession by construction.
+  That is worth stating because it is the obvious worry and it is not the real
+  one: the hazard here is OWNERSHIP, not the demand root.
+
+  The re-arm half is render_while_armed's, unchanged in shape: a render comes
+  back as a FRESH arm, the closure recomputed from the model as it then stands,
+  so the Closure must be re-entered and audible afterwards.
+-->
+<SActionScript version="1" name="render_while_master_closure">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.5"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+
+    <!-- THE MASTER INSERT. It is in the project for BOTH renders; what this
+         case isolates is the live lane, not the chain. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <!-- The reference: the same project, nothing armed, master insert present. -->
+    <render filename="closure_unarmed.wav" format="wav" quality="10" durationSec="2.0"/>
+
+    <!-- Now ARM. The shape is non-linear and LANE-caused, so the plan is a
+         CLOSURE: the frozen lane re-roots below the master chain and the
+         master's own processors become live-owned. -->
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="1200"/>
+
+    <render filename="closure_armed.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="closure_armed.wav" expected="closure_unarmed.wav"/>
+
+    <!-- ...and the CLOSURE is back, as a fresh arm. -->
+    <wait-ms ms="1800"/>
+    <assert-input-meter trackPath="0" minPeak="0.35" maxPeak="0.45"
+                        contains="live=on"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

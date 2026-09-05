@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M3, AC3.7 / T17: A COUNT-IN AND A RECORD START UNDER A CLOSURE.
+
+  record_count_in_primed with ONE thing added: a 2.0x insert on the master, put
+  there BEFORE the record start. That makes the master shape non-linear and
+  LANE-caused, so the live lane the count-in raises is a CLOSURE rather than a
+  linear split, and all three claims below are then about the Closure path.
+
+  WHY THIS CASE EXISTS AT ALL. AC3.1's engine half re-roots the frozen lane
+  below the master chain while a Closure is live, and the count-in's priming
+  demand (twSpeaker::warmFrozenLane) is issued through a DIFFERENT accessor
+  from the readahead's, so it needed its own re-rooting. The first write-up of
+  that change called this combination unreachable; it is not. Monitor AUTO is
+  "input while stopped OR recording", so a Closure is live with the transport
+  STOPPED, and a record start with a count-in demands priming pages from
+  exactly there. Rooted ABOVE the master those freezes would run the master
+  lane's processors on a worker while the pump owns them.
+
+  THREE CLAIMS, and each one would survive the other two being wrong:
+
+    assert-priming          the count-in still PRIMES with a master insert up.
+                            The re-rooting must not have cost the warm-up its
+                            effect: rooted at the bus sum it still covers the
+                            window startPlayback waits for, because that wait
+                            reads a frontier the readahead maintains against
+                            whatever root it demands.
+    assert-recorded-clip    the take lands at the SAME frame as with a linear
+                            master. A recording captures the INPUT device, so
+                            the master chain cannot reach it, and the placement
+                            conversion must be indifferent to the mode.
+    assert-render-policy    no freeze worker met a live-owned master processor
+                            during the count-in.
+
+  THE MASTER INSERT CANNOT REACH THE TAKE, which is why 2.0x is safe here and
+  why no level assertion appears: SAudioRecorder writes what the input device
+  delivered, never what the output produced.
+
+  Everything else, including the nine-track cold fixture and the 20 s pitched
+  material, is record_count_in_primed's and its header is the reasoning for it.
+  maxPolls stays at 1 for the same reason it does there: if it flakes, that is
+  the number to look at LAST, after the warm-up and the re-rooting.
+-->
+<SActionScript version="1" name="record_count_in_master_insert">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+
+    <!-- The material: pitched, so a page costs the vocoder real work, and at
+         20 s so it is nowhere near what a revalidation from 0 would cover. -->
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="1,0" cents="700"/>
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="2,0" cents="700"/>
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="3,0" cents="700"/>
+    <add-sample trackPath="4" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="4,0" cents="700"/>
+    <add-sample trackPath="5" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="5,0" cents="700"/>
+    <add-sample trackPath="6" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="6,0" cents="700"/>
+    <add-sample trackPath="7" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="7,0" cents="700"/>
+    <add-sample trackPath="8" filePath="../test_sawtooth.wav" timePos="960000"/>
+    <set-pitch clip="8,0" cents="700"/>
+
+    <set-track-input trackPath="0" input="audio:file:1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+
+    <!-- This case OWNS transport/countInBars and transport/preRollBars. -->
+    <set-count-in bars="2"/>
+    <set-pre-roll bars="0"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="960000"/>
+
+    <!-- Let whatever the construction scheduled settle, THEN stale it all. -->
+    <wait-ms ms="2000"/>
+    <set-track-volume trackPath="1" volume="-1.0"/>
+    <set-track-volume trackPath="2" volume="-1.0"/>
+    <set-track-volume trackPath="3" volume="-1.0"/>
+    <set-track-volume trackPath="4" volume="-1.0"/>
+    <set-track-volume trackPath="5" volume="-1.0"/>
+    <set-track-volume trackPath="6" volume="-1.0"/>
+    <set-track-volume trackPath="7" volume="-1.0"/>
+    <set-track-volume trackPath="8" volume="-1.0"/>
+
+    <!-- THE MASTER INSERT, before the record start, so the count-in's own live
+         lane is a CLOSURE from the moment it comes up. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <record-start/>
+    <wait-ms ms="4700"/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <!-- THE CLAIM, now under a CLOSURE: the transport did not wait for the
+         readahead at all,
+         because the count-in had already frozen what it needed. ONE poll of
+         slack, on a case that measured EXACTLY 0 on 5 runs of 5 and is
+         RUN_SERIAL. It is deliberately tight enough to bite BOTH halves of
+         the fix: without the warm-up it reads 28+, and with the warm-up but
+         the readahead's first pass delayed by its old unconditional 20 ms
+         wait it reads exactly 2. If this ever flakes, THIS is the number to
+         relax - not the warm-up. -->
+    <assert-priming maxPolls="1"/>
+
+    <!-- ...and the count-in still places the take AT THE LOCATOR, which is
+         what record_count_in gates and what the warm-up must not disturb. -->
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          startFrame="960000" startTolerance="2048"/>
+
+    <set-count-in bars="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="9"/>
+  </assertions>
+
+</SActionScript>

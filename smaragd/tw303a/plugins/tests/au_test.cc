@@ -19,6 +19,7 @@
 #include "twaumodule.h"
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>

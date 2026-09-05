@@ -2,6 +2,7 @@
 #include "app/servicesui/slogmodel.h"
 #include "app/shell/ssettings.h"
 
+#include <algorithm>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
