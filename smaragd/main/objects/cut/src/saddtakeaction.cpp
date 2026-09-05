@@ -35,7 +35,7 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     }
     QList<int> lanePath = clipPath_;
     int idx = lanePath.takeLast();
-    SObject *lane = splacements::laneAt( mixer, lanePath );
+    SObject *lane = splacements::placementLaneAt( mixer, lanePath, "add-take" );
     SLink *link = lane ? lane->childAt( idx ) : nullptr;
     if( !link || link->getSObject().isLane() ) {
         return {false, nullptr};

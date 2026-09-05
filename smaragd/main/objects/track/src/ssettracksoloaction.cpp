@@ -19,6 +19,18 @@ SApplyResult SSetTrackSoloAction::apply( SProject *project )
     if( !lane ) {
         return {false, nullptr};
     }
+    // AC5.2 / D6: SOLO ON A SYSTEM LANE IS NOT MERELY USELESS, IT IS UNREADABLE.
+    // A master lane is deliberately not a childLinks() member (D2), so
+    // ssolorules::anySoloInTree -- which walks exactly those children -- cannot
+    // see a solo flag set here. Accepting the write would store state that no
+    // audibility rule ever consults, which is the SStdMixer::volume_ defect in
+    // a new field: a control that appears to work and changes nothing.
+    // MUTE is the opposite case and is deliberately ACCEPTED (AC5.4): it is
+    // twGainStage's audio mute, it is downstream of everything, and it is
+    // heard.
+    if( splacements::refuseSystemLane( lane, "set-track-solo" ) ) {
+        return {false, nullptr};
+    }
     const bool old = lane->isSolo();
     // Everything audible is downstream of this one write: setSolo() emits
     // soloChanged(), which a folder relays up as subtreeSoloChanged() until it

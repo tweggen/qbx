@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M5, AC5.1 / D6: A CLIP PLACED ON, DROPPED ON OR MOVED TO A SYSTEM
+  LANE IS REFUSED.
+
+  SObject::acceptsClips() has existed since M1 as a predicate WITH NO CONSUMER:
+  the testkit asserted it and nothing read it, so the policy it describes was
+  enforced nowhere. splacements::placementLaneAt() is the consumer, and this
+  case is what says the policy is real rather than declared.
+
+  IT IS A SEPARATE RESOLVER, NOT A WIDENED laneAt(), and that is the design
+  decision this case protects. laneAt() is also how a clip is REMOVED, resized,
+  split and how a clip's PARENT is found; refusing a system lane there would
+  make material that somehow reached one impossible to take off again, and would
+  turn every read path into a policy decision. The policy belongs at the
+  DESTINATION and nowhere else.
+
+  THE CONVERTED CALLERS ARE ENUMERATED, because D6 asks for the list rather than
+  a claim that none were missed:
+
+    add-sample                 saddsampleaction.cpp
+    place-clip                 splaceclipaction.cpp
+    place-recording            splacerecordingaction.cpp
+    duplicate-clip (dest)      sduplicateclipaction.cpp
+    add-take                   saddtakeaction.cpp
+    insert-midi-clip           smidiclipactions.cpp
+    place-midi-recording       smidirecordactions.cpp
+    import-midi-file (explicit track)   smidifileactions.cpp
+    duplicate-asset-here       sduplicateassethereaction.cpp
+    move-clip (dest)           smoveclipaction.cpp
+    place-asset                splaceassetaction.cpp
+
+  DELIBERATELY NOT CONVERTED, and each for a reason: remove-clip,
+  remove-sample, remove-take and the restore inverses (taking material OFF a
+  lane must never be refused); resize-clip and split-clip (edits, not
+  placements); unpack-clips (it moves material OUT of a fragment); and
+  remove-track / restore-track, whose laneAt() resolves a PARENT rather than a
+  destination.
+
+  A REFUSAL MUST LEAVE THE MODEL UNTOUCHED (AC5.5), so every refusal below is
+  followed by a count that would move if it had half-applied.
+-->
+<SActionScript version="1" name="master_refuses_clips">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- The predicate itself, which M1 built and nothing read until now. -->
+    <assert-system-lane trackPath="$master" acceptsClips="0"/>
+    <assert-system-lane trackPath="0" role="none" acceptsClips="1"/>
+
+    <!-- add-sample: the drop path, and the one a user reaches first. -->
+    <add-sample trackPath="$master" filePath="../test_autosaw.wav" timePos="0"
+                expectReject="true"/>
+
+    <!-- place-clip. -->
+    <place-clip trackPath="$master" filePath="../test_autosaw.wav" timePos="0"
+                expectReject="true"/>
+
+    <!-- insert-midi-clip: the event half of the same policy. -->
+    <insert-midi-clip trackPath="$master" timePos="0" expectReject="true"/>
+
+    <!-- move-clip, whose DESTINATION is the master. -->
+    <move-clip clip="0,0" destTrack="$master" startTime="0" expectReject="true"/>
+
+    <!-- AC5.5: NOTHING HALF-APPLIED. The user track still holds its clip at 0
+         (so the move did not take it away), and the master holds no clip 0 at
+         all, which the refused assertion is what says. -->
+    <assert-clip-window clip="0,0" startTime="0"/>
+    <assert-clip-window clip="$master,0" expectReject="true"/>
+
+    <!-- ...and the ordinary lane still accepts everything, so the refusals
+         above are the POLICY and not a resolver that stopped working. -->
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="192000"/>
+    <assert-clip-window clip="0,1" startTime="192000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

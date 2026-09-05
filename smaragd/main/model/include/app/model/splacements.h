@@ -41,6 +41,48 @@ inline SObject *laneAt( SObject *root, const QList<int> &path )
     return ( obj && obj->isLane() ) ? obj : nullptr;
 }
 
+// THE PLACEMENT DESTINATION RESOLVER (proposal 45 AC5.1 / D6).
+//
+// `laneAt()` answers "is this a lane"; this answers the narrower question every
+// verb that PUTS A CLIP SOMEWHERE has to ask: "is this a lane that accepts
+// clips". A system lane is a lane in every other sense -- it has a head, a
+// fader, a meter, solo/mute state and child tracks -- and it must not directly
+// carry sample or event material (D6).
+//
+// IT IS A SEPARATE FUNCTION RATHER THAN A WIDENED laneAt() ON PURPOSE. laneAt()
+// is also the resolver for REMOVING a clip, for resizing one, for splitting
+// one and for finding a clip's parent; refusing a system lane there would make
+// material that somehow got onto one impossible to take off again, and would
+// turn every read path into a policy decision. The policy belongs at the
+// DESTINATION and nowhere else.
+//
+// `SObject::acceptsClips()` existed from M1 as a predicate with NO CONSUMER --
+// asserted by the testkit and read by nothing, so the policy it describes was
+// not enforced anywhere. This is the consumer.
+//
+// IT TAKES THE VERB NAME because AC5.1 requires the refusal to be ANNOUNCED
+// and to name the lane. A caller that merely returned null would refuse
+// silently, and a silent refusal of a drag-and-drop reads to the user as the
+// app having dropped their clip on the floor.
+SObject *placementLaneAt( SObject *root, const QList<int> &path,
+                          const char *verb );
+
+// THE STRUCTURAL / LIVE-INPUT REFUSAL (proposal 45 AC5.2 / D6).
+//
+// True, having ANNOUNCED it, when `verb` must refuse because `obj` is a system
+// lane. Used by the eight verbs D6 enumerates -- arm-track, set-monitor-mode,
+// set-track-input, remove-track, reparent-track, move-track, set-track-solo
+// and set-track-midi-output -- each of which resolves its own target and then
+// asks this ONE question, so the eight messages cannot drift apart and a ninth
+// verb has one obvious thing to call.
+//
+// It is deliberately NOT folded into the resolvers those verbs already use.
+// `laneAt()` is shared with every read and every removal path (see above), and
+// several of these verbs must keep working on a system lane's CHILDREN -- a
+// user track nested under the master is an ordinary track in every respect.
+// The question is about the addressed object alone.
+bool refuseSystemLane( SObject *obj, const char *verb );
+
 // Resolve `path` from `root` to a generic path CONTAINER (proposal 41 M2b):
 // anything the index-path search may descend into, which since D3 is a
 // STRICTLY WIDER set than isLane() -- a lane fragment answers isPathContainer()

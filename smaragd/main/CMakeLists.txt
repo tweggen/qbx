@@ -53,6 +53,7 @@ set(APP_MODEL_FILES
     model/src/slink.cpp
     model/src/sobject.cpp
     model/src/sobjectrenderer.cpp
+    model/src/splacements.cpp
     model/src/sproject.cpp
 )
 
