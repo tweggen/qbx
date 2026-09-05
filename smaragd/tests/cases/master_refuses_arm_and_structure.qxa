@@ -75,9 +75,15 @@
     <!-- ================= THE LIVE-INPUT THREE ================= -->
 
     <arm-track trackPath="$master" armed="1" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="arm-track: refused on the master lane"/>
     <set-monitor-mode trackPath="$master" mode="on" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-monitor-mode: refused on the master lane"/>
     <set-track-input trackPath="$master" input="audio:file:3"
                      expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-input: refused on the master lane"/>
 
     <!-- ...and none of the three left a trace. If arm-track had set the flag
          before refusing, or set-track-input had stored the string, this is
@@ -95,16 +101,36 @@
     <!-- ================= SOLO AND MIDI OUT ================= -->
 
     <set-track-solo trackPath="$master" solo="1" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-solo: refused on the master lane"/>
     <set-track-midi-output trackPath="$master" port="Capture MIDI Out"
                            expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-midi-output: refused on the master lane"/>
     <assert-system-lane trackPath="$master" solo="0"
                         midiOutPort="&lt;none&gt;"/>
 
     <!-- ================= THE STRUCTURAL THREE ================= -->
 
+    <!-- FOR THESE THREE THE LOG ASSERTION IS THE ONLY THING THAT BITES, and
+         that was MEASURED, not assumed. Removing each explicit check and
+         re-running leaves this case GREEN on the expectReject and
+         assert-system-lane assertions alone: the verbs still refuse, through
+         the childAt(-1) accident described in their own source. What the
+         accident does NOT do is ANNOUNCE, and D6 requires the announcement
+         ("a bound is ANNOUNCED, never silent"). So the property these three
+         assertions gate is the message, and each was watched failing by
+         deleting its own refusal. -->
+
     <remove-track trackPath="$master" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="remove-track: refused on the master lane"/>
     <move-track source="$master" toIndex="0" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="move-track: refused on the master lane"/>
     <reparent-track source="$master" destParent="0" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="reparent-track: refused on the master lane"/>
 
     <!-- The lane is still there, still the master, still outside childLinks,
          and the user tracks are still two and still where they were. A
