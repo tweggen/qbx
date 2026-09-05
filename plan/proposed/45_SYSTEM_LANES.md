@@ -729,7 +729,30 @@ D9 lands here because M1's own round-trip AC cannot be written without it.
   points at a track that does **not** answer `Master` is coerced or rejected,
   never adopted; and a pre-M1 project (no `masterLaneId`) is given a fresh master
   lane with nothing audible changed.
-- **AC1.6** **Lifecycle (D13, T15).** `create-arrangement` and
+- **AC1.6** **DONE 2026-09-02, and the last clause was FALSE when it was
+  written.** `remove-arrangement`'s inverse was `SCreateArrangementAction`,
+  which does `new SStdMixer` — a fresh, EMPTY master lane. Its
+  `childCount() > 0` guard exists precisely so undo cannot lose lanes (its own
+  comment says so), but a master lane is not a child link (D2) so the guard
+  never saw it. Measured: insert a plugin and pull the fader on a named
+  arrangement's master, remove, undo → `plugins=0 volume=0`. Latent while the
+  lane was in no signal path; **audible state since M2**.
+  Fixed with the repo's existing PIN pattern (`SRemoveTrackAction`): the action
+  `addRef()`s the root before unregistering and hands its inverse a pointer to
+  itself, so `SRestoreArrangementAction` re-registers THE SAME mixer. Widening
+  the refusal instead was rejected — it makes an ordinary undo impossible
+  rather than correct, and would need widening again for every future system
+  lane. Gate: `master_lane_lifecycle.qxa`.
+  **A PRE-EXISTING DEFECT BLOCKED THE GATE AND HAD TO BE FIXED TO WRITE IT:**
+  `insert-plugin` and `remove-plugin` peeled the arrangement qualifier into
+  `pathRoot_` and then resolved against `project->getRootComponent()` — the
+  DEFAULT root — unconditionally, so `trackPath="Drums:$master"` silently
+  edited the DEFAULT arrangement's master. That is the "resolved against the
+  wrong root SUCCEEDS" class `sobjectpath.h` warns about. Both now use
+  `splacements::rootNamed()`, as `set-track-volume` always has.
+  `smovetrackaction.cpp` and `sreparenttrackaction.cpp` have the same shape and
+  are **NOT** fixed here — no case needs them yet and each deserves its own.
+- **AC1.6 (original text)** **Lifecycle (D13, T15).** `create-arrangement` and
   `extract-arrangement` mint a master lane; `remove-arrangement` and
   `dissolve-arrangement` destroy it; **undo of a removal restores the lane with
   its chain, gain and automation.**
@@ -874,6 +897,54 @@ no longer belong to the same signal — the honest refusal inv. 18a used to give
 is absent for the whole M2→M3 window), and AC2.8 (the lane's own trackmix and
 rewire are inert by construction but nothing asserts it).
 
+#### M2 PART 2 — **DONE 2026-09-02: AC2.6 and AC2.7; AC2.8 is DISPROVED**
+
+**AC2.7 (D4a) — the shape check learns the chain.** `checkMasterShape` gains a
+required `twMasterChainState` argument (insert count, gain dB, mute, and an
+automation flag). **Required, with no default, on purpose**: a defaulted "no
+chain" is exactly how a future caller would silently get the pre-M2 answer and
+leave monitoring on over a signal that no longer matches. Passed as VALUES
+because `tw/playback` may not include `tw/plugins`. One shared reader,
+`sliveplan::masterChainStateOf()`, so the plan builder and `SLiveMonitor`
+cannot disagree about whether monitoring is legal — a disagreement that would
+be silent, since the plan is what the RT reads and the refusal is what the user
+sees. Four distinct reasons, not one, so the status line names which control
+turned monitoring off. `automated` is checked SEPARATELY from `gainDb`: a
+constant scale is at least a fixed factor, an automated one is not even that,
+and a lane that happens to sit at unity right now must still refuse.
+
+Watched failing twice: the whole block disabled (pre-M2 behaviour), and — the
+one that matters — **only `insertCount` read**, which fails too, so the four
+controls are shown to be checked separately rather than one standing for all.
+
+**AC2.6 (D12) — the master meter.** `STrack::getRootComponent()` returns the
+mixer's rewire for the master role. Measured: with a 2.5x master insert the
+master meter reads **0.568995** against a base of 0.227598 (exactly 2.5x)
+while the TRACK meter stays at 0.227598, and a −6 dB master fader moves it
+again. A render sits between the edit and the probe because proposal 34
+deliberately ACCEPTS stale-but-frozen pages.
+
+**AC2.8 IS DISPROVED, AND THE SABOTAGE FOR AC2.6 IS WHAT DISPROVED IT.**
+Removing the D12 override leaves `master_meter_postfx` **green**. The reason is
+that the master lane's own `twRewire` is **not inert**, as D12 and T5 both
+assume: `STrack`'s constructor wires `rewire.input = gainStage.output`, and
+`wireAsMasterLane()` does not disconnect it — it only takes the gain stage's
+output into the MIXER's rewire *as well*. So the lane's rewire is **REDUNDANT,
+carrying the same signal**, not silent, and a probe pointed at it would read
+correct audio rather than decaying.
+
+Consequences, none of them fixed here:
+- **AC2.8 as written ("the lane's own twTrackMix/twRewire are unwired") is
+  FALSE.** The trackmix genuinely is unwired; the rewire is not.
+- The override is kept on the **weaker basis** that it is the one correct
+  answer — the mixer's rewire is the page cache the invalidation path actually
+  bumps, so the lane's own is a second cache nobody invalidates and could go
+  stale — not because anything proves it necessary today.
+- T5's "must not be wired for consistency later" should read "must be
+  DISCONNECTED", and that is a change with its own blast radius (the lane's
+  rewire is what `getRootComponent()` returned before the override, so
+  anything still reaching it would go silent).
+
 **Also settled here:** D5's body text (line ~327) still says `set-track-volume`
 with an empty path "is **redirected to the master lane**". AC1.9 rejected that
 redirect. `master_fader_heard.qxa` now asserts the refusal, so the two cannot
@@ -914,6 +985,192 @@ drift apart silently; D5's sentence is the stale one.
   `render_while_armed` unchanged.
 - **Watched failing:** with AC3.1 reverted, `monitor_master_insert`'s **RMS**
   assertion must show the doubling, with the measured numbers in the PR.
+
+#### M3 — **GROUNDWORK ONLY, 2026-09-02. CLOSURE IS BUILT AND NOT ENABLED.**
+
+Built and inert: `twMasterShape::fromMasterLane` (which CLASS of reason caused
+Closure), `twSpeaker::setLiveMasterClosure()` (AC3.1's speaker half — the RT
+stops adding the frozen root page), and AC3.2 (the plan builder's master node
+now carries the master lane's inserts and gain envelope, which it did not
+before and whose absence is why Closure could never have been right: the node
+summed the closure and the frozen siblings and then applied NOTHING).
+
+**M3 IS ENABLED.** A LANE-caused non-linear master is now rendered as a
+Closure; a MIXER-caused one is still refused. What follows is the diagnostic
+that got here, kept in full because three of its four first-round findings were
+artifacts of my own harness and the shape of each is instructive.
+
+**THE DIAGNOSTIC RAN IN TWO ROUNDS; THE FIRST ROUND'S FINDINGS WERE ALL
+MEASUREMENT ARTIFACTS AND THE SECOND FOUND THE REAL DEFECT.** Both rounds are
+recorded, because the artifacts are instructive: every one of them was a
+plausible-looking number produced by a broken harness.
+
+**Round 1 — three artifacts, none of them real.**
+
+| claimed | what it actually was |
+|---|---|
+| "linear reference 0.23158" | a probe built with `grep -v`, which stripped the first line of a two-line `<insert-plugin>` and orphaned the continuation. A malformed script. |
+| "ratio 3.07" | computed against that reference |
+| "AC3.1 reverted is SMALLER, not doubled" | inside run-to-run noise (0.709752 x4, 0.653316 x1 for one binary) |
+| "the LINEAR split delivers one source, not two" | the measurement window ran **past the end of the 4-second fixture**, halving the root and leaving a number that looked like "ring alone" |
+
+**Two windowing traps, and any M3 gate must avoid both.** The window has to sit
+AFTER the monitor priming lag (`twSpeaker` defers the device start until the
+readahead is primed, ~2.3 s) and BEFORE the end of the material. Between them
+`test_autosaw.wav` gives about 1.5 usable seconds; the harness below places the
+fixture twice to get 8 s.
+
+**Round 2 — the corrected harness, and the linear split is CORRECT.** Sources
+made UNCORRELATED (root `test_autosaw.wav`, ring `test_sawtooth.wav`) so the
+sum is a closed form regardless of relative phase, root at −12 dB so the two
+are separable, 8 s of material, window [168000, 216000):
+
+| | measured | closed form |
+|---|---|---|
+| root alone, no live lane | **0.0580135** | 0.230956 x 0.2512 = 0.05801 |
+| ring alone (root muted) | **0.328284** | — |
+| **root + ring, LINEAR** | **0.333388** | sqrt(0.0580135² + 0.328284²) = **0.333371** |
+
+**Five significant figures.** There is no missing source; the linear split adds
+both exactly. Round 1's headline finding is withdrawn.
+
+**Round 2 — and under CLOSURE the unarmed track IS lost.**
+
+| | measured |
+|---|---|
+| Closure, 2.0x master, ring only | 0.586859 |
+| Closure, 2.0x master, root + ring | 0.586992 |
+| Closure, 2.0x master, root **raised 12 dB** | 0.589537 |
+
+A present root at 0 dB gives `2 x sqrt(0.230956² + 0.328284²) = 0.802806`.
+Raising the root by 12 dB moved the output by **0.46 %**. It is not there.
+
+**One number in that table is unexplained and is left so.** Ring-only under
+Closure reads 0.586859, which is ~11 % BELOW 2 x its own linear counterpart
+(2 x 0.328284 = 0.656568). It was not chased, because the presence
+discriminator above does not rest on it: the 12 dB test compares Closure
+against Closure and is indifferent to any constant factor the Closure path
+carries. Anyone writing AC3.3's gate has to account for it; anyone reading
+this table should not treat 0.586859 as a verified level.
+
+**THE ROOT CAUSE, and it is in AC3.1's speaker half as this branch implemented
+it.** Instrumenting the demand pump:
+
+| | `start=` | `frozenMisses` | output |
+|---|---|---|---|
+| suppression ON (as committed) | **0 for the whole 5.2 s run** | **62** | 0.589537 |
+| suppression OFF (sabotage) | **196608** (advancing) | **4** | 0.77812 |
+
+**And the sabotage row is the confirmation:** with the pull restored the output
+reads **0.77812** against the 0.802806 closed form — 3 % low, consistent with
+the 4 remaining misses — i.e. the root IS there the moment the frozen lane is
+pulled again.
+
+`twSpeaker` publishes the transport position from `engine->currentPosition()`
+**after** pulling the frozen lane. Suppress the pull and **nothing advances the
+playhead**: `SLiveMonitor::pumpDemands()` then re-demands page 0 for ever while
+the pump reads at its own advancing position, so every frozen input past the
+first page misses and the unarmed track goes silent.
+
+> **AC3.1 CANNOT BE IMPLEMENTED AS "STOP PULLING THE FROZEN LANE". The
+> transport clock is a side effect of that pull.** D4b option 1 has to keep the
+> engine pulling — so the position advances and the demands follow it — and
+> suppress only the SUMMING of its output into the device buffer. Or the
+> position has to be advanced by something else, which is a new owner for the
+> clock and a decision in its own right.
+
+D4b did not anticipate this: it framed the problem as processor ownership, and
+the clock is a second thing the frozen lane owns.
+
+**A recipe for AC3.3's gate, from the above:** uncorrelated sources, a window
+inside the material and past the priming lag, and a level change on one source
+as the presence discriminator — a level BAND alone cannot tell "present" from
+"absent" when the two sources are the same signal at an unknown phase.
+
+**AC3.1 REBUILT: THE SUPPRESSION DROPS THE SUM AND KEEPS THE PULL.** In
+`twSpeaker::renderCallbackBody`, `frozenPlaying` gates three things — the
+`pullBlock`, the position publication plus the engine-clock stamp, and the live
+gate's position authority (`gate.haveRoot` / `gate.wantPos = blockStart`). Only
+the audio may stand down, so `closureLive` no longer folds into that flag; it
+zeroes the planar scratch after the pull instead. Re-measured with an 8-second
+corpus, uncorrelated sources, the armed track through a 0.25 gain and the root
+at −12 dB (headroom, so the 2.0× master does not clip), window
+[168000, 216000):
+
+| | measured | closed form |
+|---|---|---|
+| ring alone, Closure ×2 | **0.164143** | 0.164142 |
+| root + ring, LINEAR | 0.101661 | 0.100505 |
+| root + ring, Closure ×2 | **0.201039** | 0.201010 |
+| root at −6 dB + ring, Closure ×2 | **0.283832** | 0.283790 |
+
+The root-presence discriminator — raise the unarmed track 6 dB, watch the
+output — reads **1.4118 against a closed form of 1.4118**. It read **1.0046**
+before the rebuild.
+
+**AND THE ~11 % "UNEXPLAINED" SHORTFALL ABOVE WAS CLIPPING**, not a mystery:
+that probe put a 2.0× master over full-scale sources and the 16-bit capture
+peaked at exactly 1.0000. Recorded because it very nearly went into this
+document as an engine finding.
+
+**A SEPARATE, PRE-EXISTING DEFECT THE GATE EXPOSED, NOW FIXED.**
+`SLiveMonitor::refresh()` reaches `publishPlan()` by two routes: the full
+arm/disarm path, and a `sameSet` fast path taken whenever the closure
+MEMBERSHIP did not move. The master-shape check lived only on the first. A
+track whose monitor mode is **on** is in the live set *before* it is armed, so
+arming it never changed the membership, the fast path was taken, and the master
+shape **was never consulted at all**. Under M2 — where every non-linear master
+was refused — that meant a limiter dropped on the master while a track was
+monitoring silently kept the LINEAR split: the RT went on adding a frozen root
+page the master had processed to a ring that had bypassed it. That is exactly
+the doubling D4a exists to prevent, with no log line because nothing had
+looked. The check is now `SLiveMonitor::masterShapeRefusesMonitoring()` and
+both routes ask it.
+
+**Gates** (all `RUN_SERIAL`, `SMARAGD_CAPTURE_SPEED=1`, the paced `file:` input
+carrying `test_sawtooth.wav`): `master_lane_closure_monitoring` (which PATH is
+taken — the rewritten, no-longer-vacuous successor to
+`master_insert_refuses_monitoring`), `master_closure_linear_ring`,
+`master_closure_heard_ring`, `master_closure_heard_root`,
+`master_closure_heard_root_raised`.
+
+**Watched failing, one sabotage per claim:**
+
+| sabotage | fails |
+|---|---|
+| AC3.1 reverted to suppressing the PULL | the three Closure audible cases |
+| Closure enabling reverted (`!shape.linear()` alone) | those three **and** the path case |
+| the same, with the `sameSet` extraction also reverted | **only the path case** — which is the measurement of what the extraction is worth |
+| `twSpeaker`'s closure mode latched on | nothing — see below |
+| a CLEAN master reports Closure | only the path case |
+
+**NOT GATED, and the list is longer than I would like:**
+
+- **A LATCHED closure mode.** A case that inserts a 2.0× master, arms, disarms,
+  removes the insert and measures was written and abandoned for two measured
+  reasons. The playback capture is **cumulative within one process**, so the arm
+  that enters the closure puts its own monitored audio in front of the window
+  (0.105867 where the clean run reads 0.082071) — this is also why every audible
+  case above is ONE measurement in its own file, after a four-phase version
+  returned the identical 0.100520 four times over. And **a master insert made
+  while a lane is already monitoring does not rebuild the live plan at all**, so
+  the closure is never entered and the latch sabotage passes. That second fact
+  is itself an ungated gap in design section 3's rebuild triggers, found here
+  and not fixed.
+- **The MIXER-caused refusal branch.** No verb in this repo can set a master
+  input level or a master channel map, so the path that is still refused has no
+  headless gate. `master_insert_refuses_monitoring`'s old name implied
+  otherwise.
+- **`master_closure_linear_ring` does not bite on its own**, by construction: a
+  Closure whose master node has no inserts and unity gain is a no-op, which is
+  why the linear split is legitimate. It is the reference half of a 2× pair
+  whose other half is gated.
+- **AC3.1's ENGINE half** (the readahead and `warmFrozenLane` still demand root
+  pages, which under Closure runs the master lane's processors on a worker while
+  the pump renders the same instances — D4b's two-thread hazard), **AC3.6,
+  AC3.7, AC3.8**. `liveThreadRefusals` and `liveOwnedRefusals` read **0** in
+  every case above, but with the frozen demand unre-rooted that is not yet
+  evidence of AC3.4.
 
 ### M4 — The master lane on screen
 

@@ -236,6 +236,26 @@ private:
     void setClosureOwned( const SLiveClosure &closure, bool owned );
     bool ensureInput( STrack *track );
     void closeInputIfUnused();
+    /**
+     * THE MASTER-SHAPE PRECONDITION (design D3 / D4a), asked on EVERY route to
+     * publishPlan() and not just the one that re-wires.
+     *
+     * It is a method rather than an inline block because `refresh()` reaches
+     * publishPlan() TWICE: through the full arm/disarm path, and through the
+     * `sameSet` fast path taken whenever the closure MEMBERSHIP did not move.
+     * The check used to live only on the first, and a track whose monitor mode
+     * is ON is in the live set BEFORE it is armed - so arming it never changed
+     * the membership, the fast path was taken, and the master shape was never
+     * consulted at all. Under proposal 45 M2, where every non-linear master was
+     * refused, that meant a limiter dropped on the master while a track was
+     * monitoring kept the LINEAR split silently: the RT went on adding a frozen
+     * root page the master had processed to a ring that had bypassed it, which
+     * is precisely the doubling D4a exists to prevent, with no log line because
+     * nothing had looked.
+     *
+     * Returns true when monitoring must stand down; logs the reason ONCE.
+     */
+    bool masterShapeRefusesMonitoring();
     /// The click, rebuilt only when its snapshot actually changed (a plan is
     /// republished every time a fader moves; the source holds click waveforms).
     std::shared_ptr<twLiveInputSource> ensureMetronome( bool want );

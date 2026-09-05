@@ -395,6 +395,27 @@ public:
     // and the device closed again iff the frozen lane is not using it.
     // Resolution path (playback/CONTRACT.md known debt): a device-frame-stamped
     // ring, or opening the device at the project rate (ASIO, proposal 35).
+    /**
+     * PROPOSAL 45 M3 / D4b -- THE LIVE PLAN IS A CLOSURE, so the RT must pop
+     * the ring ONLY and must not add the frozen root page.
+     *
+     * Under `LinearSplit` the ring carries the armed tracks and the frozen root
+     * page carries everything else, and the two sum because
+     * `master(a u b) == master(a) + master(b)` for a unity sum with an identity
+     * map. Once the master lane does ANYTHING -- an insert, a fader, a mute --
+     * that identity is gone (twlive::checkMasterShape), and the pump renders
+     * the WHOLE master instead: the unarmed tracks reach it as `frozenInputs`,
+     * per track, and it applies the master chain itself. Adding the root page
+     * on top of that would play the arrangement TWICE, once raw and once
+     * through the master chain.
+     *
+     * Set from the main thread when a plan is published; read on the RT.
+     */
+    void setLiveMasterClosure( bool closure )
+    { liveMasterClosure_.store( closure, std::memory_order_release ); }
+    bool liveMasterClosure() const
+    { return liveMasterClosure_.load( std::memory_order_acquire ); }
+
     int  openLive( std::uint32_t rate, idx_t channels );
 
     // How many openLive() calls were refused for a rate mismatch. Process-wide
@@ -444,6 +465,7 @@ private:
     void closeDeviceNoLock();
 
     std::atomic<DeviceState>   deviceState_{ DeviceState::CLOSED };
+    std::atomic<bool>          liveMasterClosure_{ false };  // proposal 45 M3
     std::atomic<bool>          deviceRunning_{ false };   // backend_->startOutput() done
     std::atomic<LiveLaneState> liveLane_{ LiveLaneState::OFF };
 

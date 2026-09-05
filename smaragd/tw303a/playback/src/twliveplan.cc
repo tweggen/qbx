@@ -74,12 +74,18 @@ float *twLivePlan::scratch( int track, int which ) const
 namespace twlive {
 
 twMasterShape checkMasterShape( const twMixer *mixer, const twRewire *root,
-                                idx_t width )
+                                idx_t width, const twMasterChainState &chain )
 {
     twMasterShape out;
     auto closure = [&out]( const char *why ) {
         out.mode   = twMasterMode::Closure;
         out.reason = why;
+        return out;
+    };
+    auto laneClosure = [&out]( const char *why ) {
+        out.mode           = twMasterMode::Closure;
+        out.reason         = why;
+        out.fromMasterLane = true;   // renderable by the pump (M3)
         return out;
     };
 
@@ -117,6 +123,19 @@ twMasterShape checkMasterShape( const twMixer *mixer, const twRewire *root,
             if( map[(std::size_t)c] != c )
                 return closure( "master rewire map is not the identity" );
     }
+
+    // 4. THE MASTER LANE ITSELF (proposal 45 D4a). Checked LAST so the older,
+    //    cheaper reasons keep their own wording, and stated as four distinct
+    //    reasons rather than one: whoever reads the refusal in the status line
+    //    needs to know which of their master controls turned monitoring off.
+    if( chain.insertCount > 0 )
+        return laneClosure( "the master lane has inserts" );
+    if( chain.muted )
+        return laneClosure( "the master lane is muted" );
+    if( chain.automated )
+        return laneClosure( "the master lane's volume or mute is automated" );
+    if( chain.gainDb < -1e-9 || chain.gainDb > 1e-9 )
+        return laneClosure( "the master fader is not at unity" );
 
     return out;   // LinearSplit
 }

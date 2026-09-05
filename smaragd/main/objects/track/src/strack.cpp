@@ -479,6 +479,25 @@ length_t STrack::getDuration() const
 
 std::shared_ptr<twComponent> STrack::getRootComponent()
 {
+    // PROPOSAL 45 M2 / D12 -- THE MASTER LANE'S OUTPUT IS THE MIXER'S REWIRE,
+    // not this track's own.
+    //
+    // M2 wired the lane's chain and gain stage between the bus sum and the
+    // MIXER's rewire, which leaves this track's `cpRewire_` inert (T5). A
+    // meter probe pointed at it would read silence forever -- and
+    // twLevelProbe answers a miss by DECAYING (proposal 34: "a page miss must
+    // DECAY the meter"), so the symptom is a meter that looks BROKEN rather
+    // than a wiring bug that looks like one.
+    //
+    // Overridden HERE rather than special-cased at the two meter mounts
+    // because both already call track.getRootComponent() uniformly: one
+    // answer, at the one place every consumer asks. The consequences are named
+    // so they are not discovered later -- this override is also what
+    // resolveClip(), preview building and the live plan builder's channelMap
+    // read, and for the master lane each of those is CORRECT under D3: the
+    // mixer's rewire genuinely is this lane's output.
+    if( systemRole() == SSystemRole::Master && renderPathOwner_ )
+        return renderPathOwner_->getRootComponent();
     return std::static_pointer_cast<twComponent>(cpRewire_);
 }
 

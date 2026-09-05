@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M2, AC2.6 / D12: the master meter reads POST-master-FX, and it
+  is ONE probe.
+
+  THE OBVIOUS WIRING PRODUCES A METER THAT LOOKS BROKEN RATHER THAN WRONG.
+  M2 put the master lane's chain and gain stage between the bus sum and the
+  MIXER's rewire, which leaves the lane's OWN twRewire inert (T5). Both meter
+  mounts call track.getRootComponent() uniformly, so a master head meter
+  pointed at the lane's own rewire reads silence forever - and twLevelProbe
+  answers a miss by DECAYING (proposal 34: "a page miss must DECAY the
+  meter"), so the symptom is a bar that falls to nothing, which reads as a
+  broken meter and not as a wiring bug.
+
+  D12's decision is therefore to override STrack::getRootComponent() for the
+  master role rather than special-case the two mounts: one answer, at the one
+  place every consumer already asks.
+
+  BUT THE SABOTAGE FOR THAT OVERRIDE DOES NOT BITE, AND THAT IS RECORDED HERE
+  RATHER THAN DRESSED UP. Removing the override leaves this case GREEN. The
+  reason is that the lane's own twRewire is NOT inert as D12 and T5 assume:
+  STrack's constructor wires rewire.input = gainStage.output (strack.cpp), and
+  wireAsMasterLane does not disconnect it - it only takes the gain stage's
+  output into the MIXER's rewire as well. So the lane's rewire is REDUNDANT,
+  carrying the same signal, not silent.
+
+  The override is kept on the weaker basis that it is the one correct answer
+  (the mixer's rewire genuinely is this lane's output, and it is the page cache
+  the invalidation path actually bumps), not because anything here proves it
+  necessary. AC2.8's "the lane's own twTrackMix and twRewire are unwired" is
+  therefore NOT TRUE AS BUILT, and is open.
+
+  WHAT THIS CASE DOES GATE is the claim in its title: the master meter reads
+  post-master-FX while the TRACK meter does not. That pair fails immediately
+  if the master meter is left pointing at the bus sum.
+
+  A RENDER SITS BETWEEN THE EDIT AND THE PROBE ON PURPOSE. Levels are read
+  from FROZEN PAGES BY POSITION, and proposal 34 records that stale-but-frozen
+  pages are deliberately ACCEPTED - playback serves exactly those, so
+  rejecting them would make the meter disagree with the ear while an edit is
+  absorbed. Without the render this case would read the pre-insert page and
+  assert nothing about the master chain.
+
+  Closed forms over ../test_autosaw.wav: the meter reads 0.227598 at frame
+  72000 (a shorter window than the render assertions use, hence not 0.230956),
+  and 2.5x that is 0.568995.
+-->
+<SActionScript version="1" name="master_meter_postfx">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- (1) With a clean master, the track meter and the master meter agree:
+             the master is a unity sum of one track. -->
+    <assert-meter trackPath="0"       position="72000" minRms="0.2265" maxRms="0.2287"/>
+    <assert-meter trackPath="$master" position="72000" minRms="0.2265" maxRms="0.2287"/>
+
+    <!-- (2) A 2.5x gain ON THE MASTER. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.5"/>
+    <render filename="mmp.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- (3) AC2.6: the master meter is POST the master insert... -->
+    <assert-meter trackPath="$master" position="72000" minRms="0.5661" maxRms="0.5718"/>
+
+    <!-- ...and the TRACK meter is not. That pair is the assertion: a master
+             meter that had simply been left pointing at the bus sum would pass
+             the line above only if the two were equal, and a master meter
+             reading its lane's inert rewire would have DECAYED instead. -->
+    <assert-meter trackPath="0" position="72000" minRms="0.2265" maxRms="0.2287"/>
+
+    <!-- (4) And the master fader moves it too, so the probe is downstream of
+             the gain stage as well as the chain. 0.227598 x 2.5 x 0.501187 =
+             0.285172. -->
+    <set-track-volume trackPath="$master" volume="-6.0"/>
+    <render filename="mmp6.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-meter trackPath="$master" position="72000" minRms="0.2837" maxRms="0.2866"/>
+  </actions>
+
+</SActionScript>

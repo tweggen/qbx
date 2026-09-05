@@ -464,11 +464,28 @@ endif()
 #
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
 foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
-              render_while_armed feel_flow_bounce_while_monitoring)
+              render_while_armed feel_flow_bounce_while_monitoring
+              master_lane_closure_monitoring)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE
             ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav")
+    endif()
+endforeach()
+
+# The four master_closure_* cases (proposal 45 M3, AC3.3) take the SAWTOOTH fixture
+# on the input instead, and that is load-bearing rather than incidental: they measure
+# the SUM of the ring and an unarmed track carrying test_autosaw.wav, and two
+# copies of one signal have no closed-form sum -- their RMS depends on a
+# relative phase nothing here controls. Uncorrelated sources make
+# every band a closed form. Hence their own entry rather than four more names above.
+foreach(_mc master_closure_linear_ring master_closure_heard_ring
+            master_closure_heard_root master_closure_heard_root_raised)
+    if(TEST qxa.${_mc})
+        set_tests_properties(qxa.${_mc} PROPERTIES
+            RUN_SERIAL TRUE
+            TIMEOUT 600
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_sawtooth.wav")
     endif()
 endforeach()
 # --- audio recording (proposal 21 L3b) ---------------------------------------

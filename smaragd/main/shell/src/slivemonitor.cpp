@@ -633,12 +633,100 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     }
     ensurePump();
     if( !pump_ ) return;
+    // THE SPEAKER LEARNS THE MODE WITH THE PLAN, and BEFORE the pump starts
+    // producing for it. The other order has a window in which the ring already
+    // carries the whole master while the RT is still adding the frozen root
+    // page -- the doubling, for as long as one callback.
+    if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
+                                              : std::shared_ptr<twSpeaker>() )
+        spk->setLiveMasterClosure( !plan->masterLinear );
     pump_->setPlan( plan );
     pump_->start();
     publishedSignature_ = planSignature();
 }
 
 // --- the triggers -----------------------------------------------------------
+
+bool SLiveMonitor::masterShapeRefusesMonitoring()
+{
+    SStdMixer *mixer = rootMixer();
+    if( !mixer ) return false;
+
+    // THE MASTER-SHAPE PRECONDITION (design D3).
+    //
+    // "root(unarmed) + ring" is exact only while the master is a unity sum
+    // followed by an identity map. Since proposal 45 M3 the OTHER mode is
+    // wired for one class of reason and still refused for the other, and the
+    // split is `twMasterShape::fromMasterLane`:
+    //
+    //  * THE MASTER LANE doing something -- an insert, a fader, a mute, an
+    //    automation lane -- is RENDERABLE. The plan builder gives the pump's
+    //    master node that lane's inserts and gain envelope (AC3.2), the pump
+    //    reads the unarmed tracks as per-track `frozenInputs`, and twSpeaker
+    //    stops adding the frozen root page (setLiveMasterClosure). The
+    //    arrangement is heard once, through the master, from the ring.
+    //
+    //  * THE MIXER's own sum -- a non-unity input level, a non-identity
+    //    channel map, a width disagreement -- is still REFUSED, because the
+    //    pump has NO per-input level anywhere: a plan built for that shape
+    //    would silently drop it. One log line naming the reason, and the
+    //    arrangement keeps playing untouched.
+    {
+        const twlive::twMasterShape shape = twlive::checkMasterShape(
+            mixer->masterMixComponent().get(),
+            mixer->masterRewireComponent().get(),
+            (idx_t) app_->masterChannels(),
+            sliveplan::masterChainStateOf( mixer ) );
+        // PROPOSAL 45 M3 / D4b: a LANE-CAUSED non-linear master is renderable
+        // as a CLOSURE -- the pump renders the whole arrangement through the
+        // master lane's own chain and gain -- while a MIXER-CAUSED one (a
+        // non-unity sum, a non-identity map) is not, and is still refused.
+        // Hence the two-part condition rather than `!shape.linear()`.
+        //
+        // GETTING HERE COST TWO ROUNDS OF DIAGNOSIS AND THE FIRST ROUND'S
+        // FINDINGS WERE ALL WRONG. The write-up is in
+        // plan/proposed/45_SYSTEM_LANES.md, M3; what a reader needs here is
+        // the one structural fact it turned up:
+        //
+        //   AC3.1 CANNOT BE "STOP PULLING THE FROZEN LANE". twSpeaker
+        //   publishes the transport position from engine->currentPosition()
+        //   AFTER the frozen pull, so suppressing the pull stops the playhead
+        //   -- measured, the demand position stayed at 0 for a whole 5.2 s run
+        //   and the unarmed track went silent. The suppression drops the SUM
+        //   and keeps the pull; see the comment at twspeaker.cc's
+        //   `frozenPlaying`.
+        //
+        // Measured with that in place, over [168000, 216000) -- past the
+        // priming lag AND inside the material, both of which a first attempt
+        // got wrong -- with an unarmed track at -12 dB carrying
+        // test_autosaw.wav and an armed, monitored track on the paced file
+        // input through a 0.25 gain, master insert 2.0x:
+        //
+        //   ring alone, Closure                0.164143   closed form 0.164142
+        //   root + ring, LINEAR                0.101661   closed form 0.100505
+        //   root + ring, Closure               0.201039   closed form 0.201010
+        //   root at -6 dB + ring, Closure      0.283832   closed form 0.283790
+        //
+        // and the root-presence discriminator (raise the unarmed track 6 dB,
+        // watch the output) reads 1.4118 against a closed form of 1.4118. It
+        // read 1.0046 -- the arrangement absent -- before the AC3.1 rebuild.
+        //
+        // HEADROOM IS PART OF THE MEASUREMENT, not housekeeping: an earlier
+        // probe put a 2.0x master over full-scale sources and clipped the
+        // 16-bit capture at peak exactly 1.0000, which read as an
+        // unexplained ~11 % shortfall and was very nearly written up as one.
+        if( !shape.linear() && !shape.fromMasterLane ) {
+            if( lastRefusal_.isEmpty() ) {
+                lastRefusal_ = QStringLiteral(
+                    "the master is not a unity sum with an identity map (%1); "
+                    "live monitoring is off" ).arg( QString::fromUtf8( shape.reason ) );
+                TW_LOGW( "shell", "[LIVE] %s", lastRefusal_.toStdString().c_str() );
+            }
+            return true;
+        }
+    }
+    return false;
+}
 
 void SLiveMonitor::refresh()
 {
@@ -677,6 +765,18 @@ void SLiveMonitor::refresh()
         // empty() accounts for the metronome, so a click-only lane republishes
         // here too - which is what a tempo edit while playing needs.
         if( !current_.empty() ) {
+            // THE SHAPE IS RE-ASKED HERE, and this is the whole point of the
+            // extraction: an insert, a fader, a mute or an automation lane on
+            // the master moves NO membership, so this is the ONLY route a
+            // master change reaches while a track is already monitoring - and
+            // for a track whose monitor mode is ON it is also the route ARMING
+            // takes, because such a track was in the live set before it was
+            // armed.
+            if( masterShapeRefusesMonitoring() ) {
+                detachLiveEvents( current_ );
+                current_ = SLiveClosure();
+                return;
+            }
             attachLiveEvents( current_ );
             publishPlan( current_, rootEpoch(), 0 );
         }
@@ -763,50 +863,31 @@ void SLiveMonitor::refresh()
             ensureMetronome( false );
             closeInputIfUnused();
             if( liveOpened_ ) {
-                if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() )
+                if( std::shared_ptr<twSpeaker> spk = app_->getSpeaker() ) {
+                    // Clear the mode BEFORE closing: a stale "closure" left on
+                    // the speaker would suppress the frozen lane for a project
+                    // that is merely playing, which is silence.
+                    spk->setLiveMasterClosure( false );
                     spk->closeLive();
+                }
                 liveOpened_ = false;
             }
         }
         return;
     }
 
-    // THE MASTER-SHAPE PRECONDITION, BEFORE ANYTHING IS ARMED (design D3).
-    //
-    // "root(unarmed) + ring" is exact only while the master is a unity sum
-    // followed by an identity map. The plan builder can express the other mode
-    // - the master joins the closure and the pump renders it - but the RT half
-    // of it is NOT wired: twSpeaker adds the frozen root page whenever the
-    // frozen lane is PLAYING, and nothing reads twLivePlan::masterLinear. A
-    // Closure-shaped plan would therefore be summed ON TOP of a root page that
-    // already contains those tracks, and the user would hear the arrangement
-    // doubled.
-    //
-    // So it is REFUSED rather than approximated: one log line naming the
-    // reason, and the arrangement keeps playing untouched. Whoever adds a
-    // master insert chain will land here, and the fix is a twSpeaker that
-    // stops adding the root page while a non-linear plan is live.
-    {
-        const twlive::twMasterShape shape = twlive::checkMasterShape(
-            mixer->masterMixComponent().get(),
-            mixer->masterRewireComponent().get(),
-            (idx_t) app_->masterChannels() );
-        if( !shape.linear() ) {
-            if( lastRefusal_.isEmpty() ) {
-                lastRefusal_ = QStringLiteral(
-                    "the master is not a unity sum with an identity map (%1); "
-                    "live monitoring is off" ).arg( QString::fromUtf8( shape.reason ) );
-                TW_LOGW( "shell", "[LIVE] %s", lastRefusal_.toStdString().c_str() );
-            }
-            // Nothing is armed on this path, but a PREVIOUS pass may have left
-            // live sources attached (the master can only stop being linear
-            // while something is already monitoring). Dropping the closure
-            // without dropping them would leave a ring being drained for a
-            // lane nobody renders.
-            detachLiveEvents( current_ );
-            current_ = SLiveClosure();
-            return;
-        }
+    // THE MASTER-SHAPE PRECONDITION, asked on this route AND on the `sameSet`
+    // fast path above (see masterShapeRefusesMonitoring's declaration for what
+    // asking on only one of them cost).
+    if( masterShapeRefusesMonitoring() ) {
+        // Nothing is armed on this path, but a PREVIOUS pass may have left
+        // live sources attached (the master can only stop being linear while
+        // something is already monitoring). Dropping the closure without
+        // dropping them would leave a ring being drained for a lane nobody
+        // renders.
+        detachLiveEvents( current_ );
+        current_ = SLiveClosure();
+        return;
     }
 
     if( !arriving.ordered.empty() ) {
