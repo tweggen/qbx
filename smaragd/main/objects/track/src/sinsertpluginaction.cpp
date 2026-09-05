@@ -96,6 +96,24 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
             desc.isInstrument = known.isInstrument;
     }
 
+    // AC5.3 / D6: NO INSTRUMENT ON A SYSTEM LANE. An ordinary EFFECT is
+    // accepted and is the whole point of the master chain (M3's master insert
+    // is one), so the refusal is on the instrument flag and nothing else --
+    // which is why it sits here, after desc.isInstrument has been settled,
+    // rather than beside the resolve.
+    //
+    // The reason is the same one that makes set-track-midi-output pointless
+    // here: an instrument is driven by STrack::eventFeed(), which merges a
+    // lane's OWN clip set with the children that bubble events up, and a
+    // system lane carries no clips (D6). An instrument in master slot 0 would
+    // be prepared, activated, chased and reset for every page, forever, for a
+    // feed that is empty by construction -- and it would sit in FRONT of the
+    // master insert chain, so the one slot a user actually wants there moves.
+    if( desc.isInstrument
+        && splacements::refuseSystemLane( track, "insert-plugin (instrument)" ) ) {
+        return {false, nullptr};
+    }
+
     // ONE INSTRUMENT PER TRACK, ALWAYS SLOT 0 (D3). A second is REFUSED rather
     // than appended: there is one event feed per track, so a second instrument
     // would either duplicate every note or silently take none.

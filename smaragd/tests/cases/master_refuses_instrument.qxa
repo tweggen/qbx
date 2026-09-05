@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M5, AC5.3 / D6: AN INSTRUMENT IN SLOT 0 OF A SYSTEM LANE IS
+  REFUSED. AN ORDINARY EFFECT IS ACCEPTED.
+
+  THE PAIR IS THE POINT, and a case that only asserted the refusal would be
+  much weaker than it looks: the master's plugin CHAIN is the reason proposal
+  45 M3 exists at all - a limiter on the master is the gesture the whole
+  Closure path was built to serve - so a check that refused everything would
+  pass a refusal-only case while breaking the feature. Both halves are asserted
+  here, over the SAME lane, in one run.
+
+  WHY AN INSTRUMENT IS DIFFERENT. It is driven by STrack::eventFeed(), which
+  merges a lane's OWN clip set with the children that bubble events up, and a
+  system lane carries no clips (D6) - the same reason set-track-midi-output is
+  refused. An instrument in master slot 0 would be prepared, activated, chased
+  and reset once per page forever for a feed that is empty by construction, and
+  it would sit in FRONT of the master insert chain, moving the one slot the
+  user actually wants there.
+
+  WHERE THE CHECK SITS IS LOAD-BEARING and the case gates it. It is AFTER
+  desc.isInstrument has been settled - the flag can come from an explicit
+  attribute or from the registry - not beside the resolve, because the refusal
+  is on the FLAG and not on the lane. Putting it earlier would refuse the
+  effect too, which the second half of this case is what catches.
+
+  THE ANNOUNCEMENT (D6: "a bound is ANNOUNCED, never silent") is asserted
+  beside the refusal, in the same window: assert-log's window opens at the
+  immediately preceding action that is not itself an assert-log.
+-->
+<SActionScript version="1" name="master_refuses_instrument">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <assert-system-lane trackPath="$master" role="master" plugins="0"/>
+
+    <!-- THE REFUSAL. tw.native.303 is the in-repo native instrument, present
+         in every build, so this half needs no fixture module at all. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="TW 303" vendor="Smaragd"
+                   isInstrument="true" nIn="0" nOut="2"
+                   expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="insert-plugin (instrument): refused on the master lane"/>
+
+    <!-- AC5.5: nothing half-applied. A slot created and parented before the
+         refusal would show here, and a chain of 1 is what it would read. -->
+    <assert-system-lane trackPath="$master" plugins="0"/>
+
+    <!-- The CLAP fixture instrument too, so the refusal is not accidentally
+         specific to the built-in registry path: this one carries the flag as
+         an explicit attribute rather than resolving it from a scan. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" isInstrument="true"
+                   nIn="0" nOut="2" expectReject="true"/>
+    <assert-system-lane trackPath="$master" plugins="0"/>
+
+    <!-- ================= THE OTHER HALF ================= -->
+    <!-- AN ORDINARY EFFECT IS ACCEPTED, on the same lane, in the same run.
+         This is the master insert M3 exists for. -->
+
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+    <assert-system-lane trackPath="$master" plugins="1"/>
+
+    <!-- ...and an instrument is still refused with an effect already there,
+         so the refusal is the POLICY and not "slot 0 happened to be free". -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="TW 303" vendor="Smaragd"
+                   isInstrument="true" nIn="0" nOut="2"
+                   expectReject="true"/>
+    <assert-system-lane trackPath="$master" plugins="1"/>
+
+    <!-- THE CONTROL: an instrument on an ORDINARY track still works. Without
+         it this case would pass against a build where insert-plugin refused
+         every instrument everywhere. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.303"
+                   name="TW 303" vendor="Smaragd"
+                   isInstrument="true" nIn="0" nOut="2"/>
+    <assert-track-head trackPath="0" contains="I=1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
