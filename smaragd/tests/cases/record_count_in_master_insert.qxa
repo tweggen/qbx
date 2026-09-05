@@ -106,20 +106,60 @@
     <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
 
     <record-start/>
+
+    <!-- THE CLAIM IS ASSERTED AS A PAIR, and the two halves answer to
+         different things on purpose.
+
+         FIRST, THE MECHANISM, and it is LOAD-INDEPENDENT. warmFrozenLane()
+         logs the demand it issues, so this line is present iff the count-in
+         actually spent itself freezing the priming window. Nothing about a
+         busy box can make it absent, and nothing about a fast one can make it
+         appear: it is the assertion that would bite if a change removed the
+         warm-up or moved it after the click.
+
+         THE TWO HALVES ARE DISJOINT, watched: disabling the warmFrozenLane()
+         call fails BOTH, while warming the WRONG POSITION - the call still
+         made, the pages still demanded, just not the ones the transport is
+         about to want - fails only the priming half. So neither is a
+         restatement of the other.
+         AC3.1's own hazard - that this demand must be re-rooted UNDER the
+         master while the lane is live-owned - is gated separately and equally
+         load-independently, by the assert-render-policy line at the end. -->
+    <assert-log level="debug" contains="warmFrozenLane: demanded" minCount="1"/>
     <wait-ms ms="4700"/>
     <wait-ms ms="1500"/>
     <record-stop/>
 
-    <!-- THE CLAIM, now under a CLOSURE: the transport did not wait for the
-         readahead at all,
-         because the count-in had already frozen what it needed. ONE poll of
-         slack, on a case that measured EXACTLY 0 on 5 runs of 5 and is
-         RUN_SERIAL. It is deliberately tight enough to bite BOTH halves of
-         the fix: without the warm-up it reads 28+, and with the warm-up but
-         the readahead's first pass delayed by its old unconditional 20 ms
-         wait it reads exactly 2. If this ever flakes, THIS is the number to
-         relax - not the warm-up. -->
-    <assert-priming maxPolls="1"/>
+    <!-- THE EFFECT, and the second half of the pair the mechanism
+         assertion above opens: the transport barely waited for the readahead,
+         because the count-in had already frozen what it needed. THIS ONE IS A
+         WALL-CLOCK QUANTITY and is bounded as such, in the same class as
+         twlog_test, qxa.log_dock_scale and playback_test: it measures the box
+         as much as the code.
+
+         MEASURED ON A 4-CORE BOX, this exact case:
+
+           idle                     0 or 1 polls, 6 runs of 6
+           under six spinners       0, 0, 0, 0, 6, 10
+           WITH THE WARM-UP OFF     55, 57, 57
+
+         So 12 is chosen to clear the measured loaded tail while keeping a
+         factor of more than four below the un-warmed floor. The un-warmed
+         number was measured HERE, on this case and this box, by disabling the
+         warmFrozenLane() call, rather than quoted from the case next door. It is a WEAKER
+         statement than record_count_in_primed's ONE, and deliberately so -
+         this case is strictly heavier than that one, because the master
+         insert makes the plan a CLOSURE and the pump therefore renders the
+         whole nine-track arrangement THROUGH the master lane while the
+         count-in primes. The tight number stays next door, on the case that
+         can carry it.
+
+         IF THIS FAILS, CHECK THAT THE BOX WAS IDLE FIRST. RUN_SERIAL excludes
+         other tests in the same ctest invocation, not a second worktree's
+         build or another agent's suite. A reading in the twenties is a
+         regression; a reading in the low teens is a loaded machine. And the
+         thing to relax is never the warm-up. -->
+    <assert-priming maxPolls="12"/>
 
     <!-- ...and the count-in still places the take AT THE LOCATOR, which is
          what record_count_in gates and what the warm-up must not disturb. -->
