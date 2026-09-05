@@ -5,6 +5,7 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
+#include "app/model/splacements.h"
 #include "app/model/sappcontext.h"
 #include <QDomElement>
 
@@ -23,7 +24,16 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    SObject *root = project->getRootComponent();
+    // THE ARRANGEMENT QUALIFIER IS HONOURED. `parseInto` peels a "Name:"
+    // qualifier off the path into pathRoot_, and this resolved against
+    // project->getRootComponent() -- THE DEFAULT ROOT -- unconditionally, so
+    // `source="Drums:0"` silently moved the DEFAULT arrangement's track 0.
+    // That is the "resolved against the wrong root SUCCEEDS" class
+    // sobjectpath.h's own comment warns about: no error, no log line, the
+    // wrong object edited. rootNamed() returns the default root for an empty
+    // qualifier, so an unqualified path is unchanged, and NULL for a name that
+    // is not an arrangement -- a refusal rather than a silent misfire.
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SStdMixer *rootMixer = dynamic_cast<SStdMixer *>(root);
     if (!rootMixer) {
         return {false, nullptr};

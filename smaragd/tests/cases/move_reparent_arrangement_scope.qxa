@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  move-track AND reparent-track HONOUR THE ARRANGEMENT QUALIFIER.
+
+  The third instance of one defect. `strackpath::parseInto` peels a "Name:"
+  qualifier off a path into pathRoot_, and an action that then resolves against
+  project->getRootComponent() gets THE DEFAULT ROOT whatever the caller wrote.
+  insert-plugin and remove-plugin had it and were fixed for proposal 45 AC1.6;
+  smovetrackaction.cpp and sreparenttrackaction.cpp had the identical shape,
+  were named in that PR as not fixed, and are fixed here.
+
+  IT IS THE "RESOLVED AGAINST THE WRONG ROOT SUCCEEDS" CLASS sobjectpath.h's own
+  comment warns about, which is why it is worth a case rather than a one-line
+  patch: there is no error, no rejection and no log line. The action applies,
+  reports success, and reorders somebody else's arrangement. A script asserting
+  only that the verb was accepted passes on the broken binary.
+
+  THE CASE IS A PAIR OF CLAIMS PER VERB, and both halves are needed. That the
+  NAMED arrangement changed is half; that the DEFAULT root did NOT is the other,
+  and it is the half that actually distinguishes the two binaries, because the
+  broken build edits the default root by exactly the amount the fixed build
+  edits the named one.
+
+  Six tracks, three per root, named so every position is identifiable:
+
+    Drums   arrangement    D0 D1 D2
+    default root          M0 M1 M2
+
+  move-track  source="Drums:0" toIndex="2"   gives   D1 D2 D0  /  M0 M1 M2
+  then reparent-track source="Drums:2" destParent="Drums:0"
+                                             gives   D1 D2     /  M0 M1 M2
+                                             with D0 nested under D1.
+
+  Pre-fix BOTH verbs reorder the default root instead, so the Drums assertions
+  and the master assertions fail together, in opposite directions.
+
+  assert-track-name resolves through splacements::rootNamed(), so it can address
+  either root; that is what makes the negative half expressible at all.
+-->
+<SActionScript version="1" name="move_reparent_arrangement_scope">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The default root: three named lanes that must never move. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="M0"/>
+    <set-track-name trackPath="1" name="M1"/>
+    <set-track-name trackPath="2" name="M2"/>
+
+    <!-- A second arrangement with three of its own. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="D0"/>
+    <set-track-name trackPath="Drums:1" name="D1"/>
+    <set-track-name trackPath="Drums:2" name="D2"/>
+
+    <!-- Both roots as built. -->
+    <assert-track-name trackPath="Drums:0" name="D0"/>
+    <assert-track-name trackPath="Drums:1" name="D1"/>
+    <assert-track-name trackPath="Drums:2" name="D2"/>
+    <assert-track-name trackPath="0" name="M0"/>
+    <assert-track-name trackPath="1" name="M1"/>
+    <assert-track-name trackPath="2" name="M2"/>
+
+    <!-- MOVE, inside Drums. -->
+    <move-track source="Drums:0" toIndex="2"/>
+    <assert-track-name trackPath="Drums:0" name="D1"/>
+    <assert-track-name trackPath="Drums:1" name="D2"/>
+    <assert-track-name trackPath="Drums:2" name="D0"/>
+    <assert-track-name trackPath="0" name="M0"/>
+    <assert-track-name trackPath="1" name="M1"/>
+    <assert-track-name trackPath="2" name="M2"/>
+
+    <!-- One undo puts Drums back and still leaves the master alone. -->
+    <undo count="1"/>
+    <assert-track-name trackPath="Drums:0" name="D0"/>
+    <assert-track-name trackPath="Drums:2" name="D2"/>
+    <assert-track-name trackPath="0" name="M0"/>
+    <assert-track-name trackPath="2" name="M2"/>
+    <redo count="1"/>
+
+    <!-- REPARENT, inside Drums: D0 (now at index 2) under D1 (index 0). -->
+    <reparent-track source="Drums:2" destParent="Drums:0" destIndex="0"/>
+    <assert-track-name trackPath="Drums:0" name="D1"/>
+    <assert-track-name trackPath="Drums:0,0" name="D0"/>
+    <assert-track-name trackPath="Drums:1" name="D2"/>
+    <assert-track-name trackPath="0" name="M0"/>
+    <assert-track-name trackPath="1" name="M1"/>
+    <assert-track-name trackPath="2" name="M2"/>
+
+    <assert-arrangements names="Drums"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
