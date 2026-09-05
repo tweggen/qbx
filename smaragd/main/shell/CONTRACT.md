@@ -1270,3 +1270,46 @@ It lives as a pure function on two string lists precisely so the gate needs no
 `QSettings`, no config directory and no platform — the test STATES the macOS and
 Windows default shapes rather than asserting whatever the box it runs on
 produces.
+
+## inv. 57 — `planSignature()` covers the MASTER LANE, not only the closure members
+
+`SLiveMonitor` has exactly ONE rebuild trigger for an edit that does not move
+the live SET: the 40 ms `pumpEdits()` tick, which republishes when
+`planSignature()` differs from what was published. Everything design section 3
+calls a rebuild trigger and that is not an arm, a disarm or a transport edge
+arrives through that one comparison — a fader move, an insert added, removed or
+reordered, an input device change, a tempo edit.
+
+**The master lane is not a closure member** (D2 keeps it out of `childLinks()`),
+so the loop over `current_.ordered` never reaches it, and for two milestones an
+insert, a fader move, a mute or an automation lane ON THE MASTER changed nothing
+in the signature at all. `pumpEdits()` never fired and the live plan kept the
+master shape it was built with for the life of the arm. Every other master gate
+in the suite builds the master chain BEFORE arming, which is why it survived.
+
+Measured: with the master insert applied 2.6 s into a monitored run instead of
+before the arm, the output read **0.082073** — the no-master reference of
+0.082071 to five significant figures — where the same chain built early reads
+0.164142. The insert was completely inaudible on the live lane.
+
+Two properties are contractual:
+
+1. **A closure member and the master lane are asked THE SAME QUESTION**, through
+   the one `appendTrackSignature()` helper. It was inlined in `planSignature()`
+   and the master simply was not asked; a second hand-written copy for the
+   master would be the same bug waiting on a third property being added to only
+   one of them. (Proposal 41 M7's `tagChipRect()` lesson, and the take-lane
+   geometry's, applied a third time.)
+2. **`pumpEdits()` re-asks `masterShapeRefusesMonitoring()`** before it
+   republishes. An edit that changes the signature can also change whether
+   monitoring is LEGAL: a mixer-caused non-linear master has no representable
+   plan, and republishing one hands the pump a shape it silently mis-renders.
+   **This half has NO gate** — no verb in this repo can set a master input level
+   or a channel map — and reverting it leaves
+   `master_insert_while_monitoring` green. It is kept on reasoning; say so
+   rather than letting the green case imply otherwise.
+
+Gate: `master_insert_while_monitoring` (RUN_SERIAL, `SMARAGD_CAPTURE_SPEED=1`,
+the sawtooth input), which arms with a CLEAN master and edits it afterwards —
+the ordinary user gesture of monitoring a take and then dropping a limiter on
+the master.

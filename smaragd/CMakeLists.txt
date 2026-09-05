@@ -473,14 +473,17 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
     endif()
 endforeach()
 
-# The four master_closure_* cases (proposal 45 M3, AC3.3) take the SAWTOOTH fixture
+# The four master_closure_* cases (proposal 45 M3, AC3.3) and
+# master_insert_while_monitoring (the same discriminator with the master built
+# LATE, while a lane is already live) take the SAWTOOTH fixture
 # on the input instead, and that is load-bearing rather than incidental: they measure
 # the SUM of the ring and an unarmed track carrying test_autosaw.wav, and two
 # copies of one signal have no closed-form sum -- their RMS depends on a
 # relative phase nothing here controls. Uncorrelated sources make
 # every band a closed form. Hence their own entry rather than four more names above.
 foreach(_mc master_closure_linear_ring master_closure_heard_ring
-            master_closure_heard_root master_closure_heard_root_raised)
+            master_closure_heard_root master_closure_heard_root_raised
+            master_insert_while_monitoring)
     if(TEST qxa.${_mc})
         set_tests_properties(qxa.${_mc} PROPERTIES
             RUN_SERIAL TRUE

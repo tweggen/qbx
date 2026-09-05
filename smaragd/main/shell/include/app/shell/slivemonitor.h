@@ -256,6 +256,13 @@ private:
      * Returns true when monitoring must stand down; logs the reason ONCE.
      */
     bool masterShapeRefusesMonitoring();
+    /**
+     * Stand the live lane down because the master shape now refuses it.
+     * Extracted so refresh()'s fast path and the pumpEdits() tick cannot
+     * drift: they are the two routes a master change reaches, and a teardown
+     * spelled twice is a teardown that will one day be spelled differently.
+     */
+    void tearDownLiveForRefusal();
     /// The click, rebuilt only when its snapshot actually changed (a plan is
     /// republished every time a fader moves; the source holds click waveforms).
     std::shared_ptr<twLiveInputSource> ensureMetronome( bool want );

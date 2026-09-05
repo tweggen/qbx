@@ -773,8 +773,7 @@ void SLiveMonitor::refresh()
             // takes, because such a track was in the live set before it was
             // armed.
             if( masterShapeRefusesMonitoring() ) {
-                detachLiveEvents( current_ );
-                current_ = SLiveClosure();
+                tearDownLiveForRefusal();
                 return;
             }
             attachLiveEvents( current_ );
@@ -1110,7 +1109,25 @@ void SLiveMonitor::pumpEdits()
     if( current_.empty() || suspendedForRender_ || !departing_.empty() ) return;
     const std::vector<std::uintptr_t> sig = planSignature();
     if( sig == publishedSignature_ ) return;
+    // THE REFUSAL IS RE-ASKED HERE, not only on arm/disarm/transport. An edit
+    // that changes the signature can also change whether monitoring is LEGAL
+    // at all -- a mixer-caused non-linear master (a non-unity input level, a
+    // non-identity channel map) has no representable plan, so republishing one
+    // would hand the pump a shape it silently mis-renders.
+    //
+    // NOT GATED, and it is the one half of this fix that is not: no verb in
+    // this repo can set a master input level or a channel map, so the
+    // mixer-caused branch is unreachable from a script. What the new case
+    // master_insert_while_monitoring bites is the OTHER half, the signature
+    // below.
+    if( masterShapeRefusesMonitoring() ) { tearDownLiveForRefusal(); return; }
     publishPlan( current_, 0, 0 );
+}
+
+void SLiveMonitor::tearDownLiveForRefusal()
+{
+    detachLiveEvents( current_ );
+    current_ = SLiveClosure();
 }
 
 // --- state ------------------------------------------------------------------
@@ -1141,33 +1158,59 @@ double SLiveMonitor::takeInputPeak( const STrack *track )
     return 0.0;
 }
 
+// ONE SPELLING OF "what about this track can make a published plan stale",
+// used for a closure member and for the MASTER LANE alike. It was inlined in
+// planSignature() and the master lane simply was not asked; a second, hand-
+// written copy for the master would be the same bug waiting on a third
+// property being added to only one of them.
+static void appendTrackSignature( std::vector<std::uintptr_t> &sig, STrack *t )
+{
+    if( !t ) { sig.push_back( 0u ); return; }
+    sig.push_back( (std::uintptr_t) t );
+    sig.push_back( (std::uintptr_t) t->getChannels() );
+    if( SPluginChain *chain = t->getPluginChain() ) {
+        const int n = chain->getSlotCount();
+        for( int i = 0; i < n; ++i ) {
+            SPluginSlot *slot = chain->getSlotAt( i );
+            sig.push_back( slot ? (std::uintptr_t) slot->getProcessor().get() : 0u );
+        }
+    }
+    if( t->gainStageComponent() ) {
+        // The fader, as bits: the pump replays an Envelope SNAPSHOT, so a
+        // gain that moved is a plan that is out of date.
+        const twGainStage::Envelope e = t->gainStageComponent()->envelope();
+        std::uintptr_t bits = 0;
+        std::memcpy( &bits, &e.base, sizeof( bits ) < sizeof( e.base )
+                                          ? sizeof( bits ) : sizeof( e.base ) );
+        sig.push_back( bits );
+        sig.push_back( e.muted ? 1u : 0u );
+        sig.push_back( (std::uintptr_t) e.vol.get() );
+        sig.push_back( (std::uintptr_t) e.mute.get() );
+    }
+    sig.push_back( 0xFFFFu );   // a member separator, so two shapes cannot alias
+}
+
 std::vector<std::uintptr_t> SLiveMonitor::planSignature() const
 {
     std::vector<std::uintptr_t> sig;
-    for( STrack *t : current_.ordered ) {
-        sig.push_back( (std::uintptr_t) t );
-        sig.push_back( (std::uintptr_t) t->getChannels() );
-        if( SPluginChain *chain = t->getPluginChain() ) {
-            const int n = chain->getSlotCount();
-            for( int i = 0; i < n; ++i ) {
-                SPluginSlot *slot = chain->getSlotAt( i );
-                sig.push_back( slot ? (std::uintptr_t) slot->getProcessor().get() : 0u );
-            }
-        }
-        if( t->gainStageComponent() ) {
-            // The fader, as bits: the pump replays an Envelope SNAPSHOT, so a
-            // gain that moved is a plan that is out of date.
-            const twGainStage::Envelope e = t->gainStageComponent()->envelope();
-            std::uintptr_t bits = 0;
-            std::memcpy( &bits, &e.base, sizeof( bits ) < sizeof( e.base )
-                                              ? sizeof( bits ) : sizeof( e.base ) );
-            sig.push_back( bits );
-            sig.push_back( e.muted ? 1u : 0u );
-            sig.push_back( (std::uintptr_t) e.vol.get() );
-            sig.push_back( (std::uintptr_t) e.mute.get() );
-        }
-        sig.push_back( 0xFFFFu );   // a member separator, so two shapes cannot alias
-    }
+    for( STrack *t : current_.ordered )
+        appendTrackSignature( sig, t );
+
+    // THE MASTER LANE, WHICH IS NOT A CLOSURE MEMBER AND WAS THEREFORE INVISIBLE
+    // HERE. D2 keeps the master lane out of childLinks(), so it is in no
+    // closure and the loop above never reaches it -- which meant an insert, a
+    // fader move, a mute or an automation lane on the MASTER changed nothing
+    // in this signature and pumpEdits() never fired. The live plan then kept
+    // whatever master shape it was built with for the whole life of the arm.
+    //
+    // Under the LINEAR split that is not cosmetic: the freeze path applies the
+    // new master insert to the frozen root page while the ring bypasses it, and
+    // the RT adds the two together. The halves stop belonging to the same
+    // signal -- the mismatch D4a's shape check exists to prevent, undetected
+    // because nothing re-asked. Gate: master_insert_while_monitoring.
+    sig.push_back( 0xEEEEu );
+    if( SStdMixer *mixer = rootMixer() )
+        appendTrackSignature( sig, mixer->masterLane() );
     // THE CLICK, so a TEMPO or TIME-SIGNATURE edit republishes (design section
     // 3's rebuild triggers). Asked rather than wired, exactly like the fader:
     // `set-tempo` re-derives every beats-timebase link in the project and would

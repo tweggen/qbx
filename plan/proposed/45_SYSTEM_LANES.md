@@ -1152,11 +1152,10 @@ taken — the rewritten, no-longer-vacuous successor to
   that enters the closure puts its own monitored audio in front of the window
   (0.105867 where the clean run reads 0.082071) — this is also why every audible
   case above is ONE measurement in its own file, after a four-phase version
-  returned the identical 0.100520 four times over. And **a master insert made
-  while a lane is already monitoring does not rebuild the live plan at all**, so
-  the closure is never entered and the latch sabotage passes. That second fact
-  is itself an ungated gap in design section 3's rebuild triggers, found here
-  and not fixed.
+  returned the identical 0.100520 four times over. (The second reason this case
+  was abandoned — "a master insert made while a lane is already monitoring does
+  not rebuild the live plan at all" — was a REAL DEFECT and is now **FIXED**;
+  see the section below.)
 - **The MIXER-caused refusal branch.** No verb in this repo can set a master
   input level or a master channel map, so the path that is still refused has no
   headless gate. `master_insert_refuses_monitoring`'s old name implied
@@ -1171,6 +1170,55 @@ taken — the rewritten, no-longer-vacuous successor to
   AC3.7, AC3.8**. `liveThreadRefusals` and `liveOwnedRefusals` read **0** in
   every case above, but with the frozen demand unre-rooted that is not yet
   evidence of AC3.4.
+
+### M3a — A master edit made while a lane is ALREADY live
+
+Found while gating M3, recorded there as ungated, and fixed here.
+
+**`SLiveMonitor` has exactly one rebuild trigger for an edit that does not move
+the live SET**: the 40 ms `pumpEdits()` tick, which republishes when
+`planSignature()` differs. That signature walked `current_.ordered` — the
+CLOSURE MEMBERS — and **the master lane is deliberately not one of them** (D2:
+a master lane is not a `childLinks()` member). So an insert, a fader move, a
+mute or an automation lane **on the master** changed nothing in the signature,
+`pumpEdits()` never fired, and the live plan kept whatever master shape it was
+built with for the whole life of the arm.
+
+Every other master gate in the suite builds the master chain BEFORE arming, so
+the plan is right on its first publication and nothing has to rebuild it. That
+is exactly why this survived M2 and M3.
+
+**It is not cosmetic staleness.** Under the LINEAR split the freeze path applies
+the new master insert to the frozen root page while the ring bypasses it, and
+the RT adds the two together — the halves stop belonging to the same signal,
+which is the mismatch D4a's shape check exists to prevent, undetected because
+nothing re-asked.
+
+**Measured**, with `master_closure_heard_ring`'s fixture and window and the
+master insert applied 2.6 s into the run instead of before the arm:
+
+| | measured | closed form |
+|---|---|---|
+| master built LATE, pre-fix | **0.082073** | 0.082071 — *the linear split* |
+| master built LATE, fixed | **0.164142** | 0.164142 — *2× through the master* |
+
+A factor of two, and the pre-fix number is the no-master reference to five
+significant figures: the insert was **completely inaudible** on the live lane.
+
+**Two changes, and only one of them is gated.**
+
+1. **`planSignature()` now covers the master lane**, through the same
+   `appendTrackSignature()` helper a closure member goes through — one spelling,
+   so a third property added later cannot reach only one of them. **Gated**:
+   reverting it fails `master_insert_while_monitoring` on BOTH its assertions
+   (the Closure log line absent, and the audio at 0.082073).
+2. **`pumpEdits()` re-asks `masterShapeRefusesMonitoring()`** before
+   republishing, so a master edit that makes monitoring ILLEGAL is noticed while
+   a lane is live rather than only at the next arm/disarm/transport edge.
+   **NOT GATED, and it was watched NOT failing**: reverting it leaves the new
+   case green, because no verb in this repo can produce a mixer-caused
+   non-linear master (the same gap the row below already records). It is kept
+   on reasoning, not on evidence, and this paragraph is the honest label.
 
 ### M4 — The master lane on screen
 

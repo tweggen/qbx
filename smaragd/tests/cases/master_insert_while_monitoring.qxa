@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M3 follow-up: A MASTER INSERT MADE WHILE A LANE IS ALREADY
+  MONITORING MUST REBUILD THE LIVE PLAN.
+
+  Found while gating M3 and named in PR #171 as not fixed. Every other master
+  gate in this suite builds the master chain BEFORE arming, so the plan is
+  correct on its first publication and nothing rebuilds it. This case is the
+  one that arms first and edits the master afterwards, which is the ordinary
+  user gesture: monitor a take, then drop a limiter on the master.
+
+  WHAT WAS WRONG. SLiveMonitor has exactly one rebuild trigger for an edit that
+  does not change the live SET: the 40 ms pumpEdits() tick, which republishes
+  when planSignature() differs. That signature walks `current_.ordered`, the
+  CLOSURE MEMBERS, and the master lane is deliberately not one of them (D2: a
+  master lane is not a childLinks() member). So a master insert, a master fader
+  move, a master mute and a master automation lane were ALL invisible to it: the
+  live plan kept whatever master shape it was built with, for the life of the
+  arm.
+
+  It is not a cosmetic staleness. Under the LINEAR split the RT adds the frozen
+  root page to the ring, and the FREEZE path does apply the new master insert
+  while the ring bypasses it, so the two halves stop belonging to the same
+  signal. That is exactly the mismatch D4a's shape check exists to prevent, and
+  it went undetected because nothing re-asked the question.
+
+  THE MEASUREMENT is the M3 ring-only discriminator, run a second time with the
+  master insert applied LATE:
+
+    master_closure_linear_ring   ring alone, no master     0.082071
+    master_closure_heard_ring    ring alone, 2.0x master   0.164142   (built early)
+    THIS CASE                    ring alone, 2.0x master   0.164142   (built LATE)
+
+  Pre-fix this reads the FIRST row, because the plan is still the one published
+  at arm time. The two bands are disjoint by a factor of two.
+
+  THE WINDOW AND THE FIXTURE ARE master_closure_heard_ring's, unchanged, and
+  the reasoning for both is in that case's header: the sources are uncorrelated
+  (root test_autosaw.wav, ring test_sawtooth.wav), the armed track runs through
+  a 0.25 gain so the 2.0x master does not clip a 16-bit capture, the fixture is
+  placed twice for 8 s, and [168000, 216000) is the one window that is past the
+  monitor priming lag AND inside the material.
+
+  THE INSERT LANDS AT ROUGHLY 2.6 s of captured audio, which is past the
+  priming lag and 0.9 s before the window opens. That margin covers the 40 ms
+  rebuild tick and the RT's crossfade at the flip with an order of magnitude to
+  spare; it is not tuned to them.
+
+  THE LOG ASSERTION IS A PAIR, and that is not belt and braces. The string
+  "the RT pops the ring only" appears in SLiveMonitor's Closure line AND is
+  interpolated by the plan builder, which is what made the retired
+  master_insert_refuses_monitoring vacuous. So the Closure sentence being
+  PRESENT is asserted together with the refusal sentence being ABSENT, and the
+  audio is measured independently of both.
+-->
+<SActionScript version="1" name="master_insert_while_monitoring">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: armed and monitored, on the paced file input carrying
+         test_sawtooth.wav (RMS 0.328284), through a 0.25 gain = 0.082071. -->
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <!-- Track 1: NEVER armed, and held at -60 dB so this case measures the
+         RING alone. Placed twice for 8 s of material. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-60"/>
+
+    <!-- ARM AND ROLL WITH A CLEAN MASTER. The plan published here is LINEAR,
+         and every other master gate in this suite stops caring at this point. -->
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+
+    <!-- Past the priming lag, with the lane live and the transport rolling. -->
+    <wait-ms ms="2600"/>
+
+    <!-- THE GESTURE UNDER TEST. Nothing here touches the live SET, so the only
+         thing that can notice is the signature tick. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <wait-ms ms="2600"/>
+
+    <!-- THE PLAN REBUILT AS A CLOSURE, AND MONITORING WAS NOT REFUSED, both
+         asserted INSIDE the window opened by the wait above. assert-log's
+         window starts at the immediately preceding action that is not itself
+         an assert-log, so this pair reads exactly the 2.6 s that follow the
+         master edit, not the whole run. Placed at the end of the case, after
+         dump-playback-capture, they would have read the DUMP's window and
+         found nothing, which is how the first draft of this case failed. -->
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="master_insert_while_monitoring.wav" minFrames="216000"/>
+    <assert-audio-energy filename="master_insert_while_monitoring.wav"
+                         startFrame="168000" frameCount="48000"
+                         channel="0" minRms="0.1592" maxRms="0.1691"/>
+
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- AC3.4: the late flip into Closure must not put a freeze worker on the
+         master lane's own processor instances. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
