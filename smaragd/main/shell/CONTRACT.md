@@ -1313,3 +1313,38 @@ Gate: `master_insert_while_monitoring` (RUN_SERIAL, `SMARAGD_CAPTURE_SPEED=1`,
 the sawtooth input), which arms with a CLEAN master and edits it afterwards —
 the ordinary user gesture of monitoring a take and then dropping a limiter on
 the master.
+
+## inv. 58 — entering a Closure RETIRES the queued root freezes before taking ownership
+
+`SLiveMonitor::publishPlan` enters a Closure in three steps and the middle one
+is not optional:
+
+1. `twSpeaker::setLiveMasterClosure( true, busSum )` — re-roots the frozen lane
+   below the master chain (AC3.1).
+2. **`retireMasterLaneNodes()`** — retires the scheduler nodes that would freeze
+   a page THROUGH the master chain.
+3. `setMasterLaneOwned( true )` — the pump becomes the only legal renderer of
+   the master lane's processors.
+
+**Step 2 exists because step 1 cannot un-queue what step 1 came too late for.**
+Re-rooting stops the readahead DEMANDING root pages; the demands already issued
+are sitting in the scheduler at priority 9 and execute on worker threads
+afterwards. Each one freezes a rewire page, which runs the master lane's
+processors, which by step 3 are live-owned — so the guard fires, the frames come
+back silence, and `liveOwnedRefusals` climbs.
+
+**It was found by a gate, not by reading.** `monitor_master_flip_midplay` failed
+its entering-flip assertion in **5 runs of 8**; with the retirement it is **8 of
+8**. It is the same shape and the same fix as `retireClosureNodes`, which the
+exclusion path has always needed for exactly this reason — a departing member's
+queued nodes outlive the decision to exclude it.
+
+**The ORDER OUT is the mirror**, and asymmetric on purpose: `endMasterClosure()`
+releases ownership FIRST and re-roots back second, because the guard fires on
+whoever is not the pump. Re-rooting above the master while its processors are
+still owned makes the next root freeze refuse.
+
+A methodological note worth keeping: `assert-render-policy` does **not** reset
+the counters. A case that appears to pass because an extra assertion was added
+before it has not been fixed — the counter is cumulative, so what changed was
+the timing, and the failure is a race.

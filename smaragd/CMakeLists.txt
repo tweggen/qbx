@@ -465,7 +465,8 @@ endif()
 # Note ENVIRONMENT is REPLACED, not appended, so the render timeout is restated.
 foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               render_while_armed feel_flow_bounce_while_monitoring
-              master_lane_closure_monitoring)
+              master_lane_closure_monitoring monitor_master_flip_midplay
+              render_while_master_closure)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE
@@ -589,6 +590,7 @@ endif()
 # inside the count-in. A box running three other cases could miss that window
 # on a healthy build.
 foreach(_pre record_count_in record_count_in_primed record_pre_roll
+             record_count_in_master_insert
              metronome_click_while_recording)
     if(TEST qxa.${_pre})
         set_tests_properties(qxa.${_pre} PROPERTIES

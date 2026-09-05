@@ -142,6 +142,39 @@ void SLiveMonitor::retireClosureNodes( const SLiveClosure &closure )
     sched->retireComponentNodes( comps );
 }
 
+void SLiveMonitor::retireMasterLaneNodes( SStdMixer *mixer )
+{
+    // THE IN-FLIGHT ROOT FREEZE IS THE RACE THIS EXISTS FOR, and a qxa case
+    // found it rather than a reading: monitor_master_flip_midplay failed its
+    // ENTERING-flip assertion in 5 runs of 8 before this call.
+    //
+    // Re-rooting the frozen lane (AC3.1) stops the readahead DEMANDING root
+    // pages, but it cannot un-queue the ones already demanded. Those nodes are
+    // sitting in the scheduler at priority 9, and they execute on worker
+    // threads AFTER the re-rooting -- freezing REWIRE pages, which runs the
+    // master lane's processors, which by then are live-owned. The guard fires,
+    // the frames come back silence, and the counter climbs.
+    //
+    // The same shape and the same fix as retireClosureNodes(): the exclusion
+    // has always had to retire a departing member's queued nodes for exactly
+    // this reason. The master lane's getRootComponent() is the MIXER's rewire
+    // (D12), so the root freeze is retired by naming the lane's own components.
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    CaptureRevalidator *sched = p ? p->getRevalidator() : nullptr;
+    if( !sched || !mixer ) return;
+    STrack *lane = mixer->masterLane();
+    if( !lane ) return;
+
+    std::vector<const twComponent *> comps;
+    if( lane->trackMixComponent() )    comps.push_back( lane->trackMixComponent().get() );
+    if( lane->pluginChainComponent() ) comps.push_back( lane->pluginChainComponent().get() );
+    if( lane->gainStageComponent() )   comps.push_back( lane->gainStageComponent().get() );
+    if( lane->getRootComponent() )     comps.push_back( lane->getRootComponent().get() );
+    if( mixer->masterRewireComponent() )
+        comps.push_back( mixer->masterRewireComponent().get() );
+    sched->retireComponentNodes( comps );
+}
+
 void SLiveMonitor::endMasterClosure()
 {
     // EVERY route out of a Closure comes through here, and it must, for a
@@ -704,7 +737,14 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
         // setLiveMasterClosure, which pushes the root before raising the flag.
         if( !closureNow ) setMasterLaneOwned( rootMix, false );
         spk->setLiveMasterClosure( closureNow, underMaster );
-        if( closureNow ) setMasterLaneOwned( rootMix, true );
+        if( closureNow ) {
+            // BETWEEN the re-rooting and the ownership, never outside it: the
+            // re-root stops new root demands and this kills the ones already
+            // queued, so that by the time the processors are owned there is no
+            // worker on its way to them. See retireMasterLaneNodes.
+            retireMasterLaneNodes( rootMix );
+            setMasterLaneOwned( rootMix, true );
+        }
     }
     pump_->setPlan( plan );
     pump_->start();

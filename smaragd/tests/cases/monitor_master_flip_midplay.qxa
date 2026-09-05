@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M3, AC3.6 / T18: FLIPPING LINEAR AND CLOSURE WHILE THE TRANSPORT
+  RUNS COSTS AT MOST THE HOUSE BOUND OF 1024 FRAMES, IN BOTH DIRECTIONS.
+
+  The flip is a real re-plumbing, not a mode bit. Entering a Closure the RT
+  stops adding the frozen root page, the pump's master node gains the lane's
+  inserts and gain, the frozen lane RE-ROOTS below the master chain (AC3.1) and
+  the master's processors become live-owned. Leaving one undoes all four, in the
+  opposite order. Every one of those is a chance to drop audio.
+
+  THE MASTER INSERT IS AT UNITY, AND THAT IS THE WHOLE DESIGN OF THIS CASE.
+  masterChainStateOf counts INSERTS, so a unity-gain plugin makes the shape
+  non-linear exactly as a 2.0x one does, but it changes no level. So the
+  output must be CONTINUOUS AND UNCHANGED across both flips, and a gap, a step
+  or a level move is then the defect with nothing to disentangle it from. The
+  2.0x master the other cases use would put a real 6 dB step at each flip and
+  force every bound to be loose enough to admit it.
+
+  THE UNARMED TRACK IS HELD AT -60 dB so the measurement is the RING, whose
+  level is the same in both modes: under LINEAR the ring bypasses the master
+  (unity, so no change) and under CLOSURE it goes through it (unity, so no
+  change).
+
+  THE INPUT IS test_autosaw.wav, NOT the test_sawtooth.wav the other master
+  cases take, and the difference is load-bearing. test_sawtooth.wav RAMPS in
+  amplitude over its 4 s and then loops, so the RMS of a window depends on WHERE
+  that window sits and no fixed band is a closed form at an arbitrary position.
+  A first draft of this case measured three 16000-frame windows against one
+  band and failed two of them for exactly that reason, with nothing wrong in the
+  engine. test_autosaw.wav is CONSTANT amplitude (RMS 0.230956, a 480 Hz
+  sawtooth whose period is exactly 100 frames), so 0.25 gain puts every window
+  at 0.230956 x 0.25 = 0.057739 wherever it is placed.
+
+  TWO INDEPENDENT MEASUREMENTS, because a flip can fail two ways:
+
+    assert-audio-continuity   no run of silence longer than 1024 frames
+                              anywhere across BOTH flips
+    assert-audio-energy       the level is the same before, during and after
+
+  Continuity alone would pass a flip that halved the level without dropping a
+  sample; energy alone would pass one that dropped 900 frames and recovered.
+
+  1024 IS THE HOUSE BOUND AND IT IS NOT ARBITRARY (proposal 21 L2): the RT sums
+  a ring entry only when its stamp matches the frame being delivered, so a miss
+  is one DEVICE BLOCK wide by construction. Anything tighter asserts something
+  the design does not offer, which is the mistake
+  live_instrument_disarm_playback made before its 512 moved to the frozen side.
+
+  maxStep is deliberately NOT checked. It would need the fixture's own
+  peak-to-peak reset as its unit, and this case already makes the stronger
+  statement (the level is the SAME on both sides of both flips) through a
+  closed form rather than through a bound on a difference.
+
+  TIMING. The flips land at roughly 2.2 s and 3.4 s of CAPTURED audio, and the
+  window is [96000, 200000) = 2.0 to 4.17 s, which contains both with margin at
+  each end. Capture frame 0 is the DEVICE start, which is after the monitor
+  priming lag, so the window is past it by construction.
+-->
+<SActionScript version="1" name="monitor_master_flip_midplay">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: armed and monitored, on the paced file input carrying
+         test_sawtooth.wav (RMS 0.328284), through a 0.25 gain = 0.082071. -->
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <!-- Track 1: NEVER armed, held at -60 dB, so what is measured is the ring.
+         Placed twice for 8 s. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-60"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2200"/>
+
+    <!-- FLIP 1: LINEAR to CLOSURE, at unity. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="1.0"/>
+    <wait-ms ms="1200"/>
+
+    <!-- BISECT: entering the closure on its own must already be clean, so a
+         failure at the end of the case is attributable to the LEAVING flip. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+
+    <!-- FLIP 2: CLOSURE back to LINEAR. -->
+    <remove-plugin trackPath="$master" slotIndex="0"/>
+    <wait-ms ms="1000"/>
+
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="master_flip_midplay.wav" minFrames="200000"/>
+
+    <!-- AC3.6: neither flip dropped more than one device block. -->
+    <assert-audio-continuity filename="master_flip_midplay.wav"
+                             startFrame="96000" frameCount="104000" channel="0"
+                             maxGapFrames="1024" maxStep="-1"
+                             silenceLevel="0.002"/>
+
+    <!-- ...and neither flip moved the level. Before flip 1, between the two,
+         and after flip 2. -->
+    <assert-audio-energy filename="master_flip_midplay.wav"
+                         startFrame="96000" frameCount="16000"
+                         channel="0" minRms="0.0560" maxRms="0.0595"/>
+    <assert-audio-energy filename="master_flip_midplay.wav"
+                         startFrame="132000" frameCount="16000"
+                         channel="0" minRms="0.0560" maxRms="0.0595"/>
+    <assert-audio-energy filename="master_flip_midplay.wav"
+                         startFrame="180000" frameCount="16000"
+                         channel="0" minRms="0.0560" maxRms="0.0595"/>
+
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- AC3.4 across BOTH flips: entering re-roots before taking ownership and
+         leaving releases before re-rooting back, so no freeze worker ever meets
+         a live-owned master processor. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

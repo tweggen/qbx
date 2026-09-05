@@ -272,6 +272,10 @@ private:
     /// master chain. See the definition for why the root, unlike the flag,
     /// cannot be left stale.
     void endMasterClosure();
+    /// Retire the scheduler nodes that would freeze a page THROUGH the master
+    /// chain, called between the re-rooting and taking ownership. See the
+    /// definition: a demand issued before the re-root still executes after it.
+    void retireMasterLaneNodes( SStdMixer *mixer );
     /// The click, rebuilt only when its snapshot actually changed (a plan is
     /// republished every time a fader moves; the source holds click waveforms).
     std::shared_ptr<twLiveInputSource> ensureMetronome( bool want );

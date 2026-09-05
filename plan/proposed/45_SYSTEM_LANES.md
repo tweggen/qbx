@@ -1187,8 +1187,9 @@ taken — the rewritten, no-longer-vacuous successor to
   Closure whose master node has no inserts and unity gain is a no-op, which is
   why the linear split is legitimate. It is the reference half of a 2× pair
   whose other half is gated.
-- **AC3.6, AC3.7, AC3.8.** (AC3.1's ENGINE half and AC3.4 are **DONE** — see
-  the section below.)
+- (Nothing. **M3 IS COMPLETE** — AC3.1's engine half, AC3.4, AC3.6, AC3.7 and
+  AC3.8 are all done; see the sections below. What remains ungated is listed
+  under M3c.)
 
 ### M3a — A master edit made while a lane is ALREADY live
 
@@ -1330,6 +1331,100 @@ therefore called on **every** route out: the empty-set branch, `finishDisarm`,
 - **The mixer-caused refusal branch**, unchanged and still unreachable from a
   script.
 - **AC3.6, AC3.7, AC3.8.**
+
+### M3c — AC3.6, AC3.7, AC3.8, and the race the gate found
+
+**Done 2026-09-05.** M3 is complete.
+
+#### AC3.6 — flipping linear ↔ Closure mid-play, both directions
+
+`monitor_master_flip_midplay` inserts a master plugin **at unity** while the
+transport rolls and removes it again. Unity is the whole design of the case:
+`masterChainStateOf` counts INSERTS, so a unity plugin makes the shape
+non-linear exactly as a 2.0× one does, but changes no level — so the output must
+be **continuous and unchanged** across both flips and a gap, a step or a level
+move is the defect with nothing to disentangle it from. A 2.0× master would put
+a real 6 dB step at each flip and force every bound loose enough to admit it.
+
+Two independent measurements, because a flip can fail two ways: continuity
+(no run of silence longer than the 1024-frame house bound) and three energy
+windows (the level is the same before, between and after).
+
+**A FIXTURE ERROR THIS COST, worth recording because the failure looked like an
+engine defect.** The first draft measured three windows against one band on
+`test_sawtooth.wav` and failed two of them. That fixture **ramps** in amplitude
+over its 4 s and loops, so the RMS of a window depends on where the window sits
+and no fixed band is a closed form at an arbitrary position. The case moved to
+`test_autosaw.wav`, which is constant amplitude, and all three windows then read
+the same closed form. Nothing was wrong in the engine.
+
+#### THE RACE THE GATE FOUND, and it was a real defect in AC3.1
+
+The case failed its **entering-flip** assertion in **5 runs of 8**, and adding a
+mid-case assertion made a run pass — which looked like the assertion mattering
+until `assert-render-policy` was checked and found NOT to reset the counters. It
+was a race, and the pass was luck.
+
+Re-rooting the frozen lane stops the readahead **demanding** root pages, but it
+cannot un-queue the ones already demanded. Those nodes sit in the scheduler at
+priority 9 and execute on workers AFTER the re-rooting — freezing REWIRE pages,
+which runs the master lane's processors, which by then are live-owned.
+
+`retireMasterLaneNodes()` is called BETWEEN the re-rooting and taking ownership:
+the re-root stops new demands, this kills the queued ones, and only then are the
+processors owned. It is the same shape and the same fix as `retireClosureNodes`,
+which the exclusion has always needed for exactly this reason.
+
+**Measured: 3 of 8 before, 8 of 8 after.**
+
+#### AC3.7 — a count-in and a record start under a Closure
+
+`record_count_in_master_insert` is `record_count_in_primed` plus a 2.0× master
+insert placed before the record start, so the live lane the count-in raises is a
+Closure. Three claims, each surviving the other two being wrong: the count-in
+still **primes** (`assert-priming maxPolls="1"`), the take lands at the **same
+frame** as with a linear master, and **no freeze worker met a live-owned master
+processor**.
+
+**This closes the gap the previous commit named as not gated.** Reverting
+`warmFrozenLane`'s re-rooting fails it **3 runs of 3**, deterministically — the
+count-in's priming demand goes through a different accessor from the readahead's
+and needed its own line.
+
+#### AC3.8 — a render taken while a Closure is live
+
+`render_while_master_closure` renders the same project twice, master insert in
+place both times, and requires the bytes to be identical.
+
+**Why the byte compare bites, and it is not render_while_armed's reason.** Under
+a Closure the master lane's processors are live-owned, and the ownership guard
+answers SILENCE to any renderer that is not the pump — and a render freezes
+pages on workers. Without `suspendForRender`'s `endMasterClosure()`, every page
+the render froze through the master would come back silent. Watched failing: the
+sabotage fails **both** `assert-file-identical` and `assert-render-policy`.
+
+A render shares no code with the monitor path, so AC3.1's re-rooting cannot
+reach `RenderSession` by construction. That is the obvious worry and it is not
+the real one: the hazard is OWNERSHIP.
+
+#### The unit half: a Closure plan at widths 1 / 2 / 6, no device
+
+`playback_test` gains the `twmonitor::pullChannels` precedent applied to the
+master node: a plan whose output track is a master carrying a gain envelope and
+summing one live child must deliver `child × masterGain` on **every** channel at
+widths 1, 2 and 6. A master node that summed its children and applied nothing
+would read 0.5 where the closed form is 0.25 — precisely the defect the M3
+diagnostic found in the plan builder. Watched failing at all three widths by
+removing the pump's `applyGain`.
+
+#### Still NOT gated after M3
+
+- **The MIXER-caused refusal branch.** No verb can set a master input level or a
+  channel map, so the one shape that is still refused has no headless gate.
+- **`master_closure_linear_ring` does not bite alone**, by construction.
+- **A latched closure mode** — the playback capture is cumulative within one
+  process.
+- Real device latency and jitter, as everywhere in this subsystem.
 
 ### M4 — The master lane on screen
 
