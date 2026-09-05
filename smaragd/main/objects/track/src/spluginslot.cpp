@@ -8,6 +8,7 @@
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twpluginslotproc.h"
 #include "tw/plugins/twplugindescriptor.h"
+#include <algorithm>
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>

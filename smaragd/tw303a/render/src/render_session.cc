@@ -1,5 +1,6 @@
 #include "tw/render/render_session.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <vector>

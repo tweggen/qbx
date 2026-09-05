@@ -36,8 +36,11 @@ the action-verb reference is `docs/ACTIONS.md`.
   still (like "no widget in `app/media`") is a contract plus a grep.
 - Before committing: `python tools/check_layering.py` (module boundaries),
   `python tools/check_logging.py` (no direct stderr/stdout writes — everything
-  goes through `TW_LOG*` / `syslog()`, proposal 24) and the qxa suite from
-  `tests/cases/` must be green.
+  goes through `TW_LOG*` / `syslog()`, proposal 24), `python
+  tools/check_includes.py` (a file using `std::max`/`sort`/`fill` includes
+  `<algorithm>` ITSELF — libstdc++ hands it over transitively and Apple clang's
+  libc++ does not, which is how a macOS build broke on code that had compiled
+  here for years) and the qxa suite from `tests/cases/` must be green.
 - Key-file paths below predate the split; the classes are unchanged — find
   headers at `tw303a/<module>/include/tw/<module>/…` and
   `main/<module>/include/app/<module>/…`.
@@ -349,6 +352,7 @@ token: `claude mcp remove youtrack -s user`, then add again.
 ./build.sh                                   # re-configures: required, see below
 python3 tools/check_layering.py              # module boundaries
 python3 tools/check_logging.py               # no direct stderr/stdout writes
+python3 tools/check_includes.py              # <algorithm> users include it (macOS/libc++)
 ctest --test-dir smaragd/build -j4 --output-on-failure     # THE routine gate
 ```
 

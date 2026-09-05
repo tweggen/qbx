@@ -5,6 +5,7 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
 #include "tw/plugins/twplugindescriptor.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>

@@ -35,6 +35,7 @@
 #include "asio_convert.h"
 #include "asio_id.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>

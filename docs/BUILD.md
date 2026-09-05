@@ -192,17 +192,29 @@ boxes this project is developed on and **fails to compile on macOS**:
 error: no member named 'max' in namespace 'std'; did you mean 'fmax'?
 ```
 
-`<algorithm>` (`max`/`min`/`sort`/`clamp`/`swap`/`fill`/`copy`), `<cstdint>`
-(the fixed-width integer types) and `<cstddef>` (`size_t`) are the three that
-bite. There is no CI, and nothing on a Linux or Windows box will ever catch
-this — the only defence is **include what you use**, written down here because
-a file can pick the habit up by accident and keep it for years: on `main` today
-`body_joint_test.cc` uses `std::max` twelve times and got away with it purely
-because it also includes `<vector>`.
+`<algorithm>` (`max`/`min`/`sort`/`clamp`/`fill`/`copy`), `<cstdint>` (the
+fixed-width integer types) and `<cstddef>` (`size_t`) are the three that bite.
 
-Adding a new source or test file? Check its `std::` symbols against its
-includes before pushing. A one-line grep over the file is cheaper than a
-round trip through somebody else's machine.
+**`<algorithm>` is now checked on every box**, because it is the one that
+actually has bitten: `python3 tools/check_includes.py` fails when a file uses
+`std::max`, `std::sort`, `std::fill` and the rest without including
+`<algorithm>` itself. It found twelve such files when it landed — six in
+`tw303a`, six in `main` — every one of which had compiled clean here for years.
+
+**The other two are deliberately NOT checked, and the numbers are why.**
+Measured on the same tree: **106** files use a `std::`-qualified `<cstdint>`
+spelling without including `<cstdint>`, and **120** do the same for `<cstddef>`,
+against **12** for `<algorithm>`. Those two ride in on `<string>`/`<vector>` on
+every implementation this project has ever been built with, so enforcing them
+would be a 226-file mechanical change buying portability nobody has been able
+to demonstrate a need for. If a macOS build ever does fail on one of them, add
+the rule to the checker rather than fixing the single file — the checker is
+written to take it.
+
+Adding a new source or test file? The checker covers `<algorithm>`; for
+anything else, check its `std::` symbols against its includes before pushing.
+A one-line grep over the file is cheaper than a round trip through somebody
+else's machine.
 
 ## Windows
 

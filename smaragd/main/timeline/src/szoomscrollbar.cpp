@@ -3,6 +3,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QStyleOptionSlider>
+#include <algorithm>
 #include <cmath>
 
 SZoomScrollBar::SZoomScrollBar(Qt::Orientation orientation, QWidget* parent)
