@@ -483,7 +483,10 @@ std::shared_ptr<twComponent> STrack::getRootComponent()
     // not this track's own.
     //
     // M2 wired the lane's chain and gain stage between the bus sum and the
-    // MIXER's rewire, which leaves this track's `cpRewire_` inert (T5). A
+    // MIXER's rewire, and wireAsMasterLane() now DISCONNECTS this track's own
+    // `cpRewire_` so it really is inert (T5, AC2.8). It was not, for two
+    // milestones: it carried the identical signal, which is why removing this
+    // override used to leave master_meter_postfx green. A
     // meter probe pointed at it would read silence forever -- and
     // twLevelProbe answers a miss by DECAYING (proposal 34: "a page miss must
     // DECAY the meter"), so the symptom is a meter that looks BROKEN rather
@@ -689,6 +692,28 @@ void STrack::wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
     cpDspChain_->rebuildWiring();
     cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
     rewire->setInput( 0, cpGainStage_->linkOutput( 0 ) );
+
+    // AC2.8, WHICH WAS FALSE UNTIL THIS LINE. The AC says the lane's own
+    // twTrackMix and twRewire are unwired; the trackmix genuinely is, and the
+    // REWIRE WAS NOT. STrack's ctor wires `cpRewire_.input = cpGainStage_
+    // .output` and the four lines above only ALSO take the gain stage's output
+    // into the MIXER's rewire -- so the lane's own rewire went on carrying the
+    // identical signal. Redundant, not inert.
+    //
+    // That was found by SABOTAGE, not by reading: removing D12's
+    // getRootComponent() override left master_meter_postfx GREEN, because the
+    // lane's rewire answered with the same audio the mixer's would have. A
+    // green gate over an override nothing could prove was needed.
+    //
+    // Disconnecting it makes both claims true at once: AC2.8 as written, and
+    // D12's override as something a sabotage can actually bite. It also drops
+    // a SECOND page cache that nothing invalidates -- the invalidation path
+    // bumps the mixer's rewire, so the lane's own could only ever go stale.
+    //
+    // cpRewire_ itself stays alive and keeps taking setChannels() and
+    // bumpContentEpoch(); it is its INPUT that goes, which is the one thing
+    // that made it carry audio.
+    if( cpRewire_ ) cpRewire_->setInput( 0, nullptr );
 }
 
 void STrack::bumpRenderChainEpoch()

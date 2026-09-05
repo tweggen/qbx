@@ -933,7 +933,7 @@ output into the MIXER's rewire *as well*. So the lane's rewire is **REDUNDANT,
 carrying the same signal**, not silent, and a probe pointed at it would read
 correct audio rather than decaying.
 
-Consequences, none of them fixed here:
+Consequences, none of them fixed at the time:
 - **AC2.8 as written ("the lane's own twTrackMix/twRewire are unwired") is
   FALSE.** The trackmix genuinely is unwired; the rewire is not.
 - The override is kept on the **weaker basis** that it is the one correct
@@ -944,6 +944,29 @@ Consequences, none of them fixed here:
   DISCONNECTED", and that is a change with its own blast radius (the lane's
   rewire is what `getRootComponent()` returned before the override, so
   anything still reaching it would go silent).
+
+#### AC2.8 — **CLOSED 2026-09-05, by making it true rather than by rewriting it**
+
+`STrack::wireAsMasterLane()` now ends with `cpRewire_->setInput( 0, nullptr )`.
+The disconnect was checked to be safe before it was made: `cpRewire_->setInput`
+has exactly **one** other call site, inside the one-time component-creation
+block of `setChannels()`, so nothing re-wires it afterwards; and
+`twComponent::setInput( idx, nullptr )` is a real disconnect (it deletes the
+plug from the producing latch, decrements `inputsSet_` and clears the parent
+tracking) rather than a dangling pointer. `cpRewire_` itself stays alive and
+goes on taking `setChannels()` and `bumpContentEpoch()`; it is its INPUT that
+goes, which is the one thing that made it carry audio.
+
+**The point is not tidiness — it is that D12's override becomes PROVABLE.**
+Before the disconnect, removing the override left `master_meter_postfx` fully
+green, which is what disproved AC2.8 in the first place and left the override
+resting on an argument rather than on a measurement. After it, the same sabotage
+**fails three `assert-meter` assertions** (#4, #8, #12): with the lane's own
+rewire silent, a probe pointed at it decays exactly as proposal 34 says a page
+miss must.
+
+So one change settles three things at once: AC2.8 is true as written, T5's
+"must be DISCONNECTED" is done, and a green gate that could not fail now can.
 
 **Also settled here:** D5's body text (line ~327) still says `set-track-volume`
 with an empty path "is **redirected to the master lane**". AC1.9 rejected that
