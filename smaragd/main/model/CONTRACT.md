@@ -662,3 +662,47 @@ indexing site fails closed at that one accessor.
 root qualifier on the FIRST ':' (`"Drums:0"`), so `$send:<name>` would be parsed
 as root `$send`. The reserved surface spelling is index-based (`$send0`) until
 proposal 45 M7 decides the name form.
+
+---
+
+## The SEND TAP (proposal 47 M0)
+
+`SSendTap` (`app/model/ssendtap.h`) is `{ dest, levelDb, preFader, enabled }`,
+and the vector of them lives on **`SObject`**, not on `STrack`.
+
+Same argument as `contentKind()`, `resolveEventClip()` and the automation-lane
+vector: the serializer, the verbs and the testkit must reach a tap without
+knowing which object slice owns it. WHICH objects may legally carry one is the
+verbs' business, not this class's — an audio tap on a lane that has no audio is
+refused where it can be ANNOUNCED, never by the type of the member.
+
+**THE DESTINATION IS A NAME, NEVER THE `-2-k` SENTINEL.** Proposal 45 already
+restricts `remove-send-lane` to the LAST lane precisely because that sentinel
+IS the address, so removing one from the middle re-points every path naming a
+later lane. A stored index would carry the same defect with none of that
+protection. The name is also the user-facing address (`$send:Reverb`), and
+`midiOutPort` is the precedent: a portable NAME in the file, the machine-local
+id looked up.
+
+**Serialized INLINE as `<sends>`, and written only when the list is
+non-empty** — the automation-lane discipline (37 P5). An inline child of a
+known element is invisible to the loader's `<SLink>`-based ordering and is
+ignored by an OLDER build, and writing nothing when there is nothing is what
+keeps every project written before proposal 47 and both committed goldens
+byte-unchanged.
+
+**`setSendTap()` REPLACES a tap that already addresses the same destination.**
+Two taps from one source into one bus would sum that source twice, which is not
+a thing a user can mean; a duplicate destination in a file collapses to one for
+the same reason.
+
+**`enabled` is written unconditionally**, unlike every other non-default-only
+attribute in this tree. It is the one field whose ABSENCE would have to mean
+"true", and a reader that infers a default from a missing attribute is how a
+disabled send comes back ON after a round trip.
+
+**A serialize() override must repeat `serializeSends( o )`.** `STrack::serialize`
+mirrors `SObject::serialize` body-for-body rather than hooking into it, so an
+inline child that is not repeated there is silently dropped on save with no
+error anywhere — gated by `qxa.send_tap_model`'s round trip, and watched
+failing by deleting exactly that one call.

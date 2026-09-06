@@ -1473,3 +1473,49 @@ written-only-when-non-empty rule could not express it.
 so every arranger reach-through afterwards answers from the previous load's
 mixer. Keep `assert-lane-alignment rows=` on the NEAR side of a save/load;
 `assert-lane-view` is the only trustworthy read on the far side.
+
+---
+
+## The SEND verbs (proposal 47)
+
+`assert-sends` reads a lane's taps back through the model. **In M0 it was the
+only thing that could bite**, the missing-sample placeholder's shape: before a
+bus existed, a tap that round-tripped wrong and a tap that was silently dropped
+were equally inaudible, so no audio assertion could separate them.
+
+`assert-send-inputs` reads a SEND BUS's own inputs off the live `twMixer` — the
+send-side twin of `assert-master-inputs`, and **the only thing that can gate
+D9**. A live lane does not feed a send; that cannot be measured through a
+render, because `startRender()` SUSPENDS every live lane (21 L1b), so by the
+time there is audio the condition under test is gone. The decision lives in the
+wiring pass, so that is where it is measured.
+
+`assert-send-strip` / `send-strip-set` build the Track Detail dock's Sends
+section OFF SCREEN over the real panel and drive its REAL controls.
+**`send-strip-set` sets the widget and lets Qt deliver the signal, so a missing
+`connect()` fails** — a verb that called the handler directly would pass with
+the checkbox wired to nothing. That is the one class of UI defect this repo can
+gate; a context menu still cannot be, which is why proposal 41's and 45's menu
+items are hand-verified.
+
+**The two verbs resolve a lane by two different routes, and neither is
+`laneAt`.** The strip verbs go through the shell (`SMainWindow::describeSendStrip`
+/ `driveSendStrip`), which uses `splacements::laneBySpec` — a SEND lane has a
+strip of its own (it may feed another send) and `laneAt` cannot resolve a
+system-lane sentinel at all. The first version used `laneAt`, so `$send:Reverb`
+returned an EMPTY description and every assertion read nothing rather than
+failing on the lane. `assert-send-inputs` instead asks the mixer's own send list
+(`systemLaneIndexNamed`, falling back to a `$sendN` index), because what it
+reads is a BUS and buses are indexed, not addressed — so its `lane=` takes a
+bare name or `$send0`, and **not** the `$send:<name>` form.
+
+**Two harness lessons this proposal re-paid**, both already recorded for
+proposal 45 and both of which still caught these cases out:
+
+* `assert-log`'s window opens at the preceding NON-`assert-log` action. The
+  cycle break happens while the project is ADOPTED, not during the render, so
+  an assertion placed after the `<render>` — or after an intervening
+  `assert-sends`, which advances the window just as well — reads an empty
+  window and reports "OK — 0 records" over a live failure.
+* `maxCount` alone still asserts a floor of one. A negative assertion needs
+  `minCount="0" maxCount="0"`.

@@ -18,7 +18,7 @@ Invariants:
 > `.qxa` case headers and code comments all cite these by bare number, so a
 > renumber silently redirects every one of them. **Document order is therefore
 > not number order, and that is deliberate — allocate the next free number
-> (currently 63), append, and do not tidy.**
+> (currently 64), append, and do not tidy.**
 >
 > Numbers 23-37 were each issued TWICE between 2026-08-20 and 2026-09-06: the
 > `### inv. N` heading block restarted at 24 while the plain list already ran to
@@ -1546,3 +1546,35 @@ nothing to append and every one of these rows is APPENDED instead.
     measured, with the descent deleted, `$master` read −5.93336 dB where 0 was
     due while the conductor's own −6 dB check was still green. Gates:
     `master_head_fader_heard`, `conductor_lane_addressing`.
+
+### inv. 63 — THE SENDS SECTION IS A ROW PER SEND LANE, AND UNTICKING DISABLES (proposal 47 M5)
+
+`SSendStrip` mounts in `STrackDetailPanel` below the FX chain and the Feel Flow
+section, at stretch 0: a send list is a handful of fixed-height rows, so giving
+it stretch would take space from the plugin list, which is the section that
+actually grows. It shows nothing at all when the arrangement has no send lanes,
+so a project that uses none pays no height for it.
+
+**A row exists per send LANE, not per tap.** Ticking one CREATES the tap, so a
+user does not first have to discover a separate "add" gesture, and a lane with
+no tap still shows — "there is a Reverb bus and this track does not feed it" is
+visible rather than inferred from an absence.
+
+**Unticking DISABLES; it does not remove.** That is the whole reason
+`SSendTap::enabled` exists: a level and a pre/post choice must survive being
+switched off, or a user toggling a send off and on again finds it back at 0 dB
+post.
+
+A lane's own strip offers every OTHER lane and no row for itself. The verb
+refuses a self-send anyway, and a control that exists only to be rejected is
+worse than one that is not offered.
+
+Every control commits through the ORDINARY verbs, so every gesture is one undo
+step and the UI cannot reach a state a script could not — the cycle refusal
+included. The strip is torn down and rebuilt wholesale on every track switch,
+exactly as the FX strip is: it owns nothing long-lived, and the state it shows
+lives on the track.
+
+**It rebuilds on a TRACK switch, not on a send-lane change.** Adding or
+removing a send lane while the dock is open does not re-row the strip; that is
+a known gap, not a design decision.
