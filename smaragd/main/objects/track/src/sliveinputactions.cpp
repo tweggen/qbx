@@ -20,8 +20,24 @@ STrack *resolveTrack( SProject *project, const QString &pathRoot_,
     if( !project ) return nullptr;
     SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     STrack  *track = dynamic_cast<STrack *>( splacements::laneAt( mixer, path ) );
-    if( !track )
+    if( !track ) {
         qWarning() << verb << ": no track at" << pathToString( path );
+        return nullptr;
+    }
+    // AC5.2: NONE OF THESE THREE REACH A SYSTEM LANE. The refusal is here, in
+    // the resolver the three share, rather than three times in three apply()
+    // bodies, because D6's reason is that refusing only ONE of them leaves a
+    // second door to the same contradiction: the live set is
+    // `{armed && monitorEffective} U {monitor == on}`, so a master left on
+    // monitor "on" is live-owned whether it was ever armed or not, and a
+    // live-owned master is precisely the shape D4a refuses to render.
+    //
+    // set-monitor-mode is refused for EVERY mode, not just "on". D6 names
+    // "set-monitor-mode on" because that is the mode that does the damage, but
+    // there is nothing to express by setting Auto or Off on a lane that can
+    // never monitor, and accepting two of three modes would put a value in the
+    // model that no reader may act on -- the SStdMixer::volume_ defect again.
+    if( splacements::refuseSystemLane( track, verb ) ) return nullptr;
     return track;
 }
 

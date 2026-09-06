@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M6, AC6.1 / AC6.2 / AC6.4 / D7: THE CONDUCTOR LANE EXISTS, NESTS,
+  HIDES, REFUSES CLIPS, CONTRIBUTES NO AUDIO AND ROUND-TRIPS - AND CARRIES NO
+  CONTENT AT ALL.
+
+  M6 BUILDS THE CONTAINER AND DELIBERATELY NOT THE CONTENT, and that restraint
+  is the milestone's whole point (D7). twTempoMap is THE tempo authority and
+  `set-tempo` the ONE write; a tempo lane must be a VIEW of that map and never
+  a second store, which needs a curve model for ramps and is a proposal of its
+  own. The half of that claim a script cannot see - that no tempo FIELD was
+  added anywhere - is gated by tools/check_tempo_authority.py instead, which is
+  a real script rather than another paragraph in a CONTRACT because a
+  documented grep nobody runs rots.
+
+  IT IS AN ORDINARY CHILD LINK OF THE MASTER LANE, not a second sentinel, and
+  that is the design. Its address is `{-1, 0}` (`$master,0`): one system step
+  to the master, then a plain index. So it needs
+
+    - no new path machinery      (resolveByPath already walks both halves)
+    - no new serialization       (an <SLink> child of the master's own element,
+                                  exactly like a nested user track)
+    - no new refusal             (STrack::acceptsClips() is already false for
+                                  every systemRole, from M5/D6)
+    - no new hiding rule         (SObject::laneHiddenByDefault() already hides
+                                  every system lane, from M4/D8)
+
+  and this case is what says all four are true rather than plausible.
+
+  IT CONTRIBUTES NO AUDIO FOR TWO INDEPENDENT REASONS, and the case asserts the
+  OUTCOME rather than either mechanism, because either alone would be enough:
+  it carries no clips and no instrument, and the master lane's own twTrackMix
+  drives nothing at all (wireAsMasterLane takes the mixer's sum straight into
+  the lane's plugin chain  - AC2.8/D3), so a CHILD of the master lane is summed
+  by a component that reaches no output.
+
+  AC6.4's "changes no golden" is gated where the goldens are, by
+  qxa.mc_golden_mono and qxa.mc_golden_stereo. What is asserted HERE is the
+  other half: no getNTracks(), and no user trackPath, moved.
+-->
+<SActionScript version="1" name="conductor_lane_container">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- AC6.1: IT EXISTS, at `$master,0`, without anybody creating it. -->
+    <assert-system-lane trackPath="$master,0" role="conductor"
+                        name="Conductor" expectPath="$master,0"/>
+
+    <!-- ...and it is HIDDEN BY DEFAULT, which is the model's answer and not a
+         view's: two arrangers open on one project agree about what is shown. -->
+    <assert-system-lane trackPath="$master,0" role="conductor" hidden="1"/>
+
+    <!-- ...and it REFUSES CLIPS, both as the predicate and as the policy. -->
+    <assert-system-lane trackPath="$master,0" role="conductor" acceptsClips="0"/>
+    <add-sample trackPath="$master,0" filePath="../test_autosaw.wav" timePos="0"
+                expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="add-sample: refused - the conductor lane"/>
+
+    <!-- AC6.4: NO getNTracks() MOVED. The conductor is a child of the MASTER
+         lane, which is not a child of the mixer, so no index path into the
+         mixer can shift. Two user tracks in, two user tracks out. -->
+    <assert-track-count count="2"/>
+
+    <!-- ...and no USER trackPath moved either: track 0 still holds its clip
+         where it was put, and track 1 is still track 1. -->
+    <assert-clip-window clip="0,0" startTime="0"/>
+    <assert-system-lane trackPath="1" role="none" acceptsClips="1"/>
+
+    <!-- AC6.1: IT CONTRIBUTES NO AUDIO. 0.230956 is test_autosaw.wav's own RMS;
+         the arrangement renders exactly what it would with no conductor lane
+         in the tree at all. (The BYTE-level half of this claim is where the
+         goldens are: qxa.mc_golden_mono and qxa.mc_golden_stereo, which are
+         `cmp`-identical across this milestone.) -->
+    <render filename="conductor_silent.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="conductor_silent.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+
+    <!-- AC6.1: IT ROUND-TRIPS. Saved as an ordinary <SLink> child of the
+         master lane's element, loaded back by the ordinary path, and still at
+         the same address with the same role. -->
+    <save-project path="../../build/conductor_lane_container.qxp"/>
+    <load-project path="../../build/conductor_lane_container.qxp"/>
+
+    <assert-system-lane trackPath="$master,0" role="conductor"
+                        name="Conductor" hidden="1" acceptsClips="0"
+                        expectPath="$master,0"/>
+    <assert-track-count count="2"/>
+
+    <!-- EXACTLY ONE conductor lane after the round trip. ensureConductorLane()
+         runs both at construction AND after adopting a lane from a file, so
+         the load path mints one for a project written before M6  - and a
+         second one for a project written after it would be the obvious bug.
+         The master lane has one child and it is the conductor. -->
+    <assert-system-lane trackPath="$master,1" role="conductor"
+                        expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -33,6 +33,26 @@
  *                            or to nothing. An assertion on the lane's
  *                            PROPERTIES cannot see that; only the round trip
  *                            can.
+ *   armed      = ""          "1"/"0" — SObject::isArmedForRecording()
+ *   monitor    = ""          off | auto | on — STrack::getMonitorMode()
+ *   input      = ""          the raw portable trackInput string; the literal
+ *                            "none" and "" both mean "no input", so a case
+ *                            asserting the ABSENCE of one writes input="none"
+ *   solo       = ""          "1"/"0" — SObject::isSolo()
+ *   muted      = ""          "1"/"0" — SObject::isMuted(). Present because
+ *                            AC5.4's claim is the OPPOSITE of the others': a
+ *                            mute on the master is ACCEPTED and heard, so the
+ *                            same verb has to be able to say "this one DID
+ *                            take" as well as "these seven did not".
+ *   midiOutPort = ""         STrack::getMidiOutPort(); "" is skip, so a case
+ *                            asserting the port stayed empty writes
+ *                            midiOutPort="<none>"
+ *
+ * THE SIX ABOVE ARE THE AC5.5 OBSERVABLES (proposal 45 M5). Every AC5.2
+ * refusal has to leave the model untouched, and until they existed a case
+ * could only assert that the verb RETURNED false — which a verb that refused
+ * halfway through, after writing its field, would also do.
+ *
  *   inChildLinks = ""        "0" asserts the lane is NOT a child link of its
  *                            root (D2): if it ever became one, every index
  *                            path in every case and fixture would shift by one
@@ -50,7 +70,10 @@ public:
                QStringLiteral( "hidden" ),     QStringLiteral( "acceptsClips" ),
                QStringLiteral( "plugins" ),    QStringLiteral( "volume" ),
                QStringLiteral( "name" ),       QStringLiteral( "expectPath" ),
-               QStringLiteral( "inChildLinks" ) }; }
+               QStringLiteral( "inChildLinks" ),
+               QStringLiteral( "armed" ),      QStringLiteral( "monitor" ),
+               QStringLiteral( "input" ),      QStringLiteral( "solo" ),
+               QStringLiteral( "muted" ),      QStringLiteral( "midiOutPort" ) }; }
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
@@ -64,6 +87,12 @@ private:
     QString name_;
     QString expectPath_;
     QString inChildLinks_;
+    QString armed_;
+    QString monitor_;
+    QString input_;
+    QString solo_;
+    QString muted_;
+    QString midiOutPort_;
 };
 
 #endif // _SASSERTSYSTEMLANEACTION_H_

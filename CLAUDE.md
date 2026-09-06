@@ -40,7 +40,13 @@ the action-verb reference is `docs/ACTIONS.md`.
   tools/check_includes.py` (a file using `std::max`/`sort`/`fill` includes
   `<algorithm>` ITSELF — libstdc++ hands it over transitively and Apple clang's
   libc++ does not, which is how a macOS build broke on code that had compiled
-  here for years) and the qxa suite from `tests/cases/` must be green.
+  here for years), `python tools/check_tempo_authority.py` (proposal 45 M6/D7 —
+  no tempo MEMBER on the track or mixer slices, and the `setBPMTempo` /
+  `bpmTempo_` writers stay confined to three files. A conductor lane's content
+  must be a VIEW of `twTempoMap`, never a second store; this is proposal 37
+  P1's documented grep made into a script that actually runs, because a
+  documented grep nobody runs rots) and the qxa suite from `tests/cases/` must
+  be green.
 - Key-file paths below predate the split; the classes are unchanged — find
   headers at `tw303a/<module>/include/tw/<module>/…` and
   `main/<module>/include/app/<module>/…`.
@@ -353,6 +359,7 @@ token: `claude mcp remove youtrack -s user`, then add again.
 python3 tools/check_layering.py              # module boundaries
 python3 tools/check_logging.py               # no direct stderr/stdout writes
 python3 tools/check_includes.py              # <algorithm> users include it (macOS/libc++)
+python3 tools/check_tempo_authority.py       # twTempoMap is the ONE tempo store
 ctest --test-dir smaragd/build -j4 --output-on-failure     # THE routine gate
 ```
 

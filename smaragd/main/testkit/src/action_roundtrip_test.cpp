@@ -780,6 +780,272 @@ bool testActionRoundTrip(const QString &actionName, QString &error)
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// THE ENUMERATED SYSTEM-LANE VERB TABLE (proposal 45 AC5.6, D6).
+//
+// WHY A TABLE AT ALL. M5's policy is a BLACKLIST: a verb reaches a system lane
+// unless something stops it. A blacklist is default-OPEN, so the failure mode
+// is silent and arrives later - somebody adds a track-addressed verb, never
+// thinks about the master, and it works on it. The proposal names that risk
+// and asks for this mitigation by name: every track-addressed verb carries an
+// explicit row, and a verb with no row FAILS THE SUITE rather than defaulting
+// to "accepted".
+//
+// WHAT IT IS AND IS NOT. It records the DECISION, and it enforces that the set
+// of decisions is COMPLETE and CURRENT. It cannot execute the decision - this
+// binary is a registry test with no project, no mixer and no master lane - so
+// the behaviour itself is gated by the qxa cases (master_refuses_clips,
+// master_refuses_arm_and_structure, master_refuses_instrument,
+// master_mute_audible). Two mechanisms, deliberately: the cases prove the
+// verbs that HAVE been thought about behave, and this proves none has been
+// forgotten.
+//
+// TRACK-ADDRESSED means the verb declares an attribute through which a script
+// can name a lane. That is read off knownAttributes() at RUNTIME rather than
+// from a hand-kept list, so a verb cannot escape the audit by not being
+// noticed - only by not being track-addressed, which is the honest exemption.
+const char *const kLaneAddressingAttrs[] = {
+    "trackPath",    // the ordinary spelling
+    "owner",        // the automation verbs (an owner may be a lane)
+    "destTrack",    // move-clip / duplicate-clip destinations
+    "source",       // move-track / reparent-track
+    "destParent",   // reparent-track
+};
+
+enum LanePolicy {
+    // The verb is REFUSED on a system lane, and a qxa case gates the refusal.
+    Refuse,
+    // The verb is ACCEPTED on a system lane, deliberately: the master fader,
+    // the master insert chain, mute, the automation lanes, and every verb that
+    // only READS.
+    Accept,
+    // The verb takes a lane-addressing attribute but the lane it names is not
+    // a DESTINATION or a subject - it is a parent, a source of material being
+    // taken away, or a scope. The policy question does not arise; the reason
+    // is spelled out per row so "not applicable" can never be a shrug.
+    NotApplicable,
+    // Part of the verb is refused and part accepted. insert-plugin is the only
+    // one: an INSTRUMENT is refused, an effect accepted (AC5.3).
+    Conditional,
+};
+
+struct LaneRow {
+    const char *verb;
+    LanePolicy  policy;
+    const char *why;
+};
+
+const LaneRow kLaneRows[] = {
+    // ===================== REFUSED (AC5.1: placement) =====================
+    // Every one goes through splacements::placementLaneAt(), which refuses a
+    // lane whose acceptsClips() is false and names it in the message.
+    // Gate: master_refuses_clips.
+    { "add-sample",            Refuse, "AC5.1 placement" },
+    { "place-clip",            Refuse, "AC5.1 placement" },
+    { "place-recording",       Refuse, "AC5.1 placement" },
+    { "place-asset",           Refuse, "AC5.1 placement" },
+    { "move-clip",             Refuse, "AC5.1 placement (the DESTINATION)" },
+    { "duplicate-clip",        Refuse, "AC5.1 placement (the DESTINATION)" },
+    { "insert-midi-clip",      Refuse, "AC5.1 placement" },
+    { "place-midi-recording",  Refuse, "AC5.1 placement" },
+    { "import-midi-file",      Refuse, "AC5.1 placement (explicit-track branch)" },
+
+    // ============ REFUSED (AC5.2: live input, solo, structure) ============
+    // Gate: master_refuses_arm_and_structure, which asserts the ANNOUNCEMENT as
+    // well as the refusal -- for the structural three the message is the only
+    // thing that bites, because they already refused by the childAt(-1)
+    // accident described in their own source.
+    { "arm-track",             Refuse, "AC5.2 no live input on a system lane" },
+    { "set-monitor-mode",      Refuse, "AC5.2, every mode, not only 'on'" },
+    { "set-track-input",       Refuse, "AC5.2 no live input on a system lane" },
+    { "set-track-solo",        Refuse, "AC5.2 unreadable: not in childLinks()" },
+    { "set-track-midi-output", Refuse, "AC5.2 the event feed is empty" },
+    { "remove-track",          Refuse, "AC5.2 not the user's object" },
+    { "move-track",            Refuse, "AC5.2 not the user's object" },
+    { "reparent-track",        Refuse, "AC5.2 not the user's object (SOURCE)" },
+
+    // ================== CONDITIONAL (AC5.3: instrument) ==================
+    { "insert-plugin",         Conditional,
+      "AC5.3: an INSTRUMENT is refused (empty event feed, and it would sit in "
+      "front of the master chain); an ordinary EFFECT is accepted and is what "
+      "M3's Closure path exists for. Gate: master_refuses_instrument" },
+
+    // ======================= ACCEPTED, deliberately =======================
+    // The master fader, the master chain, mute, and the automation that drives
+    // them. These are the FEATURE; a policy that refused them would refuse the
+    // reason system lanes were built.
+    { "set-track-volume",      Accept, "AC4.4 the master fader. Gate: master_head_fader_heard" },
+    { "set-track-mute",        Accept, "AC5.4 heard through twGainStage. Gate: master_mute_audible" },
+    { "head-fader",            Accept, "the master head's own fader gesture (M4)" },
+    { "fader-key",             Accept, "the same fader, by keyboard" },
+    { "set-track-name",        Accept, "renaming a system lane is harmless and useful" },
+    { "set-lane-hidden",       Accept,
+      "M4/AC4.5, and it is the INVERSE of the others: this verb refuses a lane "
+      "that is NOT a system lane" },
+    { "collapse-track",        Accept, "view state, and the master lane has children" },
+    { "remove-plugin",         Accept, "the master chain is editable (M3)" },
+    { "reorder-plugin",        Accept, "the master chain is editable (M3)" },
+    { "set-plugin-bypass",     Accept, "the master chain is editable (M3)" },
+    { "set-plugin-param",      Accept, "the master chain is editable (M3)" },
+    { "plugin-native-editor",  Accept, "a master insert has an editor like any other" },
+    { "plugin-generic-editor", Accept, "a master insert has an editor like any other" },
+    { "plugin-editor-set-param", Accept, "a master insert has an editor like any other" },
+    { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
+    { "remove-automation-lane", Accept, "the inverse of the above" },
+    { "add-automation-point",  Accept, "AC5.4. Gate: master_mute_audible" },
+    { "remove-automation-point", Accept, "the inverse of the above" },
+    { "move-automation-point", Accept, "editing a lane that is legitimately there" },
+    { "drag-automation-point", Accept, "the UI gesture for the above" },
+    { "set-automation-points", Accept, "one gesture commits through this" },
+    { "set-automation-mode",   Accept, "a master lane may be Read/Trim/Touch/..." },
+    { "automation-write-tick", Accept, "a write pass over a master lane" },
+
+    // --- the assert-* family: READ-ONLY, so the policy question does not
+    // arise. They are listed rather than exempted as a class, because
+    // "assert-" is a naming convention and a convention is not a guarantee;
+    // a row per verb is what makes the audit's coverage checkable.
+    { "assert-automation-value",   Accept, "read-only" },
+    { "assert-envelope",           Accept, "read-only" },
+    { "assert-feel-flow-panel",    Accept, "read-only" },
+    { "assert-feel-flow-pose",     Accept, "read-only" },
+    { "assert-groove-aspect",      Accept, "read-only" },
+    { "assert-input-meter",        Accept, "read-only" },
+    { "assert-instrument-slot",    Accept, "read-only" },
+    { "assert-lane-overlay",       Accept, "read-only" },
+    { "assert-lane-view",          Accept, "read-only" },
+    { "assert-meter",              Accept, "read-only; D12's master meter tap" },
+    { "assert-midi-events",        Accept, "read-only" },
+    { "assert-midi-recorded",      Accept, "read-only" },
+    { "assert-plugin-editor-kind", Accept, "read-only" },
+    { "assert-plugin-strip",       Accept, "read-only" },
+    { "assert-recorded-clip",      Accept, "read-only" },
+    { "assert-system-lane",        Accept, "read-only; it exists FOR system lanes" },
+    { "assert-take-lane",          Accept, "read-only" },
+    { "assert-track-channels",     Accept, "read-only" },
+    { "assert-track-detail-layout", Accept, "read-only" },
+    { "assert-track-head",         Accept, "read-only" },
+    { "assert-track-name",         Accept, "read-only" },
+    { "assert-track-volume",       Accept, "read-only" },
+
+    // ===================== PROPOSAL 45 M7: THE SEND VERBS ==================
+    //
+    // ROWS THAT THE AUDIT DOES NOT REQUIRE, kept deliberately. These two
+    // address a send lane by NAME (`sendName=`) rather than by a lane path, so
+    // isLaneAddressed() does not flag them and nothing would fail without a
+    // row. They are here because the table's job is to record the DECISION for
+    // every verb that can touch a system lane, and a reader auditing that
+    // question should not have to notice that these two happen to escape the
+    // detector on a technicality.
+    //
+    // The policy is inverted for them: they EXIST to act on a system lane, and
+    // refusing one would refuse the feature.
+    { "add-send-lane",    Accept, "M7/AC7.1: it CREATES a system lane" },
+    { "remove-send-lane", Accept, "M7: the inverse of the above" },
+
+    // ==================== NOT A DESTINATION OR SUBJECT ====================
+    { "remove-sample",  NotApplicable,
+      "a REMOVAL. Taking material off a lane must never be refused, or material "
+      "that somehow reached one could not be taken away (AC5.1's own reason for "
+      "leaving laneAt() alone)" },
+    { "remove-asset-placement", NotApplicable, "a REMOVAL, as above" },
+    { "export-midi-file", NotApplicable,
+      "READS a lane's feed out to a file; a system lane's feed is empty, so the "
+      "result is an empty file rather than a policy violation" },
+    { "select-track",   NotApplicable,
+      "SELECTION, not an edit. A system lane is hidden by default and has no row "
+      "unless the user asked for one; selecting the row they asked for is what "
+      "they meant" },
+    { "click-lane",         NotApplicable, "selection, as above" },
+    { "double-click-lane",  NotApplicable, "selection, as above" },
+    { "double-click-control", NotApplicable,
+      "resets a CONTROL to its default; it addresses the control, and which "
+      "controls a master head has is M4's question, not M5's" },
+    { "track-head-toggle",  NotApplicable,
+      "drives whichever head buttons exist; each underlying verb carries its own "
+      "row above, so the refusals apply through it rather than to it" },
+    { "drag-track",     NotApplicable,
+      "the UI gesture for move-track / reparent-track, both of which are Refused "
+      "above; the master lane's head additionally draws no drag grip (D5)" },
+    { "group-track",    NotApplicable,
+      "EDIT GROUPS are a user-lane concept and the master is in no childLinks() "
+      "list any group walk descends. NOT REFUSED and NOT GATED - a decision "
+      "recorded rather than a behaviour proved" },
+    { "set-edit-group", NotApplicable, "as group-track" },
+    { "set-track-midi-routing", NotApplicable,
+      "routes a lane's events to its PARENT or its instrument; a system lane has "
+      "neither an event feed nor a parent link. NOT REFUSED and NOT GATED" },
+    { "media-browser-drag", NotApplicable,
+      "produces a path and hands it to add-sample, which is Refused above -- the "
+      "media layer's job ends at the path (proposal 38)" },
+    { "learn-feel-flow",       NotApplicable, "Feel Flow is a per-user-lane analysis (proposal 40)" },
+    { "click-feel-flow-panel", NotApplicable, "as learn-feel-flow" },
+    { "set-feel-flow-mode",    NotApplicable, "as learn-feel-flow" },
+    { "set-feel-flow-metric",  NotApplicable, "as learn-feel-flow" },
+};
+
+const LaneRow *laneRowFor(const QString &verb)
+{
+    for (const LaneRow &r : kLaneRows)
+        if (verb == QLatin1String(r.verb)) return &r;
+    return nullptr;
+}
+
+// TRACK-ADDRESSEDNESS IS MEASURED, NOT DECLARED, and the first version of this
+// audit got that wrong in the exact way the audit exists to prevent. It read
+// knownAttributes(), which is an OPTIONAL override -- so set-track-solo,
+// set-track-mute, remove-track, move-track, reparent-track and insert-plugin,
+// the verbs M5 is actually about, all reported "not track-addressed" because
+// they never override it. A default-open detector guarding a default-open
+// policy is no guard at all.
+//
+// So the question is put to readXml() instead: hand the verb an element that
+// names a lane and see whether it writes that address back out. A verb that
+// round-trips `trackPath` READ it, whatever it declares. The verb's own fixture
+// is merged in first where one exists, because several verbs reject an element
+// missing a required attribute and would otherwise be missed for the wrong
+// reason.
+bool isLaneAddressed(SActionRegistry &registry, const QString &verb)
+{
+    const char *fx = fixtureFor(verb);
+
+    for (const char *key : kLaneAddressingAttrs) {
+        SAction *a = registry.create(verb);
+        if (!a) return false;
+
+        QDomDocument doc;
+        QDomElement elem;
+        if (fx) {
+            QDomDocument fdoc;
+            if (fdoc.setContent(QString::fromLatin1(fx)))
+                elem = fdoc.documentElement().cloneNode(true).toElement();
+        }
+        if (elem.isNull()) elem = doc.createElement(verb);
+        doc.appendChild(elem);
+        // "$master" is a legal lane address in every spelling, and a verb that
+        // stores it verbatim writes it back verbatim; one that parses it into
+        // an index path writes the same sentinel out through pathToString().
+        elem.setAttribute(QLatin1String(key), QStringLiteral("$master"));
+
+        const bool read = a->readXml(elem, a->formatVersion());
+        if (read) {
+            QDomDocument out;
+            QDomElement outElem;
+            writeTo(a, out, outElem);
+            for (const char *k2 : kLaneAddressingAttrs) {
+                if (!outElem.hasAttribute(QLatin1String(k2))) continue;
+                if (outElem.attribute(QLatin1String(k2))
+                        .contains(QStringLiteral("$master"))) {
+                    delete a;
+                    return true;
+                }
+            }
+        }
+        delete a;
+    }
+    return false;
+}
+
 // Audit all registered actions for round-trip correctness.
 // Exit code: 0 = all pass, 1 = any failure.
 int main()
@@ -797,6 +1063,25 @@ int main()
         if (!names.contains(QLatin1String(f.verb))) {
             failures.append(QString("Stale fixture: no registered verb '%1'")
                                 .arg(QLatin1String(f.verb)));
+        }
+    }
+
+    // AC5.6: the system-lane verb table must cover every track-addressed verb,
+    // and must name no verb that no longer exists.
+    for (const LaneRow &r : kLaneRows) {
+        if (!names.contains(QLatin1String(r.verb)))
+            failures.append(QString("Stale system-lane row: no registered verb "
+                                    "'%1'").arg(QLatin1String(r.verb)));
+    }
+    for (const QString &name : names) {
+        if (!isLaneAddressed(registry, name)) continue;
+        if (!laneRowFor(name)) {
+            failures.append(
+                QString("AC5.6: '%1' addresses a lane and has NO row in "
+                        "kLaneRows. Proposal 45 M5's policy is a blacklist, so "
+                        "a verb with no row silently ACCEPTS a system lane. Add "
+                        "a row saying Refuse (and a qxa case), Accept, or "
+                        "NotApplicable with the reason.").arg(name));
         }
     }
 

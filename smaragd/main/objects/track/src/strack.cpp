@@ -1690,8 +1690,34 @@ void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
 //   - SStdMixer   -> trackMuteSoloChanged() -> reconnectTracksToMixer(), which
 //                    nulls our input plug (and already did this for solo).
 //   - STrack      -> childTrackMuteChanged() below, which mutes our clip entry.
-void STrack::onTrackMuteChanged( bool /*muted*/ )
+//
+// A SYSTEM LANE IS THE ONE LANE WITH NO SUMMING PARENT, so neither of those two
+// reacts for it and its mute would be a flag nothing reads -- exactly the
+// SStdMixer::volume_ defect D6 refuses solo for. Proposal 45 AC5.4 says mute on
+// the master is legitimate, and the mechanism it names is the one already in the
+// tree: twGainStage's AUDIO mute, ramped over ~1.5 ms, which P3a built and left
+// unwired for everything except P5's `self:Muted` lane. The master lane's gain
+// stage sits between its insert chain and the mixer's rewire (D3), so muting it
+// silences the whole mix and nothing else -- and it composes with a `self:Muted`
+// lane rather than fighting it: setMuteCurve() governs where a curve exists,
+// setMuted() where one does not.
+//
+// USER TRACKS ARE UNTOUCHED, deliberately. Their mute stays STRUCTURAL (the
+// parent nulls the plug), which is what keeps a muted track's own capture full
+// of its material -- an asset windowing a muted track must not be silence.
+void STrack::onTrackMuteChanged( bool muted )
 {
+    if( systemRole() == SSystemRole::None || !cpGainStage_ ) return;
+    cpGainStage_->setMuted( muted );
+    // THE SAME INVALIDATION THE FADER USES, and for the same reason: the mute
+    // is baked into every frozen page from the gain stage downstream, so
+    // without it the mix keeps being served from what was frozen before the
+    // button was pressed. invalidateRenderPath() is what onTrackVolumeChanged
+    // calls one screen below, and for the master lane it reaches the mixer
+    // through renderPathOwner_ (D11) -- a plain bumpRenderChainEpoch() on this
+    // track is NOT a substitute and was measured not to be: the render came
+    // back byte-identical to the unmuted one.
+    invalidateRenderPath();
 }
 
 // A child TRACK of ours (a folder lane) changed its mute. We are the summing

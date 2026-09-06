@@ -29,6 +29,14 @@ SApplyResult SSetTrackMidiOutputAction::apply( SProject *project )
                    << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
+    // AC5.2: a system lane has no event feed to send. STrack::eventFeed() is a
+    // merge of a lane's OWN clip set with the children that bubble events up,
+    // and a system lane carries no clips (D6) -- so a port set here would be
+    // opened, chased and panicked by SMidiOutPump for a feed that is empty by
+    // construction.
+    if( splacements::refuseSystemLane( track, "set-track-midi-output" ) ) {
+        return { false, nullptr };
+    }
     if( channel_ < -1 || channel_ > 15 ) {
         qWarning() << "set-track-midi-output: channel must be 0..15 (0-based)"
                    << "or -1 for 'as authored'; got" << channel_;

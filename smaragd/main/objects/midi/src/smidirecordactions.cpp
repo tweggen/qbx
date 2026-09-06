@@ -303,7 +303,7 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
     SObject *mixer = splacements::rootNamed( project, pathRoot_ );
-    SObject *lane  = splacements::laneAt( mixer, trackPath_ );
+    SObject *lane  = splacements::placementLaneAt( mixer, trackPath_, "place-midi-recording" );
     if( !lane ) {
         qWarning() << "place-midi-recording: no lane at"
                    << qualifiedToString( pathRoot_, trackPath_ );

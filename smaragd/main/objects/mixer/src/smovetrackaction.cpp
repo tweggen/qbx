@@ -40,6 +40,24 @@ SApplyResult SMoveTrackAction::apply(SProject *project)
         return {false, nullptr};            // the root is not movable
     }
 
+    // AC5.2 / D6: A SYSTEM LANE IS NOT THE USER'S OBJECT TO RESTRUCTURE.
+    //
+    // ASKED BEFORE THE PARENT/INDEX SPLIT, and that ordering is the whole
+    // point. These three verbs address a track as "its parent, plus its index
+    // in that parent", and a master lane is deliberately NOT a childLinks()
+    // member (D2) -- so `$master` splits into an empty parent path and the
+    // index -1, childAt(-1) answers null, and the verb already refuses. It
+    // refuses SILENTLY, by an accident of the sentinel's numeric value, and
+    // that accident stops holding the moment M7 gives a send lane a name form
+    // or M6 nests a conductor lane one level down. Asking the question
+    // explicitly, of the resolved object, is what makes the refusal a POLICY
+    // rather than a coincidence -- and it is what announces it (D6: "a bound
+    // is ANNOUNCED, never silent").
+    if( splacements::refuseSystemLane(
+            resolveByPath( root, sourcePath_ ), "move-track" ) ) {
+        return {false, nullptr};
+    }
+
     // Resolve the parent container and the track's current index within it.
     QList<int> parentPath = sourcePath_;
     int fromIndex = parentPath.takeLast();

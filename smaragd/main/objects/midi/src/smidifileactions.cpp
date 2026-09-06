@@ -212,7 +212,7 @@ SApplyResult SImportMidiFileAction::apply( SProject *project )
             lanePath.append( laneBase + (int) i );
         } else {
             lanePath = trackPath_;
-            if( !splacements::laneAt( mixer, lanePath ) ) {
+            if( !splacements::placementLaneAt( mixer, lanePath, "import-midi-file" ) ) {
                 qWarning() << "import-midi-file: no lane at"
                            << qualifiedToString( pathRoot_, trackPath_ );
                 delete composite;

@@ -78,7 +78,7 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
         return {false, nullptr};   // missing, or a nested track lane (not a clip)
     }
 
-    SObject *destTrack = splacements::laneAt( mixer, destTrackPath_ );
+    SObject *destTrack = splacements::placementLaneAt( mixer, destTrackPath_, "duplicate-clip" );
     if( !destTrack ) {
         return {false, nullptr};
     }
