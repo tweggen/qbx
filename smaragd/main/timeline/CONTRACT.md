@@ -11,6 +11,23 @@ Depends on (engine): tw/core, tw/graph, tw/devices, tw/playback, tw/sources.
 App edges: per tools/check_layering.py (widest view module).
 
 Invariants:
+
+> **Numbering.** Invariants live in ONE number space shared by both spellings
+> used below — the plain `N.` list items and the `### inv. N` headings. A number,
+> once issued, is NEVER reused and never re-sorted: other CONTRACTs, `CLAUDE.md`,
+> `.qxa` case headers and code comments all cite these by bare number, so a
+> renumber silently redirects every one of them. **Document order is therefore
+> not number order, and that is deliberate — allocate the next free number
+> (currently 63), append, and do not tidy.**
+>
+> Numbers 23-37 were each issued TWICE between 2026-08-20 and 2026-09-06: the
+> `### inv. N` heading block restarted at 24 while the plain list already ran to
+> 26, and two later sections then appended over the top of it. The duplicates
+> were re-issued as 48-62 on 2026-09-06 — the plain items moved and the heading
+> block kept its numbers, because the headings carried nearly every external
+> citation. `plan/STATE.md` predates that and still calls the `media:` drop
+> branch "invariant 23"; it is now inv. 56.
+
 1. Paint paths never block: previews come from page caches with stale
    fallback; locator repaints are driven by the main-thread pump, never by
    audio threads (THREADING.md rule 1).
@@ -47,7 +64,7 @@ Invariants:
    clipped by it. Never move/resize the box — the next layout activation
    silently undoes it, which is exactly how the heads used to come unstuck.
    Qt's own clipping only handles a head whose top is negative; a head
-   straddling `[0, SMV_TIME_RULER_HEIGHT)` needs the explicit clamp inv. 29
+   straddling `[0, SMV_TIME_RULER_HEIGHT)` needs the explicit clamp inv. 53
    describes.
 7. A QWidget subclass here must draw its own style-sheet background
    (`WA_StyledBackground` + a `PE_Widget` paintEvent, or a plain paintEvent).
@@ -256,7 +273,7 @@ Invariants:
      (proposal 33 M3). The app's own slider press/release is the punch-in.
 
 How to test: lane_alignment.qxa (lane geometry + head placement under zoom,
-scroll, per-track heights and take lanes — including inv. 29's ruler-band
+scroll, per-track heights and take lanes — including inv. 53's ruler-band
 clamp on whichever row a `set-lane-view topRow=` lands the scroll offset
 inside, now that a requested row can be pixel-clamped short of its own top),
 track_list_scroll_padding.qxa (originally fix/track-list-polish l's
@@ -388,7 +405,7 @@ long-term shape.
     built), `drawTakeLane()` had nothing to paint even if a row existed, and
     the take-lane press/drag handlers (the ones this invariant describes)
     could not resolve a `stack` either — showing take lanes for such a clip
-    (inv. 30's rule 2) did nothing OBSERVABLE, which is exactly the
+    (inv. 54's rule 2) did nothing OBSERVABLE, which is exactly the
     "double-click does nothing" symptom one layer deeper. `takeStackOfLink()`
     resolves both shapes; it is deliberately scoped to take-lane
     RENDERING/INTERACTION only — the many other `dynamic_cast<STakeStack*>`
@@ -408,7 +425,7 @@ long-term shape.
     `tests/legacy_takestack_wrap.qxp`, since no verb builds the shape),
     proven failing on the pre-fix binary before being fixed.
 
-24. **A double-click on an EVENT clip opens the event editor for it**
+48. **A double-click on an EVENT clip opens the event editor for it**
     (`SMVActualView::mouseDoubleClickEvent`), through `SMainWindow::
     showEventEditor()` — never through `app/eventui` directly, which this
     module may not depend on (same reason `SEventTimeAxis` linking lives in
@@ -422,13 +439,13 @@ long-term shape.
     step, which is why this check does not call `updateLastClickVars()`
     again — doing so a second time would just repeat what that call
     already did. A CONTAINER clip (anything `scutrndrinline.cpp`'s
-    `cutIsContainer()` paints blue) is resolved by inv. 30 below, checked
+    `cutIsContainer()` paints blue) is resolved by inv. 54 below, checked
     BEFORE this branch; any other clip is a genuine no-op (matches design:
     a plain audio clip has no editor to open). Test entry point:
     `double-click-clip` (`SStdMixerView::doubleClickClip`, `drag-clip-edge`'s
     twin).
 
-25. **The Feel Flow compliance heatmap is a bottom band, drawn AFTER the clip
+49. **The Feel Flow compliance heatmap is a bottom band, drawn AFTER the clip
     loop, read-only and never a demand** (proposal 40 M2,
     `STrackRendererInline::drawFeelFlowBand`). It is deliberately NOT in the
     slot proposal 39's folder-sum overlay uses (right after the lane fill,
@@ -460,12 +477,12 @@ long-term shape.
     honestly reach a literal zero over a clip's own waveform paint. See
     `main/objects/track/CONTRACT.md`'s Feel Flow section for the LUT itself.
 
-26. **The Feel Flow Track Detail panel section is read-only and pumped from
+50. **The Feel Flow Track Detail panel section is read-only and pumped from
     `SApplication::meterTick`, never a second implementation of the overlay's
     own read path** (proposal 40 M3, `main/timeline/include/app/timeline/
     sfeelflowpanel.h`). Its readouts (compliance at the playhead, per-
     pendulum energy bars, the §3.5 lean/drive pair) go through the SAME
-    `STrack::feelFlowForUi()` cached read inv. 25 already gates, indexed by
+    `STrack::feelFlowForUi()` cached read inv. 49 already gates, indexed by
     `locator / hopFrames` exactly as the overlay indexes it — never a
     separate store read, never a demand, never a block. No control on the
     panel bumps a content epoch: the Analyze button calls the SAME
@@ -480,7 +497,7 @@ long-term shape.
     single throwaway widget, never a whole dialog page) — so a testkit
     assertion and what a user actually sees can never independently drift.
 
-27. **Vertical scroll is PIXEL-granular, and `SMVActualView::upperLeftY_` is
+51. **Vertical scroll is PIXEL-granular, and `SMVActualView::upperLeftY_` is
     the AUTHORITY** (fix/arranger-ui-fixes C, replacing the row-granular
     scroll invariant 5 predates). `setTopPixel(int y)` is the only writer,
     clamped to `[0, max(0, totalRowsHeight() - (height() -
@@ -508,7 +525,7 @@ long-term shape.
     with no accumulator — unlike the old lane-quantised step, any sub-notch
     delta already maps to a valid pixel amount.
 
-28. **The horizontal scrollbar's domain is project FRAMES, not a fixed
+52. **The horizontal scrollbar's domain is project FRAMES, not a fixed
     `HSliderRange`-step index** (fix/arranger-ui-fixes B — `HSliderRange`
     is gone). `qScrollHoriz_->value()` IS `SMVActualView::getLeftOffset()`;
     `SStdMixerView::timeSliderMoved()`/`avLeftOffsetChanged()` no longer
@@ -528,7 +545,7 @@ long-term shape.
     round-tripped back through `timeSliderMoved()`. `SMainWindow::
     arrangerSetZoomPan()` is unaffected — it already spoke frames.
 
-29. **The lane paint is CLIPPED below the ruler band, and the head column
+53. **The lane paint is CLIPPED below the ruler band, and the head column
     has a matching clamp** (fix/arranger-ui-fixes C, a consequence of inv.
     27's pixel granularity). `SMVActualView::paintEvent()` wraps the lane
     loop and the record overlay in `p.setClipRect(0, SMV_TIME_RULER_HEIGHT,
@@ -546,14 +563,14 @@ long-term shape.
     diverge — the two must stay ONE definition, as inv. 5 already requires
     of row→pixel geometry generally.
 
-30. **A double-click on a CONTAINER clip never falls through to nothing**
+54. **A double-click on a CONTAINER clip never falls through to nothing**
     (fix/arranger-ui-fixes, the "blueish clip does nothing" bug). Every
     content object `scutrndrinline.cpp`'s `cutIsContainer()` paints BLUE —
     a registered arrangement, a take stack, a plain folder-track window, a
     nested `SCut`, or anything else with no random source — is resolved by
     `SMVActualView::tryOpenContainerClip()`, checked in
-    `mouseDoubleClickEvent` right after inv. 24's marker-strip branch and
-    BEFORE the event-clip check (inv. 24): a registered arrangement opens
+    `mouseDoubleClickEvent` right after inv. 48's marker-strip branch and
+    BEFORE the event-clip check (inv. 48): a registered arrangement opens
     or fronts its tab (`arrangementNameOf()`, unchanged from before this
     invariant existed); a take stack shows THAT CLIP'S TRACK's take lanes
     (`SStdMixerView::toggleTrackTakesExpanded`) — SHOWN, never merely
@@ -576,12 +593,12 @@ long-term shape.
     test entry point for it (`SStdMixerView::doubleClickLane`,
     `click-lane`'s double-click twin). None of this is undoable itself:
     opening a tab, expanding a fold or showing take lanes is view/UI state,
-    same as inv. 24's editor-opening. Gate: `qxa.doubleclick_blue_clip_resolve`
+    same as inv. 48's editor-opening. Gate: `qxa.doubleclick_blue_clip_resolve`
     plus the pre-existing `qxa.tabs_doubleclick_drillin` for the unchanged
     arrangement-tab half.
 
 
-31. **The Feel Flow metric-lab strip is a pure paint over the panel's cached
+55. **The Feel Flow metric-lab strip is a pure paint over the panel's cached
     snapshot, and the band-metric combo is a VIEW preference** (proposal 40
     M3b, `SFeelFlowMetricStrip` in `sfeelflowpanel.cpp`). The strip paints
     one row per derived series (`SFeelFlowUiData::metrics`) through the SAME
@@ -593,7 +610,7 @@ long-term shape.
     no demand, no store access, no model walk (inv. 1) — and `setData()`
     with the SAME shared_ptr is a no-op, so the meterTick pump costs no
     repaint churn. A STALE analysis shows an EMPTY strip (the same
-    visibility rule as the band, inv. 25). The selector — a compact
+    visibility rule as the band, inv. 49). The selector — a compact
     CHECK-LIST since M3d, one checkable row per series, so a couple of
     metrics can ride the arranger band as stacked sub-rows — submits NO
     action: it calls `STrack::setFeelFlowBandMetricId()` directly with the
@@ -605,7 +622,7 @@ long-term shape.
 
 ## The `media:` drop branch (proposal 38 gate 3)
 
-23. **`SMVActualView::dropEvent` has ONE new branch and it is five lines:**
+56. **`SMVActualView::dropEvent` has ONE new branch and it is five lines:**
 parse the `media:` payload into an `SMediaRef` and call
 `smediadrop::placeWhenLocal`. Everything under it belongs to `app/media`. Two
 things are contractual:
@@ -1470,21 +1487,21 @@ its conductor lane, and the send lanes. It is deliberately NOT among its root's
 `childLinks()` (D2), so `appendRowsFor()`, which walks exactly that list, finds
 nothing to append and every one of these rows is APPENDED instead.
 
-32. **The system rows are PINNED BELOW every user lane, and the ordering needs
+57. **The system rows are PINNED BELOW every user lane, and the ordering needs
     no rule to enforce it.** `appendSystemRows()` runs once at the end of
     `rebuildRows()`. A user lane cannot be dragged below the master because
     there is no row after it to drop onto. The order within the block is signal
     order — the master and its own sub-lanes, then the sends — so it reads as
     "everything that sums, then what it sums into".
 
-33. **The master lane's row carries a NULL `link`, and every reader of a row's
+58. **The master lane's row carries a NULL `link`, and every reader of a row's
     link is guarded.** The alternative — minting a synthetic `SLink` so the view
     has something to hold — would put a model object into existence for the
     view's convenience and then have to be kept out of every walk that
     enumerates children. A CONDUCTOR row is the opposite case and carries a REAL
     link, because a conductor lane genuinely IS a child link of the master.
 
-34. **HIDING IS ONE MECHANISM, and it is `SObject::laneHidden()`, asked in the
+59. **HIDING IS ONE MECHANISM, and it is `SObject::laneHidden()`, asked in the
     row walk itself.** It defaults to `laneHiddenByDefault()` — false for every
     ordinary track, true for every system lane — so the test is a NO-OP for user
     lanes (`set-lane-hidden` refuses them outright) and is what keeps a
@@ -1498,11 +1515,11 @@ nothing to append and every one of these rows is APPENDED instead.
     the app reads (every other `isHidden()` in the tree is `QWidget`'s). Ask
     what the row walk asks.
 
-35. **HIDDEN IS A VIEW STATE AND NEVER AN AUDIO ONE.** A hidden master lane is
+60. **HIDDEN IS A VIEW STATE AND NEVER AN AUDIO ONE.** A hidden master lane is
     fully in the signal path: its inserts run, its fader applies, its mute is
     heard. Gate: `master_lane_hidden_still_audible`.
 
-36. **`systemRowsOutOfDate()` compares the WANTED system lanes against `rows_`
+61. **`systemRowsOutOfDate()` compares the WANTED system lanes against `rows_`
     intersected with the whole master SUBTREE**, and both halves of that
     sentence were got wrong once each.
 
@@ -1516,7 +1533,7 @@ nothing to append and every one of these rows is APPENDED instead.
     due**, on `master_lane_rows`' own undo step). The membership set is needed
     because `rows_` also holds every user lane.
 
-37. **A gesture on a system row derives its commit address the ORDINARY way,
+62. **A gesture on a system row derives its commit address the ORDINARY way,
     through `strackpath::pathOf()`** — which descends into system lanes (D9).
     Nothing in the row code special-cases the address, and that is the point:
     without the descent `pathOf` answers `{}`, which is also the address of the

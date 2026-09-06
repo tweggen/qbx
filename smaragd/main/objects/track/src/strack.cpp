@@ -684,6 +684,11 @@ int STrack::serialize( QTextStream &o )
     o << ">\n";
 
     serializeAutomation( o );
+    // Proposal 47 M0. STrack mirrors SObject::serialize() body-for-body
+    // rather than hooking into it (see the comment above), so every inline
+    // child SObject writes has to be repeated here — and one that is NOT
+    // repeated is silently dropped on save with no error anywhere.
+    serializeSends( o );
 
     // Written ONLY when non-default (mode == Trained, or a structure was
     // learned while still in Adaptive mode) -- so a project that has never
@@ -778,6 +783,41 @@ void STrack::wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
     // bumpContentEpoch(); it is its INPUT that goes, which is the one thing
     // that made it carry audio.
     if( cpRewire_ ) cpRewire_->setInput( 0, nullptr );
+}
+
+void STrack::wireAsSendLane( const std::shared_ptr<twMixer> &sum )
+{
+    if( !sum || !cpDspChain_ || !cpGainStage_ || !cpRewire_ ) return;
+    cpDspChain_->setInput( 0, sum->linkOutput( 0 ) );
+    cpDspChain_->rebuildWiring();
+    cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+    // ...and, UNLIKE the master lane, into this lane's OWN rewire, which is
+    // what the master sum already reads as this lane's root component. See the
+    // header for why that one difference is the whole of D1.
+    cpRewire_->setInput( 0, cpGainStage_->linkOutput( 0 ) );
+}
+
+void STrack::unwireSendLane()
+{
+    if( !cpDspChain_ ) return;
+    // Back to the constructor's wiring (strack.cpp's own
+    // `cpDspChain_->setInput( 0, cpTrackMix_->linkOutput( 0 ) )`), so a lane
+    // that stops being a send lane is an ordinary track rather than one whose
+    // chain has no input at all.
+    cpDspChain_->setInput( 0, cpTrackMix_ ? cpTrackMix_->linkOutput( 0 )
+                                          : nullptr );
+    cpDspChain_->rebuildWiring();
+    if( cpGainStage_ ) cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+    if( cpRewire_ )    cpRewire_->setInput( 0, cpGainStage_
+                                                   ? cpGainStage_->linkOutput( 0 )
+                                                   : nullptr );
+}
+
+std::shared_ptr<twComponent> STrack::sendTapComponent( bool preFader ) const
+{
+    if( preFader )
+        return std::static_pointer_cast<twComponent>( cpDspChain_ );
+    return std::static_pointer_cast<twComponent>( cpGainStage_ );
 }
 
 void STrack::bumpRenderChainEpoch()

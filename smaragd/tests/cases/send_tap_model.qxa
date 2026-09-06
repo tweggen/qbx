@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 47 M0: THE SEND TAP EXISTS IN THE MODEL, ROUND-TRIPS, AND REFUSES
+  EVERY ROUTING D6 SAYS IT MUST - AND IT IS STILL INAUDIBLE.
+
+  THIS CASE IS THE MODEL HALF: the tap's fields, its verbs, its undo and its
+  round trip. What a tap SOUNDS like is send_bus_audible's subject, and the two
+  are kept apart deliberately - an assertion that needs a render cannot tell a
+  tap that is missing from one that is merely quiet.
+
+  T8, THE NEGATIVE CONTROL, IS STATED IN THE FORM THAT SURVIVES M1. When M0
+  stood alone it read "a tap changes nothing", because no bus was wired; M1
+  wires one and that sentence is now false by design. The claim that remains,
+  and the one that actually protects both committed goldens, is narrower and
+  stronger: A SEND LANE WHOSE TAPS ARE ALL DISABLED IS BYTE-IDENTICAL TO NO
+  SEND AT ALL. That gates the `enabled` flag reaching the bus at the BYTE
+  level, which is a harder statement than the RMS bound send_bus_audible makes
+  for the same flag.
+
+  ONLY assert-sends CAN BITE THE MODEL HALF, and that is the missing-sample
+  placeholder's shape: a tap that round-trips wrong and a tap that was silently
+  dropped can both be inaudible, so no audio assertion separates them.
+
+  THE REFUSALS ARE THE SUBSTANCE (D6). The cycle one is refused because the
+  audio a cycle produces is whatever the render-time break happens to yield -
+  a number defined by accident rather than a mix anyone asked for.
+
+  AN EARLIER VERSION OF THIS HEADER SAID IT WOULD HANG, and that was wrong.
+  It claimed the page scheduler would leave two nodes each waiting on the other
+  until the watchdog killed the render. M3 measured it: a cyclic project
+  renders in about a second and is byte-identical across worker counts,
+  because FreezeContext::isComponentInStack breaks the recursion at render.
+  See send_cycle_broken.qxa, which also gates the half this verb cannot reach -
+  the LOADER does not come through it.
+
+  SEND -> SEND IS ALLOWED, deliberately, and is asserted below. Refusing it
+  outright would be simpler and would remove a legitimate shape (a delay
+  feeding a reverb) for a hazard the cycle walk already answers.
+-->
+<SActionScript version="1" name="send_tap_model">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- THE REFERENCE: no send lanes, no taps. -->
+    <render filename="tap_none.wav" format="wav" quality="10" durationSec="2.0"/>
+
+    <add-send-lane sendName="Reverb"/>
+    <add-send-lane sendName="Delay"/>
+
+    <!-- ================= THE TAP EXISTS AND CARRIES ITS FIELDS ========== -->
+
+    <assert-sends track="0" count="0"/>
+    <add-send track="0" dest="Reverb" level="-6" pre="false"/>
+    <assert-sends track="0" count="1" dest="Reverb" level="-6"
+                  pre="false" enabled="true"/>
+
+    <!-- set-send applies ONLY the attributes present (the set-lane-view
+         shape): the mode is untouched by a level change. -->
+    <set-send track="0" dest="Reverb" level="-3"/>
+    <assert-sends track="0" dest="Reverb" level="-3" pre="false"/>
+    <set-send track="0" dest="Reverb" pre="true"/>
+    <assert-sends track="0" dest="Reverb" level="-3" pre="true"/>
+    <set-send track="0" dest="Reverb" enabled="false"/>
+    <assert-sends track="0" dest="Reverb" level="-3" pre="true" enabled="false"/>
+
+    <!-- add-send on a destination that already has a tap REPLACES it: two taps
+         from one source to one bus would sum that source twice, which is not a
+         thing a user can mean. -->
+    <add-send track="0" dest="Reverb" level="-12" pre="false"/>
+    <assert-sends track="0" count="1" dest="Reverb" level="-12" pre="false"/>
+
+    <!-- ...and ONE undo puts back exactly what the replace overwrote, mode
+         and enabled flag included, rather than removing the tap. -->
+    <undo/>
+    <assert-sends track="0" count="1" dest="Reverb" level="-3" pre="true"
+                  enabled="false"/>
+
+    <!-- A second destination is a second tap, not a replacement. -->
+    <add-send track="0" dest="Delay" level="-9"/>
+    <assert-sends track="0" count="2" dest="Delay" level="-9"/>
+
+    <!-- remove-send, and its inverse restores the whole tap. -->
+    <remove-send track="0" dest="Delay"/>
+    <assert-sends track="0" count="1" dest="Delay" absent="true"/>
+    <undo/>
+    <assert-sends track="0" count="2" dest="Delay" level="-9" pre="false"
+                  enabled="true"/>
+
+    <!-- ================= D6: EVERY REFUSAL, EACH ANNOUNCED ============== -->
+
+    <!-- ...a destination that is not a send lane at all. -->
+    <add-send track="0" dest="NoSuchBus" level="0" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="there is no send lane called"/>
+
+    <!-- ...a lane sending to ITSELF. -->
+    <add-send track="$send:Reverb" dest="Reverb" level="0" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="a send lane cannot send to itself"/>
+
+    <!-- ...the MASTER as a source. Refused by ROLE, not by the cycle walk:
+         the master's output IS the sum that already contains every send lane,
+         so the edge that closes that cycle is the mixer's own wiring and is
+         not in the tap graph the walk can see. -->
+    <add-send track="$master" dest="Reverb" level="0" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="the master lane cannot feed a send"/>
+
+    <!-- ...and set-send on a tap that does not exist, which must not silently
+         create one at a level nobody chose. -->
+    <set-send track="0" dest="Delay2" level="-3" expectReject="true"/>
+
+    <!-- =============== SEND -> SEND IS LEGAL, AND THEN CYCLIC ========== -->
+
+    <!-- Delay feeds Reverb: a legitimate shape, accepted. -->
+    <add-send track="$send:Delay" dest="Reverb" level="-6"/>
+    <assert-sends track="$send:Delay" count="1" dest="Reverb" level="-6"/>
+
+    <!-- ...so Reverb feeding Delay would close the cycle, and is refused.
+         Without this the render below would HANG rather than fail. -->
+    <add-send track="$send:Reverb" dest="Delay" level="-6" expectReject="true"/>
+    <assert-log level="warn" minCount="1" contains="this would create a send CYCLE"/>
+    <assert-sends track="$send:Reverb" count="0"/>
+
+    <!-- ============ T8: EVERY TAP DISABLED IS BYTE-IDENTICAL =========== -->
+    <!-- The Reverb tap is already disabled; switch the other two off so no
+         enabled tap remains anywhere. The render must then match the one taken
+         before any send lane existed - a bus that leaked so much as a dither
+         bit would fail here and would pass any energy bound. -->
+
+    <set-send track="0" dest="Delay" enabled="false"/>
+    <set-send track="$send:Delay" dest="Reverb" enabled="false"/>
+
+    <render filename="tap_present.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="tap_present.wav" expected="tap_none.wav"/>
+
+    <!-- ...and back on, so the round trip below carries a MIX of states rather
+         than three identical flags. -->
+    <set-send track="0" dest="Delay" enabled="true"/>
+    <set-send track="$send:Delay" dest="Reverb" enabled="true"/>
+
+    <!-- ================= THE ROUND TRIP ================================= -->
+    <!-- Inline `<sends>`, written only when non-empty, invisible to an older
+         loader - the automation-lane discipline (37 P5), which is what keeps
+         every existing project and both goldens byte-unchanged. -->
+
+    <save-project path="../../build/send_tap_model.qxp"/>
+    <load-project path="../../build/send_tap_model.qxp"/>
+
+    <assert-sends track="0" count="2"/>
+    <assert-sends track="0" dest="Reverb" level="-3" pre="true" enabled="false"/>
+    <assert-sends track="0" dest="Delay" level="-9" pre="false" enabled="true"/>
+    <assert-sends track="$send:Delay" count="1" dest="Reverb" level="-6"/>
+  </actions>
+</SActionScript>

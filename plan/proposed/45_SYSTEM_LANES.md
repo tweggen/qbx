@@ -1881,7 +1881,7 @@ lifted, the restore has to learn an index and this case will not notice.
 
 **AC8.1** — the contracts were written AS EACH MILESTONE LANDED rather than
 here, which is why this milestone is small; what M8 found missing was
-`main/timeline/CONTRACT.md` (inv. 32-37: the pinned rows, the null link, the
+`main/timeline/CONTRACT.md` (inv. 57-62: the pinned rows, the null link, the
 one hiding mechanism, hidden-is-never-audio, the `systemRowsOutOfDate` subtree
 rule and the `pathOf` gesture rule) and `main/objects/mixer/CONTRACT.md`
 inv. 16-19 (the conductor lane, the send lanes' wiring inside the rewire pass,

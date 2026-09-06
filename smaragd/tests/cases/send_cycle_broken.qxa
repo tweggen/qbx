@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 47 M3: A SEND CYCLE IS BROKEN AT THE WIRING PASS, DETERMINISTICALLY
+  AND OUT LOUD.
+
+  THE PROPOSAL'S OWN PREDICTION WAS WRONG, AND THIS CASE EXISTS BECAUSE
+  MEASURING IT SAID SO. D6 asserted - from a reading of
+  CaptureRevalidator::expandNode_, which dedups nodes by (component, pageStart)
+  and guards recursion at depth 32 - that a cycle would leave two nodes each
+  holding the other as an unsatisfied dependency, that pendingDeps would never
+  reach zero, and that a render would sit until the watchdog killed it.
+
+  IT DOES NOT. Measured against this fixture BEFORE any cycle break existed: a
+  cyclic project rendered in about ONE SECOND, completed normally, and was
+  BYTE-IDENTICAL across SMARAGD_REVAL_WORKERS 1 / 4 / 8 over six runs.
+  FreezeContext::isComponentInStack breaks the recursion at render time, and
+  the scheduler never reaches the state the prediction described. The reading
+  of expandNode_ was right; the conclusion drawn from it was not.
+
+  SO WHY REFUSE A CYCLE AT ALL? Not because it hangs - because the audio it
+  produces is whatever the render-time break happens to yield, which is a
+  defined-by-accident number rather than a mix anyone asked for. That is a
+  weaker reason than the one D6 gave, and it is the true one.
+
+  AND THE VERB IS NOT ENOUGH, which is this case's actual subject. `add-send`
+  refuses a cycle (send_tap_model gates that), but THE LOADER DOES NOT GO
+  THROUGH THE VERB: `<sends>` is read by SObject::readSends(), so a
+  hand-edited or foreign .qxp carries whatever it likes. tests/send_cycle.qxp
+  is exactly that - a project saved by this app and then edited to add the
+  closing edge, which is the shape a user's file would have.
+
+  THE BREAK IS DETERMINISTIC BY LANE INDEX (= file order): an edge is accepted
+  only when it does not close a cycle among the edges ALREADY accepted, so
+  exactly ONE edge of the pair is dropped. Asking the FULL tap graph instead
+  would find both edges cyclic and drop BOTH, silencing a lane that has a
+  perfectly good reason to sound.
+
+  THE RESULTING LEVEL IS A CLOSED FORM, which is what makes this a gate rather
+  than a smoke test. With Alpha -> Beta dropped and Beta -> Alpha kept:
+    Beta's bus  = {}            -> Beta  = silence
+    Alpha's bus = {track0, Beta} -> Alpha = A
+    master      = track0 + Alpha + Beta = A + A + 0 = 2A = 0.461913
+  A break that dropped the other edge, or both, or neither, gives 3A (clipped
+  to ~0.6666), A, or the undefined cyclic value - none of them 2A.
+-->
+<SActionScript version="1" name="send_cycle_broken">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../send_cycle.qxp"/>
+
+    <!-- ============ THE BREAK IS ANNOUNCED, AND NAMES BOTH ENDS ========= -->
+    <!-- A bound is ANNOUNCED, never silent (proposal 45 D6's rule). Without
+         the message a user whose reverb went quiet has nothing to go on.
+
+         THESE TWO SIT IMMEDIATELY AFTER load-project AND THAT IS LOAD-BEARING.
+         assert-log's window opens at the preceding NON-assert-log action, and
+         the break happens while the project is being adopted - not during the
+         render. Placed after the render (or after the assert-sends below, which
+         would advance the window just as well) they read an empty window and
+         report "OK - 0 records" over a live failure. Proposal 45 recorded that
+         exact trap and this case re-paid it before it was moved here. -->
+
+    <assert-log level="warn" minCount="1"
+                contains="[SEND] cycle: the tap from 'Alpha' into 'Beta' is DROPPED"/>
+
+    <!-- ...and EXACTLY ONE edge went. Dropping both would silence a lane that
+         has a perfectly good reason to sound. minCount="0" is required:
+         maxCount alone still asserts a floor of one. -->
+    <assert-log level="warn" minCount="0" maxCount="0"
+                contains="the tap from 'Beta' into 'Alpha' is DROPPED"/>
+
+    <!-- The taps are all in the model: the loader read them, cycle and all.
+         The break is a WIRING decision, not an edit to the user's project. -->
+    <assert-sends track="0" count="1" dest="Alpha" level="0" enabled="true"/>
+    <assert-sends track="$send:Alpha" count="1" dest="Beta" enabled="true"/>
+    <assert-sends track="$send:Beta" count="1" dest="Alpha" enabled="true"/>
+
+    <render filename="cycle.wav" format="wav" quality="10" durationSec="2.0"/>
+
+    <!-- ================= THE CLOSED FORM AFTER THE BREAK ================ -->
+    <!-- 2A. See the header for why 3A, A and the cyclic value are all
+         distinguishable from it. -->
+
+    <assert-audio-energy filename="cycle.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.4480" maxRms="0.4758"/>
+
+    <!-- ============ REMOVING THE CLOSING EDGE FREES THE OTHER ========== -->
+    <!-- The dropped edge was never taken out of the model, so fixing the cycle
+         by removing ONE tap restores the other rather than requiring both to
+         be re-added. The assert-log goes on remove-send's own window, which is
+         where the re-wire happens. -->
+
+    <remove-send track="$send:Beta" dest="Alpha"/>
+    <assert-log level="warn" minCount="0" maxCount="0" contains="[SEND] cycle:"/>
+
+    <!-- track0 + Alpha + Beta, all sounding: 3A = 0.6929 peak, clipped in
+         16-bit PCM. The point is only that it is NOT 2A - the previously
+         dropped edge is carrying audio again. -->
+    <render filename="acyclic.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="acyclic.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.6400" maxRms="0.6900"/>
+
+  </actions>
+</SActionScript>

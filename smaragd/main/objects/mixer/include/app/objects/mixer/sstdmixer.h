@@ -73,6 +73,16 @@ public:
     double masterInputLevelDb( int i ) const;
     bool   masterInputWired( int i ) const;
 
+    // The SEND BUS's own inputs (proposal 47 M4), lane k = sentinel `-2 - k`.
+    // Published for the same reason the master's are: `app/testkit` may not
+    // include `tw/mix`, and a wiring decision that no assertion can read is a
+    // decision nothing can gate. THE ONLY THING THAT CAN SEE D9 -- a live lane
+    // does not feed a send -- because a render SUSPENDS every live lane
+    // (21 L1b), so the audio path cannot be asked the question at all.
+    int    sendBusInputCount( int k ) const;
+    bool   sendBusInputWired( int k, int i ) const;
+    double sendBusInputLevelDb( int k, int i ) const;
+
     virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
     virtual QWidget *getInlineEditWidget( QWidget *parent ) override;
     virtual SObjectRenderer *getInlineRenderer() override;
@@ -310,6 +320,16 @@ public slots:
     void notifyTreeChanged();
 
     /**
+     * A SEND TAP was added, removed or re-levelled (proposal 47 M1).
+     *
+     * The tap verbs edit the MODEL; this is the one seam that turns that into
+     * wiring, and it re-runs the whole pass rather than touching one bus —
+     * D4/T1's rule, that all send-bus wiring happens in one idempotent place.
+     */
+    void sendRoutingChanged();
+
+
+    /**
      * Remove the specified track.
      */
     int removeTrack( int trackIndex );
@@ -360,6 +380,19 @@ private:
     void bumpMasterChainEpochRange( offset_t start, offset_t end );
 
     void reconnectTracksToMixer();
+
+    /**
+     * The send half of the pass above, and it is called from THERE and from
+     * nowhere else (proposal 47 D4 — proposal 45's trap T3 re-paid).
+     *
+     * `reconnectTracksToMixer()` rewires EVERY master input on every
+     * audibility, solo, mute and arm change. A send bus wired from
+     * `adoptSendLane`, from a verb, or at load would work until the user
+     * toggled a solo somewhere else entirely. Filling both halves in one pass
+     * is what makes the wiring idempotent under repetition, which is what
+     * "survives a rewire" means.
+     */
+    void rewireSendBuses();
     std::vector<std::shared_ptr<twMixer> > cpMixers_;
     std::shared_ptr<twRewire> cpRewire_;
     int nBusses_;
@@ -381,6 +414,16 @@ private:
     // has a refcount of zero and is deleted the moment anything looks at it.
     QList<STrack *> sendLanes_;
     QList<SLink *>  sendLaneRefs_;
+    // ONE SEND BUS PER SEND LANE, index-parallel to sendLanes_ (proposal 47
+    // M1 / D1). A send lane's input is this sum rather than clips, exactly as
+    // the master lane's input is the master sum -- `twMixer` already provides
+    // N inputs with a per-input level in dB, which IS the send level (D7), so
+    // a send needs no new DSP anywhere.
+    //
+    // Owned here rather than by the lane because the WIRING is owned here:
+    // reconnectTracksToMixer() is the one pass that may touch it (D4/T1), and
+    // a bus the lane owned would be a second place to wire it from.
+    QList<std::shared_ptr<twMixer> > sendBuses_;
     SLink  *masterLaneRef_ = nullptr;
 
     QPointer<STrack> selectedTrack_;
