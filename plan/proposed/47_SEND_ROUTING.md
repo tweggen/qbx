@@ -227,6 +227,53 @@ serialization, the four verbs (`add-send`, `remove-send`, `set-send-level`,
 `set-send-mode`), every refusal from D6, and `assert-sends`. **No audio.** The
 negative control is T8: every golden byte-unchanged, because nothing is wired.
 
+### M0 as executed (2026-09-06)
+
+Shipped as committed. `SSendTap` on `SObject`, inline `<sends>`, the three
+verbs, `assert-sends`, and `qxa.send_tap_model`. The negative control holds:
+two send lanes and three taps between them render **byte-identically** to the
+same project with none (`assert-file-identical`), and both committed goldens
+are unchanged.
+
+**Watched failing under six sabotages, and five of the six bite disjointly:**
+
+| Sabotage | What failed |
+|---|---|
+| the CYCLE refusal deleted | only the cycle `expectReject` (action #34) |
+| the SELF refusal deleted | only its `assert-log` (#28) — see the finding below |
+| the MASTER-as-source refusal deleted | only its `expectReject` (#29) |
+| `serializeSends` writes nothing | only the four post-load assertions (#41-44) |
+| `setSendTap` APPENDS instead of replacing | only the five in-flight assertions (#10-18) |
+| `STrack::serialize` forgets `serializeSends` | the same four post-load assertions (#41-44) |
+
+The last two sharing a symptom is not a disjointness failure: they are two
+independent ways to lose the same data, and the fifth proves the in-flight
+assertions are a separate statement from the round-trip ones.
+
+**FINDING — THE SELF REFUSAL IS ALREADY DONE BY THE CYCLE WALK, and this is
+proposal 45's own lesson found a second time.** Deleting the explicit
+`dest == source` check did NOT let a self-send through: the reachability walk
+starts at the destination and returns true on its first iteration when the
+destination IS the source, so the verb still refused — with the CYCLE message
+instead. What the accident does not do is say the right thing, which is exactly
+why the gate asserts the ANNOUNCEMENT (`assert-log`) rather than the refusal.
+45's table records the identical shape for `remove-track` / `move-track` /
+`reparent-track`, where deleting each explicit check moved zero assertions. The
+explicit check stays for the same reason theirs did: it is the one that still
+reads correctly when the walk changes.
+
+**NOT gated in M0**, and each is a milestone below rather than an omission: the
+audio (M1 — there is no bus), invalidation (M2 — there is nothing to
+invalidate), the scheduler HANG the cycle refusal exists to prevent (M3
+measures it; M0 only refuses it), the monitored-send dropout (M4/D9), and any
+UI (M5 — these verbs are reachable only from a `.qxa` script, exactly as
+proposal 41's fragment verbs were before its menu items landed).
+
+**Suite:** 365 registered / 360 run / 5 disabled, reconciled both ways.
+`playback_test` failed once in the `-j4` run and is the documented wall-clock
+reposition case on a **4-core** box, where `-j4` is full saturation: 3/3 passes
+idle, and this branch changes no `tw303a/` file at all.
+
 **M1 — the send bus, audible.** `wireAsSendLane`, `rewireSendBuses()` inside the
 pass (D4), pre/post tap points (D3), level as the bus input level (D7),
 audibility (D5). Gated by RMS through a render against a closed form.
