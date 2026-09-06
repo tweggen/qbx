@@ -270,6 +270,7 @@ int SObject::readPreChildrenAttributes( QDomElement &element )
 int SObject::readPostChildrenAttributes( QDomElement &element )
 {
     readAutomation( element );
+    readSends( element );
     return 0;
 }
 
@@ -282,6 +283,7 @@ int SObject::serialize( QTextStream &o )
     o  << ">\n";
 
     serializeAutomation( o );
+    serializeSends( o );
     serializeInlineChildren( o );
 
     for( SLink *lk : childLinks() ) {
@@ -408,6 +410,78 @@ int SObject::readAutomation( const QDomElement &element )
     // The engine components do not necessarily exist yet on the load path; the
     // owner re-pushes from applyAutomationToEngine() once its chain is up.
     applyAutomationToEngine();
+    return 0;
+}
+
+// --- send taps (proposal 47 M0, design D2) -----------------------------------
+
+const SSendTap *SObject::sendTap( const QString &dest ) const
+{
+    for( const SSendTap &t : sendTaps_ )
+        if( t.dest == dest ) return &t;
+    return nullptr;
+}
+
+bool SObject::setSendTap( const SSendTap &tap )
+{
+    if( tap.dest.isEmpty() ) return false;
+    for( SSendTap &t : sendTaps_ ) {
+        if( t.dest == tap.dest ) { t = tap; return true; }
+    }
+    sendTaps_.append( tap );
+    return true;
+}
+
+bool SObject::removeSendTap( const QString &dest )
+{
+    for( int i = 0; i < sendTaps_.size(); ++i ) {
+        if( sendTaps_[i].dest == dest ) { sendTaps_.removeAt( i ); return true; }
+    }
+    return false;
+}
+
+int SObject::serializeSends( QTextStream &o )
+{
+    if( sendTaps_.isEmpty() ) return 0;   // T8: nothing written, nothing moves
+    o << "<sends>\n";
+    for( const SSendTap &t : sendTaps_ ) {
+        o << " <send dest='" << t.dest.toHtmlEscaped() << "'";
+        o << " level='" << QString::number( t.levelDb, 'g', 10 ) << "'";
+        o << " pre='" << ( t.preFader ? "true" : "false" ) << "'";
+        // Written unconditionally rather than only-when-false: `enabled` is
+        // the one field whose ABSENCE would have to mean "true", and a reader
+        // that has to infer a default from a missing attribute is how a
+        // disabled send comes back on after a round trip.
+        o << " enabled='" << ( t.enabled ? "true" : "false" ) << "'";
+        o << "/>\n";
+    }
+    o << "</sends>\n";
+    return 0;
+}
+
+int SObject::readSends( const QDomElement &element )
+{
+    const QDomElement sendsEl = element.firstChildElement( "sends" );
+    if( sendsEl.isNull() ) return 0;
+
+    for( QDomNode n = sendsEl.firstChild(); !n.isNull(); n = n.nextSibling() ) {
+        if( !n.isElement() ) continue;
+        const QDomElement e = n.toElement();
+        if( e.tagName() != QLatin1String( "send" ) ) continue;
+
+        SSendTap t;
+        t.dest = e.attribute( "dest" );
+        if( t.dest.isEmpty() ) {
+            TW_LOGW( "model", "[SEND] ignoring a <send> with no destination" );
+            continue;
+        }
+        t.levelDb  = e.attribute( "level", "0" ).toDouble();
+        t.preFader = e.attribute( "pre", "false" ) == QLatin1String( "true" );
+        t.enabled  = e.attribute( "enabled", "true" ) == QLatin1String( "true" );
+        // A DUPLICATE destination in the file collapses to one tap rather
+        // than summing the source into that bus twice (setSendTap replaces).
+        setSendTap( t );
+    }
     return 0;
 }
 

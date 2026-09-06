@@ -653,6 +653,26 @@ const Fixture kFixtures[] = {
     { "assert-clip-window",
       "<assert-clip-window clip='1,0' startTime='96000' duration='192000'"
       " loopLength='24000' startOffset='4800' timebase='beats' take='1'/>" },
+
+    // --- the send TAP verbs (proposal 47 M0) -------------------------------
+    // All three write `track` and `dest` unconditionally and readXml() refuses
+    // a pair with either missing -- a send with no source or no destination is
+    // not a thing -- so each needs a fixture to enter the audit at all.
+    // set-send writes level/pre/enabled only when they were GIVEN (the
+    // set-lane-view shape), so its fixture gives all three or two of them
+    // would never be round-tripped.
+    { "add-send",
+      "<add-send track='1' dest='Reverb' level='-6' pre='false'"
+      " enabled='true'/>" },
+    { "remove-send", "<remove-send track='1' dest='Reverb'/>" },
+    { "set-send",
+      "<set-send track='1' dest='Reverb' level='-3' pre='true'"
+      " enabled='false'/>" },
+    // count/level are written only when set, and `dest` gates the per-tap
+    // assertions, so the fixture declares every one of them.
+    { "assert-sends",
+      "<assert-sends track='1' count='2' dest='Reverb' level='-6'"
+      " pre='false' enabled='true' absent='false'/>" },
 };
 
 const char *fixtureFor(const QString &verb)
@@ -959,6 +979,27 @@ const LaneRow kLaneRows[] = {
     // refusing one would refuse the feature.
     { "add-send-lane",    Accept, "M7/AC7.1: it CREATES a system lane" },
     { "remove-send-lane", Accept, "M7: the inverse of the above" },
+
+    // ================== PROPOSAL 47 M0: THE SEND TAP VERBS =================
+    //
+    // These DO address a lane by path (`track=`), so the detector flags them
+    // and a row is required. The source of a send may legitimately BE a system
+    // lane -- a send lane feeding another send lane is the shape D6's cycle
+    // walk exists to make safe, not one to refuse outright -- so the policy is
+    // Conditional rather than Accept or Refuse, and the condition is the
+    // routing rather than the role:
+    //
+    //   * a SEND lane as the source: ACCEPTED, subject to the cycle walk;
+    //   * the MASTER lane as the source: REFUSED by role, because the master's
+    //     output is the sum that already CONTAINS every send lane, so the edge
+    //     that closes the cycle is the mixer's own wiring and is not in the tap
+    //     graph the walk can see;
+    //   * a lane sending to ITSELF: refused.
+    { "add-send",    Conditional,
+      "47/D6: a send lane may be a source (cycle-walked); the master may not" },
+    { "remove-send", Conditional, "47/D6: as add-send" },
+    { "set-send",    Conditional, "47/D6: as add-send" },
+    { "assert-sends", Accept, "read-only" },
 
     // ==================== NOT A DESTINATION OR SUBJECT ====================
     { "remove-sample",  NotApplicable,

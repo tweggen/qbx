@@ -684,6 +684,11 @@ int STrack::serialize( QTextStream &o )
     o << ">\n";
 
     serializeAutomation( o );
+    // Proposal 47 M0. STrack mirrors SObject::serialize() body-for-body
+    // rather than hooking into it (see the comment above), so every inline
+    // child SObject writes has to be repeated here — and one that is NOT
+    // repeated is silently dropped on save with no error anywhere.
+    serializeSends( o );
 
     // Written ONLY when non-default (mode == Trained, or a structure was
     // learned while still in Adaptive mode) -- so a project that has never

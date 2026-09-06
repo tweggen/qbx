@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include "app/model/sautomationlane.h"
+#include "app/model/ssendtap.h"
 #include "tw/events/tweventclipset.h"
 #include "tw/events/twfade.h"
 #include "tw/pages/capture_page_pool.h"
@@ -548,6 +549,26 @@ public:
     /// Every lane, in insertion order.
     QList<SAutomationLane *> automationLanes() const;
     bool hasAutomationLanes() const { return !automationLanes_.empty(); }
+
+    // --- send taps (proposal 47 M0, design D2) ---------------------------
+    //
+    // Main-thread only, exactly like automationLanes_ above and for the same
+    // reason. WHICH objects may legally carry a tap is the verbs' business,
+    // not this class's — an audio tap on a MIDI lane is refused where it can
+    // be announced (D6), never by the type of this member.
+    const QList<SSendTap> &sendTaps() const { return sendTaps_; }
+    bool hasSendTaps() const { return !sendTaps_.isEmpty(); }
+    /// The tap addressing `dest`, or nullptr. Names are matched EXACTLY: a
+    /// send lane's name is its address and `addSendLane` already refuses a
+    /// collision, so a case-folding match here would invent an ambiguity the
+    /// model does not have.
+    const SSendTap *sendTap( const QString &dest ) const;
+    /// Add, or REPLACE the tap that already addresses `tap.dest`. Replace
+    /// rather than append: two taps from one source to one destination would
+    /// sum the source into that bus twice, which is not a thing a user can
+    /// mean. Returns false for an empty destination.
+    bool setSendTap( const SSendTap &tap );
+    bool removeSendTap( const QString &dest );
 
     /// The snapshot a consumer should use for `target`: null when the lane is
     /// absent, empty or Off — and "null" is the SCALAR path, which is what keeps
@@ -1129,6 +1150,17 @@ protected:
     // skipped with a warning, never a load failure.
     int readAutomation( const QDomElement &element );
 
+    // Emit `<sends>…</sends>`, and NOTHING AT ALL when there are no taps —
+    // which is what keeps every project written before proposal 47 and both
+    // committed goldens byte-unchanged (T8, the negative control for the
+    // whole proposal). Called from SObject::serialize() and from every
+    // serialize() override that writes its own children (STrack's).
+    int serializeSends( QTextStream &o );
+    // Read the inline `<sends>` child. Tolerant in the same way
+    // readAutomation() is: a tap with an empty destination is skipped with a
+    // warning, never a load failure.
+    int readSends( const QDomElement &element );
+
     int getChildIndex( SObject & ) const;
 
 protected:
@@ -1139,6 +1171,12 @@ protected:
 
     // Main-thread only (see the automation block above).
     std::vector<std::unique_ptr<SAutomationLane> > automationLanes_;
+
+    // Main-thread only (see sendTaps() above). A QList of values rather than
+    // of owning pointers: a tap is four fields with no identity of its own,
+    // no signals and no independent existence — the argument proposal 37 P5
+    // makes for a lane NOT being an SObject, one step further.
+    QList<SSendTap> sendTaps_;
 
     // Phase 5e: Page cache infrastructure (unified across all SObjects).
     // Two-page buffer model (Unix page cache pattern):
