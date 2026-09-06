@@ -276,3 +276,109 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
     Only the LAST send lane may be removed, and the refusal is announced: the
     sentinel `-2 - k` IS the address, so removing one from the middle shifts
     every lane after it and silently re-points every path that named one.
+
+---
+
+## Send ROUTING (proposal 47 M1-M4)
+
+Proposal 45 M7 built a send lane that nothing could feed. These invariants are
+what feeds it.
+
+20. **A SEND LANE'S INPUT IS ITS OWN `twMixer`, and this mixer owns it.**
+    `sendBuses_` is index-parallel to `sendLanes_`: bus k belongs to the lane
+    the sentinel `-2 - k` addresses. It is the MASTER lane's shape one level
+    down — `STrack::wireAsSendLane( sum )` takes the bus into the lane's
+    plugin chain exactly as `wireAsMasterLane` takes the master sum into the
+    master lane's.
+
+    The bus is owned HERE rather than by the lane because the WIRING is owned
+    here (inv. 21). A bus the lane owned would be a second place to wire it
+    from, which is the whole failure inv. 21 exists to prevent.
+
+21. **ALL send-bus wiring happens inside `reconnectTracksToMixer()`, through
+    `rewireSendBuses()`, and nowhere else** — proposal 45's trap T3, re-paid.
+    That pass rewires EVERY input on every audibility, solo, mute and arm
+    change, so a bus wired from `adoptSendLane`, from a verb, or at load works
+    until the user toggles a solo somewhere else entirely. Filling both halves
+    in one pass is what makes the wiring idempotent under repetition, which is
+    what "survives a rewire" means.
+
+22. **`twMixer` REFUSES ZERO INPUTS by contract** (`if( n <= 0 ) return -2`),
+    so "this lane has no taps" is ONE UNWIRED input and never a request for
+    none. Measured with `setNInputs( 0 )`: the refusal went unhandled, the bus
+    kept the plug it already had, and removing the last tap left the send
+    sounding at the pre-removal level forever — a render read 0.34671 where
+    0.115752 was due. The refusal is right; expressing the empty case is the
+    caller's job.
+
+23. **A LANE IS UNWIRED FROM ITS BUS WHILE THE BUS IS STILL ALIVE.**
+    `detachSendLane` calls `STrack::unwireSendLane()` BEFORE dropping the bus,
+    and drops the bus at the SAME index rather than leaving `rewireSendBuses()`
+    to trim the tail.
+
+    A component holds an input PLUG into its producer's latch. Dropping the bus
+    first leaves the lane's plugin chain holding a plug into a destroyed
+    `twMixer`, and the next `setInput()` dereferences that dead latch to detach
+    it — **SEGFAULT**, found by `qxa.send_lane_remove_undo` (a proposal 45
+    case) on the UNDO. Trimming only the tail is also silently wrong for a
+    removal from the middle: the two lists stop being index-parallel and lane j
+    inherits lane j+1's bus. The verb forbids that today; this code does not
+    lean on it.
+
+24. **A TAP EDIT NEEDS `invalidateRenderPath()`, and nothing lighter.**
+    `sendRoutingChanged()` re-runs the pass and then invalidates. Without the
+    invalidation a `set-send` is wired correctly and INAUDIBLE, because the
+    render serves pages frozen before the edit — proposal 45 measured the
+    identical shape for the master mute, where an epoch bump alone left the
+    muted render byte-identical to the unmuted one.
+
+    Bumping the send lanes' `bumpRenderChainEpoch()` and the buses'
+    `bumpContentEpoch()` beside it was tried and REMOVED: each was ablated
+    separately and the gate passed without either, so both were code no
+    sabotage could bite. 45's rule reached independently — **invalidate, never
+    bump**.
+
+25. **A SOURCE THAT IS INAUDIBLE OR LIVE-OWNED FEEDS NOTHING, and those are
+    TWO terms.** Audibility is `ssolo::isLaneAudible`, resolved once per pass
+    and never re-spelled (`main/timeline/CONTRACT.md` inv. 10 records that two
+    local copies of that rule are how the meter and the ear came to disagree
+    about a nested lane). Mute therefore kills a PRE-fader send too, which is
+    not derivable from the tap point and is a decision: every reference DAW
+    silences sends on mute.
+
+    `isLiveOwnedLane()` is the SECOND term and is never folded into the first
+    (proposal 21 L1b): a live-owned track is still audible in every other
+    sense. **A LIVE LANE DOES NOT FEED A SEND** (proposal 47 D9, requester
+    decision): it is excluded from the frozen sum and rendered by the pump, so
+    the gain-stage pages a tap would read are not being produced at all. The
+    monitored signal is therefore DRY, and that is the behaviour rather than a
+    defect. Gated by `qxa.send_live_lane_does_not_feed` — at the WIRING, because
+    a render SUSPENDS every live lane and by the time there is audio the
+    condition is gone.
+
+26. **A SEND CYCLE IS BROKEN HERE, not only refused at the verb.**
+    `add-send` refuses one, but the LOADER does not go through the verb —
+    `<sends>` is read by `SObject::readSends()`, so a hand-edited or foreign
+    `.qxp` carries whatever it likes. `rewireSendBuses()` accepts an edge only
+    when it does not close a cycle among the edges ALREADY accepted, walking
+    lanes in index (= file) order, and ANNOUNCES every edge it drops.
+
+    That drops exactly ONE edge of a cycle. Asking the FULL tap graph instead
+    finds both edges cyclic and drops BOTH, silencing a lane that has a good
+    reason to sound.
+
+    **IT IS NOT ABOUT A HANG, and proposal 47 D6 said it was.** D6 predicted
+    the page scheduler would leave two nodes each waiting on the other until
+    the watchdog killed the render. MEASURED against `tests/send_cycle.qxp`: a
+    cyclic project renders in about one second, completes, and is
+    byte-identical across `SMARAGD_REVAL_WORKERS` 1 / 4 / 8 over six runs —
+    `FreezeContext::isComponentInStack` breaks the recursion at render time.
+    The refusal is right for a weaker and truer reason: the audio a broken
+    cycle produces is whatever that break happens to yield.
+
+27. **A SEND BUS'S INPUT LEVELS MAY BE NON-UNITY; THE MASTER SUM'S MAY NOT.**
+    The send level IS the bus's own per-input level (`twMixer::setInputLevel`),
+    so a send needs no new DSP anywhere. `twlive::checkMasterShape` inspects
+    the MASTER mixer and never a send bus, so a send at −6 dB does not disturb
+    live monitoring — unlike a non-unity MASTER input, which drops it into the
+    Closure path for every armed track (45 D4a rule 2).

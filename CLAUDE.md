@@ -2782,6 +2782,74 @@ because the main window is never shown — the standing gap
 open (`SViewTabs`), which is still session-only and is per-PROJECT state
 wanting the `.qxp`, not this branch's `.ini` or `STrack`.
 
+## Send routing: a send lane can finally be fed (proposal 47 — M0-M5 executed 2026-09-06)
+
+Proposal 45 M7 built a send LANE — a system lane with a plugin chain, a fader,
+a meter and an output that sums into the master — and **deliberately nothing
+that could feed it**, saying so out loud (45 D10 sized routing at "at least the
+size of this proposal"). Proposal 47 is that routing: a TAP on a source lane,
+naming a destination send lane, wired by the pass that already wires everything
+else. Design, the nine traps and the per-milestone "as executed" measurements:
+`plan/proposed/47_SEND_ROUTING.md`. Invariants:
+`main/objects/mixer/CONTRACT.md` inv. 20-27, `main/objects/track/CONTRACT.md`
+("A track as a SEND source"), `main/model/CONTRACT.md` ("The SEND TAP"),
+`main/timeline/CONTRACT.md` inv. 63, `main/testkit/CONTRACT.md` ("The SEND
+verbs"). Verbs and the full attribute table: `docs/ACTIONS.md`.
+
+**Read this before touching a send — the obvious design is wrong five times,
+and one of the DESIGN's own predictions was wrong too and had to be corrected
+against a measurement rather than defended.**
+
+| Thing to know | Why |
+|---|---|
+| **A send lane sums its OWN `twMixer`, and the wiring is done by `reconnectTracksToMixer` — never beside it** (D1/D4, and 45's trap T3) | That pass sizes the input count from the TRACK count and **rewires every input on every audibility, solo, mute and arm change**, so anything wired next to it works until the user toggles a solo somewhere else entirely. `rewireSendBuses()` therefore runs at the END of that same pass, keeps its bus list index-parallel with the lane list, and is idempotent under repetition. The three tap verbs commit through `SStdMixer::sendRoutingChanged()` and touch no plug themselves. |
+| **A bus that has lost its last tap keeps ONE UNWIRED input, not zero** | `twMixer::setNInputs` REFUSES a count of zero (`n <= 0` returns -2), and a bus left at its old count keeps serving its old plug — measured: a send lane read **0.34671** where 0.115752 was due, i.e. the removed source still audible through it. `nIn = feeds.isEmpty() ? 1 : feeds.size()`, and `assert-send-inputs count="1" wired="0"` is what an unfed lane reads. |
+| **The tap point is post-FX, and PRE-FX is not offered** (D3) | `pre="true"` is the gain stage's INPUT (post-FX, pre-fader), `pre="false"` — the default — its OUTPUT. An insert chain is most of what a send is for, so a pre-FX tap would need a second tap component per track for a routing nobody asked for. `STrack::sendTapComponent( preFader )` is the ONE place that answers it: the mixer may not name `twPluginChain` (`app/objects/mixer` has no edge to `tw/plugins`), which is where the first attempt put it and where `check_layering.py` caught it. |
+| **Audibility is ASKED, never re-spelled** (D5) — and LIVE-OWNED is a SECOND term, never folded into it (D9) | `ssolo::isLaneAudible` is the one rule and the walk asks it. A LIVE-OWNED lane feeds nothing: a monitored input is rendered by the live pump, which has no send path at all, so a send from an armed track goes quiet for the arm and comes back on the hand-back. That is the REQUESTER's decision (D9 option (a)), not a limitation discovered late — the alternative is a send tap inside `LiveGraphPump`, which is a proposal of its own. Folding the two terms together would darken a live-owned lane's meters and its event feed as well, which is exactly what 21 L1b's `isLiveOwnedLane()` exists to avoid. |
+| **A CYCLE is refused at the verb AND broken at the wiring** — both, because a FILE can carry one the verbs never saw | `add-send` walks the tap graph on the edit (at most lanes x sends edges, never per page) and refuses an edge that would close a loop; `rewireSendBuses` walks it again on every pass with a `fedLanes` accumulator and drops the edges that would revisit a lane already fed, **announcing each with a `TW_LOGW`** (D6's own "a bound is ANNOUNCED, never silent"). |
+| **D6 PREDICTED A HANG IF A CYCLE REACHED THE SCHEDULER, AND THAT PREDICTION WAS WRONG** | Measured, not argued: `CaptureRevalidator::expandNode_` dedups by `(component, pageStart)` and carries a depth guard of 32, and `FreezeContext::isComponentInStack` breaks a cycle at render. A cyclic project renders, in bounded time. The refusal STAYS — "renders something" is not "renders what the user meant" — but the design was corrected in place rather than left claiming a failure mode the engine does not have. |
+| Only `invalidateRenderPath()` is load-bearing on a routing edit | Ablation: both epoch bumps were removed and nothing moved. The send's audio is baked into every frozen page from the gain stage downstream, exactly as proposal 45 measured for the master mute — an epoch bump alone left a muted render BYTE-IDENTICAL to the unmuted one. |
+| **A send lane's `unwireSendLane()` must run while its bus is still ALIVE** | Removing a send lane and undoing it SEGFAULTed in `twComponent::setInput`: the lane kept a plug into a destroyed `twMixer`. The unwire happens BEFORE the bus is dropped, and the bus is dropped at the SAME INDEX the lane held. Caught by a **proposal 45** case, not by any of 47's own. |
+
+**Three gate-shaped lessons this proposal paid for**, all general:
+
+- **A number measured through a broken harness is not a measurement.** A case
+  written with `volumeDb=` where `set-track-volume` takes `volume=` produced a
+  clean, repeatable "a source-fader edit does not reach the send lane" finding,
+  for which a whole `invalidateRenderChainsContaining` override was written and
+  `SObject`'s walk made `virtual`. The attribute was the bug; both changes were
+  reverted. **Check the verb's own attribute spelling before believing a
+  negative result.**
+- **A `git checkout --` on a dirty tree is not a fix**, and it cost a
+  milestone's uncommitted work twice in one session. Commit a checkpoint before
+  every sabotage pass.
+- **`assert-log`'s window opens at the preceding non-`assert-log` action**, so a
+  pair placed after `<render>` reads an EMPTY window when the thing it guards
+  happens at LOAD — and `maxCount` alone still asserts a floor of 1, so an
+  absence needs `minCount="0" maxCount="0"`.
+
+Gates: the qxa cases `send_tap_model`, `send_bus_audible`, `send_cycle_broken`,
+`send_live_lane_does_not_feed` (RUN_SERIAL, `SMARAGD_AUDIO_INPUT_BACKEND=file:`)
+and `send_strip_ui`, over the fixture `tests/send_cycle.qxp` and
+`tests/test_autosaw.wav` (dry RMS **A = 0.230956**, a closed form — the 480 Hz
+sawtooth whose period is exactly 100 frames), plus `action_roundtrip_test`,
+which carries an accept/refuse row for all seven new verbs. Each milestone was
+watched failing under its own sabotage pass (six, six, three, two and four
+sabotages for M0..M5), and the committed GOLDENS are byte-identical throughout —
+a project with no send tap must render exactly as it did (T8).
+
+**NOT gated:** PDC across a send (D8 — out of scope, and a latency-reporting
+insert on a send lane is heard late by exactly its own number); a send from or
+to the MASTER lane (there is none, and no case asserts the refusal); a send
+lane's own SOLO (still refused by proposal 45, and invisible to
+`anySoloInTree` by construction); real device latency anywhere on the path; the
+Sends strip's PIXELS (`assert-send-strip` reads `describe()` and the row count,
+never a paint — no `paintEvent` of it is measured); the strip's behaviour when
+the addressed track IS a send lane beyond the fact that its own row is skipped;
+sends inside a named ARRANGEMENT beyond the `arrangement=` attribute
+round-tripping; and a cycle arriving through a HAND-EDITED file with more than
+two lanes in it — `send_cycle.qxp` carries a two-lane loop.
+
 ## Dependencies
 
 ### Core

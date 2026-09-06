@@ -541,6 +541,38 @@ green. Goldens byte-identical.
 `main/objects/track/CONTRACT.md`, `docs/ACTIONS.md`, `CLAUDE.md`, and this
 file's "as executed" sections.
 
+### M6 as executed (2026-09-06)
+
+Docs only — no source file changed, so the build, the four checkers and the
+suite are the same run M5 landed on. Wider than the milestone line above, and
+each addition is named because the line did not anticipate it:
+
+| File | What |
+|---|---|
+| `main/objects/mixer/CONTRACT.md` | new **"Send ROUTING (proposal 47 M1-M4)"** section, invariants **20-27**: the bus per lane and its index-parallel list, the one-unwired-input floor `twMixer::setNInputs` forces, the wiring's home inside `reconnectTracksToMixer`, audibility and live-ownership as two separate terms, the verb-side refusal and the wiring-side break, `invalidateRenderPath` as the only load-bearing invalidation, and the unwire-before-drop ordering the SEGFAULT paid for |
+| `main/objects/track/CONTRACT.md` | **"A track as a SEND source, and a send lane's own wiring"** — `sendTapComponent()` as the ONE answer to the tap point (and why the mixer cannot answer it: no edge to `tw/plugins`), `wireAsSendLane` keeping the lane's own rewire, and `unwireSendLane`'s liveness requirement |
+| `main/model/CONTRACT.md` | **"The SEND TAP (proposal 47 M0)"** — `SSendTap` on `SObject` for the same reason `contentKind()` and the automation lane vector are there, the by-NAME destination, and the non-default-only serialization that keeps every project and golden byte-unchanged |
+| `main/testkit/CONTRACT.md` | **"The SEND verbs (proposal 47)"** — the model half (`assert-sends`) against the wiring half (`assert-send-inputs`), and why the second is the only thing that can see a clobbered bus |
+| `main/timeline/CONTRACT.md` | **inv. 63** (the Sends strip: a row per lane, the addressed lane's own row skipped, `updating_` as the re-entry guard, and unticking writing `enabled=false` rather than removing). The file's numbering note moved from "currently 63" to **"currently 64"** |
+| `docs/ACTIONS.md` | a **"### Send ROUTING (proposal 47)"** subsection before the verb table, plus rows for all seven verbs — `add-send`, `remove-send`, `set-send`, `assert-sends`, `assert-send-inputs`, `assert-send-strip`, `send-strip-set`. **And a correction**: the `add-send-lane` row still said the lane had "nothing that can feed it", which 45 M7 wrote truthfully and M1 falsified |
+| `CLAUDE.md` | a **"Send routing"** section in the house shape — the read-this-first table, the three general gate-shaped lessons (a number measured through a broken harness; `git checkout --` on a dirty tree; `assert-log`'s window and `maxCount`'s implicit floor of 1), and the NOT-gated list |
+
+**Two things this pass corrected rather than merely recorded**, both places
+where a document had gone stale against the code:
+
+- `docs/ACTIONS.md`'s `add-send-lane` row (above). A reference that says a
+  feature cannot be fed, one milestone after it can be, is worse than silence.
+- D6's hang prediction, already corrected in the design at M3, is now stated
+  the same way in all four places it appears — the proposal, the mixer
+  contract, `ACTIONS.md` and `CLAUDE.md` — so a reader arriving at any one of
+  them gets the measurement rather than the guess.
+
+**Not done, and named:** the milestone line above lists four verbs for M0
+(`set-send-level` and `set-send-mode`); M0 shipped **three**, folding both into
+one partial `set-send`, and the M0 section records why. That line is left as
+written — a milestone list is a plan, and rewriting it to match the outcome
+would erase the fact that the plan changed.
+
 ---
 
 ## What this proposal will NOT gate
