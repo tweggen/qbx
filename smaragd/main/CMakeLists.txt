@@ -497,6 +497,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/stransporttestactions.h
     testkit/include/app/testkit/sassertunsavedchangesaction.h
     testkit/include/app/testkit/sassertmasterinputsaction.h
+    testkit/include/app/testkit/sdrainpendingdeletesaction.h
     testkit/include/app/testkit/sassertsystemlaneaction.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
@@ -550,6 +551,7 @@ set(APP_UI_FILES
     testkit/src/stransporttestactions.cpp
     testkit/src/sassertunsavedchangesaction.cpp
     testkit/src/sassertmasterinputsaction.cpp
+    testkit/src/sdrainpendingdeletesaction.cpp
     testkit/src/sassertsystemlaneaction.cpp
     # proposal 38 gate 4: the WebDAV stub server. Deliberately NOT under
     # include/app/testkit/ -- it is not part of testkit's public action-verb

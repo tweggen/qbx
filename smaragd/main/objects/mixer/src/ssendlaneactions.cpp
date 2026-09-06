@@ -87,6 +87,26 @@ SRemoveSendLaneAction::SRemoveSendLaneAction( const QString &name,
 {
 }
 
+SRemoveSendLaneAction::~SRemoveSendLaneAction()
+{
+    // Discarded while still holding the removed lane (i.e. in the "removed"
+    // state): let it go, its refcount reaches zero and it is torn down with
+    // its plugin chain.
+    dropStalePin();
+}
+
+void SRemoveSendLaneAction::dropStalePin()
+{
+    if( holdsRef_ && heldLane_ ) heldLane_->removeRef();
+    heldLane_ = nullptr;
+    holdsRef_ = false;
+}
+
+void SRemoveSendLaneAction::releaseHeld()
+{
+    dropStalePin();
+}
+
 SApplyResult SRemoveSendLaneAction::apply( SProject *project )
 {
     SStdMixer *mixer = mixerFor( project, arrangement_ );
@@ -116,20 +136,89 @@ SApplyResult SRemoveSendLaneAction::apply( SProject *project )
         return { false, nullptr };
     }
 
+    // PIN IT BEFORE DETACHING, and the ORDER is the whole mechanism.
+    // detachSendLane() deletes the mixer's own SLink reference, which drops a
+    // reference; taking ours first means the net count never touches zero, so
+    // the lane and its entire plugin chain survive the removal intact. Release
+    // any pin left from a previous apply first (a redo whose lane is now
+    // orphaned) -- the same dropStalePin() discipline SRemoveTrackAction uses,
+    // and for the same reason.
+    dropStalePin();
+    lane->addRef();
+    heldLane_ = lane;
+    holdsRef_ = true;
+
     mixer->detachSendLane( lane );
     SAppContext::get().rewireSpeaker();
     mixer->notifyTreeChanged();
 
-    // THE INVERSE RE-CREATES BY NAME, NOT BY POINTER, and that is a real
-    // limitation rather than an oversight: a send lane removed and restored
-    // comes back EMPTY, losing any inserts it carried. Pinning the object the
-    // way SRemoveTrackAction does is the correct fix and is deliberately not
-    // done here -- M7 builds the shape, nothing can feed a send, and a lane
-    // whose only content is inserts nobody can hear yet is not worth a second
-    // restore-action class. Named in the milestone's own "NOT gated" list so
-    // it is not discovered later.
-    return { true, new SAddSendLaneAction( sendName_, arrangement_ ) };
+    // THE INVERSE RE-ADOPTS THIS OBJECT, not a fresh lane of the same name.
+    // Returning add-send-lane here -- which is what the first version did --
+    // makes a removed send come back EMPTY on Ctrl-Z: its inserts, their state
+    // and its fader are all gone. "Nothing can hear a send's chain yet" is an
+    // argument about the AUDIO and not about the user's work, so it does not
+    // excuse losing it.
+    return { true, new SRestoreSendLaneAction( this, sendName_,
+                                               arrangement_ ) };
 }
+
+// --- restore-send-lane ------------------------------------------------------
+
+SRestoreSendLaneAction::SRestoreSendLaneAction( SRemoveSendLaneAction *owner,
+                                                const QString &name,
+                                                const QString &arrangement )
+    : owner_( owner ), sendName_( name ), arrangement_( arrangement )
+{
+}
+
+SApplyResult SRestoreSendLaneAction::apply( SProject *project )
+{
+    if( !owner_ ) return { false, nullptr };
+    SStdMixer *mixer = mixerFor( project, arrangement_ );
+    if( !mixer ) {
+        qWarning() << "restore-send-lane: no mixer root for arrangement"
+                   << arrangement_;
+        return { false, nullptr };
+    }
+    STrack *lane = owner_->heldLane();
+    if( !lane ) {
+        qWarning() << "restore-send-lane: nothing pinned to restore for"
+                   << sendName_;
+        return { false, nullptr };
+    }
+
+    // Re-adopt, which mints a fresh SLink reference; only THEN release the
+    // pin, so the count never touches zero between the two.
+    mixer->adoptSendLane( lane );
+    owner_->releaseHeld();
+
+    SAppContext::get().rewireSpeaker();
+    mixer->notifyTreeChanged();
+
+    return { true, new SRemoveSendLaneAction( sendName_, arrangement_ ) };
+}
+
+void SRestoreSendLaneAction::writeXml( QDomElement &elem ) const
+{
+    // Never serialized standalone (created live as a removal's inverse); the
+    // address is recorded for completeness.
+    elem.setAttribute( "sendName", sendName_ );
+    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+}
+
+bool SRestoreSendLaneAction::readXml( const QDomElement &, int )
+{
+    // Not reconstructible from XML: there is no pinned lane in a file. Same
+    // answer SRestoreTrackAction gives, for the same reason.
+    return false;
+}
+
+// DELIBERATELY NOT REGISTERED, exactly as SRestoreTrackAction is not. It is
+// created live as a removal's inverse and holds a POINTER to the action that
+// pins the lane; there is no pinned object in a file, so readXml() refuses and
+// a registry entry would only offer callers an action that can never be built.
+// action_roundtrip_test caught the first draft's registration immediately --
+// "Failed to deserialize action from XML" -- which is the audit working.
 
 void SRemoveSendLaneAction::writeXml( QDomElement &elem ) const
 {

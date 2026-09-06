@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M7 follow-up: UNDOING A SEND-LANE REMOVAL RESTORES THE LANE
+  ITSELF, WITH ITS CHAIN AND ITS FADER - NOT A FRESH EMPTY LANE OF THE SAME
+  NAME.
+
+  WHAT WAS WRONG. remove-send-lane returned `add-send-lane` as its inverse, so
+  Ctrl-Z re-created the lane BY NAME: same name, same address, and nothing else.
+  Its inserts, their state and its fader were gone. M7 shipped that knowingly
+  and named it in its own "NOT gated" list, on the argument that nothing can
+  hear a send's chain yet - but that is an argument about the AUDIO, not about
+  the user's work, and losing a configured chain to a plain undo is data loss
+  whether or not it was audible.
+
+  THE FIX IS SRemoveTrackAction's IDIOM, unchanged. apply() pins the lane with
+  an extra reference held ON THE FORWARD ACTION OBJECT - which the undo command
+  reuses, so the pin survives redo - and the inverse (SRestoreSendLaneAction)
+  re-adopts THAT object. The ORDER is the mechanism: the pin is taken BEFORE
+  detachSendLane() deletes the mixer's own SLink reference, so the refcount
+  never touches zero and the whole plugin chain comes through intact.
+
+  WHY THREE SIGNALS AND NOT ONE. Each is wrong in a different way on a
+  re-created lane, and any one alone is weaker than it looks:
+
+    the FADER      a fresh lane is at 0 dB, this one is at -6
+    the CHAIN      a fresh lane has 0 inserts, this one has 1
+    the SLOT STATE a fresh insert is not bypassed, this one is
+
+  The slot state is the one that proves OBJECT IDENTITY rather than merely
+  "something with the right shape was rebuilt": a hypothetical inverse that
+  re-created the lane AND re-inserted the plugin would still not know it had
+  been bypassed.
+
+  RESTORED AT THE END, which IS the original index, because remove-send-lane
+  only ever accepts the LAST lane (the sentinel -2-k is the address, so
+  removing from the middle would re-point every path naming a later lane). The
+  case asserts the surviving lane did not move, which is what would break first
+  if that restriction were ever lifted without teaching the restore an index.
+-->
+<SActionScript version="1" name="send_lane_remove_undo">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-send-lane sendName="Reverb"/>
+    <add-send-lane sendName="Delay"/>
+
+    <!-- Give the LAST lane something to lose: a fader, an insert, and a slot
+         state that a re-created lane could not reproduce. -->
+    <set-track-volume trackPath="$send1" volume="-6"/>
+    <insert-plugin trackPath="$send:Delay" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-bypass trackPath="$send:Delay" slotIndex="0" bypassed="true"/>
+
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"
+                        plugins="1" volume="-6"/>
+    <assert-master-inputs count="3"/>
+
+    <!-- ============ REMOVE ============ -->
+    <remove-send-lane sendName="Delay"/>
+
+    <assert-system-lane trackPath="$send1" role="send" expectReject="true"/>
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb"/>
+    <assert-master-inputs count="2"/>
+
+    <!-- THE STEP THAT MAKES THE PIN TESTABLE AT ALL, and it had to be built
+         for this case (drain-pending-deletes). SObject::removeRef() answers a
+         refcount reaching zero with deleteLater(), which only takes effect
+         when an event loop delivers the deferred delete - and the action
+         runner's processEvents() does NOT deliver DeferredDelete at loop level
+         0. That is the same fact smaragdOrderlyShutdown() already works around
+         by draining them by hand before std::exit().
+         MEASURED: without this line, deleting the addRef() that pins the
+         removed lane changes NOTHING in a headless run - the lane lingers for
+         the whole script and the undo appears to work for a reason it does not
+         have. In the real app, with a live event loop, that lane is freed
+         between the removal and the undo and the restore reads freed memory.
+         So this line is what separates "kept alive on purpose" from "nothing
+         has got round to deleting it". -->
+    <drain-pending-deletes/>
+
+    <!-- ============ UNDO: THE LANE ITSELF COMES BACK ============ -->
+    <undo count="1"/>
+
+    <assert-master-inputs count="3" allUnity="1"/>
+
+    <!-- ...at the same address, with the same name... -->
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"
+                        expectPath="$send1"/>
+
+    <!-- ...AND ITS FADER AND ITS CHAIN. Both of these read the defaults of a
+         freshly minted lane (0 dB, 0 inserts) on the pre-fix binary. -->
+    <assert-system-lane trackPath="$send1" role="send" volume="-6" plugins="1"/>
+
+    <!-- ...AND THE SLOT'S OWN STATE, which is the identity assertion: an
+         inverse that re-created the lane and re-inserted the plugin would
+         still have it un-bypassed. -->
+    <assert-plugin-strip trackPath="$send1" slotIndex="0"
+                         contains="bypass=1"/>
+
+    <!-- ...and the lane that was NOT removed did not move. -->
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb"/>
+
+    <!-- ============ REDO, AND UNDO AGAIN ============ -->
+    <!-- The pin lives on the forward action, which the undo command reuses, so
+         it has to survive a second round trip rather than only the first. -->
+    <redo count="1"/>
+    <assert-master-inputs count="2"/>
+    <assert-system-lane trackPath="$send1" role="send" expectReject="true"/>
+    <drain-pending-deletes/>
+
+    <undo count="1"/>
+    <assert-master-inputs count="3" allUnity="1"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"
+                        volume="-6" plugins="1"/>
+    <assert-plugin-strip trackPath="$send1" slotIndex="0"
+                         contains="bypass=1"/>
+
+    <!-- The restored lane is a live member of the sum again, not a detached
+         object that merely answers questions: it survives a rewire pass, which
+         is AC7.4's own property applied to a restored lane. -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <set-track-solo trackPath="0" solo="0"/>
+    <assert-master-inputs count="3" allUnity="1"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay" plugins="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -1786,14 +1786,63 @@ across a send. D10 sizes that at "at least the size of this proposal".
 **NOT gated, additionally:** SOLO's interaction with a send lane —
 `ssolo::anySoloInTree` walks `childLinks()`, which a send is deliberately not
 in, so a send is invisible to solo; moot while nothing can feed one, and it
-belongs to the routing milestone. A send lane REMOVED AND RESTORED comes back
-**EMPTY** — `remove-send-lane`'s inverse re-creates by name rather than pinning
-the object the way `SRemoveTrackAction` does, so any inserts it carried are
-lost; deliberate, because nothing can hear a send's chain yet and a second
-restore-action class is not worth it, but it is a real limitation and it is
-named here rather than discovered later. Removing a send from the MIDDLE is
+belongs to the routing milestone. Removing a send from the MIDDLE is
 refused outright (the sentinel is the address). And nothing pixel-level: a send
 lane's row is `SSMVMixerControl` unchanged.
+
+#### M7 follow-up (2026-09-06) — the remove/undo now preserves object identity
+
+M7 shipped `remove-send-lane` with `add-send-lane` as its inverse, which
+re-created the lane BY NAME: a removed send came back **EMPTY** on Ctrl-Z,
+losing its inserts, their state and its fader. It was named in the list above on
+the argument that nothing can hear a send's chain yet — **and that argument is
+about the AUDIO, not about the user's work.** Losing a configured chain to a
+plain undo is data loss whether or not it was audible. Fixed by the
+`SRemoveTrackAction` idiom, unchanged: `apply()` pins the lane with a reference
+held on the FORWARD action object (which the undo command reuses, so the pin
+survives redo) and the new `SRestoreSendLaneAction` re-adopts THAT object. The
+pin is taken BEFORE `detachSendLane()` deletes the mixer's own `SLink`, so the
+refcount never touches zero.
+
+**THE PIN COULD NOT BE GATED AT ALL, AND FINDING THAT OUT IS THE SUBSTANCE OF
+THIS FOLLOW-UP.** Deleting the `addRef()` and re-running changed **nothing**:
+the case passed. `SObject::removeRef()` answers a refcount reaching zero with
+`deleteLater()`, and the action runner's `processEvents()` does **not** deliver
+`QEvent::DeferredDelete` at loop level 0 — the same fact
+`smaragdOrderlyShutdown()` already works around by draining them by hand before
+`std::exit()`. So the unpinned lane lingered for the whole scripted run and the
+undo appeared to work for a reason it did not have, while in the real app, with
+a live event loop, that lane is freed between the removal and the undo and the
+restore reads freed memory. A headless suite simply could not see the
+difference.
+
+Closed by a new verb, `drain-pending-deletes`, which makes the deletion happen
+where a case can observe it. With it in place the same sabotage **SEGFAULTS**,
+which is a legitimate gate outcome here (CTest judges by exit code, exactly as
+`plugin_native_editor_teardown_safe` already relies on). Use the verb only
+where a case's claim is about an object's LIFETIME; production pumps its own
+event loop and needs nothing.
+
+`SRestoreSendLaneAction` is deliberately **NOT REGISTERED**, as
+`SRestoreTrackAction` is not: it holds a POINTER to the action that pins the
+lane, there is no pinned object in a file, and its `readXml()` therefore
+refuses. `action_roundtrip_test` caught the first draft's registration
+immediately — "Failed to deserialize action from XML" — which is that audit
+working.
+
+Gate: `send_lane_remove_undo`, watched failing under two DISJOINT sabotages —
+the pre-fix inverse (5 assertions: the fader, the chain, and the slot's bypass
+state through both undo round trips) and the missing pin (a SegFault). Three
+signals rather than one, because each is wrong differently on a re-created
+lane: a fresh lane is at 0 dB, has 0 inserts, and its insert is not bypassed —
+and the slot STATE is the one that proves object identity rather than "something
+of the right shape was rebuilt".
+
+**Still NOT gated:** restoring a send lane that was removed from the MIDDLE
+(refused outright, so unreachable), and a restore whose lane index would have
+to be remembered — `adoptSendLane()` appends, which IS the original index only
+because the removal accepts the last lane alone. If that restriction is ever
+lifted, the restore has to learn an index and this case will not notice.
 
 ### M8 — Contracts, docs, and the CLAUDE.md section
 
