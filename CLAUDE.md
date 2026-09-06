@@ -1622,7 +1622,7 @@ fetch cache, the drop helper; **no widget, ever**) and `main/mediabrowser`
 `SMediaAccountManager` in `main/shell`. Design and the twenty traps:
 `plan/proposed/38_MEDIA_BROWSER.md`. Invariants: `main/media/CONTRACT.md`
 (inv. 1-6 + the cache and drop sections), `main/mediabrowser/CONTRACT.md`
-(1-9), `main/timeline/CONTRACT.md` inv. 23, `main/shell/CONTRACT.md` inv. 37-47,
+(1-9), `main/timeline/CONTRACT.md` inv. 56, `main/shell/CONTRACT.md` inv. 37-47,
 `main/testkit/CONTRACT.md` 35-45.
 
 **Read this before touching the media layer — four things a newcomer gets
@@ -2672,7 +2672,7 @@ owns rather than the user. Design and the eighteen traps:
 `plan/proposed/45_SYSTEM_LANES.md`, whose per-milestone "as executed" sections
 carry the measurements. Invariants: `main/objects/mixer/CONTRACT.md`,
 `main/objects/track/CONTRACT.md`, `main/model/CONTRACT.md`,
-`main/timeline/CONTRACT.md` inv. 32-37, `main/shell/CONTRACT.md` inv. 18a.
+`main/timeline/CONTRACT.md` inv. 57-62, `main/shell/CONTRACT.md` inv. 18a.
 Addressing and the full refusal table: `docs/ACTIONS.md`.
 
 **Read this before touching a system lane — the obvious design is wrong SIX

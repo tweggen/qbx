@@ -422,7 +422,7 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     moved. `STrack::feelFlowForUi()` forwards to the holder and returns
     nullptr ONLY when no bounce has ever been started (the holder itself does
     not exist yet); freshness is a SEPARATE question, deliberately not folded
-    in — a caller (the lane painter, `main/timeline/CONTRACT.md` inv. 25)
+    in — a caller (the lane painter, `main/timeline/CONTRACT.md` inv. 49)
     checks `feelFlowStale()` itself.
 
     **The band's colour law is PALETTE MEMBERSHIP from ONE authoritative LUT,
@@ -434,7 +434,7 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     value ~0.85, fully OPAQUE (alpha 255); `feelFlowPaletteIndex(compliance)`
     is the one quantization function. Both the painter
     (`drawFeelFlowBand`) and the pixel gate (`SMainWindow::describeLaneOverlay`'s
-    band-mode exact-RGB classification, `main/timeline/CONTRACT.md` inv. 25)
+    band-mode exact-RGB classification, `main/timeline/CONTRACT.md` inv. 49)
     read this SAME array — never a second copy of the ramp. Chosen over the
     old lane-fill-relative interpolation deliberately: the palette no longer
     depends on a track's own fill colour, which is what makes an exact-RGB

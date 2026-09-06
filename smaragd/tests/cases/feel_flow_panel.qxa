@@ -6,7 +6,7 @@
   observable synchronously here since the bounce is background, but the
   fresh/stale transitions are), and param-aware / edit-aware staleness — all
   read through SFeelFlowPanel::describe(), the SAME computation the on-screen
-  labels are built from (main/timeline/CONTRACT.md inv. 26).
+  labels are built from (main/timeline/CONTRACT.md inv. 50).
 
   Fixture: ../groove/a_offset15.wav, the M1 fixture feel_flow_analyze.qxa and
   feel_flow_heatmap.qxa already use.

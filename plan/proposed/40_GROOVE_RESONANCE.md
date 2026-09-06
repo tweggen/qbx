@@ -761,7 +761,7 @@ never retroactively.
   a literal zero is unreachable on a clip-covered lane, the same hazard
   `folder_sum_preview`'s "NOT gated" note records); the exact staleness
   BOOLEAN is gated separately via `assert-groove-aspect stale=`.
-  Invariants: `main/timeline/CONTRACT.md` inv. 25,
+  Invariants: `main/timeline/CONTRACT.md` inv. 49,
   `main/objects/track/CONTRACT.md` inv. 25.
 
   **M2 palette follow-up, 2026-08-21.** The requester found the tinted-mix

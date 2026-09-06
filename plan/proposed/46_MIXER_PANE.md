@@ -754,7 +754,7 @@ named.
   wheel over a fader is 1 dB per notch (the head's one deliberate exception).
 - **AC4.5** `main/mixerui/CONTRACT.md` exists — carrying D6a (the one place the
   two mounts deliberately disagree about a model flag), D12 and D13;
-  `main/timeline/CONTRACT.md` gains inv. 47 (the shared walk) and inv. 48 (the
+  `main/timeline/CONTRACT.md` gains inv. 63 (the shared walk) and inv. 64 (the
   shared targets); `main/shell/CONTRACT.md` gains the ninth-dock and detach
   invariants; `docs/ACTIONS.md` gains the new verbs;
   `docs/ARCHITECTURE.md`'s module table gains `mixerui`; CLAUDE.md gains a
