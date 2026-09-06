@@ -1,0 +1,45 @@
+<SProject fileName='' rootId='94699565750704' formatVersion='2' bpmTempo='120' sampleRate='48000' channels='2' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true,"timelineScrollX":0,"timelineZoomSecondWidth":30}'>
+<SStdMixer masterLaneId='94699565753344' sendLaneIds='94699566707808,94699566748416' id='94699565750704' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='94699565783296' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack pluginChainId='94699565755104' systemRole='master' id='94699565753344' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' hidden='true' sName='Master'>
+<SLink objectId='94699565775728' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='94699565755104' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='94699565777664' systemRole='conductor' id='94699565775728' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Conductor'>
+</STrack>
+<SPluginChain id='94699565777664' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='94699565785136' id='94699565783296' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='GrumpyNarwhal'>
+<sends>
+ <send dest='Alpha' level='0' pre='false' enabled='true'/>
+</sends>
+<SLink objectId='94699566704160' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='94699565785136' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<SPlainWave filename='../tests/test_autosaw.wav' id='94699562301200' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</SPlainWave>
+<SCut srcStart='0' startOffset='0' cutDuration='192000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='94699566704160' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='94699562301200' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<STrack pluginChainId='94699566709264' systemRole='send' id='94699566707808' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Alpha'>
+<sends>
+ <send dest='Beta' level='0' pre='false' enabled='true'/>
+</sends>
+</STrack>
+<SPluginChain id='94699566709264' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='94699566750304' systemRole='send' id='94699566748416' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Beta'>
+<sends>
+ <send dest='Alpha' level='0' pre='false' enabled='true'/>
+</sends>
+</STrack>
+<SPluginChain id='94699566750304' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+</SProject>

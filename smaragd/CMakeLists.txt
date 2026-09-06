@@ -466,7 +466,12 @@ endif()
 foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               render_while_armed feel_flow_bounce_while_monitoring
               master_lane_closure_monitoring monitor_master_flip_midplay
-              render_while_master_closure)
+              render_while_master_closure
+              # proposal 47 M4 / D9: a live lane does not feed a send. It needs
+              # a real input backend for the same reason as the rest of this
+              # list -- without one an armed track never becomes a live SOURCE
+              # and the case would pass over a condition that never happened.
+              send_live_lane_does_not_feed)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE

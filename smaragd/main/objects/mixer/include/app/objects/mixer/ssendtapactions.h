@@ -26,16 +26,25 @@
  *  - the MASTER lane as a source — the master's output is the sum that already
  *    contains every send lane, so master → send is a cycle whatever the tap
  *    graph looks like;
- *  - a CYCLE, by a reachability walk from the proposed destination back to the
- *    source over the existing taps. This one is not a tidiness rule: the
- *    scheduler dedups nodes by `(component, pageStart)` and guards recursion at
- *    depth 32, so a cycle does not blow the stack — it leaves two nodes each
- *    holding the other as an unsatisfied dependency, `pendingDeps` never
- *    reaches zero, and the `GraphDemand` NEVER COMPLETES. A render then sits
- *    until the watchdog kills it and playback never reaches its priming
- *    frontier. `FreezeContext` breaks cycles at RENDER, which is why this is a
- *    hang rather than a recursion — and why it cannot save the scheduler,
- *    which never gets as far as rendering.
+ *  - a CYCLE, by a reachability walk from the proposed destination back to
+ *    the source over the existing taps.
+ *
+ * THE CYCLE REFUSAL IS NOT ABOUT A HANG, and an earlier version of this
+ * comment said it was. It claimed the page scheduler would leave two nodes
+ * each waiting on the other and that a render would sit until the watchdog.
+ * MEASURED (proposal 47 M3): a cyclic project renders in about a second,
+ * completes, and is byte-identical across worker counts --
+ * `FreezeContext::isComponentInStack` breaks the recursion at render time.
+ * The refusal is right for a different reason: the audio a broken cycle
+ * produces is whatever that break happens to yield, which is defined by
+ * accident rather than by anything a user asked for.
+ *
+ * AND THIS REFUSAL IS NOT THE ONLY DEFENCE, because the LOADER does not come
+ * through here: `<sends>` is read by `SObject::readSends()`, so a hand-edited
+ * or foreign project carries whatever it likes. `SStdMixer::rewireSendBuses()`
+ * breaks any cycle that reached the model anyway, deterministically and out
+ * loud. This layer exists to give the USER a message; that one exists to keep
+ * the graph acyclic.
  *
  * Send → send is ALLOWED subject to that walk, deliberately. Refusing it
  * outright would be simpler and would remove a legitimate shape (a delay

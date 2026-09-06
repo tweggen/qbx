@@ -21,13 +21,17 @@
   placeholder's shape: a tap that round-trips wrong and a tap that was silently
   dropped can both be inaudible, so no audio assertion separates them.
 
-  THE REFUSALS ARE THE SUBSTANCE (D6). The cycle one is not tidiness: the page
-  scheduler dedups nodes by (component, pageStart) and guards recursion at
-  depth 32, so a cycle does not blow the stack - it leaves two nodes each
-  holding the other as an unsatisfied dependency, pendingDeps never reaches
-  zero, and the GraphDemand never completes. A render would sit until the
-  watchdog. M3 measures that; M0 refuses it so it cannot be reached, and the
-  refusal is ANNOUNCED (proposal 45 D6's own rule) so this case can assert it.
+  THE REFUSALS ARE THE SUBSTANCE (D6). The cycle one is refused because the
+  audio a cycle produces is whatever the render-time break happens to yield -
+  a number defined by accident rather than a mix anyone asked for.
+
+  AN EARLIER VERSION OF THIS HEADER SAID IT WOULD HANG, and that was wrong.
+  It claimed the page scheduler would leave two nodes each waiting on the other
+  until the watchdog killed the render. M3 measured it: a cyclic project
+  renders in about a second and is byte-identical across worker counts,
+  because FreezeContext::isComponentInStack breaks the recursion at render.
+  See send_cycle_broken.qxa, which also gates the half this verb cannot reach -
+  the LOADER does not come through it.
 
   SEND -> SEND IS ALLOWED, deliberately, and is asserted below. Refusing it
   outright would be simpler and would remove a legitimate shape (a delay

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 47 M4 / D9: A LIVE LANE DOES NOT FEED A SEND.
+
+  Decided by the requester on 2026-09-06, option (a) of three: accept the
+  behaviour and announce it. This case exists so "does not" cannot rot into
+  "sometimes does".
+
+  WHY THIS IS A WIRING GATE AND NOT AN AUDIO ONE, which is the whole reason
+  assert-send-inputs had to be written. The behaviour falls out of the live
+  plan: a live-owned track is excluded from the frozen sum (the mixer nulls
+  its input plug) and the pump renders it block-wise into the ring, so the
+  gain-stage PAGES a send tap would read are not being produced at all. A
+  render cannot be asked about it, because startRender() SUSPENDS every live
+  lane (21 L1b) - by the time there is audio to measure, the condition under
+  test is gone. The decision lives in reconnectTracksToMixer's send half, so
+  that is where it is measured.
+
+  THE LIVE PLAN IS BUILT AT set-monitor-mode, NOT AT arm-track and not at the
+  transport edge. The live set is {armed && monitorEffective} U {monitor ==
+  on}, so monitor "on" ALONE puts a lane in it. Proposal 45 M7 recorded that
+  same fact the hard way - two of its three plausible assert-log placements
+  read an empty window - and it is why the assertions here sit immediately
+  after the monitor verb rather than after the arm.
+
+  NOT GATED HERE: what the user HEARS while monitoring. That is the dropout
+  the decision accepts, and measuring it needs the paced file: input and a
+  RUN_SERIAL wall-clock case like the proposal-21 monitor gates. What is
+  gated is that the send bus stops reading a live-owned source, which is the
+  mechanism the dropout follows from.
+-->
+<SActionScript version="1" name="send_live_lane_does_not_feed">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-send-lane sendName="Reverb"/>
+    <add-send track="0" dest="Reverb" level="-6" pre="false"/>
+
+    <!-- A REAL INPUT is what makes an armed track a live SOURCE. Without it
+         the plan builder has nothing to build a lane from, the track never
+         becomes live-owned, and the assertions below would pass over a
+         condition that never happened. The CTest entry supplies the paced
+         file: backend the proposal-21 monitor cases use. -->
+    <set-track-input trackPath="0" input="audio:file:3"/>
+
+    <!-- ============ THE BASELINE: the tap is wired and levelled ========= -->
+
+    <assert-send-inputs lane="Reverb" count="1" wired="1"/>
+    <assert-send-inputs lane="Reverb" index="0" level="-6"/>
+
+    <!-- ============ D9: LIVE-OWNED, SO THE BUS STOPS READING IT ========= -->
+    <!-- monitor "on" alone makes the lane live-owned; the arm is here so the
+         shape matches what a user actually does. The input REMAINS (the tap
+         is still in the model, the count does not move) and is UNWIRED. -->
+
+    <arm-track trackPath="0" armed="true"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+
+    <assert-send-inputs lane="Reverb" count="1" wired="0"/>
+
+    <!-- ...and the TAP ITSELF is untouched. D9 is a wiring decision, not an
+         edit: nothing removed the user's send, so nothing has to put it back. -->
+    <assert-sends track="0" count="1" dest="Reverb" level="-6" enabled="true"/>
+
+    <!-- ============ ...AND IT COMES BACK ON HAND-BACK =================== -->
+    <!-- Dropping monitor to auto and disarming takes the lane out of the live
+         set, and the same pass re-wires the tap at its original level. A
+         one-way transition would leave a send dead until the next unrelated
+         edit happened to re-run the pass. -->
+
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="false"/>
+
+    <assert-send-inputs lane="Reverb" count="1" wired="1"/>
+    <assert-send-inputs lane="Reverb" index="0" level="-6"/>
+
+    <!-- ...and it is audible again: dry + send at -6 dB = 1.501187 A. -->
+    <render filename="handback.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="handback.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.3363" maxRms="0.3571"/>
+  </actions>
+</SActionScript>

@@ -138,30 +138,52 @@ and "muted but still feeding the reverb" is a bug report waiting to happen.
 
 `isLiveOwnedLane()` is a SEPARATE term and is NOT folded in — see D9.
 
-### D6. A cycle is REFUSED AT THE VERB, and the reason is that the scheduler hangs rather than fails
+### D6. A cycle is REFUSED at the verb and BROKEN at the wiring pass — and the reason is NOT that it hangs
 
-Read, not measured (M3 measures it): `CaptureRevalidator::expandNode_` dedups
-nodes by `(component, pageStart)` and guards recursion at depth 32, so a cycle
-does **not** blow the stack. It produces two nodes each holding the other as an
-unsatisfied dependency — `pendingDeps` never reaches 0 for either, neither is
-ever enqueued, and the `GraphDemand` never completes. A render then sits until
-`SMARAGD_RENDER_TIMEOUT_MS` kills it; playback's readahead never reaches its
-priming frontier and the transport never starts.
+**CORRECTED 2026-09-06 by M3's measurement. The first version of this section
+was wrong, and it is left described rather than quietly rewritten.**
 
-`FreezeContext::isComponentInStack` breaks cycles at RENDER, which is why this
-is a hang rather than an infinite recursion — and why it cannot be relied on to
-save the scheduler, which never gets as far as rendering.
+It read: `CaptureRevalidator::expandNode_` dedups nodes by
+`(component, pageStart)` and guards recursion at depth 32, so a cycle produces
+two nodes each holding the other as an unsatisfied dependency, `pendingDeps`
+never reaches zero, the `GraphDemand` never completes, and a render sits until
+the watchdog kills it.
 
-So the refusal is structural and lives where it can be announced:
+**It does not.** Measured against `tests/send_cycle.qxp` before any cycle break
+existed: a cyclic project rendered in **about one second**, completed normally,
+and was **byte-identical across `SMARAGD_REVAL_WORKERS` 1 / 4 / 8 over six
+runs**. `FreezeContext::isComponentInStack` breaks the recursion at render
+time and the scheduler never reaches the state described. The reading of
+`expandNode_` was accurate; the conclusion drawn from it was not, and it was
+asserted as fact in D6, in M0's commit message and in a case header before
+anything measured it.
 
-- **self** — a lane may not send to itself;
-- **non-send destination** — the destination must be a lane with
-  `systemRole() == Send`;
-- **unresolved name** — fails CLOSED and is announced (D6's own rule from 45:
-  a bound is ANNOUNCED, never silent);
-- **cycle** — a reachability walk over the tap graph from the proposed
-  destination back to the source. The graph is at most (tracks × sends) edges
-  and is walked on an edit, never per page.
+**So why refuse a cycle?** Because the audio a broken cycle produces is
+whatever the render-time break happens to yield — a number defined by accident
+rather than a mix anyone asked for. That is a weaker reason than the original
+one and it is the true one.
+
+**And the verb alone is NOT enough**, which is the substance of M3. `add-send`
+refuses a cycle, but **the loader does not go through the verb**: `<sends>` is
+read by `SObject::readSends()`, so a hand-edited or foreign `.qxp` carries
+whatever it likes. So there are two layers, and they answer different
+questions:
+
+| Layer | Job |
+|---|---|
+| `add-send` / `set-send` (M0) | REFUSE, with a message naming both ends. This is the one a user meets. |
+| `rewireSendBuses()` (M3) | BREAK whatever reached the model anyway, deterministically, and ANNOUNCE it. This is what guarantees the graph handed to the scheduler is acyclic however the taps got there. |
+
+The break accepts an edge only when it does not close a cycle **among the
+edges already accepted**, walking lanes in index order (= file order). That
+drops exactly ONE edge of a cycle; asking the FULL tap graph instead finds both
+edges cyclic and drops BOTH, silencing a lane that has a good reason to sound.
+
+The other refusals are unchanged and are the verb's alone: self, a
+non-send destination, an unresolved name (fails closed), and the MASTER as a
+source — the master's output is the sum that already contains every send lane,
+so that edge is the mixer's own wiring and is not in the tap graph a walk can
+see.
 
 ### D7. The level is the send bus's own per-input level. No new DSP
 
@@ -385,12 +407,75 @@ nothing to any path it exercises (`rewireSendBuses` returns immediately when a
 project has no send lanes, and that case has none). Not reproduced, not
 explained.
 
-**M3 — the cycle refusal.** Measure the hang FIRST (a deliberately constructed
-cycle behind a test-only knob, so the measurement is real), then refuse it.
+### M3 as executed (2026-09-06) — and D6 was WRONG
 
-**M4 — gate D9.** The decision is made (option (a)); this milestone MEASURES the
-dropout and pins it, so "a live lane does not feed a send" cannot rot into
-"a live lane sometimes feeds a send".
+**The milestone's first act falsified its own design section.** D6 predicted a
+cyclic send graph would hang the render; `tests/send_cycle.qxp` (a project
+saved by this app, then hand-edited to add the closing edge — the shape a
+user's file would actually have) **rendered in about one second, completed
+normally, and was byte-identical across `SMARAGD_REVAL_WORKERS` 1 / 4 / 8 over
+six runs.** `FreezeContext::isComponentInStack` breaks the recursion at render
+time. The reading of `expandNode_` behind D6 was accurate; the conclusion drawn
+from it was not, and it had been asserted as fact in D6, in M0's commit message
+and in a case header before anything measured it. All three are corrected in
+place rather than quietly rewritten.
+
+**What M3 therefore built is the half the verb cannot reach.** `add-send`
+refuses a cycle, but the LOADER does not go through the verb — `<sends>` is
+read by `SObject::readSends()`. `rewireSendBuses()` now breaks any cycle that
+reached the model anyway: an edge is accepted only when it does not close a
+cycle among the edges ALREADY accepted, walking lanes in index (= file) order.
+That drops exactly ONE edge; asking the full tap graph instead finds both edges
+cyclic and drops BOTH, silencing a lane with a good reason to sound.
+
+The gate's level is a closed form: with Alpha → Beta dropped and Beta → Alpha
+kept, Beta is silent, Alpha = A, and the master is **2A = 0.461913** — where
+dropping the other edge gives 3A (clipped ≈ 0.6666), dropping both gives A, and
+dropping neither gives the undefined cyclic value.
+
+**Sabotages:** no break at all → the announcement AND the level (#2, #8); break
+over the full graph so both edges go → only the "exactly one edge" assertion
+(#3); break silently → only the announcement (#2), the level still 2A.
+
+**The `assert-log` window trap was re-paid here before it was fixed.** The
+break happens while the project is being ADOPTED, not during the render, so
+assertions placed after the `<render>` — or after the `assert-sends` calls,
+which advance the window just as well — read an empty window and report
+"OK — 0 records". Proposal 45 recorded this exact trap; it still caught this
+case out. Also learned: `maxCount` alone still asserts a floor of one, so a
+negative assertion needs `minCount="0" maxCount="0"`.
+
+### M4 as executed (2026-09-06) — D9 pinned
+
+**A wiring gate, and it had to be.** The decision is that a live lane does not
+feed a send; that cannot be measured through a render, because `startRender()`
+SUSPENDS every live lane (21 L1b) — by the time there is audio, the condition
+under test is gone. So `assert-send-inputs` reads the send bus's own inputs off
+the live `twMixer`, the send-side twin of `assert-master-inputs` and for a
+sharper version of the same reason.
+
+The case asserts the tap wired at −6 dB; then armed with `monitor == on`, the
+input REMAINS (the tap is untouched in the model) and is **UNWIRED**; then on
+hand-back it is wired again at its original level and audible at
+1.501187A.
+
+**A real input backend is load-bearing.** Without `SMARAGD_AUDIO_INPUT_BACKEND`
+an armed track never becomes a live SOURCE, and the first version of this case
+PASSED over a condition that never happened. It now takes the paced `file:`
+input the proposal-21 monitor cases use, and is `RUN_SERIAL` with them.
+
+**Sabotages:** drop the D9 term → only the "wired=0 while live" assertion (#10);
+make the exclusion one-way (never re-wire) → only the hand-back assertions
+(#14, #15, #17), which is what stops "does not feed" degrading into "never
+feeds again".
+
+**NOT gated, and it is the decision's own cost:** what the user HEARS while
+monitoring. That dropout is what option (a) accepts; measuring it needs a
+wall-clock RUN_SERIAL case of the proposal-21 monitor shape. What is gated is
+the mechanism the dropout follows from.
+
+**Suite:** 368 registered / 363 run / 5 disabled, reconciled both ways, all
+green. Goldens byte-identical.
 
 **M5 — UI.** Send controls on the track head / detail pane, and the send lane's
 own strip. Depends on nothing above except M1.

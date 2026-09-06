@@ -73,6 +73,16 @@ public:
     double masterInputLevelDb( int i ) const;
     bool   masterInputWired( int i ) const;
 
+    // The SEND BUS's own inputs (proposal 47 M4), lane k = sentinel `-2 - k`.
+    // Published for the same reason the master's are: `app/testkit` may not
+    // include `tw/mix`, and a wiring decision that no assertion can read is a
+    // decision nothing can gate. THE ONLY THING THAT CAN SEE D9 -- a live lane
+    // does not feed a send -- because a render SUSPENDS every live lane
+    // (21 L1b), so the audio path cannot be asked the question at all.
+    int    sendBusInputCount( int k ) const;
+    bool   sendBusInputWired( int k, int i ) const;
+    double sendBusInputLevelDb( int k, int i ) const;
+
     virtual QWidget *getDetailEditWidget( QWidget *parent ) override;
     virtual QWidget *getInlineEditWidget( QWidget *parent ) override;
     virtual SObjectRenderer *getInlineRenderer() override;

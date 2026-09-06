@@ -4,6 +4,8 @@
 #include <vector>
 
 #include <QDebug>
+#include <QHash>
+#include <QSet>
 
 #include "tw/core/twlog.h"
 
@@ -331,6 +333,48 @@ void SStdMixer::reconnectTracksToMixer()
  * Index-parallel to sendLanes_ throughout: bus k belongs to lane k, which is
  * the lane the sentinel `-2 - k` addresses.
  */
+int SStdMixer::sendBusInputCount( int k ) const
+{
+    if( k < 0 || k >= sendBuses_.size() || !sendBuses_[k] ) return -1;
+    return (int) sendBuses_[k]->getNInputs();
+}
+
+bool SStdMixer::sendBusInputWired( int k, int i ) const
+{
+    if( k < 0 || k >= sendBuses_.size() || !sendBuses_[k] ) return false;
+    if( i < 0 || i >= (int) sendBuses_[k]->getNInputs() ) return false;
+    return sendBuses_[k]->getInputPlug( (idx_t) i ) != nullptr;
+}
+
+double SStdMixer::sendBusInputLevelDb( int k, int i ) const
+{
+    if( k < 0 || k >= sendBuses_.size() || !sendBuses_[k] ) return 0.0;
+    if( i < 0 || i >= (int) sendBuses_[k]->getNInputs() ) return 0.0;
+    return sendBuses_[k]->inputLevel( (idx_t) i );
+}
+
+namespace {
+
+/// True when `from` reaches `to` by following the ACCEPTED send edges
+/// (`fed[x]` = the lanes x feeds). Proposal 47 M3.
+bool sendReaches( const QHash<SObject *, QList<SObject *> > &fed,
+                  SObject *from, const SObject *to )
+{
+    QSet<const SObject *> seen;
+    QList<SObject *> work;
+    work.append( from );
+    while( !work.isEmpty() ) {
+        SObject *cur = work.takeLast();
+        if( !cur || seen.contains( cur ) ) continue;
+        seen.insert( cur );
+        if( cur == to ) return true;
+        for( SObject *nxt : fed.value( cur ) ) work.append( nxt );
+    }
+    return false;
+}
+
+}  // namespace
+
 void SStdMixer::rewireSendBuses()
 {
     // Keep the bus list the same length as the lane list. A lane removed from
@@ -364,6 +408,11 @@ void SStdMixer::rewireSendBuses()
     for( STrack *lane : sendLanes_ )
         if( lane ) sources.append( static_cast<SObject *>( lane ) );
 
+    // The edges accepted so far: fedLanes[x] is the set of lanes x feeds.
+    // Built as the lanes are wired, in index order, so the cycle break below
+    // is deterministic rather than dependent on edit order.
+    QHash<SObject *, QList<SObject *> > fedLanes;
+
     for( int k = 0; k < sendLanes_.size(); ++k ) {
         STrack *lane = sendLanes_[k];
         std::shared_ptr<twMixer> bus = sendBuses_[k];
@@ -378,8 +427,34 @@ void SStdMixer::rewireSendBuses()
         QList<Feed> feeds;
         for( SObject *src : sources ) {
             if( src == static_cast<SObject *>( lane ) ) continue;  // no self
-            if( const SSendTap *t = src->sendTap( lane->getSName() ) )
-                if( t->enabled ) feeds.append( { src, *t } );
+            const SSendTap *t = src->sendTap( lane->getSName() );
+            if( !t || !t->enabled ) continue;
+
+            // THE CYCLE BREAK, AND IT LIVES HERE RATHER THAN ONLY IN THE VERB
+            // (proposal 47 M3). `add-send` refuses a cycle, but the LOADER
+            // does not go through it: `<sends>` is read by
+            // SObject::readSends(), so a hand-edited or foreign .qxp can
+            // carry Alpha -> Beta -> Alpha and the verb never sees it.
+            //
+            // Accept an edge only when it does not close a cycle among the
+            // edges ALREADY accepted, walking lanes in index order. That is
+            // deterministic (lane order is file order) and it drops exactly
+            // one edge of a cycle rather than both, which asking the full tap
+            // graph instead of the accepted one would do.
+            if( sendReaches( fedLanes, static_cast<SObject *>( lane ), src ) ) {
+                TW_LOGW( "model",
+                         "[SEND] cycle: the tap from '%s' into '%s' is DROPPED "
+                         "-- '%s' already feeds '%s'. A send graph must be "
+                         "acyclic; add-send refuses one, a project file can "
+                         "still carry one.",
+                         src->getSName().toUtf8().constData(),
+                         lane->getSName().toUtf8().constData(),
+                         lane->getSName().toUtf8().constData(),
+                         src->getSName().toUtf8().constData() );
+                continue;
+            }
+            fedLanes[src].append( static_cast<SObject *>( lane ) );
+            feeds.append( { src, *t } );
         }
 
         // TWMIXER REFUSES ZERO INPUTS BY CONTRACT (`if( n<=0 ) return -2`), so

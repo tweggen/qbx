@@ -673,6 +673,11 @@ const Fixture kFixtures[] = {
     { "assert-sends",
       "<assert-sends track='1' count='2' dest='Reverb' level='-6'"
       " pre='false' enabled='true' absent='false'/>" },
+    // count / wired / index / level are each written only when given, so the
+    // fixture declares all four.
+    { "assert-send-inputs",
+      "<assert-send-inputs lane='Reverb' count='2' wired='1' index='0'"
+      " level='-6'/>" },
 };
 
 const char *fixtureFor(const QString &verb)
@@ -1000,6 +1005,12 @@ const LaneRow kLaneRows[] = {
     { "remove-send", Conditional, "47/D6: as add-send" },
     { "set-send",    Conditional, "47/D6: as add-send" },
     { "assert-sends", Accept, "read-only" },
+    // Addresses a send lane by NAME (`lane=`), so isLaneAddressed() does not
+    // flag it and nothing would fail without a row -- the same technicality
+    // add-send-lane escapes on. Present because the table records the DECISION
+    // for every verb that can touch a system lane, and this one exists FOR
+    // them.
+    { "assert-send-inputs", Accept, "read-only; it exists FOR send lanes" },
 
     // ==================== NOT A DESTINATION OR SUBJECT ====================
     { "remove-sample",  NotApplicable,
