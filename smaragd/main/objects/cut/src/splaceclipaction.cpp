@@ -24,7 +24,7 @@ SApplyResult SPlaceClipAction::apply( SProject *project )
         return {false, nullptr};
     }
     SObject *mixer = splacements::rootNamed( project, pathRoot_ );
-    SObject *lane = splacements::laneAt( mixer, trackPath_ );
+    SObject *lane = splacements::placementLaneAt( mixer, trackPath_, "place-clip" );
     if( !lane ) {
         return {false, nullptr};
     }

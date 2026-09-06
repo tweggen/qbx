@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M5, AC5.4 / D6: MUTE ON THE MASTER IS ACCEPTED, AND IT IS HEARD -
+  both as the BUTTON and as a `self:Muted` AUTOMATION LANE.
+
+  THIS IS THE ONE POLICY IN M5 THAT POINTS THE OTHER WAY, and D6 states the
+  contrast directly: solo on a system lane is REFUSED because a master lane is
+  not a childLinks() member, so ssolorules::anySoloInTree can never see the
+  flag and accepting the write would store state no audibility rule consults.
+  Mute is legitimate for exactly the opposite reason - there is a mechanism
+  that CAN carry it.
+
+  WHAT HAD TO BE WIRED, because "accepted" was not enough. A user track's mute
+  is STRUCTURAL: the summing parent nulls its input plug (SStdMixer) or mutes
+  its clip entry (a folder STrack). THE MASTER LANE HAS NO SUMMING PARENT, so
+  neither reacts, and before this branch set-track-mute on $master set a flag
+  that nothing on any render path ever read - a control that appears to work
+  and changes nothing, which is the very defect solo is refused to avoid.
+
+  It now drives twGainStage's AUDIO mute, ramped over ~1.5 ms, which proposal
+  37 P3a built and left unwired for everything but P5's `self:Muted` lane. The
+  master lane's gain stage sits between its insert chain and the mixer's
+  rewire (D3), so muting it silences the whole mix and nothing else. USER
+  TRACKS ARE UNTOUCHED: their mute stays structural, which is what keeps a
+  muted track's own capture full of its material so an asset windowing it is
+  not silence.
+
+  THE FIXTURE IS test_autosaw.wav, whose amplitude is CONSTANT (unlike
+  test_sawtooth.wav, which ramps and loops and therefore has no closed form at
+  an arbitrary window) - 4 s of a 480 Hz sawtooth whose period is exactly 100
+  frames, RMS 0.230956.
+
+  THE AUTOMATION HALF is a self:Muted lane with a STEP at 2 s. Its floor is
+  AUDIBLE before the first point (objects/track inv. 15: a Muted lane holds
+  audible there, unlike every other lane, which holds its first point's value)
+  and the measured windows sit well clear of the 1.5 ms ramp at the transition.
+-->
+<SActionScript version="1" name="master_mute_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ BASELINE: the master is not muted and is heard. ======= -->
+    <render filename="master_mute_off.wav" durationSec="4"/>
+    <assert-audio-energy filename="master_mute_off.wav"
+                         startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.2280" maxRms="0.2340"/>
+
+    <!-- ============ THE BUTTON ============ -->
+    <!-- ACCEPTED - no expectReject anywhere in this case, which is the first
+         half of the claim. -->
+    <set-track-mute trackPath="$master" muted="1"/>
+    <assert-system-lane trackPath="$master" role="master" muted="1"/>
+
+    <!-- ...AND HEARD. Silence, not "a bit quieter": the gain stage's mute is a
+         multiply by zero after a short ramp, and both measured windows are far
+         from the ramp. -->
+    <render filename="master_mute_on.wav" durationSec="4"/>
+    <assert-audio-energy filename="master_mute_on.wav"
+                         startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0" maxRms="0.0005"/>
+
+    <!-- THE TRACK'S OWN MATERIAL IS UNTOUCHED. A master mute silences the MIX;
+         it must not reach back into what the track produces, or an asset
+         windowing that track would become silence. -->
+    <assert-system-lane trackPath="0" role="none" muted="0"/>
+
+    <!-- ...and it comes back. A mute that could not be undone would pass every
+         assertion above. -->
+    <set-track-mute trackPath="$master" muted="0"/>
+    <render filename="master_mute_back.wav" durationSec="4"/>
+    <assert-audio-energy filename="master_mute_back.wav"
+                         startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.2280" maxRms="0.2340"/>
+
+    <!-- ============ THE self:Muted AUTOMATION LANE ============ -->
+    <!-- The lane's floor is AUDIBLE before its first point - the one lane in
+         the model that does not hold its first point's value there - so second
+         0..2 must stay loud with a point at 2 s saying "muted". -->
+    <add-automation-lane owner="$master" target="self:Muted" mode="read"/>
+    <add-automation-point owner="$master" target="self:Muted"
+                          time="96000" value="1" curve="step"/>
+
+    <render filename="master_mute_lane.wav" durationSec="4"/>
+
+    <!-- Loud where the lane's floor holds... -->
+    <assert-audio-energy filename="master_mute_lane.wav"
+                         startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.2280" maxRms="0.2340"/>
+    <!-- ...silent after the step, measured from 0.5 s past it so the ~1.5 ms
+         ramp is nowhere near the window. -->
+    <assert-audio-energy filename="master_mute_lane.wav"
+                         startFrame="120000" frameCount="48000"
+                         channel="0" minRms="0" maxRms="0.0005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

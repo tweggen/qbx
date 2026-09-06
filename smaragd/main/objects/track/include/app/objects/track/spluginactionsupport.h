@@ -27,11 +27,17 @@ inline SPluginChain *chainFor( SProject *project, const QString &trackPath )
     // A qualified trackPath ("Drums:0") names its own root (proposal 09 D21);
     // a bare one means the master, which is what every caller written before
     // arrangements existed passes.
-    const strackpath::QualifiedPath q = strackpath::parseQualified( trackPath );
-    SObject *root = splacements::rootNamed( project, q.root );
-    if( !root ) return nullptr;
+    //
+    // THROUGH laneBySpec SINCE PROPOSAL 45 M7, which is the whole of AC7.2:
+    // it does the same peel-root-then-resolve, and additionally understands
+    // `$send:<name>`. That name cannot be resolved by the pure string parser
+    // (it maps to a sentinel only against a particular root, and readXml has
+    // no project), so this is the seam where it becomes a path -- and putting
+    // it HERE is what makes reorder-plugin, set-plugin-bypass and
+    // set-plugin-param reach a send lane with no edit of their own.
+    QString root;
     STrack *track = dynamic_cast<STrack *>(
-        strackpath::resolveByPath( root, q.idx ) );
+        splacements::laneBySpec( project, trackPath, root ) );
     return track ? track->getPluginChain() : nullptr;
 }
 

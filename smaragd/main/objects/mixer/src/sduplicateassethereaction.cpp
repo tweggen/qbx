@@ -132,7 +132,7 @@ SApplyResult SDuplicateAssetHereAction::apply( SProject *project )
 
     QList<int> trackPath = clipPath_;
     const int clipIdx = trackPath.takeLast();
-    SObject *lane = splacements::laneAt( root, trackPath );
+    SObject *lane = splacements::placementLaneAt( root, trackPath, "duplicate-asset-here" );
     SLink *placement = lane ? lane->childAt( clipIdx ) : nullptr;
     if( !lane || !placement || placement->getSObject().isLane() ) {
         TW_LOGW( "cut", "duplicate-asset-here: refused, no clip at '%s'",

@@ -54,7 +54,13 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     // log line, the wrong object edited. splacements::rootNamed() is what
     // set-track-volume has always used.
     SObject *root = splacements::rootNamed( project, pathRoot_ );
-    SObject *trackObj = strackpath::resolveByPath(root, path);
+    // ...and the resolve goes through laneBySpec since proposal 45 M7 (AC7.2),
+    // which does the same peel-and-resolve and additionally understands
+    // `$send:<name>` -- a spelling the pure string parser cannot finish,
+    // because a name maps to a sentinel only against a particular root and
+    // readXml has no project. `path` above stays the parsed form for the
+    // messages below; the OBJECT comes from here.
+    SObject *trackObj = splacements::laneBySpec( project, trackPath_, pathRoot_ );
     STrack *track = dynamic_cast<STrack*>(trackObj);
     if (!track) {
         return {false, nullptr};
@@ -94,6 +100,24 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
         audio::twPluginDescriptor known;
         if (audio::pluginRegistry().findByUid(desc.format, desc.uid, known))
             desc.isInstrument = known.isInstrument;
+    }
+
+    // AC5.3 / D6: NO INSTRUMENT ON A SYSTEM LANE. An ordinary EFFECT is
+    // accepted and is the whole point of the master chain (M3's master insert
+    // is one), so the refusal is on the instrument flag and nothing else --
+    // which is why it sits here, after desc.isInstrument has been settled,
+    // rather than beside the resolve.
+    //
+    // The reason is the same one that makes set-track-midi-output pointless
+    // here: an instrument is driven by STrack::eventFeed(), which merges a
+    // lane's OWN clip set with the children that bubble events up, and a
+    // system lane carries no clips (D6). An instrument in master slot 0 would
+    // be prepared, activated, chased and reset for every page, forever, for a
+    // feed that is empty by construction -- and it would sit in FRONT of the
+    // master insert chain, so the one slot a user actually wants there moves.
+    if( desc.isInstrument
+        && splacements::refuseSystemLane( track, "insert-plugin (instrument)" ) ) {
+        return {false, nullptr};
     }
 
     // ONE INSTRUMENT PER TRACK, ALWAYS SLOT 0 (D3). A second is REFUSED rather

@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M7, AC7.1 / AC7.2 / AC7.3 / AC7.5 / D10: A SEND LANE EXISTS, IS
+  NAMED, CARRIES A PLUGIN CHAIN AND A FADER, SUMS INTO THE MASTER, HIDES,
+  REFUSES CLIPS AND ROUND-TRIPS - AND NOTHING CAN FEED IT.
+
+  M7 IS SHAPE ONLY, AND THE MILESTONE ASSERTS THE ABSENCE OF ROUTING RATHER
+  THAN IMPLYING ITS PRESENCE (AC7.3). There is no send TAP: a per-track,
+  per-destination auxiliary output with a level and a pre/post-fader choice is
+  a new model object, new verbs and a new invalidation edge, and it needs
+  feedback prevention for A -> B -> A (the scheduler's dependency counting will
+  deadlock or spin on a cycle rather than fail cleanly) and latency
+  compensation across the send (PDC is unimplemented, 37 P9). D10 sizes that at
+  "at least the size of this proposal". So this case's central claim is that a
+  send lane changes NOTHING audible, and it is measured rather than assumed:
+  the same project renders BYTE-IDENTICALLY with and without one.
+
+  THE NAME IS THE ADDRESS (AC7.2), which is what makes AC7.5's collision
+  refusal a correctness rule rather than tidiness: uniquifying a second
+  "Reverb" to "Reverb 2" would leave every path the user wrote addressing the
+  first one. The `$send:<name>` spelling needed a decision M1 explicitly
+  deferred to here - parseQualified splits a spec on its first ':', so
+  "$send:Reverb" parsed as the ROOT "$send" and the path "Reverb". The rule
+  chosen is one condition: text before the first colon that begins with '$' is
+  part of the PATH, not a root name, and SProject::registerArrangement now
+  REFUSES a name beginning with '$' so the reservation is enforced rather than
+  assumed. A send in another arrangement still splits on the first colon and
+  still works: "Drums:$send:Reverb".
+
+  THE INDEX SPELLING SURVIVES ALONGSIDE IT ($send0), and it is what
+  pathToString WRITES - a name maps to a sentinel only against a particular
+  root, and stringToPath is pure (it is called from readXml, where there is no
+  project). So the name is an INPUT spelling, resolved by
+  splacements::laneBySpec, and the canonical output stays index-based. Both are
+  asserted here so neither can rot.
+
+  WHICH VERBS UNDERSTAND THE NAME FORM IS A BOUNDARY, AND THIS CASE DRAWS IT
+  DELIBERATELY. laneBySpec is reached by the FIVE PLUGIN VERBS, which is what
+  AC7.2 asks for, and by assert-system-lane, because a gate whose whole subject
+  is system lanes ought to be able to spell one. Every other verb still takes
+  the INDEX form, which is a plain path step and has always worked - so
+  set-track-volume below says $send0 rather than $send:Reverb. That is a
+  boundary, not a defect, and it FAILS CLOSED: an unresolved "$send:" token
+  becomes SPATH_INVALID and the verb refuses, rather than addressing something
+  else. Widening it is a per-verb edit and the same default-open hazard AC5.6
+  exists to police, so it is left for whoever needs it.
+-->
+<SActionScript version="1" name="send_lane_shape">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- THE REFERENCE, with no send lane in the project at all. -->
+    <render filename="send_none.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_none.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+
+    <!-- ============ AC7.1: IT EXISTS, BY VERB, AND IS NAMED ============ -->
+
+    <add-send-lane sendName="Reverb"/>
+
+    <!-- Addressed by INDEX and by NAME, and both reach the same lane. The
+         canonical pathOf spelling is the index one. -->
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb"
+                        expectPath="$send0" inChildLinks="0"/>
+    <assert-system-lane trackPath="$send:Reverb" role="send" name="Reverb"/>
+
+    <!-- HIDDEN BY DEFAULT, like every system lane: available, not in the way. -->
+    <assert-system-lane trackPath="$send0" role="send" hidden="1"/>
+
+    <!-- ...and it REFUSES CLIPS. -->
+    <assert-system-lane trackPath="$send0" role="send" acceptsClips="0"/>
+    <add-sample trackPath="$send0" filePath="../test_autosaw.wav" timePos="0"
+                expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="add-sample: refused - the send lane"/>
+
+    <!-- ============ AC7.3: NOTHING FEEDS IT, SO IT IS SILENT ============ -->
+    <!-- The lane is in the master sum, at unity, and contributes exactly
+         nothing - because there is no tap and it therefore renders silence.
+         BYTE-IDENTICAL, not merely "the same RMS": a send that leaked so much
+         as a dither bit would fail here and pass an energy bound. -->
+
+    <render filename="send_present.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="send_present.wav" expected="send_none.wav"/>
+
+    <!-- ============ AC7.2: THE FIVE PLUGIN VERBS REACH IT ============ -->
+    <!-- Unchanged verbs, addressed by NAME. The one that would fail without
+         laneBySpec is any of them - they all resolve through chainFor. -->
+
+    <insert-plugin trackPath="$send:Reverb" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$send:Reverb" slotIndex="0" paramId="0" value="2.0"/>
+    <set-plugin-bypass trackPath="$send:Reverb" slotIndex="0" bypassed="true"/>
+    <set-plugin-bypass trackPath="$send:Reverb" slotIndex="0" bypassed="false"/>
+    <assert-system-lane trackPath="$send0" role="send" plugins="1"/>
+
+    <!-- A second insert, so reorder-plugin has something to reorder. -->
+    <insert-plugin trackPath="$send:Reverb" slotIndex="1"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <reorder-plugin trackPath="$send:Reverb" fromIndex="1" toIndex="0"/>
+    <remove-plugin trackPath="$send:Reverb" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <assert-system-lane trackPath="$send0" role="send" plugins="1"/>
+
+    <!-- ...AND A CHAIN ON A SEND STILL CHANGES NOTHING, because nothing feeds
+         it. A 2.0x gain on a lane carrying silence is silence. This is the
+         assertion that would catch a send accidentally wired to the SUM rather
+         than into it - the failure mode that doubles the mix. -->
+    <render filename="send_with_fx.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="send_with_fx.wav" expected="send_none.wav"/>
+
+    <!-- ...and its FADER, which is an ordinary system-lane fader (M5/AC5.4's
+         gain stage), also changes nothing for the same reason. -->
+    <set-track-volume trackPath="$send0" volume="-6"/>
+    <assert-track-volume trackPath="$send0" volumeDb="-6" tolerance="0.001"/>
+
+    <!-- ============ AC7.5: TWO COEXIST; A COLLISION IS REFUSED ============ -->
+
+    <add-send-lane sendName="Delay"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"
+                        expectPath="$send1"/>
+    <assert-system-lane trackPath="$send:Delay" role="send" name="Delay"/>
+
+    <!-- ...and the first one did not move. -->
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb"/>
+
+    <add-send-lane sendName="Reverb" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="a send lane called"/>
+    <add-send-lane sendName="" expectReject="true"/>
+
+    <!-- Still exactly two, in order. -->
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"/>
+    <assert-system-lane trackPath="$send2" role="send" expectReject="true"/>
+
+    <!-- AC7.4's cousin: neither send became a user track. -->
+    <assert-track-count count="1"/>
+
+    <!-- ============ AC7.1: IT ROUND-TRIPS ============ -->
+
+    <save-project path="../../build/send_lane_shape.qxp"/>
+    <load-project path="../../build/send_lane_shape.qxp"/>
+
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb"
+                        hidden="1" acceptsClips="0" plugins="1"
+                        volume="-6" expectPath="$send0" inChildLinks="0"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"
+                        expectPath="$send1"/>
+    <assert-system-lane trackPath="$send:Reverb" role="send" plugins="1"/>
+    <assert-track-count count="1"/>
+
+    <!-- ...and it is still silent after the round trip. -->
+    <render filename="send_reloaded.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="send_reloaded.wav" expected="send_none.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

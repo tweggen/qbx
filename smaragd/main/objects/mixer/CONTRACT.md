@@ -182,3 +182,97 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
     the REMOVE action, not on the inverse, so it survives an undo/redo cycle;
     the inverse releases it once the registry has taken its own reference, or
     the arrangement could never be destroyed again.
+
+16. **THE CONDUCTOR LANE IS AN ORDINARY CHILD LINK OF THE MASTER LANE, NOT A
+    SECOND SENTINEL** (proposal 45 M6 / D7). Its address is `{-1, 0}`
+    (`$master,0`): one system step to the master, then a plain index. That is
+    what makes it cost almost nothing — no new path machinery (`resolveByPath`
+    already walks both halves), no new serialization (it is an `<SLink>` child
+    of the master's own element, exactly like a nested user track), no new
+    refusal (`STrack::acceptsClips()` has been false for every `systemRole`
+    since M5) and no new hiding rule (`SObject::laneHiddenByDefault()` since
+    M4). `conductorLane()` finds it BY ROLE rather than by index: index 0 is
+    where `ensureConductorLane()` puts it, but a lookup that TRUSTED index 0
+    would answer "the conductor" for whatever a later milestone parents to the
+    master first.
+
+    **It contributes no audio for TWO independent reasons**, and both are
+    recorded because either alone would suffice and a later milestone that
+    gives it real content must not lean on the wrong one: it carries no clips
+    and no instrument, AND the master lane's own `twTrackMix` drives nothing at
+    all (inv. 12) — so a CHILD of the master lane is summed by a component that
+    reaches no output.
+
+    `ensureConductorLane()` is idempotent and runs both at construction and
+    after `adoptMasterLane()`, so a project written before M6 gains one on load.
+
+17. **A SEND LANE IS WIRED BY `reconnectTracksToMixer` ITSELF, NEVER BESIDE IT**
+    (proposal 45 M7 / D10, trap T3). This is the one thing about send lanes
+    that had to be got right rather than merely added.
+
+    That function sizes the bus mixer's input count FROM THE TRACK COUNT and
+    rewires EVERY input, and it runs on every audibility, solo, mute and arm
+    change. So a send lane wired into a spare input from anywhere else — at
+    creation, at load, from a verb — is silently CLOBBERED by the next pass, and
+    the symptom is a send that works until the user presses a button somewhere
+    else entirely. The inputs are therefore RESERVED after the tracks and filled
+    in the same loop, which is what makes the wiring idempotent under
+    repetition.
+
+    **Every send input is at UNITY, and that is load-bearing rather than a copy
+    of the track line above it.** `twlive::checkMasterShape` walks
+    `getNInputs()` and refuses the LINEAR master split on ANY non-unity input
+    (D4a rule 2), so a send wired at anything else does not merely sound wrong —
+    it drops live monitoring into the Closure path for every armed track in the
+    project. A send's own level is its `twGainStage`, exactly as a track's is.
+
+    MUTE is deliberately NOT applied here, unlike a track's: a system lane's
+    mute is `twGainStage`'s AUDIO mute (inv. 18), so nulling the plug too would
+    be the same silence twice and would make the ramp unreachable. SOLO cannot
+    be applied at all — `ssolo::anySoloInTree` walks `childLinks()`, which a
+    send lane is deliberately not in.
+
+    **No audio assertion can see a clobbered send**, because in M7 nothing can
+    feed one and a correctly wired lane is silent too. `assert-master-inputs`
+    reads the input count and levels off the live mixer and is the only thing
+    that bites; measured, with the send wiring removed, `send_lane_shape` PASSES
+    and only `send_lane_survives_rewire` fails.
+
+18. **A SYSTEM LANE'S MUTE IS THE GAIN STAGE'S AUDIO MUTE; ITS SOLO IS REFUSED**
+    (proposal 45 M5 / AC5.4 / D6). Both follow from one fact — a system lane has
+    no summing parent. A user track's mute and solo are applied BY ITS PARENT
+    (this mixer nulls its input plug; a folder `STrack` mutes its clip entry),
+    and neither reacts for a lane that is in nobody's `childLinks()`.
+
+    So `set-track-mute` on one drives `twGainStage::setMuted()` — the ramped
+    audio mute proposal 37 P3a built and left unwired for everything but a
+    `self:Muted` lane — through `STrack::onTrackMuteChanged`, and it is HEARD.
+    `set-track-solo` is REFUSED, because `ssolorules::anySoloInTree` walks
+    exactly the child links a system lane is not among: the flag would be state
+    no audibility rule can ever consult, which is the `SStdMixer::volume_`
+    defect in a new field.
+
+    **The invalidation is `invalidateRenderPath()`, never a bare
+    `bumpRenderChainEpoch()`** — measured: with the epoch bump alone the muted
+    render came back BYTE-IDENTICAL to the unmuted one. USER TRACKS ARE
+    UNTOUCHED: their mute stays STRUCTURAL, which is what keeps a muted track's
+    own capture full of its material so an asset windowing it is not silence.
+
+19. **`remove-send-lane` PINS THE LANE AND ITS INVERSE RE-ADOPTS THAT OBJECT**
+    (proposal 45 M7 follow-up), the `SRemoveTrackAction` idiom unchanged. The
+    first version returned `add-send-lane` as its inverse, which re-created the
+    lane BY NAME — so a removed send came back EMPTY on Ctrl-Z, losing its
+    inserts, their state and its fader. "Nothing can hear a send's chain yet" is
+    an argument about the AUDIO, not about the user's work.
+
+    The pin is taken BEFORE `detachSendLane()` deletes the mixer's own `SLink`,
+    so the refcount never touches zero; it lives on the FORWARD action, which
+    the undo command reuses, so it survives redo. `SRestoreSendLaneAction` is
+    deliberately NOT registered with the action registry — it holds a pointer to
+    the pinning action, there is no pinned object in a file, and its `readXml()`
+    refuses; `action_roundtrip_test` caught the first draft's registration
+    immediately.
+
+    Only the LAST send lane may be removed, and the refusal is announced: the
+    sentinel `-2 - k` IS the address, so removing one from the middle shifts
+    every lane after it and silently re-points every path that named one.

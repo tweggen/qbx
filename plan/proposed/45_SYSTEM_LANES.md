@@ -1,5 +1,17 @@
 # Proposal 45 — System lanes: the master track, its inserts, and the shape send tracks will take
 
+> **STATUS: EXECUTED, M0-M8, 2026-09-06.** Each milestone below carries an
+> "as executed" section with what was measured and what the design did not
+> anticipate. Read those before the design text they follow — several of them
+> record that the design's own reading was wrong.
+>
+> **What was deliberately NOT built: the send TAP and everything routing.**
+> A send lane exists, is named, carries a chain and a fader, sums into the
+> master and round-trips — and nothing can feed it. D10 sizes the tap, feedback
+> prevention for A -> B -> A, and PDC across a send at "at least the size of
+> this proposal". M7 asserts the ABSENCE of routing rather than implying its
+> presence.
+
 > **Status: M0 and M1 EXECUTED (2026-09-01); M2 onward proposed.** The milestones below are
 > ordered so that the two genuinely dangerous changes (M2's shape check and M3's
 > Closure wiring) land before any UI can reach the situation they cover.
@@ -1562,6 +1574,56 @@ rather than half-honours.
   `master_refuses_instrument`, `master_mute_audible`; each refusal watched failing
   by removing **its own** check and confirming which assertion bites.
 
+#### M5 as executed (2026-09-05) — four findings the design did not anticipate
+
+1. **THE THREE STRUCTURAL REFUSALS DO NOT BITE AS BEHAVIOUR, AND SAYING SO IS
+   THE GATE.** `remove-track`, `move-track` and `reparent-track` address a
+   track as "its parent, plus its index in that parent". A master lane is not
+   a `childLinks()` member (D2), so `$master` splits into an empty parent path
+   and the index `-1`, `childAt(-1)` answers null, and all three ALREADY
+   refused before this milestone — silently, by an accident of the sentinel's
+   numeric value. Measured: with each explicit check deleted the case stayed
+   green on `expectReject` and `assert-system-lane` alone. What the accident
+   does not do is ANNOUNCE, so the gate is D6's own "a bound is ANNOUNCED,
+   never silent": one `assert-log` per verb. The accident also stops holding
+   the moment M6 nests a conductor lane one level down or M7 gives a send a
+   name form, which is why the explicit checks stay.
+2. **AC5.4 NEEDED WIRING, NOT JUST PERMISSION.** A user track's mute is
+   STRUCTURAL — the summing parent nulls its plug (`SStdMixer`) or mutes its
+   clip entry (a folder `STrack`). **The master lane has no summing parent**,
+   so neither reacts, and `set-track-mute` on `$master` set a flag no render
+   path ever read: a control that appears to work and changes nothing, i.e.
+   the exact `SStdMixer::volume_` defect D6 refuses SOLO to avoid. It now
+   drives `twGainStage`'s AUDIO mute, which P3a built and left unwired for
+   everything but P5's `self:Muted` lane. `invalidateRenderPath()`, not
+   `bumpRenderChainEpoch()` — measured: with the epoch bump alone the muted
+   render came back byte-identical to the unmuted one.
+3. **AC5.6's FIRST DETECTOR REPRODUCED THE HOLE IT GUARDS.** Reading
+   `knownAttributes()` to decide "is this verb track-addressed" is
+   default-OPEN, because that method is an optional override — so
+   `set-track-solo`, `set-track-mute`, `remove-track`, `move-track`,
+   `reparent-track` and `insert-plugin`, the verbs M5 is *about*, all reported
+   "not track-addressed" and escaped the audit. Measured: 37 verbs detected
+   that way against **80** when the question is put to `readXml()` instead —
+   hand the verb an element naming `$master` and see whether it writes that
+   address back. Watched: with the declarative detector restored, the table
+   passes with `set-track-solo` unrowed.
+4. **AC5.3's CHECK POSITION IS LOAD-BEARING.** It sits after
+   `desc.isInstrument` is settled, not beside the resolve, because the refusal
+   is on the FLAG: the master insert chain is the gesture M3's whole Closure
+   path exists to serve. A check placed earlier refuses the effect too, and a
+   refusal-only case would still pass. `master_refuses_instrument` asserts
+   both halves over the same lane in one run.
+
+**NOT gated in M5, and named rather than implied:** whether a USER track may be
+reparented INTO a system lane (AC5.2 asks about the ADDRESSED object; D3 gives
+the master child tracks, so a destination refusal is a design decision, not a
+policy one); `group-track` / `set-edit-group` / `set-track-midi-routing` on a
+system lane, which carry `NotApplicable` rows — decisions recorded, behaviour
+not proved; the twenty-two read-only `assert-*` rows, which are classification
+rather than assertion; and the ~1.5 ms mute ramp itself, which both
+`master_mute_audible` windows deliberately sit far away from.
+
 ### M6 — Conductor lanes: the container only
 
 - **AC6.1** A conductor lane exists as a child of the master lane, addressable as
@@ -1575,6 +1637,82 @@ rather than half-honours.
 - **AC6.4** Nesting changes no `getNTracks()`, no user `trackPath`, no golden.
 - **Gate:** new qxa `conductor_lane_container`, `conductor_lane_addressing`; the
   AC6.2 grep; `action_roundtrip_test`; `cmp` on both goldens.
+
+#### M6 as executed (2026-09-06) — the container cost almost nothing, and four things it exposed
+
+**The milestone itself is small, and that is the design working.** A conductor
+lane is an ORDINARY CHILD LINK of the master lane, not a second sentinel: its
+address is `{-1,0}` (`$master,0`), one system step then a plain index. So it
+needed no new path machinery (`resolveByPath` already walks both halves), no new
+serialization (an `<SLink>` child of the master's own element, exactly like a
+nested user track), no new refusal (`STrack::acceptsClips()` has been false for
+every `systemRole` since M5/D6) and no new hiding rule
+(`SObject::laneHiddenByDefault()` since M4/D8). The mixer gained
+`conductorLane()` / `ensureConductorLane()` and nothing else.
+
+**It contributes no audio for TWO independent reasons**, and both are recorded
+because either alone would suffice and a later milestone must not lean on the
+wrong one: it carries no clips and no instrument, AND the master lane's own
+`twTrackMix` drives nothing at all — `wireAsMasterLane()` takes the mixer's sum
+straight into the lane's plugin chain (AC2.8/D3), so a CHILD of the master lane
+is summed by a component that reaches no output.
+
+Four things the design did not anticipate, each found by measuring:
+
+1. **`systemRowsOutOfDate()` KNEW ONLY ABOUT THE MASTER LANE**, which is the
+   exact defect M4's own comment describes one level up: a `set-lane-hidden` on
+   a conductor lane changed the model, the staleness test answered false, the
+   rows were never rebuilt, and the lane appeared only after an unrelated edit
+   forced one. Measured as a row count of **2 where 3 was due**. It now compares
+   the WANTED system lanes against `rows_` intersected with the whole master
+   SUBTREE — and the obvious spelling (intersect with *wanted*) is wrong in one
+   direction: with nothing wanted the intersection is empty whether a stale row
+   is there or not, so hiding the master again left its row on screen. Measured
+   as **4 where 3 was due**, on `master_lane_rows`' own undo step.
+2. **`appendRowsFor()` DID NOT CONSULT `laneHidden()`**, so a conductor lane
+   could never be hidden. It does now, which is D8's "hiding is ONE mechanism"
+   read properly: the call is a no-op for every user lane (their default is
+   false, and `set-lane-hidden` refuses them outright). `master_lane_rows`'
+   header stated the opposite as the REASON for that refusal and has been
+   corrected in place — the refusal stands on its other, real argument.
+3. **`assert-system-lane`'s `hidden=` read the WRONG FLAG.** `SObject::isHidden()`
+   is a plain field the master lane's constructor sets and that nothing else in
+   the app consults — every other `isHidden()` in the tree is `QWidget`'s.
+   `laneHidden()` is what the row walk asks. A conductor lane is hidden by that
+   DEFAULT and sets no flag, so the verb reported it visible while the arranger
+   drew no row for it. The verb now asks what the view asks.
+4. **AC6.3's DISCRIMINATING ASSERTION IS NOT THE OBVIOUS ONE.** Deleting
+   `findPathRec`'s system-lane descent makes `pathOf` answer `{}` for a
+   conductor lane, and the head's fader then commits to the wrong object — but
+   the conductor's OWN `volumeDb="-6"` check keeps PASSING, because the head
+   control writes the value into the track it was built for whatever address it
+   subsequently commits to. What catches it is the "and nowhere else" pair:
+   `assert-track-volume` on `$master` reads **-5.93336 dB** where 0 was due. A
+   case asserting only "the target moved" would have gone green over the whole
+   defect.
+
+**AC6.2 is a SCRIPT, not a documented grep.** `tools/check_tempo_authority.py`
+enforces both halves — no tempo MEMBER on the track or mixer slices, and the
+`setBPMTempo` / `bpmTempo_` writers confined to three files — because a
+documented grep nobody runs rots, and D7's whole point is that the conductor's
+content must never become a second tempo store. Its first member pattern was
+anchored at a word boundary and **`conductorTempo_`, the single most likely name
+for the field it exists to forbid, sailed straight past it**; watched failing on
+exactly that member, plus `laneUsPerQuarter_` and `timeSigNumerator_`, while a
+`twTempoMap *cachedTempoMap_` handle is correctly exempt — a reference to the
+one authority is what D7 asks for, not a second store.
+
+**NOT gated in M6, and named rather than implied:** the conductor lane's CONTENT
+in every sense — it has none, by design, and a tempo lane needs a curve model
+for ramps and is a proposal of its own; a SECOND conductor lane, or a conductor
+lane nested inside a conductor lane (`conductorLane()` returns the first by
+role, and nothing creates a second); what a conductor row LOOKS like (no pixel
+gate, and its head is `SSMVMixerControl` unchanged); a `set-tempo` issued
+through the conductor lane rather than the project (there is no such path, which
+is the point); and a project written before M6 whose master lane was adopted
+from the file — `ensureConductorLane()` mints one there and the load path is
+gated, but no committed fixture is old enough to exercise the adoption branch
+specifically.
 
 ### M7 — Send lanes: shape only, routing explicitly NOT built
 
@@ -1593,6 +1731,130 @@ rather than half-honours.
 - **Gate:** new qxa `send_lane_shape`, `send_lane_survives_rewire`; `cmp` on both
   goldens; `action_roundtrip_test`.
 - **Splittable.** If M7 becomes its own proposal, M0-M6 stand alone.
+
+#### M7 as executed (2026-09-06) — five findings, and AC7.4's warning was right
+
+**AC7.4's premise held exactly.** Measured, not argued: with the send wiring
+removed from `reconnectTracksToMixer` (an empty send list, which reproduces the
+pre-M7 pass token for token), **`send_lane_shape` PASSES and only
+`send_lane_survives_rewire` fails**, on 8 `assert-master-inputs` assertions.
+D10 predicted that the obvious gate goes green over the clobbering defect, and
+it does. The pass is now the thing that wires the sends — the input count is
+`nTracks + sends.size()` and the sends fill the reserved trailing inputs in the
+same loop — so the wiring is idempotent under repetition, which is what
+"survives a rewire" means.
+
+1. **NO AUDIO ASSERTION ANYWHERE CAN SEE A CLOBBERED SEND**, because AC7.3 says
+   a correctly wired one contributes silence too. That is the missing-sample
+   placeholder's shape again — a dropped clip and a placeholder are equally
+   silent — and it is why M7 needed a new verb, `assert-master-inputs`, which
+   reads the live `twMixer`'s input count and levels. Its first draft included
+   `tw/mix` from `app/testkit` and `tools/check_layering.py` refused it; the
+   numbers are now published by `SStdMixer` itself, the same boundary that made
+   `SPluginSlot::paramRows()` exist for `app/timeline`.
+2. **UNITY IS NOT A LEVELLING DETAIL.** `twlive::checkMasterShape` walks
+   `getNInputs()` and refuses the LINEAR master split on ANY non-unity input
+   (D4a rule 2), so a send wired at −3 dB does not merely sound wrong: it drops
+   live monitoring into the Closure path for every armed track in the project.
+   Watched, and the log line is verbatim: `[LIVE] the master is not a unity sum
+   with an identity map (a master input level is not unity); live monitoring is
+   off`. The send's own level is its `twGainStage`, exactly as a track's is.
+3. **WHERE THAT `assert-log` GOES IS ITSELF A MEASUREMENT, and two of the three
+   plausible placements are VACUOUS.** The live plan is built — and refused —
+   at **`set-monitor-mode`**, not at the arm and not at the transport edge,
+   because the live set is `{armed && monitorEffective} ∪ {monitor == on}` and
+   monitor "on" alone puts a track in it. Placed after `arm-track` or after
+   `toggle-playback` the pair reported "OK — 0 records" over a live refusal
+   (the window was literally `log records 6 .. 6`, empty). All three were tried
+   under the sabotage; only the first bites. Same vacuous shape
+   `master_insert_while_monitoring`'s first draft had.
+4. **`$send:<name>` NEEDED THE DECISION M1 DEFERRED HERE.** `parseQualified`
+   splits a spec on its first ':', so `$send:Reverb` parsed as the ROOT
+   `$send` plus the path `Reverb`. The rule chosen is one condition — text
+   before the first colon that begins with `$` is part of the PATH, not a root
+   name — and `SProject::registerArrangement` now REFUSES a name beginning with
+   `$`, so the reservation is enforced rather than assumed. A qualified send
+   still splits on the first colon and still works: `Drums:$send:Reverb`.
+   The NAME is an **input** spelling only: it maps to a sentinel only against a
+   particular root, and `stringToPath` is pure (it is called from `readXml`,
+   where there is no project), so it fails CLOSED there and is resolved by the
+   new `splacements::laneBySpec`. `pathToString` keeps writing the index form.
+5. **WHICH VERBS UNDERSTAND THE NAME IS A BOUNDARY, drawn deliberately.**
+   `laneBySpec` is reached by the five plugin verbs — which is what AC7.2 asks,
+   and three of them for free through the shared `spluginaction::chainFor` —
+   and by `assert-system-lane`. Every other verb takes the INDEX form, which
+   has always worked. Widening it is a per-verb edit and the same default-open
+   hazard AC5.6 exists to police, so it is left to whoever needs it. It fails
+   closed: an unresolved `$send:` token becomes `SPATH_INVALID` and the verb
+   refuses.
+
+**NOT built, and this is the milestone's whole point rather than a gap:** the
+send TAP (a per-track, per-destination auxiliary output with a level and a
+pre/post-fader choice — a new model object, verbs and an invalidation edge),
+feedback prevention for A → B → A (the scheduler's dependency counting will
+deadlock or spin on a cycle rather than fail cleanly), and latency compensation
+across a send. D10 sizes that at "at least the size of this proposal".
+
+**NOT gated, additionally:** SOLO's interaction with a send lane —
+`ssolo::anySoloInTree` walks `childLinks()`, which a send is deliberately not
+in, so a send is invisible to solo; moot while nothing can feed one, and it
+belongs to the routing milestone. Removing a send from the MIDDLE is
+refused outright (the sentinel is the address). And nothing pixel-level: a send
+lane's row is `SSMVMixerControl` unchanged.
+
+#### M7 follow-up (2026-09-06) — the remove/undo now preserves object identity
+
+M7 shipped `remove-send-lane` with `add-send-lane` as its inverse, which
+re-created the lane BY NAME: a removed send came back **EMPTY** on Ctrl-Z,
+losing its inserts, their state and its fader. It was named in the list above on
+the argument that nothing can hear a send's chain yet — **and that argument is
+about the AUDIO, not about the user's work.** Losing a configured chain to a
+plain undo is data loss whether or not it was audible. Fixed by the
+`SRemoveTrackAction` idiom, unchanged: `apply()` pins the lane with a reference
+held on the FORWARD action object (which the undo command reuses, so the pin
+survives redo) and the new `SRestoreSendLaneAction` re-adopts THAT object. The
+pin is taken BEFORE `detachSendLane()` deletes the mixer's own `SLink`, so the
+refcount never touches zero.
+
+**THE PIN COULD NOT BE GATED AT ALL, AND FINDING THAT OUT IS THE SUBSTANCE OF
+THIS FOLLOW-UP.** Deleting the `addRef()` and re-running changed **nothing**:
+the case passed. `SObject::removeRef()` answers a refcount reaching zero with
+`deleteLater()`, and the action runner's `processEvents()` does **not** deliver
+`QEvent::DeferredDelete` at loop level 0 — the same fact
+`smaragdOrderlyShutdown()` already works around by draining them by hand before
+`std::exit()`. So the unpinned lane lingered for the whole scripted run and the
+undo appeared to work for a reason it did not have, while in the real app, with
+a live event loop, that lane is freed between the removal and the undo and the
+restore reads freed memory. A headless suite simply could not see the
+difference.
+
+Closed by a new verb, `drain-pending-deletes`, which makes the deletion happen
+where a case can observe it. With it in place the same sabotage **SEGFAULTS**,
+which is a legitimate gate outcome here (CTest judges by exit code, exactly as
+`plugin_native_editor_teardown_safe` already relies on). Use the verb only
+where a case's claim is about an object's LIFETIME; production pumps its own
+event loop and needs nothing.
+
+`SRestoreSendLaneAction` is deliberately **NOT REGISTERED**, as
+`SRestoreTrackAction` is not: it holds a POINTER to the action that pins the
+lane, there is no pinned object in a file, and its `readXml()` therefore
+refuses. `action_roundtrip_test` caught the first draft's registration
+immediately — "Failed to deserialize action from XML" — which is that audit
+working.
+
+Gate: `send_lane_remove_undo`, watched failing under two DISJOINT sabotages —
+the pre-fix inverse (5 assertions: the fader, the chain, and the slot's bypass
+state through both undo round trips) and the missing pin (a SegFault). Three
+signals rather than one, because each is wrong differently on a re-created
+lane: a fresh lane is at 0 dB, has 0 inserts, and its insert is not bypassed —
+and the slot STATE is the one that proves object identity rather than "something
+of the right shape was rebuilt".
+
+**Still NOT gated:** restoring a send lane that was removed from the MIDDLE
+(refused outright, so unreachable), and a restore whose lane index would have
+to be remembered — `adoptSendLane()` appends, which IS the original index only
+because the removal accepts the last lane alone. If that restriction is ever
+lifted, the restore has to learn an index and this case will not notice.
 
 ### M8 — Contracts, docs, and the CLAUDE.md section
 
@@ -1614,6 +1876,46 @@ rather than half-honours.
   than quoting any figure from `CLAUDE.md`.
 - **Gate:** documentation review; `docs/ACTIONS.md` rows verified against the
   registered verbs by `action_roundtrip_test`.
+
+#### M8 as executed (2026-09-06)
+
+**AC8.1** — the contracts were written AS EACH MILESTONE LANDED rather than
+here, which is why this milestone is small; what M8 found missing was
+`main/timeline/CONTRACT.md` (inv. 32-37: the pinned rows, the null link, the
+one hiding mechanism, hidden-is-never-audio, the `systemRowsOutOfDate` subtree
+rule and the `pathOf` gesture rule) and `main/objects/mixer/CONTRACT.md`
+inv. 16-19 (the conductor lane, the send lanes' wiring inside the rewire pass,
+the mute/solo asymmetry, the removal pin). `main/shell/CONTRACT.md` inv. 18a
+was already rewritten in M3 and needed nothing.
+
+**AC8.2** — `docs/ACTIONS.md` gains an ADDRESSING section (the four spellings,
+which verbs resolve `$send:<name>` and why the rest do not, and the
+fail-closed rule) plus the accept/refuse table.
+
+**AC8.3** — `CLAUDE.md` gains the section, headed by D4a/T1 as this AC asks.
+It is organised around SIX "the obvious design is wrong" rows and, separately,
+**three gate-shaped lessons that have nothing to do with system lanes** — two
+of which silently produce a GREEN gate over a live defect, and are therefore
+the part most worth carrying forward:
+
+1. a refusal that already happens BY ACCIDENT is not gated by asserting the
+   refusal (the three structural verbs: with each explicit check deleted, zero
+   assertions moved);
+2. `assert-log`'s window opens at the PRECEDING action, and one action too late
+   reads "OK - 0 records" over a live failure (measured: an empty window,
+   `log records 6 .. 6`, while the refusal sat one action behind);
+3. `processEvents()` never delivers `QEvent::DeferredDelete`, so a
+   `--test-case` run cannot see an object's LIFETIME (deleting a pin changed
+   NOTHING; with the new `drain-pending-deletes` the same sabotage SEGFAULTS).
+
+**AC8.4** — the PR body was kept current across M5-M8 and reports measured
+counts.
+
+**NOT done in M8:** nothing was re-gated. M8 is documentation, so its only
+mechanical check is `action_roundtrip_test` (which verifies the verb rows
+against the registry) and the four pre-commit checkers. No claim in the new
+prose is asserted by a test that did not already exist — the measurements it
+quotes were taken in M5-M7 and are cited there.
 
 ---
 

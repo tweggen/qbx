@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M5, AC5.2 / AC5.5 / D6: THE EIGHT VERBS THAT MUST REFUSE A SYSTEM
+  LANE, EACH WITH ITS OWN MESSAGE, EACH LEAVING THE MODEL UNTOUCHED.
+
+    arm-track                 sliveinputactions.cpp
+    set-monitor-mode          sliveinputactions.cpp
+    set-track-input           sliveinputactions.cpp
+    set-track-solo            ssettracksoloaction.cpp
+    set-track-midi-output     ssettrackmidioutputaction.cpp
+    remove-track              sremovetrackaction.cpp
+    move-track                smovetrackaction.cpp
+    reparent-track            sreparenttrackaction.cpp
+
+  WHY EACH ONE, in the proposal's own terms:
+
+    THE THREE LIVE-INPUT VERBS are one refusal in one shared resolver, and
+    refusing only arm-track would not be enough. The live set is
+    `{armed && monitorEffective} U {monitor == on}`, so a master left on
+    monitor "on" is live-owned whether it was ever armed or not, and a
+    live-owned master is exactly the shape D4a refuses to render. Two doors,
+    one contradiction.
+
+    SOLO IS NOT MERELY USELESS ON A MASTER, IT IS UNREADABLE. A master lane is
+    deliberately not a childLinks() member (D2), and ssolorules::anySoloInTree
+    walks exactly those children - so a solo flag set here is state that no
+    audibility rule ever consults. That is the SStdMixer::volume_ defect in a
+    new field: a control that appears to work and changes nothing. MUTE is the
+    opposite case and is deliberately ACCEPTED; master_mute_audible is where
+    that half lives.
+
+    MIDI OUT has nothing to send. STrack::eventFeed() merges a lane's OWN clip
+    set with the children that bubble up, and a system lane carries no clips
+    (D6), so a port set here would be opened, chased and panicked for a feed
+    that is empty by construction.
+
+    THE THREE STRUCTURAL VERBS are "it is not the user's object". They also
+    happen to be the three where the refusal was NOT free: each addresses a
+    track as "its parent, plus its index in that parent", and because the
+    master is not a child link, `$master` splits into an empty parent path and
+    the index -1, childAt(-1) answers null, and every one of them ALREADY
+    refused - silently, by an accident of the sentinel's numeric value. That
+    accident stops holding the moment M7 gives a send lane a name form or M6
+    nests a conductor lane one level down. Asking explicitly is what makes it
+    a policy rather than a coincidence, and it is what announces it.
+
+  AC5.5 IS WHAT THE SECOND HALF OF THIS CASE IS FOR, and expectReject alone
+  cannot supply it: a verb that wrote its field and THEN refused would return
+  false just the same. assert-system-lane grew six observables for this
+  (armed / monitor / input / solo / muted / midiOutPort), so every refusal is
+  followed by the state it would have written if it had half-applied.
+
+  NOT ASSERTED HERE, and named rather than left implied: whether a USER track
+  may be reparented INTO the master. AC5.2 asks about the ADDRESSED object and
+  this case asks the same question; D3 gives the master lane child tracks, so a
+  destination refusal would be a design decision rather than a policy one.
+  reparent-track checks its SOURCE only.
+-->
+<SActionScript version="1" name="master_refuses_arm_and_structure">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- THE BASELINE. Every field the eight verbs could write, read off the
+         master before any of them is asked, so the "untouched" assertions
+         below are compared against a state this case established rather than
+         against a default nobody checked. -->
+    <assert-system-lane trackPath="$master" role="master" inChildLinks="0"
+                        armed="0" monitor="auto" input="none" solo="0"
+                        muted="0" midiOutPort="&lt;none&gt;"/>
+
+    <!-- ================= THE LIVE-INPUT THREE ================= -->
+
+    <arm-track trackPath="$master" armed="1" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="arm-track: refused on the master lane"/>
+    <set-monitor-mode trackPath="$master" mode="on" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-monitor-mode: refused on the master lane"/>
+    <set-track-input trackPath="$master" input="audio:file:3"
+                     expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-input: refused on the master lane"/>
+
+    <!-- ...and none of the three left a trace. If arm-track had set the flag
+         before refusing, or set-track-input had stored the string, this is
+         where it shows. -->
+    <assert-system-lane trackPath="$master" armed="0" monitor="auto"
+                        input="none"/>
+
+    <!-- set-monitor-mode is refused for EVERY mode, not only "on". There is
+         nothing to express by setting Auto or Off on a lane that can never
+         monitor, and accepting two of three would put a value in the model
+         that no reader may act on. -->
+    <set-monitor-mode trackPath="$master" mode="off" expectReject="true"/>
+    <assert-system-lane trackPath="$master" monitor="auto"/>
+
+    <!-- ================= SOLO AND MIDI OUT ================= -->
+
+    <set-track-solo trackPath="$master" solo="1" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-solo: refused on the master lane"/>
+    <set-track-midi-output trackPath="$master" port="Capture MIDI Out"
+                           expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-midi-output: refused on the master lane"/>
+    <assert-system-lane trackPath="$master" solo="0"
+                        midiOutPort="&lt;none&gt;"/>
+
+    <!-- ================= THE STRUCTURAL THREE ================= -->
+
+    <!-- FOR THESE THREE THE LOG ASSERTION IS THE ONLY THING THAT BITES, and
+         that was MEASURED, not assumed. Removing each explicit check and
+         re-running leaves this case GREEN on the expectReject and
+         assert-system-lane assertions alone: the verbs still refuse, through
+         the childAt(-1) accident described in their own source. What the
+         accident does NOT do is ANNOUNCE, and D6 requires the announcement
+         ("a bound is ANNOUNCED, never silent"). So the property these three
+         assertions gate is the message, and each was watched failing by
+         deleting its own refusal. -->
+
+    <remove-track trackPath="$master" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="remove-track: refused on the master lane"/>
+    <move-track source="$master" toIndex="0" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="move-track: refused on the master lane"/>
+    <reparent-track source="$master" destParent="0" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="reparent-track: refused on the master lane"/>
+
+    <!-- The lane is still there, still the master, still outside childLinks,
+         and the user tracks are still two and still where they were. A
+         reparent that half-applied would have detached the lane; a move that
+         half-applied would have put it INTO the child list, which is the one
+         thing mixer inv. 1 says can never happen. -->
+    <assert-system-lane trackPath="$master" role="master" inChildLinks="0"
+                        expectPath="$master"/>
+    <assert-track-count count="2"/>
+
+    <!-- ================= THE CONTROL ================= -->
+    <!-- Every one of the eight still works on an ORDINARY track, so what the
+         refusals above measure is the POLICY and not eight verbs that stopped
+         resolving anything. Without this half the case would pass just as well
+         against a build in which all eight were broken outright. -->
+
+    <arm-track trackPath="1" armed="1"/>
+    <set-monitor-mode trackPath="1" mode="on"/>
+    <set-track-input trackPath="1" input="audio:file:3"/>
+    <set-track-solo trackPath="1" solo="1"/>
+    <set-track-midi-output trackPath="1" port="Capture MIDI Out"/>
+    <assert-system-lane trackPath="1" role="none" armed="1" monitor="on"
+                        input="audio:file:3" solo="1"
+                        midiOutPort="Capture MIDI Out"/>
+
+    <!-- Put track 1 back so the structural control below is not measuring an
+         armed, soloed, monitored lane. -->
+    <set-track-solo trackPath="1" solo="0"/>
+    <arm-track trackPath="1" armed="0"/>
+    <set-monitor-mode trackPath="1" mode="auto"/>
+
+    <move-track source="1" toIndex="0"/>
+    <assert-track-count count="2"/>
+    <reparent-track source="1" destParent="0"/>
+    <assert-track-count count="1"/>
+    <remove-track trackPath="0,0"/>
+    <assert-track-count count="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

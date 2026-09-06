@@ -65,7 +65,7 @@ SApplyResult SMoveClipAction::apply(SProject *project)
         return {false, nullptr};        // missing, or it's a track lane not a clip
     }
 
-    SObject *destObj = resolveByPath(root, destTrackPath_);
+    SObject *destObj = splacements::placementLaneAt(root, destTrackPath_, "move-clip");
     STrack *destTrack = dynamic_cast<STrack*>(destObj);
     if (!destTrack) {
         return {false, nullptr};

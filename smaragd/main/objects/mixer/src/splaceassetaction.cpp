@@ -38,7 +38,7 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
     }
 
     // Resolve the destination track via path from that root.
-    SObject *trackObj = resolveByPath(root, trackPath_);
+    SObject *trackObj = splacements::placementLaneAt(root, trackPath_, "place-asset");
     if (!trackObj) {
         return {false, nullptr};
     }

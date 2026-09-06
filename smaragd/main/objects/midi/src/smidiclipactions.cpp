@@ -38,7 +38,7 @@ SApplyResult SInsertMidiClipAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
     SObject *mixer = splacements::rootNamed( project, pathRoot_ );
-    SObject *lane = splacements::laneAt( mixer, trackPath_ );
+    SObject *lane = splacements::placementLaneAt( mixer, trackPath_, "add-midi-clip" );
     if( !lane ) {
         qWarning() << "insert-midi-clip: no lane at" << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };

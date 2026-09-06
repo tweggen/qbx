@@ -62,9 +62,14 @@
     <assert-lane-alignment rows="4"/>
 
     <!-- AN ORDINARY TRACK IS REFUSED, and that is a scope guard rather than a
-         policy. appendRowsFor() walks childLinks() and does not consult
-         laneHidden(), so honouring the flag for a user lane would change the
-         model and nothing on screen. Refusing says so; M4 does not ask for
+         policy. THE ORIGINAL REASON GIVEN HERE HAS SINCE BECOME FALSE and is
+         corrected rather than left to mislead: it read "appendRowsFor() walks
+         childLinks() and does not consult laneHidden(), so honouring the flag
+         for a user lane would change the model and nothing on screen".
+         Proposal 45 M6 made that walk consult laneHidden() - it had to, or a
+         conductor lane could never be hidden - so the flag now WOULD reach the
+         screen. The refusal stands on the other half of the argument, which
+         was always the real one: M4 does not ask for
          user-lane hiding, whose blast radius is selection, drag targets and
          what a hidden FOLDER does to its children. The row count is asserted
          again afterwards because a refusal must leave the model untouched. -->

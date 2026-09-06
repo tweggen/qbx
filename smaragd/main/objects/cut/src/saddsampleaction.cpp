@@ -40,7 +40,7 @@ SApplyResult SAddSampleAction::apply(SProject *project)
 
     // Get the lane. Path-addressed, so a track nested inside a folder track
     // resolves as readily as a top-level one.
-    SObject *track = splacements::laneAt( root, trackPath_ );
+    SObject *track = splacements::placementLaneAt( root, trackPath_, "add-sample" );
     if (!track) {
         return {false, nullptr};
     }
