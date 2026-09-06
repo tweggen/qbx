@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 46 M3 : the last three pieces of per-track view state survive a
+  save/load, and the arranger builds its rows from them.
+
+  `fix/track-list-polish (m)` moved the FOLD set off the arranger and onto
+  STrack, and `track_list_view_roundtrip.qxa` is its gate. THREE MORE were
+  left behind in exactly the same shape : `STrack*`-keyed containers on the
+  view, kept from dangling by a `pruneUiState()` walk called on every row
+  rebuild:
+
+    SStdMixerView::trackScale_    ->  STrack::laneHeightScale()
+    SStdMixerView::takesExpanded_ ->  STrack::takesExpanded()
+    SAutomationLaneUi::shown_     ->  STrack::shownAutomationLanes()
+
+  So a user who made a lane taller, opened its take lanes and put a volume
+  automation lane on it got all three back at their defaults on the next
+  launch. The prune walk went with them: state that lives on the object dies
+  with the object. Proposal 45 AC4.6 records that the walk did not reach
+  SYSTEM lanes, so the master lane's copies of all three were being forgotten
+  on EVERY row rebuild, which would have looked like three separate bugs.
+
+  THE FIXTURE IS THE TAKE-STACK ONE because `takesExpanded` has to be gated
+  twice over. `assert-lane-view` reads the TRACK, which since M3 is the only
+  copy there is, so on its own it says the flag round-tripped through the file
+  and nothing about what the arranger does with it. `assert-lane-alignment
+  rows=` is the other half: expanded take lanes and a shown automation lane
+  are extra ROWS, so a view that still consulted its own (now empty) sets
+  would build the bare 2. legacy_takestack_wrap.qxp gives track 0 a two-take
+  stack and track 1 as a plain sentinel, so the row arithmetic is
+  2 base + 2 take + 1 automation = 5.
+
+  THE ROW ASSERTIONS ARE DELIBERATELY ALL ON THE NEAR SIDE OF THE SAVE, and
+  that is not tidiness : A SCRIPTED `load-project` DOES NOT REBIND THE
+  ARRANGER. `SMainWindow::ensureArranger_()` returns the tab's existing editor
+  whenever there is one, while `SLoadProjectAction` loads into the SAME
+  SProject and gives it a NEW root mixer ("a load REPLACES the project, but it
+  loads INTO this same SProject object"). So every arranger reach-through
+  after a second load answers from the PREVIOUS load's mixer : measured here,
+  a `set-lane-view laneScaleRow="0"` issued after a reload silently wrote to
+  the old project's track and the model kept the pre-reload value. A row-count
+  assertion placed after the reload would therefore be measuring the stale
+  view and would pass whatever this branch did. That is a PRE-EXISTING testkit
+  limitation, not something M3 introduced or fixes; it is recorded in the PR.
+  `track_list_view_roundtrip.qxa` has the same blind spot in its post-load
+  `secondWidth`/`scrollX` assertions.
+
+  Watched failing on the pre-fix binary: with the three sets still on the
+  view, every `assert-lane-view` after the `load-project` at the bottom reads
+  the defaults (laneScale=1.0, takesExpanded=0, automation="").
+-->
+<SActionScript version="1" name="lane_view_persists">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../legacy_takestack_wrap.qxp"/>
+
+    <!-- The defaults, which are also what a project written before these
+         attributes existed says: they are omitted entirely, so an older file
+         re-serializes byte-identically. This baseline is the gate on the
+         attribute-ABSENT path. -->
+    <assert-lane-view trackPath="0" laneScale="1.0" takesExpanded="0"
+                      automation=""/>
+    <assert-lane-alignment rows="2"/>
+
+    <!-- Move all three, through the REAL calls the mouse makes:
+         setTrackHeightScale, toggleTrackTakesExpanded, toggleLane. -->
+    <set-lane-view laneScaleRow="0" laneScale="2.5"/>
+    <set-lane-view toggleTakesRow="0"/>
+    <set-lane-view automationTrack="0" automationTarget="self:Volume"
+                   showAutomation="1"/>
+
+    <assert-lane-view trackPath="0" laneScale="2.5" takesExpanded="1"
+                      automation="self:Volume"/>
+    <!-- THE VIEW SIDE: 2 base + 2 take rows + 1 automation row. The arranger
+         is live and correct here (nothing has been reloaded under it), so
+         this really does say the sub-lanes were built from the flags. -->
+    <assert-lane-alignment rows="5"/>
+
+    <!-- Track 1 was never touched: these are PER-TRACK properties, not a
+         project-wide one. -->
+    <assert-lane-view trackPath="1" laneScale="1.0" takesExpanded="0"
+                      automation=""/>
+
+    <!-- None of the three is a one-way latch, and the rows follow them back
+         down. Asserted HERE rather than after a round trip for the reason the
+         header gives. -->
+    <set-lane-view laneScaleRow="0" laneScale="1.0"/>
+    <set-lane-view toggleTakesRow="0"/>
+    <set-lane-view automationTrack="0" automationTarget="self:Volume"
+                   showAutomation="0"/>
+    <assert-lane-view trackPath="0" laneScale="1.0" takesExpanded="0"
+                      automation=""/>
+    <assert-lane-alignment rows="2"/>
+
+    <!-- Set them again, and round-trip. -->
+    <set-lane-view laneScaleRow="0" laneScale="2.5"/>
+    <set-lane-view toggleTakesRow="0"/>
+    <set-lane-view automationTrack="0" automationTarget="self:Volume"
+                   showAutomation="1"/>
+    <assert-lane-alignment rows="5"/>
+
+    <!-- THE GATE. -->
+    <save-project path="../../build/lane_view_persists.qxp"/>
+    <load-project path="../../build/lane_view_persists.qxp"/>
+
+    <assert-lane-view trackPath="0" laneScale="2.5" takesExpanded="1"
+                      automation="self:Volume"/>
+    <!-- ...and the untouched track came back untouched, so the attributes are
+         genuinely per-track on the way out as well as on the way in. -->
+    <assert-lane-view trackPath="1" laneScale="1.0" takesExpanded="0"
+                      automation=""/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

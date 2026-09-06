@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 46 M1/M2 — the window layout is written by ONE method, and a
+  headless run never writes it.
+
+  THE BUG THIS BRANCH FIXES IS NOT WHAT THIS CASE GATES, and that is worth
+  being blunt about. The defect was that `SSettings::setWindowState()` was
+  called from exactly one place — `SMainWindow::closeEvent` — and the app's
+  own Quit never reached it: File -> Exit ran `::exit(0)`, and on macOS Qt
+  gives an action titled "Exit" the QuitRole, so Cmd-Q IS that slot. Measured
+  on the reporting machine: no `ui/windowState` key in smaragd.ini at all, and
+  ZERO occurrences of the post-exec() "Smaragd exiting" line in a 4.8 MB log.
+
+  That WIRING has no headless route. `fileExit()` now goes through `close()`,
+  whose `promptSaveUnsavedChanges()` is a modal exec() and whose success ends
+  the process; `aboutToQuit` is the same. Both are hand-verified and the PR
+  says so.
+
+  What IS gated here, and both halves are real properties:
+
+    1. `saveWindowLayout()` produces a non-empty blob under BOTH keys. The old
+       code took `saveGeometry()`/`saveState()` inline at the one call site, so
+       nothing anywhere ever checked that the pair it stores is usable.
+
+    2. THE "test-case" SUPPRESSION. Every automatic caller (closeEvent,
+       aboutToQuit, the M2 autosave timer) leaves `force` false, and an
+       unforced call in a headless run must write NOTHING. `ctest -j4` is four
+       processes sharing one smaragd.ini, and a headless run's geometry
+       describes a window that is never shown at all — restoring it into a
+       real session would place the docks from a window nobody ever mapped.
+
+  THIS CASE OWNS NO SETTINGS KEY and needs no key-ownership declaration,
+  unlike every `set-option` case: the verb snapshots `ui/windowGeometry` and
+  `ui/windowState`, restores them (removing them again when they were absent)
+  BEFORE it asserts anything, and so leaves the INI byte-for-byte as it found
+  it whether it passes or fails.
+
+  Watched failing both ways on a sabotaged binary: with the isTestCaseMode()
+  guard removed the `expectWritten="false"` line fails; with saveWindowLayout()
+  made an unconditional `return false` the `expectWritten="true"` line fails.
+-->
+<SActionScript version="1" name="window_layout_save">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- (2) The suppression: the call every automatic caller makes writes
+         nothing at all in a "test-case" run. -->
+    <save-window-layout force="false" expectWritten="false"/>
+
+    <!-- (1) Forced, the method does its job: both keys, both non-empty. -->
+    <save-window-layout force="true" expectWritten="true"/>
+
+    <!-- ...and it is REPEATABLE, which the M2 autosave timer depends on. A
+         one-shot latch would pass the line above and fail this one. -->
+    <save-window-layout force="true" expectWritten="true"/>
+
+    <!-- The suppression again, AFTER a forced write: the guard is a property
+         of the call, not a first-call-only condition. -->
+    <save-window-layout force="false" expectWritten="false"/>
+  </actions>
+
+</SActionScript>

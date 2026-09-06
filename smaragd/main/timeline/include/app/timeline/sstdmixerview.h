@@ -767,8 +767,12 @@ public:
     // Per-track lane height, as a factor of the base height (UI-only state,
     // like the fold and take-lane sets). Relative to the base so that
     // vertical zoom keeps working uniformly. 1.0 = the plain lane height.
-    static constexpr double LANE_SCALE_MIN = 0.25;
-    static constexpr double LANE_SCALE_MAX = 4.0;
+    // The bounds are STrack::LANE_HEIGHT_SCALE_MIN/MAX (proposal 46 M3) —
+    // named here too because every gesture in this class reads them, and
+    // spelled ONCE there because the loader must clamp a hand-edited file by
+    // the same rule the mouse does.
+    static const double LANE_SCALE_MIN;
+    static const double LANE_SCALE_MAX;
     double trackHeightScale( const STrack * ) const;
     void setTrackHeightScale( STrack *, double scale );
     int rowIndexOfTrack( const STrack * ) const;
@@ -778,10 +782,14 @@ public:
     // view-owned QSet. toggleTrackCollapsed() still owns the row rebuild.
     bool isTrackCollapsed( STrack *t ) const { return t && t->isCollapsed(); }
     void toggleTrackCollapsed( STrack * );
-    // Take lanes (proposal 17 phase 3): per-track expanded state, UI-only.
-    // An expanded track shows one extra row per take index below its lane.
-    bool isTrackTakesExpanded( STrack *t ) const
-        { return takesExpanded_.contains( t ); }
+    // Take lanes (proposal 17 phase 3): per-track expanded state. It lived in
+    // a QSet<STrack*> here until proposal 46 M3 moved it onto the track —
+    // same argument, and the same author, as the fold set two rows up.
+    bool isTrackTakesExpanded( STrack *t ) const;
+    /// Does any track that HAS A ROW show its take lanes? The guard
+    /// onArrangementChangedRows() uses; see its definition for why the rows
+    /// are the right question and the old flag set was not.
+    bool anyTakesExpandedInRows() const;
     void toggleTrackTakesExpanded( STrack * );
 
     // --- automation lanes (proposal 37 P6, design 6.1) -------------------
@@ -791,12 +799,15 @@ public:
     // feature, and sstdmixerview.cpp keeps only the CALL SITES — this file is
     // already the largest in the app (CONTRACT, known debt).
     SAutomationLaneUi &automationUi();
-    // ONE pruning walk for EVERY per-track UI-state set — the fold set, the
-    // take-lane set, the per-track height scales and the shown-automation set
-    // (proposal 30 section E.5). Called from rebuildRows(), so a removed track
-    // cannot leave a dangling STrack* key behind for a later track allocated
-    // at the same address to inherit.
-    void pruneUiState();
+    // THE PRUNE WALK IS GONE (proposal 46 M3). It existed because the fold
+    // set, the take-lane set, the per-track height scales and the
+    // shown-automation set were all `STrack*`-keyed containers here, which a
+    // removed track would otherwise leave a dangling key in for a later track
+    // allocated at the same address to inherit. All four now live on STrack
+    // and die with it, so there is nothing left to prune — and with it goes
+    // the failure mode proposal 45 AC4.6 found, where the walk did not reach
+    // SYSTEM lanes and silently forgot the master lane's state on every single
+    // row rebuild.
     void appendAutomationRowsFor( STrack *tk, SLink *lk, SObject *container,
                                   int depth );
     // Show / hide one automation lane on a track (the picker's and the
@@ -1071,8 +1082,9 @@ private:
     // column space, rowTop_[rowCount()] the total. Rebuilt with rows_ and
     // whenever the base height or a per-track scale changes.
     QVector<int> rowTop_;
-    QSet<STrack*> takesExpanded_;   // tracks showing their take lanes
-    QHash<const STrack*, double> trackScale_;   // per-track lane height factor
+    // takesExpanded_ / trackScale_ retired by proposal 46 M3: the state is
+    // STrack::takesExpanded() / STrack::laneHeightScale() now, so it survives
+    // a save/load and needs no pruning.
     // The automation UI (proposal 37 P6). Created lazily by automationUi() so
     // a view that never shows a lane pays nothing.
     SAutomationLaneUi *autoUi_ = nullptr;

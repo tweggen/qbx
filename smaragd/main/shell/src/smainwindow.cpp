@@ -749,6 +749,36 @@ void SMainWindow::updateRecentMenu()
     }
 }
 
+// See the header for why this exists and who calls it. Idempotent, repeatable,
+// and the ONLY writer of ui/windowGeometry + ui/windowState.
+bool SMainWindow::saveWindowLayout( bool force )
+{
+    // The UI this blob would describe is already gone — closeEvent() has taken
+    // its snapshot and torn the project down. Writing now would store a layout
+    // with no central widget, which does not round-trip through restoreState().
+    if( layoutFrozen_ ) return false;
+
+    // A headless run must not write the developer's preferences: the suite
+    // shares one smaragd.ini across `ctest -j4`, and the main window is never
+    // shown in a --test-case run at all, so the geometry would describe a
+    // window nobody ever mapped. The testkit verb forces its way in on
+    // purpose and puts both keys back afterwards.
+    if( !force && SApplication::app().isTestCaseMode() ) return false;
+
+    const QByteArray state = saveState();
+    const QByteArray geo   = saveGeometry();
+    // The timer runs whether or not anything moved; an unchanged INI write is
+    // pure churn (and, with several worktrees' apps open, pure contention).
+    if( !force && state == lastSavedLayout_ && !lastSavedLayout_.isEmpty()
+        && geo == SSettings::instance().windowGeometry() )
+        return false;
+
+    SSettings::instance().setWindowGeometry( geo );
+    SSettings::instance().setWindowState( state );
+    lastSavedLayout_ = state;
+    return true;
+}
+
 bool SMainWindow::restoreWindowLayout()
 {
     const QByteArray geo = SSettings::instance().windowGeometry();
@@ -820,9 +850,23 @@ void SMainWindow::openOptionsDialogAt( int pageIndex )
     dlg.exec();   // pages write to SSettings on OK/Apply; live UI reacts to changed()
 }
 
+// Quit through the ORDINARY close path, not through ::exit(0).
+//
+// That one line was three bugs at once (proposal 46): the window layout was
+// never saved (closeEvent is the only thing that saves it), unsaved work was
+// discarded with NO PROMPT (promptSaveUnsavedChanges lives in closeEvent too),
+// and smaragdOrderlyShutdown() never ran, so the plugin scan thread was never
+// stopped and the log's file writer never flushed — which is why the log ends
+// mid-session on every machine.
+//
+// On macOS this is not a menu item nobody uses: Qt gives an action titled
+// "Exit" the QuitRole and moves it into the application menu, so Cmd-Q IS this
+// slot. close() returning false means the user cancelled the save prompt, and
+// cancelling the prompt must now cancel the quit.
 void SMainWindow::fileExit()
 {
-    ::exit( 0 );
+    if( close() )
+        qApp->quit();
 }
 
 void SMainWindow::onRenderTriggered()
@@ -985,8 +1029,14 @@ void SMainWindow::closeEvent( QCloseEvent *event )
         // including the project's central widget — still exists. Saving after
         // closeProject() records a layout without a central widget, which does
         // not round-trip through restoreState().
-        SSettings::instance().setWindowGeometry( saveGeometry() );
-        SSettings::instance().setWindowState( saveState() );
+        //
+        // layoutFrozen_ is what ENFORCES that, rather than leaving it to the
+        // order of the two lines below: the aboutToQuit handler and the
+        // autosave timer both run later, and either would otherwise overwrite
+        // this good blob with a post-closeProject() one.
+        saveWindowLayout();
+        layoutFrozen_ = true;
+        if( layoutSaveTimer_ ) layoutSaveTimer_->stop();
         closeProject();
         // Ensure all settings are written to disk before exit
         SSettings::instance().value( "dummy" );  // Triggers internal sync
@@ -1755,6 +1805,33 @@ SMainWindow::SMainWindow()
     // widget; restoring it before that widget exists (it is only created once
     // a project is opened) freezes the QMainWindow layout at the tiny pre-show
     // size. main() calls restoreWindowLayout() after openMostRecent().
+
+    // --- window-layout persistence (proposal 46 M1/M2) --------------------
+    //
+    // aboutToQuit is the BELT-AND-BRACES net: closeEvent() is the ordinary
+    // route and saves first (setting layoutFrozen_, which makes this a
+    // no-op), but a quit that never closes the window — a session logout, the
+    // macOS dock menu — reaches only this. It is emitted from inside exec(),
+    // while this window is still alive.
+    connect( qApp, &QCoreApplication::aboutToQuit,
+             this, [this] { saveWindowLayout(); } );
+
+    // ...and the autosave timer, because a SEPARATOR DRAG EMITS NO SIGNAL.
+    // QMainWindow has no layout-changed notification of any kind, so there is
+    // nothing to connect to and a timer is the only thing standing between a
+    // crash (or a force-quit) and the whole session's layout work. The write
+    // is skipped when the blob is unchanged, so an idle session costs one
+    // saveState() every two minutes and no INI write at all.
+    //
+    // Not started under --test-case: `ctest -j4` is four processes sharing one
+    // smaragd.ini, and saveWindowLayout() would refuse anyway.
+    if( !SApplication::app().isTestCaseMode() ) {
+        layoutSaveTimer_ = new QTimer( this );
+        layoutSaveTimer_->setInterval( 120000 );
+        connect( layoutSaveTimer_, &QTimer::timeout,
+                 this, [this] { saveWindowLayout(); } );
+        layoutSaveTimer_->start();
+    }
 
     // Measure and cache audio device latencies on startup
     // (done after UI is built, will show modal dialog if needed)
@@ -3918,6 +3995,31 @@ bool SMainWindow::isTrackCollapsed( const QString &trackPath )
 {
     STrack *track = trackAtPath_( trackPath );
     return track && track->isCollapsed();
+}
+
+// TEST ENTRY POINT (proposal 46 M3): the three per-track view properties that
+// joined `collapsed` on STrack, in one string.
+//
+// It reads the MODEL, and that is not a weaker statement than reading the
+// arranger: since M3 the arranger has no copy to disagree with — every
+// trackHeightScale()/isTrackTakesExpanded()/shownLanes() call delegates
+// straight to the track.
+//
+// It is also the ONLY trustworthy read after a scripted `load-project` (inv.
+// 60): ensureArranger_() returns the tab's existing editor while the loader
+// gives the project a NEW root mixer, so every arranger reach-through
+// afterwards answers from the PREVIOUS load's mixer. What the arranger does
+// with these flags — the sub-lane rows it builds — is asserted with
+// `assert-lane-alignment rows=` on the NEAR side of a save/load, where the
+// view is still the one holding the tracks being read.
+QString SMainWindow::describeLaneView( const QString &trackPath )
+{
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return QString();
+    return QStringLiteral( "laneScale=%1|takesExpanded=%2|automation=%3" )
+        .arg( track->laneHeightScale(), 0, 'f', 6 )
+        .arg( track->takesExpanded() ? 1 : 0 )
+        .arg( STrack::encodeShownAutomation( track->shownAutomationLanes() ) );
 }
 
 // TEST ENTRY POINT (fix/track-list-polish m): the arranger's zoom/pan, the

@@ -1348,3 +1348,73 @@ A methodological note worth keeping: `assert-render-policy` does **not** reset
 the counters. A case that appears to pass because an extra assertion was added
 before it has not been fixed — the counter is cumulative, so what changed was
 the timing, and the failure is a race.
+
+## inv. 59 — `saveWindowLayout()` is the ONE writer of the window layout, and Quit goes through `close()` (proposal 46 M1/M2)
+
+`ui/windowGeometry` and `ui/windowState` are written by
+`SMainWindow::saveWindowLayout()` and by nothing else. Its callers are
+`closeEvent()`, a `QCoreApplication::aboutToQuit` handler, and a 120 s autosave
+timer.
+
+**THE BUG THIS REPLACED IS THE WHOLE REASON THE INVARIANT IS WORTH STATING.**
+The two `SSettings` calls were inlined in `closeEvent()` and reached from
+nowhere else, while `fileExit()` was `::exit( 0 )` — and on macOS Qt gives an
+action titled "Exit" the `QuitRole` and moves it into the application menu, so
+**Cmd-Q was that slot**. Measured on the reporting machine: no `ui/windowState`
+key in `smaragd.ini` at all, and **zero** occurrences of the post-`exec()`
+`"Smaragd exiting"` line in a 4.8 MB log. The persistence machinery had been
+complete and correct for years — every dock has its `objectName` (inv. 4) and
+`saveState()` carries dock visibility, area, floating state, tabification,
+toolbar placement and the SEPARATOR positions — and none of it had ever run.
+
+The same line cost two more things, neither of them reported:
+`promptSaveUnsavedChanges()` was skipped, so Cmd-Q **discarded unsaved work
+with no dialog**; and `smaragdOrderlyShutdown()` was skipped, so the plugin
+scan thread was never stopped and the log's file writer never flushed.
+
+`fileExit()` is now `if( close() ) qApp->quit();`. **`close()` returning false
+means the user cancelled the save prompt, and cancelling the prompt must cancel
+the quit** — it could not before.
+
+**`layoutFrozen_` is not belt-and-braces; without it `aboutToQuit` corrupts the
+blob.** `closeEvent()` saves and then calls `closeProject()`, which removes the
+central widget; `aboutToQuit` fires afterwards, and a save taken then records a
+layout that does not round-trip through `restoreState()` — the exact hazard the
+closeEvent comment has named since it was written. The flag encodes "the UI
+this blob describes no longer exists". Call ordering encodes it only by
+accident.
+
+**A separator drag emits NO signal.** `QMainWindow` has no layout-changed
+notification of any kind, so there is nothing to connect an on-change save to
+and the timer is the only thing between a crash and the session's layout work.
+It skips the INI write when the blob is unchanged.
+
+**Every automatic caller is suppressed under `SApplication::isTestCaseMode()`**
+— `ctest -j4` is four processes sharing one `smaragd.ini`, and the main window
+is never shown in a `--test-case` run at all, so a stored geometry would
+describe a window nobody mapped. The `save-window-layout` verb passes
+`force=true` deliberately and restores both keys afterwards, pass or fail.
+
+Gated by `qxa.window_layout_save` (the method and the suppression, watched
+failing under both sabotages). **NOT gated: the wiring itself** — `close()`'s
+prompt is a modal `exec()` and its success ends the process, so neither
+`fileExit()` nor `aboutToQuit` has a headless route. Hand-verified.
+
+## inv. 60 — `SLoadProjectAction` does NOT rebind the arranger (pre-existing, recorded 2026-09-06)
+
+`ensureArranger_()` returns the active tab's existing editor whenever there is
+one, and a scripted `load-project` loads into the SAME `SProject` while giving
+it a NEW root mixer. So **every arranger reach-through after a second
+`load-project` in one script answers from the PREVIOUS load's mixer.** Measured
+while building `qxa.lane_view_persists`: a `set-lane-view laneScaleRow="0"`
+issued after a reload silently wrote to the old project's track, and the model
+kept its pre-reload value.
+
+This is not new and this branch does not fix it. It is recorded because it
+silently weakens assertions rather than failing: a row-count or zoom/pan check
+placed after a reload measures the stale view and passes whatever the code
+under test does. `qxa.track_list_view_roundtrip`'s post-load
+`secondWidth`/`scrollX` assertions have the same blind spot.
+**Put arranger-side assertions on the NEAR side of a save/load**; only
+model-side reads (`trackAtPath_`, i.e. `assert-lane-view`'s `collapsed` /
+`laneScale` / `takesExpanded` / `automation`) are trustworthy after one.

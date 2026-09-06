@@ -116,36 +116,6 @@ SProject *projectOf()
     return SApplication::app().getCurrentProject();
 }
 
-// Every track under `container`, including collapsed and nested ones. The ROWS
-// are not enough: a collapsed folder's children are alive but have no row, and
-// pruning against the rows would forget their UI state on every fold.
-void collectTracks( SObject *container, QSet<const STrack *> &out )
-{
-    if( !container ) return;
-    // SYSTEM LANES FIRST, and their absence here was a real defect (proposal 45
-    // AC4.6). A system lane is not among childLinks() (D2), so the walk below
-    // never reached the master lane -- and this set is what pruneUiState()
-    // treats as "every LIVE track". The master's per-track UI state was
-    // therefore pruned on EVERY row rebuild: its shown automation lanes (the
-    // symptom that found this), its take expansion, and its lane HEIGHT SCALE.
-    // Each would have looked like a separate bug.
-    //
-    // The sentinel sweep is findPathRec()'s, for the same reason: there is no
-    // list of system lanes to iterate, only an accessor answering one sentinel
-    // at a time.
-    for( int sentinel = strackpath::SPATH_MASTER; sentinel > -64; --sentinel ) {
-        STrack *sys = dynamic_cast<STrack *>( container->systemLaneAt( sentinel ) );
-        if( !sys ) continue;
-        out.insert( sys );
-        collectTracks( sys, out );
-    }
-    for( SLink *lk : container->childLinks() ) {
-        STrack *tk = dynamic_cast<STrack *>( &lk->getSObject() );
-        if( !tk ) continue;
-        out.insert( tk );
-        collectTracks( tk, out );
-    }
-}
 
 // A short human label for a target, for the lane's own caption.
 QString labelFor( const QString &target, SObject *owner )
@@ -173,11 +143,19 @@ QString labelFor( const QString &target, SObject *owner )
 SAutomationLaneUi::SAutomationLaneUi( SStdMixerView &view ) : view_( view ) {}
 SAutomationLaneUi::~SAutomationLaneUi() = default;
 
-const QVector<SAutoLaneRef> &SAutomationLaneUi::shownLanes( const STrack *t ) const
+// The three below are a conversion, nothing more: the SET lives on the track
+// (proposal 46 M3, see the header). `SAutoLaneRef` stays this file's own type
+// because it is what every gesture, hit test and painter here speaks; STrack's
+// `ShownAutomationLane` is the same pair with no dependency on app/timeline.
+QVector<SAutoLaneRef> SAutomationLaneUi::shownLanes( const STrack *t ) const
 {
-    static const QVector<SAutoLaneRef> kEmpty;
-    auto it = shown_.constFind( t );
-    return it == shown_.constEnd() ? kEmpty : it.value();
+    QVector<SAutoLaneRef> out;
+    if( !t ) return out;
+    const QList<STrack::ShownAutomationLane> &lanes = t->shownAutomationLanes();
+    out.reserve( lanes.size() );
+    for( const STrack::ShownAutomationLane &l : lanes )
+        out.append( SAutoLaneRef{ l.target, l.slotIndex } );
+    return out;
 }
 
 bool SAutomationLaneUi::isLaneShown( const STrack *t, const SAutoLaneRef &r ) const
@@ -188,20 +166,13 @@ bool SAutomationLaneUi::isLaneShown( const STrack *t, const SAutoLaneRef &r ) co
 void SAutomationLaneUi::toggleLane( STrack *t, const SAutoLaneRef &r )
 {
     if( !t || !r.isValid() ) return;
-    QVector<SAutoLaneRef> &v = shown_[t];
-    const int i = v.indexOf( r );
-    if( i >= 0 ) v.remove( i );
-    else         v.append( r );
-    if( v.isEmpty() ) shown_.remove( t );
+    QList<STrack::ShownAutomationLane> lanes = t->shownAutomationLanes();
+    const STrack::ShownAutomationLane want{ r.target, r.slotIndex };
+    const int i = lanes.indexOf( want );
+    if( i >= 0 ) lanes.removeAt( i );
+    else         lanes.append( want );
+    t->setShownAutomationLanes( lanes );
     view_.refreshTrackTree();
-}
-
-void SAutomationLaneUi::pruneTo( const QSet<const STrack *> &live )
-{
-    for( auto it = shown_.begin(); it != shown_.end(); ) {
-        if( live.contains( it.key() ) ) ++it;
-        else                            it = shown_.erase( it );
-    }
 }
 
 // --- resolution -------------------------------------------------------------
@@ -792,21 +763,14 @@ SAutomationLaneUi &SStdMixerView::automationUi()
 // mysteriously remembers a deleted one's state. Walking the model once and
 // pruning all of them together is what keeps them from drifting apart.
 //
-// The FOLD set used to be pruned here too. Fix/track-list-polish (m) moved
-// fold state onto STrack itself (STrack::isCollapsed()) so it can be saved
-// with the project; being an ordinary object attribute, it dies with the
-// object automatically and needs no pruning walk of its own.
-void SStdMixerView::pruneUiState()
-{
-    QSet<const STrack *> live;
-    collectTracks( model_, live );
-
-    for( auto it = takesExpanded_.begin(); it != takesExpanded_.end(); )
-        if( live.contains( *it ) ) ++it; else it = takesExpanded_.erase( it );
-    for( auto it = trackScale_.begin(); it != trackScale_.end(); )
-        if( live.contains( it.key() ) ) ++it; else it = trackScale_.erase( it );
-    if( autoUi_ ) autoUi_->pruneTo( live );
-}
+// SStdMixerView::pruneUiState() STOOD HERE and is retired (proposal 46 M3).
+// Fix/track-list-polish (m) had already moved the FOLD set onto STrack; M3
+// moved the last three — the take-lane set, the per-track height scales and
+// the shown-automation set — for the same reasons, so there is no view-owned
+// `STrack*`-keyed container left to prune. The `collectTracks()` walk that
+// fed it went with it; proposal 45 AC4.6's fix to that walk (system lanes are
+// not among childLinks(), so the master lane's UI state was being forgotten
+// on every row rebuild) is now moot rather than merely correct.
 
 // The automation sub-lanes of `tk`, appended under its take lanes. Called by
 // appendRowsFor, which owns the ORDER (track lane, take lanes, automation

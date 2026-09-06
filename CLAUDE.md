@@ -2644,6 +2644,61 @@ formant-shift, transpose and velocity-scale resets (wired, no case — this
 fixture holds no event clip); and the double-click's effect on a spin box's
 text selection, which it replaces inside those seven fields.
 
+## The window layout is saved, and the last per-track view state moved onto the track (proposal 46, 2026-09-06)
+
+Reported as "the layout of dividers, and probably also the configuration which
+views are visible where is not saved". Both halves were true and the cause was
+ONE LINE. Design and the measurements:
+`plan/proposed/46_WINDOW_LAYOUT_PERSISTENCE.md`. Invariants:
+`main/shell/CONTRACT.md` inv. 59-60, `main/objects/track/CONTRACT.md` ("The
+FOUR pieces of per-track VIEW state"), `main/timeline/CONTRACT.md` inv. 47,
+`main/testkit/CONTRACT.md` ("The window-layout and lane-view verbs").
+
+**Read this before touching window persistence — the machinery was never the
+problem.** Every dock has had its `objectName` since it was written and
+`QMainWindow::saveState()` has always carried dock visibility, area, floating
+state, tabification, toolbar placement AND the separator positions;
+`restoreWindowLayout()` has always read it back in the one order that works.
+The two `SSettings` writes were simply inlined in `closeEvent()` and reached
+from nowhere else, while `fileExit()` was `::exit( 0 )` — and **on macOS Qt
+gives an action titled "Exit" the `QuitRole` and moves it into the application
+menu, so Cmd-Q WAS that slot.**
+
+| Thing to know | Why |
+|---|---|
+| The measurements came FIRST and are what made this a one-line diagnosis | The reporting machine's `smaragd.ini` had a `[ui]` section holding only `optionsLastPage` — no `windowGeometry`, no `windowState`, ever — and its 4.8 MB `smaragd.log` contained **zero** occurrences of `"Smaragd exiting"`, the line printed after `app.exec()` returns. No session had ever ended through the normal path. |
+| **The same line was silently losing WORK, which nobody reported** | `promptSaveUnsavedChanges()` lives in `closeEvent` too, so Cmd-Q discarded unsaved edits with no dialog. It also skipped `smaragdOrderlyShutdown()`, so the plugin scan thread was never stopped and the log's file writer never flushed — which is why the log ends mid-session on every machine. `fileExit()` is now `if( close() ) qApp->quit();`, and **cancelling the save prompt now cancels the quit**. |
+| `layoutFrozen_` is NOT belt-and-braces | `closeEvent()` saves and then calls `closeProject()`, which removes the central widget; the `aboutToQuit` handler fires afterwards and would overwrite the good blob with a layout that does not round-trip through `restoreState()` — the hazard the closeEvent comment has named since it was written. The flag encodes "the UI this blob describes is gone"; call ordering encodes it only by accident. |
+| **A separator drag emits NO signal** | `QMainWindow` has no layout-changed notification of any kind, so an on-change save is not expressible and a 120 s autosave timer is the only thing between a crash and the session's layout work. It skips the INI write when the blob is unchanged. |
+| Every automatic caller is suppressed under `isTestCaseMode()` | `ctest -j4` is four processes sharing one `smaragd.ini`, and the main window is never shown in a `--test-case` run, so a stored geometry would describe a window nobody mapped. The `save-window-layout` verb forces past it and **restores both keys before it asserts**, pass or fail. |
+| M3: `laneHeightScale`, `takesExpanded` and `shownAutomation` joined `collapsed` on `STrack` | They were the last `STrack*`-keyed containers on the arranger. Living on the object means they die with it, so `SStdMixerView::pruneUiState()` and `SAutomationLaneUi::pruneTo()` are RETIRED — and with them the hazard proposal 45 AC4.6 recorded, where that walk did not reach SYSTEM lanes and forgot the master lane's height, take expansion and automation lanes on every row rebuild. |
+| Each is written only when it is not its default | So every project file and every committed golden re-serializes byte-identically. Verified: a re-save of an untouched fixture contains **0** occurrences of the three attribute names. |
+| **None of the four dirties the project**, exactly as `collapsed` does not | A session that only rearranged lanes and quit still loses them; the state is written on the next save made for another reason. Making view gestures dirty a project is a policy change that belongs to all four together, not three of them. |
+| `STrack::encodeShownAutomation()`/`decode…()` are the ONE spelling of a shown-lane identity | `target` or `target@slot`, semicolon-separated; a target contains neither character. `app/timeline` converts to its own `SAutoLaneRef` and never re-implements it — two spellings of one identity is how a lane comes back from a load under a name nothing recognises. |
+
+**A PRE-EXISTING DEFECT THIS FOUND AND DID NOT FIX:** a scripted
+`load-project` does **not** rebind the arranger (`main/shell/CONTRACT.md`
+inv. 60). `ensureArranger_()` returns the tab's existing editor while the
+loader gives the project a new root mixer, so every arranger reach-through
+after a second load in one script answers from the PREVIOUS load's mixer —
+measured: a `set-lane-view laneScaleRow="0"` after a reload wrote to the old
+project's track. It silently WEAKENS assertions rather than failing them, so
+keep arranger-side checks on the NEAR side of a save/load;
+`qxa.track_list_view_roundtrip`'s post-load `secondWidth`/`scrollX` assertions
+have the same blind spot today.
+
+Gates: the qxa cases `window_layout_save` and `lane_view_persists`, plus
+`action_roundtrip_test`. Watched failing under four sabotages, one per fix.
+**NOT gated:** the WIRING that was the actual bug — `fileExit()` routes through
+`close()`, whose prompt is a modal `exec()` and whose success ends the process,
+and `aboutToQuit` is the same, so neither has a headless route (hand-verified);
+the autosave timer firing (a 120 s wall-clock wait does not belong in the
+suite); that a restored layout LOOKS right, which no headless run can see
+because the main window is never shown — the standing gap
+`docs/MEDIA_BROWSER_MANUAL_GATE.md` already records; and which editor TABS are
+open (`SViewTabs`), which is still session-only and is per-PROJECT state
+wanting the `.qxp`, not this branch's `.ini` or `STrack`.
+
 ## Dependencies
 
 ### Core

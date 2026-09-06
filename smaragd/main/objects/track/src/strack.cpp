@@ -1,6 +1,7 @@
 
 
 #include <QDebug>
+#include <QStringList>
 
 #include <iostream>
 
@@ -125,6 +126,18 @@ int STrack::serializeSelfAttributes( QTextStream &o )
     // existed means, so an unfolded track re-serializes byte-identically.
     if( collapsed_ )
         o << " collapsed='true'";
+    // The other three pieces of per-track VIEW state (proposal 46 M3), each
+    // written only when it is not the default, for the same byte-identity
+    // reason as `collapsed` above: a track nobody has resized, expanded or
+    // given an automation lane re-serializes exactly as it did before these
+    // attributes existed.
+    if( laneHeightScale_ != 1.0 )
+        o << " laneHeightScale='" << laneHeightScale_ << "'";
+    if( takesExpanded_ )
+        o << " takesExpanded='true'";
+    if( !shownAutomation_.isEmpty() )
+        o << " shownAutomation='"
+          << encodeShownAutomation( shownAutomation_ ).toHtmlEscaped() << "'";
     // The SYSTEM ROLE (proposal 45 D1), written only when it is not None --
     // every ordinary track omits it, so every project written before system
     // lanes re-serializes byte-identically. It is IMMUTABLE, so unlike every
@@ -133,6 +146,57 @@ int STrack::serializeSelfAttributes( QTextStream &o )
         o << " systemRole='" << systemRoleToString( systemRole_ ) << "'";
     SObject::serializeSelfAttributes( o );
     return 0;
+}
+
+void STrack::setLaneHeightScale( double s )
+{
+    if( s < LANE_HEIGHT_SCALE_MIN ) s = LANE_HEIGHT_SCALE_MIN;
+    if( s > LANE_HEIGHT_SCALE_MAX ) s = LANE_HEIGHT_SCALE_MAX;
+    laneHeightScale_ = s;
+}
+
+// See the header: ONE spelling of the shown-lane identity, used by the
+// serializer, the loader and the arranger alike.
+QString STrack::encodeShownAutomation( const QList<ShownAutomationLane> &lanes )
+{
+    QStringList parts;
+    parts.reserve( lanes.size() );
+    for( const ShownAutomationLane &l : lanes ) {
+        if( l.target.isEmpty() ) continue;
+        parts << ( l.slotIndex >= 0
+                       ? QStringLiteral( "%1@%2" ).arg( l.target ).arg( l.slotIndex )
+                       : l.target );
+    }
+    return parts.join( QLatin1Char( ';' ) );
+}
+
+QList<STrack::ShownAutomationLane>
+STrack::decodeShownAutomation( const QString &text )
+{
+    QList<ShownAutomationLane> out;
+    if( text.isEmpty() ) return out;
+    const QStringList parts =
+        text.split( QLatin1Char( ';' ), Qt::SkipEmptyParts );
+    for( const QString &part : parts ) {
+        ShownAutomationLane l;
+        const int at = part.lastIndexOf( QLatin1Char( '@' ) );
+        if( at >= 0 ) {
+            bool ok = false;
+            const int slot = part.mid( at + 1 ).toInt( &ok );
+            // A trailing '@' with no number, or a non-numeric slot, is a
+            // spelling this build does not understand: skip the ENTRY rather
+            // than half-read it into a lane pointing at slot 0.
+            if( !ok ) continue;
+            l.target    = part.left( at );
+            l.slotIndex = slot;
+        } else {
+            l.target = part;
+        }
+        if( l.target.isEmpty() ) continue;
+        // Duplicates would give the track two identical rows.
+        if( !out.contains( l ) ) out.append( l );
+    }
+    return out;
 }
 
 STrack::MidiRouting STrack::midiRoutingFromString( const QString &s, bool *ok )
@@ -1508,6 +1572,22 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     // Fold state (fix/track-list-polish m). Absent = expanded, which is what
     // every project written before this attribute existed means.
     setCollapsed( element.attribute( "collapsed", "false" ).startsWith( "true" ) );
+
+    // The other three pieces of per-track VIEW state (proposal 46 M3). Absent
+    // means the default in every case, which is what every project written
+    // before these attributes existed says. setLaneHeightScale() clamps, so a
+    // hand-edited file cannot produce a lane six pixels tall or one that fills
+    // the arranger; decodeShownAutomation() skips an entry it cannot parse.
+    {
+        bool scaleOk = false;
+        const double scale =
+            element.attribute( "laneHeightScale", "1.0" ).toDouble( &scaleOk );
+        if( scaleOk ) setLaneHeightScale( scale );
+    }
+    setTakesExpanded(
+        element.attribute( "takesExpanded", "false" ).startsWith( "true" ) );
+    setShownAutomationLanes(
+        decodeShownAutomation( element.attribute( "shownAutomation" ) ) );
 
     // The SYSTEM ROLE (proposal 45 D1). Absent = None = an ordinary track,
     // which is what every project written before system lanes means. An

@@ -170,9 +170,28 @@ private:
  * `secondWidth` compares to a tolerance (it is a double, px/second);
  * `scrollX` compares EXACTLY (project frames, an integer quantity).
  *
+ * Since proposal 46 M3 it also reads back the OTHER THREE per-track view
+ * properties that moved onto STrack beside `collapsed`, and they persist by
+ * the same mechanism — an ordinary non-default-only attribute:
+ *
+ *   laneScale       the track's lane height factor (a double, tolerance 1e-6)
+ *   takesExpanded   1 / 0
+ *   automation      the shown automation lanes in STrack's own encoding,
+ *                   `target` or `target@slot`, semicolon-separated and
+ *                   compared EXACTLY — including the empty string, which is
+ *                   the assertion that a track shows no automation lane
+ *
+ * All three need `trackPath` and none needs an arranger, so a case can assert
+ * them immediately after `load-project`. What proves the arranger HONOURS a
+ * loaded value is `assert-lane-alignment rows=`: expanded take lanes and a
+ * shown automation lane are extra ROWS, and a view that ignored the file
+ * would build the wrong number of them.
+ *
  * XML format:
  * <assert-lane-view trackPath="0" collapsed="1"/>
  * <assert-lane-view secondWidth="45.0" scrollX="12345"/>
+ * <assert-lane-view trackPath="0" laneScale="2.5" takesExpanded="1"
+ *                   automation="self:Volume"/>
  */
 class SAssertLaneViewAction : public SAction {
 public:
@@ -186,6 +205,13 @@ public:
 private:
     QString trackPath_;
     int     expectCollapsed_ = -1;      // -1 = not checked
+    // proposal 46 M3. `expectAutomation_` is checked whenever the attribute is
+    // PRESENT, empty included — "this track shows no automation lane" is a
+    // thing a case needs to say — hence the separate has-flag.
+    double  expectLaneScale_ = -1.0;    // < 0 = not checked
+    int     expectTakesExpanded_ = -1;  // -1 = not checked
+    bool    hasExpectAutomation_ = false;
+    QString expectAutomation_;
     double  expectSecondWidth_ = -1.0;  // < 0 = not checked
     qlonglong expectScrollX_ = -1;      // < 0 = not checked
     // RELATIVE pan checks (same shape as assert-envelope's, and for the same

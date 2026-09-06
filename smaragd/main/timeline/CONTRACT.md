@@ -1442,3 +1442,23 @@ deliberately NOT wired: a clip's start time has no default to revert to.
 
 Gate: `qxa.detail_pane_reset_defaults`, watched failing with each pane's
 wiring removed independently.
+
+### inv. 47 — THE ARRANGER OWNS NO PER-TRACK UI STATE, AND THERE IS NO PRUNE WALK (proposal 46 M3)
+
+`SStdMixerView::trackScale_`, `SStdMixerView::takesExpanded_` and
+`SAutomationLaneUi::shown_` are gone. `trackHeightScale()`,
+`isTrackTakesExpanded()` and `SAutomationLaneUi::shownLanes()` delegate to
+`STrack` (`objects/track` CONTRACT, "The FOUR pieces of per-track VIEW state"),
+and the setters write there.
+
+`pruneUiState()` and `pruneTo()` are retired with them, along with the
+`collectTracks()` walk that fed them. **Do not reintroduce a `STrack*`-keyed
+container here.** Every one this class has ever had became a dangling-pointer
+hazard that a walk on every row rebuild had to contain, and proposal 45 AC4.6
+is the record of that walk silently missing SYSTEM lanes and forgetting the
+master lane's state on every rebuild.
+
+`onArrangementChangedRows()`'s guard is now `anyTakesExpandedInRows()` rather
+than `takesExpanded_.isEmpty()`, and the ROWS are the better question: a track
+expanded inside a COLLAPSED folder has no rows at all, so no take-row count can
+have changed for it and the rebuild the old set forced was pure waste.
