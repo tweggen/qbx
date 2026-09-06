@@ -713,3 +713,53 @@ Two properties a change here must preserve:
 
 Gate: `master_meter_postfx`, whose D12 sabotage is now load-bearing rather than
 decorative.
+
+## The FOUR pieces of per-track VIEW state (proposal 46 M3, 2026-09-06)
+
+`collapsed`, `laneHeightScale`, `takesExpanded` and `shownAutomation` are
+ordinary `STrack` attributes, each serialized **only when it is not its
+default** — so every project file and every committed golden written before
+they existed re-serializes byte-identically.
+
+`fix/track-list-polish (m)` moved the first of them here. M3 moved the other
+three, which were still `STrack*`-keyed containers on the view
+(`SStdMixerView::trackScale_`, `SStdMixerView::takesExpanded_`,
+`SAutomationLaneUi::shown_`), for the reasons `isCollapsed()`'s own comment
+already gives:
+
+1. each is a per-TRACK fact, so a second view-owned copy is a copy to keep in
+   step with nothing;
+2. **living on the object means it dies with the object**, which retired
+   `SStdMixerView::pruneUiState()` and `SAutomationLaneUi::pruneTo()` outright
+   — and with them the dangling-`STrack*` hazard those walks existed to
+   contain. Proposal 45 AC4.6 records what that hazard actually cost: the walk
+   did not reach SYSTEM lanes, so the master lane's height scale, take
+   expansion and shown automation lanes were being pruned on **every** row
+   rebuild, which presented as three unrelated bugs;
+3. it survives a save/load for free.
+
+**`shownAutomation` has ONE spelling and it is here.**
+`encodeShownAutomation()` / `decodeShownAutomation()` produce and parse a
+semicolon-separated list whose entries are `target` or `target@slot`
+(`self:Volume;param:12@0`); a target spelling contains neither `;` nor `@`, so
+it is unambiguous. `app/timeline` converts to its own `SAutoLaneRef` and never
+re-implements the encoding — two spellings of one lane identity is how a lane
+comes back from a load under a name nothing recognises. `decode()` **skips** an
+entry it cannot parse rather than failing the load: a file naming a lane
+spelling this build does not have describes a view preference, and losing one
+is not worth losing the project over.
+
+`setLaneHeightScale()` clamps to `[LANE_HEIGHT_SCALE_MIN, MAX]`, and
+`SStdMixerView::LANE_SCALE_MIN/MAX` are defined FROM those — so a hand-edited
+file and a mouse drag are bounded by one rule rather than by two that can
+drift.
+
+**None of the four is undoable and none marks the project dirty**, exactly as
+`collapsed` has not since it moved here. A session that only rearranged lanes
+and quit still loses them; the state is written on the next save the user makes
+for another reason. Whether a view gesture should dirty a project is a policy
+question that belongs to all four together, not to three of them.
+
+Gated by `qxa.lane_view_persists` (watched failing under two sabotages: the
+serializer not writing the three attributes, and the view ignoring
+`takesExpanded()`).

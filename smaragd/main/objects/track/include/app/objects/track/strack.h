@@ -491,6 +491,76 @@ public:
     void setCollapsed( bool c ) { collapsed_ = c; }
 
     /**
+     * THE OTHER THREE PIECES OF PER-TRACK VIEW STATE (proposal 46 M3), here
+     * for exactly the reasons isCollapsed() above is:
+     *
+     *   - lane HEIGHT SCALE, a factor of the arranger's base lane height;
+     *   - whether the track shows its TAKE LANES;
+     *   - which AUTOMATION LANES it shows.
+     *
+     * All three were `STrack*`-keyed containers on `SStdMixerView` /
+     * `SAutomationLaneUi` (`trackScale_`, `takesExpanded_`, `shown_`), kept
+     * from dangling by a `pruneUiState()` walk that had to be called on every
+     * row rebuild — and that walk missed SYSTEM LANES until proposal 45 AC4.6,
+     * so the master lane's height, take expansion and automation lanes were
+     * being silently forgotten on every rebuild. Living on the object means
+     * the state dies with the object, needs no pruning walk at all, and — the
+     * point of this change — survives a save/load round trip for free.
+     *
+     * WHAT THEY ARE NOT: none of them is undoable and none marks the project
+     * dirty, exactly as `collapsed_` does not. A gesture that only rearranges
+     * lanes is written on the next save the user makes for another reason.
+     * Whether view gestures should dirty a project is a policy question that
+     * belongs to all four of these together, not three of them.
+     *
+     * Each is serialized ONLY when it is not the default, so every project
+     * file and every committed golden written before this re-serializes
+     * byte-identically.
+     */
+    static constexpr double LANE_HEIGHT_SCALE_MIN = 0.25;
+    static constexpr double LANE_HEIGHT_SCALE_MAX = 4.0;
+    double laneHeightScale() const { return laneHeightScale_; }
+    /// Clamped to [MIN,MAX]. The arranger applies the same bound; this one is
+    /// what protects a hand-edited or future-written file from a 0.001 lane.
+    void   setLaneHeightScale( double s );
+
+    bool takesExpanded() const { return takesExpanded_; }
+    void setTakesExpanded( bool e ) { takesExpanded_ = e; }
+
+    /**
+     * One shown automation lane: the ParamRef spelling plus, for a `param:`
+     * lane, which SLOT it belongs to. The pair is the lane's identity in the
+     * arranger exactly as it is in the verbs — this is the model-side twin of
+     * `SAutoLaneRef`, which lives in a header private to app/timeline.
+     */
+    struct ShownAutomationLane {
+        QString target;
+        int     slotIndex = -1;
+        bool operator==( const ShownAutomationLane &o ) const
+        { return target == o.target && slotIndex == o.slotIndex; }
+    };
+    const QList<ShownAutomationLane> &shownAutomationLanes() const
+    { return shownAutomation_; }
+    void setShownAutomationLanes( const QList<ShownAutomationLane> &lanes )
+    { shownAutomation_ = lanes; }
+
+    /**
+     * THE ONE PAIR that spells the `shownAutomation` attribute: a
+     * semicolon-separated list whose entries are `target` or `target@slot`,
+     * e.g. `self:Volume;param:12@0`. A target spelling (`self:…`,
+     * `param:<id>`, `cut:…`) contains neither `;` nor `@`, so the encoding is
+     * unambiguous. The arranger converts to its own SAutoLaneRef and never
+     * re-invents this — two spellings of one identity is how a lane comes back
+     * from a load under a name nothing recognises.
+     *
+     * decode() SKIPS an entry it cannot parse rather than failing the load: a
+     * file naming a lane spelling this build does not have describes a view
+     * preference, and losing one is not worth losing the project over.
+     */
+    static QString encodeShownAutomation( const QList<ShownAutomationLane> & );
+    static QList<ShownAutomationLane> decodeShownAutomation( const QString & );
+
+    /**
      * Fill out[0..win.width) with the SUM OF OUR DESCENDANTS' DRAWN ENVELOPES
      * over `win`, and return true; false — writing nothing — when nothing
      * contributed, so the painter draws nothing at all.
@@ -728,6 +798,13 @@ private:
     SSystemRole                     systemRole_ = SSystemRole::None;
     // Fold state (fix/track-list-polish m). See isCollapsed()/setCollapsed().
     bool                            collapsed_ = false;
+    // The other three pieces of per-track VIEW state (proposal 46 M3). See
+    // laneHeightScale() for why they live on the object rather than in a
+    // view-owned map. Defaults chosen so the attributes are omitted for every
+    // track that has never been touched.
+    double                          laneHeightScale_ = 1.0;
+    bool                            takesExpanded_   = false;
+    QList<ShownAutomationLane>      shownAutomation_;
 
     mutable length_t lastDuration_;
     mutable bool lastDurationValid_;

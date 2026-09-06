@@ -335,6 +335,12 @@ public:
     // without needing the arranger to exist (STrack::isCollapsed() directly),
     // so a save/load round-trip case can check it before ever opening a view.
     bool isTrackCollapsed( const QString &trackPath );
+    // The OTHER three pieces of per-track view state (proposal 46 M3), read
+    // back as `laneScale=…|takesExpanded=…|automation=…`. "" for an
+    // unresolvable path. Reads the TRACK, like isTrackCollapsed() above and
+    // for the same reason: it must answer with no arranger built at all, which
+    // is exactly the state a save/load case is in right after `load-project`.
+    QString describeLaneView( const QString &trackPath );
     // TEST ENTRY POINT (fix/track-list-polish m): the arranger's zoom/pan as
     // "secondWidth=<double>|scrollX=<qulonglong frames>", the same two values
     // SMVActualView::saveViewStateToProject() persists. "" when there is no
@@ -535,6 +541,30 @@ public:
     // recreates the window directly maximized (no resize transition ever
     // arrives to re-fit it). Returns true if a saved geometry was applied.
     bool restoreWindowLayout();
+
+    // THE ONE PLACE `ui/windowGeometry` and `ui/windowState` are written.
+    //
+    // It used to be inlined in closeEvent() and called from nowhere else,
+    // which is the whole of the reported bug: File -> Exit / Cmd-Q ran
+    // `::exit(0)` and no dock, toolbar, divider or geometry the user had
+    // arranged was ever stored. Measured on the reporting machine: no
+    // `ui/windowState` key in smaragd.ini at all, and zero occurrences of the
+    // post-exec() "Smaragd exiting" line in a 4.8 MB log.
+    //
+    // Callers: closeEvent(), QCoreApplication::aboutToQuit, and the M2
+    // autosave timer. It is idempotent and repeatable BY DESIGN — the timer
+    // depends on that — and it writes only when the blob actually differs from
+    // what is stored, so a session that touches nothing writes nothing.
+    //
+    // `force` is for the testkit ALONE. Every automatic caller leaves it false
+    // and is therefore a no-op under `SApplication::isTestCaseMode()`: a
+    // `ctest -j4` run is four processes sharing one smaragd.ini, and a
+    // headless run's geometry describes a window that was never shown. The
+    // `save-window-layout` verb passes true deliberately and restores both
+    // keys afterwards.
+    //
+    // Returns true if anything was written.
+    bool saveWindowLayout( bool force = false );
 
     // Post a transient hint to the status bar (auto-dismisses after durationMs).
     void postHint( const QString &text, int durationMs = 5000 );
@@ -875,6 +905,25 @@ private:
 
     // Permanent mode indicator on the right of the status bar.
     QLabel *modeLabel_;
+
+    // --- window-layout persistence (proposal 46 M1/M2) --------------------
+    //
+    // Set by closeEvent() immediately after its own save, and read by
+    // saveWindowLayout() as a refusal. WITHOUT IT the aboutToQuit handler
+    // fires AFTER closeProject() has run and overwrites the good blob with one
+    // taken from a window that no longer has a central widget — which is
+    // exactly the layout closeEvent's own comment has warned since it was
+    // written does not round-trip through restoreState(). The flag encodes
+    // "the UI this blob describes is gone"; call ordering only encodes that by
+    // accident.
+    bool layoutFrozen_ = false;
+    // The blob last written, so the M2 timer can skip an unchanged INI write.
+    QByteArray lastSavedLayout_;
+    // M2: a separator drag emits NO Qt signal — QMainWindow has no
+    // layout-changed notification of any kind — so a timer is the only thing
+    // that can catch one before a crash or a force-quit takes it. Never
+    // started under --test-case.
+    QTimer *layoutSaveTimer_ = nullptr;
 };
 
 #endif

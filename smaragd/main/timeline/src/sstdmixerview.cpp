@@ -4389,7 +4389,7 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
         bool col = tk->isCollapsed();
         rows_.append( STrackRow{ tk, lk, container, depth, kids, col } );
         // Take lanes directly below the track's composite lane.
-        if( takesExpanded_.contains( tk ) ) {
+        if( tk->takesExpanded() ) {
             const int mt = maxTakesOf( tk );
             for( int k = 0; k < mt; ++k ) {
                 rows_.append( STrackRow{ tk, lk, container, depth,
@@ -4403,12 +4403,28 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
     }
 }
 
+bool SStdMixerView::isTrackTakesExpanded( STrack *t ) const
+{
+    return t && t->takesExpanded();
+}
+
 void SStdMixerView::toggleTrackTakesExpanded( STrack *t )
 {
     if( !t ) return;
-    if( takesExpanded_.contains( t ) ) takesExpanded_.remove( t );
-    else                               takesExpanded_.insert( t );
+    t->setTakesExpanded( !t->takesExpanded() );
     refreshTrackTree();
+}
+
+// The guard below used to be `takesExpanded_.isEmpty()`. With the flag on the
+// track there is no set to ask, so ask the ROWS — which is a strictly better
+// question anyway: a track expanded inside a COLLAPSED folder has no rows at
+// all, so no take-row count can have changed for it and the rebuild the old
+// set forced was pure waste.
+bool SStdMixerView::anyTakesExpandedInRows() const
+{
+    for( const STrackRow &r : rows_ )
+        if( r.track && r.track->takesExpanded() ) return true;
+    return false;
 }
 
 // Applied actions (add-take, remove-take, split of a stack …) can change an
@@ -4485,7 +4501,7 @@ void SStdMixerView::onArrangementChangedRows()
     // on a project with no expanded take stack would change the model and
     // never reach the rows, so the master lane would appear only after some
     // unrelated edit happened to force a rebuild.
-    if( takesExpanded_.isEmpty() && !systemRowsOutOfDate() ) return;
+    if( !anyTakesExpandedInRows() && !systemRowsOutOfDate() ) return;
     const int before = rows_.size();
     // Capture the scroll FRACTION before the rebuild (fix/arranger-ui-fixes C
     // item 7): scroll is pixel-granular now, and a row boundary does not
@@ -4515,7 +4531,8 @@ QString SStdMixerView::rootName() const
 
 void SStdMixerView::rebuildRows()
 {
-    pruneUiState();          // one walk, every per-track UI-state set (P6)
+    // No prune walk here any more (proposal 46 M3): every per-track UI-state
+    // set moved onto STrack, so it dies with the track.
     rows_.clear();
     if( model_ ) appendRowsFor( model_, 0 );
     appendSystemRows();      // proposal 45 AC4.1: pinned BELOW every user lane
@@ -4575,9 +4592,14 @@ void SStdMixerView::appendSystemRows()
 // today, automation lanes later). The only supported way from a row index to
 // a pixel is rowTop()/rowHeight(); the only way back is rowAtLaneY().
 
+// The bounds are the TRACK's, so a hand-edited file and a mouse drag are
+// clamped by one rule (proposal 46 M3).
+const double SStdMixerView::LANE_SCALE_MIN = STrack::LANE_HEIGHT_SCALE_MIN;
+const double SStdMixerView::LANE_SCALE_MAX = STrack::LANE_HEIGHT_SCALE_MAX;
+
 double SStdMixerView::trackHeightScale( const STrack *t ) const
 {
-    return t ? trackScale_.value( t, 1.0 ) : 1.0;
+    return t ? t->laneHeightScale() : 1.0;
 }
 
 void SStdMixerView::setTrackHeightScale( STrack *t, double scale )
@@ -4585,8 +4607,7 @@ void SStdMixerView::setTrackHeightScale( STrack *t, double scale )
     if( !t ) return;
     scale = qBound( LANE_SCALE_MIN, scale, LANE_SCALE_MAX );
     if( qFuzzyCompare( trackHeightScale( t ), scale ) ) return;
-    if( qFuzzyCompare( scale, 1.0 ) ) trackScale_.remove( t );
-    else                              trackScale_.insert( t, scale );
+    t->setLaneHeightScale( scale );
     // Heights changed under the scroll anchor: re-derive the geometry, then
     // re-anchor the scroll by FRACTION of the total height (fix/arranger-ui-
     // fixes C item 7) rather than by row — pixel scroll does not survive a

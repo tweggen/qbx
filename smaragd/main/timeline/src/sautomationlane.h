@@ -84,12 +84,18 @@ public:
     ~SAutomationLaneUi();
 
     // --- which lanes each track shows ------------------------------------
-    const QVector<SAutoLaneRef> &shownLanes( const STrack *t ) const;
+    //
+    // THE SET LIVES ON THE TRACK (proposal 46 M3), not here. It was a
+    // `QHash<const STrack*, QVector<SAutoLaneRef>>` member kept from dangling
+    // by `pruneTo()`, which the arranger had to call on every row rebuild —
+    // and which did not reach SYSTEM lanes until proposal 45 AC4.6, so the
+    // master lane's shown lanes were being forgotten on every one of them.
+    // On the track it dies with the track, needs no pruning, and survives a
+    // save/load. These three are now a thin conversion between STrack's
+    // model-side `ShownAutomationLane` and this file's `SAutoLaneRef`.
+    QVector<SAutoLaneRef> shownLanes( const STrack *t ) const;
     bool isLaneShown( const STrack *t, const SAutoLaneRef &r ) const;
     void toggleLane( STrack *t, const SAutoLaneRef &r );
-    /// Drop every entry whose track is gone. Called by the ONE prune walk
-    /// (SStdMixerView::pruneUiState, proposal 30 §E.5).
-    void pruneTo( const QSet<const STrack *> &live );
 
     // --- clip envelopes ---------------------------------------------------
     bool envelopeEditEnabled() const { return envelopeEdit_; }
@@ -158,7 +164,6 @@ private:
     enum class Drag { None, Point, Tension, Marquee };
 
     SStdMixerView  &view_;
-    QHash<const STrack *, QVector<SAutoLaneRef> > shown_;
     bool            envelopeEdit_ = false;
 
     // live gesture state

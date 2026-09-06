@@ -1436,3 +1436,40 @@ rediscovered: **an XML comment may not contain `--`** (it cost three parse
 failures before the first run), and **`assert-log` examines only the window
 since the action it FOLLOWS**, so an assertion about what a `load-project`
 logged has to sit directly under the load rather than at the end of the case.
+
+## The window-layout and lane-view verbs (proposal 46, 2026-09-06)
+
+**`save-window-layout`** drives `SMainWindow::saveWindowLayout( force )` and
+asserts what it did. Two properties, both real:
+
+- forced, the method writes a non-empty blob under BOTH `ui/windowGeometry`
+  and `ui/windowState`;
+- unforced, in a `--test-case` run, it writes **nothing** — the suppression
+  every automatic caller relies on.
+
+**IT RESTORES BOTH KEYS BEFORE IT ASSERTS ANYTHING.** It snapshots them
+(including *whether they existed*, because putting an empty `QByteArray` where
+there was no key is a different state and `restoreWindowLayout()` tells the two
+apart), writes them back — `remove()`ing them again when they were absent — and
+only then compares. So a FAILING run leaves the developer's INI byte-for-byte
+as it found it, which is why this case needs no key-ownership header the way a
+`set-option` case does, and why it is not `RUN_SERIAL`.
+
+**It gates the METHOD, never the wiring that was the actual bug.** `fileExit()`
+now routes through `close()`, whose `promptSaveUnsavedChanges()` is a modal
+`exec()` and whose success ends the process; `aboutToQuit` is the same. Neither
+has a headless route, and the PR says so rather than letting a green case imply
+otherwise.
+
+**`assert-lane-view`** gained `laneScale`, `takesExpanded` and `automation`
+(proposal 46 M3). All three read the TRACK, so they work with no arranger — the
+state a case is in immediately after `load-project`. `automation` is checked
+whenever the attribute is PRESENT, the empty string included: "this track shows
+no automation lane" is a thing a case needs to say, and a
+written-only-when-non-empty rule could not express it.
+
+**A ROW-COUNT ASSERTION AFTER A `load-project` PROVES NOTHING** — see
+`main/shell/CONTRACT.md` inv. 60. A scripted load does not rebind the arranger,
+so every arranger reach-through afterwards answers from the previous load's
+mixer. Keep `assert-lane-alignment rows=` on the NEAR side of a save/load;
+`assert-lane-view` is the only trustworthy read on the far side.

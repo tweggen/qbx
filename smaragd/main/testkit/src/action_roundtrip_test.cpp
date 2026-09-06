@@ -495,6 +495,15 @@ const Fixture kFixtures[] = {
     { "assert-lane-view",
       "<assert-lane-view trackPath='0,1' collapsed='1' secondWidth='45.5'"
       " scrollX='123456'/>" },
+    // Proposal 46 M3: the three that joined `collapsed` on STrack. Written
+    // only when checked, and `automation` is written whenever it was GIVEN --
+    // the empty string is a legitimate expectation ("no automation lane"),
+    // which a written-only-when-non-empty rule could not express.
+    { "assert-lane-view",
+      "<assert-lane-view trackPath='0' laneScale='2.5' takesExpanded='1'"
+      " automation='self:Volume;param:12@0'/>" },
+    { "assert-lane-view",
+      "<assert-lane-view trackPath='0' takesExpanded='0' automation=''/>" },
     // fix/track-list-polish (l): both bounds are written only when >= 0.
     { "assert-scroll-range",
       "<assert-scroll-range expectFullyVisible='true' expectMaxAtLeast='1'"
@@ -624,6 +633,14 @@ const Fixture kFixtures[] = {
       "<close-options-dialog page='2' result='cancel'/>" },
     { "assert-settings-file",
       "<assert-settings-file contains='foo' absent='bar'/>" },
+    // Proposal 46 M1/M2. Both attributes are written unconditionally, so one
+    // fixture per truth value is not needed -- but the (false,false) pair is
+    // the SUPPRESSION assertion and is the reason the two are independent
+    // rather than one flag.
+    { "save-window-layout",
+      "<save-window-layout force='true' expectWritten='true'/>" },
+    { "save-window-layout",
+      "<save-window-layout force='false' expectWritten='false'/>" },
     // GATE 5c, + gate 6's expectAuth. Every attribute is written
     // unconditionally, so the fixture declares all nine -- including the two
     // whose defaults are non-empty.

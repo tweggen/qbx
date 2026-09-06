@@ -258,6 +258,52 @@ SApplyResult SAssertLaneViewAction::apply(SProject * /*project*/)
             return {false, nullptr};
         }
     }
+    // --- the three that joined `collapsed` on STrack (proposal 46 M3) -----
+    if (expectLaneScale_ >= 0.0 || expectTakesExpanded_ >= 0
+        || hasExpectAutomation_) {
+        if (trackPath_.isEmpty()) {
+            qWarning() << "SAssertLaneViewAction: laneScale/takesExpanded/"
+                          "automation need trackPath";
+            return {false, nullptr};
+        }
+        const QString desc = win->describeLaneView(trackPath_);
+        if (desc.isEmpty()) {
+            qWarning() << "assert-lane-view FAILED: no track at" << trackPath_;
+            return {false, nullptr};
+        }
+        if (expectLaneScale_ >= 0.0) {
+            const QRegularExpression re(QStringLiteral("laneScale=([-0-9.]+)"));
+            const QRegularExpressionMatch m = re.match(desc);
+            const double got = m.hasMatch() ? m.captured(1).toDouble() : -1.0;
+            if (!m.hasMatch() || qAbs(got - expectLaneScale_) > 1e-6) {
+                qWarning() << "assert-lane-view FAILED: laneScale=" << got
+                           << "expected" << expectLaneScale_ << "in" << desc;
+                return {false, nullptr};
+            }
+        }
+        if (expectTakesExpanded_ >= 0) {
+            const bool got = desc.contains(QStringLiteral("takesExpanded=1"));
+            if (got != (expectTakesExpanded_ != 0)) {
+                qWarning() << "assert-lane-view FAILED: takesExpanded=" << got
+                           << "expected" << (expectTakesExpanded_ != 0)
+                           << "in" << desc;
+                return {false, nullptr};
+            }
+        }
+        if (hasExpectAutomation_) {
+            // `automation=` is the LAST field, so everything after it is the
+            // value — including the empty string, which is a legitimate
+            // expectation ("this track shows no automation lane").
+            const int at = desc.indexOf(QStringLiteral("automation="));
+            const QString got = at < 0
+                ? QString() : desc.mid(at + 11);
+            if (at < 0 || got != expectAutomation_) {
+                qWarning() << "assert-lane-view FAILED: automation=" << got
+                           << "expected" << expectAutomation_ << "in" << desc;
+                return {false, nullptr};
+            }
+        }
+    }
     if (expectSecondWidth_ >= 0.0 || expectScrollX_ >= 0
         || !snapshot_.isEmpty() || !compareTo_.isEmpty()
         || minScrollX_ >= 0) {
@@ -332,6 +378,10 @@ void SAssertLaneViewAction::writeXml(QDomElement &elem) const
 {
     if (!trackPath_.isEmpty()) elem.setAttribute("trackPath", trackPath_);
     if (expectCollapsed_ >= 0) elem.setAttribute("collapsed", expectCollapsed_);
+    if (expectLaneScale_ >= 0.0) elem.setAttribute("laneScale", expectLaneScale_);
+    if (expectTakesExpanded_ >= 0)
+        elem.setAttribute("takesExpanded", expectTakesExpanded_);
+    if (hasExpectAutomation_) elem.setAttribute("automation", expectAutomation_);
     if (expectSecondWidth_ >= 0.0)
         elem.setAttribute("secondWidth", expectSecondWidth_);
     if (expectScrollX_ >= 0)
@@ -350,6 +400,12 @@ bool SAssertLaneViewAction::readXml(const QDomElement &elem, int /*version*/)
         ? elem.attribute("secondWidth").toDouble() : -1.0;
     expectScrollX_ = elem.hasAttribute("scrollX")
         ? (qlonglong) elem.attribute("scrollX").toULongLong() : -1;
+    expectLaneScale_ = elem.hasAttribute("laneScale")
+        ? elem.attribute("laneScale").toDouble() : -1.0;
+    expectTakesExpanded_ = elem.hasAttribute("takesExpanded")
+        ? elem.attribute("takesExpanded").toInt() : -1;
+    hasExpectAutomation_ = elem.hasAttribute("automation");
+    expectAutomation_    = elem.attribute("automation");
     snapshot_   = elem.attribute("snapshot");
     compareTo_  = elem.attribute("compareTo");
     minScrollX_ = elem.attribute("minScrollX", "-1").toLongLong();

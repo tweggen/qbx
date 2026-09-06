@@ -496,6 +496,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/strackselectionactions.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/include/app/testkit/sassertunsavedchangesaction.h
+    testkit/include/app/testkit/ssavewindowlayoutaction.h
     testkit/include/app/testkit/sassertmasterinputsaction.h
     testkit/include/app/testkit/sdrainpendingdeletesaction.h
     testkit/include/app/testkit/sassertsystemlaneaction.h
@@ -550,6 +551,7 @@ set(APP_UI_FILES
     testkit/src/strackselectionactions.cpp
     testkit/src/stransporttestactions.cpp
     testkit/src/sassertunsavedchangesaction.cpp
+    testkit/src/ssavewindowlayoutaction.cpp
     testkit/src/sassertmasterinputsaction.cpp
     testkit/src/sdrainpendingdeletesaction.cpp
     testkit/src/sassertsystemlaneaction.cpp
