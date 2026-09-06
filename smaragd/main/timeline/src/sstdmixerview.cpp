@@ -4373,6 +4373,15 @@ void SStdMixerView::appendRowsFor( SObject *container, int depth )
     for( SLink *lk : container->childLinks() ) {
         STrack *tk = dynamic_cast<STrack*>( &lk->getSObject() );
         if( !tk ) continue;          // clips render inside their track's own lane
+        // HIDING IS ONE MECHANISM (D8), so it is asked here rather than only at
+        // the system-lane append: SObject::laneHidden() defaults to
+        // laneHiddenByDefault(), which is false for every ordinary track and
+        // true for every system lane -- so this is a NO-OP for user lanes
+        // (set-lane-hidden refuses them outright) and is what keeps a
+        // conductor lane hidden until somebody asks for it. A hidden lane
+        // takes its subtree with it, which is the same thing a collapsed one
+        // does and the only reading under which "hidden" means hidden.
+        if( tk->laneHidden() ) continue;
         // STrack::hasChildTracks(), not a local copy: the folder-sum overlay
         // asks the same question (proposal 39 M3.1) and two spellings of "is
         // this a folder" is one more than there should be.
@@ -4408,15 +4417,65 @@ void SStdMixerView::toggleTrackTakesExpanded( STrack *t )
 // Proposal 45 AC4.2: is the master lane's row out of step with the model?
 // set-lane-hidden changes the ROW COUNT with no track-structure signal, which
 // is exactly the situation this slot already exists for (a take-stack edit).
+// Collect every lane appendSystemRows() would produce a row for: the master
+// lane when it is shown, and recursively its own non-hidden child lanes, which
+// is where a conductor lane lives (proposal 45 M6).
+static void sCollectWantedSystemLanes( STrack *lane, QSet<const STrack *> &out )
+{
+    if( !lane || lane->laneHidden() ) return;
+    out.insert( lane );
+    if( lane->isCollapsed() ) return;
+    for( SLink *lk : lane->childLinks() ) {
+        if( !lk ) continue;
+        sCollectWantedSystemLanes( dynamic_cast<STrack *>( &lk->getSObject() ),
+                                   out );
+    }
+}
+
+// Every lane in the master subtree, shown or not: the membership test the
+// comparison below needs, and deliberately blind to laneHidden()/isCollapsed()
+// because a row for a lane that just became hidden is exactly what it is
+// looking for.
+static void sCollectSystemSubtree( STrack *lane, QSet<const STrack *> &out )
+{
+    if( !lane ) return;
+    out.insert( lane );
+    for( SLink *lk : lane->childLinks() ) {
+        if( !lk ) continue;
+        sCollectSystemSubtree( dynamic_cast<STrack *>( &lk->getSObject() ), out );
+    }
+}
+
 bool SStdMixerView::systemRowsOutOfDate() const
 {
     SStdMixer *mix = dynamic_cast<SStdMixer *>( model_ );
     if( !mix ) return false;
-    STrack *lane = mix->masterLane();
-    const bool want = lane && !lane->laneHidden();
-    bool have = false;
+
+    // ASKED OF THE WHOLE SYSTEM SUBTREE, not of the master lane alone. This
+    // used to compare one lane against one row, which was right while the
+    // master was the only system lane there could be -- and became the exact
+    // defect the comment below describes, one level down: a set-lane-hidden on
+    // a CONDUCTOR lane changed the model, this returned false, the rows were
+    // never rebuilt, and the lane appeared only after some unrelated edit
+    // happened to force one. Measured as a row count of 2 where 3 was due.
+    // WHAT SHOULD BE SHOWN...
+    QSet<const STrack *> want;
+    sCollectWantedSystemLanes( mix->masterLane(), want );
+
+    // ...AND WHAT IS SHOWN, taken as `rows_` INTERSECTED WITH THE WHOLE MASTER
+    // SUBTREE rather than with `want`. Intersecting with `want` is the obvious
+    // spelling and it is wrong in one direction: when nothing is wanted the
+    // intersection is empty whether a stale row is there or not, so hiding the
+    // master again left its row on screen. Measured as a row count of 4 where
+    // 3 was due, on master_lane_rows' own undo step. `rows_` also holds every
+    // USER lane, which is why the membership set is needed at all.
+    QSet<const STrack *> subtree;
+    sCollectSystemSubtree( mix->masterLane(), subtree );
+
+    QSet<const STrack *> have;
     for( const STrackRow &r : rows_ )
-        if( r.track == lane ) { have = true; break; }
+        if( r.track && subtree.contains( r.track ) ) have.insert( r.track );
+
     return want != have;
 }
 
@@ -4489,11 +4548,25 @@ void SStdMixerView::appendSystemRows()
     STrack *lane = mix->masterLane();
     if( !lane || lane->laneHidden() ) return;
 
-    rows_.append( STrackRow{ lane, nullptr, mix, 0, false, false } );
+    rows_.append( STrackRow{ lane, nullptr, mix, 0,
+                             lane->hasChildTracks(), lane->isCollapsed() } );
     // ...and its own automation sub-lanes, under the same rule every user
     // track's follow (proposal 37 P6): no head of their own, keyed by STrack*,
     // so the shown-automation set needs no system-lane special case (AC4.6).
     appendAutomationRowsFor( lane, nullptr, mix, 0 );
+
+    // ...and the master lane's CHILD LANES, which is where a conductor lane
+    // lives (proposal 45 M6 / AC6.3). Through appendRowsFor(), the SAME walk
+    // every user lane's children go through, so a conductor row is an ordinary
+    // row: it carries a real SLink and a real container, and a gesture on it
+    // therefore derives its commit address by the ordinary route --
+    // strackpath::pathOf(), whose system-lane descent (D9) answers
+    // `$master,0`. Nothing here special-cases it, which is the point: T16 is
+    // the warning that a row deriving `{}` would commit to the MIXER.
+    //
+    // Skipped while the master lane is COLLAPSED, exactly as a folder's
+    // children are, so the fold triangle means one thing everywhere.
+    if( !lane->isCollapsed() ) appendRowsFor( lane, 1 );
 }
 
 // --- row geometry -------------------------------------------------------

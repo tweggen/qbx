@@ -559,6 +559,62 @@ int SStdMixer::systemLaneSentinelOf( const SObject *lane ) const
     return 0;
 }
 
+// --- the conductor lane (proposal 45 M6 / D7) -------------------------------
+
+STrack *SStdMixer::conductorLane() const
+{
+    if( !masterLane_ ) return nullptr;
+    // The FIRST conductor child, by role rather than by index. Index 0 is where
+    // ensureConductorLane() puts it and where `$master,0` addresses it, but a
+    // lookup that TRUSTED index 0 would answer "the conductor" for whatever a
+    // future milestone parents to the master first.
+    for( SLink *lk : masterLane_->childLinks() ) {
+        if( !lk ) continue;
+        SObject *so = &lk->getSObject();
+        if( so && so->systemRole() == SSystemRole::Conductor )
+            return dynamic_cast<STrack *>( so );
+    }
+    return nullptr;
+}
+
+void SStdMixer::ensureConductorLane()
+{
+    if( !masterLane_ || conductorLane() ) return;
+
+    // A Qt child of the PROJECT, like every other track, which is what gets it
+    // serialized: SProject::serialize() writes each of its SObject children as
+    // an element, and the <SLink objectId> below -- an ordinary child link of
+    // the master lane's own element -- is the reference the loader resolves.
+    // Nothing new on either side.
+    SProject *project = dynamic_cast<SProject *>( parent() );
+    STrack *lane = new STrack( project );
+    lane->setSystemRole( SSystemRole::Conductor );
+    lane->setSName( QStringLiteral( "Conductor" ) );
+
+    // SLink ctor note (the same one reparent-track spells out): build with no
+    // parent, then setParent, so childEvent fires on a fully constructed link.
+    SLink *link = new SLink( *lane, nullptr );
+    link->setParent( masterLane_ );
+    const int landing = masterLane_->childCount() - 1;
+    if( landing > 0 ) masterLane_->moveChildToIndex( landing, 0 );
+
+    // IT CONTRIBUTES NO AUDIO FOR TWO INDEPENDENT REASONS, and both are worth
+    // knowing because either alone would be enough and neither is obvious:
+    //
+    //  1. It carries no clips and no instrument -- acceptsClips() is false for
+    //     every systemRole (D6), so there is nothing for it to render.
+    //  2. THE MASTER LANE'S OWN twTrackMix DRIVES NOTHING. wireAsMasterLane()
+    //     takes the mixer's sum straight into the lane's plugin chain and the
+    //     chain's output into the mixer's rewire (D3), deliberately bypassing
+    //     the lane's trackmix -- which is AC2.8, and which means a CHILD of the
+    //     master lane is summed by a component that reaches no output.
+    //
+    // A change that re-wired the master lane's trackmix would silently make
+    // reason 2 false; reason 1 is what would still hold. Stated here so a
+    // later milestone that gives a conductor lane real content knows it must
+    // not rely on either by accident.
+}
+
 void SStdMixer::wireMasterChain()
 {
     // PROPOSAL 45 M2 / D3 -- the master lane enters the signal path:
@@ -629,6 +685,12 @@ void SStdMixer::adoptMasterLane( STrack *lane )
     // which is about to be deleted, and whose inserts are not the ones the
     // user saved.
     wireMasterChain();
+
+    // A PROJECT WRITTEN BEFORE M6 GAINS ONE HERE. The adopted lane brings its
+    // own conductor when the file had one -- it is an ordinary child link, so
+    // it arrived with the lane -- and ensureConductorLane() is idempotent, so
+    // this mints only in the older case.
+    ensureConductorLane();
 }
 
 SStdMixer::SStdMixer( SProject *project )
@@ -678,6 +740,9 @@ SStdMixer::SStdMixer( SProject *project )
     // has a refcount of zero and is deleted the moment anything looks at it.
     masterLaneRef_ = new SLink( *masterLane_, nullptr );
     masterLane_->setRenderPathOwner( this );   // D11
+
+    // ...and its conductor lane (M6/D7), as an ordinary child link of it.
+    ensureConductorLane();
 
     // setNBusses(1) above ran before the lane existed and wired the sum
     // straight into the rewire; now that there is a lane, put its chain in

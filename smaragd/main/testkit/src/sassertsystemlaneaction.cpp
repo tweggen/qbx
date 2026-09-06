@@ -42,9 +42,19 @@ SApplyResult SAssertSystemLaneAction::apply( SProject *project )
     if( gotRole != role_ ) fail( "role", gotRole, role_ );
 
     if( !hidden_.isEmpty() ) {
+        // laneHidden(), NOT isHidden(), and the difference is not academic.
+        // SObject::isHidden() reads the plain `hidden_` flag, which the master
+        // lane's constructor sets explicitly and which NOTHING ELSE in the app
+        // consults -- every other isHidden() in the tree is QWidget's.
+        // laneHidden() is the one the row walk asks
+        // (SStdMixerView::appendSystemRows / appendRowsFor), and it defaults to
+        // laneHiddenByDefault(), i.e. true for every system lane. A conductor
+        // lane (proposal 45 M6) is hidden by that DEFAULT and sets no flag, so
+        // a verb reading the flag reported it visible while the arranger drew
+        // no row for it. Ask what the view asks.
         const bool want = hidden_.startsWith( '1' ) || hidden_.startsWith( 't' );
-        if( obj->isHidden() != want )
-            fail( "hidden", obj->isHidden() ? "1" : "0", want ? "1" : "0" );
+        if( obj->laneHidden() != want )
+            fail( "hidden", obj->laneHidden() ? "1" : "0", want ? "1" : "0" );
     }
 
     if( !acceptsClips_.isEmpty() ) {

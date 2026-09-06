@@ -1626,6 +1626,82 @@ rather than assertion; and the ~1.5 ms mute ramp itself, which both
 - **Gate:** new qxa `conductor_lane_container`, `conductor_lane_addressing`; the
   AC6.2 grep; `action_roundtrip_test`; `cmp` on both goldens.
 
+#### M6 as executed (2026-09-06) — the container cost almost nothing, and four things it exposed
+
+**The milestone itself is small, and that is the design working.** A conductor
+lane is an ORDINARY CHILD LINK of the master lane, not a second sentinel: its
+address is `{-1,0}` (`$master,0`), one system step then a plain index. So it
+needed no new path machinery (`resolveByPath` already walks both halves), no new
+serialization (an `<SLink>` child of the master's own element, exactly like a
+nested user track), no new refusal (`STrack::acceptsClips()` has been false for
+every `systemRole` since M5/D6) and no new hiding rule
+(`SObject::laneHiddenByDefault()` since M4/D8). The mixer gained
+`conductorLane()` / `ensureConductorLane()` and nothing else.
+
+**It contributes no audio for TWO independent reasons**, and both are recorded
+because either alone would suffice and a later milestone must not lean on the
+wrong one: it carries no clips and no instrument, AND the master lane's own
+`twTrackMix` drives nothing at all — `wireAsMasterLane()` takes the mixer's sum
+straight into the lane's plugin chain (AC2.8/D3), so a CHILD of the master lane
+is summed by a component that reaches no output.
+
+Four things the design did not anticipate, each found by measuring:
+
+1. **`systemRowsOutOfDate()` KNEW ONLY ABOUT THE MASTER LANE**, which is the
+   exact defect M4's own comment describes one level up: a `set-lane-hidden` on
+   a conductor lane changed the model, the staleness test answered false, the
+   rows were never rebuilt, and the lane appeared only after an unrelated edit
+   forced one. Measured as a row count of **2 where 3 was due**. It now compares
+   the WANTED system lanes against `rows_` intersected with the whole master
+   SUBTREE — and the obvious spelling (intersect with *wanted*) is wrong in one
+   direction: with nothing wanted the intersection is empty whether a stale row
+   is there or not, so hiding the master again left its row on screen. Measured
+   as **4 where 3 was due**, on `master_lane_rows`' own undo step.
+2. **`appendRowsFor()` DID NOT CONSULT `laneHidden()`**, so a conductor lane
+   could never be hidden. It does now, which is D8's "hiding is ONE mechanism"
+   read properly: the call is a no-op for every user lane (their default is
+   false, and `set-lane-hidden` refuses them outright). `master_lane_rows`'
+   header stated the opposite as the REASON for that refusal and has been
+   corrected in place — the refusal stands on its other, real argument.
+3. **`assert-system-lane`'s `hidden=` read the WRONG FLAG.** `SObject::isHidden()`
+   is a plain field the master lane's constructor sets and that nothing else in
+   the app consults — every other `isHidden()` in the tree is `QWidget`'s.
+   `laneHidden()` is what the row walk asks. A conductor lane is hidden by that
+   DEFAULT and sets no flag, so the verb reported it visible while the arranger
+   drew no row for it. The verb now asks what the view asks.
+4. **AC6.3's DISCRIMINATING ASSERTION IS NOT THE OBVIOUS ONE.** Deleting
+   `findPathRec`'s system-lane descent makes `pathOf` answer `{}` for a
+   conductor lane, and the head's fader then commits to the wrong object — but
+   the conductor's OWN `volumeDb="-6"` check keeps PASSING, because the head
+   control writes the value into the track it was built for whatever address it
+   subsequently commits to. What catches it is the "and nowhere else" pair:
+   `assert-track-volume` on `$master` reads **-5.93336 dB** where 0 was due. A
+   case asserting only "the target moved" would have gone green over the whole
+   defect.
+
+**AC6.2 is a SCRIPT, not a documented grep.** `tools/check_tempo_authority.py`
+enforces both halves — no tempo MEMBER on the track or mixer slices, and the
+`setBPMTempo` / `bpmTempo_` writers confined to three files — because a
+documented grep nobody runs rots, and D7's whole point is that the conductor's
+content must never become a second tempo store. Its first member pattern was
+anchored at a word boundary and **`conductorTempo_`, the single most likely name
+for the field it exists to forbid, sailed straight past it**; watched failing on
+exactly that member, plus `laneUsPerQuarter_` and `timeSigNumerator_`, while a
+`twTempoMap *cachedTempoMap_` handle is correctly exempt — a reference to the
+one authority is what D7 asks for, not a second store.
+
+**NOT gated in M6, and named rather than implied:** the conductor lane's CONTENT
+in every sense — it has none, by design, and a tempo lane needs a curve model
+for ramps and is a proposal of its own; a SECOND conductor lane, or a conductor
+lane nested inside a conductor lane (`conductorLane()` returns the first by
+role, and nothing creates a second); what a conductor row LOOKS like (no pixel
+gate, and its head is `SSMVMixerControl` unchanged); a `set-tempo` issued
+through the conductor lane rather than the project (there is no such path, which
+is the point); and a project written before M6 whose master lane was adopted
+from the file — `ensureConductorLane()` mints one there and the load path is
+gated, but no committed fixture is old enough to exercise the adoption branch
+specifically.
+
 ### M7 — Send lanes: shape only, routing explicitly NOT built
 
 - **AC7.1** A send lane can be created by verb, is named, carries a plugin chain

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M6, AC6.3 / T16 / D9: A GESTURE ON A CONDUCTOR ROW COMMITS TO THE
+  CONDUCTOR LANE, NOT TO THE MIXER.
+
+  T16 IS THE TRAP, and it is the same one AC4.4 caught one level up. Every track
+  head derives its commit address from strackpath::pathOf(), which walks
+  childLinks(). A conductor lane at `{-1,0}` sits under a MASTER lane that is
+  itself outside childLinks() (D2), so a pathOf() without the system-lane
+  DESCENT answers `{}` for it - which is also the address of the root mixer.
+  The gesture would then appear to work and commit somewhere else entirely,
+  with every property assertion on the conductor still passing because nobody
+  asked it what changed.
+
+  THE GESTURE IS THE REAL ONE. `head-fader` finds the head control built for
+  that lane and drives its own handler, exactly as AC4.4's master case does;
+  it does not call set-track-volume behind the head's back. So what is measured
+  is the address the HEAD derived, which is the thing T16 is about.
+
+  WHY A FADER ON A LANE THAT MAKES NO SOUND. A conductor lane contributes no
+  audio (AC6.1), so this case cannot HEAR the commit the way
+  master_head_fader_heard does. It reads the value back off all three
+  candidates instead, and that is a stronger discriminator than hearing it
+  would be: a wrong pathOf() lands on the mixer or on the master, and both are
+  checked to have NOT moved. Hearing the master move would only have told us
+  the commit missed - not where it went.
+
+  WATCHED FAILING by deleting findPathRec's system-lane DESCENT (the recursive
+  branch, not the sentinel branch above it, which AC4.4 already covers). What
+  it reports is worth recording, because it is NOT the assertion a reader would
+  expect to bite:
+
+    assert-system-lane [ $master,0 ] pathOf : got <empty = the root>
+                                              want $master,0
+    assert-track-volume FAILED: expected 0 dB but got -5.93336 dB
+
+  The FIRST is the model half. The SECOND is the "and nowhere else" assertion,
+  and it is the one that catches the GESTURE - while the conductor's own
+  `volumeDb="-6"` check keeps PASSING, because the head control writes the
+  value into the track it was built for whatever address it then commits to.
+  So a case that asserted only "the conductor moved" would go green over the
+  whole defect. That is why all three lanes are read back and not just the
+  target.
+-->
+<SActionScript version="1" name="conductor_lane_addressing">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- THE ADDRESS ROUND-TRIPS. pathOf() answers `$master,0` rather than
+         `$master` or the empty path that means the root mixer. This is the
+         model half of T16, before any gesture. -->
+    <assert-system-lane trackPath="$master,0" role="conductor"
+                        expectPath="$master,0"/>
+
+    <!-- HIDDEN MEANS NO ROW AND THEREFORE NO HEAD, so the gesture is refused
+         rather than silently landing somewhere. The master lane's own row is
+         hidden too, so showing the conductor means showing both: a hidden lane
+         takes its subtree with it, which is the only reading under which
+         "hidden" means hidden. -->
+    <head-fader trackPath="$master,0" db="-6" expectReject="true"/>
+
+    <set-lane-hidden trackPath="$master" hidden="0"/>
+    <set-lane-hidden trackPath="$master,0" hidden="0"/>
+
+    <!-- One user lane, the master lane, and the conductor nested under it. -->
+    <assert-lane-alignment rows="3"/>
+
+    <!-- THE GESTURE, through the real head. -->
+    <head-fader trackPath="$master,0" db="-6"/>
+
+    <!-- IT LANDED ON THE CONDUCTOR... -->
+    <assert-track-volume trackPath="$master,0" volumeDb="-6" tolerance="0.07"/>
+
+    <!-- ...AND NOWHERE ELSE. These two are the assertion T16 asks for: a
+         pathOf() missing its descent commits to one of them. -->
+    <assert-track-volume trackPath="$master" volumeDb="0" tolerance="0.001"/>
+    <assert-track-volume trackPath="0" volumeDb="0" tolerance="0.001"/>
+
+    <!-- ONE undo step, because the head's handler submitted an ordinary
+         set-track-volume - the conductor lane needed no verb of its own. -->
+    <undo count="1"/>
+    <assert-track-volume trackPath="$master,0" volumeDb="0" tolerance="0.001"/>
+
+    <!-- AND THE MUTE BUTTON, which is a different commit path through the same
+         head (M5/AC5.4 wired a system lane's mute to twGainStage). It is
+         asserted for its ADDRESS here, not for its sound - a conductor lane
+         makes none. -->
+    <track-head-toggle trackPath="$master,0" control="mute" on="1"/>
+    <assert-system-lane trackPath="$master,0" role="conductor" muted="1"/>
+    <assert-system-lane trackPath="$master" role="master" muted="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

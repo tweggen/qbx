@@ -105,6 +105,28 @@ public:
     // Never null after construction.
     STrack *masterLane() const { return masterLane_; }
 
+    // THE CONDUCTOR LANE (proposal 45 M6 / D7): a system lane for the
+    // project-wide, non-audio material -- tempo, time signature, markers.
+    //
+    // IT IS AN ORDINARY CHILD LINK OF THE MASTER LANE, not a second sentinel,
+    // and that is the whole design. Its address is `{-1, 0}` (`$master,0`):
+    // one system step to the master, then a plain index. So it needs no new
+    // path machinery, no new serialization path (it is written as an <SLink>
+    // child of the master's own element, exactly like a nested user track),
+    // and no new refusal -- STrack::acceptsClips() is already false for every
+    // systemRole, and SObject::laneHiddenByDefault() already hides one.
+    //
+    // WHAT IT DELIBERATELY DOES NOT HAVE IS CONTENT (D7). twTempoMap is THE
+    // tempo authority and `set-tempo` the ONE write; a tempo lane must be a
+    // VIEW of that map and never a second store, which needs a curve model
+    // for ramps and is a proposal of its own. M6 builds the container.
+    STrack *conductorLane() const;
+
+    /// Mint the conductor lane if the master lane has none. Idempotent, and
+    /// called both at construction and after adopting a lane from a file --
+    /// a project written before M6 gains one on load.
+    void ensureConductorLane();
+
     // Take over a master lane that came out of a project file, retiring the
     // constructor's fresh one. The adoptPluginChain() shape, and for the same
     // reason: the loader cannot hand us the lane until every object exists, so
