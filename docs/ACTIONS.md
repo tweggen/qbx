@@ -13,6 +13,61 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 - a rejected `apply()` FAILS a headless test unless the action element has
   `expectReject="true"`.
 
+## Addressing a SYSTEM LANE (proposal 45)
+
+A SYSTEM LANE is a track the PROJECT owns rather than the user. It is
+deliberately NOT among its root's `childLinks()`, so **no index path reaches
+one** and `assert-track-count` cannot see it. Four spellings, and every verb
+that takes a `trackPath` accepts the first two:
+
+| Spelling | Reaches |
+|---|---|
+| `$master` | the root's master lane |
+| `$master,0` | its CONDUCTOR lane — one system step, then a plain child index |
+| `$send0`, `$send1`, … | send lane k, by creation (and file) order. **This is the CANONICAL spelling**, and what `pathToString()` writes |
+| `$send:<name>` | the same lane by NAME — an INPUT spelling only |
+| `Drums:$master` | any of the above in a named ARRANGEMENT |
+
+Three things about it that are not guessable:
+
+- **`$send:<name>` is resolved only by the verbs that parse their path at apply
+  time**: the five plugin verbs (`insert-plugin`, `remove-plugin`,
+  `reorder-plugin`, `set-plugin-bypass`, `set-plugin-param`) and
+  `assert-system-lane`. A name maps to a sentinel only against a particular
+  root, and `stringToPath()` is pure — it is called from `readXml()`, where
+  there is no project — so it FAILS CLOSED there and
+  `splacements::laneBySpec()` does the rewrite. Every other verb takes the
+  INDEX form, which is a plain path step and has always worked. An unresolved
+  `$send:` token becomes `SPATH_INVALID` and the verb refuses; it never
+  addresses something else.
+- **A `$`-token is never a ROOT QUALIFIER.** A spec splits on its first `:`, so
+  `$send:Reverb` would otherwise parse as the arrangement `$send`. Text before
+  the first colon that begins with `$` is part of the PATH.
+  `SProject::registerArrangement` refuses a name beginning with `$`, so the
+  reservation is enforced rather than assumed.
+- **A mistyped sentinel fails CLOSED.** `$mastr` resolves to nothing rather
+  than to track 0 — `stringToPath` used to accept any non-numeric text.
+
+### What a system lane REFUSES, and what it accepts
+
+Every refusal is ANNOUNCED with a `TW_LOG` line naming the verb and the lane;
+none is a silent no-op, and each leaves the model untouched.
+
+| | Verbs |
+|---|---|
+| **REFUSED** | every PLACEMENT (`add-sample`, `place-clip`, `place-recording`, `place-asset`, `move-clip`/`duplicate-clip` as a DESTINATION, `add-take`, `insert-midi-clip`, `place-midi-recording`, `import-midi-file`, `duplicate-asset-here`); `arm-track`, `set-monitor-mode` (every mode), `set-track-input`; `set-track-solo`; `set-track-midi-output`; `remove-track`, `move-track`, `reparent-track`; and `insert-plugin` for an INSTRUMENT |
+| **ACCEPTED** | `set-track-volume` and `set-track-mute` (both HEARD — the fader and `twGainStage`'s audio mute); `set-track-name`; `set-lane-hidden` (which REFUSES a lane that is not a system lane — the inverse rule); the four other plugin verbs, so a master or send insert chain is fully editable; and every automation verb |
+
+`set-track-solo` is refused where `set-track-mute` is accepted, and the
+asymmetry is the point: a system lane is outside `childLinks()`, which is
+exactly what `ssolorules::anySoloInTree` walks — so a solo flag there is state
+no audibility rule can ever read, while a mute has `twGainStage` to carry it.
+
+**Every registered track-addressed verb carries an explicit accept/refuse row
+in `action_roundtrip_test`**, and a verb added later with no row FAILS THE
+SUITE. The policy is a blacklist, so it is default-OPEN; that audit is the
+mitigation.
+
 | Verb | Class | Source (under smaragd/main/) | Attributes (name = default) |
 |---|---|---|---|
 | `add-automation-lane` | SAddAutomationLaneAction | objects/track/src/sautomationactions.cpp | `owner` (index path from the root mixer; the TARGET's space decides how it is resolved — `self:` as a LANE, `param:` as a lane plus `slotIndex`, `cut:` as a PLACEMENT), `target` (`self:Volume` \| `self:Muted` \| `param:<id>` \| `cut:Gain` \| `cut:VelocityScale` \| `cut:Transpose`), `slotIndex` = "-1", `take` = "-1" (< 0 = the ACTIVE take of a stack), `mode` = "trim" (off\|trim\|read\|touch\|latch\|write), `name` = "" (recovery name for a `param:` lane; resolution is always by id), child `<p t= v= c= k=/>` elements. ABSOLUTE: on a lane that already exists it writes the mode and the whole point list, which is what makes it the inverse of `remove-automation-lane`. Lanes are OWNER-HELD and never `SLink` children — see design §3.3 |
@@ -50,7 +105,7 @@ Conventions (see also `smaragd/main/testkit/CONTRACT.md`):
 | `collect-external-media` | SCollectExternalMediaAction | testkit/src/sexternmediatestactions.cpp | `expectCopied` = "-1", `expectMissing` = "-1", `expectFailed` = "-1" (-1 = not checked) — runs `smediadrop::collectExternalMedia`, the SAME pass the resources dock's "Collect external media" button runs (the shell adds only a confirmation and a report on top of it): copy every out-of-folder sample into `<projectdir>/media/` through `materialiseIntoProject` (sanitised, "name (2).ext" on a collision, NEVER an overwrite, identical bytes reused) and re-point the project at the copies. A MISSING placeholder has no bytes to copy and lands in `expectMissing`, never in `expectCopied` — a collect that counted it as done would be a lie the user discovers only on the next machine. NOT undoable and it does NOT save: it touches the file system, and writing the .qxp stays the caller's decision |
 | `assert-priming` | SAssertPrimingAction | testkit/src/stransporttestactions.cpp | `maxPolls` = "0" — how many 10 ms polls `twSpeaker` spent holding the FROZEN LANE in BUFFERING after the transport had already started, i.e. how long the readahead kept the arrangement silent under a running transport. **0 means the first check answered PLAYING**, which is what a warmed lane looks like (`twSpeaker::warmFrozenLane`, spent during a count-in). Deliberately a POLL COUNT and not a wall clock: a time bound here would bound how fast this box freezes a graph, which is not what the warm-up changes — what it changes is WHEN the freezing happens. Gate: `record_count_in_primed` |
 | `assert-locator` | SAssertLocatorAction | testkit/src/stransporttestactions.cpp | `position` = "0" (FRAMES) — a STATIC read of `SApplication::getGlobalLocatorPos()`. Unlike `wait-playhead` this needs no playback: `wait-playhead` POLLS for movement and requires the transport running, while Home/End (item j, `fader-key`/the real shortcuts) and Space/Shift+Space's resume-position (item o) move or read the locator with the transport STOPPED |
-| `assert-log` | SAssertLogAction | testkit/src/sassertlogaction.cpp | `contains` (literal substring, not a regex), `minCount` = "1", `maxCount` = "-1" (no upper bound; `minCount="0" maxCount="0"` asserts a line is ABSENT), `level` = "" (any, or error\|warn\|info\|debug\|trace) — reads the in-process `TwLog` ring, which every channel funnels into (`TW_LOG*`, `syslog()`, and Qt's qWarning/qDebug through the installed handler). There is NO log file under `--test-case` (main.cpp skips the file sink so a headless suite cannot race over one file), and the ring's capacity is raised for such a run so a long render cannot evict the line under test. THE WINDOW is the records logged since the PREVIOUS action started; two assert-logs in a row share one window, so both examine the action they follow. This is the only way to gate a RECOVERY — the audio of a repaired project is exactly the audio of one that never needed repairing |
+| `assert-log` | SAssertLogAction | testkit/src/sassertlogaction.cpp | `contains` (literal substring, not a regex), `minCount` = "1", `maxCount` = "-1" (no upper bound; `minCount="0" maxCount="0"` asserts a line is ABSENT), `level` = "" (any, or error\|warn\|info\|debug\|trace) — reads the in-process `TwLog` ring, which every channel funnels into (`TW_LOG*`, `syslog()`, and Qt's qWarning/qDebug through the installed handler). There is NO log file under `--test-case` (main.cpp skips the file sink so a headless suite cannot race over one file), and the ring's capacity is raised for such a run so a long render cannot evict the line under test. THE WINDOW is the records logged since the PREVIOUS action started; two assert-logs in a row share one window, so both examine the action they follow. **WHICH ACTION THAT IS, IS ITSELF A MEASUREMENT — and putting the assertion one action too late is the commonest way to write a VACUOUS one** (proposal 45 M7, and `master_insert_while_monitoring`'s first draft before it). A pair placed after a `wait-ms` or a `dump-playback-capture` reads THAT action's window and reports "OK — 0 records" over a line the run really did log. Measured, chasing a live-monitoring refusal: the plan is built — and refused — at **`set-monitor-mode`**, not at the `arm-track` and not at the `toggle-playback` after it, because the live set is `{armed && monitorEffective} U {monitor == on}` and monitor "on" alone puts a track in it; the two later placements each reported an EMPTY window (`log records 6 .. 6`) while the refusal sat one action behind them. When an assertion must be absent-shaped (`maxCount="0"`), verify the placement by SABOTAGING the thing it guards and confirming the pair actually fires. This is the only way to gate a RECOVERY — the audio of a repaired project is exactly the audio of one that never needed repairing |
 | `assert-meter` | SAssertMeterAction | testkit/src/smetertestactions.cpp | `trackPath` = "" (index-path from the root mixer — needed to meter a NESTED lane; falls back to `trackIndex`), `trackIndex` = "0", `position` = "0" (project frames), `minRms`/`maxRms`/`minPeak`/`maxPeak` = "-1" (< 0 = not checked), `expectMiss` = "false", `headHeight` = "0", `headWidth` = "0" (0 = the minimal SMV_TRACK_CTRL_WIDTH column), `contains` = "", `grabPng` = "", `grabVertical` = "true", `grabHead` = "" — freezes the page covering `position` itself (no transport needed) and runs the production `twLevelProbe`; with `headHeight` > 0 it also builds the REAL track head off screen via `SMainWindow::describeTrackMeter` and matches `SLevelMeter::describe()`, which reads `vis=…\|orient=…\|lanes=…\|width=…\|len=…\|peak=…\|rms=…\|hold=…\|clip=…\|db=…` (the per-lane fields are comma-separated in lane order, so a one-lane meter reads exactly as it did before proposal 36 B8). `grabPng` paints the measured level into a PNG (the only coverage of `SLevelMeter::paintEvent`); `grabHead` paints the REAL head at `headHeight` x `headWidth` with that level in its bars — AC B8.4's evidence, and the reason the head is pushed a level directly: a head built for a grab is never SHOWN, so `onMeterTick`'s isVisible() gate would leave every bar at the floor. **Lanes (proposal 36 B8):** `lanes` = "1" (how many to ask the probe for; it answers `min(lanes, page->channels())` per §4.4), `expectLanes` = "-1" (>= 0 pins the lane count — assert the WIDTH before believing any level, or a page that quietly stayed mono passes every bound on lane 0), `lane` = "0" (which lane the min/max bounds apply to; out of range is an ERROR, never a silent rms 0), `laneA`/`laneB` = "-1" and `minLaneRmsDelta` = "-1" (the CHANNEL claim: |rms(A) − rms(B)| must reach it). A missing `lanes` is inferred from the highest lane index mentioned. Never make a lane claim over `test_sawtooth.wav`, whose two channels are byte-identical (proposal 36 trap 22) — `meter_levels.qxa` uses it as the negative control instead. Measures on the LEGACY PULL path, so set a track's gain BEFORE first probing a position (see the caveat in smetertestactions.cpp) |
 | `assert-master-sums` | SAssertMasterSumsAction | testkit/src/sasserttrackchannelsaction.cpp | `position` = "0" (absolute timeline frames; the containing page is used), `tolerance` = "0.0005" (maximum absolute per-sample deviation — float32 summation is not associative, so an exact comparison would be wrong rather than strict), `stride` = "97" (compare every Nth frame; coprime with the page size so the sampled set is not a periodic pattern), `minRms` = "0" (lower bound on the master's channel 0, so a project that rendered silence cannot pass the sum trivially) — freezes the root mixer's component and every AUDIBLE top-level track's root component at the same page and checks master[c][i] == sum over tracks of track[c][i] for EVERY channel. Proposal 36 AC B4.1. Muted and soloed-out lanes are excluded because the mixer excludes them by nulling their input plug. A narrower track contributes its LAST channel to every channel above it (§4.4's clamp), exactly as `twMixer` does. The pre-B4 master ran `bus < 1` and dropped every track's second channel, which this fails |
 | `assert-media-browser` | SAssertMediaBrowserAction | testkit/src/smediatestactions.cpp | `contains` = "" (substring that must appear in `SMediaBrowserPanel::describe()`), `absent` = "", `rowCount` = "-1" (exact; -1 = not checked), `truncated` = "-1", `mode` = "" (browse\|search), `waitMs` = "0" (wait for the panel to go IDLE first). Matches the REAL panel's one-line state plus one `name,size,dir` triple per row, depth-first, so an expanded directory's children follow it. A directory's size is `-1` ("unknown"), never QFileInfo::size()'s platform junk. The panel is built in SMainWindow's ctor and NEVER shown in a headless run (proposal 38 trap T10), so describe() is the only oracle there is - and it is reached through the shell, because testkit may not include app/timeline. Proposal 38 gate 2 |
