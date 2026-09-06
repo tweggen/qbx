@@ -1,4 +1,5 @@
 #include "app/timeline/strackdetailpanel.h"
+#include "app/timeline/ssendstrip.h"
 #include "app/timeline/ssubmit.h"
 #include "app/timeline/sfadercurve.h"
 #include "app/timeline/slevelmeter.h"
@@ -211,6 +212,10 @@ void STrackDetailPanel::rebuildUI()
     // Proposal 40 M3: same discipline -- deleted and re-created per track
     // switch, never owning anything across one (the track owns its own
     // Feel Flow state; this widget is a pure reader of it).
+    if (sendStrip_) {
+        delete sendStrip_;
+        sendStrip_ = nullptr;
+    }
     if (feelFlowPanel_) {
         delete feelFlowPanel_;
         feelFlowPanel_ = nullptr;
@@ -226,6 +231,14 @@ void STrackDetailPanel::rebuildUI()
         feelFlowPanel_ = new SFeelFlowPanel(currentTrack_, this);
         feelFlowPanel_->setParent(contentWidget_);
         contentLayout_->insertWidget(1, feelFlowPanel_, 0);
+
+        // Proposal 47 M5. BELOW the FX chain and the Feel Flow section, and
+        // with stretch 0: a send list is a handful of fixed-height rows, so
+        // giving it stretch would take space from the plugin list, which is
+        // the section that actually grows.
+        sendStrip_ = new SSendStrip(currentTrack_, this);
+        sendStrip_->setParent(contentWidget_);
+        contentLayout_->insertWidget(2, sendStrip_, 0);
 
         // Update volume slider, through the shared curve so this fader and the
         // arranger's put the same dB in the same place.
