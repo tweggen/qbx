@@ -1,5 +1,17 @@
 # Proposal 45 — System lanes: the master track, its inserts, and the shape send tracks will take
 
+> **STATUS: EXECUTED, M0-M8, 2026-09-06.** Each milestone below carries an
+> "as executed" section with what was measured and what the design did not
+> anticipate. Read those before the design text they follow — several of them
+> record that the design's own reading was wrong.
+>
+> **What was deliberately NOT built: the send TAP and everything routing.**
+> A send lane exists, is named, carries a chain and a fader, sums into the
+> master and round-trips — and nothing can feed it. D10 sizes the tap, feedback
+> prevention for A -> B -> A, and PDC across a send at "at least the size of
+> this proposal". M7 asserts the ABSENCE of routing rather than implying its
+> presence.
+
 > **Status: M0 and M1 EXECUTED (2026-09-01); M2 onward proposed.** The milestones below are
 > ordered so that the two genuinely dangerous changes (M2's shape check and M3's
 > Closure wiring) land before any UI can reach the situation they cover.
@@ -1864,6 +1876,46 @@ lifted, the restore has to learn an index and this case will not notice.
   than quoting any figure from `CLAUDE.md`.
 - **Gate:** documentation review; `docs/ACTIONS.md` rows verified against the
   registered verbs by `action_roundtrip_test`.
+
+#### M8 as executed (2026-09-06)
+
+**AC8.1** — the contracts were written AS EACH MILESTONE LANDED rather than
+here, which is why this milestone is small; what M8 found missing was
+`main/timeline/CONTRACT.md` (inv. 32-37: the pinned rows, the null link, the
+one hiding mechanism, hidden-is-never-audio, the `systemRowsOutOfDate` subtree
+rule and the `pathOf` gesture rule) and `main/objects/mixer/CONTRACT.md`
+inv. 16-19 (the conductor lane, the send lanes' wiring inside the rewire pass,
+the mute/solo asymmetry, the removal pin). `main/shell/CONTRACT.md` inv. 18a
+was already rewritten in M3 and needed nothing.
+
+**AC8.2** — `docs/ACTIONS.md` gains an ADDRESSING section (the four spellings,
+which verbs resolve `$send:<name>` and why the rest do not, and the
+fail-closed rule) plus the accept/refuse table.
+
+**AC8.3** — `CLAUDE.md` gains the section, headed by D4a/T1 as this AC asks.
+It is organised around SIX "the obvious design is wrong" rows and, separately,
+**three gate-shaped lessons that have nothing to do with system lanes** — two
+of which silently produce a GREEN gate over a live defect, and are therefore
+the part most worth carrying forward:
+
+1. a refusal that already happens BY ACCIDENT is not gated by asserting the
+   refusal (the three structural verbs: with each explicit check deleted, zero
+   assertions moved);
+2. `assert-log`'s window opens at the PRECEDING action, and one action too late
+   reads "OK - 0 records" over a live failure (measured: an empty window,
+   `log records 6 .. 6`, while the refusal sat one action behind);
+3. `processEvents()` never delivers `QEvent::DeferredDelete`, so a
+   `--test-case` run cannot see an object's LIFETIME (deleting a pin changed
+   NOTHING; with the new `drain-pending-deletes` the same sabotage SEGFAULTS).
+
+**AC8.4** — the PR body was kept current across M5-M8 and reports measured
+counts.
+
+**NOT done in M8:** nothing was re-gated. M8 is documentation, so its only
+mechanical check is `action_roundtrip_test` (which verifies the verb rows
+against the registry) and the four pre-commit checkers. No claim in the new
+prose is asserted by a test that did not already exist — the measurements it
+quotes were taken in M5-M7 and are cited there.
 
 ---
 

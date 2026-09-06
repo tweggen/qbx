@@ -1442,3 +1442,70 @@ deliberately NOT wired: a clip's start time has no default to revert to.
 
 Gate: `qxa.detail_pane_reset_defaults`, watched failing with each pane's
 wiring removed independently.
+
+## System-lane ROWS (proposal 45 M4 / M6 / M7)
+
+A SYSTEM LANE is a track the PROJECT owns rather than the user — the master,
+its conductor lane, and the send lanes. It is deliberately NOT among its root's
+`childLinks()` (D2), so `appendRowsFor()`, which walks exactly that list, finds
+nothing to append and every one of these rows is APPENDED instead.
+
+32. **The system rows are PINNED BELOW every user lane, and the ordering needs
+    no rule to enforce it.** `appendSystemRows()` runs once at the end of
+    `rebuildRows()`. A user lane cannot be dragged below the master because
+    there is no row after it to drop onto. The order within the block is signal
+    order — the master and its own sub-lanes, then the sends — so it reads as
+    "everything that sums, then what it sums into".
+
+33. **The master lane's row carries a NULL `link`, and every reader of a row's
+    link is guarded.** The alternative — minting a synthetic `SLink` so the view
+    has something to hold — would put a model object into existence for the
+    view's convenience and then have to be kept out of every walk that
+    enumerates children. A CONDUCTOR row is the opposite case and carries a REAL
+    link, because a conductor lane genuinely IS a child link of the master.
+
+34. **HIDING IS ONE MECHANISM, and it is `SObject::laneHidden()`, asked in the
+    row walk itself.** It defaults to `laneHiddenByDefault()` — false for every
+    ordinary track, true for every system lane — so the test is a NO-OP for user
+    lanes (`set-lane-hidden` refuses them outright) and is what keeps a
+    conductor or send lane hidden until somebody asks for it. A hidden lane
+    takes its SUBTREE with it, which is the same thing a collapsed one does and
+    the only reading under which "hidden" means hidden.
+
+    `appendRowsFor()` did NOT consult it until M6, which is why a conductor lane
+    could not be hidden at all. And `SObject::isHidden()` is a DIFFERENT flag —
+    a plain field the master lane's constructor sets and that nothing else in
+    the app reads (every other `isHidden()` in the tree is `QWidget`'s). Ask
+    what the row walk asks.
+
+35. **HIDDEN IS A VIEW STATE AND NEVER AN AUDIO ONE.** A hidden master lane is
+    fully in the signal path: its inserts run, its fader applies, its mute is
+    heard. Gate: `master_lane_hidden_still_audible`.
+
+36. **`systemRowsOutOfDate()` compares the WANTED system lanes against `rows_`
+    intersected with the whole master SUBTREE**, and both halves of that
+    sentence were got wrong once each.
+
+    It knew only about the MASTER LANE until M6 — so a `set-lane-hidden` on a
+    conductor changed the model, this answered false, the rows were never
+    rebuilt, and the lane appeared only after some unrelated edit forced one
+    (measured: **2 rows where 3 was due**). And the obvious repair, intersecting
+    `rows_` with the WANTED set, is wrong in the other direction: with nothing
+    wanted the intersection is empty whether a stale row is there or not, so
+    hiding the master again left its row on screen (measured: **4 where 3 was
+    due**, on `master_lane_rows`' own undo step). The membership set is needed
+    because `rows_` also holds every user lane.
+
+37. **A gesture on a system row derives its commit address the ORDINARY way,
+    through `strackpath::pathOf()`** — which descends into system lanes (D9).
+    Nothing in the row code special-cases the address, and that is the point:
+    without the descent `pathOf` answers `{}`, which is also the address of the
+    root mixer, and a master fader would commit to the mixer or to nothing.
+
+    **The assertion that catches it is not the obvious one.** A head control
+    writes the value into the track it was BUILT for whatever address it then
+    commits to, so the addressed lane's own value check keeps PASSING over the
+    defect. What bites is reading back the lanes it must NOT have touched:
+    measured, with the descent deleted, `$master` read −5.93336 dB where 0 was
+    due while the conductor's own −6 dB check was still green. Gates:
+    `master_head_fader_heard`, `conductor_lane_addressing`.

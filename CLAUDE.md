@@ -216,12 +216,23 @@ plan/
     │                                 the page carries N planar channels; read
     │                                 §4.3-§4.6 and the 28 traps before touching
     │                                 channel width anywhere)
-    └── 38_MEDIA_BROWSER.md          (EXECUTED 2026-08-18, all six gates — the
-                                      media browser dock, the local and
-                                      Nextcloud/WebDAV providers, the fetch
-                                      cache and SSecretStore. The real-server
-                                      runbook is PENDING:
-                                      docs/MEDIA_BROWSER_MANUAL_GATE.md)
+    ├── 38_MEDIA_BROWSER.md          (EXECUTED 2026-08-18, all six gates — the
+    │                                 media browser dock, the local and
+    │                                 Nextcloud/WebDAV providers, the fetch
+    │                                 cache and SSecretStore. The real-server
+    │                                 runbook is PENDING:
+    │                                 docs/MEDIA_BROWSER_MANUAL_GATE.md)
+    └── 45_SYSTEM_LANES.md           (EXECUTED 2026-09-06, M0-M8 — the mixer's
+                                      output stage is a REAL TRACK: a master
+                                      lane with inserts, fader, mute, meter,
+                                      automation and a row; a conductor lane
+                                      under it; send lanes summing into it.
+                                      Each milestone carries an "as executed"
+                                      section with the measurements. The SEND
+                                      TAP is deliberately NOT built — D10
+                                      sizes routing at "at least the size of
+                                      this proposal" — so a send lane exists
+                                      and nothing can feed it, said out loud)
 docs/
 ├── PROJECT_OVERVIEW.md   # This document's source
 ├── ARCHITECTURE.md       # Module map (start here for code navigation)
@@ -2650,6 +2661,71 @@ scroll area, and no verb builds it for measurement); the clip pane's stretch,
 formant-shift, transpose and velocity-scale resets (wired, no case — this
 fixture holds no event clip); and the double-click's effect on a spin box's
 text selection, which it replaces inside those seven fields.
+
+## System lanes: the master, conductor and send lanes (proposal 45 — M0-M8 executed 2026-09-06)
+
+The mixer's output stage is a REAL TRACK. `<SProject>` gains a master lane with
+its own insert chain, fader, mute, meter, automation and arranger row; a
+CONDUCTOR lane hangs off it for the project-wide non-audio material; and SEND
+lanes sum into it. All of them are `systemRole() != None` — lanes the PROJECT
+owns rather than the user. Design and the eighteen traps:
+`plan/proposed/45_SYSTEM_LANES.md`, whose per-milestone "as executed" sections
+carry the measurements. Invariants: `main/objects/mixer/CONTRACT.md`,
+`main/objects/track/CONTRACT.md`, `main/model/CONTRACT.md`,
+`main/timeline/CONTRACT.md` inv. 32-37, `main/shell/CONTRACT.md` inv. 18a.
+Addressing and the full refusal table: `docs/ACTIONS.md`.
+
+**Read this before touching a system lane — the obvious design is wrong SIX
+times here, and every one of them was found the way the level meters', the
+metronome's and the folder overlay's were: by asking what the ENGINE already
+does rather than what looks natural to build.**
+
+| Thing to know | Why |
+|---|---|
+| **THE LIVE-MONITORING SHAPE CHECK CANNOT SEE A MASTER CHAIN, and that is the first thing to know about this whole proposal** (D4a/T1) | `twlive::checkMasterShape` decides whether monitoring takes the cheap LINEAR split (the RT sums the ring onto the frozen root page) or the Closure path. It inspects the MIXER — input levels, the rewire's channel map, the widths — and a master lane's insert chain and fader are downstream of everything it looks at. So a limiter on the master would have been silently summed on top of a page that had already been through it. The answer is `twMasterShape::fromMasterLane`: a LANE-caused Closure is RENDERED by the pump; a MIXER-caused one is still REFUSED, because the pump can express the first and not the second. |
+| **A SYSTEM LANE HAS NO SUMMING PARENT, and that single fact decides mute, solo and everything structural** | A user track's mute and solo are applied BY ITS PARENT — the mixer nulls its input plug, a folder `setClipMuted`s it. The master lane is not in anybody's `childLinks()` (D2), so nothing applies either. MUTE is therefore wired to `twGainStage`'s audio mute (which P3a built and left unwired for everything but `self:Muted`) and is HEARD; SOLO is REFUSED, because `ssolorules::anySoloInTree` walks exactly those child links and a flag there is state no audibility rule can ever read — the `SStdMixer::volume_` defect in a new field. Accepting one and refusing the other is not an inconsistency; it is the same fact read twice. |
+| **`invalidateRenderPath()`, never `bumpRenderChainEpoch()`, for a master-lane edit** | Measured: with the epoch bump alone, a muted render came back BYTE-IDENTICAL to the unmuted one. The mute is baked into every frozen page from the gain stage downstream, and only the full walk reaches them. `onTrackVolumeChanged` had it right all along; the mute path had to copy it rather than invent a lighter one. |
+| **`reconnectTracksToMixer` REWIRES EVERY INPUT on every audibility, solo, mute and arm change — so anything wired beside it is CLOBBERED by the next button press** (T3) | It sizes the input count from the TRACK count. A send lane wired into a spare input at creation or at load therefore works until the user toggles a solo somewhere else entirely. The pass itself now reserves the trailing inputs and fills them in the same loop, which is what makes the wiring idempotent under repetition. **And the unity level is load-bearing, not a levelling detail**: `checkMasterShape` refuses the LINEAR split on ANY non-unity input, so a send at -3 dB drops live monitoring into the Closure path for every armed track in the project. |
+| A CONDUCTOR lane is an **ordinary child link of the master**, not a second sentinel | `{-1,0}` is one system step then a plain index, so it needs no new path machinery, no new serialization (an `<SLink>` child of the master's own element, exactly like a nested user track), no new refusal and no new hiding rule. It contributes no audio for TWO independent reasons and both are worth knowing, because either alone would do and a later milestone must not lean on the wrong one: it carries no clips or instrument, AND the master lane's own `twTrackMix` drives nothing at all (`wireAsMasterLane` takes the mixer's sum straight into the chain — AC2.8/D3). |
+| **M7 built the send lane's SHAPE and deliberately nothing that can feed it** | No send TAP, no feedback prevention for A -> B -> A (the scheduler's dependency counting will deadlock or spin on a cycle rather than fail cleanly), no PDC across a send. D10 sizes that at "at least the size of this proposal". The milestone asserts the ABSENCE of routing rather than implying its presence: the same project renders byte-identically with and without a send lane, and with and without a chain on it. |
+| Hiding is ONE mechanism (`SObject::laneHidden()`) and is a VIEW state, never an audio one | A hidden master lane is fully in the signal path. `SObject::isHidden()` is a DIFFERENT, near-dead flag that only the master's constructor sets — ask what the row walk asks. |
+| `twTempoMap` stays THE tempo authority, and a script enforces it | A conductor lane's content must be a VIEW of the map, never a second store (D7), which needs a curve model for ramps and is a proposal of its own. `tools/check_tempo_authority.py` is the FOURTH pre-commit checker: no tempo MEMBER on the track or mixer slices, and the `setBPMTempo` / `bpmTempo_` writers confined to three files. |
+
+### Three gate-shaped lessons this proposal paid for, none of them about system lanes
+
+These are general and they cost real time here. Two of them silently produce a
+GREEN gate over a live defect.
+
+| Lesson | The measurement |
+|---|---|
+| **A refusal that already happens by ACCIDENT is not gated by asserting the refusal.** `remove-track` / `move-track` / `reparent-track` address a track as "its parent, plus its index in that parent"; `$master` splits into an empty parent path and the index `-1`, `childAt(-1)` answers null, and all three ALREADY refused. Deleting the explicit checks left the case **green**. What the accident does not do is ANNOUNCE — so the gate is D6's own "a bound is ANNOUNCED, never silent", one `assert-log` per verb. The explicit checks stay because the accident dies the moment a send lane gets a name form or a conductor nests one level down | with each check deleted: 0 assertions moved |
+| **`assert-log`'s window opens at the PRECEDING action, and putting the pair one action too late writes a vacuous assertion that reads "OK - 0 records" over a live failure.** Chasing a monitoring refusal: the live plan is built — and refused — at **`set-monitor-mode`**, because the live set is `{armed && monitorEffective} U {monitor == on}` and monitor "on" ALONE puts a track in it. Not at the `arm-track`, not at the `toggle-playback`. **Verify an absent-shaped assertion by sabotaging the thing it guards** | the two later placements each read an EMPTY window, `log records 6 .. 6` |
+| **`processEvents()` does NOT deliver `QEvent::DeferredDelete` at loop level 0, so a `--test-case` run CANNOT SEE AN OBJECT'S LIFETIME.** `SObject::removeRef()` answers a zero refcount with `deleteLater()`; nothing in a scripted run delivers it (which is why `smaragdOrderlyShutdown()` drains them by hand before `std::exit()`). An object that should have died lingers for the whole script, so a case cannot tell "kept alive on purpose" from "nothing has got round to deleting it". The new `drain-pending-deletes` verb closes it — use it wherever a case's claim is about a LIFETIME | deleting the `addRef()` that pins a removed send lane changed NOTHING; with the drain in place the same sabotage **SEGFAULTS** |
+
+### Two verbs worth knowing about
+
+- **`assert-master-inputs`** — the master sum's input count and levels, read off
+  the live `twMixer` through `SStdMixer`'s own accessors (`app/testkit` may not
+  include `tw/mix`). **The only thing that can see a clobbered send lane**: in
+  M7 nothing can feed a send, so a wired one and a wiped one are BOTH silent and
+  no audio assertion anywhere can separate them — the missing-sample
+  placeholder's shape again.
+- **`drain-pending-deletes`** — see the table above. A test verb, not a fix:
+  production pumps its own event loop.
+
+**NOT gated, and the list is long on purpose:** the send TAP and everything
+routing (above); SOLO's interaction with a send lane (invisible to
+`anySoloInTree` by construction, and moot while nothing feeds one); a user track
+reparented INTO a system lane (AC5.2 asks about the ADDRESSED object; D3 gives
+the master child tracks, so a destination refusal is a design decision, not a
+policy one — named, not decided); `group-track` / `set-edit-group` /
+`set-track-midi-routing` on a system lane (decisions recorded in the AC5.6
+table, behaviour not proved); the conductor lane's CONTENT in every sense (it
+has none); a second conductor lane or one nested inside another; a send lane
+removed and restored keeps its chain, but removing one from the MIDDLE is
+refused outright (the sentinel IS the address); the ~1.5 ms mute ramp itself;
+and PIXELS anywhere — a master, conductor or send row is `SSMVMixerControl`
+unchanged, and no `paintEvent` of one is measured.
 
 ## Dependencies
 
