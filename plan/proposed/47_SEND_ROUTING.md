@@ -477,8 +477,65 @@ the mechanism the dropout follows from.
 **Suite:** 368 registered / 363 run / 5 disabled, reconciled both ways, all
 green. Goldens byte-identical.
 
-**M5 — UI.** Send controls on the track head / detail pane, and the send lane's
-own strip. Depends on nothing above except M1.
+### M5 as executed (2026-09-06)
+
+A **Sends** section in the Track Detail dock: one row per send lane, with an
+enable box, the lane's name, a level in dB and a pre/post choice, each
+committing through M0's ordinary verbs. It is the first surface that makes
+those verbs reachable by hand — until now they existed only in a `.qxa`
+script, exactly as proposal 41's fragment verbs did before its menu items
+landed.
+
+**A ROW EXISTS PER SEND LANE, NOT PER TAP.** Ticking one CREATES the tap, so a
+user does not first have to discover a separate "add" gesture, and a lane with
+no tap still shows — "there is a Reverb bus and this track does not feed it" is
+visible rather than inferred from an absence. **Unticking DISABLES; it does not
+remove**, which is the whole reason `SSendTap::enabled` exists: a level and a
+pre/post choice must survive being switched off, or a user toggling a send off
+and on finds it back at 0 dB post.
+
+A lane's own strip offers every OTHER lane and no row for itself. The verb
+refuses a self-send anyway; a control that exists only to be rejected is worse
+than one that is not offered.
+
+**THE WIRING IS GATED, AND THAT IS NEW FOR THIS REPO.** `send-strip-set` moves
+the REAL control and lets Qt deliver the signal, so **a missing `connect()`
+fails**. Every context menu this project has shipped — proposal 41's Pack /
+Unpack items, 45's Show-system-lanes item, the metronome button's right-click
+menu — is hand-verified only, because there is no testkit verb for a context
+menu. A WIDGET is different: it can be built off screen and driven, which
+`assert-track-head` and `assert-track-detail-layout` already do for geometry.
+Sabotage S1 removes the checkbox's `connect()` and five assertions fail.
+
+**Sabotages, four, each biting its own assertions:** the checkbox connected to
+nothing (#9, #10, #14, #16, #18); unticking REMOVING instead of disabling
+(#22, #24 — the two that assert the level and mode survive); a self row offered
+(#25, #26); the level control editing the model but never reaching the bus
+(#16, #18, **#20 the audio**, #22, #24).
+
+The case also ends on `assert-track-detail-layout` at 260 px and 600 px with
+`maxCrushed=0 maxOverlap=0`: the rows are fixed-height and mount at stretch 0,
+so a short dock scrolls rather than laying the FX chain and the sends on top of
+each other — the defect `fix/detail-pane-layout` fixed and this section could
+have reintroduced.
+
+**A defect this found in the new seam:** `describeSendStrip` first resolved its
+track with `splacements::laneAt`, which cannot resolve a system-lane sentinel
+at all — so `$send:Reverb` returned nothing and the assertions read an EMPTY
+description rather than failing on the lane. Through `laneBySpec` now, which is
+what every other system-lane-aware verb uses.
+
+**NOT gated, hand-verified only:** that the section appears where a user
+expects it and what it looks like. `screenshot` grabs a root window that is
+blank under `QT_QPA_PLATFORM=offscreen`, so pixels stay out of reach — the
+standing gap this repo works around by building one widget and measuring
+geometry. Also not gated: the strip's behaviour when a send lane is added or
+removed while the dock is open (it rebuilds on track switch, not on a lane
+change), and the double-click-to-0 dB reset on the level spin box (wired
+through `sdefaultreset`, no case).
+
+**Suite:** 369 registered / 364 run / 5 disabled, reconciled both ways, all
+green. Goldens byte-identical.
 
 **M6 — contracts and docs.** `main/objects/mixer/CONTRACT.md`,
 `main/objects/track/CONTRACT.md`, `docs/ACTIONS.md`, `CLAUDE.md`, and this

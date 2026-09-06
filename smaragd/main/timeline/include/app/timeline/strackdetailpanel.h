@@ -19,6 +19,8 @@ class QLabel;
 // file list) — it carries no title row or collapse button of its own, because
 // the dock's title bar already names it and the View menu / its close button
 // already show and hide it.
+class SSendStrip;
+
 class STrackDetailPanel : public QWidget {
     Q_OBJECT
 public:
@@ -74,6 +76,10 @@ private:
     // every track switch (rebuildUI() owns nothing long-lived — the state it
     // reads lives on the track, sfeelflowpanel.h's own doc).
     SFeelFlowPanel *feelFlowPanel_ = nullptr;
+    // Proposal 47 M5: mounted and torn down exactly like the two above, on
+    // every track switch. It shows nothing at all when the arrangement has no
+    // send lanes, so a project that uses none pays no height for the section.
+    SSendStrip *sendStrip_ = nullptr;
     // The volume row sits OUTSIDE the scroll area: the fader and the meter are
     // what a user looks at while the transport runs, so they stay put however
     // far the FX/Feel Flow content above them is scrolled.

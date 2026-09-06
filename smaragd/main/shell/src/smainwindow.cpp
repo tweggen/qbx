@@ -92,6 +92,7 @@
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/strackdetailpanel.h"
+#include "app/timeline/ssendstrip.h"
 #include "app/timeline/sfeelflowpanel.h"
 #include "app/timeline/sfeelflowpuppet.h"
 #include "app/objects/track/sfeelflowbounce.h"
@@ -3283,6 +3284,51 @@ QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
         .arg( st.crushed ).arg( st.overlap )
         .arg( scrollNeeded ? 1 : 0 )
         .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
+}
+
+namespace {
+
+// The panel a send-strip query is answered from: the REAL STrackDetailPanel
+// with the REAL strip inside it, parentless and never shown — describeTrackHead
+// and describeTrackDetailLayout build theirs the same way and for the same
+// reason (a --test-case run shows no window at all).
+STrack *sSendStripTrack( const QString &trackPath )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return nullptr;
+    // THROUGH laneBySpec, not laneAt: a SEND lane has a strip of its own (it
+    // may feed another send), and "$send:Reverb" is the spelling a case will
+    // reach for. laneAt cannot resolve a system-lane sentinel at all, so the
+    // first version of this returned nothing for one and the assertions read
+    // an empty description rather than failing on the lane.
+    QString rootName;
+    SObject *lane = splacements::laneBySpec( proj, trackPath, rootName );
+    return dynamic_cast<STrack *>( lane );
+}
+
+}  // namespace
+
+QString SMainWindow::describeSendStrip( const QString &trackPath )
+{
+    STrack *track = sSendStripTrack( trackPath );
+    if( !track ) return QString();
+    STrackDetailPanel panel( nullptr );
+    panel.setTrack( track );
+    sSettleLayout( &panel, 320, 400 );
+    SSendStrip *strip = panel.findChild<SSendStrip *>();
+    return strip ? strip->describe() : QString();
+}
+
+bool SMainWindow::driveSendStrip( const QString &trackPath, const QString &lane,
+                                  const QString &control, double value )
+{
+    STrack *track = sSendStripTrack( trackPath );
+    if( !track ) return false;
+    STrackDetailPanel panel( nullptr );
+    panel.setTrack( track );
+    sSettleLayout( &panel, 320, 400 );
+    SSendStrip *strip = panel.findChild<SSendStrip *>();
+    return strip && strip->driveControl( lane, control, value );
 }
 
 bool SMainWindow::doubleClickDetailControl( const QString &which,

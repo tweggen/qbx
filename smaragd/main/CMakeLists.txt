@@ -352,6 +352,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/ssubmit.h
     timeline/include/app/timeline/sstdmixerview.h
     timeline/include/app/timeline/strackdetailpanel.h
+    timeline/include/app/timeline/ssendstrip.h
     timeline/include/app/timeline/sfeelflowpanel.h
     timeline/include/app/timeline/sfeelflowpuppet.h
     timeline/include/app/timeline/sfadercurve.h
@@ -360,6 +361,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/szoomscrollbar.h
     timeline/src/sautomationlane.h
     timeline/src/sautomationlane.cpp
+    timeline/src/ssendstrip.cpp
     timeline/src/sfeelflowpanel.cpp
     timeline/src/sfeelflowpuppet.cpp
     timeline/src/sclippropertiespanel.cpp
@@ -504,6 +506,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertsystemlaneaction.h
     testkit/include/app/testkit/sassertsendsaction.h
     testkit/include/app/testkit/sassertsendinputsaction.h
+    testkit/include/app/testkit/ssendstripactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
     testkit/src/sassertaudioenergyaction.cpp
@@ -561,6 +564,7 @@ set(APP_UI_FILES
     testkit/src/sassertsystemlaneaction.cpp
     testkit/src/sassertsendsaction.cpp
     testkit/src/sassertsendinputsaction.cpp
+    testkit/src/ssendstripactions.cpp
     # proposal 38 gate 4: the WebDAV stub server. Deliberately NOT under
     # include/app/testkit/ -- it is not part of testkit's public action-verb
     # API, only a fixture two things link directly: this gate's own

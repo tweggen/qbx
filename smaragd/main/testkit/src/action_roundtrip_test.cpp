@@ -678,6 +678,14 @@ const Fixture kFixtures[] = {
     { "assert-send-inputs",
       "<assert-send-inputs lane='Reverb' count='2' wired='1' index='0'"
       " level='-6'/>" },
+    // rows / contains / absent are written only when given; the fixture gives
+    // all three so none escapes the audit.
+    { "assert-send-strip",
+      "<assert-send-strip trackPath='1' rows='2' contains='lane=Reverb'"
+      " absent='lane=Delay'/>" },
+    { "send-strip-set",
+      "<send-strip-set trackPath='1' lane='Reverb' control='level'"
+      " value='-6'/>" },
 };
 
 const char *fixtureFor(const QString &verb)
@@ -1011,6 +1019,14 @@ const LaneRow kLaneRows[] = {
     // for every verb that can touch a system lane, and this one exists FOR
     // them.
     { "assert-send-inputs", Accept, "read-only; it exists FOR send lanes" },
+    // Proposal 47 M5. Both address a lane by path and BOTH accept a system
+    // lane, deliberately: a SEND lane has a Sends strip of its own, because a
+    // send may feed another send (D6's cycle walk is what makes that safe).
+    // The one row a lane's own strip does NOT offer is itself, and that is a
+    // property of the strip rather than of the address.
+    { "assert-send-strip", Accept, "read-only; a send lane has a strip too" },
+    { "send-strip-set",    Accept,
+      "47/M5: a send lane may feed another send, so its strip is drivable" },
 
     // ==================== NOT A DESTINATION OR SUBJECT ====================
     { "remove-sample",  NotApplicable,
