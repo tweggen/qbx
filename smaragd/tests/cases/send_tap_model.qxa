@@ -3,18 +3,23 @@
   Proposal 47 M0: THE SEND TAP EXISTS IN THE MODEL, ROUND-TRIPS, AND REFUSES
   EVERY ROUTING D6 SAYS IT MUST - AND IT IS STILL INAUDIBLE.
 
-  M0 IS MODEL ONLY, and this case asserts that as its FIRST claim rather than
-  leaving it implied. Proposal 45 M7 shipped a send lane nothing could feed;
-  this milestone ships the tap that will feed it and does NOT yet wire the send
-  bus (M1). So a project with taps all over it must still render BYTE-
-  IDENTICALLY to the same project with none - T8, the negative control for the
-  whole proposal, and the thing that keeps both committed goldens unmoved.
+  THIS CASE IS THE MODEL HALF: the tap's fields, its verbs, its undo and its
+  round trip. What a tap SOUNDS like is send_bus_audible's subject, and the two
+  are kept apart deliberately - an assertion that needs a render cannot tell a
+  tap that is missing from one that is merely quiet.
 
-  ONLY assert-sends CAN BITE HERE, and that is the same shape the missing-
-  sample placeholder had: until M1 wires a bus, a tap that is present and a tap
-  that was silently dropped are BOTH inaudible, so no audio assertion anywhere
-  can separate them. An energy bound would pass over a serializer that wrote
-  nothing at all.
+  T8, THE NEGATIVE CONTROL, IS STATED IN THE FORM THAT SURVIVES M1. When M0
+  stood alone it read "a tap changes nothing", because no bus was wired; M1
+  wires one and that sentence is now false by design. The claim that remains,
+  and the one that actually protects both committed goldens, is narrower and
+  stronger: A SEND LANE WHOSE TAPS ARE ALL DISABLED IS BYTE-IDENTICAL TO NO
+  SEND AT ALL. That gates the `enabled` flag reaching the bus at the BYTE
+  level, which is a harder statement than the RMS bound send_bus_audible makes
+  for the same flag.
+
+  ONLY assert-sends CAN BITE THE MODEL HALF, and that is the missing-sample
+  placeholder's shape: a tap that round-trips wrong and a tap that was silently
+  dropped can both be inaudible, so no audio assertion separates them.
 
   THE REFUSALS ARE THE SUBSTANCE (D6). The cycle one is not tidiness: the page
   scheduler dedups nodes by (component, pageStart) and guards recursion at
@@ -117,14 +122,22 @@
     <assert-log level="warn" minCount="1" contains="this would create a send CYCLE"/>
     <assert-sends track="$send:Reverb" count="0"/>
 
-    <!-- ================= T8: STILL INAUDIBLE, BYTE FOR BYTE ============= -->
-    <!-- Two send lanes, three taps between them, and nothing is wired: the
-         render must match the one taken before any of it existed. A send bus
-         that leaked so much as a dither bit would fail here and would pass any
-         energy bound. -->
+    <!-- ============ T8: EVERY TAP DISABLED IS BYTE-IDENTICAL =========== -->
+    <!-- The Reverb tap is already disabled; switch the other two off so no
+         enabled tap remains anywhere. The render must then match the one taken
+         before any send lane existed - a bus that leaked so much as a dither
+         bit would fail here and would pass any energy bound. -->
+
+    <set-send track="0" dest="Delay" enabled="false"/>
+    <set-send track="$send:Delay" dest="Reverb" enabled="false"/>
 
     <render filename="tap_present.wav" format="wav" quality="10" durationSec="2.0"/>
     <assert-file-identical actual="tap_present.wav" expected="tap_none.wav"/>
+
+    <!-- ...and back on, so the round trip below carries a MIX of states rather
+         than three identical flags. -->
+    <set-send track="0" dest="Delay" enabled="true"/>
+    <set-send track="$send:Delay" dest="Reverb" enabled="true"/>
 
     <!-- ================= THE ROUND TRIP ================================= -->
     <!-- Inline `<sends>`, written only when non-empty, invisible to an older

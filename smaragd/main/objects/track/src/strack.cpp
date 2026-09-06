@@ -785,6 +785,41 @@ void STrack::wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
     if( cpRewire_ ) cpRewire_->setInput( 0, nullptr );
 }
 
+void STrack::wireAsSendLane( const std::shared_ptr<twMixer> &sum )
+{
+    if( !sum || !cpDspChain_ || !cpGainStage_ || !cpRewire_ ) return;
+    cpDspChain_->setInput( 0, sum->linkOutput( 0 ) );
+    cpDspChain_->rebuildWiring();
+    cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+    // ...and, UNLIKE the master lane, into this lane's OWN rewire, which is
+    // what the master sum already reads as this lane's root component. See the
+    // header for why that one difference is the whole of D1.
+    cpRewire_->setInput( 0, cpGainStage_->linkOutput( 0 ) );
+}
+
+void STrack::unwireSendLane()
+{
+    if( !cpDspChain_ ) return;
+    // Back to the constructor's wiring (strack.cpp's own
+    // `cpDspChain_->setInput( 0, cpTrackMix_->linkOutput( 0 ) )`), so a lane
+    // that stops being a send lane is an ordinary track rather than one whose
+    // chain has no input at all.
+    cpDspChain_->setInput( 0, cpTrackMix_ ? cpTrackMix_->linkOutput( 0 )
+                                          : nullptr );
+    cpDspChain_->rebuildWiring();
+    if( cpGainStage_ ) cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+    if( cpRewire_ )    cpRewire_->setInput( 0, cpGainStage_
+                                                   ? cpGainStage_->linkOutput( 0 )
+                                                   : nullptr );
+}
+
+std::shared_ptr<twComponent> STrack::sendTapComponent( bool preFader ) const
+{
+    if( preFader )
+        return std::static_pointer_cast<twComponent>( cpDspChain_ );
+    return std::static_pointer_cast<twComponent>( cpGainStage_ );
+}
+
 void STrack::bumpRenderChainEpoch()
 {
     // Every model change that reaches this track passes through here on the

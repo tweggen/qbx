@@ -158,6 +158,7 @@ SApplyResult SAddSendAction::apply( SProject *project )
     tap.preFader = preFader_;
     tap.enabled = enabled_;
     if( !r.source->setSendTap( tap ) ) return { false, nullptr };
+    r.mixer->sendRoutingChanged();
 
     return { true, inverseFor( track_, dest_, arrangement_,
                                had ? &prev : nullptr ) };
@@ -212,6 +213,7 @@ SApplyResult SRemoveSendAction::apply( SProject *project )
     }
     const SSendTap prev = *existing;
     r.source->removeSendTap( dest_ );
+    if( r.mixer ) r.mixer->sendRoutingChanged();
 
     return { true, new SAddSendAction( track_, dest_, prev.levelDb,
                                        prev.preFader, prev.enabled,
@@ -272,6 +274,7 @@ SApplyResult SSetSendAction::apply( SProject *project )
     // Changing the MODE does not change the routing graph, so no cycle walk is
     // needed here: the destination is unchanged by construction.
     r.source->setSendTap( tap );
+    r.mixer->sendRoutingChanged();
 
     return { true, new SAddSendAction( track_, dest_, prev.levelDb,
                                        prev.preFader, prev.enabled,

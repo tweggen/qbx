@@ -181,26 +181,43 @@ Unchanged from 37 P9 and 45. A latency-reporting insert on a send lane makes the
 wet path late by exactly its reported amount. This proposal adds no delay line
 and does not pretend to.
 
-### D9. THE LIVE-MONITORING HOLE, and it is the hardest thing here
+### D9. A LIVE LANE DOES NOT FEED A SEND — DECIDED, requester call 2026-09-06
 
-**An armed, monitored track's send is SILENT, and that falls out of the design
-rather than being chosen.** The live plan excludes a live-owned track from the
-frozen sum — the mixer nulls its input plug — and the pump renders it
-block-wise straight into the ring. Its send tap, however, is on the FROZEN path:
-the send bus reads the track's `twGainStage`, whose pages are the pages that are
-no longer being produced. So while a guitarist monitors through their chain, the
-reverb they hear on playback drops out.
+**An armed, monitored track's send is SILENT, and that is the behaviour, not a
+defect to be worked around later.**
 
-Three readings, and this proposal does not pretend the choice is obvious:
+It falls out of the existing design rather than being invented here. The live
+plan excludes a live-owned track from the frozen sum — the mixer nulls its
+input plug — and the pump renders it block-wise straight into the ring. Its
+send tap, however, reads the track's `twGainStage`, whose pages are exactly the
+ones that are no longer being produced. So while a performer monitors through
+their chain, the send contributes nothing.
 
-| Option | Cost |
+Three readings were put up; the requester chose the first:
+
+| Option | Verdict |
 |---|---|
-| **(a) Accept and announce** | The monitored signal is dry. Cheap, honest, and wrong for the one workflow sends exist for (singing to a reverb). |
-| **(b) Put send lanes in the live CLOSURE** | The pump must render the tap, the send bus, the send lane's chain and fader, per block — that is the pump growing a second graph, which 21 D1 spent a milestone arguing against. |
-| **(c) Feed the ring from the tap** | The RT sums the ring onto the frozen root page; a send contribution would have to be summed at the send bus instead, which the RT does not reach. |
+| **(a) A live lane does not feed a send. ACCEPT and ANNOUNCE.** | **CHOSEN.** The monitored signal is dry. |
+| (b) Put send lanes in the live CLOSURE | Rejected. The pump would have to render the tap, the send bus, the send lane's chain and its fader per block — the pump growing a second component graph, which proposal 21 D1 spent a milestone arguing against. |
+| (c) Feed the ring from the tap | Rejected. The RT sums a ring entry onto the frozen ROOT page; a send contribution would have to be summed at the send BUS instead, which the RT does not reach. |
 
-**M4 decides between them with a measurement, not in this document.** (a) is the
-default and is what M1-M3 ship; anything else is a milestone of its own.
+**What "announce" means, and it is the whole cost of the decision.** A silent
+send is indistinguishable from a broken one, so the rule is stated where
+somebody hits it rather than only here:
+
+- a live-owned source contributes **nothing** to a send bus, decided by the
+  same `isLiveOwnedLane()` term the master sum already uses — and it is a
+  SECOND term beside `ssolo::isLaneAudible`, never folded into it (proposal 21
+  L1b's rule: a live-owned track is still audible in every other sense);
+- the wiring pass logs it **once per arm**, not per pass and never per page;
+- `main/objects/mixer/CONTRACT.md` and `CLAUDE.md` carry it as a stated
+  limitation beside the monitor-priming lag, which is the other "ours, not the
+  driver's" entry.
+
+**M4 is therefore no longer a decision milestone.** It becomes the gate for this
+behaviour: a case that arms a track with a send and asserts the send bus is
+silent, so the behaviour cannot drift into a half-working state that neither
+matches this document nor a reference DAW.
 
 ---
 
@@ -278,14 +295,102 @@ idle, and this branch changes no `tw303a/` file at all.
 pass (D4), pre/post tap points (D3), level as the bus input level (D7),
 audibility (D5). Gated by RMS through a render against a closed form.
 
-**M2 — invalidation.** T3 and T4. Gated by an edit-then-render case that is
-watched failing with the invalidation removed.
+### M1 + M2 as executed (2026-09-06)
+
+Shipped together, because M1's gate cannot pass without M2: a send that is
+wired correctly and never re-freezes is inaudible, which is M2's whole subject.
+
+`STrack::wireAsSendLane`, one `twMixer` per lane owned by `SStdMixer`,
+`rewireSendBuses()` called from `reconnectTracksToMixer()` and nowhere else
+(D4/T1), and `SSendTap`'s level as the bus's own per-input level (D7).
+`qxa.send_bus_audible` measures six states, **every one against a closed form**
+rather than a bound fitted to what the code produced:
+
+| State | Closed form | Measured |
+|---|---|---|
+| dry only (tap disabled) | A = 0.230956 | 0.230956 |
+| send 0 dB, post | 2A = 0.461913 | 0.461913 |
+| send −6 dB, post | 1.501187A = 0.346686 | 0.346710 |
+| fader −6 dB, send 0 dB, **post** | 1.002374·0.501187A = 0.115752×2.0024 → 0.231504 | 0.231505 |
+| fader −6 dB, send 0 dB, **pre** | 1.501187·0.501187A… = 0.346686 | 0.346710 |
+| source muted | 0 | 0 |
+| tap removed (fader −6 dB) | 0.501187A = 0.115752 | 0.115754 |
+
+**THE PRE/POST PAIR IS THE ONLY THING THAT DISCRIMINATES THE TAP POINT**, and
+it is why the case pulls the source fader to −6 dB in the middle. At unity gain
+pre and post read IDENTICALLY, so a case that never moved the fader would gate
+nothing at all — proposal 39 M2 and 41 M5 both paid for that shape.
+
+**FOUR FINDINGS, three of them defects in this milestone's own code.**
+
+1. **`twMixer::setNInputs` REFUSES ZERO by contract** (`if( n<=0 ) return -2`),
+   and the refusal was unhandled. A bus that lost its last tap kept the plug it
+   already had and went on summing forever: a render read 0.34671 where
+   0.115752 was due. "No taps" is now ONE UNWIRED input, never a request for
+   none. The refusal is right — a mixer with no inputs has no output to define.
+
+2. **Removing a send lane and UNDOING it SEGFAULTED**, in
+   `twComponent::setInput` three frames under `SRestoreSendLaneAction`. A
+   component holds an input PLUG into its producer's latch, and dropping the
+   bus first left the lane's plugin chain holding a plug into a destroyed
+   `twMixer`; the next `setInput()` dereferenced that dead latch to detach it.
+   `STrack::unwireSendLane()` now runs while the bus is still alive, and
+   `detachSendLane` drops the bus at the SAME index rather than leaving
+   `rewireSendBuses()` to trim the tail — the two lists would otherwise stop
+   being index-parallel for a removal from the middle, which the verb forbids
+   today and which this code no longer leans on. **Caught by `qxa.send_lane_
+   remove_undo`, a proposal 45 case, not by anything written here.**
+
+3. **ONLY `invalidateRenderPath()` IS LOAD-BEARING, and that was established by
+   ABLATION rather than by reasoning.** The first version also bumped every
+   send lane's `bumpRenderChainEpoch()` and every bus's `bumpContentEpoch()`.
+   Each was removed separately and the gate still passed, so both were deleted:
+   code no sabotage can bite is code with no justification. This is proposal
+   45's own rule arrived at independently — *invalidate, never bump*.
+
+4. **A "finding" that was retracted, recorded because the retraction is the
+   lesson.** An early measurement appeared to show that a source-track FADER
+   edit never reached the send lane, and an `invalidateRenderChainsContaining`
+   override on `SStdMixer` was written for it — including making that walk
+   `virtual` on `SObject`. The measurement was wrong: the case had written
+   `volumeDb=` where `set-track-volume` takes `volume=`, so the fader had never
+   moved. With the attribute fixed the override changed nothing and was
+   reverted, `virtual` included. **A number measured through a broken harness
+   is not a measurement**, and a hot base-class walk very nearly went virtual
+   for it.
+
+**Sabotages — six, each biting one assertion and no others:**
+
+| Sabotage | Bites |
+|---|---|
+| pre and post tap the same point | only `send_pre` (#19) |
+| the send level ignored (all taps unity) | only `send_minus6` (#12) |
+| audibility ignored (a muted source still feeds) | only `send_muted` (#22) |
+| the `enabled` flag ignored | only `send_dry` (#6) |
+| `rewireSendBuses()` never called from the pass (T1/D4) | every audible assertion (#9, #12, #16, #19) |
+| `setNInputs( 0 )` again | only `send_gone` (#26) |
+
+`qxa.send_tap_model`'s T8 was RESTATED rather than deleted: "a tap changes
+nothing" was true only while no bus existed. It now reads **a send lane whose
+taps are all DISABLED is byte-identical to no send at all** — a narrower claim,
+a harder one (bytes, not an RMS bound), and the one that actually protects both
+committed goldens, which are unchanged.
+
+**Suite:** 366 registered / 361 run / 5 disabled, reconciled both ways, all
+green. One unreproduced flake to name rather than bury:
+`qxa.master_closure_linear_ring` failed once in an earlier `-j4` run and passed
+4/4 alone and in the clean full run afterwards. It is `RUN_SERIAL` and is one
+of the live-monitoring wall-clock cases on a **4-core** box; this branch adds
+nothing to any path it exercises (`rewireSendBuses` returns immediately when a
+project has no send lanes, and that case has none). Not reproduced, not
+explained.
 
 **M3 — the cycle refusal.** Measure the hang FIRST (a deliberately constructed
 cycle behind a test-only knob, so the measurement is real), then refuse it.
 
-**M4 — the live-monitoring decision (D9).** Measure the dropout, choose between
-(a)/(b)/(c), and record the reasoning.
+**M4 — gate D9.** The decision is made (option (a)); this milestone MEASURES the
+dropout and pins it, so "a live lane does not feed a send" cannot rot into
+"a live lane sometimes feeds a send".
 
 **M5 — UI.** Send controls on the track head / detail pane, and the send lane's
 own strip. Depends on nothing above except M1.
@@ -301,8 +406,8 @@ file's "as executed" sections.
 - **PDC across a send** (D8) — not implemented.
 - **Real device latency** under a send-heavy project. Every measurement here is
   against the capture backend, as everywhere else in this repo.
-- **The monitored-send dropout** until M4 decides it (D9). M1-M3 ship option
-  (a) and say so.
+- **The monitored-send dropout** until M4 pins it (D9). M1-M3 implement option
+  (a) and say so; nothing asserts it until M4.
 - **Pixels** anywhere — a send strip is `SSMVMixerControl` unchanged until M5,
   and M5 will assert a geometry relation, never a palette.
 - **A send lane inside a nested arrangement asset**, and **more than one

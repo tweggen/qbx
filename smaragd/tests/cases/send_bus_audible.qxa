@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 47 M1: A SEND LANE IS FED, AND IT IS HEARD.
+
+  The tap from M0 now reaches a send BUS - one twMixer per send lane, its
+  input taken from the source track's plugin chain (PRE-fader) or gain stage
+  (POST-fader), its per-input level BEING the send level (D7), and the lane
+  reading it instead of its own empty clip mix (D1). All of it wired inside
+  reconnectTracksToMixer(), never beside it (D4, proposal 45's trap T3).
+
+  EVERY NUMBER HERE IS A CLOSED FORM, not a measurement. test_autosaw.wav is a
+  constant-amplitude 480 Hz sawtooth whose period is EXACTLY 100 frames, so a
+  window of whole periods has an exact RMS, and a send lane with no inserts at
+  0 dB is transparent. Writing A for the dry RMS:
+
+    dry only .................. A
+    + send at   0 dB, post .... 2A
+    + send at  -6 dB, post .... A * (1 + 0.501187) = 1.501187 A
+
+  THE PRE/POST PAIR IS THE ONE THAT ACTUALLY DISCRIMINATES, and it is why the
+  track's fader is pulled to -6 dB in the middle of the case. With the dry path
+  at -6 dB:
+
+    post-fader send at 0 dB ... 0.501187 A * 2      = 1.002374 A
+    pre-fader  send at 0 dB ... 0.501187 A + A      = 1.501187 A
+
+  Those two differ by 50%, so a tap taken from the wrong side of the fader
+  cannot pass the other's bound. A case that only ever tested at unity gain
+  would read IDENTICALLY for pre and post and would gate nothing - the shape
+  proposal 39 M2 and 41 M5 both paid for.
+
+  D9 IS DECIDED AND IS NOT GATED HERE: a live lane does not feed a send. M4
+  pins that; this case never arms anything.
+-->
+<SActionScript version="1" name="send_bus_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-send-lane sendName="Reverb"/>
+
+    <!-- ============ THE DRY REFERENCE: a tap exists but is OFF ========== -->
+    <!-- enabled=false is wired as NO input at all, so this is also the gate
+         on the enabled flag reaching the bus rather than only the file. -->
+
+    <add-send track="0" dest="Reverb" level="0" pre="false" enabled="false"/>
+    <render filename="send_dry.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_dry.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+
+    <!-- ================= AC1.1: THE SEND IS AUDIBLE ===================== -->
+    <!-- Enabled at 0 dB post-fader: the master sums dry + wet, so exactly
+         twice the dry signal. -->
+
+    <set-send track="0" dest="Reverb" enabled="true"/>
+    <render filename="send_unity.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_unity.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.4480" maxRms="0.4758"/>
+
+    <!-- ================= AC1.2: THE LEVEL IS THE LEVEL ================== -->
+    <!-- -6 dB is 0.501187 linear, so the sum is 1.501187 x the dry RMS. -->
+
+    <set-send track="0" dest="Reverb" level="-6"/>
+    <render filename="send_minus6.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_minus6.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.3363" maxRms="0.3571"/>
+
+    <!-- ============ AC1.3: PRE AND POST ARE DIFFERENT SIDES ============ -->
+    <!-- The discriminator. Track fader to -6 dB, send back to 0 dB. -->
+
+    <set-send track="0" dest="Reverb" level="0"/>
+    <set-track-volume trackPath="0" volume="-6"/>
+
+    <!-- POST-fader: the tap is AFTER the fader, so both paths are at -6 dB
+         and the sum is 1.002374 x A - barely different from dry. -->
+    <render filename="send_post.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_post.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2245" maxRms="0.2385"/>
+
+    <!-- PRE-fader: the tap is BEFORE the fader, so the wet path is at full
+         level and the sum is 1.501187 x A. Half again as loud as the line
+         above, from one boolean. -->
+    <set-send track="0" dest="Reverb" pre="true"/>
+    <render filename="send_pre.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_pre.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.3363" maxRms="0.3571"/>
+
+    <!-- ============ AC1.4: MUTE KILLS A PRE-FADER SEND TOO ============= -->
+    <!-- Not derivable from the tap point, and therefore a DECISION (D5):
+         every reference DAW silences sends on mute. The source is still
+         pre-fader here, so a tap that ignored audibility would keep feeding
+         the bus at full level and this would read 1.0 A instead of silence. -->
+
+    <set-track-mute trackPath="0" muted="true"/>
+    <render filename="send_muted.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_muted.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.0" maxRms="0.0005"/>
+    <set-track-mute trackPath="0" muted="false"/>
+
+    <!-- ============ AC1.5: REMOVING THE TAP REMOVES THE AUDIO ========== -->
+    <!-- ...and one undo puts it back. The bus is re-wired by the same pass,
+         so this is also the gate on the pass being idempotent under
+         repetition rather than only correct the first time. -->
+
+    <remove-send track="0" dest="Reverb"/>
+    <render filename="send_gone.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="send_gone.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.1120" maxRms="0.1190"/>
+  </actions>
+</SActionScript>

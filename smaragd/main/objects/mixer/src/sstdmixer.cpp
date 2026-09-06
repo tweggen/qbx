@@ -320,6 +320,128 @@ void SStdMixer::reconnectTracksToMixer()
             // the routing milestone, not to this one.
         }
     }
+
+    // ...and the send BUSES, in the same pass and from nowhere else (47 D4).
+    rewireSendBuses();
+}
+
+/**
+ * Proposal 47 M1. Fill every send lane's bus from the taps that address it.
+ *
+ * Index-parallel to sendLanes_ throughout: bus k belongs to lane k, which is
+ * the lane the sentinel `-2 - k` addresses.
+ */
+void SStdMixer::rewireSendBuses()
+{
+    // Keep the bus list the same length as the lane list. A lane removed from
+    // the END takes its bus with it (remove-send-lane is restricted to the
+    // last, 45/M7), and a lane adopted from a file gets one here rather than
+    // in adoptSendLane -- D4 again: one place wires, so one place allocates.
+    while( sendBuses_.size() > sendLanes_.size() ) sendBuses_.removeLast();
+    while( sendBuses_.size() < sendLanes_.size() ) {
+        // ONE input, not zero: twMixer refuses zero by contract (see the loop
+        // below). It is left unwired until a tap addresses this lane.
+        auto bus = std::make_shared<twMixer>(
+            *( SAppContext::get().get303aEnvironment() ), 1 );
+        bus->init();
+        sendBuses_.append( bus );
+    }
+    if( sendLanes_.isEmpty() ) return;   // T8: nothing wired, nothing changes
+
+    // ONE whole-tree solo scan for the whole pass, exactly as the master half
+    // above takes one (ssolorules.h). ASKED, never re-spelled (47 D5): two
+    // local copies of the direct-children-only rule are how the meter and the
+    // ear came to disagree about a nested lane (timeline/CONTRACT inv. 10).
+    const bool solo = ssolo::anySoloInTree( this );
+
+    // Every object that may carry a tap: the user tracks, and the send lanes
+    // themselves (send -> send is legal, subject to the verb's cycle walk).
+    // The MASTER is deliberately absent -- its output is the sum that already
+    // contains every send lane, which is why add-send refuses it by role.
+    QList<SObject *> sources;
+    for( SLink *lk : childLinks() )
+        if( lk ) sources.append( &lk->getSObject() );
+    for( STrack *lane : sendLanes_ )
+        if( lane ) sources.append( static_cast<SObject *>( lane ) );
+
+    for( int k = 0; k < sendLanes_.size(); ++k ) {
+        STrack *lane = sendLanes_[k];
+        std::shared_ptr<twMixer> bus = sendBuses_[k];
+        if( !lane || !bus ) continue;
+
+        bus->setChannels( (idx_t) channels_ );
+
+        // The taps addressing THIS lane, in source order, so an input index is
+        // stable for a given project rather than depending on the order edits
+        // happened to arrive in.
+        struct Feed { SObject *src; SSendTap tap; };
+        QList<Feed> feeds;
+        for( SObject *src : sources ) {
+            if( src == static_cast<SObject *>( lane ) ) continue;  // no self
+            if( const SSendTap *t = src->sendTap( lane->getSName() ) )
+                if( t->enabled ) feeds.append( { src, *t } );
+        }
+
+        // TWMIXER REFUSES ZERO INPUTS BY CONTRACT (`if( n<=0 ) return -2`), so
+        // "no taps" is ONE UNWIRED input and never a request for none.
+        // MEASURED with `setNInputs( 0 )`: the refusal went unhandled, the bus
+        // kept the plug it already had, and removing the last tap left the send
+        // sounding at the pre-removal level forever -- a render read 0.34671
+        // where 0.115478 was due. The refusal is right (a mixer with no inputs
+        // has no output to define); expressing the empty case is this caller's
+        // job.
+        const int nIn = feeds.isEmpty() ? 1 : feeds.size();
+        bus->setNInputs( (idx_t) nIn );
+        for( int i = 0; i < nIn; ++i ) {
+            if( i >= feeds.size() ) {   // the unwired tail, and the empty case
+                bus->setInput( (idx_t) i, NULL );
+                bus->setInputLevel( (idx_t) i, 0 );
+                continue;
+            }
+            STrack *srcTrack = dynamic_cast<STrack *>( feeds[i].src );
+            bool contributes = srcTrack != nullptr;
+
+            // The SAME audibility rule the master sum applies (D5). A muted or
+            // solo-darkened source feeds nothing, and mute kills a PRE-fader
+            // send too -- not derivable from the tap point, and therefore a
+            // decision: every reference DAW silences sends on mute.
+            if( contributes )
+                contributes = ssolo::isLaneAudible( this, feeds[i].src, solo );
+
+            // D9, DECIDED: A LIVE LANE DOES NOT FEED A SEND. A live-owned
+            // track is excluded from the frozen sum and rendered by the pump
+            // straight into the ring, so the gain-stage pages this tap would
+            // read are not being produced at all. A SECOND term beside
+            // isLaneAudible and never folded into it, exactly as the master
+            // half keeps them apart (21 L1b): a live-owned track is still
+            // audible in every other sense.
+            if( contributes && srcTrack->isLiveOwnedLane() ) contributes = false;
+
+            if( !contributes ) {
+                bus->setInput( (idx_t) i, NULL );
+                bus->setInputLevel( (idx_t) i, 0 );
+                continue;
+            }
+
+            // ASKED OF THE TRACK, not resolved here: `app/objects/mixer` may
+            // not name twPluginChain, which is the same division
+            // wireAsMasterLane draws -- the mixer passes endpoints and owns the
+            // wiring, the track decides what its own internals are. D3: PRE is
+            // post-FX (the chain's output), POST is post-fader (the gain
+            // stage's).
+            std::shared_ptr<twComponent> tap =
+                srcTrack->sendTapComponent( feeds[i].tap.preFader );
+            bus->setInput( (idx_t) i, tap ? tap->linkOutput( 0 ) : NULL );
+            // D7: the send LEVEL is the bus's own per-input level. No new DSP,
+            // no new ramp, nothing new on the render path -- and unlike the
+            // MASTER sum's inputs it may be non-unity freely, because
+            // checkMasterShape inspects the master mixer and never this one.
+            bus->setInputLevel( (idx_t) i, feeds[i].tap.levelDb );
+        }
+
+        // ...and the lane reads the bus instead of its (empty) clip mix (D1).
+        lane->wireAsSendLane( bus );
+    }
 }
 
 /**
@@ -506,6 +628,27 @@ void SStdMixer::notifyTreeChanged()
     emit tracksReordered();
 }
 
+void SStdMixer::sendRoutingChanged()
+{
+    reconnectTracksToMixer();
+
+    // ...AND INVALIDATE, which is proposal 47 M2 and is not optional. Without
+    // this line the gate fails: a `set-send` level change is wired correctly
+    // and then INAUDIBLE, because the render serves pages frozen before the
+    // edit. Proposal 45 measured the identical shape for the master mute,
+    // where an epoch bump alone left the muted render byte-identical to the
+    // unmuted one.
+    //
+    // ONE LINE, AND IT IS THE FULL WALK. Bumping the send lanes'
+    // bumpRenderChainEpoch() and the buses' bumpContentEpoch() beside it was
+    // tried and REMOVED: each was ablated separately and the gate passed
+    // without either, so both were code no sabotage could bite. That is 45's
+    // rule stated a second time -- invalidateRenderPath(), never
+    // bumpRenderChainEpoch() -- and it is why the buses need no epoch
+    // handling of their own.
+    invalidateRenderPath();
+}
+
 void SStdMixer::reorderTrack( int fromIndex, int toIndex )
 {
     const int n = childCount();
@@ -681,7 +824,19 @@ int SStdMixer::detachSendLane( STrack *lane )
 {
     const int k = sendLanes_.indexOf( lane );
     if( k < 0 ) return -1;
+    // UNWIRE IT FROM ITS BUS FIRST, WHILE THE BUS IS STILL ALIVE (proposal 47
+    // M1). The lane's plugin chain holds an input PLUG into the bus's latch;
+    // dropping the bus first leaves that plug dangling and the next setInput()
+    // dereferences a destroyed twMixer to detach it. SEGFAULT, found by
+    // qxa.send_lane_remove_undo on the UNDO -- remove, restore, crash.
+    if( lane ) lane->unwireSendLane();
     sendLanes_.removeAt( k );
+    // ...and drop ITS bus, at the SAME index. rewireSendBuses() trims only the
+    // TAIL, which is right for a shrink and silently wrong for a removal from
+    // the middle -- the two lists would stop being index-parallel and lane j
+    // would inherit lane j+1's bus. remove-send-lane is restricted to the last
+    // lane today, so that is unreachable; the code does not lean on it.
+    if( k < sendBuses_.size() ) sendBuses_.removeAt( k );
     // Deleting the reference link is what releases OUR hold. The lane survives
     // if somebody else pinned it first (an undo step does exactly that) and is
     // deleteLater'd if nobody did.

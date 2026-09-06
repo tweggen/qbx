@@ -339,6 +339,58 @@ public:
     void wireAsMasterLane( const std::shared_ptr<twMixer> &sum,
                            const std::shared_ptr<twRewire> &rewire );
 
+    /**
+     * The same shape one level down (proposal 47 M1 / D1): a SEND lane's input
+     * is its own send BUS rather than clips.
+     *
+     *   sum -> cpDspChain_ -> cpGainStage_ -> cpRewire_ -> the master sum
+     *
+     * It differs from wireAsMasterLane in exactly one way, and the difference
+     * is the whole reason it is a second function rather than a default
+     * argument: **a send lane KEEPS ITS OWN REWIRE**. The master's real output
+     * is the MIXER's rewire — which is why it hands its gain stage to a rewire
+     * the caller owns and disconnects its own, and why `getRootComponent()`
+     * has a master-only override. A send lane is an ORDINARY contributor to
+     * the master sum, so its own `cpRewire_` genuinely is its output and no
+     * override is wanted. Getting that backwards would point every meter,
+     * preview and live-plan channel map at the wrong component — proposal 45
+     * T5's failure, which reads as a broken meter rather than as a wiring bug.
+     *
+     * Its `twTrackMix` goes inert the same way the master's does (T2): the
+     * chain's input is re-pointed away from it. It is left CONNECTED to
+     * nothing rather than deleted, so a send lane that later gains clips is a
+     * re-wire and not a rebuild.
+     */
+    void wireAsSendLane( const std::shared_ptr<twMixer> &sum );
+
+    /**
+     * The component a SEND TAP reads on this track (proposal 47 D3):
+     * PRE-fader is post-FX, i.e. the plugin chain's output; POST-fader is the
+     * gain stage's. A pre-**FX** tap is deliberately not offered.
+     *
+     * Returned as the BASE type, and that is the point rather than a
+     * convenience: `app/objects/mixer` may not name `twPluginChain` at all,
+     * which is the same division `wireAsMasterLane` already draws — the mixer
+     * passes endpoints and owns the wiring, the track decides what its own
+     * internals are. Resolving the tap point in the mixer compiles nowhere.
+     */
+    std::shared_ptr<twComponent> sendTapComponent( bool preFader ) const;
+
+    /**
+     * Undo wireAsSendLane(): put the chain's input back on this track's own
+     * `twTrackMix`, i.e. make it an ordinary track again.
+     *
+     * IT MUST BE CALLED WHILE THE BUS IS STILL ALIVE, and that is the whole
+     * reason it exists rather than being left to the next re-wire. A component
+     * holds an input PLUG into its producer's latch; dropping the bus first
+     * leaves this chain holding a plug into a destroyed `twMixer`, and the
+     * next `setInput()` dereferences that dead latch to detach it.
+     * SEGFAULT, found by `qxa.send_lane_remove_undo` -- removing a send lane
+     * and UNDOING it crashed in `twComponent::setInput`, three frames under
+     * `SRestoreSendLaneAction`.
+     */
+    void unwireSendLane();
+
     void setRenderPathOwner( SObject *owner ) { renderPathOwner_ = owner; }
     SObject *renderPathOwner() const override { return renderPathOwner_; }
 
