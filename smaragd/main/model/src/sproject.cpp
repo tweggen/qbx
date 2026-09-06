@@ -524,6 +524,18 @@ void SProject::registerArrangement( const QString &name, SObject *root )
                                "the path): \"%1\"." ).arg( name );
         return;
     }
+    // ...AND MAY NOT BEGIN WITH '$' (proposal 45 M7). '$' is reserved for
+    // system addressing -- "$master", "$send0", "$send:Reverb" -- and
+    // parseQualified now treats a leading '$' as "this is a PATH, not a
+    // qualifier". An arrangement called "$send" would therefore be
+    // unaddressable rather than merely oddly named. Reserved here, at the same
+    // chokepoint, so the parser's assumption is enforced and not assumed.
+    if( name.startsWith( QLatin1Char( '$' ) ) ) {
+        qWarning() << QString( "SProject::registerArrangement: refused, a name "
+                               "may not begin with '$' (it is reserved for "
+                               "system lanes): \"%1\"." ).arg( name );
+        return;
+    }
     if( arrangementDict_.contains( name ) ) {
         qWarning() << QString( "SProject::registerArrangement: name already in "
                                "use: \"%1\"." ).arg( name );

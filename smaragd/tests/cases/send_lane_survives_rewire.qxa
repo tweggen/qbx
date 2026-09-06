@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 45 M7, AC7.4 / trap T3 / D10: THE SEND LANE SURVIVES A
+  reconnectTracksToMixer PASS.
+
+  THIS IS THE ONE THING ABOUT SEND LANES THAT HAD TO BE GOT RIGHT RATHER THAN
+  MERELY ADDED, and AC7.4 exists because the obvious gate cannot see it.
+
+  WHAT reconnectTracksToMixer DOES. It sets the mixer's input count FROM THE
+  TRACK COUNT and rewires EVERY input, and it runs on every audibility, solo,
+  mute and arm change. So a send lane wired into a spare input from anywhere
+  else - at creation, at load, from a verb - is silently CLOBBERED by the next
+  pass. The symptom is a send that works until the user presses a button
+  somewhere else entirely, which is about as hard to report as a bug gets.
+
+  WHY THE OBVIOUS GATE GOES GREEN OVER IT. A case that creates a send and
+  renders sees the wiring the CREATION did; nothing has forced a pass since.
+  D10 says so in as many words, and AC7.4 answers it: TOGGLE A SOLO FIRST.
+  Solo is the cheapest thing in the model that forces a full rewire, it needs
+  no audio to observe, and it is a button a user presses constantly.
+
+  WHAT IS ASSERTED AFTER THE PASS. Not "the render still sounds right" - a
+  clobbered send lane contributes silence and so does a correctly wired one
+  (AC7.3: nothing can feed a send in M7), so NO AUDIO ASSERTION ANYWHERE CAN
+  SEPARATE THEM. That is the same shape as the missing-sample placeholder,
+  where a dropped clip and a placeholder are both silent. What separates them
+  is the MIXER'S INPUT COUNT: a pass that forgot the sends sets it back to the
+  track count, and assert-master-inputs reads it off the live twMixer.
+
+  AND THE SECOND HALF IS THE ONE THAT WOULD HAVE HURT MORE. twlive::
+  checkMasterShape walks getNInputs() and refuses the LINEAR master split the
+  moment ANY input level is not 0 dB (D4a rule 2). A send wired at anything
+  other than unity would therefore not merely be mis-levelled: it would drop
+  live monitoring into the Closure path for every armed track in the project -
+  D10's "monitoring dies for a new reason". So the case ARMS A TRACK after the
+  rewire and asserts monitoring was not refused.
+-->
+<SActionScript version="1" name="send_lane_survives_rewire">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <add-send-lane sendName="Reverb"/>
+    <add-send-lane sendName="Delay"/>
+
+    <!-- Two user tracks plus two send lanes: four inputs on the master sum. -->
+    <assert-master-inputs count="4"/>
+
+    <!-- ============ THE PASS ============ -->
+    <!-- Solo is the cheapest full rewire there is. Without this step the case
+         would only ever observe the wiring that add-send-lane itself did, and
+         would pass against a build in which the next pass wipes it. -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <assert-master-inputs count="4"/>
+
+    <set-track-solo trackPath="0" solo="0"/>
+    <assert-master-inputs count="4"/>
+
+    <!-- A MUTE forces one too, and takes a different branch of the same loop
+         (the track's plug is nulled rather than wired), so it is worth its own
+         pass rather than being assumed equivalent. -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <assert-master-inputs count="4"/>
+    <set-track-mute trackPath="1" muted="0"/>
+
+    <!-- ...and so does adding a track, which changes the count the sends sit
+         after. This is the pass most likely to get the arithmetic wrong. -->
+    <add-track index="-1"/>
+    <assert-master-inputs count="5"/>
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb"
+                        expectPath="$send0"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"/>
+
+    <!-- ...and removing one again. -->
+    <remove-track trackPath="2"/>
+    <assert-master-inputs count="4"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"/>
+
+    <!-- ============ UNITY, AND WHAT DEPENDS ON IT ============ -->
+    <!-- Every input at exactly 0 dB. checkMasterShape refuses the LINEAR
+         master split otherwise, so this is not a levelling detail. -->
+    <assert-master-inputs count="4" allUnity="1"/>
+
+    <!-- ...and the consequence, measured rather than argued: monitoring is
+         still LINEAR after all of that. A send at a non-unity level would put
+         every armed track in the project into the Closure path. -->
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+
+    <!-- ASSERTED HERE, AND THE PLACEMENT IS ITSELF A MEASUREMENT.
+         assert-log's window opens at the immediately preceding action that is
+         not an assert-log, and the live plan is built - and refused, if it is
+         going to be - AT set-monitor-mode, NOT at the arm and NOT at the
+         transport edge: the live set is
+         `{armed && monitorEffective} u {monitor == on}`, so monitor "on" alone
+         puts the track in it. All three placements were tried under the
+         non-unity sabotage and only this one sees the refusal; the other two
+         reported "OK - 0 records" over a live one, which is the same vacuous
+         shape master_insert_while_monitoring's first draft had. -->
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <assert-log level="warn" contains="a master input level is not unity"
+                minCount="0" maxCount="0"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+
+    <!-- ...and the transport edge rebuilds the plan, so the Closure sentence
+         is asserted absent over that window too. -->
+    <assert-log level="warn" contains="the RT pops the ring only"
+                minCount="0" maxCount="0"/>
+
+    <wait-ms ms="600"/>
+    <toggle-playback play="0"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- ...and the sends are still there, still in order, after a whole
+         transport run with a live lane up. -->
+    <assert-master-inputs count="4" allUnity="1"/>
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

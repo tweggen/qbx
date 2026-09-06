@@ -109,6 +109,13 @@ inline QList<int> stringToPath( const QString &s, bool *ok = nullptr )
             bool n = false;
             const int k = t.mid( 5 ).toInt( &n );
             if( n && k >= 0 ) { out << spathSendSentinel( k ); continue; }
+            // "$send:<name>" (proposal 45 M7 / AC7.2) CANNOT BE RESOLVED HERE
+            // and deliberately fails closed. A name maps to a sentinel only
+            // against a particular root, and this function is pure -- it is
+            // called from readXml(), where there is no project. The name form
+            // is rewritten to "$sendN" by splacements::laneBySpec(), which has
+            // one; a caller that forgets gets SPATH_INVALID and refuses,
+            // rather than silently addressing something else.
             if( ok ) *ok = false;
             out << SPATH_INVALID;
             continue;
@@ -157,8 +164,29 @@ inline QualifiedPath parseQualified( const QString &spec )
         q.idx = stringToPath( spec );
         return q;
     }
-    q.root = spec.left( colon );
-    q.idx  = stringToPath( spec.mid( colon + 1 ) );
+    // A '$'-TOKEN IS NEVER A ROOT QUALIFIER (proposal 45 M7). D9's M1 note
+    // recorded this collision and left the choice to M7: `$send:Reverb` splits
+    // on the first ':' like every other spec, so it would parse as the root
+    // "$send" and the path "Reverb" -- an arrangement nobody registered, and a
+    // path token that fails closed. Both halves are wrong and the second hides
+    // the first.
+    //
+    // '$' is reserved for system addressing and always has been ("$master",
+    // "$send0"), so the rule is one condition: text before the first colon
+    // that begins with '$' is part of the PATH, not a root name. A qualified
+    // send in another arrangement still works and still splits on the FIRST
+    // colon -- "Drums:$send:Reverb" gives root "Drums" and path
+    // "$send:Reverb" -- because the qualifier is what comes first, and it does
+    // not begin with '$'.
+    //
+    // SProject::registerArrangement refuses a name beginning with '$', so the
+    // reservation is enforced rather than assumed.
+    if( !spec.startsWith( QLatin1Char('$') ) ) {
+        q.root = spec.left( colon );
+        q.idx  = stringToPath( spec.mid( colon + 1 ) );
+        return q;
+    }
+    q.idx = stringToPath( spec );
     return q;
 }
 

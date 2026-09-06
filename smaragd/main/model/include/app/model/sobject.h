@@ -439,6 +439,18 @@ public:
     { (void) lane; return 0; }
 
     /**
+     * The index k of the SEND lane called `name`, or -1 (proposal 45 M7).
+     *
+     * On the base class rather than on SStdMixer for the reason contentKind()
+     * and resolveEventClip() are: app/model's own path resolver has to ask the
+     * question without knowing what a mixer is, and it may not include one.
+     * The index is the addressing -- sentinel `-2 - k` names it -- so this is
+     * how the surface spelling `$send:<name>` becomes a path step.
+     */
+    virtual int systemLaneIndexNamed( const QString &name ) const
+    { (void) name; return -1; }
+
+    /**
      * The kind of material this object carries (proposal 37 D8b). Audio by
      * default — every object that existed before event clips is audio, and a
      * container's kind is the kind of what it renders, which is audio too.

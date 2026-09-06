@@ -232,12 +232,27 @@ void SStdMixer::reconnectTracksToMixer()
     int nTracks = childCount();
     // ONE whole-tree solo scan for the whole pass (see ssolorules.h).
     const bool solo = ssolo::anySoloInTree( this );
+
+    // THE SEND LANES ARE WIRED BY THIS PASS, NOT BESIDE IT (proposal 45 M7,
+    // trap T3). This is the whole of AC7.4 and it is the one thing about send
+    // lanes that had to be got right rather than merely added.
+    //
+    // This function sets the input count FROM THE TRACK COUNT and rewires
+    // EVERY input, and it runs on every audibility, solo, mute and arm change.
+    // So a send lane wired into a spare input from anywhere else -- at
+    // creation, at load, from a verb -- is silently CLOBBERED by the next
+    // solo toggle, and the symptom is a send that worked until the user
+    // pressed a button somewhere else entirely. Reserving the inputs AFTER the
+    // tracks and filling them in the same loop is what makes the wiring
+    // idempotent under repetition, which is what "survives a rewire" means.
+    const QList<STrack *> sends = sendLanes_;
+
     // For all busses.
     for( int bus=0; bus<nBusses_; bus++ ) {
         std::shared_ptr<twMixer> mix = cpMixers_[bus];
         if( !mix ) continue;
-        // Ensure the given number of inputs.
-        mix->setNInputs( nTracks );
+        // Ensure the given number of inputs: the tracks, then the send lanes.
+        mix->setNInputs( nTracks + sends.size() );
         for( int channel=0; channel<nTracks; channel++ ) {
             SLink *lk = childAt( channel );
             // The shared audibility rule (ssolo::isLaneAudible): a folder that
@@ -272,6 +287,37 @@ void SStdMixer::reconnectTracksToMixer()
                 // (see twTrackMix::calcOutputTo), so the mixer just sums.
                 mix->setInputLevel( channel, 0.0 );
             }
+        }
+
+        // ...and the send lanes, into the inputs reserved above.
+        for( int k = 0; k < sends.size(); ++k ) {
+            const int channel = nTracks + k;
+            STrack *send = sends[k];
+            if( !send ) {
+                mix->setInput( channel, NULL );
+                mix->setInputLevel( channel, 0 );
+                continue;
+            }
+            std::shared_ptr<twComponent> root = send->getRootComponent();
+            mix->setInput( channel, root ? root->linkOutput( bus ) : NULL );
+            // UNITY, and this is load-bearing rather than a copy of the line
+            // above. twlive::checkMasterShape walks getNInputs() and refuses
+            // the LINEAR master split the moment ANY input level is not 0 dB
+            // (D4a rule 2), so a send wired at anything else would not merely
+            // be mis-levelled -- it would silently drop live monitoring into
+            // the Closure path for every armed track in the project, which is
+            // the "monitoring dies for a new reason" D10 warns about. The
+            // send's own level is its twGainStage, exactly as a track's is.
+            mix->setInputLevel( channel, 0.0 );
+            // MUTE IS NOT APPLIED HERE, unlike a track's. A track's mute is
+            // STRUCTURAL -- this pass nulls its plug -- but M5/AC5.4 wired a
+            // SYSTEM lane's mute to its twGainStage instead, because a system
+            // lane has no summing parent to do it. Nulling the plug too would
+            // be the same silence twice and would make the ramp unreachable.
+            // SOLO is not applied either, and cannot be: ssolo::anySoloInTree
+            // walks childLinks(), which a send lane is deliberately not in. It
+            // is moot while nothing can feed a send (D10) and it belongs to
+            // the routing milestone, not to this one.
         }
     }
 }
@@ -528,6 +574,10 @@ SStdMixer::~SStdMixer()
     masterLaneRef_ = nullptr;
     masterLane_    = nullptr;
 
+    for( SLink *lk : sendLaneRefs_ ) delete lk;
+    sendLaneRefs_.clear();
+    sendLanes_.clear();
+
     cpMixers_.resize(0);
     cpRewire_.reset();
 }
@@ -539,6 +589,7 @@ QList<SLink *> SStdMixer::ownedRefLinks() const
     // reference graph at all.
     QList<SLink *> out;
     if( masterLaneRef_ ) out.append( masterLaneRef_ );
+    for( SLink *lk : sendLaneRefs_ ) if( lk ) out.append( lk );
     return out;
 }
 
@@ -549,14 +600,113 @@ SObject *SStdMixer::systemLaneAt( int sentinel ) const
     // strackpath::findPathRec's descending scan before it runs off the end.
     if( sentinel == strackpath::SPATH_MASTER )
         return static_cast<SObject *>( masterLane_ );
+    // -2 - k is send lane k (proposal 45 M7). Answering null past the last one
+    // is also what stops strackpath::findPathRec's descending scan.
+    const int k = -2 - sentinel;
+    if( k >= 0 && k < sendLanes_.size() )
+        return static_cast<SObject *>( sendLanes_[k] );
     return nullptr;
+}
+
+int SStdMixer::systemLaneIndexNamed( const QString &name ) const
+{
+    for( int k = 0; k < sendLanes_.size(); ++k )
+        if( sendLanes_[k] && sendLanes_[k]->getSName() == name ) return k;
+    return -1;
 }
 
 int SStdMixer::systemLaneSentinelOf( const SObject *lane ) const
 {
     if( lane && lane == static_cast<const SObject *>( masterLane_ ) )
         return strackpath::SPATH_MASTER;
+    for( int k = 0; k < sendLanes_.size(); ++k )
+        if( lane && lane == static_cast<const SObject *>( sendLanes_[k] ) )
+            return strackpath::spathSendSentinel( k );
     return 0;
+}
+
+
+// --- the master sum's input shape, for AC7.4's gate --------------------------
+
+int SStdMixer::masterInputCount() const
+{
+    // BUS 0, which is the bus wireMasterChain() feeds into the master lane's
+    // chain (D3). A project has had one bus since setNBusses(1), and averaging
+    // over several would hide exactly the per-bus mistake this exposes.
+    std::shared_ptr<twMixer> mix = masterMixComponent();
+    return mix ? (int) mix->getNInputs() : -1;
+}
+
+double SStdMixer::masterInputLevelDb( int i ) const
+{
+    std::shared_ptr<twMixer> mix = masterMixComponent();
+    if( !mix || i < 0 || i >= (int) mix->getNInputs() ) return 0.0;
+    return mix->inputLevel( (idx_t) i );
+}
+
+bool SStdMixer::masterInputWired( int i ) const
+{
+    std::shared_ptr<twMixer> mix = masterMixComponent();
+    if( !mix || i < 0 || i >= (int) mix->getNInputs() ) return false;
+    return mix->getInputPlug( (idx_t) i ) != nullptr;
+}
+
+// --- send lanes (proposal 45 M7 / D10) --------------------------------------
+
+STrack *SStdMixer::sendLaneNamed( const QString &name ) const
+{
+    for( STrack *t : sendLanes_ )
+        if( t && t->getSName() == name ) return t;
+    return nullptr;
+}
+
+STrack *SStdMixer::addSendLane( const QString &name )
+{
+    // AC7.5: A NAME COLLISION IS REFUSED. The name is the address a script and
+    // a user reach the lane by (`$send:Reverb`), so two lanes sharing one is
+    // not a cosmetic problem -- it makes one of them unaddressable and makes
+    // which one you get depend on creation order.
+    if( name.trimmed().isEmpty() ) return nullptr;
+    if( sendLaneNamed( name ) )     return nullptr;
+
+    SProject *project = dynamic_cast<SProject *>( parent() );
+    STrack *lane = new STrack( project );
+    lane->setSystemRole( SSystemRole::Send );
+    lane->setSName( name );
+    adoptSendLane( lane );
+    return lane;
+}
+
+int SStdMixer::detachSendLane( STrack *lane )
+{
+    const int k = sendLanes_.indexOf( lane );
+    if( k < 0 ) return -1;
+    sendLanes_.removeAt( k );
+    // Deleting the reference link is what releases OUR hold. The lane survives
+    // if somebody else pinned it first (an undo step does exactly that) and is
+    // deleteLater'd if nobody did.
+    delete sendLaneRefs_.takeAt( k );
+    // EVERY LANE AFTER IT SHIFTS DOWN ONE SENTINEL, which is why
+    // remove-send-lane is restricted to the LAST lane: `-2 - k` IS the address,
+    // so removing from the middle silently re-points every path that named a
+    // later lane. The restriction lives in the verb, where it can be announced.
+    reconnectTracksToMixer();
+    return k;
+}
+
+void SStdMixer::adoptSendLane( STrack *lane )
+{
+    if( !lane || sendLanes_.contains( lane ) ) return;
+    sendLanes_.append( lane );
+    // Our own reference, exactly as the master lane has one and for the same
+    // reason: the lane hangs off no child link.
+    sendLaneRefs_.append( new SLink( *lane, nullptr ) );
+    lane->setRenderPathOwner( this );   // D11
+
+    // ...and it reaches the master SUM through the ordinary rewire pass, which
+    // is also what stops the next pass clobbering it (T3). Nothing here wires
+    // an input by hand.
+    reconnectTracksToMixer();
 }
 
 // --- the conductor lane (proposal 45 M6 / D7) -------------------------------
@@ -852,6 +1002,18 @@ int SStdMixer::serializeSelfAttributes( QTextStream &o )
     if( masterLane_ )
         o << " masterLaneId='"
           << reinterpret_cast<std::uintptr_t>( (SObject *) masterLane_ ) << "'";
+    // The SEND LANES (proposal 45 M7), by the same mechanism and IN ORDER --
+    // the order IS the addressing, since sentinel `-2 - k` names the k-th.
+    // Written only when there are any, so every project written before M7 and
+    // every project that never made one re-serializes byte-identically.
+    if( !sendLanes_.isEmpty() ) {
+        o << " sendLaneIds='";
+        for( int k = 0; k < sendLanes_.size(); ++k ) {
+            if( k ) o << ",";
+            o << reinterpret_cast<std::uintptr_t>( (SObject *) sendLanes_[k] );
+        }
+        o << "'";
+    }
     SObject::serializeSelfAttributes( o );
     return 0;
 }
@@ -932,6 +1094,37 @@ SLink *SStdMixer::instantiateFromDomElement(
                 return;
             }
             mixer->adoptMasterLane( lane );
+        } );
+    }
+
+    // The SEND LANES, deferred for exactly the masterLaneId reason: a plain
+    // attribute is invisible to the loader's <SLink objectId> dependency
+    // ordering, so the lanes' own <STrack> elements may not exist yet.
+    //
+    // ADOPTED IN FILE ORDER, and a reference that does not name a SEND is
+    // SKIPPED rather than adopted -- the AC1.5 rule the master lane already
+    // follows. An older build re-saving this file drops systemRole= along with
+    // sendLaneIds=, so a file can legitimately come back naming a track that
+    // is now an ordinary one; adopting it would put a user track into the
+    // master sum TWICE. Skipping shifts the sentinels of the lanes after it,
+    // which is the lesser evil and is announced.
+    const QString sendIds = element.attribute( "sendLaneIds" );
+    if( !sendIds.isEmpty() ) {
+        SProjectLoader *loader = &projectLoader;
+        const QStringList ids = sendIds.split( ",", Qt::SkipEmptyParts );
+        projectLoader.deferResolve( [loader, mixer, ids]() {
+            for( const QString &id : ids ) {
+                SLink *lk = loader->getObjectDictionary().value( id.trimmed() );
+                STrack *lane = lk ? dynamic_cast<STrack *>( &lk->getSObject() )
+                                  : nullptr;
+                if( !lane || lane->systemRole() != SSystemRole::Send ) {
+                    TW_LOGW( "model", "[SEND] sendLaneIds entry %s is missing "
+                                      "or does not name a send lane; skipping "
+                                      "it", id.toStdString().c_str() );
+                    continue;
+                }
+                mixer->adoptSendLane( lane );
+            }
         } );
     }
 

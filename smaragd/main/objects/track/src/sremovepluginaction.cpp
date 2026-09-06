@@ -38,7 +38,13 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     // log line, the wrong object edited. splacements::rootNamed() is what
     // set-track-volume has always used.
     SObject *root = splacements::rootNamed( project, pathRoot_ );
-    SObject *trackObj = strackpath::resolveByPath(root, path);
+    // ...and the resolve goes through laneBySpec since proposal 45 M7 (AC7.2),
+    // which does the same peel-and-resolve and additionally understands
+    // `$send:<name>` -- a spelling the pure string parser cannot finish,
+    // because a name maps to a sentinel only against a particular root and
+    // readXml has no project. `path` above stays the parsed form for the
+    // messages below; the OBJECT comes from here.
+    SObject *trackObj = splacements::laneBySpec( project, trackPath_, pathRoot_ );
     STrack *track = dynamic_cast<STrack*>(trackObj);
     if (!track) {
         return {false, nullptr};

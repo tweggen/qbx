@@ -1720,6 +1720,81 @@ specifically.
   goldens; `action_roundtrip_test`.
 - **Splittable.** If M7 becomes its own proposal, M0-M6 stand alone.
 
+#### M7 as executed (2026-09-06) — five findings, and AC7.4's warning was right
+
+**AC7.4's premise held exactly.** Measured, not argued: with the send wiring
+removed from `reconnectTracksToMixer` (an empty send list, which reproduces the
+pre-M7 pass token for token), **`send_lane_shape` PASSES and only
+`send_lane_survives_rewire` fails**, on 8 `assert-master-inputs` assertions.
+D10 predicted that the obvious gate goes green over the clobbering defect, and
+it does. The pass is now the thing that wires the sends — the input count is
+`nTracks + sends.size()` and the sends fill the reserved trailing inputs in the
+same loop — so the wiring is idempotent under repetition, which is what
+"survives a rewire" means.
+
+1. **NO AUDIO ASSERTION ANYWHERE CAN SEE A CLOBBERED SEND**, because AC7.3 says
+   a correctly wired one contributes silence too. That is the missing-sample
+   placeholder's shape again — a dropped clip and a placeholder are equally
+   silent — and it is why M7 needed a new verb, `assert-master-inputs`, which
+   reads the live `twMixer`'s input count and levels. Its first draft included
+   `tw/mix` from `app/testkit` and `tools/check_layering.py` refused it; the
+   numbers are now published by `SStdMixer` itself, the same boundary that made
+   `SPluginSlot::paramRows()` exist for `app/timeline`.
+2. **UNITY IS NOT A LEVELLING DETAIL.** `twlive::checkMasterShape` walks
+   `getNInputs()` and refuses the LINEAR master split on ANY non-unity input
+   (D4a rule 2), so a send wired at −3 dB does not merely sound wrong: it drops
+   live monitoring into the Closure path for every armed track in the project.
+   Watched, and the log line is verbatim: `[LIVE] the master is not a unity sum
+   with an identity map (a master input level is not unity); live monitoring is
+   off`. The send's own level is its `twGainStage`, exactly as a track's is.
+3. **WHERE THAT `assert-log` GOES IS ITSELF A MEASUREMENT, and two of the three
+   plausible placements are VACUOUS.** The live plan is built — and refused —
+   at **`set-monitor-mode`**, not at the arm and not at the transport edge,
+   because the live set is `{armed && monitorEffective} ∪ {monitor == on}` and
+   monitor "on" alone puts a track in it. Placed after `arm-track` or after
+   `toggle-playback` the pair reported "OK — 0 records" over a live refusal
+   (the window was literally `log records 6 .. 6`, empty). All three were tried
+   under the sabotage; only the first bites. Same vacuous shape
+   `master_insert_while_monitoring`'s first draft had.
+4. **`$send:<name>` NEEDED THE DECISION M1 DEFERRED HERE.** `parseQualified`
+   splits a spec on its first ':', so `$send:Reverb` parsed as the ROOT
+   `$send` plus the path `Reverb`. The rule chosen is one condition — text
+   before the first colon that begins with `$` is part of the PATH, not a root
+   name — and `SProject::registerArrangement` now REFUSES a name beginning with
+   `$`, so the reservation is enforced rather than assumed. A qualified send
+   still splits on the first colon and still works: `Drums:$send:Reverb`.
+   The NAME is an **input** spelling only: it maps to a sentinel only against a
+   particular root, and `stringToPath` is pure (it is called from `readXml`,
+   where there is no project), so it fails CLOSED there and is resolved by the
+   new `splacements::laneBySpec`. `pathToString` keeps writing the index form.
+5. **WHICH VERBS UNDERSTAND THE NAME IS A BOUNDARY, drawn deliberately.**
+   `laneBySpec` is reached by the five plugin verbs — which is what AC7.2 asks,
+   and three of them for free through the shared `spluginaction::chainFor` —
+   and by `assert-system-lane`. Every other verb takes the INDEX form, which
+   has always worked. Widening it is a per-verb edit and the same default-open
+   hazard AC5.6 exists to police, so it is left to whoever needs it. It fails
+   closed: an unresolved `$send:` token becomes `SPATH_INVALID` and the verb
+   refuses.
+
+**NOT built, and this is the milestone's whole point rather than a gap:** the
+send TAP (a per-track, per-destination auxiliary output with a level and a
+pre/post-fader choice — a new model object, verbs and an invalidation edge),
+feedback prevention for A → B → A (the scheduler's dependency counting will
+deadlock or spin on a cycle rather than fail cleanly), and latency compensation
+across a send. D10 sizes that at "at least the size of this proposal".
+
+**NOT gated, additionally:** SOLO's interaction with a send lane —
+`ssolo::anySoloInTree` walks `childLinks()`, which a send is deliberately not
+in, so a send is invisible to solo; moot while nothing can feed one, and it
+belongs to the routing milestone. A send lane REMOVED AND RESTORED comes back
+**EMPTY** — `remove-send-lane`'s inverse re-creates by name rather than pinning
+the object the way `SRemoveTrackAction` does, so any inserts it carried are
+lost; deliberate, because nothing can hear a send's chain yet and a second
+restore-action class is not worth it, but it is a real limitation and it is
+named here rather than discovered later. Removing a send from the MIDDLE is
+refused outright (the sentinel is the address). And nothing pixel-level: a send
+lane's row is `SSMVMixerControl` unchanged.
+
 ### M8 — Contracts, docs, and the CLAUDE.md section
 
 - **AC8.1** `main/objects/mixer/CONTRACT.md` gains the ownership, lifecycle and

@@ -16,13 +16,17 @@ SApplyResult SAssertSystemLaneAction::apply( SProject *project )
     // Resolve through the ORDINARY path machinery, deliberately: what is being
     // gated is that "$master" reaches the lane the same way "0" reaches a user
     // track, not that some test-only accessor can find it.
-    const strackpath::QualifiedPath q = strackpath::parseQualified( trackPath_ );
-    SObject *root = splacements::rootNamed( project, q.root );
+    // THROUGH laneBySpec (proposal 45 M7), which is the same peel-and-resolve
+    // plus the `$send:<name>` spelling. A verb whose whole subject is system
+    // lanes that could not use the system-lane spelling would be an odd gate.
+    QString rootName;
+    SObject *root = nullptr;
+    SObject *obj = splacements::laneBySpec( project, trackPath_, rootName,
+                                            &root );
     if( !root ) {
         qWarning() << "assert-system-lane: no root for" << trackPath_;
         return { false, nullptr };
     }
-    SObject *obj = strackpath::resolveByPath( root, q.idx );
     if( !obj ) {
         qWarning() << "assert-system-lane FAILED:" << trackPath_
                    << "resolves to nothing";

@@ -928,6 +928,21 @@ const LaneRow kLaneRows[] = {
     { "assert-track-name",         Accept, "read-only" },
     { "assert-track-volume",       Accept, "read-only" },
 
+    // ===================== PROPOSAL 45 M7: THE SEND VERBS ==================
+    //
+    // ROWS THAT THE AUDIT DOES NOT REQUIRE, kept deliberately. These two
+    // address a send lane by NAME (`sendName=`) rather than by a lane path, so
+    // isLaneAddressed() does not flag them and nothing would fail without a
+    // row. They are here because the table's job is to record the DECISION for
+    // every verb that can touch a system lane, and a reader auditing that
+    // question should not have to notice that these two happen to escape the
+    // detector on a technicality.
+    //
+    // The policy is inverted for them: they EXIST to act on a system lane, and
+    // refusing one would refuse the feature.
+    { "add-send-lane",    Accept, "M7/AC7.1: it CREATES a system lane" },
+    { "remove-send-lane", Accept, "M7: the inverse of the above" },
+
     // ==================== NOT A DESTINATION OR SUBJECT ====================
     { "remove-sample",  NotApplicable,
       "a REMOVAL. Taking material off a lane must never be refused, or material "

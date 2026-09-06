@@ -319,6 +319,8 @@ set(APP_OBJECTS_FILES
     objects/mixer/src/sremoveassetaction.cpp
     objects/mixer/src/sremoveassetplacementaction.cpp
     objects/mixer/src/sremovetrackaction.cpp
+    objects/mixer/include/app/objects/mixer/ssendlaneactions.h
+    objects/mixer/src/ssendlaneactions.cpp
     objects/mixer/src/sreparenttrackaction.cpp
     objects/mixer/src/srestoretrackaction.cpp
     objects/mixer/src/sstdmixer.cpp
@@ -494,6 +496,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/strackselectionactions.h
     testkit/include/app/testkit/stransporttestactions.h
     testkit/include/app/testkit/sassertunsavedchangesaction.h
+    testkit/include/app/testkit/sassertmasterinputsaction.h
     testkit/include/app/testkit/sassertsystemlaneaction.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
@@ -546,6 +549,7 @@ set(APP_UI_FILES
     testkit/src/strackselectionactions.cpp
     testkit/src/stransporttestactions.cpp
     testkit/src/sassertunsavedchangesaction.cpp
+    testkit/src/sassertmasterinputsaction.cpp
     testkit/src/sassertsystemlaneaction.cpp
     # proposal 38 gate 4: the WebDAV stub server. Deliberately NOT under
     # include/app/testkit/ -- it is not part of testkit's public action-verb

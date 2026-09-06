@@ -64,6 +64,26 @@ inline SObject *laneAt( SObject *root, const QList<int> &path )
 // and to name the lane. A caller that merely returned null would refuse
 // silently, and a silent refusal of a drag-and-drop reads to the user as the
 // app having dropped their clip on the floor.
+// RESOLVE A LANE FROM ITS SURFACE SPELLING, project-aware (proposal 45 M7).
+//
+// The one entry point that understands `$send:<name>` (AC7.2). Everything else
+// in this header takes a QList<int>, which by then has lost the name -- and a
+// name maps to a sentinel only against a particular root, so the resolution
+// cannot live in the pure string->path parser (that one is called from
+// readXml(), where there is no project, and it fails CLOSED on the name form
+// rather than guessing).
+//
+// It also peels the root qualifier itself, honouring parseInto's "the first
+// qualifier wins" rule through `rootInOut`, so a caller replaces the usual
+// three lines (parseInto, rootNamed, resolveByPath) with one and gains the
+// name form. A caller that keeps the three lines simply does not support
+// `$send:<name>` and refuses it cleanly.
+// `rootOut`, when given, receives the ROOT the spec resolved against -- a
+// caller that goes on to ask pathOf() or walk childLinks() needs the same root
+// this used, not one it re-derives and could disagree with.
+SObject *laneBySpec( SProject *project, const QString &spec,
+                     QString &rootInOut, SObject **rootOut = nullptr );
+
 SObject *placementLaneAt( SObject *root, const QList<int> &path,
                           const char *verb );
 
