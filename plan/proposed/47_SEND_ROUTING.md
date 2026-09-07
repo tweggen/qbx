@@ -1,9 +1,16 @@
 # Proposal 47 — Send routing: the tap, the send bus, and the cycle refusal
 
-> **Status: PROPOSED.** Nothing here is executed. It closes proposal 45's one
-> deliberate open end: **a send lane exists, is named, carries a chain and a
-> fader, sums into the master and round-trips — and nothing can feed it**
-> (45 D10, AC7.3). This proposal builds the thing that feeds it.
+> **STATUS: EXECUTED, M0-M6, 2026-09-06.** Each milestone below carries an
+> "as executed" section with what was measured and what the design did not
+> anticipate. Read those before the design text they follow — **D6's central
+> prediction was WRONG**, and M3's first act was to falsify it: a cyclic send
+> graph does not hang the scheduler. It is corrected in place rather than
+> quietly rewritten.
+>
+> It closes proposal 45's one deliberate open end: **a send lane exists, is
+> named, carries a chain and a fader, sums into the master and round-trips —
+> and nothing can feed it** (45 D10, AC7.3). This proposal builds the thing
+> that feeds it.
 >
 > 45 D10 sized this at "at least the size of this proposal" and listed three
 > pieces: the tap itself, feedback prevention for A → B → A, and PDC across a
