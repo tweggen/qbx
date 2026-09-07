@@ -1,9 +1,16 @@
 # Proposal 47 — Send routing: the tap, the send bus, and the cycle refusal
 
-> **Status: PROPOSED.** Nothing here is executed. It closes proposal 45's one
-> deliberate open end: **a send lane exists, is named, carries a chain and a
-> fader, sums into the master and round-trips — and nothing can feed it**
-> (45 D10, AC7.3). This proposal builds the thing that feeds it.
+> **STATUS: EXECUTED, M0-M6, 2026-09-06.** Each milestone below carries an
+> "as executed" section with what was measured and what the design did not
+> anticipate. Read those before the design text they follow — **D6's central
+> prediction was WRONG**, and M3's first act was to falsify it: a cyclic send
+> graph does not hang the scheduler. It is corrected in place rather than
+> quietly rewritten.
+>
+> It closes proposal 45's one deliberate open end: **a send lane exists, is
+> named, carries a chain and a fader, sums into the master and round-trips —
+> and nothing can feed it** (45 D10, AC7.3). This proposal builds the thing
+> that feeds it.
 >
 > 45 D10 sized this at "at least the size of this proposal" and listed three
 > pieces: the tap itself, feedback prevention for A → B → A, and PDC across a
@@ -477,12 +484,101 @@ the mechanism the dropout follows from.
 **Suite:** 368 registered / 363 run / 5 disabled, reconciled both ways, all
 green. Goldens byte-identical.
 
-**M5 — UI.** Send controls on the track head / detail pane, and the send lane's
-own strip. Depends on nothing above except M1.
+### M5 as executed (2026-09-06)
+
+A **Sends** section in the Track Detail dock: one row per send lane, with an
+enable box, the lane's name, a level in dB and a pre/post choice, each
+committing through M0's ordinary verbs. It is the first surface that makes
+those verbs reachable by hand — until now they existed only in a `.qxa`
+script, exactly as proposal 41's fragment verbs did before its menu items
+landed.
+
+**A ROW EXISTS PER SEND LANE, NOT PER TAP.** Ticking one CREATES the tap, so a
+user does not first have to discover a separate "add" gesture, and a lane with
+no tap still shows — "there is a Reverb bus and this track does not feed it" is
+visible rather than inferred from an absence. **Unticking DISABLES; it does not
+remove**, which is the whole reason `SSendTap::enabled` exists: a level and a
+pre/post choice must survive being switched off, or a user toggling a send off
+and on finds it back at 0 dB post.
+
+A lane's own strip offers every OTHER lane and no row for itself. The verb
+refuses a self-send anyway; a control that exists only to be rejected is worse
+than one that is not offered.
+
+**THE WIRING IS GATED, AND THAT IS NEW FOR THIS REPO.** `send-strip-set` moves
+the REAL control and lets Qt deliver the signal, so **a missing `connect()`
+fails**. Every context menu this project has shipped — proposal 41's Pack /
+Unpack items, 45's Show-system-lanes item, the metronome button's right-click
+menu — is hand-verified only, because there is no testkit verb for a context
+menu. A WIDGET is different: it can be built off screen and driven, which
+`assert-track-head` and `assert-track-detail-layout` already do for geometry.
+Sabotage S1 removes the checkbox's `connect()` and five assertions fail.
+
+**Sabotages, four, each biting its own assertions:** the checkbox connected to
+nothing (#9, #10, #14, #16, #18); unticking REMOVING instead of disabling
+(#22, #24 — the two that assert the level and mode survive); a self row offered
+(#25, #26); the level control editing the model but never reaching the bus
+(#16, #18, **#20 the audio**, #22, #24).
+
+The case also ends on `assert-track-detail-layout` at 260 px and 600 px with
+`maxCrushed=0 maxOverlap=0`: the rows are fixed-height and mount at stretch 0,
+so a short dock scrolls rather than laying the FX chain and the sends on top of
+each other — the defect `fix/detail-pane-layout` fixed and this section could
+have reintroduced.
+
+**A defect this found in the new seam:** `describeSendStrip` first resolved its
+track with `splacements::laneAt`, which cannot resolve a system-lane sentinel
+at all — so `$send:Reverb` returned nothing and the assertions read an EMPTY
+description rather than failing on the lane. Through `laneBySpec` now, which is
+what every other system-lane-aware verb uses.
+
+**NOT gated, hand-verified only:** that the section appears where a user
+expects it and what it looks like. `screenshot` grabs a root window that is
+blank under `QT_QPA_PLATFORM=offscreen`, so pixels stay out of reach — the
+standing gap this repo works around by building one widget and measuring
+geometry. Also not gated: the strip's behaviour when a send lane is added or
+removed while the dock is open (it rebuilds on track switch, not on a lane
+change), and the double-click-to-0 dB reset on the level spin box (wired
+through `sdefaultreset`, no case).
+
+**Suite:** 369 registered / 364 run / 5 disabled, reconciled both ways, all
+green. Goldens byte-identical.
 
 **M6 — contracts and docs.** `main/objects/mixer/CONTRACT.md`,
 `main/objects/track/CONTRACT.md`, `docs/ACTIONS.md`, `CLAUDE.md`, and this
 file's "as executed" sections.
+
+### M6 as executed (2026-09-06)
+
+Docs only — no source file changed, so the build, the four checkers and the
+suite are the same run M5 landed on. Wider than the milestone line above, and
+each addition is named because the line did not anticipate it:
+
+| File | What |
+|---|---|
+| `main/objects/mixer/CONTRACT.md` | new **"Send ROUTING (proposal 47 M1-M4)"** section, invariants **20-27**: the bus per lane and its index-parallel list, the one-unwired-input floor `twMixer::setNInputs` forces, the wiring's home inside `reconnectTracksToMixer`, audibility and live-ownership as two separate terms, the verb-side refusal and the wiring-side break, `invalidateRenderPath` as the only load-bearing invalidation, and the unwire-before-drop ordering the SEGFAULT paid for |
+| `main/objects/track/CONTRACT.md` | **"A track as a SEND source, and a send lane's own wiring"** — `sendTapComponent()` as the ONE answer to the tap point (and why the mixer cannot answer it: no edge to `tw/plugins`), `wireAsSendLane` keeping the lane's own rewire, and `unwireSendLane`'s liveness requirement |
+| `main/model/CONTRACT.md` | **"The SEND TAP (proposal 47 M0)"** — `SSendTap` on `SObject` for the same reason `contentKind()` and the automation lane vector are there, the by-NAME destination, and the non-default-only serialization that keeps every project and golden byte-unchanged |
+| `main/testkit/CONTRACT.md` | **"The SEND verbs (proposal 47)"** — the model half (`assert-sends`) against the wiring half (`assert-send-inputs`), and why the second is the only thing that can see a clobbered bus |
+| `main/timeline/CONTRACT.md` | **inv. 63** (the Sends strip: a row per lane, the addressed lane's own row skipped, `updating_` as the re-entry guard, and unticking writing `enabled=false` rather than removing). The file's numbering note moved from "currently 63" to **"currently 64"** |
+| `docs/ACTIONS.md` | a **"### Send ROUTING (proposal 47)"** subsection before the verb table, plus rows for all seven verbs — `add-send`, `remove-send`, `set-send`, `assert-sends`, `assert-send-inputs`, `assert-send-strip`, `send-strip-set`. **And a correction**: the `add-send-lane` row still said the lane had "nothing that can feed it", which 45 M7 wrote truthfully and M1 falsified |
+| `CLAUDE.md` | a **"Send routing"** section in the house shape — the read-this-first table, the three general gate-shaped lessons (a number measured through a broken harness; `git checkout --` on a dirty tree; `assert-log`'s window and `maxCount`'s implicit floor of 1), and the NOT-gated list |
+
+**Two things this pass corrected rather than merely recorded**, both places
+where a document had gone stale against the code:
+
+- `docs/ACTIONS.md`'s `add-send-lane` row (above). A reference that says a
+  feature cannot be fed, one milestone after it can be, is worse than silence.
+- D6's hang prediction, already corrected in the design at M3, is now stated
+  the same way in all four places it appears — the proposal, the mixer
+  contract, `ACTIONS.md` and `CLAUDE.md` — so a reader arriving at any one of
+  them gets the measurement rather than the guess.
+
+**Not done, and named:** the milestone line above lists four verbs for M0
+(`set-send-level` and `set-send-mode`); M0 shipped **three**, folding both into
+one partial `set-send`, and the M0 section records why. That line is left as
+written — a milestone list is a plan, and rewriting it to match the outcome
+would erase the fact that the plan changed.
 
 ---
 

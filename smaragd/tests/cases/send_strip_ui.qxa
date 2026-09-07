@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 47 M5: THE SENDS SECTION OF THE TRACK DETAIL DOCK.
+
+  The first surface that makes M0's verbs reachable by hand. Until now
+  add-send / set-send existed only in a .qxa script, exactly as proposal 41's
+  fragment verbs did before its menu items landed.
+
+  WHAT THIS CASE GATES, AND WHY IT IS MORE THAN THE VERB. send-strip-set moves
+  the REAL control and lets Qt deliver the signal, so a missing connect() fails
+  here. A test that called the handler directly would pass with the checkbox
+  wired to nothing - and "the wiring is hand-verified only" is what this repo
+  has had to say about every context menu it has ever shipped. It is sayable
+  for a WIDGET because a widget can be built off screen and driven;
+  assert-track-head and assert-track-detail-layout already do exactly that.
+
+  A ROW EXISTS PER SEND LANE, NOT PER TAP. Ticking one CREATES the tap, so a
+  user does not have to find a separate "add" gesture first, and a lane with no
+  tap still shows - "there is a Reverb bus and this track does not feed it" is
+  visible rather than inferred from an absence.
+
+  UNTICKING DISABLES, IT DOES NOT REMOVE, and that is asserted below because it
+  is the whole reason SSendTap::enabled exists: a level and a pre/post choice
+  must survive being switched off. Removing the tap would discard both silently
+  and a user toggling a send off and on would find it back at 0 dB post.
+
+  NOT GATED, and hand-verified only: that the section is visible where a user
+  expects it, and what it looks like. screenshot grabs a root window that is
+  blank under QT_QPA_PLATFORM=offscreen, so pixels are out of reach - the
+  standing gap this repo works around by building one widget and measuring
+  geometry, which assert-track-detail-layout does below.
+-->
+<SActionScript version="1" name="send_strip_ui">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-send-lane sendName="Reverb"/>
+    <add-send-lane sendName="Delay"/>
+
+    <!-- ============ A ROW PER LANE, EVEN WITH NO TAP =================== -->
+
+    <assert-send-strip trackPath="0" rows="2"/>
+    <assert-send-strip trackPath="0" contains="lane=Reverb|on=0"/>
+    <assert-send-strip trackPath="0" contains="lane=Delay|on=0"/>
+
+    <!-- ============ TICKING A ROW CREATES THE TAP ====================== -->
+    <!-- The checkbox's own signal submits add-send. A dead connect() fails
+         here rather than in somebody's session. -->
+
+    <send-strip-set trackPath="0" lane="Reverb" control="on" value="1"/>
+    <assert-sends track="0" count="1" dest="Reverb" level="0"
+                  pre="false" enabled="true"/>
+    <assert-send-strip trackPath="0" contains="lane=Reverb|on=1"/>
+
+    <!-- ...and it is ONE undo step, committed by the ordinary verb. -->
+    <undo/>
+    <assert-sends track="0" count="0"/>
+    <redo/>
+    <assert-sends track="0" count="1" dest="Reverb"/>
+
+    <!-- ============ THE LEVEL AND THE MODE COMMIT TOO ================== -->
+
+    <send-strip-set trackPath="0" lane="Reverb" control="level" value="-6"/>
+    <assert-sends track="0" dest="Reverb" level="-6"/>
+
+    <send-strip-set trackPath="0" lane="Reverb" control="pre" value="1"/>
+    <assert-sends track="0" dest="Reverb" level="-6" pre="true"/>
+
+    <!-- ...and the send is HEARD at what the strip set. Closed form: dry +
+         a pre-fader send at -6 dB = 1.501187 A, the send_bus_audible number.
+         A strip that edited the model and never reached the bus would pass
+         every assertion above and fail this one. -->
+    <render filename="strip.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="strip.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.3363" maxRms="0.3571"/>
+
+    <!-- ============ UNTICKING DISABLES AND KEEPS THE SETTINGS ========== -->
+
+    <send-strip-set trackPath="0" lane="Reverb" control="on" value="0"/>
+    <assert-sends track="0" count="1" dest="Reverb" level="-6" pre="true"
+                  enabled="false"/>
+
+    <!-- ...so re-ticking restores them rather than starting at 0 dB post. -->
+    <send-strip-set trackPath="0" lane="Reverb" control="on" value="1"/>
+    <assert-sends track="0" count="1" dest="Reverb" level="-6" pre="true"
+                  enabled="true"/>
+
+    <!-- ============ A LANE'S OWN STRIP OFFERS NO SELF ROW ============== -->
+    <!-- The verb refuses a self-send; a control that exists only to be
+         rejected is worse than one that is not offered. -->
+
+    <assert-send-strip trackPath="$send:Reverb" rows="1"/>
+    <assert-send-strip trackPath="$send:Reverb" absent="lane=Reverb"/>
+    <assert-send-strip trackPath="$send:Reverb" contains="lane=Delay"/>
+
+    <!-- ============ THE SECTION DOES NOT CRUSH THE DOCK ================ -->
+    <!-- The geometry gate the detail pane already has: the Sends rows are
+         fixed-height and mount at stretch 0, so a short dock scrolls rather
+         than laying the FX chain and the sends on top of each other. -->
+
+    <assert-track-detail-layout trackPath="0" panelWidth="320"
+                                panelHeight="260" maxCrushed="0" maxOverlap="0"/>
+    <assert-track-detail-layout trackPath="0" panelWidth="320"
+                                panelHeight="600" maxCrushed="0" maxOverlap="0"/>
+  </actions>
+</SActionScript>

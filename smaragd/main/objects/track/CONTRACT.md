@@ -763,3 +763,40 @@ question that belongs to all four together, not to three of them.
 Gated by `qxa.lane_view_persists` (watched failing under two sabotages: the
 serializer not writing the three attributes, and the view ignoring
 `takesExpanded()`).
+
+---
+
+## A track as a SEND source, and a send lane's own wiring (proposal 47 M1)
+
+**`wireAsSendLane( sum )` is `wireAsMasterLane` with exactly one difference,
+and that difference is the whole of proposal 47 D1: a SEND LANE KEEPS ITS OWN
+REWIRE.**
+
+The master lane's real output is the MIXER's rewire, which is why it hands its
+gain stage to a rewire the caller owns, disconnects its own, and needs a
+master-only `getRootComponent()` override. A send lane is an ORDINARY
+contributor to the master sum, so its own `cpRewire_` genuinely is its output
+and **no override is wanted**. Getting that backwards points every meter,
+preview and live-plan channel map at the wrong component — proposal 45 T5's
+failure, which reads as a broken meter rather than as a wiring bug.
+
+Its `twTrackMix` goes inert the same way the master's does: the chain's input
+is re-pointed away from it. It is left connected to nothing rather than
+deleted, so a send lane that later gains clips is a re-wire and not a rebuild.
+
+**`sendTapComponent( preFader )` is asked OF THE TRACK, never resolved in the
+mixer.** `app/objects/mixer` may not name `twPluginChain` at all — the same
+division `wireAsMasterLane` already draws, where the mixer passes endpoints and
+owns the wiring while the track decides what its own internals are. The first
+version resolved the tap point in the mixer and compiled nowhere.
+
+  * PRE  = post-FX, pre-fader — the plugin chain's output.
+  * POST = post-fader — the gain stage's output.
+
+A pre-**FX** tap would need a third tap point and no reference DAW defaults to
+one. Named so the absence is a decision rather than an oversight.
+
+**`unwireSendLane()` MUST be called while the bus is still alive.** See
+`main/objects/mixer/CONTRACT.md` inv. 23: it exists because a component holds
+an input plug into its producer's latch, and the alternative is a segfault on
+undo.

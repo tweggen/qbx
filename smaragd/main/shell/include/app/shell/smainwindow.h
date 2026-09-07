@@ -400,6 +400,20 @@ public:
     // or a Clip Detail field the current selection does not show.
     bool doubleClickDetailControl( const QString &which, const QString &trackPath );
 
+    /**
+     * The Track Detail dock's SENDS section, built OFF SCREEN over the real
+     * panel (proposal 47 M5), exactly as describeTrackDetailLayout builds it.
+     *
+     * `describeSendStrip` returns one `lane=..|on=..|level=..|pre=..|enabled=..`
+     * record per row, ';'-separated. `driveSendStrip` moves one row's REAL
+     * control, so what is exercised is the signal/slot wiring and the verb it
+     * submits — not a handler called directly, which would gate nothing about
+     * whether the control is connected at all.
+     */
+    QString describeSendStrip( const QString &trackPath );
+    bool    driveSendStrip( const QString &trackPath, const QString &lane,
+                            const QString &control, double value );
+
     QString describeFeelFlow( const QString &trackPath );
     // ...and paint that same off-screen section into a PNG. Coverage, not
     // oracle: describe() is the numbers, this only proves it draws.
