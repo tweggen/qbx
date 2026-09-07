@@ -21,6 +21,8 @@
 #include <QPointer>
 #include <QElapsedTimer>
 
+#include "app/objects/mixer/slaneorder.h"
+
 class SStdMixer;
 class QGridLayout;
 class QPaintEvent;
@@ -1140,12 +1142,13 @@ private:
     bool trackHeaderDragActive_ = false;
     int trackHeaderDragStartX_ = 0;
     int trackHeaderDragStartWidth_ = 0;
-    /// Proposal 45 AC4.1: the master lane's row, appended after every user
-    /// lane rather than walked to (it is not a childLinks() member, D2).
-    void appendSystemRows();
     /// Proposal 45 AC4.2: the master row's presence disagrees with the model.
     bool systemRowsOutOfDate() const;
-    void appendRowsFor( SObject *container, int depth );
+    /// ONE LANE's rows: its composite lane, its take sub-lanes, its automation
+    /// sub-lanes, in that order. WHICH lanes there are is
+    /// `slaneorder::flattenTrackLanes` (proposal 48 M0 / D1), shared with the
+    /// mixer pane; this is the ROW fold the pane has no use for.
+    void appendRowsForLane( const slaneorder::Lane &lane );
     // Resolve a drag drop at control-column y: *onto = the lane's track if the
     // pointer is over a lane's middle (nest), else NULL; *topSlot = insertion
     // index among top-level tracks (reorder / pop-to-top).
