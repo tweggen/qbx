@@ -1,8 +1,42 @@
-# Proposal 46 — The mixer pane: one horizontal dock, one channel strip per lane
+# Proposal 48 — The mixer pane: one horizontal dock, one channel strip per lane
 
 > **Status: PROPOSED.** Nothing here is executed. It rests on proposal 45 M4
-> (the master lane has a row and a head), which IS executed
-> (`890fb00d`, `4274da86`).
+> (the master lane has a row and a head) and on proposal 47 (send routing),
+> both of which ARE executed — 45 M4 at `890fb00d` / `4274da86`, 47 M0-M6 at
+> `eaeed762`.
+>
+> **RENUMBERED FROM 46 TO 48 (revision 3).** It was filed as 46 while
+> `46_WINDOW_LAYOUT_PERSISTENCE.md` already held that number, and that one is
+> executed and cited as "proposal 46" from CLAUDE.md, `main/shell/CONTRACT.md`
+> inv. 59-60, `main/objects/track/CONTRACT.md`, `main/testkit/CONTRACT.md`,
+> `docs/ACTIONS.md` and eight source files. Every one of those means the window
+> layout; **none of them meant this document**, which is why this is the one
+> that moves.
+>
+> **Revision 3 (2026-09-07) — PROPOSAL 47 LANDED, AND IT DELETES A DECISION.**
+> Revision 2 was written on 2026-09-06 against a tree in which the per-track
+> send tap did not exist. It does now: 47 M0-M6 built `SSendTap`, the send bus,
+> the cycle break, and — M5 — **`SSendStrip`, a working sends UI in the Track
+> Detail dock**. So D7's whole subject is gone:
+>
+> - **D7 said the sends section ANNOUNCES that it is empty.** It no longer can;
+>   there are sends to show. D7 becomes an ordinary MOUNT, which is what this
+>   proposal's own governing rule asks for anyway.
+> - **`SSendStrip` lives in `app/timeline`**, the edge D4 already declares for
+>   `SLevelMeter`. No new edge, no second spelling, and the widget is gated
+>   (47 M5 sabotaged its `connect()` and five assertions failed).
+> - **D5a's narrow mode has a SECOND occupant.** `SSendStrip`'s row is a
+>   checkbox + a name label at `setMinimumWidth( 60 )` + a `QDoubleSpinBox` +
+>   a `QComboBox` in one `QHBoxLayout` (`ssendstrip.cpp:97-125`) — the same
+>   ~230 px layout minimum, against the same 60/96 px strips. The narrow mode
+>   is two widgets in two modules, not one.
+> - **AC4.5's contract numbers were taken while this sat.** 47 M5 claimed
+>   `main/timeline/CONTRACT.md` **inv. 63** and moved the file's numbering note
+>   to "currently 64". This proposal takes **64 and 65**.
+>
+> The Why table, the prerequisite reading, D5's diagram and the Non-goals each
+> carried the same false statement and are corrected in place. **Nothing
+> structural moved**: D1, D6a, D11b, D12, D13 and T11 are untouched by 47.
 >
 > **Revision 2** after an adversarial review against the tree (2026-09-06).
 > **Six claims in revision 1 were WRONG**; each is corrected in place rather
@@ -52,11 +86,19 @@ that invalidates the obvious design:
    is a track's ROOT component, read BY POSITION, and **a page miss must DECAY**.
    A mixer is the first mount that will have thirty of them at once.
 3. `plan/proposed/45_SYSTEM_LANES.md` **D10, D11, D12** — the master lane's
-   place in the lane order, why its meter tap is `getRootComponent()`, and the
-   fact that **send lanes are shape-only and unbuilt**.
-4. `main/mediabrowser/CONTRACT.md` — the precedent for a new app_ui module that
+   place in the lane order, and why its meter tap is `getRootComponent()`.
+   (D10's "a send lane exists and nothing can feed it" is CLOSED by 47; read
+   it for the lane ORDER, not for the state of routing.)
+4. `plan/proposed/47_SEND_ROUTING.md` **D2, D3, D9** and its **M5 as
+   executed** — the tap on `SObject`, pre = post-FX/pre-fader against post =
+   post-fader, the fact that **a live-owned source contributes nothing to a
+   send** (which this pane's meter must not contradict), and the rules
+   `SSendStrip` already implements: a row per send LANE rather than per tap,
+   unticking DISABLES rather than removes, and a lane's own strip offers every
+   other lane and no row for itself.
+5. `main/mediabrowser/CONTRACT.md` — the precedent for a new app_ui module that
    is "the DOCK and nothing else", including how it stays out of `app/timeline`.
-5. `main/pluginui/CONTRACT.md` invariant 3 (every model mutation is an ACTION)
+6. `main/pluginui/CONTRACT.md` invariant 3 (every model mutation is an ACTION)
    and the generic editor's **module-level registry keyed by slot** (the
    `fix/editor-ui-and-shortcuts` lesson).
 
@@ -94,7 +136,7 @@ proposal of its own:
 
 | Missing | Evidence | Consequence for this proposal |
 |---|---|---|
-| **Sends** | `grep -rni "sendtrack\|auxsend\|send bus"` over `main/` returns nothing (proposal 45 §Why 3, re-verified 2026-09-06). 45 M7 gives a send LANE its *shape* and is unexecuted; the per-track send TAP, feedback prevention and send-path latency are named as out of its scope. | D7: the section exists and **announces** that it is empty. |
+| ~~**Sends**~~ **— CLOSED by proposal 47, 2026-09-06** | Revision 2 measured `grep -rni "sendtrack\|auxsend\|send bus"` over `main/` returning nothing. It now returns `SSendTap`, `rewireSendBuses`, `wireAsSendLane` and `SSendStrip`: 47 built the tap, the bus, the cycle break and a working UI. | D7 is no longer an announcement. The pane MOUNTS `SSendStrip`. |
 | **Track pan** | `SObject::pan_` exists and is written only by `set-clip-pan` (clip properties). `grep -i pan` over `tw303a/mix/include` finds one comment and no law. CLAUDE.md: "`self:Pan` is still absent — what is missing is the pan itself". | D8: **no pan control.** A knob that moves and is never heard is worse than no knob. |
 | **Pre-fader metering** | Proposal 34: the tap is the track's root component, which is post-fader, post-FX, pre-summing. "a pre-fader meter is not available without new engine work". | The strip's meter is post-fader and the tooltip says so. |
 
@@ -261,6 +303,11 @@ it is the second copy this proposal exists to prevent. The mediabrowser's
 like; it does not fit a module whose entire content is the arranger's widgets
 mounted differently.
 
+**Revision 3: that one edge now carries the sends section too.** `SSendStrip`
+(47 M5) is `app/timeline/ssendstrip.h`, so D7's mount costs no new edge. Worth
+noting because it is the second time this edge has paid for itself, and it is
+the argument against anyone re-proposing a `timeline`-free `mixerui`.
+
 **And with that edge, AC0.4's `sfadercurve.h` move is deleted.** Its only
 includers are three `app/timeline` files. Moving it would be churn bought for a
 constraint that no longer exists.
@@ -287,7 +334,7 @@ confirmed it against them:
 │ FX  EQ     ▫ │   INSERTS  — see D5a
 │ +            │
 ├──────────────┤
-│ S  (no sends)│   SENDS — D7
+│ S  Reverb -6 │   SENDS  — SSendStrip, mounted (D7)
 ├──────────────┤   ← scroll ends here
 │ M  S  R      │
 │ ▮▮   ┃       │   METER + FADER, pinned, never scrolled
@@ -307,7 +354,7 @@ is also what makes the block a fixed height independent of the button count.
 **No widget in the strip that carries a layout sets an explicit minimum
 height.** T1.
 
-### D5a. The inserts section needs a NARROW mode, which does not exist yet
+### D5a. The inserts AND sends sections need a NARROW mode, which does not exist yet
 
 Revision 1 said `SPluginEffectStrip` mounts "unchanged". It cannot: each row is
 a name label + a latency badge + a bypass box + **Edit (≤70 px) + Reload (≤80)
@@ -330,6 +377,24 @@ Two answers, and this proposal picks the first:
 
 **This is real work in a module this proposal otherwise only mounts**, and it
 belongs to M1, not to a polish milestone — AC1.7 cannot pass without it.
+
+**Revision 3: `SSendStrip` (47 M5) has the identical problem, and it is a
+SECOND widget in a SECOND module.** Its row is a checkbox + a name label at
+`setMinimumWidth( 60 )` + a `QDoubleSpinBox` + a `QComboBox` in one
+`QHBoxLayout` (`ssendstrip.cpp:97-125`) — the same ~230 px layout minimum
+against the same 60 and 96 px strips, reached by a different route. Its narrow
+mode collapses a row to the enable box + an elided lane name, with the level
+and the pre/post choice on the row's context menu.
+
+So M1 carries a narrow mode in **`app/pluginui`** and one in **`app/timeline`**,
+and the cost table below says so. The alternative — one narrow mode and one
+section quietly dropped from a narrow strip — is worse than it sounds: a user
+who narrows a strip and loses the ability to SEE that a track feeds the reverb
+has lost the answer to the question the pane exists for.
+
+**And the Track Detail dock gets both**, which is the same argument as before:
+47 M5 mounted `SSendStrip` in a dock whose left column can be dragged narrow,
+so the defect is already there and is fixed for free.
 
 ### D6. The master strip is pinned at the right and does not scroll
 
@@ -372,19 +437,42 @@ tooltip. **The M1 fixture must be a project that has never set
 whether this decision was implemented or not, which is exactly the shape of gate
 this repository has shipped three times.
 
-### D7. The sends section exists and ANNOUNCES that it is empty
+### D7. The sends section MOUNTS `SSendStrip` — REWRITTEN in revision 3
 
-Until routing exists the section shows one disabled row reading
-"no sends (routing not implemented)" with a tooltip naming proposal 45 M7 and
-this document. It is **not** a plus button that fails, and **not** a section
-that silently is not there.
+**What this section said, and why it is worth keeping the corpse visible.**
+Revision 2 decided that the section would show one disabled row reading
+"no sends (routing not implemented)", on the rule that a bound is ANNOUNCED
+rather than silent (proposal 38), and because the strip's geometry and its
+layout gate are easier to get right once with the section present than to
+retrofit. That was the correct decision **against the tree it was written
+against**, and it survived exactly one day: proposal 47 executed M0-M6 on
+2026-09-06 and there are now sends to show.
 
-The reason it is on screen at all: the strip's geometry, its scroll behaviour
-and its layout gate are all easier to get right once, with the section present,
-than to retrofit into a shipped pane. The reason it is announced: this
-repository's own rule — "a bound is ANNOUNCED, never silent" (proposal 38) —
-and the loop-drag defect (`fix/loop-behaviour` (b)), where a cursor promised a
-gesture the model then refused.
+**The decision now: mount `SSendStrip`, and add nothing.** It is
+`app/timeline/ssendstrip.h`, reachable over the edge D4 already declares for
+`SLevelMeter`, and it already implements the four rules a mixer would
+otherwise have to re-decide — every one of them gated by 47 M5, which sabotaged
+its `connect()` and watched five assertions fail:
+
+| Rule 47 M5 already settled | Why the mixer must not re-decide it |
+|---|---|
+| A row per send LANE, not per tap — ticking one CREATES the tap | "There is a Reverb bus and this track does not feed it" must be VISIBLE, not inferred from an absence. A per-tap list makes an unfed lane invisible in exactly the mount where comparing tracks is the point. |
+| Unticking DISABLES; it does not remove | `SSendTap::enabled` exists for this. A level and a pre/post choice must survive being switched off, or a user toggling a send off and on finds it back at 0 dB post. |
+| A lane's own strip offers every OTHER lane and no row for itself | The verb refuses a self-send anyway; a control that exists only to be rejected is worse than one that is not offered. Load-bearing here, because D1's walk gives a SEND lane its own strip. |
+| Every change commits through 47 M0's ordinary verbs | This proposal's governing rule, and D11's. |
+
+**What the mixer adds is the narrow mode (D5a) and nothing else.** In
+particular it does NOT add a plus button, a routing matrix, or a second way to
+create a send lane — `add-send-lane` is proposal 45's verb and the arranger
+owns that gesture.
+
+**One thing to announce, and it is 47's, not this pane's.** 47 D9 decided that
+**a live-owned source contributes nothing to a send** — an armed, monitored
+track's send is silent, accepted rather than worked around. A mixer is the
+first surface on which a user sees a send row lit and a send lane's meter dark
+at the same time, so the send lane's strip carries that in its tooltip. This is
+D11b's problem wearing a different hat: the pane must not invent an explanation
+for a silence the engine already has a documented reason for.
 
 ### D8. There is no pan control, and the strip says why
 
@@ -661,6 +749,11 @@ named.
   reorder) and **reuses** the slot's existing editor rather than minting a
   second (T4); `SPluginEffectStrip` has a narrow mode (D5a) and the Track Detail
   dock gets it too.
+- **AC1.6a (revision 3)** The sends section is **`SSendStrip` mounted** (D7),
+  not a second sends UI: ticking a row creates the tap, unticking DISABLES it
+  and the level and pre/post survive, a send lane's own strip has no row for
+  itself, and every change is one of 47 M0's verbs. `SSendStrip` has a narrow
+  mode (D5a) and the Track Detail dock gets that too.
 - **AC1.7 (the layout gate)** At dock heights 180 / 260 / 500 px and strip
   widths 60 / 96 px, `crushed == 0` and `overlap == 0` **on both axes** (T11),
   and the pane SCROLLS instead of compressing.
@@ -671,7 +764,9 @@ named.
   does not crash (D13).
 - **Gates:** new qxa `mixer_pane_strips` (AC1.2, incl. the default-project
   master and the fold/hidden pair), `mixer_broadcast` (AC1.4/1.5),
-  `mixer_inserts` (AC1.6), `mixer_pane_layout` (AC1.7), `mixer_path_root`
+  `mixer_inserts` (AC1.6), `mixer_sends` (AC1.6a — over a project with a send
+  lane, in the shape 47's `send_strip_ui` already uses),
+  `mixer_pane_layout` (AC1.7), `mixer_path_root`
   (AC1.8), `mixer_close_teardown` (AC1.9, **judged by EXIT CODE** — the
   `plugin_native_editor_teardown_safe` precedent). New verbs
   `assert-mixer-pane`, `assert-mixer-layout`, `mixer-strip-toggle`.
@@ -682,7 +777,10 @@ named.
   crush, which the pre-T11 audit reports as 0/0 and is the whole reason for the
   twin; AC1.4 with the broadcast replaced by a single-track commit; AC1.2 with
   the system-lane tail dropped from the walk AND with D6a's exemption removed
-  (two different failures); AC1.8 with `submitActive` used blind.
+  (two different failures); AC1.8 with `submitActive` used blind; **AC1.6a with
+  unticking REMOVING the tap instead of disabling it** — 47 M5's own sabotage,
+  which bit the two assertions that check the level and the mode survive, and
+  which a second mount can reintroduce without touching `SSendStrip` at all.
 
 ### M2 — collapse, persistence, pruning
 
@@ -754,8 +852,10 @@ named.
   wheel over a fader is 1 dB per notch (the head's one deliberate exception).
 - **AC4.5** `main/mixerui/CONTRACT.md` exists — carrying D6a (the one place the
   two mounts deliberately disagree about a model flag), D12 and D13;
-  `main/timeline/CONTRACT.md` gains inv. 63 (the shared walk) and inv. 64 (the
-  shared targets); `main/shell/CONTRACT.md` gains the ninth-dock and detach
+  `main/timeline/CONTRACT.md` gains inv. **64** (the shared walk) and inv. **65**
+  (the shared targets) — **not 63/64: 47 M5 took 63 and moved that file's
+  numbering note to "currently 64"**, so MEASURE the note rather than quoting
+  this line; `main/shell/CONTRACT.md` gains the ninth-dock and detach
   invariants; `docs/ACTIONS.md` gains the new verbs;
   `docs/ARCHITECTURE.md`'s module table gains `mixerui`; CLAUDE.md gains a
   section in the house style, including a **NOT gated** list.
@@ -767,8 +867,11 @@ named.
 
 ## Non-goals
 
-- **Sends and any routing.** D7. The prerequisite is 45 M7 plus a proposal for
-  the per-track send tap, feedback prevention and send-path latency.
+- **Building any routing.** Revision 2 listed sends here; proposal 47 executed
+  them, so the pane MOUNTS the sends UI (D7) and builds none of it. What stays
+  a non-goal is everything 47 itself left out: the send-path **latency / PDC**,
+  a routing MATRIX, and creating a send lane from the mixer (`add-send-lane` is
+  45's verb and the arranger owns that gesture).
 - **Pan.** D8. Needs an engine pan law, a stored per-track value and a
   `self:Pan` automation target.
 - **Pre-fader metering, gain reduction meters, PDC.** Each needs engine work
@@ -806,8 +909,15 @@ Named up front, so a green suite is not read as coverage it does not have:
   already carries 41 `RUN_SERIAL` tests because of those (T9).
 - **Real device meters and real driver latency.** Everything is measured
   through the capture backend.
-- **`SPluginEffectStrip`'s narrow mode below the threshold this proposal
-  picks** — the mode is gated at the two widths AC1.7 names and nowhere between.
+- **Either narrow mode below the threshold this proposal picks** —
+  `SPluginEffectStrip`'s and `SSendStrip`'s are each gated at the two widths
+  AC1.7 names and nowhere between.
+- **A send whose destination lane is HIDDEN**, and a send lane's own strip
+  showing a send to another send lane (47 T9 calls that shape legitimate and
+  47 D6's cycle break governs it). The pane mounts the widget that handles
+  both; nothing here measures either.
+- **The silent send under monitoring** (47 D9). The pane's tooltip states it;
+  47 M4 gates the mechanism, and neither gates what a user HEARS.
 - **The master strip's exemption from `laneHidden()` under a project that
   EXPLICITLY hides the master** (D6a says the mixer shows it anyway; the case
   asserts the default-project shape, not the explicit-hide one).
@@ -818,11 +928,14 @@ Named up front, so a green suite is not read as coverage it does not have:
 
 Revised after the review — M1 grew a narrow mode in `pluginui` (D5a) and three
 seams revision 1 missed (D12, D13, and the audit's width twin), and M3a is new.
+**Revision 3 moved the total slightly DOWN in risk and slightly UP in lines:**
+D7 stopped being a bespoke placeholder and became a mount of a gated widget,
+and that same widget brought a second narrow mode with it (D5a).
 
 | Milestone | New code | Touched | New cases |
 |---|---|---|---|
 | M0 | ~300 lines (two headers + a unit test) | `sstdmixerview.cpp`, `ssmvmixercontrol.cpp`, `sautomationlane.cpp` | 1 unit test |
-| M1 | ~900 (`mixerui`: pane + strip) + ~200 (`pluginui` narrow mode) + ~300 testkit incl. the width audit | `smainwindow.cpp` (dock, menu, button, **detach list**), `check_layering.py`, CMake | 6 qxa + 3 verbs |
+| M1 | ~900 (`mixerui`: pane + strip) + ~200 (`pluginui` narrow mode) + ~120 (`timeline` `SSendStrip` narrow mode, **new in r3**) + ~300 testkit incl. the width audit | `smainwindow.cpp` (dock, menu, button, **detach list**), `check_layering.py`, CMake | 7 qxa + 3 verbs |
 | M2 | ~200 | pane + `SOpt` | 2 qxa |
 | M3 | ~200 | pane only | 4 qxa |
 | M3a | ~120 | pane only | 1 qxa |
