@@ -88,6 +88,49 @@ rebuilt every strip on every model signal deletes the fader mid-drag. Structure
 Nothing here is gated by a screenshot: `screenshot` grabs the SCREEN's root
 window, blank under `QT_QPA_PLATFORM=offscreen`.
 
+**inv. 8 — THE STRIP STAMPS ITS OWN ARRANGEMENT ON EVERY ACTION, never
+`stimeline::submitActive`.** That helper asks which editor TAB is active and
+stamps that root — right for a widget living inside one arranger, wrong for a
+pane that can be showing a different arrangement than the tab in front. The
+failure is SILENT: an action stamped with the wrong root resolves an empty
+path and does nothing, with no refusal and no log line. `SMixerStrip::submit_`
+is the only route out. Gated by `mixer_path_root`, which asserts both halves —
+the gesture lands in the right tree AND the identically-positioned track in the
+other one is untouched.
+
+**inv. 9 — BOTH MOUNTED WIDGETS ARE ASKED FOR COMPACT MODE, and the Track
+Detail dock is not.** `SPluginEffectStrip::setCompact` and
+`SSendStrip::setCompact` (proposal 48 D5a). Measured: the FX strip's two Add
+buttons alone carry a 113 px layout minimum against a 96 px wide strip.
+Nothing becomes unreachable — Edit is already the row's double-click and
+Reload / Remove stay on its context menu.
+
+## Four layout floors, measured
+
+Every one of these was found by measuring, not by reading, and each would
+silently reappear if the next change re-introduced it.
+
+| Floor | The number | What it forces |
+|---|---|---|
+| A widget the author PINNED with `setFixedSize` is not crushed when it is shorter than its own hint | a 20×20 button whose hint is 28, ×12 | `sHonestMinHeight` honours an explicit fixed size as the author's number. The detail-pane gate is unaffected: its defect was `setMinimumHeight()` alone, where min != max |
+| Three 20 px squares plus gaps and margins | 68 px against D9's 60 | narrow uses 16 px squares, drops the dB readout, tightens margins to 1 |
+| **A `QScrollArea` carries a large minimum size hint of its own, whatever it holds** | ~113 px — wider than a WIDE strip | the name header lives OUTSIDE the scroll area (a deliberate departure from D5's diagram, and the better shape: a strip's name is its identity, so D5's own "what a user looks at while the transport runs stays put" applies to it), and narrow hides the scroll area outright |
+| **A `QLabel`'s minimum width is its FULL TEXT** — the one that actually held the wide strip hostage | 91 px for an ordinary generated track name; with the toggle button and margins, exactly the 113 the strip was reported as owing | the name ELIDES at both widths, as a fixed-width column must. The full name stays in the tooltip and in `describe()` |
+
 ## Known debt
 
-Filled in by M1 as executed.
+- **The narrow/wide flag is per-pane VIEW state and is not persisted.** M2's
+  job (`Mixer/sections` and the per-strip set), and until then a strip is born
+  wide every time.
+- **Each strip scrolls its own FX/sends section independently.** D5 puts the
+  fader block outside the scroll area, which means one scroll area per strip;
+  scrolling one strip's inserts does not scroll its neighbour's. Acceptable
+  while the sections are short and worth revisiting if they grow.
+- **`SystemLanes::All` has no caller**, so a SEND lane gets no strip: send
+  lanes have no arranger row either (a proposal 45 M7 gap `slaneorder.h`
+  records). Closing it changes the strip list and belongs with whatever closes
+  the arranger half.
+- **The LIVE dock is not what any gate measures.** A `--test-case` run never
+  binds its project into the window, so every seam builds a pane on demand and
+  what is gated is the VERB PATH rather than widget-state persistence. The
+  dock, its View-menu item, its shortcut and its detach are hand-verified.

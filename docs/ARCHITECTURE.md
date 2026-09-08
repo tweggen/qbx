@@ -63,7 +63,8 @@ a STATIC lib would drop):
     (model)     (actions,     (objects/cut,   (timeline, pluginui,
                 persistence,   wave, midi,     eventui, servicesui,
                 selection,     track, mixer)   shell, testkit,
-                media)                         mediabrowser, theme)
+                media)                         mediabrowser, mixerui,
+                                               theme)
 
 The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
 only its own include dirs and links only the lower layers plus its declared
@@ -115,6 +116,7 @@ minimal.
 | app/timeline | the arrangement canvas + chrome | main/timeline/CONTRACT.md |
 | app/mediabrowser | the Media Browser DOCK and nothing else — source picker, tree, filter, search, drag out | main/mediabrowser/CONTRACT.md |
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |
+| app/mixerui | the MIXER PANE dock and nothing else — one channel strip per track lane, MOUNTING the arranger's own meter, insert strip and sends strip rather than re-implementing them | main/mixerui/CONTRACT.md |
 | app/eventui | event editor (piano roll) + virtual keyboard | main/eventui/CONTRACT.md |
 | app/servicesui | render/record/options dialogs | main/servicesui/CONTRACT.md |
 | app/shell | SApplication, SMainWindow, main() — composition root; the live monitor, the MIDI-out pump, the AUDIO RECORDER, `SSecretStore` and the Nextcloud accounts model | main/shell/CONTRACT.md |

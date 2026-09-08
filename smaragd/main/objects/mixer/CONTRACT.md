@@ -382,3 +382,31 @@ what feeds it.
     the MASTER mixer and never a send bus, so a send at −6 dB does not disturb
     live monitoring — unlike a non-unity MASTER input, which drops it into the
     Closure path for every armed track (45 D4a rule 2).
+
+## The ONE lane walk and the ONE broadcast rule (proposal 48 M0)
+
+`slaneorder::flattenTrackLanes()` and
+`strackbroadcast::{targetsFor, orderByLane, pruneNestedTargets}` live here
+rather than in `app/model` for one reason: they have to name `STrack`, and
+`strack.h` is two layers above `app/model`, whose include dirs a lower layer
+cannot see. `objects/mixer` is the lowest layer that can express the type.
+
+**What deliberately does NOT extract is the SUBMIT.** `SAppContext` exposes no
+submit and no undo stack, so a `submitOverSelection` down here would mean
+widening it for one convenience. The three-line macro is duplicated at each
+mount ON PURPOSE; what may never be duplicated is the target COMPUTATION.
+
+**`orderByLane` preserves "a track with no visible lane sorts LAST", and that
+was an ARTIFACT before M0 rather than a decision** — it fell out of
+`rowIndexOfTrack()` answering -1. It survives because the arranger's row list
+IS the flattened walk with fold and hidden honoured, so a track absent from it
+is exactly a track with no row. The one shape that distinguishes the two
+orders is a multi-selection spanning a COLLAPSED folder, which nothing in the
+qxa suite covers — `laneorder_test` is what says which order holds.
+
+**`SystemLanes::All` has no caller.** Proposal 45's design text says the tail
+is "sends above, master last", but nothing in `sstdmixerview.cpp` mentions a
+send lane: a send lane created by `add-send-lane` is in the model, carries a
+chain and a fader, and **cannot be seen or selected in the arranger**. That
+gap belongs to 45 M7; closing it changes the arranger's row count, so the
+option exists and stays unused until somebody closes both halves together.
