@@ -72,6 +72,7 @@ private:
     QHBoxLayout *masterLayout_ = nullptr;
 
     QPointer<SStdMixer>   mixer_;
+    QList<QMetaObject::Connection> structureConns_;
     QList<SMixerStrip *>  strips_;
     SMixerStrip          *masterStrip_ = nullptr;
 

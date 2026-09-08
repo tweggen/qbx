@@ -8,6 +8,7 @@
 #include "app/mixerui/smixerstrip.h"
 #include "app/objects/mixer/slaneorder.h"
 #include "app/objects/mixer/sstdmixer.h"
+#include "app/model/sproject.h"
 #include "app/objects/track/strack.h"
 
 SMixerPane::SMixerPane( QWidget *parent ) : QWidget( parent )
@@ -58,7 +59,30 @@ void SMixerPane::clearStrips_()
 
 void SMixerPane::setRoot( SObject *root )
 {
+    if( SStdMixer *old = mixer_.data() )
+        for( const QMetaObject::Connection &c : structureConns_ )
+            QObject::disconnect( c );
+    structureConns_.clear();
+
     mixer_ = dynamic_cast<SStdMixer *>( root );
+
+    // REBUILD ON STRUCTURE, UPDATE IN PLACE OTHERWISE (CONTRACT inv. 7). A
+    // pane that rebuilt on every model signal would delete the fader under
+    // the hand mid-drag -- the arranger's own head rebuild uses deleteLater()
+    // and says why. Structure is: tracks added, removed, reordered, or a
+    // lane's HIDDEN flag changed (which changes the strip list, D2/D6a);
+    // volume, mute, solo and arm are per-track signals the STRIP handles.
+    if( SStdMixer *m = mixer_.data() ) {
+        structureConns_ << connect( m, &SStdMixer::trackInserted,
+                                    this, [this]{ rebuildStrips(); } )
+                        << connect( m, &SStdMixer::trackRemoved,
+                                    this, [this]{ rebuildStrips(); } )
+                        << connect( m, &SStdMixer::tracksReordered,
+                                    this, &SMixerPane::rebuildStrips );
+        if( SProject *p = m->getProjectSafe() )
+            structureConns_ << connect( p, &SProject::arrangementChanged,
+                                        this, &SMixerPane::rebuildStrips );
+    }
     rebuildStrips();
 }
 

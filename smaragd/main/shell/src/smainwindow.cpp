@@ -192,24 +192,53 @@ void SMainWindow::attachTrackDetail()
 // measurement therefore lives here, as `describeTrackDetailLayout` and
 // `describeSendStrip` already do.
 
+// EVERY SEAM BELOW BUILDS ITS OWN PANE, and that is forced rather than
+// chosen. A `--test-case` run NEVER BINDS ITS PROJECT INTO THE WINDOW:
+// `SActionRunner` builds it straight on `SApplication`, and `main.cpp` calls
+// `adoptCurrentProject()` only when `!testMode` (its own comment says so).
+// So `mixerPane_` is empty for the whole of a scripted run, and a seam that
+// read it would measure nothing and report `strips=0` forever. This is the
+// same reason `describeTrackDetailLayout` and `describeSendStrip` construct
+// an `STrackDetailPanel` of their own instead of reading the live dock.
+//
+// CONSEQUENCE TO KNOW RATHER THAN REDISCOVER: a gesture and the assertion
+// after it run against DIFFERENT pane instances, so what is gated is the VERB
+// PATH -- the button's own signal reaching the model -- and never the
+// persistence of widget state across the two. `send_strip_ui` has the
+// identical limitation and it is the honest one: the model is the thing both
+// mounts must agree about.
+SMixerPane *SMainWindow::buildScratchMixerPane() const
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return nullptr;
+    SMixerPane *pane = new SMixerPane( nullptr );
+    pane->setRoot( splacements::rootContainer( proj ) );
+    return pane;
+}
+
 QString SMainWindow::describeMixerPane() const
 {
-    return mixerPane_ ? mixerPane_->describe() : QString();
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    return pane ? pane->describe() : QString();
 }
 
 QString SMainWindow::describeMixerStrip( const QString &trackName ) const
 {
-    if( !mixerPane_ ) return QString();
-    SMixerStrip *strip = mixerPane_->stripForTrackNamed( trackName );
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    if( !pane ) return QString();
+    SMixerStrip *strip = pane->stripForTrackNamed( trackName );
     return strip ? strip->describe() : QString();
 }
 
 bool SMainWindow::mixerStripToggle( const QString &trackName,
                                     const QString &control, bool on )
 {
-    if( !mixerPane_ ) return false;
-    SMixerStrip *strip = mixerPane_->stripForTrackNamed( trackName );
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    if( !pane ) return false;
+    SMixerStrip *strip = pane->stripForTrackNamed( trackName );
     if( !strip ) return false;
+    // The button's own click submits the real action, which reaches the MODEL
+    // -- so the next assertion, on a fresh pane, sees it.
     return strip->driveControl( control, on );
 }
 
@@ -218,13 +247,23 @@ void SMainWindow::attachMixerPane()
     QObject::disconnect( mixerRootConn_ );
     mixerRootConn_ = QMetaObject::Connection();
     if( !mixerPane_ ) return;
+    SObject *root = nullptr;
     if( SViewTabs *tabs = viewTabs() ) {
         mixerRootConn_ = connect( tabs, &SViewTabs::activeRootChanged,
                                   mixerPane_, &SMixerPane::setRoot );
-        mixerPane_->setRoot( tabs->activeRoot() );
-    } else if( SProject *proj = SApplication::app().getCurrentProject() ) {
-        mixerPane_->setRoot( splacements::rootContainer( proj ) );
+        root = tabs->activeRoot();
     }
+    // THE FALLBACK IS NOT BELT-AND-BRACES. The tabs exist from the
+    // constructor but have no ACTIVE ROOT until an editor is installed, and
+    // `attachMixerPane()` is called right after `installMasterEditor_()` on a
+    // path where that ordering is not guaranteed to have published one yet --
+    // so following the tabs alone left the pane empty for the whole session
+    // (measured: `strips=0` on a project with three tracks). The master root
+    // is the same arrangement the tabs would name.
+    if( !root )
+        if( SProject *proj = SApplication::app().getCurrentProject() )
+            root = splacements::rootContainer( proj );
+    mixerPane_->setRoot( root );
 }
 
 void SMainWindow::detachMixerPane()
@@ -3388,29 +3427,30 @@ void sSendDoubleClick( QWidget *target )
 QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
                                           int stripWidth )
 {
-    if( !mixerPane_ ) return QString();
-    for( int i = 0; i < mixerPane_->stripCount(); ++i )
-        if( SMixerStrip *s = mixerPane_->stripAt( i ) )
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    if( !pane ) return QString();
+    for( int i = 0; i < pane->stripCount(); ++i )
+        if( SMixerStrip *s = pane->stripAt( i ) )
             s->setNarrow( stripWidth <= SMixerStrip::NARROW_WIDTH );
 
-    sSettleLayout( mixerPane_, paneWidth > 0 ? paneWidth : 640,
+    sSettleLayout( pane.get(), paneWidth > 0 ? paneWidth : 640,
                    paneHeight > 0 ? paneHeight : 260 );
 
     SDetailLayoutStats st;
-    sAuditLayout( mixerPane_, st );
+    sAuditLayout( pane.get(), st );
 
     // NAMED, never `findChild<QScrollArea *>()`: the pane holds N+1 of them
     // (one per strip plus its own), and the first one found is whichever the
     // object tree happens to yield (T11).
     bool scrollNeeded = false;
     if( QScrollArea *sa =
-            mixerPane_->findChild<QScrollArea *>( QStringLiteral( "mixerPaneScroll" ) ) )
+            pane->findChild<QScrollArea *>( QStringLiteral( "mixerPaneScroll" ) ) )
         scrollNeeded = sa->widget()
                     && sa->widget()->width() > sa->viewport()->width();
 
     return QStringLiteral(
                "w=%1|h=%2|stripW=%3|crushed=%4|overlap=%5|scrollNeeded=%6|worst=%7" )
-        .arg( mixerPane_->width() ).arg( mixerPane_->height() ).arg( stripWidth )
+        .arg( pane->width() ).arg( pane->height() ).arg( stripWidth )
         .arg( st.crushed ).arg( st.overlap )
         .arg( scrollNeeded ? 1 : 0 )
         .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
