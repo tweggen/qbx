@@ -123,6 +123,11 @@ void SSendStrip::rebuild()
             "post: after this track's fader. pre: after its inserts, before "
             "the fader. A muted track feeds neither." ) );
         rl->addWidget( r.mode );
+        // D5a: the level and the mode are ~140 px together, against a 96 px
+        // mixer strip. The enable box and the lane name stay.
+        r.level->setVisible( !compact_ );
+        r.mode->setVisible( !compact_ );
+        if( compact_ ) name->setMinimumWidth( 0 );
 
         const int idx = rows_.size();
         connect( r.on, &QCheckBox::toggled, this,
@@ -202,6 +207,14 @@ void SSendStrip::onModeChanged( int row, int index )
     auto *a = new SSetSendAction( spec, r.lane );
     a->setPreFader( index == 1 );
     SApplication::app().submitAction( a );
+}
+
+// PROPOSAL 48 D5a -- see the header.
+void SSendStrip::setCompact( bool compact )
+{
+    if( compact_ == compact ) return;
+    compact_ = compact;
+    rebuild();
 }
 
 QString SSendStrip::describe() const

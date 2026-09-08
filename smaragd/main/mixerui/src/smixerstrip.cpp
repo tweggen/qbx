@@ -37,9 +37,18 @@
 namespace {
 
 /// The M/S/R squares. 20 px is the arranger head's own Full-density size, so
-/// the two mounts agree at a glance; a mixer strip never shrinks them, because
-/// unlike a lane its width is the user's own choice (D9).
-constexpr int BTN = 20;
+/// the two mounts agree at a glance in the wide strip.
+///
+/// A NARROW strip shrinks them, and that is arithmetic rather than taste:
+/// three 20 px squares plus two 2 px gaps plus the layout's 4 px of margins
+/// need 68 px, which does not fit the 60 px D9 names -- measured as
+/// `SMixerStrip(w 60<72)`, i.e. the strip's own layout minimum exceeding the
+/// width it was pinned to, with two overlapping pairs behind it. At 16 px the
+/// row needs 56 and fits. This is NOT the head's density ladder: that exists
+/// because a lane's HEIGHT is imposed by the arrangement, whereas a strip's
+/// width is the user's own two-state choice.
+constexpr int BTN        = 20;
+constexpr int BTN_NARROW = 16;
 
 }  // namespace
 
@@ -84,38 +93,65 @@ void SMixerStrip::buildUi_()
     outer->setSpacing( 2 );
 
     // --- the SCROLLED half -------------------------------------------------
+    // (the header is added to `outer` above this, so it sits on top)
     scroll_ = new QScrollArea( this );
     scroll_->setObjectName( QStringLiteral( "mixerStripScroll" ) );
     scroll_->setWidgetResizable( true );
     scroll_->setFrameShape( QFrame::NoFrame );
     scroll_->setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+    // See setSectionsVisible(): a QScrollArea's own minimum size hint is a
+    // Qt floor far wider than a mixer column, and qSmartMinSize() bounds a
+    // minimum by the maximum. Applied HERE as well because setNarrow() early-
+    // returns when the flag is unchanged, so a strip that is born wide would
+    // otherwise never get it.
+    scroll_->setMaximumWidth( WIDE_WIDTH );
 
     scrollBody_ = new QWidget( scroll_ );
     QVBoxLayout *body = new QVBoxLayout( scrollBody_ );
     body->setContentsMargins( 0, 0, 0, 0 );
     body->setSpacing( 2 );
 
+    // THE NAME HEADER IS OUTSIDE THE SCROLL AREA, and this is a deliberate
+    // departure from D5's diagram, which drew it inside. Two reasons, one of
+    // them measured:
+    //
+    //  - a strip's NAME is its identity rather than its content, and D5's own
+    //    rule for the fader block -- "what a user looks at while the transport
+    //    runs stays put" -- applies to knowing WHICH track they are looking at
+    //    at least as strongly;
+    //  - a QAbstractScrollArea carries a minimum size hint of its own, several
+    //    times the font height, whatever it contains. With the header inside
+    //    it, a NARROW strip demanded 70 px against the 60 D9 names even with
+    //    the inserts and the sends hidden and the scrollbar off. Outside it,
+    //    the scroll area can be hidden outright in narrow mode -- where it has
+    //    nothing to show anyway -- and the 60 px strip fits.
     QHBoxLayout *header = new QHBoxLayout();
     header->setContentsMargins( 0, 0, 0, 0 );
     header->setSpacing( 2 );
-    nameLabel_ = new QLabel( t ? t->getSName() : QString(), scrollBody_ );
+    nameLabel_ = new QLabel( t ? t->getSName() : QString(), this );
     nameLabel_->setToolTip( nameLabel_->text() );
     header->addWidget( nameLabel_, 1 );
-    narrowBtn_ = new QPushButton( QStringLiteral( "<" ), scrollBody_ );
+    narrowBtn_ = new QPushButton( QStringLiteral( "<" ), this );
     narrowBtn_->setFixedSize( 16, 16 );
     narrowBtn_->setToolTip( tr( "Narrow / wide strip" ) );
     connect( narrowBtn_, &QPushButton::clicked,
              this, [this]{ setNarrow( !narrow_ ); } );
     header->addWidget( narrowBtn_, 0 );
-    body->addLayout( header );
+    outer->addLayout( header );
 
     // THE ARRANGER'S OWN WIDGETS, MOUNTED. Not a compact re-implementation:
     // the editor registry, the drop handling and the Missing / Unsupported
     // states would each have to be written a second time and could then
     // disagree with the Track Detail dock's.
     inserts_ = new SPluginEffectStrip( t, scrollBody_ );
+    // COMPACT ALWAYS, in both widths (D5a). Even a WIDE mixer strip is 96 px
+    // against an insert row that wants 113 for its two Add buttons alone --
+    // this is a mixer column, not the Track Detail dock, and the detail dock
+    // keeps the full row.
+    inserts_->setCompact( true );
     body->addWidget( inserts_, 0 );
     sends_ = new SSendStrip( t, scrollBody_ );
+    sends_->setCompact( true );
     body->addWidget( sends_, 0 );
     body->addStretch( 1 );
 
@@ -129,6 +165,7 @@ void SMixerStrip::buildUi_()
     fixed->setSpacing( 2 );
 
     QHBoxLayout *msr = new QHBoxLayout();
+    msrLayout_ = msr;
     msr->setContentsMargins( 0, 0, 0, 0 );
     msr->setSpacing( 2 );
     auto mkBtn = [&]( const QString &glyph, const QString &tip ) {
@@ -149,6 +186,7 @@ void SMixerStrip::buildUi_()
     connect( armBtn_,  &QPushButton::toggled, this, &SMixerStrip::onArmToggled );
 
     QHBoxLayout *faderRow = new QHBoxLayout();
+    faderLayout_ = faderRow;
     faderRow->setContentsMargins( 0, 0, 0, 0 );
     faderRow->setSpacing( 2 );
 
@@ -460,17 +498,54 @@ void SMixerStrip::setSectionsVisible( bool inserts, bool sends,
     // It is not a density ladder: a lane's HEIGHT is imposed on it by the
     // arrangement, whereas a strip's width is chosen, so this is a two-state
     // user choice rather than a graceful degradation.
+    const int btn = narrow_ ? BTN_NARROW : BTN;
+    for( QPushButton *b : { muteBtn_, soloBtn_, armBtn_ } )
+        if( b ) b->setFixedSize( btn, btn );
+    // The dB READOUT goes with the width: "+0.0 dB" needs about as much room
+    // as the three buttons do, and the fader's own position still shows the
+    // level. The number comes back the moment the strip is widened.
+    if( dbLabel_ ) dbLabel_->setVisible( showFader_ && !narrow_ );
+    // A NARROW strip has NOTHING SCROLLABLE -- the inserts and the sends are
+    // both hidden -- so its scroll area's vertical scrollbar is pure cost, and
+    // a QScrollArea reserves that extent in its own minimum width whether the
+    // bar is ever shown or not. Measured: it was 10 of the 70 px the strip
+    // demanded against the 60 D9 names.
+    // A QScrollArea CARRIES A LARGE MINIMUM SIZE HINT OF ITS OWN, whatever it
+    // contains -- measured at 113 px here, which is more than a WIDE mixer
+    // strip is. That is a Qt floor and no amount of compacting the content
+    // moves it. `qSmartMinSize()` bounds a widget's minimum BY ITS MAXIMUM,
+    // so pinning the scroll area to the strip's own width is what lets a
+    // column be a column. This is the legitimate use of an explicit maximum:
+    // a scroll area's entire job is to be smaller than its contents, which is
+    // the opposite of the case `main/timeline/CONTRACT.md` inv. 45 warns
+    // about (a widget UNDER-reporting what it needs).
+    const int w = narrow_ ? NARROW_WIDTH : WIDE_WIDTH;
+    if( scroll_ ) {
+        scroll_->setMaximumWidth( w );
+        // Nothing in it is shown when narrow, so it is hidden outright.
+        scroll_->setVisible( !narrow_ && ( showInserts_ || showSends_ ) );
+    }
+    const int pad = narrow_ ? 1 : 2;
+    if( QLayout *l = layout() ) l->setContentsMargins( pad, pad, pad, pad );
+    if( msrLayout_ ) msrLayout_->setSpacing( pad );
+    if( faderLayout_ ) faderLayout_->setSpacing( pad );
     if( inserts_ ) inserts_->setVisible( showInserts_ && !narrow_ );
     if( sends_ )   sends_->setVisible( showSends_ && !narrow_ );
     if( meter_ )   meter_->setVisible( showMeter_ );
     if( fader_ )   fader_->setVisible( showFader_ );
-    if( dbLabel_ ) dbLabel_->setVisible( showFader_ );
-    if( nameLabel_ && track_ ) {
-        const QString full = track_->getSName();
+    // THE NAME ELIDES IN BOTH WIDTHS, and getting this wrong is what made the
+    // WIDE strip fail AC1.7. A QLabel's minimum width is its FULL TEXT --
+    // measured at 91 px for an ordinary generated track name, which with the
+    // narrow-toggle button and the margins is exactly the 113 px a 96 px
+    // strip was reported as owing. A mixer strip is a fixed-width column and
+    // a name that does not fit is truncated, as it is in every reference DAW;
+    // the full name stays in the tooltip and in describe().
+    if( nameLabel_ ) {
+        const QString full = track_ ? track_->getSName() : QString();
+        const int avail = qMax( 8, w - 16 - 3 * pad );   // less the toggle button
+        nameLabel_->setMaximumWidth( avail );
         nameLabel_->setText(
-            narrow_ ? nameLabel_->fontMetrics().elidedText(
-                          full, Qt::ElideRight, NARROW_WIDTH - 24 )
-                    : full );
+            nameLabel_->fontMetrics().elidedText( full, Qt::ElideRight, avail ) );
         nameLabel_->setToolTip( full );
     }
 }

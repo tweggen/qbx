@@ -46,6 +46,22 @@ public:
     // MODULE-LEVEL registry keyed by slot (splugineffectstrip.cpp), not on
     // any one strip instance, for the identical reason the native editor's
     // does -- see ensureParamEditor()'s own comment.
+    /// COMPACT MODE (proposal 48 D5a). Below a usable width a row collapses
+    /// to its name and bypass box and the two Add buttons lose their text.
+    /// NOTHING BECOMES UNREACHABLE, only smaller: Edit is already the row's
+    /// own double-click, and Reload / Remove stay on its context menu.
+    ///
+    /// It exists because the mixer pane mounts this widget in a 60 or 96 px
+    /// strip while the full row's layout minimum is far past that -- measured
+    /// at 113 px for the two Add buttons alone, which made proposal 48's
+    /// AC1.7 fail on a pane that was otherwise clean. A SECOND, compact
+    /// insert list in `app/mixerui` was the alternative and was rejected: the
+    /// editor registry, the drop handling and the Missing / Unsupported
+    /// states would each have to be written again and could then disagree
+    /// with this one.
+    void setCompact( bool compact );
+    bool isCompact() const { return compact_; }
+
     static bool isGenericEditorOpenFor( SPluginSlot *slot );
     static void closeGenericEditorFor( SPluginSlot *slot );
 
@@ -151,6 +167,8 @@ private:
     SPluginChain *pluginChain_;
     QVBoxLayout  *pluginsLayout_;
     QPushButton  *addInstrumentBtn_ = nullptr;
+    QPushButton  *addEffectBtn_ = nullptr;
+    bool          compact_ = false;
     std::vector<PluginWidget> pluginWidgets_;
     int dragSourceIndex_ = -1;
 

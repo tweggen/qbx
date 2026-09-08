@@ -11,6 +11,7 @@
 class QCheckBox;
 class QLabel;
 class QPushButton;
+class QHBoxLayout;
 class QScrollArea;
 class QSlider;
 class QVBoxLayout;
@@ -118,6 +119,8 @@ private:
     SSendStrip         *sends_   = nullptr;
 
     QWidget     *fixedBlock_  = nullptr;   ///< the PINNED half (D5)
+    QHBoxLayout *msrLayout_   = nullptr;
+    QHBoxLayout *faderLayout_ = nullptr;
     QPushButton *muteBtn_     = nullptr;
     QPushButton *soloBtn_     = nullptr;
     QPushButton *armBtn_      = nullptr;

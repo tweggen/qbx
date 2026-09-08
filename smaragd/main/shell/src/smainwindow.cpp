@@ -3295,6 +3295,15 @@ struct SDetailLayoutStats {
 // a 100 px floor hide a 400 px section — so the audit must not repeat it.
 int sHonestMinHeight( const QWidget *w )
 {
+    // A widget the author PINNED to a fixed height is not being crushed when
+    // it is shorter than its own sizeHint -- it is being given exactly what it
+    // asked for. `setFixedSize( 20, 20 )` on a QPushButton whose hint is 28 is
+    // the arranger track head's own idiom at Full density, and reporting the
+    // mixer's copy of it as 12 crushed widgets says nothing about a layout.
+    // What the check is FOR is a layout that could not honour a minimum, and
+    // for a pinned widget the author's number IS the minimum.
+    if( w->minimumHeight() > 0 && w->minimumHeight() == w->maximumHeight() )
+        return w->minimumHeight();
     return qMax( w->minimumHeight(), w->minimumSizeHint().height() );
 }
 
