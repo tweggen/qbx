@@ -512,6 +512,17 @@ mistake them for an isolation bug:
 | `qxa.clip_properties_actions` | `***Exception: SegFault` | 1 of 2 serial runs |
 | `qxa.split_plain_screenshot` | script prints `PASS`, process then exits non-zero — a crash during **teardown**, after every action and assertion succeeded | 1 of 2 serial runs, and `-j2` |
 
+**A THIRD, found 2026-09-08 and measured against `main` rather than assumed:
+`action_roundtrip_test` crashes intermittently** — a SEGFAULT, and under
+`ctest` an `Exit code 0xc0000374` (STATUS_HEAP_CORRUPTION). Rate on this box:
+**7 failures in 30 runs on `main` (4819c27a) and 7 in 30 on a feature branch**
+— identical, so it is not any one branch's doing. Two other binaries in the
+same worktree (`laneorder_test`, `filepathref_test`, both ~295 MB, the same
+size) are **20/20 clean**, so it is specific to this test and not a loader or
+memory-pressure artifact. Root cause NOT established; treat it as open. Note
+that a run can also exit **127** with no output at all, which is the same
+failure wearing a different hat — do not read 127 as "binary missing".
+
 They are not a `-j` problem: they appeared in the **serial** run and both passed
 in the green `-j4` and `-j8` runs. Neither reproduces in isolation —
 `split_plain_screenshot` 80/80 (including 25 with `SMARAGD_SIDECAR_DIR=off`) and
