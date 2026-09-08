@@ -88,6 +88,7 @@
 #include "app/eventui/svirtualkeyboarddock.h"
 #include "app/media/smediadrop.h"
 #include "app/mediabrowser/smediabrowserpanel.h"
+#include "app/mixerui/smixerpane.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
@@ -155,6 +156,7 @@ void SMainWindow::destroyDocksToolbars()
     detachTrackDetail();
     detachClipProperties();
     detachEventEditor();
+    detachMixerPane();
 }
 
 void SMainWindow::attachTrackDetail()
@@ -175,6 +177,34 @@ void SMainWindow::attachTrackDetail()
     trackDetailConn_ = connect( mixer, &SStdMixer::selectedTrackChanged,
                                 trackDetailPanel_, &STrackDetailPanel::setTrack );
     trackDetailPanel_->setTrack( mixer->getSelectedTrack() );
+}
+
+// PROPOSAL 48 D12 -- THE PANE FOLLOWS THE ACTIVE TAB'S ROOT, so what it shows
+// and what `stimeline::submitActive` stamps on the action are the same
+// arrangement. A pane that showed the master while the user worked in a
+// second tab would broadcast over the wrong selection and resolve its paths
+// against the wrong tree; this repository has already shipped that bug once
+// (`SClearSelectionAction` honours `pathRoot_` and the convenience helper did
+// not set one, so Ctrl+Shift+A cleared the master's selection from any tab).
+void SMainWindow::attachMixerPane()
+{
+    QObject::disconnect( mixerRootConn_ );
+    mixerRootConn_ = QMetaObject::Connection();
+    if( !mixerPane_ ) return;
+    if( SViewTabs *tabs = viewTabs() ) {
+        mixerRootConn_ = connect( tabs, &SViewTabs::activeRootChanged,
+                                  mixerPane_, &SMixerPane::setRoot );
+        mixerPane_->setRoot( tabs->activeRoot() );
+    } else if( SProject *proj = SApplication::app().getCurrentProject() ) {
+        mixerPane_->setRoot( splacements::rootContainer( proj ) );
+    }
+}
+
+void SMainWindow::detachMixerPane()
+{
+    QObject::disconnect( mixerRootConn_ );
+    mixerRootConn_ = QMetaObject::Connection();
+    if( mixerPane_ ) mixerPane_->detachProject();
 }
 
 void SMainWindow::detachTrackDetail()
@@ -478,6 +508,7 @@ void SMainWindow::fileNew()
     linkEventEditorAxis();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
+    attachMixerPane();
     attachClipProperties();
     attachEventEditor();
 
@@ -550,6 +581,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     linkEventEditorAxis();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
+    attachMixerPane();
     attachClipProperties();
     attachEventEditor();
 
@@ -1710,6 +1742,19 @@ SMainWindow::SMainWindow()
     if( SApplication::app().isTestCaseMode() )
         qDockMediaBrowser_->hide();
 
+    // --- THE NINTH DOCK: the mixer pane (proposal 48 M1 / D10) -------------
+    // Bottom area, HIDDEN on a first run -- a mixer is not what a new user
+    // needs on screen before they have a track -- and thereafter placed
+    // entirely by `ui/windowState`, like every other dock. No settings key of
+    // its own for visibility.
+    qDockMixer_ = new QDockWidget( tr( "Mixer" ), this );
+    qDockMixer_->setObjectName( "dock_mixer" );
+    mixerPane_ = new SMixerPane( qDockMixer_ );
+    qDockMixer_->setWidget( mixerPane_ );
+    addDockWidget( Qt::BottomDockWidgetArea, qDockMixer_ );
+    tabifyDockWidget( qDockLog_, qDockMixer_ );
+    qDockMixer_->hide();
+
     // The FEEL FLOW PUPPET (proposal 40 M3e AC 5) -- the EIGHTH dock. Created
     // here in the ctor for the reason every dock above is (shell CONTRACT
     // inv. 4 fixes the restore order, and restoreState() can only place docks
@@ -1778,6 +1823,15 @@ SMainWindow::SMainWindow()
     // No shortcut in the MVP (design §B.4): every free Ctrl+Shift letter that
     // reads as "media" is already taken or ambiguous, and a binding nobody
     // chose is worse than none.
+    QAction *actMixer = qDockMixer_->toggleViewAction();
+    actMixer->setText( tr( "Mi&xer" ) );
+    // WINDOW-scoped, and checked against the two bindings that already own a
+    // bare letter: the event editor's Q (quantize) and the virtual keyboard's
+    // note keys. Ctrl+Shift+M collides with neither -- `fix/editor-ui-and-
+    // shortcuts` is the precedent for checking rather than assuming.
+    actMixer->setShortcut( QKeySequence( QStringLiteral( "Ctrl+Shift+M" ) ) );
+    viewMenu->addAction( actMixer );
+
     QAction *actMedia = qDockMediaBrowser_->toggleViewAction();
     actMedia->setText( tr( "&Media browser" ) );
     viewMenu->addAction( actMedia );
@@ -2702,6 +2756,7 @@ void SMainWindow::adoptCurrentProject()
     ensureArranger_();
     createDocksToolbars();
     attachTrackDetail();
+    attachMixerPane();
     attachClipProperties();
     attachEventEditor();
 
