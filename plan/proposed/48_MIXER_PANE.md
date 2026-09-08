@@ -901,6 +901,34 @@ from both sides.
 heights 180 / 260 / 500, on BOTH axes, plus scroll-instead-of-compress at a
 200 px pane.
 
+**THE SABOTAGE PASS FOUND A VACUOUS GATE, which is what it is for.** Five
+sabotages; four bit immediately and three of those are cleanly disjoint:
+
+| Sabotage | Bites |
+|---|---|
+| S1 D6a removed (`alwaysShowMaster = false`) | 3 cases |
+| S3 the broadcast replaced by `{clicked}` | `mixer_broadcast` alone |
+| S4 D12's stamp dropped | `mixer_path_root` alone |
+| S5 the FX strip's compact mode dropped | `mixer_inserts` alone |
+
+**S2 — D2 removed outright, the pane switched to `Fold::Honour` — BIT
+NOTHING.** Every case passed with the feature deleted. `collapse-track` drives
+`SStdMixerView::toggleTrackCollapsed()`, the fold triangle's own call, and a
+`--test-case` run has no bound arranger, so the verb is a **no-op**: measured
+directly, `assert-lane-view collapsed="1"` reads FALSE immediately after it.
+No verb writes `STrack::setCollapsed()` without the arranger, so no script can
+put the model into the state D2 is about.
+
+Fixed by moving the claim to where it can bite. `SMixerPane::walkOptions()` is
+a static returning the pane's own options, `rebuildStrips()` its only caller,
+and `laneorder_test` asserts it — the pane's CHOICE — and then the order that
+choice produces over a collapsed folder set on the model directly. The honest
+split: the behaviour is the walk's, the choice is the pane's. S2 re-run: **2
+failing checks**. The qxa case now states in place why it does not assert D2.
+
+**Suite:** 373/373 passed, 0 failed, 395 s at `-j4`; 376 registered / 373 run
+/ 3 Not Run (Disabled) — the macOS-only `au_*` trio — reconciled both ways.
+
 **What M1 did NOT build**, beyond the proposal's own non-goals: the four
 pane-wide section toggles are plumbed (`setSectionsVisible`) and have no UI or
 storage — that is M2, which also owns the narrow flag's persistence.

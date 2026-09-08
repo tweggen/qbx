@@ -2900,6 +2900,14 @@ above, master last". Now that 47 makes send lanes audible, a lane you can hear
 and cannot see is a sharper gap than it was. `slaneorder.h` records it and
 offers `SystemLanes::All`; nothing calls it yet.
 
+**THE SABOTAGE PASS FOUND A VACUOUS GATE.** Removing D2 outright — switching
+the pane to `Fold::Honour` — broke NOTHING: `collapse-track` drives the
+arranger's own `toggleTrackCollapsed()`, and a `--test-case` run has no bound
+arranger, so the verb is a **no-op** (`assert-lane-view collapsed=` reads false
+straight after it). No script can set the fold flag at all. The pane's choice
+is now `SMixerPane::walkOptions()`, a static that `laneorder_test` asserts
+directly — after which the sabotage costs 2 checks.
+
 Gates: `laneorder_test` (M0 — the walk's order over folders, a collapsed
 folder, a hidden lane and the master; D3a's "no visible lane sorts LAST"
 PRESERVED, over the multi-selection-spanning-a-collapsed-folder shape nothing
