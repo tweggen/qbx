@@ -179,6 +179,27 @@ APP_DEPS = {
     # started doing the arranger's job, and the drag payload is the whole
     # interface between them.
     'mediabrowser':   {'actions', 'media', 'model', 'servicesui', 'shell'},
+    # mixerui (proposal 48 M1) is the mixer PANE and nothing else -- the
+    # mediabrowser precedent, one rank over. It MOUNTS widgets the arranger
+    # already owns rather than re-implementing them, which is the whole
+    # proposal ('a second MOUNT of rules the arranger already owns, never a
+    # second COPY of them'), so the edges are wide by design:
+    #   timeline   -- SLevelMeter and SSendStrip live there, and the pane is
+    #                 built around both. Revision 1 of the proposal tried to
+    #                 avoid this edge; moving SLevelMeter down would drag
+    #                 tw/metering into a lower layer's engine deps, and
+    #                 re-implementing it is the second copy this proposal
+    #                 exists to prevent. The mediabrowser's 'no timeline'
+    #                 rule fits a browser that must not know what an arranger
+    #                 looks like; it does not fit a module whose entire
+    #                 content is the arranger's widgets mounted differently.
+    #   pluginui   -- SPluginEffectStrip is the inserts section.
+    #   objects/mixer -- slaneorder + strackbroadcast (M0's shared seams).
+    #   servicesui -- option KEY NAMES live in SOpt, same reason the
+    #                 mediabrowser and eventui edges exist.
+    'mixerui':        {'actions', 'model', 'objects/mixer', 'objects/track',
+                       'pluginui', 'selection', 'servicesui', 'shell',
+                       'timeline'},
     'persistence':    {'actions', 'model'},
     'selection':      {'actions', 'model'},
     # timeline + objects/midi since proposal 37 P1: the Clip Properties dock
@@ -253,7 +274,8 @@ APP_DEPS = {
     # with the `pluginui -> shell` edge below, and that is a shortening of the
     # existing `shell -> timeline -> pluginui -> shell` cycle rather than a new
     # class of problem -- see the UI+shell note at the top of this file.
-    'shell':          {'actions', 'eventui', 'media', 'mediabrowser', 'model',
+    'shell':          {'actions', 'eventui', 'media', 'mediabrowser',
+                       'mixerui', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
                        'objects/track', 'objects/wave', 'persistence',
                        'pluginui', 'selection', 'servicesui', 'testkit', 'theme',
@@ -283,7 +305,7 @@ APP_DEPS = {
     # persistence, same milestone: fragment_test's AC1.3 round-trips a
     # hand-authored document through the REAL SProjectLoader, exactly the
     # save/load machinery a project file goes through.
-    'testkit':        {'actions', 'media', 'mediabrowser', 'model',
+    'testkit':        {'actions', 'media', 'mediabrowser', 'mixerui', 'model',
                        'objects/cut', 'objects/fragment', 'objects/midi',
                        'objects/mixer', 'objects/track', 'objects/wave',
                        'persistence', 'pluginui', 'servicesui', 'shell'},
@@ -351,6 +373,9 @@ APP_ENG = {
     # doing the engine's job.
     'media':          _ENG_BASE,
     'mediabrowser':   _ENG_BASE,
+    # metering for twLevelProbe (the meter tap), pages for the frozen page
+    # it reads BY POSITION. Deliberately smaller than timeline's set.
+    'mixerui':        _ENG_BASE | {'metering', 'pages'},
     # theme reaches NO engine module beyond the base -- only tw/core's TW_LOG.
     'theme':          _ENG_BASE,
     'persistence':    _ENG_BASE,

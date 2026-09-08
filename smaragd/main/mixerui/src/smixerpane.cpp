@@ -1,0 +1,166 @@
+#include "app/mixerui/smixerpane.h"
+
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QScrollArea>
+#include <QStringList>
+
+#include "app/mixerui/smixerstrip.h"
+#include "app/objects/mixer/slaneorder.h"
+#include "app/objects/mixer/sstdmixer.h"
+#include "app/objects/track/strack.h"
+
+SMixerPane::SMixerPane( QWidget *parent ) : QWidget( parent )
+{
+    // NO EXPLICIT MINIMUM ON ANYTHING THAT CARRIES A LAYOUT (CONTRACT inv. 6).
+    QHBoxLayout *outer = new QHBoxLayout( this );
+    outer->setContentsMargins( 2, 2, 2, 2 );
+    outer->setSpacing( 4 );
+
+    scroll_ = new QScrollArea( this );
+    scroll_->setObjectName( QStringLiteral( "mixerPaneScroll" ) );
+    scroll_->setWidgetResizable( true );
+    scroll_->setFrameShape( QFrame::NoFrame );
+    scroll_->setVerticalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+
+    stripHost_ = new QWidget( scroll_ );
+    stripLayout_ = new QHBoxLayout( stripHost_ );
+    stripLayout_->setContentsMargins( 0, 0, 0, 0 );
+    stripLayout_->setSpacing( 4 );
+    stripLayout_->addStretch( 1 );
+    scroll_->setWidget( stripHost_ );
+    outer->addWidget( scroll_, 1 );
+
+    // THE MASTER COLUMN IS PINNED AND DOES NOT SCROLL (D6). D1's walk puts
+    // the master at the tail; in a horizontal pane the tail is the right-hand
+    // end, which is where both reference DAWs put it, and it is the one strip
+    // a user needs while looking at any other -- so it lives in a separate,
+    // non-scrolling container beside the scroll area rather than inside it.
+    masterHost_ = new QWidget( this );
+    masterLayout_ = new QHBoxLayout( masterHost_ );
+    masterLayout_->setContentsMargins( 0, 0, 0, 0 );
+    masterLayout_->setSpacing( 0 );
+    outer->addWidget( masterHost_, 0 );
+}
+
+SMixerPane::~SMixerPane() = default;
+
+void SMixerPane::clearStrips_()
+{
+    for( SMixerStrip *s : strips_ ) { s->setParent( nullptr ); s->deleteLater(); }
+    strips_.clear();
+    if( masterStrip_ ) {
+        masterStrip_->setParent( nullptr );
+        masterStrip_->deleteLater();
+        masterStrip_ = nullptr;
+    }
+}
+
+void SMixerPane::setRoot( SObject *root )
+{
+    mixer_ = dynamic_cast<SStdMixer *>( root );
+    rebuildStrips();
+}
+
+void SMixerPane::rebuildStrips()
+{
+    clearStrips_();
+    SStdMixer *mixer = mixer_.data();
+    if( !mixer ) return;
+
+    // ONE WALK, SHARED WITH THE ARRANGER (M0 / D1). The options ARE the
+    // pane's semantics, stated rather than implied:
+    //
+    //   Fold::Ignore     a collapsed folder's children KEEP their strips --
+    //                    fold answers "show this lane's children as ROWS",
+    //                    and a mixer has no rows (D2). Consequence to know
+    //                    rather than rediscover: the strip count does not
+    //                    match the arranger's visible row count, and no gate
+    //                    may assert that it does.
+    //   Hidden::Honour   hiding answers "show this track at all", which both
+    //                    mounts must agree on.
+    //   alwaysShowMaster D6a -- the ONE place the two mounts deliberately
+    //                    disagree about a model flag. Every system role is
+    //                    laneHiddenByDefault(), so on a project nobody has
+    //                    touched the master lane has no arranger row; a mixer
+    //                    without its summing point is not a mixer. The
+    //                    exemption covers the master ITSELF and never its
+    //                    children, so a hidden conductor lane stays hidden.
+    slaneorder::Options opt;
+    opt.fold             = slaneorder::Fold::Ignore;
+    opt.hidden           = slaneorder::Hidden::Honour;
+    opt.system           = slaneorder::SystemLanes::MasterSubtree;
+    opt.alwaysShowMaster = true;
+
+    for( const slaneorder::Lane &lane : slaneorder::flattenTrackLanes( mixer, opt ) ) {
+        if( !lane.track ) continue;
+        const bool isMaster = lane.role == SSystemRole::Master;
+        QWidget *host = isMaster ? masterHost_ : stripHost_;
+        SMixerStrip *strip = new SMixerStrip( mixer, lane.track, host );
+        strip->setSectionsVisible( showInserts_, showSends_, showMeter_, showFader_ );
+        if( isMaster ) {
+            masterLayout_->addWidget( strip, 0 );
+            masterStrip_ = strip;
+        } else {
+            // Before the trailing stretch, so the strips pack left.
+            stripLayout_->insertWidget( stripLayout_->count() - 1, strip, 0 );
+            strips_.append( strip );
+        }
+    }
+}
+
+SMixerStrip *SMixerPane::stripAt( int i ) const
+{
+    if( i >= 0 && i < strips_.size() ) return strips_.at( i );
+    if( i == strips_.size() ) return masterStrip_;   // the pinned tail
+    return nullptr;
+}
+
+SMixerStrip *SMixerPane::stripForTrackNamed( const QString &name ) const
+{
+    for( SMixerStrip *s : strips_ )
+        if( s->track() && s->track()->getSName() == name ) return s;
+    if( masterStrip_ && masterStrip_->track()
+        && masterStrip_->track()->getSName() == name ) return masterStrip_;
+    return nullptr;
+}
+
+void SMixerPane::setSectionsVisible( bool inserts, bool sends,
+                                     bool meter, bool fader )
+{
+    showInserts_ = inserts;
+    showSends_   = sends;
+    showMeter_   = meter;
+    showFader_   = fader;
+    for( SMixerStrip *s : strips_ )
+        s->setSectionsVisible( inserts, sends, meter, fader );
+    if( masterStrip_ )
+        masterStrip_->setSectionsVisible( inserts, sends, meter, fader );
+}
+
+QString SMixerPane::describe() const
+{
+    QStringList names;
+    for( SMixerStrip *s : strips_ )
+        names << ( s->track() ? s->track()->getSName() : QStringLiteral( "?" ) );
+    if( masterStrip_ && masterStrip_->track() )
+        names << masterStrip_->track()->getSName();
+    return QStringLiteral( "strips=%1|master=%2|names=%3" )
+        .arg( strips_.size() + ( masterStrip_ ? 1 : 0 ) )
+        .arg( masterStrip_ ? 1 : 0 )
+        .arg( names.join( QLatin1Char( ',' ) ) );
+}
+
+// D13. The pane holds one STrack* and one twLevelProbe PER STRIP, and
+// closeProject() deletes the project AFTER destroyDocksToolbars(). Without
+// this the next 33 ms meter tick dereferences freed tracks -- a crash, not a
+// glitch, and the same class as the SCut revalidation UAF and the SViewTabs
+// dangling-root hazard, both of which this tree fixed by wiring lifetime from
+// the first commit rather than later.
+void SMixerPane::detachProject()
+{
+    for( SMixerStrip *s : strips_ ) s->detachProject();
+    if( masterStrip_ ) masterStrip_->detachProject();
+    clearStrips_();
+    mixer_ = nullptr;
+}

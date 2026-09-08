@@ -399,6 +399,15 @@ set(APP_UI_FILES
     # pluginui/eventui -- a UI slice that is hosted by the shell.
     mediabrowser/include/app/mediabrowser/smediabrowserpanel.h
     mediabrowser/src/smediabrowserpanel.cpp
+    # --- app/mixerui (proposal 48 M1). The mixer PANE and nothing else, on the
+    # mediabrowser's precedent one rank over: a UI slice the shell hosts. It
+    # MOUNTS widgets the arranger already owns (SLevelMeter, SPluginEffectStrip,
+    # SSendStrip) rather than re-implementing them -- "a second MOUNT of rules
+    # the arranger already owns, never a second COPY of them".
+    mixerui/include/app/mixerui/smixerpane.h
+    mixerui/include/app/mixerui/smixerstrip.h
+    mixerui/src/smixerpane.cpp
+    mixerui/src/smixerstrip.cpp
     # --- app/pluginui
     pluginui/include/app/pluginui/spluginbrowserdialog.h
     pluginui/include/app/pluginui/splugineffectstrip.h
@@ -632,6 +641,7 @@ target_include_directories(app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/timeline/include
     ${CMAKE_CURRENT_SOURCE_DIR}/eventui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/mediabrowser/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/mixerui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/pluginui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/servicesui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shell/include

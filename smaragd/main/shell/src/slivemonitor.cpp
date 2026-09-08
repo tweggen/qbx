@@ -1267,6 +1267,15 @@ double SLiveMonitor::takeInputPeak( const STrack *track )
     return 0.0;
 }
 
+// The non-clearing twin — see the header. Exactly one mount may TAKE.
+double SLiveMonitor::peekInputPeak( const STrack *track ) const
+{
+    for( std::size_t i = 0; i < current_.sources.size() && i < sources_.size(); ++i )
+        if( current_.sources[i] == track && sources_[i] )
+            return sources_[i]->peekPeak();
+    return 0.0;
+}
+
 // ONE SPELLING OF "what about this track can make a published plan stale",
 // used for a closure member and for the MASTER LANE alike. It was inlined in
 // planSignature() and the master lane simply was not asked; a second, hand-
