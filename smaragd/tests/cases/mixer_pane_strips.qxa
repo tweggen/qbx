@@ -57,15 +57,24 @@
     <assert-mixer-pane strips="4" master="1"/>
     <assert-mixer-pane contains="names=Alpha,Folder,FolderKid,Master"/>
 
-    <!-- ============ D2: FOLD CHANGES THE ARRANGER, NOT THE PANE ======== -->
-    <!-- collapse-track drives SStdMixerView::toggleTrackCollapsed(), the fold
-         triangle's own call. The arranger loses FolderKid's row; the pane
-         keeps its strip, because a mixer has no rows to fold. -->
+    <!-- ============ D2 IS NOT GATED HERE, AND THIS IS WHY ============= -->
+    <!-- An earlier version of this case collapsed the folder and asserted the
+         strip count was unchanged. IT WAS VACUOUS, and the sabotage pass is
+         what caught it: with the pane switched to `Fold::Honour` — D2 removed
+         outright — the case still PASSED.
 
-    <collapse-track trackPath="1" collapsed="true"/>
-    <assert-mixer-pane strips="4" master="1"/>
-    <assert-mixer-pane contains="names=Alpha,Folder,FolderKid,Master"/>
-    <collapse-track trackPath="1" collapsed="false"/>
+         `collapse-track` drives SStdMixerView::toggleTrackCollapsed(), the
+         fold triangle's own call, and a test-case run has no bound arranger
+         at all, so the verb is a NO-OP here. Measured directly:
+         `assert-lane-view collapsed="1"` reads false immediately after it.
+         There is no verb that writes STrack::setCollapsed() without the
+         arranger, so no script can put the model in the state D2 is about.
+
+         D2 is therefore gated in `laneorder_test` instead, which asserts
+         `SMixerPane::walkOptions()` itself — the pane's CHOICE of
+         Fold::Ignore — and then the order that choice produces over a
+         collapsed folder set on the model directly. That is the honest place
+         for it: the behaviour is the walk's, and the choice is the pane's. -->
 
     <!-- ============ D6a DOES NOT DESCEND ============================== -->
     <!-- The master lane owns a CONDUCTOR lane (proposal 45 M6), minted by
