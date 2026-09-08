@@ -745,6 +745,16 @@ private:
     /// and one twLevelProbe per strip, and closeProject() deletes the project
     /// AFTER destroyDocksToolbars(). Without this seam the next 33 ms meter
     /// tick dereferences freed tracks -- a crash, not a glitch.
+    /// TEST ENTRY POINTS for the mixer pane (proposal 48 M1). The verbs live
+    /// in `app/testkit`, which may not include `app/mixerui` any more than it
+    /// may include `app/timeline` — so the MEASUREMENT lives here, exactly as
+    /// `describeTrackDetailLayout` / `describeSendStrip` already do.
+    QString describeMixerPane() const;
+    QString describeMixerStrip( const QString &trackName ) const;
+    QString describeMixerLayout( int paneWidth, int paneHeight, int stripWidth );
+    bool    mixerStripToggle( const QString &trackName, const QString &control,
+                              bool on );
+
     void attachMixerPane();
     void detachMixerPane();
     // Same lifecycle for the clip properties dock (proposal 31): it follows the

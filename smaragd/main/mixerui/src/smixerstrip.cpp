@@ -475,6 +475,23 @@ void SMixerStrip::setSectionsVisible( bool inserts, bool sends,
     }
 }
 
+// A GESTURE SEAM, not a model write. It moves the REAL control and lets Qt
+// deliver the signal, so a missing connect() fails the gate -- the property
+// proposal 47 M5 established for the sends strip and the reason a widget can
+// be gated where a context menu cannot.
+bool SMixerStrip::driveControl( const QString &control, bool on )
+{
+    if( control == QLatin1String( "narrow" ) ) { setNarrow( on ); return true; }
+    QPushButton *b = control == QLatin1String( "mute" ) ? muteBtn_
+                   : control == QLatin1String( "solo" ) ? soloBtn_
+                   : control == QLatin1String( "arm" )  ? armBtn_
+                                                        : nullptr;
+    if( !b ) return false;
+    if( b->isChecked() == on ) return true;   // already there; nothing to click
+    b->click();
+    return true;
+}
+
 QString SMixerStrip::describe() const
 {
     STrack *t = track_.data();

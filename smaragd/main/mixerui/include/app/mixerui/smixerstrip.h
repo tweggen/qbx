@@ -71,6 +71,12 @@ public:
     /// `name=…|narrow=…|mute=…|solo=…|arm=…|db=…|role=…|inserts=…|sends=…|meter=…`
     QString describe() const;
 
+    /// Drive a control the way a HAND would: `mute` / `solo` / `arm` click the
+    /// real button so Qt delivers the signal, which is what makes a missing
+    /// `connect()` FAIL (proposal 47 M5's lesson, and the reason the sends
+    /// strip's own verb exists). `narrow` toggles the strip width.
+    bool driveControl( const QString &control, bool on );
+
     /// Drop every reference into the project: the track, the probe's tap and
     /// the two mounted widgets. Called from the pane's `detachProject()`
     /// (CONTRACT inv. 4 / D13) BEFORE the project is deleted.

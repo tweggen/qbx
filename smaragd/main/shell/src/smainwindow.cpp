@@ -89,6 +89,7 @@
 #include "app/media/smediadrop.h"
 #include "app/mediabrowser/smediabrowserpanel.h"
 #include "app/mixerui/smixerpane.h"
+#include "app/mixerui/smixerstrip.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
@@ -186,6 +187,32 @@ void SMainWindow::attachTrackDetail()
 // against the wrong tree; this repository has already shipped that bug once
 // (`SClearSelectionAction` honours `pathRoot_` and the convenience helper did
 // not set one, so Ctrl+Shift+A cleared the master's selection from any tab).
+// --- the mixer pane's TEST SEAMS (proposal 48 M1) -------------------------
+// The verbs are in `app/testkit`, which may not include `app/mixerui`; the
+// measurement therefore lives here, as `describeTrackDetailLayout` and
+// `describeSendStrip` already do.
+
+QString SMainWindow::describeMixerPane() const
+{
+    return mixerPane_ ? mixerPane_->describe() : QString();
+}
+
+QString SMainWindow::describeMixerStrip( const QString &trackName ) const
+{
+    if( !mixerPane_ ) return QString();
+    SMixerStrip *strip = mixerPane_->stripForTrackNamed( trackName );
+    return strip ? strip->describe() : QString();
+}
+
+bool SMainWindow::mixerStripToggle( const QString &trackName,
+                                    const QString &control, bool on )
+{
+    if( !mixerPane_ ) return false;
+    SMixerStrip *strip = mixerPane_->stripForTrackNamed( trackName );
+    if( !strip ) return false;
+    return strip->driveControl( control, on );
+}
+
 void SMainWindow::attachMixerPane()
 {
     QObject::disconnect( mixerRootConn_ );
@@ -3232,6 +3259,34 @@ int sHonestMinHeight( const QWidget *w )
     return qMax( w->minimumHeight(), w->minimumSizeHint().height() );
 }
 
+// THE WIDTH TWIN (proposal 48 T11), and it is not symmetry for its own sake.
+// `sAuditLayout` compared HEIGHTS only, which was right for a vertical dock
+// and is BLIND to the axis a horizontal mixer pane fails on: a QHBoxLayout
+// handed less than its minimum WIDTH shrinks its children side by side and
+// they DO NOT OVERLAP, so a horizontally crushed pane reports
+// `crushed == 0, overlap == 0` and the gate passes over the defect. Shipping
+// the pane's layout gate on the height-only audit would have been this
+// repository's fourth gate sitting beside the layer its defect lives in
+// (proposal 39 M2, proposal 41 M5, fix/take-lane-domain).
+//
+// **IT ASKS THE LAYOUT, NOT THE WIDGET, AND THE ASYMMETRY WITH THE HEIGHT
+// CHECK IS DELIBERATE.** The first version compared every widget's own
+// `minimumSizeHint().width()` and immediately reported the Track Detail dock
+// as crushed: `SPluginEffectStrip`'s Edit button is `setMaximumWidth( 70 )`
+// against an 81 px hint. That is an author SQUEEZING a leaf on purpose -- a
+// too-narrow button clips its label and nothing else -- whereas a too-short
+// one in a vertical stack pushes its neighbours into each other, which is the
+// defect the height check exists for. So the width question is asked only of
+// widgets that CARRY A LAYOUT, where "handed less than the layout's minimum"
+// is exactly T11's sentence and has no benign reading. Returns 0 for a leaf,
+// which the caller skips.
+int sHonestMinWidth( const QWidget *w )
+{
+    QLayout *l = w->layout();
+    if( !l ) return 0;
+    return qMax( w->minimumWidth(), l->minimumSize().width() );
+}
+
 void sAuditLayout( QWidget *w, SDetailLayoutStats &st )
 {
     if( QLayout *l = w->layout() ) {
@@ -3243,9 +3298,21 @@ void sAuditLayout( QWidget *w, SDetailLayoutStats &st )
             if( minH > 0 && a->height() < minH ) {
                 ++st.crushed;
                 if( st.worst.isEmpty() )
-                    st.worst = QStringLiteral( "%1(%2<%3)" )
+                    st.worst = QStringLiteral( "%1(h %2<%3)" )
                                    .arg( a->metaObject()->className() )
                                    .arg( a->height() ).arg( minH );
+            }
+            // The WIDTH half (proposal 48 T11), containers only -- see
+            // `sHonestMinWidth`. Counted into the SAME `crushed` total: a
+            // crushed widget is a crushed widget, and a gate asserting
+            // `crushed == 0` should not have to name an axis.
+            const int minW = sHonestMinWidth( a );
+            if( minW > 0 && a->width() < minW ) {
+                ++st.crushed;
+                if( st.worst.isEmpty() )
+                    st.worst = QStringLiteral( "%1(w %2<%3)" )
+                                   .arg( a->metaObject()->className() )
+                                   .arg( a->width() ).arg( minW );
             }
             for( int j = i + 1; j < kids.size(); ++j ) {
                 if( a->geometry().intersects( kids.at( j )->geometry() ) ) {
@@ -3306,6 +3373,48 @@ void sSendDoubleClick( QWidget *target )
 }
 
 }  // namespace
+
+// THE LAYOUT GATE (AC1.7). A geometry relation, never a screenshot:
+// `screenshot` grabs the SCREEN's root window, blank under
+// QT_QPA_PLATFORM=offscreen, so it proves nothing about one widget's paint.
+// "This widget got less space than it needs" and "these two rectangles
+// intersect" are questions about QWidget::geometry(), which is the one class
+// of paint defect a headless run can measure directly.
+//
+// The pane is built OFF SCREEN and SETTLED: a widget that is not visible
+// never receives a resize event, and a QScrollArea lays out from its own
+// resizeEvent -- the tell that this was got wrong is IDENTICAL counts at two
+// different sizes.
+QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
+                                          int stripWidth )
+{
+    if( !mixerPane_ ) return QString();
+    for( int i = 0; i < mixerPane_->stripCount(); ++i )
+        if( SMixerStrip *s = mixerPane_->stripAt( i ) )
+            s->setNarrow( stripWidth <= SMixerStrip::NARROW_WIDTH );
+
+    sSettleLayout( mixerPane_, paneWidth > 0 ? paneWidth : 640,
+                   paneHeight > 0 ? paneHeight : 260 );
+
+    SDetailLayoutStats st;
+    sAuditLayout( mixerPane_, st );
+
+    // NAMED, never `findChild<QScrollArea *>()`: the pane holds N+1 of them
+    // (one per strip plus its own), and the first one found is whichever the
+    // object tree happens to yield (T11).
+    bool scrollNeeded = false;
+    if( QScrollArea *sa =
+            mixerPane_->findChild<QScrollArea *>( QStringLiteral( "mixerPaneScroll" ) ) )
+        scrollNeeded = sa->widget()
+                    && sa->widget()->width() > sa->viewport()->width();
+
+    return QStringLiteral(
+               "w=%1|h=%2|stripW=%3|crushed=%4|overlap=%5|scrollNeeded=%6|worst=%7" )
+        .arg( mixerPane_->width() ).arg( mixerPane_->height() ).arg( stripWidth )
+        .arg( st.crushed ).arg( st.overlap )
+        .arg( scrollNeeded ? 1 : 0 )
+        .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
+}
 
 QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
                                                 int w, int h )
