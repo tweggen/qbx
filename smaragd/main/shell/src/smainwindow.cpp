@@ -207,33 +207,40 @@ void SMainWindow::attachTrackDetail()
 // persistence of widget state across the two. `send_strip_ui` has the
 // identical limitation and it is the honest one: the model is the thing both
 // mounts must agree about.
-SMixerPane *SMainWindow::buildScratchMixerPane() const
+SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) const
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return nullptr;
+    // An EMPTY name is the master, exactly as `SAction::pathRoot()` reads it.
+    SObject *root = arrangement.isEmpty()
+                        ? splacements::rootContainer( proj )
+                        : splacements::rootNamed( proj, arrangement );
+    if( !root ) return nullptr;
     SMixerPane *pane = new SMixerPane( nullptr );
-    pane->setRoot( splacements::rootContainer( proj ) );
+    pane->setRoot( root, arrangement );
     return pane;
 }
 
-QString SMainWindow::describeMixerPane() const
+QString SMainWindow::describeMixerPane( const QString &arrangement ) const
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
     return pane ? pane->describe() : QString();
 }
 
-QString SMainWindow::describeMixerStrip( const QString &trackName ) const
+QString SMainWindow::describeMixerStrip( const QString &trackName,
+                                        const QString &arrangement ) const
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
     if( !pane ) return QString();
     SMixerStrip *strip = pane->stripForTrackNamed( trackName );
     return strip ? strip->describe() : QString();
 }
 
 bool SMainWindow::mixerStripToggle( const QString &trackName,
-                                    const QString &control, bool on )
+                                    const QString &control, bool on,
+                                    const QString &arrangement )
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
     if( !pane ) return false;
     SMixerStrip *strip = pane->stripForTrackNamed( trackName );
     if( !strip ) return false;
@@ -250,7 +257,14 @@ void SMainWindow::attachMixerPane()
     SObject *root = nullptr;
     if( SViewTabs *tabs = viewTabs() ) {
         mixerRootConn_ = connect( tabs, &SViewTabs::activeRootChanged,
-                                  mixerPane_, &SMixerPane::setRoot );
+                                  mixerPane_, [this]( SObject *r ) {
+                                      // The NAME travels with the root: it is
+                                      // what every action the pane submits is
+                                      // stamped with (D12).
+                                      SProject *p = SApplication::app().getCurrentProject();
+                                      mixerPane_->setRoot(
+                                          r, p ? p->arrangementNameOf( r ) : QString() );
+                                  } );
         root = tabs->activeRoot();
     }
     // THE FALLBACK IS NOT BELT-AND-BRACES. The tabs exist from the
@@ -3436,7 +3450,7 @@ void sSendDoubleClick( QWidget *target )
 QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
                                           int stripWidth )
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane() );
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( QString() ) );
     if( !pane ) return QString();
     for( int i = 0; i < pane->stripCount(); ++i )
         if( SMixerStrip *s = pane->stripAt( i ) )

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE MIXER PANE SCROLLS AND DOES NOT CRUSH (proposal 48 M1, AC1.7 / T11).
+
+  A GEOMETRY GATE, NOT A SCREENSHOT. `screenshot` grabs the SCREEN's root
+  window, blank under QT_QPA_PLATFORM=offscreen, so it proves nothing about a
+  widget's paint. "This widget got less space than it needs" and "these two
+  rectangles intersect" are questions about QWidget::geometry(), which is the
+  one class of paint defect a headless run can measure directly.
+
+  IT ASSERTS BOTH AXES, AND THAT IS THE WHOLE POINT OF T11. `sAuditLayout`
+  compared HEIGHTS only — right for a vertical dock, and BLIND to the axis a
+  horizontal pane fails on: a QHBoxLayout handed less than its minimum WIDTH
+  shrinks its children side by side and they DO NOT OVERLAP, so a horizontally
+  crushed pane reports crushed == 0, overlap == 0 and the gate passes over the
+  defect. Shipping this on the height-only audit would have been the fourth
+  time in this repository that a gate sat beside the layer its defect lives in
+  (proposal 39 M2, proposal 41 M5, fix/take-lane-domain).
+
+  FOUR LAYOUT FLOORS HAD TO BE PAID before these numbers came out clean, and
+  each was found by measuring rather than by reading: small fixed-size buttons
+  reading as crushed (12 of them), three 20 px squares not fitting 60 px, a
+  QScrollArea's own ~113 px minimum, and — the one that actually held the wide
+  strip hostage — a QLabel's minimum width being its FULL TEXT, 91 px for an
+  ordinary generated track name. See the M1 commit and mixerui/CONTRACT.md.
+
+  NOT gated: what any of it LOOKS like — a geometry relation, never a palette
+  — and repaint cost, which is measured in the PR and not bounded here.
+-->
+<SActionScript version="1" name="mixer_pane_layout">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- ============ WIDE STRIPS, THREE DOCK HEIGHTS =================== -->
+    <!-- 180 is a deliberately SHORT dock: the height at which the Track
+         Detail dock's own defect showed and taller docks did not. -->
+
+    <assert-mixer-layout paneWidth="640" paneHeight="180" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="500" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"/>
+
+    <!-- ============ NARROW STRIPS, THE SAME THREE ===================== -->
+
+    <assert-mixer-layout paneWidth="640" paneHeight="180" stripWidth="60"
+                         maxCrushed="0" maxOverlap="0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="60"
+                         maxCrushed="0" maxOverlap="0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="500" stripWidth="60"
+                         maxCrushed="0" maxOverlap="0"/>
+
+    <!-- ============ A NARROW PANE SCROLLS RATHER THAN COMPRESSING ===== -->
+    <!-- Four strips (three tracks plus the master) at 96 px cannot fit 200 px
+         of pane. The pane's OWN scroll area is named rather than found with
+         findChild(), because the pane holds N+1 of them (T11). -->
+
+    <assert-mixer-layout paneWidth="200" paneHeight="260" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0" scrollNeeded="1"/>
+  </actions>
+</SActionScript>

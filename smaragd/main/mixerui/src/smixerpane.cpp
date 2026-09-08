@@ -57,8 +57,9 @@ void SMixerPane::clearStrips_()
     }
 }
 
-void SMixerPane::setRoot( SObject *root )
+void SMixerPane::setRoot( SObject *root, const QString &rootName )
 {
+    rootName_ = rootName;
     if( SStdMixer *old = mixer_.data() )
         for( const QMetaObject::Connection &c : structureConns_ )
             QObject::disconnect( c );
@@ -120,7 +121,7 @@ void SMixerPane::rebuildStrips()
         if( !lane.track ) continue;
         const bool isMaster = lane.role == SSystemRole::Master;
         QWidget *host = isMaster ? masterHost_ : stripHost_;
-        SMixerStrip *strip = new SMixerStrip( mixer, lane.track, host );
+        SMixerStrip *strip = new SMixerStrip( mixer, lane.track, rootName_, host );
         strip->setSectionsVisible( showInserts_, showSends_, showMeter_, showFader_ );
         if( isMaster ) {
             masterLayout_->addWidget( strip, 0 );

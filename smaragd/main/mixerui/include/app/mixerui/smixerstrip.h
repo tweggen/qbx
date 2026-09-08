@@ -4,6 +4,7 @@
 #include <functional>
 
 #include <QPointer>
+#include <QString>
 #include <QWidget>
 
 #include "tw/metering/tw_level_probe.h"
@@ -16,6 +17,7 @@ class QScrollArea;
 class QSlider;
 class QVBoxLayout;
 
+class SAction;
 class SLevelMeter;
 class SPluginEffectStrip;
 class SSendStrip;
@@ -54,7 +56,12 @@ public:
     static constexpr int NARROW_WIDTH = 60;
     static constexpr int WIDE_WIDTH   = 96;
 
-    SMixerStrip( SStdMixer *mixer, STrack *track, QWidget *parent = nullptr );
+    /// `rootName` is the ARRANGEMENT this strip belongs to, empty for the
+    /// master. It is stamped on every action the strip submits (D12): a pane
+    /// showing one arrangement must not commit into whichever tab happens to
+    /// be active, which is what `stimeline::submitActive` would do.
+    SMixerStrip( SStdMixer *mixer, STrack *track, const QString &rootName,
+                 QWidget *parent = nullptr );
     ~SMixerStrip() override;
 
     STrack *track() const { return track_.data(); }
@@ -96,6 +103,7 @@ private slots:
     void onTrackArmedChanged( bool on );
 
 private:
+    void submit_( SAction *a ) const;
     void buildUi_();
     void applyVolumeDb_( double db );
     void setFaderSilently_( double db );
@@ -109,6 +117,7 @@ private:
     int  syncMeterLanes_();
 
     QPointer<SStdMixer> mixer_;
+    QString             rootName_;
     QPointer<STrack>    track_;
 
     QScrollArea *scroll_      = nullptr;   ///< the SCROLLED half

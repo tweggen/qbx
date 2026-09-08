@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE MIXER MOUNTS THE ARRANGER'S OWN INSERT AND SEND WIDGETS, COMPACT
+  (proposal 48 M1, AC1.6 / AC1.6a / D5a).
+
+  WHAT IS MIXER-SPECIFIC HERE, and therefore what this case gates: the two
+  widgets are MOUNTED rather than re-implemented, and they are asked for a
+  COMPACT mode that the Track Detail dock does not take. The insert VERBS
+  themselves (add, bypass, remove, reorder) and the editor registry are gated
+  by plugin_ui_strip_and_editor and plugin_generic_editor_survives_strip; a
+  second copy of those assertions here would test the same code twice and the
+  mount not at all.
+
+  WHY COMPACT AT ALL, measured rather than assumed: SPluginEffectStrip's two
+  Add buttons alone carry a layout minimum of 113 px, against a WIDE mixer
+  strip of 96. Mounting the full row means AC1.7 fails or the strips are
+  250 px wide, which is not a mixer. A second, compact insert list in
+  app/mixerui was the alternative and was rejected: the editor registry, the
+  drop handling and the Missing / Unsupported states would each have to be
+  written again and could then disagree with this one.
+
+  NOTHING BECOMES UNREACHABLE in compact mode, which is the condition on the
+  whole idea: Edit is already the row's own double-click, and Reload / Remove
+  stay on its context menu.
+-->
+<SActionScript version="1" name="mixer_inserts">
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <add-send-lane sendName="Reverb"/>
+
+    <!-- ============ THE MIXER's MOUNT IS COMPACT ====================== -->
+
+    <assert-mixer-pane track="Alpha" contains="compact=1"/>
+    <assert-mixer-pane track="Alpha" contains="inserts=1"/>
+    <assert-mixer-pane track="Alpha" contains="sends=1"/>
+
+    <!-- ============ THE TRACK DETAIL DOCK KEEPS THE FULL ROW ========== -->
+    <!-- The same SSendStrip class, mounted in the dock, still shows its level
+         and its pre/post choice. If setCompact leaked into the dock's mount
+         this row would lose them. -->
+
+    <assert-send-strip trackPath="0" rows="1"/>
+    <assert-send-strip trackPath="0" contains="lane=Reverb|on=0"/>
+
+    <!-- ...and the dock's own layout is still clean, which is the other half
+         of "the dock keeps the full row": a compact mode that leaked would
+         change its geometry too. -->
+    <assert-track-detail-layout trackPath="0" panelWidth="320"
+                                panelHeight="260" maxCrushed="0" maxOverlap="0"/>
+
+    <!-- ============ NARROW IS NOT ASSERTED HERE, AND WHY ============== -->
+    <!-- D9's narrow/wide is per-pane VIEW state, and every seam in this file
+         builds a FRESH pane (see mixer_broadcast's header: a test-case run
+         never binds its project into the window). So a `mixer-strip-toggle
+         control="narrow"` followed by an `assert-mixer-pane` would read a
+         pane that never saw the toggle and report narrow=0 — an assertion
+         that passes whether the feature works or not.
+
+         What DOES exercise narrow is mixer_pane_layout, which drives it
+         through `assert-mixer-layout stripWidth="60"` inside one seam call
+         and measures the geometry that results. That is the honest place for
+         it, because narrow is a LAYOUT decision and the layout is what can be
+         measured. -->
+  </actions>
+</SActionScript>

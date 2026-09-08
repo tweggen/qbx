@@ -3,6 +3,7 @@
 
 #include <QList>
 #include <QPointer>
+#include <QString>
 #include <QWidget>
 
 class QHBoxLayout;
@@ -40,7 +41,8 @@ public:
 
     /// Point the pane at an arrangement root. Null clears it. Called from the
     /// shell on `SViewTabs::activeRootChanged` and on project open.
-    void setRoot( SObject *root );
+    void setRoot( SObject *root, const QString &rootName = QString() );
+    QString rootName() const { return rootName_; }
 
     /// Drop every reference into the project. MUST be called from
     /// `SMainWindow::destroyDocksToolbars()` BEFORE the project is deleted.
@@ -72,6 +74,7 @@ private:
     QHBoxLayout *masterLayout_ = nullptr;
 
     QPointer<SStdMixer>   mixer_;
+    QString               rootName_;
     QList<QMetaObject::Connection> structureConns_;
     QList<SMixerStrip *>  strips_;
     SMixerStrip          *masterStrip_ = nullptr;

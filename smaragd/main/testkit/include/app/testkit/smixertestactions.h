@@ -36,6 +36,7 @@ public:
 
 private:
     QString track_;       ///< empty = the pane; else the strip for this track
+    QString arrangement_; ///< empty = the master (D12)
     int     strips_ = -1; ///< -1 = not checked
     int     master_ = -1; ///< -1 = not checked; 1 = a master strip is present
     QString contains_;
@@ -87,6 +88,7 @@ public:
 
 private:
     QString track_;
+    QString arrangement_;
     QString control_ = QStringLiteral( "mute" );
     bool    on_      = true;
 };

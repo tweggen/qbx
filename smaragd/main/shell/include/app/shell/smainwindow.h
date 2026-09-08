@@ -417,12 +417,13 @@ public:
     /// in `app/testkit`, which may not include `app/mixerui` any more than it
     /// may include `app/timeline` — so the MEASUREMENT lives here, exactly as
     /// `describeTrackDetailLayout` / `describeSendStrip` already do.
-    SMixerPane *buildScratchMixerPane() const;
-    QString describeMixerPane() const;
-    QString describeMixerStrip( const QString &trackName ) const;
+    SMixerPane *buildScratchMixerPane( const QString &arrangement ) const;
+    QString describeMixerPane( const QString &arrangement = QString() ) const;
+    QString describeMixerStrip( const QString &trackName,
+                                const QString &arrangement = QString() ) const;
     QString describeMixerLayout( int paneWidth, int paneHeight, int stripWidth );
     bool    mixerStripToggle( const QString &trackName, const QString &control,
-                              bool on );
+                              bool on, const QString &arrangement = QString() );
     bool    driveSendStrip( const QString &trackPath, const QString &lane,
                             const QString &control, double value );
 

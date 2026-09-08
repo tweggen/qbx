@@ -36,8 +36,9 @@ SApplyResult SAssertMixerPaneAction::apply( SProject * )
     SMainWindow *win = mainWindow();
     if( !win ) { qWarning() << "assert-mixer-pane: no main window"; return { false, nullptr }; }
 
-    const QString desc = track_.isEmpty() ? win->describeMixerPane()
-                                          : win->describeMixerStrip( track_ );
+    const QString desc = track_.isEmpty()
+                             ? win->describeMixerPane( arrangement_ )
+                             : win->describeMixerStrip( track_, arrangement_ );
     if( desc.isEmpty() ) {
         qWarning() << "assert-mixer-pane: no description for"
                    << ( track_.isEmpty() ? QStringLiteral( "the pane" ) : track_ );
@@ -74,14 +75,15 @@ SApplyResult SAssertMixerPaneAction::apply( SProject * )
 
 QStringList SAssertMixerPaneAction::knownAttributes() const
 {
-    return { QStringLiteral( "track" ), QStringLiteral( "strips" ),
-             QStringLiteral( "master" ), QStringLiteral( "contains" ),
-             QStringLiteral( "absent" ) };
+    return { QStringLiteral( "track" ), QStringLiteral( "arrangement" ),
+             QStringLiteral( "strips" ), QStringLiteral( "master" ),
+             QStringLiteral( "contains" ), QStringLiteral( "absent" ) };
 }
 
 void SAssertMixerPaneAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "track", track_ );
+    elem.setAttribute( "arrangement", arrangement_ );
     elem.setAttribute( "strips", strips_ );
     elem.setAttribute( "master", master_ );
     elem.setAttribute( "contains", contains_ );
@@ -90,8 +92,9 @@ void SAssertMixerPaneAction::writeXml( QDomElement &elem ) const
 
 bool SAssertMixerPaneAction::readXml( const QDomElement &elem, int )
 {
-    track_    = elem.attribute( "track", QString() );
-    strips_   = elem.attribute( "strips", "-1" ).toInt();
+    track_       = elem.attribute( "track", QString() );
+    arrangement_ = elem.attribute( "arrangement", QString() );
+    strips_      = elem.attribute( "strips", "-1" ).toInt();
     master_   = elem.attribute( "master", "-1" ).toInt();
     contains_ = elem.attribute( "contains", QString() );
     absent_   = elem.attribute( "absent", QString() );
@@ -178,7 +181,7 @@ SApplyResult SMixerStripToggleAction::apply( SProject * )
 {
     SMainWindow *win = mainWindow();
     if( !win ) { qWarning() << "mixer-strip-toggle: no main window"; return { false, nullptr }; }
-    if( !win->mixerStripToggle( track_, control_, on_ ) ) {
+    if( !win->mixerStripToggle( track_, control_, on_, arrangement_ ) ) {
         qWarning() << "mixer-strip-toggle FAILED:" << track_ << control_ << on_;
         return { false, nullptr };
     }
@@ -191,21 +194,23 @@ SApplyResult SMixerStripToggleAction::apply( SProject * )
 
 QStringList SMixerStripToggleAction::knownAttributes() const
 {
-    return { QStringLiteral( "track" ), QStringLiteral( "control" ),
-             QStringLiteral( "on" ) };
+    return { QStringLiteral( "track" ), QStringLiteral( "arrangement" ),
+             QStringLiteral( "control" ), QStringLiteral( "on" ) };
 }
 
 void SMixerStripToggleAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "track", track_ );
+    elem.setAttribute( "arrangement", arrangement_ );
     elem.setAttribute( "control", control_ );
     elem.setAttribute( "on", on_ ? "true" : "false" );
 }
 
 bool SMixerStripToggleAction::readXml( const QDomElement &elem, int )
 {
-    track_   = elem.attribute( "track", QString() );
-    control_ = elem.attribute( "control", "mute" );
+    track_       = elem.attribute( "track", QString() );
+    arrangement_ = elem.attribute( "arrangement", QString() );
+    control_     = elem.attribute( "control", "mute" );
     on_      = elem.attribute( "on", "true" ) == QLatin1String( "true" );
     return !track_.isEmpty() && !control_.isEmpty();
 }

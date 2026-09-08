@@ -26,13 +26,13 @@
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackpath.h"
 #include "app/pluginui/splugineffectstrip.h"
+#include "app/actions/saction.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/sautomationrecorder.h"
 #include "app/shell/slivemonitor.h"
 #include "app/timeline/sfadercurve.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssendstrip.h"
-#include "app/timeline/ssubmit.h"
 
 namespace {
 
@@ -52,8 +52,9 @@ constexpr int BTN_NARROW = 16;
 
 }  // namespace
 
-SMixerStrip::SMixerStrip( SStdMixer *mixer, STrack *track, QWidget *parent )
-    : QWidget( parent ), mixer_( mixer ), track_( track )
+SMixerStrip::SMixerStrip( SStdMixer *mixer, STrack *track,
+                          const QString &rootName, QWidget *parent )
+    : QWidget( parent ), mixer_( mixer ), track_( track ), rootName_( rootName )
 {
     buildUi_();
 
@@ -227,6 +228,22 @@ void SMixerStrip::buildUi_()
     }
 }
 
+// PROPOSAL 48 D12 -- THE STRIP STAMPS ITS OWN ARRANGEMENT, never
+// `stimeline::submitActive`. That helper asks which EDITOR TAB is active and
+// stamps THAT root, which is right for a widget living inside one arranger
+// and wrong for a pane that can be showing a different arrangement than the
+// tab in front: the action would resolve its path against the wrong tree and
+// SILENTLY DO NOTHING (an empty path resolves to no object). This repository
+// has already shipped that shape once -- `SClearSelectionAction` honours
+// `pathRoot_` and the convenience helper did not set one, so Ctrl+Shift+A
+// cleared the master's selection from any tab.
+void SMixerStrip::submit_( SAction *a ) const
+{
+    if( !a ) return;
+    a->setPathRoot( rootName_ );
+    SApplication::app().submitAction( a );
+}
+
 // --- the fader --------------------------------------------------------------
 
 void SMixerStrip::onFaderMoved( int value )
@@ -271,7 +288,7 @@ void SMixerStrip::applyVolumeDb_( double db )
                target, db, SApplication::app().getGlobalLocatorPos() ) )
         return;
 
-    stimeline::submitActive( new SSetTrackVolumeAction( path, db ) );
+    submit_( new SSetTrackVolumeAction( path, db ) );
 }
 
 void SMixerStrip::setFaderSilently_( double db )
@@ -319,8 +336,8 @@ void SMixerStrip::onMuteToggled( bool on )
     SStdMixer *mixer = mixer_.data();
     broadcast_( "Mute tracks",
                 [on]( STrack *t ) { return t->isMuted() != on; },
-                [on, mixer]( STrack *t ) {
-                    stimeline::submitActive( new SSetTrackMuteAction(
+                [on, mixer, this]( STrack *t ) {
+                    submit_( new SSetTrackMuteAction(
                         strackpath::pathOf( mixer, t ), on ) );
                 } );
 }
@@ -331,8 +348,8 @@ void SMixerStrip::onSoloToggled( bool on )
     SStdMixer *mixer = mixer_.data();
     broadcast_( "Solo tracks",
                 [on]( STrack *t ) { return t->isSolo() != on; },
-                [on, mixer]( STrack *t ) {
-                    stimeline::submitActive( new SSetTrackSoloAction(
+                [on, mixer, this]( STrack *t ) {
+                    submit_( new SSetTrackSoloAction(
                         strackpath::pathOf( mixer, t ), on ) );
                 } );
 }
@@ -343,8 +360,8 @@ void SMixerStrip::onArmToggled( bool on )
     SStdMixer *mixer = mixer_.data();
     broadcast_( "Arm tracks",
                 [on]( STrack *t ) { return t->isArmedForRecording() != on; },
-                [on, mixer]( STrack *t ) {
-                    stimeline::submitActive( new SArmTrackAction(
+                [on, mixer, this]( STrack *t ) {
+                    submit_( new SArmTrackAction(
                         strackpath::pathOf( mixer, t ), on ) );
                 } );
 }
@@ -573,7 +590,7 @@ QString SMixerStrip::describe() const
     const double db = t ? t->getVolume() : 0.0;
     return QStringLiteral(
                "name=%1|narrow=%2|mute=%3|solo=%4|arm=%5|db=%6|role=%7"
-               "|inserts=%8|sends=%9|meter=%10" )
+               "|inserts=%8|sends=%9|compact=%10|meter=%11" )
         .arg( t ? t->getSName() : QStringLiteral( "?" ) )
         .arg( narrow_ ? 1 : 0 )
         .arg( t && t->isMuted() ? 1 : 0 )
@@ -584,6 +601,11 @@ QString SMixerStrip::describe() const
             systemRoleToString( t ? t->systemRole() : SSystemRole::None ) ) )
         .arg( inserts_ && !inserts_->isHidden() ? 1 : 0 )
         .arg( sends_ && !sends_->isHidden() ? 1 : 0 )
+        // D5a: BOTH mounted widgets are compact in a mixer column, and the
+        // Track Detail dock keeps the full row. Reported as one field because
+        // the strip always sets them together.
+        .arg( inserts_ && inserts_->isCompact()
+              && sends_ && sends_->isCompact() ? 1 : 0 )
         .arg( meter_ ? meter_->describe() : QString() );
 }
 
