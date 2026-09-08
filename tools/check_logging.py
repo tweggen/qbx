@@ -34,6 +34,7 @@ ALLOW_FILES = {
     os.path.join("smaragd", "main", "testkit", "src", "action_roundtrip_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "filepathref_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "fragment_test.cpp"),
+    os.path.join("smaragd", "main", "testkit", "src", "laneorder_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "mediabrowser_size_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "preview_container_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "preview_envelope_test.cpp"),

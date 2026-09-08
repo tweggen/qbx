@@ -31,6 +31,7 @@
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
 #include "app/objects/mixer/sstdmixer.h"
+#include "app/objects/mixer/strackbroadcast.h"
 #include "app/timeline/sstdmixerview.h"
 #include "app/timeline/ssubmit.h"
 #include "app/shell/sviewtabs.h"
@@ -1301,49 +1302,35 @@ QList<STrack *> SStdMixerView::tracksBetween( STrack *a, STrack *b ) const
     return out;
 }
 
+// THE THREE BELOW ARE DELEGATING MEMBERS (proposal 48 M0 / D3). The rule they
+// used to spell out lives in `strackbroadcast`, in app/objects/mixer, so a
+// second mount of a channel strip cannot grow a second answer to "which tracks
+// does this gesture act on".
+//
+// They are WRAPPED rather than deleted, deliberately. `selectionTargets` has
+// twelve call sites, eleven of them in this file driving remove / indent /
+// outdent / group / ungroup / asset / drag -- the structure-verb family a
+// mixer never mounts. Migrating all of them buys nothing and churns gated
+// code; one spelling behind a delegating member is the same guarantee at a
+// tenth of the risk.
+//
+// `orderByLane` no longer reads `rowIndexOfTrack()`. It reads the flattened
+// MODEL walk with the arranger's own options -- which is the same list, since
+// the row list is built from exactly that walk. See strackbroadcast.h for why
+// "no visible lane sorts last" is preserved rather than inherited.
 QList<STrack *> SStdMixerView::orderByLane( const QList<STrack *> &in ) const
 {
-    QList<STrack *> out = in;
-    std::stable_sort( out.begin(), out.end(),
-                      [this]( STrack *l, STrack *r ) {
-                          const int li = rowIndexOfTrack( l );
-                          const int ri = rowIndexOfTrack( r );
-                          // Tracks with no visible lane sort last, stably.
-                          if( li < 0 ) return false;
-                          if( ri < 0 ) return true;
-                          return li < ri;
-                      } );
-    return out;
+    return strackbroadcast::orderByLane( model_, in );
 }
 
 QList<STrack *> SStdMixerView::pruneNestedTargets( const QList<STrack *> &in )
 {
-    QList<STrack *> out;
-    for( STrack *t : in ) {
-        bool covered = false;
-        for( STrack *other : in ) {
-            if( other == t ) continue;
-            // isSelfOrDescendant( candidate, ancestor ): is t below other?
-            if( strackpath::isSelfOrDescendant( t, other ) ) { covered = true; break; }
-        }
-        if( !covered ) out.append( t );
-    }
-    return out;
+    return strackbroadcast::pruneNestedTargets( in );
 }
 
 QList<STrack *> SStdMixerView::selectionTargets( STrack *clicked ) const
 {
-    QList<STrack *> out;
-    if( !clicked ) return out;
-    // THE rule: only a gesture aimed INTO the selection broadcasts. Aiming at a
-    // lane outside it acts on that lane alone, so an operation can never reach
-    // a track the user is not pointing at.
-    if( model_ && model_->isTrackSelected( clicked )
-        && model_->nSelectedTracks() > 1 ) {
-        return orderByLane( model_->getSelectedTracks() );
-    }
-    out.append( clicked );
-    return out;
+    return strackbroadcast::targetsFor( model_, clicked );
 }
 
 void SStdMixerView::applyTrackSelectionClick( STrack *t, Qt::KeyboardModifiers mods )
@@ -4368,39 +4355,33 @@ static int maxTakesOf( STrack *tk )
     return maxTakes;
 }
 
-void SStdMixerView::appendRowsFor( SObject *container, int depth )
+// ONE LANE'S ROWS: the composite lane, then its take sub-lanes, then its
+// automation sub-lanes. THE ORDER IS THIS FUNCTION'S BUSINESS and every
+// sub-lane rule depends on it -- the track's single head spans the whole group
+// (laneGroupHeight) and assert-lane-alignment covers them for free.
+//
+// WHICH LANES THERE ARE, AND IN WHAT ORDER, IS NOT THIS FUNCTION'S BUSINESS
+// any more (proposal 48 M0 / D1): that is `slaneorder::flattenTrackLanes`,
+// shared with the mixer pane so a second mount cannot grow a second walk.
+// What stays here is the ROW fold -- sub-lanes and heights, which a pane with
+// no rows has no use for.
+void SStdMixerView::appendRowsForLane( const slaneorder::Lane &lane )
 {
-    for( SLink *lk : container->childLinks() ) {
-        STrack *tk = dynamic_cast<STrack*>( &lk->getSObject() );
-        if( !tk ) continue;          // clips render inside their track's own lane
-        // HIDING IS ONE MECHANISM (D8), so it is asked here rather than only at
-        // the system-lane append: SObject::laneHidden() defaults to
-        // laneHiddenByDefault(), which is false for every ordinary track and
-        // true for every system lane -- so this is a NO-OP for user lanes
-        // (set-lane-hidden refuses them outright) and is what keeps a
-        // conductor lane hidden until somebody asks for it. A hidden lane
-        // takes its subtree with it, which is the same thing a collapsed one
-        // does and the only reading under which "hidden" means hidden.
-        if( tk->laneHidden() ) continue;
-        // STrack::hasChildTracks(), not a local copy: the folder-sum overlay
-        // asks the same question (proposal 39 M3.1) and two spellings of "is
-        // this a folder" is one more than there should be.
-        bool kids = tk->hasChildTracks();
-        bool col = tk->isCollapsed();
-        rows_.append( STrackRow{ tk, lk, container, depth, kids, col } );
-        // Take lanes directly below the track's composite lane.
-        if( tk->takesExpanded() ) {
-            const int mt = maxTakesOf( tk );
-            for( int k = 0; k < mt; ++k ) {
-                rows_.append( STrackRow{ tk, lk, container, depth,
-                                         false, false, k, SubLaneKind::Take } );
-            }
+    STrack *tk = lane.track;
+    if( !tk ) return;
+    rows_.append( STrackRow{ tk, lane.link, lane.parent, lane.depth,
+                             lane.hasChildren, lane.collapsed } );
+    // Take lanes directly below the track's composite lane.
+    if( tk->takesExpanded() ) {
+        const int mt = maxTakesOf( tk );
+        for( int k = 0; k < mt; ++k ) {
+            rows_.append( STrackRow{ tk, lane.link, lane.parent, lane.depth,
+                                     false, false, k, SubLaneKind::Take } );
         }
-        // ...then this track's automation lanes, under the same sub-lane rule
-        // (proposal 37 P6): no head of their own, covered by the track's.
-        appendAutomationRowsFor( tk, lk, container, depth );
-        if( kids && !col ) appendRowsFor( tk, depth+1 );   // recurse if expanded
     }
+    // ...then this track's automation lanes, under the same sub-lane rule
+    // (proposal 37 P6): no head of their own, covered by the track's.
+    appendAutomationRowsFor( tk, lane.link, lane.parent, lane.depth );
 }
 
 bool SStdMixerView::isTrackTakesExpanded( STrack *t ) const
@@ -4433,7 +4414,7 @@ bool SStdMixerView::anyTakesExpandedInRows() const
 // Proposal 45 AC4.2: is the master lane's row out of step with the model?
 // set-lane-hidden changes the ROW COUNT with no track-structure signal, which
 // is exactly the situation this slot already exists for (a take-stack edit).
-// Collect every lane appendSystemRows() would produce a row for: the master
+// Collect every lane the system tail would produce a row for: the master
 // lane when it is shown, and recursively its own non-hidden child lanes, which
 // is where a conductor lane lives (proposal 45 M6).
 static void sCollectWantedSystemLanes( STrack *lane, QSet<const STrack *> &out )
@@ -4529,62 +4510,76 @@ QString SStdMixerView::rootName() const
     return proj ? proj->arrangementNameOf( model_ ) : QString();
 }
 
+// ONE WALK, THEN ONE FOLD (proposal 48 M0). `flattenTrackLanes` decides which
+// lanes exist and in what order -- user lanes depth-first, then the system
+// tail pinned below every one of them (proposal 45 AC4.1) -- and this loop
+// turns each into its rows. The options ARE the arranger's semantics, stated
+// rather than implied:
+//
+//   Fold::Honour     a collapsed folder's children have no rows
+//   Hidden::Honour   a hidden lane and its subtree have no rows
+//   MasterSubtree    the master lane and its own child lanes (where a
+//                    conductor lane lives). NOT `All`: a send lane has no
+//                    arranger row today -- see slaneorder.h, which records
+//                    that as a proposal 45 M7 gap rather than a decision.
+//   alwaysShowMaster false -- D6a's exemption is the MIXER PANE's, and the
+//                    arranger deliberately does not take it. A master row
+//                    costs vertical space in a list of lanes, and hiding it
+//                    is what `laneHiddenByDefault()` is for.
+//
+// No prune walk here any more (proposal 46 M3): every per-track UI-state set
+// moved onto STrack, so it dies with the track.
 void SStdMixerView::rebuildRows()
 {
-    // No prune walk here any more (proposal 46 M3): every per-track UI-state
-    // set moved onto STrack, so it dies with the track.
     rows_.clear();
-    if( model_ ) appendRowsFor( model_, 0 );
-    appendSystemRows();      // proposal 45 AC4.1: pinned BELOW every user lane
+    slaneorder::Options opt;
+    opt.fold             = slaneorder::Fold::Honour;
+    opt.hidden           = slaneorder::Hidden::Honour;
+    opt.system           = slaneorder::SystemLanes::MasterSubtree;
+    opt.alwaysShowMaster = false;
+    for( const slaneorder::Lane &lane : slaneorder::flattenTrackLanes( model_, opt ) )
+        appendRowsForLane( lane );
     rebuildRowGeometry();
 }
 
 // PROPOSAL 45 AC4.1 -- THE MASTER LANE'S ROW, AND WHY IT IS APPENDED RATHER
 // THAN WALKED TO.
 //
-// appendRowsFor() walks childLinks(), and D2 keeps the master lane out of that
-// list on purpose: it is not a child of the mixer, it is the mixer's own
-// output stage. So there is nothing to find and the row is APPENDED, once, at
-// the end -- which is also exactly what "pinned below every user lane" means.
-// A user lane cannot be dragged below it because there is no row after it to
-// drop onto, and the ordering needs no separate rule to enforce.
+// `SStdMixerView::appendSystemRows()` STOOD HERE and is retired (proposal 48
+// M0). The rule it carried is unchanged and now lives in
+// `slaneorder::flattenTrackLanes`, which is where the mixer pane can share it:
 //
-// THE ROW CARRIES A NULL `link`, deliberately. Everything that reads it is
-// guarded (the lane paint, above); the alternative -- minting a synthetic
-// SLink so the view has something to hold -- would put a model object into
-// existence for the view's convenience and then have to keep it out of every
-// walk that enumerates children.
+//  - the walk is over `childLinks()`, and proposal 45 D2 keeps the master lane
+//    out of that list on purpose -- it is not a child of the mixer, it is the
+//    mixer's own output stage. So there is nothing to find and the lane is
+//    APPENDED, once, at the end, which is also exactly what "pinned below
+//    every user lane" means. A user lane cannot be dragged below it because
+//    there is no row after it to drop onto, and the ordering needs no separate
+//    rule to enforce;
+//  - the lane carries a NULL `link`, deliberately. Everything that reads it is
+//    guarded; the alternative -- minting a synthetic SLink so the view has
+//    something to hold -- would put a model object into existence for the
+//    view's convenience and then have to keep it out of every walk that
+//    enumerates children;
+//  - HIDDEN IS THE DEFAULT for a system lane and it is the MODEL's answer, not
+//    this view's (`SObject::laneHidden`). Two arrangers open on one project
+//    agree about what is shown, and the toggle is one undo step because it is
+//    an action. The mixer pane will take D6a's exemption from exactly that
+//    flag; the arranger does not, and `rebuildRows()` says so at the call;
+//  - the master lane's CHILD LANES, which is where a conductor lane lives
+//    (proposal 45 M6 / AC6.3), go through the SAME recursion every user lane's
+//    children do -- so a conductor row is an ordinary row: it carries a real
+//    SLink and a real container, and a gesture on it therefore derives its
+//    commit address by the ordinary route, `strackpath::pathOf()`, whose
+//    system-lane descent answers `$master,0`. Nothing special-cases it, which
+//    is the point: 45 T16 is the warning that a row deriving `{}` would commit
+//    to the MIXER. They are skipped while the master lane is COLLAPSED,
+//    exactly as a folder's children are, so the fold triangle means one thing
+//    everywhere.
 //
-// HIDDEN IS THE DEFAULT for a system lane and it is the MODEL's answer, not
-// this view's (SObject::laneHidden). Two arrangers open on one project agree
-// about what is shown, and the toggle is one undo step because it is an action.
-void SStdMixerView::appendSystemRows()
-{
-    SStdMixer *mix = dynamic_cast<SStdMixer *>( model_ );
-    if( !mix ) return;
-    STrack *lane = mix->masterLane();
-    if( !lane || lane->laneHidden() ) return;
-
-    rows_.append( STrackRow{ lane, nullptr, mix, 0,
-                             lane->hasChildTracks(), lane->isCollapsed() } );
-    // ...and its own automation sub-lanes, under the same rule every user
-    // track's follow (proposal 37 P6): no head of their own, keyed by STrack*,
-    // so the shown-automation set needs no system-lane special case (AC4.6).
-    appendAutomationRowsFor( lane, nullptr, mix, 0 );
-
-    // ...and the master lane's CHILD LANES, which is where a conductor lane
-    // lives (proposal 45 M6 / AC6.3). Through appendRowsFor(), the SAME walk
-    // every user lane's children go through, so a conductor row is an ordinary
-    // row: it carries a real SLink and a real container, and a gesture on it
-    // therefore derives its commit address by the ordinary route --
-    // strackpath::pathOf(), whose system-lane descent (D9) answers
-    // `$master,0`. Nothing here special-cases it, which is the point: T16 is
-    // the warning that a row deriving `{}` would commit to the MIXER.
-    //
-    // Skipped while the master lane is COLLAPSED, exactly as a folder's
-    // children are, so the fold triangle means one thing everywhere.
-    if( !lane->isCollapsed() ) appendRowsFor( lane, 1 );
-}
+// The automation sub-lanes the master's row used to get here it now gets from
+// `appendRowsForLane`, which every lane goes through -- so the shown-automation
+// set still needs no system-lane special case (45 AC4.6).
 
 // --- row geometry -------------------------------------------------------
 // Lane heights are per-row and must be treated as arbitrary: a track carries

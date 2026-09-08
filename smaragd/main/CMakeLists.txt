@@ -301,6 +301,12 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/sreparenttrackaction.h
     objects/mixer/include/app/objects/mixer/srestoretrackaction.h
     objects/mixer/include/app/objects/mixer/sstdmixer.h
+    # --- proposal 48 M0: the ONE flattened lane walk and the ONE broadcast
+    #     target rule, shared by the arranger's rows and (later) the mixer pane
+    objects/mixer/include/app/objects/mixer/slaneorder.h
+    objects/mixer/include/app/objects/mixer/strackbroadcast.h
+    objects/mixer/src/slaneorder.cpp
+    objects/mixer/src/strackbroadcast.cpp
     # --- pack-clips / unpack-clips / duplicate-asset-here (proposal 41 M2)
     objects/mixer/include/app/objects/mixer/spackclipsaction.h
     objects/mixer/include/app/objects/mixer/sunpackclipsaction.h
@@ -1068,6 +1074,19 @@ set_tests_properties(project_channels_test PROPERTIES
 # AC1.4 (SCut windows it exactly as it windows a track). Same shape as
 # project_channels_test: a real SProject/STrack/SCut/SLaneFragment against a
 # StubAppContext, no display, no audio device.
+# Proposal 48 M0: the ONE flattened lane walk and the ONE broadcast target
+# rule. AC0.2 (the arranger's order is unchanged) and AC0.4 (D3a's "no visible
+# lane sorts LAST" is PRESERVED) -- the latter over a multi-selection spanning
+# a COLLAPSED folder, which nothing in the qxa suite covers.
+add_executable(laneorder_test testkit/src/laneorder_test.cpp)
+target_link_libraries(laneorder_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME laneorder_test COMMAND laneorder_test)
+set_tests_properties(laneorder_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(fragment_test testkit/src/fragment_test.cpp)
 target_link_libraries(fragment_test
     PRIVATE
