@@ -1,6 +1,6 @@
 # Proposal 48 — The mixer pane: one horizontal dock, one channel strip per lane
 
-> **STATUS: M0 AND M1 EXECUTED, 2026-09-07/08; M2-M4 PROPOSED.** Each
+> **STATUS: M0, M1 AND M2 EXECUTED, 2026-09-07/09; M3-M4 PROPOSED.** Each
 > executed milestone below carries an "as executed" section with what was
 > measured and what the design did not anticipate — read those before the
 > design text they follow. It rests on proposal 45 M4
@@ -948,6 +948,65 @@ storage — that is M2, which also owns the narrow flag's persistence.
 - **Gates:** `mixer_sections` and `mixer_narrow_strip` (both `RUN_SERIAL`, both
   declaring `Mixer/*` ownership per T7), plus `mixer_pane_layout` re-run with
   sections off.
+
+### M2 as executed (2026-09-09)
+
+The pane-wide section toggles, the per-strip narrow flag, and two cases.
+**D9's premise turned out to be STALE, in exactly the shape M0 found in D1**,
+so the narrow flag went somewhere D9 says it cannot.
+
+**D9 says the flag "cannot" live on `STrack`** — *"narrow is a per-USER view
+preference and `STrack` attributes are serialized with the arrangement"* — and
+prescribes a pane-owned `STrack*`-keyed set joined to
+`SStdMixerView::pruneUiState`. Both halves are out of date:
+
+- **`pruneUiState()` was RETIRED by proposal 46 M3.** Only tombstones remain,
+  so there is no walk to join.
+- **The three sets D9 names as still being in it** — `takesExpanded_`,
+  `trackScale_` and the shown-automation set — **all moved onto `STrack` in
+  that same milestone**, and every one of them is a per-user view preference
+  serialized with the arrangement. The reason D9 gives for excluding narrow
+  excludes its four siblings equally.
+
+D9's own next sentence is the one that survives: *"if the narrow flag can live
+on the track, it needs no pruning at all."* It can, so it does — a fifth
+sibling, serialized only when true, not undoable, not dirtying the project.
+
+**Two things fall out, and both are asserted rather than assumed:**
+
+1. **The flag survives a fresh pane, which closes M1's own documented
+   limitation.** Every seam builds a pane (shell inv. 62), so under D9's
+   pane-owned set a toggle would have been invisible to the very next
+   assertion — which is precisely why M1's `mixer_inserts` had to record that
+   it could not assert narrow at all. It now can, and does.
+2. **AC2.3's hazard cannot arise.** A dangling key inherited by a later track
+   allocated at the same address is impossible when there is no key. Asserted
+   anyway — remove a narrowed track, drain the deferred deletes, add a new one,
+   assert it is WIDE — because "cannot arise" is a claim about the
+   implementation and the case checks the behaviour.
+
+**The sections are `SOpt::MixerSections`**, a bitmask (1 inserts, 2 sends,
+4 meter, 8 fader), default 15, **re-read on every rebuild**: a pane that only
+honoured the mask it was born with would show the defaults forever, since every
+seam and every project open builds a fresh one. Not undoable — the
+`set-count-in` / `set-pre-roll` precedent — and a SOpt key rather than a raw
+`SSettings` write, because that module owns key NAMES (D4).
+
+**AC2.4 measured:** with every section off (`mixer/sections = 0`), the layout
+gate still reads `crushed 0 / overlap 0` at 96 px and 60 px strips against pane
+heights 180 / 260 / 500. That is the shape most likely to produce a zero-height
+container and an overlap.
+
+**Watched failing — three sabotages, each biting exactly one case:** the stored
+mask ignored on rebuild (`mixer_sections`), narrow never reaching the track
+(`mixer_narrow_strip`), and a new strip never reading the track's flag
+(`mixer_narrow_strip` again, by a different route).
+
+**NOT gated:** the toolbar row of four section buttons itself — D9 puts them on
+the pane and M2 wires the mask they would write, but there is no verb for a
+toolbar any more than for a context menu, so the buttons are hand-verified and
+`set-option` is what the case drives. Same for the strip's own narrow button:
+`mixer-strip-toggle control="narrow"` drives the code it calls, not the click.
 
 ### M3 — meters, audibility, and the live path
 

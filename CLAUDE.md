@@ -2861,7 +2861,7 @@ sends inside a named ARRANGEMENT beyond the `arrangement=` attribute
 round-tripping; and a cycle arriving through a HAND-EDITED file with more than
 two lanes in it — `send_cycle.qxp` carries a two-lane loop.
 
-## The mixer pane (proposal 48 — M0 and M1 executed 2026-09-07/08)
+## The mixer pane (proposal 48 — M0, M1 and M2 executed 2026-09-07/09)
 
 A ninth dock holding one channel strip per track lane: name, inserts, sends,
 then M/S/R beside the meter and the fader. Design and the fourteen decisions:
@@ -2894,6 +2894,8 @@ there is a second mount of them**, exactly as proposal 45 M0 split
 | **THE LAYOUT AUDIT NOW COVERS BOTH AXES, and the width half asks the LAYOUT rather than the leaf** | `sAuditLayout` compared heights only — right for a vertical dock, blind to the axis a horizontal pane fails on, because a `QHBoxLayout` handed less than its minimum WIDTH shrinks its children side by side and **they do not overlap** (T11). But comparing every widget's own `minimumSizeHint().width()` immediately reported the *Track Detail* dock crushed: `SPluginEffectStrip`'s Edit button is `setMaximumWidth( 70 )` against an 81 px hint, a deliberate squeeze of a LEAF. So the width question is asked only of widgets that CARRY A LAYOUT. |
 | A widget the author **PINNED** with `setFixedSize` is not being crushed when it is shorter than its own hint | It is getting exactly what it asked for. A 20×20 button whose hint is 28 is the arranger head's own Full-density idiom, and the audit reported the mixer's copy as **12** crushed widgets. `sHonestMinHeight` honours an explicit fixed size as the author's number; the detail-pane gate is unaffected, its defect being `setMinimumHeight()` alone (min != max). |
 | **A `QScrollArea` carries a ~113 px minimum of its own, and a `QLabel`'s minimum width is its FULL TEXT** | Both are Qt floors wider than a 96 px mixer column, and no amount of compacting the content moves either. The name header therefore lives OUTSIDE the strip's scroll area — a deliberate departure from D5's diagram, and the better shape anyway, since a strip's name is its identity — and the name ELIDES at both widths. The label was the one that actually held the wide strip hostage: 91 px for an ordinary generated track name is, with the toggle button and the margins, exactly the 113 px the strip was reported as owing. |
+| **THE PER-STRIP NARROW FLAG LIVES ON `STrack`, WHICH D9 SAYS IT CANNOT — and D9's reason is STALE** (M2) | D9 excludes it because "narrow is a per-USER view preference and `STrack` attributes are serialized with the arrangement", and prescribes a pane-owned set joined to `SStdMixerView::pruneUiState`. That walk was **RETIRED by proposal 46 M3**, and the three sets D9 names as still being in it (`takesExpanded_`, `trackScale_`, the shown-automation set) **all moved onto `STrack` in that same milestone** — every one a per-user view preference serialized with the arrangement. The reason excludes its four siblings equally. D9's own next sentence survives: *"if the narrow flag can live on the track, it needs no pruning at all."* It can. **Consequence: AC2.3's dangling-key hazard cannot arise, and the flag survives a fresh pane — which closes M1's documented inability to assert narrow at all.** |
+| The pane-wide SECTIONS are `SOpt::MixerSections`, a bitmask, **re-read on every REBUILD** (M2) | 1 inserts, 2 sends, 4 meter, 8 fader, default 15. Not undoable (the `set-count-in` precedent), and a SOpt key rather than a raw `SSettings` write because that module owns key NAMES (D4). Re-read per rebuild because every seam and every project open builds a FRESH pane — one that honoured only the mask it was born with would show the defaults forever. |
 | **D5a is TWO widgets in TWO modules**, not one | `SPluginEffectStrip::setCompact` (the Add buttons lose their text; Edit is already the row's double-click and Reload / Remove stay on its context menu, so nothing becomes unreachable) and `SSendStrip::setCompact` (the level spin and the pre/post combo go). Revision 3 predicted the second by measuring `ssendstrip.cpp`'s row; the FX strip's own 113 px is what made AC1.7 fail. The Track Detail dock keeps the full row in both. |
 
 **Two claims in D1 were STALE and were found by trying to execute them:**
@@ -2924,7 +2926,7 @@ folder, a hidden lane and the master; D3a's "no visible lane sorts LAST"
 PRESERVED, over the multi-selection-spanning-a-collapsed-folder shape nothing
 in the qxa suite covers) plus the qxa cases `mixer_pane_strips`,
 `mixer_broadcast`, `mixer_pane_layout`, `mixer_path_root`, `mixer_inserts` and
-`mixer_close_teardown` (judged by EXIT CODE), and `action_roundtrip_test`.
+`mixer_close_teardown` (judged by EXIT CODE), `mixer_sections` (M2, `RUN_SERIAL` — it OWNS `mixer/sections` and restores it) and `mixer_narrow_strip` (M2, owning no INI key), plus `action_roundtrip_test`.
 Measured: **crushed 0 / overlap 0 at 96 px and 60 px strips against pane
 heights 180 / 260 / 500**, on both axes.
 
@@ -2934,9 +2936,10 @@ measured, and `screenshot` grabs a root window that is blank under
 `Ctrl+Shift+M` shortcut, its docked/floating/closed round trip through Qt's
 opaque `ui/windowState` blob, and its detach on project close — is
 hand-verified, because a scripted run never binds a project into the window
-(above). The narrow/wide flag's PERSISTENCE (M2's job; it is per-pane view
-state today). Repaint cost with many strips (M3 will measure it, not bound
-it). A send lane's own strip (`SystemLanes::All` has no caller). Hiding a USER
+(above). The four section BUTTONS and the strip's own narrow button — there is
+no verb for a toolbar any more than for a context menu, so the buttons are
+hand-verified and the cases drive `set-option` and `mixer-strip-toggle`
+instead. Repaint cost with many strips (M3 will measure it, not bound it). A send lane's own strip (`SystemLanes::All` has no caller). Hiding a USER
 lane from a script, which `set-lane-hidden` refuses by design — that rule is
 gated in `laneorder_test` against the model instead. And the per-strip
 independent scrolling of the FX/sends section, which follows from D5 putting
