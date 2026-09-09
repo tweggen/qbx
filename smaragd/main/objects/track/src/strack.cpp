@@ -138,6 +138,12 @@ int STrack::serializeSelfAttributes( QTextStream &o )
     if( !shownAutomation_.isEmpty() )
         o << " shownAutomation='"
           << encodeShownAutomation( shownAutomation_ ).toHtmlEscaped() << "'";
+    // ...and a FIFTH (proposal 48 M2): the mixer strip's narrow flag, on the
+    // same terms. See strack.h for why it lives here rather than in the
+    // pane-owned, pruned set proposal 48 D9 asks for -- that walk was retired
+    // by 46 M3 and the reason D9 gives excludes the four above equally.
+    if( mixerStripNarrow_ )
+        o << " mixerStripNarrow='true'";
     // The SYSTEM ROLE (proposal 45 D1), written only when it is not None --
     // every ordinary track omits it, so every project written before system
     // lanes re-serializes byte-identically. It is IMMUTABLE, so unlike every
@@ -1626,6 +1632,8 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     }
     setTakesExpanded(
         element.attribute( "takesExpanded", "false" ).startsWith( "true" ) );
+    setMixerStripNarrow(
+        element.attribute( "mixerStripNarrow", "false" ).startsWith( "true" ) );
     setShownAutomationLanes(
         decodeShownAutomation( element.attribute( "shownAutomation" ) ) );
 

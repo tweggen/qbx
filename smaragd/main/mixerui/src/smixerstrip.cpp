@@ -225,6 +225,7 @@ void SMixerStrip::buildUi_()
         soloBtn_->setChecked( t->isSolo() );
         armBtn_->setChecked( t->isArmedForRecording() );
         setFaderSilently_( t->getVolume() );
+        narrow_ = t->mixerStripNarrow();
     }
 }
 
@@ -493,10 +494,17 @@ void SMixerStrip::pumpReadValue_( offset_t pos )
 
 // --- sections, narrow, describe, detach -------------------------------------
 
+// NARROW IS THE TRACK'S OWN FLAG (proposal 48 M2), a fifth sibling of the four
+// pieces of per-track view state proposal 46 M3 moved onto STrack. It
+// therefore survives a save/load for free and needs no pruning walk -- see
+// `STrack::mixerStripNarrow()` for why that deviates from D9, whose stated
+// reason ("STrack attributes are serialized with the arrangement") excludes
+// its four siblings equally, and whose prescribed walk was retired by 46 M3.
 void SMixerStrip::setNarrow( bool narrow )
 {
     if( narrow_ == narrow ) return;
     narrow_ = narrow;
+    if( STrack *t = track_.data() ) t->setMixerStripNarrow( narrow );
     setFixedWidth( narrow_ ? NARROW_WIDTH : WIDE_WIDTH );
     if( narrowBtn_ )
         narrowBtn_->setText( narrow_ ? QStringLiteral( ">" )

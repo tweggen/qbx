@@ -187,6 +187,25 @@ inline constexpr const char *CountInBars          = "transport/countInBars";
 inline constexpr const char *PreRollBars          = "transport/preRollBars";
 inline constexpr const char *ClickWhileRecording  = "metronome/clickWhileRecording";
 
+// THE MIXER PANE's section toggles (proposal 48 M2 / D9) -- a BITMASK of which
+// of the four sections every strip shows: 1 inserts, 2 sends, 4 meter, 8 fader.
+//
+// Per-USER and never per-project, and that is the whole reason it is here
+// rather than on the arrangement: which sections somebody wants on screen is a
+// property of how they work, not of the song. It is deliberately NOT undoable
+// -- a preference is not an edit to the arrangement, the same call
+// `set-count-in` and `set-pre-roll` make.
+//
+// **It is a SOpt key rather than a raw SSettings write** because this module
+// owns key NAMES (proposal 48 D4), and a second spelling of a key is how a
+// setting silently stops round-tripping.
+//
+// Note the PER-STRIP narrow flag is NOT here: it lives on `STrack` beside the
+// four other pieces of per-track view state (proposal 46 M3), because it is
+// per TRACK rather than per user. See `STrack::mixerStripNarrow()` for why
+// that deviates from D9, whose stated reason is stale.
+inline constexpr const char *MixerSections        = "mixer/sections";
+
 // MEDIA BROWSER (proposal 38 gate 2, design §B.4). Per-user and machine-local
 // for the reason every path in this table is: where this person keeps their
 // samples is a property of this machine, not of the song, and a project file

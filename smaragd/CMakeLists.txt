@@ -271,6 +271,19 @@ foreach(_media media_browser_browse media_browser_search
     endif()
 endforeach()
 
+# The MIXER PANE's section toggles (proposal 48 M2) write `mixer/sections` --
+# a per-USER preference bitmask -- into the same shared per-user smaragd.ini,
+# so `mixer_sections` gets the identical treatment: RUN_SERIAL, its header
+# declaring that it OWNS that key, and it restores the SOpt default (15) at the
+# end so the INI comes back with identical content.
+#
+# `mixer_narrow_strip` is NOT here and needs no serialisation: the per-strip
+# narrow flag lives on STrack (proposal 46 M3's shape, a fifth sibling of the
+# four view-state attributes) and touches no INI key at all.
+if(TEST qxa.mixer_sections)
+    set_tests_properties(qxa.mixer_sections PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # --- the deferred `media:` drop (proposal 38 gate 3) --------------------------
 #
 # Same INI argument as the three above (it writes media/lastSourceId and

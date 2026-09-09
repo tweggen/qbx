@@ -9,6 +9,8 @@
 #include "app/objects/mixer/slaneorder.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/sproject.h"
+#include "app/servicesui/soptions.h"
+#include "app/shell/ssettings.h"
 #include "app/objects/track/strack.h"
 
 SMixerPane::SMixerPane( QWidget *parent ) : QWidget( parent )
@@ -90,6 +92,12 @@ void SMixerPane::setRoot( SObject *root, const QString &rootName )
 void SMixerPane::rebuildStrips()
 {
     clearStrips_();
+    // A pane built now must honour the stored preference, not the defaults it
+    // was constructed with: every test seam builds a FRESH pane (shell inv. 62)
+    // and so does a project open.
+    const int m = sectionsMask();
+    showInserts_ = m & 1; showSends_ = m & 2;
+    showMeter_   = m & 4; showFader_ = m & 8;
     SStdMixer *mixer = mixer_.data();
     if( !mixer ) return;
 
@@ -150,6 +158,27 @@ SMixerStrip *SMixerPane::stripForTrackNamed( const QString &name ) const
     return nullptr;
 }
 
+// THE SECTION MASK IS PER-USER AND LIVES IN SOpt (proposal 48 M2 / D9):
+// 1 inserts | 2 sends | 4 meter | 8 fader. It is NOT undoable -- a preference
+// is not an edit to the arrangement, the call `set-count-in` and
+// `set-pre-roll` already make.
+int SMixerPane::sectionsMask()
+{
+    return SSettings::instance()
+        .value( SOpt::MixerSections, SOpt::def( SOpt::MixerSections ) ).toInt();
+}
+
+void SMixerPane::setSectionsMask( int mask )
+{
+    SSettings::instance().setValue( SOpt::MixerSections, mask );
+}
+
+void SMixerPane::applyStoredSections()
+{
+    const int m = sectionsMask();
+    setSectionsVisible( m & 1, m & 2, m & 4, m & 8 );
+}
+
 void SMixerPane::setSectionsVisible( bool inserts, bool sends,
                                      bool meter, bool fader )
 {
@@ -170,9 +199,10 @@ QString SMixerPane::describe() const
         names << ( s->track() ? s->track()->getSName() : QStringLiteral( "?" ) );
     if( masterStrip_ && masterStrip_->track() )
         names << masterStrip_->track()->getSName();
-    return QStringLiteral( "strips=%1|master=%2|names=%3" )
+    return QStringLiteral( "strips=%1|master=%2|sections=%3|names=%4" )
         .arg( strips_.size() + ( masterStrip_ ? 1 : 0 ) )
         .arg( masterStrip_ ? 1 : 0 )
+        .arg( sectionsMask() )
         .arg( names.join( QLatin1Char( ',' ) ) );
 }
 
