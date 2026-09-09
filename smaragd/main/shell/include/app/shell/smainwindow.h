@@ -27,6 +27,7 @@ class SClipPropertiesPanel;
 class SEventEditorDock;
 class SVirtualKeyboardDock;
 class SMediaBrowserPanel;
+class SMixerPane;
 class SFeelFlowPuppetWidget;
 
 class SMainWindow
@@ -411,6 +412,18 @@ public:
      * whether the control is connected at all.
      */
     QString describeSendStrip( const QString &trackPath );
+
+    /// TEST ENTRY POINTS for the mixer pane (proposal 48 M1). The verbs live
+    /// in `app/testkit`, which may not include `app/mixerui` any more than it
+    /// may include `app/timeline` — so the MEASUREMENT lives here, exactly as
+    /// `describeTrackDetailLayout` / `describeSendStrip` already do.
+    SMixerPane *buildScratchMixerPane( const QString &arrangement ) const;
+    QString describeMixerPane( const QString &arrangement = QString() ) const;
+    QString describeMixerStrip( const QString &trackName,
+                                const QString &arrangement = QString() ) const;
+    QString describeMixerLayout( int paneWidth, int paneHeight, int stripWidth );
+    bool    mixerStripToggle( const QString &trackName, const QString &control,
+                              bool on, const QString &arrangement = QString() );
     bool    driveSendStrip( const QString &trackPath, const QString &lane,
                             const QString &control, double value );
 
@@ -740,6 +753,12 @@ private:
     // dropped again before the project dies.
     void attachTrackDetail();
     void detachTrackDetail();
+    /// Proposal 48 D13 / mixerui CONTRACT inv. 4: the pane holds one STrack*
+    /// and one twLevelProbe per strip, and closeProject() deletes the project
+    /// AFTER destroyDocksToolbars(). Without this seam the next 33 ms meter
+    /// tick dereferences freed tracks -- a crash, not a glitch.
+    void attachMixerPane();
+    void detachMixerPane();
     // Same lifecycle for the clip properties dock (proposal 31): it follows the
     // SELECTION, and every selection change is an action, so it refreshes off
     // the project's arrangementChanged rather than a signal of its own.
@@ -900,6 +919,15 @@ private:
     // that already exist. Its objectName, "dock_media_browser", is the whole
     // persistence mechanism -- docked/floating/closed round-trips through the
     // existing ui/windowState blob and needs no settings key.
+    // --- the MIXER PANE, the ninth dock (proposal 48 M1 / D10) ----------
+    // Created in the constructor like every other one, because restoreState()
+    // can only place docks that already exist (inv. 4). Hidden on a first run
+    // and thereafter riding entirely on the opaque `ui/windowState` blob --
+    // no settings key of its own for visibility.
+    QDockWidget        *qDockMixer_ = nullptr;
+    SMixerPane         *mixerPane_  = nullptr;
+    QMetaObject::Connection mixerRootConn_;
+
     QDockWidget        *qDockMediaBrowser_ = nullptr;
     SMediaBrowserPanel *mediaBrowser_      = nullptr;
 

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE MIXER PANE HAS ONE STRIP PER LANE, IN THE ARRANGER'S ORDER, AND THE TWO
+  MOUNTS DELIBERATELY DISAGREE ABOUT EXACTLY ONE MODEL FLAG (proposal 48 M1,
+  AC1.2 / D2 / D6a).
+
+  THREE THINGS ARE PINNED HERE AND EACH WOULD BE A DIFFERENT DEFECT:
+
+  1. THE ORDER IS THE SHARED WALK'S. `slaneorder::flattenTrackLanes` (M0) is
+     what the arranger's rows are built from too, so a pane that walked
+     `childLinks()` itself would be the second spelling this whole proposal
+     exists to prevent — and the way it would go wrong is the system-lane
+     tail, which is NOT among childLinks() and which proposal 45 D11 lists
+     four specific ways of forgetting.
+
+  2. THE PANE IGNORES FOLD (D2). A folder collapsed in the arranger keeps its
+     children's STRIPS: fold answers "show this lane's children as ROWS", and
+     a mixer has no rows. **CONSEQUENCE THIS CASE RELIES ON, AND WHICH NO GATE
+     MAY EVER ASSERT THE OPPOSITE OF: the strip count does not match the
+     arranger's visible row count.** Collapsing the folder below changes the
+     arranger and must change nothing here.
+
+  3. THE MASTER STRIP IS PRESENT ON A PROJECT THAT HAS NEVER CALLED
+     `set-lane-hidden` (D6a, trap T12). `laneHiddenByDefault()` is TRUE for
+     every system role, so the master lane has no ARRANGER row on an untouched
+     project — correct there, since a master row costs vertical space in a list
+     of lanes. A mixer without its summing point is not a mixer, so the pane
+     takes an exemption the arranger does not.
+
+     **THE FIXTURE MUST NEVER UN-HIDE THE MASTER FIRST.** A case that did
+     would pass whether D6a were implemented or not — the exact shape of gate
+     this repository has shipped three times (proposal 39 M2, proposal 41 M5,
+     fix/take-lane-domain). Nothing below touches `set-lane-hidden`.
+
+  NOT gated here: what any of it looks like (`screenshot` grabs the SCREEN's
+  root window, blank under QT_QPA_PLATFORM=offscreen), and the dock's own
+  visibility — the pane is measured through its describe seam whether the dock
+  is shown or not, which is deliberate: a headless run never shows the main
+  window at all.
+-->
+<SActionScript version="1" name="mixer_pane_strips">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <set-track-name trackPath="1" name="Folder"/>
+    <set-track-name trackPath="2" name="Omega"/>
+    <!-- Make track 2 a CHILD of track 1, so there is a folder to collapse. -->
+    <reparent-track source="2" destParent="1" destIndex="-1"/>
+    <set-track-name trackPath="1,0" name="FolderKid"/>
+
+    <!-- ============ AC1.2: ONE STRIP PER LANE, MASTER LAST ============= -->
+    <!-- Alpha, Folder, FolderKid, and the master = 4. The master is present
+         WITHOUT anything having un-hidden it (D6a). -->
+
+    <assert-mixer-pane strips="4" master="1"/>
+    <assert-mixer-pane contains="names=Alpha,Folder,FolderKid,Master"/>
+
+    <!-- ============ D2 IS NOT GATED HERE, AND THIS IS WHY ============= -->
+    <!-- An earlier version of this case collapsed the folder and asserted the
+         strip count was unchanged. IT WAS VACUOUS, and the sabotage pass is
+         what caught it: with the pane switched to `Fold::Honour` — D2 removed
+         outright — the case still PASSED.
+
+         `collapse-track` drives SStdMixerView::toggleTrackCollapsed(), the
+         fold triangle's own call, and a test-case run has no bound arranger
+         at all, so the verb is a NO-OP here. Measured directly:
+         `assert-lane-view collapsed="1"` reads false immediately after it.
+         There is no verb that writes STrack::setCollapsed() without the
+         arranger, so no script can put the model in the state D2 is about.
+
+         D2 is therefore gated in `laneorder_test` instead, which asserts
+         `SMixerPane::walkOptions()` itself — the pane's CHOICE of
+         Fold::Ignore — and then the order that choice produces over a
+         collapsed folder set on the model directly. That is the honest place
+         for it: the behaviour is the walk's, and the choice is the pane's. -->
+
+    <!-- ============ D6a DOES NOT DESCEND ============================== -->
+    <!-- The master lane owns a CONDUCTOR lane (proposal 45 M6), minted by
+         SStdMixer's constructor as an ordinary child link and hidden by the
+         same `laneHiddenByDefault()` rule the master is. The pane's exemption
+         is the MASTER's alone: a mixer without its summing point is not a
+         mixer, and that argument does not reach a lane carrying no audio at
+         all. So the count below is 4 — Alpha, Folder, FolderKid, Master —
+         and NOT 5. A pane that passed `Hidden::Ignore` down the system tail
+         would read 5 here.
+
+         HIDING A *USER* LANE IS NOT REACHABLE FROM A SCRIPT AND IS THEREFORE
+         NOT ASSERTED HERE. `set-lane-hidden` REFUSES anything that is not a
+         system lane (docs/ACTIONS.md's inverse rule), so there is no verb
+         that can hide Alpha. The rule that the pane HONOURS hidden for user
+         lanes is gated one layer down instead, in `laneorder_test`, which
+         sets the flag on the model directly — and that is the honest place
+         for it, since it is the shared walk's behaviour rather than the
+         pane's. -->
+
+    <assert-mixer-pane strips="4"/>
+    <assert-mixer-pane absent="Conductor"/>
+
+    <!-- ============ EACH STRIP READS ITS OWN TRACK ==================== -->
+
+    <assert-mixer-pane track="Alpha" contains="name=Alpha|narrow=0"/>
+    <assert-mixer-pane track="Master" contains="role=master"/>
+  </actions>
+</SActionScript>

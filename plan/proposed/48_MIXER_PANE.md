@@ -1,6 +1,9 @@
 # Proposal 48 — The mixer pane: one horizontal dock, one channel strip per lane
 
-> **Status: PROPOSED.** Nothing here is executed. It rests on proposal 45 M4
+> **STATUS: M0 AND M1 EXECUTED, 2026-09-07/08; M2-M4 PROPOSED.** Each
+> executed milestone below carries an "as executed" section with what was
+> measured and what the design did not anticipate — read those before the
+> design text they follow. It rests on proposal 45 M4
 > (the master lane has a row and a head) and on proposal 47 (send routing),
 > both of which ARE executed — 45 M4 at `890fb00d` / `4274da86`, 47 M0-M6 at
 > `eaeed762`.
@@ -728,6 +731,60 @@ named.
   assertion — a refactor that needed a case edited is not this refactor), plus a
   new `laneorder_test` for AC0.2/AC0.4 and `action_roundtrip_test` unchanged.
 
+### M0 as executed (2026-09-07)
+
+Shipped as committed. `slaneorder::flattenTrackLanes()` and
+`strackbroadcast::{targetsFor,orderByLane,pruneNestedTargets}` in
+`app/objects/mixer`; `SStdMixerView::rebuildRows` is one walk plus a per-lane
+row fold, and the three head members are one-line delegating members.
+`appendSystemRows()` is retired with its four rules carried forward in a
+tombstone where it stood.
+
+**AC0.4 / D3a resolved as PRESERVED.** "A track with no visible lane sorts
+LAST" was an ARTIFACT of `rowIndexOfTrack()` answering -1 rather than a
+decision, and it survives because the arranger's row list IS the flattened
+walk with fold and hidden honoured — so a track absent from it is exactly a
+track with no row. `laneorder_test` is the only thing that says so: the one
+shape distinguishing the two orders is a multi-selection spanning a COLLAPSED
+folder, and nothing in the qxa suite covers it.
+
+**TWO CLAIMS IN D1 WERE STALE, both found by trying to execute them.**
+
+1. **AC0.1's second consumer does not exist.** D1 calls `collectTracks` at
+   `sautomationlane.cpp:122-147` "a THIRD model walk (the prune sweep's)".
+   Proposal 46 M3 deleted it, and the file carries a tombstone saying so.
+   Revision 2 caught the neighbouring half of that same deletion ("D9's
+   pruning inventory was stale") and did not follow it through.
+2. **A DIFFERENT `collectTracks` has the very bug the shared walk prevents.**
+   `spluginnativeeditor.cpp:172` walks `childLinks()` only, so
+   `restoreOpenEditors()` misses the master lane and every system lane —
+   proposal 45 AC4.6's shape again. An editor left open on a master-lane
+   insert is not restored on load. **Not fixed:** it is a legitimate consumer
+   (`pluginui` already declares the `objects/mixer` edge), but
+   `restoreOpenEditors()` returns early in `--test-case` mode, so the fix
+   would be ungated — and M0's entire claim is that it changes nothing.
+
+**Also found: SEND LANES HAVE NO ARRANGER ROW** — zero mentions in
+`sstdmixerview.cpp`, though 45's design text says the tail is "sends above,
+master last". `slaneorder.h` records it and offers `SystemLanes::All`; the
+arranger keeps asking for `MasterSubtree`, so the row count is unchanged.
+
+**The test caught an error in the AUTHOR's expectations**, which is worth
+recording because it is the same class of mistake the milestone exists to
+prevent: un-hiding the master lane does NOT reveal its conductor lane —
+`laneHiddenByDefault()` is true for every system role, so hidden is per lane.
+One check was passing vacuously as a result; both were fixed and the per-lane
+rule is now pinned before the check that depends on it.
+
+**Suite:** 367/367 passed, 0 failed, 455 s at `-j4`; 370 registered / 367 run
+/ 3 Not Run (Disabled), reconciled both ways — the disabled three are the
+macOS-only `au_*` trio. **No case file changed**, which is AC0.1's actual
+assertion. **Watched failing under five sabotages**, three of them cleanly
+disjoint: fold ignored everywhere (7 checks), the system tail appended FIRST
+(4), the D6a exemption descending (2 — the mixer-pane pair only), lane-less
+tracks sorting FIRST (2 — the AC0.4 pair only), any multi-selection
+broadcasting (1 — the aimed-outside check only).
+
 ### M1 — the pane, the strips, inserts, fader, meter, M/S/R
 
 - **AC1.1** A `Mixer` dock exists, ninth, `objectName="dock_mixer"`, hidden on a
@@ -781,6 +838,100 @@ named.
   unticking REMOVING the tap instead of disabling it** — 47 M5's own sabotage,
   which bit the two assertions that check the level and the mode survive, and
   which a second mount can reintroduce without touching `SSendStrip` at all.
+
+### M1 as executed (2026-09-08)
+
+The dock, the pane, the strip, D5a's two compact modes, three verbs and six
+qxa cases. Every acceptance criterion is met; three of them cost a design
+correction and one is not gateable in the shape AC1.9 imagined.
+
+**THE SECOND MOUNT BROKE THE FIRST ONE, and it is exactly what this proposal's
+governing rule is about.** `SLiveMonitor::takeInputPeak()` CLEARS the source's
+peak — `twLiveInputSource::takePeak()` against its own documented `peekPeak()`
+twin. Harmless while the arranger track head was the only caller; with the
+pane ticking on the same 33 ms broadcast, whichever ran second read 0 and its
+meter sat dead. **Exactly one mount may TAKE and every other must PEEK.**
+`peekInputPeak()` added; the head keeps taking, and so keeps clearing.
+
+**D12 WAS IMPLEMENTED WRONG FIRST, and the failure mode is silence.** The
+strip used `stimeline::submitActive`, which stamps whichever editor TAB is
+active. A pane showing a different arrangement than the tab in front then
+submits an action that resolves an empty path and DOES NOTHING — no refusal,
+no log line, nothing to notice. `SMixerStrip::submit_` now stamps the strip's
+own arrangement. `mixer_path_root` asserts both halves, because the first
+alone would pass if the action reached both trees.
+
+**AC1.9's shape had to change, and the reason reshaped every seam.** A
+`--test-case` run NEVER BINDS ITS PROJECT INTO THE WINDOW: `SActionRunner`
+builds it straight on `SApplication` and `main.cpp` calls
+`adoptCurrentProject()` only when `!testMode`, its own comment saying so. The
+live pane reports `strips=0` for a whole scripted run — measured before the
+fix. Every seam therefore builds a pane on demand, which is why
+`describeTrackDetailLayout` and `describeSendStrip` already build their own
+panel. **Consequence recorded rather than hidden:** a gesture and the
+assertion after it run against DIFFERENT pane instances, so what is gated is
+the VERB PATH and never widget-state persistence; anything that IS per-pane
+view state (the narrow flag) cannot be asserted this way at all, and
+`mixer_inserts` says so where that assertion would otherwise sit.
+
+**AC1.7 COST FOUR LAYOUT FLOORS, every one found by measuring:**
+
+| Floor | Measured | Answer |
+|---|---|---|
+| A pinned widget reads as crushed | a 20×20 button whose hint is 28, ×12 | `sHonestMinHeight` honours an explicit fixed size as the author's number. The detail-pane gate is untouched: its defect was `setMinimumHeight()` alone (min != max) |
+| Three 20 px squares do not fit 60 px | `SMixerStrip(w 60<72)` | narrow uses 16 px squares, drops the dB readout, margins to 1 |
+| **A `QScrollArea`'s own minimum** | ~113 px, wider than a WIDE strip | the name header moved OUT of the scroll area — a deliberate departure from D5's diagram, and the better shape: a strip's name is its identity, so D5's own rule for the fader block applies to it at least as strongly. Narrow hides the scroll area outright |
+| **A `QLabel`'s minimum width is its FULL TEXT** — the one that actually held 96 px hostage | 91 px for an ordinary generated name; with the toggle and margins, exactly the 113 the strip was reported as owing | the name ELIDES at both widths, as a fixed-width column must; the full name stays in the tooltip and in `describe()` |
+
+**And T11's width twin had to ask the LAYOUT, not the leaf.** The first
+version compared every widget's own `minimumSizeHint().width()` and
+immediately reported the *Track Detail* dock crushed: `SPluginEffectStrip`'s
+Edit button is `setMaximumWidth( 70 )` against an 81 px hint — an author
+squeezing a leaf on purpose, where a too-short widget in a vertical stack
+pushes its neighbours into each other. Asking only widgets that CARRY A LAYOUT
+is precisely T11's sentence and has no benign reading.
+
+**D5a is TWO widgets in TWO modules, as revision 3 predicted**, and the FX
+strip's own 113 px is what made AC1.7 fail rather than the >200 px revision 2
+estimated. `SPluginEffectStrip::setCompact` and `SSendStrip::setCompact`; the
+Track Detail dock keeps the full row in both, which `mixer_inserts` asserts
+from both sides.
+
+**Measured:** `crushed 0 / overlap 0` at 96 px and 60 px strips against pane
+heights 180 / 260 / 500, on BOTH axes, plus scroll-instead-of-compress at a
+200 px pane.
+
+**THE SABOTAGE PASS FOUND A VACUOUS GATE, which is what it is for.** Five
+sabotages; four bit immediately and three of those are cleanly disjoint:
+
+| Sabotage | Bites |
+|---|---|
+| S1 D6a removed (`alwaysShowMaster = false`) | 3 cases |
+| S3 the broadcast replaced by `{clicked}` | `mixer_broadcast` alone |
+| S4 D12's stamp dropped | `mixer_path_root` alone |
+| S5 the FX strip's compact mode dropped | `mixer_inserts` alone |
+
+**S2 — D2 removed outright, the pane switched to `Fold::Honour` — BIT
+NOTHING.** Every case passed with the feature deleted. `collapse-track` drives
+`SStdMixerView::toggleTrackCollapsed()`, the fold triangle's own call, and a
+`--test-case` run has no bound arranger, so the verb is a **no-op**: measured
+directly, `assert-lane-view collapsed="1"` reads FALSE immediately after it.
+No verb writes `STrack::setCollapsed()` without the arranger, so no script can
+put the model into the state D2 is about.
+
+Fixed by moving the claim to where it can bite. `SMixerPane::walkOptions()` is
+a static returning the pane's own options, `rebuildStrips()` its only caller,
+and `laneorder_test` asserts it — the pane's CHOICE — and then the order that
+choice produces over a collapsed folder set on the model directly. The honest
+split: the behaviour is the walk's, the choice is the pane's. S2 re-run: **2
+failing checks**. The qxa case now states in place why it does not assert D2.
+
+**Suite:** 373/373 passed, 0 failed, 395 s at `-j4`; 376 registered / 373 run
+/ 3 Not Run (Disabled) — the macOS-only `au_*` trio — reconciled both ways.
+
+**What M1 did NOT build**, beyond the proposal's own non-goals: the four
+pane-wide section toggles are plumbed (`setSectionsVisible`) and have no UI or
+storage — that is M2, which also owns the narrow flag's persistence.
 
 ### M2 — collapse, persistence, pruning
 

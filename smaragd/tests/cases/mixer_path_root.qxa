@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A MIXER GESTURE COMMITS INTO THE ARRANGEMENT THE PANE IS SHOWING
+  (proposal 48 M1, AC1.8 / D12).
+
+  THE DEFECT THIS GATES IS SILENT, WHICH IS WHY IT NEEDS A CASE. Selection is
+  per-SStdMixer and every action carries a `pathRoot`. `stimeline::submitActive`
+  asks which EDITOR TAB is active and stamps THAT root — right for a widget
+  living inside one arranger, wrong for a pane that can be showing a different
+  arrangement than the tab in front. An action stamped with the wrong root
+  resolves an empty path and DOES NOTHING: no refusal, no log line, no failed
+  assertion anywhere unless something checks the other tree.
+
+  The first implementation of this milestone used `submitActive` blind and had
+  exactly that bug. The strip now carries its own arrangement name and stamps
+  it (`SMixerStrip::submit_`), which is what D12 asks for in so many words.
+
+  This repository has shipped the same shape once before:
+  `SClearSelectionAction` honours `pathRoot_` and the convenience helper does
+  not set one, so Ctrl+Shift+A cleared the MASTER's selection from any tab
+  (fix/editor-ui-and-shortcuts).
+
+  WHAT IS ASSERTED: a mute driven on a strip of arrangement "Riff" changes
+  Riff's track and leaves the identically-positioned MASTER track alone. Both
+  halves are needed — the first alone would pass if the action reached both.
+-->
+<SActionScript version="1" name="mixer_path_root">
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterTrack"/>
+
+    <create-arrangement name="Riff"/>
+    <add-track index="-1" arrangement="Riff"/>
+    <set-track-name trackPath="Riff:0" name="RiffTrack"/>
+
+    <!-- Two separate trees, each with its own single track and master. -->
+    <assert-mixer-pane strips="2" contains="names=MasterTrack,Master"/>
+    <assert-mixer-pane arrangement="Riff" strips="2"
+                       contains="names=RiffTrack,Master"/>
+
+    <!-- ============ THE GESTURE LANDS IN THE PANE'S OWN TREE ========== -->
+
+    <mixer-strip-toggle track="RiffTrack" arrangement="Riff"
+                        control="mute" on="true"/>
+    <assert-mixer-pane arrangement="Riff" track="RiffTrack" contains="mute=1"/>
+
+    <!-- ...and NOT in the master's, which a `submitActive` stamp would have
+         reached instead. -->
+    <assert-mixer-pane track="MasterTrack" contains="mute=0"/>
+
+    <!-- One undo step, and it comes off the arrangement it went on. -->
+    <undo/>
+    <assert-mixer-pane arrangement="Riff" track="RiffTrack" contains="mute=0"/>
+
+    <!-- ============ AND THE MASTER'S OWN GESTURE STAYS AT HOME ======== -->
+
+    <mixer-strip-toggle track="MasterTrack" control="mute" on="true"/>
+    <assert-mixer-pane track="MasterTrack" contains="mute=1"/>
+    <assert-mixer-pane arrangement="Riff" track="RiffTrack" contains="mute=0"/>
+  </actions>
+</SActionScript>

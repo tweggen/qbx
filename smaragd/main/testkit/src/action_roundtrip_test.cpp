@@ -411,6 +411,18 @@ const Fixture kFixtures[] = {
       " contains='density=Full' absent='I=1' grabPng='head.png'"
       " grabWidth='160' grabHeight='160'/>" },
 
+    // --- the mixer-pane verbs (proposal 48 M1) ------------------------------
+    { "assert-mixer-pane",
+      "<assert-mixer-pane track='Drums' arrangement='Riff' strips='4'"
+      " master='1' contains='role=master' absent='Conductor'/>" },
+    { "assert-mixer-layout",
+      "<assert-mixer-layout paneWidth='640' paneHeight='180' stripWidth='60'"
+      " maxCrushed='0' maxOverlap='0' scrollNeeded='1'"
+      " contains='worst=-'/>" },
+    { "mixer-strip-toggle",
+      "<mixer-strip-toggle track='Drums' arrangement='Riff' control='solo'"
+      " on='true'/>" },
+
     // --- the detail-pane verbs (fix/detail-pane-layout) ---------------------
     { "assert-track-detail-layout",
       "<assert-track-detail-layout trackPath='1,0' panelWidth='280'"
@@ -973,6 +985,8 @@ const LaneRow kLaneRows[] = {
     { "assert-system-lane",        Accept, "read-only; it exists FOR system lanes" },
     { "assert-take-lane",          Accept, "read-only" },
     { "assert-track-channels",     Accept, "read-only" },
+    { "assert-mixer-layout",       Accept, "read-only" },
+    { "assert-mixer-pane",         Accept, "read-only" },
     { "assert-track-detail-layout", Accept, "read-only" },
     { "assert-track-head",         Accept, "read-only" },
     { "assert-track-name",         Accept, "read-only" },
@@ -1046,6 +1060,11 @@ const LaneRow kLaneRows[] = {
     { "double-click-control", NotApplicable,
       "resets a CONTROL to its default; it addresses the control, and which "
       "controls a master head has is M4's question, not M5's" },
+    { "mixer-strip-toggle", NotApplicable,
+      "drives a MIXER STRIP's mute / solo / arm / narrow button; each underlying "
+      "verb carries its own row above, so the refusals apply through it rather "
+      "than to it -- exactly as they do through track-head-toggle. `narrow` "
+      "touches no model state at all" },
     { "track-head-toggle",  NotApplicable,
       "drives whichever head buttons exist; each underlying verb carries its own "
       "row above, so the refusals apply through it rather than to it" },

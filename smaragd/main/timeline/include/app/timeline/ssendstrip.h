@@ -47,6 +47,14 @@ public:
     /// really there.
     QString describe() const;
 
+    /// COMPACT MODE (proposal 48 D5a), the twin of `SPluginEffectStrip`'s.
+    /// A row keeps its enable box and an elided lane name; the level spin box
+    /// and the pre/post combo go, because together they are ~140 px against a
+    /// 96 px mixer strip. The tap itself is untouched -- this hides CONTROLS,
+    /// never state, and the Track Detail dock keeps the full row.
+    void setCompact( bool compact );
+    bool isCompact() const { return compact_; }
+
     /// Drive one row's control the way a hand would, for `send-strip-set`.
     /// `control` is "on" | "level" | "pre". Returns false when there is no
     /// row for `laneName`.
@@ -79,6 +87,7 @@ private:
     /// setValue() does not re-enter as if the user had moved it. The
     /// automation recorder's `applyVolume_` guard, one class over.
     bool         updating_ = false;
+    bool         compact_ = false;
 };
 
 #endif

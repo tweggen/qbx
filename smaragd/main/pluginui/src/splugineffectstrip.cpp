@@ -208,6 +208,24 @@ QString SPluginEffectStrip::trackPathString() const
     return strackpath::pathToString(path);
 }
 
+// PROPOSAL 48 D5a -- see the header.
+void SPluginEffectStrip::setCompact( bool compact )
+{
+    if( compact_ == compact ) return;
+    compact_ = compact;
+    if( addInstrumentBtn_ ) {
+        addInstrumentBtn_->setText( compact_ ? QStringLiteral( "+I" )
+                                             : QStringLiteral( "+ Add Instrument" ) );
+        addInstrumentBtn_->setToolTip( tr( "Add an instrument" ) );
+    }
+    if( addEffectBtn_ ) {
+        addEffectBtn_->setText( compact_ ? QStringLiteral( "+FX" )
+                                         : QStringLiteral( "+ Add Effect" ) );
+        addEffectBtn_->setToolTip( tr( "Add an effect" ) );
+    }
+    rebuildUI();
+}
+
 void SPluginEffectStrip::rebuildUI()
 {
     // Clear existing widgets
@@ -333,6 +351,7 @@ void SPluginEffectStrip::rebuildUI()
         // button exists because a double-click is not discoverable.
         QPushButton *editBtn = new QPushButton(tr("Edit"));
         editBtn->setMaximumWidth(70);
+        editBtn->setVisible( !compact_ );   // D5a: double-click the row instead
         editBtn->setEnabled(active);
         rowLayout->addWidget(editBtn);
 
@@ -341,6 +360,7 @@ void SPluginEffectStrip::rebuildUI()
         if (!active) {
             reloadBtn = new QPushButton(tr("Reload"));
             reloadBtn->setMaximumWidth(80);
+            reloadBtn->setVisible( !compact_ );   // D5a: on the row's context menu
             reloadBtn->setToolTip(tooltip);
             rowLayout->addWidget(reloadBtn);
         }
@@ -348,6 +368,7 @@ void SPluginEffectStrip::rebuildUI()
         // Remove button
         QPushButton *removeBtn = new QPushButton("Remove");
         removeBtn->setMaximumWidth(80);
+        removeBtn->setVisible( !compact_ );   // D5a: on the row's context menu
         rowLayout->addWidget(removeBtn);
 
         pluginsLayout_->addWidget(container);

@@ -512,6 +512,17 @@ mistake them for an isolation bug:
 | `qxa.clip_properties_actions` | `***Exception: SegFault` | 1 of 2 serial runs |
 | `qxa.split_plain_screenshot` | script prints `PASS`, process then exits non-zero — a crash during **teardown**, after every action and assertion succeeded | 1 of 2 serial runs, and `-j2` |
 
+**A THIRD, found 2026-09-08 and measured against `main` rather than assumed:
+`action_roundtrip_test` crashes intermittently** — a SEGFAULT, and under
+`ctest` an `Exit code 0xc0000374` (STATUS_HEAP_CORRUPTION). Rate on this box:
+**7 failures in 30 runs on `main` (4819c27a) and 7 in 30 on a feature branch**
+— identical, so it is not any one branch's doing. Two other binaries in the
+same worktree (`laneorder_test`, `filepathref_test`, both ~295 MB, the same
+size) are **20/20 clean**, so it is specific to this test and not a loader or
+memory-pressure artifact. Root cause NOT established; treat it as open. Note
+that a run can also exit **127** with no output at all, which is the same
+failure wearing a different hat — do not read 127 as "binary missing".
+
 They are not a `-j` problem: they appeared in the **serial** run and both passed
 in the green `-j4` and `-j8` runs. Neither reproduces in isolation —
 `split_plain_screenshot` 80/80 (including 25 with `SMARAGD_SIDECAR_DIR=off`) and
@@ -2849,6 +2860,87 @@ the addressed track IS a send lane beyond the fact that its own row is skipped;
 sends inside a named ARRANGEMENT beyond the `arrangement=` attribute
 round-tripping; and a cycle arriving through a HAND-EDITED file with more than
 two lanes in it — `send_cycle.qxp` carries a two-lane loop.
+
+## The mixer pane (proposal 48 — M0 and M1 executed 2026-09-07/08)
+
+A ninth dock holding one channel strip per track lane: name, inserts, sends,
+then M/S/R beside the meter and the fader. Design and the fourteen decisions:
+`plan/proposed/48_MIXER_PANE.md` (renumbered from 46 in revision 3, which also
+rewrote D7 after proposal 47 shipped the sends). Invariants:
+`main/mixerui/CONTRACT.md` (nine, plus the four measured layout floors),
+`main/objects/mixer/CONTRACT.md` ("The ONE lane walk"),
+`main/shell/CONTRACT.md` inv. 61-62, `main/pluginui/CONTRACT.md`.
+
+**The governing rule, and it is the whole proposal:**
+
+> **The mixer is a second MOUNT of rules the arranger already owns — never a
+> second COPY of them.**
+
+Lane order, the selection broadcast, the audibility rule, the fader curve, the
+meter's lane cap and the clip palette each have exactly one spelling in this
+tree. This repository has paid for the alternative four times — the meter and
+the ear disagreeing about a nested lane, paint and hit-test disagreeing about
+z-order (green for two milestones), the loop-marker geometry, the take-lane
+body fill. **M0 exists solely to make the two shared rules shareable BEFORE
+there is a second mount of them**, exactly as proposal 45 M0 split
+`isPathContainer()` from `isLane()` before a second container kind existed.
+
+| Thing to know | Why |
+|---|---|
+| **A SECOND MOUNT OF A METER BREAKS THE FIRST ONE, and this is the concrete instance the rule is about.** `SLiveMonitor::takeInputPeak()` CLEARS the source's peak — `takePeak()` against its own documented `peekPeak()` twin | Harmless while the arranger head was the only caller. With the pane ticking on the same 33 ms broadcast, whichever ran second read 0 and its meter sat dead. **Exactly one mount may TAKE; every other must PEEK.** `peekInputPeak()` is the twin the pane uses. |
+| The pane **IGNORES FOLD** and honours HIDDEN, **except that it always shows the MASTER** | Fold answers "show this lane's children as ROWS", and a mixer has no rows (D2). Hiding answers "show this track at all", which both mounts agree on. `laneHiddenByDefault()` is TRUE for every system role, so on an untouched project the master has no ARRANGER row — correct there, and a mixer without its summing point is not a mixer (D6a). **The exemption covers the master ITSELF, never its children**: a hidden conductor lane stays hidden in both mounts. **CONSEQUENCE NO GATE MAY ASSERT THE OPPOSITE OF: the strip count does not match the arranger's visible row count.** |
+| **The strip stamps its OWN arrangement on every action, never `stimeline::submitActive`** | That helper stamps whichever editor TAB is active. A pane showing a different arrangement than the tab in front would then resolve an empty path and **DO NOTHING** — no refusal, no log line, nothing to notice. The first implementation had exactly that bug. Same shape as `SClearSelectionAction`'s, where Ctrl+Shift+A cleared the master's selection from any tab. |
+| **A `--test-case` run NEVER BINDS ITS PROJECT INTO THE WINDOW**, so every mixer test seam builds its own pane | `SActionRunner` builds it straight on `SApplication` and `main.cpp` calls `adoptCurrentProject()` only when `!testMode` — its own comment says so. The live pane reports `strips=0` for a whole scripted run. This is why `describeTrackDetailLayout` and `describeSendStrip` already build their own panel. **Consequence: a gesture and the assertion after it run against DIFFERENT instances**, so what is gated is the VERB PATH and never widget-state persistence — and anything that IS per-pane view state (the narrow flag) cannot be asserted this way at all. |
+| **THE LAYOUT AUDIT NOW COVERS BOTH AXES, and the width half asks the LAYOUT rather than the leaf** | `sAuditLayout` compared heights only — right for a vertical dock, blind to the axis a horizontal pane fails on, because a `QHBoxLayout` handed less than its minimum WIDTH shrinks its children side by side and **they do not overlap** (T11). But comparing every widget's own `minimumSizeHint().width()` immediately reported the *Track Detail* dock crushed: `SPluginEffectStrip`'s Edit button is `setMaximumWidth( 70 )` against an 81 px hint, a deliberate squeeze of a LEAF. So the width question is asked only of widgets that CARRY A LAYOUT. |
+| A widget the author **PINNED** with `setFixedSize` is not being crushed when it is shorter than its own hint | It is getting exactly what it asked for. A 20×20 button whose hint is 28 is the arranger head's own Full-density idiom, and the audit reported the mixer's copy as **12** crushed widgets. `sHonestMinHeight` honours an explicit fixed size as the author's number; the detail-pane gate is unaffected, its defect being `setMinimumHeight()` alone (min != max). |
+| **A `QScrollArea` carries a ~113 px minimum of its own, and a `QLabel`'s minimum width is its FULL TEXT** | Both are Qt floors wider than a 96 px mixer column, and no amount of compacting the content moves either. The name header therefore lives OUTSIDE the strip's scroll area — a deliberate departure from D5's diagram, and the better shape anyway, since a strip's name is its identity — and the name ELIDES at both widths. The label was the one that actually held the wide strip hostage: 91 px for an ordinary generated track name is, with the toggle button and the margins, exactly the 113 px the strip was reported as owing. |
+| **D5a is TWO widgets in TWO modules**, not one | `SPluginEffectStrip::setCompact` (the Add buttons lose their text; Edit is already the row's double-click and Reload / Remove stay on its context menu, so nothing becomes unreachable) and `SSendStrip::setCompact` (the level spin and the pre/post combo go). Revision 3 predicted the second by measuring `ssendstrip.cpp`'s row; the FX strip's own 113 px is what made AC1.7 fail. The Track Detail dock keeps the full row in both. |
+
+**Two claims in D1 were STALE and were found by trying to execute them:**
+AC0.1's second consumer, `collectTracks` in `sautomationlane.cpp`, was deleted
+by proposal 46 M3 (there is a tombstone in the file saying so); and a
+*different* `collectTracks`, in `spluginnativeeditor.cpp`, walks `childLinks()`
+only and so **misses the master lane** — an editor left open on a master-lane
+insert is not restored on load. That one is named, not fixed: it is unreachable
+headlessly (`restoreOpenEditors()` returns early in `--test-case` mode), and
+M0's whole claim was that it changed nothing.
+
+**Also found: SEND LANES HAVE NO ARRANGER ROW AT ALL** — zero mentions in
+`sstdmixerview.cpp` — though proposal 45's design text says the tail is "sends
+above, master last". Now that 47 makes send lanes audible, a lane you can hear
+and cannot see is a sharper gap than it was. `slaneorder.h` records it and
+offers `SystemLanes::All`; nothing calls it yet.
+
+**THE SABOTAGE PASS FOUND A VACUOUS GATE.** Removing D2 outright — switching
+the pane to `Fold::Honour` — broke NOTHING: `collapse-track` drives the
+arranger's own `toggleTrackCollapsed()`, and a `--test-case` run has no bound
+arranger, so the verb is a **no-op** (`assert-lane-view collapsed=` reads false
+straight after it). No script can set the fold flag at all. The pane's choice
+is now `SMixerPane::walkOptions()`, a static that `laneorder_test` asserts
+directly — after which the sabotage costs 2 checks.
+
+Gates: `laneorder_test` (M0 — the walk's order over folders, a collapsed
+folder, a hidden lane and the master; D3a's "no visible lane sorts LAST"
+PRESERVED, over the multi-selection-spanning-a-collapsed-folder shape nothing
+in the qxa suite covers) plus the qxa cases `mixer_pane_strips`,
+`mixer_broadcast`, `mixer_pane_layout`, `mixer_path_root`, `mixer_inserts` and
+`mixer_close_teardown` (judged by EXIT CODE), and `action_roundtrip_test`.
+Measured: **crushed 0 / overlap 0 at 96 px and 60 px strips against pane
+heights 180 / 260 / 500**, on both axes.
+
+**NOT gated:** pixels and aesthetics anywhere — no `paintEvent` of the pane is
+measured, and `screenshot` grabs a root window that is blank under
+`QT_QPA_PLATFORM=offscreen`. The DOCK itself — its View-menu item, its
+`Ctrl+Shift+M` shortcut, its docked/floating/closed round trip through Qt's
+opaque `ui/windowState` blob, and its detach on project close — is
+hand-verified, because a scripted run never binds a project into the window
+(above). The narrow/wide flag's PERSISTENCE (M2's job; it is per-pane view
+state today). Repaint cost with many strips (M3 will measure it, not bound
+it). A send lane's own strip (`SystemLanes::All` has no caller). Hiding a USER
+lane from a script, which `set-lane-hidden` refuses by design — that rule is
+gated in `laneorder_test` against the model instead. And the per-strip
+independent scrolling of the FX/sends section, which follows from D5 putting
+the fader block outside the scroll area.
 
 ## Dependencies
 

@@ -197,6 +197,15 @@ public:
     /// (design D9) needs a since-the-last-tick reading or the bar latches at
     /// the loudest thing that ever happened.
     double takeInputPeak( const STrack *track );
+    /// The same reading WITHOUT clearing it — for a SECOND mount of a meter.
+    ///
+    /// `takeInputPeak()` clears the source's peak (`twLiveInputSource::takePeak`
+    /// against its own `peekPeak()` twin), which was harmless while the
+    /// arranger track head was the only caller. With the mixer pane ticking on
+    /// the same 33 ms broadcast, whichever of the two ran second would read 0
+    /// and its meter would sit dead — so exactly one mount may TAKE and every
+    /// other must PEEK. The head takes (and so keeps clearing); the pane peeks.
+    double peekInputPeak( const STrack *track ) const;
     /// Freeze-path renders that arrived at a LIVE-OWNED processor and were
     /// answered with silence (design D4). Process-wide. Surfaced here rather
     /// than read straight off `twPluginSlotProcessor` because `app/testkit`

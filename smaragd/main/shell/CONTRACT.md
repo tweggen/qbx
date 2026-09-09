@@ -1418,3 +1418,35 @@ under test does. `qxa.track_list_view_roundtrip`'s post-load
 **Put arranger-side assertions on the NEAR side of a save/load**; only
 model-side reads (`trackAtPath_`, i.e. `assert-lane-view`'s `collapsed` /
 `laneScale` / `takesExpanded` / `automation`) are trustworthy after one.
+
+## inv. 61 — the MIXER PANE is the ninth dock, and it joins the detach seam (proposal 48 M1)
+
+`dock_mixer`, created in the constructor like every other one (inv. 4:
+`restoreState()` can only place docks that already exist), bottom area,
+**hidden on a first run** and thereafter placed entirely by `ui/windowState` —
+no settings key of its own for visibility. View menu + `Ctrl+Shift+M`, checked
+against the two bindings that already own a bare letter (the event editor's Q
+and the virtual keyboard's note keys).
+
+`detachMixerPane()` is on `destroyDocksToolbars()`'s list. Without it the pane
+holds one `STrack *` and one `twLevelProbe` per strip while `closeProject()`
+deletes the project underneath, and the next 33 ms meter tick dereferences
+freed tracks — a crash, not a glitch, and the same class as the `SCut`
+revalidation UAF and the `SViewTabs` dangling-root hazard.
+
+## inv. 62 — a mixer TEST SEAM builds its own pane, because a scripted run has no bound project
+
+**`SActionRunner` builds a `--test-case` run's project straight on
+`SApplication`, and `main.cpp` calls `adoptCurrentProject()` only when
+`!testMode`.** So the live `mixerPane_` is empty for the whole of a scripted
+run and a seam that read it would report `strips=0` forever — measured, not
+inferred. `buildScratchMixerPane()` therefore constructs one on demand, which
+is the same reason `describeTrackDetailLayout` and `describeSendStrip` build
+their own `STrackDetailPanel`.
+
+**Consequence to know rather than rediscover:** a gesture and the assertion
+after it run against DIFFERENT pane instances, so what is gated is the VERB
+PATH — the button's own signal reaching the model — and never the persistence
+of widget state across the two. Anything that IS per-pane view state (the
+narrow flag) cannot be asserted this way at all, and `mixer_inserts` says so
+where the assertion would otherwise sit.

@@ -492,3 +492,24 @@ the button row on top of the list), and the panel above now scrolls as ONE
 surface. The strip reports what its rows actually need and lets that panel's
 scroll area absorb the rest. A strip that reintroduces either will crush again
 at exactly the sizes `qxa.track_detail_layout` measures.
+
+## The FX strip has a COMPACT mode (proposal 48 D5a / M1)
+
+`SPluginEffectStrip::setCompact( true )` collapses each row to its name and
+bypass box and shortens the two Add buttons to `+I` / `+FX`.
+
+**NOTHING BECOMES UNREACHABLE, only smaller**, and that is the condition on
+the whole idea: Edit is already the row's own DOUBLE-CLICK, and Reload and
+Remove stay on its context menu.
+
+It exists because the mixer pane mounts this widget in a 60 or 96 px strip
+while the full row's layout minimum is far past that — **measured at 113 px
+for the two Add buttons alone**, which made proposal 48's AC1.7 fail on a pane
+that was otherwise clean. A SECOND, compact insert list in `app/mixerui` was
+the alternative and was rejected: the editor registry, the drop handling and
+the Missing / Unsupported states would each have to be written again and could
+then disagree with this one.
+
+The Track Detail dock does NOT take it, and `mixer_inserts` asserts both sides
+— the mixer's mount reports `compact=1` while the dock's send strip still
+shows its level and pre/post controls and its own layout stays clean.

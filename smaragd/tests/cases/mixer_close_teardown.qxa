@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CLOSING A PROJECT WITH THE MIXER PANE ALIVE DOES NOT CRASH
+  (proposal 48 M1, AC1.9 / D13).
+
+  JUDGED BY EXIT CODE, NOT BY AN ASSERTION — the `plugin_native_editor_
+  teardown_safe` precedent. There is nothing to assert: either the process
+  leaves cleanly or it does not, and CTest reads the exit code.
+
+  THE HAZARD. `closeProject()` clears the undo stack (releasing the track pins
+  SRemoveTrackAction holds), calls `destroyDocksToolbars()` — which explicitly
+  detaches the three track-holding panels — and THEN deletes the project. A
+  pane holding one STrack* and one twLevelProbe per strip that is not on that
+  detach list dereferences freed tracks on the next 33 ms meter tick. That is
+  a crash, not a glitch, and it is the same class as the SCut revalidation UAF
+  and the SViewTabs dangling-root hazard, both of which this tree fixed by
+  wiring lifetime from the first commit rather than later.
+
+  `SMixerPane::detachProject()` is on that list, the strips hold their tracks
+  as QPointer, and each strip drops its probe's tap.
+
+  WHAT THIS CASE CAN AND CANNOT REACH. It builds panes through the seams (each
+  of which constructs and destroys one, so strip and probe teardown runs many
+  times over) and lets the run end, which tears the project down. It does NOT
+  exercise the LIVE dock's detach, because a test-case run never binds its
+  project into the window at all — that path is hand-verified. What is gated
+  here is that constructing, populating and destroying panes over a live
+  project, repeatedly, with metering active, leaves cleanly.
+-->
+<SActionScript version="1" name="mixer_close_teardown">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-send-lane sendName="Reverb"/>
+
+    <!-- Each of these builds a pane, populates every strip (each with a live
+         twLevelProbe bound to its track's root component) and destroys it. -->
+    <assert-mixer-pane strips="3"/>
+    <assert-mixer-pane track="Master" contains="role=master"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="60"
+                         maxCrushed="0" maxOverlap="0"/>
+
+    <!-- A gesture, so a strip's model connections are live when it dies. -->
+    <mixer-strip-toggle track="Master" control="mute" on="true"/>
+    <undo/>
+
+    <!-- Removing a track under the pane: the next seam call must rebuild
+         against the shorter model rather than a dangling STrack*. -->
+    <remove-track trackPath="1"/>
+    <assert-mixer-pane strips="2"/>
+
+    <!-- ...and the DEFERRED deletes actually run, so a strip that should have
+         died is gone rather than merely unreferenced (proposal 45's lesson:
+         processEvents() does not deliver DeferredDelete at loop level 0). -->
+    <drain-pending-deletes/>
+    <assert-mixer-pane strips="2"/>
+  </actions>
+</SActionScript>

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A MIXER GESTURE OBEYS THE ARRANGER'S BROADCAST RULE, WHICH IS ONE RULE AND
+  NOT TWO (proposal 48 M1, AC1.4 / D3).
+
+  THE RULE: only a gesture aimed INTO the selection broadcasts; a gesture aimed
+  at a lane OUTSIDE it acts on that lane alone. A mixer strip that toggled only
+  the strip clicked would be a SECOND rule, and the user would find out which
+  one they had touched by undoing. M0 extracted the target COMPUTATION to
+  `strackbroadcast::targetsFor` for exactly this milestone; what is deliberately
+  NOT extracted is the SUBMIT, because `objects/mixer` can reach neither
+  `stimeline::submitActive` nor the undo stack, and the three-line macro is
+  duplicated on purpose.
+
+  `mixer-strip-toggle` CLICKS THE REAL BUTTON and lets Qt deliver the signal,
+  so a missing connect() FAILS here rather than in somebody's session — the
+  property proposal 47 M5 established for the sends strip, and the reason a
+  widget can be gated where a context menu cannot.
+
+  WHAT THIS CANNOT ASSERT, and it is worth saying: the gesture and the
+  assertion after it run against DIFFERENT pane instances, because a
+  a test-case run never binds its project into the window (main.cpp calls
+  adoptCurrentProject() only when !testMode) and the seams therefore build a
+  pane on demand. So what is gated is the VERB PATH — the button's own signal
+  reaching the MODEL — never widget-state persistence across the two.
+  `send_strip_ui` has the identical limitation.
+-->
+<SActionScript version="1" name="mixer_broadcast">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <set-track-name trackPath="1" name="Beta"/>
+    <set-track-name trackPath="2" name="Gamma"/>
+
+    <!-- ============ AIMED OUTSIDE THE SELECTION: THAT LANE ALONE ====== -->
+    <!-- Nothing is selected, so Alpha's mute button mutes Alpha and only
+         Alpha. A broadcast here would be the rule inverted. -->
+
+    <mixer-strip-toggle track="Alpha" control="mute" on="true"/>
+    <assert-mixer-pane track="Alpha" contains="mute=1"/>
+    <assert-mixer-pane track="Beta"  contains="mute=0"/>
+    <assert-mixer-pane track="Gamma" contains="mute=0"/>
+    <undo/>
+    <assert-mixer-pane track="Alpha" contains="mute=0"/>
+
+    <!-- ============ AIMED INTO A MULTI-SELECTION: ALL OF IT ========== -->
+    <!-- Two tracks selected, the gesture aimed at one of them. Every target
+         is driven to the PRESSED state, and it is ONE undo step. -->
+
+    <select-track trackPath="0"/>
+    <select-track trackPath="2" modifiers="ctrl"/>
+    <mixer-strip-toggle track="Alpha" control="mute" on="true"/>
+    <assert-mixer-pane track="Alpha" contains="mute=1"/>
+    <assert-mixer-pane track="Gamma" contains="mute=1"/>
+    <assert-mixer-pane track="Beta"  contains="mute=0"/>
+
+    <!-- ONE undo step for the whole broadcast: the macro, not three actions. -->
+    <undo/>
+    <assert-mixer-pane track="Alpha" contains="mute=0"/>
+    <assert-mixer-pane track="Gamma" contains="mute=0"/>
+
+    <!-- ============ AIMED OUTSIDE, WITH A SELECTION STANDING ========= -->
+    <!-- Beta is not in the selection, so it acts alone even though two other
+         tracks are selected. This is the half a naive implementation gets
+         wrong: it is not "is anything selected", it is "is the CLICKED lane
+         in the selection". -->
+
+    <mixer-strip-toggle track="Beta" control="mute" on="true"/>
+    <assert-mixer-pane track="Beta"  contains="mute=1"/>
+    <assert-mixer-pane track="Alpha" contains="mute=0"/>
+    <assert-mixer-pane track="Gamma" contains="mute=0"/>
+    <undo/>
+
+    <!-- ============ SOLO AND ARM TAKE THE SAME PATH ================== -->
+
+    <mixer-strip-toggle track="Alpha" control="solo" on="true"/>
+    <assert-mixer-pane track="Alpha" contains="solo=1"/>
+    <assert-mixer-pane track="Gamma" contains="solo=1"/>
+    <undo/>
+    <assert-mixer-pane track="Alpha" contains="solo=0"/>
+  </actions>
+</SActionScript>

@@ -88,6 +88,8 @@
 #include "app/eventui/svirtualkeyboarddock.h"
 #include "app/media/smediadrop.h"
 #include "app/mediabrowser/smediabrowserpanel.h"
+#include "app/mixerui/smixerpane.h"
+#include "app/mixerui/smixerstrip.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
@@ -155,6 +157,7 @@ void SMainWindow::destroyDocksToolbars()
     detachTrackDetail();
     detachClipProperties();
     detachEventEditor();
+    detachMixerPane();
 }
 
 void SMainWindow::attachTrackDetail()
@@ -175,6 +178,113 @@ void SMainWindow::attachTrackDetail()
     trackDetailConn_ = connect( mixer, &SStdMixer::selectedTrackChanged,
                                 trackDetailPanel_, &STrackDetailPanel::setTrack );
     trackDetailPanel_->setTrack( mixer->getSelectedTrack() );
+}
+
+// PROPOSAL 48 D12 -- THE PANE FOLLOWS THE ACTIVE TAB'S ROOT, so what it shows
+// and what `stimeline::submitActive` stamps on the action are the same
+// arrangement. A pane that showed the master while the user worked in a
+// second tab would broadcast over the wrong selection and resolve its paths
+// against the wrong tree; this repository has already shipped that bug once
+// (`SClearSelectionAction` honours `pathRoot_` and the convenience helper did
+// not set one, so Ctrl+Shift+A cleared the master's selection from any tab).
+// --- the mixer pane's TEST SEAMS (proposal 48 M1) -------------------------
+// The verbs are in `app/testkit`, which may not include `app/mixerui`; the
+// measurement therefore lives here, as `describeTrackDetailLayout` and
+// `describeSendStrip` already do.
+
+// EVERY SEAM BELOW BUILDS ITS OWN PANE, and that is forced rather than
+// chosen. A `--test-case` run NEVER BINDS ITS PROJECT INTO THE WINDOW:
+// `SActionRunner` builds it straight on `SApplication`, and `main.cpp` calls
+// `adoptCurrentProject()` only when `!testMode` (its own comment says so).
+// So `mixerPane_` is empty for the whole of a scripted run, and a seam that
+// read it would measure nothing and report `strips=0` forever. This is the
+// same reason `describeTrackDetailLayout` and `describeSendStrip` construct
+// an `STrackDetailPanel` of their own instead of reading the live dock.
+//
+// CONSEQUENCE TO KNOW RATHER THAN REDISCOVER: a gesture and the assertion
+// after it run against DIFFERENT pane instances, so what is gated is the VERB
+// PATH -- the button's own signal reaching the model -- and never the
+// persistence of widget state across the two. `send_strip_ui` has the
+// identical limitation and it is the honest one: the model is the thing both
+// mounts must agree about.
+SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) const
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return nullptr;
+    // An EMPTY name is the master, exactly as `SAction::pathRoot()` reads it.
+    SObject *root = arrangement.isEmpty()
+                        ? splacements::rootContainer( proj )
+                        : splacements::rootNamed( proj, arrangement );
+    if( !root ) return nullptr;
+    SMixerPane *pane = new SMixerPane( nullptr );
+    pane->setRoot( root, arrangement );
+    return pane;
+}
+
+QString SMainWindow::describeMixerPane( const QString &arrangement ) const
+{
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
+    return pane ? pane->describe() : QString();
+}
+
+QString SMainWindow::describeMixerStrip( const QString &trackName,
+                                        const QString &arrangement ) const
+{
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
+    if( !pane ) return QString();
+    SMixerStrip *strip = pane->stripForTrackNamed( trackName );
+    return strip ? strip->describe() : QString();
+}
+
+bool SMainWindow::mixerStripToggle( const QString &trackName,
+                                    const QString &control, bool on,
+                                    const QString &arrangement )
+{
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
+    if( !pane ) return false;
+    SMixerStrip *strip = pane->stripForTrackNamed( trackName );
+    if( !strip ) return false;
+    // The button's own click submits the real action, which reaches the MODEL
+    // -- so the next assertion, on a fresh pane, sees it.
+    return strip->driveControl( control, on );
+}
+
+void SMainWindow::attachMixerPane()
+{
+    QObject::disconnect( mixerRootConn_ );
+    mixerRootConn_ = QMetaObject::Connection();
+    if( !mixerPane_ ) return;
+    SObject *root = nullptr;
+    if( SViewTabs *tabs = viewTabs() ) {
+        mixerRootConn_ = connect( tabs, &SViewTabs::activeRootChanged,
+                                  mixerPane_, [this]( SObject *r ) {
+                                      // The NAME travels with the root: it is
+                                      // what every action the pane submits is
+                                      // stamped with (D12).
+                                      SProject *p = SApplication::app().getCurrentProject();
+                                      mixerPane_->setRoot(
+                                          r, p ? p->arrangementNameOf( r ) : QString() );
+                                  } );
+        root = tabs->activeRoot();
+    }
+    // THE FALLBACK IS NOT BELT-AND-BRACES. The tabs exist from the
+    // constructor but have no ACTIVE ROOT until an editor is installed, and
+    // `attachMixerPane()` is called right after `installMasterEditor_()` on a
+    // path where that ordering is not guaranteed to have published one yet --
+    // so following the tabs alone left the pane empty for the whole session
+    // (measured: `strips=0` on a project with three tracks). The master root
+    // is the same arrangement the tabs would name.
+    if( !root )
+        if( SProject *proj = SApplication::app().getCurrentProject() )
+            root = splacements::rootContainer( proj );
+    mixerPane_->setRoot( root );
+}
+
+void SMainWindow::detachMixerPane()
+{
+    QObject::disconnect( mixerRootConn_ );
+    mixerRootConn_ = QMetaObject::Connection();
+    if( mixerPane_ ) mixerPane_->detachProject();
 }
 
 void SMainWindow::detachTrackDetail()
@@ -478,6 +588,7 @@ void SMainWindow::fileNew()
     linkEventEditorAxis();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
+    attachMixerPane();
     attachClipProperties();
     attachEventEditor();
 
@@ -550,6 +661,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     linkEventEditorAxis();
     SApplication::app().setCurrentProject( currentProject_ );
     attachTrackDetail();
+    attachMixerPane();
     attachClipProperties();
     attachEventEditor();
 
@@ -1710,6 +1822,19 @@ SMainWindow::SMainWindow()
     if( SApplication::app().isTestCaseMode() )
         qDockMediaBrowser_->hide();
 
+    // --- THE NINTH DOCK: the mixer pane (proposal 48 M1 / D10) -------------
+    // Bottom area, HIDDEN on a first run -- a mixer is not what a new user
+    // needs on screen before they have a track -- and thereafter placed
+    // entirely by `ui/windowState`, like every other dock. No settings key of
+    // its own for visibility.
+    qDockMixer_ = new QDockWidget( tr( "Mixer" ), this );
+    qDockMixer_->setObjectName( "dock_mixer" );
+    mixerPane_ = new SMixerPane( qDockMixer_ );
+    qDockMixer_->setWidget( mixerPane_ );
+    addDockWidget( Qt::BottomDockWidgetArea, qDockMixer_ );
+    tabifyDockWidget( qDockLog_, qDockMixer_ );
+    qDockMixer_->hide();
+
     // The FEEL FLOW PUPPET (proposal 40 M3e AC 5) -- the EIGHTH dock. Created
     // here in the ctor for the reason every dock above is (shell CONTRACT
     // inv. 4 fixes the restore order, and restoreState() can only place docks
@@ -1778,6 +1903,15 @@ SMainWindow::SMainWindow()
     // No shortcut in the MVP (design §B.4): every free Ctrl+Shift letter that
     // reads as "media" is already taken or ambiguous, and a binding nobody
     // chose is worse than none.
+    QAction *actMixer = qDockMixer_->toggleViewAction();
+    actMixer->setText( tr( "Mi&xer" ) );
+    // WINDOW-scoped, and checked against the two bindings that already own a
+    // bare letter: the event editor's Q (quantize) and the virtual keyboard's
+    // note keys. Ctrl+Shift+M collides with neither -- `fix/editor-ui-and-
+    // shortcuts` is the precedent for checking rather than assuming.
+    actMixer->setShortcut( QKeySequence( QStringLiteral( "Ctrl+Shift+M" ) ) );
+    viewMenu->addAction( actMixer );
+
     QAction *actMedia = qDockMediaBrowser_->toggleViewAction();
     actMedia->setText( tr( "&Media browser" ) );
     viewMenu->addAction( actMedia );
@@ -2702,6 +2836,7 @@ void SMainWindow::adoptCurrentProject()
     ensureArranger_();
     createDocksToolbars();
     attachTrackDetail();
+    attachMixerPane();
     attachClipProperties();
     attachEventEditor();
 
@@ -3174,7 +3309,44 @@ struct SDetailLayoutStats {
 // a 100 px floor hide a 400 px section — so the audit must not repeat it.
 int sHonestMinHeight( const QWidget *w )
 {
+    // A widget the author PINNED to a fixed height is not being crushed when
+    // it is shorter than its own sizeHint -- it is being given exactly what it
+    // asked for. `setFixedSize( 20, 20 )` on a QPushButton whose hint is 28 is
+    // the arranger track head's own idiom at Full density, and reporting the
+    // mixer's copy of it as 12 crushed widgets says nothing about a layout.
+    // What the check is FOR is a layout that could not honour a minimum, and
+    // for a pinned widget the author's number IS the minimum.
+    if( w->minimumHeight() > 0 && w->minimumHeight() == w->maximumHeight() )
+        return w->minimumHeight();
     return qMax( w->minimumHeight(), w->minimumSizeHint().height() );
+}
+
+// THE WIDTH TWIN (proposal 48 T11), and it is not symmetry for its own sake.
+// `sAuditLayout` compared HEIGHTS only, which was right for a vertical dock
+// and is BLIND to the axis a horizontal mixer pane fails on: a QHBoxLayout
+// handed less than its minimum WIDTH shrinks its children side by side and
+// they DO NOT OVERLAP, so a horizontally crushed pane reports
+// `crushed == 0, overlap == 0` and the gate passes over the defect. Shipping
+// the pane's layout gate on the height-only audit would have been this
+// repository's fourth gate sitting beside the layer its defect lives in
+// (proposal 39 M2, proposal 41 M5, fix/take-lane-domain).
+//
+// **IT ASKS THE LAYOUT, NOT THE WIDGET, AND THE ASYMMETRY WITH THE HEIGHT
+// CHECK IS DELIBERATE.** The first version compared every widget's own
+// `minimumSizeHint().width()` and immediately reported the Track Detail dock
+// as crushed: `SPluginEffectStrip`'s Edit button is `setMaximumWidth( 70 )`
+// against an 81 px hint. That is an author SQUEEZING a leaf on purpose -- a
+// too-narrow button clips its label and nothing else -- whereas a too-short
+// one in a vertical stack pushes its neighbours into each other, which is the
+// defect the height check exists for. So the width question is asked only of
+// widgets that CARRY A LAYOUT, where "handed less than the layout's minimum"
+// is exactly T11's sentence and has no benign reading. Returns 0 for a leaf,
+// which the caller skips.
+int sHonestMinWidth( const QWidget *w )
+{
+    QLayout *l = w->layout();
+    if( !l ) return 0;
+    return qMax( w->minimumWidth(), l->minimumSize().width() );
 }
 
 void sAuditLayout( QWidget *w, SDetailLayoutStats &st )
@@ -3188,9 +3360,21 @@ void sAuditLayout( QWidget *w, SDetailLayoutStats &st )
             if( minH > 0 && a->height() < minH ) {
                 ++st.crushed;
                 if( st.worst.isEmpty() )
-                    st.worst = QStringLiteral( "%1(%2<%3)" )
+                    st.worst = QStringLiteral( "%1(h %2<%3)" )
                                    .arg( a->metaObject()->className() )
                                    .arg( a->height() ).arg( minH );
+            }
+            // The WIDTH half (proposal 48 T11), containers only -- see
+            // `sHonestMinWidth`. Counted into the SAME `crushed` total: a
+            // crushed widget is a crushed widget, and a gate asserting
+            // `crushed == 0` should not have to name an axis.
+            const int minW = sHonestMinWidth( a );
+            if( minW > 0 && a->width() < minW ) {
+                ++st.crushed;
+                if( st.worst.isEmpty() )
+                    st.worst = QStringLiteral( "%1(w %2<%3)" )
+                                   .arg( a->metaObject()->className() )
+                                   .arg( a->width() ).arg( minW );
             }
             for( int j = i + 1; j < kids.size(); ++j ) {
                 if( a->geometry().intersects( kids.at( j )->geometry() ) ) {
@@ -3251,6 +3435,49 @@ void sSendDoubleClick( QWidget *target )
 }
 
 }  // namespace
+
+// THE LAYOUT GATE (AC1.7). A geometry relation, never a screenshot:
+// `screenshot` grabs the SCREEN's root window, blank under
+// QT_QPA_PLATFORM=offscreen, so it proves nothing about one widget's paint.
+// "This widget got less space than it needs" and "these two rectangles
+// intersect" are questions about QWidget::geometry(), which is the one class
+// of paint defect a headless run can measure directly.
+//
+// The pane is built OFF SCREEN and SETTLED: a widget that is not visible
+// never receives a resize event, and a QScrollArea lays out from its own
+// resizeEvent -- the tell that this was got wrong is IDENTICAL counts at two
+// different sizes.
+QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
+                                          int stripWidth )
+{
+    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( QString() ) );
+    if( !pane ) return QString();
+    for( int i = 0; i < pane->stripCount(); ++i )
+        if( SMixerStrip *s = pane->stripAt( i ) )
+            s->setNarrow( stripWidth <= SMixerStrip::NARROW_WIDTH );
+
+    sSettleLayout( pane.get(), paneWidth > 0 ? paneWidth : 640,
+                   paneHeight > 0 ? paneHeight : 260 );
+
+    SDetailLayoutStats st;
+    sAuditLayout( pane.get(), st );
+
+    // NAMED, never `findChild<QScrollArea *>()`: the pane holds N+1 of them
+    // (one per strip plus its own), and the first one found is whichever the
+    // object tree happens to yield (T11).
+    bool scrollNeeded = false;
+    if( QScrollArea *sa =
+            pane->findChild<QScrollArea *>( QStringLiteral( "mixerPaneScroll" ) ) )
+        scrollNeeded = sa->widget()
+                    && sa->widget()->width() > sa->viewport()->width();
+
+    return QStringLiteral(
+               "w=%1|h=%2|stripW=%3|crushed=%4|overlap=%5|scrollNeeded=%6|worst=%7" )
+        .arg( pane->width() ).arg( pane->height() ).arg( stripWidth )
+        .arg( st.crushed ).arg( st.overlap )
+        .arg( scrollNeeded ? 1 : 0 )
+        .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
+}
 
 QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
                                                 int w, int h )
