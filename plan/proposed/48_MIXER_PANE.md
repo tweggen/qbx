@@ -1002,6 +1002,26 @@ mask ignored on rebuild (`mixer_sections`), narrow never reaching the track
 (`mixer_narrow_strip`), and a new strip never reading the track's flag
 (`mixer_narrow_strip` again, by a different route).
 
+**Suite:** 375/375 passed, 412 s at `-j4`; 378 registered / 375 run / 3 Not Run
+(Disabled) — the macOS-only `au_*` trio.
+
+**ONE UNREPRODUCED FAILURE, named rather than buried.** The first full run
+after M2 landed showed `qxa.metronome_click_while_recording` failing with
+*"expected 0 click(s), found 8"* — its `ClickWhileRecording=false` phase
+reading true. It had passed in all three earlier full runs (M0's and M1's), so
+M2 is the delta and it deserves an explanation this milestone does not have.
+What is established: **5/5 in isolation**, **375/375 on the very next full
+run**, and **3/3 over the metronome + mixer neighbourhood at `-j4`** — 9 passes
+against the one failure. The plausible neighbour is that M2 adds one new INI
+writer, `mixer_sections`, to a suite whose INI-ownership convention CLAUDE.md
+already records as "the residual hazard, not the locking"; both cases are
+`RUN_SERIAL` and each restores its own key, so no mechanism has been
+demonstrated. Two mechanisms WERE considered and ruled out by reading: the
+pane does not make every process touch `SSettings` (`rebuildStrips()` is
+reached only through the seams in a scripted run, and the plugin scan
+instantiates `SSettings` in every process regardless). **Root cause not
+established; treat it as open.**
+
 **NOT gated:** the toolbar row of four section buttons itself — D9 puts them on
 the pane and M2 wires the mask they would write, but there is no verb for a
 toolbar any more than for a context menu, so the buttons are hand-verified and
