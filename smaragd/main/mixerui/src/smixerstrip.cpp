@@ -53,6 +53,9 @@ namespace {
 /// because a lane's HEIGHT is imposed by the arrangement, whereas a strip's
 /// width is the user's own two-state choice.
 constexpr int BTN        = 20;
+/// The header label's horizontal padding, in the stylesheet AND in the
+/// elision budget. One constant, because the two must agree exactly.
+constexpr int NAME_PAD_PX = 2;
 constexpr int BTN_NARROW = 16;
 
 }  // namespace
@@ -267,8 +270,9 @@ void SMixerStrip::applyHeaderColor_()
                                                      : QColor( 235, 235, 235 );
     nameLabel_->setAutoFillBackground( true );
     nameLabel_->setStyleSheet(
-        QStringLiteral( "QLabel { background:%1; color:%2; padding:1px 2px; }" )
-            .arg( headerColor_.name(), fg.name() ) );
+        QStringLiteral( "QLabel { background:%1; color:%2; padding:1px %3px; }" )
+            .arg( headerColor_.name(), fg.name() )
+            .arg( NAME_PAD_PX ) );
 }
 
 // PROPOSAL 48 D12 -- THE STRIP STAMPS ITS OWN ARRANGEMENT, never
@@ -621,7 +625,14 @@ void SMixerStrip::setSectionsVisible( bool inserts, bool sends,
     // the full name stays in the tooltip and in describe().
     if( nameLabel_ ) {
         const QString full = track_ ? track_->getSName() : QString();
-        const int avail = qMax( 8, w - 16 - 3 * pad );   // less the toggle button
+        // Less the toggle button AND the header's own colour padding. That
+        // padding is not decoration accounting: AC4.3 tints the label with a
+        // stylesheet, and a QLabel's minimum width is its text PLUS its
+        // padding -- so forgetting the 4 px here put the NARROW strip's own
+        // layout minimum at 61 against the 60 D9 names, reported as
+        // `SMixerStrip(w 60<61)` by three cases at once. The same class of
+        // Qt floor M1 paid four times over.
+        const int avail = qMax( 8, w - 16 - 3 * pad - 2 * NAME_PAD_PX );
         nameLabel_->setMaximumWidth( avail );
         nameLabel_->setText(
             nameLabel_->fontMetrics().elidedText( full, Qt::ElideRight, avail ) );
