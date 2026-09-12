@@ -135,8 +135,13 @@ void SSMVMixerControl::applyVolume_( double newVolume )
  * the event just died in the head (QWidget's default ignores it, and the column
  * viewport is not in the canvas' parent chain).
  *
- * The fader is the one exception: it accepts the wheel itself (1.0 dB per
- * notch, see its singleStep), so those events never reach here.
+ * The fader is the one exception: it accepts the wheel itself, and since
+ * proposal 48 AC4.4 a notch really is 1.0 dB -- see the Wheel branch in
+ * eventFilter() below and `sFaderWheelValue()`. This comment used to say "see
+ * its singleStep", which was wrong from the day it was written: the curve is
+ * non-linear, so ten slider units are a tenth of the travel's dB span only
+ * nominally, and QAbstractSlider multiplies the step by wheelScrollLines() as
+ * well.
  */
 void SSMVMixerControl::wheelEvent( QWheelEvent *ev )
 {
@@ -181,6 +186,21 @@ bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
             }
             return true;   // never let QAbstractSlider touch the fader's value
         }
+    }
+    // ONE NOTCH IS ONE dB, in BOTH mounts (proposal 48 AC4.4). Filtered here
+    // rather than left to QAbstractSlider, whose own wheel handling is
+    // `wheelScrollLines() * singleStep` in SLIDER units -- which on this
+    // curve is between ~1.9 dB at unity and ~5 dB at -60. The step lives in
+    // `sfadercurve.h` so the mixer strip's fader cannot disagree with this one.
+    if( watched == qVolume_ && ev->type() == QEvent::Wheel ) {
+        QWheelEvent *we = static_cast<QWheelEvent *>( ev );
+        const int notches = we->angleDelta().y() / 120;
+        if( notches != 0 ) {
+            const int next = sFaderWheelValue( qVolume_->value(), notches );
+            if( next != qVolume_->value() )
+                qVolume_->setValue( next );   // its own signal commits
+        }
+        return true;      // never let the slider apply its own step as well
     }
     if( watched == qVolume_ && ev->type() == QEvent::MouseButtonDblClick ) {
         QMouseEvent *me = static_cast<QMouseEvent *>( ev );

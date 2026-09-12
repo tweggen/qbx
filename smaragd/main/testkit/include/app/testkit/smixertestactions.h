@@ -172,4 +172,34 @@ private:
     double  value_   = 0.0;
 };
 
+
+/// `mixer-strip-menu` — run ONE of the strip context menu's track commands
+/// (proposal 48 AC4.2): `remove-track`, `group-track`, `ungroup-track`.
+///
+/// **This is not a menu verb and this repo has none.** It calls
+/// `SMixerStrip::runMenuCommand()`, which is exactly what the menu item's own
+/// lambda calls — the same discipline proposal 41 M2 settled on for the
+/// arranger's pack/unpack items. The popup, the labels and the enabled states
+/// stay hand-verified. The command's BODY is `strackgestures`, shared with the
+/// arranger's own menu, and the strip's submitter stamps its arrangement (D12).
+class SMixerStripMenuAction : public SAction
+{
+public:
+    SMixerStripMenuAction() {}
+    SApplyResult apply( SProject *project ) override;
+    QString name() const override
+    { return QStringLiteral( "mixer-strip-menu" ); }
+    QStringList knownAttributes() const override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString track_;
+    QString arrangement_;
+    QString command_;
+    /// `false` asserts the command is REFUSED — a system lane offers none of
+    /// them, and a refusal that happens by accident is not gated by hoping.
+    bool    expect_ = true;
+};
+
 #endif // SMIXERTESTACTIONS_H

@@ -3,6 +3,7 @@
 
 #include <functional>
 
+#include <QColor>
 #include <QPointer>
 #include <QString>
 #include <QWidget>
@@ -92,6 +93,20 @@ public:
     bool driveValue( const QString &control, const QString &gesture,
                      double value );
 
+    /// THE THREE TRACK-STRUCTURE COMMANDS the strip's context menu offers
+    /// (proposal 48 AC4.2): `remove-track`, `group-track`, `ungroup-track`.
+    /// The MENU ITEM calls exactly this, so a test that drives the command
+    /// drives the item's own code path -- which is as close as this repo gets
+    /// to gating a context menu, and it is what proposal 41 M2 and 45 already
+    /// settled for. Returns false for an unknown command or an empty target
+    /// list; the menu greys those out rather than offering them.
+    bool runMenuCommand( const QString &command );
+
+    /// The strip header's colour, resolved through `sclipcolors` from the
+    /// PROJECT root -- the same call `sClipBodyOf()` makes for the arranger's
+    /// own pixel gates, so the two mounts cannot disagree (AC4.3).
+    QColor headerColor() const;
+
     /// Drop every reference into the project: the track, the probe's tap and
     /// the two mounted widgets. Called from the pane's `detachProject()`
     /// (CONTRACT inv. 4 / D13) BEFORE the project is deleted.
@@ -102,6 +117,13 @@ public:
     /// (CONTRACT inv. 5). Returns true when it did probe work, which is what
     /// the pane's counter counts.
     bool onMeterTick( offset_t pos, qint64 nowMs, bool live );
+
+protected:
+    /// ONE WHEEL NOTCH IS ONE dB over the fader (AC4.4). Filtered rather than
+    /// left to QAbstractSlider, whose own wheel step is in SLIDER units.
+    bool eventFilter( QObject *watched, QEvent *ev ) override;
+    void contextMenuEvent( QContextMenuEvent *ev ) override;
+
 
 private slots:
     void onFaderMoved( int value );
@@ -127,6 +149,7 @@ private:
                      const std::function<void( STrack * )> &submitOne );
     void pumpReadValue_( offset_t pos );
     int  syncMeterLanes_();
+    void applyHeaderColor_();
 
     QPointer<SStdMixer> mixer_;
     QString             rootName_;
@@ -150,6 +173,7 @@ private:
     SLevelMeter *meter_       = nullptr;
 
     twLevelProbe probe_;
+    QColor       headerColor_;
 
     bool narrow_          = false;
     bool showInserts_     = true;

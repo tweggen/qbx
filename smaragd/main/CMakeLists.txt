@@ -356,6 +356,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/sobjecttreeview.h
     timeline/include/app/timeline/ssmvmixercontrol.h
     timeline/include/app/timeline/ssubmit.h
+    timeline/include/app/timeline/strackgestures.h
     timeline/include/app/timeline/sstdmixerview.h
     timeline/include/app/timeline/strackdetailpanel.h
     timeline/include/app/timeline/ssendstrip.h
@@ -375,6 +376,7 @@ set(APP_UI_FILES
     timeline/src/sobjecttreeview.cpp
     timeline/src/ssmvmixercontrol.cpp
     timeline/src/ssubmit.cpp
+    timeline/src/strackgestures.cpp
     timeline/src/sstdmixerview.cpp
     timeline/src/strackdetailpanel.cpp
     timeline/src/slevelmeter.cpp
