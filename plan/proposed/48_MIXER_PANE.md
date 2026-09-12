@@ -1309,6 +1309,16 @@ bites nothing is a claim about the SABOTAGE first and the gate second**, and
 the cheap way to tell them apart is to assert the anchor inside the patch, as
 the corrected S6 does.
 
+**A HARD FAILURE HID BEHIND A KNOWN FLAKE FOR ONE FULL-SUITE RUN.**
+`mixer-strip-menu`'s `readXml` refuses an empty `track`/`command`, so
+`action_roundtrip_test` could not build one and failed — reporting
+`Exit code 0xc0000374`, which CLAUDE.md records as that test's INTERMITTENT
+heap-corruption flake (7 in 30 on `main`). The suite's one failure was exactly
+the failure the notes tell you to expect. Looping it said **12 of 12**, which
+7-in-30 is not; the fixture and the accept/refuse row fixed it and the same box
+then read 11 of 12. **A named flake is a reason to measure the rate, not a
+reason to move on** — the two answers are one `for` loop apart.
+
 **The harness refused a dirty tree once, mid-pass, exactly as it is meant to** —
 an uncommitted `docs/ACTIONS.md` edit made while the sabotages were running.
 That guard exists because this command has destroyed verified work three times
@@ -1317,8 +1327,13 @@ in this repository.
 **NOT gated by M4, beyond the proposal's standing list:** the menu POPUP, its
 labels and its enabled states (there is no menu verb in this repository, and
 what is gated is the command each item calls); the ARRANGER's own three menu
-items after the extraction — they call the identical function, and no headless
-route reaches `SStdMixerView`'s context menu; indent and outdent from a mixer
+item after the extraction — `ctRemoveTrack` has no headless route at all
+(only the context menu reaches it), while `ctGroupTrack` and
+`ctUngroupTrack` DO: the `group-track` / `ungroup-track` testkit verbs call
+them directly and seven existing cases exercise them
+(`group_nested_track`, `multitrack_selection`, `instrument_folder_drums`,
+`midi_folder_feed`, `midi_out_offset_and_folder`, `midi_out_render_silent`,
+`track_head_density`), all green across the extraction; indent and outdent from a mixer
 strip (not offered, for the reason the table above gives); the wheel over the
 ARRANGER head's fader (the step is shared, but no case drives that widget's
 wheel); and pixels, as everywhere in this proposal — nothing here says the
