@@ -18,7 +18,7 @@ Invariants:
 > `.qxa` case headers and code comments all cite these by bare number, so a
 > renumber silently redirects every one of them. **Document order is therefore
 > not number order, and that is deliberate — allocate the next free number
-> (currently 64), append, and do not tidy.**
+> (currently 67), append, and do not tidy.**
 >
 > Numbers 23-37 were each issued TWICE between 2026-08-20 and 2026-09-06: the
 > `### inv. N` heading block restarted at 24 while the plain list already ran to
@@ -1578,3 +1578,68 @@ lives on the track.
 **It rebuilds on a TRACK switch, not on a send-lane change.** Adding or
 removing a send lane while the dock is open does not re-row the strip; that is
 a known gap, not a design decision.
+
+### inv. 64 — THE LANE WALK IS `slaneorder::flattenTrackLanes`, AND THE ARRANGER IS ONE OF ITS CALLERS (proposal 48 M0)
+
+`SStdMixerView::rebuildRows()` no longer walks the tree itself. The ONE
+flattened lane walk lives in `app/objects/mixer/slaneorder.h`, parameterised by
+fold, hidden and how much of the system tail to include, and the arranger
+passes the options that reproduce exactly what it did before. The MIXER PANE
+passes different ones (`SMixerPane::walkOptions()` — fold IGNORED, the master
+always shown), and that difference is a decision recorded in
+`main/mixerui/CONTRACT.md` inv. 1-2 rather than an accident of two walks
+drifting.
+
+**The reason it had to be extracted BEFORE a second mount existed** is this
+repository's own history: the meter and the ear disagreed about a nested lane,
+paint and hit-test disagreed about z-order for two whole milestones, the
+loop-marker geometry and the take-lane body fill each shipped as two spellings
+of one rule. Proposal 45 M0 split `isPathContainer()` from `isLane()` the same
+way and for the same reason.
+
+**D3a's "a track with no visible lane sorts LAST" is PRESERVED, not inherited.**
+Before M0 the order came from `rowIndexOfTrack()`, which answers −1 for a track
+with no row — so the behaviour was an artifact of the view's row list. It is
+reproduced deliberately in `strackbroadcast::orderByLane`, and `laneorder_test`
+asserts it over a multi-selection spanning a COLLAPSED folder, the one shape
+that can tell the two orders apart and the one shape nothing in the qxa suite
+covers.
+
+### inv. 65 — WHICH TRACKS A GESTURE ACTS ON IS `strackbroadcast::targetsFor` (proposal 48 M0 / D3)
+
+*Only a gesture aimed INTO the selection broadcasts; a gesture aimed at a lane
+outside it acts on that lane alone.* The head's mute, solo, arm, edit-group,
+track input, monitor mode and automation mode all commit over that list, and so
+does every mixer strip. A second mount that toggled only the strip clicked
+would be a SECOND rule, and the user would find out which one they had touched
+by undoing.
+
+**What deliberately does NOT extract is the SUBMIT.** `objects/mixer` can reach
+neither `stimeline::submitActive` nor the app's undo stack, and widening
+`SAppContext` for one convenience was rejected; the three-line macro wrapper is
+duplicated on purpose at each mount. What may never be duplicated is the target
+computation.
+
+### inv. 66 — REMOVE / GROUP / UNGROUP ARE `strackgestures`, AND A FADER'S WHEEL STEP IS `sfadercurve.h` (proposal 48 M4)
+
+Two more shared spellings, both of them for the same reason as 64 and 65.
+
+`app/timeline/strackgestures.h` holds the three track-STRUCTURE gestures with
+the submitter injected, so the arranger's own `ctRemoveTrack` / `ctGroupTrack` /
+`ctUngroupTrack` and the mixer strip's context menu run one body and stamp
+different roots (D12). **The rest of the head menu is not shareable and the
+header says why, measured rather than asserted**: indent and outdent resolve the
+preceding sibling through `rowIndexOfTrack()` / `rowAt()` — the arranger's
+visible ROW list, which a mixer does not have — take lanes / lane height / the
+automation picker are row concepts outright, "create asset from range" needs the
+ruler RANGE and "insert sample" a click POSITION.
+
+`sFaderWheelValue()` makes ONE WHEEL NOTCH ONE dB, and both faders filter
+`QEvent::Wheel` to use it. `QAbstractSlider`'s own handling is
+`wheelScrollLines() * singleStep` in SLIDER units, and the curve is `x^0.5`, so
+a slider unit is a tenth of a dB only nominally: a notch was ~1.9 dB at unity
+and ~5 dB at −60. **`SSMVMixerControl::wheelEvent`'s comment claimed 1.0 dB per
+notch and had been wrong since it was written** — the fix makes the comment
+true rather than deleting it. The stall guard in that function is load-bearing:
+−96 dB and −95 dB round to the same slider value, so a pure dB round trip would
+leave a notch at the bottom of the range moving nothing at all.
