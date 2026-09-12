@@ -77,7 +77,10 @@ public:
     /// M1 wires the plumbing and always passes every section.
     void setSectionsVisible( bool inserts, bool sends, bool meter, bool fader );
 
-    /// `name=…|narrow=…|mute=…|solo=…|arm=…|db=…|role=…|inserts=…|sends=…|meter=…`
+    /// `name=|narrow=|mute=|solo=|arm=|db=|role=|faderDb=|inserts=|sends=
+    /// |compact=|live=|color=|meter=` — where `db` is the MODEL's volume and
+    /// `faderDb` the WIDGET's position (a Read-family lane moves one without
+    /// the other), and `color` is AC4.3's resolved header colour.
     QString describe() const;
 
     /// Drive a control the way a HAND would: `mute` / `solo` / `arm` click the

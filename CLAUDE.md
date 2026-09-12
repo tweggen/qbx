@@ -523,6 +523,15 @@ memory-pressure artifact. Root cause NOT established; treat it as open. Note
 that a run can also exit **127** with no output at all, which is the same
 failure wearing a different hat — do not read 127 as "binary missing".
 
+**AND IT IS A GOOD PLACE TO HIDE A REAL FAILURE, which it did on 2026-09-12.**
+Proposal 48 M4 added a verb whose `readXml` refuses an empty required
+attribute, and the round-trip harness could not build one — so the test failed
+**12 of 12**, reporting the SAME `Exit code 0xc0000374` this row tells you to
+expect. One full-suite run looked exactly like the known flake. **A flake this
+row names is a reason to MEASURE the rate, never a reason to move on**: 12 of
+12 is not 7 of 30, and the two are one `for` loop apart. After the fixture
+landed the same box read 11 of 12.
+
 They are not a `-j` problem: they appeared in the **serial** run and both passed
 in the green `-j4` and `-j8` runs. Neither reproduces in isolation —
 `split_plain_screenshot` 80/80 (including 25 with `SMARAGD_SIDECAR_DIR=off`) and
@@ -2973,9 +2982,10 @@ no verb for a toolbar any more than for a context menu, so the buttons are
 hand-verified and the cases drive `set-option` and `mixer-strip-toggle`
 instead — and the same for the strip's own CONTEXT MENU, whose popup, labels
 and enabled states are hand-verified while `mixer-strip-menu` drives the
-command each item calls. The ARRANGER's own remove / group / ungroup items
-after M4's extraction: they call the identical function and no headless route
-reaches `SStdMixerView`'s context menu. INDENT and OUTDENT from a mixer strip,
+command each item calls. The ARRANGER's own REMOVE item after M4's
+extraction — `ctRemoveTrack` is reachable only from the context menu, while
+`ctGroupTrack` / `ctUngroupTrack` have the `group-track` / `ungroup-track`
+gesture verbs and seven existing cases behind them. INDENT and OUTDENT from a mixer strip,
 which are not offered at all. Repaint cost with many strips (measured in no
 milestone: M3's meters were gated by counter, not by clock). A send lane's own strip (`SystemLanes::All` has no caller). Hiding a USER
 lane from a script, which `set-lane-hidden` refuses by design — that rule is
