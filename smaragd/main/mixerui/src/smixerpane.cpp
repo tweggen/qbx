@@ -6,6 +6,7 @@
 #include <QStringList>
 
 #include "app/mixerui/smixerstrip.h"
+#include "app/shell/sapplication.h"
 #include "app/objects/mixer/slaneorder.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/sproject.h"
@@ -44,9 +45,38 @@ SMixerPane::SMixerPane( QWidget *parent ) : QWidget( parent )
     masterLayout_->setContentsMargins( 0, 0, 0, 0 );
     masterLayout_->setSpacing( 0 );
     outer->addWidget( masterHost_, 0 );
+
+    connect( &SApplication::app(), &SApplication::meterTick,
+             this, [this]( offset_t pos, qint64 nowMs, bool live ) {
+                 onMeterTick( pos, nowMs, live );
+             } );
 }
 
 SMixerPane::~SMixerPane() = default;
+
+// The app BROADCASTS and the PANE connects once, rather than every strip
+// connecting itself. Two reasons, and the first is a contract:
+//
+//  - inv. 5 requires the DOCK gate to be answered before the model walk, and a
+//    gate inside each strip has already walked by the time it runs;
+//  - one connection instead of N, dropped when the pane dies rather than N
+//    times as strips are rebuilt.
+int SMixerPane::onMeterTick( offset_t pos, qint64 nowMs, bool live )
+{
+    // THE DOCK GATE. `isHidden()` rather than `!isVisible()`, deliberately: a
+    // widget whose window has never been shown is not "visible" either, and in
+    // a --test-case run NOTHING is — so `!isVisible()` would make this return
+    // for every scripted run and the meters would be ungateable. `isHidden()`
+    // asks the question that was actually meant: has somebody hidden it.
+    if( isHidden() ) return 0;
+
+    int worked = 0;
+    for( SMixerStrip *s : strips_ )
+        if( s->onMeterTick( pos, nowMs, live ) ) ++worked;
+    if( masterStrip_ && masterStrip_->onMeterTick( pos, nowMs, live ) ) ++worked;
+    tickWork_ += worked;
+    return worked;
+}
 
 void SMixerPane::clearStrips_()
 {
@@ -199,10 +229,11 @@ QString SMixerPane::describe() const
         names << ( s->track() ? s->track()->getSName() : QStringLiteral( "?" ) );
     if( masterStrip_ && masterStrip_->track() )
         names << masterStrip_->track()->getSName();
-    return QStringLiteral( "strips=%1|master=%2|sections=%3|names=%4" )
+    return QStringLiteral( "strips=%1|master=%2|sections=%3|tickWork=%4|names=%5" )
         .arg( strips_.size() + ( masterStrip_ ? 1 : 0 ) )
         .arg( masterStrip_ ? 1 : 0 )
         .arg( sectionsMask() )
+        .arg( tickWork_ )
         .arg( names.join( QLatin1Char( ',' ) ) );
 }
 

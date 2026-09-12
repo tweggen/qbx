@@ -418,12 +418,23 @@ public:
     /// may include `app/timeline` — so the MEASUREMENT lives here, exactly as
     /// `describeTrackDetailLayout` / `describeSendStrip` already do.
     SMixerPane *buildScratchMixerPane( const QString &arrangement ) const;
+    /// One persistent test pane per arrangement — see the definition for why
+    /// M3 needed them to outlive a single verb. Mutable because the describe
+    /// seams are const and this is a cache, not state the window exposes.
+    mutable QHash<QString, SMixerPane *> testPanes_;
     QString describeMixerPane( const QString &arrangement = QString() ) const;
     QString describeMixerStrip( const QString &trackName,
                                 const QString &arrangement = QString() ) const;
     QString describeMixerLayout( int paneWidth, int paneHeight, int stripWidth );
     bool    mixerStripToggle( const QString &trackName, const QString &control,
                               bool on, const QString &arrangement = QString() );
+    bool    mixerStripSet( const QString &trackName, const QString &control,
+                           const QString &gesture, double value,
+                           const QString &arrangement = QString() );
+    /// Drive ONE meter tick over the pane for `arrangement`. Returns the number
+    /// of strips that did probe work, or -1 when there is no pane.
+    int     mixerMeterTick( const QString &arrangement, offset_t position,
+                            qint64 nowMs, bool live, bool requestPages );
     bool    driveSendStrip( const QString &trackPath, const QString &lane,
                             const QString &control, double value );
 

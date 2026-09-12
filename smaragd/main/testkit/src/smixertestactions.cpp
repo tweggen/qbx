@@ -231,3 +231,110 @@ static const bool s_reg_mixer_strip_toggle = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "mixer-strip-toggle" ),
         []{ return new SMixerStripToggleAction; } ), true );
+
+// --- mixer-meter-tick -------------------------------------------------------
+
+SApplyResult SMixerMeterTickAction::apply( SProject *project )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) { qWarning() << "mixer-meter-tick: no main window"; return { false, nullptr }; }
+    if( !project ) { qWarning() << "mixer-meter-tick: no project"; return { false, nullptr }; }
+
+    // A monotonically advancing clock, because the ballistics are driven by
+    // wall-clock dt and two ticks at the SAME nowMs decay by nothing. Handing
+    // the case a default that always moves forward is what keeps a decay
+    // assertion (AC3.3) from depending on how fast the box ran the script.
+    static qint64 s_fakeNow = 0;
+    const qint64 now = nowMs_ >= 0 ? nowMs_ : ( s_fakeNow += 100 );
+
+    const int worked =
+        win->mixerMeterTick( arrangement_, position_, now, live_, requestPages_ );
+    if( worked < 0 ) {
+        qWarning() << "mixer-meter-tick FAILED: no pane for arrangement"
+                   << arrangement_;
+        return { false, nullptr };
+    }
+    qDebug() << "mixer-meter-tick: OK -" << worked << "strip(s) worked at"
+             << (long long) position_ << "live" << live_;
+    return { true, nullptr };
+}
+
+QStringList SMixerMeterTickAction::knownAttributes() const
+{
+    return { QStringLiteral( "arrangement" ), QStringLiteral( "position" ),
+             QStringLiteral( "live" ), QStringLiteral( "requestPages" ),
+             QStringLiteral( "nowMs" ) };
+}
+
+void SMixerMeterTickAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "arrangement", arrangement_ );
+    elem.setAttribute( "position", (qlonglong) position_ );
+    elem.setAttribute( "live", live_ ? "true" : "false" );
+    elem.setAttribute( "requestPages", requestPages_ ? "true" : "false" );
+    elem.setAttribute( "nowMs", (qlonglong) nowMs_ );
+}
+
+bool SMixerMeterTickAction::readXml( const QDomElement &elem, int )
+{
+    arrangement_  = elem.attribute( "arrangement", QString() );
+    position_     = (offset_t) elem.attribute( "position", "0" ).toLongLong();
+    live_         = elem.attribute( "live", "true" ) == QLatin1String( "true" );
+    requestPages_ = elem.attribute( "requestPages", "true" ) == QLatin1String( "true" );
+    nowMs_        = elem.attribute( "nowMs", "-1" ).toLongLong();
+    return true;
+}
+
+// --- mixer-strip-set --------------------------------------------------------
+
+SApplyResult SMixerStripSetAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) { qWarning() << "mixer-strip-set: no main window"; return { false, nullptr }; }
+    if( !win->mixerStripSet( track_, control_, gesture_, value_, arrangement_ ) ) {
+        qWarning() << "mixer-strip-set FAILED:" << track_ << control_
+                   << gesture_ << value_;
+        return { false, nullptr };
+    }
+    qDebug() << "mixer-strip-set: OK -" << track_ << control_ << gesture_ << value_;
+    // A GESTURE verb: no undo step of its own. During an open automation pass
+    // the control's handler submits NOTHING at all (the recorder takes the
+    // value), which is exactly what AC3a.1 asserts by counting undo entries.
+    return { true, nullptr };
+}
+
+QStringList SMixerStripSetAction::knownAttributes() const
+{
+    return { QStringLiteral( "track" ), QStringLiteral( "arrangement" ),
+             QStringLiteral( "control" ), QStringLiteral( "gesture" ),
+             QStringLiteral( "value" ) };
+}
+
+void SMixerStripSetAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "track", track_ );
+    elem.setAttribute( "arrangement", arrangement_ );
+    elem.setAttribute( "control", control_ );
+    elem.setAttribute( "gesture", gesture_ );
+    elem.setAttribute( "value", value_ );
+}
+
+bool SMixerStripSetAction::readXml( const QDomElement &elem, int )
+{
+    track_       = elem.attribute( "track", QString() );
+    arrangement_ = elem.attribute( "arrangement", QString() );
+    control_     = elem.attribute( "control", "fader" );
+    gesture_     = elem.attribute( "gesture", "set" );
+    value_       = elem.attribute( "value", "0" ).toDouble();
+    return !track_.isEmpty();
+}
+
+static const bool s_reg_mixer_meter_tick = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "mixer-meter-tick" ),
+        []{ return new SMixerMeterTickAction; } ), true );
+
+static const bool s_reg_mixer_strip_set = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "mixer-strip-set" ),
+        []{ return new SMixerStripSetAction; } ), true );

@@ -90,6 +90,7 @@
 #include "app/mediabrowser/smediabrowserpanel.h"
 #include "app/mixerui/smixerpane.h"
 #include "app/mixerui/smixerstrip.h"
+#include "tw/pages/tw_output_page.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
@@ -207,6 +208,17 @@ void SMainWindow::attachTrackDetail()
 // persistence of widget state across the two. `send_strip_ui` has the
 // identical limitation and it is the honest one: the model is the thing both
 // mounts must agree about.
+// THE TEST PANE IS PERSISTENT SINCE M3, and that changes what the seams can
+// gate. M1 built a FRESH pane per call, because a `--test-case` run never
+// binds its project into the window (inv. 62) and the live `mixerPane_` is
+// therefore empty — but a pane that is destroyed before the next verb runs
+// cannot hold a METER READING, cannot accumulate a tick counter, and made
+// every per-pane view state (the narrow flag) unassertable. M3 needs all
+// three, so the seams now keep ONE pane per arrangement for the run.
+//
+// It is SHOWN with `WA_DontShowOnScreen`, which is what `sSettleLayout`
+// already does and what makes its layout run at all; without it a widget
+// never receives a resize event and a QScrollArea never lays out.
 SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) const
 {
     SProject *proj = SApplication::app().getCurrentProject();
@@ -216,31 +228,79 @@ SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) con
                         ? splacements::rootContainer( proj )
                         : splacements::rootNamed( proj, arrangement );
     if( !root ) return nullptr;
-    SMixerPane *pane = new SMixerPane( nullptr );
-    pane->setRoot( root, arrangement );
-    return pane;
+
+    SMixerPane *&slot = testPanes_[ arrangement ];
+    if( !slot ) {
+        slot = new SMixerPane( nullptr );
+        slot->setAttribute( Qt::WA_DontShowOnScreen, true );
+        slot->resize( 640, 260 );
+        slot->show();
+    }
+    // Re-root every time: a second `load-project` in one script gives the
+    // project a new root mixer, and a pane still holding the old one would
+    // answer from the PREVIOUS load (the shape inv. 60 records for the
+    // arranger).
+    slot->setRoot( root, arrangement );
+    return slot;
 }
 
 QString SMainWindow::describeMixerPane( const QString &arrangement ) const
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
+    SMixerPane *pane = buildScratchMixerPane( arrangement );
     return pane ? pane->describe() : QString();
 }
 
 QString SMainWindow::describeMixerStrip( const QString &trackName,
                                         const QString &arrangement ) const
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
+    SMixerPane *pane = buildScratchMixerPane( arrangement );
     if( !pane ) return QString();
     SMixerStrip *strip = pane->stripForTrackNamed( trackName );
     return strip ? strip->describe() : QString();
+}
+
+// ONE METER TICK over the test pane. It REQUESTS the pages first, exactly as
+// `assert-meter` does: `twLevelProbe` only READS frozen pages (getPageIfExists)
+// and never freezes, so without this a strip meter reads a miss on a project
+// nothing has rendered — and a case would be asserting the miss path by
+// accident. Requesting is the same call the arranger's own meter gate makes.
+int SMainWindow::mixerMeterTick( const QString &arrangement, offset_t position,
+                                 qint64 nowMs, bool live, bool requestPages )
+{
+    SMixerPane *pane = buildScratchMixerPane( arrangement );
+    if( !pane ) return -1;
+
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( requestPages && proj ) {
+        const length_t CAP = twOutputPage::FRAME_CAPACITY;
+        const offset_t pageStart = ( position / CAP ) * CAP;
+        for( int i = 0; i <= pane->stripCount(); ++i ) {
+            SMixerStrip *st = pane->stripAt( i );
+            if( !st || !st->track() ) continue;
+            if( auto tap = st->track()->getRootComponent() )
+                tap->requestPage( pageStart, nullptr, 0, CAP,
+                                  proj->getSRate(), nullptr );
+        }
+    }
+    return pane->onMeterTick( position, nowMs, live );
+}
+
+bool SMainWindow::mixerStripSet( const QString &trackName, const QString &control,
+                                 const QString &gesture, double value,
+                                 const QString &arrangement )
+{
+    SMixerPane *pane = buildScratchMixerPane( arrangement );
+    if( !pane ) return false;
+    SMixerStrip *strip = pane->stripForTrackNamed( trackName );
+    if( !strip ) return false;
+    return strip->driveValue( control, gesture, value );
 }
 
 bool SMainWindow::mixerStripToggle( const QString &trackName,
                                     const QString &control, bool on,
                                     const QString &arrangement )
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( arrangement ) );
+    SMixerPane *pane = buildScratchMixerPane( arrangement );
     if( !pane ) return false;
     SMixerStrip *strip = pane->stripForTrackNamed( trackName );
     if( !strip ) return false;
@@ -3450,17 +3510,17 @@ void sSendDoubleClick( QWidget *target )
 QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
                                           int stripWidth )
 {
-    std::unique_ptr<SMixerPane> pane( buildScratchMixerPane( QString() ) );
+    SMixerPane *pane = buildScratchMixerPane( QString() );
     if( !pane ) return QString();
     for( int i = 0; i < pane->stripCount(); ++i )
         if( SMixerStrip *s = pane->stripAt( i ) )
             s->setNarrow( stripWidth <= SMixerStrip::NARROW_WIDTH );
 
-    sSettleLayout( pane.get(), paneWidth > 0 ? paneWidth : 640,
+    sSettleLayout( pane, paneWidth > 0 ? paneWidth : 640,
                    paneHeight > 0 ? paneHeight : 260 );
 
     SDetailLayoutStats st;
-    sAuditLayout( pane.get(), st );
+    sAuditLayout( pane, st );
 
     // NAMED, never `findChild<QScrollArea *>()`: the pane holds N+1 of them
     // (one per strip plus its own), and the first one found is whichever the

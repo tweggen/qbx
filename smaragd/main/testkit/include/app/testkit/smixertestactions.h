@@ -5,6 +5,7 @@
 #include <QStringList>
 
 #include "app/actions/saction.h"
+#include "tw/core/twtypes.h"
 
 /**
  * The MIXER PANE verbs (proposal 48 M1).
@@ -91,6 +92,61 @@ private:
     QString arrangement_;
     QString control_ = QStringLiteral( "mute" );
     bool    on_      = true;
+};
+
+/// `mixer-meter-tick` — ONE meter tick, driven the way `SApplication::meterTick`
+/// drives one (proposal 48 M3).
+///
+/// **NO TRANSPORT.** `assert-meter` set the precedent: it requests the page
+/// covering the position and runs the production `twLevelProbe` directly, so
+/// the measurement is deterministic instead of racing a real playback run.
+/// This verb does the same and then enters at exactly the point the broadcast
+/// enters — `SMixerPane::onMeterTick` — so the dock gate, the audibility rule,
+/// the live-owned branch, the lane sync and the probe binding are all the
+/// production ones. A verb that pushed a level into the widget instead would
+/// gate none of them.
+class SMixerMeterTickAction : public SAction
+{
+public:
+    SMixerMeterTickAction() {}
+    SApplyResult apply( SProject *project ) override;
+    QString name() const override
+    { return QStringLiteral( "mixer-meter-tick" ); }
+    QStringList knownAttributes() const override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString  arrangement_;
+    offset_t position_    = 0;
+    bool     live_        = true;
+    bool     requestPages_ = true;
+    qint64   nowMs_       = -1;   ///< -1 = a monotonically advancing default
+};
+
+/// `mixer-strip-set` — drive one strip's VALUE control (proposal 48 M3a).
+///
+/// The twin of `mixer-strip-toggle` for things that carry a number. It moves
+/// the REAL fader and lets Qt deliver the signal, so `applyVolumeDb_`'s offer
+/// to `SAutomationRecorder` is on the path — which is the whole of AC3a.1.
+/// `gesture="double-click"` takes the reset route instead (AC3a.3).
+class SMixerStripSetAction : public SAction
+{
+public:
+    SMixerStripSetAction() {}
+    SApplyResult apply( SProject *project ) override;
+    QString name() const override
+    { return QStringLiteral( "mixer-strip-set" ); }
+    QStringList knownAttributes() const override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString track_;
+    QString arrangement_;
+    QString control_ = QStringLiteral( "fader" );
+    QString gesture_ = QStringLiteral( "set" );
+    double  value_   = 0.0;
 };
 
 #endif // SMIXERTESTACTIONS_H
