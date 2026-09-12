@@ -81,50 +81,14 @@ strip plus once for the pane.
 rebuilt every strip on every model signal deletes the fader mid-drag. Structure
 = tracks added / removed / reordered / hidden.
 
-**inv. 14 — A STRIP'S COLOUR IS `sclipcolors`, RESOLVED FROM THE PROJECT ROOT**
-(proposal 48 AC4.3). `sclipcolors::indexForLane( *project->getRootComponent(),
-track )` then `body( idx, false, muted )` — the same two calls
-`strackrndrinline.cpp`, the arranger's take lanes and the shell's own
-`sClipBodyOf()` (the classifier `assert-take-lane` and `assert-lane-overlay`
-use on grabbed PIXELS) all make. Not "the same palette": the same function.
-The muted variant follows the flag, so the header is re-resolved when the mute
-changes rather than cached at construction.
-
-**THE PADDING IS IN THE ELISION BUDGET, and forgetting it broke three cases at
-once.** The tint is a stylesheet, and a `QLabel`'s minimum width is its text
-PLUS its padding — so 2 px each side put the NARROW strip's own layout minimum
-at 61 against the 60 D9 names (`SMixerStrip(w 60<61)`). `NAME_PAD_PX` is one
-constant used by the stylesheet and by the elision, and inv. 6's audit is what
-found it.
-
-**inv. 15 — ONE WHEEL NOTCH OVER A FADER IS ONE dB, AND THE STEP IS SHARED**
-(AC4.4). `sFaderWheelValue()` in `app/timeline/sfadercurve.h`, filtered by both
-the strip and `SSMVMixerControl` rather than left to `QAbstractSlider` — whose
-own wheel handling is `wheelScrollLines() * singleStep` in SLIDER units, which
-on this curve is ~1.9 dB a notch at unity and ~5 dB at −60. The arranger head
-carried a comment claiming 1.0 dB per notch that was wrong from the day it was
-written; M4 made it true in both mounts at once rather than in this one.
-
-**inv. 16 — THE STRIP'S CONTEXT MENU IS A SUBSET OF THE ARRANGER'S, SHARED BY
-BODY AND NOT BY COPY** (AC4.2). Remove, group and ungroup are
-`app/timeline/strackgestures`, which the arranger's own `ct*` slots now call
-too; the SUBMIT is injected so each mount stamps its own root (inv. 8 / D12).
-Everything else in the head menu is excluded for a reason that is measured
-rather than aesthetic — indent and outdent resolve the preceding sibling
-through the arranger's ROW list, take lanes / lane height / the automation
-picker are row concepts outright, "create asset from range" needs the ruler
-RANGE and "insert sample" a click POSITION. A pane has none of those. See
-`strackgestures.h`.
-
-**A SYSTEM LANE IS OFFERED NONE OF THEM.** Proposal 45 D6 refuses remove, move
-and reparent on the master; refusing to OFFER is that rule read forwards, and
-`mixer-strip-menu expect="false"` gates it — an accidental refusal is not
-gated by hoping.
 
 ## How to test
 
-`assert-mixer-pane` (the strip list and each strip's `describe()`),
-`assert-mixer-layout` (the geometry audit, BOTH axes) and `mixer-strip-toggle`.
+`assert-mixer-pane` (the strip list and each strip's `describe()`, plus
+`colorMismatch=` / `colors=`), `assert-mixer-layout` (the geometry audit, BOTH
+axes, plus `scrolled=` / `masterPinned=`), `mixer-strip-toggle`,
+`mixer-strip-set` (the fader, including `gesture="wheel"`),
+`mixer-meter-tick` and `mixer-strip-menu`.
 Nothing here is gated by a screenshot: `screenshot` grabs the SCREEN's root
 window, blank under `QT_QPA_PLATFORM=offscreen`.
 
@@ -188,7 +152,47 @@ probe's window (the probe measured peak 0.399994 and the widget reported −60 d
 one line later). The section mask is applied SEPARATELY, because it is a
 per-strip visibility change and not a structure change.
 
-## Four layout floors, measured
+**inv. 14 — A STRIP'S COLOUR IS `sclipcolors`, RESOLVED FROM THE PROJECT ROOT**
+(proposal 48 AC4.3). `sclipcolors::indexForLane( *project->getRootComponent(),
+track )` then `body( idx, false, muted )` — the same two calls
+`strackrndrinline.cpp`, the arranger's take lanes and the shell's own
+`sClipBodyOf()` (the classifier `assert-take-lane` and `assert-lane-overlay`
+use on grabbed PIXELS) all make. Not "the same palette": the same function.
+The muted variant follows the flag, so the header is re-resolved when the mute
+changes rather than cached at construction.
+
+**THE PADDING IS IN THE ELISION BUDGET, and forgetting it broke three cases at
+once.** The tint is a stylesheet, and a `QLabel`'s minimum width is its text
+PLUS its padding — so 2 px each side put the NARROW strip's own layout minimum
+at 61 against the 60 D9 names (`SMixerStrip(w 60<61)`). `NAME_PAD_PX` is one
+constant used by the stylesheet and by the elision, and inv. 6's audit is what
+found it.
+
+**inv. 15 — ONE WHEEL NOTCH OVER A FADER IS ONE dB, AND THE STEP IS SHARED**
+(AC4.4). `sFaderWheelValue()` in `app/timeline/sfadercurve.h`, filtered by both
+the strip and `SSMVMixerControl` rather than left to `QAbstractSlider` — whose
+own wheel handling is `wheelScrollLines() * singleStep` in SLIDER units, which
+on this curve is ~1.9 dB a notch at unity and ~5 dB at −60. The arranger head
+carried a comment claiming 1.0 dB per notch that was wrong from the day it was
+written; M4 made it true in both mounts at once rather than in this one.
+
+**inv. 16 — THE STRIP'S CONTEXT MENU IS A SUBSET OF THE ARRANGER'S, SHARED BY
+BODY AND NOT BY COPY** (AC4.2). Remove, group and ungroup are
+`app/timeline/strackgestures`, which the arranger's own `ct*` slots now call
+too; the SUBMIT is injected so each mount stamps its own root (inv. 8 / D12).
+Everything else in the head menu is excluded for a reason that is measured
+rather than aesthetic — indent and outdent resolve the preceding sibling
+through the arranger's ROW list, take lanes / lane height / the automation
+picker are row concepts outright, "create asset from range" needs the ruler
+RANGE and "insert sample" a click POSITION. A pane has none of those. See
+`strackgestures.h`.
+
+**A SYSTEM LANE IS OFFERED NONE OF THEM.** Proposal 45 D6 refuses remove, move
+and reparent on the master; refusing to OFFER is that rule read forwards, and
+`mixer-strip-menu expect="false"` gates it — an accidental refusal is not
+gated by hoping.
+
+## Five layout floors, measured
 
 Every one of these was found by measuring, not by reading, and each would
 silently reappear if the next change re-introduced it.
@@ -199,6 +203,7 @@ silently reappear if the next change re-introduced it.
 | Three 20 px squares plus gaps and margins | 68 px against D9's 60 | narrow uses 16 px squares, drops the dB readout, tightens margins to 1 |
 | **A `QScrollArea` carries a large minimum size hint of its own, whatever it holds** | ~113 px — wider than a WIDE strip | the name header lives OUTSIDE the scroll area (a deliberate departure from D5's diagram, and the better shape: a strip's name is its identity, so D5's own "what a user looks at while the transport runs stays put" applies to it), and narrow hides the scroll area outright |
 | **A `QLabel`'s minimum width is its FULL TEXT** — the one that actually held the wide strip hostage | 91 px for an ordinary generated track name; with the toggle button and margins, exactly the 113 the strip was reported as owing | the name ELIDES at both widths, as a fixed-width column must. The full name stays in the tooltip and in `describe()` |
+| **A tinted `QLabel`'s minimum width is its text PLUS its stylesheet padding** (proposal 48 M4 / AC4.3) | 2 px each side put the NARROW strip at 61 against D9's 60 — `SMixerStrip(w 60<61)`, and THREE cases failed at once | `NAME_PAD_PX` is one constant, used by the stylesheet and by the elision budget. Found by inv. 6's own audit within minutes of the tint landing |
 
 ## Known debt
 
