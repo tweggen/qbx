@@ -428,6 +428,9 @@ const Fixture kFixtures[] = {
     { "mixer-strip-set",
       "<mixer-strip-set track='Drums' arrangement='Riff' control='fader'"
       " gesture='double-click' value='-6.5'/>" },
+    { "mixer-strip-menu",
+      "<mixer-strip-menu track='Drums' arrangement='Riff'"
+      " command='ungroup-track' expect='false'/>" },
 
     // --- the detail-pane verbs (fix/detail-pane-layout) ---------------------
     { "assert-track-detail-layout",
@@ -1074,6 +1077,12 @@ const LaneRow kLaneRows[] = {
       "drives a strip's VALUE control; the underlying verb is "
       "set-track-volume, whose own row above carries the refusals, and during "
       "an automation pass it submits nothing at all" },
+    { "mixer-strip-menu",   NotApplicable,
+      "runs one of the strip context menu's TRACK commands; remove-track / "
+      "group-track / ungroup-track each carry their own row above, so the "
+      "refusals apply through it rather than to it -- and the strip refuses "
+      "to OFFER any of them on a system lane, which mixer_pane_polish gates "
+      "with expect=false" },
     { "mixer-strip-toggle", NotApplicable,
       "drives a MIXER STRIP's mute / solo / arm / narrow button; each underlying "
       "verb carries its own row above, so the refusals apply through it rather "
