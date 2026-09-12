@@ -631,7 +631,7 @@ QString SMixerStrip::describe() const
     const double db = t ? t->getVolume() : 0.0;
     return QStringLiteral(
                "name=%1|narrow=%2|mute=%3|solo=%4|arm=%5|db=%6|role=%7"
-               "|inserts=%8|sends=%9|compact=%10|live=%11|meter=%12" )
+               "|faderDb=%8|inserts=%9|sends=%10|compact=%11|live=%12|meter=%13" )
         .arg( t ? t->getSName() : QStringLiteral( "?" ) )
         .arg( narrow_ ? 1 : 0 )
         .arg( t && t->isMuted() ? 1 : 0 )
@@ -640,6 +640,12 @@ QString SMixerStrip::describe() const
         .arg( db, 0, 'f', 1 )
         .arg( QString::fromLatin1(
             systemRoleToString( t ? t->systemRole() : SSystemRole::None ) ) )
+        // THE FADER'S OWN POSITION, which is NOT the same number as `db=`
+        // above. That one is the model's volume; this is what the widget
+        // shows. A Read-family lane moves the fader WITHOUT editing the model
+        // (D11a's second obligation), so the two legitimately differ and only
+        // this one can gate the read-value pump.
+        .arg( fader_ ? sFaderToDb( fader_->value() ) : 0.0, 0, 'f', 1 )
         .arg( inserts_ && !inserts_->isHidden() ? 1 : 0 )
         .arg( sends_ && !sends_->isHidden() ? 1 : 0 )
         // D5a: BOTH mounted widgets are compact in a mixer column, and the

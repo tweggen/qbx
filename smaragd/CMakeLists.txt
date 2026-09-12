@@ -562,6 +562,16 @@ endforeach()
 # above describes (the click is produced by the pump and consumed by the RT
 # callback, and the measurement is the capture backend's recording), so
 # RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out.
+# proposal 48 M3a: a Touch pass driven from the MIXER fader. It runs a real
+# transport and waits on the playhead, so it is a wall-clock case in the same
+# sense -- RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out. It needs no
+# input backend: the fader is the source of the pass, not a device.
+if(TEST qxa.mixer_write_pass)
+    set_tests_properties(qxa.mixer_write_pass PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+endif()
+
 foreach(_met metronome_click metronome_render_identity metronome_toggle_during_playback)
     if(TEST qxa.${_met})
         set_tests_properties(qxa.${_met} PROPERTIES
