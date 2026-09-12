@@ -64,6 +64,14 @@ public:
     /// The four pane-wide section toggles (M2 stores them; M1 wires them).
     void setSectionsVisible( bool inserts, bool sends, bool meter, bool fader );
 
+    /// The stored per-user section mask: 1 inserts | 2 sends | 4 meter |
+    /// 8 fader (`SOpt::MixerSections`). NOT undoable — a preference is not an
+    /// edit to the arrangement.
+    static int  sectionsMask();
+    static void setSectionsMask( int mask );
+    /// Re-read the stored mask and apply it to every strip.
+    void applyStoredSections();
+
 private:
     void clearStrips_();
 

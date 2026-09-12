@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE PER-STRIP NARROW TOGGLE (proposal 48 M2, AC2.2 / AC2.3 / D9).
+
+  NARROW KEEPS M/S/R, THE METER AND THE FADER, and hides the name text beyond
+  an elision, the inserts and the sends. It is not a density ladder: the head's
+  Full/Compact/Tiny exists because a lane's HEIGHT is imposed on it by the
+  arrangement, whereas a strip's width is the user's own two-state choice.
+
+  THIS DEVIATES FROM D9 ABOUT WHERE THE FLAG LIVES, and the deviation is what
+  makes this case possible at all. D9 says the flag "cannot" live on the track
+  — "narrow is a per-USER view preference and STrack attributes are serialized
+  with the arrangement" — and prescribes a pane-owned set joined to
+  `SStdMixerView::pruneUiState`. Both halves are stale:
+
+    - `pruneUiState()` was RETIRED by proposal 46 M3; only tombstones remain,
+      so there is no walk to join;
+    - the three sets D9 names as still being in it (`takesExpanded_`,
+      `trackScale_`, the shown-automation set) all moved onto STrack in that
+      same milestone, and every one is a per-user view preference serialized
+      with the arrangement. The reason D9 gives excludes those four equally.
+
+  D9's own next sentence is the one that survives: "if the narrow flag can live
+  on the track, it needs no pruning at all." It can, so it does — a fifth
+  sibling of the four, serialized only when true.
+
+  TWO THINGS THAT FOLLOW, and both are asserted below rather than assumed:
+
+    1. THE FLAG NOW SURVIVES A FRESH PANE. Every seam builds one (shell
+       inv. 62), so under D9's pane-owned set a toggle would have been
+       invisible to the very next assertion — which is exactly why M1's
+       mixer_inserts had to say it could not assert narrow at all.
+    2. AC2.3's HAZARD CANNOT ARISE. A dangling key inherited by a later track
+       allocated at the same address is impossible when there is no key: the
+       flag dies with the object. Asserted anyway, because "cannot arise" is
+       a claim about the implementation and this checks the behaviour.
+
+  This case touches no `mixer/*` INI key and so owns none.
+-->
+<SActionScript version="1" name="mixer_narrow_strip">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <set-track-name trackPath="1" name="Beta"/>
+    <add-send-lane sendName="Reverb"/>
+
+    <!-- ============ AC2.2: WHAT NARROW KEEPS AND WHAT IT DROPS ======== -->
+
+    <assert-mixer-pane track="Alpha" contains="narrow=0"/>
+    <assert-mixer-pane track="Alpha" contains="inserts=1"/>
+    <assert-mixer-pane track="Alpha" contains="sends=1"/>
+
+    <mixer-strip-toggle track="Alpha" control="narrow" on="true"/>
+    <assert-mixer-pane track="Alpha" contains="narrow=1"/>
+    <assert-mixer-pane track="Alpha" contains="inserts=0"/>
+    <assert-mixer-pane track="Alpha" contains="sends=0"/>
+    <!-- ...and the meter is still there, which is the half that makes narrow
+         a useful width rather than a hidden strip. -->
+    <assert-mixer-pane track="Alpha" contains="lanes=2"/>
+
+    <!-- ============ IT IS PER STRIP, NOT PANE-WIDE ==================== -->
+
+    <assert-mixer-pane track="Beta" contains="narrow=0"/>
+    <assert-mixer-pane track="Beta" contains="inserts=1"/>
+
+    <!-- ============ AND IT LAYS OUT CLEANLY MIXED ==================== -->
+    <!-- One narrow strip beside two wide ones, on both axes. -->
+
+    <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"/>
+
+    <!-- ============ AC2.3: THE FLAG DIES WITH ITS TRACK =============== -->
+    <!-- Alpha is narrow. Remove it and add a new track: the newcomer is WIDE.
+         Under a pane-owned STrack*-keyed set this is the exact case that
+         inherits a dangling key when the allocator reuses the address. -->
+
+    <remove-track trackPath="0"/>
+    <drain-pending-deletes/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Gamma"/>
+    <assert-mixer-pane track="Gamma" contains="narrow=0"/>
+    <assert-mixer-pane track="Gamma" contains="inserts=1"/>
+
+    <!-- ...and Beta, which was never narrowed, is still wide. -->
+    <assert-mixer-pane track="Beta" contains="narrow=0"/>
+  </actions>
+</SActionScript>

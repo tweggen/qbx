@@ -580,6 +580,36 @@ public:
     void setTakesExpanded( bool e ) { takesExpanded_ = e; }
 
     /**
+     * A FIFTH SIBLING (proposal 48 M2): whether the MIXER PANE draws this
+     * track's channel strip NARROW.
+     *
+     * **THIS DEVIATES FROM PROPOSAL 48 D9, WHOSE STATED REASON IS STALE.**
+     * D9 says the flag "cannot" live here — "narrow is a per-USER view
+     * preference and `STrack` attributes are serialized with the arrangement"
+     * — and instructs the pane to keep a `STrack*`-keyed set joined to
+     * `SStdMixerView::pruneUiState`. Both halves of that are out of date:
+     *
+     *   - `pruneUiState()` was RETIRED by proposal 46 M3 and only tombstones
+     *     remain, so there is no walk to join;
+     *   - the three sets D9 names as still being in it — `takesExpanded_`,
+     *     `trackScale_` and the shown-automation set — all moved HERE in that
+     *     same milestone, and every one of them is a per-user view preference
+     *     serialized with the arrangement. The reason D9 gives for excluding
+     *     narrow excludes its four siblings equally.
+     *
+     * D9's own next sentence is the one that survives: *"if the narrow flag
+     * can live on the track, it needs no pruning at all."* It can. So AC2.3's
+     * hazard — a dangling key inherited by a later track allocated at the same
+     * address — does not have to be managed, because it cannot arise.
+     *
+     * Same rules as the four above: not undoable, does not dirty the project,
+     * and serialized ONLY when true, so every existing file and golden
+     * re-serializes byte-identically.
+     */
+    bool mixerStripNarrow() const { return mixerStripNarrow_; }
+    void setMixerStripNarrow( bool n ) { mixerStripNarrow_ = n; }
+
+    /**
      * One shown automation lane: the ParamRef spelling plus, for a `param:`
      * lane, which SLOT it belongs to. The pair is the lane's identity in the
      * arranger exactly as it is in the verbs — this is the model-side twin of
@@ -856,6 +886,7 @@ private:
     // track that has never been touched.
     double                          laneHeightScale_ = 1.0;
     bool                            takesExpanded_   = false;
+    bool                            mixerStripNarrow_ = false;
     QList<ShownAutomationLane>      shownAutomation_;
 
     mutable length_t lastDuration_;

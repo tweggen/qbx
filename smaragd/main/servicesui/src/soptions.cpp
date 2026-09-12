@@ -84,6 +84,9 @@ QVariant SOpt::def( const QString &key )
     if( key == CountInBars )         return 0;
     if( key == PreRollBars )         return 0;
     if( key == ClickWhileRecording ) return true;
+    // Every mixer section ON: 1 inserts | 2 sends | 4 meter | 8 fader. A
+    // first-run pane shows everything it has, and hiding is the choice.
+    if( key == MixerSections )       return 15;
     // Media browser (proposal 38 gate 2). "local" is the only source the MVP
     // registers, so remembering it is the honest default rather than an empty
     // string the combo would have to interpret. The mask is Audio (1) --

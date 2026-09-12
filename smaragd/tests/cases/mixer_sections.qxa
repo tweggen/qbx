@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE PANE-WIDE SECTION TOGGLES (proposal 48 M2, AC2.1 / AC2.4 / D9).
+
+  A BITMASK IN `SOpt::MixerSections` — 1 inserts | 2 sends | 4 meter | 8 fader
+  — applying to EVERY strip, PER USER, and NOT undoable. A preference is not an
+  edit to the arrangement: the same call `set-count-in` and `set-pre-roll`
+  already make. It is a SOpt key rather than a raw SSettings write because that
+  module owns key NAMES (D4), and a second spelling of a key is how a setting
+  silently stops round-tripping.
+
+  THIS CASE OWNS `mixer/sections` and restores it to the default (15) at the
+  end, pass or fail, per the suite's INI ownership convention (T7). It is
+  RUN_SERIAL for the same reason every other `set-option` case is.
+
+  WHY THE MASK IS RE-READ ON EVERY REBUILD rather than only at construction:
+  every test seam builds a FRESH pane (main/shell/CONTRACT.md inv. 62) and so
+  does a project open, so a pane that only honoured the mask it was born with
+  would show the defaults forever. That is what `sections=` in the pane's
+  describe is for, and what the round trip below actually proves.
+-->
+<SActionScript version="1" name="mixer_sections">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <set-track-name trackPath="1" name="Beta"/>
+    <add-send-lane sendName="Reverb"/>
+
+    <!-- ============ THE DEFAULT IS EVERYTHING ON ===================== -->
+
+    <assert-mixer-pane contains="sections=15"/>
+    <assert-mixer-pane track="Alpha" contains="inserts=1"/>
+    <assert-mixer-pane track="Alpha" contains="sends=1"/>
+
+    <!-- ============ THE TOGGLE REACHES EVERY STRIP =================== -->
+    <!-- 12 = meter | fader: both content sections off. -->
+
+    <set-option key="mixer/sections" value="12"/>
+    <assert-mixer-pane contains="sections=12"/>
+    <assert-mixer-pane track="Alpha" contains="inserts=0"/>
+    <assert-mixer-pane track="Alpha" contains="sends=0"/>
+    <assert-mixer-pane track="Beta"  contains="inserts=0"/>
+    <assert-mixer-pane track="Beta"  contains="sends=0"/>
+    <assert-mixer-pane track="Master" contains="inserts=0"/>
+
+    <!-- ============ ONE SECTION AT A TIME ============================ -->
+    <!-- 13 = inserts | meter | fader: the sends alone come back off. -->
+
+    <set-option key="mixer/sections" value="13"/>
+    <assert-mixer-pane track="Alpha" contains="inserts=1"/>
+    <assert-mixer-pane track="Alpha" contains="sends=0"/>
+
+    <!-- ============ AC2.4: EVERY SECTION OFF IS STILL A VALID LAYOUT == -->
+    <!-- A pane with nothing but the name and the M/S/R row must still lay out
+         cleanly at every size, on BOTH axes. This is the shape most likely to
+         produce a zero-height container and an overlap. -->
+
+    <set-option key="mixer/sections" value="0"/>
+    <assert-mixer-pane contains="sections=0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="180" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="500" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"/>
+    <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="60"
+                         maxCrushed="0" maxOverlap="0"/>
+
+    <!-- ============ NOTHING OF THIS IS ON THE UNDO STACK ============== -->
+    <!-- `set-option` is not undoable and neither is the pane's own toggle:
+         the ONE undoable thing this script did is add-send-lane, so a single
+         undo removes the send lane and nothing about the sections moves. -->
+
+    <undo/>
+    <assert-mixer-pane contains="sections=0"/>
+
+    <!-- ============ RESTORE THE KEY THIS CASE OWNS =================== -->
+
+    <set-option key="mixer/sections" value="15"/>
+    <assert-mixer-pane contains="sections=15"/>
+  </actions>
+</SActionScript>

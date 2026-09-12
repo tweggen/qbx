@@ -105,6 +105,28 @@ buttons alone carry a 113 px layout minimum against a 96 px wide strip.
 Nothing becomes unreachable — Edit is already the row's double-click and
 Reload / Remove stay on its context menu.
 
+**inv. 10 — THE PER-STRIP NARROW FLAG LIVES ON `STrack`, and the pane owns no
+`STrack*`-keyed container at all.** Proposal 48 D9 says it cannot, because
+"narrow is a per-USER view preference and `STrack` attributes are serialized
+with the arrangement", and prescribes a pane-owned set joined to
+`SStdMixerView::pruneUiState`. That walk was RETIRED by proposal 46 M3, and
+the three sets D9 names as still being in it all moved onto `STrack` in that
+same milestone — every one a per-user view preference serialized with the
+arrangement. The flag is a fifth sibling of those four: serialized only when
+true, not undoable, not dirtying the project.
+
+**A change that reintroduces a `STrack*`-keyed map here breaks this
+invariant.** The hazard it would bring back — a dangling key inherited by a
+later track allocated at the same address — is what proposal 46 M3 spent a
+milestone removing.
+
+**inv. 11 — THE SECTION MASK IS RE-READ ON EVERY REBUILD, not only at
+construction.** `SOpt::MixerSections`, a bitmask (1 inserts, 2 sends, 4 meter,
+8 fader). Every test seam builds a fresh pane (shell inv. 62) and so does a
+project open, so a pane that honoured only the mask it was born with would
+show the defaults forever. Not undoable, and a SOpt key rather than a raw
+`SSettings` write because that module owns key NAMES (D4).
+
 ## Four layout floors, measured
 
 Every one of these was found by measuring, not by reading, and each would
@@ -119,9 +141,10 @@ silently reappear if the next change re-introduced it.
 
 ## Known debt
 
-- **The narrow/wide flag is per-pane VIEW state and is not persisted.** M2's
-  job (`Mixer/sections` and the per-strip set), and until then a strip is born
-  wide every time.
+- **The four section BUTTONS and the strip's narrow button are not gated.**
+  M2 wires the mask and the flag they write; there is no testkit verb for a
+  toolbar any more than for a context menu, so the cases drive `set-option`
+  and `mixer-strip-toggle` and the buttons themselves are hand-verified.
 - **Each strip scrolls its own FX/sends section independently.** D5 puts the
   fader block outside the scroll area, which means one scroll area per strip;
   scrolling one strip's inserts does not scroll its neighbour's. Acceptable

@@ -800,3 +800,20 @@ one. Named so the absence is a decision rather than an oversight.
 `main/objects/mixer/CONTRACT.md` inv. 23: it exists because a component holds
 an input plug into its producer's latch, and the alternative is a segfault on
 undo.
+
+## A FIFTH piece of per-track view state (proposal 48 M2)
+
+`mixerStripNarrow` joins `collapsed`, `laneHeightScale`, `takesExpanded` and
+`shownAutomation` on exactly their terms: serialized only when it is not the
+default, not undoable, and it does not dirty the project.
+
+**It is here although proposal 48 D9 says it cannot be**, and the deviation is
+recorded rather than quiet. D9 excludes it because "narrow is a per-USER view
+preference and `STrack` attributes are serialized with the arrangement", and
+prescribes a pane-owned `STrack*`-keyed set joined to
+`SStdMixerView::pruneUiState`. Both halves are stale: that walk was RETIRED by
+proposal 46 M3, and the three sets D9 names as still being in it moved onto
+this class in the same milestone — every one of them a per-user view
+preference serialized with the arrangement, so the reason excludes the four
+equally. D9's own next sentence is the one that holds: *"if the narrow flag can
+live on the track, it needs no pruning at all."*
