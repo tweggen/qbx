@@ -403,3 +403,50 @@ static const bool s_reg_mixer_strip_set = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "mixer-strip-set" ),
         []{ return new SMixerStripSetAction; } ), true );
+
+// --- mixer-strip-menu -------------------------------------------------------
+
+SApplyResult SMixerStripMenuAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) { qWarning() << "mixer-strip-menu: no main window"; return { false, nullptr }; }
+    const bool ran = win->mixerStripMenu( track_, command_, arrangement_ );
+    if( ran != expect_ ) {
+        qWarning() << "mixer-strip-menu FAILED:" << track_ << command_
+                   << "ran" << ran << "expected" << expect_;
+        return { false, nullptr };
+    }
+    qDebug() << "mixer-strip-menu: OK -" << track_ << command_ << "ran" << ran;
+    // A GESTURE verb: no undo step of its own. The command submits the real
+    // actions, which is what makes a wrong ROOT STAMP (D12) show up as a
+    // model that did not change rather than as a silent pass.
+    return { true, nullptr };
+}
+
+QStringList SMixerStripMenuAction::knownAttributes() const
+{
+    return { QStringLiteral( "track" ), QStringLiteral( "arrangement" ),
+             QStringLiteral( "command" ), QStringLiteral( "expect" ) };
+}
+
+void SMixerStripMenuAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "track", track_ );
+    elem.setAttribute( "arrangement", arrangement_ );
+    elem.setAttribute( "command", command_ );
+    elem.setAttribute( "expect", expect_ ? "true" : "false" );
+}
+
+bool SMixerStripMenuAction::readXml( const QDomElement &elem, int )
+{
+    track_       = elem.attribute( "track", QString() );
+    arrangement_ = elem.attribute( "arrangement", QString() );
+    command_     = elem.attribute( "command", QString() );
+    expect_      = elem.attribute( "expect", "true" ) == QLatin1String( "true" );
+    return !track_.isEmpty() && !command_.isEmpty();
+}
+
+static const bool s_reg_mixer_strip_menu = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "mixer-strip-menu" ),
+        []{ return new SMixerStripMenuAction; } ), true );

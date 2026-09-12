@@ -428,6 +428,11 @@ public:
     QString describeMixerLayout( int paneWidth, int paneHeight, int stripWidth );
     bool    mixerStripToggle( const QString &trackName, const QString &control,
                               bool on, const QString &arrangement = QString() );
+    /// AC4.2: run one of the strip context menu's TRACK commands
+    /// (`remove-track` / `group-track` / `ungroup-track`) through the very
+    /// function the menu item calls.
+    bool    mixerStripMenu( const QString &trackName, const QString &command,
+                            const QString &arrangement = QString() );
     bool    mixerStripSet( const QString &trackName, const QString &control,
                            const QString &gesture, double value,
                            const QString &arrangement = QString() );
