@@ -33,6 +33,7 @@
 #include "app/timeline/sfadercurve.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssendstrip.h"
+#include "tw/core/twlog.h"
 
 namespace {
 

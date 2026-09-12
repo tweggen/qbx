@@ -6,6 +6,7 @@
 #include <QString>
 #include <QWidget>
 
+#include "app/objects/mixer/slaneorder.h"
 #include "tw/core/twtypes.h"
 
 class QHBoxLayout;
@@ -38,6 +39,20 @@ class SMixerPane : public QWidget
     Q_OBJECT
 
 public:
+    /// THE PANE'S OWN WALK OPTIONS, as a value so they can be ASSERTED.
+    ///
+    /// `rebuildStrips()` and `rebuildIfStructureChanged()` are the only
+    /// callers, and `laneorder_test` asserts what this returns — which is the
+    /// only way the pane's CHOICE is gated at all. It cannot be gated from a
+    /// `.qxa`: `collapse-track` drives the arranger's own
+    /// `toggleTrackCollapsed()`, and a `--test-case` run has no bound
+    /// arranger, so the fold flag cannot be set from a script (measured:
+    /// `assert-lane-view collapsed=` reads false straight after the verb). A
+    /// qxa case that collapsed a folder and asserted the strip count was
+    /// therefore VACUOUS — it passed with `Fold::Honour` too, which is what
+    /// M2's sabotage pass caught.
+    static slaneorder::Options walkOptions();
+
     explicit SMixerPane( QWidget *parent = nullptr );
     ~SMixerPane() override;
 
@@ -55,6 +70,12 @@ public:
     /// deliberately NOT called for per-track signals — a rebuild deletes the
     /// fader under the hand mid-drag (CONTRACT inv. 7).
     void rebuildStrips();
+
+    /// Rebuild ONLY when the lane list actually differs (CONTRACT inv. 7).
+    /// The signal that reaches this fires after every action, and a blanket
+    /// rebuild destroys each strip's meter ballistics and probe window — and
+    /// would delete a fader under the hand mid-drag.
+    void rebuildIfStructureChanged();
 
     int          stripCount() const { return strips_.size(); }
     SMixerStrip *stripAt( int i ) const;
