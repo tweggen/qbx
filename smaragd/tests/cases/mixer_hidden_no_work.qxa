@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A HIDDEN DOCK DOES NO WORK, NOT EVEN THE MODEL WALK (proposal 48 M3, AC3.5;
+  mixerui CONTRACT inv. 5).
+
+  The Feel Flow puppet's rule, and it matters more here because the walk is PER
+  STRIP: a project with thirty tracks would otherwise probe thirty taps thirty
+  times a second for a dock nobody is looking at.
+
+  THE GATE IS A COUNTER, NEVER A TIMER. A timing assertion would measure the
+  box, which is how this repository ended up with 41 RUN_SERIAL tests. The pane
+  counts the strips that actually did probe work and reports it as `tickWork=`;
+  a tick with the dock hidden must not move it.
+
+  WHY THE GATE HAD TO MOVE TO THE PANE FOR THIS TO MEAN ANYTHING. Until M3 each
+  strip connected itself to SApplication::meterTick and answered the question
+  on its own, which is too late: by then the pane has already walked its strip
+  list, which is precisely what inv. 5 says must not happen. The pane now takes
+  the broadcast once and answers before it walks.
+
+  Also fixed on the way: the strip's own early-out was `!meter_->isVisible()`,
+  which never did what it looked like. A strip scrolled out of a QScrollArea is
+  still visible, and inv. 5 explicitly says such a strip MUST keep ticking. The
+  two things that legitimately stop the work are the meter SECTION being off, a
+  user's explicit choice, and the dock being hidden, which is the pane's
+  question and not a strip's.
+-->
+<SActionScript version="1" name="mixer_hidden_no_work">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="A"/>
+    <set-track-name trackPath="1" name="B"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- A visible pane works: three strips (A, B, Master) per tick. -->
+    <mixer-meter-tick position="48000" hidden="false"/>
+    <assert-mixer-pane contains="tickWork=3"/>
+    <mixer-meter-tick position="48000"/>
+    <assert-mixer-pane contains="tickWork=6"/>
+
+    <!-- ============ HIDDEN: THE COUNTER MUST NOT MOVE ================= -->
+
+    <mixer-meter-tick position="48000" hidden="true"/>
+    <assert-mixer-pane contains="tickWork=6"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <assert-mixer-pane contains="tickWork=6"/>
+
+    <!-- ============ AND IT COMES BACK ================================= -->
+    <!-- A gate that latched off would pass every assertion above and be
+         useless in the app: the meters would never return. -->
+
+    <mixer-meter-tick position="48000" hidden="false"/>
+    <assert-mixer-pane contains="tickWork=9"/>
+  </actions>
+</SActionScript>

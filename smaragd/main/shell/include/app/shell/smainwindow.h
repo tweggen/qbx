@@ -434,7 +434,8 @@ public:
     /// Drive ONE meter tick over the pane for `arrangement`. Returns the number
     /// of strips that did probe work, or -1 when there is no pane.
     int     mixerMeterTick( const QString &arrangement, offset_t position,
-                            qint64 nowMs, bool live, bool requestPages );
+                            qint64 nowMs, bool live, bool requestPages,
+                            const QString &hidden = QString() );
     bool    driveSendStrip( const QString &trackPath, const QString &lane,
                             const QString &control, double value );
 

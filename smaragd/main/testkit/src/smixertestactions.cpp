@@ -69,6 +69,49 @@ SApplyResult SAssertMixerPaneAction::apply( SProject * )
         qWarning() << "assert-mixer-pane FAILED: unexpected" << absent_ << "-" << desc;
         return { false, nullptr };
     }
+    if( minMeterDb_ < 1e29 || maxMeterDb_ < 1e29 ) {
+        const int at = desc.indexOf( QStringLiteral( "|db=" ),
+                                     desc.indexOf( QStringLiteral( "|meter=" ) ) );
+        if( at < 0 ) {
+            qWarning() << "assert-mixer-pane FAILED: no meter dB -" << desc;
+            return { false, nullptr };
+        }
+        const double db = desc.mid( at + 4 )
+                              .section( QLatin1Char( '|' ), 0, 0 )
+                              .section( QLatin1Char( ',' ), 0, 0 ).toDouble();
+        if( minMeterDb_ < 1e29 && db < minMeterDb_ ) {
+            qWarning() << "assert-mixer-pane FAILED: meter" << db << "dB <"
+                       << minMeterDb_ << "-" << desc;
+            return { false, nullptr };
+        }
+        if( maxMeterDb_ < 1e29 && db > maxMeterDb_ ) {
+            qWarning() << "assert-mixer-pane FAILED: meter" << db << "dB >"
+                       << maxMeterDb_ << "-" << desc;
+            return { false, nullptr };
+        }
+    }
+    if( minLaneDbDelta_ >= 0.0 ) {
+        // The meter's own `db=a,b` field, which is the widget's ballistics
+        // rather than the probe's raw sample -- deliberately: what this gates
+        // is what a user SEES on the strip.
+        const int at = desc.indexOf( QStringLiteral( "|db=" ),
+                                     desc.indexOf( QStringLiteral( "|meter=" ) ) );
+        const QString tail = at < 0 ? QString() : desc.mid( at + 4 );
+        const QStringList lanes =
+            tail.section( QLatin1Char( '|' ), 0, 0 ).split( QLatin1Char( ',' ) );
+        if( lanes.size() < 2 ) {
+            qWarning() << "assert-mixer-pane FAILED: fewer than two meter lanes"
+                       << "-" << desc;
+            return { false, nullptr };
+        }
+        const double delta = qAbs( lanes[0].toDouble() - lanes[1].toDouble() );
+        if( delta < minLaneDbDelta_ ) {
+            qWarning() << "assert-mixer-pane FAILED: lane dB" << lanes[0]
+                       << "vs" << lanes[1] << "differ by" << delta
+                       << "which is below" << minLaneDbDelta_ << "-" << desc;
+            return { false, nullptr };
+        }
+    }
     qDebug() << "assert-mixer-pane: OK -" << desc;
     return { true, nullptr };
 }
@@ -77,7 +120,9 @@ QStringList SAssertMixerPaneAction::knownAttributes() const
 {
     return { QStringLiteral( "track" ), QStringLiteral( "arrangement" ),
              QStringLiteral( "strips" ), QStringLiteral( "master" ),
-             QStringLiteral( "contains" ), QStringLiteral( "absent" ) };
+             QStringLiteral( "contains" ), QStringLiteral( "absent" ),
+             QStringLiteral( "minLaneDbDelta" ), QStringLiteral( "minMeterDb" ),
+             QStringLiteral( "maxMeterDb" ) };
 }
 
 void SAssertMixerPaneAction::writeXml( QDomElement &elem ) const
@@ -88,6 +133,9 @@ void SAssertMixerPaneAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "master", master_ );
     elem.setAttribute( "contains", contains_ );
     elem.setAttribute( "absent", absent_ );
+    elem.setAttribute( "minLaneDbDelta", minLaneDbDelta_ );
+    elem.setAttribute( "minMeterDb", minMeterDb_ );
+    elem.setAttribute( "maxMeterDb", maxMeterDb_ );
 }
 
 bool SAssertMixerPaneAction::readXml( const QDomElement &elem, int )
@@ -98,6 +146,9 @@ bool SAssertMixerPaneAction::readXml( const QDomElement &elem, int )
     master_   = elem.attribute( "master", "-1" ).toInt();
     contains_ = elem.attribute( "contains", QString() );
     absent_   = elem.attribute( "absent", QString() );
+    minLaneDbDelta_ = elem.attribute( "minLaneDbDelta", "-1" ).toDouble();
+    minMeterDb_ = elem.attribute( "minMeterDb", "1e30" ).toDouble();
+    maxMeterDb_ = elem.attribute( "maxMeterDb", "1e30" ).toDouble();
     return true;
 }
 
@@ -248,7 +299,8 @@ SApplyResult SMixerMeterTickAction::apply( SProject *project )
     const qint64 now = nowMs_ >= 0 ? nowMs_ : ( s_fakeNow += 100 );
 
     const int worked =
-        win->mixerMeterTick( arrangement_, position_, now, live_, requestPages_ );
+        win->mixerMeterTick( arrangement_, position_, now, live_, requestPages_,
+                             hidden_ );
     if( worked < 0 ) {
         qWarning() << "mixer-meter-tick FAILED: no pane for arrangement"
                    << arrangement_;
@@ -263,7 +315,7 @@ QStringList SMixerMeterTickAction::knownAttributes() const
 {
     return { QStringLiteral( "arrangement" ), QStringLiteral( "position" ),
              QStringLiteral( "live" ), QStringLiteral( "requestPages" ),
-             QStringLiteral( "nowMs" ) };
+             QStringLiteral( "nowMs" ), QStringLiteral( "hidden" ) };
 }
 
 void SMixerMeterTickAction::writeXml( QDomElement &elem ) const
@@ -273,6 +325,7 @@ void SMixerMeterTickAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "live", live_ ? "true" : "false" );
     elem.setAttribute( "requestPages", requestPages_ ? "true" : "false" );
     elem.setAttribute( "nowMs", (qlonglong) nowMs_ );
+    elem.setAttribute( "hidden", hidden_ );
 }
 
 bool SMixerMeterTickAction::readXml( const QDomElement &elem, int )
@@ -282,6 +335,7 @@ bool SMixerMeterTickAction::readXml( const QDomElement &elem, int )
     live_         = elem.attribute( "live", "true" ) == QLatin1String( "true" );
     requestPages_ = elem.attribute( "requestPages", "true" ) == QLatin1String( "true" );
     nowMs_        = elem.attribute( "nowMs", "-1" ).toLongLong();
+    hidden_       = elem.attribute( "hidden", QString() );
     return true;
 }
 

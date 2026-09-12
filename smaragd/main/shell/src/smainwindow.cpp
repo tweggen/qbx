@@ -265,10 +265,16 @@ QString SMainWindow::describeMixerStrip( const QString &trackName,
 // nothing has rendered — and a case would be asserting the miss path by
 // accident. Requesting is the same call the arranger's own meter gate makes.
 int SMainWindow::mixerMeterTick( const QString &arrangement, offset_t position,
-                                 qint64 nowMs, bool live, bool requestPages )
+                                 qint64 nowMs, bool live, bool requestPages,
+                                 const QString &hidden )
 {
     SMixerPane *pane = buildScratchMixerPane( arrangement );
     if( !pane ) return -1;
+
+    // AC3.5's mechanism. An EMPTY string leaves the pane as it is, so a case
+    // that never mentions the dock never touches it.
+    if( hidden == QLatin1String( "true" ) )       pane->hide();
+    else if( hidden == QLatin1String( "false" ) ) pane->show();
 
     SProject *proj = SApplication::app().getCurrentProject();
     if( requestPages && proj ) {

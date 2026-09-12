@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE MASTER STRIP'S METER READS THE MIXER'S REWIRE (proposal 48 M3, AC3.4).
+
+  It needs NO special case in the pane, and that is the claim. Proposal 45 D12
+  overrode `STrack::getRootComponent()` for the master role to return the
+  mixer's own rewire, "one answer, at the one place every consumer already
+  asks", so the strip binds its twLevelProbe exactly as it does for a user
+  track and gets the summing point for free. A pane that had to know the
+  master was special would be the second spelling this proposal exists to
+  prevent.
+
+  ON A DEFAULT PROJECT, which is D6a and trap T12. The master lane is
+  laneHiddenByDefault() and has no ARRANGER row on a project nobody has
+  touched; the pane shows it anyway. Nothing below calls set-lane-hidden, so a
+  pane that had inherited the arranger's answer would have no master strip to
+  meter at all.
+
+  The level is a RELATION, not a number: the master sums two tracks carrying
+  the same material, so it must read LOUDER than either of them. Asserting an
+  absolute dB here would be asserting the summing law, which is the mixer's
+  business and is gated elsewhere.
+-->
+<SActionScript version="1" name="mixer_meter_master">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="A"/>
+    <set-track-name trackPath="1" name="B"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- The master strip exists at all, without anything un-hiding it. -->
+    <assert-mixer-pane master="1" contains="names=A,B,Master"/>
+    <assert-mixer-pane track="Master" contains="role=master"/>
+
+    <mixer-meter-tick position="48000"/>
+
+    <!-- Each source reads its own level (measured -8.0 dB)... -->
+    <assert-mixer-pane track="A" minMeterDb="-9" maxMeterDb="-7"/>
+    <assert-mixer-pane track="B" minMeterDb="-9" maxMeterDb="-7"/>
+
+    <!-- ...and the master reads the SUM, which is LOUDER than either. Two
+         equal sources are +6 dB, so about -2 dB; the band is what matters and
+         not the digit. A strip mistakenly bound to a track's own rewire, or to
+         a shared tap, would report a source's level here. -->
+    <assert-mixer-pane track="Master" minMeterDb="-3" maxMeterDb="-1"/>
+
+    <!-- Muting one source moves the MASTER and leaves the other alone: its tap
+         is downstream of the mix rather than a copy of a track's. Several
+         ticks, because the meter HOLDS its peak and then decays; one tick
+         after the mute still shows the old level, which is the ballistics
+         working rather than the tap being wrong. -->
+    <mixer-strip-toggle track="B" control="mute" on="true"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <assert-mixer-pane track="Master" minMeterDb="-9" maxMeterDb="-7"/>
+    <assert-mixer-pane track="A" minMeterDb="-9" maxMeterDb="-7"/>
+  </actions>
+</SActionScript>

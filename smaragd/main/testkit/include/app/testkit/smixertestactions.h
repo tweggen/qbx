@@ -42,6 +42,20 @@ private:
     int     master_ = -1; ///< -1 = not checked; 1 = a master strip is present
     QString contains_;
     QString absent_;
+    /// T6's LANE PAIR, the mixer's copy of `assert-meter`'s `minLaneRmsDelta`.
+    /// The strip's `describe()` carries the meter's per-lane dB; this asserts
+    /// the two differ by at least this much. **Only a real per-channel meter
+    /// passes it AND its rejection twin** — `test_sawtooth.wav`'s two channels
+    /// are byte-identical, so a meter fed channel 0 twice passes every bound on
+    /// lane 0 and is caught only by requiring the delta to be ABSENT there.
+    double  minLaneDbDelta_ = -1.0;   ///< < 0 = not checked
+    /// The meter's LANE 0 dB, bounded. A RELATION with margin rather than an
+    /// exact string: the widget's ballistics round to one decimal and decay
+    /// between ticks, so `contains="db=-2.0,-2.0"` is a brittle way of saying
+    /// "louder than a single source" and breaks on a fixture change that means
+    /// nothing. 1e30 = not checked.
+    double  minMeterDb_ = 1e30;
+    double  maxMeterDb_ = 1e30;
 };
 
 /// `assert-mixer-layout` — AC1.7's geometry gate, on BOTH axes.
@@ -121,6 +135,11 @@ private:
     offset_t position_    = 0;
     bool     live_        = true;
     bool     requestPages_ = true;
+    /// "true" / "false" set the pane's hidden state before ticking; empty
+    /// leaves it alone. AC3.5's mechanism: with the dock hidden the pane must
+    /// not walk its strips at all, which `tickWork=` in the pane's describe
+    /// reports and this attribute is how a case gets there.
+    QString  hidden_;
     qint64   nowMs_       = -1;   ///< -1 = a monotonically advancing default
 };
 
