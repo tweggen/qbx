@@ -1,6 +1,6 @@
 # Proposal 48 — The mixer pane: one horizontal dock, one channel strip per lane
 
-> **STATUS: M0, M1 AND M2 EXECUTED, 2026-09-07/09; M3-M4 PROPOSED.** Each
+> **STATUS: M0-M3a EXECUTED, 2026-09-07/12; M4 PROPOSED.** Each
 > executed milestone below carries an "as executed" section with what was
 > measured and what the design did not anticipate — read those before the
 > design text they follow. It rests on proposal 45 M4
@@ -1065,6 +1065,114 @@ toolbar any more than for a context menu, so the buttons are hand-verified and
 - **Gate:** `mixer_write_pass` (`RUN_SERIAL`). **Watched failing** with the
   `writeTick` offer removed — expect an action per slider tick, which the
   undo-count assertion reads directly.
+
+### M3 as executed (2026-09-12)
+
+The meters, the audibility rule and the live path. **Three structural changes
+had to land before a single meter could be asserted**, and each is a bug the
+milestone found rather than a design it followed.
+
+**THE PANE TAKES THE BROADCAST, not each strip.** `mixerui/CONTRACT.md` inv. 5
+says a hidden dock does no work *"not even the model walk"*, and a gate inside
+each strip has already walked by the time it runs. One connection instead of
+N, and AC3.5's counter falls out of the same change. Fixed on the way: the
+strip's early-out was `!meter_->isVisible()`, which never did what it looked
+like — a strip scrolled out of a `QScrollArea` is still visible, and inv. 5
+explicitly requires such a strip to keep ticking.
+
+**CONTRACT INV. 7 WAS BEING VIOLATED IN PRODUCTION, and the first meter found
+it.** M2 connected `SProject::arrangementChanged` straight to
+`rebuildStrips()`; that signal fires from the action chokepoint after EVERY
+action, so every verb destroyed and rebuilt every strip — seven rebuilds for a
+ten-action script. Inv. 7's own words are *"a pane that rebuilt every strip on
+every model signal will delete the fader mid-drag"*, so that hazard was live in
+the shipped code. It surfaced as a meter that would not read: **the probe
+measured peak 0.399994 and the widget reported −60 dB one line later**, because
+the strip holding the ballistics had already been thrown away. The signal is
+kept — the strip list genuinely changes for things no signal reports, a send
+lane added or a lane hidden — and `rebuildIfStructureChanged()` compares the
+lane list first.
+
+**THE TEST PANE IS PERSISTENT.** M1 built a fresh one per seam call, which
+cannot hold a meter reading, cannot accumulate a counter, and made every
+per-pane view state unassertable. One pane per arrangement now lives for the
+run, shown with `WA_DontShowOnScreen` so its layout runs, and re-rooted on
+every call so a second `load-project` cannot leave it answering from the
+previous mixer. `setRoot` had to become idempotent for the same reason — and
+**that broke the section mask**, because `rebuildStrips()` was what re-read
+`SOpt::MixerSections`; `mixer_sections` caught it on the next run.
+
+**THE DESCRIBE COULD NOT EXPRESS TWO OF THE CLAIMS.**
+`SLevelMeter::describe()` carries no label, so `contains="MONITORED"` could
+never have matched however the live branch behaved; the strip reports `live=`
+from `isLiveOwnedLane()` instead. And `db=` is the MODEL's volume, which the
+read-value pump deliberately does not touch, so `faderDb=` reports the widget's
+own position — the two differing is D11a's second obligation working.
+
+**Measured:** two equal sources at −8.0 dB each and the master at **−1.9**, the
++6 dB sum, through `getRootComponent()`'s master override with no special case
+in the pane (45 D12). A monitored track reads **db=−8.0,−60.0 with live=1**.
+
+**Watched failing — six sabotages, every one biting exactly one case:**
+
+| Sabotage | Bites |
+|---|---|
+| S1 audibility ignored | `mixer_meter_audibility` |
+| S2 the live-owned branch never taken | `mixer_meter_audibility` |
+| S3 the dock gate removed | `mixer_hidden_no_work` |
+| S4 the recorder never offered the tick (D11a #1) | `mixer_write_pass` |
+| S5 the READ value never pumped (D11a #2) | `mixer_write_pass` |
+| S6 lane 1 a copy of lane 0 (trap 22's duplicated mono) | `mixer_meter_lanes` |
+
+**AND THE SABOTAGE PASS CORRECTED ITSELF TWICE**, which is the most useful
+thing in this milestone:
+
+- **The harness ran cases without their registered environment.** It invoked
+  the binary directly, so `mixer_meter_audibility` — `RUN_SERIAL` with the
+  paced `file:` input — failed for want of an input backend under every
+  sabotage *and under none*, which reads exactly like a bite. Every FAIL in
+  that column was false evidence. It runs through `ctest` now, which CLAUDE.md
+  already prescribes.
+- **With that fixed, S2 bit NOTHING and the live half of AC3.6 was vacuous.**
+  Deleting the live-owned branch outright changed nothing: the track's pages
+  are frozen and hold audio, so the ordinary probe reads −8 dB and every
+  is-it-lit assertion still passes. The discriminator is the LANE SHAPE — the
+  live branch builds ONE `twLevelSample`, so lane 0 carries the input and the
+  rest idle, while the probe path fills both lanes from a page whose channels
+  are identical. A 30 dB lane delta can only come from the live branch.
+
+### M3a as executed (2026-09-12)
+
+D11a's two UI-side obligations. The third — redirecting a write to an
+automation POINT — is inside `SSetTrackVolumeAction` and is inherited with no
+code, and that asymmetry is the whole reason the milestone exists: two thirds
+of the job is at the MOUNT, so a second mount gets it wrong by default.
+
+`mixer_write_pass` drives three fader moves through the REAL slider during a
+Touch pass. None submits a `set-track-volume` — each is offered to
+`SAutomationRecorder` and taken — and the pass commits one
+`set-automation-points` at the stop, reverted by ONE undo. Then a Read-family
+lane moves the fader from the meter tick.
+
+**−5.9 and −35.9 rather than −6.0 and −36.0**, asserted rather than rounded
+away: the fader is an INTEGER control whose curve does not round-trip, the same
+property that makes the double-click reset commit a dB directly instead of
+moving the slider. A change to the curve should break this.
+
+**A REAL RACE, found by looping rather than by one green run.** The case failed
+**1 in 6**: the pane is connected to the real `SApplication::meterTick`, which
+keeps running for an ~8 s tail after a transport stop so meters can decay, and
+such a tick calls the same pump at the LIVE playhead. One landing between the
+scripted tick and the assertion moved the fader to the curve's value there —
+`faderDb=-35.9` where −5.9 was due, which is exactly the curve at 48000.
+Parking the locator first makes the two agree. 8/8 after.
+
+**NOT gated:** Latch and Write passes (Touch only, as `automation_write_pass`
+also leaves them); AC3a.3's double-click during an open pass is implemented and
+reachable through `gesture="double-click"` but has no case of its own; and the
+input LEVEL a monitored strip shows, which is the monitor's peak for whichever
+block the pump last filled and so a wall-clock quantity — what is gated is
+lit-versus-dark and which BRANCH produced it.
 
 ### M4 — the finish, and the documents
 
