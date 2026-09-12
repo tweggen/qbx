@@ -94,6 +94,21 @@
          wall-clock quantity. What is gated is lit-versus-dark. -->
     <assert-mixer-pane track="Other" minMeterDb="-40"/>
 
+    <!-- ...AND IT CAME FROM THE LIVE BRANCH, not from an ordinary probe that
+         happened to succeed. This is the assertion that distinguishes them,
+         and without it the whole live half is vacuous: the track's pages are
+         frozen and hold audio, so deleting the live branch outright leaves the
+         probe reading -8 dB and every "is it lit" assertion still passing.
+         Measured exactly that way: the sabotage bit nothing.
+
+         The signature is the LANE SHAPE. The live branch builds ONE
+         twLevelSample from the monitor's peak and pushes it, so lane 0 carries
+         the input and every other lane idles: db=-8.0,-60.0. The probe path
+         fills both lanes from the page, and test_autosaw's two channels are
+         identical, so it reads db=-8.0,-8.0, a delta of zero. A 30 dB delta
+         can only come from the live branch. -->
+    <assert-mixer-pane track="Other" minLaneDbDelta="30"/>
+
     <!-- Hand it back: the label goes, and the ordinary probe path returns. -->
     <set-monitor-mode trackPath="1" mode="auto"/>
     <arm-track trackPath="1" armed="false"/>
