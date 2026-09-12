@@ -1450,3 +1450,28 @@ PATH — the button's own signal reaching the model — and never the persistenc
 of widget state across the two. Anything that IS per-pane view state (the
 narrow flag) cannot be asserted this way at all, and `mixer_inserts` says so
 where the assertion would otherwise sit.
+
+**SINCE M3 THE PANE IS KEPT, one per arrangement, for the run.** A pane
+destroyed before the next verb cannot hold a METER READING, cannot accumulate a
+tick counter and makes every per-pane view state unassertable; M3 needs all
+three. It is shown with `WA_DontShowOnScreen` (a widget that is not visible
+never receives a resize event, and a `QScrollArea` lays out from its own
+`resizeEvent`) and re-rooted on every call, because a second `load-project`
+gives the project a new root mixer.
+
+**`describeMixerPane` COMPARES the two mounts' colours (proposal 48 M4 /
+AC4.3), and that comparison is the reason `sClipBodyOf()` moved up this file.**
+It is the classifier `assert-take-lane` and `assert-lane-overlay` run over
+grabbed PIXELS; the seam asks it for each strip's track and reports
+`colorMismatch=`. No audio and no geometry assertion anywhere can see a colour,
+so without this field a mixer that grew a palette of its own would ship green.
+`colors=` counts DISTINCT header colours, which is what makes "the auto index
+is the lane's position in the walk" bite rather than merely hold.
+
+**`describeMixerLayout` MEASURES the pinned master rather than reading the
+widget tree** (AC4.4): "is it a child of the scroll area" and "does it move
+when the row scrolls" are different questions and only the second is the
+promise. It drags the pane's own horizontal scrollbar to its maximum and
+compares both strips' GLOBAL positions, reporting `scrolled=` as the control —
+a pane that did not scroll at all would report `masterPinned=1` for the wrong
+reason.

@@ -81,6 +81,46 @@ strip plus once for the pane.
 rebuilt every strip on every model signal deletes the fader mid-drag. Structure
 = tracks added / removed / reordered / hidden.
 
+**inv. 14 — A STRIP'S COLOUR IS `sclipcolors`, RESOLVED FROM THE PROJECT ROOT**
+(proposal 48 AC4.3). `sclipcolors::indexForLane( *project->getRootComponent(),
+track )` then `body( idx, false, muted )` — the same two calls
+`strackrndrinline.cpp`, the arranger's take lanes and the shell's own
+`sClipBodyOf()` (the classifier `assert-take-lane` and `assert-lane-overlay`
+use on grabbed PIXELS) all make. Not "the same palette": the same function.
+The muted variant follows the flag, so the header is re-resolved when the mute
+changes rather than cached at construction.
+
+**THE PADDING IS IN THE ELISION BUDGET, and forgetting it broke three cases at
+once.** The tint is a stylesheet, and a `QLabel`'s minimum width is its text
+PLUS its padding — so 2 px each side put the NARROW strip's own layout minimum
+at 61 against the 60 D9 names (`SMixerStrip(w 60<61)`). `NAME_PAD_PX` is one
+constant used by the stylesheet and by the elision, and inv. 6's audit is what
+found it.
+
+**inv. 15 — ONE WHEEL NOTCH OVER A FADER IS ONE dB, AND THE STEP IS SHARED**
+(AC4.4). `sFaderWheelValue()` in `app/timeline/sfadercurve.h`, filtered by both
+the strip and `SSMVMixerControl` rather than left to `QAbstractSlider` — whose
+own wheel handling is `wheelScrollLines() * singleStep` in SLIDER units, which
+on this curve is ~1.9 dB a notch at unity and ~5 dB at −60. The arranger head
+carried a comment claiming 1.0 dB per notch that was wrong from the day it was
+written; M4 made it true in both mounts at once rather than in this one.
+
+**inv. 16 — THE STRIP'S CONTEXT MENU IS A SUBSET OF THE ARRANGER'S, SHARED BY
+BODY AND NOT BY COPY** (AC4.2). Remove, group and ungroup are
+`app/timeline/strackgestures`, which the arranger's own `ct*` slots now call
+too; the SUBMIT is injected so each mount stamps its own root (inv. 8 / D12).
+Everything else in the head menu is excluded for a reason that is measured
+rather than aesthetic — indent and outdent resolve the preceding sibling
+through the arranger's ROW list, take lanes / lane height / the automation
+picker are row concepts outright, "create asset from range" needs the ruler
+RANGE and "insert sample" a click POSITION. A pane has none of those. See
+`strackgestures.h`.
+
+**A SYSTEM LANE IS OFFERED NONE OF THEM.** Proposal 45 D6 refuses remove, move
+and reparent on the master; refusing to OFFER is that rule read forwards, and
+`mixer-strip-menu expect="false"` gates it — an accidental refusal is not
+gated by hoping.
+
 ## How to test
 
 `assert-mixer-pane` (the strip list and each strip's `describe()`),

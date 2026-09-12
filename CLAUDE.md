@@ -2861,7 +2861,7 @@ sends inside a named ARRANGEMENT beyond the `arrangement=` attribute
 round-tripping; and a cycle arriving through a HAND-EDITED file with more than
 two lanes in it — `send_cycle.qxp` carries a two-lane loop.
 
-## The mixer pane (proposal 48 — M0-M3a executed 2026-09-07/12)
+## The mixer pane (proposal 48 — M0-M4 executed 2026-09-07/12)
 
 A ninth dock holding one channel strip per track lane: name, inserts, sends,
 then M/S/R beside the meter and the fader. Design and the fourteen decisions:
@@ -2900,6 +2900,10 @@ there is a second mount of them**, exactly as proposal 45 M0 split
 | **INV. 7 WAS BEING VIOLATED IN PRODUCTION, and the first meter found it** (M3) | M2 connected `SProject::arrangementChanged` — which fires from the action chokepoint after EVERY action — straight to `rebuildStrips()`, so every verb destroyed and rebuilt every strip. Inv. 7's own words are *"a pane that rebuilt every strip on every model signal will delete the fader mid-drag"*. It surfaced as a meter that would not read: **the probe measured peak 0.399994 and the widget reported −60 dB one line later**. The signal is KEPT (the strip list changes for things no signal reports — a send lane added, a lane hidden) and `rebuildIfStructureChanged()` compares the lane list first. |
 | **`db` is the MODEL's volume and `faderDb` the WIDGET's position**, and they differ on purpose | A Read-family lane moves the fader WITHOUT editing the model (D11a's second obligation), so only `faderDb` can gate the read-value pump. Likewise `SLevelMeter::describe()` carries no label, so the strip reports `live=` from `isLiveOwnedLane()` — the second term D11b keeps beside audibility — because `contains="MONITORED"` could never have matched however the branch behaved. |
 | The mixer meter is driven with **NO TRANSPORT**, the `assert-meter` precedent | `mixer-meter-tick` requests the page covering the position and then enters at exactly the point the broadcast enters, so the measurement is deterministic instead of racing a playback run. `twLevelProbe` only READS frozen pages and never freezes, which is why the request is not optional. `advanceMs` is how a case says "long enough to decay to the floor" — the ballistics are a wall-clock decay, so counting out ticks would be counting out milliseconds. |
+| **A SECOND MOUNT OF A CONTROL IS WHERE A STALE COMMENT GETS FOUND** (M4) | `SSMVMixerControl::wheelEvent` said "the fader accepts the wheel itself (1.0 dB per notch, see its singleStep)" and had been wrong since it was written. The curve is `x^0.5`, so ten slider units are a tenth of a dB only NOMINALLY — one dB is ~16 units at unity and ~6 at −60 — and `QAbstractSlider` multiplies `singleStep` by `wheelScrollLines()` (3) on top: a notch was ~1.9 dB at unity and ~5 dB at −60. `sFaderWheelValue()` in `sfadercurve.h` does the arithmetic in dB and BOTH faders filter `QEvent::Wheel` to use it, so AC4.4 made the comment TRUE rather than deleting it. Its stall guard is load-bearing: −96 dB and −95 dB round to the same slider value, so a pure dB round trip leaves a notch at the bottom of the range moving nothing at all. |
+| **THE CONTEXT MENU IS THREE ITEMS BECAUSE THAT IS WHAT MEASURED AS SHAREABLE** (M4 / AC4.2) | Remove, group and ungroup read `pathOf` and `childLinks` and nothing else, so they moved into `app/timeline/strackgestures` **with the SUBMIT INJECTED** — the arranger stamps the active TAB's root, the mixer its own (D12), one body and two submitters. Everything else in the head menu is excluded for a reason that is read off the code rather than argued: indent and outdent resolve the preceding sibling through `rowIndexOfTrack()` / `rowAt()`, the arranger's visible ROW list; take lanes, lane height and the automation picker are row concepts outright; "create asset from range" needs the ruler RANGE and "insert sample" a click POSITION. **A pane has none of the three.** |
+| **NOTHING BUT A DEDICATED FIELD CAN SEE A COLOUR** (M4 / AC4.3) | No audio, no geometry and no `describe()` of the arranger's would move if the strip grew a palette of its own. The strip resolves through `sclipcolors::indexForLane` from the PROJECT root — the same two calls `sClipBodyOf()` makes for `assert-take-lane` and `assert-lane-overlay`, the arranger's own PIXEL classifiers — and `describeMixerPane` reports `colorMismatch=` by comparing them, plus `colors=` (distinct headers), which is what makes "the auto index is the lane's position in the walk" bite rather than merely hold. **The master and lane 0 share a colour**, because `autoIndexForLane()` answers 0 for a lane it cannot find and a master lane is not in the walk — the ARRANGER's answer, which `colorMismatch=0` reports agreement with and does not endorse. |
+| **A FIFTH Qt LAYOUT FLOOR, caught by M1's own gate within minutes** (M4) | The colour tint is a stylesheet with `padding:1px 2px`, and a `QLabel`'s minimum width is its text PLUS its padding — so the NARROW strip's layout minimum went to 61 px against the 60 D9 names and THREE cases failed at once with `SMixerStrip(w 60<61)`. One constant now, used by the stylesheet and by the elision budget. |
 | **D5a is TWO widgets in TWO modules**, not one | `SPluginEffectStrip::setCompact` (the Add buttons lose their text; Edit is already the row's double-click and Reload / Remove stay on its context menu, so nothing becomes unreachable) and `SSendStrip::setCompact` (the level spin and the pre/post combo go). Revision 3 predicted the second by measuring `ssendstrip.cpp`'s row; the FX strip's own 113 px is what made AC1.7 fail. The Track Detail dock keeps the full row in both. |
 
 **Two claims in D1 were STALE and were found by trying to execute them:**
@@ -2952,7 +2956,9 @@ in the qxa suite covers) plus the qxa cases `mixer_pane_strips`,
 `mixer_broadcast`, `mixer_pane_layout`, `mixer_path_root`, `mixer_inserts` and
 `mixer_close_teardown` (judged by EXIT CODE), `mixer_sections` (M2, `RUN_SERIAL` — it OWNS `mixer/sections` and restores it) and `mixer_narrow_strip` (M2, owning no INI key), plus `action_roundtrip_test`, plus M3's `mixer_meter_lanes`, `mixer_meter_master`,
 `mixer_hidden_no_work`, `mixer_meter_audibility` (`RUN_SERIAL`, the paced
-`file:` input) and M3a's `mixer_write_pass` (`RUN_SERIAL`).
+`file:` input), M3a's `mixer_write_pass` (`RUN_SERIAL`) and M4's
+`mixer_pane_polish` (the colour agreement, the wheel, the pinned master and
+the three shared menu commands, watched failing under EIGHT sabotages).
 Measured: **crushed 0 / overlap 0 at 96 px and 60 px strips against pane
 heights 180 / 260 / 500**, on both axes.
 
@@ -2965,7 +2971,13 @@ hand-verified, because a scripted run never binds a project into the window
 (above). The four section BUTTONS and the strip's own narrow button — there is
 no verb for a toolbar any more than for a context menu, so the buttons are
 hand-verified and the cases drive `set-option` and `mixer-strip-toggle`
-instead. Repaint cost with many strips (M3 will measure it, not bound it). A send lane's own strip (`SystemLanes::All` has no caller). Hiding a USER
+instead — and the same for the strip's own CONTEXT MENU, whose popup, labels
+and enabled states are hand-verified while `mixer-strip-menu` drives the
+command each item calls. The ARRANGER's own remove / group / ungroup items
+after M4's extraction: they call the identical function and no headless route
+reaches `SStdMixerView`'s context menu. INDENT and OUTDENT from a mixer strip,
+which are not offered at all. Repaint cost with many strips (measured in no
+milestone: M3's meters were gated by counter, not by clock). A send lane's own strip (`SystemLanes::All` has no caller). Hiding a USER
 lane from a script, which `set-lane-hidden` refuses by design — that rule is
 gated in `laneorder_test` against the model instead. And the per-strip
 independent scrolling of the FX/sends section, which follows from D5 putting

@@ -1,6 +1,6 @@
 # Proposal 48 — The mixer pane: one horizontal dock, one channel strip per lane
 
-> **STATUS: M0-M3a EXECUTED, 2026-09-07/12; M4 PROPOSED.** Each
+> **STATUS: M0-M4 EXECUTED, 2026-09-07/12. The milestone list is CLOSED.** Each
 > executed milestone below carries an "as executed" section with what was
 > measured and what the design did not anticipate — read those before the
 > design text they follow. It rests on proposal 45 M4
@@ -1200,6 +1200,129 @@ lit-versus-dark and which BRANCH produced it.
 - **Gate:** `mixer_pane_polish`, plus `check_layering.py` / `check_logging.py` /
   `check_includes.py` and a full-suite reconcile (`ctest -N` registered vs run
   vs disabled — MEASURE it, never quote the stale figure).
+
+### M4 as executed (2026-09-12)
+
+Three of the four ACs were mostly ALREADY TRUE and the work was in gating them;
+the fourth was a refactor that had to be measured before it could be scoped.
+
+**AC4.1 was M3a's.** The fader's double-click reset landed with the write-pass
+milestone (`sdefaultreset::onDoubleClick` -> `applyVolumeDb_( 0.0 )`, committed
+as a dB because the integer curve does not round-trip). What M4 adds is the
+assertion: `db=0.0` beside `faderDb=0.1`, which is that non-round-trip stated
+as a number. The PLUGIN-slider half is inherited with no code — the mixer
+mounts the arranger's own `SPluginEffectStrip`, whose generic editor got the
+same helper in `fix/detail-pane-layout` — and is deliberately NOT re-gated
+here: a second copy would gate the same lines twice and prove nothing about the
+mount.
+
+**AC4.2 was scoped by MEASUREMENT, and the answer is three items, not ten.**
+The AC's escape clause ("if the extraction is not done, the menu is dropped
+rather than duplicated") turned out not to be needed, but only after reading
+what each item of the arranger's head menu actually depends on:
+
+| Item | Shareable? | What it reads |
+|---|---|---|
+| Remove track | **yes** | `pathOf` only |
+| Group tracks | **yes** | `pathOf` only |
+| Ungroup track | **yes** | `pathOf` + `childLinks` |
+| Indent / Outdent | no | `rowIndexOfTrack()` / `rowAt()` — the arranger's visible ROW list |
+| Take lanes, lane height, automation picker | no | row concepts outright; the AC excludes them by name |
+| Create asset from range | no | the ruler RANGE |
+| Insert / remove / delete sample | no | a click POSITION on the timeline |
+| New track (below) | no | a row position |
+
+So `app/timeline/strackgestures` holds exactly the three, **with the SUBMIT
+INJECTED** — that is the whole reason it is a namespace with a callback rather
+than a method on the view. The arranger stamps the active TAB's root and the
+mixer stamps its own (D12): one body, two submitters. `SStdMixerView`'s three
+`ct*` slots are now four lines each and `ungroupOne_` moved out; `indentOne_`
+and `outdentOne_` stayed, and re-expressing them over
+`slaneorder::flattenTrackLanes` is named as later work rather than smuggled
+into a documentation milestone.
+
+**AC4.3 needed a new KIND of assertion, because nothing existing can see a
+colour.** No audio, no geometry and no `describe()` of the arranger's would
+move if the strip grew a palette of its own. The strip resolves through
+`sclipcolors::indexForLane` from the PROJECT root — the same two calls
+`sClipBodyOf()` makes for `assert-take-lane` and `assert-lane-overlay`, the
+arranger's own PIXEL classifiers — and `describeMixerPane` now reports
+`colorMismatch=` by comparing the two, plus `colors=` (distinct headers), which
+is what makes "the auto index is the lane's position in the walk" bite rather
+than merely hold. Measured: `colorMismatch=0`, `colors=3` over four strips.
+
+**THE MASTER AND LANE 0 SHARE A COLOUR, and it is the ARRANGER's answer, not
+this pane's.** `sclipcolors::autoIndexForLane()` returns 0 for a lane it cannot
+find in the project's flattened walk, and a master lane is not in it. That is
+why `colors` is 3 and not 4. `colorMismatch=0` says the mounts agree; it
+deliberately does not say the answer is a good one, and fixing it is a change
+to the arranger's palette rather than to the mixer.
+
+**AC4.4's wheel was a STALE CLAIM in the arranger, not a missing feature in the
+mixer.** `SSMVMixerControl::wheelEvent`'s comment read "the fader accepts the
+wheel itself (1.0 dB per notch, see its singleStep)" and had been wrong since
+it was written: the curve is `x^0.5`, so ten slider units are a tenth of a dB
+only nominally — one dB is ~16 units at unity and ~6 at −60 — and
+`QAbstractSlider` multiplies `singleStep` by `wheelScrollLines()` (3) on top. A
+notch was therefore ~1.9 dB at unity and ~5 dB at −60. `sFaderWheelValue()` in
+`sfadercurve.h` does the arithmetic in dB and BOTH faders filter
+`QEvent::Wheel` to use it, so the comment is now true in both mounts rather
+than in the new one. Its stall guard is load-bearing and not decoration: −96
+and −95 dB round to the same slider value, so a pure dB round trip leaves a
+notch at the bottom of the range moving nothing at all.
+
+**AC4.4's pinned master was M1's SHAPE and had never been MEASURED.** The seam
+now drags the pane's own horizontal scrollbar to its maximum and compares both
+strips' GLOBAL positions before and after, reporting `masterPinned=` beside
+`scrolled=` — the control, because a pane that did not scroll at all would
+report `masterPinned=1` for the wrong reason.
+
+**A REGRESSION THE M1 LAYOUT GATE CAUGHT IMMEDIATELY, which is what it is
+for.** The colour tint is a stylesheet with `padding:1px 2px`, and a `QLabel`'s
+minimum width is its text PLUS its padding — so the NARROW strip's own layout
+minimum went to 61 px against the 60 D9 names. Three cases failed at once with
+`SMixerStrip(w 60<61)`. `NAME_PAD_PX` is now one constant used by the
+stylesheet and by the elision budget. That is the FIFTH Qt layout floor this
+proposal has paid.
+
+**Sabotage: eight, each biting `mixer_pane_polish` and only it** —
+`mixer_pane_layout`, `mixer_pane_strips`, `mixer_path_root` and
+`mixer_write_pass` stayed green under every one.
+
+| # | Sabotage | Bites |
+|---|---|---|
+| 1 | the header takes a hardcoded grey | `colorMismatch` |
+| 2 | `body( idx, false, false )` — the muted variant dropped | the muted-tint pair |
+| 3 | never re-tint on a mute change | the muted-tint pair |
+| 4 | let `QAbstractSlider` handle the wheel | the three dB assertions |
+| 5 | `sFaderWheelValue` steps in SLIDER units | the three dB assertions |
+| 6 | the master strip joins the SCROLLING row | `masterPinned=1` |
+| 7 | a system lane is offered the menu | the two `expect="false"` rows |
+| 8 | the menu submits through `stimeline::submitActive` | the arrangement-root leg |
+
+**THE FIRST SPELLING OF SABOTAGE 6 WAS A NO-OP AND READ AS A VACUOUS GATE.** It
+changed the strip's CONSTRUCTOR parent, which `masterLayout_->addWidget()`
+immediately overrides one line later — so the master stayed pinned, nothing
+failed, and the honest-looking conclusion was "the master-pinned assertion
+proves nothing". It proves plenty; the patch did nothing. **A sabotage that
+bites nothing is a claim about the SABOTAGE first and the gate second**, and
+the cheap way to tell them apart is to assert the anchor inside the patch, as
+the corrected S6 does.
+
+**The harness refused a dirty tree once, mid-pass, exactly as it is meant to** —
+an uncommitted `docs/ACTIONS.md` edit made while the sabotages were running.
+That guard exists because this command has destroyed verified work three times
+in this repository.
+
+**NOT gated by M4, beyond the proposal's standing list:** the menu POPUP, its
+labels and its enabled states (there is no menu verb in this repository, and
+what is gated is the command each item calls); the ARRANGER's own three menu
+items after the extraction — they call the identical function, and no headless
+route reaches `SStdMixerView`'s context menu; indent and outdent from a mixer
+strip (not offered, for the reason the table above gives); the wheel over the
+ARRANGER head's fader (the step is shared, but no case drives that widget's
+wheel); and pixels, as everywhere in this proposal — nothing here says the
+header is painted at all, only what colour it resolves to.
 
 ---
 
