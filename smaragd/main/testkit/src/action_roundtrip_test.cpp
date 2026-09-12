@@ -422,6 +422,12 @@ const Fixture kFixtures[] = {
     { "mixer-strip-toggle",
       "<mixer-strip-toggle track='Drums' arrangement='Riff' control='solo'"
       " on='true'/>" },
+    { "mixer-meter-tick",
+      "<mixer-meter-tick arrangement='Riff' position='48000' live='false'"
+      " requestPages='false' nowMs='1234' hidden='true' advanceMs='4000'/>" },
+    { "mixer-strip-set",
+      "<mixer-strip-set track='Drums' arrangement='Riff' control='fader'"
+      " gesture='double-click' value='-6.5'/>" },
 
     // --- the detail-pane verbs (fix/detail-pane-layout) ---------------------
     { "assert-track-detail-layout",
@@ -1060,6 +1066,14 @@ const LaneRow kLaneRows[] = {
     { "double-click-control", NotApplicable,
       "resets a CONTROL to its default; it addresses the control, and which "
       "controls a master head has is M4's question, not M5's" },
+    { "mixer-meter-tick",   NotApplicable,
+      "drives ONE meter tick over the pane; it reads pages and pushes into a "
+      "widget, and touches no model state at all -- on a system lane or "
+      "anywhere else" },
+    { "mixer-strip-set",    NotApplicable,
+      "drives a strip's VALUE control; the underlying verb is "
+      "set-track-volume, whose own row above carries the refusals, and during "
+      "an automation pass it submits nothing at all" },
     { "mixer-strip-toggle", NotApplicable,
       "drives a MIXER STRIP's mute / solo / arm / narrow button; each underlying "
       "verb carries its own row above, so the refusals apply through it rather "
