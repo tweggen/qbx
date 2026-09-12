@@ -631,7 +631,7 @@ QString SMixerStrip::describe() const
     const double db = t ? t->getVolume() : 0.0;
     return QStringLiteral(
                "name=%1|narrow=%2|mute=%3|solo=%4|arm=%5|db=%6|role=%7"
-               "|inserts=%8|sends=%9|compact=%10|meter=%11" )
+               "|inserts=%8|sends=%9|compact=%10|live=%11|meter=%12" )
         .arg( t ? t->getSName() : QStringLiteral( "?" ) )
         .arg( narrow_ ? 1 : 0 )
         .arg( t && t->isMuted() ? 1 : 0 )
@@ -647,6 +647,13 @@ QString SMixerStrip::describe() const
         // the strip always sets them together.
         .arg( inserts_ && inserts_->isCompact()
               && sends_ && sends_->isCompact() ? 1 : 0 )
+        // D11b's SECOND term, reported separately from audibility because it
+        // IS separate: a live-owned lane is still audible in every other
+        // sense, and the meter reads its pre-FX input rather than going dark.
+        // `SLevelMeter::describe()` carries no label, so this is the only way
+        // a case can tell the live branch from an ordinary probe that happened
+        // to succeed.
+        .arg( t && t->isLiveOwnedLane() ? 1 : 0 )
         .arg( meter_ ? meter_->describe() : QString() );
 }
 

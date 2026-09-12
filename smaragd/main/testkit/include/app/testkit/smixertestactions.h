@@ -141,6 +141,10 @@ private:
     /// reports and this attribute is how a case gets there.
     QString  hidden_;
     qint64   nowMs_       = -1;   ///< -1 = a monotonically advancing default
+    /// How much fake time this tick represents, in ms (default 100). The
+    /// ballistics are driven by wall-clock dt, so this is how a case says
+    /// "long enough to decay to the floor" without counting out twenty ticks.
+    qint64   advanceMs_   = 0;
 };
 
 /// `mixer-strip-set` — drive one strip's VALUE control (proposal 48 M3a).

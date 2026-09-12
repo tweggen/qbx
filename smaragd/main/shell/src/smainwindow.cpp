@@ -241,6 +241,14 @@ SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) con
     // answer from the PREVIOUS load (the shape inv. 60 records for the
     // arranger).
     slot->setRoot( root, arrangement );
+    // RE-APPLY THE SECTION MASK, and separately from the rebuild. Until M3
+    // `rebuildStrips()` re-read `SOpt::MixerSections` and every seam call
+    // rebuilt, so the mask arrived by accident; once `setRoot` became
+    // idempotent a `set-option` stopped reaching the strips at all
+    // (`mixer_sections` caught it immediately). Applying it is cheap and
+    // destroys nothing, which is the difference that matters -- the mask is a
+    // per-strip VISIBILITY change, never a structure change.
+    slot->applyStoredSections();
     return slot;
 }
 

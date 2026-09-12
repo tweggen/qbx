@@ -76,12 +76,7 @@
          ticks, because the ballistics are a decay and not a jump to the
          floor; each tick advances the fake clock by 100 ms. -->
 
-    <mixer-meter-tick position="4000000" requestPages="false"/>
-    <mixer-meter-tick position="4000000" requestPages="false"/>
-    <mixer-meter-tick position="4000000" requestPages="false"/>
-    <mixer-meter-tick position="4000000" requestPages="false"/>
-    <mixer-meter-tick position="4000000" requestPages="false"/>
-    <mixer-meter-tick position="4000000" requestPages="false"/>
-    <assert-mixer-pane track="Loud" maxMeterDb="-20"/>
+    <mixer-meter-tick position="4000000" requestPages="false" advanceMs="4000"/>
+    <assert-mixer-pane track="Loud" maxMeterDb="-55"/>
   </actions>
 </SActionScript>

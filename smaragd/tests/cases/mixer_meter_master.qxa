@@ -52,14 +52,7 @@
          after the mute still shows the old level, which is the ballistics
          working rather than the tap being wrong. -->
     <mixer-strip-toggle track="B" control="mute" on="true"/>
-    <mixer-meter-tick position="48000"/>
-    <mixer-meter-tick position="48000"/>
-    <mixer-meter-tick position="48000"/>
-    <mixer-meter-tick position="48000"/>
-    <mixer-meter-tick position="48000"/>
-    <mixer-meter-tick position="48000"/>
-    <mixer-meter-tick position="48000"/>
-    <mixer-meter-tick position="48000"/>
+    <mixer-meter-tick position="48000" advanceMs="4000"/>
     <assert-mixer-pane track="Master" minMeterDb="-9" maxMeterDb="-7"/>
     <assert-mixer-pane track="A" minMeterDb="-9" maxMeterDb="-7"/>
   </actions>

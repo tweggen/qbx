@@ -296,7 +296,15 @@ SApplyResult SMixerMeterTickAction::apply( SProject *project )
     // the case a default that always moves forward is what keeps a decay
     // assertion (AC3.3) from depending on how fast the box ran the script.
     static qint64 s_fakeNow = 0;
-    const qint64 now = nowMs_ >= 0 ? nowMs_ : ( s_fakeNow += 100 );
+    // An explicit `nowMs` ADVANCES the shared clock rather than sitting beside
+    // it: a case that jumps forward to force a full decay must not leave the
+    // next default tick going BACKWARDS, which would hand the ballistics a
+    // negative dt. `advanceMs` is the ergonomic form of the same thing --
+    // "let this much time pass" -- so a case does not have to track absolute
+    // milliseconds to say "long enough to reach the floor".
+    if( nowMs_ >= 0 ) s_fakeNow = qMax( s_fakeNow, nowMs_ );
+    else              s_fakeNow += ( advanceMs_ > 0 ? advanceMs_ : 100 );
+    const qint64 now = s_fakeNow;
 
     const int worked =
         win->mixerMeterTick( arrangement_, position_, now, live_, requestPages_,
@@ -315,7 +323,8 @@ QStringList SMixerMeterTickAction::knownAttributes() const
 {
     return { QStringLiteral( "arrangement" ), QStringLiteral( "position" ),
              QStringLiteral( "live" ), QStringLiteral( "requestPages" ),
-             QStringLiteral( "nowMs" ), QStringLiteral( "hidden" ) };
+             QStringLiteral( "nowMs" ), QStringLiteral( "hidden" ),
+             QStringLiteral( "advanceMs" ) };
 }
 
 void SMixerMeterTickAction::writeXml( QDomElement &elem ) const
@@ -326,6 +335,7 @@ void SMixerMeterTickAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "requestPages", requestPages_ ? "true" : "false" );
     elem.setAttribute( "nowMs", (qlonglong) nowMs_ );
     elem.setAttribute( "hidden", hidden_ );
+    elem.setAttribute( "advanceMs", (qlonglong) advanceMs_ );
 }
 
 bool SMixerMeterTickAction::readXml( const QDomElement &elem, int )
@@ -336,6 +346,7 @@ bool SMixerMeterTickAction::readXml( const QDomElement &elem, int )
     requestPages_ = elem.attribute( "requestPages", "true" ) == QLatin1String( "true" );
     nowMs_        = elem.attribute( "nowMs", "-1" ).toLongLong();
     hidden_       = elem.attribute( "hidden", QString() );
+    advanceMs_    = elem.attribute( "advanceMs", "0" ).toLongLong();
     return true;
 }
 
