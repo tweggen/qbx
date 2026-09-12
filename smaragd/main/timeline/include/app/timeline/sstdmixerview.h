@@ -1171,7 +1171,7 @@ private:
     // one would have used). Return false when the step does not apply.
     bool indentOne_( STrack *t, const QList<STrack *> &alsoMoving );
     bool outdentOne_( STrack *t );
-    void ungroupOne_( STrack *t );
+    // ungroupOne_ moved to app/timeline/strackgestures.h (proposal 48 M4).
 };
 
 

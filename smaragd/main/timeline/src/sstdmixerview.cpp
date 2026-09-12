@@ -34,6 +34,7 @@
 #include "app/objects/mixer/strackbroadcast.h"
 #include "app/timeline/sstdmixerview.h"
 #include "app/timeline/ssubmit.h"
+#include "app/timeline/strackgestures.h"
 #include "app/shell/sviewtabs.h"
 #include "app/timeline/strackheaderresizer.h"
 #include "app/objects/track/strack.h"
@@ -1543,39 +1544,14 @@ void SStdMixerView::ctRemoveTrack()
 {
     STrack *clicked = qContent_->getLastClickTrack();
     if( !clicked || !model_ ) return;
-    // Outermost tracks only: removing a folder takes its subtree with it, so a
-    // selected child inside a selected folder must not be removed twice (its
-    // path would resolve to a different track by then).
-    const QList<STrack*> targets =
-        pruneNestedTargets( selectionTargets( clicked ) );
-    if( targets.isEmpty() ) return;
-
-    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
-    const bool macro = targets.size() > 1 && stack;
-    if( macro ) stack->beginMacro( QStringLiteral( "Remove tracks" ) );
-    // Bottom-up: every removal shifts the indices of the lanes below it, and
-    // the paths are re-derived per step anyway (submitAction drains
-    // synchronously), but going upwards keeps each re-derivation cheap and the
-    // undo order the mirror of the redo order.
-    for( int i = targets.size()-1; i >= 0; --i ) {
-        // Index-PATH from the root mixer, so a track inside a folder can be
-        // removed too. This used to be model_->indexOfChildObject(), which sees
-        // the mixer's DIRECT children only: on a nested track it returned -1 and
-        // this slot returned right here, so "Remove track" did nothing at all —
-        // no action, no message, no undo entry.
-        const QList<int> path = strackpath::pathOf( model_, targets.at( i ) );
-        if( path.isEmpty() ) continue;      // not in this project's tree
-        // Through the action so it is undoable (the track + subtree is restorable).
-        stimeline::submitActive( new SRemoveTrackAction( path ) );
-    }
-    if( macro ) stack->endMacro();
-    // Nothing that was removed may stay selected.
-    if( model_ ) {
-        QList<STrack*> keep;
-        for( STrack *s : model_->getSelectedTracks() )
-            if( !strackpath::pathOf( model_, s ).isEmpty() ) keep.append( s );
-        model_->setSelectedTracks( keep );
-    }
+    // The BODY lives in app/timeline/strackgestures.h since proposal 48 M4:
+    // the mixer strip's own menu offers the same three items and may not be a
+    // second copy of them. What stays here is this mount's SUBMITTER -- the
+    // arranger stamps the ACTIVE TAB's root, which is exactly what the mixer
+    // pane must not do (D12).
+    strackgestures::removeTracks(
+        model_, strackgestures::structuralTargets( model_, clicked ),
+        []( SAction *a ) { stimeline::submitActive( a ); } );
 }
 
 // --- grouping (proposal 05 §1.2) ----------------------------------------
@@ -1669,107 +1645,25 @@ void SStdMixerView::ctGroupTrack()
 {
     STrack *clicked = qContent_->getLastClickTrack();
     if( !clicked || !model_ ) return;
-    // One new folder for the whole target block — not one per track.
-    const QList<STrack*> targets =
-        pruneNestedTargets( selectionTargets( clicked ) );
-    if( targets.isEmpty() ) return;
-
-    STrack *first = targets.first();
-    const QList<int> tPath = strackpath::pathOf( model_, first );
-    if( tPath.isEmpty() ) return;
-    QList<int> parentPath = tPath;
-    const int ti = parentPath.takeLast();       // first target's slot in its parent
-
-    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
-    if( stack ) stack->beginMacro( "Group track" );
-
-    if( parentPath.isEmpty() ) {
-        // The block is top-level: create the folder directly in its slot. (This
-        // is the only case the gesture used to handle at all.)
-        stimeline::submitActive( new SAddTrackAction( ti ) );
-    } else {
-        // NESTED. add-track can only append at the MIXER's top level, and
-        // SReparentTrackAction refuses a same-container move (that is
-        // SMoveTrackAction's job) — so the folder cannot be born in place and
-        // cannot be slid there afterwards if it starts as a sibling. Create it
-        // top-level, then move it INTO the parent at the target's slot (a real
-        // cross-container reparent), which pushes the targets down by one.
-        stimeline::submitActive( new SAddTrackAction( -1 ) );
-        const int folderTop = model_->getNTracks() - 1;   // append landed last
-        stimeline::submitActive( new SReparentTrackAction(
-            QList<int>{ folderTop }, parentPath, ti ) );
-    }
-    // Resolve the folder BY POINTER from here on: every reparent below shifts
-    // the indices its path would otherwise have been spelled with.
-    QList<int> folderPath = parentPath; folderPath.append( ti );
-    STrack *folder = dynamic_cast<STrack*>(
-        strackpath::resolveByPath( model_, folderPath ) );
-    if( folder ) {
-        for( STrack *t : targets ) {
-            const QList<int> src = strackpath::pathOf( model_, t );
-            if( src.isEmpty() ) continue;
-            stimeline::submitActive( new SReparentTrackAction(
-                src, strackpath::pathOf( model_, folder ), -1 ) );
-        }
-    }
-
-    if( stack ) stack->endMacro();
+    strackgestures::groupTracks(
+        model_, strackgestures::structuralTargets( model_, clicked ),
+        []( SAction *a ) { stimeline::submitActive( a ); } );
 }
 
 void SStdMixerView::ctUngroupTrack()
 {
     STrack *clicked = qContent_->getLastClickTrack();
     if( !clicked || !model_ ) return;
-    const QList<STrack*> targets =
-        pruneNestedTargets( selectionTargets( clicked ) );
-    if( targets.isEmpty() ) return;
-
-    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
-    const bool macro = targets.size() > 1 && stack;
-    if( macro ) stack->beginMacro( QStringLiteral( "Ungroup tracks" ) );
-    for( int i = targets.size()-1; i >= 0; --i ) ungroupOne_( targets.at( i ) );
-    if( macro ) stack->endMacro();
+    strackgestures::ungroupTracks(
+        model_, strackgestures::structuralTargets( model_, clicked ),
+        []( SAction *a ) { stimeline::submitActive( a ); } );
 }
 
 // Dissolve one folder track, promoting its children into the folder's own
 // parent, then deleting the (now empty) folder.
-void SStdMixerView::ungroupOne_( STrack *t )
-{
-    if( !t || !model_ ) return;
-    const QList<int> tPath = strackpath::pathOf( model_, t );
-    if( tPath.isEmpty() ) return;
-    QList<int> parentPath = tPath;
-    const int ti = parentPath.takeLast();       // the folder's slot in ITS parent
-
-    QList<STrack*> kids;
-    for( SLink *lk : t->childLinks() ) {
-        if( STrack *k = dynamic_cast<STrack*>( &lk->getSObject() ) ) kids.append( k );
-    }
-    if( kids.isEmpty() ) return;
-
-    QUndoStack *stack = SApplication::app().actionHistory()->undoStack();
-    if( stack ) stack->beginMacro( "Ungroup track" );
-    // Promote each child into the folder's OWN parent — the mixer when the
-    // folder is top-level, the grandparent folder when it is nested (this used
-    // to hard-code the mixer, so ungrouping a nested folder would have flung its
-    // children out to the top level). Fill the slots just before the folder so
-    // they end up where it was, in order; each insert pushes the folder one
-    // further right, which is why insertAt just increments. Actions apply
-    // synchronously, so pathOf() below re-reads the tree after the previous move.
-    int insertAt = ti;
-    for( STrack *k : kids ) {
-        stimeline::submitActive( new SReparentTrackAction(
-            strackpath::pathOf( model_, k ), parentPath, insertAt ) );
-        ++insertAt;
-    }
-    // Delete the now-empty folder (undoable: its restore brings it back, then the
-    // child reparents undo back into it).
-    const QList<int> fPath = strackpath::pathOf( model_, t );
-    if( !fPath.isEmpty() ) {
-        stimeline::submitActive( new SRemoveTrackAction( fPath ) );
-    }
-    if( stack ) stack->endMacro();
-}
+// ungroupOne_ MOVED to app/timeline/strackgestures.cpp (proposal 48 M4).
+// It was row-free -- pathOf() and childLinks() only -- which is exactly
+// what made it shareable with a pane that has no rows.
 
 bool SStdMixerView::tkClickTrackHead( STrack *t, Qt::KeyboardModifiers mods )
 {

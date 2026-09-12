@@ -1,14 +1,17 @@
 #include "app/mixerui/smixerstrip.h"
 
 #include <QCheckBox>
+#include <QContextMenuEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QMenu>
 #include <QSlider>
 #include <QUndoStack>
+#include <QWheelEvent>
 #include <QVBoxLayout>
 
 #include "app/actions/sactionhistory.h"
@@ -33,6 +36,7 @@
 #include "app/timeline/sfadercurve.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssendstrip.h"
+#include "app/timeline/strackgestures.h"
 #include "tw/core/twlog.h"
 
 namespace {
@@ -205,6 +209,11 @@ void SMixerStrip::buildUi_()
     // through the slider: the curve does not round-trip (`sDbToFader( 0.0 )`
     // is tick -191 and back is +0.0625 dB).
     sdefaultreset::onDoubleClick( fader_, [this]{ applyVolumeDb_( 0.0 ); } );
+    // ONE WHEEL NOTCH IS ONE dB (AC4.4). See eventFilter(): the step is
+    // `sFaderWheelValue()` in `sfadercurve.h`, shared with the arranger head,
+    // because a fader is a fader in both mounts and the curve makes "1 dB" a
+    // question a singleStep cannot answer.
+    fader_->installEventFilter( this );
     faderRow->addWidget( fader_, 0 );
 
     meter_ = new SLevelMeter( fixedBlock_ );
@@ -229,6 +238,37 @@ void SMixerStrip::buildUi_()
         setFaderSilently_( t->getVolume() );
         narrow_ = t->mixerStripNarrow();
     }
+    applyHeaderColor_();
+}
+
+// AC4.3. THE TRACK'S COLOUR REACHES THE MIXER THROUGH THE SAME FUNCTION THE
+// ARRANGER PAINTS WITH, resolved from the PROJECT root -- which is what
+// `strackrndrinline.cpp`, `sstdmixerview.cpp`'s take lanes and the shell's own
+// `sClipBodyOf()` (the pixel gates' classifier) all ask. Not "the same colour
+// scheme": the same call. A second palette here is the drift proposal 41 M7
+// fixed for the tag chip and the clip palette fixed for the classifiers, and
+// this proposal's governing rule forbids it outright.
+//
+// The header LABEL is tinted rather than the whole strip: a mixer column is
+// mostly controls, and a saturated 96 px block behind a fader is unreadable.
+// The text colour follows the anchor's own lightness so a light anchor does
+// not get white-on-white -- derived, never a second palette entry.
+QColor SMixerStrip::headerColor() const { return headerColor_; }
+
+void SMixerStrip::applyHeaderColor_()
+{
+    STrack *t = track_.data();
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *root  = proj ? proj->getRootComponent() : nullptr;
+    const int idx = ( root && t ) ? sclipcolors::indexForLane( *root, *t ) : 0;
+    headerColor_ = sclipcolors::body( idx, false, t && t->isMuted() );
+    if( !nameLabel_ ) return;
+    const QColor fg = headerColor_.lightness() > 140 ? QColor( 20, 20, 20 )
+                                                     : QColor( 235, 235, 235 );
+    nameLabel_->setAutoFillBackground( true );
+    nameLabel_->setStyleSheet(
+        QStringLiteral( "QLabel { background:%1; color:%2; padding:1px 2px; }" )
+            .arg( headerColor_.name(), fg.name() ) );
 }
 
 // PROPOSAL 48 D12 -- THE STRIP STAMPS ITS OWN ARRANGEMENT, never
@@ -374,6 +414,10 @@ void SMixerStrip::onTrackMutedChanged( bool on )
     if( !muteBtn_ ) return;
     QSignalBlocker b( muteBtn_ );
     muteBtn_->setChecked( on );
+    // `sclipcolors::body()` takes the muted flag, so the header follows the
+    // mute exactly as a clip body does. Re-resolved rather than cached per
+    // state: the resolve is one palette lookup once the index is known.
+    applyHeaderColor_();
 }
 
 void SMixerStrip::onTrackSoloChanged( bool on )
@@ -617,6 +661,20 @@ bool SMixerStrip::driveValue( const QString &control, const QString &gesture,
         return true;
     }
 
+    if( gesture == QLatin1String( "wheel" ) ) {
+        // A REAL WHEEL EVENT at the fader, so what runs is `eventFilter`'s own
+        // branch rather than a second copy of its arithmetic. `value` is
+        // NOTCHES; Qt's unit is 1/8 degree and one notch is 15 degrees, hence
+        // 120 per notch -- the same number the filter divides by.
+        const int notches = (int) value;
+        const QPointF c( fader_->width() / 2.0, fader_->height() / 2.0 );
+        QWheelEvent we( c, fader_->mapToGlobal( c.toPoint() ), QPoint(),
+                        QPoint( 0, notches * 120 ), Qt::NoButton,
+                        Qt::NoModifier, Qt::NoScrollPhase, false );
+        QCoreApplication::sendEvent( fader_, &we );
+        return true;
+    }
+
     // MOVE THE REAL SLIDER and let Qt deliver valueChanged, so the handler
     // under test is the production one. setValue() on an unchanged tick emits
     // nothing, so a case asking for a value the fader already holds gets a
@@ -625,13 +683,95 @@ bool SMixerStrip::driveValue( const QString &control, const QString &gesture,
     return true;
 }
 
+// AC4.4. ONE NOTCH IS ONE dB, and the step is `sfadercurve.h`'s so the two
+// mounts cannot drift. QAbstractSlider's own wheel handling is
+// `wheelScrollLines() * singleStep` in SLIDER units, which on this curve is
+// between ~1.9 dB at unity and ~5 dB down at -60 -- the arranger head carried
+// a comment claiming 1.0 dB per notch that was wrong from the day it was
+// written, and both faders now go through the same function instead.
+bool SMixerStrip::eventFilter( QObject *watched, QEvent *ev )
+{
+    if( watched == fader_ && ev->type() == QEvent::Wheel && fader_ ) {
+        QWheelEvent *we = static_cast<QWheelEvent *>( ev );
+        const int notches = we->angleDelta().y() / 120;
+        if( notches != 0 ) {
+            const int next = sFaderWheelValue( fader_->value(), notches );
+            if( next != fader_->value() )
+                fader_->setValue( next );   // its own signal commits
+        }
+        return true;    // never let the slider apply its own step as well
+    }
+    return QWidget::eventFilter( watched, ev );
+}
+
+// AC4.2. THE TRACK-VERB SUBSET, and only what is genuinely shareable: the
+// bodies are `strackgestures`, which is the arranger's own code since M4 --
+// see that header for the measured list of what does NOT extract (indent and
+// outdent resolve the preceding sibling through the arranger's ROW list, and
+// a mixer has no rows).
+//
+// The SUBMITTER is this strip's own `submit_`, which stamps `rootName_` (D12).
+// `stimeline::submitActive` would stamp whichever editor TAB is in front, and
+// a pane showing a different arrangement would then resolve an empty path and
+// silently do NOTHING -- no refusal, no log line.
+bool SMixerStrip::runMenuCommand( const QString &command )
+{
+    STrack *t = track_.data();
+    SStdMixer *m = mixer_.data();
+    if( !t || !m ) return false;
+    // A SYSTEM LANE has no summing parent and no path of the ordinary shape;
+    // proposal 45 D6 refuses remove / move / reparent on one, by accident at
+    // the verb and on purpose at the check. Refusing here as well keeps the
+    // menu from OFFERING something that would be declined -- D6's own "a bound
+    // is announced, never silent", read forwards.
+    if( t->systemRole() != SSystemRole::None ) return false;
+
+    const QList<STrack *> targets = strackgestures::structuralTargets( m, t );
+    if( targets.isEmpty() ) return false;
+    const auto submit = [this]( SAction *a ) { submit_( a ); };
+
+    if( command == QLatin1String( "remove-track" ) )
+        return strackgestures::removeTracks( m, targets, submit );
+    if( command == QLatin1String( "group-track" ) )
+        return strackgestures::groupTracks( m, targets, submit );
+    if( command == QLatin1String( "ungroup-track" ) )
+        return strackgestures::ungroupTracks( m, targets, submit );
+    return false;
+}
+
+// The menu itself is HAND-VERIFIED, as every menu in this repo is: there is no
+// testkit verb for a context menu anywhere here, so each item calls
+// `runMenuCommand()` and the gate drives that -- the item's own code path.
+void SMixerStrip::contextMenuEvent( QContextMenuEvent *ev )
+{
+    STrack *t = track_.data();
+    if( !t || t->systemRole() != SSystemRole::None ) { ev->ignore(); return; }
+
+    const int n = strackgestures::structuralTargets( mixer_.data(), t ).size();
+    const QString sfx = n > 1 ? QStringLiteral( " (%1 tracks)" ).arg( n )
+                              : QString();
+    QMenu menu( this );
+    menu.addAction( tr( "Remove track" ) + sfx,
+                    this, [this]{ runMenuCommand( QStringLiteral( "remove-track" ) ); } );
+    menu.addAction( n > 1 ? tr( "Group %1 tracks" ).arg( n )
+                          : tr( "Group track" ),
+                    this, [this]{ runMenuCommand( QStringLiteral( "group-track" ) ); } );
+    QAction *ung = menu.addAction(
+        tr( "Ungroup track" ),
+        this, [this]{ runMenuCommand( QStringLiteral( "ungroup-track" ) ); } );
+    ung->setEnabled( !t->childLinks().isEmpty() );
+    menu.exec( ev->globalPos() );
+    ev->accept();
+}
+
 QString SMixerStrip::describe() const
 {
     STrack *t = track_.data();
     const double db = t ? t->getVolume() : 0.0;
     return QStringLiteral(
                "name=%1|narrow=%2|mute=%3|solo=%4|arm=%5|db=%6|role=%7"
-               "|faderDb=%8|inserts=%9|sends=%10|compact=%11|live=%12|meter=%13" )
+               "|faderDb=%8|inserts=%9|sends=%10|compact=%11|live=%12"
+               "|color=%13|meter=%14" )
         .arg( t ? t->getSName() : QStringLiteral( "?" ) )
         .arg( narrow_ ? 1 : 0 )
         .arg( t && t->isMuted() ? 1 : 0 )
@@ -660,6 +800,11 @@ QString SMixerStrip::describe() const
         // a case can tell the live branch from an ordinary probe that happened
         // to succeed.
         .arg( t && t->isLiveOwnedLane() ? 1 : 0 )
+        // AC4.3, and it is what makes the agreement ASSERTABLE rather than
+        // merely intended: `colorMatchesArranger` in the seam compares this
+        // against `sClipBodyOf()`, the classifier the arranger's own PIXEL
+        // gates use.
+        .arg( headerColor_.name() )
         .arg( meter_ ? meter_->describe() : QString() );
 }
 

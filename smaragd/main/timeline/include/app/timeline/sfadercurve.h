@@ -41,4 +41,35 @@ inline int sDbToFader( double dB )
     return (int)( SFADER_MIN + curved * ( SFADER_MAX - SFADER_MIN ) + 0.5 );
 }
 
+
+// ONE WHEEL NOTCH IS ONE dB (proposal 48 AC4.4), and the arithmetic HAS to
+// happen in dB rather than in slider units.
+//
+// The curve is `y = x^0.5` over the travel, so a slider unit is NOT a tenth of
+// a dB anywhere except nominally: near 0 dB one dB is ~16 units, near -60 dB
+// it is ~6. `setSingleStep( 10 )` therefore never meant "1 dB per notch" --
+// and QAbstractSlider multiplies the step by QApplication::wheelScrollLines()
+// (3 by default) on top, so a notch on the arranger head was ~1.9 dB at unity
+// and ~5 dB down at -60. The comment in `SSMVMixerControl::wheelEvent` claimed
+// 1.0 dB per notch and had been wrong since it was written; this is the
+// function that makes it true, in BOTH mounts.
+//
+// THE STALL GUARD IS NOT DECORATION. The bottom of the range is compressed
+// past the integer slider's resolution -- -96 dB and -95 dB round to the SAME
+// value (-960) -- so a pure dB round trip would leave a notch there moving
+// nothing at all and read as a dead control. One unit is then the honest
+// minimum: it is the smallest change this slider can express.
+static const double SFADER_WHEEL_DB = 1.0;
+
+inline int sFaderWheelValue( int cur, int notches )
+{
+    if( notches == 0 ) return cur;
+    const double db = qBound( SFADER_MIN_DB,
+                              sFaderToDb( cur ) + notches * SFADER_WHEEL_DB,
+                              SFADER_MAX_DB );
+    int next = sDbToFader( db );
+    if( next == cur ) next = cur + ( notches > 0 ? 1 : -1 );
+    return qBound( SFADER_MIN, next, SFADER_MAX );
+}
+
 #endif

@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE MIXER PANE'S FINISH (proposal 48 M4 - AC4.1 to AC4.4).
+
+  Four unrelated promises, one case, because each is small and all four are
+  about the same widget: the fader resets, the strip carries its track's
+  COLOUR, the master does not scroll, and a wheel notch is one dB.
+
+  WHAT EACH ASSERTION CAN AND CANNOT SEE
+  ======================================
+
+  COLOUR (AC4.3) is gated by `colorMismatch=`, and that field exists because
+  no other kind of assertion can see a colour at all: no audio, no geometry
+  and no `describe()` string of the arranger's would move if the mixer grew a
+  palette of its own. The seam compares each strip's header against
+  `sClipBodyOf()` - the classifier `assert-take-lane` and `assert-lane-overlay`
+  use on grabbed PIXELS - so what is asserted is that the two MOUNTS resolve
+  one track to one colour, through one function. `colors=` counts DISTINCT
+  header colours: a strip that handed every lane anchor 0 would collapse it.
+
+  IT IS NOT A PIXEL GATE AND NOT A PALETTE GATE. Nothing here says which
+  colour is right, or that the header is painted at all; the proposal's own
+  NOT-gated list keeps pixels and aesthetics out on purpose.
+
+  THE MASTER AND LANE 0 SHARE A COLOUR, and that is the ARRANGER's behaviour
+  rather than this pane's: `sclipcolors::autoIndexForLane()` returns 0 for a
+  lane it cannot find in the project's flattened walk, and a master lane is
+  not in it. `colorMismatch=0` says the two mounts agree; it deliberately does
+  not say the answer is a good one. Hence `colors=3` for four strips.
+
+  THE WHEEL (AC4.4) is asserted at EXACT dB values, which is legitimate here
+  and nowhere near a measurement: the fader is an integer slider and
+  `sFaderWheelValue()` is pure integer arithmetic over a fixed curve, so
+  -6 dB, one notch up, three notches down is the same triple on every box.
+  What it bites is a wheel that moved by `wheelScrollLines() * singleStep` in
+  SLIDER units, which is what QAbstractSlider does by itself: ~1.9 dB a notch
+  at unity and ~5 dB at -60, on this curve.
+
+  THE SCROLL half (AC4.4) is measured, not read off the widget tree: the seam
+  drags the pane's own horizontal scrollbar to its maximum and compares both
+  strips' GLOBAL positions before and after. `scrolled=1` is the control - a
+  pane that did not scroll at all would report `masterPinned=1` for the wrong
+  reason.
+
+  THE MENU (AC4.2) is three commands, and there is no menu verb in this
+  repository. `mixer-strip-menu` calls `SMixerStrip::runMenuCommand()`, which
+  is what each item's own lambda calls; the popup, the labels and the enabled
+  states stay hand-verified. The three BODIES are `strackgestures`, shared
+  with the arranger's own track menu - the extraction AC4.2 asks for. Indent,
+  outdent, take lanes, lane height, the automation picker, "new track below"
+  and "create asset from range" are NOT offered and cannot be: each reads the
+  arranger's ROW list, its ruler RANGE or a click POSITION, and a pane has
+  none of the three (see strackgestures.h for the measured list).
+
+  THE PLUGIN-SLIDER half of AC4.1 IS NOT ASSERTED HERE, and that is not an
+  omission. The mixer mounts the arranger's own `SPluginEffectStrip`, whose
+  generic editor got `sdefaultreset::onDoubleClick` in fix/detail-pane-layout;
+  `detail_pane_reset_defaults` gates it. A second copy here would gate the
+  same lines twice and prove nothing about the mount.
+-->
+<SActionScript version="1" name="mixer_pane_polish">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <set-track-name trackPath="1" name="Beta"/>
+    <set-track-name trackPath="2" name="Gamma"/>
+
+    <!-- ============ AC4.3 - THE TWO MOUNTS AGREE ABOUT COLOUR ========= -->
+
+    <assert-mixer-pane strips="4" contains="colorMismatch=0"/>
+    <!-- Three distinct anchors over four strips: the three user lanes differ
+         from each other, and the master collides with lane 0 for the reason
+         the header gives. A strip painting every lane one colour reads
+         `colors=1`; one resolving the auto index against the wrong root
+         reads `colorMismatch` above zero. -->
+    <assert-mixer-pane contains="colors=3"/>
+
+    <!-- A MUTED LANE IS THE MUTED VARIANT, in both mounts. `sclipcolors::
+         body()` takes the flag, so a header that resolved its colour once at
+         construction and never again keeps the unmuted one and this bites. -->
+    <assert-mixer-pane track="Alpha" contains="color=#466d9b"/>
+    <mixer-strip-toggle track="Alpha" control="mute" on="true"/>
+    <assert-mixer-pane track="Alpha" contains="mute=1"/>
+    <assert-mixer-pane track="Alpha" absent="color=#466d9b"/>
+    <assert-mixer-pane contains="colorMismatch=0"/>
+    <mixer-strip-toggle track="Alpha" control="mute" on="false"/>
+    <assert-mixer-pane track="Alpha" contains="color=#466d9b"/>
+
+    <!-- ============ AC4.4 - ONE NOTCH IS ONE dB ======================= -->
+    <!-- `db=` is the MODEL's volume; `faderDb=` the widget's own position.
+         They differ by the integer slider's quantisation (0.1 dB here) and
+         both are asserted, because only the first proves the wheel COMMITTED
+         and only the second proves the widget moved. -->
+
+    <mixer-strip-set track="Alpha" control="fader" gesture="set" value="-6"/>
+    <assert-mixer-pane track="Alpha" contains="|db=-5.9|"/>
+
+    <mixer-strip-set track="Alpha" control="fader" gesture="wheel" value="1"/>
+    <assert-mixer-pane track="Alpha" contains="|db=-4.8|"/>
+    <assert-mixer-pane track="Alpha" contains="|faderDb=-4.7|"/>
+
+    <mixer-strip-set track="Alpha" control="fader" gesture="wheel" value="-3"/>
+    <assert-mixer-pane track="Alpha" contains="|db=-7.7|"/>
+
+    <!-- ============ AC4.1 - DOUBLE-CLICK IS EXACTLY 0.0 dB ============ -->
+    <!-- EXACTLY, and the fader cannot express it: `sDbToFader( 0.0 )` is tick
+         -191 and back is +0.0625 dB, which is why the reset commits a dB
+         rather than moving the slider. `db=0.0` beside `faderDb=0.1` is that
+         difference, and it is the assertion. -->
+
+    <mixer-strip-set track="Alpha" control="fader" gesture="double-click" value="0"/>
+    <assert-mixer-pane track="Alpha" contains="|db=0.0|"/>
+    <assert-mixer-pane track="Alpha" contains="|faderDb=0.1|"/>
+
+    <!-- ============ AC4.4 - THE MASTER DOES NOT SCROLL ================ -->
+    <!-- 200 px of pane cannot hold four 96 px strips, so the row really does
+         scroll (`scrolled=1`, the control) and the master really does not
+         move (`masterPinned=1`). At 640 px there is nothing to scroll and the
+         measurement would be vacuous - which is why the narrow pane is the
+         one asserted. -->
+
+    <assert-mixer-layout paneWidth="200" paneHeight="260" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0" scrollNeeded="1"
+                         contains="scrolled=1"/>
+    <assert-mixer-layout paneWidth="200" paneHeight="260" stripWidth="96"
+                         maxCrushed="0" maxOverlap="0"
+                         contains="masterPinned=1"/>
+
+    <!-- ============ AC4.2 - THE SHARED TRACK-VERB SUBSET ============== -->
+    <!-- A SYSTEM LANE OFFERS NONE OF THEM. Proposal 45 D6 refuses remove,
+         move and reparent on the master; the strip refuses to OFFER them,
+         which is D6's own "a bound is announced, never silent" read forwards.
+         `expect="false"` is the assertion - a refusal nobody watched is not
+         gated by hoping. -->
+
+    <mixer-strip-menu track="Master" command="remove-track" expect="false"/>
+    <mixer-strip-menu track="Master" command="group-track"  expect="false"/>
+
+    <!-- REMOVE, through the item's own call, and ONE undo puts it back. -->
+    <mixer-strip-menu track="Gamma" command="remove-track"/>
+    <assert-mixer-pane strips="3" contains="names=Alpha,Beta,Master"/>
+    <undo/>
+    <assert-mixer-pane strips="4" contains="names=Alpha,Beta,Gamma,Master"/>
+
+    <!-- GROUP: one new folder for the block, so the pane gains exactly one
+         strip. The folder's name is GENERATED, so the count is what is
+         asserted and not the names. -->
+    <mixer-strip-menu track="Beta" command="group-track"/>
+    <assert-mixer-pane strips="5"/>
+    <undo/>
+    <assert-mixer-pane strips="4" contains="names=Alpha,Beta,Gamma,Master"/>
+
+    <!-- UNGROUP: the child is promoted into the folder's own parent and the
+         emptied folder goes. Built with reparent-track so both lanes have
+         names this case chose. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Kid"/>
+    <reparent-track source="3" destParent="1" destIndex="-1"/>
+    <assert-mixer-pane strips="5" contains="names=Alpha,Beta,Kid,Gamma,Master"/>
+    <mixer-strip-menu track="Beta" command="ungroup-track"/>
+    <assert-mixer-pane strips="4" contains="names=Alpha,Kid,Gamma,Master"/>
+    <undo/>
+    <assert-mixer-pane strips="5" contains="names=Alpha,Beta,Kid,Gamma,Master"/>
+  </actions>
+</SActionScript>

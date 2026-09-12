@@ -30,6 +30,8 @@
 #include <QPushButton>
 #include <QAbstractSpinBox>
 #include <QMouseEvent>
+#include <QScrollBar>
+#include <QSet>
 #include <QScrollArea>
 #include <QSlider>
 
@@ -188,6 +190,31 @@ void SMainWindow::attachTrackDetail()
 // against the wrong tree; this repository has already shipped that bug once
 // (`SClearSelectionAction` honours `pathRoot_` and the convenience helper did
 // not set one, so Ctrl+Shift+A cleared the master's selection from any tab).
+namespace {
+
+// THE CLIP BODY COLOUR OF ONE TRACK, from the very function the painter uses
+// (app/model/sclipcolors.h). THREE callers need it and hardcoding it -- which
+// is what QColor(160,160,160) was -- is exactly the drift proposal 41 M7 fixed
+// for the tag chip by giving paint and hit-test one geometry function:
+// `assert-take-lane` and `assert-lane-overlay` classify grabbed PIXELS with
+// it, and since proposal 48 M4 `describeMixerPane` compares the MIXER STRIP's
+// header against it (AC4.3). That third caller is what turns "both mounts use
+// sclipcolors" from an intention into an assertion.
+//
+// The UNSELECTED variant: neither pixel verb knows which clip it is about to
+// meet, and a selected clip's brighter body is measured through
+// assert-lane-overlay's luminance bands rather than by exact identity.
+QColor sClipBodyOf( STrack *track )
+{
+    SProject *proj = SAppContext::get().getCurrentProject();
+    SObject *root = proj ? proj->getRootComponent() : nullptr;
+    const int idx = ( root && track )
+        ? sclipcolors::indexForLane( *root, *track ) : 0;
+    return sclipcolors::body( idx, false, track && track->isMuted() );
+}
+
+}  // namespace
+
 // --- the mixer pane's TEST SEAMS (proposal 48 M1) -------------------------
 // The verbs are in `app/testkit`, which may not include `app/mixerui`; the
 // measurement therefore lives here, as `describeTrackDetailLayout` and
@@ -255,7 +282,29 @@ SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) con
 QString SMainWindow::describeMixerPane( const QString &arrangement ) const
 {
     SMixerPane *pane = buildScratchMixerPane( arrangement );
-    return pane ? pane->describe() : QString();
+    if( !pane ) return QString();
+    // AC4.3, APPENDED HERE rather than computed in the pane, because the
+    // comparison is the point: `sClipBodyOf()` is the classifier the
+    // ARRANGER's own pixel gates use, and `app/mixerui` cannot reach it. A
+    // strip that grew its own palette, or resolved the auto index against the
+    // wrong root, or forgot the muted variant, reports a mismatch here and
+    // nowhere else -- no audio and no geometry assertion can see a colour.
+    //
+    // `colors=` is the number of DISTINCT header colours, which is what makes
+    // "auto index is the lane's position in the walk" bite: a strip that
+    // handed every lane anchor 0 would still match the arranger only if the
+    // arranger were equally broken, and would collapse this count to 1.
+    int mismatch = 0;
+    QSet<QString> distinct;
+    for( int i = 0; i <= pane->stripCount(); ++i ) {
+        SMixerStrip *st = pane->stripAt( i );
+        if( !st || !st->track() ) continue;
+        distinct.insert( st->headerColor().name() );
+        if( st->headerColor() != sClipBodyOf( st->track() ) ) ++mismatch;
+    }
+    return pane->describe()
+           + QStringLiteral( "|colorMismatch=%1|colors=%2" )
+                 .arg( mismatch ).arg( distinct.size() );
 }
 
 QString SMainWindow::describeMixerStrip( const QString &trackName,
@@ -321,6 +370,22 @@ bool SMainWindow::mixerStripToggle( const QString &trackName,
     // The button's own click submits the real action, which reaches the MODEL
     // -- so the next assertion, on a fresh pane, sees it.
     return strip->driveControl( control, on );
+}
+
+// AC4.2's seam. There is no testkit verb for a CONTEXT MENU anywhere in this
+// repository (proposal 41 M2, 45 and 21 L5 each record the same gap), so what
+// is gated is the command each item invokes -- `SMixerStrip::runMenuCommand`,
+// which is literally what the item's own lambda calls. The menu's LABELS, its
+// enabled states and the popup itself stay hand-verified.
+bool SMainWindow::mixerStripMenu( const QString &trackName,
+                                  const QString &command,
+                                  const QString &arrangement )
+{
+    SMixerPane *pane = buildScratchMixerPane( arrangement );
+    if( !pane ) return false;
+    SMixerStrip *strip = pane->stripForTrackNamed( trackName );
+    if( !strip ) return false;
+    return strip->runMenuCommand( command );
 }
 
 void SMainWindow::attachMixerPane()
@@ -3545,11 +3610,41 @@ QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
         scrollNeeded = sa->widget()
                     && sa->widget()->width() > sa->viewport()->width();
 
+    // AC4.4's OTHER half: THE MASTER DOES NOT SCROLL. Measured rather than
+    // asserted from the widget tree alone, because "is it a child of the
+    // scroll area" and "does it move when the row scrolls" are different
+    // questions and only the second is the promise. So: read both global x
+    // positions, drag the pane's own horizontal scrollbar to its maximum, and
+    // read them again. The first strip MUST move (or the pane did not scroll
+    // at all and the measurement proves nothing -- `scrolled=` reports it);
+    // the master MUST NOT.
+    int masterPinned = -1, scrolled = 0;
+    if( QScrollArea *sa =
+            pane->findChild<QScrollArea *>( QStringLiteral( "mixerPaneScroll" ) ) ) {
+        SMixerStrip *first  = pane->stripAt( 0 );
+        SMixerStrip *master = pane->stripAt( pane->stripCount() );
+        if( first && master ) {
+            const int x0 = first->mapToGlobal( QPoint( 0, 0 ) ).x();
+            const int m0 = master->mapToGlobal( QPoint( 0, 0 ) ).x();
+            QScrollBar *bar = sa->horizontalScrollBar();
+            const int was = bar->value();
+            bar->setValue( bar->maximum() );
+            QCoreApplication::sendPostedEvents();
+            const int x1 = first->mapToGlobal( QPoint( 0, 0 ) ).x();
+            const int m1 = master->mapToGlobal( QPoint( 0, 0 ) ).x();
+            bar->setValue( was );
+            scrolled     = ( x1 != x0 ) ? 1 : 0;
+            masterPinned = ( m1 == m0 ) ? 1 : 0;
+        }
+    }
+
     return QStringLiteral(
-               "w=%1|h=%2|stripW=%3|crushed=%4|overlap=%5|scrollNeeded=%6|worst=%7" )
+               "w=%1|h=%2|stripW=%3|crushed=%4|overlap=%5|scrollNeeded=%6"
+               "|scrolled=%7|masterPinned=%8|worst=%9" )
         .arg( pane->width() ).arg( pane->height() ).arg( stripWidth )
         .arg( st.crushed ).arg( st.overlap )
         .arg( scrollNeeded ? 1 : 0 )
+        .arg( scrolled ).arg( masterPinned )
         .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
 }
 
@@ -3953,22 +4048,10 @@ namespace {
 // Composite `c` under drawTakeLane's inactive-take dim, USING QT, rather than
 // reproducing its rounding here: the dim is p.fillRect(vr, QColor(0,0,0,130))
 // and the exact result is Qt's business, not ours.
-// THE CLIP BODY COLOUR OF ONE TRACK, from the very function the painter uses
-// (app/model/sclipcolors.h). Both classifiers below need it, and hardcoding it
-// -- which is what QColor(160,160,160) was -- is exactly the drift proposal 41
-// M7 fixed for the tag chip by giving paint and hit-test one geometry function.
-//
-// The UNSELECTED variant: neither verb knows which clip it is about to meet,
-// and a selected clip's brighter body is measured through
-// assert-lane-overlay's luminance bands rather than by exact identity.
-QColor sClipBodyOf( STrack *track )
-{
-    SProject *proj = SAppContext::get().getCurrentProject();
-    SObject *root = proj ? proj->getRootComponent() : nullptr;
-    const int idx = ( root && track )
-        ? sclipcolors::indexForLane( *root, *track ) : 0;
-    return sclipcolors::body( idx, false, track && track->isMuted() );
-}
+// sClipBodyOf() MOVED UP to the anonymous namespace above
+// `buildScratchMixerPane` (proposal 48 M4): the MIXER pane's seam needs the
+// same classifier, to assert that the two mounts resolve one track to one
+// colour. Same function, one definition -- which is the whole point of it.
 
 QRgb sTakeDim( QRgb c )
 {
