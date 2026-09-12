@@ -163,5 +163,31 @@
     <assert-mixer-pane strips="4" contains="names=Alpha,Kid,Gamma,Master"/>
     <undo/>
     <assert-mixer-pane strips="5" contains="names=Alpha,Beta,Kid,Gamma,Master"/>
+
+    <!-- ============ AC4.2 x D12 - THE MENU STAMPS ITS OWN ROOT ======== -->
+    <!-- The three commands submit through the STRIP's own `submit_`, which
+         stamps `rootName_`. `stimeline::submitActive` would stamp whichever
+         editor TAB is in front, and the action would then resolve an empty
+         path and do NOTHING - no refusal, no log line. On the MASTER root the
+         two submitters agree, so this leg is what makes the difference
+         visible at all: it removes a lane from arrangement "Riff" and asserts
+         the master tree did not move. `mixer_path_root` gates the same rule
+         for the M/S/R buttons. -->
+
+    <create-arrangement name="Riff"/>
+    <add-track index="-1" arrangement="Riff"/>
+    <add-track index="-1" arrangement="Riff"/>
+    <set-track-name trackPath="Riff:0" name="RiffOne"/>
+    <set-track-name trackPath="Riff:1" name="RiffTwo"/>
+    <assert-mixer-pane arrangement="Riff" strips="3"
+                       contains="names=RiffOne,RiffTwo,Master"/>
+
+    <mixer-strip-menu track="RiffTwo" arrangement="Riff" command="remove-track"/>
+    <assert-mixer-pane arrangement="Riff" strips="2"
+                       contains="names=RiffOne,Master"/>
+    <assert-mixer-pane strips="5" contains="names=Alpha,Beta,Kid,Gamma,Master"/>
+    <undo/>
+    <assert-mixer-pane arrangement="Riff" strips="3"
+                       contains="names=RiffOne,RiffTwo,Master"/>
   </actions>
 </SActionScript>
