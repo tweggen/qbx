@@ -109,8 +109,26 @@ public:
     // Back to the floor with the clip latch cleared (transport start).
     void resetMeter();
 
+    // THE TICK SCALE (QBX-101). Every meter draws it: a gray notch from the
+    // leading edge at each multiple of tickStepDb() inside the scale, and a
+    // white 0 dB tick that is thicker (ZERO_TICK_PX) and spans the full short
+    // axis. Ticks are placed with dbToPx(), the same mapping the bars use, so
+    // a tick cannot sit anywhere but where its dB value lights up.
+    //
+    // The step is the smallest of TICK_STEPS_DB that keeps neighbouring ticks
+    // at least MIN_TICK_SPACING_PX apart on a bar `barLen` pixels long -- dense
+    // on a tall dock meter, thinned on a 40 px head -- and 0 when even the
+    // widest step would crowd (only the 0 dB tick is drawn then).
+    static constexpr int MIN_TICK_SPACING_PX = 4;
+    static constexpr int ZERO_TICK_PX        = 2;
+    static int tickStepDb( int barLen, float floorDb, float ceilDb );
+    // Pixel positions (along the growth axis, dbToPx units) of the minor ticks,
+    // lowest first, 0 dB excluded; and of the 0 dB tick, or -1 off the scale.
+    std::vector<int> minorTickPx() const;
+    int zeroTickPx() const;
+
     // Stable one-line description for headless tests, e.g.
-    // "vis=1|orient=v|lanes=2|width=6|len=48|peak=17,9|rms=11,5|hold=22,14|clip=0|db=-11.4,-19.8".
+    // "vis=1|orient=v|lanes=2|width=6|len=48|peak=17,9|rms=11,5|hold=22,14|clip=0|db=-11.4,-19.8|tickStep=12|ticks=4|zeroPx=44".
     // Per-lane fields are comma-separated in lane order; a one-lane meter
     // therefore reads exactly as it did before B8.
     QString describe() const;

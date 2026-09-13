@@ -1000,6 +1000,17 @@ set_tests_properties(plugin_editor_geometry_test PROPERTIES
 # and never references SSettings::instance() (AC 6a), so unlike the two
 # RUN_SERIAL qxa cases in gate 5b that DO touch the shared smaragd.ini, this
 # binary needs no RUN_SERIAL and is safe under `ctest -j4`.
+# QBX-101: the dB tick scale on SLevelMeter, read off the PAINTED image of a
+# real meter (a describe() of the computed positions cannot see a paint bug).
+add_executable(levelmeter_ticks_test timeline/tests/levelmeter_ticks_test.cpp)
+target_link_libraries(levelmeter_ticks_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME levelmeter_ticks_test COMMAND levelmeter_ticks_test)
+set_tests_properties(levelmeter_ticks_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The stale-INI plugin search-path merge (fix/mac-vst3-loading). A pure
 # function over two string lists, so it needs no QSettings and no platform --
 # the test states the macOS/Windows default shapes itself.
