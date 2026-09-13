@@ -810,9 +810,21 @@ public:
      * mutates the model. The consequence is deliberate and worth knowing:
      * showing the master lane travels with the project rather than with the
      * machine, exactly as the metronome switch does.
+     *
+     * A SEND LANE IS SHOWN BY DEFAULT (QBX-104), and it is the one system
+     * role that is. The master and the conductor exist in EVERY project
+     * whether anybody asked for them, so hiding them keeps a row nobody
+     * requested out of the track list. A send lane exists only because
+     * somebody ran add-send-lane, it is AUDIBLE since proposal 47, and nothing
+     * in the UI can un-hide a lane: hidden by default made it a lane you could
+     * hear and could not see or select in the arranger OR the mixer pane. An
+     * older file that set nothing therefore loads with its send lanes shown;
+     * one that wrote laneHidden='false' reads back as the default and drops
+     * the attribute on its next save.
      */
     bool laneHiddenByDefault() const
-        { return systemRole() != SSystemRole::None; }
+        { return systemRole() != SSystemRole::None
+                 && systemRole() != SSystemRole::Send; }
     bool laneHidden() const
         { return laneHidden_.value_or( laneHiddenByDefault() ); }
     void setLaneHidden( bool hidden )

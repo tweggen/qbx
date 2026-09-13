@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Proposal 45 M7, AC7.1 / AC7.2 / AC7.3 / AC7.5 / D10: A SEND LANE EXISTS, IS
-  NAMED, CARRIES A PLUGIN CHAIN AND A FADER, SUMS INTO THE MASTER, HIDES,
+  NAMED, CARRIES A PLUGIN CHAIN AND A FADER, SUMS INTO THE MASTER,
   REFUSES CLIPS AND ROUND-TRIPS - AND NOTHING CAN FEED IT.
 
   M7 IS SHAPE ONLY, AND THE MILESTONE ASSERTS THE ABSENCE OF ROUTING RATHER
@@ -69,8 +69,14 @@
                         expectPath="$send0" inChildLinks="0"/>
     <assert-system-lane trackPath="$send:Reverb" role="send" name="Reverb"/>
 
-    <!-- HIDDEN BY DEFAULT, like every system lane: available, not in the way. -->
-    <assert-system-lane trackPath="$send0" role="send" hidden="1"/>
+    <!-- SHOWN BY DEFAULT - the one system role that is (QBX-104). This line
+         read hidden="1" ("like every system lane: available, not in the
+         way") until QBX-104 gave send lanes an arranger row and a mixer
+         strip. Nothing in the UI can un-hide a lane, so a hidden default
+         left an AUDIBLE lane unreachable in both mounts. The master and the
+         conductor are still hidden by default; send_lane_rows.qxa carries the
+         rest of that rule. -->
+    <assert-system-lane trackPath="$send0" role="send" hidden="0"/>
 
     <!-- ...and it REFUSES CLIPS. -->
     <assert-system-lane trackPath="$send0" role="send" acceptsClips="0"/>
@@ -153,7 +159,7 @@
     <load-project path="../../build/send_lane_shape.qxp"/>
 
     <assert-system-lane trackPath="$send0" role="send" name="Reverb"
-                        hidden="1" acceptsClips="0" plugins="1"
+                        hidden="0" acceptsClips="0" plugins="1"
                         volume="-6" expectPath="$send0" inChildLinks="0"/>
     <assert-system-lane trackPath="$send1" role="send" name="Delay"
                         expectPath="$send1"/>
