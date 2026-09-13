@@ -1,4 +1,5 @@
 #include "app/pluginui/splugineffectstrip.h"
+#include "app/model/suifonts.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/strack.h"
@@ -127,6 +128,9 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
 
     setAcceptDrops(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // THE SMALL FONT (QBX-102): the insert/instrument list reads at the track
+    // head's name size in BOTH mounts, the Track Detail dock and the mixer.
+    setFont(suifonts::smallFont());
 
     // NO EXPLICIT MINIMUM HEIGHT, deliberately, and no scroll area of its own.
     //

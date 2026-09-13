@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-102: SMALLER, NAMED FONTS AND COLLAPSIBLE TRACK DETAIL SECTIONS.
+
+  THE FONTS ARE TWO NAMED FUNCTIONS (app/model/suifonts.h), and every mount
+  asks for one of them:
+    SMALL = the arranger track head's NAME font (application font, 9 pt):
+            the head itself, the mixer strip, and the insert/instrument list
+            in the Track Detail dock.
+    TREE  = the font a dock TITLE is drawn in, i.e.
+            QApplication::font("QDockWidgetTitle") - QDockWidget's own
+            title font, per Qt's source. The Extern file list and the media
+            browser's tree use it.
+
+  WHAT IS ASSERTED IS THE RELATION, read off REAL widgets: each mount's font
+  EQUALS the named font (exact QFont equality), and the mixer strip's font
+  EQUALS the head's name font, which is the request's own wording. The small
+  font's size is also asserted as a number (9). The TREE font's size is NOT:
+  it comes from the platform theme (smaller on macOS, the application font on
+  Windows and Linux), so on this headless Linux run it equals the application
+  font and a size assertion would describe the box rather than the code.
+
+  ON THIS BOX THE APPLICATION FONT IS ALREADY 9 PT (measured: small=9 and
+  tree=9), so every size and equality field here would read the same with no
+  setFont() call at all. What bites is `<mount>Set=1` - Qt::WA_SetFont, the
+  widget chose its font explicitly - which is why it is asserted for every
+  mount that sets one.
+
+  THE SECTIONS. Plugins, Feel Flow and Sliders each have a disclosure-triangle
+  header, and their collapsed state is ONE PROJECT PROPERTY per section:
+    - the defaults are Feel Flow collapsed, Plugins and Sliders expanded;
+    - a state set on one track shows on every other track;
+    - it survives save and load.
+  Every assertion reads a FRESH panel. The seams build a new
+  STrackDetailPanel per call, so a state that lived in the clicked panel
+  instead of the project could not pass here.
+
+  NOT gated: what the triangle and the fonts LOOK like (no paintEvent is
+  measured, and `screenshot` is blank offscreen); the tree font on macOS,
+  where it actually differs from the application font; the LIVE dock (a
+  test-case run never binds its project into the window); and whether
+  collapsing a section dirties the project - it deliberately does not, which
+  nothing asserts.
+-->
+<SActionScript version="1" name="track_detail_sections_and_fonts">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <set-track-name trackPath="1" name="Beta"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- ============ THE FONTS ============================================ -->
+    <assert-ui-fonts trackPath="0" contains="small=9"/>
+    <assert-ui-fonts trackPath="0" contains="head=9|headSmall=1"/>
+    <assert-ui-fonts trackPath="0" contains="stripSmall=1"/>
+    <assert-ui-fonts trackPath="0" contains="stripEqHead=1"/>
+    <assert-ui-fonts trackPath="0" contains="plugin=9|pluginSmall=1"/>
+    <!-- Tree AND Set: on this Linux run treeFont() IS the application font,
+         so equality alone would pass for a list that never set a font. -->
+    <assert-ui-fonts trackPath="0" contains="externTree=1|externSet=1"/>
+    <assert-ui-fonts trackPath="0" contains="mediaTree=1|mediaSet=1"/>
+    <assert-ui-fonts trackPath="0" contains="stripSet=1"/>
+    <assert-ui-fonts trackPath="0" contains="pluginSet=1"/>
+
+    <!-- ============ THE DEFAULTS ========================================= -->
+    <assert-track-detail-sections trackPath="0"
+        contains="plugins=0,feelflow=1,sliders=0|pluginFontPt=9|pluginSmallFont=1"/>
+
+    <!-- ============ ONE STATE FOR EVERY TRACK ============================ -->
+    <track-detail-section trackPath="0" section="feelflow" collapsed="0"/>
+    <track-detail-section trackPath="0" section="sliders" collapsed="1"/>
+    <assert-track-detail-sections trackPath="0" contains="plugins=0,feelflow=0,sliders=1"/>
+    <assert-track-detail-sections trackPath="1" contains="plugins=0,feelflow=0,sliders=1"/>
+
+    <!-- ABSOLUTE, not a toggle: asking for the state it already has changes
+         nothing. -->
+    <track-detail-section trackPath="1" section="sliders" collapsed="1"/>
+    <assert-track-detail-sections trackPath="0" contains="sliders=1"/>
+
+    <track-detail-section trackPath="1" section="plugins" collapsed="1"/>
+    <assert-track-detail-sections trackPath="0" contains="plugins=1,feelflow=0,sliders=1"/>
+
+    <track-detail-section trackPath="0" section="nonsense" collapsed="1"
+                          expectReject="true"/>
+
+    <!-- ============ PERSISTED WITH THE PROJECT =========================== -->
+    <save-project path="../../build/track_detail_sections_and_fonts.qxp"/>
+    <load-project path="../../build/track_detail_sections_and_fonts.qxp"/>
+    <assert-track-detail-sections trackPath="0" contains="plugins=1,feelflow=0,sliders=1"/>
+    <assert-track-detail-sections trackPath="1" contains="plugins=1,feelflow=0,sliders=1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

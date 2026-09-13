@@ -440,6 +440,15 @@ const Fixture kFixtures[] = {
     { "double-click-control",
       "<double-click-control control='clip-volume' trackPath='0,1'/>" },
 
+    // --- QBX-102: the named UI fonts and the Track Detail sections ----------
+    { "assert-ui-fonts",
+      "<assert-ui-fonts trackPath='1,0' contains='headSmall=1' absent='strip=-1'/>" },
+    { "track-detail-section",
+      "<track-detail-section trackPath='1,0' section='sliders' collapsed='0'/>" },
+    { "assert-track-detail-sections",
+      "<assert-track-detail-sections trackPath='1,0' contains='feelflow=1'"
+      " absent='plugins=1'/>" },
+
     // --- the automation UI verbs (proposal 37 P6) ---------------------------
     // `take` rather than `slotIndex` here, because a `cut:` target is the one
     // that has takes; the slot half is covered by the write-tick row below.
@@ -997,6 +1006,8 @@ const LaneRow kLaneRows[] = {
     { "assert-mixer-layout",       Accept, "read-only" },
     { "assert-mixer-pane",         Accept, "read-only" },
     { "assert-track-detail-layout", Accept, "read-only" },
+    { "assert-ui-fonts",           Accept, "read-only" },
+    { "assert-track-detail-sections", Accept, "read-only" },
     { "assert-track-head",         Accept, "read-only" },
     { "assert-track-name",         Accept, "read-only" },
     { "assert-track-volume",       Accept, "read-only" },
@@ -1066,6 +1077,10 @@ const LaneRow kLaneRows[] = {
       "they meant" },
     { "click-lane",         NotApplicable, "selection, as above" },
     { "double-click-lane",  NotApplicable, "selection, as above" },
+    { "track-detail-section", NotApplicable,
+      "toggles a Track Detail SECTION, whose state is one project-wide "
+      "property shared by every track; the lane only picks which panel to "
+      "click, so a system lane changes nothing about what is written" },
     { "double-click-control", NotApplicable,
       "resets a CONTROL to its default; it addresses the control, and which "
       "controls a master head has is M4's question, not M5's" },

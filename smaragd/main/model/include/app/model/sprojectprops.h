@@ -1,6 +1,7 @@
 #ifndef SPROJECTPROPS_H
 #define SPROJECTPROPS_H
 
+#include <QString>
 #include <QVariantMap>
 
 // Central registry of well-known per-project property keys and their defaults.
@@ -33,6 +34,33 @@ inline constexpr char TimelineZoomSecondWidth[] = "timelineZoomSecondWidth";
 inline constexpr char TimelineScrollX[] = "timelineScrollX";
     // qulonglong (offset_t): horizontal scroll position, project frames
     // (SMVActualView::upperLeftOffset_)
+
+// Track Detail dock SECTIONS (QBX-102). One flag per section, shared by every
+// track in the project and saved with it: collapsing the Feel Flow section on
+// one track collapses it for all of them. Deliberately NOT seeded by defaults()
+// below -- a key that was never set reads its default through
+// trackDetailSectionCollapsedDefault(), so a project that nobody collapsed
+// anything in writes no new keys and serializes exactly as before. View state:
+// not an action, not undoable, and it does not mark the project dirty (the
+// TimelineZoomSecondWidth precedent above).
+inline constexpr char TrackDetailPluginsCollapsed[]  = "trackDetailPluginsCollapsed";   // bool, default false
+inline constexpr char TrackDetailFeelFlowCollapsed[] = "trackDetailFeelFlowCollapsed";  // bool, default TRUE
+inline constexpr char TrackDetailSlidersCollapsed[]  = "trackDetailSlidersCollapsed";   // bool, default false
+
+inline const char *trackDetailSectionKey( const QString &id )
+{
+    if( id == QLatin1String( "plugins" ) )  return TrackDetailPluginsCollapsed;
+    if( id == QLatin1String( "feelflow" ) ) return TrackDetailFeelFlowCollapsed;
+    if( id == QLatin1String( "sliders" ) )  return TrackDetailSlidersCollapsed;
+    return nullptr;
+}
+
+/// The request's defaults: the whole Feel Flow section collapsed, the plugin
+/// chain and the sliders expanded.
+inline bool trackDetailSectionCollapsedDefault( const QString &id )
+{
+    return id == QLatin1String( "feelflow" );
+}
 
 // Values a brand-new project starts with.
 inline QVariantMap defaults()

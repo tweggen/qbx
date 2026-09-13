@@ -1,5 +1,6 @@
 
 #include <QContextMenuEvent>
+#include "app/model/suifonts.h"
 #include <QDebug>
 #include <QDrag>
 #include <QMenu>
@@ -263,6 +264,9 @@ SExternFileList::SExternFileList( QWidget *parent, SProject *project )
       project_( nullptr )
 {
     setColumnCount(3);
+    // THE TREE FONT (app/model/suifonts.h, QBX-102): the font this dock's own
+    // TITLE is drawn in, so the list reads at the size of its heading.
+    setFont( suifonts::treeFont() );
     // The extern-file list is a bounded side panel, not the primary content: cap its
     // width and give it a non-greedy horizontal policy so it cannot starve the
     // Expanding central mixer view. Without this, QMainWindow hands all resize space

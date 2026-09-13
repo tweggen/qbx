@@ -1,4 +1,9 @@
 
+#include <memory>
+#include <QTreeWidget>
+#include <QToolButton>
+#include "app/timeline/scollapsiblesection.h"
+#include "app/model/suifonts.h"
 #include <stdlib.h>
 
 #include <cassert>
@@ -97,6 +102,7 @@
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/strackdetailpanel.h"
+#include "app/pluginui/splugineffectstrip.h"
 #include "app/timeline/ssendstrip.h"
 #include "app/timeline/sfeelflowpanel.h"
 #include "app/timeline/sfeelflowpuppet.h"
@@ -3680,6 +3686,102 @@ QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
         .arg( st.crushed ).arg( st.overlap )
         .arg( scrollNeeded ? 1 : 0 )
         .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
+}
+
+QString SMainWindow::describeTrackDetailSections( const QString &trackPath )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return QString();
+    SObject *root = splacements::rootContainer( proj );
+    STrack *track = dynamic_cast<STrack *>(
+        splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
+    if( !track ) return QString();
+    STrackDetailPanel panel( nullptr );
+    panel.setTrack( track );
+    sSettleLayout( &panel, 320, 400 );
+    return panel.describeSections();
+}
+
+bool SMainWindow::clickTrackDetailSection( const QString &trackPath,
+                                           const QString &section )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return false;
+    SObject *root = splacements::rootContainer( proj );
+    STrack *track = dynamic_cast<STrack *>(
+        splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
+    if( !track ) return false;
+    STrackDetailPanel panel( nullptr );
+    panel.setTrack( track );
+    sSettleLayout( &panel, 320, 400 );
+    SCollapsibleSection *sec = panel.section( section );
+    if( !sec || !sec->headerButton() ) return false;
+    sec->headerButton()->click();
+    return true;
+}
+
+QString SMainWindow::describeUiFonts( const QString &trackPath )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return QString();
+    SObject *root = splacements::rootContainer( proj );
+    STrack *track = dynamic_cast<STrack *>(
+        splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
+    if( !track ) return QString();
+
+    const QFont small = suifonts::smallFont();
+    const QFont tree  = suifonts::treeFont();
+    QStringList out;
+    out << QStringLiteral( "small=%1" ).arg( small.pointSize() )
+        << QStringLiteral( "tree=%1" ).arg( tree.pointSize() );
+    // One mount: its point size and whether its font IS the named font. A
+    // mount that could not be built reports -1 and 0, which no positive
+    // assertion can mistake for a match.
+    // `<name>Set` is Qt::WA_SetFont: the widget asked for a font EXPLICITLY.
+    // That is what keeps the TREE relation from being vacuous where the
+    // platform sets no dock-title font (Windows, Linux): there treeFont() IS
+    // the application font, so a list that never called setFont() would
+    // "equal" it by default. Equality plus Set=1 says the mount chose it.
+    auto mount = [&out]( const char *name, const char *rel, const QWidget *w,
+                         const QFont &want ) {
+        const QString n = QLatin1String( name );
+        out << QStringLiteral( "%1=%2" ).arg( n ).arg( w ? w->font().pointSize() : -1 )
+            << QStringLiteral( "%1%2=%3" ).arg( n, QLatin1String( rel ) )
+                   .arg( w && w->font() == want ? 1 : 0 )
+            << QStringLiteral( "%1Set=%2" ).arg( n )
+                   .arg( w && w->testAttribute( Qt::WA_SetFont ) ? 1 : 0 );
+    };
+
+    const QWidget *headLabel = nullptr;
+    std::unique_ptr<SSMVMixerControl> head;
+    if( SStdMixerView *v = ensureArranger_() ) {
+        head = std::make_unique<SSMVMixerControl>( nullptr, *v, *track );
+        headLabel = head->nameWidget();
+    }
+    mount( "head", "Small", headLabel, small );
+
+    SMixerStrip *strip = nullptr;
+    if( SMixerPane *pane = buildScratchMixerPane( QString() ) )
+        strip = pane->stripForTrackNamed( track->getSName() );
+    mount( "strip", "Small", strip, small );
+    // The request's own wording is "the same size as the track name in the
+    // track head", so the relation is also stated directly.
+    out << QStringLiteral( "stripEqHead=%1" )
+               .arg( headLabel && strip && strip->font() == headLabel->font() ? 1 : 0 );
+
+    {
+        STrackDetailPanel panel( nullptr );
+        panel.setTrack( track );
+        mount( "plugin", "Small", panel.findChild<SPluginEffectStrip *>(), small );
+    }
+
+    // THE LIVE dock widgets: both lists are built with the window whether or
+    // not a project is bound (the media verbs already drive mediaBrowser_).
+    mount( "extern", "Tree", externFileList_, tree );
+    mount( "media", "Tree",
+           mediaBrowser_ ? mediaBrowser_->findChild<QTreeWidget *>() : nullptr, tree );
+
+    return out.join( QLatin1Char( '|' ) );
 }
 
 namespace {

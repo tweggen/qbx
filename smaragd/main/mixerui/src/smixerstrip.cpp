@@ -1,4 +1,5 @@
 #include "app/mixerui/smixerstrip.h"
+#include "app/model/suifonts.h"
 
 #include <QCheckBox>
 #include <QContextMenuEvent>
@@ -64,6 +65,11 @@ SMixerStrip::SMixerStrip( SStdMixer *mixer, STrack *track,
                           const QString &rootName, QWidget *parent )
     : QWidget( parent ), mixer_( mixer ), track_( track ), rootName_( rootName )
 {
+    // THE SMALL FONT (QBX-102): the track head's name font, set on the whole
+    // strip BEFORE its children exist so every label, button and the embedded
+    // insert and send lists inherit it. The name label's elision reads its own
+    // fontMetrics, so it measures the size it is drawn at.
+    setFont( suifonts::smallFont() );
     buildUi_();
 
     if( STrack *t = track_.data() ) {
