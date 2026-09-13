@@ -1,6 +1,7 @@
 #include "app/timeline/slevelmeter.h"
 
 #include <QMouseEvent>
+#include <cmath>
 #include <QPainter>
 #include <QResizeEvent>
 
@@ -16,6 +17,11 @@ static const QColor kZoneRed   ( 0xd0, 0x40, 0x40 );
 static const QColor kRmsTint   ( 0xff, 0xff, 0xff, 0x50 );  // over the peak zones
 static const QColor kHoldTick  ( 0xf0, 0xf0, 0xf0 );
 static const QColor kClipCap   ( 0xff, 0x30, 0x30 );
+// QBX-101: the scale. Minor ticks gray, the 0 dB tick white.
+static const QColor kTickMinor ( 0x80, 0x80, 0x80 );
+static const QColor kTickZero  ( 0xff, 0xff, 0xff );
+// Candidate minor-tick steps, dB, densest first.
+static constexpr int kTickStepsDb[] = { 3, 6, 12, 24 };
 
 // Zone boundaries, dBFS. Below -9 green, -9..-1 amber, above -1 red.
 static constexpr float kAmberFromDb = -9.0f;
@@ -179,6 +185,39 @@ int SLevelMeter::dbToPx( float db ) const
     return (int) ( t * (float) len + 0.5f );
 }
 
+int SLevelMeter::tickStepDb( int barLen, float floorDb, float ceilDb )
+{
+    const float span = ceilDb - floorDb;
+    if( barLen <= 0 || !( span > 0.0f ) ) return 0;
+    const float pxPerDb = (float) barLen / span;
+    for( int step : kTickStepsDb )
+        if( (float) step * pxPerDb >= (float) MIN_TICK_SPACING_PX ) return step;
+    return 0;
+}
+
+std::vector<int> SLevelMeter::minorTickPx() const
+{
+    std::vector<int> out;
+    const twMeterBallisticsConfig &cfg = ballistics_[0].config();
+    const int step = tickStepDb( barLength(), cfg.floorDb, cfg.ceilDb );
+    if( step <= 0 ) return out;
+    // Multiples of the step, strictly inside the scale: the two ends are the
+    // frame, and 0 dB has its own tick.
+    const int lo = (int) std::ceil( cfg.floorDb / step ) * step;
+    for( int db = lo; (float) db < cfg.ceilDb; db += step ) {
+        if( db == 0 || (float) db <= cfg.floorDb ) continue;
+        out.push_back( dbToPx( (float) db ) );
+    }
+    return out;
+}
+
+int SLevelMeter::zeroTickPx() const
+{
+    const twMeterBallisticsConfig &cfg = ballistics_[0].config();
+    if( !( cfg.floorDb < 0.0f && cfg.ceilDb > 0.0f ) ) return -1;
+    return dbToPx( 0.0f );
+}
+
 void SLevelMeter::pushLevel( const twLevelSampleSet &s, qint64 nowMs )
 {
     const double now = (double) nowMs / 1000.0;
@@ -335,6 +374,41 @@ void SLevelMeter::paintEvent( QPaintEvent * )
         was.hold = holdPx;
         was.clip = clip;
     }
+
+    // THE SCALE (QBX-101), drawn LAST so it reads over a lit bar as well as an
+    // unlit one. Minor ticks are notches from each LANE's leading edge (left on
+    // a vertical meter, top on a horizontal one) covering half of that lane,
+    // so the other half of EVERY lane still shows its reading unobstructed. A
+    // single notch across half the whole widget would cover the first half of
+    // a six-lane meter's lanes entirely and leave the rest bare.
+    // The 0 dB tick spans the whole short axis, frame included, ZERO_TICK_PX
+    // thick: thicker, longer and white, as requested.
+    const bool vert = orientation_ == Qt::Vertical;
+    const int across = vert ? width() : height();
+    const int interior = across - 2;
+    if( interior >= 1 ) {
+        // Position v along the growth axis is drawn on the pixel the bar's v-th
+        // lit pixel occupies -- what slab() fills for [v-1, v): row
+        // height()-v on a vertical meter, column v on a horizontal one. A
+        // thicker tick grows from there back toward the floor.
+        auto tick = [&]( int v, int from, int length, int thick, const QColor &c ) {
+            if( v <= 0 || v > len ) return;
+            if( vert ) p.fillRect( from, height() - v, length, thick, c );
+            else       p.fillRect( v - thick + 1, from, thick, length, c );
+        };
+        const std::vector<int> minors = minorTickPx();
+        for( int i = 0; i < (int) ballistics_.size(); ++i ) {
+            int laneOff = 0, laneExt = 0;
+            if( !laneGeom( i, laneOff, laneExt ) ) continue;
+            // Half the lane, at least one pixel: a stereo track head splits
+            // 8 px into two 3 px lanes, and a notch the width of the lane would
+            // hide both readings on every tick row.
+            const int notch = laneExt >= 2 ? laneExt / 2 : 1;
+            for( int v : minors ) tick( v, laneOff, notch, 1, kTickMinor );
+        }
+        const int z = zeroTickPx();
+        if( z > 0 ) tick( z, 0, across, ZERO_TICK_PX, kTickZero );
+    }
 }
 
 void SLevelMeter::mousePressEvent( QMouseEvent *e )
@@ -378,7 +452,8 @@ QString SLevelMeter::describe() const
     for( const twMeterBallistics &b : ballistics_ ) if( b.clipped() ) anyClip = true;
 
     return QStringLiteral(
-               "vis=%1|orient=%2|lanes=%3|width=%4|len=%5|peak=%6|rms=%7|hold=%8|clip=%9|db=%10" )
+               "vis=%1|orient=%2|lanes=%3|width=%4|len=%5|peak=%6|rms=%7|hold=%8|clip=%9|db=%10"
+               "|tickStep=%11|ticks=%12|zeroPx=%13" )
         // !isHidden(), NOT isVisible(): isVisible() is false for any widget whose
         // ancestors are unshown, and the headless assertions build a head that is
         // never shown. What is being described is whether the DENSITY RULE hid the
@@ -393,5 +468,9 @@ QString SLevelMeter::describe() const
         .arg( rmss )
         .arg( holds )
         .arg( anyClip ? 1 : 0 )
-        .arg( dbs );
+        .arg( dbs )
+        .arg( tickStepDb( barLength(), ballistics_[0].config().floorDb,
+                          ballistics_[0].config().ceilDb ) )
+        .arg( (int) minorTickPx().size() )
+        .arg( zeroTickPx() );
 }
