@@ -85,13 +85,25 @@ public:
     /// strip's own verb exists). `narrow` toggles the strip width.
     bool driveControl( const QString &control, bool on );
 
+    /// Drive a VALUE control (proposal 48 M3a). `control` is `fader` (dB);
+    /// `gesture` is `set` (move the real slider, so `applyVolumeDb_`'s offer to
+    /// SAutomationRecorder is on the path) or `double-click` (the reset route,
+    /// which must go through the recorder too while a pass is open).
+    bool driveValue( const QString &control, const QString &gesture,
+                     double value );
+
     /// Drop every reference into the project: the track, the probe's tap and
     /// the two mounted widgets. Called from the pane's `detachProject()`
     /// (CONTRACT inv. 4 / D13) BEFORE the project is deleted.
     void detachProject();
 
+    /// ONE METER TICK, called by the PANE rather than connected to the app's
+    /// broadcast: the dock gate has to be answered before the per-strip walk
+    /// (CONTRACT inv. 5). Returns true when it did probe work, which is what
+    /// the pane's counter counts.
+    bool onMeterTick( offset_t pos, qint64 nowMs, bool live );
+
 private slots:
-    void onMeterTick( offset_t pos, qint64 nowMs, bool live );
     void onFaderMoved( int value );
     void onFaderReleased();
     void onMuteToggled( bool on );

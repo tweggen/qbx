@@ -33,6 +33,7 @@
 #include "app/timeline/sfadercurve.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssendstrip.h"
+#include "tw/core/twlog.h"
 
 namespace {
 
@@ -65,11 +66,12 @@ SMixerStrip::SMixerStrip( SStdMixer *mixer, STrack *track,
         connect( t, &STrack::armedForRecordingChanged,  this, &SMixerStrip::onTrackArmedChanged );
     }
 
-    // The app BROADCASTS; every mount connects itself. A registry would have
-    // to be poked from everywhere a strip is created or destroyed, and these
-    // connections drop themselves when the strip does.
-    connect( &SApplication::app(), &SApplication::meterTick,
-             this, &SMixerStrip::onMeterTick );
+    // THE STRIP DOES NOT CONNECT TO `meterTick` ITSELF (proposal 48 M3). The
+    // PANE takes the broadcast once and dispatches, because the dock gate has
+    // to be answered BEFORE the per-strip walk: `mixerui/CONTRACT.md` inv. 5
+    // says a hidden dock does no work "not even the model walk", and a gate
+    // sitting inside each strip has already paid for the walk by the time it
+    // runs. One connection instead of N is the smaller consequence.
     if( meter_ )
         connect( &SApplication::app(), &SApplication::meterReset,
                  meter_, &SLevelMeter::resetMeter );
@@ -413,24 +415,31 @@ int SMixerStrip::syncMeterLanes_()
     return shown;
 }
 
-void SMixerStrip::onMeterTick( offset_t pos, qint64 nowMs, bool live )
+bool SMixerStrip::onMeterTick( offset_t pos, qint64 nowMs, bool live )
 {
     // The READ-value pump runs FIRST and unconditionally: a Read-family lane
     // must move the fader even on a strip whose meter is hidden.
     pumpReadValue_( pos );
 
-    if( !meter_ || !meter_->isVisible() ) return;
+    // NOT a visibility test. A strip scrolled out of the viewport MUST still
+    // tick (inv. 5: its meter is a few px of paint, and stopping it would
+    // freeze a bar the user scrolls back to), and a clipped widget is still
+    // `isVisible()` — so that test never did what it looked like it did. What
+    // legitimately stops the work is the METER SECTION being switched off,
+    // which is a user's explicit choice, and the DOCK being hidden, which the
+    // pane answers before it walks at all.
+    if( !meter_ || !showMeter_ ) return false;
     STrack    *t     = track_.data();
     SStdMixer *mixer = mixer_.data();
-    if( !t ) return;
+    if( !t ) return false;
 
-    if( !live ) { meter_->pushIdle( nowMs ); return; }
+    if( !live ) { meter_->pushIdle( nowMs ); return false; }
 
     // AUDIBILITY IS ASKED, NEVER RE-DERIVED. main/timeline/CONTRACT.md
     // inv. 10 records that two local copies of the direct-children-only rule
     // are exactly how the meter and the ear came to disagree about a nested
     // lane. A solo-muted lane IDLES; it never gets a special reading.
-    if( !ssolo::isLaneAudible( mixer, t ) ) { meter_->pushIdle( nowMs ); return; }
+    if( !ssolo::isLaneAudible( mixer, t ) ) { meter_->pushIdle( nowMs ); return true; }
 
     // A LIVE-OWNED LANE HAS NO FROZEN PAGES TO READ, so the meter shows the
     // pre-FX INPUT level instead - the arranger head's own branch. This is a
@@ -455,7 +464,7 @@ void SMixerStrip::onMeterTick( offset_t pos, qint64 nowMs, bool live )
                 tr( "Input level (pre-FX) - this track is MONITORED, so it "
                     "has no frozen pages to read" ) );
             meter_->pushLevel( ls, nowMs );
-            return;
+            return true;
         }
     }
 
@@ -467,6 +476,7 @@ void SMixerStrip::onMeterTick( offset_t pos, qint64 nowMs, bool live )
     // create a demand.
     if( probe_.advanceTo( pos, s, shown ) ) meter_->pushLevel( s, nowMs );
     else                                    meter_->pushIdle( nowMs );
+    return true;
 }
 
 void SMixerStrip::pumpReadValue_( offset_t pos )
@@ -592,13 +602,36 @@ bool SMixerStrip::driveControl( const QString &control, bool on )
     return true;
 }
 
+bool SMixerStrip::driveValue( const QString &control, const QString &gesture,
+                              double value )
+{
+    if( control != QLatin1String( "fader" ) || !fader_ ) return false;
+
+    if( gesture == QLatin1String( "double-click" ) ) {
+        // The RESET route. It commits a dB DIRECTLY rather than moving the
+        // slider, because the integer fader's curve does not round-trip
+        // (`sDbToFader( 0.0 )` is tick -191 and back is +0.0625 dB) -- and it
+        // goes through applyVolumeDb_, so during an open pass the recorder
+        // takes it exactly as an ordinary drag tick would (AC3a.3).
+        applyVolumeDb_( 0.0 );
+        return true;
+    }
+
+    // MOVE THE REAL SLIDER and let Qt deliver valueChanged, so the handler
+    // under test is the production one. setValue() on an unchanged tick emits
+    // nothing, so a case asking for a value the fader already holds gets a
+    // truthful no-op rather than a phantom edit.
+    fader_->setValue( sDbToFader( value ) );
+    return true;
+}
+
 QString SMixerStrip::describe() const
 {
     STrack *t = track_.data();
     const double db = t ? t->getVolume() : 0.0;
     return QStringLiteral(
                "name=%1|narrow=%2|mute=%3|solo=%4|arm=%5|db=%6|role=%7"
-               "|inserts=%8|sends=%9|compact=%10|meter=%11" )
+               "|faderDb=%8|inserts=%9|sends=%10|compact=%11|live=%12|meter=%13" )
         .arg( t ? t->getSName() : QStringLiteral( "?" ) )
         .arg( narrow_ ? 1 : 0 )
         .arg( t && t->isMuted() ? 1 : 0 )
@@ -607,6 +640,12 @@ QString SMixerStrip::describe() const
         .arg( db, 0, 'f', 1 )
         .arg( QString::fromLatin1(
             systemRoleToString( t ? t->systemRole() : SSystemRole::None ) ) )
+        // THE FADER'S OWN POSITION, which is NOT the same number as `db=`
+        // above. That one is the model's volume; this is what the widget
+        // shows. A Read-family lane moves the fader WITHOUT editing the model
+        // (D11a's second obligation), so the two legitimately differ and only
+        // this one can gate the read-value pump.
+        .arg( fader_ ? sFaderToDb( fader_->value() ) : 0.0, 0, 'f', 1 )
         .arg( inserts_ && !inserts_->isHidden() ? 1 : 0 )
         .arg( sends_ && !sends_->isHidden() ? 1 : 0 )
         // D5a: BOTH mounted widgets are compact in a mixer column, and the
@@ -614,6 +653,13 @@ QString SMixerStrip::describe() const
         // the strip always sets them together.
         .arg( inserts_ && inserts_->isCompact()
               && sends_ && sends_->isCompact() ? 1 : 0 )
+        // D11b's SECOND term, reported separately from audibility because it
+        // IS separate: a live-owned lane is still audible in every other
+        // sense, and the meter reads its pre-FX input rather than going dark.
+        // `SLevelMeter::describe()` carries no label, so this is the only way
+        // a case can tell the live branch from an ordinary probe that happened
+        // to succeed.
+        .arg( t && t->isLiveOwnedLane() ? 1 : 0 )
         .arg( meter_ ? meter_->describe() : QString() );
 }
 

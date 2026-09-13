@@ -127,6 +127,27 @@ project open, so a pane that honoured only the mask it was born with would
 show the defaults forever. Not undoable, and a SOpt key rather than a raw
 `SSettings` write because that module owns key NAMES (D4).
 
+**inv. 12 — THE PANE TAKES THE METER BROADCAST AND ANSWERS THE DOCK GATE
+BEFORE IT WALKS.** Strips do not connect to `SApplication::meterTick`
+themselves. Inv. 5 says a hidden dock does no work "not even the model walk",
+and a gate inside each strip has already walked by the time it runs.
+`tickWork()` counts the strips that did probe work and is what AC3.5 asserts —
+counted, never timed.
+
+**A strip's own visibility is NOT a reason to skip its tick.** A strip scrolled
+out of the `QScrollArea` is still `isVisible()` and inv. 5 requires it to keep
+ticking; what legitimately stops the work is the meter SECTION being off (a
+user's explicit choice) and the dock being hidden (the pane's question).
+
+**inv. 13 — `rebuildStrips()` IS CALLED ONLY WHEN THE LANE LIST DIFFERS.**
+`SProject::arrangementChanged` fires after every action and is connected to
+`rebuildIfStructureChanged()`, never to the rebuild directly. Connecting it
+directly is what M2 did, and it made inv. 7's hazard live in shipped code —
+found because a rebuilt strip also throws away its meter's ballistics and its
+probe's window (the probe measured peak 0.399994 and the widget reported −60 dB
+one line later). The section mask is applied SEPARATELY, because it is a
+per-strip visibility change and not a structure change.
+
 ## Four layout floors, measured
 
 Every one of these was found by measuring, not by reading, and each would

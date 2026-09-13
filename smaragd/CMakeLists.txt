@@ -484,7 +484,12 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               # a real input backend for the same reason as the rest of this
               # list -- without one an armed track never becomes a live SOURCE
               # and the case would pass over a condition that never happened.
-              send_live_lane_does_not_feed)
+              send_live_lane_does_not_feed
+              # proposal 48 M3 / AC3.6 / D11b: a MONITORED track's strip meter
+              # reads the pre-FX input rather than going dark. Same reason as
+              # the rest of this list -- without a real input backend the track
+              # never becomes live-owned and the case would assert nothing.
+              mixer_meter_audibility)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE
@@ -557,6 +562,16 @@ endforeach()
 # above describes (the click is produced by the pump and consumed by the RT
 # callback, and the measurement is the capture backend's recording), so
 # RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out.
+# proposal 48 M3a: a Touch pass driven from the MIXER fader. It runs a real
+# transport and waits on the playhead, so it is a wall-clock case in the same
+# sense -- RUN_SERIAL with SMARAGD_CAPTURE_SPEED=1 spelled out. It needs no
+# input backend: the fader is the source of the pass, not a device.
+if(TEST qxa.mixer_write_pass)
+    set_tests_properties(qxa.mixer_write_pass PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+endif()
+
 foreach(_met metronome_click metronome_render_identity metronome_toggle_during_playback)
     if(TEST qxa.${_met})
         set_tests_properties(qxa.${_met} PROPERTIES

@@ -2861,7 +2861,7 @@ sends inside a named ARRANGEMENT beyond the `arrangement=` attribute
 round-tripping; and a cycle arriving through a HAND-EDITED file with more than
 two lanes in it — `send_cycle.qxp` carries a two-lane loop.
 
-## The mixer pane (proposal 48 — M0, M1 and M2 executed 2026-09-07/09)
+## The mixer pane (proposal 48 — M0-M3a executed 2026-09-07/12)
 
 A ninth dock holding one channel strip per track lane: name, inserts, sends,
 then M/S/R beside the meter and the fader. Design and the fourteen decisions:
@@ -2896,6 +2896,10 @@ there is a second mount of them**, exactly as proposal 45 M0 split
 | **A `QScrollArea` carries a ~113 px minimum of its own, and a `QLabel`'s minimum width is its FULL TEXT** | Both are Qt floors wider than a 96 px mixer column, and no amount of compacting the content moves either. The name header therefore lives OUTSIDE the strip's scroll area — a deliberate departure from D5's diagram, and the better shape anyway, since a strip's name is its identity — and the name ELIDES at both widths. The label was the one that actually held the wide strip hostage: 91 px for an ordinary generated track name is, with the toggle button and the margins, exactly the 113 px the strip was reported as owing. |
 | **THE PER-STRIP NARROW FLAG LIVES ON `STrack`, WHICH D9 SAYS IT CANNOT — and D9's reason is STALE** (M2) | D9 excludes it because "narrow is a per-USER view preference and `STrack` attributes are serialized with the arrangement", and prescribes a pane-owned set joined to `SStdMixerView::pruneUiState`. That walk was **RETIRED by proposal 46 M3**, and the three sets D9 names as still being in it (`takesExpanded_`, `trackScale_`, the shown-automation set) **all moved onto `STrack` in that same milestone** — every one a per-user view preference serialized with the arrangement. The reason excludes its four siblings equally. D9's own next sentence survives: *"if the narrow flag can live on the track, it needs no pruning at all."* It can. **Consequence: AC2.3's dangling-key hazard cannot arise, and the flag survives a fresh pane — which closes M1's documented inability to assert narrow at all.** |
 | The pane-wide SECTIONS are `SOpt::MixerSections`, a bitmask, **re-read on every REBUILD** (M2) | 1 inserts, 2 sends, 4 meter, 8 fader, default 15. Not undoable (the `set-count-in` precedent), and a SOpt key rather than a raw `SSettings` write because that module owns key NAMES (D4). Re-read per rebuild because every seam and every project open builds a FRESH pane — one that honoured only the mask it was born with would show the defaults forever. |
+| **THE PANE TAKES THE METER BROADCAST, not each strip** (M3) | inv. 5 says a hidden dock does no work *"not even the model walk"*, and a gate inside each strip has already walked by the time it runs. One connection instead of N, and AC3.5's counter falls out of the same change. The strip's old early-out was `!meter_->isVisible()`, which never did what it looked like: a strip scrolled out of a `QScrollArea` is still visible, and inv. 5 explicitly requires such a strip to keep ticking. |
+| **INV. 7 WAS BEING VIOLATED IN PRODUCTION, and the first meter found it** (M3) | M2 connected `SProject::arrangementChanged` — which fires from the action chokepoint after EVERY action — straight to `rebuildStrips()`, so every verb destroyed and rebuilt every strip. Inv. 7's own words are *"a pane that rebuilt every strip on every model signal will delete the fader mid-drag"*. It surfaced as a meter that would not read: **the probe measured peak 0.399994 and the widget reported −60 dB one line later**. The signal is KEPT (the strip list changes for things no signal reports — a send lane added, a lane hidden) and `rebuildIfStructureChanged()` compares the lane list first. |
+| **`db` is the MODEL's volume and `faderDb` the WIDGET's position**, and they differ on purpose | A Read-family lane moves the fader WITHOUT editing the model (D11a's second obligation), so only `faderDb` can gate the read-value pump. Likewise `SLevelMeter::describe()` carries no label, so the strip reports `live=` from `isLiveOwnedLane()` — the second term D11b keeps beside audibility — because `contains="MONITORED"` could never have matched however the branch behaved. |
+| The mixer meter is driven with **NO TRANSPORT**, the `assert-meter` precedent | `mixer-meter-tick` requests the page covering the position and then enters at exactly the point the broadcast enters, so the measurement is deterministic instead of racing a playback run. `twLevelProbe` only READS frozen pages and never freezes, which is why the request is not optional. `advanceMs` is how a case says "long enough to decay to the floor" — the ballistics are a wall-clock decay, so counting out ticks would be counting out milliseconds. |
 | **D5a is TWO widgets in TWO modules**, not one | `SPluginEffectStrip::setCompact` (the Add buttons lose their text; Edit is already the row's double-click and Reload / Remove stay on its context menu, so nothing becomes unreachable) and `SSendStrip::setCompact` (the level spin and the pre/post combo go). Revision 3 predicted the second by measuring `ssendstrip.cpp`'s row; the FX strip's own 113 px is what made AC1.7 fail. The Track Detail dock keeps the full row in both. |
 
 **Two claims in D1 were STALE and were found by trying to execute them:**
@@ -2913,7 +2917,27 @@ above, master last". Now that 47 makes send lanes audible, a lane you can hear
 and cannot see is a sharper gap than it was. `slaneorder.h` records it and
 offers `SystemLanes::All`; nothing calls it yet.
 
-**THE SABOTAGE PASS FOUND A VACUOUS GATE.** Removing D2 outright — switching
+**THE SABOTAGE PASS HAS NOW FOUND A VACUOUS GATE TWICE, and the second time it
+also caught ITSELF.** In M3 the harness was running cases by invoking the
+binary directly, so `mixer_meter_audibility` — `RUN_SERIAL` with the paced
+`file:` input — failed for want of an input backend under every sabotage AND
+under none, which reads exactly like a bite. Every failure in that column was
+false evidence. **Run a sabotage through `ctest -R`, never the binary**, which
+CLAUDE.md already says elsewhere for flake-hunting and which is the same
+reason. With that fixed, deleting the live-owned branch outright bit nothing:
+the track's pages are frozen and hold audio, so the ordinary probe reads −8 dB
+and every is-it-lit assertion still passes. The discriminator is the LANE
+SHAPE — the live branch builds ONE `twLevelSample`, so lane 0 carries the input
+and the rest idle, while the probe path fills both lanes from a page whose
+channels are identical.
+
+**A HARNESS THAT ENDS IN `git checkout --` MUST REFUSE A DIRTY TREE.** M2's
+verified fix (`SMixerPane::walkOptions()` and its `laneorder_test` assertions)
+was destroyed exactly that way and shipped as docs claiming a gate that did not
+exist; it was restored in M3. That is the THIRD loss to this command recorded
+here.
+
+**THE M1 SABOTAGE PASS FOUND A VACUOUS GATE.** Removing D2 outright — switching
 the pane to `Fold::Honour` — broke NOTHING: `collapse-track` drives the
 arranger's own `toggleTrackCollapsed()`, and a `--test-case` run has no bound
 arranger, so the verb is a **no-op** (`assert-lane-view collapsed=` reads false
@@ -2926,7 +2950,9 @@ folder, a hidden lane and the master; D3a's "no visible lane sorts LAST"
 PRESERVED, over the multi-selection-spanning-a-collapsed-folder shape nothing
 in the qxa suite covers) plus the qxa cases `mixer_pane_strips`,
 `mixer_broadcast`, `mixer_pane_layout`, `mixer_path_root`, `mixer_inserts` and
-`mixer_close_teardown` (judged by EXIT CODE), `mixer_sections` (M2, `RUN_SERIAL` — it OWNS `mixer/sections` and restores it) and `mixer_narrow_strip` (M2, owning no INI key), plus `action_roundtrip_test`.
+`mixer_close_teardown` (judged by EXIT CODE), `mixer_sections` (M2, `RUN_SERIAL` — it OWNS `mixer/sections` and restores it) and `mixer_narrow_strip` (M2, owning no INI key), plus `action_roundtrip_test`, plus M3's `mixer_meter_lanes`, `mixer_meter_master`,
+`mixer_hidden_no_work`, `mixer_meter_audibility` (`RUN_SERIAL`, the paced
+`file:` input) and M3a's `mixer_write_pass` (`RUN_SERIAL`).
 Measured: **crushed 0 / overlap 0 at 96 px and 60 px strips against pane
 heights 180 / 260 / 500**, on both axes.
 

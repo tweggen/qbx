@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A STRIP METER READS AUDIBILITY AND THE LIVE PATH, NOT THE TRACK'S FLAGS
+  (proposal 48 M3, AC3.6 / D11b).
+
+  TWO RULES, AND THEY ARE TWO. A strip that simply ran its probe would show a
+  DEAD meter on every armed or monitored track and a LIT one on a solo-muted
+  nested lane. Both are the shipped bug main/timeline/CONTRACT.md inv. 10
+  exists to prevent, and the strip must ask the same two questions the arranger
+  head asks:
+
+    1. `ssolo::isLaneAudible` decides whether the meter runs at all. Inv. 10
+       records that two local copies of the direct-children-only rule are
+       exactly how the meter and the ear came to disagree about a nested lane,
+       so the rule is ASKED and never re-spelled.
+    2. `isLiveOwnedLane()` is a SECOND term beside it, never folded in. A
+       live-owned lane has no frozen pages to read, so its meter shows the
+       pre-FX INPUT level instead. Folding the two together would darken a
+       monitored track, which is the opposite of what a user needs while
+       playing into it (proposal 21 L1b's rule: a live-owned track is still
+       audible in every other sense).
+
+  A REAL INPUT BACKEND IS LOAD-BEARING for the second half, which is why this
+  case is RUN_SERIAL with the paced `file:` input the proposal-21 monitor cases
+  use. Without one an armed track never becomes a live SOURCE and the case
+  would pass over a condition that never happened, exactly as proposal 47 M4
+  found for its own live case.
+
+  WHAT IS NOT ASSERTED: the input level's VALUE. The pre-FX branch reports
+  whatever the monitor's peak happens to be for the block the pump last filled,
+  which is a wall-clock quantity; what is gated is that the meter is LIT from
+  that branch rather than dark, and that the ordinary probe path is not what
+  produced it.
+-->
+<SActionScript version="1" name="mixer_meter_audibility">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Folder"/>
+    <set-track-name trackPath="1" name="Other"/>
+    <add-track index="-1"/>
+    <reparent-track source="2" destParent="0" destIndex="-1"/>
+    <set-track-name trackPath="0,0" name="Nested"/>
+    <add-sample trackPath="0,0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ AUDIBLE: THE NESTED LANE METERS =================== -->
+
+    <mixer-meter-tick position="48000"/>
+    <assert-mixer-pane track="Nested" minMeterDb="-9" maxMeterDb="-7"/>
+
+    <!-- ============ SOLO ELSEWHERE MAKES IT DARK ====================== -->
+    <!-- Soloing `Other` makes the nested lane INAUDIBLE. The strip must idle,
+         not probe: its pages still exist and still hold audio, so a strip that
+         ran the probe regardless would light up while the ear hears nothing.
+         Several ticks, because idling is a DECAY. -->
+
+    <mixer-strip-toggle track="Other" control="solo" on="true"/>
+    <mixer-meter-tick position="48000" advanceMs="4000"/>
+    <assert-mixer-pane track="Nested" maxMeterDb="-55"/>
+    <!-- ...while the soloed track itself is unaffected. -->
+    <assert-mixer-pane track="Other" minMeterDb="-9" maxMeterDb="-7"/>
+
+    <mixer-strip-toggle track="Other" control="solo" on="false"/>
+
+    <!-- ============ LIVE-OWNED: LIT FROM THE PRE-FX INPUT ============= -->
+    <!-- An armed, monitored track is rendered BLOCK-WISE by the live pump and
+         has no frozen pages at the playhead, so the ordinary probe path
+         reports a miss and the meter would go dark while the performer plays
+         into it. The strip takes the head's own second branch instead and
+         shows the monitor's pre-FX input peak.
+
+         `Other` is armed with the paced file: input this case is registered
+         with. `monitor="on"` alone is what puts a track in the live set (the
+         set is {armed and monitorEffective} union {monitor == on}), which is
+         also why the DISARM below has to drop the mode back to auto. -->
+
+    <set-track-input trackPath="1" input="audio:file:3"/>
+    <arm-track trackPath="1" armed="true"/>
+    <set-monitor-mode trackPath="1" mode="on"/>
+
+    <!-- The meter is LIT, and it is lit from the live branch: the label the
+         strip sets on that path names it, which is the only way to tell this
+         reading apart from an ordinary probe that happened to succeed. -->
+    <!-- The pump needs real wall-clock time to deliver a block: `advanceMs`
+         moves the METER's fake clock and nothing else. This is the one place
+         in the case that waits, and it is why the case is RUN_SERIAL. -->
+    <wait-ms ms="400"/>
+    <mixer-meter-tick position="48000" advanceMs="200"/>
+    <assert-mixer-pane track="Other" contains="live=1"/>
+    <!-- ...and it is LIT, from the pre-FX input rather than from frozen pages
+         it does not have. The BOUND is loose on purpose: the value is the
+         monitor's peak for whichever block the pump last filled, which is a
+         wall-clock quantity. What is gated is lit-versus-dark. -->
+    <assert-mixer-pane track="Other" minMeterDb="-40"/>
+
+    <!-- ...AND IT CAME FROM THE LIVE BRANCH, not from an ordinary probe that
+         happened to succeed. This is the assertion that distinguishes them,
+         and without it the whole live half is vacuous: the track's pages are
+         frozen and hold audio, so deleting the live branch outright leaves the
+         probe reading -8 dB and every "is it lit" assertion still passing.
+         Measured exactly that way: the sabotage bit nothing.
+
+         The signature is the LANE SHAPE. The live branch builds ONE
+         twLevelSample from the monitor's peak and pushes it, so lane 0 carries
+         the input and every other lane idles: db=-8.0,-60.0. The probe path
+         fills both lanes from the page, and test_autosaw's two channels are
+         identical, so it reads db=-8.0,-8.0, a delta of zero. A 30 dB delta
+         can only come from the live branch. -->
+    <assert-mixer-pane track="Other" minLaneDbDelta="30"/>
+
+    <!-- Hand it back: the label goes, and the ordinary probe path returns. -->
+    <set-monitor-mode trackPath="1" mode="auto"/>
+    <arm-track trackPath="1" armed="false"/>
+    <mixer-meter-tick position="48000" advanceMs="200"/>
+    <assert-mixer-pane track="Other" contains="live=0"/>
+    <assert-mixer-pane track="Other" minMeterDb="-9" maxMeterDb="-7"/>
+  </actions>
+</SActionScript>

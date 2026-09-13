@@ -6,6 +6,8 @@
 #include <QStringList>
 
 #include "app/mixerui/smixerstrip.h"
+#include "app/shell/sapplication.h"
+#include "tw/core/twlog.h"
 #include "app/objects/mixer/slaneorder.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/sproject.h"
@@ -44,9 +46,38 @@ SMixerPane::SMixerPane( QWidget *parent ) : QWidget( parent )
     masterLayout_->setContentsMargins( 0, 0, 0, 0 );
     masterLayout_->setSpacing( 0 );
     outer->addWidget( masterHost_, 0 );
+
+    connect( &SApplication::app(), &SApplication::meterTick,
+             this, [this]( offset_t pos, qint64 nowMs, bool live ) {
+                 onMeterTick( pos, nowMs, live );
+             } );
 }
 
 SMixerPane::~SMixerPane() = default;
+
+// The app BROADCASTS and the PANE connects once, rather than every strip
+// connecting itself. Two reasons, and the first is a contract:
+//
+//  - inv. 5 requires the DOCK gate to be answered before the model walk, and a
+//    gate inside each strip has already walked by the time it runs;
+//  - one connection instead of N, dropped when the pane dies rather than N
+//    times as strips are rebuilt.
+int SMixerPane::onMeterTick( offset_t pos, qint64 nowMs, bool live )
+{
+    // THE DOCK GATE. `isHidden()` rather than `!isVisible()`, deliberately: a
+    // widget whose window has never been shown is not "visible" either, and in
+    // a --test-case run NOTHING is — so `!isVisible()` would make this return
+    // for every scripted run and the meters would be ungateable. `isHidden()`
+    // asks the question that was actually meant: has somebody hidden it.
+    if( isHidden() ) return 0;
+
+    int worked = 0;
+    for( SMixerStrip *s : strips_ )
+        if( s->onMeterTick( pos, nowMs, live ) ) ++worked;
+    if( masterStrip_ && masterStrip_->onMeterTick( pos, nowMs, live ) ) ++worked;
+    tickWork_ += worked;
+    return worked;
+}
 
 void SMixerPane::clearStrips_()
 {
@@ -61,6 +92,20 @@ void SMixerPane::clearStrips_()
 
 void SMixerPane::setRoot( SObject *root, const QString &rootName )
 {
+    // IDEMPOTENT, and that is load-bearing rather than an optimisation.
+    // `rebuildStrips()` destroys every strip, and with it every meter's
+    // ballistics and every twLevelProbe's window. The test seams call this on
+    // ENTRY so a pane can never answer from a stale root (inv. 60's shape), so
+    // without this guard a `mixer-meter-tick` would push a level into strips
+    // that the very next `assert-mixer-pane` throws away — measured: the probe
+    // read peak 0.399994 and the widget reported -60 dB.
+    //
+    // A second `load-project` hands over a genuinely different root and still
+    // rebuilds, which is the case the entry call exists for.
+    if( mixer_.data() == dynamic_cast<SStdMixer *>( root )
+        && rootName_ == rootName && !strips_.isEmpty() )
+        return;
+
     rootName_ = rootName;
     if( SStdMixer *old = mixer_.data() )
         for( const QMetaObject::Connection &c : structureConns_ )
@@ -77,16 +122,63 @@ void SMixerPane::setRoot( SObject *root, const QString &rootName )
     // volume, mute, solo and arm are per-track signals the STRIP handles.
     if( SStdMixer *m = mixer_.data() ) {
         structureConns_ << connect( m, &SStdMixer::trackInserted,
-                                    this, [this]{ rebuildStrips(); } )
+                                    this, [this]{ rebuildIfStructureChanged(); } )
                         << connect( m, &SStdMixer::trackRemoved,
-                                    this, [this]{ rebuildStrips(); } )
+                                    this, [this]{ rebuildIfStructureChanged(); } )
                         << connect( m, &SStdMixer::tracksReordered,
-                                    this, &SMixerPane::rebuildStrips );
+                                    this, &SMixerPane::rebuildIfStructureChanged );
+        // `arrangementChanged` fires from the action chokepoint after EVERY
+        // action, so it is not a structure signal -- it is "something
+        // happened". It is connected anyway because the strip list also
+        // changes for things no signal reports (a send lane added or removed,
+        // a lane hidden), and it goes to the GUARDED rebuild for exactly that
+        // reason.
         if( SProject *p = m->getProjectSafe() )
             structureConns_ << connect( p, &SProject::arrangementChanged,
-                                        this, &SMixerPane::rebuildStrips );
+                                        this, &SMixerPane::rebuildIfStructureChanged );
     }
     rebuildStrips();
+}
+
+// REBUILD ON STRUCTURE, UPDATE IN PLACE OTHERWISE -- CONTRACT inv. 7, which
+// the M2 wiring quietly violated by connecting `arrangementChanged` straight
+// to `rebuildStrips()`. That signal fires from the action chokepoint after
+// EVERY action, so every verb destroyed and rebuilt every strip: the
+// fader-under-the-hand hazard inv. 7 names was live, and M3 found it because a
+// rebuilt strip also throws away its meter's ballistics and its probe's window
+// (measured: the probe read peak 0.399994 and the widget reported -60 dB one
+// line later).
+//
+// The signal is KEPT -- the strip list genuinely changes for things no signal
+// reports, a send lane added or a lane hidden -- and the WALK decides. A no-op
+// costs one walk, which is the same walk a rebuild would do anyway, and no
+// widget churn at all.
+void SMixerPane::rebuildIfStructureChanged()
+{
+    SStdMixer *mixer = mixer_.data();
+    if( !mixer ) return;
+
+    const QVector<slaneorder::Lane> lanes =
+        slaneorder::flattenTrackLanes( mixer, walkOptions() );
+
+    int i = 0;
+    bool same = true;
+    for( const slaneorder::Lane &lane : lanes ) {
+        SMixerStrip *st = stripAt( i++ );
+        if( !st || st->track() != lane.track ) { same = false; break; }
+    }
+    if( same && i == strips_.size() + ( masterStrip_ ? 1 : 0 ) ) return;
+    rebuildStrips();
+}
+
+slaneorder::Options SMixerPane::walkOptions()
+{
+    slaneorder::Options opt;
+    opt.fold             = slaneorder::Fold::Ignore;
+    opt.hidden           = slaneorder::Hidden::Honour;
+    opt.system           = slaneorder::SystemLanes::MasterSubtree;
+    opt.alwaysShowMaster = true;
+    return opt;
 }
 
 void SMixerPane::rebuildStrips()
@@ -119,13 +211,8 @@ void SMixerPane::rebuildStrips()
     //                    without its summing point is not a mixer. The
     //                    exemption covers the master ITSELF and never its
     //                    children, so a hidden conductor lane stays hidden.
-    slaneorder::Options opt;
-    opt.fold             = slaneorder::Fold::Ignore;
-    opt.hidden           = slaneorder::Hidden::Honour;
-    opt.system           = slaneorder::SystemLanes::MasterSubtree;
-    opt.alwaysShowMaster = true;
-
-    for( const slaneorder::Lane &lane : slaneorder::flattenTrackLanes( mixer, opt ) ) {
+    for( const slaneorder::Lane &lane :
+             slaneorder::flattenTrackLanes( mixer, walkOptions() ) ) {
         if( !lane.track ) continue;
         const bool isMaster = lane.role == SSystemRole::Master;
         QWidget *host = isMaster ? masterHost_ : stripHost_;
@@ -199,10 +286,11 @@ QString SMixerPane::describe() const
         names << ( s->track() ? s->track()->getSName() : QStringLiteral( "?" ) );
     if( masterStrip_ && masterStrip_->track() )
         names << masterStrip_->track()->getSName();
-    return QStringLiteral( "strips=%1|master=%2|sections=%3|names=%4" )
+    return QStringLiteral( "strips=%1|master=%2|sections=%3|tickWork=%4|names=%5" )
         .arg( strips_.size() + ( masterStrip_ ? 1 : 0 ) )
         .arg( masterStrip_ ? 1 : 0 )
         .arg( sectionsMask() )
+        .arg( tickWork_ )
         .arg( names.join( QLatin1Char( ',' ) ) );
 }
 

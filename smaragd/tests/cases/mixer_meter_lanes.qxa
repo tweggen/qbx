@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EVERY STRIP'S METER READS ITS OWN TRACK, AND IT IS GENUINELY PER-CHANNEL
+  (proposal 48 M3, AC3.1 / AC3.2 / AC3.3 and trap T6).
+
+  HOW THIS IS DRIVEN, and why it is not a transport run. `assert-meter` set the
+  precedent: it requests the page covering the position and runs the production
+  twLevelProbe directly, so the measurement is deterministic instead of racing
+  a real playback. `mixer-meter-tick` does the same and then enters at exactly
+  the point SApplication::meterTick enters, SMixerPane::onMeterTick, so the
+  dock gate, the audibility rule, the lane sync and the probe binding are all
+  the production ones. A verb that pushed a level into the widget instead
+  would gate none of them.
+
+  WHY THE PANE HAD TO BECOME PERSISTENT FOR THIS TO BE POSSIBLE AT ALL. Until
+  M3 every seam built a fresh pane, so a level pushed by one verb was thrown
+  away before the next could read it. Worse, the pane rebuilt its strips on
+  SProject::arrangementChanged, which fires after EVERY action: the probe
+  measured peak 0.399994 and the widget reported -60 dB one line later. That
+  was CONTRACT inv. 7 being violated in production ("a pane that rebuilt every
+  strip on every model signal will delete the fader mid-drag"), and the first
+  meter is what found it.
+
+  THE LANE PAIR IS THE POINT OF AC3.2, and it must be a PAIR. test_sawtooth.wav
+  has two channels holding byte-identical audio (proposal 36 trap 22), so a
+  meter fed channel 0 twice passes every bound on lane 0 and looks perfectly
+  healthy. Only requiring a lane delta on test_stereo.wav AND requiring its
+  ABSENCE on test_sawtooth.wav can tell a real per-channel meter from a
+  duplicated-mono one. That is the defect which made channel_assert_dupmono
+  incapable of detecting a narrow sink.
+-->
+<SActionScript version="1" name="mixer_meter_lanes">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Loud"/>
+    <set-track-name trackPath="1" name="Quiet"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ AC3.1: EACH STRIP READS ITS OWN TRACK ============= -->
+    <!-- Same material, 18 dB apart. A strip wired to the wrong tap, or to a
+         shared one, cannot show two different levels. -->
+
+    <set-track-volume trackPath="1" volume="-18"/>
+    <mixer-meter-tick position="48000"/>
+    <assert-mixer-pane track="Loud"  minMeterDb="-9"  maxMeterDb="-7"/>
+    <assert-mixer-pane track="Quiet" minMeterDb="-27" maxMeterDb="-25"/>
+
+    <!-- ============ AC3.2 / T6: THE LANE PAIR ======================== -->
+    <!-- test_stereo.wav is a 6 dB ladder, so its two lanes MUST differ.
+         test_sawtooth.wav holds byte-identical channels, so the very same
+         assertion MUST be refused there. Either half alone is worthless: a
+         meter fed channel 0 twice passes the first if you only look at lane 0,
+         and passes nothing at all if you only look at the second. -->
+
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="2" name="Stereo"/>
+    <set-track-name trackPath="3" name="Dup"/>
+    <add-sample trackPath="2" filePath="../test_stereo.wav" timePos="0"/>
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="0"/>
+    <mixer-meter-tick position="48000"/>
+
+    <assert-mixer-pane track="Stereo" minLaneDbDelta="3.0"/>
+    <assert-mixer-pane track="Dup" minLaneDbDelta="3.0" expectReject="true"/>
+
+    <!-- ...and the DUP track's meter is genuinely reading, not simply dark:
+         a silent meter would also refuse the delta and prove nothing. -->
+    <assert-mixer-pane track="Dup" minMeterDb="-30"/>
+
+    <!-- ============ AC3.3: A PAGE MISS DECAYS, IT NEVER HOLDS ========= -->
+    <!-- Position 4 000 000 is far past the 4 s fixture, so no page covers it
+         and the probe misses. The meter must FALL rather than freeze at the
+         level it last read, because a dropout has to look like a dropout. Several
+         ticks, because the ballistics are a decay and not a jump to the
+         floor; each tick advances the fake clock by 100 ms. -->
+
+    <mixer-meter-tick position="4000000" requestPages="false" advanceMs="4000"/>
+    <assert-mixer-pane track="Loud" maxMeterDb="-55"/>
+  </actions>
+</SActionScript>

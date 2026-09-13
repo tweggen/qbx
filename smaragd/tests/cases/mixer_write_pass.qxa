@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE MIXER FADER IS A THIRD AUTOMATION CONTROL (proposal 48 M3a, D11a).
+
+  SAutomationRecorder is fed by the arranger's fader AND the plugin parameter
+  slider, and NEITHER of that control's two UI-side obligations lives inside
+  the action:
+
+    1. offer each drag tick to the recorder and RETURN IF TAKEN. A fader that
+       skips this submits a set-track-volume per slider tick during a
+       Touch/Latch/Write pass: thirty undo entries a second, which is the
+       precise thing proposal 37 P6 exists to prevent.
+    2. pump the READ value from the meter tick while a Read-family lane
+       exists. A fader that skips this freezes at the last hand value while
+       the arranger's fader follows the curve, and the user has two faders on
+       one track disagreeing on screen.
+
+  The THIRD obligation, redirecting a write to an automation POINT, is inside
+  SSetTrackVolumeAction and is inherited with no code. That asymmetry is the
+  whole reason this milestone exists: two thirds of the job is at the mount,
+  so a second mount gets it wrong by default.
+
+  mixer-strip-set moves the REAL slider and lets Qt deliver valueChanged, so
+  applyVolumeDb_ is on the path. A verb that wrote the model would gate none
+  of this.
+-->
+<SActionScript version="1" name="mixer_write_pass">
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <add-automation-lane owner="0" target="self:Volume" mode="touch">
+      <p t="0" v="-6"/>
+    </add-automation-lane>
+
+    <!-- ============ AC3a.1: ONE PASS, ONE UNDO STEP ================== -->
+    <!-- Three fader moves while the transport runs. Each is offered to the
+         recorder and TAKEN, so none of them submits a set-track-volume; the
+         pass commits ONE set-automation-points at the stop. -->
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+
+    <wait-playhead position="24000" minAdvance="4096" timeoutMs="20000"/>
+    <mixer-strip-set track="Alpha" control="fader" value="-30"/>
+
+    <wait-playhead position="48000" minAdvance="4096" timeoutMs="20000"/>
+    <mixer-strip-set track="Alpha" control="fader" value="-12"/>
+
+    <wait-playhead position="72000" minAdvance="4096" timeoutMs="20000"/>
+    <mixer-strip-set track="Alpha" control="fader" value="0"/>
+
+    <wait-playhead position="96000" minAdvance="4096" timeoutMs="20000"/>
+    <toggle-playback play="0"/>
+
+    <!-- The lane grew: the pass wrote points rather than the fader writing
+         static volumes. The exact positions are the transport's business, so
+         what is asserted is the COUNT and the fact that the curve moved. -->
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="0" value="-6" tolerance="1e-9"
+                             minPointCount="2"/>
+
+    <!-- ============ ONE UNDO REVERTS THE WHOLE PASS ================== -->
+    <!-- If the fader had submitted its own verb per tick this would take
+         three undos and leave points behind. -->
+
+    <undo/>
+    <assert-automation-value owner="0" target="self:Volume"
+                             time="0" value="-6" tolerance="1e-9"
+                             pointCount="1"/>
+
+    <!-- ============ AC3a.2: A READ-FAMILY LANE MOVES THE FADER ======= -->
+    <!-- The pump runs from the meter tick, FIRST and unconditionally, so it
+         works on a strip whose meter section is switched off. The lane holds
+         -6 dB at frame 0 and -36 at 48000; ticking at each position must move
+         the strip's own fader to the curve's value. -->
+
+    <set-automation-mode owner="0" target="self:Volume" mode="read"/>
+    <add-automation-point owner="0" target="self:Volume" time="48000" value="-36"/>
+
+    <!-- `faderDb` is the WIDGET's position and is deliberately not the same
+         field as `db`, which is the MODEL's volume: a Read-family lane moves
+         the fader without editing the model, so the two differ here on
+         purpose and only the first can gate the pump.
+
+         -5.9 rather than -6.0, and -35.9 rather than -36.0, because the fader
+         is an INTEGER control whose curve does not round-trip, the same
+         property that makes the double-click reset commit a dB directly
+         instead of moving the slider (sDbToFader( 0.0 ) is tick -191 and back
+         is +0.0625 dB). The quantisation is asserted rather than rounded away:
+         a change to the curve should break this. -->
+
+    <!-- THE LOCATOR IS PARKED FIRST, and that is not tidiness. The pane is
+         connected to the REAL SApplication::meterTick, which keeps running for
+         an ~8 s tail after a transport stop (proposal 34: the meters must be
+         able to decay). Such a tick calls the same pump at the LIVE playhead,
+         so without parking the locator a real tick lands between the scripted
+         one and the assertion and moves the fader to the curve's value THERE.
+         Measured as a 1-in-6 flake reading faderDb=-35.9 where -5.9 was due,
+         which is exactly the curve at 48000. -->
+
+    <set-locator position="0"/>
+    <mixer-meter-tick position="0"/>
+    <assert-mixer-pane track="Alpha" contains="faderDb=-5.9"/>
+    <assert-mixer-pane track="Alpha" contains="|db=0.0|"/>
+
+    <set-locator position="48000"/>
+    <mixer-meter-tick position="48000"/>
+    <assert-mixer-pane track="Alpha" contains="faderDb=-35.9"/>
+  </actions>
+</SActionScript>

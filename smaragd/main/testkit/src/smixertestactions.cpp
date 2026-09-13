@@ -69,6 +69,49 @@ SApplyResult SAssertMixerPaneAction::apply( SProject * )
         qWarning() << "assert-mixer-pane FAILED: unexpected" << absent_ << "-" << desc;
         return { false, nullptr };
     }
+    if( minMeterDb_ < 1e29 || maxMeterDb_ < 1e29 ) {
+        const int at = desc.indexOf( QStringLiteral( "|db=" ),
+                                     desc.indexOf( QStringLiteral( "|meter=" ) ) );
+        if( at < 0 ) {
+            qWarning() << "assert-mixer-pane FAILED: no meter dB -" << desc;
+            return { false, nullptr };
+        }
+        const double db = desc.mid( at + 4 )
+                              .section( QLatin1Char( '|' ), 0, 0 )
+                              .section( QLatin1Char( ',' ), 0, 0 ).toDouble();
+        if( minMeterDb_ < 1e29 && db < minMeterDb_ ) {
+            qWarning() << "assert-mixer-pane FAILED: meter" << db << "dB <"
+                       << minMeterDb_ << "-" << desc;
+            return { false, nullptr };
+        }
+        if( maxMeterDb_ < 1e29 && db > maxMeterDb_ ) {
+            qWarning() << "assert-mixer-pane FAILED: meter" << db << "dB >"
+                       << maxMeterDb_ << "-" << desc;
+            return { false, nullptr };
+        }
+    }
+    if( minLaneDbDelta_ >= 0.0 ) {
+        // The meter's own `db=a,b` field, which is the widget's ballistics
+        // rather than the probe's raw sample -- deliberately: what this gates
+        // is what a user SEES on the strip.
+        const int at = desc.indexOf( QStringLiteral( "|db=" ),
+                                     desc.indexOf( QStringLiteral( "|meter=" ) ) );
+        const QString tail = at < 0 ? QString() : desc.mid( at + 4 );
+        const QStringList lanes =
+            tail.section( QLatin1Char( '|' ), 0, 0 ).split( QLatin1Char( ',' ) );
+        if( lanes.size() < 2 ) {
+            qWarning() << "assert-mixer-pane FAILED: fewer than two meter lanes"
+                       << "-" << desc;
+            return { false, nullptr };
+        }
+        const double delta = qAbs( lanes[0].toDouble() - lanes[1].toDouble() );
+        if( delta < minLaneDbDelta_ ) {
+            qWarning() << "assert-mixer-pane FAILED: lane dB" << lanes[0]
+                       << "vs" << lanes[1] << "differ by" << delta
+                       << "which is below" << minLaneDbDelta_ << "-" << desc;
+            return { false, nullptr };
+        }
+    }
     qDebug() << "assert-mixer-pane: OK -" << desc;
     return { true, nullptr };
 }
@@ -77,7 +120,9 @@ QStringList SAssertMixerPaneAction::knownAttributes() const
 {
     return { QStringLiteral( "track" ), QStringLiteral( "arrangement" ),
              QStringLiteral( "strips" ), QStringLiteral( "master" ),
-             QStringLiteral( "contains" ), QStringLiteral( "absent" ) };
+             QStringLiteral( "contains" ), QStringLiteral( "absent" ),
+             QStringLiteral( "minLaneDbDelta" ), QStringLiteral( "minMeterDb" ),
+             QStringLiteral( "maxMeterDb" ) };
 }
 
 void SAssertMixerPaneAction::writeXml( QDomElement &elem ) const
@@ -88,6 +133,9 @@ void SAssertMixerPaneAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "master", master_ );
     elem.setAttribute( "contains", contains_ );
     elem.setAttribute( "absent", absent_ );
+    elem.setAttribute( "minLaneDbDelta", minLaneDbDelta_ );
+    elem.setAttribute( "minMeterDb", minMeterDb_ );
+    elem.setAttribute( "maxMeterDb", maxMeterDb_ );
 }
 
 bool SAssertMixerPaneAction::readXml( const QDomElement &elem, int )
@@ -98,6 +146,9 @@ bool SAssertMixerPaneAction::readXml( const QDomElement &elem, int )
     master_   = elem.attribute( "master", "-1" ).toInt();
     contains_ = elem.attribute( "contains", QString() );
     absent_   = elem.attribute( "absent", QString() );
+    minLaneDbDelta_ = elem.attribute( "minLaneDbDelta", "-1" ).toDouble();
+    minMeterDb_ = elem.attribute( "minMeterDb", "1e30" ).toDouble();
+    maxMeterDb_ = elem.attribute( "maxMeterDb", "1e30" ).toDouble();
     return true;
 }
 
@@ -231,3 +282,124 @@ static const bool s_reg_mixer_strip_toggle = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "mixer-strip-toggle" ),
         []{ return new SMixerStripToggleAction; } ), true );
+
+// --- mixer-meter-tick -------------------------------------------------------
+
+SApplyResult SMixerMeterTickAction::apply( SProject *project )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) { qWarning() << "mixer-meter-tick: no main window"; return { false, nullptr }; }
+    if( !project ) { qWarning() << "mixer-meter-tick: no project"; return { false, nullptr }; }
+
+    // A monotonically advancing clock, because the ballistics are driven by
+    // wall-clock dt and two ticks at the SAME nowMs decay by nothing. Handing
+    // the case a default that always moves forward is what keeps a decay
+    // assertion (AC3.3) from depending on how fast the box ran the script.
+    static qint64 s_fakeNow = 0;
+    // An explicit `nowMs` ADVANCES the shared clock rather than sitting beside
+    // it: a case that jumps forward to force a full decay must not leave the
+    // next default tick going BACKWARDS, which would hand the ballistics a
+    // negative dt. `advanceMs` is the ergonomic form of the same thing --
+    // "let this much time pass" -- so a case does not have to track absolute
+    // milliseconds to say "long enough to reach the floor".
+    if( nowMs_ >= 0 ) s_fakeNow = qMax( s_fakeNow, nowMs_ );
+    else              s_fakeNow += ( advanceMs_ > 0 ? advanceMs_ : 100 );
+    const qint64 now = s_fakeNow;
+
+    const int worked =
+        win->mixerMeterTick( arrangement_, position_, now, live_, requestPages_,
+                             hidden_ );
+    if( worked < 0 ) {
+        qWarning() << "mixer-meter-tick FAILED: no pane for arrangement"
+                   << arrangement_;
+        return { false, nullptr };
+    }
+    qDebug() << "mixer-meter-tick: OK -" << worked << "strip(s) worked at"
+             << (long long) position_ << "live" << live_;
+    return { true, nullptr };
+}
+
+QStringList SMixerMeterTickAction::knownAttributes() const
+{
+    return { QStringLiteral( "arrangement" ), QStringLiteral( "position" ),
+             QStringLiteral( "live" ), QStringLiteral( "requestPages" ),
+             QStringLiteral( "nowMs" ), QStringLiteral( "hidden" ),
+             QStringLiteral( "advanceMs" ) };
+}
+
+void SMixerMeterTickAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "arrangement", arrangement_ );
+    elem.setAttribute( "position", (qlonglong) position_ );
+    elem.setAttribute( "live", live_ ? "true" : "false" );
+    elem.setAttribute( "requestPages", requestPages_ ? "true" : "false" );
+    elem.setAttribute( "nowMs", (qlonglong) nowMs_ );
+    elem.setAttribute( "hidden", hidden_ );
+    elem.setAttribute( "advanceMs", (qlonglong) advanceMs_ );
+}
+
+bool SMixerMeterTickAction::readXml( const QDomElement &elem, int )
+{
+    arrangement_  = elem.attribute( "arrangement", QString() );
+    position_     = (offset_t) elem.attribute( "position", "0" ).toLongLong();
+    live_         = elem.attribute( "live", "true" ) == QLatin1String( "true" );
+    requestPages_ = elem.attribute( "requestPages", "true" ) == QLatin1String( "true" );
+    nowMs_        = elem.attribute( "nowMs", "-1" ).toLongLong();
+    hidden_       = elem.attribute( "hidden", QString() );
+    advanceMs_    = elem.attribute( "advanceMs", "0" ).toLongLong();
+    return true;
+}
+
+// --- mixer-strip-set --------------------------------------------------------
+
+SApplyResult SMixerStripSetAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) { qWarning() << "mixer-strip-set: no main window"; return { false, nullptr }; }
+    if( !win->mixerStripSet( track_, control_, gesture_, value_, arrangement_ ) ) {
+        qWarning() << "mixer-strip-set FAILED:" << track_ << control_
+                   << gesture_ << value_;
+        return { false, nullptr };
+    }
+    qDebug() << "mixer-strip-set: OK -" << track_ << control_ << gesture_ << value_;
+    // A GESTURE verb: no undo step of its own. During an open automation pass
+    // the control's handler submits NOTHING at all (the recorder takes the
+    // value), which is exactly what AC3a.1 asserts by counting undo entries.
+    return { true, nullptr };
+}
+
+QStringList SMixerStripSetAction::knownAttributes() const
+{
+    return { QStringLiteral( "track" ), QStringLiteral( "arrangement" ),
+             QStringLiteral( "control" ), QStringLiteral( "gesture" ),
+             QStringLiteral( "value" ) };
+}
+
+void SMixerStripSetAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "track", track_ );
+    elem.setAttribute( "arrangement", arrangement_ );
+    elem.setAttribute( "control", control_ );
+    elem.setAttribute( "gesture", gesture_ );
+    elem.setAttribute( "value", value_ );
+}
+
+bool SMixerStripSetAction::readXml( const QDomElement &elem, int )
+{
+    track_       = elem.attribute( "track", QString() );
+    arrangement_ = elem.attribute( "arrangement", QString() );
+    control_     = elem.attribute( "control", "fader" );
+    gesture_     = elem.attribute( "gesture", "set" );
+    value_       = elem.attribute( "value", "0" ).toDouble();
+    return !track_.isEmpty();
+}
+
+static const bool s_reg_mixer_meter_tick = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "mixer-meter-tick" ),
+        []{ return new SMixerMeterTickAction; } ), true );
+
+static const bool s_reg_mixer_strip_set = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "mixer-strip-set" ),
+        []{ return new SMixerStripSetAction; } ), true );
