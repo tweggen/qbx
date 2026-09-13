@@ -4351,6 +4351,12 @@ bool SStdMixerView::systemRowsOutOfDate() const
     // happened to force one. Measured as a row count of 2 where 3 was due.
     // WHAT SHOULD BE SHOWN...
     QSet<const STrack *> want;
+    // SEND LANES TOO (QBX-104). add-send-lane / remove-send-lane change the
+    // ROW COUNT with no track-structure signal, exactly as set-lane-hidden on
+    // the master does -- so a walk of the master subtree alone would leave a
+    // new send lane rowless until some unrelated edit forced a rebuild.
+    for( STrack *send : mix->sendLanes() )
+        sCollectWantedSystemLanes( send, want );
     sCollectWantedSystemLanes( mix->masterLane(), want );
 
     // ...AND WHAT IS SHOWN, taken as `rows_` INTERSECTED WITH THE WHOLE MASTER
@@ -4361,6 +4367,8 @@ bool SStdMixerView::systemRowsOutOfDate() const
     // 3 was due, on master_lane_rows' own undo step. `rows_` also holds every
     // USER lane, which is why the membership set is needed at all.
     QSet<const STrack *> subtree;
+    for( STrack *send : mix->sendLanes() )
+        sCollectSystemSubtree( send, subtree );
     sCollectSystemSubtree( mix->masterLane(), subtree );
 
     QSet<const STrack *> have;
@@ -4412,10 +4420,11 @@ QString SStdMixerView::rootName() const
 //
 //   Fold::Honour     a collapsed folder's children have no rows
 //   Hidden::Honour   a hidden lane and its subtree have no rows
-//   MasterSubtree    the master lane and its own child lanes (where a
-//                    conductor lane lives). NOT `All`: a send lane has no
-//                    arranger row today -- see slaneorder.h, which records
-//                    that as a proposal 45 M7 gap rather than a decision.
+//   All              every send lane, then the master lane and its own
+//                    child lanes (where a conductor lane lives) -- proposal
+//                    45 D11's "sends above, master last". It was
+//                    `MasterSubtree` until QBX-104, which left a send lane
+//                    audible and without a row.
 //   alwaysShowMaster false -- D6a's exemption is the MIXER PANE's, and the
 //                    arranger deliberately does not take it. A master row
 //                    costs vertical space in a list of lanes, and hiding it
@@ -4423,15 +4432,21 @@ QString SStdMixerView::rootName() const
 //
 // No prune walk here any more (proposal 46 M3): every per-track UI-state set
 // moved onto STrack, so it dies with the track.
-void SStdMixerView::rebuildRows()
+slaneorder::Options SStdMixerView::walkOptions()
 {
-    rows_.clear();
     slaneorder::Options opt;
     opt.fold             = slaneorder::Fold::Honour;
     opt.hidden           = slaneorder::Hidden::Honour;
-    opt.system           = slaneorder::SystemLanes::MasterSubtree;
+    opt.system           = slaneorder::SystemLanes::All;
     opt.alwaysShowMaster = false;
-    for( const slaneorder::Lane &lane : slaneorder::flattenTrackLanes( model_, opt ) )
+    return opt;
+}
+
+void SStdMixerView::rebuildRows()
+{
+    rows_.clear();
+    for( const slaneorder::Lane &lane :
+             slaneorder::flattenTrackLanes( model_, walkOptions() ) )
         appendRowsForLane( lane );
     rebuildRowGeometry();
 }

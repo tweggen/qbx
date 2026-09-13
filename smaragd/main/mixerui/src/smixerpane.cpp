@@ -176,7 +176,7 @@ slaneorder::Options SMixerPane::walkOptions()
     slaneorder::Options opt;
     opt.fold             = slaneorder::Fold::Ignore;
     opt.hidden           = slaneorder::Hidden::Honour;
-    opt.system           = slaneorder::SystemLanes::MasterSubtree;
+    opt.system           = slaneorder::SystemLanes::All;
     opt.alwaysShowMaster = true;
     return opt;
 }
@@ -204,8 +204,11 @@ void SMixerPane::rebuildStrips()
     //                    may assert that it does.
     //   Hidden::Honour   hiding answers "show this track at all", which both
     //                    mounts must agree on.
+    //   All              every send lane gets a strip, between the user
+    //                    lanes and the master (QBX-104). A send lane is shown
+    //                    by default, so it needs no exemption of its own.
     //   alwaysShowMaster D6a -- the ONE place the two mounts deliberately
-    //                    disagree about a model flag. Every system role is
+    //                    disagree about a model flag. The master is
     //                    laneHiddenByDefault(), so on a project nobody has
     //                    touched the master lane has no arranger row; a mixer
     //                    without its summing point is not a mixer. The

@@ -91,8 +91,10 @@ QVector<Lane> flattenTrackLanes( SObject *root, const Options &opt )
     SStdMixer *mix = dynamic_cast<SStdMixer *>( root );
     if( !mix || opt.system == SystemLanes::None ) return out;
 
-    // Sends first, master last (proposal 45 D11).  See the header: nothing
-    // asks for `All` today, because a send lane has no arranger row.
+    // Sends first, master last (proposal 45 D11).  Both mounts ask for `All`
+    // since QBX-104; a send lane is shown by default (SObject::
+    // laneHiddenByDefault), so it gets a row and a strip without any exemption
+    // of the D6a kind.
     if( opt.system == SystemLanes::All )
         for( STrack *send : mix->sendLanes() )
             appendSystemLane( send, mix, opt, false, out );

@@ -36,7 +36,9 @@
 
     <!-- Each of these builds a pane, populates every strip (each with a live
          twLevelProbe bound to its track's root component) and destroys it. -->
-    <assert-mixer-pane strips="3"/>
+    <!-- Two user lanes, the Reverb send lane and the master = 4. It read 3
+         until QBX-104 gave a send lane a strip. -->
+    <assert-mixer-pane strips="4"/>
     <assert-mixer-pane track="Master" contains="role=master"/>
     <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="96"
                          maxCrushed="0" maxOverlap="0"/>
@@ -50,12 +52,12 @@
     <!-- Removing a track under the pane: the next seam call must rebuild
          against the shorter model rather than a dangling STrack*. -->
     <remove-track trackPath="1"/>
-    <assert-mixer-pane strips="2"/>
+    <assert-mixer-pane strips="3"/>
 
     <!-- ...and the DEFERRED deletes actually run, so a strip that should have
          died is gone rather than merely unreferenced (proposal 45's lesson:
          processEvents() does not deliver DeferredDelete at loop level 0). -->
     <drain-pending-deletes/>
-    <assert-mixer-pane strips="2"/>
+    <assert-mixer-pane strips="3"/>
   </actions>
 </SActionScript>

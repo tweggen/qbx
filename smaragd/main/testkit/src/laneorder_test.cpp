@@ -21,6 +21,15 @@
 // conductor lane), the hidden-takes-its-subtree rule, and the system tail's
 // position and order.
 //
+// QBX-104 adds the SEND LANES: both mounts now walk `SystemLanes::All`, a send
+// lane is shown by default (the one system role that is), and the tail order
+// is "sends above, master last" (proposal 45 D11). Both mounts' options are
+// asserted through their OWN statics -- `SStdMixerView::walkOptions()` and
+// `SMixerPane::walkOptions()` -- rather than through a local copy of what they
+// are believed to pass, because a copy cannot fail when a call site changes.
+// Before QBX-104 this file claimed (in CLAUDE.md, proposal 48 and
+// mixer_pane_strips.qxa) to assert the pane's static, and did not.
+//
 // No display, no audio device — same shape as fragment_test.
 
 #include "app/model/sappcontext.h"
@@ -30,6 +39,8 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/mixer/strackbroadcast.h"
 #include "app/objects/track/strack.h"
+#include "app/mixerui/smixerpane.h"
+#include "app/timeline/sstdmixerview.h"
 
 #include "tw/graph/tw303aenv.h"
 
@@ -171,12 +182,15 @@ void testArrangerOrder( SProject &p )
 {
     Fixture f = makeFixture( p );
 
-    // Exactly what SStdMixerView::rebuildRows() passes.
-    slaneorder::Options opt;
-    opt.fold             = slaneorder::Fold::Honour;
-    opt.hidden           = slaneorder::Hidden::Honour;
-    opt.system           = slaneorder::SystemLanes::MasterSubtree;
-    opt.alwaysShowMaster = false;
+    // Exactly what SStdMixerView::rebuildRows() passes -- ASKED of the view,
+    // not restated here.
+    const slaneorder::Options opt = SStdMixerView::walkOptions();
+    check( opt.fold == slaneorder::Fold::Honour
+           && opt.hidden == slaneorder::Hidden::Honour
+           && opt.system == slaneorder::SystemLanes::All
+           && !opt.alwaysShowMaster,
+           "The arranger's walk: fold honoured, hidden honoured, the WHOLE "
+           "system tail (sends included, QBX-104), no master exemption" );
 
     const QVector<slaneorder::Lane> lanes =
         slaneorder::flattenTrackLanes( f.mixer.get(), opt );
@@ -268,14 +282,17 @@ void testMixerPaneOrder( SProject &p )
 {
     Fixture f = makeFixture( p );
 
-    // What the pane will pass: fold ignored (D2 -- a mixer has no rows, so
-    // "show this lane's children as rows" is not a question it can answer),
-    // hidden honoured for user lanes, master shown regardless (D6a).
-    slaneorder::Options opt;
-    opt.fold             = slaneorder::Fold::Ignore;
-    opt.hidden           = slaneorder::Hidden::Honour;
-    opt.system           = slaneorder::SystemLanes::MasterSubtree;
-    opt.alwaysShowMaster = true;
+    // What the pane passes, ASKED of the pane: fold ignored (D2 -- a mixer
+    // has no rows, so "show this lane's children as rows" is not a question
+    // it can answer), hidden honoured for user lanes, master shown regardless
+    // (D6a), and the whole system tail (QBX-104).
+    const slaneorder::Options opt = SMixerPane::walkOptions();
+    check( opt.fold == slaneorder::Fold::Ignore
+           && opt.hidden == slaneorder::Hidden::Honour
+           && opt.system == slaneorder::SystemLanes::All
+           && opt.alwaysShowMaster,
+           "The mixer pane's walk: fold IGNORED (D2), hidden honoured, the "
+           "WHOLE system tail (QBX-104), the master exempt from hiding (D6a)" );
 
     const QVector<slaneorder::Lane> lanes =
         slaneorder::flattenTrackLanes( f.mixer.get(), opt );
@@ -299,6 +316,94 @@ void testMixerPaneOrder( SProject &p )
     check( slaneorder::indexOfTrack( lanes, f.conductor ) < 0,
            "D6a: the exemption does NOT descend -- a hidden conductor lane "
            "stays hidden in both mounts" );
+}
+
+// --- QBX-104: SEND LANES in both mounts ------------------------------------
+
+void testSendLanes( SProject &p )
+{
+    Fixture f = makeFixture( p );
+    SStdMixer *m = f.mixer.get();
+    STrack *reverb = m->addSendLane( QStringLiteral( "Reverb" ) );
+    STrack *delay  = m->addSendLane( QStringLiteral( "Delay" ) );
+    check( reverb && delay, "fixture: two send lanes minted" );
+    if( !reverb || !delay ) return;
+
+    // THE DEFAULT, per role. A send lane exists only because somebody asked
+    // for one and is AUDIBLE (proposal 47); nothing in the UI can un-hide a
+    // lane, so hidden-by-default made it unreachable in both mounts.
+    check( !reverb->laneHiddenByDefault() && !reverb->laneHidden(),
+           "QBX-104: a SEND lane is shown by default" );
+    check( f.master->laneHiddenByDefault() && f.conductor
+           && f.conductor->laneHiddenByDefault(),
+           "...and the master and the conductor are still hidden by default" );
+    check( !reverb->laneHiddenIsExplicit(),
+           "...and the default serializes NOTHING (no attribute is written)" );
+
+    const QString arr =
+        describe( slaneorder::flattenTrackLanes( m, SStdMixerView::walkOptions() ) );
+    check( arr == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "
+                                  "Omega@0 Reverb@0 Delay@0" ),
+           qPrintable( QStringLiteral(
+               "QBX-104: the ARRANGER gives both send lanes a row, below every "
+               "user lane, in creation order, with the (hidden) master absent "
+               "[got: %1]" ).arg( arr ) ) );
+
+    const QVector<slaneorder::Lane> pane =
+        slaneorder::flattenTrackLanes( m, SMixerPane::walkOptions() );
+    const QString paneGot = describe( pane );
+    check( paneGot == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "
+                                      "InsideCollapsed@1 Omega@0 Reverb@0 "
+                                      "Delay@0 Master@0" ),
+           qPrintable( QStringLiteral(
+               "QBX-104: the MIXER PANE gives both send lanes a strip, SENDS "
+               "ABOVE MASTER (proposal 45 D11) [got: %1]" ).arg( paneGot ) ) );
+
+    const int ri = slaneorder::indexOfTrack( pane, reverb );
+    check( ri >= 0 && pane[ri].link == nullptr
+           && pane[ri].role == SSystemRole::Send && pane[ri].parent == m,
+           "A send lane carries a NULL link, its role and the mixer as parent "
+           "-- the master lane's shape (45 D2)" );
+
+    // Sends above master in the ARRANGER too, once the master is shown.
+    f.master->setLaneHidden( false );
+    const QString arrM =
+        describe( slaneorder::flattenTrackLanes( m, SStdMixerView::walkOptions() ) );
+    check( arrM == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "
+                                   "Omega@0 Reverb@0 Delay@0 Master@0" ),
+           qPrintable( QStringLiteral(
+               "QBX-104: with the master shown, the arranger reads sends above "
+               "master [got: %1]" ).arg( arrM ) ) );
+
+    // HIDING IS STILL ONE MECHANISM: a hidden send lane leaves BOTH mounts,
+    // and the pane's D6a exemption does not extend to it.
+    reverb->setLaneHidden( true );
+    const QString arrH =
+        describe( slaneorder::flattenTrackLanes( m, SStdMixerView::walkOptions() ) );
+    const QString paneH =
+        describe( slaneorder::flattenTrackLanes( m, SMixerPane::walkOptions() ) );
+    check( arrH == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "
+                                   "Omega@0 Delay@0 Master@0" ),
+           qPrintable( QStringLiteral(
+               "QBX-104: a HIDDEN send lane has no arranger row [got: %1]" )
+               .arg( arrH ) ) );
+    check( paneH == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "
+                                    "InsideCollapsed@1 Omega@0 Delay@0 Master@0" ),
+           qPrintable( QStringLiteral(
+               "QBX-104: ...and no strip: the D6a exemption is the MASTER's "
+               "alone [got: %1]" ).arg( paneH ) ) );
+    check( reverb->laneHiddenIsExplicit(),
+           "...and a hidden send lane IS explicit, so it serializes" );
+    reverb->setLaneHidden( false );
+
+    // What QBX-104 fixed, stated as the difference between the two tails:
+    // `MasterSubtree` is the pre-fix walk and must NOT contain a send lane.
+    slaneorder::Options old = SMixerPane::walkOptions();
+    old.system = slaneorder::SystemLanes::MasterSubtree;
+    const QVector<slaneorder::Lane> oldLanes = slaneorder::flattenTrackLanes( m, old );
+    check( slaneorder::indexOfTrack( oldLanes, reverb ) < 0
+           && slaneorder::indexOfTrack( oldLanes, delay ) < 0,
+           "The pre-QBX-104 tail (MasterSubtree) has no send lane -- the gap" );
 }
 
 // --- AC0.4 / D3a: "no visible lane sorts LAST" ------------------------------
@@ -401,6 +506,7 @@ int main( int argc, char **argv )
         testArrangerOrder( *p );
         testSystemTail( *p );
         testMixerPaneOrder( *p );
+        testSendLanes( *p );
         testOrderByLanePreservesNoRowLast( *p );
         testTargetsFor( *p );
         testPruneNestedTargets( *p );

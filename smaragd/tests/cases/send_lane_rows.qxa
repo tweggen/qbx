@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-104: A SEND LANE HAS AN ARRANGER ROW AND A MIXER STRIP.
+
+  THE DEFECT. Proposal 47 made send lanes audible. Proposal 48 M0 then found
+  that they had no arranger row at all, and so no mixer strip either: both
+  mounts walked the system tail with `SystemLanes::MasterSubtree`, and
+  `SystemLanes::All` (sends above, master last - proposal 45 D11) had no
+  caller. A send lane was in the model, carried a chain and a fader, could be
+  HEARD, and could not be seen or selected.
+
+  TWO THINGS HAD TO CHANGE, AND EACH IS PINNED HERE.
+
+  1. BOTH MOUNTS WALK `All`. Measured below as a row count on the arranger and
+     a strip count plus a name order on the pane.
+
+  2. A SEND LANE IS SHOWN BY DEFAULT. `laneHiddenByDefault()` used to be true
+     for EVERY system role. Changing only the walk would have left a send lane
+     rowless and stripless on every untouched project, and nothing in the UI
+     can un-hide a lane: `set-lane-hidden` is reachable only as a verb. The
+     master and the conductor stay hidden by default, because they exist in
+     every project whether anybody asked for them. A send lane exists only
+     because somebody ran add-send-lane. So this case NEVER un-hides a send
+     lane before asserting its row: a fixture that did would pass whether the
+     default had changed or not, the vacuous-gate shape the mixer_pane_strips
+     header warns about.
+
+  THE ARRANGER'S ROW COUNT IS REBUILT WITH NO TRACK-STRUCTURE SIGNAL.
+  add-send-lane and remove-send-lane change the row count the way
+  set-lane-hidden on the master does, and `systemRowsOutOfDate()` used to ask
+  only about the master subtree. Every row assertion here follows a verb
+  directly, with no unrelated edit in between that could force a rebuild.
+
+  THE MASTER STAYS HIDDEN in the arranger throughout (its default), so the
+  arranger's tail below is the send lanes alone. The pane shows the master
+  anyway (proposal 48 D6a), and its name order is what pins "sends ABOVE
+  master".
+
+  NOT gated here: pixels (`screenshot` is blank offscreen), the head's own
+  controls on a send row (it is the unchanged SSMVMixerControl the master row
+  already uses), and dragging a user lane onto or below a send row.
+-->
+<SActionScript version="1" name="send_lane_rows">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Alpha"/>
+    <set-track-name trackPath="1" name="Beta"/>
+
+    <!-- Baseline: two user lanes, the master hidden, no send lane. -->
+    <assert-lane-alignment rows="2"/>
+    <assert-mixer-pane strips="3" contains="names=Alpha,Beta,Master"/>
+
+    <!-- ============ A SEND LANE GETS A ROW AND A STRIP ================== -->
+    <add-send-lane sendName="Reverb"/>
+    <assert-system-lane trackPath="$send0" role="send" hidden="0"/>
+    <assert-lane-alignment rows="3"/>
+    <assert-mixer-pane strips="4" contains="names=Alpha,Beta,Reverb,Master"/>
+    <assert-mixer-pane track="Reverb" contains="role=send"/>
+
+    <add-send-lane sendName="Delay"/>
+    <assert-lane-alignment rows="4"/>
+    <assert-mixer-pane strips="5"
+                       contains="names=Alpha,Beta,Reverb,Delay,Master"/>
+
+    <!-- ============ SENDS ABOVE MASTER IN THE ARRANGER TOO =============== -->
+    <set-lane-hidden trackPath="$master" hidden="0"/>
+    <assert-lane-alignment rows="5"/>
+    <undo count="1"/>
+    <assert-lane-alignment rows="4"/>
+
+    <!-- ============ REMOVE AND UNDO KEEP BOTH MOUNTS CONSISTENT ========== -->
+    <remove-send-lane sendName="Delay"/>
+    <assert-lane-alignment rows="3"/>
+    <assert-mixer-pane strips="4" contains="names=Alpha,Beta,Reverb,Master"/>
+
+    <undo count="1"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay"/>
+    <assert-lane-alignment rows="4"/>
+    <assert-mixer-pane strips="5"
+                       contains="names=Alpha,Beta,Reverb,Delay,Master"/>
+
+    <redo count="1"/>
+    <assert-lane-alignment rows="3"/>
+    <assert-mixer-pane strips="4" contains="names=Alpha,Beta,Reverb,Master"/>
+    <undo count="1"/>
+    <assert-lane-alignment rows="4"/>
+
+    <!-- ============ HIDING IS STILL ONE MECHANISM ======================== -->
+    <!-- A hidden send lane leaves BOTH mounts. The pane's D6a exemption is
+         the master's alone. -->
+    <set-lane-hidden trackPath="$send0" hidden="1"/>
+    <assert-lane-alignment rows="3"/>
+    <assert-mixer-pane strips="4" contains="names=Alpha,Beta,Delay,Master"/>
+    <undo count="1"/>
+    <assert-lane-alignment rows="4"/>
+    <assert-mixer-pane strips="5"
+                       contains="names=Alpha,Beta,Reverb,Delay,Master"/>
+
+    <!-- ============ THE DEFAULT SURVIVES A ROUND TRIP ==================== -->
+    <save-project path="../../build/send_lane_rows.qxp"/>
+    <load-project path="../../build/send_lane_rows.qxp"/>
+    <assert-system-lane trackPath="$send0" role="send" name="Reverb" hidden="0"/>
+    <assert-system-lane trackPath="$send1" role="send" name="Delay" hidden="0"/>
+    <assert-mixer-pane strips="5"
+                       contains="names=Alpha,Beta,Reverb,Delay,Master"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

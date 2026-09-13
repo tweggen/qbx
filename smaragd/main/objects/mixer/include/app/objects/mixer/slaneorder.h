@@ -53,29 +53,28 @@ enum class Hidden { Ignore, Honour };
 
 /// Which of the arrangement's system lanes the tail carries.
 ///
-/// `MasterSubtree` is what the ARRANGER emits today: the master lane and,
-/// unless it is collapsed, its own child lanes (which is where a conductor
-/// lane lives -- proposal 45 M6).
+/// `All` is what BOTH mounts emit (QBX-104): every send lane, then the master
+/// lane and, unless it is collapsed, its own child lanes (which is where a
+/// conductor lane lives -- proposal 45 M6).  That is proposal 45 D11's "sends
+/// above, master last".
 ///
-/// **SEND LANES HAVE NO ARRANGER ROW, AND `All` IS THEREFORE UNUSED TODAY.**
-/// Proposal 45's design text says the tail is "sends above, master last", but
-/// `appendSystemRows()` only ever appended the master and nothing in
-/// `sstdmixerview.cpp` mentions a send lane -- so a send lane created by
-/// `add-send-lane` is in the model, carries a chain and a fader, and cannot be
-/// seen or selected in the arranger.  That gap belongs to proposal 45 M7 and
-/// closing it would change the arranger's row COUNT, which this milestone's
-/// AC0.2 forbids.  `All` exists so the mixer pane can ask for the tail 45
-/// specified without a second walk being written for it.
+/// `MasterSubtree` is the tail WITHOUT the send lanes, and it is what both
+/// mounts emitted until QBX-104.  Proposal 48 M0 found the gap that left: a
+/// send lane created by `add-send-lane` was in the model, carried a chain and
+/// a fader, was AUDIBLE since proposal 47 -- and had no arranger row and no
+/// mixer strip, so it could be heard and not seen or selected.  The value is
+/// kept because `laneorder_test` asserts the difference between the two, which
+/// is the watched-failing half of the fix.
 enum class SystemLanes { None, MasterSubtree, All };
 
 struct Options {
     Fold        fold   = Fold::Honour;
     Hidden      hidden = Hidden::Honour;
-    SystemLanes system = SystemLanes::MasterSubtree;
+    SystemLanes system = SystemLanes::All;
 
     /// PROPOSAL 48 D6a -- THE ONE PLACE THE TWO MOUNTS DELIBERATELY DISAGREE
-    /// ABOUT A MODEL FLAG.  `laneHiddenByDefault()` is TRUE for every system
-    /// role, so on a project nobody has touched the master lane has no
+    /// ABOUT A MODEL FLAG.  `laneHiddenByDefault()` is TRUE for the master
+    /// (and the conductor), so on a project nobody has touched the master lane has no
     /// arranger row -- correct for the arranger, where a master row costs
     /// vertical space in a list of lanes.  A mixer without its summing point
     /// is not a mixer, so the pane sets this and shows the master whatever the
