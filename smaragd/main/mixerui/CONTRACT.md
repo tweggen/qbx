@@ -35,7 +35,8 @@ Concretely, and each of these is an invariant rather than a preference:
 **inv. 1 — THE PANE HONOURS `laneHidden()` FOR USER LANES AND SHOWS THE MASTER
 REGARDLESS.** This is the one place the two mounts deliberately disagree about
 a model flag (proposal 48 D6a). `SObject::laneHiddenByDefault()` is TRUE for
-every system role, so on a project nobody has touched the master lane has no
+the master and the conductor (a SEND lane is shown by default since QBX-104,
+so it needs no exemption), so on a project nobody has touched the master lane has no
 ARRANGER row — correct there, since a master row costs vertical space in a list
 of lanes. A mixer without its summing point is not a mixer, so the pane passes
 `slaneorder::Options::alwaysShowMaster`. The exemption covers the master lane
@@ -215,10 +216,10 @@ silently reappear if the next change re-introduced it.
   fader block outside the scroll area, which means one scroll area per strip;
   scrolling one strip's inserts does not scroll its neighbour's. Acceptable
   while the sections are short and worth revisiting if they grow.
-- **`SystemLanes::All` has no caller**, so a SEND lane gets no strip: send
-  lanes have no arranger row either (a proposal 45 M7 gap `slaneorder.h`
-  records). Closing it changes the strip list and belongs with whatever closes
-  the arranger half.
+- **A SEND lane has a strip since QBX-104** (the pane walks
+  `SystemLanes::All`: user lanes, then sends, then the master), and the arranger
+  gives it a row in the same change. NOT gated: a send strip's own controls
+  beyond `role=send` in `describe()`, which is the unchanged `SMixerStrip`.
 - **The LIVE dock is not what any gate measures.** A `--test-case` run never
   binds its project into the window, so every seam builds a pane on demand and
   what is gated is the VERB PATH rather than widget-state persistence. The

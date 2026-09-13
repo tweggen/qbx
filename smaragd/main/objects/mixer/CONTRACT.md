@@ -404,9 +404,12 @@ is exactly a track with no row. The one shape that distinguishes the two
 orders is a multi-selection spanning a COLLAPSED folder, which nothing in the
 qxa suite covers — `laneorder_test` is what says which order holds.
 
-**`SystemLanes::All` has no caller.** Proposal 45's design text says the tail
-is "sends above, master last", but nothing in `sstdmixerview.cpp` mentions a
-send lane: a send lane created by `add-send-lane` is in the model, carries a
-chain and a fader, and **cannot be seen or selected in the arranger**. That
-gap belongs to 45 M7; closing it changes the arranger's row count, so the
-option exists and stays unused until somebody closes both halves together.
+**BOTH MOUNTS WALK `SystemLanes::All`** (QBX-104), which is proposal 45's
+"sends above, master last", and `All` is the `Options` default. Until then both
+asked for `MasterSubtree`, so a send lane was in the model, carried a chain and
+a fader, was AUDIBLE (proposal 47) and could not be seen or selected. The
+change needed a second half: `SObject::laneHiddenByDefault()` is now false for
+a SEND lane, because a hidden default would have kept it out of both walks
+and nothing in the UI can un-hide a lane. Gated by `laneorder_test` (through
+`slaneorder::arrangerOptions()` and `SMixerPane::walkOptions()`, never a copy of
+them) and `qxa.send_lane_rows`.

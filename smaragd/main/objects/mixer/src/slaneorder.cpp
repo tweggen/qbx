@@ -103,6 +103,16 @@ QVector<Lane> flattenTrackLanes( SObject *root, const Options &opt )
     return out;
 }
 
+Options arrangerOptions()
+{
+    Options opt;
+    opt.fold             = Fold::Honour;
+    opt.hidden           = Hidden::Honour;
+    opt.system           = SystemLanes::All;
+    opt.alwaysShowMaster = false;
+    return opt;
+}
+
 int indexOfTrack( const QVector<Lane> &lanes, const STrack *t )
 {
     if( !t ) return -1;

@@ -4351,10 +4351,16 @@ bool SStdMixerView::systemRowsOutOfDate() const
     // happened to force one. Measured as a row count of 2 where 3 was due.
     // WHAT SHOULD BE SHOWN...
     QSet<const STrack *> want;
-    // SEND LANES TOO (QBX-104). add-send-lane / remove-send-lane change the
-    // ROW COUNT with no track-structure signal, exactly as set-lane-hidden on
-    // the master does -- so a walk of the master subtree alone would leave a
-    // new send lane rowless until some unrelated edit forced a rebuild.
+    // SEND LANES TOO (QBX-104), since both mounts now walk them. What this
+    // protects is set-lane-hidden ON A SEND LANE: it changes the row count
+    // with no track-structure signal, and a check over the master subtree
+    // alone left the hidden lane's row on screen (measured: 4 rows where 3
+    // were due). add-send-lane / remove-send-lane do NOT depend on it -- they
+    // arrive through the tree signal and refreshTrackTree(). BOTH loops are
+    // needed, and only the pair is gated: without the `want` loop alone the
+    // check reports stale on EVERY action while a send lane exists, which is
+    // a rebuild per action rather than a wrong row count, and no verb counts
+    // rebuilds.
     for( STrack *send : mix->sendLanes() )
         sCollectWantedSystemLanes( send, want );
     sCollectWantedSystemLanes( mix->masterLane(), want );
@@ -4432,21 +4438,11 @@ QString SStdMixerView::rootName() const
 //
 // No prune walk here any more (proposal 46 M3): every per-track UI-state set
 // moved onto STrack, so it dies with the track.
-slaneorder::Options SStdMixerView::walkOptions()
-{
-    slaneorder::Options opt;
-    opt.fold             = slaneorder::Fold::Honour;
-    opt.hidden           = slaneorder::Hidden::Honour;
-    opt.system           = slaneorder::SystemLanes::All;
-    opt.alwaysShowMaster = false;
-    return opt;
-}
-
 void SStdMixerView::rebuildRows()
 {
     rows_.clear();
     for( const slaneorder::Lane &lane :
-             slaneorder::flattenTrackLanes( model_, walkOptions() ) )
+             slaneorder::flattenTrackLanes( model_, slaneorder::arrangerOptions() ) )
         appendRowsForLane( lane );
     rebuildRowGeometry();
 }

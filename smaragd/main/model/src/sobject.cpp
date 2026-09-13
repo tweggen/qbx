@@ -163,7 +163,8 @@ int SObject::serializeSelfAttributes( QTextStream &o )
     if( colorIndex_ >= 0 )
         o << " colorIndex='" << colorIndex_ << "'";
     // Only when it differs from the ROLE's own default, so a freshly minted
-    // master lane (hidden, like every system lane) writes nothing and every
+    // master lane (hidden, like the conductor; a send lane is SHOWN by
+    // default since QBX-104) writes nothing and every
     // project file written since M1 is byte-unchanged. See laneHidden().
     if( laneHiddenIsExplicit() )
         o << " laneHidden='" << ( *laneHidden_ ? "true" : "false" ) << "'";

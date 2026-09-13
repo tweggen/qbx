@@ -1503,9 +1503,12 @@ nothing to append and every one of these rows is APPENDED instead.
 
 59. **HIDING IS ONE MECHANISM, and it is `SObject::laneHidden()`, asked in the
     row walk itself.** It defaults to `laneHiddenByDefault()` — false for every
-    ordinary track, true for every system lane — so the test is a NO-OP for user
-    lanes (`set-lane-hidden` refuses them outright) and is what keeps a
-    conductor or send lane hidden until somebody asks for it. A hidden lane
+    ordinary track and (since QBX-104) every SEND lane, true for the master and
+    the conductor — so the test is a NO-OP for user lanes (`set-lane-hidden`
+    refuses them outright) and is what keeps a master or conductor lane hidden
+    until somebody asks for it. A send lane walks with `SystemLanes::All`, above
+    the master, and `systemRowsOutOfDate()` asks about it, so hiding one
+    reaches the rows with no track-structure signal. A hidden lane
     takes its SUBTREE with it, which is the same thing a collapsed one does and
     the only reading under which "hidden" means hidden.
 

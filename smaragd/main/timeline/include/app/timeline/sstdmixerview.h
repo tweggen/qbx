@@ -576,13 +576,6 @@ class SStdMixerView
 {
     Q_OBJECT
 public:
-    /// THE ARRANGER'S OWN WALK OPTIONS, as a value so they can be ASSERTED
-    /// (QBX-104) -- the twin of `SMixerPane::walkOptions()`. `rebuildRows()`
-    /// is the only caller; `laneorder_test` asserts what this returns, which
-    /// is what makes reverting `SystemLanes::All` to `MasterSubtree` at the
-    /// call site fail a unit test and not only a qxa case.
-    static slaneorder::Options walkOptions();
-
     SStdMixerView( QWidget *parent, SStdMixer *model );
     virtual ~SStdMixerView();
 

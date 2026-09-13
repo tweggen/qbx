@@ -25,11 +25,19 @@
      default had changed or not, the vacuous-gate shape the mixer_pane_strips
      header warns about.
 
-  THE ARRANGER'S ROW COUNT IS REBUILT WITH NO TRACK-STRUCTURE SIGNAL.
-  add-send-lane and remove-send-lane change the row count the way
-  set-lane-hidden on the master does, and `systemRowsOutOfDate()` used to ask
-  only about the master subtree. Every row assertion here follows a verb
-  directly, with no unrelated edit in between that could force a rebuild.
+  HIDING A SEND LANE CHANGES THE ROW COUNT WITH NO TRACK-STRUCTURE SIGNAL,
+  exactly as set-lane-hidden on the master does, and `systemRowsOutOfDate()`
+  used to ask only about the master subtree. add-send-lane and remove-send-lane
+  do not depend on that check: they arrive through the tree signal. Every row
+  assertion here follows a verb directly, with no unrelated edit in between
+  that could force a rebuild, so the hide step is the one the check is gated
+  by (measured: with the widening reverted, the first failure is the row count
+  straight after set-lane-hidden on $send0).
+
+  THE `$send:<name>` SPELLING IS NOT ACCEPTED BY set-lane-hidden, which parses
+  its path without splacements::laneBySpec, so the name form fails closed
+  there. That gap predates QBX-104 and is not fixed here; this case uses
+  `$send0`.
 
   THE MASTER STAYS HIDDEN in the arranger throughout (its default), so the
   arranger's tail below is the send lanes alone. The pane shows the master

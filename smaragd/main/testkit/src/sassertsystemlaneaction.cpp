@@ -52,7 +52,8 @@ SApplyResult SAssertSystemLaneAction::apply( SProject *project )
         // consults -- every other isHidden() in the tree is QWidget's.
         // laneHidden() is the one the row walk asks
         // (SStdMixerView::appendSystemRows / appendRowsFor), and it defaults to
-        // laneHiddenByDefault(), i.e. true for every system lane. A conductor
+        // laneHiddenByDefault(), i.e. true for the master and the conductor
+        // (a send lane is shown by default since QBX-104). A conductor
         // lane (proposal 45 M6) is hidden by that DEFAULT and sets no flag, so
         // a verb reading the flag reported it visible while the arranger drew
         // no row for it. Ask what the view asks.
