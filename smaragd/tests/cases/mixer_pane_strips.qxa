@@ -22,7 +22,8 @@
 
   3. THE MASTER STRIP IS PRESENT ON A PROJECT THAT HAS NEVER CALLED
      `set-lane-hidden` (D6a, trap T12). `laneHiddenByDefault()` is TRUE for
-     every system role, so the master lane has no ARRANGER row on an untouched
+     the master (and the conductor; a send lane is shown since QBX-104), so the
+     master lane has no ARRANGER row on an untouched
      project — correct there, since a master row costs vertical space in a list
      of lanes. A mixer without its summing point is not a mixer, so the pane
      takes an exemption the arranger does not.

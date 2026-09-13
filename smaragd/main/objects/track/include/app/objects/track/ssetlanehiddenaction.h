@@ -15,8 +15,9 @@
  * PROJECT rather than with the machine (as the metronome switch does), and two
  * arrangers open on one project agree about what is shown.
  *
- * THE DEFAULT IS PER ROLE (SObject::laneHiddenByDefault): an ordinary track is
- * shown, a SYSTEM lane is hidden. So "hidden by default" needs no minting step,
+ * THE DEFAULT IS PER ROLE (SObject::laneHiddenByDefault): an ordinary track and
+ * a SEND lane are shown (QBX-104), the master and the conductor are hidden. So
+ * "hidden by default" needs no minting step,
  * and the attribute serializes only when it differs from that default -- which
  * is what keeps every project file written since M1 byte-unchanged.
  *

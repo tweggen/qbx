@@ -2897,7 +2897,7 @@ there is a second mount of them**, exactly as proposal 45 M0 split
 | Thing to know | Why |
 |---|---|
 | **A SECOND MOUNT OF A METER BREAKS THE FIRST ONE, and this is the concrete instance the rule is about.** `SLiveMonitor::takeInputPeak()` CLEARS the source's peak — `takePeak()` against its own documented `peekPeak()` twin | Harmless while the arranger head was the only caller. With the pane ticking on the same 33 ms broadcast, whichever ran second read 0 and its meter sat dead. **Exactly one mount may TAKE; every other must PEEK.** `peekInputPeak()` is the twin the pane uses. |
-| The pane **IGNORES FOLD** and honours HIDDEN, **except that it always shows the MASTER** | Fold answers "show this lane's children as ROWS", and a mixer has no rows (D2). Hiding answers "show this track at all", which both mounts agree on. `laneHiddenByDefault()` is TRUE for every system role, so on an untouched project the master has no ARRANGER row — correct there, and a mixer without its summing point is not a mixer (D6a). **The exemption covers the master ITSELF, never its children**: a hidden conductor lane stays hidden in both mounts. **CONSEQUENCE NO GATE MAY ASSERT THE OPPOSITE OF: the strip count does not match the arranger's visible row count.** |
+| The pane **IGNORES FOLD** and honours HIDDEN, **except that it always shows the MASTER** | Fold answers "show this lane's children as ROWS", and a mixer has no rows (D2). Hiding answers "show this track at all", which both mounts agree on. `laneHiddenByDefault()` is TRUE for the master and the conductor (a SEND lane is shown by default since QBX-104), so on an untouched project the master has no ARRANGER row — correct there, and a mixer without its summing point is not a mixer (D6a). **The exemption covers the master ITSELF, never its children**: a hidden conductor lane stays hidden in both mounts. **CONSEQUENCE NO GATE MAY ASSERT THE OPPOSITE OF: the strip count does not match the arranger's visible row count.** |
 | **The strip stamps its OWN arrangement on every action, never `stimeline::submitActive`** | That helper stamps whichever editor TAB is active. A pane showing a different arrangement than the tab in front would then resolve an empty path and **DO NOTHING** — no refusal, no log line, nothing to notice. The first implementation had exactly that bug. Same shape as `SClearSelectionAction`'s, where Ctrl+Shift+A cleared the master's selection from any tab. |
 | **A `--test-case` run NEVER BINDS ITS PROJECT INTO THE WINDOW**, so every mixer test seam builds its own pane | `SActionRunner` builds it straight on `SApplication` and `main.cpp` calls `adoptCurrentProject()` only when `!testMode` — its own comment says so. The live pane reports `strips=0` for a whole scripted run. This is why `describeTrackDetailLayout` and `describeSendStrip` already build their own panel. **Consequence: a gesture and the assertion after it run against DIFFERENT instances**, so what is gated is the VERB PATH and never widget-state persistence — and anything that IS per-pane view state (the narrow flag) cannot be asserted this way at all. |
 | **THE LAYOUT AUDIT NOW COVERS BOTH AXES, and the width half asks the LAYOUT rather than the leaf** | `sAuditLayout` compared heights only — right for a vertical dock, blind to the axis a horizontal pane fails on, because a `QHBoxLayout` handed less than its minimum WIDTH shrinks its children side by side and **they do not overlap** (T11). But comparing every widget's own `minimumSizeHint().width()` immediately reported the *Track Detail* dock crushed: `SPluginEffectStrip`'s Edit button is `setMaximumWidth( 70 )` against an 81 px hint, a deliberate squeeze of a LEAF. So the width question is asked only of widgets that CARRY A LAYOUT. |
@@ -2924,11 +2924,25 @@ insert is not restored on load. That one is named, not fixed: it is unreachable
 headlessly (`restoreOpenEditors()` returns early in `--test-case` mode), and
 M0's whole claim was that it changed nothing.
 
-**Also found: SEND LANES HAVE NO ARRANGER ROW AT ALL** — zero mentions in
-`sstdmixerview.cpp` — though proposal 45's design text says the tail is "sends
-above, master last". Now that 47 makes send lanes audible, a lane you can hear
-and cannot see is a sharper gap than it was. `slaneorder.h` records it and
-offers `SystemLanes::All`; nothing calls it yet.
+**Also found: SEND LANES HAD NO ARRANGER ROW AT ALL** — though proposal 45's
+design text says the tail is "sends above, master last", and 47 had made them
+audible. **CLOSED BY QBX-104 (2026-09-13)**: both mounts walk
+`SystemLanes::All`, so a send lane gets a row above the master and a strip
+between the user lanes and the master. That needed a SECOND change the gap note
+never mentioned: `laneHiddenByDefault()` was true for EVERY system role, so the
+walk alone would still have shown nothing. **A send lane is now shown by
+default** — the one system role that is — because it exists only when somebody
+ran `add-send-lane`, and nothing in the UI can un-hide a lane (`set-lane-hidden`
+is a verb and nothing more). The master and the conductor stay hidden by
+default. `laneorder_test` asserts both mounts' options through the functions
+they actually call — `slaneorder::arrangerOptions()` (in objects/mixer, because
+testkit may not include app/timeline) and `SMixerPane::walkOptions()` — and
+`systemRowsOutOfDate()` now asks about send lanes too, which is what makes
+hiding one reach the rows. Gate: `qxa.send_lane_rows`, watched failing under
+five sabotages (either walk option, the default, and the staleness check).
+**Not fixed, found on the way:** `set-lane-hidden` parses its path without
+`splacements::laneBySpec`, so it refuses the `$send:<name>` spelling (`$send0`
+works).
 
 **THE SABOTAGE PASS HAS NOW FOUND A VACUOUS GATE TWICE, and the second time it
 also caught ITSELF.** In M3 the harness was running cases by invoking the
@@ -2947,8 +2961,12 @@ channels are identical.
 **A HARNESS THAT ENDS IN `git checkout --` MUST REFUSE A DIRTY TREE.** M2's
 verified fix (`SMixerPane::walkOptions()` and its `laneorder_test` assertions)
 was destroyed exactly that way and shipped as docs claiming a gate that did not
-exist; it was restored in M3. That is the THIRD loss to this command recorded
-here.
+exist. **This paragraph used to end "it was restored in M3", and that was ALSO
+not true of the tree**: at `e117d661` the static existed and `laneorder_test`
+never called it, asserting a hand-written copy of the pane's options instead —
+so reverting the pane's call site could fail nothing. QBX-104 found it and made
+the test ask the static (and gave the arranger a twin). That is the THIRD loss
+to this command recorded here, and the fourth doc claim to outlive its gate.
 
 **THE M1 SABOTAGE PASS FOUND A VACUOUS GATE.** Removing D2 outright — switching
 the pane to `Fold::Honour` — broke NOTHING: `collapse-track` drives the
@@ -2987,7 +3005,7 @@ extraction — `ctRemoveTrack` is reachable only from the context menu, while
 `ctGroupTrack` / `ctUngroupTrack` have the `group-track` / `ungroup-track`
 gesture verbs and seven existing cases behind them. INDENT and OUTDENT from a mixer strip,
 which are not offered at all. Repaint cost with many strips (measured in no
-milestone: M3's meters were gated by counter, not by clock). A send lane's own strip (`SystemLanes::All` has no caller). Hiding a USER
+milestone: M3's meters were gated by counter, not by clock). Hiding a USER
 lane from a script, which `set-lane-hidden` refuses by design — that rule is
 gated in `laneorder_test` against the model instead. And the per-strip
 independent scrolling of the FX/sends section, which follows from D5 putting

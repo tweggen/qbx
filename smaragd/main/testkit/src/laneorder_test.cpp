@@ -24,7 +24,7 @@
 // QBX-104 adds the SEND LANES: both mounts now walk `SystemLanes::All`, a send
 // lane is shown by default (the one system role that is), and the tail order
 // is "sends above, master last" (proposal 45 D11). Both mounts' options are
-// asserted through their OWN statics -- `SStdMixerView::walkOptions()` and
+// asserted through the functions they actually call -- `slaneorder::arrangerOptions()` and
 // `SMixerPane::walkOptions()` -- rather than through a local copy of what they
 // are believed to pass, because a copy cannot fail when a call site changes.
 // Before QBX-104 this file claimed (in CLAUDE.md, proposal 48 and
@@ -40,7 +40,6 @@
 #include "app/objects/mixer/strackbroadcast.h"
 #include "app/objects/track/strack.h"
 #include "app/mixerui/smixerpane.h"
-#include "app/timeline/sstdmixerview.h"
 
 #include "tw/graph/tw303aenv.h"
 
@@ -182,9 +181,9 @@ void testArrangerOrder( SProject &p )
 {
     Fixture f = makeFixture( p );
 
-    // Exactly what SStdMixerView::rebuildRows() passes -- ASKED of the view,
-    // not restated here.
-    const slaneorder::Options opt = SStdMixerView::walkOptions();
+    // Exactly what SStdMixerView::rebuildRows() passes -- ASKED, not restated
+    // here (slaneorder::arrangerOptions() is the view's only source).
+    const slaneorder::Options opt = slaneorder::arrangerOptions();
     check( opt.fold == slaneorder::Fold::Honour
            && opt.hidden == slaneorder::Hidden::Honour
            && opt.system == slaneorder::SystemLanes::All
@@ -341,7 +340,7 @@ void testSendLanes( SProject &p )
            "...and the default serializes NOTHING (no attribute is written)" );
 
     const QString arr =
-        describe( slaneorder::flattenTrackLanes( m, SStdMixerView::walkOptions() ) );
+        describe( slaneorder::flattenTrackLanes( m, slaneorder::arrangerOptions() ) );
     check( arr == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "
                                   "Omega@0 Reverb@0 Delay@0" ),
            qPrintable( QStringLiteral(
@@ -368,7 +367,7 @@ void testSendLanes( SProject &p )
     // Sends above master in the ARRANGER too, once the master is shown.
     f.master->setLaneHidden( false );
     const QString arrM =
-        describe( slaneorder::flattenTrackLanes( m, SStdMixerView::walkOptions() ) );
+        describe( slaneorder::flattenTrackLanes( m, slaneorder::arrangerOptions() ) );
     check( arrM == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "
                                    "Omega@0 Reverb@0 Delay@0 Master@0" ),
            qPrintable( QStringLiteral(
@@ -379,7 +378,7 @@ void testSendLanes( SProject &p )
     // and the pane's D6a exemption does not extend to it.
     reverb->setLaneHidden( true );
     const QString arrH =
-        describe( slaneorder::flattenTrackLanes( m, SStdMixerView::walkOptions() ) );
+        describe( slaneorder::flattenTrackLanes( m, slaneorder::arrangerOptions() ) );
     const QString paneH =
         describe( slaneorder::flattenTrackLanes( m, SMixerPane::walkOptions() ) );
     check( arrH == QStringLiteral( "Alpha@0 Folder@0 FolderKid@1 Collapsed@0 "

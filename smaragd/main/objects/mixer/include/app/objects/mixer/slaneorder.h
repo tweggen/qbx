@@ -98,6 +98,16 @@ struct Lane {
     SSystemRole role        = SSystemRole::None;
 };
 
+/// THE ARRANGER'S WALK, as a value so it can be ASSERTED (QBX-104): fold
+/// honoured, hidden honoured, the WHOLE system tail, no master exemption.
+/// `SStdMixerView::rebuildRows()` is its only caller. It lives HERE rather than
+/// as a static on the view because `app/testkit` may not include
+/// `app/timeline` (tools/check_layering.py), and `laneorder_test` asserts it --
+/// a test that restates the options it believes the arranger passes cannot
+/// fail when the arranger changes them. The mixer pane's twin is
+/// `SMixerPane::walkOptions()`, which testkit may see.
+Options arrangerOptions();
+
 /// `root` is normally the `SStdMixer` being shown.  The system tail is emitted
 /// only when `root` IS a mixer -- a nested container has none.
 QVector<Lane> flattenTrackLanes( SObject *root, const Options &opt = Options() );

@@ -1061,7 +1061,7 @@ const LaneRow kLaneRows[] = {
       "READS a lane's feed out to a file; a system lane's feed is empty, so the "
       "result is an empty file rather than a policy violation" },
     { "select-track",   NotApplicable,
-      "SELECTION, not an edit. A system lane is hidden by default and has no row "
+      "SELECTION, not an edit. A master or conductor lane is hidden by default and has no row "
       "unless the user asked for one; selecting the row they asked for is what "
       "they meant" },
     { "click-lane",         NotApplicable, "selection, as above" },
