@@ -61,6 +61,15 @@
                    name="Smaragd Test Gain" vendor="Smaragd"
                    path="twtestclap.clap" nIn="2" nOut="2"/>
 
+    <!-- QBX-102 MADE THE FEEL FLOW SECTION COLLAPSED BY DEFAULT, and the
+         reported defect was that section being crushed. So it is expanded
+         FIRST, which puts the panel back in the configuration this case was
+         written and watched failing against. Without this line the 260 px
+         assertions below stop overflowing and scrollNeeded=1 fails - not
+         because anything regressed, but because the content got shorter.
+         The COLLAPSED default is measured at the end. -->
+    <track-detail-section trackPath="0" section="feelflow" collapsed="0"/>
+
     <!-- ============ 1. a dock far too short for the content ============ -->
     <!-- The failing configuration. Nothing may be compressed and nothing may
          overlap; the overflow becomes a scrollbar instead. -->
@@ -100,5 +109,17 @@
     <!-- ...and with two rows, even a tall dock now overflows. -->
     <assert-track-detail-layout trackPath="0" panelWidth="320" panelHeight="380"
                                 maxCrushed="0" maxOverlap="0"/>
+
+    <!-- ============ 5. QBX-102: every section collapsed ================ -->
+    <!-- A collapsed section is its header row and nothing else, and it must
+         not reintroduce the crush: no stale stretch, no header drawn over
+         its neighbour. -->
+    <track-detail-section trackPath="0" section="feelflow" collapsed="1"/>
+    <track-detail-section trackPath="0" section="plugins" collapsed="1"/>
+    <track-detail-section trackPath="0" section="sliders" collapsed="1"/>
+    <assert-track-detail-sections trackPath="0" contains="plugins=1,feelflow=1,sliders=1"/>
+    <assert-track-detail-layout trackPath="0" panelWidth="320" panelHeight="200"
+                                maxCrushed="0" maxOverlap="0"
+                                contains="scrollNeeded=0"/>
   </actions>
 </SActionScript>

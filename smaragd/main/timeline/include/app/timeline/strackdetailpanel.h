@@ -1,6 +1,7 @@
 #ifndef STRACKDETAILPANEL_H
 #define STRACKDETAILPANEL_H
 
+#include <QPointer>
 #include <QWidget>
 
 #include "tw/metering/tw_level_probe.h"
@@ -13,6 +14,8 @@ class QVBoxLayout;
 class QScrollArea;
 class QSlider;
 class QLabel;
+class SCollapsibleSection;
+class SProject;
 
 // Track detail panel: shows plugin grid and large volume control.
 // Lives in the main window's "Track Detail" dock (left area, below the extern
@@ -33,6 +36,17 @@ public:
     // Size constraint (50% of screen, max 450px; small when empty)
     QSize sizeHint() const override;
 
+    /// QBX-102: the three collapsible sections, by id ("plugins", "feelflow",
+    /// "sliders"), or nullptr. For the test seam, which clicks a REAL header.
+    SCollapsibleSection *section( const QString &id ) const;
+
+    /// "plugins=<0|1>,feelflow=<0|1>,sliders=<0|1>" -- 1 is COLLAPSED -- plus
+    /// "|pluginFontPt=<n>|pluginSmallFont=<0|1>", where the last says the
+    /// insert list's font IS suifonts::smallFont(). What the section headers
+    /// SHOW, which is what a user sees; the project property is asserted
+    /// separately through the model.
+    QString describeSections() const;
+
 protected:
     // A QWidget subclass must draw its own style-sheet background.
     void paintEvent(QPaintEvent *) override;
@@ -50,6 +64,14 @@ private slots:
 
 private:
     void rebuildUI();
+    // QBX-102: read the three collapsed flags from the project and apply them.
+    // Called at construction, on every rebuild and whenever the project
+    // reports one of the keys changed, so every open panel follows.
+    void applySectionState();
+    // A header was clicked: write the flag the user asked for into the
+    // project. The panels -- this one included -- apply it from
+    // SProject::propertyChanged, so there is ONE route to the widgets.
+    void onSectionToggle( const QString &id, bool wantExpanded );
     // The volume commit, in dB. Split out of onVolumeSliderMoved so the
     // double-click reset can ask for exactly 0.0 dB — a value the integer
     // fader's own curve cannot round-trip (ctor, sdefaultreset wiring).
@@ -84,6 +106,17 @@ private:
     // what a user looks at while the transport runs, so they stay put however
     // far the FX/Feel Flow content above them is scrolled.
     QWidget *volumeRow_ = nullptr;
+    // QBX-102. pluginsSection_ and feelFlowSection_ live in contentLayout_ and
+    // are long-lived: the strips inside them are still rebuilt per track.
+    // slidersSection_ wraps volumeRow_ and stays OUTSIDE the scroll area with it.
+    SCollapsibleSection *pluginsSection_  = nullptr;
+    SCollapsibleSection *feelFlowSection_ = nullptr;
+    SCollapsibleSection *slidersSection_  = nullptr;
+    // The project whose property changes the sections follow. A QPointer and
+    // not a remembered connection, because the dock panel can outlive a
+    // project: applySectionState() reconnects whenever the current project is
+    // not this one.
+    QPointer<SProject> sectionsProject_;
     QSlider *volumeSlider_;
     QLabel *volumeLabel_;
     QLabel *placeholder_;   // shown instead of the content when no track is set

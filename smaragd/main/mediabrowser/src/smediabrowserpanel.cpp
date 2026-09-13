@@ -1,4 +1,5 @@
 #include "app/mediabrowser/smediabrowserpanel.h"
+#include "app/model/suifonts.h"
 
 #include "app/media/sdelayedlocalsource.h"
 #include "app/media/slocalmediasource.h"
@@ -230,6 +231,9 @@ void SMediaBrowserPanel::buildUi()
     root->addWidget( banner_ );
 
     tree_ = new SMediaBrowserTree( this, this );
+    // THE TREE FONT (QBX-102): the same font the Extern file list uses, i.e.
+    // the dock-title font.
+    tree_->setFont( suifonts::treeFont() );
     tree_->setColumnCount( 1 );
     tree_->setHeaderLabels( { tr( "Name" ) } );
     // One column now (AC-d1): the size that used to live beside it is a

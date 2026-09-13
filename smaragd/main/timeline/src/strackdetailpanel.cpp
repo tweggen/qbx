@@ -14,6 +14,10 @@
 #include "app/model/ssolorules.h"
 #include "app/pluginui/splugineffectstrip.h"
 #include "app/timeline/sfeelflowpanel.h"
+#include "app/timeline/scollapsiblesection.h"
+#include "app/model/sprojectprops.h"
+#include "app/model/suifonts.h"
+#include <QToolButton>
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
 #include <QVBoxLayout>
@@ -56,6 +60,16 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     // Plugin strip (will be created when track is set)
     pluginStrip_ = nullptr;
     feelFlowPanel_ = nullptr;   // proposal 40 M3, mounted the same way
+
+    // QBX-102: the plugin chain and the Feel Flow section each sit in a
+    // collapsible section. The sections are long-lived; the strips inside
+    // them are still created and destroyed per track by rebuildUI().
+    pluginsSection_ = new SCollapsibleSection(QStringLiteral("plugins"),
+                                              tr("Plugins"), contentWidget_);
+    contentLayout_->addWidget(pluginsSection_, 1);
+    feelFlowSection_ = new SCollapsibleSection(QStringLiteral("feelflow"),
+                                               tr("Feel Flow"), contentWidget_);
+    contentLayout_->addWidget(feelFlowSection_, 0);
 
     // Shown instead of the content when no track is selected, so the panel is
     // never a large blank area (and the dock can shrink to it).
@@ -139,8 +153,17 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     volLayout->addWidget(meter_);
     // OUTSIDE the scroll area: the fader and the meter are the two things a
     // user watches while the transport runs, so scrolling the FX chain must
-    // not carry them off the bottom of the dock.
-    mainLayout->addWidget(volumeRow_, 0);
+    // not carry them off the bottom of the dock. QBX-102 wraps it in the
+    // "Sliders" section, which stays outside the scroll area with it.
+    slidersSection_ = new SCollapsibleSection(QStringLiteral("sliders"),
+                                              tr("Sliders"), this);
+    slidersSection_->contentLayout()->addWidget(volumeRow_);
+    mainLayout->addWidget(slidersSection_, 0);
+
+    for (SCollapsibleSection *sec : { pluginsSection_, feelFlowSection_, slidersSection_ }) {
+        connect(sec, &SCollapsibleSection::toggleRequested, this,
+                [this, sec](bool want) { onSectionToggle(sec->id(), want); });
+    }
 
     connect(volumeSlider_, &QSlider::valueChanged,
             this, &STrackDetailPanel::onVolumeSliderMoved);
@@ -151,7 +174,8 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
 
     // Nothing to show until a track is selected.
     scroll_->setVisible(false);
-    volumeRow_->setVisible(false);
+    slidersSection_->setVisible(false);
+    applySectionState();
 }
 
 // Required for the style sheet above to reach the screen: QWidget subclasses
@@ -224,13 +248,11 @@ void STrackDetailPanel::rebuildUI()
     if (currentTrack_) {
         // Create new plugin strip for this track, add directly to content
         pluginStrip_ = new SPluginEffectStrip(currentTrack_, this);
-        pluginStrip_->setParent(contentWidget_);
-        contentLayout_->insertWidget(0, pluginStrip_, 1);
+        pluginsSection_->contentLayout()->addWidget(pluginStrip_, 1);
 
         // Feel Flow section, below the FX strip and above the volume row.
         feelFlowPanel_ = new SFeelFlowPanel(currentTrack_, this);
-        feelFlowPanel_->setParent(contentWidget_);
-        contentLayout_->insertWidget(1, feelFlowPanel_, 0);
+        feelFlowSection_->contentLayout()->addWidget(feelFlowPanel_, 0);
 
         // Proposal 47 M5. BELOW the FX chain and the Feel Flow section, and
         // with stretch 0: a send list is a handful of fixed-height rows, so
@@ -253,16 +275,77 @@ void STrackDetailPanel::rebuildUI()
         if (meter_) meter_->resetMeter();
 
         scroll_->setVisible(true);
-        volumeRow_->setVisible(true);
+        slidersSection_->setVisible(true);
         placeholder_->setVisible(false);
+        applySectionState();
     } else {
         probe_.setTap(nullptr);
         if (meter_) meter_->resetMeter();
         scroll_->setVisible(false);
-        volumeRow_->setVisible(false);
+        slidersSection_->setVisible(false);
         placeholder_->setVisible(true);
     }
     updateGeometry();   // the empty panel asks for far less room than a full one
+}
+
+SCollapsibleSection *STrackDetailPanel::section(const QString &id) const
+{
+    for (SCollapsibleSection *sec : { pluginsSection_, feelFlowSection_, slidersSection_ })
+        if (sec && sec->id() == id) return sec;
+    return nullptr;
+}
+
+// ONE PROJECT-WIDE FLAG PER SECTION (QBX-102). Read from the APP's project,
+// which is what every other write in this panel uses (applyVolumeDb) and what
+// the headless seams build against.
+void STrackDetailPanel::applySectionState()
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    for (SCollapsibleSection *sec : { pluginsSection_, feelFlowSection_, slidersSection_ }) {
+        if (!sec) continue;
+        const char *key = SProjectProps::trackDetailSectionKey(sec->id());
+        const bool def  = SProjectProps::trackDetailSectionCollapsedDefault(sec->id());
+        const bool collapsed = (proj && key) ? proj->prop(key, def).toBool() : def;
+        sec->setExpanded(!collapsed);
+    }
+    // A collapsed plugin chain must stop claiming the stretch it was given, or
+    // the Feel Flow section below it is pushed to the bottom of a mostly empty
+    // dock.
+    contentLayout_->setStretchFactor(pluginsSection_, pluginsSection_->isExpanded() ? 1 : 0);
+    if (proj && sectionsProject_.data() != proj) {
+        if (SProject *old = sectionsProject_.data())
+            disconnect(old, &SProject::propertyChanged, this, nullptr);
+        sectionsProject_ = proj;
+        connect(proj, &SProject::propertyChanged, this,
+            [this](const QString &key, const QVariant &) {
+                if (key == QLatin1String(SProjectProps::TrackDetailPluginsCollapsed)
+                    || key == QLatin1String(SProjectProps::TrackDetailFeelFlowCollapsed)
+                    || key == QLatin1String(SProjectProps::TrackDetailSlidersCollapsed))
+                    applySectionState();
+            });
+    }
+    updateGeometry();
+}
+
+void STrackDetailPanel::onSectionToggle(const QString &id, bool wantExpanded)
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    const char *key = SProjectProps::trackDetailSectionKey(id);
+    if (!proj || !key) return;
+    // setProp() is a no-op when the value is unchanged and emits
+    // propertyChanged otherwise; applySectionState() runs from that signal.
+    proj->setProp(key, !wantExpanded);
+}
+
+QString STrackDetailPanel::describeSections() const
+{
+    const QFont pf = pluginStrip_ ? pluginStrip_->font() : QFont();
+    return QStringLiteral("plugins=%1,feelflow=%2,sliders=%3|pluginFontPt=%4|pluginSmallFont=%5")
+        .arg(pluginsSection_ && !pluginsSection_->isExpanded() ? 1 : 0)
+        .arg(feelFlowSection_ && !feelFlowSection_->isExpanded() ? 1 : 0)
+        .arg(slidersSection_ && !slidersSection_->isExpanded() ? 1 : 0)
+        .arg(pluginStrip_ ? pf.pointSize() : -1)
+        .arg(pluginStrip_ && pf == suifonts::smallFont() ? 1 : 0);
 }
 
 void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)

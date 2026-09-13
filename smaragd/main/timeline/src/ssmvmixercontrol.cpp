@@ -1,5 +1,6 @@
 
 #include <stdlib.h>
+#include "app/model/suifonts.h"
 #include <cmath>
 
 #include <qwidget.h>
@@ -604,10 +605,10 @@ SSMVMixerControl::SSMVMixerControl(
     qLayout_->setContentsMargins( SMV_FOLD_W + HANDLE_W, 2, 4, 2 );
     qLayout_->setSpacing( 2 );
 
-    // Small label font derived from the application default (the bundled
-    // FreeSans, antialiased) so the channel strip matches the rest of the UI.
-    QFont smallFont = QApplication::font();
-    smallFont.setPointSize( 9 );
+    // THE SMALL FONT (app/model/suifonts.h, QBX-102): the application default
+    // at 9 pt. The mixer strip and the insert list read the SAME function, so
+    // "the same size as the track name in the track head" is one spelling.
+    const QFont smallFont = suifonts::smallFont();
 
     qTrkLabel_ = new QLineEdit( tk_.getSName(), this );
     qTrkLabel_->setFrame( false );
@@ -1379,6 +1380,11 @@ void SSMVMixerControl::instrumentClicked()
                                         slot->getDescriptor().name ) ) );
     editor->resize( 340, 420 );
     editor->show();
+}
+
+const QWidget *SSMVMixerControl::nameWidget() const
+{
+    return qTrkLabel_;
 }
 
 QString SSMVMixerControl::describeHead()

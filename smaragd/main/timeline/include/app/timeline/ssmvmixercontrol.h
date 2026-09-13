@@ -185,6 +185,9 @@ public:
     // fitW/fitH say the visible strip still fits the lane it was given - the
     // "hiding beats clipping" rule made assertable rather than eyeballed.
     QString describeHead();
+    /// The widget the track's NAME is drawn in (QBX-102): its font is the
+    /// "small font" every other mount is meant to match. For the ui-font seam.
+    const QWidget *nameWidget() const;
 
     // The track's automation mode: the common mode of every lane it owns, or
     // the mode of the first one when they disagree, or Off when it owns none.

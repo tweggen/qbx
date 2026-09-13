@@ -388,6 +388,26 @@ public:
     // CONTRACT inv. 5). Empty string when the path names no track.
     QString describeTrackDetailLayout( const QString &trackPath, int w, int h );
 
+    /// QBX-102 test seams, here for the same reason as the one above (testkit
+    /// may not include app/timeline, app/mixerui or app/mediabrowser).
+    ///
+    /// `describeTrackDetailSections` builds the REAL panel off screen and
+    /// returns STrackDetailPanel::describeSections(). `clickTrackDetailSection`
+    /// clicks the REAL header button of `section` ("plugins" | "feelflow" |
+    /// "sliders") on a panel built the same way, so the path exercised is the
+    /// button's signal reaching the project property; false for an unknown
+    /// section or a path that names no track.
+    QString describeTrackDetailSections( const QString &trackPath );
+    bool clickTrackDetailSection( const QString &trackPath, const QString &section );
+
+    /// Every QBX-102 font mount, read off REAL widgets:
+    /// `small=<pt>|tree=<pt>` then, per mount (head, strip, plugin, extern,
+    /// media), `<m>=<pt>|<m>Small|Tree=<0|1>|<m>Set=<0|1>`, plus
+    /// `stripEqHead=<0|1>`. Small/Tree are exact QFont equality with
+    /// suifonts::smallFont() / treeFont(); Set is Qt::WA_SetFont. A mount that
+    /// could not be built reports -1 and 0s.
+    QString describeUiFonts( const QString &trackPath );
+
     // ...and double-click ONE control of a detail pane, off screen, through
     // the real filter installed by sdefaultreset::onDoubleClick — so what it
     // exercises is the production gesture and the production commit path, not

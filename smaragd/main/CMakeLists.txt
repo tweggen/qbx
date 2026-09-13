@@ -24,6 +24,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sclipwindow.h
     model/include/app/model/sclipwindowgeometry.h
     model/include/app/model/sdefaultreset.h
+    model/include/app/model/suifonts.h
     model/include/app/model/sfeelflowskeleton.h
     model/include/app/model/sdetaileditors.h
     model/include/app/model/sexternfile.h
@@ -359,6 +360,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/strackgestures.h
     timeline/include/app/timeline/sstdmixerview.h
     timeline/include/app/timeline/strackdetailpanel.h
+    timeline/include/app/timeline/scollapsiblesection.h
     timeline/include/app/timeline/ssendstrip.h
     timeline/include/app/timeline/sfeelflowpanel.h
     timeline/include/app/timeline/sfeelflowpuppet.h
@@ -379,6 +381,7 @@ set(APP_UI_FILES
     timeline/src/strackgestures.cpp
     timeline/src/sstdmixerview.cpp
     timeline/src/strackdetailpanel.cpp
+    timeline/src/scollapsiblesection.cpp
     timeline/src/slevelmeter.cpp
     timeline/src/strackheaderresizer.cpp
     timeline/src/szoomscrollbar.cpp
@@ -486,6 +489,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertclipwindowaction.h
     testkit/include/app/testkit/sasserthovermodeaction.h
     testkit/include/app/testkit/sdetailpanetestactions.h
+    testkit/include/app/testkit/suifonttestactions.h
     testkit/include/app/testkit/smixertestactions.h
     testkit/include/app/testkit/sasserttakecolumnaction.h
     testkit/include/app/testkit/sassertclipmixaction.h
@@ -540,6 +544,7 @@ set(APP_UI_FILES
     testkit/src/sassertclipwindowaction.cpp
     testkit/src/sasserthovermodeaction.cpp
     testkit/src/sdetailpanetestactions.cpp
+    testkit/src/suifonttestactions.cpp
     testkit/src/smixertestactions.cpp
     testkit/src/sasserttakecolumnaction.cpp
     testkit/src/sassertclipmixaction.cpp
