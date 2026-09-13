@@ -340,12 +340,22 @@ void STrackDetailPanel::onSectionToggle(const QString &id, bool wantExpanded)
 QString STrackDetailPanel::describeSections() const
 {
     const QFont pf = pluginStrip_ ? pluginStrip_->font() : QFont();
-    return QStringLiteral("plugins=%1,feelflow=%2,sliders=%3|pluginFontPt=%4|pluginSmallFont=%5")
+    // `headerOnly`: every COLLAPSED section is exactly as tall as its header
+    // row, i.e. it claims no leftover space. Meaningful only on a panel whose
+    // layout has run (the seam settles it at 320x400).
+    bool headerOnly = true;
+    for (SCollapsibleSection *sec : { pluginsSection_, feelFlowSection_, slidersSection_ }) {
+        if (sec && !sec->isExpanded() && sec->isVisible()
+            && sec->height() != sec->headerButton()->height())
+            headerOnly = false;
+    }
+    return QStringLiteral("plugins=%1,feelflow=%2,sliders=%3|pluginFontPt=%4|pluginSmallFont=%5|headerOnly=%6")
         .arg(pluginsSection_ && !pluginsSection_->isExpanded() ? 1 : 0)
         .arg(feelFlowSection_ && !feelFlowSection_->isExpanded() ? 1 : 0)
         .arg(slidersSection_ && !slidersSection_->isExpanded() ? 1 : 0)
         .arg(pluginStrip_ ? pf.pointSize() : -1)
-        .arg(pluginStrip_ && pf == suifonts::smallFont() ? 1 : 0);
+        .arg(pluginStrip_ && pf == suifonts::smallFont() ? 1 : 0)
+        .arg(headerOnly ? 1 : 0);
 }
 
 void STrackDetailPanel::onVolumeSliderMoved(int sliderValue)

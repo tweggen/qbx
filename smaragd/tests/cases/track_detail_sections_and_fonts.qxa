@@ -86,6 +86,10 @@
 
     <track-detail-section trackPath="1" section="plugins" collapsed="1"/>
     <assert-track-detail-sections trackPath="0" contains="plugins=1,feelflow=0,sliders=1"/>
+    <!-- A collapsed section is its header row and nothing more: the plugin
+         chain, collapsed above an EXPANDED Feel Flow section, must not keep
+         the stretch it had and push Feel Flow to the bottom of the dock. -->
+    <assert-track-detail-sections trackPath="0" contains="headerOnly=1"/>
 
     <track-detail-section trackPath="0" section="nonsense" collapsed="1"
                           expectReject="true"/>
