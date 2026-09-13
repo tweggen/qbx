@@ -104,6 +104,35 @@ Invariants:
    repainting, but repaints the widget, because the lanes move on both axes and
    a union of per-lane rects would buy nothing on the handful that exist.
 
+11b. **Every meter carries a dB TICK SCALE, drawn by `SLevelMeter` itself**
+   (QBX-101), so the track head, the Track Detail dock, the transport master
+   meter and every mixer strip get it without a mount knowing.
+   - Ticks are placed with `dbToPx()`, the bars' own mapping, so a tick sits
+     exactly where its dB value lights up. Gated: a 0 dBFS peak lights to the
+     0 dB tick's pixel.
+   - Minor ticks are GRAY notches from each LANE's leading edge, half the
+     lane wide (at least 1 px), so every lane's reading stays visible on a
+     tick row. A stereo track head's 3 px lanes are the case that forced
+     "per lane" and "half".
+   - The 0 dB tick is WHITE, `ZERO_TICK_PX` (2) thick, and spans the whole
+     short axis, frame included.
+   - The scale is drawn LAST, over a lit bar.
+   - The step is the smallest of 3/6/12/24 dB that keeps ticks
+     `MIN_TICK_SPACING_PX` (4) apart on the bar's length: 3 dB on a 240 px
+     strip, 12 dB on a 40 px head.
+   - The scale is static, so the sub-rect repaint of inv. 11 needs no change:
+     `paintEvent` redraws the ticks inside whatever band it was asked for.
+   - `describe()` appends `tickStep`, `ticks` and `zeroPx`.
+   Gate: `levelmeter_ticks_test`, a PIXEL test over real meters (1 lane at 240
+   and 48 px, 2 lanes Split and Grow, 6 lanes Grow, horizontal 72 px). Watched
+   failing under eight sabotages:
+   - no scale;
+   - a thin, a short and a gray 0 dB tick;
+   - a one-row offset;
+   - one notch across the whole widget;
+   - no thinning;
+   - ticks hidden where the bar is lit.
+
 11a. **How many lanes a meter shows is the MOUNT's decision** (proposal 36 B8),
    and `SLevelMeter` implements both answers rather than choosing:
    - The **track head** and the **transport master meter** show
