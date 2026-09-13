@@ -1428,6 +1428,29 @@ crushed widgets and overlapping pairs at several panel sizes. Watched failing
 on the pre-fix binary: 13 crushed / 7 overlapping at 200 px and at 260 px,
 `worst=QWidget(200<447)`.
 
+
+### inv. 45a — THE TRACK DETAIL SECTIONS COLLAPSE PROJECT-WIDE (QBX-102)
+
+The FX strip, the Feel Flow section and the volume ("Sliders") row each sit in
+an `SCollapsibleSection`: a disclosure-triangle header over a content area with
+ZERO margins, so nothing that moved into a section was indented. The Sliders
+section wraps the volume row and stays OUTSIDE the scroll area with it (inv.
+45).
+
+| Thing to know | Why |
+|---|---|
+| ONE flag per section, in `SProject` properties (`sprojectprops.h`: `trackDetail{Plugins,FeelFlow,Sliders}Collapsed`) | The request: the state is the same for every track and saved with the project. The keys are NOT seeded by `defaults()`; an unset key reads `trackDetailSectionCollapsedDefault()` (Feel Flow collapsed, the other two expanded), so a project nobody collapsed anything in serializes exactly as before |
+| A header click WRITES THE PROPERTY and nothing else; every panel applies it from `SProject::propertyChanged` | One route to the widgets, so a second open panel (or a fresh one built by a test seam) cannot disagree with the one that was clicked |
+| View state: not an action, not undoable, and it does NOT dirty the project | The `timelineZoomSecondWidth` precedent in the same file; a session that only folded sections and quit loses them, exactly as proposal 46 records for lane view state |
+| A COLLAPSED section's vertical size policy is `Maximum` | That, and not a stretch-factor reset, is what stops a collapsed plugin chain taking the dock's leftover height. The stretch reset was written, ablated and REMOVED: `headerOnly=1` held without it and failed without the policy |
+| The panel follows its project through a `QPointer` and reconnects when the current project changes | The dock panel can outlive a project |
+
+Gates: `qxa.track_detail_sections_and_fonts` (defaults, project-wide state,
+absolute toggle, refusal of an unknown section, save/load, `headerOnly=1`) and
+`qxa.track_detail_layout`, which now EXPANDS Feel Flow first so it still
+measures the configuration it was watched failing against, and adds an
+all-collapsed pass.
+
 ### inv. 46 — A VALUE CONTROL RESETS TO ITS DEFAULT ON DOUBLE-CLICK
 
 The Track Detail fader and the Clip Detail pane's value fields (volume, pan,
