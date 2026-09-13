@@ -608,6 +608,27 @@ And it SWALLOWS the event. On a QSlider the second press would otherwise start
 another drag or jump the handle to the click position, moving the control off
 the default it was just asked for.
 
+### `suifonts` — the two NAMED UI fonts (QBX-102)
+
+`app/model/suifonts.h` spells the only two UI fonts that other widgets are
+required to MATCH, so "the same size as" is one function rather than two
+point sizes that happen to agree:
+
+| Font | Is | Used by |
+|---|---|---|
+| `smallFont()` | the application font at `SMALL_POINT_SIZE` (9 pt) — the arranger track head's NAME font | the track head's name and volume labels, `SMixerStrip` (set on the whole strip before its children exist), `SPluginEffectStrip` (both mounts) |
+| `treeFont()` | `QApplication::font("QDockWidgetTitle")` — the font `QDockWidget` draws its TITLE in (its own `init()` sets the title font from that class key) | `SExternFileList`, the media browser's tree |
+
+The tree font is the PLATFORM THEME's: macOS supplies a smaller dock-title
+font, while Windows and Linux supply none, so there it IS the application font.
+**Consequence to know:** on Windows and Linux a list that never called
+`setFont()` "equals" the tree font by default, and on this repository's Linux
+box the application font is already 9 pt, so every size and equality check
+passes with no `setFont()` at all. That is why `assert-ui-fonts` also reports
+`<mount>Set` (`Qt::WA_SetFont`), and why that field is what the gate asserts.
+It lives in the lowest app layer for the `sdefaultreset` reason: timeline,
+mixerui, pluginui and mediabrowser all need it and cannot see each other.
+
 ## System lanes and their addressing (proposal 45 D1/D8/D9)
 
 Three predicates on `SObject`, all on the base class for the reason

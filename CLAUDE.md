@@ -2993,6 +2993,42 @@ gated in `laneorder_test` against the model instead. And the per-strip
 independent scrolling of the FX/sends section, which follows from D5 putting
 the fader block outside the scroll area.
 
+## Smaller named fonts and collapsible Track Detail sections (QBX-102, 2026-09-13)
+
+Two named fonts in `app/model/suifonts.h`, so "the same size as" is one
+function: **`smallFont()`** is the track head's NAME font (app font, 9 pt) and
+is now used by the mixer strip and the insert/instrument list in both mounts;
+**`treeFont()`** is `QApplication::font("QDockWidgetTitle")`, the font a
+DOCK TITLE is drawn in (Qt's `QDockWidget` uses that class key), and is now
+used by the Extern file list and the media browser's tree. The Track Detail
+dock's plugin chain, Feel Flow section and volume row each sit under a
+disclosure-triangle header (`SCollapsibleSection`, zero content margins), with
+ONE collapsed flag per section in `SProject` properties, shared by every track
+and saved with the project. Defaults: Feel Flow collapsed, the other two
+expanded. Invariants: `main/model/CONTRACT.md` ("`suifonts`"),
+`main/timeline/CONTRACT.md` inv. 45a, `main/testkit/CONTRACT.md` ("The
+UI-font and Track Detail section verbs").
+
+| Thing to know | Why |
+|---|---|
+| **The tree font is the PLATFORM's, and on Windows and Linux it IS the application font** | macOS supplies a smaller dock-title font; the other themes set none. Only macOS will show that list getting smaller, and a gate may assert the RELATION, never the size |
+| **On this repo's Linux box the application font is ALREADY 9 pt** | Measured `small=9|tree=9`. Every size and equality field reads the same with no `setFont()` at all, which is why `assert-ui-fonts` reports `<mount>Set` (`Qt::WA_SetFont`) and why that is what the case asserts. Watched: each of the four new `setFont()` calls, removed, fails the case |
+| A header click writes the PROJECT PROPERTY and nothing else; panels apply it from `propertyChanged` | One route, so a fresh panel cannot disagree with the clicked one. View state: not undoable, does not dirty the project (the timeline-zoom precedent) |
+| A collapsed section's vertical policy is `Maximum`; there is no stretch reset | The reset was written, ablated and removed. `headerOnly=1` held without it and failed without the policy |
+| `track_detail_layout.qxa` now EXPANDS Feel Flow first | Collapsed by default, the content fitted and two `scrollNeeded=1` assertions stopped holding. That was not a regression; the case needs the configuration it was watched failing against. It also gained an all-collapsed pass |
+
+Gates: `qxa.track_detail_sections_and_fonts` and `qxa.track_detail_layout`,
+plus `action_roundtrip_test`. **Sabotage pass**, each run through `ctest -R`:
+removing any of the four `setFont()` calls, the Feel Flow default, the
+project-property write, content hiding, or the `Maximum` policy fails a case.
+
+**NOT gated:** what the fonts and the triangle LOOK like (no `paintEvent` is
+measured); the tree font on macOS, the one platform where it differs; the LIVE
+dock's sections (a test-case run never binds its project into the window, so
+the seams build their own panels); that collapsing does not dirty the project;
+and the mixer strip's layout floors at the new size beyond the existing
+`mixer_*` layout cases, which stayed green.
+
 ## Dependencies
 
 ### Core

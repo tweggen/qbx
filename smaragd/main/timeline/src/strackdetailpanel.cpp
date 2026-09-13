@@ -308,10 +308,12 @@ void STrackDetailPanel::applySectionState()
         const bool collapsed = (proj && key) ? proj->prop(key, def).toBool() : def;
         sec->setExpanded(!collapsed);
     }
-    // A collapsed plugin chain must stop claiming the stretch it was given, or
-    // the Feel Flow section below it is pushed to the bottom of a mostly empty
-    // dock.
-    contentLayout_->setStretchFactor(pluginsSection_, pluginsSection_->isExpanded() ? 1 : 0);
+    // No stretch bookkeeping here: the plugins section keeps its stretch of 1,
+    // and a COLLAPSED section's vertical size policy is Maximum
+    // (SCollapsibleSection::setExpanded), which is what stops it taking the
+    // leftover height. A setStretchFactor() reset stood here and was removed
+    // after ablation: with it deleted, track_detail_sections_and_fonts'
+    // headerOnly=1 still held; with the Maximum policy deleted, it failed.
     if (proj && sectionsProject_.data() != proj) {
         if (SProject *old = sectionsProject_.data())
             disconnect(old, &SProject::propertyChanged, this, nullptr);

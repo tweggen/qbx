@@ -1437,6 +1437,25 @@ failures before the first run), and **`assert-log` examines only the window
 since the action it FOLLOWS**, so an assertion about what a `load-project`
 logged has to sit directly under the load rather than at the end of the case.
 
+## The UI-font and Track Detail section verbs (QBX-102)
+
+`assert-ui-fonts`, `track-detail-section` and `assert-track-detail-sections`
+(`testkit/src/suifonttestactions.cpp`), all routed through `SMainWindow` for
+inv. 5's reason. Each seam builds the REAL widget (a head, a scratch mixer
+pane's strip, a `STrackDetailPanel`, the live Extern file list and media
+browser) and reads it; `track-detail-section` clicks the REAL header button.
+
+- **A fresh panel per call is load-bearing.** A section state kept in the
+  clicked panel rather than the project cannot pass
+  `assert-track-detail-sections`, which always builds a new one.
+- **`<mount>Set` (Qt::WA_SetFont) is the field that bites on Windows and
+  Linux.** There `treeFont()` is the application font, and on this repo's
+  Linux box the application font is already 9 pt, so size and equality alone
+  pass with every `setFont()` deleted. Watched: removing each of the four new
+  `setFont()` calls fails the case through its `Set` field.
+- `track-detail-section` is ABSOLUTE (`collapsed=`) and clicks only when the
+  panel shows the other state; an unknown `section` is REJECTED.
+
 ## The window-layout and lane-view verbs (proposal 46, 2026-09-06)
 
 **`save-window-layout`** drives `SMainWindow::saveWindowLayout( force )` and
