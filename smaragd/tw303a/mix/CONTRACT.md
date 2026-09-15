@@ -109,9 +109,8 @@ sweep, mirror, near side at unity, monotone over the 201 control ticks).
 Known debt: calcOutputTo allocates buffers per block. twTrackMix::setTrackGain
 and trackGainDb_ are dead weight until proposal 37 P5 removes them.
 twGainStage's mute ramp is implemented and unit-tested but UNWIRED — P5's
-`self:Muted` lane is its caller. TRACK pan does not exist yet (proposal 49
-M2 puts it in twGainStage). CLIP pan is AUDIBLE since proposal 49 M1 — see
-below.
+`self:Muted` lane is its caller. CLIP pan is audible since proposal 49 M1 and
+TRACK pan since M2 — see below. `self:Pan` automation is M3.
 
 **THE PAN LAW, `twpanlaw.h` (proposal 49 D1, M0).** One pure function,
 `twPanLaw(p)`, and every stage that pans must call it rather than spell its own:
@@ -167,6 +166,26 @@ an asset window over a faded track captures the unfaded audio.
     proposal 36's committed golden corpus is byte-identical across P5 by
     construction: no golden carries a lane, so no golden's samples are touched.
     `isFlat()` keeps the same property over the flat stretches of a STEP lane.
+    **Since proposal 49 M2 the factor is PER CHANNEL** and the pure-copy test
+    is asked of the channel's own factor (T10): a panned track's near side is
+    still a pure copy, its far side is scaled, and a track at 0 dB with a
+    non-zero pan never takes the copy path on the side that must fall. A
+    CONSTANT pan cannot break flatness, so `isFlat()` needs no pan term until
+    a pan CURVE exists (M3, T11).
+
+20a. **TRACK PAN LIVES IN twGainStage, and `factorAt` / `applyGain` take a
+    REQUIRED output channel AND page width** (proposal 49 D2, M2, trap T5).
+    `Envelope::pan` is snapshotted with the fader; the law applies at a width of
+    exactly 2 and only to channels 0 and 1. Neither argument has a default, on
+    purpose: an optional channel defaulting to 0 would have let the live pump
+    compile unchanged and scale BOTH channels with channel 0's gain, and an
+    unchecked width would pan channels 0/1 of a 6-channel page. The legacy
+    mono pull (`calcOutputTo`) asks as channel 0 of its own width. Post-FX and
+    post-fader, so the PRE-fader send tap (the stage's input) is pre-pan and
+    the POST-fader tap is post-pan. Gates: `qxa.track_pan_audible`,
+    `qxa.track_pan_post_fx` (through `tw.test.clap.stereoskew`, whose cross
+    term makes the two orders differ by 3x), `qxa.send_pan_taps`,
+    `qxa.monitor_pan_live`.
 
 21. **TRIM SUMS IN dB; READ REPLACES.** `absolute == false` (Trim, the default —
     design §11 decision 3) evaluates `10^((gainDb + curve(pos))/20)`: a dB sum is

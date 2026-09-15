@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SENDS AND PAN (proposal 49 D2 / D6, M2 AC2.4 and AC2.8's send half).
+
+  The send taps fall out of where pan lives (D2): the PRE-fader tap is the
+  gain stage's INPUT, so it is pre-pan; the POST-fader tap is its OUTPUT, so
+  it is post-pan. A send lane's OWN track pan positions its return.
+
+  Shape (send_bus_audible.qxa's): one source track over ../test_autosaw.wav
+  (identical channels, RMS A = 0.230956) and one send lane "Reverb" with no
+  inserts, summing into the master beside the source. The source is panned
+  HARD LEFT, so on channel 1 the send lane is the ONLY possible contributor:
+      post-fader send   ch0 = A + A = 2A = 0.461912   ch1 = 0
+      pre-fader send    ch0 = 2A                      ch1 = A (unpanned)
+  Then the source is centred and the SEND LANE is panned hard left:
+      post-fader send   ch0 = 2A                      ch1 = A (the dry track)
+-->
+<SActionScript version="1" name="send_pan_taps">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-send-lane sendName="Reverb"/>
+    <add-send track="0" dest="Reverb" level="0" pre="false"/>
+
+    <set-track-pan trackPath="0" pan="-1"/>
+
+    <!-- post-fader: the send hears the PANNED signal -->
+    <render filename="spt_post.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="spt_post.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.4573" maxRms="0.4665"/>
+    <assert-audio-energy filename="spt_post.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+
+    <!-- pre-fader: the send hears the UNPANNED signal -->
+    <set-send track="0" dest="Reverb" pre="true"/>
+    <render filename="spt_pre.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="spt_pre.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.4573" maxRms="0.4665"/>
+    <assert-audio-energy filename="spt_pre.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- the SEND LANE's own pan positions its return, and is heard -->
+    <set-send track="0" dest="Reverb" pre="false"/>
+    <set-track-pan trackPath="0" pan="0"/>
+    <set-track-pan trackPath="$send0" pan="-1"/>
+    <render filename="spt_lane_left.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="spt_lane_left.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.4573" maxRms="0.4665"/>
+    <assert-audio-energy filename="spt_lane_left.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+  </actions>
+
+  <verify-undo/>
+
+</SActionScript>

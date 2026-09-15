@@ -170,6 +170,8 @@ const Fixture kFixtures[] = {
     { "set-track-mute",  "<set-track-mute trackPath='1,1' muted='1'/>" },
     { "set-track-volume",
       "<set-track-volume trackPath='1,0' volume='-6'/>" },
+    { "set-track-pan",
+      "<set-track-pan trackPath='1,0' pan='-0.5'/>" },
     // A non-empty name, deliberately: the default is the empty string, which an
     // unread attribute also produces.
     { "set-track-name",
@@ -956,6 +958,7 @@ const LaneRow kLaneRows[] = {
     // them. These are the FEATURE; a policy that refused them would refuse the
     // reason system lanes were built.
     { "set-track-volume",      Accept, "AC4.4 the master fader. Gate: master_head_fader_heard" },
+    { "set-track-pan",         Accept, "proposal 49 D2: master and send lanes are panned and HEARD; the CONDUCTOR is refused in the verb (no audio). Gate: track_pan_audible" },
     { "set-track-mute",        Accept, "AC5.4 heard through twGainStage. Gate: master_mute_audible" },
     { "head-fader",            Accept, "the master head's own fader gesture (M4)" },
     { "fader-key",             Accept, "the same fader, by keyboard" },

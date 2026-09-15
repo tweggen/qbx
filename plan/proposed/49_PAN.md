@@ -450,6 +450,27 @@ identical) unless it says `test_stereo.wav`.
   from `twMasterChainState`; pan in `twTrackMix` instead of the gain stage
   (AC2.2 bites).
 
+#### M2 as executed (QBX-110)
+
+- **Measured** (A = 0.230956): track pan 0.75 **0.088383 / 0.230956**; hard
+  left **0.230956 / 0.000000**; clip -0.5 x track 0.75 **0.088383 /
+  0.163311** (the per-channel product); a MONO source hard right **0.000000 /
+  0.353530**; the master at 0.75 **0.088383 / 0.230956**; through the stereo
+  skew, unpanned **0.346435 / 0.115478** and hard left **0.346435 /
+  0.000000** (post-FX; pre-FX would be 0.115478); sends post-fader **0.461913 /
+  0.000000**, pre-fader **0.461913 / 0.230956**, a send lane panned hard left
+  **0.461913 / 0.230956**; a MONITORED track hard left **0.230956 / 0.000000**.
+- **The width is a required argument too**, not only the channel. `factorAt`
+  and `applyGain` take `(channel, nChannels)`: the design named the channel
+  (T5), and a width left to the caller would pan channels 0/1 of a 6-channel
+  page in exactly the same silent way.
+- **`isFlat()` got no pan term** in M2: a constant pan is one factor for every
+  frame. T11 is M3's, when a pan curve exists.
+- **The monitoring gate covers the LIVE half only.** `monitor_pan_live`
+  asserts the pump's per-channel pan; the frozen half of a hand-back is the
+  gain stage's own render, gated by `track_pan_audible`, and no case pans a
+  track that is disarmed while its own clips play.
+
 ### M3 — `self:Pan` automation
 
 - The lane target on `STrack`; `twGainStage::setPanCurve(curve, absolute)`;

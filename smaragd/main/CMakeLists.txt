@@ -248,6 +248,7 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/ssettracknameaction.h
     objects/track/include/app/objects/track/ssettracksoloaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
+    objects/track/include/app/objects/track/ssettrackpanaction.h
     objects/track/include/app/objects/track/strack.h
     objects/track/include/app/objects/track/strackcolormodifier.h
     objects/track/include/app/objects/track/strackpath.h
@@ -277,6 +278,7 @@ set(APP_OBJECTS_FILES
     objects/track/src/ssettracknameaction.cpp
     objects/track/src/ssettracksoloaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
+    objects/track/src/ssettrackpanaction.cpp
     objects/track/src/strack.cpp
     objects/track/src/strackcolormodifier.cpp
     objects/track/src/strackrndrinline.cpp

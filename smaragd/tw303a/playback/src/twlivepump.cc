@@ -375,7 +375,10 @@ void LiveGraphPump::renderTrack( const twLivePlan &plan, int index, length_t fra
     //    the Envelope the plan snapshotted. In place: applyGain allows it.
     for( idx_t c = 0; c < nch; ++c ) {
         float *ch = sig + (std::size_t)c * stride;
-        twGainStage::applyGain( ch, ch, frames, pos, t.gain );
+        // Channel and width are REQUIRED (proposal 49 T5): the plan's pan is
+        // per channel, and this is the call that would otherwise have panned
+        // both channels with channel 0's gain.
+        twGainStage::applyGain( ch, ch, frames, pos, t.gain, c, nch );
     }
 
     // 4. THE CHANNEL MAP. Empty is the identity, which is every track today, so

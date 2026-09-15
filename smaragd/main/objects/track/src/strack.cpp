@@ -1270,6 +1270,7 @@ void STrack::setChannels( int n )
         // attribute before setChannels() runs for a re-parented lane) must not
         // silently start at unity.
         cpGainStage_->setGainDb( getVolume() );
+        cpGainStage_->setPan( getPan() );     // proposal 49 M2, same reason
     }
 
     channels_ = n;
@@ -1362,6 +1363,8 @@ STrack::STrack( SProject *project )
                       this, SLOT( onTrackMuteChanged( bool ) ) );
     QObject::connect( this, SIGNAL( volumeChanged( double ) ),
                       this, SLOT( onTrackVolumeChanged( double ) ) );
+    QObject::connect( this, SIGNAL( panChanged( double ) ),
+                      this, SLOT( onTrackPanChanged( double ) ) );
 
     // WIDTH COMES FROM THE PROJECT (proposal 36 B4), and follows it. There is
     // exactly one authority — SProject::channels(), the attribute M1 added —
@@ -2169,6 +2172,22 @@ void STrack::onTrackVolumeChanged( double gainDb )
         cpGainStage_->setGainDb( gainDb );
     }
     // Gain is baked into frozen pages from the gain stage downstream.
+    invalidateRenderPath();
+}
+
+void STrack::onTrackPanChanged( double pan )
+{
+    // TRACK PAN IS POST-FX AND POST-FADER (proposal 49 D2): twGainStage, beside
+    // the fader, so an insert sees the unpanned image and the root -- the
+    // metering tap, the mixer input and the post-fader send tap -- sees the
+    // panned one. The pre-fader send tap is the gain stage's INPUT, so it is
+    // pre-pan too.
+    if( cpGainStage_ ) {
+        cpGainStage_->setPan( pan );
+    }
+    // invalidateRenderPath(), NEVER an epoch bump alone: proposal 45 measured
+    // a muted master render coming back BYTE-IDENTICAL to the unmuted one with
+    // only the bump, because the value is baked into every page downstream.
     invalidateRenderPath();
 }
 

@@ -738,6 +738,9 @@ public slots:
     // subtreeSoloChanged, so it works at any nesting depth.
     void childTrackSoloChanged();
     void onTrackVolumeChanged( double gainDb );
+    // THE TRACK'S PAN (proposal 49 M2): into twGainStage beside the fader, with
+    // the same full invalidation walk the fader uses.
+    void onTrackPanChanged( double pan );
 
 public:
     // --- automation (proposal 37 P5, design D5) ----------------------------

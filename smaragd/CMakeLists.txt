@@ -489,7 +489,11 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               # reads the pre-FX input rather than going dark. Same reason as
               # the rest of this list -- without a real input backend the track
               # never becomes live-owned and the case would assert nothing.
-              mixer_meter_audibility)
+              mixer_meter_audibility
+              # proposal 49 M2 / AC2.5-2.6: a panned master sends monitoring to
+              # the lane Closure, and the pump pans a monitored track per
+              # channel. Both need a real input to have a live source at all.
+              master_pan_closure monitor_pan_live)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE

@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TRACK PAN IS AUDIBLE (proposal 49 M2, QBX-110).
+
+  Track pan lives in twGainStage, beside the fader (D2): post-FX, post-fader,
+  pre-rewire. The law is tw/mix/twpanlaw.h, per OUTPUT channel, at width 2.
+
+  Fixtures and closed forms:
+    - ../test_autosaw.wav, dry RMS A = 0.230956 on both (identical) channels;
+    - ../test_position.wav, genuinely MONO, RMS 0.353530.
+
+  Sections:
+    1. AC2.1  track pan 0.75: ch0 = A*cos(0.375 pi) = 0.088384, ch1 = A, with a
+              render BEFORE the edit in the same process (a pan that only
+              reached the mix through a later invalidation would pass a
+              render-after-only gate).
+    2.        hard left: ch1 EXACTLY 0.
+    3. AC2.3  clip pan and track pan COMPOSE per channel: clip -0.5 and track
+              0.75 give ch0 = A * 1 * cos(0.375 pi) = 0.088384 and
+              ch1 = A * cos(pi/4) * 1 = 0.163310. A sum, a max or a
+              last-writer-wins would give neither.
+    4.        a MONO source under track pan hard right: ch0 EXACTLY 0, ch1 the
+              full level. The gain stage clamps a narrower producer onto every
+              channel, so this is trap T8 at the second stage.
+    5. AC2.8  the MASTER lane accepts set-track-pan and is HEARD; the
+              CONDUCTOR lane is refused, with a warning.
+    6. D1     a non-zero track pan is refused off width 2, with a warning;
+              pan 0 is accepted.
+    7. AC2.7  assert-master-sums still holds over a panned project (T16): pan
+              is applied before the rewire, so the master is still the
+              per-channel sum of its tracks.
+-->
+<SActionScript version="1" name="track_pan_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ 1. track pan 0.75, render BEFORE and after ======== -->
+    <render filename="tpa_centre.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tpa_centre.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <set-track-pan trackPath="0" pan="0.75"/>
+    <render filename="tpa_r75.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tpa_r75.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0875" maxRms="0.0893"/>
+    <assert-audio-energy filename="tpa_r75.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ 2. hard left ======================================= -->
+    <set-track-pan trackPath="0" pan="-1"/>
+    <render filename="tpa_l100.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tpa_l100.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="tpa_l100.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- back to centre is byte-identical to the never-panned render -->
+    <set-track-pan trackPath="0" pan="0"/>
+    <render filename="tpa_recentred.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="tpa_recentred.wav" expected="tpa_centre.wav"/>
+
+    <!-- ============ 3. clip pan x track pan, per channel =============== -->
+    <set-clip-pan clip="0,0" pan="-0.5"/>
+    <set-track-pan trackPath="0" pan="0.75"/>
+    <render filename="tpa_composed.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tpa_composed.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0875" maxRms="0.0893"/>
+    <!-- A * cos(pi/4) = 0.163310 -->
+    <assert-audio-energy filename="tpa_composed.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1617" maxRms="0.1650"/>
+    <set-clip-pan clip="0,0" pan="0"/>
+    <set-track-pan trackPath="0" pan="0"/>
+
+    <!-- ============ 4. a MONO source, track pan hard right ============= -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_position.wav" timePos="0"/>
+    <set-track-pan trackPath="1" pan="1"/>
+    <render filename="tpa_mono_r100.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tpa_mono_r100.wav" channel="0"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="tpa_mono_r100.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.3500" maxRms="0.3571"/>
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-track-mute trackPath="0" muted="0"/>
+
+    <!-- ============ 5. the master is panned and heard; the conductor refuses -->
+    <set-track-pan trackPath="$master" pan="0.75"/>
+    <render filename="tpa_master_r75.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tpa_master_r75.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0875" maxRms="0.0893"/>
+    <assert-audio-energy filename="tpa_master_r75.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <set-track-pan trackPath="$master" pan="0"/>
+
+    <set-track-pan trackPath="$master,0" pan="0.5" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-pan: refusing the conductor lane"/>
+
+    <!-- ============ 6. refused off width 2 ============================== -->
+    <set-project-channels channels="1"/>
+    <set-track-pan trackPath="0" pan="0.5" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-track-pan: refusing pan 0.5 on a 1-channel project"/>
+    <set-track-pan trackPath="0" pan="0"/>
+    <set-project-channels channels="2"/>
+
+    <!-- ============ 7. the master is still the per-channel sum ========== -->
+    <set-track-mute trackPath="1" muted="0"/>
+    <set-track-pan trackPath="0" pan="0.75"/>
+    <set-track-pan trackPath="1" pan="-0.3"/>
+    <assert-master-sums position="0" tolerance="0.0005" stride="97" minRms="0.05"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>
