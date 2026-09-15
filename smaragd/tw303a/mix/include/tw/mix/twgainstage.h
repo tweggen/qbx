@@ -83,6 +83,21 @@ public:
     /// Ramp length in frames at the environment's current rate (~1.5 ms).
     length_t muteRampFrames() const;
 
+    // --- pan (proposal 49 D2, M2) ------------------------------------------
+    //
+    // TRACK PAN LIVES HERE, beside the fader: post-FX, post-fader, pre-rewire.
+    // The component stays class infinity and pure (pan is a per-channel scale
+    // with no state), so range invalidation stays exact, and the live pump
+    // gets it through the same public Envelope + applyGain it already uses for
+    // the fader -- which is what makes a monitored track's pan identical to the
+    // frozen one it hands back to. The law is tw/mix/twpanlaw.h, applied per
+    // OUTPUT channel at a page width of exactly 2 and nowhere else (D1).
+
+    /// Pan in [-1, 1]; 0 is centre and renders with no pan arithmetic at all.
+    /// Bumps the content epoch, exactly as setGainDb() does.
+    void setPan( double pan );
+    double pan() const;
+
     // --- automation (proposal 37 P5, design D5 / §4.5) ---------------------
     //
     // THE CURVE IS A SNAPSHOT, and it is swapped, never edited: the render
@@ -170,22 +185,36 @@ public:
         std::shared_ptr<const twAutomationCurve> vol;    // dB
         bool     volAbsolute = false;                    // Read (vs Trim)
         std::shared_ptr<const twAutomationCurve> mute;   // >= 0.5 == muted
+        double   pan        = 0.0;            // [-1, 1], width 2 only (M2)
     };
     /// A snapshot of the fader as it stands right now. Main thread.
     Envelope envelope() const;
 
-    // The multiplier for the frame at absolute position `pos`.
-    static double factorAt( const Envelope &e, offset_t pos );
+    // The multiplier for the frame at absolute position `pos` on OUTPUT channel
+    // `channel` of a page `nChannels` wide.
+    //
+    // BOTH CHANNEL ARGUMENTS ARE REQUIRED, and that is the point (proposal 49
+    // trap T5). Pan made the factor per-channel; an optional channel defaulting
+    // to 0 would let every existing caller compile unchanged and pan BOTH
+    // channels with channel 0's gain -- a monitored track would then snap to a
+    // different image at disarm. Making the build break at each call site is
+    // what forces every caller to say which channel it is scaling. The width is
+    // required for the same reason: pan applies at width 2 only (D1), and a
+    // caller that forgot to check would pan channels 0 and 1 of a 6-channel page.
+    static double factorAt( const Envelope &e, offset_t pos,
+                            idx_t channel, idx_t nChannels );
 
     // True when the envelope is the same value for every frame of
     // [start, start + n) — the overwhelmingly common case, and the one that
     // degenerates to a plain scalar (or, at unity, to no arithmetic at all).
     static bool isFlat( const Envelope &e, offset_t start, length_t n );
 
-    // Scale `n` frames of `src` into `dst` at absolute position `start`.
-    // dst == src is allowed.
+    // Scale `n` frames of `src` into `dst` at absolute position `start`, as
+    // OUTPUT channel `channel` of a page `nChannels` wide (see factorAt for why
+    // both are required). dst == src is allowed.
     static void applyGain( const sample_t *src, sample_t *dst, length_t n,
-                           offset_t start, const Envelope &e );
+                           offset_t start, const Envelope &e,
+                           idx_t channel, idx_t nChannels );
 
 private:
     // The multiplier a mute CURVE gives at `pos`, ramp included.
@@ -202,6 +231,7 @@ private:
     std::shared_ptr<const twAutomationCurve> volCurve_;
     bool                 volAbsolute_{ false };
     std::shared_ptr<const twAutomationCurve> muteCurve_;
+    double               pan_{ 0.0 };
 
     std::atomic<int>     channels_{ 1 };
 

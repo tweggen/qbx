@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A MONITORED track is panned by the live pump (proposal 49 D6, trap T5,
+  M2 AC2.6).
+
+  The pump applies a live track's fader through twGainStage::applyGain over
+  the Envelope the plan snapshotted, one channel at a time. Pan made that
+  factor per channel. If the channel argument were optional and defaulted to
+  0, the pump would compile unchanged and scale BOTH channels with channel 0's
+  gain: a hard-left monitored input would be heard centred, and would snap to
+  hard left at the hand-back.
+
+  Shape: monitor_through_chain.qxa's phase A, with no insert. The input is the
+  paced file: ../test_autosaw.wav (RMS 0.230940 as measured by that case),
+  monitor Auto, transport STOPPED, so the capture holds the live lane alone.
+  With the track panned hard left, channel 1 of the capture must be EXACTLY
+  silent and channel 0 the full input.
+
+  NOT GATED HERE: the frozen half of the hand-back. After disarm this track
+  has no material to play; the frozen gain stage's pan is track_pan_audible's.
+  RUN_SERIAL, SMARAGD_CAPTURE_SPEED=1, like every live case.
+-->
+<SActionScript version="1" name="monitor_pan_live">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-track-pan trackPath="0" pan="-1"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="2100"/>
+    <dump-playback-capture filename="mpl_left.wav" minFrames="72000"/>
+    <!-- 0.230940, +-3 % -->
+    <assert-audio-energy filename="mpl_left.wav" startFrame="48000" frameCount="24000"
+                         channel="0" minRms="0.22401" maxRms="0.23787"/>
+    <assert-audio-energy filename="mpl_left.wav" startFrame="48000" frameCount="24000"
+                         channel="1" minRms="0.0" maxRms="0.0"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+</SActionScript>

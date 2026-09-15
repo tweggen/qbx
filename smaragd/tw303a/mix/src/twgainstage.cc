@@ -1,4 +1,5 @@
 #include "tw/mix/twgainstage.h"
+#include "tw/mix/twpanlaw.h"
 
 #include "tw/graph/tw303aenv.h"
 #include "tw/pages/io_vector.h"
@@ -91,6 +92,23 @@ bool twGainStage::muted() const
     return muted_;
 }
 
+void twGainStage::setPan( double pan )
+{
+    {
+        std::lock_guard<std::mutex> lock( paramMutex_ );
+        if( pan_ == pan ) return;
+        pan_ = pan;
+    }
+    // Baked into every page already published, like the fader.
+    bumpContentEpoch();
+}
+
+double twGainStage::pan() const
+{
+    std::lock_guard<std::mutex> lock( paramMutex_ );
+    return pan_;
+}
+
 length_t twGainStage::muteRampFrames() const
 {
     // ~1.5 ms, the middle of the 1-2 ms the design asks for. Rate-derived, so a
@@ -168,6 +186,7 @@ twGainStage::Envelope twGainStage::envelope() const
         e.vol         = volCurve_;
         e.volAbsolute = volAbsolute_;
         e.mute        = muteCurve_;
+        e.pan         = pan_;
     }
     e.ramp = muteRampFrames();
     return e;
@@ -226,7 +245,8 @@ bool twGainStage::curveIsFlatOver( const twAutomationCurve &c, offset_t start,
     return pts[i].shape == twCurveShape::Step;
 }
 
-double twGainStage::factorAt( const Envelope &e, offset_t pos )
+double twGainStage::factorAt( const Envelope &e, offset_t pos,
+                              idx_t channel, idx_t nChannels )
 {
     // 1. The fader, plus its lane. TRIM SUMS IN dB, which is the same thing as
     //    multiplying the gains — the identity that makes "static value x curve"
@@ -258,6 +278,13 @@ double twGainStage::factorAt( const Envelope &e, offset_t pos )
             m = e.muted ? ( 1.0 - t ) : t;
         }
     }
+    // 3. Pan (proposal 49 D1/D2). A fourth factor, and the only per-channel
+    //    one. Width 2 only; a centred envelope does not even call the law, so
+    //    at pan 0 this factor is not part of the product at all (D5).
+    if( nChannels == 2 && e.pan != 0.0 && ( channel == 0 || channel == 1 ) ) {
+        const twPanGains p = twPanLaw( e.pan );
+        return g * m * ( channel == 0 ? p.l : p.r );
+    }
     return g * m;
 }
 
@@ -284,12 +311,20 @@ bool twGainStage::isFlat( const Envelope &e, offset_t start, length_t n )
 }
 
 void twGainStage::applyGain( const sample_t *src, sample_t *dst, length_t n,
-                             offset_t start, const Envelope &e )
+                             offset_t start, const Envelope &e,
+                             idx_t channel, idx_t nChannels )
 {
     if( n <= 0 ) return;
 
+    // A CONSTANT pan cannot break flatness: it is the same factor for every
+    // frame of the span. isFlat() therefore needs no pan term in M2 (a pan
+    // CURVE is proposal 49 M3's, and T11 is where it has to be added).
     if( isFlat( e, start, n ) ) {
-        const double f = factorAt( e, start );
+        // UNITY INCLUDES PAN (trap T10): the factor asked here is the channel's
+        // own, so a panned track's near side is still a pure copy and its far
+        // side is scaled -- and a track at 0 dB with a non-zero pan never takes
+        // the copy path on the side that must fall.
+        const double f = factorAt( e, start, channel, nChannels );
         // UNITY IS A PURE COPY, with no multiply at all. This is what makes the
         // fader move byte-identical over a corpus that never touches a fader:
         // the samples that come out are the ones that went in.
@@ -308,7 +343,7 @@ void twGainStage::applyGain( const sample_t *src, sample_t *dst, length_t n,
 
     // The ramp crosses this span: per-sample, and exact.
     for( length_t i = 0; i < n; ++i ) {
-        dst[i] = src[i] * (sample_t) factorAt( e, start + i );
+        dst[i] = src[i] * (sample_t) factorAt( e, start + i, channel, nChannels );
     }
 }
 
@@ -347,7 +382,7 @@ length_t twGainStage::renderPageWide( twOutputPage &page, length_t frames,
         sample_t *dst = page.channelPtr( c );
         // Rule 1's clamp: a narrower producer plays on every channel.
         const sample_t *s = src->channelPtr( twPageClampChannel( *src, c ) );
-        applyGain( s, dst, m, page.startPosition, e );
+        applyGain( s, dst, m, page.startPosition, e, c, nCh );
         if( m < n ) std::fill( dst + m, dst + n, 0.0f );
     }
 
@@ -393,8 +428,11 @@ length_t twGainStage::calcOutputTo( IOVector& dest, idx_t idx )
     if( got <= 0 ) return dest.fillSilence( 0, n );
 
     const Envelope e = envelope();
+    // Output channel 0 of a page the component's own width: the plug seam is
+    // mono by construction, and channel 0 is the one it carries.
     applyGain( buffer.data(), buffer.data(), got,
-               renderPos_.load( std::memory_order_relaxed ), e );
+               renderPos_.load( std::memory_order_relaxed ), e,
+               0, getOutputChannels() );
 
     return dest.copyFrom( IOVector::CreateFromBuffer( buffer.data(), got ), 0, got );
 }

@@ -33,6 +33,7 @@ twlive::twMasterChainState masterChainStateOf( const SStdMixer *mixer )
         out.insertCount = chain->childCount();
     out.gainDb = lane->getVolume();
     out.muted  = lane->isMuted();
+    out.pan    = lane->getPan();   // proposal 49 D6 / T6
     // A lane on the master's OWN volume or mute. `param:` lanes are covered by
     // insertCount (an automated plugin implies a plugin), and a `cut:` lane
     // cannot exist here because a system lane holds no clips (D6).

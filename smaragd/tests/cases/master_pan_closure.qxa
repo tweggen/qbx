@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A PANNED MASTER sends live monitoring to the pump-rendered CLOSURE path
+  (proposal 49 D6, trap T6, M2 AC2.5).
+
+  twlive::checkMasterShape decides whether monitoring takes the LINEAR split
+  (the RT sums the live ring onto the frozen root page) or the lane-caused
+  Closure the pump renders. A master pan is a per-channel scale downstream of
+  everything the mixer-side checks look at, so without the new
+  twMasterChainState::pan the split would sum an UNPANNED ring onto a PANNED
+  root page and the monitored input would sit centred in a panned mix.
+
+  Asserted as a PAIR each time, per master_lane_closure_monitoring.qxa's
+  lesson (a reason string is not an outcome): the Closure-specific sentence
+  must be present AND "live monitoring is off" must be absent.
+  RUN_SERIAL with the paced file: input, like every live case.
+-->
+<SActionScript version="1" name="master_pan_closure">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+
+    <!-- A centred master monitors on the linear split: neither sentence. -->
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the RT pops the ring only"
+                minCount="0" maxCount="0"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- A panned master goes to the lane-caused Closure. -->
+    <set-track-pan trackPath="$master" pan="0.5"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="1"/>
+    <assert-log level="warn" contains="live monitoring is off"
+                minCount="0" maxCount="0"/>
+    <assert-log level="warn" contains="the master lane is panned" minCount="1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+</SActionScript>

@@ -250,10 +250,16 @@ struct twMasterChainState {
      * would at least be a fixed factor; an automated one is not even that, so
      * this is checked separately rather than folded into gainDb. */
     bool   automated   = false;
+    /** The master lane's pan (proposal 49 D6, trap T6). A constant pan is a
+     * per-channel LINEAR scale, so the split algebra would technically hold --
+     * and the check stays strict for the reason gainDb gives: a scale is a
+     * fader, faders grow curves. Without this the split sums an UNPANNED live
+     * ring onto a PANNED root page. */
+    double pan         = 0.0;
 
     bool unity() const
     { return insertCount == 0 && !muted && !automated
-             && gainDb > -1e-9 && gainDb < 1e-9; }
+             && gainDb > -1e-9 && gainDb < 1e-9 && pan == 0.0; }
 };
 
 // `width` is the project's channel count. A null component, a non-unity input

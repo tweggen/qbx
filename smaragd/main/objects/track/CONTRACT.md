@@ -822,3 +822,14 @@ this class in the same milestone — every one of them a per-user view
 preference serialized with the arrangement, so the reason excludes the four
 equally. D9's own next sentence is the one that holds: *"if the narrow flag can
 live on the track, it needs no pruning at all."*
+
+## Track pan (proposal 49 M2)
+
+`SObject::pan_` on an `STrack` is its TRACK pan. `panChanged` is self-connected
+to `onTrackPanChanged`, which pushes the value into `twGainStage::setPan` and
+walks `invalidateRenderPath()` — never an epoch bump alone (proposal 45
+measured a muted master render coming back byte-identical with only the bump).
+The value is also pushed when the gain stage is (re)built in `setChannels`, so
+a lane created after its pan was loaded does not silently start centred. The
+verb is `set-track-pan`; the conductor lane refuses it. Every system lane with
+a gain stage (master, sends) is panned by it and heard.

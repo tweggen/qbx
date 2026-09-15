@@ -1636,6 +1636,16 @@ int main()
             CHECK(!twlive::checkMasterShape(mixer.get(), root.get(), 2, c).linear(),
                   "45 AC2.7: an automated master volume selects CLOSURE mode");
         }
+        // Proposal 49 D6 / T6: a PANNED master is a per-channel scale the split
+        // cannot see either.
+        {
+            twlive::twMasterChainState c;
+            c.pan = 0.5;
+            const twlive::twMasterShape sh =
+                twlive::checkMasterShape(mixer.get(), root.get(), 2, c);
+            CHECK(!sh.linear() && sh.fromMasterLane,
+                  "49 T6: a panned master selects the lane-caused CLOSURE mode");
+        }
         // ...and the boundary: a fader at exactly unity is NOT a refusal, or
         // every project would monitor in Closure mode.
         {

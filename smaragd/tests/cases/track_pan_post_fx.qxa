@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TRACK PAN IS POST-FX (proposal 49 D2, M2 AC2.2).
+
+  A linear insert cannot tell pre-FX from post-FX pan, so the ordering is
+  gated through a plugin whose output mixes its channels:
+  tw.test.clap.stereoskew,
+      out[0] = in[0]*0.5*g + in[1]*g,     out[1] = in[1]*0.5*g     (g = 1).
+  Over ../test_autosaw.wav (identical channels, RMS A = 0.230956):
+      unpanned                 ch0 = 1.5A = 0.346434   ch1 = 0.5A = 0.115478
+      pan -1 AFTER the insert  ch0 = 1.5A              ch1 = 0
+      pan -1 BEFORE the insert ch0 = 0.5A = 0.115478   ch1 = 0
+  The two orders differ by a factor of 3 on channel 0, not by a tolerance.
+-->
+<SActionScript version="1" name="track_pan_post_fx">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <render filename="tppf_unpanned.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tppf_unpanned.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.3430" maxRms="0.3499"/>
+    <assert-audio-energy filename="tppf_unpanned.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1143" maxRms="0.1167"/>
+
+    <set-track-pan trackPath="0" pan="-1"/>
+    <render filename="tppf_left.wav" format="wav" quality="10" durationSec="2.0"/>
+    <!-- 1.5A: the insert saw BOTH channels, then the pan removed channel 1 -->
+    <assert-audio-energy filename="tppf_left.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.3430" maxRms="0.3499"/>
+    <assert-audio-energy filename="tppf_left.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+  </actions>
+
+  <verify-undo/>
+
+</SActionScript>
