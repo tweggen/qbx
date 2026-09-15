@@ -2142,6 +2142,11 @@ void STrack::refreshClipGainCurves()
         // from the same window: it is a third factor in the mix's per-frame
         // product, beside the gain curve and the static volume.
         cpTrackMix_->setClipFade( lk, obj->clipFade() );
+        // THE CLIP'S PAN (proposal 49 D2, M1), the fourth factor, from the
+        // same window: a wrapped column pans by the WRAPPER's value and a
+        // direct one by the active take's -- exactly the object set-clip-pan
+        // edits. The mix applies it only at width 2 (D1).
+        cpTrackMix_->setClipPan( lk, obj->getPan() );
     }
 }
 

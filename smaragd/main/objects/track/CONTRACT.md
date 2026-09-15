@@ -261,6 +261,11 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     `refreshInstrumentFeed()` does and for the same reason. A take stack is
     asked for its ACTIVE take (`windowTakeAt(-1)`), so an inactive take keeps
     its own envelope and contributes nothing until it is selected.
+    Since proposal 49 M1 it also pushes the window's PAN (`setClipPan`), from
+    the SAME window `parametersOf` resolves: a wrapped column pans by the
+    WRAPPER, a direct one by its ACTIVE TAKE. `SLaneFragment::
+    refreshClipGainCurves()` mirrors it; forgetting the twin makes a pan inside
+    a fragment inaudible exactly the way proposal 41 M2b found for volume.
 
 14. **A SLOT's `param:` LANE INVALIDATES `[a, INT64_MAX)`, AND IT NEEDS THE
     TRACK TO DO THE WALK.** `SPluginSlot::onAutomationChanged()` pushes the

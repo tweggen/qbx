@@ -26,10 +26,9 @@
         static trim must land at 0.25 linear overall (two independent
         halvings), which an "envelope wins" or "static wins" bug would not
         produce;
-    (c) set-clip-pan is undoable and round-trips through save/load, but is
-        deliberately NOT audible — a render before/after a pan-only change
-        is BYTE-IDENTICAL, the same discipline the "0 dB does no arithmetic"
-        rule gives volume;
+    (c) set-clip-pan is undoable, round-trips through save/load, and is
+        AUDIBLE (proposal 49 M1): pan 0.75 scales channel 0 by exactly
+        cos(0.375 pi) and leaves channel 1 at the unpanned level;
     (d) both values read back exactly via the new assert-clip-mix verb —
         including after undo, not just "the action applied without being
         rejected" (contrast clip_properties_actions.qxa's note on why name/
@@ -37,6 +36,17 @@
     (e) an old project — no volumeDb/pan ever set — loads at the documented
         default, 0 dB / center (assert-clip-mix right after add-sample,
         before anything here has touched either property).
+
+  LICENCE (proposal 49 M1, QBX-109, trap T1). Sections 3 and 4 used to assert
+  that pan is INAUDIBLE: section 3 compared a pan-0.75 render byte-for-byte
+  with the unity render, and section 4 read channel 0 at the unpanned
+  half-volume level after a reload with pan 0.75. Both were true of a build in
+  which nothing read SObject::pan_, and both are exactly the "value the user
+  can set that does nothing" proposal 49 exists to remove. They are REWRITTEN,
+  not deleted: section 3 now asserts the law's closed form on each channel,
+  and section 4 moves channel 0's band by the same cos(0.375 pi) = 0.382683
+  factor while channel 1 keeps the old half-volume band. Nothing else in this
+  case moved.
 -->
 <SActionScript version="1" name="clip_volume_pan">
 
@@ -86,16 +96,24 @@
     <render filename="cvp_uncomposed.wav" format="wav" quality="10" durationSec="4.0"/>
     <assert-file-identical actual="cvp_uncomposed.wav" expected="cvp_unity.wav"/>
 
-    <!-- ============ 3. pan is undoable, round-trips, and is INAUDIBLE == -->
+    <!-- ============ 3. pan is undoable, round-trips, and is AUDIBLE ==== -->
     <set-clip-pan clip="0,0" pan="0.75"/>
     <assert-clip-mix clip="0,0" expectPan="0.75" panTolerance="1e-6"/>
 
     <render filename="cvp_panned.wav" format="wav" quality="10" durationSec="4.0"/>
-    <!-- Deliberately NOT wired to DSP: byte-identical to the unpanned render. -->
-    <assert-file-identical actual="cvp_panned.wav" expected="cvp_unity.wav"/>
+    <!-- Proposal 49 M1: the baseline band scaled by cos(0.375 pi) = 0.382683
+         on channel 0; channel 1, the near side, is the baseline band. -->
+    <assert-audio-energy filename="cvp_panned.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.085733" maxRms="0.091032"/>
+    <assert-audio-energy filename="cvp_panned.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.22403" maxRms="0.23788"/>
 
     <undo count="1"/>
     <assert-clip-mix clip="0,0" expectPan="0" panTolerance="1e-6"/>
+    <render filename="cvp_unpanned.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="cvp_unpanned.wav" expected="cvp_unity.wav"/>
 
     <!-- ============ 4. both survive save / load ======================== -->
     <set-clip-volume clip="0,0" volumeDb="-6.0206"/>
@@ -107,7 +125,12 @@
                      expectPan="0.75" panTolerance="1e-6"/>
 
     <render filename="cvp_reloaded.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- Half volume AND pan 0.75: channel 0 is the half band scaled by
+         cos(0.375 pi); channel 1 is the half band. -->
     <assert-audio-energy filename="cvp_reloaded.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.042866" maxRms="0.045517"/>
+    <assert-audio-energy filename="cvp_reloaded.wav" channel="1"
                          startFrame="0" frameCount="48000"
                          minRms="0.112015" maxRms="0.11894"/>
   </actions>

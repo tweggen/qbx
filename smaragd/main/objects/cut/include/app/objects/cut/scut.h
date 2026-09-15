@@ -537,6 +537,12 @@ private slots:
     // invalidation is what triggers.
     void onVolumeChanged( double db );
 
+    // THE CLIP'S PAN (proposal 49 M1, trap T2). SObject::setPan() invalidates
+    // nothing, so without this a pan edit is inaudible until some unrelated
+    // edit re-pulls the clip entry. Same route as onVolumeChanged: the value
+    // reaches the mix through STrack::refreshClipGainCurves().
+    void onPanChanged( double pan );
+
     // Trailing edge of the slip-invalidation throttle (see
     // invalidateRenderPathForSlip). Both run on THIS object's thread: the
     // timer is a child QObject, and armSlipInvalidateTimer_ is only ever

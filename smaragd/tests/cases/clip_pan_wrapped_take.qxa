@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A WRAPPED take column pans by the WRAPPER's value (proposal 49 M1, AC1.5).
+
+  A take column reaches a track two ways (CLAUDE.md, take lanes): DIRECT,
+  SLink -> STakeStack, and WRAPPED, SLink -> SCut -> STakeStack. D2's
+  resolution rule is the one STrack::refreshClipGainCurves() already applies
+  to volume, the curve and the fade (SClipWindow::parametersOf): a wrapped
+  column's parameters are the WRAPPER's, a direct column's the ACTIVE TAKE's.
+
+  WHAT A LOAD DOES TO THE SHAPE, and why this case needs a PANNED wrapper.
+  On load, stakes::normalizeColumns() FOLDS a wrapped column into a direct one
+  whenever the fold is exact, and a wrapper with pan 0 folds, so a fixture
+  whose only pan sits on a TAKE loads as a DIRECT column and says nothing
+  about the wrapped rule (that half is clip_pan_folded_take.qxa). A wrapper
+  with a NON-ZERO pan is refused the fold ("the wrapper is PANNED", trap T15)
+  and stays wrapped, which is exactly the shape this case needs.
+
+  Fixture: ../takestack_wrap_wrapperpan.qxp is ../takestack_wrap_takeslip.qxp
+  (wrapped_take_window.qxa's fixture) with ONE change: the WRAPPER, wrapcut,
+  carries pan='-1'. Every take stays centred. The clip plays source
+  [2.5, 4.5) s of test_gapsaw.wav: silent / loud / loud / silent in
+  half-second windows, so [24000, 72000) is where the channels are compared
+  (measured 0.41242 on both channels of the unpanned fixture).
+-->
+<SActionScript version="1" name="clip_pan_wrapped_take">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_wrapperpan.qxp"/>
+
+    <!-- The load REFUSED the fold, so the column is still wrapped.
+         Immediately after the load: assert-log's window opens at the
+         preceding non-assert-log action. -->
+    <assert-log level="warn" minCount="1"
+                contains="take column left WRAPPED: the wrapper is PANNED"/>
+
+    <!-- The wrapper's pan of -1 is heard. -->
+    <render filename="cpw_loaded.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="cpw_loaded.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="cpw_loaded.wav" channel="0"
+                         startFrame="24000" frameCount="48000"
+                         minRms="0.408" maxRms="0.417"/>
+
+    <!-- set-clip-pan on the placement edits the WRAPPER, and recentring it
+         brings channel 1 back. -->
+    <set-clip-pan clip="0,0" pan="0"/>
+    <render filename="cpw_centred.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="cpw_centred.wav" channel="1"
+                         startFrame="24000" frameCount="48000"
+                         minRms="0.408" maxRms="0.417"/>
+  </actions>
+
+</SActionScript>

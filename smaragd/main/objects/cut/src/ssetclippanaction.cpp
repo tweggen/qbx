@@ -8,6 +8,7 @@
 #include "app/model/slink.h"
 #include "app/actions/sactionregistry.h"
 #include "app/actions/scompositeaction.h"
+#include "tw/core/twlog.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -43,6 +44,20 @@ SApplyResult SSetClipPanAction::apply( SProject *project )
     }
     SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     if( !mixer ) {
+        return {false, nullptr};
+    }
+
+    // PAN IS DEFINED AT WIDTH 2 ONLY (proposal 49 D1). At any other width the
+    // mix passes a clip through as if centred, so a non-zero value would be a
+    // control that does nothing -- refused, and ANNOUNCED. 0 is always
+    // accepted, so a reset can never fail. Checked before the broadcast, so
+    // a refused edit touches no group member either.
+    if( pan_ != 0.0 && project->channels() != 2 ) {
+        // QString::number, not %f: this box's LC_NUMERIC is de_DE, and a
+        // printf-spelled "0,5000" would read as a different number in the log.
+        TW_LOGW( "cut", "set-clip-pan: refusing pan %s on a %d-channel "
+                        "project; pan is defined for 2 channels only",
+                 qPrintable( QString::number( pan_ ) ), project->channels() );
         return {false, nullptr};
     }
 

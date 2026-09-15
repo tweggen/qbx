@@ -109,11 +109,9 @@ sweep, mirror, near side at unity, monotone over the 201 control ticks).
 Known debt: calcOutputTo allocates buffers per block. twTrackMix::setTrackGain
 and trackGainDb_ are dead weight until proposal 37 P5 removes them.
 twGainStage's mute ramp is implemented and unit-tested but UNWIRED — P5's
-`self:Muted` lane is its caller. Pan does not reach the audio path YET (a
-clip's `SObject::pan_` is modeled, serialized and editable — see item 26 —
-but nothing downstream reads it). Proposal 49 is the design: M0 landed the
-law (`twpanlaw.h`, below) with NO caller; M1 makes clip pan audible in
-twTrackMix, M2 adds track pan in twGainStage.
+`self:Muted` lane is its caller. TRACK pan does not exist yet (proposal 49
+M2 puts it in twGainStage). CLIP pan is AUDIBLE since proposal 49 M1 — see
+below.
 
 **THE PAN LAW, `twpanlaw.h` (proposal 49 D1, M0).** One pure function,
 `twPanLaw(p)`, and every stage that pans must call it rather than spell its own:
@@ -126,6 +124,26 @@ caller at any other width must not call it (D1 — transparent there, and the
 verbs refuse a non-zero value). A caller must also keep D5's byte identity by
 not multiplying at all when pan is 0, rather than multiplying by the law's
 1.0.
+
+**CLIP PAN IN THE CLIP LOOP (proposal 49 D2, M1).** `ClipEntry::pan`, pushed by
+`STrack::refreshClipGainCurves()` (and `SLaneFragment`'s twin) from the same
+window as `gainScalar`, is a FOURTH factor in the clip loop's per-frame
+product — the only PER-CHANNEL one. Three rules, each paid for by a trap:
+- It applies at an OUTPUT width of exactly 2. At any other width the entry is
+  mixed as if centred and the law is not called (D1).
+- A non-zero pan JOINS `hasGain`, so a panned clip at 0 dB with no curve and
+  no fade still takes the scaling branch (T7); a centred clip does NOT, so its
+  mix stays the straight copy (D5), and the goldens are byte-identical by
+  construction.
+- The factor is indexed by the OUTPUT channel `c`, never by `srcCh`, which is
+  clamped: a mono clip has `srcCh == 0` for every `c`, and indexing by it
+  would give both channels the left gain and silence a hard-right mono clip
+  (T8).
+It is PRE-FX, pre-fader and ahead of both send taps, so a clip's position
+survives into the insert chain and every send.
+Gates: `qxa.clip_pan_audible`, `qxa.clip_pan_wrapped_take`,
+`qxa.clip_pan_folded_take`, `qxa.clip_pan_width_refused` and the licensed
+sections 3-4 of `qxa.clip_volume_pan`.
 
 ## Automation (proposal 37 P5, design D5 / §4.5)
 

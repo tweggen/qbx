@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CLIP PAN IS AUDIBLE (proposal 49 M1, QBX-109).
+
+  The law is tw/mix/twpanlaw.h (D1): a centre-unity equal-power BALANCE.
+  At p > 0 channel 0 is scaled by cos(p*pi/2) and channel 1 is untouched; at
+  p < 0 the mirror; at |p| = 1 the far side is EXACTLY 0.0. Applied in
+  twTrackMix's clip loop, per OUTPUT channel, at width 2 only (D2).
+
+  Fixtures and closed forms:
+    - ../test_autosaw.wav: 4 s of a 480 Hz sawtooth whose period is exactly
+      100 frames, dry RMS A = 0.230956 on BOTH channels (they are identical,
+      proposal 36 trap 22). So it proves the LAW, per channel, and nothing
+      about a stereo IMAGE (trap T4).
+    - ../test_stereo.wav: the 6 dB ladder, a 480 Hz sine with channel 0 at
+      RMS 0.5 and channel 1 at 0.25 (measured 0.499987 / 0.249990). This is
+      the fixture that can see an IMAGE: a balance must scale each channel of
+      a stereo source by its own side's gain, never collapse it.
+
+  What bites, and what each section is for:
+    1. AC1.1  pan 0.75: ch0 = A*cos(0.375 pi) = 0.088384, ch1 = A. A render
+              taken BEFORE the edit, in this same process, must be the
+              centred level: a pan edit that only reaches the mix through some
+              later unrelated invalidation passes a render-after-only gate
+              (trap T2, the wrapped-take-window lesson).
+    2. AC1.2  pan -1: ch1 is EXACTLY 0.000000 and ch0 is A (trap T3). A law
+              written as a bare cos() leaves 6e-17 on the far side, which 16
+              bits round to 0, so this pins the LAW's short-circuit only
+              through the WAV, and panlaw_test pins it exactly.
+    3. AC1.4  pan back to 0: BYTE-IDENTICAL to the never-panned render (D5).
+    4. AC1.3  a STEREO source under pan +0.5 and -0.5: each channel follows
+              its own side's gain, so the ladder survives on the near side.
+    5. AC1.5 (direct column)  a take column built by add-take pans by the
+              ACTIVE take's value: a pan on the INACTIVE take is not heard,
+              and selecting that take makes it heard. The WRAPPED shape is
+              clip_pan_wrapped_take.qxa (it needs a loaded fixture).
+
+  LICENCE: none needed here. clip_volume_pan.qxa sections 3 and 4 are the
+  cases that asserted pan was inaudible, and they were rewritten under a
+  licence recorded in that file's header (trap T1).
+-->
+<SActionScript version="1" name="clip_pan_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ 1. pan 0.75, with a render BEFORE the edit ========= -->
+    <render filename="cpa_centre.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cpa_centre.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <assert-audio-energy filename="cpa_centre.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <set-clip-pan clip="0,0" pan="0.75"/>
+    <assert-clip-mix clip="0,0" expectPan="0.75" panTolerance="1e-6"/>
+
+    <render filename="cpa_r75.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- A * cos(0.375 pi) = 0.230956 * 0.382683 = 0.088384 -->
+    <assert-audio-energy filename="cpa_r75.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0875" maxRms="0.0893"/>
+    <!-- the near side is held at unity -->
+    <assert-audio-energy filename="cpa_r75.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ 2. hard left: the far side is EXACTLY silent ======= -->
+    <set-clip-pan clip="0,0" pan="-1"/>
+    <render filename="cpa_l100.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cpa_l100.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="cpa_l100.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ 3. back to centre is byte-identical ================ -->
+    <set-clip-pan clip="0,0" pan="0"/>
+    <render filename="cpa_recentred.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="cpa_recentred.wav" expected="cpa_centre.wav"/>
+
+    <!-- ============ 4. a STEREO source keeps its image ================= -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_stereo.wav" timePos="0"/>
+
+    <set-clip-pan clip="1,0" pan="0.5"/>
+    <render filename="cpa_stereo_r50.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- 0.5 * cos(pi/4) = 0.353553 ; channel 1 untouched at 0.25 -->
+    <assert-audio-energy filename="cpa_stereo_r50.wav" channel="0"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.3500" maxRms="0.3571"/>
+    <assert-audio-energy filename="cpa_stereo_r50.wav" channel="1"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.2475" maxRms="0.2525"/>
+
+    <set-clip-pan clip="1,0" pan="-0.5"/>
+    <render filename="cpa_stereo_l50.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- channel 0 untouched at 0.5 ; 0.25 * cos(pi/4) = 0.176777 -->
+    <assert-audio-energy filename="cpa_stereo_l50.wav" channel="0"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.4950" maxRms="0.5050"/>
+    <assert-audio-energy filename="cpa_stereo_l50.wav" channel="1"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.1750" maxRms="0.1786"/>
+
+    <!-- ============ 5. a DIRECT take column pans by the ACTIVE take ==== -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="2" filePath="../test_autosaw.wav" timePos="0"/>
+    <!-- take 1 is appended and ACTIVATED -->
+    <add-take clip="2,0" filePath="../test_autosaw.wav" startOffset="0"/>
+
+    <!-- Pan the INACTIVE take hard left: nothing may be heard of it. -->
+    <set-clip-pan clip="2,0" take="0" pan="-1"/>
+    <render filename="cpa_take_inactive.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cpa_take_inactive.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- Make that take the active one: its pan is now what plays. -->
+    <select-take clip="2,0" take="0"/>
+    <render filename="cpa_take_active.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cpa_take_active.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="cpa_take_active.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

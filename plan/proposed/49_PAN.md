@@ -375,6 +375,29 @@ identical) unless it says `test_stereo.wav`.
   **Sabotages:** drop the `hasGain` term; index by `srcCh`; drop the
   `setPan` invalidation; let p == 0 through the law.
 
+#### M1 as executed (QBX-109)
+
+- **Measured against the closed forms** (A = 0.230956): pan 0.75 gives ch0
+  **0.088383** (0.088384 due) and ch1 **0.230956**; pan -1 gives ch1
+  **0.000000**; the stereo ladder under +0.5 gives **0.353546 / 0.249990**
+  and under -0.5 **0.499987 / 0.176770**; back at pan 0 the render is
+  byte-identical to the never-panned one.
+- **AC1.5 needed TWO fixtures, and D2's text did not predict why.** On load
+  `stakes::normalizeColumns()` FOLDS a wrapped column into a direct one when
+  the fold is exact, and a wrapper with pan 0 folds. So a fixture whose pan
+  sits on a TAKE loads as a DIRECT column and pans by its active take
+  (`clip_pan_folded_take`), while a PANNED wrapper is refused the fold (T15's
+  "the wrapper is PANNED") and is the only way to reach the wrapped rule
+  (`clip_pan_wrapped_take`). The first draft of that case assumed the fixture
+  stayed wrapped and failed on its own first assertion.
+- **The inert-pan announcement counts OBJECTS**, reachable from the master
+  root, every arrangement root and every asset body, each shared object once.
+  It fires only on a change that LEAVES width 2.
+- **The refusal log spells the value with `QString::number`**, not `%f`: the
+  box's `LC_NUMERIC` is de_DE (T9's hazard, on the logging side).
+- **`detail_pane_reset_defaults.qxa` survived unchanged**, as D5 expected but
+  did not promise.
+
 ### M2 — track pan, post-FX, on every audio path
 
 - `twGainStage::setPan(double)`; `Envelope` gains `pan`; `factorAt` /

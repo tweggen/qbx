@@ -139,6 +139,7 @@ void SLaneFragment::refreshClipGainCurves()
             lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
         cpTrackMix_->setClipGainScalar(
             lk, std::pow( 10.0, obj->getVolume() / 20.0 ) );
+        cpTrackMix_->setClipPan( lk, obj->getPan() );   // proposal 49 M1
     }
 }
 
