@@ -284,18 +284,22 @@ file already round-trips a `volume='0' pan='0'` attribute on every `SCut`
 element (`SObject::serializeSelfAttributes`/`readPreChildrenAttributes`), so
 there is no format version to bump and no old-file default to invent.
 
-**Volume IS applied in the audio path; pan is NOT.** `SCut::setVolume()`
-override wires the clip's own `volumeChanged` to `invalidateRenderPathRange`
-(self-connected in the ctor, the same idiom `STrack` uses for its own fader —
-`volumeChanged -> onTrackVolumeChanged`), which reaches
+**Volume and pan are BOTH applied in the audio path** (pan since proposal 49
+M1). The clip's own `volumeChanged` and `panChanged` are self-connected in the
+ctor to `onVolumeChanged` / `onPanChanged`, each of which calls
+`invalidateRenderPathRange` (the same idiom `STrack` uses for its own fader —
+`volumeChanged -> onTrackVolumeChanged`). That reaches
 `STrack::refreshClipGainCurves()` through the existing
 `bumpRenderChainEpochRange` funnel — the SAME funnel a `cut:Gain` automation
-edit already drives. That function now pushes BOTH the automation curve and a
-linear `gainScalar` (the dB value converted once) into
-`twTrackMix::ClipEntry`, and the mix loop multiplies the two per frame — see
-`tw303a/mix/CONTRACT.md` inv. 26. `SObject::setPan()` is called directly with
-no override and no invalidation: nothing downstream reads a clip's pan, by
-design (see `tw303a/mix/CONTRACT.md` "Known debt").
+edit already drives — which pushes the automation curve, a linear
+`gainScalar`, the fade and the PAN into `twTrackMix::ClipEntry`; the mix loop
+applies all four per frame (`tw303a/mix/CONTRACT.md`, "CLIP PAN IN THE CLIP
+LOOP"). **`SObject::setPan()` invalidates nothing by itself**, which is why
+`onPanChanged` exists (proposal 49 trap T2): without it a pan edit is
+inaudible until an unrelated edit re-pulls the clip entry, and a gate that
+renders only after the edit cannot tell. `set-clip-pan` REFUSES a non-zero
+value on a project whose width is not 2 (D1), with a warning, and accepts 0
+there so a reset never fails.
 
 **`cloneWindowOver()` copies both explicitly.** They are per-take properties
 like pitch/formant, but unlike those two they are not part of `twGrainParams`,

@@ -74,6 +74,15 @@ struct ClipEntry {
     // null gainCurve it keeps the pre-existing null-curve fast path exact, so
     // an unedited project's render is unchanged byte-for-byte.
     double gainScalar{ 1.0 };
+
+    // THE CLIP'S PAN (proposal 49 D2, M1), in [-1, 1]; 0 is centre and the
+    // untouched value. A FOURTH factor in the same per-frame product, but a
+    // PER-OUTPUT-CHANNEL one: channel 0 x twPanLaw(pan).l, channel 1 x .r. It
+    // applies at a page width of exactly 2 and nowhere else (D1): at any other
+    // width the entry is mixed as if pan were 0. Pushed by
+    // STrack::refreshClipGainCurves() from the same window as gainScalar.
+    // APPENDED, for the aggregate-initialisation reason `fade` gives.
+    double pan{ 0.0 };
 };
 
 // State snapshot for page boundary continuity
@@ -161,6 +170,11 @@ public:
     // (STrack::refreshClipGainCurves(), reached through the same
     // invalidateRenderPathRange walk a volume edit already triggers) owns that.
     void setClipGainScalar( const void *key, double linear );
+
+    // Set one clip entry's PAN (see ClipEntry::pan). 0 is the untouched value.
+    // Same protocol as setClipGainScalar: swapped under mutex(), no
+    // invalidation here -- the caller owns it.
+    void setClipPan( const void *key, double pan );
 
     // THE PRE-FX FADER IS GONE (proposal 37 P5, design D5). setTrackGain() and
     // trackGainDb_ were forced to 0 dB by P3a and are DELETED here: the fader is

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A wrapped column whose WRAPPER is centred FOLDS on load, and then pans by its
+  ACTIVE TAKE (proposal 49 M1, AC1.5, the other half of
+  clip_pan_wrapped_take.qxa).
+
+  stakes::normalizeColumns() folds an exact wrapper into its takes on load, so
+  this fixture arrives as a DIRECT column. D2's rule for a direct column is
+  that the ACTIVE take's pan is heard, which is what makes a take-level pan
+  in an old wrapped project survive the migration audibly rather than being
+  thrown away with the wrapper.
+
+  Fixture: ../takestack_wrap_takepan.qxp is ../takestack_wrap_takeslip.qxp
+  with ONE change: the ACTIVE TAKE, take0cut, carries pan='-1'. The wrapper
+  is centred. The loud window is [24000, 72000) (see clip_pan_wrapped_take).
+-->
+<SActionScript version="1" name="clip_pan_folded_take">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_takepan.qxp"/>
+
+    <!-- The fold was NOT refused. -->
+    <assert-log level="warn" minCount="0" maxCount="0"
+                contains="take column left WRAPPED"/>
+
+    <!-- The active take's pan of -1 is heard. -->
+    <render filename="cpf_loaded.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="cpf_loaded.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="cpf_loaded.wav" channel="0"
+                         startFrame="24000" frameCount="48000"
+                         minRms="0.408" maxRms="0.417"/>
+
+    <!-- On the direct shape set-clip-pan edits the active take. -->
+    <set-clip-pan clip="0,0" pan="0"/>
+    <render filename="cpf_centred.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="cpf_centred.wav" channel="1"
+                         startFrame="24000" frameCount="48000"
+                         minRms="0.408" maxRms="0.417"/>
+  </actions>
+
+</SActionScript>

@@ -8,6 +8,7 @@
 #include "tw/graph/tw303aenv.h"
 #include <vector>
 #include "tw/mix/twtrackmix.h"
+#include "tw/mix/twpanlaw.h"
 #include <vector>
 #include "tw/graph/twview.h"
 #include <vector>
@@ -309,6 +310,17 @@ void twTrackMix::setClipGainScalar( const void *key, double linear )
     for( ClipEntry &c : clips_ ) {
         if( c.key != key ) continue;
         c.gainScalar = linear;
+        return;
+    }
+}
+
+// THE CLIP'S PAN (proposal 49 M1). Same protocol as setClipGainScalar.
+void twTrackMix::setClipPan( const void *key, double pan )
+{
+    std::lock_guard<std::mutex> lock( mutex() );
+    for( ClipEntry &c : clips_ ) {
+        if( c.key != key ) continue;
+        c.pan = pan;
         return;
     }
 }
@@ -640,13 +652,28 @@ length_t twTrackMix::freezePage_nolock(
         // the curve is: the model may swap it while this page renders.
         const twClipFade fade = clip.fade;
         const offset_t fadeClipLen = (offset_t) clip.duration;
-        const bool hasGain = gainCurve || gainScalar != 1.0 || !fade.none();
-
         const idx_t nCh = (idx_t) page->channels();
+        // THE CLIP'S PAN (proposal 49 D1/D2), the fourth factor, and the only
+        // PER-CHANNEL one. Defined at an OUTPUT width of exactly 2; at any
+        // other width the clip mixes as if centred. `panned` joins hasGain so
+        // a panned clip at 0 dB with no curve and no fade still takes the
+        // scaling branch (trap T7) -- and a centred clip does NOT, so its mix
+        // stays the straight copy it has always been (D5: pan 0 does no
+        // arithmetic, and the law is never even called for it).
+        const double pan = clip.pan;
+        const bool panned = ( nCh == 2 ) && pan != 0.0;
+        const twPanGains panGains = panned ? twPanLaw( pan ) : twPanGains{ 1.0, 1.0 };
+        const bool hasGain = gainCurve || gainScalar != 1.0 || !fade.none() || panned;
+
         for( idx_t c = 0; c < nCh; ++c ) {
             const idx_t srcCh = twPageClampChannel( *childPage, c );
             IOVector childVec = IOVector::CreateForPageOutput( childPage, srcCh );
             if( hasGain && framesToMix > 0 ) {
+                // Indexed by the OUTPUT channel `c`, never by `srcCh` (trap
+                // T8): a mono clip clamps srcCh to 0 for every c, and indexing
+                // the law by it would give both channels the LEFT gain.
+                const double panGain = ( c == 0 ) ? panGains.l
+                                     : ( c == 1 ) ? panGains.r : 1.0;
                 if( (offset_t) clipGainScratch_.size() < framesToMix )
                     clipGainScratch_.resize( (std::size_t) framesToMix );
                 const sample_t *src = childPage->channelPtr( srcCh );
@@ -657,7 +684,7 @@ length_t twTrackMix::freezePage_nolock(
                         fade.none() ? 1.0
                                     : fade.gainAt( childPos + i, fadeClipLen );
                     clipGainScratch_[(std::size_t) i] =
-                        src[i] * (sample_t) ( gainScalar * envelope * fadeGain );
+                        src[i] * (sample_t) ( gainScalar * envelope * fadeGain * panGain );
                 }
                 childVec = IOVector::CreateFromBuffer( clipGainScratch_.data(),
                                                        (length_t) framesToMix );

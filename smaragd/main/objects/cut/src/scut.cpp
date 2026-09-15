@@ -1545,6 +1545,9 @@ SCut::SCut( SProject *parentProject, SObject &content )
     // (volumeChanged -> onTrackVolumeChanged) in strack.cpp.
     QObject::connect( this, SIGNAL( volumeChanged( double ) ),
                       this, SLOT( onVolumeChanged( double ) ) );
+    // The clip's pan (proposal 49 M1), the same idiom.
+    QObject::connect( this, SIGNAL( panChanged( double ) ),
+                      this, SLOT( onPanChanged( double ) ) );
 }
 
 void SCut::setFade( const twClipFade &f )
@@ -1568,6 +1571,13 @@ void SCut::onVolumeChanged( double /*db*/ )
     // automation edit uses (mix/CONTRACT.md inv. 23). Not throttled like the
     // SLIP-only edits (invariant 6): a volume edit is a single dialog commit,
     // never a per-mouse-move drag.
+    invalidateRenderPathRange( 0, (offset_t) getDurationBlocking() );
+}
+
+void SCut::onPanChanged( double /*pan*/ )
+{
+    // See onVolumeChanged: the same walk, for the same reason. A pan edit is
+    // a dialog commit or one gesture's release, never a per-move write.
     invalidateRenderPathRange( 0, (offset_t) getDurationBlocking() );
 }
 

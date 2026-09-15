@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Pan is DEFINED AT WIDTH 2 ONLY, and every consequence of that is announced
+  (proposal 49 D1 / D2, M1 AC1.6, trap T12).
+
+    1. set-clip-pan with a NON-ZERO value is REFUSED on a 1- and a 6-channel
+       project, with a warning; pan 0 is always ACCEPTED, so a reset can
+       never fail.
+    2. set-clip-pan on an EVENT clip is REFUSED (an SMidiCut is not an SCut;
+       an instrument's audio is under TRACK pan). This refusal predates M1 and
+       is gated so it is on record rather than accidental.
+    3. A width change AWAY from 2 with a pan stored is NOT refused: it
+       succeeds, announces how many pans became inert, keeps the value, and
+       the clip is heard centred. Back at 2 the pan is heard again.
+
+  THE assert-log PAIRS SIT IMMEDIATELY AFTER THE ACTION THEY GUARD.
+  assert-log's window opens at the preceding non-assert-log action (proposal
+  45 and 47 each paid for placing one a step too late).
+
+  Fixture: ../test_autosaw.wav, dry RMS A = 0.230956 on both channels.
+-->
+<SActionScript version="1" name="clip_pan_width_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ============ 1. refused off width 2, announced ================== -->
+    <set-project-channels channels="1"/>
+    <set-clip-pan clip="0,0" pan="0.5" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-clip-pan: refusing pan 0.5 on a 1-channel project"/>
+    <assert-clip-mix clip="0,0" expectPan="0" panTolerance="1e-9"/>
+    <!-- 0 is always accepted -->
+    <set-clip-pan clip="0,0" pan="0"/>
+
+    <set-project-channels channels="6"/>
+    <set-clip-pan clip="0,0" pan="-0.25" expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-clip-pan: refusing pan -0.25 on a 6-channel project"/>
+    <assert-clip-mix clip="0,0" expectPan="0" panTolerance="1e-9"/>
+    <set-clip-pan clip="0,0" pan="0"/>
+
+    <!-- ============ 2. an event clip is refused ======================== -->
+    <set-project-channels channels="2"/>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="Notes"/>
+    <set-clip-pan clip="1,0" pan="0.5" expectReject="true"/>
+
+    <!-- ============ 3. a width change makes a stored pan INERT ========= -->
+    <set-clip-pan clip="0,0" pan="-1"/>
+    <render filename="cpwr_left_w2.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cpwr_left_w2.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+
+    <set-project-channels channels="6"/>
+    <assert-log level="warn" minCount="1"
+                contains="set-project-channels: 1 object(s) carry a non-zero pan that is now inert at 6 channels"/>
+    <!-- the value is KEPT -->
+    <assert-clip-mix clip="0,0" expectPan="-1" panTolerance="1e-9"/>
+
+    <!-- and the clip is heard CENTRED: channel 1 carries the full level -->
+    <render filename="cpwr_w6.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cpwr_w6.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <assert-audio-energy filename="cpwr_w6.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- A change that does not LEAVE 2 announces nothing. -->
+    <set-project-channels channels="4"/>
+    <assert-log level="warn" minCount="0" maxCount="0" contains="now inert"/>
+
+    <!-- Back at width 2 the stored pan is heard again. -->
+    <set-project-channels channels="2"/>
+    <render filename="cpwr_left_again.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cpwr_left_again.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+  </actions>
+
+  <verify-undo/>
+
+</SActionScript>

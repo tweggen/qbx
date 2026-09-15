@@ -10,12 +10,14 @@
 // exact previous number — mirrors set-clip-volume / set-pitch). Take stacks:
 // a PER-TAKE property, same rule as volume/pitch/formant.
 //
-// DELIBERATELY NOT WIRED INTO THE AUDIO PATH. Nothing downstream reads a
-// clip's pan (the wide sink removed the reason it could not be heard, not the
-// work — see CLAUDE.md's automation section on `self:Pan`, still absent for
-// the same reason). This action only ever touches the model: unlike
-// set-clip-volume it never calls invalidateRenderPathRange, because there is
-// nothing in the render chain for a pan edit to invalidate.
+// AUDIBLE since proposal 49 M1. The value reaches twTrackMix's clip loop
+// through STrack::refreshClipGainCurves(), and SCut::onPanChanged invalidates
+// the render path. The law is tw/mix/twpanlaw.h, applied per OUTPUT channel.
+//
+// Pan is defined at a project width of 2 only (proposal 49 D1): at any other
+// width a NON-ZERO value is REFUSED with a warning, and 0 is always accepted.
+// An EVENT clip (SMidiCut) is refused because it is not an SCut (D2): an
+// instrument's audio is under TRACK pan.
 class SSetClipPanAction : public SAction {
 public:
     SSetClipPanAction() = default;
