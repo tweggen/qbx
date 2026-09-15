@@ -25,7 +25,9 @@
     5. AC2.8  the MASTER lane accepts set-track-pan and is HEARD; the
               CONDUCTOR lane is refused, with a warning.
     6. D1     a non-zero track pan is refused off width 2, with a warning;
-              pan 0 is accepted.
+              pan 0 is accepted; and a pan STORED at width 2 is not applied
+              to a 6-channel page (the engine's width gate, which the verb's
+              refusal cannot reach).
     7. AC2.7  assert-master-sums still holds over a panned project (T16): pan
               is applied before the rewire, so the master is still the
               per-channel sum of its tracks.
@@ -117,6 +119,18 @@
                 contains="set-track-pan: refusing pan 0.5 on a 1-channel project"/>
     <set-track-pan trackPath="0" pan="0"/>
     <set-project-channels channels="2"/>
+
+    <!-- A pan STORED at width 2 is inert at width 6: the gain stage must not
+         pan channels 0 and 1 of a 6-channel page. The verb cannot reach this
+         (it refuses there), so only the engine's own width gate can. -->
+    <set-track-pan trackPath="0" pan="-1"/>
+    <set-project-channels channels="6"/>
+    <render filename="tpa_w6.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tpa_w6.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <set-project-channels channels="2"/>
+    <set-track-pan trackPath="0" pan="0"/>
 
     <!-- ============ 7. the master is still the per-channel sum ========== -->
     <set-track-mute trackPath="1" muted="0"/>
