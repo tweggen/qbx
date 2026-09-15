@@ -30,6 +30,13 @@
     3. AC1.4  pan back to 0: BYTE-IDENTICAL to the never-panned render (D5).
     4. AC1.3  a STEREO source under pan +0.5 and -0.5: each channel follows
               its own side's gain, so the ladder survives on the near side.
+    6. trap T8  a MONO source: its page is width 1, so srcCh is 0 for BOTH
+              output channels. Hard right must leave channel 0 EXACTLY silent
+              and channel 1 at full level; a law indexed by srcCh instead of
+              the output channel gives both channels the LEFT gain and
+              silences the clip. The two-channel fixtures above cannot see
+              this (srcCh == c there), which the sabotage pass proved.
+              ../test_position.wav is genuinely mono, RMS 0.353530.
     5. AC1.5 (direct column)  a take column built by add-take pans by the
               ACTIVE take's value: a pan on the INACTIVE take is not heard,
               and selecting that take makes it heard. The WRAPPED shape is
@@ -130,10 +137,33 @@
     <assert-audio-energy filename="cpa_take_active.wav" channel="0"
                          startFrame="0" frameCount="48000"
                          minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ 6. a MONO source pans by the OUTPUT channel ======== -->
+    <set-track-mute trackPath="2" muted="1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="3" filePath="../test_position.wav" timePos="0"/>
+
+    <set-clip-pan clip="3,0" pan="1"/>
+    <render filename="cpa_mono_r100.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="cpa_mono_r100.wav" channel="0"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="cpa_mono_r100.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.3500" maxRms="0.3571"/>
+
+    <!-- 0.353530 * cos(pi/4) = 0.249985 on the far side -->
+    <set-clip-pan clip="3,0" pan="0.5"/>
+    <render filename="cpa_mono_r50.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="cpa_mono_r50.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2475" maxRms="0.2525"/>
+    <assert-audio-energy filename="cpa_mono_r50.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.3500" maxRms="0.3571"/>
   </actions>
 
   <assertions>
-    <assert-track-count equals="3"/>
+    <assert-track-count equals="4"/>
   </assertions>
 
   <verify-undo/>
