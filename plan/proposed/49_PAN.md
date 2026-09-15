@@ -397,6 +397,20 @@ identical) unless it says `test_stereo.wav`.
   box's `LC_NUMERIC` is de_DE (T9's hazard, on the logging side).
 - **`detail_pane_reset_defaults.qxa` survived unchanged**, as D5 expected but
   did not promise.
+- **Sabotage pass** (a committed checkpoint, then each through `ctest -R`):
+  dropping `panned` from `hasGain` (T7), dropping `SCut::onPanChanged`'s
+  invalidation (T2) and not pushing pan from `STrack` each fail all five pan
+  cases; removing the mix's width gate, the verb's width refusal or the inert
+  announcement each fail `clip_pan_width_refused`. **Indexing the law by
+  `srcCh` (T8) failed NOTHING on the first pass**: every fixture was a
+  two-channel file, where `srcCh == c`. `clip_pan_audible` section 6 adds the
+  mono `test_position.wav` (measured **0.000000 / 0.353530** hard right,
+  **0.249983 / 0.353530** at +0.5) and the same sabotage now fails two
+  assertions.
+- **"Let pan 0 through the law" is NOT gateable by audio**, and no case
+  pretends it is: `twPanLaw(0)` is exactly `{1, 1}` and a multiply by 1.0 is
+  byte-identical, so the only cost is the scaling branch running on centred
+  clips. D5's "does no arithmetic" is enforced by reading the code.
 
 ### M2 — track pan, post-FX, on every audio path
 
