@@ -331,6 +331,21 @@ identical) unless it says `test_stereo.wav`.
 - **Gates:** `panlaw_test` (ctest). Nothing audible moves. The whole suite is
   unchanged.
 
+#### M0 as executed (QBX-108)
+
+- **The gate is TWO binaries, not one.** `panlaw_test` is an engine module test
+  (`tw_module_test`, links `tw_mix` only) and carries AC0.1. AC0.2 is
+  `panscale_test` in `main/`, because `tw303a/` may not include an app header
+  and the law must not wait on an app link to be tested.
+- **Two answers the design left open, now written down.** A NaN pan is centre
+  and a value outside [-1, 1] is hard pan, in both the law and the spelling, so
+  no input can produce a gain above 1 or a NaN sample. `sPanText` spells the
+  TICK, so a stored value between ticks (0.004) reads `C`, the value a control
+  would show.
+- **Nothing calls either header yet.** The `twpanlaw.h` doc and
+  `tw303a/mix/CONTRACT.md` state the caller's D5 obligation (no multiply at
+  pan 0) so that M1 cannot satisfy the law and still break byte identity.
+
 ### M1 — clip pan is AUDIBLE (the stored `pan_` stops lying)
 
 - `ClipEntry` gains `pan`; `refreshClipGainCurves()` pushes it; the clip loop
