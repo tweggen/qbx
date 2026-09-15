@@ -470,6 +470,20 @@ identical) unless it says `test_stereo.wav`.
   asserts the pump's per-channel pan; the frozen half of a hand-back is the
   gain stage's own render, gated by `track_pan_audible`, and no case pans a
   track that is disarmed while its own clips play.
+- **Sabotage pass** (a committed checkpoint, then each through `ctest -R`):
+  the pump passing channel 0 fails `monitor_pan_live`; the pure-copy test
+  ignoring pan fails four cases; dropping the master pan from the chain state,
+  or from `checkMasterShape`, fails `master_pan_closure` (the second also
+  `playback_test`); no invalidation on a pan edit fails three; track pan
+  applied PRE-FX in the clip loop fails six, `track_pan_post_fx` among them;
+  removing the conductor or the width refusal fails `track_pan_audible`.
+  **Removing the engine's own width gate failed NOTHING on the first pass**:
+  the verb refuses a non-zero pan off width 2, so no case ever rendered a
+  stored pan at another width. `track_pan_audible` now stores hard left at
+  width 2, renders at 6 and asserts channel 1 at full level, and the same
+  sabotage fails it.
+- **Not sabotaged: `isFlat` omitting pan**, because M2 has no pan term there
+  to omit (see above).
 
 ### M3 — `self:Pan` automation
 
