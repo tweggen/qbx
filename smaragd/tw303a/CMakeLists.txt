@@ -191,6 +191,7 @@ tw_module(mix
         mix/include/tw/mix/twmixer.h
         mix/include/tw/mix/twrewire.h
         mix/include/tw/mix/twgainstage.h
+        mix/include/tw/mix/twpanlaw.h
         mix/src/twcompcolumn.cc
         mix/src/twtrackmix.cc
         mix/src/twmixer.cc
@@ -1158,6 +1159,7 @@ tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc       
 add_executable(warp_bench sources/tests/warp_bench.cc)
 target_link_libraries(warp_bench PRIVATE tw_sources tw_sidecar)
 tw_module_test(mix_test                     mix/tests/mix_test.cc                       tw_mix)
+tw_module_test(panlaw_test                  mix/tests/panlaw_test.cc                    tw_mix)
 tw_module_test(schedule_test                schedule/tests/schedule_test.cc             tw_schedule tw_pages)
 tw_module_test(events_test                  events/tests/events_test.cc                 tw_events)
 # The committed SMF corpus (type 0 with running status, a multi-track type 1 with

@@ -178,6 +178,17 @@ Invariants:
    dock previously did a naive value = dB*10 and disagreed with the arranger
    about where a given dB sits.
 
+13a. **There is ONE pan-control spelling, app/timeline/spanscale.h** (proposal
+   49 D4, landed in M0 with no mount yet). Every pan control — the arranger
+   head, the Track Detail dock, the mixer strip onto a track's pan, Clip
+   Properties onto a clip's — maps through it: an integer tick over -100..100
+   that round-trips EXACTLY (`sPanToTick(sTickToPan(t)) == t`), the text `C` /
+   `L37` / `R100` spelled from the tick (in the control, the tooltip and every
+   `describe()`), and `SPAN_DEFAULT = 0.0` committed DIRECTLY on a
+   double-click reset, never through a tick. A widget that formats its own pan
+   text or scales by its own factor is the fader disagreement of inv. 13 again.
+   Gate: `ctest -R panscale_test`.
+
 14. **The track head's second button pair is density-gated, and the gate is
    a FIT test, not a constant** (proposal 37 P4, design 6.1). "A" (automation
    mode) is Full-density only AND only while a six-button column still fits

@@ -4,7 +4,8 @@ Purpose: arrangement composition — twTrackMix (clips on a timeline, THE
 consumer of the clip model), twMixer (bus summing), twGainStage (the track
 fader), twRewire (fan-out).
 
-Public headers: twtrackmix.h, twmixer.h, twgainstage.h, twrewire.h.
+Public headers: twtrackmix.h, twmixer.h, twgainstage.h, twrewire.h,
+twpanlaw.h.
 
 Depends on: tw/core, tw/pages, tw/graph. Forbidden: tw/sources (the mixer
 sees only components via twView), app headers.
@@ -101,15 +102,30 @@ qxa.mc_width_change (2 -> 8 -> 2) and qxa.mc_legacy_pull_wide (the same with no
 scheduler at all). For invariant 8, the twGainStage block of `mix_test`
 (bit-exact unity, the exact scaled product, epoch staling, the mute ramp's
 position-determinism, the width-1 path) plus qxa.fader_post_fx and
-qxa.meter_gain_after_probe end-to-end.
+qxa.meter_gain_after_probe end-to-end. For the pan law, `ctest -R panlaw_test`
+(proposal 49 AC0.1: centre bit-exact, far side exactly 0.0 at +-1, the cos
+sweep, mirror, near side at unity, monotone over the 201 control ticks).
 
 Known debt: calcOutputTo allocates buffers per block. twTrackMix::setTrackGain
 and trackGainDb_ are dead weight until proposal 37 P5 removes them.
 twGainStage's mute ramp is implemented and unit-tested but UNWIRED — P5's
-`self:Muted` lane is its caller. Pan does not reach the audio path anywhere
-(a clip's `SObject::pan_` is modeled, serialized and editable — see item 26 —
-but nothing downstream reads it; a full pan implementation needs channel
-roles and a fold law, out of scope here).
+`self:Muted` lane is its caller. Pan does not reach the audio path YET (a
+clip's `SObject::pan_` is modeled, serialized and editable — see item 26 —
+but nothing downstream reads it). Proposal 49 is the design: M0 landed the
+law (`twpanlaw.h`, below) with NO caller; M1 makes clip pan audible in
+twTrackMix, M2 adds track pan in twGainStage.
+
+**THE PAN LAW, `twpanlaw.h` (proposal 49 D1, M0).** One pure function,
+`twPanLaw(p)`, and every stage that pans must call it rather than spell its own:
+a centre-unity equal-power BALANCE — `p == 0` is `{1, 1}` with no arithmetic,
+`p > 0` holds the right side at 1 and takes the left along `cos(p·π/2)`,
+mirrored for `p < 0`, and the far side is EXACTLY 0.0 at `|p| >= 1`. NaN is
+centre and out-of-range values are hard pan, so no input yields a gain above
+1 or a NaN. It is defined for width 2 ONLY and does not know the width: a
+caller at any other width must not call it (D1 — transparent there, and the
+verbs refuse a non-zero value). A caller must also keep D5's byte identity by
+not multiplying at all when pan is 0, rather than multiplying by the law's
+1.0.
 
 ## Automation (proposal 37 P5, design D5 / §4.5)
 

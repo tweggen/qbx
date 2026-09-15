@@ -365,6 +365,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/sfeelflowpanel.h
     timeline/include/app/timeline/sfeelflowpuppet.h
     timeline/include/app/timeline/sfadercurve.h
+    timeline/include/app/timeline/spanscale.h
     timeline/include/app/timeline/slevelmeter.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
@@ -1009,6 +1010,19 @@ target_link_libraries(levelmeter_ticks_test
 )
 add_test(NAME levelmeter_ticks_test COMMAND levelmeter_ticks_test)
 set_tests_properties(levelmeter_ticks_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Proposal 49 M0 (AC0.2): the ONE pan-control spelling, app/timeline/spanscale.h
+# -- tick <-> value round trip, text, clamps. Header-only arithmetic plus a
+# QString, but it reaches the header through app_ui's include directories like
+# every other timeline test.
+add_executable(panscale_test timeline/tests/panscale_test.cpp)
+target_link_libraries(panscale_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME panscale_test COMMAND panscale_test)
+set_tests_properties(panscale_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The stale-INI plugin search-path merge (fix/mac-vst3-loading). A pure
