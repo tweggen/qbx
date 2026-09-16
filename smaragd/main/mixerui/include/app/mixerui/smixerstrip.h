@@ -83,6 +83,13 @@ public:
     /// the other), and `color` is AC4.3's resolved header colour.
     QString describe() const;
 
+    /// Re-apply the state that depends on things OUTSIDE this strip's own
+    /// track — today the project's channel count, which decides whether the
+    /// pan control is offered at all (proposal 49 D1). Public because the PANE
+    /// drives it: a channel change is not a structure change, so the guarded
+    /// rebuild correctly does nothing and this is what reaches the strips.
+    void refreshEnabledState();
+
     /// Drive a control the way a HAND would: `mute` / `solo` / `arm` click the
     /// real button so Qt delivers the signal, which is what makes a missing
     /// `connect()` FAIL (proposal 47 M5's lesson, and the reason the sends

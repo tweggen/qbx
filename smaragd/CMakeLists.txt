@@ -576,6 +576,15 @@ if(TEST qxa.mixer_write_pass)
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
 endif()
 
+# proposal 49 M4 AC4.4: the same shape for the PAN knob -- a Touch pass over a
+# real transport, waiting on the playhead between ticks. Same reasons, same
+# settings; it needs no input backend either, the knob being the source.
+if(TEST qxa.automation_pan_write_pass)
+    set_tests_properties(qxa.automation_pan_write_pass PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+endif()
+
 foreach(_met metronome_click metronome_render_identity metronome_toggle_during_playback)
     if(TEST qxa.${_met})
         set_tests_properties(qxa.${_met} PROPERTIES

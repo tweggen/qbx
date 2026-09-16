@@ -282,6 +282,10 @@ SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) con
     // destroys nothing, which is the difference that matters -- the mask is a
     // per-strip VISIBILITY change, never a structure change.
     slot->applyStoredSections();
+    // ...and the per-strip state that is neither structure nor the mask, for
+    // the SAME reason: this pane is CACHED, so a strip built at one project
+    // width would keep that width's pan enabled state for the rest of the run.
+    slot->refreshStripState();
     return slot;
 }
 
@@ -3835,7 +3839,10 @@ bool SMainWindow::doubleClickDetailControl( const QString &which,
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
 
-    if( which == QLatin1String( "track-volume" ) ) {
+    // The two Track Detail controls are the same shape; only the object name
+    // differs (proposal 49 M4 added the pan one).
+    if( which == QLatin1String( "track-volume" )
+        || which == QLatin1String( "track-pan" ) ) {
         SObject *root = splacements::rootContainer( proj );
         SObject *lane =
             splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
@@ -3844,16 +3851,23 @@ bool SMainWindow::doubleClickDetailControl( const QString &which,
         STrackDetailPanel panel( nullptr );
         panel.setTrack( track );
         sSettleLayout( &panel, 320, 400 );
-        QSlider *fader =
-            panel.findChild<QSlider *>( QStringLiteral( "trackDetailVolumeSlider" ) );
-        if( !fader ) return false;
-        sSendDoubleClick( fader );
+        const QString objName =
+            ( which == QLatin1String( "track-pan" ) )
+                ? QStringLiteral( "trackDetailPanSlider" )
+                : QStringLiteral( "trackDetailVolumeSlider" );
+        QSlider *ctl = panel.findChild<QSlider *>( objName );
+        if( !ctl ) return false;
+        sSendDoubleClick( ctl );
         return true;
     }
 
     static const QHash<QString, QString> kClipFields = {
         { QStringLiteral( "clip-volume" ),    QStringLiteral( "clipVolumeSpin" ) },
         { QStringLiteral( "clip-pan" ),       QStringLiteral( "clipPanSpin" ) },
+        // The SLIDER half of the clip pan pair (proposal 49 M4): a separate
+        // control name because it is a separate widget with its own filter,
+        // and gating only the spin box would leave the slider's reset unproved.
+        { QStringLiteral( "clip-pan-slider" ), QStringLiteral( "clipPanSlider" ) },
         { QStringLiteral( "clip-pitch" ),     QStringLiteral( "clipPitchSpin" ) },
         { QStringLiteral( "clip-stretch" ),   QStringLiteral( "clipStretchSpin" ) },
         { QStringLiteral( "clip-formant" ),   QStringLiteral( "clipFormantShiftSpin" ) },
@@ -3869,9 +3883,13 @@ bool SMainWindow::doubleClickDetailControl( const QString &which,
     SClipPropertiesPanel panel( nullptr );
     panel.refresh();
     sSettleLayout( &panel, 320, 600 );
-    QAbstractSpinBox *sp = panel.findChild<QAbstractSpinBox *>( field );
-    if( !sp || !sp->isEnabled() ) return false;
-    sSendDoubleClick( sp );
+    // The clip pan pair is a spin box AND a slider (proposal 49 M4), so the
+    // widget is looked up as a plain QWidget and the enabled check asked of
+    // that. A findChild<QAbstractSpinBox*> would silently answer null for the
+    // slider and the verb would report "no such control" for one that exists.
+    QWidget *ctl = panel.findChild<QWidget *>( field );
+    if( !ctl || !ctl->isEnabled() ) return false;
+    sSendDoubleClick( ctl );
     return true;
 }
 

@@ -106,6 +106,9 @@ public:
     static void setSectionsMask( int mask );
     /// Re-read the stored mask and apply it to every strip.
     void applyStoredSections();
+    /// Re-apply per-strip state that is neither structure nor the section mask
+    /// (the pan control's enabled state). Cheap; safe to call on any signal.
+    void refreshStripState();
 
 private:
     void clearStrips_();
