@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DOUBLE-CLICK CENTRES EVERY PAN CONTROL, and commits EXACTLY 0.0 (proposal 49
+  M4, AC4.2). The pan half of `detail_pane_reset_defaults`.
+
+  Each gesture goes through the production filter
+  (`sdefaultreset::onDoubleClick`, app/model/sdefaultreset.h) on a panel built
+  off screen and bound to the real model, so what runs is the real handler and
+  what it submits is the real undoable action.
+
+  WHY "EXACTLY" IS THE WHOLE POINT. `SPAN_DEFAULT` is committed DIRECTLY, never
+  through a tick — the `applyVolumeDb` precedent. Pan's ticks DO round-trip
+  (unlike the fader's, where `sDbToFader( 0.0 )` is tick -191 and back is
+  +0.0625 dB), so here the direct commit is belt and braces rather than a
+  correction; it is spelled the same way so the two controls cannot drift
+  apart. The assertions use tolerance 0 because anything else would pass on a
+  control that went through the tick.
+
+  THE CLIP PAN PAIR IS TWO CONTROLS and both are gated. Gating only the spin
+  box would leave the slider's own filter unproved, and they are separate
+  widgets with separate filters.
+-->
+<SActionScript version="1" name="pan_reset_defaults">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- ===== the TRACK pan, from the Track Detail dock ================= -->
+    <set-track-pan trackPath="0" pan="-0.8"/>
+    <assert-track-pan trackPath="0" pan="-0.8" tolerance="1e-9"/>
+
+    <!-- An intervening edit on ANOTHER property, so the reset cannot merge
+         with the set-track-pan above. `set-track-pan` COALESCES consecutive
+         edits on one lane into a single undo entry (its mergeKey is the path,
+         exactly as `set-track-volume`'s is) — correct for a drag, and it would
+         make the undo below prove nothing: one undo would reverse the pair and
+         land on the DEFAULT, which is also what a successful reset looks like.
+         `detail_pane_reset_defaults` documents the same trap for the fader. -->
+    <set-clip-pan clip="0,0" pan="0.25"/>
+
+    <double-click-control control="track-pan" trackPath="0"/>
+    <assert-track-pan trackPath="0" pan="0" tolerance="0"/>
+
+    <!-- The gesture is not undoable ITSELF; the action it submitted is. -->
+    <undo count="1"/>
+    <assert-track-pan trackPath="0" pan="-0.8" tolerance="1e-9"/>
+    <redo count="1"/>
+    <assert-track-pan trackPath="0" pan="0" tolerance="0"/>
+    <undo count="1"/>   <!-- the reset -->
+    <undo count="1"/>   <!-- the clip pan, back to 0 -->
+
+    <!-- ===== the CLIP pan, both halves of the pair ===================== -->
+    <!-- The Clip Detail panel has no setter: it reads the SELECTION. -->
+    <set-selection paths="0,0"/>
+    <set-clip-pan clip="0,0" pan="0.6"/>
+    <assert-clip-mix clip="0,0" expectPan="0.6" panTolerance="1e-9"/>
+    <double-click-control control="clip-pan"/>
+    <assert-clip-mix clip="0,0" expectPan="0" panTolerance="0"/>
+
+    <!-- ...and the SLIDER half, which has its own filter. -->
+    <set-clip-pan clip="0,0" pan="-0.45"/>
+    <assert-clip-mix clip="0,0" expectPan="-0.45" panTolerance="1e-9"/>
+    <double-click-control control="clip-pan-slider"/>
+    <assert-clip-mix clip="0,0" expectPan="0" panTolerance="0"/>
+  </actions>
+
+</SActionScript>

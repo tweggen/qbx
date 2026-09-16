@@ -409,6 +409,8 @@ void SMixerStrip::applyPan_( double pan )
 }
 
 // Disabled with a tooltip at width != 2 and on the conductor lane (49 D1/D2).
+void SMixerStrip::refreshEnabledState() { syncPanEnabled_(); }
+
 void SMixerStrip::syncPanEnabled_()
 {
     if( !pan_ ) return;

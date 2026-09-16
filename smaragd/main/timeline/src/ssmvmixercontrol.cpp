@@ -947,6 +947,13 @@ SSMVMixerControl::SSMVMixerControl(
         setPanSliderSilently( p );
         syncPanEnabled();
     } );
+    // THE PROJECT'S CHANNEL COUNT decides whether pan is offered at all (D1),
+    // and it changes without this track changing. The mixer pane needed the
+    // same connection for the same reason — there, a cached pane kept a
+    // width-2 strip live at width 6, which is what found this.
+    if( SProject *proj = SApplication::app().getCurrentProject() )
+        QObject::connect( proj, &SProject::channelsChanged,
+                          this, [this]( int ) { syncPanEnabled(); } );
     QObject::connect( qMute_, SIGNAL( toggled( bool ) ),
                       this, SLOT( muteToggled( bool ) ) );
     QObject::connect( qSolo_, SIGNAL( toggled( bool ) ),

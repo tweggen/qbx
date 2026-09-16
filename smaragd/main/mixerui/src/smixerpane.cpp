@@ -133,9 +133,20 @@ void SMixerPane::setRoot( SObject *root, const QString &rootName )
         // changes for things no signal reports (a send lane added or removed,
         // a lane hidden), and it goes to the GUARDED rebuild for exactly that
         // reason.
-        if( SProject *p = m->getProjectSafe() )
+        if( SProject *p = m->getProjectSafe() ) {
             structureConns_ << connect( p, &SProject::arrangementChanged,
                                         this, &SMixerPane::rebuildIfStructureChanged );
+            // THE PROJECT'S CHANNEL COUNT IS NOT A STRUCTURE CHANGE, and the
+            // pan control's enabled state depends on it (proposal 49 D1: pan
+            // is defined for two channels only). The guarded rebuild compares
+            // the LANE LIST and correctly does nothing here, so without this
+            // the control would stay live at width 6 until something else
+            // happened to rebuild the pane. Exactly the shape M3 found with
+            // the section mask: once `setRoot` became idempotent, per-strip
+            // state that is not structure needs its own re-apply.
+            structureConns_ << connect( p, &SProject::channelsChanged,
+                                        this, &SMixerPane::refreshStripState );
+        }
     }
     rebuildStrips();
 }
@@ -261,6 +272,16 @@ int SMixerPane::sectionsMask()
 void SMixerPane::setSectionsMask( int mask )
 {
     SSettings::instance().setValue( SOpt::MixerSections, mask );
+}
+
+// Per-strip state that is NOT structure and NOT the section mask: today just
+// the pan control's enabled state. Cheap (no rebuild, no walk), which is what
+// lets it be called from a signal that fires on any channel change.
+void SMixerPane::refreshStripState()
+{
+    for( int i = 0; i <= stripCount(); ++i )
+        if( SMixerStrip *st = stripAt( i ) )
+            st->refreshEnabledState();
 }
 
 void SMixerPane::applyStoredSections()

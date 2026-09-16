@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE FOUR PAN MOUNTS REPORT ONE SPELLING (proposal 49 M4, AC4.1).
+
+  D4's whole claim is that there is ONE pan-control spelling and every mount is
+  a mount of it. The way to gate that is not to look at four widgets and hope
+  they agree, but to make each one REPORT its reading and compare the strings:
+  `spanscale.h`'s sPanText is the only thing that can produce "L37", so two
+  mounts printing "L37" for the same track is that function being shared.
+
+  The fields are APPENDED AT THE END of each describe() on purpose, so every
+  `contains=` string committed before this milestone still matches. That is
+  gated by the pre-existing cases staying green (track_head_density,
+  mixer_pane_strips, mixer_narrow_strip, mixer_sections), not by anything here.
+
+  Sections:
+   1. centre reads "C" in both the head and the strip, and the control is ON
+   2. a pan set through the MODEL reaches both mounts, in one spelling
+   3. the head shows the control at Full density and hides it below
+   4. width != 2 DISABLES it in both mounts, with the tooltip's own reason
+-->
+<SActionScript version="1" name="pan_mounts_describe">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <set-track-name trackPath="0" name="PanMount"/>
+
+    <!-- ===== 1. centre, both mounts ==================================== -->
+    <assert-track-head trackPath="0" headHeight="160" contains="pan=C"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="panShown=1"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="panOn=1"/>
+    <assert-mixer-pane track="PanMount" contains="pan=C"/>
+    <assert-mixer-pane track="PanMount" contains="panOn=1"/>
+
+    <!-- ===== 2. one value, one spelling, two mounts ==================== -->
+    <!-- -0.37 is chosen because it is NOT a round number: it exercises the
+         tick rounding (lround) rather than a value every mapping agrees on. -->
+    <set-track-pan trackPath="0" pan="-0.37"/>
+    <assert-track-pan trackPath="0" pan="-0.37" tolerance="1e-9"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="pan=L37"/>
+    <assert-mixer-pane track="PanMount" contains="pan=L37"/>
+
+    <set-track-pan trackPath="0" pan="1"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="pan=R100"/>
+    <assert-mixer-pane track="PanMount" contains="pan=R100"/>
+
+    <!-- ===== 3. the head's density ladder ============================== -->
+    <!-- FULL density shows it; the strip is the least urgent thing in the
+         head, so Compact and Tiny drop it (D4). At 44 px the head is Tiny:
+         even the fader is gone there, so a pan control would be absurd. -->
+    <assert-track-head trackPath="0" headHeight="160" contains="panShown=1"/>
+    <assert-track-head trackPath="0" headHeight="70" contains="panShown=0"/>
+    <assert-track-head trackPath="0" headHeight="44" contains="panShown=0"/>
+
+    <!-- ===== 4. width != 2 disables it, in both mounts ================= -->
+    <!-- The verb REFUSES a non-zero pan off width 2, so the control must not
+         offer the gesture. Centre first: the project-channel verb announces
+         panned objects, and this section is about the CONTROL, not that. -->
+    <set-track-pan trackPath="0" pan="0"/>
+    <set-project-channels channels="6"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="panOn=0"/>
+    <assert-mixer-pane track="PanMount" contains="panOn=0"/>
+    <!-- ...and it comes back when the project does. -->
+    <set-project-channels channels="2"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="panOn=1"/>
+    <assert-mixer-pane track="PanMount" contains="panOn=1"/>
+  </actions>
+
+</SActionScript>

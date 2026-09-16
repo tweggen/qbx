@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="automation_pan_write_pass">
+
+  <!-- Proposal 49 M4, AC4.4: A TOUCH PASS ON THE PAN KNOB IS ONE UNDO STEP,
+       AND IT IS HEARD. The pan twin of `automation_write_pass`.
+
+       The single-action property is the thing most easily got wrong: a
+       recorder that submitted an action per tick would put thirty entries a
+       second on the undo stack, and one Ctrl-Z would peel a 33 ms sliver off
+       the pass. Here THREE ticks are reverted by ONE `undo`.
+
+       The ticks arrive through `automation-write-tick`, which feeds the
+       recorder and pushes no undo step of its own — exactly as the pan knob
+       moving mid-pass does, because `SSMVMixerControl::applyPan_` and
+       `SMixerStrip::applyPan_` both OFFER the value to the recorder first and
+       return if it was taken. The verb REJECTS a lane that is not in
+       touch/latch/write, so a case cannot pass by ticking into the void.
+
+       THE TRANSPORT IS REAL (RUN_SERIAL, SMARAGD_CAPTURE_SPEED=1), so
+       `wait-playhead` waits on an actual playhead and the ticks land during
+       actual playback. The pass ends at the TRANSPORT STOP.
+
+       ============================================================== audio
+
+       Fixture ../test_autosaw.wav: A = 0.230956 on both (identical) channels.
+
+       THE RECORDER WRITES **LINEAR** POINTS, not step — `SAutomationRecorder`
+       uses Step for `self:Muted` alone and Linear for every other target,
+       which is right for a knob being dragged. So the windows between the
+       ticks are RAMPS, and each one's rms is A times the root-mean-square of
+       the law over that sweep, integrated in the PAN value (49 D3):
+
+         window        pan sweep    ch0                ch1
+         [0.0, 0.5)    -1 held      0.230956           0.000000  (exactly)
+         [0.5, 1.0)    -0.5 -> 0    0.230956           0.208924
+         [1.0, 1.5)     0 -> +1     0.163311           0.230956
+         [1.5, 2.0)    +1 held      0.000000  (exact)  0.230956
+
+       The first window holds because the SEEDED point at 0 is `step`; the
+       last holds because it is the final point.
+
+       The EXACT zeros are what make this a gate rather than a smoke test: the
+       law's far side is exactly 0.0 at |p| = 1, so `minRms="0.0"
+       maxRms="0.0"` is a real assertion and not a band. And the two ramp
+       figures are the ones that would move if the curve were interpolated in
+       the GAIN rather than in the pan VALUE — 0.208924 is the same number
+       `automation_pan_ramp` reads over its own quarter-sweep, for the same
+       reason.
+
+       The audio is measured through a RENDER after the stop, not through the
+       capture backend. The pass's own ticks are wall-clock; the CURVE it
+       committed is not, and a render of that curve is deterministic. What the
+       capture could add here is that the pan was audible DURING the pass,
+       which is proposal 21 D2's one-reposition transient territory and is not
+       what AC4.4 asks.
+  -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- The lane, in TOUCH. One point at 0 so the state the undo returns to is
+         exact rather than "no lane". -->
+    <add-automation-lane owner="0" target="self:Pan" mode="touch">
+      <p t="0" v="-1" c="step"/>
+    </add-automation-lane>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="0" value="-1" tolerance="1e-9"
+                             mode="touch" pointCount="1"/>
+
+    <!-- Before: the lane holds -1 at all three tick positions. These are the
+         assertions the undo at the end has to restore. -->
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="24000" value="-1" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="48000" value="-1" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="72000" value="-1" tolerance="1e-9"/>
+
+    <!-- ==================== THE PASS ====================
+         `time` is given explicitly so the POINTS are exact while the transport
+         is genuinely running; a tick taking the live locator instead would
+         make every number above a measurement of this machine's scheduling. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+
+    <wait-playhead position="24000" minAdvance="4096" timeoutMs="20000"/>
+    <automation-write-tick owner="0" target="self:Pan"
+                           time="24000" value="-0.5"/>
+
+    <wait-playhead position="48000" minAdvance="4096" timeoutMs="20000"/>
+    <automation-write-tick owner="0" target="self:Pan"
+                           time="48000" value="0"/>
+
+    <wait-playhead position="72000" minAdvance="4096" timeoutMs="20000"/>
+    <automation-write-tick owner="0" target="self:Pan"
+                           time="72000" value="1"/>
+
+    <wait-playhead position="96000" minAdvance="4096" timeoutMs="20000"/>
+    <toggle-playback play="0"/>
+
+    <!-- The stop committed the pass: all three ticks are on the lane, plus the
+         point that was already there. -->
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="24000" value="-0.5" tolerance="1e-9"
+                             pointCount="4"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="48000" value="0" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="72000" value="1" tolerance="1e-9"/>
+
+    <!-- ==================== IT IS HEARD ==================== -->
+    <render filename="apwp.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="apwp.wav" channel="0"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <assert-audio-energy filename="apwp.wav" channel="1"
+                         startFrame="0" frameCount="24000"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="apwp.wav" channel="0"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <assert-audio-energy filename="apwp.wav" channel="1"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.2068" maxRms="0.2111"/>
+    <assert-audio-energy filename="apwp.wav" channel="0"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.1617" maxRms="0.1650"/>
+    <assert-audio-energy filename="apwp.wav" channel="1"
+                         startFrame="48000" frameCount="24000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <assert-audio-energy filename="apwp.wav" channel="0"
+                         startFrame="72000" frameCount="24000"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="apwp.wav" channel="1"
+                         startFrame="72000" frameCount="24000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ ONE UNDO REVERSES THE WHOLE PASS ============ -->
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="24000" value="-1" tolerance="1e-9"
+                             pointCount="1"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="48000" value="-1" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="72000" value="-1" tolerance="1e-9"/>
+  </actions>
+
+</SActionScript>
