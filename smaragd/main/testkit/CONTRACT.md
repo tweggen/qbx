@@ -1538,3 +1538,22 @@ proposal 45 and both of which still caught these cases out:
   window and reports "OK — 0 records" over a live failure.
 * `maxCount` alone still asserts a floor of one. A negative assertion needs
   `minCount="0" maxCount="0"`.
+
+## `assert-track-pan` (proposal 49 M3)
+
+`trackPath` / `pan` / `tolerance`, reading `STrack::getPan()`.
+
+- **It reads the STORED pan, deliberately, and never what a lane is reading.**
+  The thing it exists to catch is `set-track-pan` on a Read-family lane: that
+  verb must write a POINT at the locator and leave `pan_` alone, and every
+  AUDIO assertion in the suite passes either way, because a point at the
+  locator and a stored value at the same number sound identical. Pair it with
+  `assert-automation-value` — one says the lane gained the value, the other
+  says the knob did not.
+- **It is a LANE-addressing verb, so it needs a row in `action_roundtrip_test`'s
+  `kLaneRows`** (AC5.6's audit). Missing that row is what failed the test on
+  the first M3 build: a verb that addresses a lane and declares no lane row is
+  reported as an unaudited address, not as a bad attribute.
+- Numbers go through `QString::number` / `QString::toDouble`, never
+  `QLocale` — this box's `LC_NUMERIC` is `de_DE`, and a locale-aware parse
+  reads `0.5` as `0` (proposal 49 trap T9).

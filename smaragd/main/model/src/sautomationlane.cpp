@@ -54,9 +54,12 @@ SParamRef SParamRef::parse( const QString &target )
             r.space = Space::Self; r.prop = QStringLiteral( "Volume" );
         } else if( rest.compare( QLatin1String( "muted" ), Qt::CaseInsensitive ) == 0 ) {
             r.space = Space::Self; r.prop = QStringLiteral( "Muted" );
+        } else if( rest.compare( QLatin1String( "pan" ), Qt::CaseInsensitive ) == 0 ) {
+            // Proposal 49 M3. Absent until now for a reason that expired: the
+            // sink was mono until proposal 36 B5, so a pan lane would have
+            // stored a number nothing could hear. M1/M2 made pan audible.
+            r.space = Space::Self; r.prop = QStringLiteral( "Pan" );
         }
-        // Pan is deliberately absent: the sink is mono until proposal 36 B5,
-        // so a pan lane would store a number nothing could ever hear.
         return r;
     }
     if( space == QLatin1String( "param" ) ) {

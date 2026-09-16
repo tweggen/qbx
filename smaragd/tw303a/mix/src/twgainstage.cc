@@ -109,6 +109,24 @@ double twGainStage::pan() const
     return pan_;
 }
 
+void twGainStage::setPanCurve( std::shared_ptr<const twAutomationCurve> curve,
+                               bool absolute )
+{
+    {
+        std::lock_guard<std::mutex> lock( paramMutex_ );
+        if( panCurve_ == curve && panAbsolute_ == absolute ) return;
+        panCurve_    = std::move( curve );
+        panAbsolute_ = absolute;
+    }
+    bumpContentEpoch();
+}
+
+std::shared_ptr<const twAutomationCurve> twGainStage::panCurve() const
+{
+    std::lock_guard<std::mutex> lock( paramMutex_ );
+    return panCurve_;
+}
+
 length_t twGainStage::muteRampFrames() const
 {
     // ~1.5 ms, the middle of the 1-2 ms the design asks for. Rate-derived, so a
@@ -187,6 +205,8 @@ twGainStage::Envelope twGainStage::envelope() const
         e.volAbsolute = volAbsolute_;
         e.mute        = muteCurve_;
         e.pan         = pan_;
+        e.panCu       = panCurve_;
+        e.panAbsolute = panAbsolute_;
     }
     e.ramp = muteRampFrames();
     return e;
@@ -278,12 +298,28 @@ double twGainStage::factorAt( const Envelope &e, offset_t pos,
             m = e.muted ? ( 1.0 - t ) : t;
         }
     }
-    // 3. Pan (proposal 49 D1/D2). A fourth factor, and the only per-channel
-    //    one. Width 2 only; a centred envelope does not even call the law, so
-    //    at pan 0 this factor is not part of the product at all (D5).
-    if( nChannels == 2 && e.pan != 0.0 && ( channel == 0 || channel == 1 ) ) {
-        const twPanGains p = twPanLaw( e.pan );
-        return g * m * ( channel == 0 ? p.l : p.r );
+    // 3. Pan (proposal 49 D1/D2/D3). A fourth factor, and the only per-channel
+    //    one. Width 2 only; a centred envelope with no lane does not even call
+    //    the law, so at pan 0 this factor is not part of the product at all
+    //    (D5).
+    //
+    //    THE LANE IS INTERPOLATED IN PAN-VALUE SPACE and the law is applied to
+    //    the RESULT (D3): interpolating the two GAINS separately would be a
+    //    second implementation of the law, and a Linear sweep would then not
+    //    follow the cos curve. TRIM SUMS in the pan domain and clamps ONCE
+    //    after the sum, exactly as the fader's Trim sums in dB.
+    if( nChannels == 2 && ( channel == 0 || channel == 1 ) ) {
+        double p = e.pan;
+        if( e.panCu ) {
+            p = e.panAbsolute ? e.panCu->valueAt( pos )
+                              : ( e.pan + e.panCu->valueAt( pos ) );
+            if( p < -1.0 ) p = -1.0;
+            else if( p > 1.0 ) p = 1.0;
+        }
+        if( p != 0.0 ) {
+            const twPanGains pg = twPanLaw( p );
+            return g * m * ( channel == 0 ? pg.l : pg.r );
+        }
     }
     return g * m;
 }
@@ -295,6 +331,12 @@ bool twGainStage::isFlat( const Envelope &e, offset_t start, length_t n )
     // it AND that segment holds. Getting this right is what lets a STEP lane
     // keep the pure-copy path over the stretches between its points.
     if( e.vol && !curveIsFlatOver( *e.vol, start, n ) ) return false;
+    // A PAN CURVE BREAKS FLATNESS EXACTLY AS A VOLUME CURVE DOES (proposal 49
+    // trap T11). Without this a pan sweep would render at its first frame's
+    // value for a whole flat-volume page — a smooth sweep heard as a staircase
+    // one page wide. A CONSTANT pan still cannot break flatness and is not
+    // consulted here.
+    if( e.panCu && !curveIsFlatOver( *e.panCu, start, n ) ) return false;
     if( e.mute ) {
         // The RAMP reaches `ramp` frames past a breakpoint, so a span that
         // starts inside one is not flat either.

@@ -833,3 +833,22 @@ The value is also pushed when the gain stage is (re)built in `setChannels`, so
 a lane created after its pan was loaded does not silently start centred. The
 verb is `set-track-pan`; the conductor lane refuses it. Every system lane with
 a gain stage (master, sends) is panned by it and heard.
+
+### The `self:Pan` lane (proposal 49 M3)
+
+`pushTrackAutomation()` pushes a `self:Pan` lane's snapshot into
+`twGainStage::setPanCurve( curve, absolute )` beside the `self:Volume` one, with
+`absolute = pan && pan->mode() != SAutomationMode::Trim` — the SAME spelling the
+fader uses, so the two targets cannot drift into two readings of what Trim
+means. A track with no pan lane pushes a NULL curve, which is the scalar path,
+which at pan 0 is no arithmetic at all (D5): that is why no golden moved.
+
+**`set-track-pan` on a Read-family lane writes a POINT at the locator and does
+NOT touch `pan_`**, exactly as `set-track-volume` and `set-track-mute` do, and
+through the same two helpers (`sautomation::readLaneFor`,
+`sautomation::pointAtLocatorAction`). Trim and Off are deliberately not
+redirected — there the stored pan is still the thing being edited. Without the
+redirect the knob moves, the render does not, and undo carries a step nobody can
+hear. Only a check on the STORED value can see the difference, which is what
+`assert-track-pan` exists for: `qxa.automation_pan_trim_read` asserts the point was
+written AND that `getPan()` still reads what it read before.

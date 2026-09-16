@@ -98,6 +98,15 @@ public:
     void setPan( double pan );
     double pan() const;
 
+    /// The `self:Pan` lane (proposal 49 D3, M3), in the SAME [-1, 1] unit as
+    /// the static pan. `absolute` false is TRIM: the curve is SUMMED with
+    /// pan() and the sum is clamped ONCE — the pan-domain twin of the fader's
+    /// "TRIM SUMS IN dB". `absolute` true is READ: the curve alone, and the
+    /// stored pan is not consumed. A NULL curve is the scalar path.
+    void setPanCurve( std::shared_ptr<const twAutomationCurve> curve,
+                      bool absolute );
+    std::shared_ptr<const twAutomationCurve> panCurve() const;
+
     // --- automation (proposal 37 P5, design D5 / §4.5) ---------------------
     //
     // THE CURVE IS A SNAPSHOT, and it is swapped, never edited: the render
@@ -186,6 +195,8 @@ public:
         bool     volAbsolute = false;                    // Read (vs Trim)
         std::shared_ptr<const twAutomationCurve> mute;   // >= 0.5 == muted
         double   pan        = 0.0;            // [-1, 1], width 2 only (M2)
+        std::shared_ptr<const twAutomationCurve> panCu;  // self:Pan (M3)
+        bool     panAbsolute = false;                    // Read (vs Trim)
     };
     /// A snapshot of the fader as it stands right now. Main thread.
     Envelope envelope() const;
@@ -232,6 +243,8 @@ private:
     bool                 volAbsolute_{ false };
     std::shared_ptr<const twAutomationCurve> muteCurve_;
     double               pan_{ 0.0 };
+    std::shared_ptr<const twAutomationCurve> panCurve_;
+    bool                 panAbsolute_{ false };
 
     std::atomic<int>     channels_{ 1 };
 

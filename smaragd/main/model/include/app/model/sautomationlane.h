@@ -46,6 +46,13 @@
  *                      rather than that point's value: "muted from frame 0" is
  *                      what the structural mute says, and a lane drawn to mute
  *                      a track at 1 s must not silence everything before it.
+ *   self:Pan           [-1, 1], the stored SObject::pan_ unit: -1 hard left,
+ *                      0 centre, +1 hard right (proposal 49 D3). A Linear
+ *                      segment interpolates the pan VALUE and the law
+ *                      (tw/mix/twpanlaw.h) is applied to it per frame, so a
+ *                      sweep follows the cos law rather than interpolating two
+ *                      gains independently. Trim SUMS with the stored pan and
+ *                      clamps ONCE, after the sum.
  *   param:<id>         the plugin's HOST-FACING domain — native for CLAP/AU,
  *                      normalized [0,1] for VST3 (plugins inv. 26), i.e. the
  *                      same numbers `set-plugin-param` writes.

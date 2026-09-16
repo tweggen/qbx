@@ -4,6 +4,10 @@
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
 #include "app/objects/track/strack.h"
+#include "app/model/sappcontext.h"
+#include "app/model/sautomationlane.h"
+#include "app/objects/track/sautomationactions.h"
+#include <memory>
 #include "tw/core/twlog.h"
 #include <QDomElement>
 
@@ -37,6 +41,21 @@ SApplyResult SSetTrackPanAction::apply( SProject *project )
                           "project; pan is defined for 2 channels only",
                  qPrintable( QString::number( newPan_ ) ), project->channels() );
         return { false, nullptr };
+    }
+
+    // A STATIC EDIT ON A READ LANE BECOMES A POINT (proposal 37 D5 / §3.4,
+    // proposal 49 D3), exactly as set-track-volume does: otherwise the knob
+    // moves, the render does not, and the undo stack carries a step nobody can
+    // hear. Trim and Off are deliberately NOT redirected — there the static
+    // value is still the thing being edited.
+    if( sautomation::readLaneFor( track, QStringLiteral( "self:Pan" ) ) ) {
+        const offset_t at = SAppContext::get().getGlobalLocatorPos();
+        std::unique_ptr<SAction> pt(
+            sautomation::pointAtLocatorAction( trackPath_,
+                                               QStringLiteral( "self:Pan" ),
+                                               at, newPan_ ) );
+        SApplyResult viaLane = pt->apply( project );
+        if( viaLane.applied ) return viaLane;
     }
 
     const double oldPan = track->getPan();
