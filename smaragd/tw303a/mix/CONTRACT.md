@@ -204,10 +204,16 @@ an asset window over a faded track captures the unfaded audio.
 20c. **TRIM SUMS IN THE PAN DOMAIN AND CLAMPS ONCE; READ REPLACES.** The dB
     fader's rule (inv. 21) read in pan units: Trim is `clamp(pan + curve(pos))`,
     Read/Touch/Latch/Write is `clamp(curve(pos))` with the stored pan not
-    consulted at all. The clamp is applied to the SUM, once, before the law —
-    two clamps, or a clamp inside the law, would make `0.5 + 0.75` differ from
-    `1.25` on the near side. A sum is the pan analogue of the dB product
-    because the law is monotone in `p`, not because the units multiply.
+    consulted at all. A sum is the pan analogue of the dB product because the
+    law is monotone in `p`, not because the units multiply.
+    **THE CLAMP ITSELF IS NOT GATED AND CANNOT BE**, which the M3 sabotage
+    pass established rather than assumed: `twPanLaw` saturates at `|p| >= 1`
+    by construction (D1), so a clamped 1.0 and an unclamped 1.25 produce the
+    identical pair of gains and deleting the clamp fails nothing in the suite.
+    It is kept because D3 specifies it and because a law that stopped
+    saturating would need it — recorded here so nobody reads the passing
+    `qxa.automation_pan_trim_read` as covering it. What that case DOES gate
+    is that Trim sums at all.
 
 21. **TRIM SUMS IN dB; READ REPLACES.** `absolute == false` (Trim, the default —
     design §11 decision 3) evaluates `10^((gainDb + curve(pos))/20)`: a dB sum is
