@@ -282,10 +282,13 @@ SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) con
     // destroys nothing, which is the difference that matters -- the mask is a
     // per-strip VISIBILITY change, never a structure change.
     slot->applyStoredSections();
-    // ...and the per-strip state that is neither structure nor the mask, for
-    // the SAME reason: this pane is CACHED, so a strip built at one project
-    // width would keep that width's pan enabled state for the rest of the run.
-    slot->refreshStripState();
+    // NOTE: the per-strip state that is neither structure nor the mask (the
+    // pan control's enabled state) is deliberately NOT re-applied here. It was,
+    // and the M4 sabotage pass showed the call to be DEAD: `SMixerPane` now
+    // connects `SProject::channelsChanged` to `refreshStripState()`, which
+    // covers the cached pane too. The two differ from the section mask in the
+    // one way that matters — `SOpt::MixerSections` emits no signal, so
+    // `applyStoredSections()` above has no production route and must stay.
     return slot;
 }
 
