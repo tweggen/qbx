@@ -313,6 +313,12 @@ double twGainStage::factorAt( const Envelope &e, offset_t pos,
         if( e.panCu ) {
             p = e.panAbsolute ? e.panCu->valueAt( pos )
                               : ( e.pan + e.panCu->valueAt( pos ) );
+            // ONE clamp, on the SUM, before the law (D3). It is kept for
+            // intent and is NOT GATED, deliberately and said out loud:
+            // `twPanLaw` saturates at |p| >= 1 by construction (D1), so
+            // deleting these two lines changes no output anywhere and no
+            // case can bite them. A law that stopped saturating would need
+            // them, which is the only reason they are still here.
             if( p < -1.0 ) p = -1.0;
             else if( p > 1.0 ) p = 1.0;
         }

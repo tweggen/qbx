@@ -506,6 +506,90 @@ identical) unless it says `test_stereo.wav`.
 - **Gates:** `qxa.automation_pan_ramp`, `qxa.automation_pan_trim_read`,
   `qxa.automation_pan_stereo` (`test_stereo.wav`), `action_roundtrip_test`.
 
+#### M3 as executed (QBX-111)
+
+Built as designed. `Envelope` gained `panCu` / `panAbsolute` beside `gainCu` /
+`absolute`; `factorAt` evaluates the curve, folds Trim, clamps once and calls
+`twPanLaw` on the RESULT; `pushTrackAutomation()` pushes the lane with
+`absolute = mode != Trim`, the fader's own spelling; `set-track-pan` on a
+Read-family lane redirects through the two helpers `set-track-volume` already
+uses. Three things are worth recording.
+
+**T11 was real and `isFlat()` needed the pan term.** Without it a pan sweep
+over a 0 dB unmuted stretch reports flat, takes the pure-copy path and is
+silently inaudible over exactly the pages it was drawn on. Measured: with the
+term removed, `automation_pan_ramp` and `automation_pan_trim_read` both fail.
+
+**The closed forms separate the two candidate implementations.** AC3.1's inner
+seconds are what make the case a gate rather than a smoke test: interpolating
+the pan VALUE and applying the law reads **0.208924** over seconds 1 and 2,
+while interpolating the two GAINS separately would read 0.196 and 0.173. Both
+readings agree at the endpoints, so an endpoint-only case would have passed
+either way. Measured per second, channel 0 / channel 1, over
+`test_autosaw.wav` (A = 0.230956):
+
+| second | ch0 | ch1 |
+|---|---|---|
+| 0 | 0.230956 | 0.098445 |
+| 1 | 0.230956 | 0.208924 |
+| 2 | 0.208924 | 0.230956 |
+| 3 | 0.098445 | 0.230956 |
+
+The step lane is EXACT on both sides (`minRms="0.0" maxRms="0.0"`), because
+the law's far side is exactly 0.0 at |p| = 1 — not a band. Removing the lane
+returns the render to the unpanned one BYTE-IDENTICALLY
+(`assert-file-identical`), which is D5 holding at the curve level.
+
+**AC3.5's stereo half needs `test_stereo.wav` and the OTHER two cases cannot
+substitute for it.** `test_autosaw.wav` has two identical channels (36 trap
+22), so every assertion in the first two cases proves the LAW per channel and
+nothing about an IMAGE. `automation_pan_stereo` puts the lane at -0.5 and then
+at +0.5 over the 6 dB ladder: the near side keeps the ladder and the far side
+falls by the law (0.499987 / 0.176770, then 0.353546 / 0.249990). A law that
+summed the channels would put the same number on both sides at either setting;
+one that panned channel 0 alone would leave ch1 at 0.249990 in both.
+
+#### The M3 sabotage pass
+
+Seven sabotages, each built and run through `ctest -R` (never the binary —
+proposal 48 M3's lesson).
+
+| Sabotage | Cost |
+|---|---|
+| `pushTrackAutomation` never pushes the pan curve | 3 cases (all three) |
+| Trim does not sum with the stored pan | `automation_pan_trim_read` |
+| `panAbsolute` always false (Read behaves as Trim) | `automation_pan_trim_read` |
+| the T11 pan term removed from `isFlat` | `automation_pan_ramp`, `automation_pan_trim_read` |
+| the `set-track-pan` Read-family redirect removed | `automation_pan_trim_read` |
+| **the Trim sum is not clamped** | **NOTHING — see below** |
+| `panAutomated` dropped from `checkMasterShape` | **NOTHING, until a gate was added** |
+
+**Two of the seven cost nothing, and the two findings are different in kind.**
+
+The CLAMP is behaviourally unreachable: `twPanLaw` saturates at `|p| >= 1` by
+construction (D1), so a clamped 1.0 and an unclamped 1.25 are the same pair of
+gains. No case can bite it and none was invented. It is kept because D3
+specifies it and a non-saturating law would need it, and it is recorded as NOT
+GATED in the code, in `tw303a/mix/CONTRACT.md` and in the case header — which
+had claimed the opposite before the pass ran, and is corrected here.
+
+`panAutomated` was a genuine hole. A master `self:Pan` lane whose curve happens
+to read 0 at the instant the plan is built leaves `twMasterChainState::pan` at
+exactly 0.0, so the first term alone calls the project LINEAR and monitors it
+unpanned for the whole run — for every position the curve is not 0 at, which is
+most of them. Nothing in the tree asserted the second term. `playback_test` now
+carries the row "49 M3: an AUTOMATED master pan reading 0 still selects the
+lane-caused CLOSURE mode", and dropping the term fails it.
+
+**NOT gated in M3, beyond the clamp:** `sAutoScaleFor`'s [-1, 1] pan scale and
+the picker's `&Pan` entry (no `paintEvent` of an automation lane is measured
+anywhere — proposal 37 P6's own standing gap); a `self:Pan` lane on a SEND or
+MASTER lane (the code path is the same `twGainStage` every lane has, and no
+case addresses one); a pan lane in Touch/Latch/Write RECORDING (the recorder is
+target-agnostic and reaches pan through the same `set-automation-points`, no
+case); and an EXP segment on a pan lane (interpolated by the same
+`twAutomationCurve` as every other target, no case).
+
 ### M4 — the mounts
 
 - The four mounts of D4, all through `spanscale.h`; double-click reset

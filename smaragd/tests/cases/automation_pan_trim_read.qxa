@@ -11,10 +11,16 @@
     static 0.5, flat lane 0.75, TRIM -> clamp(1.25) = 1.0  -> ch0 EXACTLY 0
     static 0.5, flat lane 0.75, READ  -> 0.75             -> ch0 = 0.088383
                                                              (A*cos(0.375 pi))
-  The clamp is what makes the two modes differ by more than a rounding: a sum
-  that was not clamped would be 1.25 and the law would still answer 0 on the
-  far side, so the CLAMP itself is proved by channel 1 staying at A rather
-  than by channel 0.
+  WHAT THIS PROVES IS THE SUM, NOT THE CLAMP, and the sabotage pass is how
+  that was found out. Deleting the clamp in `twGainStage::factorAt` fails
+  NOTHING, here or anywhere, because `twPanLaw` SATURATES on its own: at
+  `p >= 1` it already answers 0.0 on the far side and 1.0 on the near one, so
+  a clamped 1.0 and an unclamped 1.25 are the same two gains. The clamp is
+  kept for intent — D3 says "sum, then clamp ONCE" and a future law that did
+  not saturate would need it — and it is recorded as NOT GATED rather than
+  left looking covered. What IS gated is that Trim SUMS at all: a Trim that
+  ignored the stored 0.5 would read the lane's 0.75 alone and channel 0 would
+  be 0.088383, not 0.
 -->
 <SActionScript version="1" name="automation_pan_trim_read">
 
