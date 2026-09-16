@@ -47,6 +47,23 @@
        `automation_pan_ramp` reads over its own quarter-sweep, for the same
        reason.
 
+       NOT GATED HERE, and the M4 sabotage pass is what established it rather
+       than assumed it: the knob's own OFFER-TO-THE-RECORDER-FIRST rule.
+       `automation-write-tick` feeds `SAutomationRecorder` DIRECTLY, so it
+       cannot see whether a real control offered its value first — deleting the
+       offer from `applyPan_` leaves every assertion here green.
+
+       A section driving the REAL slider (`mixer-strip-set control="pan"`,
+       added for exactly this) was written and then REMOVED as vacuous, and the
+       reason is worth recording because it is M3's doing: `set-track-pan` on a
+       Read-family lane REDIRECTS to a point at the locator, so a knob that
+       skipped the offer writes a point too and the STORED pan is unchanged
+       either way. The only discriminator left is the number of UNDO ENTRIES
+       three moves leave behind — one for a taken pass, three otherwise — and a
+       case counting those has to survive `set-automation-points` coalescing
+       two passes on one lane. That shape was not stabilised here; the verb is
+       committed and this is named rather than implied.
+
        The audio is measured through a RENDER after the stop, not through the
        capture backend. The pass's own ticks are wall-clock; the CURVE it
        committed is not, and a render of that curve is deterministic. What the
@@ -143,40 +160,7 @@
                          startFrame="72000" frameCount="24000"
                          minRms="0.2287" maxRms="0.2333"/>
 
-    <!-- ============ THE KNOB ITSELF OFFERS, AND IS TAKEN ============
-         Everything above drives `automation-write-tick`, which feeds the
-         recorder DIRECTLY — so it cannot see whether a real control offers its
-         value first, and the M4 sabotage pass proved that: deleting the offer
-         from `applyPan_` left every assertion above green.
-
-         `mixer-strip-set control="pan"` moves the REAL slider and lets Qt
-         deliver `valueChanged`, so what runs is `SMixerStrip::applyPan_`. If
-         it did NOT offer first it would submit an ordinary `set-track-pan`,
-         which writes the STATIC pan — so `assert-track-pan` reading the stored
-         value UNCHANGED is exactly the discriminator, and the lane gaining the
-         point is the other half. -->
-    <assert-track-pan trackPath="0" pan="0" tolerance="1e-9"/>
-
-    <set-locator position="0"/>
-    <toggle-playback play="1"/>
-    <wait-playhead position="24000" minAdvance="4096" timeoutMs="20000"/>
-    <mixer-strip-set track="PanPass" control="pan" value="-0.75"/>
-    <wait-playhead position="48000" minAdvance="4096" timeoutMs="20000"/>
-    <toggle-playback play="0"/>
-
-    <!-- TAKEN: the stored pan did not move, so no set-track-pan was submitted.
-         A knob that skipped the offer would have written 0.75 here. -->
-    <assert-track-pan trackPath="0" pan="0" tolerance="1e-9"/>
-
-    <!-- ============ ONE UNDO REVERSES THE WHOLE PASS ============
-         Two undos: the knob pass above, then the tick pass. Each is ONE entry,
-         which is the property this case exists for — `set-automation-points`
-         merges only an IDENTICAL window, and these two passes cover different
-         ones, so they stay separate entries. -->
-    <undo count="1"/>
-    <assert-automation-value owner="0" target="self:Pan"
-                             time="24000" value="-0.5" tolerance="1e-9"
-                             pointCount="4"/>
+    <!-- ============ ONE UNDO REVERSES THE WHOLE PASS ============ -->
     <undo count="1"/>
     <assert-automation-value owner="0" target="self:Pan"
                              time="24000" value="-1" tolerance="1e-9"

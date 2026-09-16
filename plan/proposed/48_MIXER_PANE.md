@@ -479,10 +479,21 @@ for a silence the engine already has a documented reason for.
 
 ### D8. There is no pan control, and the strip says why
 
-Per the table above. The strip's context menu carries a disabled "Pan
-(not implemented)" entry with the same tooltip discipline as D7. **Do not add a
-knob wired to `SObject::setPan()`** — the value would be stored, serialized,
-undoable and inaudible, which is the worst of the four available outcomes.
+**SUPERSEDED BY PROPOSAL 49 M4 (QBX-112), 2026-09-16. The strip has a pan
+control.** D8's prohibition was conditional on its reason — "the value would be
+stored, serialized, undoable and INAUDIBLE, which is the worst of the four
+available outcomes" — and 49 M1/M2 made pan audible on every path, which
+retires it.
+
+**The disabled "Pan (not implemented)" context entry this decision specified was
+NEVER BUILT**: the strip's menu has always been exactly three items (remove,
+group, ungroup). So M4 had nothing to delete, and this paragraph is a doc claim
+that outlived nothing — it never had code behind it at all. Recorded here
+because "delete the entry" was carried forward into QBX-112's own ticket text.
+
+The original text, for the record: *the strip's context menu carries a disabled
+"Pan (not implemented)" entry with the same tooltip discipline as D7. Do not add
+a knob wired to `SObject::setPan()`.*
 
 ### D9. Collapse is TWO mechanisms and they are not the same
 
