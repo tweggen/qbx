@@ -138,6 +138,8 @@ twMasterShape checkMasterShape( const twMixer *mixer, const twRewire *root,
         return laneClosure( "the master fader is not at unity" );
     if( chain.pan != 0.0 )
         return laneClosure( "the master lane is panned" );
+    if( chain.panAutomated )
+        return laneClosure( "the master lane's pan is automated" );
 
     return out;   // LinearSplit
 }

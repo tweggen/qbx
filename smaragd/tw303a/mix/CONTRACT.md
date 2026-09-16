@@ -170,8 +170,10 @@ an asset window over a faded track captures the unfaded audio.
     is asked of the channel's own factor (T10): a panned track's near side is
     still a pure copy, its far side is scaled, and a track at 0 dB with a
     non-zero pan never takes the copy path on the side that must fall. A
-    CONSTANT pan cannot break flatness, so `isFlat()` needs no pan term until
-    a pan CURVE exists (M3, T11).
+    A CONSTANT pan cannot break flatness; **a pan CURVE can, and since M3
+    `isFlat()` carries the pan term** (T11). Without it a ramping pan over a
+    0 dB unmuted stretch would report flat and take the pure-copy path, and the
+    pan would be silently inaudible over exactly the pages it was drawn on.
 
 20a. **TRACK PAN LIVES IN twGainStage, and `factorAt` / `applyGain` take a
     REQUIRED output channel AND page width** (proposal 49 D2, M2, trap T5).
@@ -185,7 +187,27 @@ an asset window over a faded track captures the unfaded audio.
     the POST-fader tap is post-pan. Gates: `qxa.track_pan_audible`,
     `qxa.track_pan_post_fx` (through `tw.test.clap.stereoskew`, whose cross
     term makes the two orders differ by 3x), `qxa.send_pan_taps`,
-    `qxa.monitor_pan_live`.
+    `qxa.monitor_pan_live`; and for the CURVE, `qxa.automation_pan_ramp`,
+    `qxa.automation_pan_trim_read` and `qxa.automation_pan_stereo`.
+
+20b. **A `self:Pan` CURVE IS INTERPOLATED IN THE PAN VALUE, AND THE LAW IS
+    APPLIED TO THE RESULT** (proposal 49 D3, M3). `Envelope::panCu` /
+    `panAbsolute` sit beside `gainCu` / `absolute`, and `factorAt` evaluates the
+    curve, folds Trim, clamps ONCE to [-1, 1], and only then calls `twPanLaw`.
+    Interpolating the two GAINS instead would be a SECOND implementation of the
+    law: it agrees at the endpoints and nowhere between them, which is what
+    makes a closed form the only honest gate (`qxa.automation_pan_ramp` reads
+    0.208924 over the second the gain-interpolated reading would put at 0.196).
+    The domain is the control's own [-1, 1] (D4), not a gain and not a
+    percentage, so a lane and the knob speak one number.
+
+20c. **TRIM SUMS IN THE PAN DOMAIN AND CLAMPS ONCE; READ REPLACES.** The dB
+    fader's rule (inv. 21) read in pan units: Trim is `clamp(pan + curve(pos))`,
+    Read/Touch/Latch/Write is `clamp(curve(pos))` with the stored pan not
+    consulted at all. The clamp is applied to the SUM, once, before the law —
+    two clamps, or a clamp inside the law, would make `0.5 + 0.75` differ from
+    `1.25` on the near side. A sum is the pan analogue of the dB product
+    because the law is monotone in `p`, not because the units multiply.
 
 21. **TRIM SUMS IN dB; READ REPLACES.** `absolute == false` (Trim, the default —
     design §11 decision 3) evaluates `10^((gainDb + curve(pos))/20)`: a dB sum is

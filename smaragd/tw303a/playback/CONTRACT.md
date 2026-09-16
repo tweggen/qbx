@@ -229,6 +229,12 @@ Invariants:
     `twMasterChainState::pan` is read by `checkMasterShape`, which answers
     `laneClosure("the master lane is panned")` for any non-zero value (T6):
     a constant pan is linear, but "a scale is a fader, faders grow curves".
+    **Since M3 `twMasterChainState::panAutomated` is a SECOND term**, and it is
+    not folded into the first: a master `self:Pan` lane whose curve happens to
+    read 0 at the plan's instant would otherwise pass a `pan != 0` test and be
+    monitored unpanned for the whole run. The closure reason names which one
+    fired (`"the master lane's pan is automated"`), because a refusal that
+    cannot say why is one nobody can act on.
     Gates: `qxa.monitor_pan_live`, `qxa.master_pan_closure`, and the
     `playback_test` row "49 T6".
 

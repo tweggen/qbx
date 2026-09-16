@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A `self:Pan` LANE IS HEARD (proposal 49 M3, QBX-111, AC3.1 / AC3.2 / AC3.4).
+
+  The lane's domain is the stored pan unit, [-1, 1] (D3). It is interpolated
+  in PAN-VALUE space and the law (tw/mix/twpanlaw.h) is applied to the result
+  per frame, so a Linear sweep follows the cos law. Interpolating the two
+  GAINS separately would be a second implementation of the law and would give
+  different numbers everywhere except the endpoints.
+
+  Fixture: ../test_autosaw.wav, A = 0.230956 on both (identical) channels.
+
+  1. AC3.1  A Linear ramp -1 -> +1 over 4 s. Over each second the per-channel
+            RMS is A * sqrt(mean(gain^2)) with the gain taken through the law,
+            which is a closed form:
+
+              second   channel 0    channel 1
+              0        0.230956     0.098445
+              1        0.230956     0.208924
+              2        0.208924     0.230956
+              3        0.098445     0.230956
+
+            The two inner seconds are what separate this from a law applied to
+            interpolated GAINS: a linear gain ramp would read 0.196 / 0.173
+            there, not 0.208924.
+  2. AC3.2  A STEP lane from -1 to +1 at 2 s: channel 1 is EXACTLY silent
+            before the step and channel 0 EXACTLY silent after it. Exact, not
+            a band, because the law's far side is exactly 0.0 at |p| = 1.
+  3. AC3.4  Moving ONE breakpoint invalidates exactly the pages it moved: the
+            render changes where the curve changed and is byte-identical
+            where it did not (the automation_edit_invalidates shape).
+  4.        Removing the lane returns the render to the unpanned one,
+            byte-identically.
+-->
+<SActionScript version="1" name="automation_pan_ramp">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <render filename="apr_nolane.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="apr_nolane.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ 1. a Linear ramp, hard left to hard right ========== -->
+    <add-automation-lane owner="0" target="self:Pan" mode="read"/>
+    <add-automation-point owner="0" target="self:Pan"
+                          time="0" value="-1" curve="linear"/>
+    <add-automation-point owner="0" target="self:Pan"
+                          time="192000" value="1" curve="linear"/>
+
+    <!-- The snapshot the engine is handed, read at the midpoint: linear in
+         PAN value, so 2 s is exactly centre. -->
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="96000" value="0" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="48000" value="-0.5" tolerance="1e-9"/>
+
+    <render filename="apr_ramp.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="apr_ramp.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <assert-audio-energy filename="apr_ramp.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0975" maxRms="0.0995"/>
+    <assert-audio-energy filename="apr_ramp.wav" channel="1"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.2068" maxRms="0.2111"/>
+    <assert-audio-energy filename="apr_ramp.wav" channel="0"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.2068" maxRms="0.2111"/>
+    <assert-audio-energy filename="apr_ramp.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0975" maxRms="0.0995"/>
+    <assert-audio-energy filename="apr_ramp.wav" channel="1"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ 2. a STEP lane is exact on both sides ============== -->
+    <remove-automation-lane owner="0" target="self:Pan"/>
+    <add-automation-lane owner="0" target="self:Pan" mode="read"/>
+    <add-automation-point owner="0" target="self:Pan"
+                          time="0" value="-1" curve="step"/>
+    <add-automation-point owner="0" target="self:Pan"
+                          time="96000" value="1" curve="step"/>
+
+    <render filename="apr_step.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="apr_step.wav" channel="1"
+                         startFrame="0" frameCount="91200"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="apr_step.wav" channel="0"
+                         startFrame="0" frameCount="91200"
+                         minRms="0.2287" maxRms="0.2333"/>
+    <assert-audio-energy filename="apr_step.wav" channel="0"
+                         startFrame="100800" frameCount="91200"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="apr_step.wav" channel="1"
+                         startFrame="100800" frameCount="91200"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- A render with nothing changed is byte-identical: the lane is a
+         snapshot, not a source of drift. -->
+    <render filename="apr_step2.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="apr_step2.wav" expected="apr_step.wav"/>
+
+    <!-- ============ 3. moving ONE point moves only its own pages ======= -->
+    <move-automation-point owner="0" target="self:Pan"
+                           time="96000" value="1"
+                           toTime="144000" toValue="1"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="120000" value="-1" tolerance="1e-9"/>
+
+    <render filename="apr_moved.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- Before 1.9 s neither render has changed. -->
+    <assert-audio-energy filename="apr_moved.wav" channel="1"
+                         startFrame="0" frameCount="91200"
+                         minRms="0.0" maxRms="0.0"/>
+    <!-- Where the step used to be, channel 1 is now still silent. -->
+    <assert-audio-energy filename="apr_moved.wav" channel="1"
+                         startFrame="100800" frameCount="38400"
+                         minRms="0.0" maxRms="0.0"/>
+    <!-- ...and after the moved step it is the loud side. -->
+    <assert-audio-energy filename="apr_moved.wav" channel="1"
+                         startFrame="148800" frameCount="43200"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ 4. removing the lane restores the render =========== -->
+    <remove-automation-lane owner="0" target="self:Pan"/>
+    <render filename="apr_gone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="apr_gone.wav" expected="apr_nolane.wav"/>
+  </actions>
+
+  <verify-undo/>
+
+</SActionScript>

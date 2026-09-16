@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TRIM SUMS IN THE PAN DOMAIN; READ REPLACES (proposal 49 D3, M3 AC3.3 /
+  AC3.5), and `set-track-pan` on a Read-family lane writes a POINT.
+
+  The pan-domain twin of the fader's inv. 21. Trim is the default mode: the
+  lane is an OFFSET on the stored pan, summed and then clamped ONCE. Read is
+  the lane alone, and the stored pan is not consumed.
+
+  Fixture: ../test_autosaw.wav, A = 0.230956. Closed forms:
+    static 0.5, flat lane 0.75, TRIM -> clamp(1.25) = 1.0  -> ch0 EXACTLY 0
+    static 0.5, flat lane 0.75, READ  -> 0.75             -> ch0 = 0.088383
+                                                             (A*cos(0.375 pi))
+  The clamp is what makes the two modes differ by more than a rounding: a sum
+  that was not clamped would be 1.25 and the law would still answer 0 on the
+  far side, so the CLAMP itself is proved by channel 1 staying at A rather
+  than by channel 0.
+-->
+<SActionScript version="1" name="automation_pan_trim_read">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <set-track-pan trackPath="0" pan="0.5"/>
+
+    <!-- ============ TRIM: the lane is an offset, summed and clamped ==== -->
+    <add-automation-lane owner="0" target="self:Pan" mode="trim"/>
+    <add-automation-point owner="0" target="self:Pan"
+                          time="0" value="0.75" curve="step"/>
+
+    <render filename="aptr_trim.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="aptr_trim.wav" channel="0"
+                         minRms="0.0" maxRms="0.0"/>
+    <assert-audio-energy filename="aptr_trim.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ READ: the lane alone, the stored pan ignored ======= -->
+    <set-automation-mode owner="0" target="self:Pan" mode="read"/>
+    <render filename="aptr_read.wav" format="wav" quality="10" durationSec="2.0"/>
+    <!-- A * cos(0.375 pi) = 0.088384: the LANE's 0.75, not the sum. -->
+    <assert-audio-energy filename="aptr_read.wav" channel="0"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0875" maxRms="0.0893"/>
+    <assert-audio-energy filename="aptr_read.wav" channel="1"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2287" maxRms="0.2333"/>
+
+    <!-- ============ set-track-pan on a READ lane writes a POINT ======== -->
+    <!-- The stored pan must NOT move, and the lane must gain the value at the
+         locator. Otherwise the knob moves and the render does not. -->
+    <set-locator position="48000"/>
+    <set-track-pan trackPath="0" pan="-1"/>
+    <assert-track-pan trackPath="0" pan="0.5" tolerance="1e-9"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="48000" value="-1" tolerance="1e-9"/>
+
+    <!-- ...and it is HEARD from there: the second half is hard left. -->
+    <render filename="aptr_point.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="aptr_point.wav" channel="1"
+                         startFrame="52800" frameCount="43200"
+                         minRms="0.0" maxRms="0.0"/>
+
+    <!-- ============ AC3.5: the lane round-trips inline ================= -->
+    <save-project path="../../build/automation_pan_trim_read.qxp"/>
+    <load-project path="../../build/automation_pan_trim_read.qxp"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="48000" value="-1" tolerance="1e-9"
+                             mode="read"/>
+    <assert-track-pan trackPath="0" pan="0.5" tolerance="1e-9"/>
+  </actions>
+
+</SActionScript>

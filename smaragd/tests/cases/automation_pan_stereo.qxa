@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A `self:Pan` lane over a STEREO source (proposal 49 M3, AC3.5's stereo half).
+
+  ../test_autosaw.wav has two IDENTICAL channels (proposal 36 trap 22), so
+  every other pan case proves the LAW per channel and nothing about an IMAGE.
+  ../test_stereo.wav is the 6 dB ladder — a 480 Hz sine, channel 0 at RMS 0.5
+  and channel 1 at 0.25 (measured 0.499987 / 0.249990) — and it is the fixture
+  that can tell a balance from a collapse.
+
+  A balance scales each channel by ITS OWN side's gain, so the ladder survives
+  on the near side and the far side falls by the law:
+
+    lane at -0.5   ch0 = 0.499987            ch1 = 0.249990*cos(pi/4) = 0.176770
+    lane at +0.5   ch0 = 0.499987*cos(pi/4)  ch1 = 0.249990
+                       = 0.353546
+
+  A law that summed or averaged the channels would put the SAME number on both
+  sides at either setting; a law that panned channel 0 only would leave ch1 at
+  0.249990 in both. The two settings together exclude both.
+-->
+<SActionScript version="1" name="automation_pan_stereo">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+
+    <add-automation-lane owner="0" target="self:Pan" mode="read"/>
+    <add-automation-point owner="0" target="self:Pan"
+                          time="0" value="-0.5" curve="step"/>
+
+    <render filename="aps_left.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="aps_left.wav" channel="0"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.4950" maxRms="0.5050"/>
+    <assert-audio-energy filename="aps_left.wav" channel="1"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.1750" maxRms="0.1786"/>
+
+    <!-- A point on a frame that already carries one is REPLACED. -->
+    <add-automation-point owner="0" target="self:Pan"
+                          time="0" value="0.5" curve="step"/>
+    <render filename="aps_right.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="aps_right.wav" channel="0"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.3500" maxRms="0.3571"/>
+    <assert-audio-energy filename="aps_right.wav" channel="1"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.2475" maxRms="0.2525"/>
+
+    <!-- The two channels are still DIFFERENT audio at both settings: the
+         image was moved, not collapsed. -->
+    <assert-channels-differ filename="aps_right.wav" channelA="0" channelB="1"
+                            minRmsDelta="0.05"/>
+  </actions>
+
+  <verify-undo/>
+
+</SActionScript>

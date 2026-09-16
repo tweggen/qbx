@@ -2091,6 +2091,13 @@ void STrack::pushTrackAutomation()
 
     SAutomationLane *mute = automationLane( QStringLiteral( "self:Muted" ) );
     cpGainStage_->setMuteCurve( mute ? mute->snapshot() : nullptr );
+
+    // THE `self:Pan` LANE (proposal 49 D3, M3). Same Trim/Read rule as the
+    // fader's, in the pan domain: Trim SUMS with the stored pan, Read replaces
+    // it. The clamp is the gain stage's, applied once after the sum.
+    SAutomationLane *pan = automationLane( QStringLiteral( "self:Pan" ) );
+    const bool panAbsolute = pan && pan->mode() != SAutomationMode::Trim;
+    cpGainStage_->setPanCurve( pan ? pan->snapshot() : nullptr, panAbsolute );
 }
 
 void STrack::applyAutomationToEngine()

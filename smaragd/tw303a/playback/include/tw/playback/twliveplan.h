@@ -256,10 +256,15 @@ struct twMasterChainState {
      * fader, faders grow curves. Without this the split sums an UNPANNED live
      * ring onto a PANNED root page. */
     double pan         = 0.0;
+    /** A `self:Pan` lane on the master (proposal 49 D3/D6). Separate from
+     * `automated` so the refusal can name WHICH control did it, exactly as the
+     * four older reasons do. */
+    bool   panAutomated = false;
 
     bool unity() const
     { return insertCount == 0 && !muted && !automated
-             && gainDb > -1e-9 && gainDb < 1e-9 && pan == 0.0; }
+             && gainDb > -1e-9 && gainDb < 1e-9 && pan == 0.0
+             && !panAutomated; }
 };
 
 // `width` is the project's channel count. A null component, a non-unity input

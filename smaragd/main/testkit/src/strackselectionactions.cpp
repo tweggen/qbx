@@ -276,6 +276,43 @@ bool SAssertTrackVolumeAction::readXml( const QDomElement &elem, int /*version*/
     return true;
 }
 
+// --- assert-track-pan ---------------------------------------------------------
+
+SApplyResult SAssertTrackPanAction::apply( SProject *project )
+{
+    const strackpath::QualifiedPath q_ = strackpath::parseQualified( trackPath_ );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    SObject *lane = splacements::laneAt( root, q_.idx );
+    STrack *track = dynamic_cast<STrack *>( lane );
+    if( !track ) {
+        qWarning() << "assert-track-pan: no track at" << trackPath_;
+        return { false, nullptr };
+    }
+    const double actual = track->getPan();
+    if( qAbs( actual - pan_ ) > tolerance_ ) {
+        qWarning() << "assert-track-pan FAILED: expected" << pan_
+                   << "but got" << actual << "(tolerance" << tolerance_ << ")";
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertTrackPanAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "pan", QString::number( pan_ ) );
+    elem.setAttribute( "tolerance", QString::number( tolerance_ ) );
+}
+
+bool SAssertTrackPanAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    pan_       = elem.attribute( "pan", "0" ).toDouble();
+    tolerance_ = elem.attribute( "tolerance", "1e-6" ).toDouble();
+    return true;
+}
+
 // --- assert-track-selection -------------------------------------------------
 
 SApplyResult SAssertTrackSelectionAction::apply( SProject *project )
@@ -339,6 +376,12 @@ static const bool s_reg_selecttrack =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "select-track" ),
           [] { return new SSelectTrackAction; } ),
+      true );
+
+static const bool s_reg_asserttrackpan =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-track-pan" ),
+          [] { return new SAssertTrackPanAction; } ),
       true );
 
 static const bool s_reg_trackheadtoggle =

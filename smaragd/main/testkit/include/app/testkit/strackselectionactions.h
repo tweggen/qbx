@@ -161,6 +161,29 @@ private:
     double  tolerance_ = 0.001;
 };
 
+// assert-track-pan — the stored SObject::pan_ of a track (proposal 49 M3).
+//
+//   trackPath = "0"    index-path from the root mixer ($master / $send<N> too)
+//   pan       = "0"    expected value, [-1, 1]
+//   tolerance = "1e-6"
+//
+// The twin of assert-track-volume, and it exists for the same reason: to prove
+// a gesture did NOT move the stored value. `set-track-pan` on a Read-family
+// `self:Pan` lane writes a POINT instead of the field, and only this can see
+// the difference.
+class SAssertTrackPanAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-track-pan" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    double  pan_       = 0.0;
+    double  tolerance_ = 1e-6;
+};
+
 // assert-track-selection — the mixer's selection, as index-paths.
 //
 //   paths   = "0;1"       SEMICOLON-separated (a path itself is

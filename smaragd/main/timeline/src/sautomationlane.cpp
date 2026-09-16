@@ -74,6 +74,11 @@ SAutoValueScale sAutoScaleFor( const QString &target, SObject *owner )
     case SParamRef::Space::Self:
         if( ref.prop == QLatin1String( "Muted" ) ) {
             s.lo = 0.0; s.hi = 1.0; s.stepped = true;
+        } else if( ref.prop == QLatin1String( "Pan" ) ) {
+            // The stored pan unit (proposal 49 D3): centre sits at mid-height,
+            // which is what makes the lane and the knob agree. NOT the fader
+            // curve — pan is linear in its own domain.
+            s.lo = -1.0; s.hi = 1.0;
         } else {                                   // Volume
             s.lo = SFADER_MIN_DB; s.hi = SFADER_MAX_DB; s.fader = true;
         }
@@ -301,6 +306,7 @@ void SAutomationLaneUi::buildPickerMenu( QMenu *parent, STrack *t )
 
     addEntry( QObject::tr( "&Volume" ), QStringLiteral( "self:Volume" ), -1 );
     addEntry( QObject::tr( "&Mute" ),   QStringLiteral( "self:Muted" ),  -1 );
+    addEntry( QObject::tr( "&Pan" ),    QStringLiteral( "self:Pan" ),    -1 );
 
     // Every parameter of every slot on the track. A plugin that is missing on
     // this machine reports no rows, so it contributes no entries rather than a
