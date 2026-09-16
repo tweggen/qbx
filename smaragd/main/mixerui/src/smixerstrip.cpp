@@ -27,6 +27,7 @@
 #include "app/objects/track/ssettrackmuteaction.h"
 #include "app/objects/track/ssettracksoloaction.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/objects/track/ssettrackpanaction.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackpath.h"
 #include "app/pluginui/splugineffectstrip.h"
@@ -35,6 +36,7 @@
 #include "app/shell/sautomationrecorder.h"
 #include "app/shell/slivemonitor.h"
 #include "app/timeline/sfadercurve.h"
+#include "app/timeline/spanscale.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/ssendstrip.h"
 #include "app/timeline/strackgestures.h"
@@ -74,6 +76,10 @@ SMixerStrip::SMixerStrip( SStdMixer *mixer, STrack *track,
 
     if( STrack *t = track_.data() ) {
         connect( t, &STrack::volumeChanged, this, &SMixerStrip::onTrackVolumeChanged );
+        // MODEL -> VIEW for pan (proposal 49 M4): `panChanged` is emitted by
+        // SObject::setPan, so an undo, a load or another mount's edit moves
+        // this control too.
+        connect( t, &SObject::panChanged, this, &SMixerStrip::onTrackPanChanged );
         connect( t, &STrack::mutedChanged,  this, &SMixerStrip::onTrackMutedChanged );
         connect( t, &STrack::soloChanged,   this, &SMixerStrip::onTrackSoloChanged );
         connect( t, &STrack::armedForRecordingChanged,  this, &SMixerStrip::onTrackArmedChanged );
@@ -201,6 +207,35 @@ void SMixerStrip::buildUi_()
     connect( soloBtn_, &QPushButton::toggled, this, &SMixerStrip::onSoloToggled );
     connect( armBtn_,  &QPushButton::toggled, this, &SMixerStrip::onArmToggled );
 
+    // THE PAN CONTROL (proposal 49 M4, D4), ABOVE the fader as D4's table has
+    // it. Horizontal and short: this strip is 60 px wide in narrow mode, which
+    // is the measured floor proposal 48 M4 found the hard way, so the control
+    // is given a FIXED height and no minimum width beyond the slider's own.
+    //
+    // PROPOSAL 48 D8 SAID THERE WOULD BE NO KNOB HERE, and that this menu would
+    // carry a disabled "Pan (not implemented)" entry instead. The entry was
+    // never actually built (the menu has always been three items), and D8's
+    // REASON — "the value would be stored, serialized, undoable and inaudible"
+    // — was retired by proposal 49 M1/M2: pan is audible on every path now. So
+    // there is nothing to delete and the knob is legitimate. See 48 D8, updated.
+    panRow_ = new QHBoxLayout();
+    panRow_->setContentsMargins( 0, 0, 0, 0 );
+    panRow_->setSpacing( 2 );
+    pan_ = new QSlider( Qt::Horizontal, fixedBlock_ );
+    pan_->setRange( SPAN_TICK_MIN, SPAN_TICK_MAX );
+    pan_->setSingleStep( 1 );
+    pan_->setPageStep( 10 );
+    pan_->setTickPosition( QSlider::NoTicks );
+    pan_->setFixedHeight( 12 );
+    pan_->setMinimumWidth( 24 );
+    connect( pan_, &QSlider::valueChanged, this, [this]( int tick ) {
+        if( updatingPan_ ) return;
+        applyPan_( sTickToPan( tick ) );
+    } );
+    sdefaultreset::onDoubleClick( pan_, [this]{ applyPan_( SPAN_DEFAULT ); } );
+    panRow_->addWidget( pan_, 1 );
+    fixed->addLayout( panRow_ );
+
     QHBoxLayout *faderRow = new QHBoxLayout();
     faderLayout_ = faderRow;
     faderRow->setContentsMargins( 0, 0, 0, 0 );
@@ -245,6 +280,7 @@ void SMixerStrip::buildUi_()
         soloBtn_->setChecked( t->isSolo() );
         armBtn_->setChecked( t->isArmedForRecording() );
         setFaderSilently_( t->getVolume() );
+        setPanSilently_( t->getPan() );
         narrow_ = t->mixerStripNarrow();
     }
     applyHeaderColor_();
@@ -344,6 +380,55 @@ void SMixerStrip::applyVolumeDb_( double db )
     submit_( new SSetTrackVolumeAction( path, db ) );
 }
 
+// The pan twin (proposal 49 M4): the same offer-the-recorder-first rule, and
+// the same submit_() so the strip stamps its OWN arrangement (48 D12).
+void SMixerStrip::applyPan_( double pan )
+{
+    STrack    *t     = track_.data();
+    SStdMixer *mixer = mixer_.data();
+    if( !t ) return;
+
+    const QList<int> path =
+        mixer ? strackpath::pathOf( mixer, t ) : QList<int>();
+    if( path.isEmpty() ) {
+        t->setPan( pan );
+        if( SProject *p = SApplication::app().getCurrentProject() )
+            p->notifyArrangementChanged();
+        return;
+    }
+
+    SAutomationRecorder::Target target;
+    target.ownerPath = path;
+    target.target    = QStringLiteral( "self:Pan" );
+    if( SApplication::app().isPlaying()
+        && SApplication::app().automationRecorder().writeTick(
+               target, pan, SApplication::app().getGlobalLocatorPos() ) )
+        return;
+
+    submit_( new SSetTrackPanAction( path, pan ) );
+}
+
+// Disabled with a tooltip at width != 2 and on the conductor lane (49 D1/D2).
+void SMixerStrip::syncPanEnabled_()
+{
+    if( !pan_ ) return;
+    STrack *t = track_.data();
+    SProject *proj = SApplication::app().getCurrentProject();
+    const int channels = proj ? proj->channels() : 2;
+    const bool conductor = t && t->systemRole() == SSystemRole::Conductor;
+    const bool ok = t && ( channels == 2 ) && !conductor;
+    pan_->setEnabled( ok );
+    if( conductor )
+        pan_->setToolTip( tr( "The conductor lane carries no audio, so it "
+                              "cannot be panned." ) );
+    else if( channels != 2 )
+        pan_->setToolTip( tr( "Pan is defined for 2 channels only; this "
+                              "project is %1-channel." ).arg( channels ) );
+    else
+        pan_->setToolTip( tr( "Pan: %1. Double-click to centre." )
+                              .arg( sPanText( t ? t->getPan() : 0.0 ) ) );
+}
+
 void SMixerStrip::setFaderSilently_( double db )
 {
     if( !fader_ ) return;
@@ -356,6 +441,17 @@ void SMixerStrip::setFaderSilently_( double db )
 }
 
 void SMixerStrip::onTrackVolumeChanged( double db ) { setFaderSilently_( db ); }
+
+void SMixerStrip::setPanSilently_( double pan )
+{
+    if( !pan_ ) return;
+    updatingPan_ = true;
+    { QSignalBlocker b( pan_ ); pan_->setValue( sPanToTick( pan ) ); }
+    updatingPan_ = false;
+    syncPanEnabled_();   // keeps the tooltip's reading in step
+}
+
+void SMixerStrip::onTrackPanChanged( double pan ) { setPanSilently_( pan ); }
 
 // --- M / S / R --------------------------------------------------------------
 
@@ -474,6 +570,7 @@ bool SMixerStrip::onMeterTick( offset_t pos, qint64 nowMs, bool live )
     // The READ-value pump runs FIRST and unconditionally: a Read-family lane
     // must move the fader even on a strip whose meter is hidden.
     pumpReadValue_( pos );
+    pumpReadPan_( pos );
 
     // NOT a visibility test. A strip scrolled out of the viewport MUST still
     // tick (inv. 5: its meter is a few px of paint, and stopping it would
@@ -556,6 +653,29 @@ void SMixerStrip::pumpReadValue_( offset_t pos )
     setFaderSilently_( db );
 }
 
+// The pan twin (proposal 49 M4), same rule and same reasons.
+void SMixerStrip::pumpReadPan_( offset_t pos )
+{
+    STrack    *t     = track_.data();
+    SStdMixer *mixer = mixer_.data();
+    if( !t || !pan_ ) return;
+
+    SAutomationLane *lane = t->automationLane( QStringLiteral( "self:Pan" ) );
+    if( !lane || !SAutomationRecorder::isReadFamily( lane->mode() ) ) {
+        lastReadPan_ = 1e30;
+        return;
+    }
+    SAutomationRecorder::Target target;
+    target.ownerPath = mixer ? strackpath::pathOf( mixer, t ) : QList<int>();
+    target.target    = QStringLiteral( "self:Pan" );
+    if( SApplication::app().automationRecorder().isRecording( target ) ) return;
+
+    const double p = lane->valueAt( pos );
+    if( qAbs( p - lastReadPan_ ) < 0.005 ) return;   // below one tick
+    lastReadPan_ = p;
+    setPanSilently_( p );
+}
+
 // --- sections, narrow, describe, detach -------------------------------------
 
 // NARROW IS THE TRACK'S OWN FLAG (proposal 48 M2), a fifth sibling of the four
@@ -594,6 +714,13 @@ void SMixerStrip::setSectionsVisible( bool inserts, bool sends,
     // as the three buttons do, and the fader's own position still shows the
     // level. The number comes back the moment the strip is widened.
     if( dbLabel_ ) dbLabel_->setVisible( showFader_ && !narrow_ );
+    // THE PAN CONTROL GOES WITH THE FADER SECTION, in both widths. It sits
+    // above the fader (D4) and is part of the same "level" block as far as the
+    // pane's section toggles are concerned, so turning the fader off and
+    // leaving a lone pan slider behind would be the surprising reading.
+    // It survives NARROW: it is 12 px tall and asks for 24 px of width, which
+    // fits the 60 px floor with room to spare (AC4.3).
+    if( pan_ ) pan_->setVisible( showFader_ );
     // A NARROW strip has NOTHING SCROLLABLE -- the inserts and the sends are
     // both hidden -- so its scroll area's vertical scrollbar is pure cost, and
     // a QScrollArea reserves that extent in its own minimum width whether the
@@ -786,9 +913,12 @@ QString SMixerStrip::describe() const
     STrack *t = track_.data();
     const double db = t ? t->getVolume() : 0.0;
     return QStringLiteral(
+               // `pan` / `panOn` are APPENDED AT THE END (AC4.1) so every
+               // committed `contains=` string still matches, exactly as
+               // proposal 48 M4 appended `color` and `meter`.
                "name=%1|narrow=%2|mute=%3|solo=%4|arm=%5|db=%6|role=%7"
                "|faderDb=%8|inserts=%9|sends=%10|compact=%11|live=%12"
-               "|color=%13|meter=%14" )
+               "|color=%13|meter=%14|pan=%15|panOn=%16" )
         .arg( t ? t->getSName() : QStringLiteral( "?" ) )
         .arg( narrow_ ? 1 : 0 )
         .arg( t && t->isMuted() ? 1 : 0 )
@@ -822,7 +952,11 @@ QString SMixerStrip::describe() const
         // against `sClipBodyOf()`, the classifier the arranger's own PIXEL
         // gates use.
         .arg( headerColor_.name() )
-        .arg( meter_ ? meter_->describe() : QString() );
+        .arg( meter_ ? meter_->describe() : QString() )
+        // The pan control's TEXT, through spanscale's ONE spelling, so this
+        // strip and the arranger head cannot disagree about what "L37" means.
+        .arg( sPanText( t ? t->getPan() : 0.0 ) )
+        .arg( pan_ && pan_->isEnabled() ? 1 : 0 );
 }
 
 // CONTRACT inv. 4 / D13. closeProject() clears the undo stack, calls

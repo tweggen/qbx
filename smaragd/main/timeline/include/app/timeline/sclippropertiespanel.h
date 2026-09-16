@@ -17,6 +17,7 @@ class QCheckBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
+class QSlider;
 class QLineEdit;
 class QPushButton;
 class QScrollArea;
@@ -179,6 +180,10 @@ private:
     // model/UI/serialization only — deliberately not wired to any DSP.
     QDoubleSpinBox *volumeSpin_  = nullptr;
     QDoubleSpinBox *panSpin_     = nullptr;
+    /// The pan SLIDER beside the number (proposal 49 M4 / D4, QBX-84). The
+    /// spin box stays as the way a value is TYPED and as what `clipPanSpin`
+    /// addresses; the two are kept in step through the one commit.
+    QSlider        *panSlider_   = nullptr;
 
     // The MIDI page (proposal 37 6.1): the per-clip modifiers plus the one
     // placement property that is not shared with audio, the timebase.

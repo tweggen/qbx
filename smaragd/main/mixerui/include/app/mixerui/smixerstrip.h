@@ -135,6 +135,7 @@ private slots:
     void onSoloToggled( bool on );
     void onArmToggled( bool on );
     void onTrackVolumeChanged( double db );
+    void onTrackPanChanged( double pan );
     void onTrackMutedChanged( bool on );
     void onTrackSoloChanged( bool on );
     void onTrackArmedChanged( bool on );
@@ -143,7 +144,14 @@ private:
     void submit_( SAction *a ) const;
     void buildUi_();
     void applyVolumeDb_( double db );
+    /// The pan twin (proposal 49 M4): offers the value to the automation
+    /// recorder first, then submits through submit_() so the strip stamps its
+    /// OWN arrangement (D12).
+    void applyPan_( double pan );
+    /// Disabled with a tooltip at width != 2 and on the conductor lane.
+    void syncPanEnabled_();
     void setFaderSilently_( double db );
+    void setPanSilently_( double pan );
     /// The pass-and-macro shape every M/S/R button shares. `apply` builds the
     /// one action for one track; the macro wrapper is D3's deliberate
     /// three-line duplication (the SUBMIT does not extract, only the TARGETS).
@@ -151,6 +159,8 @@ private:
                      const std::function<bool( STrack * )> &needsChange,
                      const std::function<void( STrack * )> &submitOne );
     void pumpReadValue_( offset_t pos );
+    /// The pan twin (proposal 49 M4).
+    void pumpReadPan_( offset_t pos );
     int  syncMeterLanes_();
     void applyHeaderColor_();
 
@@ -172,6 +182,13 @@ private:
     QPushButton *soloBtn_     = nullptr;
     QPushButton *armBtn_      = nullptr;
     QSlider     *fader_       = nullptr;
+    /// The pan control (proposal 49 M4), above the fader. A short HORIZONTAL
+    /// slider, not a dial: this strip is 60 px wide in narrow mode and a dial's
+    /// minimumSizeHint is what would break that measured floor.
+    QSlider     *pan_         = nullptr;
+    QHBoxLayout *panRow_      = nullptr;
+    /// True while the strip writes the pan control from the model.
+    bool         updatingPan_ = false;
     QLabel      *dbLabel_     = nullptr;
     SLevelMeter *meter_       = nullptr;
 
@@ -185,6 +202,7 @@ private:
     bool showFader_       = true;
     bool updating_        = false;   ///< model->view write in progress
     double lastReadDb_    = 1e30;    ///< the Read-family pump's last value
+    double lastReadPan_   = 1e30;    ///< the same, for the pan pump
 };
 
 #endif // SMIXERSTRIP_H

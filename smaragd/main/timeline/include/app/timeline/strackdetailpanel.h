@@ -76,6 +76,10 @@ private:
     // double-click reset can ask for exactly 0.0 dB — a value the integer
     // fader's own curve cannot round-trip (ctor, sdefaultreset wiring).
     void applyVolumeDb( double dB );
+    // The pan twin (proposal 49 M4), split for the same reason.
+    void applyPan( double pan );
+    // Disabled with a tooltip at width != 2 and on the conductor lane.
+    void syncPanEnabled();
     // Index of currentTrack_ in the mixer, or -1.
 
     STrack *currentTrack_ = nullptr;
@@ -119,6 +123,14 @@ private:
     QPointer<SProject> sectionsProject_;
     QSlider *volumeSlider_;
     QLabel *volumeLabel_;
+    // The pan row (proposal 49 M4): in the "Sliders" section beside the volume
+    // row, so it is outside the scroll area for the same reason.
+    QWidget *panRow_ = nullptr;
+    QSlider *panSlider_ = nullptr;
+    QLabel *panLabel_ = nullptr;
+    // True while the panel writes the pan slider from the model, so the
+    // resulting valueChanged never turns a DISPLAY into a new action.
+    bool updatingPan_ = false;
     QLabel *placeholder_;   // shown instead of the content when no track is set
     SLevelMeter *meter_ = nullptr;   // proposal 34
     twLevelProbe probe_;             // re-bound whenever the track changes

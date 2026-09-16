@@ -1,5 +1,6 @@
 #include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/ssubmit.h"
+#include "app/timeline/spanscale.h"
 
 #include <limits>
 
@@ -20,6 +21,7 @@
 #include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -262,10 +264,46 @@ void SClipPropertiesPanel::buildUi()
     panSpin_->setRange( -1.0, 1.0 );
     panSpin_->setSingleStep( 0.1 );
     panSpin_->setGroupSeparatorShown( false );
+    // THIS TOOLTIP SAID "Model/UI only - not yet wired into the audio path"
+    // and had been WRONG since proposal 49 M1 made clip pan audible. A control
+    // that tells the user it does nothing is worse than one that says nothing:
+    // it is the reason not to reach for it.
     panSpin_->setToolTip(
-        tr( "-1 = full left, 0 = center, +1 = full right. Model/UI only — "
-            "not yet wired into the audio path." ) );
-    mixForm->addRow( tr( "Pan:" ), panSpin_ );
+        tr( "-1 = full left, 0 = centre, +1 = full right (equal power). "
+            "Double-click to centre." ) );
+    // D4: a SLIDER beside the number (QBX-84 asked for one here). The spin box
+    // stays: it is how a value is TYPED, it is what `clipPanSpin` addresses,
+    // and dropping it would break the double-click-control verb's mapping.
+    // The two are kept in step through the same commit either drives.
+    panSlider_ = new QSlider( Qt::Horizontal, mixGroup );
+    panSlider_->setObjectName( QStringLiteral( "clipPanSlider" ) );
+    panSlider_->setRange( SPAN_TICK_MIN, SPAN_TICK_MAX );
+    panSlider_->setSingleStep( 1 );
+    panSlider_->setPageStep( 10 );
+    panSlider_->setToolTip( panSpin_->toolTip() );
+    QWidget *panRow = new QWidget( mixGroup );
+    QHBoxLayout *panRowLayout = new QHBoxLayout( panRow );
+    panRowLayout->setContentsMargins( 0, 0, 0, 0 );
+    panRowLayout->setSpacing( 4 );
+    panRowLayout->addWidget( panSlider_, 1 );
+    panRowLayout->addWidget( panSpin_, 0 );
+    mixForm->addRow( tr( "Pan:" ), panRow );
+
+    // The slider drives the SAME commit the spin box does. It commits on
+    // release rather than per tick, so one drag is one undo step - the spin
+    // box's own `editingFinished` rule, read for a slider.
+    connect( panSlider_, &QSlider::valueChanged, this, [this]( int tick ) {
+        if( updating_ ) return;
+        // Show the number moving while the hand moves; the commit waits.
+        const bool was = panSpin_->blockSignals( true );
+        panSpin_->setValue( sTickToPan( tick ) );
+        panSpin_->blockSignals( was );
+        markEdited( panSpin_ );
+    } );
+    connect( panSlider_, &QSlider::sliderReleased, this, [this] {
+        if( updating_ ) return;
+        commitPan();
+    } );
 
     formLayout->addWidget( mixGroup );
 
@@ -460,6 +498,20 @@ void SClipPropertiesPanel::buildUi()
 
     resetOnDblClick( volumeSpin_,       0.0, &SClipPropertiesPanel::commitVolume,
                      tr( "0 dB" ) );
+    // The slider is reset by the same gesture on EITHER control: a
+    // double-click on the number and a double-click on the slider both centre
+    // the pair and commit exactly SPAN_DEFAULT.
+    sdefaultreset::onDoubleClick( panSlider_, [this] {
+        if( updating_ || !panSlider_->isEnabled() ) return;
+        const bool was = panSlider_->blockSignals( true );
+        panSlider_->setValue( sPanToTick( SPAN_DEFAULT ) );
+        panSlider_->blockSignals( was );
+        markEdited( panSpin_ );
+        const bool wasSpin = panSpin_->blockSignals( true );
+        panSpin_->setValue( SPAN_DEFAULT );
+        panSpin_->blockSignals( wasSpin );
+        commitPan();
+    } );
     resetOnDblClick( panSpin_,          0.0, &SClipPropertiesPanel::commitPan,
                      tr( "centre" ) );
     resetOnDblClick( pitchSpin_,        0.0, &SClipPropertiesPanel::commitPitch,
@@ -718,6 +770,21 @@ void SClipPropertiesPanel::refresh()
     showValues( formantShiftSpin_, formantShifts );
     showValues( volumeSpin_,   volumes );
     showValues( panSpin_,      pans );
+    // The slider follows the spin box (proposal 49 M4). A MIXED selection
+    // leaves the spin box blank; the slider has no blank state, so it goes to
+    // centre and the number beside it stays empty rather than the pair
+    // claiming a value none of the clips has.
+    if( panSlider_ ) {
+        const bool was = panSlider_->blockSignals( true );
+        // `allEqual` is the qint64 overload; pans are doubles, and the one
+        // question here is whether every selected clip agrees.
+        bool sameP = !pans.isEmpty();
+        for( const double p : pans )
+            if( p != pans.first() ) { sameP = false; break; }
+        panSlider_->setValue( sameP ? sPanToTick( pans.first() )
+                                    : sPanToTick( 0.0 ) );
+        panSlider_->blockSignals( was );
+    }
 
     // The semitone readout mirrors the pitch field, including its blank state.
     bool pitchSame = allEqual( pitches );

@@ -33,6 +33,7 @@
 #include "app/timeline/ssubmit.h"
 #include "app/timeline/slevelmeter.h"
 #include "app/timeline/sfadercurve.h"
+#include "app/timeline/spanscale.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/sliveinputactions.h"
 #include "app/objects/track/sliveinputactions.h"
@@ -43,6 +44,7 @@
 #include "app/timeline/ssmvmixercontrol.h"
 #include "app/objects/track/strackcolormodifier.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/objects/track/ssettrackpanaction.h"
 #include "app/objects/track/seteditgroupaction.h"
 #include "app/objects/track/ssettrackmuteaction.h"
 #include "app/objects/track/ssettracknameaction.h"
@@ -131,6 +133,78 @@ void SSMVMixerControl::applyVolume_( double newVolume )
 }
 
 /**
+ * THE PAN TWIN OF applyVolume_ (proposal 49 M4).
+ *
+ * Split out of the slider handler for the reason `applyVolumeDb` is: the
+ * double-click reset must commit EXACTLY `SPAN_DEFAULT` (0.0), the value that
+ * does no arithmetic at all (D5), and it must not have to go looking for that
+ * number in an integer tick.
+ *
+ * Unlike the fader this mount offers the value to the automation recorder AND
+ * has a Read-family display, so the two halves of proposal 37 P6's rule apply
+ * to pan exactly as they do to volume.
+ */
+void SSMVMixerControl::applyPan_( double newPan )
+{
+    SStdMixer *mixer = smv_.getModel();
+    const QList<int> trackPath =
+        mixer ? strackpath::pathOf( mixer, &tk_ ) : QList<int>();
+    if( !trackPath.isEmpty() ) {
+        SAutomationRecorder::Target t;
+        t.ownerPath = trackPath;
+        t.target = QStringLiteral( "self:Pan" );
+        if( SApplication::app().isPlaying()
+            && SApplication::app().automationRecorder().writeTick(
+                   t, newPan,
+                   smv_.contentView() ? smv_.contentView()->localLocatorPos()
+                                      : SApplication::app().getGlobalLocatorPos() ) )
+            return;
+        stimeline::submitActive( new SSetTrackPanAction( trackPath, newPan ) );
+    } else {
+        tk_.setPan( newPan );
+        if( SProject *p = SApplication::app().getCurrentProject() )
+            p->notifyArrangementChanged();
+    }
+}
+
+void SSMVMixerControl::setPanSliderSilently( double p )
+{
+    if( !qPan_ ) return;
+    const bool was = qPan_->blockSignals( true );
+    qPan_->setValue( sPanToTick( p ) );
+    qPan_->blockSignals( was );
+    if( qPanLabel_ ) qPanLabel_->setText( sPanText( p ) );
+}
+
+/**
+ * PAN IS DEFINED FOR TWO CHANNELS ONLY (49 D1) and the conductor lane refuses
+ * it (D2). `SSetTrackPanAction` refuses both, loudly — so a control that stayed
+ * live would offer a gesture whose only outcome is a warning in the log. It is
+ * DISABLED with a tooltip naming which of the two reasons applies, the same
+ * discipline every other announced bound in this tree follows.
+ */
+void SSMVMixerControl::syncPanEnabled()
+{
+    if( !qPan_ ) return;
+    SProject *proj = SApplication::app().getCurrentProject();
+    const int channels = proj ? proj->channels() : 2;
+    const bool conductor = tk_.systemRole() == SSystemRole::Conductor;
+    const bool ok = ( channels == 2 ) && !conductor;
+    qPan_->setEnabled( ok );
+    if( qPanLabel_ ) qPanLabel_->setEnabled( ok );
+    if( conductor )
+        qPan_->setToolTip( tr( "The conductor lane carries no audio, so it "
+                               "cannot be panned." ) );
+    else if( channels != 2 )
+        qPan_->setToolTip( tr( "Pan is defined for 2 channels only; this "
+                               "project is %1-channel." ).arg( channels ) );
+    else
+        qPan_->setToolTip( tr( "Pan: %1\n"
+                               "Double-click to centre." )
+                               .arg( sPanText( tk_.getPan() ) ) );
+}
+
+/**
  * Wheel over a track head = wheel over the arranger canvas. The head column is
  * part of the same view, so scrolling/zooming there had to work; without this
  * the event just died in the head (QWidget's default ignores it, and the column
@@ -202,6 +276,16 @@ bool SSMVMixerControl::eventFilter( QObject *watched, QEvent *ev )
                 qVolume_->setValue( next );   // its own signal commits
         }
         return true;      // never let the slider apply its own step as well
+    }
+    // Double-click the pan control = back to centre, committed as EXACTLY
+    // SPAN_DEFAULT rather than through a tick (D4, the applyVolumeDb precedent).
+    if( watched == qPan_ && ev->type() == QEvent::MouseButtonDblClick ) {
+        QMouseEvent *me = static_cast<QMouseEvent *>( ev );
+        if( me->button() == Qt::LeftButton && qPan_->isEnabled() ) {
+            setPanSliderSilently( SPAN_DEFAULT );
+            applyPan_( SPAN_DEFAULT );
+            return true;   // swallow it: no jump-to-position as well
+        }
     }
     if( watched == qVolume_ && ev->type() == QEvent::MouseButtonDblClick ) {
         QMouseEvent *me = static_cast<QMouseEvent *>( ev );
@@ -657,6 +741,31 @@ SSMVMixerControl::SSMVMixerControl(
     int maxWidth = fm.horizontalAdvance( "-96.0 dB" ) + 4;
     qVolLabel_->setFixedWidth( maxWidth );
 
+    // THE PAN CONTROL (proposal 49 M4, D4). Horizontal, under the fader's dB
+    // readout, because pan IS a left-right quantity and a vertical pan control
+    // reads as a second fader. Ticks are -100..100 (`spanscale.h`), which
+    // round-trip exactly, so the control never commits a value it does not show.
+    qPan_ = new QSlider( Qt::Horizontal, this );
+    qPan_->setRange( SPAN_TICK_MIN, SPAN_TICK_MAX );
+    qPan_->setSingleStep( 1 );     // 1 % per arrow key
+    qPan_->setPageStep( 10 );      // 10 % per page
+    qPan_->setTickPosition( QSlider::NoTicks );
+    qPan_->setFixedHeight( 12 );
+    qPan_->setMinimumWidth( 24 );
+    qPan_->installEventFilter( this );   // double-click = centre
+    connect( qPan_, &QSlider::valueChanged, this, [this]( int tick ) {
+        if( applyingReadValue_ ) return;
+        applyPan_( sTickToPan( tick ) );
+    } );
+
+    qPanLabel_ = new QLabel( this );
+    qPanLabel_->setAlignment( Qt::AlignHCenter );
+    qPanLabel_->setFont( smallFont );
+    // "L100" is the widest reading; fixing the width stops the column shifting
+    // as the text changes, exactly as the dB readout does.
+    qPanLabel_->setFixedWidth( fm.horizontalAdvance( "L100" ) + 4 );
+    qPanLabel_->setText( sPanText( tk_.getPan() ) );
+
     // Small square Mute / Solo toggle buttons. Mute (red when on) silences this
     // track; Solo (yellow when on) silences every track that is not soloed.
     // Small square Mute / Solo toggle buttons. A compact bold font keeps the
@@ -754,6 +863,8 @@ SSMVMixerControl::SSMVMixerControl(
     qFaderCol_->setSpacing( 1 );
     qFaderCol_->addWidget( qVolume_, 1, Qt::AlignHCenter );
     qFaderCol_->addWidget( qVolLabel_, 0, Qt::AlignHCenter );
+    qFaderCol_->addWidget( qPan_, 0, Qt::AlignHCenter );
+    qFaderCol_->addWidget( qPanLabel_, 0, Qt::AlignHCenter );
 
     // Level meter (proposal 34), beside the fader in Full and under it in
     // Compact — qStripRow_ flips direction, so one insert covers both. It fits
@@ -807,6 +918,8 @@ SSMVMixerControl::SSMVMixerControl(
 
     // Seed widgets from the current track state.
     setSliderSilently( tk_.getVolume() );
+    setPanSliderSilently( tk_.getPan() );
+    syncPanEnabled();
     qMute_->setChecked( tk_.isMuted() );
     qSolo_->setChecked( tk_.isSolo() );
     qArm_->setChecked( tk_.isArmedForRecording() );
@@ -827,6 +940,13 @@ SSMVMixerControl::SSMVMixerControl(
                       this, SLOT( sliderValueChanged( int ) ) );
     QObject::connect( &tk_, SIGNAL( volumeChanged( double ) ),
                       this, SLOT( sliderValueChanged( double ) ) );
+    // MODEL -> VIEW for pan. `panChanged` is emitted by SObject::setPan, so an
+    // undo, a load or another mount's edit moves this control too.
+    QObject::connect( &tk_, &SObject::panChanged,
+                      this, [this]( double p ) {
+        setPanSliderSilently( p );
+        syncPanEnabled();
+    } );
     QObject::connect( qMute_, SIGNAL( toggled( bool ) ),
                       this, SLOT( muteToggled( bool ) ) );
     QObject::connect( qSolo_, SIGNAL( toggled( bool ) ),
@@ -1196,6 +1316,7 @@ void SSMVMixerControl::onMeterTick( offset_t pos, qint64 nowMs, bool live )
     // it is not the meter's business and it must keep working on a lane whose
     // meter is hidden by the density rules.
     pumpReadValue( pos );
+    pumpReadPan( pos );
 
     // A hidden meter does ZERO work: this is the first and cheapest layer of the
     // repaint-storm defence (30 heads x 30 Hz), and in Tiny density every meter
@@ -1427,15 +1548,23 @@ QString SSMVMixerControl::describeHead()
     // reported at EVERY density - the button hides on a short lane, the mode
     // does not stop existing. Appended after `name=` on purpose, so every
     // committed `contains=` written against the P4 string still matches.
+    // `pan` is the pan control's TEXT (spanscale's one spelling) plus whether
+    // the control is shown and enabled. Appended AFTER `Amode=` for the reason
+    // `Amode` was appended after `name=`: every committed `contains=` string
+    // must still match (AC4.1).
     return QStringLiteral( "density=%1|w=%2|h=%3|btns=%4|I=%5|A=%6"
-                           "|fitW=%7|fitH=%8|name=%9|Amode=%10" )
+                           "|fitW=%7|fitH=%8|name=%9|Amode=%10"
+                           "|pan=%11|panShown=%12|panOn=%13" )
         .arg( QLatin1String( dens ) ).arg( width() ).arg( height() )
         .arg( visible.join( QLatin1Char( ',' ) ) )
         .arg( ( qInstr_ && !qInstr_->isHidden() ) ? 1 : 0 )
         .arg( ( qAuto_ && !qAuto_->isHidden() ) ? 1 : 0 )
         .arg( fitW ? 1 : 0 ).arg( fitH ? 1 : 0 )
         .arg( QLatin1String( spot ) )
-        .arg( sAutomationModeToString( trackAutomationMode() ) );
+        .arg( sAutomationModeToString( trackAutomationMode() ) )
+        .arg( sPanText( tk_.getPan() ) )
+        .arg( ( qPan_ && !qPan_->isHidden() ) ? 1 : 0 )
+        .arg( ( qPan_ && qPan_->isEnabled() ) ? 1 : 0 );
 }
 
 QString SSMVMixerControl::describeMeter()
@@ -1486,6 +1615,12 @@ void SSMVMixerControl::applyDensity( Density d )
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
         qVolLabel_->show();
+        // THE PAN CONTROL IS FULL-DENSITY ONLY (D4). It is the least urgent
+        // thing in the strip: a fader you cannot see is worse than a meter you
+        // cannot see, and a pan you cannot see is worse than neither. Hiding
+        // beats clipping, exactly as the rest of this switch has it.
+        qPan_->show();
+        qPanLabel_->setVisible( height() >= 132 );
         qMeter_->show();
         placeLabel( LabelSpot::BesideButtons );
         break;
@@ -1497,6 +1632,8 @@ void SSMVMixerControl::applyDensity( Density d )
         qArm_->show(); qTakes_->show(); qGroup_->show();
         qVolume_->show();
         qVolLabel_->setVisible( height() >= 84 );
+        qPan_->hide();
+        qPanLabel_->hide();
         // The meter is the first thing to go when the rows stack up: a fader you
         // cannot see is worse than a meter you cannot see.
         qMeter_->setVisible( height() >= 60 );
@@ -1529,6 +1666,8 @@ void SSMVMixerControl::applyDensity( Density d )
         qSolo_->setVisible( height() >= 38 );
         qVolume_->hide();
         qVolLabel_->hide();
+        qPan_->hide();
+        qPanLabel_->hide();
         qMeter_->hide();
         // Only M/S here, so the name usually does fit beside them — which is the
         // whole strip on a lane this short.
@@ -1783,5 +1922,29 @@ void SSMVMixerControl::pumpReadValue( offset_t pos )
     lastReadDb_ = db;
     applyingReadValue_ = true;
     setSliderSilently( db );
+    applyingReadValue_ = false;
+}
+
+// The pan twin, same rule and same reasons (proposal 49 M4).
+void SSMVMixerControl::pumpReadPan( offset_t pos )
+{
+    if( !qPan_ ) return;
+    SAutomationLane *lane = tk_.automationLane( QStringLiteral( "self:Pan" ) );
+    if( !lane || !SAutomationRecorder::isReadFamily( lane->mode() ) ) {
+        lastReadPan_ = 1e30;
+        return;
+    }
+    SAutomationRecorder::Target t;
+    SStdMixer *mixer = smv_.getModel();
+    t.ownerPath = mixer ? strackpath::pathOf( mixer, &tk_ ) : QList<int>();
+    t.target = QStringLiteral( "self:Pan" );
+    if( SApplication::app().automationRecorder().isRecording( t ) ) return;
+
+    const double p = lane->valueAt( pos );
+    // One tick is 1 % of the travel: below that nothing would move on screen.
+    if( qAbs( p - lastReadPan_ ) < 0.005 ) return;
+    lastReadPan_ = p;
+    applyingReadValue_ = true;
+    setPanSliderSilently( p );
     applyingReadValue_ = false;
 }

@@ -5,6 +5,8 @@
 #include "app/timeline/slevelmeter.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/ssettrackvolumeaction.h"
+#include "app/objects/track/ssettrackpanaction.h"
+#include "app/timeline/spanscale.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/model/sdefaultreset.h"
 #include "app/model/slink.h"
@@ -155,9 +157,44 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     // user watches while the transport runs, so scrolling the FX chain must
     // not carry them off the bottom of the dock. QBX-102 wraps it in the
     // "Sliders" section, which stays outside the scroll area with it.
+    // THE PAN ROW (proposal 49 M4, D4), under the volume row and in the same
+    // section, so it is outside the scroll area for the same reason: pan is a
+    // thing you reach for while the transport runs.
+    panRow_ = new QWidget(this);
+    QHBoxLayout *panLayout = new QHBoxLayout(panRow_);
+    panLayout->setContentsMargins(4, 2, 4, 4);
+    panLayout->addWidget(new QLabel(tr("Pan:")));
+    panSlider_ = new QSlider(Qt::Horizontal);
+    panSlider_->setObjectName(QStringLiteral("trackDetailPanSlider"));
+    panSlider_->setMinimum(SPAN_TICK_MIN);
+    panSlider_->setMaximum(SPAN_TICK_MAX);
+    panSlider_->setSingleStep(1);
+    panSlider_->setPageStep(10);
+    panSlider_->setSliderPosition(sPanToTick(0.0));
+    panSlider_->installEventFilter(this);   // Home/End drive the transport
+    // EXACTLY SPAN_DEFAULT, committed directly — the applyVolumeDb precedent
+    // above, for the same reason stated there. Pan's ticks DO round-trip, so
+    // this one is belt and braces rather than a correction; it is spelled the
+    // same way so the two controls cannot drift apart.
+    sdefaultreset::onDoubleClick( panSlider_, [this] {
+        const bool was = panSlider_->blockSignals( true );
+        panSlider_->setValue( sPanToTick( SPAN_DEFAULT ) );
+        panSlider_->blockSignals( was );
+        applyPan( SPAN_DEFAULT );
+    } );
+    panLayout->addWidget(panSlider_);
+    panLabel_ = new QLabel(sPanText(0.0));
+    panLabel_->setMinimumWidth(60);
+    panLayout->addWidget(panLabel_);
+    connect(panSlider_, &QSlider::valueChanged, this, [this](int tick) {
+        if (updatingPan_) return;
+        applyPan(sTickToPan(tick));
+    });
+
     slidersSection_ = new SCollapsibleSection(QStringLiteral("sliders"),
                                               tr("Sliders"), this);
     slidersSection_->contentLayout()->addWidget(volumeRow_);
+    slidersSection_->contentLayout()->addWidget(panRow_);
     mainLayout->addWidget(slidersSection_, 0);
 
     for (SCollapsibleSection *sec : { pluginsSection_, feelFlowSection_, slidersSection_ }) {
@@ -269,6 +306,16 @@ void STrackDetailPanel::rebuildUI()
         volumeSlider_->setValue(sDbToFader(volume));
         volumeSlider_->blockSignals(false);
         volumeLabel_->setText(QString::asprintf("%+.1f dB", volume));
+
+        // The pan control, the same way (proposal 49 M4).
+        const double pan = currentTrack_->getPan();
+        updatingPan_ = true;
+        panSlider_->blockSignals(true);
+        panSlider_->setValue(sPanToTick(pan));
+        panSlider_->blockSignals(false);
+        updatingPan_ = false;
+        panLabel_->setText(sPanText(pan));
+        syncPanEnabled();
 
         // Point the meter at THIS track's root component (its twRewire).
         probe_.setTap(currentTrack_->getRootComponent());
@@ -390,6 +437,48 @@ void STrackDetailPanel::applyVolumeDb(double dB)
         if (SProject *p = SApplication::app().getCurrentProject())
             p->notifyArrangementChanged();
     }
+}
+
+// The pan twin (proposal 49 M4). Same resolution, same fallback, same reasons.
+void STrackDetailPanel::applyPan(double pan)
+{
+    if (!currentTrack_) return;
+
+    panLabel_->setText(sPanText(pan));
+
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *root = splacements::rootContainer(proj);
+    const QList<int> trackPath =
+        root ? strackpath::pathOf(root, currentTrack_) : QList<int>();
+    if (!trackPath.isEmpty()) {
+        stimeline::submitActive(new SSetTrackPanAction(trackPath, pan));
+    } else {
+        currentTrack_->setPan(pan);
+        if (SProject *p = SApplication::app().getCurrentProject())
+            p->notifyArrangementChanged();
+    }
+}
+
+// Pan is defined for TWO channels only and the conductor lane refuses it
+// (49 D1/D2) — disabled with a tooltip naming which, never silently live.
+void STrackDetailPanel::syncPanEnabled()
+{
+    if (!panSlider_) return;
+    SProject *proj = SApplication::app().getCurrentProject();
+    const int channels = proj ? proj->channels() : 2;
+    const bool conductor =
+        currentTrack_ && currentTrack_->systemRole() == SSystemRole::Conductor;
+    const bool ok = currentTrack_ && (channels == 2) && !conductor;
+    panSlider_->setEnabled(ok);
+    panLabel_->setEnabled(ok);
+    if (conductor)
+        panSlider_->setToolTip(tr("The conductor lane carries no audio, so it "
+                                  "cannot be panned."));
+    else if (channels != 2)
+        panSlider_->setToolTip(tr("Pan is defined for 2 channels only; this "
+                                  "project is %1-channel.").arg(channels));
+    else
+        panSlider_->setToolTip(tr("Track pan. Double-click to centre."));
 }
 
 void STrackDetailPanel::onMeterTick(offset_t pos, qint64 nowMs, bool live)
