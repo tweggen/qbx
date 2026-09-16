@@ -143,6 +143,20 @@ private:
     // fader drag and the double-click-to-reset path.
     void applyVolume_( double dB );
 
+    // Push the pan slider to `p` ([-1, 1]) without re-submitting an action.
+    void setPanSliderSilently( double p );
+
+    // Apply a new track pan through the action system (proposal 49 M4). The
+    // pan twin of applyVolume_, split for the same reason: the double-click
+    // reset must commit EXACTLY 0.0 (SPAN_DEFAULT), and an integer tick is not
+    // where that value should come from.
+    void applyPan_( double pan );
+
+    // Pan is defined for TWO channels only (49 D1) and the conductor lane
+    // refuses it (D2), so the control is DISABLED with a tooltip naming why
+    // rather than silently committing something the verb will refuse.
+    void syncPanEnabled();
+
     // Responsive layout management. The strip has to fit whatever lane height
     // it is given — lanes are individually sized and vertical zoom runs down to
     // a few pixels — so the layout adapts to BOTH dimensions. Anything that
@@ -231,6 +245,8 @@ private slots:
     // at a static position and for a tail after the transport stops - a fader
     // frozen at the value the curve had when playback stopped would be a lie.
     void pumpReadValue( offset_t pos );
+    // The same for a Read-family `self:Pan` lane (proposal 49 M4).
+    void pumpReadPan( offset_t pos );
 
 private:
     static constexpr int WIDE_MODE_THRESHOLD = 156;  // ~130% of minimal width (120px)
@@ -274,6 +290,13 @@ private:
     QBoxLayout *qStripRow_;  // buttons next to (or above) the right column
     QSlider *qVolume_;
     QLabel *qVolLabel_;
+    // The pan control (proposal 49 M4, D4). A compact HORIZONTAL SLIDER rather
+    // than the dial D4's table calls a "knob": one widget type across all four
+    // mounts is what D4 is actually for, and a QDial's minimumSizeHint is the
+    // thing most able to break proposal 48's measured 60 px narrow-strip floor.
+    // Full density only - it is the first thing to go, like the dB readout.
+    QSlider *qPan_;
+    QLabel *qPanLabel_;
     QLineEdit *qTrkLabel_;
     QPushButton *qMute_;
     QPushButton *qSolo_;
@@ -290,6 +313,8 @@ private:
     bool applyingReadValue_ = false;
     // The dB the read display last wrote, so a static position costs nothing.
     double lastReadDb_ = 1e30;
+    // The same for the pan read display.
+    double lastReadPan_ = 1e30;
 
     // Does this track carry an INSTRUMENT in slot 0? The one question the "I"
     // button's visibility turns on; asked of the model every time the density
