@@ -612,6 +612,85 @@ case); and an EXP segment on a pan lane (interpolated by the same
 - **Gates:** `qxa.pan_mounts_describe`, `qxa.pan_reset_defaults`,
   `qxa.automation_pan_write_pass` (RUN_SERIAL), the existing layout cases.
 
+#### M4 as executed (QBX-112)
+
+Four mounts, all through `app/timeline/spanscale.h` — which until this
+milestone had NO consumers at all. Three departures from D4's text, each for a
+measured reason.
+
+**THE CONTROL IS A COMPACT HORIZONTAL SLIDER, not the "knob" D4's table names**,
+in all four mounts. One widget type is what D4 is actually for, and a `QDial`
+carries a `minimumSizeHint` that is the single thing most able to break
+proposal 48's measured 60 px narrow-strip floor (AC4.3). Horizontal because pan
+IS a left-right quantity and a vertical pan control reads as a second fader.
+
+**THERE WAS NOTHING TO DELETE.** The ticket and D4 both say to remove the mixer
+strip's disabled "Pan (not implemented)" context entry. Proposal 48 D8
+specified that entry; **it was never built** — the strip's menu has always been
+exactly three items. D8's REASON is what actually mattered and it is now spent:
+"the value would be stored, serialized, undoable and inaudible" was true when
+D8 was written and was retired by 49 M1/M2. 48 D8 is updated in place rather
+than left specifying a control that does not exist.
+
+**THE CLIP PROPERTIES SPIN BOX STAYS, with a slider beside it.** D4 says the
+spin box "becomes" a slider; it is how a value is TYPED, it is what the
+`clipPanSpin` object name addresses, and `double-click-control`'s existing
+`clip-pan` mapping would have broken. Both drive the one commit. Its tooltip
+also said "Model/UI only — not yet wired into the audio path", wrong since M1;
+a control that tells the user it does nothing is the reason not to reach for it.
+
+**A PRODUCTION BUG THE GATE FOUND.** A project channel-count change did not
+reach the mixer strips: `SMixerPane` connects `arrangementChanged` to a GUARDED
+rebuild that compares the lane list, and a width change is not a structure
+change — so a strip built at width 2 kept its pan control live at width 6.
+Exactly the shape proposal 48 M3 hit with the section mask once `setRoot`
+became idempotent. Fixed with `SProject::channelsChanged` →
+`SMixerPane::refreshStripState()` → `SMixerStrip::refreshEnabledState()`; the
+arranger head gets the same connection.
+
+#### The M4 sabotage pass
+
+Nine sabotages, each built and run through `ctest -R`.
+
+| Sabotage | Cost |
+|---|---|
+| `describeHead` reports a constant instead of the pan | `pan_mounts_describe` |
+| the head's pan control is never disabled off width 2 | `pan_mounts_describe` |
+| the Track Detail pan double-click removed | `pan_reset_defaults` |
+| the pane's `channelsChanged` connection removed | `pan_mounts_describe` |
+| BOTH re-sync routes removed | `pan_mounts_describe` |
+| the seam's `refreshStripState()` removed (alone) | **NOTHING — it was DEAD** |
+| the pane's connection removed while the seam's call stood | **NOTHING — alternatives** |
+| the head's `applyPan_` never offers to the recorder | **NOTHING — see below** |
+| the strip's `applyPan_` never offers to the recorder | **NOTHING — see below** |
+
+**Two findings, both kept rather than papered over.**
+
+The seam's `refreshStripState()` and the pane's `channelsChanged` connection
+turned out to be ALTERNATIVES, not belt and braces: removing either alone left
+the gate green and removing both failed it. The connection is the one a USER
+needs, so the seam call was DELETED as dead. It differs from the
+`applyStoredSections()` call beside it in exactly one way, now recorded there:
+`SOpt::MixerSections` emits no signal, so that one has no production route.
+
+**The OFFER-TO-THE-RECORDER-FIRST rule is NOT GATED for pan**, and the reason is
+M3's own doing. `automation-write-tick` feeds the recorder directly and cannot
+see whether a control offered first. A section driving the REAL slider was
+written — `mixer-strip-set` gained `control="pan"` for it, and that verb is
+committed — and then removed as vacuous: `set-track-pan` on a Read-family lane
+REDIRECTS to a point (M3), so a knob that skipped the offer writes a point too
+and the stored pan is unchanged either way. The only discriminator left is the
+number of UNDO ENTRIES three moves leave, and such a case must also survive
+`set-automation-points` coalescing two passes on one lane; that shape was not
+stabilised. Named here rather than implied by a passing case.
+
+**NOT gated beyond that:** every mount's PIXELS (no `paintEvent` of any of the
+four is measured, the standing gap); the Clip Properties slider's own layout
+(no verb builds that panel for measurement); the arranger head's pan control at
+a lane height between the density thresholds; the tooltip TEXT anywhere; and
+the read-value display for pan (pumped from `meterTick` exactly as the fader's
+is, and gated no better than the fader's — which is to say not at all).
+
 ---
 
 ## 4. What this proposal does NOT build (named, so nobody infers it)
