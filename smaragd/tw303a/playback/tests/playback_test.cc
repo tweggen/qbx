@@ -1646,6 +1646,22 @@ int main()
             CHECK(!sh.linear() && sh.fromMasterLane,
                   "49 T6: a panned master selects the lane-caused CLOSURE mode");
         }
+        // Proposal 49 M3: an AUTOMATED master pan is a SECOND term, and it has
+        // to be one. A `self:Pan` lane whose curve happens to read 0 at the
+        // instant the plan is built leaves `pan` at exactly 0.0, so a shape
+        // check that looked only at the value would call this project LINEAR
+        // and monitor it unpanned for the whole run — for every position the
+        // curve is not 0 at, which is most of them.
+        {
+            twlive::twMasterChainState c;
+            c.pan          = 0.0;      // the curve reads centre right now
+            c.panAutomated = true;
+            const twlive::twMasterShape sh =
+                twlive::checkMasterShape(mixer.get(), root.get(), 2, c);
+            CHECK(!sh.linear() && sh.fromMasterLane,
+                  "49 M3: an AUTOMATED master pan reading 0 still selects "
+                  "the lane-caused CLOSURE mode");
+        }
         // ...and the boundary: a fader at exactly unity is NOT a refusal, or
         // every project would monitor in Closure mode.
         {
