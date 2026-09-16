@@ -59,6 +59,11 @@
 
   <actions>
     <add-track index="-1"/>
+    <!-- Named up here, and the lane is created in TOUCH, so that NOTHING
+         undoable sits between the two passes below: the case's whole claim is
+         that each pass is exactly ONE undo entry, and a stray setup action
+         between them would be peeled by an undo meant for a pass. -->
+    <set-track-name trackPath="0" name="PanPass"/>
     <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="0"/>
 
     <!-- The lane, in TOUCH. One point at 0 so the state the undo returns to is
@@ -138,7 +143,40 @@
                          startFrame="72000" frameCount="24000"
                          minRms="0.2287" maxRms="0.2333"/>
 
-    <!-- ============ ONE UNDO REVERSES THE WHOLE PASS ============ -->
+    <!-- ============ THE KNOB ITSELF OFFERS, AND IS TAKEN ============
+         Everything above drives `automation-write-tick`, which feeds the
+         recorder DIRECTLY — so it cannot see whether a real control offers its
+         value first, and the M4 sabotage pass proved that: deleting the offer
+         from `applyPan_` left every assertion above green.
+
+         `mixer-strip-set control="pan"` moves the REAL slider and lets Qt
+         deliver `valueChanged`, so what runs is `SMixerStrip::applyPan_`. If
+         it did NOT offer first it would submit an ordinary `set-track-pan`,
+         which writes the STATIC pan — so `assert-track-pan` reading the stored
+         value UNCHANGED is exactly the discriminator, and the lane gaining the
+         point is the other half. -->
+    <assert-track-pan trackPath="0" pan="0" tolerance="1e-9"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="24000" minAdvance="4096" timeoutMs="20000"/>
+    <mixer-strip-set track="PanPass" control="pan" value="-0.75"/>
+    <wait-playhead position="48000" minAdvance="4096" timeoutMs="20000"/>
+    <toggle-playback play="0"/>
+
+    <!-- TAKEN: the stored pan did not move, so no set-track-pan was submitted.
+         A knob that skipped the offer would have written 0.75 here. -->
+    <assert-track-pan trackPath="0" pan="0" tolerance="1e-9"/>
+
+    <!-- ============ ONE UNDO REVERSES THE WHOLE PASS ============
+         Two undos: the knob pass above, then the tick pass. Each is ONE entry,
+         which is the property this case exists for — `set-automation-points`
+         merges only an IDENTICAL window, and these two passes cover different
+         ones, so they stay separate entries. -->
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Pan"
+                             time="24000" value="-0.5" tolerance="1e-9"
+                             pointCount="4"/>
     <undo count="1"/>
     <assert-automation-value owner="0" target="self:Pan"
                              time="24000" value="-1" tolerance="1e-9"

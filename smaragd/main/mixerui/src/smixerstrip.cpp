@@ -795,6 +795,30 @@ bool SMixerStrip::driveControl( const QString &control, bool on )
 bool SMixerStrip::driveValue( const QString &control, const QString &gesture,
                               double value )
 {
+    // THE PAN CONTROL (proposal 49 M4). Same three gestures, same reasons —
+    // and it is what makes `applyPan_`'s offer-to-the-recorder-first rule
+    // gateable at all: `automation-write-tick` feeds the recorder directly and
+    // therefore cannot see whether a real control OFFERS its value first.
+    if( control == QLatin1String( "pan" ) ) {
+        if( !pan_ ) return false;
+        if( gesture == QLatin1String( "double-click" ) ) {
+            applyPan_( SPAN_DEFAULT );
+            return true;
+        }
+        if( gesture == QLatin1String( "wheel" ) ) {
+            const int notches = (int) value;
+            const QPointF c( pan_->width() / 2.0, pan_->height() / 2.0 );
+            QWheelEvent we( c, pan_->mapToGlobal( c.toPoint() ), QPoint(),
+                            QPoint( 0, notches * 120 ), Qt::NoButton,
+                            Qt::NoModifier, Qt::NoScrollPhase, false );
+            QCoreApplication::sendEvent( pan_, &we );
+            return true;
+        }
+        // The REAL slider, so the handler under test is the production one.
+        pan_->setValue( sPanToTick( value ) );
+        return true;
+    }
+
     if( control != QLatin1String( "fader" ) || !fader_ ) return false;
 
     if( gesture == QLatin1String( "double-click" ) ) {
