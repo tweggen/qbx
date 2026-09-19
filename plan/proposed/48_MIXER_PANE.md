@@ -354,6 +354,14 @@ FX content above them is scrolled". Everything above it scrolls.
 **M/S/R sit BESIDE the fader**, not above it — the requester's wording, and it
 is also what makes the block a fixed height independent of the button count.
 
+> **As built, M1 did NOT follow this**: it put M/S/R in a row ABOVE the fader
+> (the diagram above shows the same). QBX-100 (2026-09-19) moved them into a
+> vertical column to the fader's left, and the proposal 49 pan slider took
+> the freed row. QBX-100 also asked for a square pan KNOB there; the requester
+> chose to keep the slider (see `smixerstrip.cpp`). The arrangement is gated
+> from widget geometry by `qxa.mixer_pane_layout`
+> (`msrColumn=1|msrBesideFader=1|panAbove=1`).
+
 **No widget in the strip that carries a layout sets an explicit minimum
 height.** T1.
 
