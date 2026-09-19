@@ -70,3 +70,7 @@ smaragd/third_party/asiosdk/
 # smaragd/tw303a/sidecar/tools/build_body_probe.sh. A BINARY, and it was
 # committed once by an over-broad `git add -A` before this line existed.
 /body_probe
+
+# thinktank: generated briefing and your own Claude Code memory (CYB-219)
+.claude/thinktank-briefing.md
+CLAUDE.local.md
