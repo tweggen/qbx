@@ -24,6 +24,12 @@
   strip hostage — a QLabel's minimum width being its FULL TEXT, 91 px for an
   ordinary generated track name. See the M1 commit and mixerui/CONTRACT.md.
 
+  QBX-100: M/S/R ARE A COLUMN BESIDE THE FADER, and the pan slider has the
+  row they used to occupy. Asserted from GEOMETRY by every size above
+  (`msrColumn=1|msrBesideFader=1|panAbove=1`, the WORST value over every
+  strip including the master), because "the buttons are in a QVBoxLayout" is
+  also true of a column pushed somewhere nobody can see it.
+
   NOT gated: what any of it LOOKS like — a geometry relation, never a palette
   — and repaint cost, which is measured in the PR and not bounded here.
 -->
@@ -38,20 +44,26 @@
          Detail dock's own defect showed and taller docks did not. -->
 
     <assert-mixer-layout paneWidth="640" paneHeight="180" stripWidth="96"
-                         maxCrushed="0" maxOverlap="0"/>
+                         maxCrushed="0" maxOverlap="0"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="96"
-                         maxCrushed="0" maxOverlap="0"/>
+                         maxCrushed="0" maxOverlap="0"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="500" stripWidth="96"
-                         maxCrushed="0" maxOverlap="0"/>
+                         maxCrushed="0" maxOverlap="0"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
 
     <!-- ============ NARROW STRIPS, THE SAME THREE ===================== -->
 
     <assert-mixer-layout paneWidth="640" paneHeight="180" stripWidth="60"
-                         maxCrushed="0" maxOverlap="0"/>
+                         maxCrushed="0" maxOverlap="0"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="60"
-                         maxCrushed="0" maxOverlap="0"/>
+                         maxCrushed="0" maxOverlap="0"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="500" stripWidth="60"
-                         maxCrushed="0" maxOverlap="0"/>
+                         maxCrushed="0" maxOverlap="0"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
 
     <!-- ============ A NARROW PANE SCROLLS RATHER THAN COMPRESSING ===== -->
     <!-- Four strips (three tracks plus the master) at 96 px cannot fit 200 px

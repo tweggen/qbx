@@ -1,6 +1,9 @@
 #include "app/timeline/sclippropertiespanel.h"
 #include "app/timeline/ssubmit.h"
+#include "app/timeline/sfadercurve.h"
 #include "app/timeline/spanscale.h"
+
+#include <cmath>
 
 #include <limits>
 
@@ -243,7 +246,7 @@ void SClipPropertiesPanel::buildUi()
     // --- Mix (per-clip volume/pan) ------------------------------------------
     // Volume is a STATIC dB trim, applied in the audio path (composed with the
     // `cut:Gain` automation envelope — see ssetclipvolumeaction.h). Pan is
-    // model/serialization/UI only; nothing downstream reads it yet.
+    // audible since proposal 49 M1 (twTrackMix's clip loop, before the inserts).
     QGroupBox *mixGroup = mixGroup_ = new QGroupBox( tr( "Mix" ), form );
     QFormLayout *mixForm = new QFormLayout( mixGroup );
 
@@ -257,7 +260,42 @@ void SClipPropertiesPanel::buildUi()
     volumeSpin_->setToolTip(
         tr( "Static clip volume trim, in dB. Sums with the clip's cut:Gain "
             "automation envelope (a dB sum is a product of linear factors)." ) );
-    mixForm->addRow( tr( "Volume:" ), volumeSpin_ );
+    // QBX-84: a SLIDER beside the number, the pan row's shape (proposal 49 M4)
+    // applied to volume. It maps through THE fader curve (`sfadercurve.h`),
+    // whose -96..+24 dB range is exactly the clip trim's, so a given dB sits
+    // at the same fraction of travel as on every track fader. The spin box
+    // stays for the same reasons the pan one did: it is how a value is TYPED,
+    // it is what `clipVolumeSpin` addresses, and the double-click-control
+    // verb's `clip-volume` mapping depends on it.
+    volumeSlider_ = new QSlider( Qt::Horizontal, mixGroup );
+    volumeSlider_->setObjectName( QStringLiteral( "clipVolumeSlider" ) );
+    volumeSlider_->setRange( SFADER_MIN, SFADER_MAX );
+    volumeSlider_->setSingleStep( 10 );
+    volumeSlider_->setPageStep( 60 );
+    volumeSlider_->setToolTip( volumeSpin_->toolTip() );
+    QWidget *volumeRow = new QWidget( mixGroup );
+    QHBoxLayout *volumeRowLayout = new QHBoxLayout( volumeRow );
+    volumeRowLayout->setContentsMargins( 0, 0, 0, 0 );
+    volumeRowLayout->setSpacing( 4 );
+    volumeRowLayout->addWidget( volumeSlider_, 1 );
+    volumeRowLayout->addWidget( volumeSpin_, 0 );
+    mixForm->addRow( tr( "Volume:" ), volumeRow );
+
+    // The same two-step commit as the pan slider: the number follows the hand
+    // while it moves, and ONE commit happens on release, so a drag is one undo
+    // step. The dB goes through the curve and is rounded to the spin box's own
+    // two decimals, so what commits is exactly what the field shows.
+    connect( volumeSlider_, &QSlider::valueChanged, this, [this]( int v ) {
+        if( updating_ ) return;
+        const bool was = volumeSpin_->blockSignals( true );
+        volumeSpin_->setValue( std::round( sFaderToDb( v ) * 100.0 ) / 100.0 );
+        volumeSpin_->blockSignals( was );
+        markEdited( volumeSpin_ );
+    } );
+    connect( volumeSlider_, &QSlider::sliderReleased, this, [this] {
+        if( updating_ ) return;
+        commitVolume();
+    } );
 
     panSpin_ = new QDoubleSpinBox( mixGroup );
     panSpin_->setDecimals( 2 );
@@ -496,6 +534,20 @@ void SClipPropertiesPanel::buildUi()
     transposeSpin_->setObjectName( QStringLiteral( "clipTransposeSpin" ) );
     velScaleSpin_->setObjectName( QStringLiteral( "clipVelScaleSpin" ) );
 
+    // The volume slider resets EXACTLY to 0 dB through the spin box, never
+    // through the curve: `sDbToFader( 0.0 )` is tick -191 and back is
+    // +0.0625 dB, so a reset that went slider -> dB would commit a trim.
+    sdefaultreset::onDoubleClick( volumeSlider_, [this] {
+        if( updating_ || !volumeSlider_->isEnabled() ) return;
+        const bool was = volumeSlider_->blockSignals( true );
+        volumeSlider_->setValue( sDbToFader( 0.0 ) );
+        volumeSlider_->blockSignals( was );
+        markEdited( volumeSpin_ );
+        const bool wasSpin = volumeSpin_->blockSignals( true );
+        volumeSpin_->setValue( 0.0 );
+        volumeSpin_->blockSignals( wasSpin );
+        commitVolume();
+    } );
     resetOnDblClick( volumeSpin_,       0.0, &SClipPropertiesPanel::commitVolume,
                      tr( "0 dB" ) );
     // The slider is reset by the same gesture on EITHER control: a
@@ -774,6 +826,16 @@ void SClipPropertiesPanel::refresh()
     // leaves the spin box blank; the slider has no blank state, so it goes to
     // centre and the number beside it stays empty rather than the pair
     // claiming a value none of the clips has.
+    // The volume slider follows its spin box the same way; a mixed selection
+    // parks it at 0 dB with the number left blank.
+    if( volumeSlider_ ) {
+        const bool was = volumeSlider_->blockSignals( true );
+        bool sameV = !volumes.isEmpty();
+        for( const double v : volumes )
+            if( v != volumes.first() ) { sameV = false; break; }
+        volumeSlider_->setValue( sDbToFader( sameV ? volumes.first() : 0.0 ) );
+        volumeSlider_->blockSignals( was );
+    }
     if( panSlider_ ) {
         const bool was = panSlider_->blockSignals( true );
         // `allEqual` is the qint64 overload; pans are doubles, and the one

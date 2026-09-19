@@ -83,6 +83,14 @@ public:
     /// the other), and `color` is AC4.3's resolved header colour.
     QString describe() const;
 
+    /// The ARRANGEMENT of the pinned block, read from widget geometry
+    /// (QBX-100): `msrColumn` = M, S and R share a left edge and stack top to
+    /// bottom; `msrBesideFader` = the column ends left of the fader and starts
+    /// within its vertical span; `panAbove` = the pan control ends above both.
+    /// Each is 1/0, or -1 when a widget it needs is hidden. Only meaningful on
+    /// a laid-out, shown strip (the layout seam settles the pane first).
+    QString describeArrangement() const;
+
     /// Re-apply the state that depends on things OUTSIDE this strip's own
     /// track — today the project's channel count, which decides whether the
     /// pan control is offered at all (proposal 49 D1). Public because the PANE
@@ -183,7 +191,8 @@ private:
     SSendStrip         *sends_   = nullptr;
 
     QWidget     *fixedBlock_  = nullptr;   ///< the PINNED half (D5)
-    QHBoxLayout *msrLayout_   = nullptr;
+    /// M/S/R as a COLUMN beside the fader since QBX-100 (was a row above it).
+    QVBoxLayout *msrLayout_   = nullptr;
     QHBoxLayout *faderLayout_ = nullptr;
     QPushButton *muteBtn_     = nullptr;
     QPushButton *soloBtn_     = nullptr;

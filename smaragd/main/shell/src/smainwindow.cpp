@@ -3651,14 +3651,37 @@ QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
         }
     }
 
+    // QBX-100: the pinned block's ARRANGEMENT, over EVERY strip including the
+    // master (stripAt( stripCount() )). Each field is the WORST any strip
+    // reports -- 0 beats -1 beats 1 -- so one strip laid out the old way fails
+    // the case rather than being outvoted by the others.
+    int arr[3] = { 1, 1, 1 };
+    const char *arrKeys[3] = { "msrColumn", "msrBesideFader", "panAbove" };
+    for( int i = 0; i <= pane->stripCount(); ++i ) {
+        SMixerStrip *s = pane->stripAt( i );
+        if( !s ) continue;
+        const QString a = s->describeArrangement();
+        for( int k = 0; k < 3; ++k ) {
+            const QString key = QLatin1String( arrKeys[k] ) + QLatin1Char( '=' );
+            const int at = a.indexOf( key );
+            if( at < 0 ) { arr[k] = 0; continue; }
+            const int v = a.mid( at + key.size() ).section( QLatin1Char( '|' ), 0, 0 ).toInt();
+            if( v == 0 || ( v == -1 && arr[k] != 0 ) ) arr[k] = v;
+        }
+    }
+
+    // The arrangement fields are APPENDED AFTER `worst` so every committed
+    // `contains=` string still matches.
     return QStringLiteral(
                "w=%1|h=%2|stripW=%3|crushed=%4|overlap=%5|scrollNeeded=%6"
-               "|scrolled=%7|masterPinned=%8|worst=%9" )
+               "|scrolled=%7|masterPinned=%8|worst=%9"
+               "|msrColumn=%10|msrBesideFader=%11|panAbove=%12" )
         .arg( pane->width() ).arg( pane->height() ).arg( stripWidth )
         .arg( st.crushed ).arg( st.overlap )
         .arg( scrollNeeded ? 1 : 0 )
         .arg( scrolled ).arg( masterPinned )
-        .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst );
+        .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst )
+        .arg( arr[0] ).arg( arr[1] ).arg( arr[2] );
 }
 
 QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
@@ -3871,6 +3894,8 @@ bool SMainWindow::doubleClickDetailControl( const QString &which,
         // control name because it is a separate widget with its own filter,
         // and gating only the spin box would leave the slider's reset unproved.
         { QStringLiteral( "clip-pan-slider" ), QStringLiteral( "clipPanSlider" ) },
+        // ...and its volume twin (QBX-84), for the same reason.
+        { QStringLiteral( "clip-volume-slider" ), QStringLiteral( "clipVolumeSlider" ) },
         { QStringLiteral( "clip-pitch" ),     QStringLiteral( "clipPitchSpin" ) },
         { QStringLiteral( "clip-stretch" ),   QStringLiteral( "clipStretchSpin" ) },
         { QStringLiteral( "clip-formant" ),   QStringLiteral( "clipFormantShiftSpin" ) },

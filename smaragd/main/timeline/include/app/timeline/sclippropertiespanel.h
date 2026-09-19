@@ -184,6 +184,8 @@ private:
     /// spin box stays as the way a value is TYPED and as what `clipPanSpin`
     /// addresses; the two are kept in step through the one commit.
     QSlider        *panSlider_   = nullptr;
+    /// QBX-84: the volume twin of panSlider_, on THE fader curve (sfadercurve.h).
+    QSlider        *volumeSlider_ = nullptr;
 
     // The MIDI page (proposal 37 6.1): the per-clip modifiers plus the one
     // placement property that is not shared with audio, the timebase.
