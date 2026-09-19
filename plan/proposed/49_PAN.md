@@ -1,13 +1,15 @@
 # Proposal 49 — Pan: one law, two stages, one automation target
 
-> **STATUS: PROPOSED — DESIGN ONLY, awaiting requester review (QBX-105).**
-> Implementation milestone tickets are filed AFTER that review, not before.
-> Surveyed against `main` at **`1fe23b98`** (2026-09-13, after proposal 48 M1).
-> Every file:line below is from that tree.
+> **STATUS: EXECUTED — M0..M4 landed (QBX-108 .. QBX-112, 2026-09-15 .. 16).**
+> Each milestone carries an "as executed" section below with its sabotage
+> pass. The design text was surveyed against `main` at **`1fe23b98`**
+> (2026-09-13, after proposal 48 M1); file:line references in §1-§3 are from
+> that tree, the "as executed" sections from their own.
 >
-> **An adversarial review is REQUESTED** (the repo's practice since proposal
-> 37 v2). §6 lists the claims this design expects to be challenged, so the
-> reviewer can start there. None of them has been reviewed yet.
+> **The adversarial review (§6) was requested and never done as a whole.**
+> Two of its points have since been settled — see §6: the pan law stands by
+> requester decision (point 1), and the conductor question is ticketed
+> (point 5, QBX-114). The rest remain open.
 
 ## The defect this closes
 
@@ -724,7 +726,23 @@ is, and gated no better than the fader's — which is to say not at all).
   either. If a fader edit is not audibly zippered today, a pan edit is not
   either. That claim is carried over from the fader, not measured.
 
-## 6. Adversarial review — REQUESTED, not yet done
+## 6. Adversarial review — REQUESTED; two points settled after execution
+
+**Settled, 2026-09-19:**
+
+- **Point 1 — the law stays a centre-unity BALANCE.** The requester accepted
+  the 3 dB loss of a hard-panned mono source; there is no switch to a
+  constant-power law. Recorded in thinktank on QBX-105 (component
+  `tw303a/mix`).
+- **Point 5 — confirmed.** `set-track-volume` has no system-role check and
+  is ACCEPTED on the conductor lane, whose audio contribution is none: a
+  stored, undoable, inaudible control, the defect this proposal existed to
+  remove. `set-track-pan` refuses the conductor (D2); volume does not.
+  Ticketed as QBX-114.
+
+The remaining points (2, 3, 4, 6, 7) have not been reviewed.
+
+**The original request, unchanged:**
 
 Claims this design expects to be challenged, in the order I would challenge
 them:
