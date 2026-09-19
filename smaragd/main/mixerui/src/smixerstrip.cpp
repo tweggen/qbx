@@ -186,29 +186,13 @@ void SMixerStrip::buildUi_()
     fixed->setContentsMargins( 0, 0, 0, 0 );
     fixed->setSpacing( 2 );
 
-    QHBoxLayout *msr = new QHBoxLayout();
-    msrLayout_ = msr;
-    msr->setContentsMargins( 0, 0, 0, 0 );
-    msr->setSpacing( 2 );
-    auto mkBtn = [&]( const QString &glyph, const QString &tip ) {
-        QPushButton *b = new QPushButton( glyph, fixedBlock_ );
-        b->setCheckable( true );
-        b->setFixedSize( BTN, BTN );
-        b->setToolTip( tip );
-        msr->addWidget( b );
-        return b;
-    };
-    muteBtn_ = mkBtn( QStringLiteral( "M" ), tr( "Mute" ) );
-    soloBtn_ = mkBtn( QStringLiteral( "S" ), tr( "Solo" ) );
-    armBtn_  = mkBtn( QStringLiteral( "R" ), tr( "Arm for recording" ) );
-    msr->addStretch( 1 );
-    fixed->addLayout( msr );
-    connect( muteBtn_, &QPushButton::toggled, this, &SMixerStrip::onMuteToggled );
-    connect( soloBtn_, &QPushButton::toggled, this, &SMixerStrip::onSoloToggled );
-    connect( armBtn_,  &QPushButton::toggled, this, &SMixerStrip::onArmToggled );
-
     // THE PAN CONTROL (proposal 49 M4, D4), ABOVE the fader as D4's table has
-    // it. Horizontal and short: this strip is 60 px wide in narrow mode, which
+    // it, and since QBX-100 in the row M/S/R used to occupy: M/S/R moved into
+    // a column beside the fader, and the pan control takes the freed row.
+    // QBX-100 asked for a square KNOB here; the requester chose to keep the
+    // slider (2026-09-19), because a QDial's minimum size hint is what would
+    // break the 60 px narrow floor, and one control type serves all four pan
+    // mounts. Horizontal and short: this strip is 60 px wide in narrow mode, which
     // is the measured floor proposal 48 M4 found the hard way, so the control
     // is given a FIXED height and no minimum width beyond the slider's own.
     //
@@ -240,6 +224,34 @@ void SMixerStrip::buildUi_()
     faderLayout_ = faderRow;
     faderRow->setContentsMargins( 0, 0, 0, 0 );
     faderRow->setSpacing( 2 );
+
+    // M/S/R AS A VERTICAL COLUMN BESIDE THE FADER (QBX-100), top-aligned so
+    // the buttons sit at the fader's top rather than floating in the middle
+    // of a tall strip. It stays in this row whatever the section toggles say:
+    // hiding the fader leaves the column and the meter, exactly as hiding it
+    // left the old M/S/R row. Width arithmetic, narrow: a 16 px column plus
+    // the fader and the meter replaces a 3 x 16 px row, so the 60 px floor
+    // (proposal 48 D9) only gets easier -- assert-mixer-layout measures it.
+    QVBoxLayout *msr = new QVBoxLayout();
+    msrLayout_ = msr;
+    msr->setContentsMargins( 0, 0, 0, 0 );
+    msr->setSpacing( 2 );
+    auto mkBtn = [&]( const QString &glyph, const QString &tip ) {
+        QPushButton *b = new QPushButton( glyph, fixedBlock_ );
+        b->setCheckable( true );
+        b->setFixedSize( BTN, BTN );
+        b->setToolTip( tip );
+        msr->addWidget( b );
+        return b;
+    };
+    muteBtn_ = mkBtn( QStringLiteral( "M" ), tr( "Mute" ) );
+    soloBtn_ = mkBtn( QStringLiteral( "S" ), tr( "Solo" ) );
+    armBtn_  = mkBtn( QStringLiteral( "R" ), tr( "Arm for recording" ) );
+    msr->addStretch( 1 );
+    faderRow->addLayout( msr, 0 );
+    connect( muteBtn_, &QPushButton::toggled, this, &SMixerStrip::onMuteToggled );
+    connect( soloBtn_, &QPushButton::toggled, this, &SMixerStrip::onSoloToggled );
+    connect( armBtn_,  &QPushButton::toggled, this, &SMixerStrip::onArmToggled );
 
     fader_ = new QSlider( Qt::Vertical, fixedBlock_ );
     fader_->setRange( SFADER_MIN, SFADER_MAX );
@@ -983,6 +995,39 @@ QString SMixerStrip::describe() const
         // strip and the arranger head cannot disagree about what "L37" means.
         .arg( sPanText( t ? t->getPan() : 0.0 ) )
         .arg( pan_ && pan_->isEnabled() ? 1 : 0 );
+}
+
+// QBX-100. The arrangement is read from GEOMETRY, never from the layout tree:
+// "M/S/R are in a QVBoxLayout" is true of a column the stretch has pushed off
+// screen too, and the promise to the user is where the buttons ARE. Rects are
+// mapped into this strip's own coordinates so the three relations compare
+// like with like whatever parent each widget sits in.
+QString SMixerStrip::describeArrangement() const
+{
+    const auto rectOf = [this]( const QWidget *w ) {
+        return QRect( w->mapTo( this, QPoint( 0, 0 ) ), w->size() );
+    };
+    const auto shown = []( const QWidget *w ) { return w && !w->isHidden(); };
+
+    int column = -1, beside = -1, above = -1;
+    if( shown( muteBtn_ ) && shown( soloBtn_ ) && shown( armBtn_ ) ) {
+        const QRect m = rectOf( muteBtn_ ), s = rectOf( soloBtn_ ),
+                    r = rectOf( armBtn_ );
+        column = ( m.left() == s.left() && s.left() == r.left()
+                   && m.bottom() < s.top() && s.bottom() < r.top() ) ? 1 : 0;
+        if( shown( fader_ ) ) {
+            const QRect f = rectOf( fader_ );
+            const int colRight = qMax( m.right(), qMax( s.right(), r.right() ) );
+            beside = ( colRight < f.left()
+                       && m.top() >= f.top() && m.top() <= f.bottom() ) ? 1 : 0;
+            if( shown( pan_ ) ) {
+                const QRect p = rectOf( pan_ );
+                above = ( p.bottom() < f.top() && p.bottom() < m.top() ) ? 1 : 0;
+            }
+        }
+    }
+    return QStringLiteral( "msrColumn=%1|msrBesideFader=%2|panAbove=%3" )
+        .arg( column ).arg( beside ).arg( above );
 }
 
 // CONTRACT inv. 4 / D13. closeProject() clears the undo stack, calls

@@ -91,6 +91,17 @@
     <assert-clip-mix clip="0,0" expectVolumeDb="-6.0206" volumeTolerance="1e-4"/>
     <undo count="1"/>
 
+    <!-- ...and the Volume SLIDER beside it (QBX-84), which has its own filter.
+         TOLERANCE ZERO on purpose: the fader curve does not round-trip
+         (sDbToFader( 0 ) is tick -191, and back is +0.0625 dB), so a reset
+         that went slider -> dB would commit a 0.06 dB trim and fail here. -->
+    <set-clip-volume clip="0,0" volumeDb="-6.0206"/>
+    <double-click-control control="clip-volume-slider"/>
+    <assert-clip-mix clip="0,0" expectVolumeDb="0" volumeTolerance="0"/>
+    <undo count="1"/>
+    <assert-clip-mix clip="0,0" expectVolumeDb="-6.0206" volumeTolerance="1e-4"/>
+    <undo count="1"/>
+
     <!-- ============ 3. ...and its Pan ================================== -->
     <set-clip-pan clip="0,0" pan="0.75"/>
     <assert-clip-mix clip="0,0" expectPan="0.75" panTolerance="1e-4"/>
