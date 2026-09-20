@@ -38,12 +38,53 @@ PY
 > `test_stereo.wav` or `test_channels4.wav`, and include a **mono** source such
 > as `tests/test_position.wav` when the claim is about channel indexing.
 
-> **Do not run `generate_test_wav.cpp`** (repo root). It is an unreferenced
-> stray from the first phase of the project and still produces the *old*
-> fixture — mono, four quantized full-scale ramps, 1,048,576 samples, 21.85 s —
-> which is a different file in kind from the one in the tree. Running it would
-> silently replace the fixture that 175 cases depend on. It is not wired into
-> any build.
+> **There is no generator, and that is deliberate.** `generate_test_wav.cpp`
+> used to sit at the repository root, wired into no build, still producing the
+> *old* fixture — mono, four quantized full-scale ramps, 1,048,576 samples,
+> 21.85 s. Running it would have silently replaced the file 175 cases depend on,
+> and the failures would have read as engine regressions rather than as a
+> changed input. It was deleted 2026-09-20; `git log --diff-filter=D -- generate_test_wav.cpp`
+> finds it. **Do not write a replacement** without reading the next section
+> first.
+
+## The formula behind it, and why it is not regenerable
+
+The signal is a 440 Hz sawtooth under a linear amplitude envelope, truncated
+toward zero:
+
+```python
+S, f, N, sr = 0.8 * 32767, 440.0, 192000, 48000
+ph = f * i / sr
+v  = int((i / N) * (2.0 * (ph - math.floor(ph)) - 1.0) * S)   # both channels
+```
+
+In double precision this reproduces **191994 of the 192000 frames exactly**.
+
+The remaining **six do not, and no formula will fix them**, because the file
+itself is inconsistent there. All six sit at `i % 1200 == 0`, where
+`440·i/48000` is an exact integer and the sawtooth is at its discontinuity —
+but so do 154 other frames, and those agree with the formula. At `i = 1200` the
+file holds the negative value the formula gives; at `i = 27600` it holds the
+positive one:
+
+| i | formula | file |
+|---|---|---|
+| 1200 | −163 | −163 |
+| 27600 | −3768 | **+3768** |
+| 49200 | −6717 | **+6717** |
+| 55200, 98400, 104400, 110400 | negative | **positive** |
+
+A phase accumulator instead of the multiply is worse, not better (153
+mismatches). float32 throughout is far worse (86189). The likeliest explanation
+is the original's float→int16 write path resolving the discontinuity
+differently depending on where the accumulated error landed — which is not
+something a rewrite can reproduce on purpose.
+
+So: the fixture is a **committed binary with no generator**, like
+`test_stereo.wav`, `test_channels4.wav` and `test_position.wav`. Treat the
+bytes as the definition. The formula above is for *reasoning* about the
+signal — predicting where a discontinuity falls, what the amplitude is at a
+given frame — not for producing it.
 
 ## What it is good for
 
