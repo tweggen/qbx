@@ -23,7 +23,8 @@ core ── pages ── graph ─┬─ sources ─┐
                     └─ record (devices+sinks+sources)
 ```
 
-Not part of the dataflow above: `tw/analysis` and `tw/sidecar` (→ core) and
+Not part of the dataflow above: `tw/analysis` and `tw/sidecar` (→ core),
+`tw/body` (→ NOTHING, not even core) and
 `tw/metering` (→ core+pages+graph) are leaves consumed by the app and the tests.
 `tw/metering` READS frozen pages by position and never freezes or demands, so it
 hangs off the graph without joining the audio path. `tw/events` (→ core ONLY,
@@ -50,6 +51,7 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 | tw/sidecar | derived-data QAF container + LRU store | tw303a/sidecar/CONTRACT.md |
 | tw/metering | level meters: page probe + ballistics | tw303a/metering/CONTRACT.md |
 | tw/events | events, tempo map, SMF, curves, clip set | tw303a/events/CONTRACT.md |
+| tw/body | anthropometrics and joint mechanics (proposal 44); depends on NOTHING, not even tw/core | tw303a/body/CONTRACT.md |
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 
