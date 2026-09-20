@@ -1,5 +1,10 @@
 # Exact Rational Arithmetic Testing & Verification
 
+> **ARCHIVED — a status snapshot from 2026-06-16.** Its pass counts and paths
+> (`tw303a/src/test_twfraction.cpp`) predate the module split; the tests now
+> live under `tw303a/core/tests/`. The design it verifies is
+> [`docs/EXACT_ARITHMETIC_DESIGN.md`](../EXACT_ARITHMETIC_DESIGN.md).
+
 ## Overview
 
 Comprehensive test suites have been implemented to verify the exact rational arithmetic infrastructure across all phases of the Exact Arithmetic implementation. All tests pass with 100% success rate.
@@ -241,9 +246,9 @@ Total: 27
 
 ## Documentation References
 
-- [Exact Arithmetic Design](EXACT_ARITHMETIC_DESIGN.md) - High-level architecture
-- [Project File Format](PROJECT_FILE_FORMAT.md) - XML serialization details
-- [Fraction Parser](FRACTION_PARSER.md) - Parser algorithm and examples
+- [Exact Arithmetic Design](../EXACT_ARITHMETIC_DESIGN.md) - High-level architecture
+- [Project File Format](../PROJECT_FILE_FORMAT.md) - XML serialization details
+- [Fraction Parser](../FRACTION_PARSER.md) - Parser algorithm and examples
 
 ---
 

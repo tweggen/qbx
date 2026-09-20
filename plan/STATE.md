@@ -1186,10 +1186,10 @@ Added `std::mutex fileMutex_` to `twWavInput` class:
 
 ### Documentation created
 
-- `THREAD_SAFETY_ANALYSIS.md` — detailed race condition mechanics
+- `docs/archive/THREAD_SAFETY_ANALYSIS.md` — detailed race condition mechanics
 - `EXECUTION_PATH_DIAGRAM.md` — visual timeline of crash scenario
 - `SYNCHRONIZATION_FIX_PLAN.md` — implementation guide
-- `THREAD_SAFETY_SUMMARY.txt` — quick reference
+- `docs/archive/THREAD_SAFETY_SUMMARY.txt` — quick reference
 - Thread affinity annotations added to: `splainwave.h`, `twwavinput.h`, `sexternfile.h`, `scut.h`
 
 ### Verification

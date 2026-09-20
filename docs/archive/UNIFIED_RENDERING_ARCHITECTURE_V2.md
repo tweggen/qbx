@@ -1,5 +1,12 @@
 # Unified Rendering Architecture V2: Freezing Wires
 
+> **ARCHIVED — a design from 2026-06-27, not current.**
+> The normative account of page freezing is
+> [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md). Of
+> this family only
+> [`UNIFIED_RENDERING_ARCHITECTURE_V3.md`](../UNIFIED_RENDERING_ARCHITECTURE_V3.md)
+> still describes live mechanisms (the teardown protocol).
+
 **Status:** Concept & Design  
 **Date:** 2026-06-27  
 **Revision:** 2.0 (replaces UNIFIED_RENDERING_ARCHITECTURE.md)  

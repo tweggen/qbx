@@ -1,5 +1,9 @@
 # SZoomScrollBar: Usage Guide
 
+> **ARCHIVED — a usage guide from 2026-06-21.** The current reference for the
+> widget is its own header,
+> `smaragd/main/timeline/include/app/timeline/szoomscrollbar.h`.
+
 A custom Qt scrollbar with zoom control at the ends. Drag the tiny zones at each end to zoom; drag the middle for normal scrolling.
 
 ## Features

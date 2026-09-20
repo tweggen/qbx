@@ -261,7 +261,7 @@ cd /Users/tweggen/coding/github/qbx/smaragd
 
 After implementing, update:
 1. ✅ Already added: Thread affinity annotations in headers
-2. ✅ Already added: THREAD_SAFETY_ANALYSIS.md
+2. ✅ Already added: docs/archive/THREAD_SAFETY_ANALYSIS.md
 3. ✅ Already added: EXECUTION_PATH_DIAGRAM.md
 4. ✅ Already added: SYNCHRONIZATION_FIX_PLAN.md
 

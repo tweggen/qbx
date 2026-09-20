@@ -1,5 +1,10 @@
 # Phase 5: Unified Playback/Render Architecture
 
+> **ARCHIVED — a design from 2026-06-28, not current.**
+> Superseded by the module split (proposal 14, 2026-07-12) and by
+> [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md).
+> Milestone history is in [`plan/STATE.md`](../../plan/STATE.md).
+
 ## Executive Summary
 
 **Render is playback with file buffering.** Unify the audio paths so both playback and render pull from the same component graph, handle async captures identically, and differ only in output destination (audio device vs. file buffer).

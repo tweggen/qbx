@@ -135,6 +135,11 @@ minimal.
   the media browser no headless gate can reach (a real Nextcloud server, TLS,
   the credential store on real hardware).
 
+Superseded design notes are in `docs/archive/` — each carries a banner naming
+what replaced it. Nothing there describes the system as it is now; several are
+kept only because they hold the failure narrative a current rule exists to
+prevent. See `docs/archive/README.md`.
+
 ## Working agreement (humans and AIs)
 
 1. A task names ONE module it may modify (plus its CONTRACT.md). Touching

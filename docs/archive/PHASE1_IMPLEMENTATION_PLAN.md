@@ -1,5 +1,11 @@
 # Phase 1 Implementation Plan: Component-Level Page Caching Foundations
 
+> **ARCHIVED — a milestone plan from 2026-06-28, not current design.**
+> The authoritative, chronological record of what was implemented and what was
+> deferred is [`plan/STATE.md`](../../plan/STATE.md). Page caching and freezing
+> are specified in [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md).
+> Kept for the reasoning behind the phase split.
+
 **Status:** Ready to implement  
 **Date:** 2026-06-27  
 **Scope:** Gaps 7, 1, 2 (3 critical blockers for unified rendering)  

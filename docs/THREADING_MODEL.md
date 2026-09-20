@@ -1,5 +1,11 @@
 # Smaragd Threading Model: Unix Page Cache Semantics
 
+> **HISTORICAL (2026-06-16) — the framing survives, the inventory does not.**
+> The double-buffer / page-cache idea below is still how UI-to-audio handoff
+> works (see [`docs/contracts/THREADING.md`](contracts/THREADING.md) rule 2),
+> but this page predates the capture bridge, the live graph pump and the MIDI
+> seams. For which threads exist and what each may touch, read the contract.
+
 ## Executive Summary
 
 Smaragd uses a **double-buffer model inspired by Unix page cache semantics** to ensure safe concurrent access between the UI thread and real-time audio thread.

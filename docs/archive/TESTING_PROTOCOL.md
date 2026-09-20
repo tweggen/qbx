@@ -1,5 +1,10 @@
 # Threading Model: Test Protocol
 
+> **ARCHIVED — a manual test protocol from 2026-06-16.** These scenarios are
+> covered by the `.qxa` suite under `smaragd/tests` today; the threading rules
+> they were written against are in
+> [`docs/contracts/THREADING.md`](../contracts/THREADING.md).
+
 ## Critical Scenarios (Previously Broken)
 
 Test the exact scenarios that showed corruption/glitches before the double-buffer fix.

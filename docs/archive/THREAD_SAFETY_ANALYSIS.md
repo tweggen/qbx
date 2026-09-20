@@ -1,5 +1,12 @@
 # Thread Safety Analysis: UI Redraw vs Audio Playback Race Condition
 
+> **ARCHIVED — the race described here was resolved by removing the shared
+> resource.** `twWavInput` no longer holds a `QFile`: sample data is decoded
+> once, at load time, into RAM, so there is no handle and no mutex to race on
+> (see `tw303a/sources/include/tw/sources/twwavinput.h`). The live threading
+> rules are [`docs/contracts/THREADING.md`](../contracts/THREADING.md). Kept
+> for the failure narrative — a seek and a read are not one operation.
+
 ## Executive Summary
 
 There is a **critical race condition** between the UI redraw thread and the audio playback thread, both accessing the same file handle (`QFile`) without synchronization. This causes crashes during waveform preview rendering while audio is playing.

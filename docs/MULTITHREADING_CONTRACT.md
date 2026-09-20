@@ -1,5 +1,10 @@
 # Smaragd Multithreading Contract
 
+> **HISTORICAL (2026-06-16) — superseded as a contract.**
+> [`docs/contracts/THREADING.md`](contracts/THREADING.md) is the current one.
+> What is still load-bearing here is the snapshot discipline: the audio thread
+> reads `SCut` window parameters through `getSnapshot()`, never the members.
+
 ## Purpose
 
 This document defines the legal operations and synchronization boundaries for Smaragd's UI and audio threads. Every function must adhere to this contract or explicitly document deviations.

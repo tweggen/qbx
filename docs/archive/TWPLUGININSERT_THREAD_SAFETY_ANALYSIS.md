@@ -1,5 +1,11 @@
 # twPluginInsert Thread-Safety Analysis
 
+> **ARCHIVED — an audit from 2026-06-29.** The rules it argues for are now
+> stated in [`docs/contracts/THREADING.md`](../contracts/THREADING.md) (rule 3,
+> lock discipline) and its line numbers predate the module split. Kept for the
+> failure narrative, in particular the unsynchronised `producedThisBlock_` flag
+> that allowed one block to be processed more than once.
+
 ## Executive Summary
 
 **twPluginInsert** has **4 critical thread-safety violations** that violate the base class `twComponent` _nolock() pattern established in `APPLYING_NOLOCK_PATTERN.md`. All race conditions can be fixed by applying the proven pattern: acquire `mutex()` in public methods, delegate to `_nolock()` variants.

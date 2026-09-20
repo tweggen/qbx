@@ -1,5 +1,12 @@
 # Smaragd Concurrency Guidelines: Formal Model
 
+> **HISTORICAL (2026-06-16) — read the contract first.**
+> [`docs/contracts/THREADING.md`](contracts/THREADING.md) is the current
+> threading specification. This page's claim that adherence makes the code
+> "provably race-condition-free" no longer holds as stated: the contract
+> documents a deliberately *accepted* race on in-place page re-freeze. The
+> Forbidden Patterns section is still worth its space.
+
 ## Purpose
 
 This document defines a **mathematically sound concurrency model** for Smaragd. If code adheres to these guidelines, it is **provably race-condition-free**. This is a formal specification, not advice—violations are bugs.
