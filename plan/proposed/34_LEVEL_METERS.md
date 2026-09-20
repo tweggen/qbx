@@ -13,7 +13,7 @@ paragraph added by this proposal), `smaragd/tw303a/metering/CONTRACT.md`,
 Smaragd had faders, mute/solo, plugin inserts and a render path, but **no visual
 level feedback anywhere** — no way to see which track contributes what, to catch
 a clipping insert, or to confirm a muted track is silent. The intent was on
-record twice and deferred twice (`docs/UNIFIED_RENDERING_ARCHITECTURE.md:648`,
+record twice and deferred twice (`docs/archive/UNIFIED_RENDERING_ARCHITECTURE.md:648`,
 `plan/06_RECORDING_MVP.md:23,305`), and a dead stub had been sitting in
 `SApplication` since the beginning: `setSpeakerMaxVal()`, body
 `// FIXME: insert for VU.`, zero callers.

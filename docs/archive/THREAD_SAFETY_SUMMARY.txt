@@ -1,4 +1,12 @@
 ================================================================================
+ARCHIVED -- the race described here was resolved by removing the shared
+resource. twWavInput no longer holds a QFile: sample data is decoded once, at
+load time, into RAM, so there is no handle and no mutex to race on. The live
+threading rules are docs/contracts/THREADING.md. Kept for the failure
+narrative -- a seek and a read are not one operation.
+================================================================================
+
+================================================================================
 THREAD SAFETY ANALYSIS SUMMARY
 ================================================================================
 

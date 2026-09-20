@@ -398,7 +398,7 @@ If Phase 2 proves too complex or causes issues:
 
 ## References
 
-- `UNIFIED_RENDERING_ARCHITECTURE.md` — Architecture overview
+- `docs/archive/UNIFIED_RENDERING_ARCHITECTURE.md` — Architecture overview (superseded; see docs/contracts/FREEZE_PROTOCOL.md)
 - `capture_page_pool.h/cc` — Page cache system
 - `capture_revalidator.h/cc` — Async revalidation
 - `scut.h/cc` — Container cut implementation

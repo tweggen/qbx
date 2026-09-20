@@ -1,5 +1,11 @@
 # Phase 5c: Render Unification with Futures — Complete
 
+> **ARCHIVED — a completion report from 2026-06-28, not current design.**
+> What shipped is recorded in [`plan/STATE.md`](../../plan/STATE.md); the
+> normative account of freezing is
+> [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md). Its
+> line counts describe the tree as it stood before the module split.
+
 **Date:** 2026-06-22
 **Status:** ✅ Complete and tested (builds cleanly, ~50% fewer render loop lines)
 

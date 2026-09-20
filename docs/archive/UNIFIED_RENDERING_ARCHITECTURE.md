@@ -1,5 +1,14 @@
 # Unified Rendering Architecture
 
+> **ARCHIVED — superseded twice.** This is the 2026-06-22 design. It was
+> explicitly replaced by `UNIFIED_RENDERING_ARCHITECTURE_V2.md` (2026-06-27,
+> "Revision 2.0"), and the normative account of page freezing is now
+> [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md).
+> Of the family only
+> [`UNIFIED_RENDERING_ARCHITECTURE_V3.md`](../UNIFIED_RENDERING_ARCHITECTURE_V3.md)
+> still describes live mechanisms (the teardown protocol). Do not read this
+> page as current design.
+
 **Status:** Design & Partial Implementation  
 **Date:** 2026-06-22  
 **Author:** Timo Weggen, Claude  

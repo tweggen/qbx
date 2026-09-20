@@ -1,5 +1,13 @@
 # Page Cache Safety Proof
 
+> **ARCHIVED — its conclusion no longer holds as stated.** This 2026-06-28
+> verification argues that every write to a `twOutputPage` is mutex-protected
+> and the cache therefore race-free.
+> [`docs/contracts/THREADING.md`](../contracts/THREADING.md) rule 1 since
+> documents a *deliberately accepted* race: reading a page's samples while a
+> worker re-freezes it in place is bounded and allowed, because `samples` is
+> sized once and never resized. Kept for the enumeration of write sites.
+
 **Status:** Verification complete  
 **Date:** 2026-06-28  
 **Scope:** All write accesses to `twOutputPage` instances are protected by appropriate mutexes

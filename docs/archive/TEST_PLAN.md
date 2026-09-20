@@ -1,5 +1,11 @@
 # Unified Rendering Architecture V2: Test Plan
 
+> **ARCHIVED — describes a test suite that was never built.** It plans a
+> GoogleTest tree at `tw303a/test/`; that directory does not exist. The suite
+> is `smaragd/tests` (`.qxa` cases, fixtures, goldens) plus per-module unit
+> tests, all run through `ctest`. See the gates section of
+> [`CLAUDE.md`](../../CLAUDE.md).
+
 **Status:** Design phase  
 **Purpose:** Comprehensive unit tests for validation and future extensions  
 **Framework:** Google Test (GTest) - C++17, async-ready  

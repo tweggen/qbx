@@ -1,5 +1,11 @@
 # Applying the _nolock() Pattern to Derived Components
 
+> **ARCHIVED — a work record from 2026-06-29.** The pattern itself is
+> described in
+> [`docs/COMPONENT_LOCKING_STRATEGY.md`](../COMPONENT_LOCKING_STRATEGY.md) and
+> the live lock discipline in
+> [`docs/contracts/THREADING.md`](../contracts/THREADING.md) (rule 3).
+
 ## Overview
 
 This document describes the systematic application of the _nolock() pattern (documented in `COMPONENT_LOCKING_STRATEGY.md`) to four derived component classes that were previously missing thread-safety protections. These classes exhibited critical race conditions due to unprotected shared state mutations.

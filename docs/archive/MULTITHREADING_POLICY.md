@@ -1,5 +1,10 @@
 # Smaragd Multithreading Policy
 
+> **ARCHIVED — superseded by
+> [`docs/contracts/THREADING.md`](../contracts/THREADING.md)**, which carries
+> the current thread inventory and the five rules. This 2026-06-16 policy
+> predates the capture bridge, the live graph pump and the MIDI seams.
+
 ## Overview
 
 Smaragd has two concurrent execution contexts:

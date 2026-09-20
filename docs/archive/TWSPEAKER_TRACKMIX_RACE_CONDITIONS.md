@@ -1,5 +1,11 @@
 # Critical Race Conditions in twSpeaker, twTrackMix, and Audio Backends
 
+> **ARCHIVED — an audit from 2026-06-29.** The rules it argues for are now
+> stated in [`docs/contracts/THREADING.md`](../contracts/THREADING.md) (rules 2
+> and 3) and its line numbers predate the module split. Kept for the failure
+> narratives: the `setCycle()` use-after-free, the torn read of the callback,
+> and the iterator invalidation between `seekTo()` and `calcOutputTo()`.
+
 ## Executive Summary
 
 Analysis of twSpeaker, twTrackMix, and audio backends (WASAPI, ALSA, CoreAudio) revealed **9 critical race conditions** involving use-after-free, torn reads, and iterator invalidation. These are the most severe thread-safety issues in the codebase—affecting the audio output path which runs in real-time context.

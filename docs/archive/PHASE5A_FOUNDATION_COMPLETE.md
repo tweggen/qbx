@@ -1,5 +1,10 @@
 # Phase 5a: Foundation — Complete
 
+> **ARCHIVED — a completion report from 2026-06-28, not current design.**
+> What shipped is recorded in [`plan/STATE.md`](../../plan/STATE.md); the
+> normative account of freezing is
+> [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md).
+
 **Date:** 2026-06-22
 **Status:** ✅ Complete and tested (builds cleanly)
 

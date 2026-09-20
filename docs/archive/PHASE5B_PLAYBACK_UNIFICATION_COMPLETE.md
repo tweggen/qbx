@@ -1,5 +1,10 @@
 # Phase 5b: Playback Unification — Complete
 
+> **ARCHIVED — a completion report from 2026-06-28, not current design.**
+> What shipped is recorded in [`plan/STATE.md`](../../plan/STATE.md); the live
+> playback threading contract is
+> [`docs/contracts/THREADING.md`](../contracts/THREADING.md).
+
 **Date:** 2026-06-22
 **Status:** ✅ Complete and tested (builds cleanly)
 

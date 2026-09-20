@@ -1,5 +1,12 @@
 # RGB Affine Color Modifier Implementation Summary
 
+> **ARCHIVED — an implementation note from 2026-06-28.** The concept is in
+> [`docs/TRACK_COLOR_MODIFIER_CONCEPT.md`](../TRACK_COLOR_MODIFIER_CONCEPT.md)
+> and the rejected alternative in
+> [`docs/RGB_AFFINE_VS_HSV_APPROACH.md`](../RGB_AFFINE_VS_HSV_APPROACH.md).
+> The modifier itself lives in `app/objects/track/strackcolormodifier.h`, and
+> `app/model/sclipcolors.h` is the authority for clip and lane colour.
+
 ## What Was Implemented
 
 A composable **RGB affine color modifier system** for tracks that visually conveys:

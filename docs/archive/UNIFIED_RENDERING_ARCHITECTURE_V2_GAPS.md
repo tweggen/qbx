@@ -1,5 +1,10 @@
 # Unified Rendering Architecture V2: Gap Analysis
 
+> **ARCHIVED — a gap analysis of the V2 concept against the implementation as
+> it stood on 2026-06-27.** Both sides of the comparison have moved; the
+> current contract is
+> [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md).
+
 **Date:** 2026-06-27  
 **Status:** Current Implementation vs. V2 Concept  
 **Scope:** Identify what's missing, divergences, and implementation roadmap
