@@ -1,5 +1,16 @@
 # Smaragd Audio Synthesizer - Architecture Guide
 
+> **ARCHIVED — and renamed, because it is not the module map.** This is the
+> 2026-06-30 *component* architecture guide from the second docs tree at
+> `smaragd/docs/`, moved here 2026-09-20. It shared a filename with
+> [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md), which is a different document
+> entirely. Page freezing is now specified in
+> [`docs/contracts/FREEZE_PROTOCOL.md`](../contracts/FREEZE_PROTOCOL.md) and
+> threading in [`docs/contracts/THREADING.md`](../contracts/THREADING.md). Kept
+> for its Architecture Decisions section — in particular why the two page
+> systems were deliberately NOT unified, and why `freezePage()` replaced live
+> `calcOutputTo()` chains.
+
 ## Overview
 
 Smaragd's audio engine consists of two parallel rendering systems unified by a page-based architecture:

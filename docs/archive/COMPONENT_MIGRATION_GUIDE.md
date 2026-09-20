@@ -1,5 +1,14 @@
 # Component Migration Guide: Adding New DSP Components
 
+> **ARCHIVED — its central instruction is now wrong.** This 2026-06-30 guide
+> tells you to implement BOTH `calcOutputTo` overloads. That was a Phase 3
+> transition measure; the raw-pointer overload now carries
+> `[[deprecated("... Raw-pointer interface will be removed in v1.0")]]`. A new
+> component implements the IOVector form, and overrides `renderPageWide()` if
+> it is wider than one channel. Moved here 2026-09-20 from the second docs tree
+> at `smaragd/docs/`; kept for the shape of the step-by-step, not for the
+> instruction.
+
 **Audience:** Developers extending Smaragd with new audio processing components  
 **Prerequisites:** Understanding of twComponent architecture (see `ARCHITECTURE.md` and `COMPONENTS.md`)  
 **Goal:** Provide step-by-step process for implementing new components using type-safe IOVector interface

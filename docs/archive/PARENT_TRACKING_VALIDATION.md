@@ -1,5 +1,16 @@
 # Parent Tracking Wiring Validation Report
 
+> **ARCHIVED — the gap it reports has been closed.** This 2026-07-05 report
+> found the teardown protocol inert: `parentComponent_` and `myInputIndex_`
+> existed and `teardown()` used them, but nothing ever called
+> `setParentComponent()`, so every component's parent was null. Its
+> recommendation — Option A, auto-detect the parent inside `setInput()` from
+> the latch that owns the output — is what was built, and
+> `tw303a/graph/src/twcomponent.cc` sets `parentComponent_` today. Moved here
+> 2026-09-20 from the second docs tree at `smaragd/docs/`; kept for the option
+> comparison and for the failure mode, which is a protocol that reads fields
+> nothing writes.
+
 ## Status: ⚠️ Incomplete — Infrastructure Present, Wiring Missing
 
 ### What's Implemented

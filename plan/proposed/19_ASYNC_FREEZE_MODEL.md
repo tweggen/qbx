@@ -28,7 +28,7 @@
 > Companion context (must-read before implementing):
 > `plan/proposed/16_STALE_PAGE_FALLBACK.md` (stale-but-consistent playback),
 > `plan/proposed/18_EXACT_POSITION_DOMAINS.md` (position math),
-> `smaragd/docs/contracts/FREEZE_PROTOCOL.md`, `THREADING.md`, `CLIP_MODEL.md`,
+> `docs/contracts/FREEZE_PROTOCOL.md`, `THREADING.md`, `CLIP_MODEL.md`,
 > and the memory note `flaky_takes_group_broadcast`.
 
 ---

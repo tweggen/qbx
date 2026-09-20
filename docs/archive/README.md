@@ -50,6 +50,21 @@ paths.
 modifier; the concept and the rejected HSV alternative stayed in `docs/`) and
 `ZOOM_SCROLLBAR_USAGE.md` (the widget's header is the reference now).
 
+**From the second docs tree** (2026-09-20) — until then a `smaragd/docs/`
+directory held eight more documents that nothing linked to `docs/` and nobody
+maintained alongside it. Six landed here: `COMPONENT_ARCHITECTURE.md` and
+`SIGNAL_CHAIN_2026-07.md` were RENAMED on the way in, because they shared
+filenames with live documents in `docs/` while saying different things —
+`SIGNAL_CHAIN_2026-07.md` differs from `docs/SIGNAL_CHAIN.md` by some 661
+lines. Also `COMPONENTS.md`, `COMPONENT_MIGRATION_GUIDE.md` (whose central
+instruction, implement both `calcOutputTo` overloads, is now wrong — the
+raw-pointer one is deprecated), `TESTING_AND_PERFORMANCE.md` and
+`PARENT_TRACKING_VALIDATION.md` (whose reported gap has since been closed).
+The two that described live mechanisms were promoted into `docs/` instead:
+[`PLAYBACK_START.md`](../PLAYBACK_START.md) and
+[`FINE_GRAINED_LOCKING_TWSPEAKER.md`](../FINE_GRAINED_LOCKING_TWSPEAKER.md).
+There is now one docs tree.
+
 ## Adding to this directory
 
 Move a document here when it has been replaced rather than merely aged, and give

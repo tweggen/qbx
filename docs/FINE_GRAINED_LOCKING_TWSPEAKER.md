@@ -1,5 +1,13 @@
 # twSpeaker: Fine-Grained Locking Strategy
 
+> **Current.** Moved here from `smaragd/docs/` on 2026-09-20. The three locks
+> are live in `tw/playback/twspeaker.h`, which now carries the lock ORDER as a
+> comment: `engineMutex_` is a leaf, never held while acquiring `mutex()` or
+> `taskMutex_` and never across blocking work. The general lock discipline is
+> [`docs/contracts/THREADING.md`](contracts/THREADING.md) rule 3; the startup
+> flow these locks serve is
+> [`docs/PLAYBACK_START.md`](PLAYBACK_START.md).
+
 ## Problem Statement
 
 Previously, `twSpeaker` held a single broad `outputMutex_` across expensive I/O operations:
@@ -122,6 +130,6 @@ Release engineMutex_
 
 ## References
 
-- `tw303a/include/twcomponent.h` — `stateMutex_` definition and usage pattern
-- `tw303a/include/twspeaker.h` — Class definition with three locks
-- `tw303a/src/twspeaker.cc` — Implementation with fine-grained locking
+- `tw303a/graph/include/tw/graph/twcomponent.h` — `stateMutex_` definition and usage pattern
+- `tw303a/playback/include/tw/playback/twspeaker.h` — Class definition with three locks
+- `tw303a/playback/src/twspeaker.cc` — Implementation with fine-grained locking
