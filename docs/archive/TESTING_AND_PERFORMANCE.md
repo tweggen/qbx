@@ -1,5 +1,12 @@
 # Testing & Performance Report - Phase 3 IOVector Complete
 
+> **ARCHIVED — a status snapshot** titled "Phase 3 IOVector Complete", from
+> 2026-06-30, moved here 2026-09-20 from the second docs tree at
+> `smaragd/docs/`. Its pass counts, timings and component coverage describe a
+> tree that predates the module split. The suite today is `smaragd/tests`
+> (`.qxa` cases, fixtures, goldens) plus per-module unit tests, run through
+> `ctest`; the gates are listed in [`CLAUDE.md`](../../CLAUDE.md).
+
 **Date:** 2026-06-30  
 **Phase:** 3 IOVector Refactoring (18/18 components)  
 **Status:** ✅ Verified & Stable

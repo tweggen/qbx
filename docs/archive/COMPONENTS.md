@@ -1,5 +1,12 @@
 # Component Inventory & Reference
 
+> **ARCHIVED — a component inventory from 2026-06-30**, moved here 2026-09-20
+> from the second docs tree at `smaragd/docs/`. Its categories and its
+> "Refactoring Status Summary" predate the module split, so the paths and the
+> counts are both wrong. The current module map is
+> [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md), and each module's own
+> `CONTRACT.md` is the authority on what it contains.
+
 ## Overview
 
 Complete inventory of 18 refactored twComponent implementations for Phase 3 IOVector architecture. All components implement both type-safe IOVector and legacy raw-pointer calcOutputTo interfaces.

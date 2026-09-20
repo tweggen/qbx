@@ -1,5 +1,13 @@
 # Smaragd Audio Signal Chain
 
+> **ARCHIVED — and renamed, because it is the OTHER signal-chain document.**
+> This is the 2026-07-05 version from the second docs tree at `smaragd/docs/`,
+> moved here 2026-09-20. It differs from
+> [`docs/SIGNAL_CHAIN.md`](../SIGNAL_CHAIN.md) by some 661 lines; the two were
+> maintained independently and neither knew about the other. Read the one in
+> `docs/` instead. Kept because its account of parent-tracking auto-detection
+> is the one that turned out to be right.
+
 ## Overview
 
 Smaragd's audio architecture separates the **UI model** (SObject hierarchy) from the **DSP engine** (twComponent graph). This document traces how audio flows from project structure through DSP components to hardware output.

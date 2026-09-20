@@ -136,6 +136,11 @@ minimal.
 - `docs/MEDIA_BROWSER_MANUAL_GATE.md` — the manual runbook for the parts of
   the media browser no headless gate can reach (a real Nextcloud server, TLS,
   the credential store on real hardware).
+- `docs/PLAYBACK_START.md` — what happens between the Play button and the
+  first sample: the `OutputState` machine, why the backend callback is
+  deferred until the readahead has buffered, and the numbers it is tuned to.
+- `docs/FINE_GRAINED_LOCKING_TWSPEAKER.md` — why `twSpeaker` holds three
+  narrow locks instead of one broad one, and the lock order between them.
 
 Superseded design notes are in `docs/archive/` — each carries a banner naming
 what replaced it. Nothing there describes the system as it is now; several are

@@ -1,5 +1,15 @@
 # Playback Startup Flow
 
+> **Current.** Moved here from `smaragd/docs/` on 2026-09-20, where it sat in a
+> second docs tree nobody read. The mechanisms it describes are live: the
+> `OutputState` enum, `monitorReadaheadBuffer()`, the 3-second buffer wait and
+> the 10-second timeout are all in
+> `tw303a/playback/src/twspeaker.cc` today. Threading rules it touches on are
+> normative in [`docs/contracts/THREADING.md`](contracts/THREADING.md); the
+> locking it relies on is in
+> [`docs/FINE_GRAINED_LOCKING_TWSPEAKER.md`](FINE_GRAINED_LOCKING_TWSPEAKER.md).
+> Every timing figure below was measured on the Windows box.
+
 ## Overview
 
 This document describes how audio playback is initiated in Smaragd, from user action through audio output on the device.
@@ -61,7 +71,7 @@ twSpeaker::startOutput() [NON-BLOCKING]
 
 ### 1. UI Layer: SMainWindow::startPlaying()
 
-**File:** `main/src/smainwindow.cpp` (lines 478-505)
+**File:** `main/shell/src/smainwindow.cpp` (lines 478-505)
 
 **Responsibilities:**
 - Toggle between play/stop states
@@ -96,7 +106,7 @@ void SMainWindow::startPlaying() {
 
 ### 2. Audio Device Layer: twSpeaker::startOutput() (Phase 6b+)
 
-**File:** `tw303a/src/twspeaker.cc` (lines 42-200)
+**File:** `tw303a/playback/src/twspeaker.cc` (lines 42-200)
 
 **Responsibilities (Non-Blocking State Machine):**
 - Open audio device via backend (CoreAudio/WASAPI/ALSA)
@@ -165,7 +175,7 @@ void twSpeaker::startOutput() {
 
 ### 2b. Background Buffering Task: twSpeaker::monitorReadaheadBuffer()
 
-**File:** `tw303a/src/twspeaker.cc` (lines 256-330)
+**File:** `tw303a/playback/src/twspeaker.cc` (lines 256-330)
 
 **Responsibilities:**
 - Monitor readahead progress (audioEngine_->getPlaybackState())
@@ -220,7 +230,7 @@ void twSpeaker::monitorReadaheadBuffer() {
 
 ### 3. Readahead Thread: AudioEngine::readaheadLoop()
 
-**File:** `tw303a/src/audio/audio_engine.cc` (lines 373-480)
+**File:** `tw303a/playback/src/audio_engine.cc` (lines 373-480)
 
 **Responsibilities:**
 - Monitor current playback position
@@ -295,7 +305,7 @@ void AudioEngine::readaheadLoop() {
 
 ### 4. Audio Callback: AudioEngine::pullBlock()
 
-**File:** `tw303a/src/audio/audio_engine.cc` (lines 51-157)
+**File:** `tw303a/playback/src/audio_engine.cc` (lines 51-157)
 
 **Responsibilities:**
 - Pull audio frames from cached frozen pages
@@ -512,13 +522,13 @@ Three complementary mechanisms:
 
 | File | Role |
 |------|------|
-| `main/src/smainwindow.cpp` | UI integration (startPlaying/stopPlaying) |
-| `tw303a/include/twspeaker.h` | OutputState enum, state machine members, public getOutputState() |
-| `tw303a/src/twspeaker.cc` | State machine (startOutput/stopOutput, monitorReadaheadBuffer, buffering task) |
-| `tw303a/include/audio/audio_engine.h` | AudioEngine interface (readahead, pullBlock, playbackReadyCv_, getPlaybackReadyCv()) |
-| `tw303a/src/audio/audio_engine.cc` | AudioEngine implementation (readaheadLoop, pullBlock, state signaling) |
-| `tw303a/include/tw_output_page.h` | Frozen page structure (validAspects, startPosition, samples) |
-| `tw303a/src/twcomponent.cc` | Page caching (getPageIfExists, getOrAllocatePage) |
+| `main/shell/src/smainwindow.cpp` | UI integration (startPlaying/stopPlaying) |
+| `tw303a/playback/include/tw/playback/twspeaker.h` | OutputState enum, state machine members, public getOutputState() |
+| `tw303a/playback/src/twspeaker.cc` | State machine (startOutput/stopOutput, monitorReadaheadBuffer, buffering task) |
+| `tw303a/playback/include/tw/playback/audio_engine.h` | AudioEngine interface (readahead, pullBlock, playbackReadyCv_, getPlaybackReadyCv()) |
+| `tw303a/playback/src/audio_engine.cc` | AudioEngine implementation (readaheadLoop, pullBlock, state signaling) |
+| `tw303a/pages/include/tw/pages/tw_output_page.h` | Frozen page structure (validAspects, startPosition, samples) |
+| `tw303a/graph/src/twcomponent.cc` | Page caching (getPageIfExists, getOrAllocatePage) |
 
 ---
 

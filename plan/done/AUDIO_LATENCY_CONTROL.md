@@ -328,7 +328,7 @@ Optional Phase 3b features (deferred):
 - `main/src/soptionsdialog.cpp` (or equivalent)
 
 **Documentation:**
-- `smaragd/docs/AUDIO_IO_ARCHITECTURE.md`
+- `docs/AUDIO_IO_ARCHITECTURE.md`
 
 ---
 
