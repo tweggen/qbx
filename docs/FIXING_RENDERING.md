@@ -1,227 +1,84 @@
-# Fixing Rendering: Audio Path Alignment
+# test_sawtooth.wav and render/playback alignment
 
-## Test WAV File: test_sawtooth.wav
+`smaragd/tests/test_sawtooth.wav` is the workhorse audio fixture: about 175
+`.qxa` cases load it. This page says what it actually contains and what it can
+and cannot prove.
 
-**Purpose:** Diagnostic tool for validating render/playback timing and sample-level accuracy.
+## What the file is
 
-**Specification:**
-- **Format:** 16-bit PCM, mono, 48 kHz
-- **Duration:** 21.85 seconds (1,048,576 samples)
-- **Content:** 4 identical sawtooth ramps
-  - Each ramp: -32768 to +32767 (65,536 distinct values)
-  - Quantization: Each value held for exactly 4 samples
-  - Total per ramp: 262,144 samples
+Measured from the committed file on 2026-09-20 (`smaragd/tests/test_sawtooth.wav`,
+768044 bytes):
 
-**Usage:**
-1. Load the file into Smaragd as a clip on a track
-2. Render to WAV at project rate (default 48 kHz)
-3. Compare byte-for-byte with original using `cmp` or waveform editor
-4. Any timing drift or sample skew will manifest as waveform misalignment
+| Property | Value |
+|---|---|
+| Format | 16-bit PCM WAV, **2 channels**, 48 kHz |
+| Length | **192000 frames — exactly 4.000 s** |
+| Content | a **440 Hz sawtooth**: 1760 periods in 4 s, 109.09 frames each |
+| Shape | strictly rising within a period, one discontinuity per period — **not band-limited** |
+| Amplitude | peaks at −26155 / +26021, about 0.8 of full scale |
+| Channels | **bit-identical to each other** |
 
-**Why this design:**
-- Sawtooth provides linear monotonic data (easy to verify visually and numerically)
-- Quantized steps (4 samples each) expose sample-level timing errors
-- 4 repetitions catch both consistent errors (persistent offset) and drift (cumulative)
+Re-measure rather than trust this table if anything depends on it:
 
----
-
-## Playback Audio Path
-
-**Trigger:** User clicks play button or presses spacebar; `twSpeaker::startOutput()` called.
-
-### Device Setup (twspeaker.cc lines 26–86)
-
-1. **Rate negotiation:** Determine graph rate (project sample rate) and device-supported rates
-2. **Device open:** Call `backend_->openDevice(outputDeviceId_, graphRate)`
-   - Backend attempts to open device at graph rate (passthrough case)
-   - Falls back to device native rate if unavailable
-3. **Resampler config:** `resampler_.configure(graphRate, deviceRate)`
-   - If `graphRate == deviceRate`, resampler is passthrough (no interpolation)
-   - Otherwise, resampler performs linear interpolation
-4. **Backend callback registration:** `backend_->setRenderCallback([this](...) { ... })`
-   - Callback invoked by audio backend when device buffer needs filling
-
-### Real-Time Playback Callback (twspeaker.cc lines 87–120)
-
-Device calls this callback ~20–40 times per second (buffer-dependent):
-
-```cpp
-[this](float *out, std::size_t frames, std::uint32_t channels) -> std::size_t {
-    offset_t formerPos = SApplication::app().getGlobalLocatorPos();
-    length_t inConsumed = 0;
-    
-    // Pull mono samples from synth via resampler
-    length_t framesOut = resampler_.process(
-        static_cast<twLatchStreamingOutput *>(pInputPlugs[0]),
-        out, static_cast<length_t>(frames), &inConsumed);
-    
-    // Expand mono to stereo/multichannel
-    if (channels > 1) {
-        for (length_t i = framesOut - 1; i >= 0; --i) {
-            float s = out[i];
-            for (std::uint32_t c = 0; c < channels; ++c) {
-                out[i * channels + c] = s;
-            }
-        }
-    }
-    
-    // Advance locator by INPUT frames consumed (not output frames)
-    SApplication::app().setGlobalLocatorPos(formerPos + inConsumed);
-    return static_cast<std::size_t>(framesOut);
-}
+```bash
+python3 - <<'PY'
+import wave, struct
+w = wave.open('smaragd/tests/test_sawtooth.wav')
+n, ch, sr = w.getnframes(), w.getnchannels(), w.getframerate()
+d = struct.unpack('<%dh' % (n*ch), w.readframes(n))
+L, R = d[0::ch], d[1::ch]
+print(f"{ch}ch {sr}Hz {n} frames = {n/sr:.4f}s  identical={L==R}")
+print("periods:", sum(1 for i in range(1, n) if L[i] < L[i-1]))
+PY
 ```
 
-**Key behaviors:**
-- **Source:** Synth's output plug, obtained via `pInputPlugs[0]` (wired at graph-construction time)
-- **Rate matching:** Resampler handles graph↔device rate mismatch via linear interpolation
-- **Position tracking:** Advances by `inConsumed` (input frames), not output frames, to account for resampling
-- **Channel expansion:** Mono synth duplicated to N device channels in-place (avoids extra copy)
+> **The two channels being identical is a trap.** On this fixture the source
+> channel always equals the output channel, so a per-channel bug is invisible.
+> Never make a per-channel claim over `test_sawtooth.wav` alone — pair it with
+> `test_stereo.wav` or `test_channels4.wav`, and include a **mono** source such
+> as `tests/test_position.wav` when the claim is about channel indexing.
 
-### Audio Graph Pull Chain
+> **Do not run `generate_test_wav.cpp`** (repo root). It is an unreferenced
+> stray from the first phase of the project and still produces the *old*
+> fixture — mono, four quantized full-scale ramps, 1,048,576 samples, 21.85 s —
+> which is a different file in kind from the one in the tree. Running it would
+> silently replace the fixture that 175 cases depend on. It is not wired into
+> any build.
 
-When resampler calls `pInputPlugs[0]->readData()`:
-1. Input plug pulls from its connected synth output
-2. Synth component's `calcNextFrames()` or streaming callback is invoked
-3. Synth generates audio frame-by-frame, respecting current `seekTo()` position
-4. Resampler buffers input history and interpolates to output rate
-5. Callback returns to device with filled buffer
+## What it is good for
 
----
+A 440 Hz ramp with a hard discontinuity every 109 frames is easy to reason
+about at sample granularity: a timing error moves the discontinuities, and a
+dropped or duplicated block shows up as a period that is the wrong length.
+That makes the file useful for render/playback alignment and for clip-window
+arithmetic (split, slip, loop), which is what most of the cases using it do.
 
-## Rendering Audio Path
+It is **not** a full-scale signal and **not** a quantized staircase, so it does
+not exercise clipping, and it cannot show a value-level quantization error the
+way a held-value ramp would.
 
-**Trigger:** User selects File → Render... and confirms; `RenderSession::start()` called with synth component.
+## How alignment is actually gated
 
-### Initialization (render_session.cc lines 23–97)
+Render exactness is gated by **byte-level `cmp` of rendered WAVs** — they are
+16-bit PCM, so never parse them as float32. A render and the playback of the
+same material go through the same frozen pages, so a divergence between them is
+a bug in one of the two consumers rather than in the material.
 
-1. **Parameter validation:** Check output path, time range, format
-2. **Writer creation:** `createAudioFileWriter(format)` — selects WAV/OGG/MP3 encoder
-3. **File open:** Writer opens output file with stereo, 16-bit, project sample rate
-4. **Thread spawn:** Start `renderThreadMain()` in background thread
-
-### Render Thread Main Loop (render_session.cc lines 120–230)
-
-```cpp
-// Initial seek (once per render, before loop starts)
-synthOutput_->seekTo(startOffsetSamples_);
-SApplication::app().setGlobalLocatorPos(startOffsetSamples_);
-
-// Configure resampler (passthrough, since render rate = project rate)
-resampler_.configure(sampleRate_, sampleRate_);
-resampler_.reserveHint((length_t) RENDER_BUFFER_FRAMES);
-resampler_.reset();
-
-// Get synth output (same wiring as playback)
-twLatchOutput *synthOutputPlug = synthOutput_->linkOutput(0);
-
-// Main render loop (driven by this thread, not device)
-while (!cancelRequested_ && samplesWrittenVal < totalSamples_) {
-    // Pull mono frames via resampler (same interface as playback callback)
-    length_t inConsumed = 0;
-    length_t framesGenerated = resampler_.process(
-        static_cast<twLatchStreamingOutput *>(synthOutputPlug),
-        buffer.data(), (length_t) framesToRender, &inConsumed);
-    
-    // Fill silence if synth produced no frames
-    if (framesGenerated <= 0) {
-        std::fill(buffer.begin(), buffer.begin() + framesToRender, 0.0f);
-        framesGenerated = framesToRender;
-    }
-    
-    // Expand mono to stereo (identical to playback callback)
-    for (length_t i = framesGenerated - 1; i >= 0; --i) {
-        float s = buffer[i];
-        buffer[i * 2] = s;      // Left
-        buffer[i * 2 + 1] = s;  // Right
-    }
-    
-    // Write to file
-    writer_->write(buffer.data(), framesGenerated);
-    
-    // Update position (same pattern as playback callback)
-    offset_t formerPos = SApplication::app().getGlobalLocatorPos();
-    SApplication::app().setGlobalLocatorPos(formerPos + framesGenerated);
-    
-    samplesWrittenVal += framesGenerated;
-}
-```
-
-**Key behaviors:**
-- **Same synth wiring:** Obtains output via `linkOutput(0)` (identical to speaker's input connection)
-- **Same resampler:** Uses `twResampler::process()` (same frame-pulling interface as playback)
-- **Rate:** Resampler configured in passthrough mode (render rate = project rate)
-- **Position tracking:** Advances by frames written (delta-based, like playback callback)
-- **Self-driven loop:** Thread controls iteration, not device callback
-- **Mono→stereo:** Identical expansion logic to playback callback
-
-### Progress Feedback
-
-- Every ~50 ms: `onProgress` callback invoked with `(samplesWritten, totalSamples)`
-- Progress dialog updates in real time
-- User can cancel via "Stop Rendering" button → sets `cancelRequested_` flag
+The mechanism that makes that true is the freeze protocol, not a shared
+resampler call: both offline render and playback read frozen `twOutputPage`s by
+position, and a page is a pure function of its position and its inputs. See
+[`docs/contracts/FREEZE_PROTOCOL.md`](contracts/FREEZE_PROTOCOL.md) for the
+normative sequence and
+[`docs/contracts/POSITION_DOMAINS.md`](contracts/POSITION_DOMAINS.md) for which
+positions each side speaks.
 
 ---
 
-## Interface Alignment: Render vs. Playback
-
-As of the refactoring, **rendering now uses the exact same audio-sourcing interface as playback:**
-
-| Aspect | Playback | Rendering |
-|--------|----------|-----------|
-| **Synth source** | `speaker->pInputPlugs[0]` | `synth->linkOutput(0)` |
-| **Source type** | `twLatchStreamingOutput*` | `twLatchStreamingOutput*` (via cast) |
-| **Frame pulling** | `resampler_.process()` | `resampler_.process()` |
-| **Resampler config** | `configure(graphRate, deviceRate)` | `configure(projectRate, projectRate)` |
-| **Position advance** | `formerPos + inConsumed` | `formerPos + framesGenerated` |
-| **Mono→stereo** | In-place expand loop | Identical in-place expand loop |
-| **Seeking** | Implicit in streaming | Explicit `seekTo()` at start, then streaming |
-
-**Differences:**
-- **Timing:** Playback driven by device callback (~20–40 Hz); render driven by thread loop (~2400 Hz at 2048-frame chunks)
-- **Rate conversion:** Playback may resample; render always passthrough
-- **Latency:** Playback has fixed device buffer latency; render has no latency concern
-
----
-
-## Why Alignment Matters
-
-**Before refactoring:** Render called `calcOutputTo()` directly, bypassing the resampler and its synth interface. If the synth's streaming interface (`calcNextFrames`, input plug readback) differed from `calcOutputTo()` behavior, timing and sample output could diverge.
-
-**After refactoring:** Both paths call the *exact same code path* to pull frames from the synth, ensuring **bit-identical output** when rendered at the project's native rate (no device resampling).
-
-**Validation:** The `test_sawtooth.wav` file can be used to verify this:
-1. Load into a track
-2. Render to WAV
-3. Compare bytes: should be identical if timing is correct
-4. Misalignment or skipped samples indicate remaining timing bugs
-
----
-
-## Synth Component Structure
-
-The synth component hierarchy (simplified):
-
-```
-tw303aEnvironment (root synth engine)
-├── twNegotiator (rate negotiation)
-├── twRewire / twMixer (graph mixing)
-├── twOscillators, Filters, etc. (signal processors)
-└── linkOutput(0) → twLatchOutput* (streaming output plug)
-
-Speaker (twSpeaker)
-├── pInputPlugs[0] ← synth->linkOutput(0) (wired at app startup)
-├── resampler_ (rate conversion)
-├── backend_ (WASAPI/ALSA/CoreAudio)
-└── startOutput() → device callback loop
-```
-
-The `linkOutput()` method wires the synth to the speaker's input plugs at graph-construction time. Rendering bypasses the speaker but uses the same `linkOutput()` to access the synth's output in the resampler.
-
----
-
-## Future Work
-
-1. **Verify timing:** Use `test_sawtooth.wav` to confirm render output matches expected sample counts
-2. **Stress test:** Load complex graphs and long audio, render vs. play in parallel
-3. **Edge cases:** Render from non-zero time (via startOffsetSamples_), non-trivial resampling
-4. **Device resampling:** Test playback on a device with different native rate to validate resampler correctness
+*An earlier version of this page walked through `twSpeaker`'s render callback
+and `RenderSession`'s loop pulling mono frames through a resampler and
+expanding them to stereo in place. That engine is gone: since proposal 36 B4 a
+page is planar and `SProject::channels()` wide, there is one track mix rather
+than one per bus, and playback reads frozen pages rather than pulling the synth
+plug directly. The walkthrough was removed rather than corrected, because
+`docs/contracts/FREEZE_PROTOCOL.md` already describes the current path. The old
+text is in git history: `git show 1e93d080:docs/FIXING_RENDERING.md`.*
