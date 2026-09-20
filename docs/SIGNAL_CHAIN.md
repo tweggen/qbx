@@ -1,5 +1,13 @@
 # Audio Signal Chain Architecture
 
+> **Scope.** This page traces the WIRING: which object creates which component
+> and what is connected to what. It is not the normative account of anything it
+> touches on the way — page freezing is
+> [`docs/contracts/FREEZE_PROTOCOL.md`](contracts/FREEZE_PROTOCOL.md), threading
+> is [`docs/contracts/THREADING.md`](contracts/THREADING.md), and the clip
+> layers are [`docs/contracts/CLIP_MODEL.md`](contracts/CLIP_MODEL.md). Where
+> this page and a contract disagree, the contract wins.
+
 ## Overview
 
 Smaragd's audio signal chain connects the SObject model hierarchy (UI + user data) to the twComponent DSP graph (real-time audio processing) via a series of wiring calls. This document traces the complete chain from project root through to hardware output.
@@ -88,12 +96,17 @@ twSpeaker::pullBlock()
     └─ Resample project rate → device rate (if needed)
 
 
-AudioEngine::pullStereoFrameFrozen()
+AudioEngine::pullBlock(float* const* outChannels, nChannels, ...)
     ├─ Load current timeline position (atomic)
-    ├─ Call updateFrozenPage(pos)
+    ├─ Update the frozen page for that position
     │   └─ Call synthOutput_->getPageIfExists(pageStartPos)
     │
-    └─ Extract sample from currentFrozenPage_
+    └─ Extract frames from the current frozen page
+
+    N DESTINATION BUFFERS, not two: since proposal 36 B5 the pull is
+    SProject::channels() wide. There is no mono pull and no
+    mono→stereo expansion anywhere on this path. See
+    tw303a/playback/include/tw/playback/audio_engine.h.
 
 
 synthOutput_ = SStdMixer::getRootComponent() = twRewire (root mixer output)
@@ -188,7 +201,8 @@ SPlainWave::getRootComponent() = twWavInput (WAV file reader)
 
 Page Cache & State Continuity
     ├─ Each component caches frozen pages by startPosition
-    ├─ Page contains 65,536 samples @ project rate + internal state snapshot
+    ├─ Page holds 65,536 frames PER CHANNEL @ project rate, planar,
+    │  + an internal state snapshot
     ├─ Next page reads: previousPage.internalState → restoreInternalState()
     │   ├─ Maintains reader position across page boundaries
     │   ├─ Maintains filter state (poles, delay lines) — IF captured
@@ -201,22 +215,26 @@ Page Cache & State Continuity
 
 ## Part 3: Key Wiring Call Sites
 
-| Step | Component | File | Line(s) | Code Fragment |
-|------|-----------|------|---------|---|
-| 1 | SStdMixer created | main/src/smainwindow.cpp | ~217 | `fileNew()` → `SProject::setRootComponent(new SStdMixer(...))` |
-| 2 | Speaker wired to root | main/src/sapplication.cpp | 51–63 | `rewireSpeaker()` → `getSpeaker()->setInput(0, root.linkOutput(0))` |
-| 3a | SStdMixer twMixer created | main/objects/mixer/src/sstdmixer.cpp | — | `setNBusses(1)` → ONE `twMixer`, `setChannels(n)` → n channels wide |
-| 3b | SStdMixer twRewire created | main/objects/mixer/src/sstdmixer.cpp | — | `new twRewire(env)`, `setNPlugs(1)`, `setChannels(n)` |
-| 3c | Mixer→Rewire wiring | main/objects/mixer/src/sstdmixer.cpp | — | `cpRewire_->setInput(0, mix->linkOutput(0))` |
-| 4 | Tracks → Mixer wiring | main/objects/mixer/src/sstdmixer.cpp | — | `reconnectTracksToMixer()` → `mix->setInput(trackIndex, track_rewire.linkOutput(0))` |
-| 5a | STrack twTrackMix created | main/objects/track/src/strack.cpp | — | `setChannels()` → ONE `twTrackMix(env)`, n channels wide |
-| 5b | STrack twPluginChain created | main/objects/track/src/strack.cpp | — | `new twPluginChain(env, n)` — ONE, one port each way |
-| 5c | STrack twRewire created | main/objects/track/src/strack.cpp | — | `new twRewire(env)`, `setNPlugs(1)` |
-| 5d | TrackMix→Chain→Rewire wiring | main/objects/track/src/strack.cpp | — | `cpDspChain_->setInput(0, cpTrackMix_->linkOutput(0))` etc. |
-| 6 | Clips inserted into twTrackMix | main/objects/track/src/strack.cpp | — | `trackChildWasAdded()` → `cpTrackMix_->insertClip(startTime, duration, getComponentFn)` |
-| 7 | twView created for clip | tw303a/src/twtrackmix.cc | 88–106 | `insertClip()` → `twView *view = new twView(env, getComponentFn)` |
-| 8 | SCut reader built | main/src/scut.cpp | 469–481 | `getRootComponent()` → builds or returns `twSampleReader`, `twLoopReader`, etc. |
-| 9 | SPlainWave reader created | main/src/splainwave.cpp | 65–68 | `getRootComponent()` → returns `cpWave_` (twWavInput) |
+Paths are given without line numbers on purpose: line numbers in a document
+rot on the next commit to the file, and every row below is findable by the
+function name in one grep.
+
+| Step | Component | File | Code Fragment |
+|------|-----------|------|---|
+| 1 | SStdMixer created | main/shell/src/smainwindow.cpp | `fileNew()` → `SProject::setRootComponent(new SStdMixer(...))` |
+| 2 | Speaker wired to root | main/shell/src/sapplication.cpp | `rewireSpeaker()` → `getSpeaker()->setInput(0, root.linkOutput(0))` |
+| 3a | SStdMixer twMixer created | main/objects/mixer/src/sstdmixer.cpp | `setNBusses(1)` → ONE `twMixer`, `setChannels(n)` → n channels wide |
+| 3b | SStdMixer twRewire created | main/objects/mixer/src/sstdmixer.cpp | `new twRewire(env)`, `setNPlugs(1)`, `setChannels(n)` |
+| 3c | Mixer→Rewire wiring | main/objects/mixer/src/sstdmixer.cpp | `cpRewire_->setInput(0, mix->linkOutput(0))` |
+| 4 | Tracks → Mixer wiring | main/objects/mixer/src/sstdmixer.cpp | `reconnectTracksToMixer()` → `mix->setInput(trackIndex, track_rewire.linkOutput(0))` |
+| 5a | STrack twTrackMix created | main/objects/track/src/strack.cpp | `setChannels()` → ONE `twTrackMix(env)`, n channels wide |
+| 5b | STrack twPluginChain created | main/objects/track/src/strack.cpp | `new twPluginChain(env, n)` — ONE, one port each way |
+| 5c | STrack twRewire created | main/objects/track/src/strack.cpp | `new twRewire(env)`, `setNPlugs(1)` |
+| 5d | TrackMix→Chain→Rewire wiring | main/objects/track/src/strack.cpp | `cpDspChain_->setInput(0, cpTrackMix_->linkOutput(0))` etc. |
+| 6 | Clips inserted into twTrackMix | main/objects/track/src/strack.cpp | `trackChildWasAdded()` → `cpTrackMix_->insertClip(...)` |
+| 7 | twView created for clip | tw303a/mix/src/twtrackmix.cc | `insertClip()` → `twView *view = new twView(env, getComponentFn)` |
+| 8 | SCut reader built | main/objects/cut/src/scut.cpp | `getRootComponent()` → builds or returns `twSampleReader`, `twLoopReader`, etc. |
+| 9 | SPlainWave reader created | main/objects/wave/src/splainwave.cpp | `getRootComponent()` → returns `cpWave_` (twWavInput) |
 
 ---
 
@@ -224,11 +242,18 @@ Page Cache & State Continuity
 
 ### Summary Table
 
+> **The override set has grown.** This table was written when only two
+> components overrode `freezePage()`. Five do as of 2026-09-20 — `twTrackMix`,
+> `twView`, `twPluginChain`, `twPluginInsert` and `twCompColumn`. Confirm with
+> `grep -rn "freezePage(" smaragd/tw303a --include=*.h` rather than trusting
+> the rows below; what has NOT changed is the second observation, which is the
+> reason the table exists.
+
 | Component | File | freezePage() Override? | Mechanism | State Snapshot? |
 |-----------|------|---|---|---|
-| **twTrackMix** | twtrackmix.cc | **YES** (line 231) | Iterates clips, calls `clip.view->freezePage()`, mixes outputs, applies track gain | Minimal (no audio state) |
-| **twView** | twview.cc | **YES** (line 44) | Forwards to dynamically-resolved component via callback | None (pure proxy) |
-| **twRewire** | twrewire.cc | No (base class) | `calcOutputTo()` → `readStreamingData()` on single input plug | None (stateless router) |
+| **twTrackMix** | tw303a/mix/src/twtrackmix.cc | **YES** | Iterates clips, calls `clip.view->freezePage()`, mixes outputs, applies track gain | Minimal (no audio state) |
+| **twView** | tw303a/graph/src/twview.cc | **YES** | Forwards to dynamically-resolved component via callback | None (pure proxy) |
+| **twRewire** | tw303a/mix/src/twrewire.cc | No (base class) | `calcOutputTo()` → `readStreamingData()` on single input plug | None (stateless router) |
 | **twMixer** | twmixer.cc | No (base class) | `calcOutputTo()` → `readStreamingData()` × N inputs, accumulate with per-input gain | None (stateless adder) |
 | **twPluginChain** | twpluginchain.cc | No (base class) | `calcOutputTo()` → iterates plugins, chains via `twStreamingLatch` | None (chains stateless plugins) |
 | **twSampleReader** | twsamplereader.cc | No (base class) | `calcOutputTo()` reads via latch from `twSampleSource`; **has `captureInternalState()` / `restoreInternalState()`** | **YES** — play position |
@@ -237,10 +262,17 @@ Page Cache & State Continuity
 
 ### Key Observations
 
-1. **Only `twTrackMix` and `twView` override `freezePage()`**. All others use the base class, which:
+1. **Most components do not override `freezePage()`**; they use the base class, which:
    - Installs a `FreezeContext` for cycle detection
    - Calls `renderFrames()` (default: calls `calcOutputTo()`)
    - Calls `captureInternalState()` / `restoreInternalState()` for state snapshots
+
+   A component overrides it only when the base sequence cannot express what it
+   does — `twTrackMix` because it mixes N clips into one page, `twView` because
+   it must resolve its target first, the plugin components because a plugin
+   carries state the base class cannot chase. The normative sequence every
+   override still has to honour is in
+   [`docs/contracts/FREEZE_PROTOCOL.md`](contracts/FREEZE_PROTOCOL.md).
 
 2. **State continuity across page boundaries requires `captureInternalState()` / `restoreInternalState()`**. Components with internal playback state must implement these:
    - ✅ `twSampleReader` — play position
@@ -253,9 +285,20 @@ Page Cache & State Continuity
 
 ## Part 5: The Mutex Hold-Time Problem & Thread Safety
 
+> **RESOLVED — kept for the reasoning, which is still load-bearing.** Both
+> halves of the fix proposed below were adopted. `freezePage` no longer holds
+> the component mutex across a render (cache check and placeholder insertion
+> only), and `pInputPlugs_` is a
+> `std::vector<std::shared_ptr<twLatchOutput>>` that `calcOutputTo()`
+> snapshots under a brief lock before releasing it for the recursive render —
+> see `twRewire::calcOutputTo` and
+> [`docs/contracts/THREADING.md`](contracts/THREADING.md) rules 2 and 3.
+> Read this part for WHY the obvious fix is unsafe without the refcount; do
+> not read the "Status" line below as current.
+
 ### The Silent Audio Issue
 
-**Status:** Root cause identified but fix requires architectural changes.
+**Status (2026-07-04, since fixed):** Root cause identified but fix requires architectural changes.
 
 **Problem:** Complete silence during playback despite correct signal wiring.
 
@@ -296,7 +339,12 @@ inputPlug->readStreamingData(...);  // DANGEROUS: inputPlug may be dangling
 - twrewire.cc line 75-78: "CRITICAL: Must be called under lock because: 1. Reallocates pInputPlugs array (use-after-free race with calcOutputTo)"
 - twmixer.cc line 136-137: "CRITICAL: Must be called under lock to prevent use-after-free when calcOutputTo() is running concurrently"
 
-### Proper Long-Term Solution: Shared Pointer Hierarchy
+### Proper Long-Term Solution: Shared Pointer Hierarchy — ADOPTED
+
+This is what was built. `pInputPlugs_` is a vector of
+`std::shared_ptr<twLatchOutput>`, and the snapshot pattern below is what
+`twRewire::calcOutputTo` does today (with a `ComponentState::ZOMBIE` fast path
+in front of it, added later by the teardown protocol).
 
 To fix both the silence AND the thread safety race, the entire component hierarchy needs lifetime management:
 
@@ -327,15 +375,20 @@ if (snapshot)
 
 ### Secondary Issue: twMoog Missing State Snapshot
 
-Lower priority than the mutex problem, but worth noting: `twMoog` has no `captureInternalState()` / `restoreInternalState()`, so filter pole state is lost at page boundaries. This causes audio quality degradation but not silence.
+Still open as of 2026-09-20: `twMoog` has no `captureInternalState()` /
+`restoreInternalState()`, so filter pole and delay state is lost at every page
+boundary. This is an audio-quality gap, not silence, and it is invisible to a
+byte-compare gate that uses the same page partition on both sides.
 
 ---
 
 ## References
 
-- **Architecture V3:** `docs/UNIFIED_RENDERING_ARCHITECTURE_V3.md`
-- **Signal routing:** `tw303a/include/twcomponent.h`, `tw303a/include/twlatch.h`, `tw303a/include/twplug.h`
-- **Freezing mechanism:** `tw303a/src/twcomponent.cc`, `tw303a/src/tw_freeze_context.cc`
-- **Audio engine:** `tw303a/src/audio/audio_engine.cc`, `tw303a/src/twspeaker.cc`
-- **Model wiring:** `main/src/sproject.cpp`, `main/src/sstdmixer.cpp`, `main/src/strack.cpp`
-- **Known thread-safety issues:** Lines 75-78 in twrewire.cc, 136-137 in twmixer.cc
+- **Teardown and sequential page protocols:** [`docs/UNIFIED_RENDERING_ARCHITECTURE_V3.md`](UNIFIED_RENDERING_ARCHITECTURE_V3.md)
+- **Freeze protocol (normative):** [`docs/contracts/FREEZE_PROTOCOL.md`](contracts/FREEZE_PROTOCOL.md)
+- **Threading rules (normative):** [`docs/contracts/THREADING.md`](contracts/THREADING.md)
+- **Signal routing:** `tw303a/graph/include/tw/graph/{twcomponent.h,twlatch.h,twview.h}`
+- **Freezing mechanism:** `tw303a/graph/src/twcomponent.cc`, `tw303a/graph/src/tw_freeze_context.cc`
+- **Audio engine:** `tw303a/playback/include/tw/playback/audio_engine.h`, `tw303a/playback/src/twspeaker.cc`
+- **Model wiring:** `main/model/src/sproject.cpp`, `main/objects/mixer/src/sstdmixer.cpp`, `main/objects/track/src/strack.cpp`
+- **The use-after-free the plug array guards against:** the `CRITICAL: Must be called under lock` comments in `twrewire.cc` and `twmixer.cc`
