@@ -53,6 +53,10 @@ echo ""
 echo "Building..."
 cmake --build build
 
+# Record which Qt this tree was built against, so a later ./build.sh can refuse
+# to build incrementally over a Qt upgrade it cannot otherwise detect (QBX-103).
+write_qt_stamp
+
 echo ""
 echo "=== Build complete ==="
 echo "Binary: $BIN_PATH"

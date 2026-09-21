@@ -50,6 +50,76 @@ qt_prefix_from_query() {
     echo "$prefix"
 }
 
+# The Qt version behind a prefix, or "" when it cannot be determined.
+#
+# Why this exists: a DISTRO Qt UPGRADE IS INVISIBLE TO NINJA. dpkg preserves the
+# upstream mtime on installed headers, so Ubuntu's Qt 6.11.2 headers carry an
+# mtime months older than object files built against 6.10.2. Ninja compares
+# mtimes, sees nothing newer, rebuilds nothing -- and the incremental binary ends
+# up with objects compiled against the OLD Qt headers linked against the NEW Qt
+# runtime. The QList/QArrayData layouts disagree and inlined header code writes
+# through a null pointer: every qxa case then SEGFAULTs in SApplication's
+# constructor, with a clean build the only cure (QBX-103).
+#
+# Asking the toolchain beats trusting a timestamp, so build.sh stamps the version
+# it built against and refuses an incremental build when it no longer matches.
+qt_version_of_prefix() {
+    local prefix="${1%/}" ver exe hdr toolprefix
+    [ -n "$prefix" ] || return 1
+    # A qmake/qtpaths INSIDE the prefix describes that Qt by construction.
+    for exe in "$prefix/bin/qmake6" "$prefix/bin/qtpaths6" "$prefix/bin/qmake"; do
+        [ -x "$exe" ] || continue
+        ver=$("$exe" -query QT_VERSION 2>/dev/null) || continue
+        [ -n "$ver" ] && { echo "$ver"; return 0; }
+    done
+    # One on PATH only counts if it reports THIS prefix -- otherwise it is a
+    # different Qt and would stamp a version this build never used.
+    for exe in qmake6 qtpaths6; do
+        command -v "$exe" &>/dev/null || continue
+        toolprefix=$("$exe" -query QT_INSTALL_PREFIX 2>/dev/null) || continue
+        [ "${toolprefix%/}" = "$prefix" ] || continue
+        ver=$("$exe" -query QT_VERSION 2>/dev/null) || continue
+        [ -n "$ver" ] && { echo "$ver"; return 0; }
+    done
+    # No tool: read it out of the headers, multiarch layout included.
+    for hdr in "$prefix"/include/QtCore/qtcoreversion.h \
+               "$prefix"/include/*/qt6/QtCore/qtcoreversion.h \
+               "$prefix"/include/qt6/QtCore/qtcoreversion.h; do
+        [ -f "$hdr" ] || continue
+        ver=$(sed -n 's/.*QTCORE_VERSION_STR[[:space:]]*"\([^"]*\)".*/\1/p' "$hdr" | head -1)
+        [ -n "$ver" ] && { echo "$ver"; return 0; }
+    done
+    return 1
+}
+
+# Where build.sh/rebuild.sh record the Qt a build directory was built against.
+qt_stamp_path() { echo "$PROJECT_DIR/build/.qt-version"; }
+
+# Record the Qt version behind $QT_PATH next to the build tree. Best effort: a
+# setup we cannot interrogate simply gets no stamp, and the check below then
+# stays quiet rather than blocking the build.
+write_qt_stamp() {
+    local ver stamp
+    ver=$(qt_version_of_prefix "$QT_PATH") || return 0
+    stamp=$(qt_stamp_path)
+    [ -d "$(dirname "$stamp")" ] || return 0
+    printf '%s\n' "$ver" > "$stamp" 2>/dev/null || true
+}
+
+# True when the build tree was built against a DIFFERENT Qt than the one now
+# resolved. Echoes "<was> -> <now>" when it differs.
+qt_stamp_differs() {
+    local stamp was now
+    stamp=$(qt_stamp_path)
+    [ -f "$stamp" ] || return 1          # never stamped: say nothing
+    was=$(head -1 "$stamp" 2>/dev/null)
+    now=$(qt_version_of_prefix "$QT_PATH") || return 1
+    [ -n "$was" ] && [ -n "$now" ] || return 1
+    [ "$was" = "$now" ] && return 1
+    echo "$was -> $now"
+    return 0
+}
+
 # True when a prefix actually contains a Qt 6 CMake package, whatever libdir
 # layout it uses: <prefix>/lib/cmake (Qt installer, macOS/Windows),
 # <prefix>/lib/<arch>/cmake (Debian/Ubuntu multiarch) or <prefix>/lib64/cmake
