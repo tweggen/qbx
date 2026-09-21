@@ -296,6 +296,13 @@ void SMixerStrip::buildUi_()
         narrow_ = t->mixerStripNarrow();
     }
     applyHeaderColor_();
+
+    // A STRIP MUST BE BORN IN THE RIGHT ENABLED STATE (QBX-114). refreshEnabled
+    // State() was only ever reached from SMixerPane on a project-channel change,
+    // so a strip built for a lane that already disallows a control offered it
+    // anyway until something unrelated happened to change the channel count.
+    // Measured: an un-hidden conductor's strip reported `volOn=1`.
+    refreshEnabledState();
 }
 
 // AC4.3. THE TRACK'S COLOUR REACHES THE MIXER THROUGH THE SAME FUNCTION THE
@@ -421,7 +428,11 @@ void SMixerStrip::applyPan_( double pan )
 }
 
 // Disabled with a tooltip at width != 2 and on the conductor lane (49 D1/D2).
-void SMixerStrip::refreshEnabledState() { syncPanEnabled_(); }
+void SMixerStrip::refreshEnabledState()
+{
+    syncPanEnabled_();
+    syncVolumeEnabled_();
+}
 
 void SMixerStrip::syncPanEnabled_()
 {
@@ -441,6 +452,26 @@ void SMixerStrip::syncPanEnabled_()
     else
         pan_->setToolTip( tr( "Pan: %1. Double-click to centre." )
                               .arg( sPanText( t ? t->getPan() : 0.0 ) ) );
+}
+
+// The fader's counterpart to syncPanEnabled_(), and for the same reason: the
+// conductor lane carries no audio, so a fader there would move and never be
+// heard (QBX-114). Volume has only the one bound -- unlike pan, which is also
+// undefined away from width 2 -- so there is one branch, not two.
+void SMixerStrip::syncVolumeEnabled_()
+{
+    if( !fader_ ) return;
+    STrack *t = track_.data();
+    const bool conductor = t && t->systemRole() == SSystemRole::Conductor;
+    const bool ok = t && !conductor;
+    fader_->setEnabled( ok );
+    if( dbLabel_ ) dbLabel_->setEnabled( ok );
+    if( conductor )
+        fader_->setToolTip( tr( "The conductor lane carries no audio, so its "
+                                "level cannot be changed." ) );
+    else
+        fader_->setToolTip( tr( "Track volume. Double-click to reset to "
+                                "0.0 dB." ) );
 }
 
 void SMixerStrip::setFaderSilently_( double db )
@@ -956,7 +987,7 @@ QString SMixerStrip::describe() const
                // proposal 48 M4 appended `color` and `meter`.
                "name=%1|narrow=%2|mute=%3|solo=%4|arm=%5|db=%6|role=%7"
                "|faderDb=%8|inserts=%9|sends=%10|compact=%11|live=%12"
-               "|color=%13|meter=%14|pan=%15|panOn=%16" )
+               "|color=%13|meter=%14|pan=%15|panOn=%16|volOn=%17" )
         .arg( t ? t->getSName() : QStringLiteral( "?" ) )
         .arg( narrow_ ? 1 : 0 )
         .arg( t && t->isMuted() ? 1 : 0 )
@@ -994,7 +1025,10 @@ QString SMixerStrip::describe() const
         // The pan control's TEXT, through spanscale's ONE spelling, so this
         // strip and the arranger head cannot disagree about what "L37" means.
         .arg( sPanText( t ? t->getPan() : 0.0 ) )
-        .arg( pan_ && pan_->isEnabled() ? 1 : 0 );
+        .arg( pan_ && pan_->isEnabled() ? 1 : 0 )
+        // QBX-114: the FADER's enabled state, appended last for the same AC4.1
+        // reason `pan` was. 0 on the conductor, which carries no audio.
+        .arg( fader_ && fader_->isEnabled() ? 1 : 0 );
 }
 
 // QBX-100. The arrangement is read from GEOMETRY, never from the layout tree:

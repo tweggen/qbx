@@ -165,6 +165,9 @@ private:
     void applyPan_( double pan );
     /// Disabled with a tooltip at width != 2 and on the conductor lane.
     void syncPanEnabled_();
+    // QBX-114: the fader's counterpart -- disabled on the conductor, which
+    // carries no audio.
+    void syncVolumeEnabled_();
     void setFaderSilently_( double db );
     void setPanSilently_( double pan );
     /// The pass-and-macro shape every M/S/R button shares. `apply` builds the

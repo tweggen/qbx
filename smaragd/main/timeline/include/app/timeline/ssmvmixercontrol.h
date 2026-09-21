@@ -156,6 +156,9 @@ private:
     // refuses it (D2), so the control is DISABLED with a tooltip naming why
     // rather than silently committing something the verb will refuse.
     void syncPanEnabled();
+    // QBX-114: the fader's counterpart -- disabled on the conductor lane,
+    // which carries no audio.
+    void syncVolumeEnabled();
 
     // Responsive layout management. The strip has to fit whatever lane height
     // it is given — lanes are individually sized and vertical zoom runs down to
