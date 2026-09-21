@@ -181,6 +181,25 @@ void collectTracks( SObject *node, QList<STrack *> &out )
     }
 }
 
+// The divisor between the plugin's geometry units and Qt's logical geometry.
+//
+// ONE on macOS, and that is the whole fix: VST3 (iplugview.h:98-100) and CLAP
+// (gui.h) both state cocoa geometry in LOGICAL units, which are already the
+// units QWidget geometry is in, so there is nothing to convert. Windows and X11
+// state theirs in physical pixels, so those divide by the device pixel ratio.
+//
+// A dpr of zero is not a scale; it is a widget that has no window yet. Treat it
+// as 1 rather than dividing by it.
+qreal pluginToHostScale( qreal dpr )
+{
+#if defined( Q_OS_MACOS )
+    Q_UNUSED( dpr );
+    return 1.0;
+#else
+    return dpr > 0.0 ? dpr : 1.0;
+#endif
+}
+
 }  // namespace
 
 // See the header for why this is public and static.
@@ -208,6 +227,21 @@ QRect SPluginNativeEditor::clampOntoAScreen( const QRect &want )
     if( r.left() < avail.left() )     r.moveLeft( avail.left() );
     if( r.top() < avail.top() )       r.moveTop( avail.top() );
     return r;
+}
+
+// See the header for why these two are public and static, and why macOS is an
+// identity rather than a scale.
+QSize SPluginNativeEditor::hostSizeFor( audio::twEditorSize native, qreal dpr )
+{
+    const qreal s = pluginToHostScale( dpr );
+    return QSize( qRound( native.width / s ), qRound( native.height / s ) );
+}
+
+audio::twEditorSize SPluginNativeEditor::nativeSizeFor( QSize host, qreal dpr )
+{
+    const qreal s = pluginToHostScale( dpr );
+    return audio::twEditorSize{ qRound( host.width() * s ),
+                                qRound( host.height() * s ) };
 }
 
 QString SPluginNativeEditor::pluginKey() const
@@ -395,28 +429,28 @@ bool SPluginNativeEditor::attachPlugin()
 
 // --- geometry -----------------------------------------------------------------
 
-void SPluginNativeEditor::resizeToPlugin( audio::twEditorSize physical )
+void SPluginNativeEditor::resizeToPlugin( audio::twEditorSize native )
 {
-    if( !physical.valid() ) return;
+    if( !native.valid() ) return;
     // Nothing of ours has that size: the plugin owns its floating window and
     // sizes it itself. Resizing this hidden dialog would be a no-op with a
     // layout pass attached.
     if( floating_ ) return;
 
-    // THE ONE CONVERSION. twEditorSize is PHYSICAL PIXELS by ABI fiat
-    // (twplugineditor.h), because VST3 coordinates are physical on Windows and
-    // X11 but LOGICAL on macOS — the backend normalizes, and everything above it
-    // sees one convention. Qt widget geometry is logical, so the physical size
-    // is divided by the device pixel ratio exactly here and nowhere else.
-    // Skipping it is a no-op at 100% and a window the wrong size on every
-    // scaled display, which is the classic embedding bug and never reproduces on
-    // the developer's own monitor.
-    const qreal dpr = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
-    const int   w   = qRound( physical.width / dpr );
-    const int   hgt = qRound( physical.height / dpr );
-
+    // THE ONE CONVERSION, and it happens exactly here and in resizeEvent()
+    // below. twEditorSize is the PLUGIN'S OWN units (twplugineditor.h): physical
+    // pixels on Windows and X11, logical points on macOS. Qt widget geometry is
+    // logical, so the first two divide by the device pixel ratio and macOS does
+    // not convert at all.
+    //
+    // Both halves of that have bitten. Skipping the division on Windows/X11 is a
+    // no-op at 100% and a window the wrong size on every scaled display, which
+    // never reproduces on the developer's own monitor. DOING it on macOS — where
+    // the plugin was already speaking Qt's units — is what shipped, and it made
+    // every native editor on a Retina Mac exactly half size with the plugin's
+    // GUI cropped inside it.
     applyingResize_ = true;
-    container_->setFixedSize( w, hgt );
+    container_->setFixedSize( hostSizeFor( native, devicePixelRatioF() ) );
     // Fixed only while the plugin says it cannot resize; otherwise the user is
     // allowed to drag and resizeEvent negotiates.
     if( editor_ && editor_->caps().resizable )
@@ -431,9 +465,11 @@ void SPluginNativeEditor::resizeEvent( QResizeEvent *e )
     if( applyingResize_ || !editor_ ) return;
     if( !editor_->caps().resizable ) return;
 
-    const qreal dpr = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
-    audio::twEditorSize want{ qRound( container_->width() * dpr ),
-                              qRound( container_->height() * dpr ) };
+    // The inverse of resizeToPlugin()'s conversion, and it MUST be the inverse:
+    // a round trip that does not land back where it started makes the plugin and
+    // the container argue about the size, one poll at a time.
+    audio::twEditorSize want = nativeSizeFor(
+        QSize( container_->width(), container_->height() ), devicePixelRatioF() );
 
     // Ask before telling: a plugin may only accept certain sizes, and onSize()
     // with one it refused is how a GUI ends up clipped.

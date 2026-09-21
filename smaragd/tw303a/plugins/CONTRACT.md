@@ -1132,3 +1132,29 @@ different views of the same type.
     an option — it writes to the same fd, and a plugin may legitimately want a
     console. Gate: the same "BUNDLE load" section, which probes OUT OF PROCESS
     against a deliberately CHATTY fixture.
+
+56. **A BACKEND NEVER CONVERTS A SIZE; `twEditorSize` IS WHATEVER THE PLUGIN
+    SAID** (found 2026-09-21). VST3 states (`iplugview.h:98-100`) that
+    `IPlugView` geometry is LOGICAL on macOS and PHYSICAL pixels on Windows and
+    X11; CLAP's `gui.h` says the same. `size()`, `constrain()`, `setSize()` and
+    `poll()`'s `newSize` pass those numbers through untouched in both backends,
+    and the ONE conversion to the host's logical geometry lives on the other
+    side of the ABI — `SPluginNativeEditor::hostSizeFor()`, which divides by the
+    device pixel ratio on Windows/X11 and does nothing on macOS.
+
+    The ABI used to say the opposite: PHYSICAL PIXELS ALWAYS, backends normalize
+    macOS up, so the host would have one convention. Nothing implemented it.
+    Both backends passed the cocoa size through — each deferring to "the caller
+    that knows the scale" — while the host divided by the dpr on the strength of
+    the rule, and every native editor on a 2x Retina Mac came up at half size
+    with the plugin's view painting full size inside it and the right and bottom
+    of the GUI cropped away (measured against NassauAnalogue: a 944x712 editor
+    in a 472x356 window). It never showed on Windows, where the declared
+    convention happened to be true.
+
+    A backend that wants to convert here again needs a scale, and the only
+    correct one is Qt's `devicePixelRatioF()` for that specific window, which is
+    on the far side of this ABI. A second source for it — `NSScreen`, the
+    attached view's `backingScaleFactor` — is a second chance to disagree with
+    the host about the same number, and the host's copy is the one the window is
+    actually sized with. Gate: `plugin_editor_geometry_test`.

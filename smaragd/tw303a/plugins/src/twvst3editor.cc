@@ -166,9 +166,13 @@ twEditorSize twVst3Editor::size() const
     ViewRect r{};
     if( view_->getSize( &r ) == kResultOk )
         s = twEditorSize{ r.getWidth(), r.getHeight() };
-    // Physical pixels on Windows and X11 already; macOS is logical and is
-    // converted by the caller that knows the scale (twplugineditor.h states the
-    // ABI rule). Nothing to do here on the two physical platforms.
+    // Verbatim, on every platform: physical pixels on Windows and X11, logical
+    // points on macOS. That IS what twEditorSize means (twplugineditor.h) — the
+    // rule it used to state, "physical always", asked this function to scale
+    // cocoa sizes up and this function never did, which is how every Retina Mac
+    // got a half-size editor window. The one conversion to Qt's geometry
+    // belongs to the host, which is the only side that knows the dpr to do it
+    // with. Same in constrain(), setSize() and poll()'s newSize.
     return s;
 }
 
