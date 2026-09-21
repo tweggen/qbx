@@ -67,11 +67,22 @@ SMixerStrip::SMixerStrip( SStdMixer *mixer, STrack *track,
                           const QString &rootName, QWidget *parent )
     : QWidget( parent ), mixer_( mixer ), track_( track ), rootName_( rootName )
 {
-    // THE SMALL FONT (QBX-102): the track head's name font, set on the whole
-    // strip BEFORE its children exist so every label, button and the embedded
-    // insert and send lists inherit it. The name label's elision reads its own
-    // fontMetrics, so it measures the size it is drawn at.
-    setFont( suifonts::smallFont() );
+    // THE TREE FONT (QBX-115), set on the whole strip BEFORE its children
+    // exist so every label and button inherits it. The name label's elision
+    // reads its own fontMetrics, so it measures the size it is drawn at.
+    //
+    // THIS REVERSES PART OF QBX-102 ON PURPOSE. That ticket made the strip use
+    // smallFont() -- "the mixer uses the same size as the track name in the
+    // track head" -- and `stripEqHead` gated the agreement. QBX-115 asks for
+    // the opposite and gives the reason: the mixer is a DENSITY surface, and
+    // the smaller font is what "allow[s] for more channels to be displayed on
+    // screen at once". The insert list moves with it, in BOTH mounts: the
+    // dock's SPluginEffectStrip does not inherit from this strip, so it sets
+    // treeFont() itself (splugineffectstrip.cpp).
+    //
+    // QBX-102's rule still holds where it was really about agreement -- the
+    // head's name and volume labels are still smallFont().
+    setFont( suifonts::treeFont() );
     buildUi_();
 
     if( STrack *t = track_.data() ) {
@@ -153,12 +164,15 @@ void SMixerStrip::buildUi_()
     nameLabel_ = new QLabel( t ? t->getSName() : QString(), this );
     nameLabel_->setToolTip( nameLabel_->text() );
     header->addWidget( nameLabel_, 1 );
+    // QBX-116: the narrow/wide button is BUILT here but MOUNTED in the M/S/R
+    // column below, not in this row. It used to sit beside the name and took
+    // 16 px plus a gap off the title's elision budget on every strip, wide or
+    // narrow -- and the title is the one thing a strip has to be able to say.
     narrowBtn_ = new QPushButton( QStringLiteral( "<" ), this );
     narrowBtn_->setFixedSize( 16, 16 );
     narrowBtn_->setToolTip( tr( "Narrow / wide strip" ) );
     connect( narrowBtn_, &QPushButton::clicked,
              this, [this]{ setNarrow( !narrow_ ); } );
-    header->addWidget( narrowBtn_, 0 );
     outer->addLayout( header );
 
     // THE ARRANGER'S OWN WIDGETS, MOUNTED. Not a compact re-implementation:
@@ -178,6 +192,18 @@ void SMixerStrip::buildUi_()
     body->addStretch( 1 );
 
     scroll_->setWidget( scrollBody_ );
+    // QBX-115: THE FADER GETS THE VERTICAL STRETCH, not the insert list.
+    // These two lines used to read `scroll_, 1` and `fixedBlock_, 0`, so every
+    // pixel a taller mixer gained went to the SCROLLED half and the fader --
+    // which cannot scroll and is the control a mixer exists for -- kept its
+    // size hint. The reporter saw exactly that: "expanding the mixer area
+    // vertically expands the area above the faders, and allows the faders only
+    // little to grow".
+    //
+    // 1:3 rather than 0:1 because the insert list still benefits from height
+    // and can then show a row or two more before it has to scroll; the fader
+    // takes three quarters of whatever is going. The ratio is the tunable here
+    // -- the defect was that one side took everything.
     outer->addWidget( scroll_, 1 );
 
     // --- the PINNED half (D5) ----------------------------------------------
@@ -247,6 +273,11 @@ void SMixerStrip::buildUi_()
     muteBtn_ = mkBtn( QStringLiteral( "M" ), tr( "Mute" ) );
     soloBtn_ = mkBtn( QStringLiteral( "S" ), tr( "Solo" ) );
     armBtn_  = mkBtn( QStringLiteral( "R" ), tr( "Arm for recording" ) );
+    // QBX-116: the narrow/wide toggle, directly below M/S/R and above the
+    // stretch so it sits under the buttons rather than floating at the bottom
+    // of a tall strip. Same 16 px square as the narrow M/S/R buttons, so the
+    // column's width arithmetic (proposal 48 D9's 60 px floor) is unchanged.
+    msr->addWidget( narrowBtn_, 0, Qt::AlignHCenter );
     msr->addStretch( 1 );
     faderRow->addLayout( msr, 0 );
     connect( muteBtn_, &QPushButton::toggled, this, &SMixerStrip::onMuteToggled );
@@ -282,7 +313,7 @@ void SMixerStrip::buildUi_()
     dbLabel_ = new QLabel( QStringLiteral( "+0.0 dB" ), fixedBlock_ );
     fixed->addWidget( dbLabel_, 0 );
 
-    outer->addWidget( fixedBlock_, 0 );
+    outer->addWidget( fixedBlock_, 3 );   // QBX-115, see above
 
     if( t ) {
         probe_.setTap( t->getRootComponent() );
@@ -1026,8 +1057,36 @@ QString SMixerStrip::describeArrangement() const
             }
         }
     }
-    return QStringLiteral( "msrColumn=%1|msrBesideFader=%2|panAbove=%3" )
-        .arg( column ).arg( beside ).arg( above );
+    // QBX-116: the compact ("narrow") button is IN the M/S/R column, under
+    // the arm button, not in the header row beside the name. Geometry again:
+    // below arm's bottom, and horizontally inside the column's band. -1 when
+    // a widget the relation needs is not shown, exactly like the three above.
+    int narrowUnderMsr = -1;
+    if( shown( narrowBtn_ ) && shown( muteBtn_ ) && shown( soloBtn_ )
+        && shown( armBtn_ ) ) {
+        const QRect n = rectOf( narrowBtn_ ), m = rectOf( muteBtn_ ),
+                    s = rectOf( soloBtn_ ), r = rectOf( armBtn_ );
+        const int bandL = qMin( m.left(), qMin( s.left(), r.left() ) );
+        const int bandR = qMax( m.right(), qMax( s.right(), r.right() ) );
+        narrowUnderMsr = ( n.top() > r.bottom() && n.center().x() >= bandL
+                           && n.center().x() <= bandR ) ? 1 : 0;
+    }
+
+    // QBX-115: THE FADER'S SHARE OF THE STRIP. The complaint is that the
+    // fader is too short, and the cause was the vertical stretch: the fader
+    // block took its sizeHint and the insert/send scroll area took every
+    // extra pixel. Reported as a percentage of the strip's own height so the
+    // case asserts a RELATION between two measured widgets rather than a pixel
+    // count, and computed from geometry so a layout that says the right thing
+    // but lays out the old way still fails.
+    const int faderPct = ( shown( fader_ ) && height() > 0 )
+                             ? ( rectOf( fader_ ).height() * 100 ) / height()
+                             : -1;
+
+    return QStringLiteral( "msrColumn=%1|msrBesideFader=%2|panAbove=%3"
+                           "|narrowUnderMsr=%4|faderPct=%5" )
+        .arg( column ).arg( beside ).arg( above )
+        .arg( narrowUnderMsr ).arg( faderPct );
 }
 
 // CONTRACT inv. 4 / D13. closeProject() clears the undo stack, calls

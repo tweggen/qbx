@@ -3655,19 +3655,29 @@ QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
     // master (stripAt( stripCount() )). Each field is the WORST any strip
     // reports -- 0 beats -1 beats 1 -- so one strip laid out the old way fails
     // the case rather than being outvoted by the others.
-    int arr[3] = { 1, 1, 1 };
-    const char *arrKeys[3] = { "msrColumn", "msrBesideFader", "panAbove" };
+    int arr[4] = { 1, 1, 1, 1 };
+    const char *arrKeys[4] = { "msrColumn", "msrBesideFader", "panAbove",
+                               "narrowUnderMsr" };
+    // QBX-115: the SHORTEST fader on the pane, for the same reason -- one
+    // strip laid out the old way must fail the case, not be averaged away.
+    int faderPct = 100;
     for( int i = 0; i <= pane->stripCount(); ++i ) {
         SMixerStrip *s = pane->stripAt( i );
         if( !s ) continue;
         const QString a = s->describeArrangement();
-        for( int k = 0; k < 3; ++k ) {
-            const QString key = QLatin1String( arrKeys[k] ) + QLatin1Char( '=' );
+        const auto field = [&a]( const char *name ) {
+            const QString key = QLatin1String( name ) + QLatin1Char( '=' );
             const int at = a.indexOf( key );
-            if( at < 0 ) { arr[k] = 0; continue; }
-            const int v = a.mid( at + key.size() ).section( QLatin1Char( '|' ), 0, 0 ).toInt();
+            if( at < 0 ) return -2;   // the field itself is gone
+            return a.mid( at + key.size() ).section( QLatin1Char( '|' ), 0, 0 ).toInt();
+        };
+        for( int k = 0; k < 4; ++k ) {
+            const int v = field( arrKeys[k] );
+            if( v == -2 ) { arr[k] = 0; continue; }
             if( v == 0 || ( v == -1 && arr[k] != 0 ) ) arr[k] = v;
         }
+        const int p = field( "faderPct" );
+        if( p < faderPct ) faderPct = p;
     }
 
     // The arrangement fields are APPENDED AFTER `worst` so every committed
@@ -3675,13 +3685,15 @@ QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
     return QStringLiteral(
                "w=%1|h=%2|stripW=%3|crushed=%4|overlap=%5|scrollNeeded=%6"
                "|scrolled=%7|masterPinned=%8|worst=%9"
-               "|msrColumn=%10|msrBesideFader=%11|panAbove=%12" )
+               "|msrColumn=%10|msrBesideFader=%11|panAbove=%12"
+               "|narrowUnderMsr=%13|faderPct=%14" )
         .arg( pane->width() ).arg( pane->height() ).arg( stripWidth )
         .arg( st.crushed ).arg( st.overlap )
         .arg( scrollNeeded ? 1 : 0 )
         .arg( scrolled ).arg( masterPinned )
         .arg( st.worst.isEmpty() ? QStringLiteral( "-" ) : st.worst )
-        .arg( arr[0] ).arg( arr[1] ).arg( arr[2] );
+        .arg( arr[0] ).arg( arr[1] ).arg( arr[2] )
+        .arg( arr[3] ).arg( faderPct );
 }
 
 QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
@@ -3793,16 +3805,25 @@ QString SMainWindow::describeUiFonts( const QString &trackPath )
     SMixerStrip *strip = nullptr;
     if( SMixerPane *pane = buildScratchMixerPane( QString() ) )
         strip = pane->stripForTrackNamed( track->getSName() );
-    mount( "strip", "Small", strip, small );
-    // The request's own wording is "the same size as the track name in the
-    // track head", so the relation is also stated directly.
+    // QBX-115 moved the mixer strip (and the insert list it embeds) from
+    // smallFont() to treeFont(), so it is compared against TREE now. On a
+    // platform that sets no dock-title font -- Windows and Linux -- treeFont()
+    // IS the application font and the two can be the same QFont, so this field
+    // alone cannot tell the change happened: `stripSet` is what gates that the
+    // widget asked for a font at all.
+    mount( "strip", "Tree", strip, tree );
+    // Reported, no longer asserted. QBX-102's request was "the same size as the
+    // track name in the track head"; QBX-115 asked for the media browser's font
+    // instead, which is a different named font, so this relation is now
+    // incidental -- and on Linux, where the two named fonts coincide, it cannot
+    // tell the two apart anyway.
     out << QStringLiteral( "stripEqHead=%1" )
                .arg( headLabel && strip && strip->font() == headLabel->font() ? 1 : 0 );
 
     {
         STrackDetailPanel panel( nullptr );
         panel.setTrack( track );
-        mount( "plugin", "Small", panel.findChild<SPluginEffectStrip *>(), small );
+        mount( "plugin", "Tree", panel.findChild<SPluginEffectStrip *>(), tree );
     }
 
     // THE LIVE dock widgets: both lists are built with the window whether or

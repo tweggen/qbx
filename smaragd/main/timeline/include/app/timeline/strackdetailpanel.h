@@ -41,8 +41,9 @@ public:
     SCollapsibleSection *section( const QString &id ) const;
 
     /// "plugins=<0|1>,feelflow=<0|1>,sliders=<0|1>" -- 1 is COLLAPSED -- plus
-    /// "|pluginFontPt=<n>|pluginSmallFont=<0|1>", where the last says the
-    /// insert list's font IS suifonts::smallFont(). What the section headers
+    /// "|pluginFontPt=<n>|pluginTreeFont=<0|1>", where the last says the
+    /// insert list's font IS suifonts::treeFont() (QBX-115; it was
+    /// smallFont() under QBX-102). What the section headers
     /// SHOW, which is what a user sees; the project property is asserted
     /// separately through the model.
     QString describeSections() const;

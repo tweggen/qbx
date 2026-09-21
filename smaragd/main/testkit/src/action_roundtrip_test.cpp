@@ -422,7 +422,7 @@ const Fixture kFixtures[] = {
     { "assert-mixer-layout",
       "<assert-mixer-layout paneWidth='640' paneHeight='180' stripWidth='60'"
       " maxCrushed='0' maxOverlap='0' scrollNeeded='1'"
-      " contains='worst=-'/>" },
+      " minFaderPct='40' contains='worst=-'/>" },
     { "mixer-strip-toggle",
       "<mixer-strip-toggle track='Drums' arrangement='Riff' control='solo'"
       " on='true'/>" },
