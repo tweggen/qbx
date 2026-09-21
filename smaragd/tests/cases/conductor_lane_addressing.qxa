@@ -17,30 +17,26 @@
   it does not call set-track-volume behind the head's back. So what is measured
   is the address the HEAD derived, which is the thing T16 is about.
 
-  WHY A FADER ON A LANE THAT MAKES NO SOUND. A conductor lane contributes no
-  audio (AC6.1), so this case cannot HEAR the commit the way
-  master_head_fader_heard does. It reads the value back off all three
-  candidates instead, and that is a stronger discriminator than hearing it
-  would be: a wrong pathOf() lands on the mixer or on the master, and both are
-  checked to have NOT moved. Hearing the master move would only have told us
-  the commit missed - not where it went.
+  WHY THE MUTE AND NOT THE FADER. A conductor lane contributes no audio
+  (AC6.1), so this case cannot HEAR the commit the way master_head_fader_heard
+  does. It reads the value back off all three candidates instead, and that is a
+  stronger discriminator than hearing it would be: a wrong pathOf() lands on the
+  mixer or on the master, and both are checked to have NOT moved. Hearing the
+  master move would only have told us the commit missed - not where it went.
+
+  The gesture used to be the FADER. QBX-114 refuses a fader on the conductor
+  outright - it was stored, undoable and never heard - so the fader half is now
+  a refusal assertion, and the MUTE carries T16's landing-site check. Mute is
+  still accepted there on purpose: it is not purely an audio control, it also
+  drives the lane and clip colour through strackcolormodifier, so refusing it
+  would remove a visible behaviour rather than an inert one.
 
   WATCHED FAILING by deleting findPathRec's system-lane DESCENT (the recursive
-  branch, not the sentinel branch above it, which AC4.4 already covers). What
-  it reports is worth recording, because it is NOT the assertion a reader would
-  expect to bite:
-
-    assert-system-lane [ $master,0 ] pathOf : got <empty = the root>
-                                              want $master,0
-    assert-track-volume FAILED: expected 0 dB but got -5.93336 dB
-
-  The FIRST is the model half. The SECOND is the "and nowhere else" assertion,
-  and it is the one that catches the GESTURE - while the conductor's own
-  `volumeDb="-6"` check keeps PASSING, because the head control writes the
-  value into the track it was built for whatever address it then commits to.
-  So a case that asserted only "the conductor moved" would go green over the
-  whole defect. That is why all three lanes are read back and not just the
-  target.
+  branch, not the sentinel branch above it, which AC4.4 already covers). With
+  the descent gone the mute commits to the master instead, so
+  `assert-system-lane [ $master ] muted` flips to 1 while the conductor's own
+  check reports 0 - the pair is what catches it, which is why all three lanes
+  are read back and not just the target.
 -->
 <SActionScript version="1" name="conductor_lane_addressing">
 
@@ -68,29 +64,35 @@
     <!-- One user lane, the master lane, and the conductor nested under it. -->
     <assert-lane-alignment rows="3"/>
 
-    <!-- THE GESTURE, through the real head. -->
-    <head-fader trackPath="$master,0" db="-6"/>
-
-    <!-- IT LANDED ON THE CONDUCTOR... -->
-    <assert-track-volume trackPath="$master,0" volumeDb="-6" tolerance="0.07"/>
-
-    <!-- ...AND NOWHERE ELSE. These two are the assertion T16 asks for: a
-         pathOf() missing its descent commits to one of them. -->
+    <!-- THE GESTURE IS NOW REFUSED, and that is QBX-114 rather than a change
+         of heart about T16. The conductor carries no audio, so its fader is
+         disabled in every mount and set-track-volume refuses the lane; the
+         head gesture therefore cannot commit. What this case needs from the
+         gesture is a LANDING SITE to check, and the mute below supplies one. -->
+    <head-fader trackPath="$master,0" db="-6" expectReject="true"/>
+    <assert-track-volume trackPath="$master,0" volumeDb="0" tolerance="0.001"/>
     <assert-track-volume trackPath="$master" volumeDb="0" tolerance="0.001"/>
     <assert-track-volume trackPath="0" volumeDb="0" tolerance="0.001"/>
 
-    <!-- ONE undo step, because the head's handler submitted an ordinary
-         set-track-volume - the conductor lane needed no verb of its own. -->
-    <undo count="1"/>
-    <assert-track-volume trackPath="$master,0" volumeDb="0" tolerance="0.001"/>
+    <!-- THE MUTE BUTTON IS NOW T16's GESTURE HALF. It is a different commit
+         path through the same head (M5/AC5.4 wired a system lane's mute to
+         twGainStage), it is asserted for its ADDRESS and not for its sound -
+         a conductor lane makes none - and unlike the fader it is still
+         ACCEPTED there, because mute is not purely an audio control: it also
+         drives the lane and clip colour through strackcolormodifier, so it is
+         not the inert control QBX-114 removed.
 
-    <!-- AND THE MUTE BUTTON, which is a different commit path through the same
-         head (M5/AC5.4 wired a system lane's mute to twGainStage). It is
-         asserted for its ADDRESS here, not for its sound - a conductor lane
-         makes none. -->
+         "...AND NOWHERE ELSE" is the assertion T16 actually asks for: a
+         pathOf() missing its system-lane descent commits to the master or the
+         root instead, and both are checked to have NOT moved. -->
     <track-head-toggle trackPath="$master,0" control="mute" on="1"/>
     <assert-system-lane trackPath="$master,0" role="conductor" muted="1"/>
     <assert-system-lane trackPath="$master" role="master" muted="0"/>
+
+    <!-- ONE undo step, because the head's handler submitted an ordinary
+         set-track-mute - the conductor lane needed no verb of its own. -->
+    <undo count="1"/>
+    <assert-system-lane trackPath="$master,0" role="conductor" muted="0"/>
   </actions>
 
   <assertions>

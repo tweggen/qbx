@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE CONDUCTOR LANE'S FADER IS REFUSED, AND SAYS SO (QBX-114).
+
+  The conductor carries no audio: it holds no clips and no instrument. A volume
+  set there was stored, serialized, undoable and never heard - the inert-control
+  defect proposal 49 exists to remove. set-track-pan has refused it since D2;
+  set-track-volume did not.
+
+  WHY AN assert-log AND NOT ONLY A VALUE CHECK. The verb could refuse BY
+  ACCIDENT - laneAt() returning null, the STrack cast failing - and a case that
+  only asserted "the volume did not move" would pass over the accident and stop
+  gating the rule. So the gate is that the refusal is ANNOUNCED, exactly as
+  master_refuses_arm_and_structure gates its own refusals.
+
+  WHY THE MOUNTS ARE ASSERTED TOO. A verb that refuses while the fader still
+  moves under the mouse is the same defect wearing a different hat: the user
+  drags, the widget moves, nothing is heard and nothing is recorded. `volOn=` is
+  each mount's own report of whether its fader is enabled, beside the `panOn=`
+  that proposal 49 M4 added for the same reason.
+
+  Sections:
+   1. an ordinary track is unaffected - the fader works and is enabled
+   2. the conductor refuses the verb, ANNOUNCED, and its volume does not move
+   3. the refusal is not a read-lane redirect either
+   4. both mounts disable the control on the conductor and not elsewhere
+-->
+<SActionScript version="1" name="conductor_volume_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Ordinary"/>
+
+    <!-- The conductor and the master are hidden by default; a hidden lane has
+         no row and therefore no head, so show both before asking a mount
+         anything. A hidden lane takes its subtree with it. -->
+    <set-lane-hidden trackPath="$master" hidden="0"/>
+    <set-lane-hidden trackPath="$master,0" hidden="0"/>
+    <assert-system-lane trackPath="$master,0" role="conductor"/>
+
+    <!-- ===== 1. an ordinary track still takes a fader =================== -->
+    <set-track-volume trackPath="0" volume="-6"/>
+    <assert-track-volume trackPath="0" volumeDb="-6" tolerance="0.001"/>
+    <assert-track-head trackPath="0" headHeight="160" contains="volOn=1"/>
+    <assert-mixer-pane track="Ordinary" contains="volOn=1"/>
+
+    <!-- ===== 2. the conductor refuses, and ANNOUNCES it ================= -->
+    <!-- assert-log sits directly after the action that produces the line: its
+         window opens at the preceding non-assert-log action. -->
+    <set-track-volume trackPath="$master,0" volume="-6" expectReject="true"/>
+    <assert-log contains="set-track-volume: refusing the conductor lane"
+                minCount="1"/>
+    <assert-track-volume trackPath="$master,0" volumeDb="0" tolerance="0.001"/>
+
+    <!-- ...and nowhere else either: a refusal that quietly landed on the
+         master or the root would be worse than the defect it replaces. -->
+    <assert-track-volume trackPath="$master" volumeDb="0" tolerance="0.001"/>
+    <assert-track-volume trackPath="0" volumeDb="-6" tolerance="0.001"/>
+
+    <!-- ===== 3. the read-lane redirect is not a way around it =========== -->
+    <!-- set-track-volume on a Read-family lane BECOMES a point at the locator
+         (proposal 37 P5). That redirect would be the same inaudible edit with a
+         lane behind it, so the conductor is refused BEFORE it.
+
+         The REFUSAL LINE is the discriminator here, not the stored value: had
+         the redirect run, the static volume would not have moved either, so
+         reading it back cannot tell the two apart. A refusal that is announced
+         while a Read lane exists can only come from the check above it. -->
+    <add-automation-lane owner="$master,0" target="self:Volume" mode="read"/>
+    <set-automation-mode owner="$master,0" target="self:Volume" mode="read"/>
+    <set-track-volume trackPath="$master,0" volume="-3" expectReject="true"/>
+    <assert-log contains="set-track-volume: refusing the conductor lane"
+                minCount="1"/>
+    <assert-track-volume trackPath="$master,0" volumeDb="0" tolerance="0.001"/>
+
+    <!-- ===== 4. every mount that CAN show it disables the control ======= -->
+    <!-- The MIXER PANE is not one of them: it mounts no conductor strip at all
+         (gated by mixer_pane_strips' own `absent="Conductor"`), so there is no
+         fader there to disable. Asserted here too, because that exclusion is
+         what makes the head the only place the gesture is reachable. -->
+    <assert-track-head trackPath="$master,0" headHeight="160" contains="volOn=0"/>
+    <assert-mixer-pane track="Conductor" contains="volOn=0"/>
+    <!-- The ordinary track is untouched by all of this. -->
+    <assert-track-head trackPath="0" headHeight="160" contains="volOn=1"/>
+    <assert-mixer-pane track="Ordinary" contains="volOn=1"/>
+  </actions>
+
+</SActionScript>

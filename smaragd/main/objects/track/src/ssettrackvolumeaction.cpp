@@ -8,6 +8,7 @@
 #include "app/model/sappcontext.h"
 #include "app/model/sautomationlane.h"
 #include "app/objects/track/sautomationactions.h"
+#include "tw/core/twlog.h"
 #include <QDomElement>
 #include <memory>
 
@@ -49,6 +50,20 @@ SApplyResult SSetTrackVolumeAction::apply(SProject *project)
     STrack *track = dynamic_cast<STrack*>(lane);
     if (!track) {
         return {false, nullptr};
+    }
+
+    // THE CONDUCTOR LANE CARRIES NO AUDIO (proposal 45, proposal 49 D2), so a
+    // fader there would be stored, serialized, undoable and never heard -- the
+    // inert-control defect proposal 49 exists to remove. set-track-pan has
+    // refused it since D2; volume did not, which is QBX-114.
+    //
+    // Refused BEFORE redirectToReadLane on purpose: a self:Volume automation
+    // point on the conductor is the same inaudible edit with an extra lane
+    // behind it, so the redirect must not be the way around this.
+    if( track->systemRole() == SSystemRole::Conductor ) {
+        TW_LOGW( "track", "set-track-volume: refusing the conductor lane; it "
+                          "carries no audio" );
+        return { false, nullptr };
     }
 
     SApplyResult viaLane = redirectToReadLane(

@@ -959,10 +959,10 @@ const LaneRow kLaneRows[] = {
     // The master fader, the master chain, mute, and the automation that drives
     // them. These are the FEATURE; a policy that refused them would refuse the
     // reason system lanes were built.
-    { "set-track-volume",      Accept, "AC4.4 the master fader. Gate: master_head_fader_heard" },
+    { "set-track-volume",      Accept, "AC4.4 the master fader; the CONDUCTOR is refused in the verb (no audio), as set-track-pan is. Gates: master_head_fader_heard, conductor_volume_refused" },
     { "assert-track-pan",      Accept, "read-only: it asserts a lane's stored pan, exactly as assert-track-volume asserts its fader" },
     { "set-track-pan",         Accept, "proposal 49 D2: master and send lanes are panned and HEARD; the CONDUCTOR is refused in the verb (no audio). Gate: track_pan_audible" },
-    { "set-track-mute",        Accept, "AC5.4 heard through twGainStage. Gate: master_mute_audible" },
+    { "set-track-mute",        Accept, "AC5.4 heard through twGainStage. On the CONDUCTOR it is accepted on purpose where volume and pan are refused: mute is not purely an audio control, it also drives the lane/clip colour through strackcolormodifier, so refusing it would remove a visible behaviour rather than an inert one (QBX-114). Gate: master_mute_audible" },
     { "head-fader",            Accept, "the master head's own fader gesture (M4)" },
     { "fader-key",             Accept, "the same fader, by keyboard" },
     { "set-track-name",        Accept, "renaming a system lane is harmless and useful" },

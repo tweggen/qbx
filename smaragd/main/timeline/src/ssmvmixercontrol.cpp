@@ -205,6 +205,25 @@ void SSMVMixerControl::syncPanEnabled()
 }
 
 /**
+ * The fader's counterpart to syncPanEnabled(), for the same reason: the
+ * conductor lane carries no audio, so a fader there would move and never be
+ * heard (QBX-114). Volume has only the one bound, unlike pan, which is also
+ * undefined away from width 2 -- hence one branch rather than two.
+ */
+void SSMVMixerControl::syncVolumeEnabled()
+{
+    if( !qVolume_ ) return;
+    const bool conductor = tk_.systemRole() == SSystemRole::Conductor;
+    qVolume_->setEnabled( !conductor );
+    if( conductor )
+        qVolume_->setToolTip( tr( "The conductor lane carries no audio, so its "
+                                  "level cannot be changed." ) );
+    else
+        qVolume_->setToolTip( tr( "Track volume. Double-click to reset to "
+                                  "0.0 dB." ) );
+}
+
+/**
  * Wheel over a track head = wheel over the arranger canvas. The head column is
  * part of the same view, so scrolling/zooming there had to work; without this
  * the event just died in the head (QWidget's default ignores it, and the column
@@ -920,6 +939,7 @@ SSMVMixerControl::SSMVMixerControl(
     setSliderSilently( tk_.getVolume() );
     setPanSliderSilently( tk_.getPan() );
     syncPanEnabled();
+    syncVolumeEnabled();
     qMute_->setChecked( tk_.isMuted() );
     qSolo_->setChecked( tk_.isSolo() );
     qArm_->setChecked( tk_.isArmedForRecording() );
@@ -1561,7 +1581,7 @@ QString SSMVMixerControl::describeHead()
     // must still match (AC4.1).
     return QStringLiteral( "density=%1|w=%2|h=%3|btns=%4|I=%5|A=%6"
                            "|fitW=%7|fitH=%8|name=%9|Amode=%10"
-                           "|pan=%11|panShown=%12|panOn=%13" )
+                           "|pan=%11|panShown=%12|panOn=%13|volOn=%14" )
         .arg( QLatin1String( dens ) ).arg( width() ).arg( height() )
         .arg( visible.join( QLatin1Char( ',' ) ) )
         .arg( ( qInstr_ && !qInstr_->isHidden() ) ? 1 : 0 )
@@ -1571,7 +1591,10 @@ QString SSMVMixerControl::describeHead()
         .arg( sAutomationModeToString( trackAutomationMode() ) )
         .arg( sPanText( tk_.getPan() ) )
         .arg( ( qPan_ && !qPan_->isHidden() ) ? 1 : 0 )
-        .arg( ( qPan_ && qPan_->isEnabled() ) ? 1 : 0 );
+        .arg( ( qPan_ && qPan_->isEnabled() ) ? 1 : 0 )
+        // QBX-114: the FADER's enabled state, appended last for the same
+        // AC4.1 reason `pan` was. 0 on the conductor, which carries no audio.
+        .arg( ( qVolume_ && qVolume_->isEnabled() ) ? 1 : 0 );
 }
 
 QString SSMVMixerControl::describeMeter()

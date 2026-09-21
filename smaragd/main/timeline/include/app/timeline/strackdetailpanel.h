@@ -80,6 +80,9 @@ private:
     void applyPan( double pan );
     // Disabled with a tooltip at width != 2 and on the conductor lane.
     void syncPanEnabled();
+    // QBX-114: the fader's counterpart -- disabled on the conductor lane,
+    // which carries no audio.
+    void syncVolumeEnabled();
     // Index of currentTrack_ in the mixer, or -1.
 
     STrack *currentTrack_ = nullptr;

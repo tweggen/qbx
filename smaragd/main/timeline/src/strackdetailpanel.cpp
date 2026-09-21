@@ -316,6 +316,7 @@ void STrackDetailPanel::rebuildUI()
         updatingPan_ = false;
         panLabel_->setText(sPanText(pan));
         syncPanEnabled();
+        syncVolumeEnabled();
 
         // Point the meter at THIS track's root component (its twRewire).
         probe_.setTap(currentTrack_->getRootComponent());
@@ -479,6 +480,25 @@ void STrackDetailPanel::syncPanEnabled()
                                   "project is %1-channel.").arg(channels));
     else
         panSlider_->setToolTip(tr("Track pan. Double-click to centre."));
+}
+
+// The fader's counterpart to syncPanEnabled(), for the same reason: the
+// conductor lane carries no audio, so a fader there would move and never be
+// heard (QBX-114). Volume has only the one bound, unlike pan.
+void STrackDetailPanel::syncVolumeEnabled()
+{
+    if (!volumeSlider_) return;
+    const bool conductor =
+        currentTrack_ && currentTrack_->systemRole() == SSystemRole::Conductor;
+    const bool ok = currentTrack_ && !conductor;
+    volumeSlider_->setEnabled(ok);
+    if (volumeLabel_) volumeLabel_->setEnabled(ok);
+    if (conductor)
+        volumeSlider_->setToolTip(tr("The conductor lane carries no audio, so "
+                                     "its level cannot be changed."));
+    else
+        volumeSlider_->setToolTip(tr("Track volume. Double-click to reset to "
+                                     "0.0 dB."));
 }
 
 void STrackDetailPanel::onMeterTick(offset_t pos, qint64 nowMs, bool live)
