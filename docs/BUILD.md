@@ -40,6 +40,36 @@ both):
 The manual CMake commands below remain valid if you prefer to drive CMake
 directly or need a generator the scripts don't use (e.g. MSVC, Xcode).
 
+### After a Qt upgrade, rebuild clean — ninja cannot see one
+
+**A distro Qt upgrade under an existing `build/` silently produces a
+miscompiled binary.** Packaged headers keep their UPSTREAM mtime — Ubuntu's Qt
+6.11.2 headers are stamped 2026-05-11 — so after an upgrade the new headers are
+*older* than the object files compiled against the previous version. Ninja
+compares mtimes, finds nothing newer, and rebuilds nothing. The link then mixes
+objects that assume the old Qt's inline layouts with the new Qt runtime.
+
+It does not fail loudly. `ninja` reports the tree fully built, `cmake --build`
+exits 0, and the compile flags are identical. What you get is a binary whose
+inlined `QList::append` writes through a null pointer, so **every qxa case
+SEGFAULTs in `SApplication`'s constructor** — measured on 2026-09-21 after
+6.10.2 → 6.11.2, where 4/4 sampled cases crashed 100% on the incremental build
+and passed 100% on a clean one (QBX-103).
+
+`./build.sh` now guards this: `rebuild.sh` records the Qt version in
+`smaragd/build/.qt-version`, and an incremental build whose resolved Qt no
+longer matches announces the change and delegates to `rebuild.sh` instead. The
+guard is best-effort — a Qt whose version cannot be queried gets no stamp and
+no check — so the rule still stands on its own:
+
+> If the Qt package changed, `./rebuild.sh`. If a binary crashes somewhere it
+> has no business crashing — inside Qt's own inlined container code, in a
+> constructor, identically every time — suspect the build tree before the
+> source.
+
+`git clean -xdf smaragd/build` or simply deleting `smaragd/build` has the same
+effect as `rebuild.sh` for this purpose.
+
 ## Requirements
 
 | Tool          | Version  | Notes                                                                  |

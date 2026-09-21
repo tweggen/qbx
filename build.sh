@@ -33,6 +33,23 @@ fi
 resolve_qt_path "$1"
 setup_toolchain
 
+# A Qt upgrade under an existing build tree is NOT safe to build incrementally,
+# and ninja cannot see it: dpkg preserves upstream mtimes, so the new headers can
+# be OLDER than the objects compiled against the old ones. Nothing rebuilds, and
+# the binary mixes old-Qt objects with the new Qt runtime -- which on 2026-09-21
+# meant every qxa case SEGFAULTing in SApplication's constructor while `ctest`
+# and `ninja` both reported a clean, complete build (QBX-103).
+if QT_CHANGE=$(qt_stamp_differs); then
+    echo "=== Qt changed since this build tree was configured: $QT_CHANGE ==="
+    echo ""
+    echo "An incremental build would link objects compiled against the old Qt"
+    echo "headers against the new Qt runtime. Ninja cannot detect this, because"
+    echo "packaged headers keep their upstream mtime. Rebuilding cleanly."
+    echo ""
+    "$SCRIPT_DIR/rebuild.sh" "$1"
+    exit 0
+fi
+
 # Build (only changed files)
 echo "Building (incremental)..."
 cmake --build build
