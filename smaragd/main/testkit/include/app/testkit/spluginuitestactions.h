@@ -29,6 +29,20 @@
 //   contains    = ""      substring that must appear in
 //                         SPluginEffectStrip::describeSlot(slotIndex)
 //   absent      = ""      substring that must NOT appear there
+//   strayWindows = "-1"   if >= 0, how many widgets were SHOWN while still
+//                         top-level while the strip was being built. The
+//                         answer must be 0 and the default is "do not check"
+//                         (QBX-117): a widget made visible before its layout
+//                         has it is a TOP-LEVEL WINDOW for that instant, Qt
+//                         gives it a real platform window, and on macOS AppKit
+//                         can move the main window's full-screen Space onto it
+//                         — which took a full-screened Smaragd out of full
+//                         screen every time a track with a plugin was selected.
+//                         Nothing else in the repo can see that: the debris is
+//                         invisible on Windows and X11, and it is gone again by
+//                         the time apply() could look at the widget tree, so
+//                         this is measured with an event filter DURING the
+//                         build rather than asserted afterwards.
 class SAssertPluginStripAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "assert-plugin-strip" ); }
@@ -43,6 +57,7 @@ private:
     int     slotIndex_  = -1;
     QString contains_;
     QString absent_;
+    int     strayWindows_ = -1;
 };
 
 // assert-plugin-editor-kind — WHICH editor a double-click would open for a

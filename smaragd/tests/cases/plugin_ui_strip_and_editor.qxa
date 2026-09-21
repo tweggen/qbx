@@ -69,6 +69,22 @@
          a non-zero value: plugin delay compensation is out of scope. -->
     <assert-plugin-strip trackIndex="0" slotIndex="0" contains="latency=0"/>
 
+    <!-- ...and BUILDING the row opened no window (QBX-117). The three buttons
+         on a row (Edit, Reload, Remove) used to be constructed with no parent
+         and made visible a line BEFORE addWidget() adopted them, so each was a
+         top-level widget at the moment it was shown and Qt gave it a real
+         platform window. Invisible debris on Windows and X11; on macOS the
+         stray window became key and AppKit moved the main window's FULL-SCREEN
+         SPACE onto it, so selecting a track that carried a plugin dropped a
+         full-screened Smaragd out of full screen and exposed the desktop.
+
+         `strayWindows` counts widgets shown while still top-level DURING the
+         build, which is the only moment the defect is visible: a line later the
+         buttons are ordinary children again. Before the fix this Active row
+         answered 2 (Edit + Remove) and the two-row state below answered 5 (the
+         Missing row adds Reload). The expected answer is always 0. -->
+    <assert-plugin-strip trackIndex="0" slotCount="1" strayWindows="0"/>
+
     <!-- THE FALLBACK DECISION (proposal 33 D3). The slider list is not
          reachable alongside a native GUI, so which editor a double-click opens
          is the only thing standing between a plugin that misreports an editor
@@ -116,6 +132,10 @@
                          contains="Plugin not installed: clap / tw.nobody.ships.this.plugin"/>
     <assert-plugin-strip trackIndex="0" slotIndex="1"
                          contains="Stored module path: nosuchmodule.clap"/>
+
+    <!-- The Missing row is the one that also builds a Reload button, so this is
+         the shape that showed three stray windows per row before QBX-117. -->
+    <assert-plugin-strip trackIndex="0" slotCount="2" strayWindows="0"/>
 
     <!-- A missing slot has no parameters, so the editor refuses rather than
          pretending: an accepted edit here would be lost, and the authority on a

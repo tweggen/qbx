@@ -22,6 +22,9 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEvent>
+#include <QObject>
+#include <QStringList>
+#include <QWidget>
 
 #include <QDebug>
 #include <QDomElement>
@@ -34,6 +37,37 @@ namespace {
 // strip needs a REAL ancestor chain to, for `open-via-strip` below (see its
 // own comment for why a strip parented to nullptr would not reproduce the
 // bug it exists to gate).
+// Every widget that is SHOWN while it is still a top-level one.
+//
+// QBX-117. `setVisible(true)` on a widget whose layout has not adopted it yet
+// makes it a WINDOW: Qt creates a real platform window on the spot, and the
+// addWidget() that follows re-parents the widget and throws that window away.
+// The debris is invisible on Windows and X11; on macOS the stray window becomes
+// key, carries NSWindowCollectionBehaviorFullScreenPrimary (all Qt gives a plain
+// Qt::Window) and AppKit MOVES THE FULL-SCREEN SPACE ONTO IT, dropping a
+// full-screened Smaragd out of full screen and exposing the desktop.
+//
+// It has to be measured WHILE the widgets are built. By the time apply() could
+// walk the tree the buttons are ordinary children again and the evidence is
+// gone, which is why every after-the-fact assertion would pass over the bug.
+class TopLevelShowSpy : public QObject {
+public:
+    QStringList shown;
+
+protected:
+    bool eventFilter( QObject *obj, QEvent *ev ) override
+    {
+        if( ev->type() == QEvent::Show && obj->isWidgetType() ) {
+            QWidget *w = static_cast<QWidget *>( obj );
+            // isWindow() is the whole test: a child being shown is ordinary,
+            // a PARENTLESS one being shown is the defect.
+            if( w->isWindow() )
+                shown << QString::fromLatin1( w->metaObject()->className() );
+        }
+        return false;   // never consume: this observes, it does not interfere
+    }
+};
+
 SMainWindow *mainWindowForStrip_()
 {
     for( QWidget *w : QApplication::topLevelWidgets() )
@@ -118,8 +152,21 @@ std::unique_ptr<SPluginEffectStrip> makeStripAt( SProject *project,
 
 SApplyResult SAssertPluginStripAction::apply( SProject *project )
 {
+    // The spy goes on BEFORE the strip exists: the rows, and the buttons this
+    // gates, are built inside SPluginEffectStrip's own constructor.
+    TopLevelShowSpy spy;
+    if( strayWindows_ >= 0 ) qApp->installEventFilter( &spy );
     auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
                                       : makeStripAt( project, pathRoot_, trackPath_ );
+    if( strayWindows_ >= 0 ) qApp->removeEventFilter( &spy );
+
+    if( strayWindows_ >= 0 && spy.shown.size() != strayWindows_ ) {
+        qWarning() << "assert-plugin-strip FAILED: building the strip showed"
+                   << spy.shown.size() << "top-level widget(s), expected"
+                   << strayWindows_ << "--" << spy.shown.join( ", " );
+        return { false, nullptr };
+    }
+
     if( !strip ) {
         qWarning() << "assert-plugin-strip: no track"
                    << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
@@ -162,6 +209,7 @@ void SAssertPluginStripAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "slotIndex", slotIndex_ );
     elem.setAttribute( "contains", contains_ );
     elem.setAttribute( "absent", absent_ );
+    elem.setAttribute( "strayWindows", strayWindows_ );
 }
 
 bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -172,6 +220,7 @@ bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/
     slotIndex_  = elem.attribute( "slotIndex", "-1" ).toInt();
     contains_   = elem.attribute( "contains" );
     absent_     = elem.attribute( "absent" );
+    strayWindows_ = elem.attribute( "strayWindows", "-1" ).toInt();
     return true;
 }
 

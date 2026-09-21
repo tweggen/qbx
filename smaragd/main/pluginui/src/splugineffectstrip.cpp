@@ -353,7 +353,21 @@ void SPluginEffectStrip::rebuildUI()
 
         // Edit (parameters). Double-clicking the row does the same thing; the
         // button exists because a double-click is not discoverable.
-        QPushButton *editBtn = new QPushButton(tr("Edit"));
+        //
+        // EVERY BUTTON ON THIS ROW TAKES `container` AS ITS PARENT IN THE
+        // CONSTRUCTOR, and that is load-bearing rather than tidy (QBX-117).
+        // These three are the only widgets on the row made VISIBLE before the
+        // layout has them, and setVisible(true) on a PARENTLESS widget makes it
+        // a TOP-LEVEL WINDOW: Qt creates a real platform window there and then,
+        // and the addWidget() a line later re-parents the widget and throws
+        // that window away. On Windows and X11 the debris is invisible. On
+        // macOS it is not -- a plain Qt::Window gets NSWindowCollectionBehavior-
+        // FullScreenPrimary and nothing else, the stray window becomes the key
+        // window, and AppKit MOVES THE FULL-SCREEN SPACE ONTO IT. Selecting a
+        // track that carries a plugin therefore dropped a full-screened Smaragd
+        // out of its Space and exposed the desktop. Passing the parent here is
+        // what keeps setVisible() a child-widget operation.
+        QPushButton *editBtn = new QPushButton(tr("Edit"), container);
         editBtn->setMaximumWidth(70);
         editBtn->setVisible( !compact_ );   // D5a: double-click the row instead
         editBtn->setEnabled(active);
@@ -362,7 +376,7 @@ void SPluginEffectStrip::rebuildUI()
         // Reload, only where it means something.
         QPushButton *reloadBtn = nullptr;
         if (!active) {
-            reloadBtn = new QPushButton(tr("Reload"));
+            reloadBtn = new QPushButton(tr("Reload"), container);
             reloadBtn->setMaximumWidth(80);
             reloadBtn->setVisible( !compact_ );   // D5a: on the row's context menu
             reloadBtn->setToolTip(tooltip);
@@ -370,7 +384,7 @@ void SPluginEffectStrip::rebuildUI()
         }
 
         // Remove button
-        QPushButton *removeBtn = new QPushButton("Remove");
+        QPushButton *removeBtn = new QPushButton("Remove", container);
         removeBtn->setMaximumWidth(80);
         removeBtn->setVisible( !compact_ );   // D5a: on the row's context menu
         rowLayout->addWidget(removeBtn);

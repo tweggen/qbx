@@ -196,7 +196,7 @@ const Fixture kFixtures[] = {
     // --- the M5 plugin-UI verbs --------------------------------------------
     { "assert-plugin-strip",
       "<assert-plugin-strip trackIndex='0' slotCount='2' slotIndex='1'"
-      " contains='state=Missing' absent='reload=0'/>" },
+      " contains='state=Missing' absent='reload=0' strayWindows='0'/>" },
     { "plugin-editor-set-param",
       "<plugin-editor-set-param trackIndex='0' slotIndex='0' paramId='1'"
       " value='0.25' gesture='double-click'/>" },
