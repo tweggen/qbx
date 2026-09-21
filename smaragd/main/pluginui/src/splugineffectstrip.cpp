@@ -128,9 +128,12 @@ SPluginEffectStrip::SPluginEffectStrip(STrack *track, QWidget *parent)
 
     setAcceptDrops(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    // THE SMALL FONT (QBX-102): the insert/instrument list reads at the track
-    // head's name size in BOTH mounts, the Track Detail dock and the mixer.
-    setFont(suifonts::smallFont());
+    // THE TREE FONT (QBX-115, reversing QBX-102 here): the insert/instrument
+    // list reads at the size the media browser and the Extern file list use,
+    // in BOTH mounts - the Track Detail dock and the mixer strip. Set
+    // EXPLICITLY rather than inherited from the strip, because the dock mount
+    // has no such parent.
+    setFont(suifonts::treeFont());
 
     // NO EXPLICIT MINIMUM HEIGHT, deliberately, and no scroll area of its own.
     //

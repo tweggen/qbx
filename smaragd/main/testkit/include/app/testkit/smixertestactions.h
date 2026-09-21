@@ -64,6 +64,12 @@ private:
 /// `stripWidth`, settles it, and asserts `crushed` and `overlap`. A geometry
 /// relation, never a screenshot: `screenshot` grabs the SCREEN's root window,
 /// which is blank under `QT_QPA_PLATFORM=offscreen`.
+///
+/// `minFaderPct` is QBX-115's gate and a FLOOR, not an equality: the fader's
+/// height as a percentage of its strip's, over the SHORTEST fader on the pane.
+/// A floor because the exact percentage is the platform's font and style
+/// metrics, while the defect was a pure stretch-factor bug that moved the
+/// number by tens (at a 500 px dock, 16% before and 63% after).
 class SAssertMixerLayoutAction : public SAction
 {
 public:
@@ -82,6 +88,7 @@ private:
     int maxCrushed_  = 0;
     int maxOverlap_  = 0;
     int scrollNeeded_ = -1;   ///< -1 = not checked
+    int minFaderPct_  = -1;   ///< -1 = not checked
     QString contains_;
 };
 

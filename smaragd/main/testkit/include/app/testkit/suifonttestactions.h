@@ -62,7 +62,7 @@ private:
 /**
  * `assert-track-detail-sections` — `contains` / `absent` against
  * STrackDetailPanel::describeSections() on a FRESH panel for `trackPath`:
- *   plugins=<0|1>,feelflow=<0|1>,sliders=<0|1>|pluginFontPt=<n>|pluginSmallFont=<0|1>
+ *   plugins=<0|1>,feelflow=<0|1>,sliders=<0|1>|pluginFontPt=<n>|pluginTreeFont=<0|1>
  * (1 = collapsed). A fresh panel is the point: the state must come from the
  * PROJECT, never from the panel instance that was clicked.
  */

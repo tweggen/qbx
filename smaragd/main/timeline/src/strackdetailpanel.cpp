@@ -399,12 +399,12 @@ QString STrackDetailPanel::describeSections() const
             && sec->height() != sec->headerButton()->height())
             headerOnly = false;
     }
-    return QStringLiteral("plugins=%1,feelflow=%2,sliders=%3|pluginFontPt=%4|pluginSmallFont=%5|headerOnly=%6")
+    return QStringLiteral("plugins=%1,feelflow=%2,sliders=%3|pluginFontPt=%4|pluginTreeFont=%5|headerOnly=%6")
         .arg(pluginsSection_ && !pluginsSection_->isExpanded() ? 1 : 0)
         .arg(feelFlowSection_ && !feelFlowSection_->isExpanded() ? 1 : 0)
         .arg(slidersSection_ && !slidersSection_->isExpanded() ? 1 : 0)
         .arg(pluginStrip_ ? pf.pointSize() : -1)
-        .arg(pluginStrip_ && pf == suifonts::smallFont() ? 1 : 0)
+        .arg(pluginStrip_ && pf == suifonts::treeFont() ? 1 : 0)
         .arg(headerOnly ? 1 : 0);
 }
 

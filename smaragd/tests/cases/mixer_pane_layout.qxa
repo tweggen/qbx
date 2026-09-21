@@ -30,6 +30,21 @@
   strip including the master), because "the buttons are in a QVBoxLayout" is
   also true of a column pushed somewhere nobody can see it.
 
+  QBX-116: THE COMPACT BUTTON IS UNDER THE M/S/R COLUMN, not in the header
+  row beside the name, where it competed with an already-elided track name for
+  the strip's scarcest width. `narrowUnderMsr=1`, geometry again: below the
+  arm button, horizontally inside the column's band.
+
+  QBX-115: THE FADER GROWS WITH THE DOCK. `minFaderPct` is a FLOOR on the
+  shortest fader's share of its strip, asserted at each of the three heights
+  because the defect was visible only in how the number MOVED: the fader block
+  took its sizeHint and the insert/send scroll area every extra pixel, so a
+  taller dock gave a SHORTER fader — measured 37 / 32 / 16 % at 180 / 260 /
+  500 px before the fix, and 37 / 47 / 63 % after. The floors (30 / 40 / 55)
+  sit under the fixed numbers and well over the broken ones; they are floors
+  and not equalities because the exact percentage is the platform's font and
+  style metrics, which this box does not get to legislate for macOS.
+
   NOT gated: what any of it LOOKS like — a geometry relation, never a palette
   — and repaint cost, which is measured in the PR and not bounded here.
 -->
@@ -44,26 +59,26 @@
          Detail dock's own defect showed and taller docks did not. -->
 
     <assert-mixer-layout paneWidth="640" paneHeight="180" stripWidth="96"
-                         maxCrushed="0" maxOverlap="0"
-                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
+                         maxCrushed="0" maxOverlap="0" minFaderPct="30"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1|narrowUnderMsr=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="96"
-                         maxCrushed="0" maxOverlap="0"
-                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
+                         maxCrushed="0" maxOverlap="0" minFaderPct="40"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1|narrowUnderMsr=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="500" stripWidth="96"
-                         maxCrushed="0" maxOverlap="0"
-                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
+                         maxCrushed="0" maxOverlap="0" minFaderPct="55"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1|narrowUnderMsr=1"/>
 
     <!-- ============ NARROW STRIPS, THE SAME THREE ===================== -->
 
     <assert-mixer-layout paneWidth="640" paneHeight="180" stripWidth="60"
-                         maxCrushed="0" maxOverlap="0"
-                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
+                         maxCrushed="0" maxOverlap="0" minFaderPct="30"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1|narrowUnderMsr=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="260" stripWidth="60"
-                         maxCrushed="0" maxOverlap="0"
-                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
+                         maxCrushed="0" maxOverlap="0" minFaderPct="40"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1|narrowUnderMsr=1"/>
     <assert-mixer-layout paneWidth="640" paneHeight="500" stripWidth="60"
-                         maxCrushed="0" maxOverlap="0"
-                         contains="msrColumn=1|msrBesideFader=1|panAbove=1"/>
+                         maxCrushed="0" maxOverlap="0" minFaderPct="55"
+                         contains="msrColumn=1|msrBesideFader=1|panAbove=1|narrowUnderMsr=1"/>
 
     <!-- ============ A NARROW PANE SCROLLS RATHER THAN COMPRESSING ===== -->
     <!-- Four strips (three tracks plus the master) at 96 px cannot fit 200 px

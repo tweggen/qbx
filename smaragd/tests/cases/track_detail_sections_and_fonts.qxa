@@ -1,30 +1,39 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  QBX-102: SMALLER, NAMED FONTS AND COLLAPSIBLE TRACK DETAIL SECTIONS.
+  QBX-102 / QBX-115: NAMED FONTS AND COLLAPSIBLE TRACK DETAIL SECTIONS.
 
   THE FONTS ARE TWO NAMED FUNCTIONS (app/model/suifonts.h), and every mount
   asks for one of them:
-    SMALL = the arranger track head's NAME font (application font, 9 pt):
-            the head itself, the mixer strip, and the insert/instrument list
-            in the Track Detail dock.
+    SMALL = the arranger track head's NAME font (application font, 9 pt).
     TREE  = the font a dock TITLE is drawn in, i.e.
             QApplication::font("QDockWidgetTitle") - QDockWidget's own
-            title font, per Qt's source. The Extern file list and the media
-            browser's tree use it.
+            title font, per Qt's source. The Extern file list, the media
+            browser's tree, and - since QBX-115 - the MIXER STRIP and the
+            insert/instrument list in the Track Detail dock use it.
+
+  QBX-115 MOVED THE STRIP FROM SMALL TO TREE, deliberately reversing part of
+  QBX-102: the request was for the strip's track titles and insert rows to
+  match "the very small font as used in e.g. the media browser or the
+  resource list", and those two lists are exactly the TREE mounts below. So
+  `stripTree` and `pluginTree` replace what used to be `stripSmall` and
+  `pluginSmall`, and `stripEqHead` - QBX-102's wording, "the same size as the
+  track name in the track head" - is still reported but no longer asserted.
 
   WHAT IS ASSERTED IS THE RELATION, read off REAL widgets: each mount's font
-  EQUALS the named font (exact QFont equality), and the mixer strip's font
-  EQUALS the head's name font, which is the request's own wording. The small
-  font's size is also asserted as a number (9). The TREE font's size is NOT:
-  it comes from the platform theme (smaller on macOS, the application font on
-  Windows and Linux), so on this headless Linux run it equals the application
-  font and a size assertion would describe the box rather than the code.
+  EQUALS the named font (exact QFont equality). The small font's size is also
+  asserted as a number (9). The TREE font's size is NOT: it comes from the
+  platform theme (smaller on macOS, the application font on Windows and
+  Linux), so on this headless Linux run it equals the application font and a
+  size assertion would describe the box rather than the code.
 
   ON THIS BOX THE APPLICATION FONT IS ALREADY 9 PT (measured: small=9 and
   tree=9), so every size and equality field here would read the same with no
-  setFont() call at all. What bites is `<mount>Set=1` - Qt::WA_SetFont, the
-  widget chose its font explicitly - which is why it is asserted for every
-  mount that sets one.
+  setFont() call at all - AND small and tree are the same QFont, so nothing
+  here can tell QBX-115's change from the QBX-102 state it replaced. That
+  difference is visible only where the platform gives QDockWidgetTitle its own
+  font, i.e. macOS, where QBX-115 was reported. What bites on THIS box is
+  `<mount>Set=1` - Qt::WA_SetFont, the widget chose its font explicitly -
+  which is why it is asserted for every mount that sets one.
 
   THE SECTIONS. Plugins, Feel Flow and Sliders each have a disclosure-triangle
   header, and their collapsed state is ONE PROJECT PROPERTY per section:
@@ -59,11 +68,10 @@
     <!-- ============ THE FONTS ============================================ -->
     <assert-ui-fonts trackPath="0" contains="small=9"/>
     <assert-ui-fonts trackPath="0" contains="head=9|headSmall=1"/>
-    <assert-ui-fonts trackPath="0" contains="stripSmall=1"/>
-    <assert-ui-fonts trackPath="0" contains="stripEqHead=1"/>
-    <assert-ui-fonts trackPath="0" contains="plugin=9|pluginSmall=1"/>
     <!-- Tree AND Set: on this Linux run treeFont() IS the application font,
-         so equality alone would pass for a list that never set a font. -->
+         so equality alone would pass for a mount that never set a font. -->
+    <assert-ui-fonts trackPath="0" contains="stripTree=1"/>
+    <assert-ui-fonts trackPath="0" contains="pluginTree=1"/>
     <assert-ui-fonts trackPath="0" contains="externTree=1|externSet=1"/>
     <assert-ui-fonts trackPath="0" contains="mediaTree=1|mediaSet=1"/>
     <assert-ui-fonts trackPath="0" contains="stripSet=1"/>
@@ -71,7 +79,10 @@
 
     <!-- ============ THE DEFAULTS ========================================= -->
     <assert-track-detail-sections trackPath="0"
-        contains="plugins=0,feelflow=1,sliders=0|pluginFontPt=9|pluginSmallFont=1"/>
+        contains="plugins=0,feelflow=1,sliders=0"/>
+    <!-- Separate: pluginFontPt sits between the two in the describe string,
+         and its number is the platform theme's, never asserted. -->
+    <assert-track-detail-sections trackPath="0" contains="pluginTreeFont=1"/>
 
     <!-- ============ ONE STATE FOR EVERY TRACK ============================ -->
     <track-detail-section trackPath="0" section="feelflow" collapsed="0"/>

@@ -187,6 +187,17 @@ SApplyResult SAssertMixerLayoutAction::apply( SProject * )
             return { false, nullptr };
         }
     }
+    if( minFaderPct_ >= 0 ) {
+        // QBX-115. fieldOf returns -1 for a field that is not there, which is
+        // below every floor a case can state, so deleting the field fails too.
+        const int got = fieldOf( desc, QStringLiteral( "faderPct" ) );
+        if( got < minFaderPct_ ) {
+            qWarning() << "assert-mixer-layout FAILED: the shortest fader is"
+                       << got << "% of its strip, floor" << minFaderPct_
+                       << "-" << desc;
+            return { false, nullptr };
+        }
+    }
     if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
         qWarning() << "assert-mixer-layout FAILED: missing" << contains_ << "-" << desc;
         return { false, nullptr };
@@ -200,7 +211,7 @@ QStringList SAssertMixerLayoutAction::knownAttributes() const
     return { QStringLiteral( "paneWidth" ), QStringLiteral( "paneHeight" ),
              QStringLiteral( "stripWidth" ), QStringLiteral( "maxCrushed" ),
              QStringLiteral( "maxOverlap" ), QStringLiteral( "scrollNeeded" ),
-             QStringLiteral( "contains" ) };
+             QStringLiteral( "minFaderPct" ), QStringLiteral( "contains" ) };
 }
 
 void SAssertMixerLayoutAction::writeXml( QDomElement &elem ) const
@@ -211,6 +222,7 @@ void SAssertMixerLayoutAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "maxCrushed", maxCrushed_ );
     elem.setAttribute( "maxOverlap", maxOverlap_ );
     elem.setAttribute( "scrollNeeded", scrollNeeded_ );
+    elem.setAttribute( "minFaderPct", minFaderPct_ );
     elem.setAttribute( "contains", contains_ );
 }
 
@@ -222,6 +234,7 @@ bool SAssertMixerLayoutAction::readXml( const QDomElement &elem, int )
     maxCrushed_   = elem.attribute( "maxCrushed", "0" ).toInt();
     maxOverlap_   = elem.attribute( "maxOverlap", "0" ).toInt();
     scrollNeeded_ = elem.attribute( "scrollNeeded", "-1" ).toInt();
+    minFaderPct_  = elem.attribute( "minFaderPct", "-1" ).toInt();
     contains_     = elem.attribute( "contains", QString() );
     return true;
 }
