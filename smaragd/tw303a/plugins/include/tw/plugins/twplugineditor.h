@@ -57,14 +57,29 @@ struct twEditorHandle
     bool valid() const { return api != twEditorApi::None && handle != nullptr; }
 };
 
-// A size in PHYSICAL PIXELS. Always. This is the one rule that keeps high-DPI
-// embedding honest, and it is a rule this ABI imposes rather than inherits:
-// VST3 states (pluginterfaces/gui/iplugview.h:98-100) that IPlugView
+// A size in THE PLUGIN'S OWN GEOMETRY UNITS, passed through by every backend
+// exactly as the plugin stated it. Those units are not the same on every
+// platform: VST3 states (pluginterfaces/gui/iplugview.h:98-100) that IPlugView
 // coordinates are LOGICAL units on macOS but PHYSICAL pixels on Windows and
-// X11. A backend therefore converts on macOS and passes through elsewhere, so
-// that the host has exactly one convention to reason about. The host divides by
-// the widget's devicePixelRatio to get Qt's logical geometry — see
+// X11, and CLAP's gui.h says the same of its own sizes. The ONE conversion to
+// Qt's logical geometry therefore divides by the widget's devicePixelRatio on
+// Windows and X11 and by nothing at all on macOS, where the plugin is already
+// speaking Qt's units — SPluginNativeEditor::hostSizeFor(), and
 // pluginui/CONTRACT.md.
+//
+// THIS RULE USED TO READ "PHYSICAL PIXELS. ALWAYS.", AND THAT WAS THE BUG
+// (found 2026-09-21). It asked the backends to normalize macOS up so the host
+// would have one convention to reason about. Neither backend ever did — both
+// passed the cocoa size through, each deferring to "the caller that knows the
+// scale" — while the caller divided by the dpr on the strength of the rule.
+// Every native editor window on a Retina Mac came up at exactly 1/dpr of its
+// size, with the plugin's view painting full size inside it and the right and
+// bottom of every GUI cropped away. The rule now says what the backends do,
+// and macOS gets an identity rather than a multiply and a divide that have to
+// agree about the scale. If a backend is ever tempted to convert here again:
+// the number it would need is Qt's devicePixelRatioF() for THAT window, which
+// lives on the other side of this ABI, and a second source for it is a second
+// chance to disagree.
 struct twEditorSize
 {
     int width  = 0;

@@ -39,6 +39,7 @@
 #include <QHash>
 #include <QPointer>
 #include <QRect>
+#include <QSize>
 #include <QString>
 
 #include <cstdint>
@@ -117,6 +118,26 @@ public:
     // takes to get the window inside an available screen.
     static QRect clampOntoAScreen( const QRect &want );
 
+    // THE ONE CONVERSION, both directions: the plugin's geometry units to Qt's
+    // logical geometry and back. `dpr` is the container widget's
+    // devicePixelRatioF().
+    //
+    // PUBLIC AND STATIC for exactly the reason clampOntoAScreen() is. This is
+    // what decides how big the window is, it is a pure function of (size, dpr),
+    // and the failure it prevents — every native editor on a Retina Mac coming
+    // up at 1/dpr of its size, with the plugin painting full size inside and
+    // the right and bottom of the GUI cropped off — cannot be reproduced on a
+    // 1x monitor, which is every developer monitor that ever looked fine.
+    //
+    // macOS is deliberately an IDENTITY: VST3 and CLAP state cocoa geometry in
+    // logical units, which are already Qt's (twplugineditor.h). Windows and X11
+    // state theirs in physical pixels, so those divide. Keeping the identity
+    // spelled out here rather than "scaling both ways and letting them cancel"
+    // is the point — two conversions that must agree about a scale are two
+    // chances to disagree.
+    static QSize               hostSizeFor( audio::twEditorSize native, qreal dpr );
+    static audio::twEditorSize nativeSizeFor( QSize host, qreal dpr );
+
     // True if this slot has a native editor available at all. Cheap: it asks
     // twPlugin::supportsNativeEditor() and instantiates nothing.
     static bool isAvailableFor( SPluginSlot *slot );
@@ -153,7 +174,7 @@ private:
     // Acts on a restart request, or declines to — see the .cpp for the livelock
     // that makes "declines to" the important half.
     void handleRestart();
-    void resizeToPlugin( audio::twEditorSize physical );
+    void resizeToPlugin( audio::twEditorSize native );
 
     // The model address, DERIVED, never cached. Both return an empty/-1 "cannot
     // address this any more", which is a real state: the track can be deleted

@@ -209,9 +209,9 @@ twEditorSize twClapEditor::size() const
     std::uint32_t w = 0, h = 0;
     if( gui_->get_size( plugin_, &w, &h ) )
         s = twEditorSize{ (int)w, (int)h };
-    // win32 and x11 are physical already; cocoa is logical and is converted by
-    // the caller that knows the scale, exactly as the VST3 backend leaves it
-    // (twplugineditor.h states the ABI rule).
+    // Verbatim, on every platform: physical on win32 and x11, logical on cocoa,
+    // exactly as the VST3 backend leaves it and exactly what twEditorSize means
+    // (twplugineditor.h). The host owns the single conversion to Qt's geometry.
     return s;
 }
 

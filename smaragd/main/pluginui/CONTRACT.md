@@ -185,6 +185,25 @@ fixed by `twEditorParamEdit::previousValue` plus
 of that setter and must stay so: every other edit reaches the plugin THROUGH the
 action.
 
+**`twEditorSize` IS THE PLUGIN'S OWN UNITS, AND THE CONVERSION TO Qt's IS A
+NO-OP ON macOS.** VST3 (`iplugview.h:98-100`) and CLAP (`gui.h`) both state
+cocoa geometry in LOGICAL units — already `QWidget` units — and in PHYSICAL
+pixels on Windows and X11. Both backends pass the plugin's numbers through
+untouched, and `hostSizeFor()` / `nativeSizeFor()` convert in exactly two call
+sites, `resizeToPlugin()` and `resizeEvent()`. They are pure statics for the
+same reason `clampOntoAScreen()` is, and gated in the same binary.
+
+This was wrong in the shipped M4: `twplugineditor.h` declared `twEditorSize`
+PHYSICAL PIXELS ALWAYS and asked the backends to scale cocoa sizes up so the
+host would have one convention. Neither backend ever did — each deferred to
+"the caller that knows the scale" while the caller divided by the dpr on the
+strength of the rule — so on a 2x Retina Mac every native editor window opened
+at exactly half size with the plugin's view painting full size inside it, right
+and bottom cropped. Found 2026-09-21 against NassauAnalogue (a 944x712 iPlug2
+editor in a 472x356 window). A change here must keep the two conversions
+INVERSES: `resizeEvent()` feeds its result back to the plugin, and a round trip
+that does not land where it started makes the two argue one poll at a time.
+
 **A floating editor is a real outcome, not an error path** (decision D1, CLAP
 only). When `attach()` refuses, `attachFloating()` is offered before the generic
 fallback: the plugin owns a top-level window of its own and this `QDialog` is
@@ -245,8 +264,11 @@ one. **What is gated headlessly is the parameter FLOW, not the window**: `qxa.pl
 against `tw.test.clap.gui`, a fixture that implements `clap.gui` and creates no
 window at all, with `showWindow = false` so nothing reaches the screen (a qxa
 run uses the real platform plugin). Whether a real plugin's GUI actually draws
-inside our container — and keyboard/focus routing, host-driven resize, and DPI
-on a scaled monitor — remains hand-verification only. The drop handler's
+inside our container — and keyboard/focus routing, host-driven resize, and a
+real window on a scaled monitor — remains hand-verification only. The DPI
+ARITHMETIC is no longer in that list: `hostSizeFor()`/`nativeSizeFor()` are pure
+and gated by `plugin_editor_geometry_test`, which is what the half-size Retina
+bug needed and did not have. The drop handler's
 `dragSourceIndex_` is never assigned by any drag START — `startDragFromPlugin()`
 was declared and never defined — so drag-to-reorder cannot fire today even
 though `reorder-plugin` behind it is tested; that is pre-existing and untouched
