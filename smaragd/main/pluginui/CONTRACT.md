@@ -193,6 +193,38 @@ untouched, and `hostSizeFor()` / `nativeSizeFor()` convert in exactly two call
 sites, `resizeToPlugin()` and `resizeEvent()`. They are pure statics for the
 same reason `clampOntoAScreen()` is, and gated in the same binary.
 
+**THE macOS IDENTITY HAS A PRECONDITION: Qt's logical unit must BE an AppKit
+point**, i.e. `devicePixelRatioF() == NSWindow.backingScaleFactor`. That is true
+of every configuration this app ships — it never sets a Qt scale override — but
+`QT_SCALE_FACTOR` and `QT_SCREEN_SCALE_FACTORS` are opt-in and break it by
+exactly their own factor, because `QtDPR = backingScaleFactor x QT_SCALE_FACTOR
+x QT_SCREEN_SCALE_FACTORS`. Measured on a built-in Retina display (backing scale
+2 throughout), sizing one `QWidget` to Qt logical 944 and reading `view.frame`
+back in AppKit points:
+
+| environment | Qt `devicePixelRatioF()` | AppKit `backingScaleFactor` | 944 as POINTS |
+|---|---|---|---|
+| (default) | 2.0 | 2.0 | 944 |
+| `QT_SCALE_FACTOR=1.5` | 3.0 | 2.0 | 1416 |
+| `QT_SCALE_FACTOR=2` | 4.0 | 2.0 | 1888 |
+| `QT_SCALE_FACTOR=0.5` | 1.0 | 2.0 | 472 |
+| `QT_SCREEN_SCALE_FACTORS=1.25` | 2.5 | 2.0 | 1180 |
+
+At `QT_SCALE_FACTOR=0.5` a 944 pt editor lands in a 472 pt window — the half-size
+symptom below, returning by a different route.
+
+**This is known and deliberately not fixed (QBX-123).** The correct scale would
+be `QtDPR / backingScaleFactor`, and every way to obtain it reintroduces the
+thing the fix below refused: `NSWindow.backingScaleFactor` is a second scale
+source and the first Objective-C++ in a module that today only passes `void*`;
+CoreGraphics is the same second source wearing a C API, and is per-DISPLAY where
+the ratio is per-WINDOW; reading the variables re-implements Qt's own resolution
+order badly. Paying that for a configuration nobody runs is the wrong trade, so
+the precondition is written down here instead. If it ever has to be honoured,
+`pluginToHostScale()` must take the ratio as a PARAMETER — the two conversions
+stay pure and exact inverses, and the case is then testable off a Mac, which is
+the shape the gate below already has.
+
 This was wrong in the shipped M4: `twplugineditor.h` declared `twEditorSize`
 PHYSICAL PIXELS ALWAYS and asked the backends to scale cocoa sizes up so the
 host would have one convention. Neither backend ever did — each deferred to
