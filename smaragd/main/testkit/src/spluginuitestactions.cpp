@@ -530,6 +530,35 @@ SApplyResult SPluginNativeEditorAction::apply( SProject *project )
                    << "expected" << ( expectOpen_ ? "open" : "closed" );
         return { false, nullptr };
     }
+
+    // QBX-119. See the header for why this is a floor and not an equality.
+    if( !minContainerAtLeast_.isEmpty() ) {
+        const QStringList wh = minContainerAtLeast_.split( QLatin1Char( 'x' ) );
+        bool okW = false, okH = false;
+        const int wantW = wh.size() == 2 ? wh[0].toInt( &okW ) : 0;
+        const int wantH = wh.size() == 2 ? wh[1].toInt( &okH ) : 0;
+        if( !okW || !okH ) {
+            qWarning() << "plugin-native-editor: minContainerAtLeast must read "
+                          "\"WxH\", got" << minContainerAtLeast_;
+            return { false, nullptr };
+        }
+        const QSize got = SPluginNativeEditor::containerMinimumSizeFor( slot );
+        if( !got.isValid() ) {
+            qWarning() << "plugin-native-editor FAILED: minContainerAtLeast asks "
+                          "about a container, and no editor is open for slot"
+                       << slotIndex_;
+            return { false, nullptr };
+        }
+        if( got.width() < wantW || got.height() < wantH ) {
+            qWarning() << "plugin-native-editor FAILED: the native container may "
+                          "be squeezed to" << got.width() << "x" << got.height()
+                       << "- at least" << wantW << "x" << wantH << "was required."
+                       << "A container that may reach 0 in either extent is a "
+                          "window the user can drag until the plugin is told a "
+                          "size of 0x0 (QBX-119).";
+            return { false, nullptr };
+        }
+    }
     return { true, nullptr };
 }
 
@@ -540,6 +569,8 @@ void SPluginNativeEditorAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "slotIndex", slotIndex_ );
     elem.setAttribute( "action", action_ );
     elem.setAttribute( "expectOpen", expectOpen_ );
+    if( !minContainerAtLeast_.isEmpty() )
+        elem.setAttribute( "minContainerAtLeast", minContainerAtLeast_ );
 }
 
 bool SPluginNativeEditorAction::readXml( const QDomElement &elem, int )
@@ -549,6 +580,7 @@ bool SPluginNativeEditorAction::readXml( const QDomElement &elem, int )
     slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
     action_     = elem.attribute( "action", "open" );
     expectOpen_ = elem.attribute( "expectOpen", "1" ).toInt();
+    minContainerAtLeast_ = elem.attribute( "minContainerAtLeast" );
     return true;
 }
 

@@ -123,6 +123,29 @@ private:
 //                        the assertion that the editor's lifetime no longer
 //                        depends on the strip.
 //   expectOpen = "1"     what isOpenFor() must say afterwards
+//   minContainerAtLeast = ""  if set, "WxH": the open editor's native container
+//                        must refuse to be squeezed below W and H logical units
+//                        in either extent. Empty = do not check.
+//
+//                        A FLOOR, NEVER AN EQUALITY, and the reason is the same
+//                        one that makes hostSizeFor() platform-split: the
+//                        minimum is derived from the plugin's own floor in
+//                        PLUGIN units (tw.test.clap.gui rounds any proposed size
+//                        down to a multiple of 16 with a floor of 16) and then
+//                        converted, and that conversion DIVIDES by the device
+//                        pixel ratio on Windows and X11 while being the identity
+//                        on macOS. So the same correct code answers 16x16 on a
+//                        Mac and 8x8 on a 2x Windows display, and an equality
+//                        here would be a Mac-only assertion wearing a general
+//                        one's clothes.
+//
+//                        What the floor DOES pin is the whole of QBX-119: the
+//                        minimum used to be 0x0, so the user could drag the
+//                        window down until resizeEvent() offered the plugin a
+//                        size of 0x0, and an iPlug2/Skia editor dies on that
+//                        (a CAMetalLayer drawable of 0x0, nil from
+//                        nextDrawable, a null SkCanvas). "1x1 or more" fails on
+//                        0x0 and passes on every honest answer at every ratio.
 class SPluginNativeEditorAction : public SAction {
 public:
     QString name() const override
@@ -139,6 +162,7 @@ private:
     int     slotIndex_  = 0;
     QString action_     = QStringLiteral( "open" );
     int     expectOpen_ = 1;
+    QString minContainerAtLeast_;
 };
 
 // plugin-generic-editor -- the plugin-native-editor twin for the GENERIC

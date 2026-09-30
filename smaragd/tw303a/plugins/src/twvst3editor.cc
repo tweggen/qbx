@@ -4,6 +4,8 @@
 
 #include "tw/core/twlog.h"
 
+#include <cmath>
+
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 
 using namespace Steinberg;
@@ -188,6 +190,24 @@ twEditorSize twVst3Editor::constrain( twEditorSize want ) const
 bool twVst3Editor::setSize( twEditorSize s )
 {
     if( !view_ || !attached_ || !caps_.resizable ) return false;
+
+    // A NON-POSITIVE SIZE NEVER REACHES onSize() (QBX-119). twClapEditor::
+    // setSize() has always had this check and this one did not, which is the
+    // whole of why the crash was VST3-only: an iPlug2/Skia editor told to be
+    // 0x0 sets a CAMetalLayer drawable of 0x0, gets nil from nextDrawable, and
+    // dereferences the null SkCanvas that follows -- inside the plugin, where
+    // the host cannot catch it.
+    //
+    // The host guards this too (SPluginNativeEditor::resizeEvent), and the
+    // duplication is deliberate: twEditorSize::valid() is THIS ABI's own word
+    // for "a size a plugin may be told", so the ABI is where it has to hold. A
+    // second host, a test, or a later caller does not get to reopen the hole.
+    if( !s.valid() ) {
+        TW_LOGW( "plugins", "VST3 editor: refusing a size of %dx%d; a plugin may "
+                 "not be told a non-positive size", s.width, s.height );
+        return false;
+    }
+
     ViewRect r{ 0, 0, s.width, s.height };
     return view_->onSize( &r ) == kResultOk;
 }
@@ -195,6 +215,15 @@ bool twVst3Editor::setSize( twEditorSize s )
 bool twVst3Editor::setScale( double factor )
 {
     if( !view_ || !caps_.scalable ) return false;
+    // Same rule as setSize() and the same failure behind it: 0 arrives as a
+    // CAMetalLayer contentsScale of 0 and the drawable is 0x0 however big the
+    // view is (QBX-119). std::isfinite rejects NaN as well, which no
+    // comparison-based guard does reliably -- every comparison against NaN is
+    // false, so the negated form lets it through.
+    if( !std::isfinite( factor ) || factor <= 0.0 ) {
+        TW_LOGW( "plugins", "VST3 editor: refusing a content scale of %f", factor );
+        return false;
+    }
     IPlugViewContentScaleSupport *scale = nullptr;
     if( view_->queryInterface( IPlugViewContentScaleSupport::iid,
                                (void **)&scale ) != kResultOk || !scale )

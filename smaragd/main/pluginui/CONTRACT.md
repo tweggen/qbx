@@ -236,6 +236,75 @@ editor in a 472x356 window). A change here must keep the two conversions
 INVERSES: `resizeEvent()` feeds its result back to the plugin, and a round trip
 that does not land where it started makes the two argue one poll at a time.
 
+**A PLUGIN IS NEVER HANDED A NON-POSITIVE SIZE OR SCALE, AND THE CONTAINER'S
+MINIMUM IS NEVER ZERO** (QBX-119). `container_` is a bare `QWidget`, so its
+`sizeHint()` is `(-1, -1)`: it has no opinion about its own size, and
+`QWidgetItem::sizeHint()` therefore falls back to the widget's MINIMUM.
+`resizeToPlugin()` used to relax that minimum to `(0, 0)` for a resizable plugin
+BEFORE calling `adjustSize()`, so the layout's hint was `0x0` and the window
+collapsed to nothing the moment a plugin answered `canResize`. Measured on
+`tw.test.clap.gui` with the old code: `dialog=0x0 container=640x480 min=0x0
+hint=0x0`. The plugin's view was then parented into a container with no area,
+which is how NassauAnalogue died: an iPlug2/Skia editor turns a zero-area view
+into a `CAMetalLayer` drawable of `0x0` (`ignoring invalid setDrawableSize
+width=0.000000 height=0.000000`, verbatim in the ticket), `nextDrawable` answers
+nil, and it dereferences the null `SkCanvas` that follows — `EXC_BAD_ACCESS` in
+`SkCanvas::restoreToCount`, inside the plugin, where no host guard can catch it.
+
+The rule is now enforced at four places, and the duplication is deliberate
+because each closes a different hole:
+
+1. **The order in `resizeToPlugin()`.** `setFixedSize()` stays in force across
+   `adjustSize()` — so the hint is `min == max == want`, a real one — and only
+   then are the bounds widened. Setting the size explicitly instead
+   (`container_->resize(); resize()`) was tried and MEASURED not working: the
+   dialog is still at Qt's default 640x480 there, a hidden top-level loses that
+   resize to the next layout pass, and the container came back stretched to
+   640x480.
+2. **The floor is the PLUGIN's**, `minimumContainerSize()` — `constrain({1,1})`,
+   which is the resize-constraint protocol used in the one direction it answers
+   reliably — floored at `1x1` because `hostSizeFor()` DIVIDES on Windows and
+   X11 and would round a `1` down to `0`.
+3. **`resizeEvent()` negotiates only for a window that was really mapped**
+   (`shown_`, now set from `showEvent()` rather than `openFor()`), never sends a
+   size that fails `twEditorSize::valid()` either before or after `constrain()`,
+   and never sends a size the plugin already reports. That last one is not
+   tidiness: a plugin may read `onSize()`/`set_size()` as a USER gesture —
+   `tw.test.clap.gui` queues a parameter edit from it — so an echoed resize
+   turned the Gain the fixture's own GUI had just set back down again.
+4. **The backends refuse it too.** `twClapEditor::setSize()` always had
+   `if( !s.valid() ) return false;` and `twVst3Editor::setSize()` did not, which
+   is the whole of why the crash was VST3-only: CLAP dropped the zero and VST3
+   forwarded it to `IPlugView::onSize()`. Both now also refuse a non-finite or
+   non-positive `setScale()` factor, for the same reason in the other currency —
+   a `contentsScale` of 0 gives a `0x0` drawable however big the view is.
+
+`isSendableScale()` is a pure static gated in `plugin_editor_geometry_test`, and
+it rejects NaN explicitly: every comparison against NaN is false, so a guard
+spelled as the negation of a rejection (`if( !(scale <= 0) ) send`) passes it
+straight through. A REJECTED SCALE MEANS SAY NOTHING rather than send 1.0 — the
+plugin's own default is already its best guess, and this is the opposite choice
+from `hostSizeFor()`'s "a dpr of 0 counts as 1" because there a divisor of 1 is
+the identity while here a scale of 1 is a positive claim about the monitor.
+
+The gate is `minContainerAtLeast="1x1"` on `qxa.plugin_native_editor`'s open. It
+is a FLOOR, never an equality, and for the same reason the conversion above is
+platform-split: the fixture's floor is 16 in PLUGIN units, which `hostSizeFor()`
+leaves at 16 on macOS and divides to 8 on a 2x Windows display, so an equality
+would be a Mac-only assertion wearing a general one's clothes. What it does NOT
+prove is that the floor came from the plugin rather than from the `1x1`
+fallback; no portable equality can. The `resizeEvent()` guards in (3) are NOT
+gated at all — a qxa case opens with `showWindow = false`, so `shown_` is false
+and that handler is unreachable there by construction.
+
+**A SIDE EFFECT WORTH KNOWING: this made `qxa.plugin_native_editor`
+deterministic.** On `main` it depends on sticky state in the developer's real
+`~/.config/Smaragd` — it passes on a machine that has never stored a plugin
+editor geometry and fails once one exists, because the restored geometry gives
+the collapsed container a real size and the resulting echo resize made the
+fixture report a knob move that displaced the Gain the case asserts. That is why
+QBX-118's 21-failure inventory does not list it.
+
 **A floating editor is a real outcome, not an error path** (decision D1, CLAP
 only). When `attach()` refuses, `attachFloating()` is offered before the generic
 fallback: the plugin owns a top-level window of its own and this `QDialog` is

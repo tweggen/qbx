@@ -19,7 +19,9 @@
 #include <QGuiApplication>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QShowEvent>
 #include <QTimer>
+#include <QtNumeric>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
@@ -165,6 +167,17 @@ void SPluginNativeEditor::closeFor( SPluginSlot *slot )
         w->close();
 }
 
+QSize SPluginNativeEditor::containerMinimumSizeFor( SPluginSlot *slot )
+{
+    SPluginNativeEditor *w = registry().value( slot ).data();
+    if( !w || !w->container_ ) return QSize();
+    // minimumSize(), not minimumSizeHint(): the hint is what the widget would
+    // LIKE, and what QBX-119 turns on is what the layout will actually let the
+    // user do. setFixedSize() sets this too, so a non-resizable editor answers
+    // its one legal size here rather than nothing.
+    return w->container_->minimumSize();
+}
+
 namespace {
 
 // Every track in the project, depth first. A folder's children are tracks in
@@ -242,6 +255,16 @@ audio::twEditorSize SPluginNativeEditor::nativeSizeFor( QSize host, qreal dpr )
     const qreal s = pluginToHostScale( dpr );
     return audio::twEditorSize{ qRound( host.width() * s ),
                                 qRound( host.height() * s ) };
+}
+
+// See the header for why a rejected scale is silence rather than 1.0.
+bool SPluginNativeEditor::isSendableScale( qreal scale )
+{
+    // qIsFinite rejects both NaN and the infinities. A NaN would otherwise pass
+    // every comparison-based guard written the obvious way round: `scale > 0.0`
+    // is false for NaN, but so is `scale <= 0.0`, and a guard spelled as the
+    // negation of the second lets it straight through.
+    return qIsFinite( scale ) && scale > 0.0;
 }
 
 QString SPluginNativeEditor::pluginKey() const
@@ -362,9 +385,9 @@ SPluginNativeEditor *SPluginNativeEditor::openFor( STrack *track, SPluginSlot *s
     // put its own window on screen. This object stays alive, unshown, as the
     // poll pump and the registry entry.
     if( showWindow && !w->isFloating() ) {
-        w->show();
+        w->show();   // shown_ is set by showEvent(), which is also true for the
+                     // already-open branch above
         w->raise();
-        w->shown_ = true;
     }
     return w;
 }
@@ -393,9 +416,20 @@ bool SPluginNativeEditor::attachPlugin()
     }
 
     // Tell the plugin the monitor scale BEFORE attaching, so its first paint is
-    // at the right size rather than being corrected afterwards.
-    if( caps.scalable )
-        editor_->setScale( devicePixelRatioF() );
+    // at the right size rather than being corrected afterwards -- but only when
+    // there is a scale to tell it. NOTHING HAS BEEN MAPPED AT THIS POINT: this
+    // runs from openFor() before show(), so devicePixelRatioF() can still answer
+    // 0, and 0 is not a scale (QBX-119; isSendableScale()).
+    if( caps.scalable ) {
+        const qreal scale = devicePixelRatioF();
+        if( isSendableScale( scale ) )
+            editor_->setScale( scale );
+        else
+            TW_LOGW( "pluginui",
+                     "native editor: not sending a scale of %f -- this window has "
+                     "none yet, and the plugin's own default beats a made-up one",
+                     (double)scale );
+    }
 
     const audio::twEditorHandle h = handleOf( container_ );
     if( h.valid() && editor_->attach( h ) ) {
@@ -450,13 +484,74 @@ void SPluginNativeEditor::resizeToPlugin( audio::twEditorSize native )
     // every native editor on a Retina Mac exactly half size with the plugin's
     // GUI cropped inside it.
     applyingResize_ = true;
-    container_->setFixedSize( hostSizeFor( native, devicePixelRatioF() ) );
-    // Fixed only while the plugin says it cannot resize; otherwise the user is
-    // allowed to drag and resizeEvent negotiates.
-    if( editor_ && editor_->caps().resizable )
-        container_->setMinimumSize( 0, 0 ), container_->setMaximumSize( 16777215, 16777215 );
+
+    const QSize want = hostSizeFor( native, devicePixelRatioF() );
+
+    // SIZE FIRST WITH THE BOUNDS PINNED, THEN RELAX THEM. THE ORDER IS THE FIX
+    // FOR QBX-119, and it used to be the other way round.
+    //
+    // container_ is a bare QWidget, so its sizeHint() is (-1, -1): it has no
+    // opinion about how big it ought to be. QWidgetItem::sizeHint() therefore
+    // falls back to the widget's MINIMUM -- and the old code relaxed that
+    // minimum to (0, 0) for a resizable plugin BEFORE calling adjustSize(). So
+    // the layout's size hint was 0x0 and adjustSize() SHRANK THE WINDOW TO
+    // NOTHING the moment a plugin said it could be resized. The plugin was then
+    // handed a view with no area; an iPlug2/Skia editor turns that into a
+    // CAMetalLayer drawable of 0x0 ("ignoring invalid setDrawableSize
+    // width=0.000000 height=0.000000", verbatim in the ticket's log),
+    // nextDrawable answers nil, and it dereferences the null SkCanvas that
+    // follows -- the EXC_BAD_ACCESS inside SkCanvas::restoreToCount this ticket
+    // was filed for.
+    //
+    // With setFixedSize() still in force adjustSize() has min == max == want to
+    // read, which is a real hint, and the window comes up at the size the plugin
+    // asked for. Only then may the bounds be widened, and the floor they are
+    // widened to is the PLUGIN's own (minimumContainerSize()), never zero -- so
+    // the user can drag but cannot drag the plugin down to nothing.
+    //
+    // Setting the size explicitly instead (container_->resize(); resize()) does
+    // NOT work, and was measured not working: the dialog is still at its default
+    // 640x480 at this point, a hidden top-level loses that resize to the next
+    // layout pass, and the container came back stretched to 640x480 -- which
+    // resizeEvent then forwarded to the plugin as a user resize.
+    container_->setFixedSize( want );
     adjustSize();
+
+    // Fixed only while the plugin says it cannot resize -- which is the common
+    // path, every VST3 installed on this box reports canResize=no -- otherwise
+    // the user is allowed to drag and resizeEvent negotiates.
+    if( editor_ && editor_->caps().resizable ) {
+        container_->setMinimumSize( minimumContainerSize() );
+        container_->setMaximumSize( QWIDGETSIZE_MAX, QWIDGETSIZE_MAX );
+    }
+
     applyingResize_ = false;
+}
+
+// The plugin's own floor, asked for in the one direction the resize-constraint
+// protocol answers reliably: propose the smallest size that exists and take
+// whatever comes back. A plugin with a real minimum rounds 1x1 up to it; one
+// that does not implement the constraint echoes 1x1, which is already positive
+// and already enough.
+QSize SPluginNativeEditor::minimumContainerSize() const
+{
+    if( !editor_ ) return QSize( 1, 1 );
+
+    audio::twEditorSize floor_ = editor_->constrain( audio::twEditorSize{ 1, 1 } );
+    if( !floor_.valid() ) floor_ = audio::twEditorSize{ 1, 1 };
+
+    const QSize s = hostSizeFor( floor_, devicePixelRatioF() );
+    // hostSizeFor() DIVIDES on Windows and X11, so a 1x1 plugin floor rounds to
+    // 0x0 there and would reintroduce exactly the zero this function exists to
+    // forbid. The floor of the floor is 1.
+    return QSize( qMax( 1, s.width() ), qMax( 1, s.height() ) );
+}
+
+void SPluginNativeEditor::showEvent( QShowEvent *e )
+{
+    // The one place "this window was really mapped" is true by construction.
+    shown_ = true;
+    QDialog::showEvent( e );
 }
 
 void SPluginNativeEditor::resizeEvent( QResizeEvent *e )
@@ -465,15 +560,67 @@ void SPluginNativeEditor::resizeEvent( QResizeEvent *e )
     if( applyingResize_ || !editor_ ) return;
     if( !editor_->caps().resizable ) return;
 
+    // ONLY A WINDOW THE USER CAN ACTUALLY HAVE DRAGGED NEGOTIATES A SIZE.
+    //
+    // This handler exists for ONE caller: the user pulling the window's edges.
+    // A resize the PLUGIN asked for arrives through poll()'s fb.resized and goes
+    // to resizeToPlugin() instead, so nothing is lost by ignoring the rest --
+    // and the rest is not harmless. A never-mapped dialog (the headless open, the
+    // path every qxa case takes) still gets layout-driven resize events carrying
+    // Qt's default 640x480 top-level geometry, delivered after applyingResize_
+    // has gone back to false, because the layout is never reconciled against a
+    // window that was never shown. Measured: with the container's minimum lifted
+    // off zero, that event started telling tw.test.clap.gui it was 640x480 -- a
+    // size nobody asked for, which the fixture duly reported back as a user
+    // gesture and which turned the Gain its own GUI had just set back down.
+    if( !shown_ ) return;
+
     // The inverse of resizeToPlugin()'s conversion, and it MUST be the inverse:
     // a round trip that does not land back where it started makes the plugin and
     // the container argue about the size, one poll at a time.
     audio::twEditorSize want = nativeSizeFor(
         QSize( container_->width(), container_->height() ), devicePixelRatioF() );
 
+    // A NON-POSITIVE SIZE IS NEVER SENT (QBX-119). The container's minimum is
+    // positive now, so arriving here with a zero extent means something other
+    // than the user's drag produced it -- a layout pass during teardown, or a
+    // dpr division that rounded a 1 down to 0 on Windows/X11. Either way the
+    // plugin has no use for the number and at least one real plugin dies on it,
+    // so the honest act is to DROP the resize rather than clamp it to a size the
+    // user never asked for: clamping would fight the layout every 33 ms.
+    if( !want.valid() ) {
+        TW_LOGW( "pluginui",
+                 "native editor: dropping a resize to %dx%d -- a plugin is never "
+                 "told a non-positive size", want.width, want.height );
+        return;
+    }
+
     // Ask before telling: a plugin may only accept certain sizes, and onSize()
     // with one it refused is how a GUI ends up clipped.
     want = editor_->constrain( want );
+
+    // ...AND THE ANSWER IS CHECKED TOO. constrain() is the PLUGIN's arithmetic,
+    // returned verbatim by both backends (twvst3editor.cc, twclapeditor.cc), so
+    // a plugin that rounds down to 0 puts us straight back where the guard above
+    // started.
+    if( !want.valid() ) {
+        TW_LOGW( "pluginui",
+                 "native editor: the plugin constrained a resize to %dx%d; "
+                 "dropping it rather than forwarding a non-positive size",
+                 want.width, want.height );
+        return;
+    }
+
+    // AND A PLUGIN IS NEVER TOLD A SIZE IT ALREADY HAS. Every layout pass
+    // delivers a resizeEvent, and most of them carry the size the plugin itself
+    // just asked for, so forwarding one re-enters the plugin's GUI for nothing.
+    // It is not merely wasteful: a plugin is entitled to read onSize() /
+    // set_size() as something the USER did. tw.test.clap.gui queues a parameter
+    // edit from it, which is how this was found -- an echoed resize turned the
+    // Gain that the fixture's own GUI had just set straight back down again.
+    const audio::twEditorSize have = editor_->size();
+    if( want.width == have.width && want.height == have.height ) return;
+
     editor_->setSize( want );
 }
 

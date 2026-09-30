@@ -93,6 +93,16 @@ public:
     static bool isOpenFor( SPluginSlot *slot );
     static void closeFor( SPluginSlot *slot );
 
+    // The smallest size this slot's open native container may be squeezed to,
+    // or an invalid QSize when no editor is open.
+    //
+    // FOR THE TESTKIT, and it is here because the thing worth gating about
+    // QBX-119 is a NEGATIVE: the host must never be ABLE to ask a plugin for a
+    // size of 0x0. A container minimum of 0x0 is what made it able to, and a
+    // minimum is observable with no window, no screen and no resize -- which is
+    // the only reason a headless case can assert it at all.
+    static QSize containerMinimumSizeFor( SPluginSlot *slot );
+
     // D2: re-open every editor a loaded project says was open. Called once,
     // after a load has finished and the UI exists.
     //
@@ -138,6 +148,26 @@ public:
     static QSize               hostSizeFor( audio::twEditorSize native, qreal dpr );
     static audio::twEditorSize nativeSizeFor( QSize host, qreal dpr );
 
+    // WHETHER to tell a plugin the monitor scale at all, given the number we
+    // have to hand. True only for a finite, strictly positive one.
+    //
+    // PUBLIC AND STATIC for the same reason the two above are. The hole it
+    // closes: devicePixelRatioF() is read in attachPlugin(), BEFORE this dialog
+    // has ever been mapped, and a widget with no window and no screen behind it
+    // has no honest scale to report. Zero is what reaches the plugin then, and
+    // zero is not a scale -- an iPlug2/Skia editor turns it into a CAMetalLayer
+    // contentsScale of 0, a drawable of 0x0, a null SkCanvas, and an
+    // EXC_BAD_ACCESS inside the plugin's own SkCanvas::restoreToCount, which is
+    // the crash QBX-119 was filed for.
+    //
+    // A REJECTED SCALE MEANS SAY NOTHING, not "send 1.0". The plugin's own
+    // default is already its best guess and inventing a number we do not have
+    // would replace a correct guess with a wrong one. That is the opposite
+    // choice from hostSizeFor()'s "a dpr of 0 counts as 1", and deliberately
+    // so: there a divisor of 1 is the identity and changes nothing, here a
+    // scale of 1 is a positive claim about the user's monitor.
+    static bool isSendableScale( qreal scale );
+
     // True if this slot has a native editor available at all. Cheap: it asks
     // twPlugin::supportsNativeEditor() and instantiates nothing.
     static bool isAvailableFor( SPluginSlot *slot );
@@ -154,6 +184,7 @@ public:
 protected:
     void closeEvent( QCloseEvent *e ) override;
     void resizeEvent( QResizeEvent *e ) override;
+    void showEvent( QShowEvent *e ) override;
 
 private slots:
     void onPoll();
@@ -176,6 +207,12 @@ private:
     void handleRestart();
     void resizeToPlugin( audio::twEditorSize native );
 
+    // The smallest the native container may be squeezed to, in Qt's logical
+    // units, and NEVER zero in either extent -- see resizeToPlugin() for what a
+    // zero minimum costs. Derived from the plugin's own answer to
+    // constrain({1,1}), floored at 1x1.
+    QSize minimumContainerSize() const;
+
     // The model address, DERIVED, never cached. Both return an empty/-1 "cannot
     // address this any more", which is a real state: the track can be deleted
     // or the slot removed while the window is up.
@@ -193,6 +230,13 @@ private:
     // (showWindow = false) and a floating editor both have no geometry of ours
     // worth storing, and writing one would overwrite the user's real position
     // with a default-constructed rectangle.
+    //
+    // SET FROM showEvent(), not from openFor(). openFor() only knew about the
+    // show IT performed, and it has a second path that shows an ALREADY-OPEN
+    // window (raise it rather than making a second one) which never set this at
+    // all -- so a window re-raised after a headless open still counted as never
+    // mapped. showEvent() is the one place that is true by construction, and
+    // resizeEvent() now depends on it as well as saveGeometryToSettings().
     bool                             shown_          = false;
 
     // The last value committed per parameter, for the echo guard in applyEdit().
