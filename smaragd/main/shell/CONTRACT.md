@@ -1475,3 +1475,34 @@ promise. It drags the pane's own horizontal scrollbar to its maximum and
 compares both strips' GLOBAL positions, reporting `scrolled=` as the control —
 a pane that did not scroll at all would report `masterPinned=1` for the wrong
 reason.
+
+**inv. 53. EVERY WIDGET LAYS OUT BY ITS OWN RECT** (QBX-118). `SApplication`'s
+constructor installs an application-wide filter that sets
+`Qt::WA_LayoutUsesWidgetRect` on every widget, at `ChildAdded` and at `Polish`.
+
+Qt lets a style report a *layout item rect* smaller than the widget rect, so a
+control with decorative margins can be packed by its visible body rather than
+its frame: `QWidgetItem` reserves the small rect and `setGeometry()` expands the
+widget back to the large one. On Fusion and Windows the two are equal and none
+of it shows. `QMacStyle` reports real margins, and the measured consequence was
+a 20 px M/S/R button handed an **8 px cell** (`item 0 min=20x8 max=20x8`,
+`widgetGeom 20x20`), three buttons 12 px apart overlapping by 8 px each, and
+`assert-mixer-layout` reporting 24-28 overlapping pairs with `crushed=0` —
+nothing squeezed, the cells simply too small.
+
+It was not cosmetic: the same deficit made `msrColumn`, `msrBesideFader` and
+`narrowUnderMsr` read 0 on macOS and 1 on Windows, so three arrangement
+guarantees QBX-100/115/116 gated were false on this platform and invisible.
+
+**THIS IS WHAT MAKES `sAuditLayout()` MEAN THE SAME THING ON ALL THREE
+PLATFORMS.** That audit compares WIDGET geometries, which is only a statement
+about the layout while the style's layout rect equals the widget rect. Every
+layout gate in this repo rests on that equality; this is where it is established.
+
+UNCONDITIONAL, not `#ifdef Q_OS_MACOS`: where the two rects already agree it
+changes nothing, and an `#ifdef` would be two code paths of which only one can
+ever be gated on a given machine — which is exactly how the discrepancy
+survived. Both hooks are needed: `Polish` is the documented about-to-be-laid-out
+moment and the only one a parentless top-level gets, while `ChildAdded` catches
+a widget as it is parented, which covers the scratch widget trees the layout
+gates build and never show.
