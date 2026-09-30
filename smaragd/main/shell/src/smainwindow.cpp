@@ -223,6 +223,65 @@ namespace {
 //
 // It also makes a pixel gate mean the same thing on every display, which is the
 // argument inv. 53 already makes for layout rects.
+// RESIZING AN UNMAPPED WINDOW DOES NOT RESIZE ITS CHILDREN (QBX-128).
+//
+// Under `--test-case` the main window is never mapped, so `resize()` updates ITS
+// geometry at once while the layout that would pass the new size down never
+// runs: the QResizeEvent that drives it is deferred to the eventual show
+// (`WA_PendingResizeEvent`), and a layout that was never told it is dirty has
+// nothing to do when asked. The canvas therefore keeps whatever size it had, and
+// a verb that resizes and then measures is measuring the OLD one.
+//
+// MEASURED on `take_lane_domain` (canvas 150x89, case asked for 900x600), each
+// step applied in turn to the same run:
+//
+//   after resize()                       canvas 150x89
+//   after activate()                     canvas 150x89
+//   after invalidate() + activate()      canvas 150x89
+//   after draining QEvent::LayoutRequest canvas 150x89
+//   after WA_DontShowOnScreen + show()   canvas 460x604
+//   after hide() + clearing the attr     canvas 460x604
+//
+// So only the last one does anything, and the settled geometry SURVIVES going
+// back to hidden -- which is what makes this restorable rather than a permanent
+// change to the window's state. `invalidate()` is listed because it is the
+// obvious fix and it does NOT work: activate() still has no mapped widget to lay
+// out against.
+//
+// WA_DontShowOnScreen is what keeps show() honest: AppKit never maps the window,
+// so nothing appears on the developer's desktop mid-suite and the full-screen
+// Space hazard of QBX-117 cannot arise. The window is put back exactly as it was
+// found, and a window that was ALREADY visible (an ordinary run) is left alone
+// entirely -- there the layout reconciles by itself.
+//
+// Same Qt behaviour as QBX-119, where a never-mapped QDialog lost its resize to
+// the next layout pass. The general rule, for any verb: under `--test-case`
+// nothing is mapped, so resize-then-measure measures the old size.
+static void sResizeAndSettle( QWidget *win, QWidget *view, int winW, int winH )
+{
+    if( !win ) return;
+    win->resize( winW, winH );
+
+    const bool wasHidden = win->isHidden();
+    if( wasHidden ) {
+        win->setAttribute( Qt::WA_DontShowOnScreen, true );
+        win->show();
+    }
+    // Three passes for the same reason sSettleLayout() takes three: a nested
+    // layout settles one level per pass, and this canvas sits inside a scroll
+    // area inside the arranger.
+    for( int pass = 0; pass < 3; ++pass ) {
+        if( QLayout *l = win->layout() ) l->activate();
+        if( view ) if( QLayout *l = view->layout() ) l->activate();
+        QCoreApplication::sendPostedEvents( nullptr, QEvent::LayoutRequest );
+        QCoreApplication::sendPostedEvents();
+    }
+    if( wasHidden ) {
+        win->hide();
+        win->setAttribute( Qt::WA_DontShowOnScreen, false );
+    }
+}
+
 static QImage sGrabLogical( QWidget *w )
 {
     if( !w || w->width() < 1 || w->height() < 1 ) return QImage();
@@ -4275,9 +4334,7 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
 
     SMVActualView *canvas = v->contentView();
     if( w > 0 && h > 0 ) {           // the same sizing dance as the overlay verb
-        resize( w + v->getTrackControlWidth() + 48, h + 160 );
-        if( layout() ) layout()->activate();
-        if( v->layout() ) v->layout()->activate();
+        sResizeAndSettle( this, v, w + v->getTrackControlWidth() + 48, h + 160 );
     }
     // SETTLE BEFORE GRABBING, which the overlay verb does not need and this one
     // does. Measured: the FIRST grab of a run came back carrying the time grid
@@ -4474,11 +4531,8 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
     // Same sizing dance grabArrangerLanes() does, and for the same reason: the
     // canvas is inside a never-shown window and its geometry belongs to its
     // parents, so resizing the child alone is undone before grab() renders.
-    if( w > 0 && h > 0 ) {
-        resize( w + v->getTrackControlWidth() + 48, h + 160 );
-        if( layout() ) layout()->activate();
-        if( v->layout() ) v->layout()->activate();
-    }
+    if( w > 0 && h > 0 )
+        sResizeAndSettle( this, v, w + v->getTrackControlWidth() + 48, h + 160 );
     const QImage img = sGrabLogical( canvas );
     if( img.isNull() ) return QString();
     if( !pngPath.isEmpty() ) img.save( pngPath, "PNG" );

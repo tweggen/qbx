@@ -6,7 +6,8 @@ gating a change here has to build a baseline by hand to tell their own breakage
 from the standing breakage. This is that list. Its sibling is
 `docs/ASIO_WINDOWS_GATE.md`, which does the same job for the other platform.
 
-Filed as QBX-118. Baseline re-measured **2026-09-30** at `8f0dea85`, on Darwin
+Filed as QBX-118. Baseline re-measured **2026-09-30** at `cf966eb8` (21
+failures at `8f0dea85`, 7 now), on Darwin
 25.5.0 / Apple silicon, Qt 6.11.1, a fresh out-of-tree `./build.sh`. The four
 static checkers (`check_layering`, `check_logging`, `check_includes`,
 `check_tempo_authority`) are clean; everything below is `ctest` only.
@@ -30,37 +31,31 @@ not run", in the same `N - name` format it uses for failures, so a script that
 greps for that shape will report them as failures. `LastTestsFailed.log`
 contains only real failures and is the safer thing to diff.
 
-## Standing failures (14)
+## Standing failures (7)
 
 Every line has a ticket. If your change breaks something that is **not** on this
 list, that one is yours.
 
 | test | cluster | ticket |
 |---|---|---|
-| `qxa.asset_clip_preview` | C — the grabbed canvas never reaches the requested size | QBX-128 |
-| `qxa.doubleclick_blue_clip_resolve` | C | QBX-128 |
-| `qxa.feel_flow_metric_lab` | C | QBX-128 |
-| `qxa.follow_scroll_hold` | C | QBX-128 |
-| `qxa.take_lane_domain` | C | QBX-128 |
-| `qxa.takestack_legacy_wrap_lanes` | C | QBX-128 |
+| `qxa.follow_scroll_hold` | shift+wheel does not scroll horizontally | QBX-129 |
 | `devices_midi_test` | D — no high-resolution wait on macOS | QBX-124 |
 | `devices_input_test` | D | QBX-124 |
 | `plugins_scan_test` | E — the cold scan itself fails, not just the cache | QBX-126 |
 | `qxa.automation_plugin_param` | outside the five clusters | QBX-127 |
 | `qxa.instrument_sine_render` | outside the five clusters | QBX-127 |
 | `qxa.plugin_editor_persistence` | outside the five clusters | QBX-127 |
-| `qxa.plugin_native_editor` | fixed by QBX-119; fails on `main` until that merges | QBX-119 |
-| `au_test` | flake — SEGFAULTs under load, passes alone | QBX-118 |
 
-`au_test` is the only one that is a flake rather than a solid failure: it passed
-3 of 3 on its own and SEGFAULTs under parallel load. `devices_midi_test` is
-solid but marginal — see below.
+Not in the table because they are not standing failures: **`au_test`** is a
+flake that SEGFAULTs under parallel load and passes alone (it did not fire in the
+last serial run at all), and **`devices_midi_test`** IS in the table but is
+marginal rather than solid — see cluster D below.
 
-`qxa.plugin_native_editor` is worth knowing about even after QBX-119 merges,
-because on `main` it reads **sticky state in your real `~/.config/Smaragd`**: it
-passes on a machine that has never stored a plugin editor geometry and fails
-once one exists. That is why QBX-118's original 21-failure inventory does not
-list it and why two people can disagree about the baseline.
+`qxa.plugin_native_editor` is no longer a standing failure (QBX-119), but it is
+worth knowing why it used to be: it read **sticky state in your real
+`~/.config/Smaragd`** and failed only once a plugin editor geometry had been
+stored there. That is why QBX-118's original 21-failure inventory did not list
+it, and why two people could disagree about the baseline.
 
 ## Fixed, and what it taught
 
@@ -130,6 +125,43 @@ The remaining six fail for a different reason, now visible because the grab is
 honest: the canvas never reaches the size the case asked for. **QBX-128**, and it
 is the same Qt hazard as QBX-119 — under `--test-case` nothing is mapped, so any
 verb that resizes a widget and then measures it is measuring the old size.
+
+## Resizing an unmapped window does not resize its children
+
+**Under `--test-case` nothing is mapped, so any verb that resizes a widget and
+then measures it is measuring the OLD size** (QBX-128; the same Qt behaviour as
+QBX-119, where a never-shown `QDialog` lost its `resize()` to the next layout
+pass).
+
+`resize()` updates the window's own geometry at once, but the QResizeEvent that
+drives the layout is deferred to the eventual show (`WA_PendingResizeEvent`), and
+a layout that was never told it is dirty has nothing to do when asked. The pixel
+gates asked for a 900x600 canvas and grabbed a 150x89 one. Measured on
+`take_lane_domain`, each step applied in turn to the same run:
+
+```
+after resize()                       canvas 150x89
+after activate()                     canvas 150x89
+after invalidate() + activate()      canvas 150x89
+after draining QEvent::LayoutRequest canvas 150x89
+after WA_DontShowOnScreen + show()   canvas 460x604
+after hide() + clearing the attr     canvas 460x604
+```
+
+Only the last one does anything, and the settled geometry **survives going back
+to hidden** — which is what makes it restorable rather than a permanent change to
+the window's state. `invalidate()` is in that list because it is the obvious fix
+and it does not work.
+
+`WA_DontShowOnScreen` is what keeps the `show()` honest: AppKit never maps the
+window, so nothing appears on the developer's desktop mid-suite and QBX-117's
+full-screen-Space hazard cannot arise. A window that is already visible (an
+ordinary run) is left alone entirely.
+
+This had been invisible for as long as `grab()` returned a 2x pixmap: the doubled
+image passed the `top + lh > img.height()` bounds check that a logical one
+correctly fails, so the gates were failing that check by luck and mis-measuring
+whenever they passed it. Fixing the grab (QBX-125) is what made it visible.
 
 ## Cluster D is a defect, not a tolerance
 
