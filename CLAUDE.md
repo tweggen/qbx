@@ -63,6 +63,12 @@ ctest --test-dir smaragd/build -j4 --output-on-failure   # scale -j to the machi
 To pin a flake, run `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]`
 from `smaragd/tests/cases/`. For record and live cases, loop `ctest -R` instead.
 
+**On macOS the suite is not green**, and `docs/MACOS_GATE.md` names every
+standing failure with a ticket beside it so you can tell your breakage from the
+standing breakage. Build that comparison **serially** — two `-j4` runs of
+identical code differed by 18 tests on the dev box, so a `-j4` set difference
+proves nothing. Windows has the same kind of note in `docs/ASIO_WINDOWS_GATE.md`.
+
 ## Workflow
 
 - A PR is the only route to `main`. An agent opens the PR and stops there; the

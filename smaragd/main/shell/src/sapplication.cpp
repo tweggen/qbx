@@ -652,6 +652,34 @@ offset_t SApplication::getGlobalLocatorPos() const
     return globalLocatorPos_.load( std::memory_order_relaxed );
 }
 
+#include <QChildEvent>
+#include <QEvent>
+#include <QWidget>
+
+namespace {
+
+// See the constructor for WHY. This only sets an attribute; it never consumes an
+// event, and it deliberately does not care whether the widget has a layout yet.
+class SWidgetRectPolicy : public QObject {
+public:
+    explicit SWidgetRectPolicy( QObject *parent ) : QObject( parent ) {}
+
+    bool eventFilter( QObject *o, QEvent *e ) override
+    {
+        if( e->type() == QEvent::ChildAdded ) {
+            if( QWidget *c = qobject_cast<QWidget *>(
+                    static_cast<QChildEvent *>( e )->child() ) )
+                c->setAttribute( Qt::WA_LayoutUsesWidgetRect );
+        } else if( e->type() == QEvent::Polish ) {
+            if( QWidget *w = qobject_cast<QWidget *>( o ) )
+                w->setAttribute( Qt::WA_LayoutUsesWidgetRect );
+        }
+        return false;   // never consume: this is policy, not handling
+    }
+};
+
+}  // namespace
+
 SApplication::SApplication( int &argc, char **argv )
     : QApplication( argc, argv ),
       actionHistory_( NULL ),
@@ -664,6 +692,41 @@ SApplication::SApplication( int &argc, char **argv )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );
+
+    // QBX-118: EVERY WIDGET LAYS OUT BY ITS OWN RECT, NOT THE STYLE'S LAYOUT
+    // ITEM RECT. One line of policy, and it is the difference between the
+    // layout gates meaning the same thing on macOS as they do on Windows and
+    // the macOS suite being permanently red.
+    //
+    // Qt lets a style report a "layout item rect" SMALLER than the widget rect,
+    // so a control with decorative margins (an Aqua push button's shadow, a
+    // slider's groove surround) can be packed as tightly as its visible body
+    // rather than its frame. QWidgetItem then reserves the SMALL rect and
+    // setGeometry() expands the widget back out to the large one. On the Fusion
+    // and Windows styles the two rects are equal and none of this is visible.
+    // QMacStyle reports real margins, and the consequences were measured:
+    //
+    //   mixer strip, macOS, before | item 0 min=20x8 max=20x8  widgetGeom 20x20
+    //
+    // A 20 px M/S/R button given an 8 px cell. The three buttons landed 12 px
+    // apart, overlapping by 8 px each, and `assert-mixer-layout` reported 24-28
+    // overlapping pairs with `crushed=0` — nothing was being squeezed, the CELLS
+    // were simply too small for the widgets in them. It also silently broke
+    // every arrangement promise those tickets gated (`msrColumn`,
+    // `msrBesideFader`, `narrowUnderMsr` all read 0 on macOS and 1 on Windows).
+    //
+    // `Qt::WA_LayoutUsesWidgetRect` is Qt's own documented switch for this, and
+    // its documentation names macOS as the reason it exists. Applied
+    // UNCONDITIONALLY rather than under Q_OS_MACOS: where the two rects are
+    // already equal it changes nothing, and an `#ifdef` here would be two code
+    // paths of which only one can ever be gated on a given machine — which is
+    // how this discrepancy survived in the first place.
+    //
+    // Both hooks are needed. Polish is the documented "about to be laid out"
+    // moment and is the only one a parentless top-level gets; ChildAdded catches
+    // a widget as it is parented, which is before any layout can measure it and
+    // covers the scratch widget trees the layout gates build and never show.
+    installEventFilter( new SWidgetRectPolicy( this ) );
 
     // Proposal 33 M1. The one place in the process that is unambiguously the Qt
     // main thread: QApplication's own constructor runs on it by definition.
