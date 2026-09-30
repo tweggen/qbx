@@ -202,6 +202,37 @@ namespace {
 // (app/model/sclipcolors.h). THREE callers need it and hardcoding it -- which
 // is what QColor(160,160,160) was -- is exactly the drift proposal 41 M7 fixed
 // for the tag chip by giving paint and hit-test one geometry function:
+// EVERY PIXEL GATE READS A LOGICAL IMAGE (QBX-125). The classifiers below scan
+// bands computed from LOGICAL widget geometry -- `canvas->laneTop( row )`,
+// `laneHeight( row )` -- so the image they index has to be in logical units too.
+//
+// `QWidget::grab()` is not. It honours the widget's devicePixelRatio, so on a
+// Retina Mac a 460 px wide canvas grabs to a 920 px image while `laneTop()` goes
+// on answering in logical units. Every scan band then lands at half its intended
+// y, i.e. on a DIFFERENT LANE than the one the verb named, and the gate reports
+// with confidence about pixels it never looked at. Measured before the fix, on
+// `feel_flow_heatmap`: the classifier scanned `scanTop=96 scanH=19` of a `w=920`
+// image while the renderer had just been handed `rect=460x98`.
+//
+// Rendering into a QImage we construct AT dpr 1 fixes it WITHOUT RESAMPLING, and
+// that matters more here than anywhere else in the app: these gates assert EXACT
+// colour identity -- membership in `STrackRendererInline::feelFlowPalette()`, the
+// clip body's own rgb, the playhead's -- and scaling a 2x grab down would
+// interpolate those colours into values that are in no palette at all. The
+// painter simply draws at 1x instead.
+//
+// It also makes a pixel gate mean the same thing on every display, which is the
+// argument inv. 53 already makes for layout rects.
+static QImage sGrabLogical( QWidget *w )
+{
+    if( !w || w->width() < 1 || w->height() < 1 ) return QImage();
+    QImage img( w->size(), QImage::Format_ARGB32 );
+    img.setDevicePixelRatio( 1.0 );
+    img.fill( Qt::transparent );
+    w->render( &img );
+    return img;
+}
+
 // `assert-take-lane` and `assert-lane-overlay` classify grabbed PIXELS with
 // it, and since proposal 48 M4 `describeMixerPane` compares the MIXER STRIP's
 // header against it (AC4.3). That third caller is what turns "both mounts use
@@ -4258,10 +4289,9 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
     // from it) off by however far away it lands.
     QCoreApplication::processEvents( QEventLoop::ExcludeUserInputEvents );
     canvas->repaint();
-    const QPixmap pm = canvas->grab();
-    if( pm.isNull() ) return QString();
-    if( !pngPath.isEmpty() ) pm.save( pngPath, "PNG" );
-    const QImage img = pm.toImage();
+    const QImage img = sGrabLogical( canvas );
+    if( img.isNull() ) return QString();
+    if( !pngPath.isEmpty() ) img.save( pngPath, "PNG" );
 
     // SEARCH for the row, never rowIndexOfTrack()+1+k: automation sub-lanes
     // can sit between a track's lane and its take rows, and an offset would
@@ -4449,10 +4479,9 @@ QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h
         if( layout() ) layout()->activate();
         if( v->layout() ) v->layout()->activate();
     }
-    const QPixmap pm = canvas->grab();
-    if( pm.isNull() ) return QString();
-    if( !pngPath.isEmpty() ) pm.save( pngPath, "PNG" );
-    const QImage img = pm.toImage();
+    const QImage img = sGrabLogical( canvas );
+    if( img.isNull() ) return QString();
+    if( !pngPath.isEmpty() ) img.save( pngPath, "PNG" );
 
     const int row = v->rowIndexOfTrack( track );
     if( row < 0 ) return QString();

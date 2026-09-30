@@ -283,7 +283,24 @@ SApplyResult SAssertLaneOverlayAction::apply( SProject * )
     if( expectOverlay_ ) {
         // The fill must be ON SCREEN, or "lighter than the fill" is a relation
         // against a colour nothing painted.
-        if( fillPx <= 0 ) {
+        //
+        // NOT IN bandOnly MODE (QBX-125). There the scan region IS the feel-flow
+        // band, and since the proposal 40 M2 palette follow-up that band paints
+        // OPAQUE colours out of the LUT across its whole height -- so the lane
+        // fill is legitimately absent and `fillPixels == 0` is what a correctly
+        // painted band looks like. Measured on `feel_flow_heatmap` once the grab
+        // was fixed to be logical: `lutPixels=8721 lutIndexMin=0 lutIndexMax=23`
+        // over a 460x19 band, i.e. every one of the 24 palette steps present and
+        // nothing else but the playhead. This precondition was written for the
+        // whole-lane scan, where fill always surrounds the clips, and it only
+        // ever fired here because the band was being read off the WRONG ROWS.
+        //
+        // The luminance window is not the gate for a bandOnly case anyway -- the
+        // LUT membership check below is, and the code that builds the LUT says so
+        // ("the STRONGER gate for it is exact membership in that LUT, not a
+        // luminance relation"). `overlayPixels` in this mode merely counts the
+        // LUT colours whose luminance happens to fall between the two bounds.
+        if( !bandOnly_ && fillPx <= 0 ) {
             qWarning() << "assert-lane-overlay FAILED:" << trackPath_
                        << "- the lane fill colour is nowhere in the band:" << rep;
             return { false, nullptr };
