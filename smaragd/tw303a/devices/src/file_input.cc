@@ -4,6 +4,10 @@
 #include "tw/core/twsyslog.h"
 #include "tw/devices/midi_out_scheduler.h"
 
+#if defined(__APPLE__)
+#  include "mac_thread_deadline.h"
+#endif
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -253,6 +257,15 @@ void FileAudioInput::captureThreadMain()
 #if defined(_WIN32)
     DWORD taskIndex = 0;
     HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
+#endif
+    // The macOS sibling of that promotion, and the same bargain: macOS coalesces
+    // timers by a PROPORTION of the sleep, so this thread's 21.3 ms period woke
+    // ~5 ms late and devices_input_test measured 5.03 ms against its 2 ms bound.
+    // Failure is ignored here for the reason the comment above already gives.
+#if defined(__APPLE__)
+    audio::twMacRequestDeadlineScheduling( "audio-in-file", (double) kBlockFrames
+                                               * 1e9 / 48000.0,
+                                           500'000.0, 2'000'000.0 );
 #endif
 
     const std::int64_t period =

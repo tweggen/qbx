@@ -104,12 +104,39 @@ Invariants:
 12. The scheduler thread and every device thread are Qt-FREE and joined
     directly (THREADING.md rule 1). Nothing in this module may emit a signal,
     touch a QObject, or own a thread_local with a non-trivial destructor.
-13. Timing granularity is ~1 ms, and on Windows that needs a HIGH-RESOLUTION
-    waitable timer, not timeBeginPeriod(1) alone: measured on this repo's box, a
-    condition_variable wait rounded up to the 15.6 ms system tick with the
-    period request in force. When a backend supportsTimestamps() (CoreMIDI,
-    ALSA-seq queues) the scheduler hands off early and the driver does the
-    pacing instead.
+13. Timing granularity is ~1 ms, and EVERY PLATFORM NEEDS SOMETHING SPECIFIC TO
+    GET IT. When a backend supportsTimestamps() (CoreMIDI, ALSA-seq queues) the
+    scheduler hands off early and the driver does the pacing instead; otherwise:
+
+    - **Windows** needs a HIGH-RESOLUTION waitable timer, not timeBeginPeriod(1)
+      alone. Measured on this repo's box, a condition_variable wait rounded up
+      to the 15.6 ms system tick with the period request in force.
+    - **macOS** needs the sender thread to hold a THREAD_TIME_CONSTRAINT_POLICY
+      (`devices/src/mac_thread_deadline.h`), because macOS coalesces timers by a
+      PROPORTION of the requested sleep. Measured worst overshoot of a plain
+      `condition_variable::wait_until`, 20 repetitions each:
+
+      | requested | 1 ms | 5 ms | 10 ms |
+      |---|---|---|---|
+      | default | 0.272 | 1.337 | 2.544 |
+      | QOS_USER_INTERACTIVE | 0.280 | 1.289 | 3.896 |
+      | TIME_CONSTRAINT | 0.041 | 0.061 | 0.028 |
+
+      So a 12.5 ms MIDI period landed 1-3 ms late and `devices_midi_test`
+      measured a worst |sent - due| of ~5 ms against its 5 ms bound — failing
+      most runs but not all, which is what a bound sitting inside a
+      distribution looks like. With the policy: **0.032-0.075 ms, and late() ==
+      0 of 16**. `devices_input_test` went from 5.02-9.85 ms to 0.031-0.042 ms
+      against its 2 ms bound.
+
+    **THE BOUNDS THEMSELVES ARE NOT PLATFORM-CONDITIONAL, AND MUST NOT BECOME
+    SO.** QBX-118 assumed the 5 ms and 2 ms figures were Windows numbers to
+    widen for macOS; they were honest, and the code was slow. Two things that do
+    NOT fix it, measured so they are not tried again: raising the QoS class (the
+    table above), and swapping the primitive for `mach_wait_until()`
+    (0.273 / 1.287 / 2.555 ms — the coalescing is applied to the THREAD, not to
+    the call). A failed policy request is logged and ignored: the pacing is then
+    as coarse as it was before, never wrong.
 14. flush() DISCARDS the queue rather than pushing it out — at a stop or a
     locate the queued future belongs to a playhead that no longer exists, and a
     note-on that escaped afterwards would be a stuck note. stop() discards for
@@ -188,7 +215,8 @@ Invariants:
     hand-rolled ON PURPOSE: libsndfile lives behind tw_sources/tw_sinks, and
     reaching for it here would make the platform I/O layer depend on the codec
     stack for the sake of a fixture. Its capture thread takes MMCSS "Pro Audio"
-    exactly as the WASAPI RENDER thread does — it is standing in for a device,
+    exactly as the WASAPI RENDER thread does, and on macOS the time-constraint
+    policy of inv. 13 for the same reason — it is standing in for a device,
     and without the promotion an ordinary desktop scheduling hiccup shows up as
     delivery jitter the real thing would not have had (measured: roughly double,
     with outliers past 3 ms). It also keeps a per-block PUSH-TIME log, the file

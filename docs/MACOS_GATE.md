@@ -31,7 +31,7 @@ not run", in the same `N - name` format it uses for failures, so a script that
 greps for that shape will report them as failures. `LastTestsFailed.log`
 contains only real failures and is the safer thing to diff.
 
-## Standing failures (7)
+## Standing failures (5)
 
 Every line has a ticket. If your change breaks something that is **not** on this
 list, that one is yours.
@@ -39,17 +39,14 @@ list, that one is yours.
 | test | cluster | ticket |
 |---|---|---|
 | `qxa.follow_scroll_hold` | shift+wheel does not scroll horizontally | QBX-129 |
-| `devices_midi_test` | D — no high-resolution wait on macOS | QBX-124 |
-| `devices_input_test` | D | QBX-124 |
 | `plugins_scan_test` | E — the cold scan itself fails, not just the cache | QBX-126 |
 | `qxa.automation_plugin_param` | outside the five clusters | QBX-127 |
 | `qxa.instrument_sine_render` | outside the five clusters | QBX-127 |
 | `qxa.plugin_editor_persistence` | outside the five clusters | QBX-127 |
 
-Not in the table because they are not standing failures: **`au_test`** is a
-flake that SEGFAULTs under parallel load and passes alone (it did not fire in the
-last serial run at all), and **`devices_midi_test`** IS in the table but is
-marginal rather than solid — see cluster D below.
+Not in the table because it is not a standing failure: **`au_test`** is a flake
+that SEGFAULTs under parallel load and passes alone (it did not fire in the last
+serial run at all).
 
 `qxa.plugin_native_editor` is no longer a standing failure (QBX-119), but it is
 worth knowing why it used to be: it read **sticky state in your real
@@ -163,27 +160,28 @@ image passed the `top + lh > img.height()` bounds check that a logical one
 correctly fails, so the gates were failing that check by luck and mis-measuring
 whenever they passed it. Fixing the grab (QBX-125) is what made it visible.
 
-## Cluster D is a defect, not a tolerance
+## Cluster D was a defect, not a tolerance — and it is fixed
 
-QBX-118 guessed clusters D's 5 ms and 2 ms bounds were Windows numbers to be
-widened. They are not, and this is the trap worth not falling into twice.
+QBX-118 guessed cluster D's 5 ms and 2 ms bounds were Windows numbers to widen.
+They were honest; the code was slow. **The bounds are unchanged and the tests
+now pass with two orders of magnitude of margin** (QBX-124).
 
-`MidiOutScheduler::waitUntil()` has a high-resolution wait **for Windows only**
-(`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`), and its comment records why: with the
-portable `std::condition_variable::wait_until` the Windows box measured a worst
-error of 15.36 ms, and the high-resolution timer brought the same run to well
-under 1 ms. macOS takes the portable path and pays for it. Measured, 10
-consecutive runs of `devices_midi_test`:
+macOS coalesces timers by a PROPORTION of the requested sleep, so a thread that
+sleeps to a deadline wakes progressively later the longer it sleeps. The sender
+thread now holds a `THREAD_TIME_CONSTRAINT_POLICY` — what CoreAudio gives its own
+render thread — and does not change how it waits, so the existing no-lost-wakeup
+machinery is untouched.
 
-```
-2.869  3.028  3.120  5.025  5.027  5.034  5.037  5.037  5.039  5.044   (ms)
-```
+| test | before | after | bound |
+|---|---|---|---|
+| `devices_midi_test` | 5.02-5.07 ms | **0.032-0.075 ms** | 5 ms |
+| `devices_input_test` | 5.02-9.85 ms | **0.031-0.042 ms** | 2 ms |
 
-The 5 ms bound sits *inside* that distribution, which is why the test fails most
-runs but not all. `devices_input_test` lands on the same quantum (5.02-9.85 ms
-against a 2 ms bound). Two independent tests showing one quantum is what makes
-it the platform's wait granularity rather than either test's arithmetic.
+`late()` for the MIDI scheduler went from 8-14 of 16 messages to **0**.
 
-So the bounds are honest and the code is slow. Widening them would hide 5 ms of
-MIDI jitter — about a 32nd note at 150 bpm. QBX-124 has the measurements and the
-candidate fixes.
+Two things that do NOT work, measured so nobody spends a build on them again:
+raising the QoS class (`QOS_CLASS_USER_INTERACTIVE` is no better than the default
+and was worse at 10 ms), and swapping the primitive for `mach_wait_until()`
+(indistinguishable from the condition variable — the coalescing is applied to the
+THREAD, not to the call). Details and the full table: `tw303a/devices/CONTRACT.md`
+inv. 13.
