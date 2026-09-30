@@ -23,6 +23,7 @@
 #include <QSize>
 
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -180,6 +181,50 @@ int main( int argc, char **argv )
                                    "944x712 (%1x%2)" )
                        .arg( back.width ).arg( back.height ) );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // isSendableScale(): whether we have a monitor scale worth telling a plugin.
+    //
+    // WHAT THIS PREVENTS: QBX-119. attachPlugin() reads devicePixelRatioF()
+    // BEFORE the dialog has ever been mapped, and a widget with no window and no
+    // screen behind it reports 0. An iPlug2/Skia editor handed a content scale of
+    // 0 sets a CAMetalLayer contentsScale of 0, so its drawable comes out 0x0
+    // however big the view is, nextDrawable answers nil, and the plugin
+    // dereferences the null SkCanvas that follows -- an EXC_BAD_ACCESS in
+    // SkCanvas::restoreToCount, inside the plugin, where the host cannot catch
+    // it. The only safe host behaviour is not to make the call.
+    std::cout << "=== isSendableScale ===\n";
+    {
+        check( SPluginNativeEditor::isSendableScale( 1.0 ),
+               "1.0 is a scale" );
+        check( SPluginNativeEditor::isSendableScale( 2.0 ),
+               "2.0 is a scale" );
+        check( SPluginNativeEditor::isSendableScale( 1.5 ),
+               "a fractional ratio is a scale" );
+        check( SPluginNativeEditor::isSendableScale( 0.5 ),
+               "a ratio below 1 is still a scale: QT_SCALE_FACTOR may be < 1" );
+
+        // THE ONE THAT SHIPPED.
+        check( !SPluginNativeEditor::isSendableScale( 0.0 ),
+               "0 is NOT a scale -- it is a widget with no window yet" );
+
+        check( !SPluginNativeEditor::isSendableScale( -2.0 ),
+               "a negative ratio is not a scale" );
+
+        // NaN is the reason this is a named function rather than `scale > 0` at
+        // the call site. Every comparison against NaN is false, so a guard
+        // written as the negation of a rejection -- `if( !(scale <= 0) ) send` --
+        // passes it straight through to the plugin.
+        check( !SPluginNativeEditor::isSendableScale(
+                   std::numeric_limits<qreal>::quiet_NaN() ),
+               "NaN is not a scale, however the guard is spelled" );
+        check( !SPluginNativeEditor::isSendableScale(
+                   std::numeric_limits<qreal>::infinity() ),
+               "infinity is not a scale" );
+        check( !SPluginNativeEditor::isSendableScale(
+                   -std::numeric_limits<qreal>::infinity() ),
+               "negative infinity is not a scale" );
     }
 
     if( g_failures ) {

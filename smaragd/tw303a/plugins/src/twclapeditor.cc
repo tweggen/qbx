@@ -4,6 +4,7 @@
 
 #include "tw/core/twlog.h"
 
+#include <cmath>
 #include <cstdint>
 
 namespace audio {
@@ -237,6 +238,16 @@ bool twClapEditor::setSize( twEditorSize s )
 bool twClapEditor::setScale( double factor )
 {
     if( !gui_ || !plugin_ || !caps_.scalable || !gui_->set_scale ) return false;
+    // The twin of setSize()'s valid() check just below, and for the same reason
+    // (QBX-119): a scale of 0 gives an iPlug2/Skia editor a CAMetalLayer
+    // contentsScale of 0 and therefore a 0x0 drawable whatever size the window
+    // is, and it dies on the null SkCanvas that follows. std::isfinite also
+    // rejects NaN, which a comparison-based guard cannot -- NaN fails every
+    // comparison, so the negated spelling passes it through.
+    if( !std::isfinite( factor ) || factor <= 0.0 ) {
+        TW_LOGW( "plugins", "CLAP editor: refusing a content scale of %f", factor );
+        return false;
+    }
     // Ignoring the call is EXPLICITLY allowed by gui.h, so false here is not an
     // error — the host treats it only as a reason not to retry.
     return gui_->set_scale( plugin_, factor );

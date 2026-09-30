@@ -50,7 +50,33 @@
           with the edit (twEditorParamEdit::previousValue).
 
        4. The window closes, and the plugin is not torn down with an editor
-          still open (which the backend reports as an error). -->
+          still open (which the backend reports as an error).
+
+       5. THE CONTAINER CANNOT BE SQUEEZED TO NOTHING (QBX-119).
+          `minContainerAtLeast` on the open above. tw.test.clap.gui answers
+          can_resize=true, and for a resizable plugin resizeToPlugin() used to
+          hand the container `setMinimumSize( 0, 0 )` - so the user could drag
+          the window down until resizeEvent() offered the plugin a size of 0x0.
+          The reported crash is what an iPlug2/Skia editor does with that: a
+          CAMetalLayer drawable of 0x0 ("ignoring invalid setDrawableSize
+          width=0.000000 height=0.000000", verbatim in the ticket), nil back
+          from nextDrawable, and a dereference of the null SkCanvas that
+          follows - inside the plugin, where no host guard can catch it.
+
+          A FLOOR OF 1x1, NOT AN EQUALITY, and the reason is stated rather than
+          worked around: the minimum is now the plugin's OWN floor, which this
+          fixture states in plugin units as 16 (adjust_size rounds down to a
+          multiple of 16, minimum 16), converted to Qt's units by hostSizeFor()
+          - an identity on macOS and a DIVISION by the device pixel ratio on
+          Windows and X11. The same correct code therefore reads 16x16 on a Mac
+          and 8x8 on a 2x Windows display, so "equals 16x16" would be a
+          Mac-only assertion pretending to be a general one. 1x1 is the whole of
+          the rule that was broken - the extent may not reach zero - and it
+          fails on 0x0 at every ratio on every platform.
+
+          What this does NOT prove: that the floor came from the plugin rather
+          than from the 1x1 fallback in minimumContainerSize(). No portable
+          equality can, for the reason above. -->
 
   <setup project="new"/>
 
@@ -75,7 +101,8 @@
     <!-- 2. Open the plugin's own interface. The fixture turns its Gain knob to
          2.5 on show() and asks the host to flush; the 30 Hz poll is what
          collects it, so the wait is doing real work, not padding. -->
-    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"
+                          minContainerAtLeast="1x1"/>
     <wait-ms ms="250"/>
 
     <render filename="pne_gui_gain.wav" format="wav" quality="10" durationSec="1.5"/>

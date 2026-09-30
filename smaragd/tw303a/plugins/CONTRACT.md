@@ -1158,3 +1158,29 @@ different views of the same type.
     attached view's `backingScaleFactor` — is a second chance to disagree with
     the host about the same number, and the host's copy is the one the window is
     actually sized with. Gate: `plugin_editor_geometry_test`.
+
+57. **A NON-POSITIVE SIZE OR SCALE NEVER REACHES A PLUGIN, AND THIS ABI IS WHERE
+    THAT HOLDS** (QBX-119). `twEditorSize::valid()` is this header's own word for
+    "a size a plugin may be told", so `setSize()` must check it and `setScale()`
+    must reject a non-finite or non-positive factor. The host checks too
+    (`main/pluginui/CONTRACT.md`), and the duplication is the point: a second
+    host, a test, or a later caller does not get to reopen the hole.
+
+    THIS WAS ASYMMETRIC, AND THE ASYMMETRY WAS THE BUG.
+    `twClapEditor::setSize()` always had the check; `twVst3Editor::setSize()` did
+    not, and forwarded a `0x0` straight to `IPlugView::onSize()`. That is the
+    whole of why the reported crash was VST3-only — the host was handing both
+    backends the size of a container that had collapsed to nothing (see
+    `main/pluginui/CONTRACT.md` for how it collapsed), CLAP dropped it on the
+    floor and VST3 passed it on. An iPlug2/Skia editor told it has no area sets a
+    `CAMetalLayer` drawable of `0x0`, gets nil back from `nextDrawable`, and
+    dereferences the null `SkCanvas` that follows — `EXC_BAD_ACCESS` inside
+    `SkCanvas::restoreToCount`, in the plugin, where no host guard can catch it.
+
+    `std::isfinite` rather than a bare comparison: every comparison against NaN
+    is false, so a guard written as the negation of a rejection lets NaN through.
+
+    NOT GATED at this level. Every `plugin_*` qxa case loads an in-repo fixture,
+    and reaching these two refusals needs a host that offers a bad value — which
+    the host no longer does. The gate that bites is the host-side one,
+    `minContainerAtLeast` on `qxa.plugin_native_editor`.
