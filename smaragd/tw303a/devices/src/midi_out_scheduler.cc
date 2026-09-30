@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <chrono>
 
+#if defined(__APPLE__)
+#  include "mac_thread_deadline.h"
+#endif
+
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
@@ -266,6 +270,14 @@ void MidiOutScheduler::sendNow(const Slot &s, std::int64_t now)
 
 void MidiOutScheduler::threadMain()
 {
+#if defined(__APPLE__)
+    // The sender sleeps to a deadline, writes a few bytes and sleeps again.
+    // Without this it woke 1-3 ms late on a 12.5 ms period and
+    // devices_midi_test measured a worst |sent - due| of ~5 ms against its 5 ms
+    // bound; with it, 0.034-0.075 ms and late() == 0 of 16. See the header.
+    audio::twMacRequestDeadlineScheduling( "MIDI out", 5'000'000.0,
+                                           500'000.0, 1'000'000.0 );
+#endif
 #if defined(_WIN32)
     // Held only while the sender runs, so an idle app leaves the system timer
     // alone. It is NOT what makes the pacing accurate — see openWaitPrimitives()
