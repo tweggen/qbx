@@ -31,7 +31,7 @@ not run", in the same `N - name` format it uses for failures, so a script that
 greps for that shape will report them as failures. `LastTestsFailed.log`
 contains only real failures and is the safer thing to diff.
 
-## Standing failures (5)
+## Standing failures (2)
 
 Every line has a ticket. If your change breaks something that is **not** on this
 list, that one is yours.
@@ -40,9 +40,6 @@ list, that one is yours.
 |---|---|---|
 | `qxa.follow_scroll_hold` | shift+wheel does not scroll horizontally | QBX-129 |
 | `plugins_scan_test` | E — the cold scan itself fails, not just the cache | QBX-126 |
-| `qxa.automation_plugin_param` | outside the five clusters | QBX-127 |
-| `qxa.instrument_sine_render` | outside the five clusters | QBX-127 |
-| `qxa.plugin_editor_persistence` | outside the five clusters | QBX-127 |
 
 Not in the table because it is not a standing failure: **`au_test`** is a flake
 that SEGFAULTs under parallel load and passes alone (it did not fire in the last
@@ -122,6 +119,50 @@ The remaining six fail for a different reason, now visible because the grab is
 honest: the canvas never reaches the size the case asked for. **QBX-128**, and it
 is the same Qt hazard as QBX-119 — under `--test-case` nothing is mapped, so any
 verb that resizes a widget and then measures it is measuring the old size.
+
+## The VST3 fixture was never copied into the app bundle
+
+Two of the three failures outside QBX-118's clusters were one packaging bug
+(QBX-127). A qxa case names a plugin module by a RELATIVE path, which
+`SPluginSlot::resolveModulePath` resolves against
+`QCoreApplication::applicationDirPath()` — on macOS that is `Contents/MacOS`
+INSIDE the bundle. `twtestclap.clap` was copied in there; `twtestvst3.vst3` was
+not, so it sat in `build/bin` where nothing looked for it:
+
+```
+[vst3] no loadable binary in 'twtestvst3.vst3'
+[slot] could not instantiate the plugin ... the slot ... is MISSING
+```
+
+The slot ran the transparent placeholder, so the audio came out at unity:
+`automation_plugin_param` read RMS 0.230956 where it wanted 0.115478 — the
+ungained level, exactly — and `instrument_sine_render` failed the same way. The
+file itself was a perfectly good `Mach-O 64-bit bundle arm64` the whole time.
+
+**The third case is the warning.** `plugin_restart_no_livelock` names the same
+fixture and passed throughout, because a transparent placeholder is a perfectly
+good way to not live-lock. A missing fixture does not always announce itself as a
+failure; it can also quietly turn a case vacuous.
+
+## A gate that reads the real smaragd.ini is not hermetic
+
+`plugin_editor_persistence` asserted a settings key was ABSENT, and
+`assert-settings-file` reads `SSettings::instance().configDir()` — the REAL
+user-scope INI, the same file the developer's own sessions write. So the
+assertion was never a statement about the run. It failed on this box because an
+earlier session had left `editorGeometry\clap%3Atw.test.clap.gui` behind, and no
+amount of correct product behaviour could have made it pass again. Verified by
+deleting the key by hand: the case passed and the run did **not** write it back.
+
+The case now establishes that precondition with `settings-remove` at the TOP of
+its actions — before anything can legitimately write a geometry, so the assertion
+still means "nothing wrote it". Removing the key just before asserting would have
+made the gate vacuous; sabotage-checked by making `saveGeometryToSettings()`
+write unconditionally, which the case still catches.
+
+Redirecting the whole INI for `--test-case` runs would be the bigger fix and was
+deliberately not taken: `configDir()` also holds `plugincache.v2.json`, so every
+case would then cold-probe every plugin installed on the machine.
 
 ## Resizing an unmapped window does not resize its children
 

@@ -690,6 +690,37 @@ bool SAssertMediaOptionsAction::readXml( const QDomElement &elem, int )
 // assert-settings-file
 // --------------------------------------------------------------------------
 
+SApplyResult SSettingsRemoveAction::apply( SProject * )
+{
+    if( key_.isEmpty() ) {
+        qWarning() << "settings-remove: needs a key=";
+        return { false, nullptr };
+    }
+    // SSettings::remove() sync()s, so the ON-DISK file a later
+    // assert-settings-file reads is already up to date rather than waiting on
+    // QSettings' own schedule.
+    SSettings::instance().remove( key_ );
+    qDebug() << "settings-remove:" << key_;
+    return { true, nullptr };
+}
+
+void SSettingsRemoveAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "key", key_ );
+}
+
+bool SSettingsRemoveAction::readXml( const QDomElement &elem, int )
+{
+    key_ = elem.attribute( "key" );
+    return true;
+}
+
+static const bool s_reg_settingsremove =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "settings-remove" ),
+          [] { return new SSettingsRemoveAction; } ),
+      true );
+
 SApplyResult SAssertSettingsFileAction::apply( SProject * )
 {
     if( contains_.isEmpty() && absent_.isEmpty() ) {

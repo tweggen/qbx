@@ -800,6 +800,32 @@ elseif(SMARAGD_MACOS)
         )
     endif()
 
+    # ...AND THE VST3 FIXTURE, for exactly the same reason and with exactly the
+    # same consequence when it is missing (QBX-127). It was not copied, so on
+    # macOS every qxa case naming `twtestvst3.vst3` resolved nothing, the slot
+    # ran the transparent placeholder, and the render came out at unity:
+    #
+    #   [vst3] no loadable binary in 'twtestvst3.vst3'
+    #   [slot] could not instantiate the plugin; the slot ... is MISSING
+    #
+    # automation_plugin_param read RMS 0.230956 where it wanted 0.115478 -- the
+    # ungained level, exactly -- and instrument_sine_render failed the same way.
+    # The file itself was fine all along (a Mach-O 64-bit bundle arm64 sitting in
+    # build/bin); nothing ever put it where applicationDirPath() looks.
+    #
+    # THE THIRD CASE IS THE WARNING. plugin_restart_no_livelock names the same
+    # fixture and PASSED throughout, because a transparent placeholder is a
+    # perfectly good way to not live-lock. A missing fixture does not always
+    # announce itself as a failure; it can also quietly turn a case vacuous.
+    if(TARGET twtestvst3)
+        add_custom_command(TARGET smaragd POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:twtestvst3>"
+                    "$<TARGET_BUNDLE_DIR:smaragd>/Contents/MacOS/twtestvst3.vst3"
+            COMMENT "Copying the twtestvst3 fixture into the app bundle (qxa cases)"
+        )
+    endif()
+
     # Code-sign app with microphone entitlements after building
     add_custom_command(TARGET smaragd POST_BUILD
         COMMAND codesign --force --deep --sign -
@@ -838,6 +864,9 @@ endif()
 # SMARAGD_MACOS), harmless elsewhere.
 if(SMARAGD_MACOS AND TARGET twtestclap)
     add_dependencies(smaragd twtestclap)
+endif()
+if(SMARAGD_MACOS AND TARGET twtestvst3)
+    add_dependencies(smaragd twtestvst3)
 endif()
 
 # Auto-deploy Qt runtime DLLs / plugins next to smaragd.exe on Windows

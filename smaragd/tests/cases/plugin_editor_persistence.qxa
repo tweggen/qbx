@@ -50,6 +50,25 @@
   <setup project="new"/>
 
   <actions>
+    <!-- THE PRECONDITION IS ESTABLISHED, NOT INHERITED (QBX-127), and it is
+         established HERE, before anything in this case can write a geometry —
+         so the `assert-settings-file absent=` at the end still means "nothing
+         wrote it during this run" and a regression that starts storing one for
+         a never-shown window still fails. Removing it just before the assertion
+         would have made that assertion vacuous.
+
+         Why it is needed at all: `assert-settings-file` reads the REAL
+         user-scope smaragd.ini, the same file the developer's own sessions
+         write. So "this key is absent" was never a statement about this run.
+         This case failed on a box where an earlier session had left the key
+         behind, and no amount of correct product behaviour could have made it
+         pass again — verified by deleting the key by hand, after which the case
+         passed and the run did NOT write it back.
+
+         The case already declares it owns exactly this key (see the comment by
+         the assertion), which is what makes removing it legitimate. -->
+    <settings-remove key="pluginui/editorGeometry/clap:tw.test.clap.gui"/>
+
     <add-track index="-1"/>
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 

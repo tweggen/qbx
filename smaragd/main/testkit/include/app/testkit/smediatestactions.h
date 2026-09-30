@@ -323,6 +323,43 @@ private:
     QString absent_;
 };
 
+// settings-remove — delete ONE key from the persistent settings, so a case that
+// asserts a key is ABSENT can establish that as its own precondition instead of
+// inheriting whatever the developer's real smaragd.ini happens to hold.
+//
+// WHY THIS HAS TO EXIST (QBX-127). `assert-settings-file` reads
+// `SSettings::instance().configDir()`, which is the REAL user-scope INI — the
+// same file the developer's own sessions write. So "this key must be absent" was
+// never a statement about the run: `plugin_editor_persistence` failed on this box
+// because an earlier session had left
+// `editorGeometry\clap%3Atw.test.clap.gui` behind, and no amount of correct
+// product behaviour could have made it pass again. Verified by deleting the key
+// by hand: the case passed and the run did NOT write it back, so the code was
+// right and the gate was not hermetic.
+//
+// Redirecting the whole INI for `--test-case` runs would be the bigger fix and is
+// deliberately NOT what this is: `configDir()` also holds `plugincache.v2.json`,
+// so every case would then cold-probe every plugin installed on the machine.
+//
+// A case may only remove a key it OWNS — one written by a fixture, keyed by a
+// fixture's uid. Removing a user's real preference from a test would be a far
+// worse bug than the one this fixes.
+//   key = ""   the QSettings key path, slash-separated as the code writes it
+//              ("pluginui/editorGeometry/clap:tw.test.clap.gui"), NOT the INI's
+//              on-disk percent-escaped spelling
+class SSettingsRemoveAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "settings-remove" ); }
+    QStringList knownAttributes() const override { return { "key" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString key_;
+};
+
 // assert-media-browser — match SMediaBrowserPanel::describe().
 //   contains  = ""     substring that must appear
 //   absent    = ""     substring that must NOT appear
