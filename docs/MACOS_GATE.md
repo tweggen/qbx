@@ -30,21 +30,19 @@ not run", in the same `N - name` format it uses for failures, so a script that
 greps for that shape will report them as failures. `LastTestsFailed.log`
 contains only real failures and is the safer thing to diff.
 
-## Standing failures (16)
+## Standing failures (14)
 
 Every line has a ticket. If your change breaks something that is **not** on this
 list, that one is yours.
 
 | test | cluster | ticket |
 |---|---|---|
-| `qxa.asset_clip_preview` | C — lane overlay paints nothing in the classifier's window | QBX-125 |
-| `qxa.doubleclick_blue_clip_resolve` | C | QBX-125 |
-| `qxa.feel_flow_heatmap` | C | QBX-125 |
-| `qxa.feel_flow_metric_lab` | C | QBX-125 |
-| `qxa.folder_sum_preview` | C | QBX-125 |
-| `qxa.follow_scroll_hold` | C | QBX-125 |
-| `qxa.take_lane_domain` | C | QBX-125 |
-| `qxa.takestack_legacy_wrap_lanes` | C | QBX-125 |
+| `qxa.asset_clip_preview` | C — the grabbed canvas never reaches the requested size | QBX-128 |
+| `qxa.doubleclick_blue_clip_resolve` | C | QBX-128 |
+| `qxa.feel_flow_metric_lab` | C | QBX-128 |
+| `qxa.follow_scroll_hold` | C | QBX-128 |
+| `qxa.take_lane_domain` | C | QBX-128 |
+| `qxa.takestack_legacy_wrap_lanes` | C | QBX-128 |
 | `devices_midi_test` | D — no high-resolution wait on macOS | QBX-124 |
 | `devices_input_test` | D | QBX-124 |
 | `plugins_scan_test` | E — the cold scan itself fails, not just the cache | QBX-126 |
@@ -100,6 +98,38 @@ given machine, which is how this survived in the first place.
 **If you add a layout gate, this is why it now means the same thing on all three
 platforms.** Before the fix, `sAuditLayout()`'s comparison of widget geometries
 was only meaningful where the style's layout rect equalled the widget rect.
+
+## Cluster C: the pixel gates were reading the wrong rows
+
+**A pixel gate must read a LOGICAL image** (QBX-125). The classifiers scan bands
+computed from logical widget geometry — `canvas->laneTop( row )`,
+`laneHeight( row )` — but `QWidget::grab()` honours the widget's device pixel
+ratio. On a Retina Mac a 460 px wide canvas grabbed to a **920 px** image while
+`laneTop()` went on answering in logical units, so every scan band landed at half
+its intended y: **on a different lane than the one the verb named**, reported with
+full confidence. Measured on `feel_flow_heatmap` before the fix — the classifier
+scanned `scanTop=96 scanH=19` of a `w=920` image while the renderer had just been
+handed `rect=460x98`, and found four colours with no palette member among them.
+
+After rendering into a QImage constructed at dpr 1 (`sGrabLogical()`), the same
+band reads `lutPixels=8721 lutIndexMin=0 lutIndexMax=23` — every one of the 24
+palette steps present. The heat band had been painting correctly all along.
+
+Rendering at 1x rather than scaling a 2x grab down matters more here than
+anywhere else in the app: these gates assert **exact colour identity**
+(`feelFlowPalette()` membership, the clip body's own rgb), and interpolating a
+downscale would produce values that are in no palette at all.
+
+Two cases went green on that alone; `feel_flow_heatmap` needed one more thing.
+`assert-lane-overlay` required the lane fill to be present in the scan region —
+sound for a whole-lane scan, where fill surrounds the clips, but false in
+`bandOnly` mode where the scan region **is** the opaque feel-flow band. That
+precondition only ever fired because the band was being read off the wrong rows.
+
+The remaining six fail for a different reason, now visible because the grab is
+honest: the canvas never reaches the size the case asked for. **QBX-128**, and it
+is the same Qt hazard as QBX-119 — under `--test-case` nothing is mapped, so any
+verb that resizes a widget and then measures it is measuring the old size.
 
 ## Cluster D is a defect, not a tolerance
 
