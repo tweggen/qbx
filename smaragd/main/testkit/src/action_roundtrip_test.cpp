@@ -667,6 +667,9 @@ const Fixture kFixtures[] = {
       "<close-options-dialog page='2' result='cancel'/>" },
     { "assert-settings-file",
       "<assert-settings-file contains='foo' absent='bar'/>" },
+    // QBX-127. One attribute, written unconditionally.
+    { "settings-remove",
+      "<settings-remove key='pluginui/editorGeometry/clap:tw.test.clap.gui'/>" },
     // Proposal 46 M1/M2. Both attributes are written unconditionally, so one
     // fixture per truth value is not needed -- but the (false,false) pair is
     // the SUPPRESSION assertion and is the reason the two are independent
