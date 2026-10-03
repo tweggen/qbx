@@ -61,14 +61,13 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           CTEST_JOBS: "4"
 
-          # A GitHub-hosted runner has no D-Bus session and no keyring, so the
-          # libsecret backend secret_store_test picks by default cannot work
-          # here. This is configuration, not an exclusion: the test still runs,
-          # against the memory backend. docs/LINUX_GATE.md 1.
-          SMARAGD_SECRET_BACKEND: memory
-
-          # The one genuine exclusion, and it is meant to be temporary:
-          # qxa.asset_clip_preview SEGFAULTs on Linux and the cause is not yet
-          # known (offscreen platform? a Linux-only bug? -j4?). Diagnosing it
-          # needs a Linux box with a debugger. docs/LINUX_GATE.md 2.
-          CTEST_EXCLUDE: '^qxa\.asset_clip_preview$'
+          # Two exclusions, for two different reasons, both with an entry in
+          # docs/LINUX_GATE.md:
+          #
+          #   qxa.asset_clip_preview  SEGFAULTs on Linux, cause not yet known.
+          #                           Meant to be temporary. LINUX_GATE.md 2.
+          #   secret_store_test       Needs a D-Bus session and a keyring, which
+          #                           a GitHub-hosted runner does not have.
+          #                           Environmental, like the macOS-only AU
+          #                           cases. LINUX_GATE.md 1.
+          CTEST_EXCLUDE: '^(qxa\.asset_clip_preview|secret_store_test)$'

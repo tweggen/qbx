@@ -20,6 +20,9 @@ Measured **2026-10-03** on the first-ever run of `.github/workflows/ci.yml`
 Total Test time (real) = 367.51 s
 ```
 
+With both exclusions below applied, the same tree is **green at 398/398** in
+367 s.
+
 Also **5 disabled** and not counted: `qxa.au_effect_audible`,
 `qxa.au_missing_placeholder`, `qxa.au_slot_roundtrip` (AU is macOS-only) and
 `qxa.media_options_page`, `qxa.media_secret_redaction`.
@@ -28,19 +31,30 @@ Also **5 disabled** and not counted: `qxa.au_effect_audible`,
 
 ### 1. `secret_store_test` — no keyring on a headless runner
 
-**Not a code defect, and now configured around rather than excluded.** The test
-reports `platform default backend on this build: libsecret`, and a
+**Not a code defect. Excluded, because it cannot be configured around.**
+
+The test reports `platform default backend on this build: libsecret`, and a
 GitHub-hosted runner has no D-Bus session or keyring daemon for libsecret to
-talk to. The test's own first section proves `SMARAGD_SECRET_BACKEND` is
-honoured by `resolveBackend()`, so CI sets
+talk to.
 
-```
-SMARAGD_SECRET_BACKEND=memory
-```
+The first attempt here was to set `SMARAGD_SECRET_BACKEND=memory`, on the
+strength of the test's own opening section proving that `resolveBackend()`
+honours it. **That did not work, and the reason is worth recording:** the test
+does not only ask `resolveBackend()` what it would pick — it goes on to
+exercise *the platform default backend* deliberately, resolved independently of
+the override ("platform backend under test: libsecret"). Overriding the
+environment cannot rescue a test whose subject is what the environment would
+otherwise have chosen.
 
-The consequence to be honest about: **the libsecret backend is therefore not
-covered on Linux by CI.** Exercising it needs a session bus and a keyring, i.e.
-a desktop, so it stays a manual check.
+So it is excluded, in the same category as the three macOS-only AU cases: an
+environment this runner cannot provide, not a defect.
+
+Two consequences to be honest about. The libsecret backend is **not covered on
+Linux by CI** — exercising it needs a session bus and a keyring, i.e. a
+desktop, so it stays a manual check. But `libsecret-1-dev` is still installed
+deliberately, so the backend is still **compiled**; dropping the dependency
+would have turned the test green by removing the code it tests, which is worse
+than an exclusion that says what it is.
 
 ### 2. `qxa.asset_clip_preview` — SEGFAULT, needs triage
 
@@ -61,8 +75,8 @@ this section — **this list is meant to shrink.**
 ## Running the comparison yourself
 
 ```bash
-./ci/gates.sh                  # build + the four checkers + ctest
-CTEST_EXCLUDE='^qxa\.asset_clip_preview$' ./ci/gates.sh   # what CI runs
+./ci/gates.sh                  # build + the four checkers + ctest, excluding nothing
+CTEST_EXCLUDE='^(qxa\.asset_clip_preview|secret_store_test)$' ./ci/gates.sh   # what CI runs
 ```
 
 A local run excludes nothing by default, on purpose: the exclusion is a
