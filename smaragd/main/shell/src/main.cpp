@@ -4,6 +4,7 @@
 #include <QFont>
 #include <QCommandLineParser>
 #include <QEvent>
+#include "smaragd_version.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
 #include "app/testkit/sactionscript.h"
@@ -108,6 +109,17 @@ static void smaragdOrderlyShutdown()
     QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
     audio::pluginRegistry().stopScan();
     tw::TwLog::instance().shutdown();
+}
+
+// Plan 50 M5: the same one-line marker every Nassau plugin bundle carries, so
+// that `strings` on any artifact in the product answers "which build is this?"
+// the same way -- for an app that arrived without a build tree or a terminal.
+//
+// EXTERNAL LINKAGE and `used` on purpose: a file-scope const array nothing
+// references is exactly what a Release build is entitled to discard. Verified
+// with `strings` on the built bundle, not assumed.
+extern "C" {
+__attribute__((used)) const char smaragd_nassau_stamp[] = SMARAGD_STAMP;
 }
 
 int main( int argc, char *argv[] )
@@ -238,6 +250,11 @@ int main( int argc, char *argv[] )
 
     // Command-line parsing (Phase 1+: --run-actions, Phase 2+: --test-case, --list-actions)
     QCommandLineParser parser;
+    // Plan 50 M5: --version prints what SApplication set, which leads with the
+    // SUITE version (D5). This is the machine-readable surface the suite's
+    // ci/stamp-check.sh uses, so "which build is this?" has an answer that does
+    // not require opening a GUI.
+    parser.addVersionOption();
     parser.addOption({"run-actions", "Execute an action script and keep the window open.", "file"});
     parser.addOption({"test-case", "Run an action script as a headless test (exit 0 on pass, 1 on fail).", "file"});
     parser.addOption({"list-actions", "List known action verbs and exit."});

@@ -841,8 +841,11 @@ if(SMARAGD_MACOS)
     set_target_properties(smaragd PROPERTIES
         MACOSX_BUNDLE_GUI_IDENTIFIER "dev.tweggen.smaragd"
         MACOSX_BUNDLE_BUNDLE_NAME "Smaragd"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        # Derived from project(), not written twice (plan 50 M5): these are
+        # the versions Finder and the host show, so a drift between them and
+        # project() is the one a user would see first.
+        MACOSX_BUNDLE_BUNDLE_VERSION "${SMARAGD_BUNDLE_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${SMARAGD_BUNDLE_SHORT_VERSION}"
     )
 endif()
 

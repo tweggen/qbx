@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "smaragd_version.h"
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/tw_freeze_context.h"
 #include "tw/core/twlog.h"
@@ -692,6 +693,17 @@ SApplication::SApplication( int &argc, char **argv )
 {
     setOrganizationName( "Smaragd" );
     setApplicationName( "smaragd" );
+
+    // Plan 50 M5. The version Qt reports is the SUITE's, not this component's,
+    // because D5 makes the suite version the only user-facing one -- it is what
+    // a bug report should quote. smaragd's own version follows in parentheses
+    // as the developer/forensics number, and the suite commit identifies the
+    // exact pin set. A build that did not come through nassau-suite says
+    // "dev (unknown)", which is honest rather than a lie about being a release.
+    setApplicationVersion(
+        QStringLiteral( NASSAU_SUITE_VERSION )
+        + QStringLiteral( " (smaragd " SMARAGD_VERSION ", suite "
+                          NASSAU_SUITE_COMMIT ")" ) );
 
     // QBX-118: EVERY WIDGET LAYS OUT BY ITS OWN RECT, NOT THE STYLE'S LAYOUT
     // ITEM RECT. One line of policy, and it is the difference between the

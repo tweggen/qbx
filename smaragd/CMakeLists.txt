@@ -41,6 +41,7 @@ if(NOT MSVC)
     endif()
 endif()
 
+include_directories(${CMAKE_BINARY_DIR}/generated)   # smaragd_version.h (M5)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -54,6 +55,11 @@ set(CMAKE_AUTOUIC ON)
 # named here so that gate does not have to touch the root file. Concurrent is a
 # SEPARATE Qt component and was absent from the tree entirely; forgetting it is
 # a link error at the END of a gate rather than at its start.
+# Plan 50 M5: SMARAGD_VERSION + the suite stamp, generated into
+# ${CMAKE_BINARY_DIR}/generated/smaragd_version.h. Included before the
+# targets so they can all see the header.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/SmaragdVersion.cmake)
+
 find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Widgets Xml Network Concurrent REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Widgets Xml Network Concurrent REQUIRED)
 message(STATUS "smaragd: using Qt ${QT_VERSION_MAJOR} (${Qt${QT_VERSION_MAJOR}_VERSION})")
