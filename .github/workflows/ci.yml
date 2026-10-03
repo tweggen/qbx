@@ -1,0 +1,62 @@
+name: CI
+
+# The jobs call ci/gates.sh and do nothing else of substance (plan 50, D6).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Seconds, no dependencies beyond python3. Until now CLAUDE.md's gate
+  # checklist was something a human had to remember before every PR; this is the
+  # half of it that can be enforced for free, on every push.
+  # ---------------------------------------------------------------------------
+  static:
+    name: Static checkers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./ci/gates.sh --static
+
+  # ---------------------------------------------------------------------------
+  # The full gate: build + the checkers + all 406 qxa/unit cases.
+  #
+  # Linux, not macOS, for three reasons: the repo's two known standing-failure
+  # lists are docs/MACOS_GATE.md (7 failures as of 2026-09-30, QBX-118) and
+  # docs/ASIO_WINDOWS_GATE.md, so a macOS job would be red by construction;
+  # Linux minutes are 1x where macOS are 10x; and Linux is the one platform with
+  # no standing-failure list, which is either because it is clean or because
+  # nobody has measured. This job is how that gets measured.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: Build + ctest (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # smaragd/third_party/{clap,vst3_pluginterfaces}. Without them the
+          # build succeeds but SILENTLY DROPS plugin hosting and the plugin_*
+          # cases with it (docs/BUILD.md), which would make this job pass while
+          # testing less than it claims.
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            qt6-base-dev \
+            libgl1-mesa-dev \
+            libsndfile1-dev libvorbis-dev libogg-dev \
+            libasound2-dev \
+            libsecret-1-dev
+
+      - name: Gate
+        run: ./ci/gates.sh
+        env:
+          # No display on a runner, and the qxa cases construct a real
+          # QApplication. The offscreen plugin ships with qt6-base.
+          QT_QPA_PLATFORM: offscreen
+          CTEST_JOBS: "4"
