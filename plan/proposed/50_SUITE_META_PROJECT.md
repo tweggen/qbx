@@ -1,6 +1,16 @@
 # Proposal 50 — One superproject: the suite is the product
 
-> **STATUS: PROPOSED.** Surveyed against `main` at `0305a735` (2026-09-22) and
+> **STATUS: EXECUTED — M0..M7 landed 2026-09-22 .. 2026-10-03.** Every
+> milestone carries an "as executed" note below, including where it corrected
+> the design or recorded a mistake. **Three gates remain unmet and are not
+> engineering** — signing, a clean machine, and Windows; see the status section
+> at the end.
+>
+> The survey below is the ORIGINAL one and is kept as written: it is what the
+> plan was reasoned from. Its file:line references point at the trees named
+> here, not at today's `main`.
+>
+> Surveyed against `main` at `0305a735` (2026-09-22) and
 > against the sibling checkouts `../nassau-plugin-sdk` (`db15697`),
 > `../nassau-analogue` (`bb31eff`), `../nassau-eq` (`12f8ff0`) and
 > `../nassau-zermatt` (`6b4ec98`). Every file:line below is from those trees.
@@ -13,6 +23,409 @@
 > mechanism (D9); and the existing `plugin_*` coverage turns out to test the
 > host against in-repo fixtures only (Q3), which resizes M4. The staging and the
 > decisions in §2 are what this document adds.
+>
+> **M0 + M1 ARE EXECUTED (2026-10-03), as four PRs awaiting the author's
+> merge.** They went in as one PR per repo rather than one per milestone --
+> §9 point 4 asked the question and the answer is that M0 and M1 edit the same
+> lines, so splitting them per milestone would have made each repo conflict
+> with itself. Merge order is SDK first; the plugin branches degrade to a
+> DSP-only build without it.
+>
+> | repo | PR | top-level CMakeLists |
+> |---|---|---|
+> | nassau-plugin-sdk | [#2](https://github.com/tweggen/nassau-plugin-sdk/pull/2) | +2 modules |
+> | nassau-zermatt | [#2](https://github.com/tweggen/nassau-zermatt/pull/2) | 75 -> 40 |
+> | nassau-analogue | [#5](https://github.com/tweggen/nassau-analogue/pull/5) | 117 -> 85 |
+> | nassau-eq | [#2](https://github.com/tweggen/nassau-eq/pull/2) | 75 -> 45, `sdk/` dropped |
+>
+> Gated on macOS 26.5.1/arm64 against `nassau-plugin-sdk@db15697`, each repo
+> compared with a baseline build of its own default branch in the same tree:
+> build-step counts identical (110/150/104), ctest 12/12, 12/12, 5/5, and
+> analogue's goldens unchanged to every digit (G5 `1.863e-09`, G11
+> `2.274e-13`). The locator's resolution order was gated in a probe project
+> across six cases. **Not gated: Windows and Linux** (no hosts), and the
+> `FetchContent` branch against the real remote (private repo, needs
+> credentials).
+>
+> **Three corrections this execution forces on the text below:**
+>
+> 1. **M0's gate in §3 claimed analogue's goldens "must still verify at exactly
+>    `0.000e+00`".** They do not and never did: the fixtures verify at the small
+>    non-zero errors above. That phrasing came from `nassau-analogue`'s own
+>    comment, which describes the *scalar-vs-SIMD* comparison, not
+>    golden-vs-fixture. The invariant actually worth gating -- and gated -- is
+>    that the numbers are *unchanged*. (A side result: with `NASSAU_NO_SIMD=ON`
+>    the goldens are bit-identical to the SIMD path, which is what DESIGN.md
+>    §12.3 claims and nothing had demonstrated.)
+> 2. **M0's premise that the three copies were identical was wrong.** They had
+>    drifted: analogue and zermatt passed `/Oi` for MSVC release, **eq passed
+>    nothing**. The module unifies on `/Oi`, which is the one behavioural change
+>    in the series and is Windows-only, hence unverified.
+> 3. **The locator cannot live in the SDK.** M0/M1 as written implied all the
+>    shared CMake moves into `nassau-plugin-sdk`; the *locating* step cannot,
+>    because a repo cannot `include()` from a directory it has not found yet. So
+>    the split shipped is: prologue in the SDK
+>    (`cmake/NassauPluginProject.cmake`, the part whose reasoning changes),
+>    locator copied verbatim per repo (`cmake/NassauSDK.cmake`, pure location
+>    logic, expected never to change).
+>
+> **M2 IS EXECUTED (2026-10-03), pushed to `nassau-suite@7dc5130`.** The repo
+> holds the five pins (qbx `cd4485fe`, sdk `2cfea22`, analogue `f83ec84`, eq
+> `0203835`, zermatt `f6d7258`), the `ExternalProject` superbuild,
+> `cmake/StageBundles.cmake` and `ci/build.sh`. **Gate met as specified:** a
+> genuinely fresh `git clone` of the remote, then `./ci/build.sh`, produces
+> `build/stage/` with `smaragd.app` and all ten plugin bundles in **5m05s** on
+> macOS 26.5.1/arm64 — submodule init, provisioning, Skia fetch, three plugins
+> and the whole DAW. All three plugins link Skia (49 symbols each, so real UI
+> builds, not headless); `smaragd.app` carries 8 Qt frameworks via macdeployqt.
+>
+> **Three bugs the gate caught, each of which would have shipped silently:**
+>
+> 1. **Smaragd's `bin/` holds the qxa plugin test fixtures** —
+>    `twtestclap.clap`, `twtestvst3.vst3`, `twtestvst3bundle.vst3` — right next
+>    to the app, and the first staging pass shipped all three to the installer.
+>    Staging patterns are now stated per component; Smaragd contributes `*.app`
+>    and nothing else. §4 should note this: the DAW's build directory is not a
+>    safe thing to glob.
+> 2. **iPlug2 defaults `IPLUG_DEPLOY_PLUGINS` to ON**, copying every built
+>    bundle into the *building user's own* `~/Library/Audio/Plug-Ins/`. Right
+>    for a plugin developer, wrong for a release build, which must produce an
+>    artefact and touch nothing else. The superbuild forces it OFF, proved by
+>    rebuilding eq inside the suite and confirming the `~/Library` copy's mtime
+>    did not move.
+> 3. CMake splits a `;` inside a `COMMAND` argument, so a semicolon-separated
+>    pattern list arrived as separate arguments and the staging script silently
+>    saw only the first — staging `.vst3` and dropping `.component`, `.clap`
+>    and `.app`. Comma-separated now.
+>
+> **Two decisions M2 made that the text above did not anticipate:**
+>
+> - **Smaragd is driven through its own CMake, not `qbx/build.sh`.** build.sh
+>   owns a build tree inside the checkout and a superbuild wants its own
+>   out-of-tree binary dir. The flags it passes (`CMAKE_PREFIX_PATH`,
+>   `AUTO_DEPLOY_QT=ON`) are exactly `rebuild.sh`'s.
+> - **`ci/build.sh` resolves Qt by sourcing `qbx/_env.sh`** rather than
+>   reimplementing detection, so the product has one such implementation
+>   instead of two that can disagree. Note `resolve_qt_path` needs
+>   `detect_platform` called first, or it silently finds nothing.
+>
+> **M4 IS EXECUTED (2026-10-03), `nassau-suite@302bd80`.** Six `.qxa` cases in
+> `integration/cases/` plus `ci/integration.sh`. **M4's prediction held: no
+> `qbx` code change was needed** — `CLAP_PATH`/`VST3_PATH` reach the staging
+> tree, and the cases insert by uid with no `path=`, so resolution goes through
+> the registry and what is gated is real discovery. 6/6 pass, twice from a cold
+> config dir. Assertion bands are measured, not guessed (dry 0.06665; EQ at
+> defaults 0.06665 — transparent to five decimals; EQ +24 dB 0.08782; Zermatt
+> default 0.22616; Zermatt hot 0.33728; Analogue one C4 0.12847).
+>
+> **The sabotage pass answers §9 point 6 — "what does hosting break that a
+> plugin's own tests cannot see?" — with a measurement rather than an
+> argument.** EQ's `Band 1 Gain` default was changed 0 → 6 dB, so the EQ is no
+> longer transparent when inserted. **`nassau-eq`'s own suite: 6/6 green. This
+> gate: the two cases asserting transparency fail.** Two cheaper sabotages also
+> bite correctly: deleting the staged `NassauEQ.clap` fails exactly the three
+> cases that use it, and pointing the search paths at an empty directory fails
+> discovery.
+>
+> **Three runner requirements the plan did not anticipate, all found by getting
+> them wrong first:**
+>
+> 1. **The gate was not hermetic.** Smaragd caches its plugin scan in the
+>    user's config dir (`~/.config/Smaragd/plugincache.v2.json`), so the gate
+>    both read a developer's cached state and wrote to it. Qt honours
+>    `XDG_CONFIG_HOME` for `IniFormat`/`UserScope`, so the runner redirects it
+>    into the run directory — hermetic, and always cold.
+> 2. **The scan is asynchronous** (`twPluginRegistry::rescanAsync`), so from an
+>    empty cache the first process to ask for a plugin races it. Observed, not
+>    theorised: after a rebuild the first cases failed at discovery while an
+>    identical second run passed everything. `integration/warmup.qxa` now runs
+>    until it passes and its result is never counted — and from cold it
+>    converges after **four** attempts, reproducibly, which says each process
+>    persists part of what it discovered rather than one completing the scan.
+>    **That looks like a qbx improvement worth its own ticket:** there is no
+>    verb to force a synchronous scan, and `wait-ms` is the only tool the
+>    existing cases have.
+> 3. **Search paths must be set explicitly**, not merged with the machine's, or
+>    the gate can pass against a developer's older build in
+>    `~/Library/Audio/Plug-Ins` while the staged bundle is broken.
+>
+> **AU remains uncovered, and §8 Q3's worry about it is now sharper:** it is not
+> an oversight that can be fixed in M4. `twpluginsearchpaths.cc` returns early
+> for `au` because AU is enumerated from the OS component registry, and the code
+> deliberately keeps it out of the folder/env-var machinery — so there is no
+> `AU_PATH` to redirect. Testing AU means really installing a `.component` and
+> letting macOS register it, which a build gate must not do to its own machine.
+> **AU verification therefore belongs to M6**, whose gate already installs the
+> package and then checks a second host sees the plugins.
+>
+> Two authoring errors the gate caught in its own cases, fixed and documented in
+> place: an `undo count="2"` where the bypass toggles made it 3, and an
+> `assert-file-identical` across two renders in one process — which qbx's own
+> `CMakeLists.txt` says is a **fresh-process** property (design F4) that no
+> single case can assert. §9 point 7's circularity worry about M7 is unaffected:
+> the Mangrove cases still have to come after its migration.
+>
+> **M7 IS EXECUTED (2026-10-03)** — `nassau-mangrove2#7` and `nassau-suite#1`,
+> both awaiting merge. All four plugins are now on the SDK. The suite stages 13
+> plugin bundles + `smaragd.app`, and the gate is 7/7.
+>
+> **D8 and M7 both understated the job.** The plan said mangrove2 carried three
+> private copies of SDK work; it carried those *and* a far messier repo. What
+> was removed: `external/iplug2` + `external/vst3sdk` (**9.0 GB**), a 212-line
+> hand-rolled `Source/Plugin/CMakeLists.txt` (→ 30), and `Source/VST3/`, an
+> older *second* plugin with its own duplicate `MangrovePlugin.cpp` and
+> `config.h`. **Gained:** CLAP, and a working AU — the AU target had been
+> sitting behind `if(FALSE)`.
+>
+> **The risk the plan feared was mostly absent, for a reason worth recording:**
+> mangrove2 pinned the *identical* upstream commits as the SDK (iplug2
+> `7dfe7a96d`, vst3sdk `58f8da7`), so no third-party code changed in the move.
+> Only two source changes were needed, both demanded by the CLAP target alone:
+> three missing `PLUG_*_STR` macros, and `: Plugin(...)` → `: iplug::Plugin(...)`
+> (the CLAP-helpers headers define a competing `Plugin` template — the same
+> one-line fix nassau-eq and nassau-zermatt already carry).
+>
+> **§9 point 7's circularity is resolved by baselining, and it worked:** the
+> pre-migration VST3 was rendered through the suite's Smaragd at RMS 0.06022
+> before anything was touched; the migrated VST3 and the new CLAP both reproduce
+> it to five decimals, with the VST3 uid unchanged.
+>
+> **A mistake worth keeping in the record.** Mid-migration I measured a dry
+> render from the migrated VST3 and concluded `PLUG_CHANNEL_IO "2-2"` had broken
+> it; I changed the IO config and guarded `ProcessBlock` on that basis. It was
+> wrong — the dry render came from a run that had **failed on plugin-registry
+> readiness**, so no plugin was in the chain and the output was the untouched
+> input. Reverted in a second commit rather than rewritten away. **The general
+> hazard this exposes belongs in §7:** a failed plugin case leaves a
+> *plausible-looking* render behind, so an artifact read without its verdict can
+> manufacture a regression that does not exist. M4's runner is built against
+> this; ad-hoc measurement is not.
+>
+> Still a good idea and deliberately not done: declaring `"1-1 2-2"` like the
+> other three plugins would let Mangrove load in mono hosts — but it *requires*
+> the `ProcessBlock` guard, since it reads `inputs[1]`/writes `outputs[1]`
+> unconditionally. Both together, or neither.
+>
+> **Out of M7's scope and left alone, for the author:** mangrove2 also tracks
+> `MangrovePlugin/` (127 files), `MangroveIPlug/` (132) and `Source_Original/` —
+> parallel copies of the plugin, three with their own `MangrovePlugin.cpp`
+> and/or `config.h` — plus `build_phase5/` and `build_vst3/`, **618 tracked
+> files of committed build output**. Sorting product from history there is a
+> judgement call, not a build migration. `BUILD.md` and `CLAUDE.md` now state
+> that `Source/Plugin` is the one that builds and ships, and four stale build
+> docs carry a SUPERSEDED banner.
+>
+> `nassau-mangrove` is **not** archived — an administrative change to a public
+> repo, left for the author; one command.
+>
+> **M3 IS EXECUTED (2026-10-03)** — seven PRs, all awaiting merge. Every repo in
+> the product now has CI where none had any: `qbx#216`,
+> `nassau-plugin-sdk#3`, `nassau-analogue#6`, `nassau-eq#3`,
+> `nassau-zermatt#3`, `nassau-suite#2`, and mangrove2's rides on its migration
+> PR (`nassau-mangrove2#7`). D6 held throughout: every workflow calls a
+> `ci/gates.sh` and does nothing else of substance.
+>
+> **The credential problem turned out far smaller than M3 assumed**, and this is
+> the finding that matters most. M3 expected to need a cross-repo token
+> everywhere. In fact:
+>
+> | repo | credential needed |
+> |---|---|
+> | `qbx` | **none** |
+> | `nassau-plugin-sdk` | **none** — its consumer, `nassau-analogue`, is public |
+> | the four plugins | one **read-only deploy key**, and only for the optional macOS job |
+> | `nassau-suite` | a cross-repo token — unavoidable, see below |
+>
+> Two design choices bought that. First, **the plugin job builds headless**:
+> headless needs the SDK (private, hence a deploy key) but *not* the prebuilt
+> Skia release asset, which is the only thing that would require an API token —
+> deploy keys authenticate git, not REST. Second, the **DSP-only job** uses
+> `NASSAU_SDK_DIR=/nonexistent`, so it needs no SDK, no submodules, no network
+> and no macOS, and is green on a fork.
+>
+> Only the suite can't be arranged that way: it checks out four private
+> submodules *and* needs the Skia asset (its gate opens real plugin editors, so
+> headless is not an option there). One GitHub App token or fine-grained PAT as
+> `NASSAU_CI_TOKEN`. Its workflow is therefore **the one thing in M3 that has
+> never run** — everything it calls is gated locally, but the plumbing is
+> unverified until a secret exists.
+>
+> **qbx's first CI run did what CI was added for: it measured Linux, which this
+> repo had never had a baseline for.** Build succeeded first try; **398/400
+> passed in 367 s**. The two failures are now `docs/LINUX_GATE.md`, the sibling
+> of `MACOS_GATE.md` and `ASIO_WINDOWS_GATE.md` — and the only one of the three
+> built by measurement rather than by hand:
+>
+> 1. `secret_store_test` — **not a code defect.** It picks the libsecret backend
+>    and a runner has no D-Bus session or keyring. Its own output proves
+>    `SMARAGD_SECRET_BACKEND` is honoured, so CI sets `memory` and the test still
+>    *runs*. Honest cost: the libsecret backend is uncovered on Linux.
+> 2. `qxa.asset_clip_preview` — **SEGFAULT, excluded, a real open question.**
+>    Offscreen platform? A Linux-only bug? A `-j4` interaction? Nothing in the
+>    run distinguishes them; it needs a Linux box with a debugger. **Worth a
+>    ticket.**
+>
+> `ci/gates.sh` gained `CTEST_EXCLUDE`, empty by default so a local run excludes
+> nothing — an exclusion is a statement about CI's environment, not about the
+> test — and an exclusion without an entry in a platform gate doc is a bug.
+>
+> **With both entries applied, qbx CI is GREEN: `100% tests passed, 0 tests
+> failed out of 398`, in 367 s** (run 37135875524). So from here a red
+> `build-and-test` means new breakage, which is the whole point — and it took
+> three iterations to get there, each one a real finding rather than a retry.
+>
+> **Also measured:** the plugin DSP job runs in ~41 s on Linux; macOS jobs skip
+> in ~2 s when their secret is absent, green rather than red. And the SDK, which
+> had **no tests at all**, now has six: the locator's resolution order, which is
+> the one file in the product copied verbatim into four repos.
+>
+> **Two bugs CI found in my own work, both of the same kind — things that pass
+> on the machine that wrote them:** the SDK probe relied on an empty
+> `ci/probe/cmake/` directory, which git does not track, so it worked locally
+> and failed on every fresh checkout (now re-verified against a `git archive`
+> tree rather than a working copy); and `NASSAU_FORCE_HEADLESS` was first passed
+> as an environment variable, which CMake ignores for a plain `option()`.
+>
+> **One unresolved infrastructure quirk:** GitHub has registered no workflow for
+> `nassau-mangrove2` (`actions/workflows` returns 0) though the file is on the
+> PR branch and Actions is enabled, where it registered immediately for the
+> other five. Expect it to appear when the file reaches `main`.
+>
+> **M5 IS EXECUTED (2026-10-03)** — three PRs: `nassau-plugin-sdk#4`,
+> `qbx#217`, `nassau-suite#3`. **The four plugin repos needed no change at
+> all**, because `nassau_add_plugin()` generates the stamp and adds it to every
+> format target — the same "one place" reasoning that put the toolchain prologue
+> in the SDK in M0.
+>
+> M5 as drafted said "each component surfaces both versions in its About box".
+> What shipped is **better suited to the actual question**, which is *"which
+> build is this?"* asked of an artifact that arrived without a build tree:
+>
+> | surface | what it answers |
+> |---|---|
+> | an embedded `NASSAU_STAMP` line in every binary | `strings` works on a bundle emailed to you — no host, no GUI, no build tree |
+> | `smaragd --version` | machine-readable, and what `ci/stamp-check.sh` reads |
+> | the macOS bundle keys | what Finder and the host show |
+>
+> One line, one format, every artifact: `NASSAU_STAMP suite=<v> commit=<sha>
+> component=<name>/<v>`, carrying both versions per D5. A build that did not come
+> through the suite stamps `dev`/`unknown` rather than inventing a release.
+>
+> **D5's "two literals for one number" is closed**: the macOS bundle keys now
+> derive from `project()`, values unchanged (1.0.0 / 1.0), verified in the built
+> `Info.plist`.
+>
+> **The gate is `ci/stamp-check.sh`, and all three of its checks are verified
+> rather than assumed:** against the pre-stamp stage all 14 artifacts report
+> `NO STAMP` and it exits non-zero; with the component branches built, four
+> artifacts agree on `suite=0.1.0 commit=302bd80` each with its own component
+> version; and rebuilding one component with a different suite version makes it
+> name both builds and exit 1. That third case is the one that matters — it
+> catches a stage assembled from two builds.
+>
+> Dead-stripping was the failure mode that would have made this silently
+> useless, so the stamp uses external linkage + `__attribute__((used))` and was
+> confirmed with `strings` on real Release bundles.
+>
+> **Two build-system facts this surfaced, both of which cost me a wrong
+> conclusion first:** `ci/build.sh` runs `git submodule update --init
+> --recursive`, so it **resets a submodule checked out to a branch back to its
+> pin** — correct behaviour (the suite enforcing its pins), but it means
+> component changes cannot be tested *through* `ci/build.sh`; and a cached
+> `ExternalProject` sub-build does not necessarily reconfigure when the SDK's
+> CMake changes, so its build directory has to be wiped. **§7 should carry the
+> second one as a release-correctness risk**, not just a testing nuisance.
+>
+> Still outstanding for M5: a one-line step added to the suite's workflow once
+> `nassau-suite#2` and `#3` both land, and advancing the suite pins to the
+> components' merge commits.
+>
+> **M6 IS EXECUTED (2026-10-03)** — `nassau-suite#6` and `nassau-mangrove2#8`.
+> `ci/package.sh` builds a macOS distribution `.pkg` (171 MB, five components);
+> `ci/package-check.sh` verifies the payload without installing.
+>
+> **The `NassauAnalogue.app` question is answered by the requester:** it ships
+> as a **deselectable component, off by default** — offered, not imposed. The
+> table above can be struck.
+>
+> **AU IS VERIFIED, which §8 Q3 and M4 both said was structurally impossible
+> from a build gate.** The way through was not a new verb but the installer:
+> declaring `enable_currentUserHome` lets the package install into
+> `~/Library/Audio/Plug-Ins/Components` **with no root**, and macOS registers
+> AUs from there. `auval` — Apple's own tool, a genuine second host — reports
+> **AU VALIDATION SUCCEEDED** for NassauEQ, NassauZermatt and NassauAnalogue.
+> That turns M6's AU gate from "needs a machine someone will modify" into a
+> routine check, and it is the single most reusable thing M6 produced.
+>
+> **Three bugs, every one found by *installing* rather than building** — which
+> is the argument for M6 having a gate at all:
+>
+> 1. **Bundle relocation.** `pkgbuild` defaults `BundleIsRelocatable` to *true*,
+>    so the installer hunts for an existing copy of each bundle identifier and
+>    installs **where it already lives**. The app component wrote a receipt
+>    recording `InstallPrefixPath=Applications` and delivered `smaragd.app` to
+>    *neither* `~/Applications` nor `/Applications`. On a customer's machine
+>    that means overwriting an old install wherever it happens to sit. Fixed by
+>    analyzing each component and forcing every flag false. **Symptom worth
+>    memorising: a receipt exists but the payload is nowhere.**
+> 2. **`--` inside an XML comment** is illegal and `productbuild` rejects the
+>    distribution file. The same rule bit M4's `.qxa` cases; second time.
+> 3. **Mangrove's Audio Unit, three defects deep** — see below.
+>
+> **Mangrove's AU is withdrawn, and the chain is worth recording.** An
+> unexpanded `$(EXECUTABLE_NAME)` (mine, from M7 — I copied `Info.plist.au`
+> without reading it, and CMake does not substitute Xcode variables) meant
+> macOS could not load the bundle at all. Beneath that, `factoryFunction`
+> named `IPlugAUEntry` where the binary exports `MangrovePluginAUFactory`:
+> registers, then `Cannot open component: -1`. Beneath *that*, its **editor
+> crashes the host** — `auval` segfaults reproducibly at "VERIFYING CUSTOM UI"
+> where the other three pass that stage. Not a regression: its AU target had
+> sat behind `if(FALSE)` and had never been built, so the first time the format
+> existed was the first time the defect could be seen. **AU out of its FORMATS
+> until `auval -v aufx Mng5 Nss2` exits 0.**
+>
+> **M6's gate is NOT met, and this is the milestone's honest status.** The plan
+> requires "installs on a clean machine, `spctl -a -vv` passes, no Gatekeeper
+> prompt, and a second host sees them". What was reached: the layout, a real
+> (user-domain) install, the stamp arriving through the installer
+> (`smaragd 0.1.0 (smaragd 1.0.0, suite 2f1ca98)`), and the AU half of the
+> second-host clause. What was not: **signing, notarization, Gatekeeper, a
+> clean machine, and Windows.** Signing is written as code that runs the moment
+> `CODESIGN_IDENTITY`/`PKGSIGN_IDENTITY`/`NOTARY_PROFILE` exist — by the
+> requester's decision to defer credentials — and **an unsigned package is not
+> shippable.** `packaging/windows/smaragd.iss` mirrors every decision but has
+> never been compiled.
+>
+> **The licence review (§M6) is still open.** `collect-licences.sh` assembles
+> the texts from the pinned trees and reports gaps as `*** MISSING` rather than
+> omitting them; Skia arrives as a prebuilt binary and carries no text, and Qt's
+> LGPL relinking obligation is named but unaddressed. The script says in its own
+> output that it is not the review.
+>
+> ---
+>
+> **WHAT IS STILL OUTSTANDING.** M0–M7 are done. What stands between this plan
+> and a release is not engineering any more:
+>
+> | outstanding | needs |
+> |---|---|
+> | M6's signing gate | a Developer ID + notarization credentials |
+> | M6's clean-machine gate | a second machine |
+> | M6's Windows half | a Windows host |
+> | the licence review | someone qualified (and D10's SDK-visibility question) |
+> | `qxa.asset_clip_preview` SEGFAULT | a Linux box with a debugger (`docs/LINUX_GATE.md`) |
+> | plugin-registry readiness | a qbx fix; the async scan needs 4–18 process launches to converge |
+> | Mangrove's AU editor crash | investigation (`nassau-mangrove2`) |
+> | `nassau-mangrove2` CI | GitHub registers no workflow there; a repo setting to check |
+> | `CMAKE_OSX_DEPLOYMENT_TARGET` | a one-line fix; see the note just below |
+>
+> **A shipping bug found on the way, deliberately NOT fixed in a no-op
+> refactor:** `CMAKE_OSX_DEPLOYMENT_TARGET "10.13"` has never taken effect in
+> any plugin repo. `project()` initialises that cache entry to empty first, and
+> a non-`FORCE` `set(CACHE)` cannot overwrite it. Measured on a built bundle:
+> `minos 26.0` on a macOS 26.5.1 host. The shipped plugins therefore refuse to
+> load on anything older than the build machine -- which matters directly to
+> D9/M6. Needs its own one-line PR.
 
 ## The defect this closes
 
