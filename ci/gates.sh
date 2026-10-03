@@ -60,8 +60,19 @@ say "Build"
 run_static
 
 # CLAUDE.md: "scale -j to the machine". 406 cases, ~475 s serially on an
-# Apple-silicon box.
+# Apple-silicon box, ~368 s at -j4 on a GitHub runner.
+#
+# CTEST_EXCLUDE is a ctest -E regex, and it is EMPTY BY DEFAULT on purpose: a
+# local run should exclude nothing. CI sets it for the cases its environment
+# cannot host, and every such case has an entry in the platform gate doc
+# (docs/LINUX_GATE.md, docs/MACOS_GATE.md, docs/ASIO_WINDOWS_GATE.md) saying
+# why. An exclusion with no entry there is a bug, not a configuration.
 say "ctest"
-ctest --test-dir smaragd/build -j"${CTEST_JOBS:-4}" --output-on-failure
+CTEST_ARGS=( --test-dir smaragd/build -j"${CTEST_JOBS:-4}" --output-on-failure )
+if [ -n "${CTEST_EXCLUDE:-}" ]; then
+    CTEST_ARGS+=( -E "$CTEST_EXCLUDE" )
+    echo "  excluding: $CTEST_EXCLUDE   (see the platform gate doc for why)"
+fi
+ctest "${CTEST_ARGS[@]}"
 
 say "Pass"
