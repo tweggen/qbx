@@ -71,7 +71,10 @@ from `smaragd/tests/cases/`. For record and live cases, loop `ctest -R` instead.
 standing failure with a ticket beside it so you can tell your breakage from the
 standing breakage. Build that comparison **serially** — two `-j4` runs of
 identical code differed by 18 tests on the dev box, so a `-j4` set difference
-proves nothing. Windows has the same kind of note in `docs/ASIO_WINDOWS_GATE.md`.
+proves nothing. Windows has the same kind of note in `docs/ASIO_WINDOWS_GATE.md`,
+and Linux — measured by CI rather than by hand — in `docs/LINUX_GATE.md`
+(398/400 at the first run: one SEGFAULT awaiting triage, and one keyring test
+a headless runner cannot host).
 
 ## Workflow
 
