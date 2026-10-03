@@ -1,0 +1,18 @@
+// Generated from cmake/smaragd_version.h.in. Do not edit.
+//
+// Plan 50 M5. SMARAGD_VERSION is this component's own version; the two
+// NASSAU_SUITE_* values identify the pin set the build came from, and are
+// "dev"/"unknown" in a build that did not come through nassau-suite.
+#pragma once
+
+#define SMARAGD_VERSION       "@PROJECT_VERSION@"
+#define NASSAU_SUITE_VERSION  "@NASSAU_SUITE_VERSION@"
+#define NASSAU_SUITE_COMMIT   "@NASSAU_SUITE_COMMIT@"
+
+// The same one-line, machine-readable marker every Nassau plugin bundle
+// carries (the SDK's cmake/NassauStamp.cmake), so `strings` on any artifact in
+// the product answers "which build is this?" the same way.
+#define SMARAGD_STAMP \
+    "NASSAU_STAMP suite=" NASSAU_SUITE_VERSION \
+    " commit=" NASSAU_SUITE_COMMIT \
+    " component=smaragd/" SMARAGD_VERSION
