@@ -730,7 +730,29 @@ if(TEST qxa.midi_out_backend_reject)
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_MIDI_BACKEND=null")
 endif()
 
+# The backend summary reports what the build HAS, not what it was asked for.
+# Those are the same thing for every backend but ASIO: the other five either
+# fail the configure when their library is missing (ALSA, PipeWire, PulseAudio
+# and JACK are all find/pkg_check REQUIRED) or are system APIs that are always
+# present (WASAPI, CoreAudio). ASIO's SDK is not redistributable, so a missing
+# SDK warns and continues -- and ENABLE_ASIO, an option defaulting to ON on
+# Windows, keeps saying ON regardless. tw303a sets TW_ASIO_ACTIVE from whether
+# the SDK was actually found.
+#
+# The requested-but-unavailable case is spelled out rather than collapsed to
+# OFF, because the two mean different things to whoever reads the log: one is
+# "you did not ask for ASIO", the other is "you asked and did not get it, and
+# here is why". A build that quietly reported OFF would be honest but would
+# lose the reason.
+if(TW_ASIO_ACTIVE)
+    set(_smaragd_asio "ON")
+elseif(ENABLE_ASIO AND SMARAGD_WINDOWS)
+    set(_smaragd_asio "OFF (requested; the ASIO SDK is absent — see the warning above)")
+else()
+    set(_smaragd_asio "OFF")
+endif()
+
 message(STATUS "smaragd: ALSA=${ENABLE_ALSA} PipeWire=${ENABLE_PIPEWIRE} "
                "PulseAudio=${ENABLE_PULSEAUDIO} JACK=${ENABLE_JACK} "
                "WASAPI=${ENABLE_WASAPI} CoreAudio=${ENABLE_COREAUDIO} "
-               "ASIO=${ENABLE_ASIO}")
+               "ASIO=${_smaragd_asio}")

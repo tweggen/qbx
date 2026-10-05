@@ -933,6 +933,21 @@ endif()
 # what sidesteps the MSVC-isms in the SDK's host/pc/asiolist.cpp on MinGW.
 # Phase 2 promotes asio_driver_list into tw_devices and adds the backend.
 set(TW_ASIOSDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/asiosdk)
+
+# ASIO is the ONE audio backend whose OPTION and OUTCOME can differ, so it is
+# the one that needs a resolved variable. Every other backend either fails the
+# configure outright when its library is absent (ALSA, PipeWire, PulseAudio and
+# JACK all use REQUIRED) or is a system API that is always there (WASAPI,
+# CoreAudio). ASIO cannot do either: the SDK is not redistributable, so a
+# missing SDK has to warn and continue rather than break the build.
+#
+# TW_ASIO_ACTIVE is that outcome, propagated to the parent scope so the backend
+# summary can report what HAPPENED instead of what was ASKED FOR. Before this,
+# a Windows build with no SDK printed the warning below and then "ASIO=ON" sixty
+# lines later, because the summary read ENABLE_ASIO -- which is an option
+# defaulting to ON on Windows and says nothing about whether the SDK was found.
+set(TW_ASIO_ACTIVE OFF)
+
 if(SMARAGD_WINDOWS AND ENABLE_ASIO)
     if(EXISTS ${TW_ASIOSDK_DIR}/common/iasiodrv.h)
         # Phase 2: the backend itself. TW_HAVE_ASIO is PRIVATE to tw_devices and
@@ -986,11 +1001,16 @@ if(SMARAGD_WINDOWS AND ENABLE_ASIO)
         # panel on it).
         target_link_libraries(asio_probe PRIVATE ole32 advapi32 user32)
         set_target_properties(asio_probe PROPERTIES AUTOMOC OFF)
+        set(TW_ASIO_ACTIVE ON)
         message(STATUS "tw_devices: ASIO SDK found — asio_probe spike enabled (proposal 35 Phase 1)")
     else()
         message(WARNING "tw_devices: third_party/asiosdk not present; ASIO DISABLED. Download the Steinberg ASIO SDK and unzip it to smaragd/third_party/asiosdk (so that common/iasiodrv.h exists). It is deliberately not a submodule: Steinberg's license forbids redistribution.")
     endif()
 endif()
+
+# set(... PARENT_SCOPE) does not touch the current scope, so this is a second
+# statement rather than part of the sets above.
+set(TW_ASIO_ACTIVE "${TW_ASIO_ACTIVE}" PARENT_SCOPE)
 
 if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
     find_library(COREAUDIO_LIBRARY  CoreAudio)
