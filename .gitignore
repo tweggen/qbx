@@ -31,9 +31,28 @@
 *.out
 *.app
 
-# CMake build output
+# CMake build output.
+#
+# build_*/ as well as build-*/: the hyphen form was covered and the UNDERSCORE
+# form was not, so build_macos/ and smaragd/build_macos/ were tracked from
+# 2026-06-02 to 2026-10-05 -- 83 generated files, every one of them Qt moc
+# autogen, ninja state or CMake internals.
+#
+# The per-file rules below are NOT a substitute, and that is the whole point of
+# this pattern. They catch most of a build tree incidentally (CMakeFiles/, *.d,
+# *.a), which is why the leak looked harmless, but nothing here matched
+# tw303a_autogen/moc_predefs.h, mocs_compilation.cpp or timestamp -- so those
+# came back as untracked-and-unignored after every build, one `git add -A` away
+# from being committed again. Untracking them (#219) did not close that; only a
+# directory rule does.
+#
+# The trailing slash matters: it keeps smaragd/tw303a/sidecar/tools/
+# build_body_probe.sh (a tracked script, see the note further down) out of the
+# match. The same gap in nassau-mangrove2 kept build_phase5/ and build_vst3/ in
+# that repo's history (QBX-132).
 build/
 build-*/
+build_*/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
