@@ -66,6 +66,14 @@ compile_commands.json
 .idea/
 *.user
 
+# clangd's index. A language server writes it beside the source it indexes, so
+# it appears wherever someone runs one and is never a build product -- no
+# per-file rule above would catch the .idx files. Listed here before it exists
+# in this repo rather than after: nassau-mangrove2 had 172 of them untracked
+# and unignored (nassau-mangrove2#10), and a pattern added once a directory is
+# already tracked does nothing.
+.cache/
+
 # Local git worktrees (never track as gitlinks)
 .claude/worktrees/
 
