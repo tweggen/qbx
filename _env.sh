@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared environment + toolchain detection for build.sh / rebuild.sh.
+# Shared environment + toolchain detection for ci/build.sh.
 # This file is *sourced*, not executed. It defines helper functions and,
 # after they run, these variables:
 #   PLATFORM   macos | linux | windows
@@ -17,9 +17,21 @@
 # <QtRoot>/Tools, which is NOT inside the Qt prefix. setup_toolchain()
 # locates them and prepends them to PATH so CMake/Ninja find gcc/g++/ninja.
 #
+# IT LIVES AT THE REPO ROOT AND MUST STAY THERE, even though every script that
+# sources it now lives in ci/: nassau-suite's own ci/build.sh reaches into this
+# checkout for it (`cd qbx && source ./_env.sh`) so that the whole product has
+# one Qt-detection implementation rather than two that can disagree.
+#
+# SCRIPT_DIR, which a caller must set, means THE REPO ROOT -- the functions below
+# build $SCRIPT_DIR/smaragd/... and $SCRIPT_DIR/.git out of it. The name was
+# honest while the callers sat at the root; it is kept because nassau-suite sets
+# it by that name too, and a rename here would silently break the superbuild.
+#
 # Typical use from a caller:
-#   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-#   source "$SCRIPT_DIR/_env.sh"
+#   REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+#   SCRIPT_DIR="$REPO_DIR"            # the repo root, NOT the caller's directory
+#   PROJECT_DIR="$REPO_DIR/smaragd"
+#   source "$REPO_DIR/_env.sh"
 #   detect_platform
 #   resolve_qt_path "$1"
 #   setup_toolchain
@@ -61,7 +73,7 @@ qt_prefix_from_query() {
 # through a null pointer: every qxa case then SEGFAULTs in SApplication's
 # constructor, with a clean build the only cure (QBX-103).
 #
-# Asking the toolchain beats trusting a timestamp, so build.sh stamps the version
+# Asking the toolchain beats trusting a timestamp, so a configure stamps the version
 # it built against and refuses an incremental build when it no longer matches.
 qt_version_of_prefix() {
     local prefix="${1%/}" ver exe hdr toolprefix
@@ -92,7 +104,7 @@ qt_version_of_prefix() {
     return 1
 }
 
-# Where build.sh/rebuild.sh record the Qt a build directory was built against.
+# Where ci/build.sh records the Qt a build directory was built against.
 qt_stamp_path() { echo "$PROJECT_DIR/build/.qt-version"; }
 
 # Record the Qt version behind $QT_PATH next to the build tree. Best effort: a
@@ -408,9 +420,9 @@ setup_toolchain() {
 # The sentinel is a real header, not the directory: an uninitialised submodule
 # leaves an empty directory behind, which "[ -d ]" would happily accept.
 #
-# Called from BOTH build.sh and rebuild.sh on purpose: build.sh deliberately
-# skips ensure_render_deps, so a dependency hook placed only in rebuild.sh would
-# never run on the common incremental path.
+# Called on BOTH of ci/build.sh's paths on purpose: the incremental path
+# deliberately skips ensure_render_deps, so a dependency hook placed only on the
+# configure path would never run on the common one.
 ensure_submodules() {
     local sentinel="$SCRIPT_DIR/smaragd/third_party/clap/include/clap/clap.h"
     [ -f "$sentinel" ] && return 0
@@ -437,9 +449,9 @@ ensure_submodules() {
         echo "Third-party submodules ready."
         # The SDK discovery lives in tw303a/CMakeLists.txt, and CMake only
         # re-runs when one of its inputs changes. Submodule content appearing is
-        # invisible to that dependency graph, so on the incremental path
-        # (build.sh, existing build/) TW_HAVE_CLAP would stay off until the next
-        # unrelated CMake edit. Touching the file that does the discovery makes
+        # invisible to that dependency graph, so on the incremental path (an
+        # existing build/) TW_HAVE_CLAP would stay off until the next unrelated
+        # CMake edit. Touching the file that does the discovery makes
         # Ninja reconfigure exactly once.
         touch "$SCRIPT_DIR/smaragd/tw303a/CMakeLists.txt" 2>/dev/null || true
     else

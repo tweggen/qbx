@@ -51,11 +51,11 @@ if [ -n "$STATIC_ONLY" ]; then
     exit 0
 fi
 
-# build.sh resolves Qt itself (_env.sh: a ~/Qt tree, a Homebrew keg, or a
+# ci/build.sh resolves Qt itself (_env.sh: a ~/Qt tree, a Homebrew keg, or a
 # qmake6/qtpaths6 on PATH, which is how a distro Qt is found). Nothing here
 # second-guesses it — one Qt-detection implementation in the product.
 say "Build"
-./build.sh
+./ci/build.sh
 
 run_static
 

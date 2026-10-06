@@ -7,14 +7,24 @@ repository (the directory that contains `CMakeLists.txt`).
 
 ## Quick start (recommended): the build scripts
 
-Two scripts at the repo root wrap the CMake invocation and work on macOS,
-Linux, and Windows (Git Bash / MSYS). They detect the platform and locate the
-toolchain for you:
+`ci/` wraps the CMake invocation and works on macOS, Linux, and Windows (Git
+Bash / MSYS). The scripts detect the platform and locate the toolchain for you:
 
 ```bash
-./rebuild.sh [QT_PATH]   # clean rebuild (wipes build/, configures, builds)
-./build.sh   [QT_PATH]   # incremental build (configures first if build/ is missing)
+./ci/build.sh [QT_PATH]           # incremental (configures first if build/ is missing)
+./ci/build.sh [QT_PATH] --clean   # clean rebuild (wipes build/, configures, builds)
+./ci/build.sh --test              # ...and run ctest afterwards
+./ci/clean.sh                     # drop smaragd/build/ without touching the checkout
+./ci/install.sh                   # install the result for this user
+./ci/uninstall.sh                 # remove it again
 ```
+
+These replace the `./build.sh` and `./rebuild.sh` that used to sit at the repo
+root; `--clean` is what `rebuild.sh` was. Every repo in the Nassau suite now
+answers to the same verbs, which is the reason for the move. `_env.sh` stays at
+the repo root — it is a sourced library, and nassau-suite's own `ci/build.sh`
+reaches into this checkout for it so the product has exactly one Qt-detection
+implementation.
 
 `QT_PATH` is the Qt prefix (e.g. `/c/Qt/6.11.1/mingw_64`,
 `$HOME/Qt/6.11.1/macos`, `$HOME/Qt/6.11.1/gcc_64`, or `/usr` for a distro Qt).
@@ -23,8 +33,8 @@ If omitted it is detected, in this order: the Qt installer's layout
 `qmake` on PATH, then a system `Qt6Config.cmake` under `/usr`, `/usr/local` or
 `/opt/qt6*`. You can also point at any kit explicitly.
 
-What the scripts handle automatically (logic lives in `_env.sh`, sourced by
-both):
+What the scripts handle automatically (logic lives in `_env.sh`, which
+`ci/build.sh` sources):
 
 - **Platform detection** via `uname`.
 - **Windows toolchain on PATH:** Qt's MinGW compiler and Ninja live in a
@@ -56,19 +66,19 @@ SEGFAULTs in `SApplication`'s constructor** — measured on 2026-09-21 after
 6.10.2 → 6.11.2, where 4/4 sampled cases crashed 100% on the incremental build
 and passed 100% on a clean one (QBX-103).
 
-`./build.sh` now guards this: `rebuild.sh` records the Qt version in
+`./ci/build.sh` guards this: a configure records the Qt version in
 `smaragd/build/.qt-version`, and an incremental build whose resolved Qt no
-longer matches announces the change and delegates to `rebuild.sh` instead. The
-guard is best-effort — a Qt whose version cannot be queried gets no stamp and
-no check — so the rule still stands on its own:
+longer matches announces the change and configures afresh instead. The guard is
+best-effort — a Qt whose version cannot be queried gets no stamp and no check —
+so the rule still stands on its own:
 
-> If the Qt package changed, `./rebuild.sh`. If a binary crashes somewhere it
-> has no business crashing — inside Qt's own inlined container code, in a
-> constructor, identically every time — suspect the build tree before the
-> source.
+> If the Qt package changed, `./ci/build.sh --clean`. If a binary crashes
+> somewhere it has no business crashing — inside Qt's own inlined container
+> code, in a constructor, identically every time — suspect the build tree
+> before the source.
 
-`git clean -xdf smaragd/build` or simply deleting `smaragd/build` has the same
-effect as `rebuild.sh` for this purpose.
+`./ci/clean.sh`, or simply deleting `smaragd/build`, has the same effect for
+this purpose.
 
 ## Requirements
 
@@ -108,10 +118,10 @@ is disabled in the media browser's account dialog; nothing else changes, and
 the build succeeds either way.
 
 **Installing it is a CONFIGURE-time change, so re-configure afterwards** —
-`./rebuild.sh`, or `cmake` over an existing `build/`. CMake probes
+`./ci/build.sh --clean`, or `cmake` over an existing `build/`. CMake probes
 `libsecret-1` with `pkg_check_modules` once, at configure time
-(`main/CMakeLists.txt`), so an incremental `./build.sh` after the install will
-NOT pick it up and the backend stays `none`. `./rebuild.sh` prints which
+(`main/CMakeLists.txt`), so an incremental `./ci/build.sh` after the install
+will NOT pick it up and the backend stays `none`. A configure prints which
 backend it settled on; `ctest -R secret_store_test` then names the backend it
 actually exercised.
 
@@ -150,7 +160,7 @@ starting point:
 ### 2. Build
 
 ```bash
-./rebuild.sh          # from the repo root; no QT_PATH needed
+./ci/build.sh --clean   # from the repo root; no QT_PATH needed
 ```
 
 The distro Qt is found automatically: its prefix is `/usr` and its CMake
@@ -161,10 +171,10 @@ installer kit still wins when it is present and can always be forced
 explicitly:
 
 ```bash
-./rebuild.sh "$HOME/Qt/6.11.1/gcc_64"
+./ci/build.sh --clean "$HOME/Qt/6.11.1/gcc_64"
 ```
 
-If a prerequisite is missing, `./rebuild.sh` prints the `apt install` line for
+If a prerequisite is missing, `./ci/build.sh` prints the `apt install` line for
 exactly what it could not find before CMake gets a chance to fail.
 
 Driving CMake directly, if you prefer:
@@ -208,7 +218,7 @@ brew install qt@5 cmake libsndfile libvorbis
 ```
 
 > **Status:** Builds and runs; the CoreAudio backend is audible with a device
-> picker. The build scripts also work here — `./rebuild.sh $HOME/Qt/6.11.1/macos`
+> picker. The build scripts also work here — `./ci/build.sh --clean $HOME/Qt/6.11.1/macos`
 > (uses Ninja + clang). The Xcode generator above remains a valid alternative.
 
 ### macOS is the strictest compiler this project sees, and it is not a warning level
@@ -259,7 +269,7 @@ toolchain on PATH, wires up vcpkg, and — if the render deps are missing — ru
 `vcpkg install` for you (bootstrapping `vcpkg.exe` first if needed):
 
 ```bash
-./rebuild.sh /c/Qt/6.11.1/mingw_64
+./ci/build.sh --clean /c/Qt/6.11.1/mingw_64
 ```
 
 The auto-install only triggers when the libs are absent (a one-time cost on a

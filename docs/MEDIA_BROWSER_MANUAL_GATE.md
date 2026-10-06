@@ -26,7 +26,7 @@ can be reached from a `.qxa`.
 
 ```bash
 git checkout main && git pull
-./build.sh
+./ci/build.sh
 ```
 
 No knob, no SDK, no submodule to fetch: `Qt6::Network` and `Qt6::Concurrent`

@@ -8,7 +8,7 @@ from the standing breakage. This is that list. Its sibling is
 
 Filed as QBX-118. Baseline re-measured **2026-09-30** at `cf966eb8` (21
 failures at `8f0dea85`, 7 now), on Darwin
-25.5.0 / Apple silicon, Qt 6.11.1, a fresh out-of-tree `./build.sh`. The four
+25.5.0 / Apple silicon, Qt 6.11.1, a fresh out-of-tree `./ci/build.sh`. The four
 static checkers (`check_layering`, `check_logging`, `check_includes`,
 `check_tempo_authority`) are clean; everything below is `ctest` only.
 
