@@ -127,8 +127,9 @@ backlog; `plan/STATE.md` and the proposals carry the rest.
 See [`docs/BUILD.md`](BUILD.md). From the repository root:
 
 ```bash
-./build.sh   [QT_PATH]   # incremental; configures if smaragd/build/ is missing
-./rebuild.sh [QT_PATH]   # clean
+./ci/build.sh [QT_PATH]           # incremental; configures if smaragd/build/ is missing
+./ci/build.sh [QT_PATH] --clean   # clean
+./ci/install.sh                   # install locally; ci/uninstall.sh removes it
 ```
 
 `QT_PATH` is the Qt prefix; omit it to auto-detect.

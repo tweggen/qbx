@@ -38,9 +38,16 @@ sources; cross-module protocols are in `docs/contracts/`; every action verb (the
 ## Build
 
 ```bash
-./build.sh   [QT_PATH]   # incremental; configures if smaragd/build/ is missing
-./rebuild.sh [QT_PATH]   # clean
+./ci/build.sh   [QT_PATH]          # incremental; configures if smaragd/build/ is missing
+./ci/build.sh   [QT_PATH] --clean  # clean
+./ci/clean.sh                      # drop smaragd/build/, keep the checkout
+./ci/install.sh                    # install the dev build into ~/Applications
+./ci/uninstall.sh                  # ...and take it back out
 ```
+
+Every repo in the suite answers to those four verbs; the root `build.sh` and
+`rebuild.sh` they replace are gone. `_env.sh` stays at the root, because
+nassau-suite sources it from here for the one Qt detection in the product.
 
 `QT_PATH` is the Qt prefix; omit it to auto-detect. Platform details and
 prerequisites: `docs/BUILD.md`. With `AUTO_DEPLOY_QT=OFF`, copy
@@ -56,7 +63,7 @@ python3). The commands below are what the script does, kept here because
 knowing them matters when one of them fails.
 
 ```bash
-./build.sh                                  # the re-configure registers new .qxa cases
+./ci/build.sh                               # the re-configure registers new .qxa cases
 python3 tools/check_layering.py
 python3 tools/check_logging.py
 python3 tools/check_includes.py

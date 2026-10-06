@@ -48,16 +48,16 @@ compile ZERO SDK sources.
 
 ### 3. Build, and check the configure line
 
-**A plain `./build.sh` on an existing `build/` will NOT pick the SDK up.** The
-sentinel is an `EXISTS()` test in `smaragd/tw303a/CMakeLists.txt`, and a
+**A plain `./ci/build.sh` on an existing `build/` will NOT pick the SDK up.**
+The sentinel is an `EXISTS()` test in `smaragd/tw303a/CMakeLists.txt`, and a
 directory appearing is invisible to CMake's dependency graph — so nothing
 re-runs configure and `asio_probe` is silently never built. `_env.sh` does
-exactly this `touch` for the clap/vst3 submodules for the same reason, but
-that path runs from `rebuild.sh`, not from an incremental build:
+exactly this `touch` for the clap/vst3 submodules for the same reason, but that
+path runs only on a configure, not on an incremental build:
 
 ```bash
 touch smaragd/tw303a/CMakeLists.txt   # forces exactly one reconfigure
-./build.sh                            # Git Bash, as usual
+./ci/build.sh                         # Git Bash, as usual
 ```
 
 Watch the configure output for:
