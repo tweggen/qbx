@@ -109,6 +109,35 @@ endif()
 
 enable_testing()
 
+# --- vcpkg's applocal step is redundant here, and breaks the build ----------
+# The vcpkg toolchain file wraps add_executable() and appends a POST_BUILD call
+# to scripts/buildsystems/msbuild/applocal.ps1, which walks the new binary's
+# import table and copies the vcpkg DLLs it needs alongside it. To read that
+# import table it needs dumpbin, llvm-objdump or objdump, and a Windows box
+# with Qt's bundled MinGW need have none of them:
+#
+#     applocal.ps1:162  Neither dumpbin, llvm-objdump nor objdump could be
+#                       found. Can not take care of dll dependencies.
+#     ninja: build stopped: subcommand failed.
+#
+# It fires once per executable, so the failure lands on whichever of the ~30
+# test binaries links first and reads as a test problem rather than a toolchain
+# one.
+#
+# WE DO NOT NEED IT. main/CMakeLists.txt already copies the whole vcpkg bin/
+# directory next to smaragd.exe itself ("so the binary stays self-contained --
+# windeployqt handles only the Qt DLLs"), and CMAKE_RUNTIME_OUTPUT_DIRECTORY
+# puts EVERY executable in that same bin/, so one copy serves the app and all
+# the tests. applocal would be doing the same work per target, by a route that
+# needs a tool we do not otherwise require.
+#
+# Set here rather than passed by _env.sh, so that a build driven by
+# nassau-suite -- which calls cmake on this directory directly and never sources
+# _env.sh -- is covered by the same decision.
+if(SMARAGD_WINDOWS)
+    set(VCPKG_APPLOCAL_DEPS OFF)
+endif()
+
 add_subdirectory(tw303a)
 add_subdirectory(main)
 
