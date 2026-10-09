@@ -15,6 +15,27 @@ namespace audio {
 
 namespace {
 
+// The virtual MIDI client and its two ports, as every other application on the
+// machine sees them -- and as a .qxp stores them.
+//
+// FROZEN IDENTITY KEYS (QBX-137, plan 51 §2). These are NOT the product's
+// display name and must not follow it when it changes. Two reasons, both
+// outside this file:
+//
+//   * another program that routes to or from this client saves THIS name in its own
+//     configuration, so renaming the port breaks that program's routing, not
+//     ours -- and silently, since the port simply stops existing;
+//   * qbx stores the portable port NAME in the project (STrack::midiOutPort_,
+//     mapped to a machine-local id by SSettings::midiPortId()), so a renamed
+//     port can also orphan a saved project's routing.
+//
+// `Smaragd` is an internal code name and the product is called something else,
+// so these will read wrong. That is the intended state.
+// tools/check_product_name.py pins all three.
+constexpr const char *kMidiClientName  = "Smaragd";      // check_product_name: allow -- frozen identity key, plan 51 §2
+constexpr const char *kMidiOutPortName = "Smaragd Out";  // check_product_name: allow -- frozen identity key, plan 51 §2
+constexpr const char *kMidiInPortName  = "Smaragd In";   // check_product_name: allow -- frozen identity key, plan 51 §2
+
 // "client:port" (aconnect's spelling), or "default" for the first writable
 // destination the sequencer offers.
 bool parseAddr(const std::string &s, int &client, int &port)
@@ -89,7 +110,7 @@ bool AlsaSeqMidiOutput::ensureSeq(const std::string &clientName)
     snd_seq_set_client_name(seq_, clientName.c_str());
 
     // OUR port is by definition a virtual one: anything can subscribe to it.
-    port_ = snd_seq_create_simple_port(seq_, "Smaragd Out",
+    port_ = snd_seq_create_simple_port(seq_, kMidiOutPortName,
                                        SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ,
                                        SND_SEQ_PORT_TYPE_MIDI_GENERIC |
                                            SND_SEQ_PORT_TYPE_APPLICATION);
@@ -128,7 +149,7 @@ bool AlsaSeqMidiOutput::startQueue()
 
 int AlsaSeqMidiOutput::open(const std::string &portId)
 {
-    if (!ensureSeq("Smaragd")) return -1;
+    if (!ensureSeq(kMidiClientName)) return -1;
 
     int client = -1;
     int port   = -1;
@@ -193,7 +214,7 @@ bool AlsaSeqMidiOutput::createVirtualPort(const std::string &name)
 {
     // Creating the sequencer port IS creating a virtual port on ALSA; other
     // applications subscribe to it with aconnect. Nothing else to do.
-    return ensureSeq(name.empty() ? std::string("Smaragd") : name);
+    return ensureSeq(name.empty() ? std::string(kMidiClientName) : name);
 }
 
 int AlsaSeqMidiOutput::send(const std::uint8_t *bytes, std::size_t size,
@@ -241,7 +262,7 @@ bool AlsaSeqMidiInput::ensureSeq(const std::string &clientName)
         return false;
     }
     snd_seq_set_client_name(seq_, clientName.c_str());
-    port_ = snd_seq_create_simple_port(seq_, "Smaragd In",
+    port_ = snd_seq_create_simple_port(seq_, kMidiInPortName,
                                        SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
                                        SND_SEQ_PORT_TYPE_MIDI_GENERIC |
                                            SND_SEQ_PORT_TYPE_APPLICATION);
@@ -256,7 +277,7 @@ bool AlsaSeqMidiInput::ensureSeq(const std::string &clientName)
 
 int AlsaSeqMidiInput::open(const std::string &portId)
 {
-    if (!ensureSeq("Smaragd")) return -1;
+    if (!ensureSeq(kMidiClientName)) return -1;
 
     if (!(portId.empty() || portId == "default")) {
         int client = -1, port = -1;
@@ -298,7 +319,7 @@ std::vector<MidiPortInfo> AlsaSeqMidiInput::listPorts() const
 
 bool AlsaSeqMidiInput::createVirtualPort(const std::string &name)
 {
-    return ensureSeq(name.empty() ? std::string("Smaragd") : name);
+    return ensureSeq(name.empty() ? std::string(kMidiClientName) : name);
 }
 
 void AlsaSeqMidiInput::setCallback(MidiInputCallback cb)

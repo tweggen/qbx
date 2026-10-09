@@ -14,7 +14,7 @@ SSettings &SSettings::instance()
 
 SSettings::SSettings()
     : settings_( QSettings::IniFormat, QSettings::UserScope,
-                 "Smaragd", "smaragd" )
+                 "Smaragd", "smaragd" )  // check_product_name: allow -- frozen identity key, plan 51 §2
 {
 }
 

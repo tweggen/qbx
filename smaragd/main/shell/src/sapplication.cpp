@@ -691,7 +691,7 @@ SApplication::SApplication( int &argc, char **argv )
       currentProject_( NULL ),
       audioRecorder_( nullptr )
 {
-    setOrganizationName( "Smaragd" );
+    setOrganizationName( "Smaragd" );  // check_product_name: allow -- frozen identity key, plan 51 §2
     setApplicationName( "smaragd" );
 
     // Plan 50 M5. The version Qt reports is the SUITE's, not this component's,

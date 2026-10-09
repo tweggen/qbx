@@ -28,7 +28,7 @@ QString SMediaAccountManager::secretKey( const QString &accountId )
 
 SMediaAccountManager::SMediaAccountManager( QObject *parent )
     : QObject( parent )
-    , secretSettings_( QSettings::IniFormat, QSettings::UserScope, "Smaragd", "smaragd" )
+    , secretSettings_( QSettings::IniFormat, QSettings::UserScope, "Smaragd", "smaragd" )  // check_product_name: allow -- frozen identity key, plan 51 §2
 {
     secretStore_.reset( new SSecretStore( &secretSettings_, QStringLiteral( "com.smaragd.media" ) ) );
     smedia::installCredentialProvider( this );
