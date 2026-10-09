@@ -420,10 +420,15 @@ every string in the product.
     because `CFBundleName` is display and the bundle directory is frozen.
   - `--version` keeps leading with `smaragd`, because `applicationName()` is
     an identity key.
-  - Artifact filenames (`Smaragd-<ver>.pkg`, `Smaragd-<ver>-setup.exe`) and
-    release prose (`ci/release.sh`'s tag messages, `docs/RELEASING.md`'s
-    title) cannot flow from `PRODUCT`; stage 4 enumerates them or accepts
-    drift.
+  - ~~Artifact filenames cannot flow from `PRODUCT`.~~ **Wrong, corrected
+    while implementing stage 4.** Both installers build their own output name,
+    so `Smaragd-<ver>.pkg` and `Smaragd-<ver>-setup.exe` do follow the product
+    name. Only *markdown* prose cannot — `docs/RELEASING.md` and `README.md`
+    are static files, so stage 4 made their product-facing sentences
+    name-NEUTRAL ("the DAW", "the suite") rather than substituting a name that
+    would go stale at the next change. `ci/release.sh`'s tag messages are
+    shell and could follow it; left alone, because a git tag message describes
+    a release that already happened.
   - The qbx standalone default stays `Smaragd`, so every qbx CI run and every
     `.qxa` case executes under the *other* name. Any case asserting
     user-visible text must read the accessor, never a literal.
@@ -514,6 +519,29 @@ survey grep is case-sensitive, so it missed **35 lowercase-only literals**,
 one of which — `setApplicationName("smaragd")` — is Class A. The rest are
 filenames and paths that must not be swept, which turns case-awareness from a
 detail into a checker requirement (§5 job 1).
+
+### Corrections made while implementing, 2026-10-09
+
+Kept here rather than silently edited in, because a plan whose errors are
+invisible teaches nothing the second time.
+
+- **§6 stage 0 said to rename `~/Documents/smaragd`.** It must not be: that is
+  a filesystem path, which the ticket excludes in as many words, and a user
+  with projects there would find new ones saved elsewhere. Stage 0 fixed the
+  dialog *filter* only and commented the directory as deliberate.
+- **§5's MIDI pin said two constants per backend.** It is **three** — a client
+  name and two port names. Counted by reading the files.
+- **§8 said artifact filenames cannot follow `PRODUCT`.** They can; see above.
+- **§4's Qt title-append question is now half-measured.** Setting
+  `setApplicationDisplayName()` changes neither `QWidget::windowTitle()`, nor
+  `QMessageBox`'s default caption, nor — the one that matters —
+  `applicationName()`, so no `QStandardPaths` location moves. What remains
+  unmeasured is what a native window manager paints, which is QPA-private and
+  not observable from a headless Linux box. Stage 3 therefore keeps the
+  product name in the title EXPLICITLY rather than relying on the platform:
+  the cost is a possibly doubled name in the native bar on Windows and X11,
+  which is cosmetic, against the alternative of no product name at all in the
+  title on macOS.
 
 ## 10. What to watch during implementation
 
