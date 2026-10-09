@@ -2783,7 +2783,9 @@ void SMVActualView::ctRangeSetBPM()
     STimeGridSpec tgs( smv_.getTimeGridSpec() );
     double oldTempo = tgs.getBPM();
     double newTempo = QInputDialog::getDouble(
-        &smv_, "Smaragd request", tr( "Please enter new BPM" ),
+        &smv_,
+        QGuiApplication::applicationDisplayName() + QStringLiteral( " request" ),
+        tr( "Please enter new BPM" ),
         oldTempo, 10., 4000., 1, &ok );
     if( ok && newTempo != oldTempo ) {
         // Through the verb, never the project: set-tempo is the ONLY tempo

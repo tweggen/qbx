@@ -33,7 +33,13 @@ bool dpapiEncrypt( const QByteArray &plain, QByteArray *cipher )
     // default -- no CRYPTPROTECT_LOCAL_MACHINE flag -- so the key comes from
     // the logon credential and stays put even if another account is added to
     // the same machine.
-    const BOOL ok = CryptProtectData( &in, L"Smaragd secret", nullptr, nullptr, nullptr,
+    // szDataDescr. Passed in and never read back -- nothing here uses
+    // CryptUnprotectData's description out-parameter -- so qbx never shows
+    // this to anyone. Left alone rather than swept: it is stored INSIDE every
+    // existing blob, so changing it would only mix two spellings across a
+    // user's entries with nobody able to see either (plan 51 §2, Class C).
+    const BOOL ok = CryptProtectData( &in, L"Smaragd secret",  // check_product_name: allow -- opaque DPAPI description, never displayed, plan 51 §2
+                                      nullptr, nullptr, nullptr,
                                        CRYPTPROTECT_UI_FORBIDDEN, &out );
     if( !ok ) {
         TW_LOGW( "secretstore", "DPAPI CryptProtectData failed (error %lu)", GetLastError() );

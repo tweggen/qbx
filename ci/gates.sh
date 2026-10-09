@@ -31,30 +31,19 @@ say() { printf '\n=== %s ===\n' "$*"; }
 # The static checkers, in CLAUDE.md's order. Stdlib-only python, so this runs
 # anywhere python3 does.
 #
-# check_product_name runs --warn-only for now (QBX-137, plan 51 stage 2). Its
-# JOB 2 -- the frozen identity keys -- is fatal regardless, and that is the
-# half worth having early: those keys address the user's settings, saved
-# passwords and MIDI routing, and moving one is a silent data migration. Its
-# job 1 (no new "Smaragd" display literals) can only be fatal once the stage-3
-# sweep has emptied it, so until then it reports and does not fail. Drop the
-# flag in stage 3 -- the plan says so, and so does this comment, because a
-# warn-only checker nobody ever promotes is just noise.
+# check_product_name is FULLY fatal from stage 3 on (QBX-137, plan 51). It ran
+# --warn-only through stage 2, because its job 1 could not pass over the
+# fourteen display literals that were still there; the stage-3 sweep emptied
+# them, so the flag is gone and a new "Smaragd" in a string literal now fails
+# the gate like any other checker violation.
 run_static() {
     say "Static checkers"
-    local t args
+    local t
     for t in check_layering check_logging check_includes check_tempo_authority \
              check_product_name; do
-        args=""
-        [ "$t" = "check_product_name" ] && args="--warn-only"
         printf '  %-24s' "$t"
-        if python3 "tools/$t.py" $args >"/tmp/$t.log" 2>&1; then
+        if python3 "tools/$t.py" >"/tmp/$t.log" 2>&1; then
             echo "PASS"
-            # A warn-only checker that found something has to be SEEN, or the
-            # warning is not a warning.
-            if [ "$t" = "check_product_name" ] && grep -q 'WARNING' "/tmp/$t.log"; then
-                grep -c 'WARNING' "/tmp/$t.log" \
-                    | sed 's/^/      /;s/$/ un-marked "Smaragd" literal(s) -- see plan 51 stage 3/'
-            fi
         else
             echo "FAIL"
             sed 's/^/      /' "/tmp/$t.log"

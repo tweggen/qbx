@@ -147,7 +147,9 @@ using namespace std;
 
 void SMainWindow::nyi()
 {
-    QMessageBox::information( nullptr, "Smaragd warning",
+    QMessageBox::information( nullptr,
+                              QGuiApplication::applicationDisplayName()
+                                  + QStringLiteral( " warning" ),
                               "This feature is not yet implemented.",
                               QMessageBox::Ok );
 }
@@ -703,7 +705,7 @@ bool SMainWindow::saveToPath( const QString &path )
     SSaveProjectAction action( path );
     SApplyResult r = action.apply( currentProject_ );
     if( !r.applied ) {
-        QMessageBox::warning( this, "Smaragd",
+        QMessageBox::warning( this, QGuiApplication::applicationDisplayName(),
                               QString( "Could not write project file:\n%1" )
                                   .arg( path ),
                               QMessageBox::Ok );
@@ -783,7 +785,8 @@ bool SMainWindow::fileSaveAs()
     }
 
     QFileDialog dialog( this, "Save Project As", startDir,
-                        "Smaragd Projects (*.qxp)" );
+                        QStringLiteral( "%1 Projects (*.qxp)" )
+                            .arg( QGuiApplication::applicationDisplayName() ) );
     dialog.setFileMode( QFileDialog::AnyFile );
     dialog.setAcceptMode( QFileDialog::AcceptSave );
     dialog.setOptions( QFileDialog::DontUseNativeDialog );
@@ -823,8 +826,17 @@ void SMainWindow::updateWindowTitle()
                 : QFileInfo( currentFilePath_ ).fileName() )
         : QString();
 
-    setWindowTitle( name.isEmpty() ? QString( "Smaragd" )
-                                   : QString( "Smaragd - %1" ).arg( name ) );
+    // The product name stays in the title EXPLICITLY rather than being left
+    // to the platform. Qt may append the display name to a native title on
+    // some platforms and not others (it is QPA-private, not observable from
+    // here, and not shipped in the headers) -- so relying on that would mean a
+    // title bar with no product name at all on macOS. The cost is a possible
+    // doubled name in the native bar on platforms that DO append; cosmetic,
+    // and plan 51 §8 says to check it on Windows and X11 before stage 5.
+    const QString product = QGuiApplication::applicationDisplayName();
+    setWindowTitle( name.isEmpty() ? product
+                                   : QStringLiteral( "%1 - %2" )
+                                         .arg( product, name ) );
 }
 
 void SMainWindow::fileNew()
@@ -860,7 +872,8 @@ void SMainWindow::fileOpen()
 {
     const QString defaultDir = defaultProjectDir();
     QFileDialog dialog( this, "Open Project", defaultDir,
-                        "Smaragd Projects (*.qxp *.QXP)" );
+                        QStringLiteral( "%1 Projects (*.qxp *.QXP)" )
+                            .arg( QGuiApplication::applicationDisplayName() ) );
     dialog.setFileMode( QFileDialog::ExistingFile );
     dialog.setOptions( QFileDialog::DontUseNativeDialog );
     QString fileName;
@@ -893,7 +906,9 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     SLoadProjectAction action( fileName );
     SApplyResult r = action.apply( currentProject_ );
     if( !r.applied ) {
-        QMessageBox::information( nullptr, "Smaragd warning",
+        QMessageBox::information( nullptr,
+                                  QGuiApplication::applicationDisplayName()
+                                      + QStringLiteral( " warning" ),
                                   "Unable to open specified project file.",
                                   QMessageBox::Ok );
         // Failed load — mark as partial so destructor skips unsafe cleanup,
@@ -1194,9 +1209,10 @@ void SMainWindow::onAudioOutputDeviceFailed()
     box.setWindowTitle( "Audio Output Unavailable" );
     box.setText( "The configured audio output device could not be opened." );
     box.setInformativeText(
-        "Smaragd will keep running with no audio output. Pick a different "
-        "device in Audio Options, or reconnect the interface and try Play "
-        "again." );
+        QStringLiteral( "%1 will keep running with no audio output. Pick a "
+                        "different device in Audio Options, or reconnect the "
+                        "interface and try Play again." )
+            .arg( QGuiApplication::applicationDisplayName() ) );
     QPushButton *openBtn = box.addButton( "Open Audio Options...",
                                           QMessageBox::AcceptRole );
     box.addButton( QMessageBox::Ok );
