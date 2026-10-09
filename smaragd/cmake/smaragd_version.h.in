@@ -9,6 +9,23 @@
 #define NASSAU_SUITE_VERSION  "@NASSAU_SUITE_VERSION@"
 #define NASSAU_SUITE_COMMIT   "@NASSAU_SUITE_COMMIT@"
 
+// QBX-137 / plan 51. The USER-VISIBLE product name, and the one string in this
+// product that is meant to change. "Smaragd" in a standalone build; the suite
+// supplies the shipped name from its PRODUCT file.
+//
+// This header is the single carrier for it, on both sides of the app/engine
+// layering boundary, because smaragd/CMakeLists.txt puts
+// ${CMAKE_BINARY_DIR}/generated on every target's include path. An accessor in
+// app_model could not serve the engine at all -- engine code may not include
+// an app header (tools/check_layering.py rule 1) -- and 21 of the 41 surveyed
+// name literals are in tw303a/.
+//
+// NOT for identity keys. The QSettings quadruple, com.smaragd.SecretStore,
+// com.smaragd.media, dev.tweggen.smaragd and the MIDI client/port names are
+// addresses of the user's saved data, are frozen forever, and must never be
+// derived from this macro. tools/check_product_name.py pins each one.
+#define SMARAGD_PRODUCT_NAME  "@NASSAU_PRODUCT_NAME@"
+
 // The same one-line, machine-readable marker every Nassau plugin bundle
 // carries (the SDK's cmake/NassauStamp.cmake), so `strings` on any artifact in
 // the product answers "which build is this?" the same way.

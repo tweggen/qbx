@@ -1079,6 +1079,21 @@ tw_module_test(twfraction_test              core/tests/test_twfraction.cpp      
 tw_module_test(twwarpmap_test               core/tests/test_twwarpmap.cpp               tw_core)
 tw_module_test(timemap_test                 core/tests/test_timemap.cpp                 tw_core)
 tw_module_test(twlog_test                   core/tests/test_twlog.cpp                   tw_core)
+
+# QBX-137 / plan 51 stage 1: the user-visible product name reaches the ENGINE.
+# It links tw_core and nothing else, which is the gate: the plan's first draft
+# put the name in an app_model accessor, and 21 of the 41 surveyed name
+# literals are in this subtree, where an app header may not be included. If the
+# carrier ever moves out of the generated header to somewhere only the app can
+# see, this target stops compiling -- which, per the comment on tw_module_test
+# above, is the layering regression announcing itself.
+#
+# TEST_EXPECTED_PRODUCT_NAME is the same CMake variable arriving by a second
+# path, so the test can tell a correctly generated header from a STALE one. A
+# test that only asserted "non-empty" could not.
+tw_module_test(product_name_test             core/tests/test_product_name.cpp            tw_core)
+target_compile_definitions(product_name_test PRIVATE
+    TEST_EXPECTED_PRODUCT_NAME="${NASSAU_PRODUCT_NAME}")
 # twlog_test asserts a WALL-CLOCK LATENCY BOUND: one non-blocking TW_LOG call
 # from a pretend-RT thread must complete in < 2000 us while four threads contend
 # the logger lock. That is the whole point of the try_lock, but it means the test
