@@ -44,6 +44,27 @@ grep -rn '"[^"]*Smaragd[^"]*"' --include=*.cpp --include=*.cc --include=*.h \
 `smaragd/main`** (the app) and **21 in `smaragd/tw303a`** (the engine). The
 split is the single most important number in this document; see §4.
 
+That grep is **case-sensitive**, and the lowercase name is a separate
+population of **35** more literals:
+
+```bash
+grep -rn '"[^"]*smaragd[^"]*"' --include=*.cpp --include=*.cc --include=*.h \
+     --include=*.mm --include=*.c smaragd/main smaragd/tw303a \
+  | grep -v '/tests/' | grep -v 'Smaragd'
+```
+
+Almost all 35 are **Class C** — `smaragd.ini`, log and cache filenames, paths —
+and must NOT be swept. But one is Class A: `setApplicationName("smaragd")`.
+This is why the checker has to be case-aware rather than matching the word
+(§5): a checker that flagged the lowercase population would invite someone to
+rename files, which is exactly what the ticket excludes.
+
+**These numbers are the SURVEY, not the checker's scope.** The grep above
+includes `main/testkit/**` and comment lines; §5's checker excludes both, so it
+will report a smaller number. Neither is wrong. Expect roughly 10–12 app sites
+and 0–7 engine sites to be actual sweep targets — the by-class table in §6
+stage 3 has the breakdown.
+
 The engine's 21, by file:
 
 | File | n | What |
@@ -76,7 +97,7 @@ and the ticket's "paths may remain" does not cover the dangerous kind.
 | `SApplication::SApplication()` | `setOrganizationName("Smaragd")`, `setApplicationName("smaragd")` | **not** the INI, which passes its own tuple. Qt derives `QStandardPaths::CacheLocation` from these, and that is the sidecar store root (same function's `SMARAGD_SIDECAR_DIR` block); `AppConfigLocation` is `SMediaCache`'s standalone default root. `--version` also prints `applicationName()` as its first word |
 | `schema()` in `ssecretstore_linux.cpp` | `com.smaragd.SecretStore` | every stored password **on Linux**: libsecret writes it as `xdg:schema` and matches on it in `secret_password_lookup_sync` |
 | `SMediaAccountManager::SMediaAccountManager()`, passing it explicitly | `com.smaragd.media` | the same secrets **on both** Linux (a `"service"` schema attribute, matched on lookup) and macOS (`kSecAttrService` in `baseQuery`). Note the live value is at this call site; the identical default argument in `SSecretStore::SSecretStore()` is **never used by the product** |
-| `main/CMakeLists.txt` — `MACOSX_BUNDLE_GUI_IDENTIFIER` | `dev.tweggen.smaragd` | macOS **microphone consent**: TCC keys consent on the bundle identifier, so a DAW that changes it loses audio input until the user re-grants it |
+| `main/CMakeLists.txt` — `MACOSX_BUNDLE_GUI_IDENTIFIER` | `dev.tweggen.smaragd` | macOS **microphone consent**: TCC keys consent on the bundle identifier, so a DAW that changes it loses audio input until the user re-grants it. *This is documented macOS behaviour, not verified from this repository* — the only Class A claim here that is not. Code signing and keychain ACLs are deliberately NOT cited: the build is ad-hoc signed today, so that part would be overstated until QBX-133 |
 | `distribution.xml.in` **and** `ci/package.sh` (`add_component`, `pkgbuild --identifier`) | `dev.tweggen.smaragd.app` / `.vst3` / `.au` | upgrade and uninstall detection by the macOS installer. **Two files**, independently spelled |
 | `coremidi_midi.cc`, `alsa_seq_midi.cc` | `"Smaragd"`, `"Smaragd Out"`, `"Smaragd In"` | these are the virtual MIDI client and ports **other applications see and save in their own routing**. And qbx stores the portable port *name* in the project (`STrack::midiOutPort_`, mapped to a machine-local id by `SSettings::midiPortId()`), so a renamed port can also orphan a saved `.qxp`'s routing |
 | the bundle directory `smaragd.app` | from the CMake target name | `ci/package.sh` installs it to `/Applications` with relocation forced off, under the pkg-ref id above. Renaming the directory would leave the old copy behind **under the same id**; the plan freezes it — see the §8 consequence |
@@ -202,48 +223,118 @@ because it answers *which build is this* for a developer, and
 **Unverified, and to be settled in stage 3 rather than assumed:** whether Qt
 appends the display name to `QWidget` window titles on any platform we ship.
 If it does, `SMainWindow::updateWindowTitle()`'s own `"Smaragd - %1"` prefix
-must go or the title doubles. Measure it; do not reason about it.
+may double the name.
+
+Review offered a narrower mechanism — that the append lives in
+`QPlatformWindow::formatWindowTitle()`, is used by the Windows and XCB backends
+but not Cocoa, and fires only when the title does not already contain the
+display name, so `"volume - project"` would never double and only a bare
+`"project"` would gain a suffix. **That was offered from memory and is not
+verified here, so it is recorded as the hypothesis to test, not as fact.**
+Stage 3 measures both title shapes on all three platforms and picks one
+deliberately; keeping the explicit prefix is the safe default. Note that once a
+display name is set, every `QMessageBox` caption becomes a candidate for the
+same append.
 
 ## 5. How it is kept true
 
-A one-time sweep of 41 literals decays on the next commit. qbx holds its
-invariants with checkers in `ci/gates.sh`, and this one fits.
+A one-time sweep decays on the next commit. qbx holds its invariants with
+checkers in `ci/gates.sh`, and this one fits.
 
 **`tools/check_product_name.py`** does two jobs, and the second is the one that
-matters:
+matters.
 
-1. **Forbid new display literals.** Fail on a bare `"Smaragd"` in a string
-   literal in application or engine code.
-2. **Assert the frozen keys are byte-identical to a pinned list** — the
-   QSettings tuple at both sites, `com.smaragd.SecretStore`, `com.smaragd.media`
-   at its live call site, `dev.tweggen.smaragd`, the two setter calls, and the
-   three MIDI names. If one of them *changes*, the checker fails.
+### Job 1 — forbid new display literals
+
+Fail on a capital-`Smaragd` string literal in application or engine code.
+
+**Scope, stated so the implementer does not guess:** string literals only, in
+`smaragd/main` and `smaragd/tw303a`; excluding `**/tests/**`,
+`smaragd/main/testkit/**` and `smaragd/tests/**`; **comments not matched**
+(`SOptionsDialog` truthfully names `smaragd.ini`, and flagging it would invite
+someone to "fix" a true statement); and **case-sensitive on the capital form
+only** — the 35 lowercase literals are filenames and paths the ticket
+explicitly leaves alone.
+
+### Job 2 — pin the frozen keys, by file and pattern
+
+This is the real protection, and it is implementable **today, before any
+sweep** — every value below exists in the tree now. A pin needs a file, a
+pattern and an **expected count**, because without the count a refactor that
+drops an occurrence passes silently:
+
+| File | Pattern | Count |
+|---|---|---|
+| `main/shell/src/ssettings.cpp` | `IniFormat, QSettings::UserScope,\s*"Smaragd", "smaragd"` | 1 |
+| `main/shell/src/smediaaccountmanager.cpp` | the same quadruple | 1 |
+| `main/shell/src/smediaaccountmanager.cpp` | `QStringLiteral( "com.smaragd.media" )` | 1 |
+| `main/shell/include/app/shell/ssecretstore.h` | `serviceName = QStringLiteral( "com.smaragd.media" )` | 1 |
+| `main/shell/src/sapplication.cpp` | `setOrganizationName( "Smaragd" )` | 1 |
+| `main/shell/src/sapplication.cpp` | `setApplicationName( "smaragd" )` | 1 |
+| `main/shell/src/ssecretstore_linux.cpp` | `"com.smaragd.SecretStore"` | 1 |
+| `main/CMakeLists.txt` | `MACOSX_BUNDLE_GUI_IDENTIFIER "dev.tweggen.smaragd"` | 1 |
+| `tw303a/devices/src/alsa_seq_midi.cc` | the MIDI name constants (see below) | 2 |
+| `tw303a/devices/src/coremidi_midi.cc` | the MIDI name constants | 2 |
+
+**The header default is pinned too, and asserted EQUAL to the call site.** The
+product passes `com.smaragd.media` explicitly, so the default argument is dead
+today — but if someone later drops the explicit argument, the default takes
+over. Pinning only the live site would leave that silent.
+
+**The 12 MIDI literals are refactored to one `constexpr` per file first.**
+`alsa_seq_midi.cc` spells `ensureSeq("Smaragd")` three ways and
+`name.empty() ? std::string("Smaragd") : name` twice; pinning 12 call sites is
+brittle, pinning two definitions is not. The refactor is behaviour-neutral and
+belongs in stage 2 beside the markers.
 
 Job 2 replaces the runtime gate this plan originally proposed, which **could
 not be built**: with a compile-time constant a test has no way to configure a
 different product name, so "change the name and assert the paths did not move"
-had nothing to turn. A static byte-identity assertion needs no running app and
-catches exactly the regression a diff reviewer cannot see — someone sweeping
-`"Smaragd"` and catching an identity key in the net.
+had nothing to turn. A static pin needs no running app and catches exactly the
+regression a diff reviewer cannot see — someone sweeping `"Smaragd"` and
+catching an identity key in the net.
 
-**Exemptions use the house marker, not a central list.** Both existing
-checkers exempt per site with a trailing comment —
+### Exemptions use the house marker, per file type
+
+Both existing checkers exempt per site with a trailing comment —
 `tools/check_logging.py`'s `ALLOW_COMMENT = "check_logging: allow"` and
-`check_tempo_authority.py` likewise. So:
+`check_tempo_authority.py` likewise. The checker matches **only that prefix**,
+so the text after it is free and carries the reason:
 
 ```cpp
 setOrganizationName( "Smaragd" );  // check_product_name: allow — frozen identity key, plan 51 §3
+passThrough.vendor = "Smaragd";    // check_product_name: allow — deliberate vendor string, plan 51 §7
 ```
 
-That marker *is* stage 0's comment, so the comment pass and the checker become
-one thing, and there is no central 41-entry list to become a merge-conflict
-magnet. `ALLOW_FILES` covers the test trees wholesale.
+Two distinct reasons, because §7's vendor and host-identity strings are *kept
+on purpose* rather than frozen as data addresses — and without a marker they
+would fail job 1 the moment stage 3 flips it to failing.
 
-**Scope, stated so the implementer does not have to guess:** string literals
-only, in `smaragd/main` and `smaragd/tw303a`, excluding `**/tests/**`,
-`smaragd/main/testkit/**` and `smaragd/tests/**`. Comments are not matched —
-`SOptionsDialog` truthfully names `smaragd.ini`, and a checker that flagged it
-would invite someone to "fix" a true statement.
+The marker is a C/C++ mechanism. Elsewhere:
+
+| Site | Marker | What actually protects it |
+|---|---|---|
+| C/C++ | trailing `// check_product_name: allow — …` | job 1 skips the line; job 2 pins the value |
+| `main/CMakeLists.txt` | trailing `# …` (legal between `set_target_properties` arguments) | **job 2's pin** — job 1 does not scan CMake, and the value holds no capital `Smaragd` anyway, so the marker here is documentation |
+| `distribution.xml.in` | `<!-- … -->` on the preceding line (XML cannot carry one inside an attribute) | **not the qbx checker** — see below |
+| `ci/package.sh`, `package-windows.sh` | trailing `#` | same |
+| `smaragd.iss` | `; …` starting the line (Inno comments must) | same |
+
+### The suite-side keys need a suite-side pin
+
+`tools/check_product_name.py` lives in qbx and cannot see nassau-suite at all,
+and nassau-suite has no static checker. The cheapest strong place is
+**`ci/package-check.sh`**, which already runs `pkgutil --expand` and reads the
+expanded `Distribution` file: assert the five `dev.tweggen.smaragd.*`
+identifiers there and in the component receipts, and assert the app installs as
+`smaragd.app`. That tests the **built artifact** rather than the source, which
+is better, and needs no new workflow step. Pin the `.iss` `AppId` GUID by grep
+in the same script.
+
+**Honest limit:** nassau-suite's only CI job is token-gated and no-ops without
+`NASSAU_CI_TOKEN`, so this pin does not run on a fork or on any PR without the
+secret. Whoever lands it says so in the PR body, per the house rule that a PR
+states what was *not* gated.
 
 ## 6. Staging
 
@@ -253,10 +344,34 @@ Each stage stands alone and is separately reviewable.
 |---|---|---|
 | **0** | Fix the `"qbx Projects"` filter and the `~/Documents/smaragd` default. Amend `main/shell/CONTRACT.md` invariants 41/42 with the freeze rule. | A real bug fixed, and the rule recorded where the code's own contract lives. Valuable even if the rename is abandoned. |
 | **1** | `PRODUCT` + the suite forwarding + `SMARAGD_PRODUCT_NAME` in the generated header + the standalone default. No call sites changed. | The mechanism, provably inert: the build still says Smaragd everywhere. |
-| **2** | `tools/check_product_name.py` with job 2 (frozen-key assertions) live and job 1 **warn-only**; the `check_product_name: allow` markers added at every Class A site; register it in `ci/gates.sh` and update `CLAUDE.md`, which currently says "the four checkers". | The identity-key protection lands *before* anything is swept, which is the whole point. Job 1 warns rather than fails so this stage does not depend on stage 3. |
-| **3** | The sweep: 20 app sites via `applicationDisplayName()`, 21 engine sites via the macro. Measure the Qt title-append question. Flip job 1 to failing. | Gated by stage 2, and the only stage that touches the engine. |
+| **2** | Refactor the 12 MIDI literals to one `constexpr` per file. `tools/check_product_name.py` with job 2 live and job 1 **warn-only**; `check_product_name: allow` markers at every Class A **and** §7 site; the suite-side pins in `ci/package-check.sh`; register it in `ci/gates.sh` and update `CLAUDE.md`, which says "the four checkers". | The identity-key protection lands *before* anything is swept, which is the whole point. Job 1 warns rather than fails, so this stage does not depend on stage 3 — verified: every value job 2 pins exists in the tree today. |
+| **3** | The sweep (see the table below), plus `MACOSX_BUNDLE_BUNDLE_NAME` → `${NASSAU_PRODUCT_NAME}` — the CMake variable, not the C macro. Measure the Qt title-append question. Flip job 1 to failing. | Gated by stage 2. **Precondition:** §7's vendor and host-identity decisions must be made first, or job 1 cannot be flipped. |
 | **4** | The suite sweep: both installers, `ci/package.sh`'s display text, the licence document, `README.md`, `docs/RELEASING.md`. | Changes what a user reads on an installer pane; wants its own review. |
 | **5** | Set `PRODUCT` to `volume`. | One line in the suite. |
+
+### What stage 3 actually sweeps
+
+The 41 survey hits are **not** 41 sweep sites. By class:
+
+| | Sites | What |
+|---|---|---|
+| App, Class A | 3 | frozen in stage 2; marker only |
+| App, display in a sensitive file | 2 | the libsecret item label `"Smaragd: %1"` and DPAPI's `L"Smaragd secret"` — both display-only (Seahorse shows the label), but they sit in the secret-store backends, so they get their own review |
+| App, comments | 2 | job 1 does not match comments |
+| App, test code | 3 | `action_roundtrip_test.cpp`; outside the checker's scope |
+| **App, genuine sweep** | **10** | `smainwindow.cpp` ×6, `main.cpp` ×2, `sstdmixerview.cpp`, `soptionsdialog.cpp` |
+| Engine, Class A | 12 | the MIDI names — **frozen**, marker only |
+| Engine, Class C | 2 | `vst3_probe.cc`'s window class, looked up by nothing |
+| **Engine, open per §7** | **7** | registry ×3, CLAP ×2, VST3 ×2 |
+
+So stage 3 sweeps **10 app sites, and between 0 and 7 engine sites depending on
+§7**. If §7's recommendations stand — leave the vendor, leave host identity —
+**stage 3 does not touch the engine at all**, and stage 2 becomes the only
+stage that does, via the MIDI constants and the markers.
+
+This table exists because the previous draft's staging said "21 engine sites
+via the macro" while §2 and §8 froze 12 of those same sites. An implementer
+following the table literally would have renamed the MIDI ports.
 
 Stage 5 is deliberately trivial and deliberately last. What it does **not**
 cover is listed in §8; the one-line claim is about the mechanism, not about
@@ -275,7 +390,10 @@ every string in the product.
   `"Smaragd exiting"` log line. Changing the vendor is a 61-file test edit.
   **Recommendation: leave the vendor, and let the checker's `ALLOW_FILES`
   cover the cases** — but decide it explicitly rather than discovering it in
-  stage 3.
+  stage 3, because §6 stage 3 cannot flip job 1 to failing until it is decided.
+  (The case asserting the `"Smaragd exiting"` log line is **not** part of this
+  decision: that log line is Class B and stage 3 sweeps it, so that one case
+  changes in the stage-3 PR.)
 - **Plug-in host identity** — CLAP `host_.name`/`vendor`, VST3
   `IHostApplication::getName` → `"Smaragd"`. Third-party plug-ins occasionally
   key compatibility shims on the host name, so changing it is a compatibility
@@ -353,3 +471,67 @@ One review claim was **not** adopted as stated: that the macOS row should drop
 ad-hoc-signed build, so the row now names microphone consent alone — which is
 the part that is true regardless of signing, and QBX-133 will make the rest
 true.
+
+### Second pass, 2026-10-09
+
+Verdict YELLOW again, "one edit short of GREEN", and the blocker was an
+**internal contradiction introduced by the first revision**: stage 3's row said
+"21 engine sites via the macro" while §2 and §8 froze 12 of those same sites as
+the MIDI names. An implementer following the staging table literally would have
+renamed the MIDI ports — the exact failure the plan exists to prevent, written
+into the plan's own instructions. §6 now carries a by-class table, and the
+count of real sweep sites is 10 app plus 0–7 engine depending on §7.
+
+Also from this pass:
+
+- Job 2 needed a **file + pattern + expected count** table to be
+  implementable; "byte-identical to a pinned list" named no sites. Without the
+  count, a refactor that drops an occurrence passes silently.
+- The `ssecretstore.h` **default argument is now pinned too, and asserted
+  equal to the call site** — it is dead today, but it takes over if anyone
+  drops the explicit argument.
+- The 12 MIDI literals are **refactored to one `constexpr` per file** before
+  being pinned; `alsa_seq_midi.cc` spells the name three different ways.
+- The `: allow` marker is a C/C++ mechanism and **does not work** at the CMake,
+  XML, shell and Inno sites. §5 now gives the comment syntax per file type and,
+  more importantly, says what actually protects each one — for the suite that
+  is a new pin in `ci/package-check.sh`, which already expands the built `.pkg`
+  and reads its `Distribution`. With the honest limit that the suite's CI job
+  no-ops without `NASSAU_CI_TOKEN`.
+- `MACOSX_BUNDLE_BUNDLE_NAME` is a Class B site **outside job 1's scope**
+  (CMake, not C++), and one of the first strings a macOS user sees. Stage 3
+  sets it explicitly.
+- §7's kept-on-purpose strings need the marker with a **different reason** from
+  the frozen keys, or job 1 fails on them the moment stage 3 flips it.
+- The Qt title-append mechanism was offered in more detail
+  (`QPlatformWindow::formatWindowTitle()`, Windows and XCB but not Cocoa, only
+  when the title does not already contain the name). Offered from memory and
+  **not verified**, so §4 records it as the hypothesis to test rather than as
+  fact — the stance that has been right repeatedly in this work.
+
+**Found while verifying this pass, by neither the plan nor the review:** the
+survey grep is case-sensitive, so it missed **35 lowercase-only literals**,
+one of which — `setApplicationName("smaragd")` — is Class A. The rest are
+filenames and paths that must not be swept, which turns case-awareness from a
+detail into a checker requirement (§5 job 1).
+
+## 10. What to watch during implementation
+
+Carried from review, and worth keeping where the implementer will read it:
+
+- **Stage 2's warn-only job 1 prints ~17 warnings on every
+  `./ci/gates.sh --static` run** until stage 3 lands. Keep that below the
+  threshold where people stop reading the checker output, or stage 3 follows
+  stage 2 closely.
+- **Every `.qxa` case runs under `Smaragd`**, because the qbx standalone
+  default stays that. A case wanting to assert a caption has no way to read the
+  configured name — there is no `describe` field for it. Either add one in
+  stage 1 or forbid literal captions in cases outright. Decide in stage 1, not
+  in stage 3.
+- **The Finder / menu-bar split** (§8) is the first thing a macOS user will
+  report as a bug after stage 5. Stage 4 should decide whether to set
+  `CFBundleDisplayName` as well, or to accept it until the bundle directory is
+  renamed in its own ticket alongside the `pkg-ref` migration.
+- **File the `host_.version = "1.0.0"` ticket before stage 3**, so the engine
+  sweep PR does not pick up a third hard-coded version by accident and widen
+  its own scope.
