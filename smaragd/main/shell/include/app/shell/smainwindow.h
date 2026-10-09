@@ -758,6 +758,11 @@ protected slots:
     void onStatusModeChanged( const QString &mode );
 
 private:
+    // Where the project dialogs start on a machine that has never saved one.
+    // Shared by fileSaveAs() and fileOpen(), which computed it identically.
+    // The directory name is NOT the product name on purpose -- see the
+    // definition, and plan 51 §2 (Class C).
+    static QString defaultProjectDir();
     // The arranger for the current project, creating it if the headless test
     // path has not gone through openProject(). NULL when there is no project.
     class SStdMixerView *ensureArranger_();
