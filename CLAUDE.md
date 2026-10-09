@@ -68,18 +68,19 @@ python3 tools/check_layering.py
 python3 tools/check_logging.py
 python3 tools/check_includes.py
 python3 tools/check_tempo_authority.py
-python3 tools/check_product_name.py --warn-only
+python3 tools/check_product_name.py
 ctest --test-dir smaragd/build -j4 --output-on-failure   # scale -j to the machine
 ```
 
-`check_product_name` is two checks in one, and the halves differ in force
-(QBX-137, plan 51). Its **job 2** pins the frozen identity keys — the
-`QSettings` quadruple, `com.smaragd.*`, `dev.tweggen.smaragd`, the MIDI client
-and port names — and is **always fatal**: those are not names, they are where
-the user's settings, saved passwords and MIDI routing live, and moving one is a
-silent data migration. Its **job 1** forbids new `"Smaragd"` display literals
-and is **warn-only until the stage-3 sweep**, because it cannot pass over the
-twelve that are still there. Drop `--warn-only` then.
+`check_product_name` is two checks in one (QBX-137, plan 51). Its **job 2**
+pins the frozen identity keys — the `QSettings` quadruple, `com.smaragd.*`,
+`dev.tweggen.smaragd`, the MIDI client and port names. Those are not names:
+they are where the user's settings, saved passwords and MIDI routing live, and
+moving one is a data migration, silently. Its **job 1** forbids new
+`"Smaragd"` string literals in app or engine code; read the name instead, from
+`QGuiApplication::applicationDisplayName()` in the app or
+`SMARAGD_PRODUCT_NAME` in the engine. A literal that is deliberate carries a
+`// check_product_name: allow — <why>` marker, as in the two older checkers.
 
 To pin a flake, run `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]`
 from `smaragd/tests/cases/`. For record and live cases, loop `ctest -R` instead.

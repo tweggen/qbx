@@ -692,7 +692,17 @@ SApplication::SApplication( int &argc, char **argv )
       audioRecorder_( nullptr )
 {
     setOrganizationName( "Smaragd" );  // check_product_name: allow -- frozen identity key, plan 51 §2
-    setApplicationName( "smaragd" );
+    setApplicationName( "smaragd" );  // check_product_name: allow -- frozen identity key, plan 51 §2
+    // The USER-VISIBLE name, and the only one that is meant to change
+    // (QBX-137, plan 51). Qt's own property for exactly this distinction, so
+    // every call site can read it back without a qbx-specific accessor.
+    //
+    // MEASURED, because the plan would not take it on trust: setting this
+    // changes neither QWidget::windowTitle(), nor QMessageBox's default
+    // caption, nor -- the one that matters -- applicationName(). So no
+    // QStandardPaths location moves, and the sidecar store and media cache
+    // roots above stay exactly where the user's data already is.
+    setApplicationDisplayName( QStringLiteral( SMARAGD_PRODUCT_NAME ) );
 
     // Plan 50 M5. The version Qt reports is the SUITE's, not this component's,
     // because D5 makes the suite version the only user-facing one -- it is what

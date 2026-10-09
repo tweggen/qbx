@@ -333,7 +333,8 @@ int main( int argc, char *argv[] )
             log.setFileSink( settings.configDir().toStdString(),
                              8u * 1024u * 1024u, 3 );
 
-        TW_LOGI( "ui.shell", "Smaragd starting; log level=%s console=%d dir=%s",
+        TW_LOGI( "ui.shell", "%s starting; log level=%s console=%d dir=%s",
+                 SMARAGD_PRODUCT_NAME,
                  tw::TwLog::levelName( level ), (int)wantConsole,
                  settings.configDir().toUtf8().constData() );
     }
@@ -540,7 +541,7 @@ int main( int argc, char *argv[] )
 
     // Stop the plugin scan thread and flush the log's file writer before the
     // process tears down.
-    TW_LOGI( "ui.shell", "Smaragd exiting" );
+    TW_LOGI( "ui.shell", "%s exiting", SMARAGD_PRODUCT_NAME );
     smaragdOrderlyShutdown();
     return 0;
 }

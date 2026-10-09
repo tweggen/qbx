@@ -26,6 +26,11 @@
 
 #include "tw/core/twlog.h"
 
+// Below the libsecret include deliberately -- see the include-order note at
+// the top of this file. Needed for applicationDisplayName() in the item
+// label (QBX-137, plan 51).
+#include <QGuiApplication>
+
 namespace tw_secretstore_linux {
 
 namespace {
@@ -56,7 +61,15 @@ bool libsecretStore( const QString &service, const QString &account, const QByte
     // responsibility, which is already exercised (and gated) via the dpapi
     // path.
     const QByteArray encoded = secret.toBase64();
-    const QByteArray label   = QStringLiteral( "Smaragd: %1" ).arg( service ).toUtf8();
+    // The item LABEL, which Seahorse and friends show the user. Display only:
+    // libsecret looks an item up by the schema name and the service/account
+    // attributes, never by this (see schema() above and the lookup below), so
+    // following the product name here is safe. Items stored by an older build
+    // keep their old label -- cosmetic, and not worth a migration.
+    const QByteArray label   = QStringLiteral( "%1: %2" )
+                                   .arg( QGuiApplication::applicationDisplayName(),
+                                         service )
+                                   .toUtf8();
 
     const gboolean ok = secret_password_store_sync(
         schema(), SECRET_COLLECTION_DEFAULT, label.constData(), encoded.constData(), nullptr, &error,

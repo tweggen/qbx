@@ -1092,10 +1092,13 @@ QWidget *SOptionsDialog::buildPluginsPage()
 
     pluginScanOnStartup_ = new QCheckBox( "Scan for plugins at startup" );
     pluginScanOnStartup_->setToolTip(
-        "The result is cached in plugincache.v<n>.json next to smaragd.ini, keyed "
-        "on each module's path, size and modification time — so only plugins that "
-        "actually changed are loaded again. The <n> is the scanner version, so "
-        "two Smaragd builds cannot invalidate each other's cache." );
+        QStringLiteral(
+            "The result is cached in plugincache.v<n>.json next to smaragd.ini, "
+            "keyed on each module's path, size and modification time — so only "
+            "plugins that actually changed are loaded again. The <n> is the "
+            "scanner version, so two %1 builds cannot invalidate each other's "
+            "cache." )
+            .arg( QGuiApplication::applicationDisplayName() ) );
     v->addWidget( pluginScanOnStartup_ );
 
     pluginRescanBtn_ = new QPushButton( "Rescan now" );
