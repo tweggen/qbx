@@ -750,6 +750,27 @@ bool SMainWindow::fileSave()
     return saveToPath( currentFilePath_ );
 }
 
+// The folder the project dialogs start in on a machine that has never saved
+// one. Was computed identically in fileSaveAs() and fileOpen(); one copy now,
+// so a later decision about it has a single site.
+//
+// THE DIRECTORY NAME IS DELIBERATELY NOT THE PRODUCT NAME (plan 51 §2, Class
+// C). QBX-137 renames what the user READS, and says in as many words that
+// "git repo names and file system pathes however still may remain the same".
+// A user with projects in ~/Documents/smaragd would otherwise find new ones
+// saved somewhere else, which is a data-scatter bug wearing a rename's
+// clothes. If this ever should move, it moves in its own ticket.
+QString SMainWindow::defaultProjectDir()
+{
+    QString dir = SSettings::instance().lastDir( "project", QString() );
+    if( dir.isEmpty() ) {
+        dir = QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation )
+            + QDir::separator() + "smaragd";
+        QDir().mkpath( dir );
+    }
+    return dir;
+}
+
 bool SMainWindow::fileSaveAs()
 {
     if( !currentProject_ ) return false;
@@ -758,15 +779,11 @@ bool SMainWindow::fileSaveAs()
     if( !currentFilePath_.isEmpty() ) {
         startDir = currentFilePath_;
     } else {
-        startDir = SSettings::instance().lastDir( "project", QString() );
-        if( startDir.isEmpty() ) {
-            startDir = QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation )
-                     + QDir::separator() + "smaragd";
-            QDir().mkpath( startDir );
-        }
+        startDir = defaultProjectDir();
     }
 
-    QFileDialog dialog( this, "Save Project As", startDir, "qbx Projects (*.qxp)" );
+    QFileDialog dialog( this, "Save Project As", startDir,
+                        "Smaragd Projects (*.qxp)" );
     dialog.setFileMode( QFileDialog::AnyFile );
     dialog.setAcceptMode( QFileDialog::AcceptSave );
     dialog.setOptions( QFileDialog::DontUseNativeDialog );
@@ -841,13 +858,9 @@ void SMainWindow::fileNew()
 
 void SMainWindow::fileOpen()
 {
-    QString defaultDir = SSettings::instance().lastDir( "project", QString() );
-    if( defaultDir.isEmpty() ) {
-        defaultDir = QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation )
-                   + QDir::separator() + "smaragd";
-        QDir().mkpath( defaultDir );
-    }
-    QFileDialog dialog( this, "Open Project", defaultDir, "qbx Projects (*.qxp *.QXP)" );
+    const QString defaultDir = defaultProjectDir();
+    QFileDialog dialog( this, "Open Project", defaultDir,
+                        "Smaragd Projects (*.qxp *.QXP)" );
     dialog.setFileMode( QFileDialog::ExistingFile );
     dialog.setOptions( QFileDialog::DontUseNativeDialog );
     QString fileName;

@@ -895,6 +895,18 @@ change rather than the only one.
     hand it a `QSettings` explicitly, and that `QSettings` cannot be
     `SSettings`'s private member (there is no accessor for it, on purpose).
 
+    **The quadruple is FROZEN, whatever the product is called** (QBX-137, plan
+    51 §3). It is not a name; it is the address of the user's settings and
+    window layout. `Smaragd` is an internal code name and the product is
+    called something else, so this will read wrong — on purpose. Changing it
+    is a data migration with a consent dialog, and a *silent* one if done by
+    accident: the app starts cleanly against an empty INI and merely looks
+    forgetful. The same holds for `SApplication`'s `setOrganizationName()` /
+    `setApplicationName()`, for a different reason worth knowing — **not** the
+    INI, which passes its own quadruple, but `QStandardPaths`, from which Qt
+    derives the sidecar store root and `SMediaCache`'s standalone root.
+    `tools/check_product_name.py` pins all four.
+
 ## The secret store (proposal 38 GATE 5a)
 
 `SSecretStore` (`app/shell/ssecretstore.h`) is where a password lives. It sits
