@@ -327,7 +327,7 @@ bool twVst3Plugin::init( const std::string &path, const std::string &uid )
     }
     if( uid_.empty() ) uid_ = vst3UidFromTuid( want.cid );
 
-    host_.reset( new twVst3HostApplication( "Smaragd" ) );
+    host_.reset( new twVst3HostApplication( "Smaragd" ) );  // check_product_name: allow -- deliberate publisher/host string, plan 51 §7
     handler_.reset( new twVst3ComponentHandler() );
 
     if( factory->createInstance( want.cid, Vst::IComponent::iid,

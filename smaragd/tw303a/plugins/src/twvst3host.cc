@@ -267,7 +267,7 @@ tresult PLUGIN_API twVst3HostApplication::queryInterface( const TUID _iid, void 
 tresult PLUGIN_API twVst3HostApplication::getName( Vst::String128 name )
 {
     if( !name ) return kInvalidArgument;
-    copyToString128( name, name_.empty() ? "Smaragd" : name_.c_str() );
+    copyToString128( name, name_.empty() ? "Smaragd" : name_.c_str() );  // check_product_name: allow -- deliberate publisher/host string, plan 51 §7
     return kResultOk;
 }
 

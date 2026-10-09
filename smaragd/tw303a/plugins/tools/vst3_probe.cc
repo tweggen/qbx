@@ -383,7 +383,7 @@ public:
 
     tresult PLUGIN_API getName( Vst::String128 name ) override
     {
-        static const char16_t kName[] = u"Smaragd (vst3_probe)";
+        static const char16_t kName[] = u"Smaragd (vst3_probe)";  // check_product_name: allow -- internal tool, not user-visible, plan 51 §2 Class C
         const std::size_t n = sizeof( kName ) / sizeof( kName[0] );
         for( std::size_t i = 0; i < n && i < 128; ++i )
             name[i] = (Vst::TChar)kName[i];
@@ -741,7 +741,7 @@ private:
 HWND makeHostWindow()
 {
     static bool registered = false;
-    static const wchar_t *kClass = L"SmaragdVst3ProbeHost";
+    static const wchar_t *kClass = L"SmaragdVst3ProbeHost";  // check_product_name: allow -- internal tool, not user-visible, plan 51 §2 Class C
     if( !registered ) {
         WNDCLASSEXW wc{};
         wc.cbSize        = sizeof( wc );

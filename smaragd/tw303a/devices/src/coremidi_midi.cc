@@ -14,6 +14,28 @@ namespace audio {
 
 namespace {
 
+// The virtual MIDI client and its two ports, as every other application on the
+// machine sees them -- and as a .qxp stores them.
+//
+// FROZEN IDENTITY KEYS (QBX-137, plan 51 §2). These are NOT the product's
+// display name and must not follow it when it changes. Two reasons, both
+// outside this file:
+//
+//   * another program that routes to or from this client saves THIS name in its own
+//     configuration, so renaming the port breaks that program's routing, not
+//     ours -- and silently, since the port simply stops existing;
+//   * qbx stores the portable port NAME in the project (STrack::midiOutPort_,
+//     mapped to a machine-local id by SSettings::midiPortId()), so a renamed
+//     port can also orphan a saved project's routing.
+//
+// `Smaragd` is an internal code name and the product is called something else,
+// so these will read wrong. That is the intended state.
+// tools/check_product_name.py pins all three.
+constexpr const char *kMidiClientName  = "Smaragd";      // check_product_name: allow -- frozen identity key, plan 51 §2
+constexpr const char *kMidiOutPortName = "Smaragd Out";  // check_product_name: allow -- frozen identity key, plan 51 §2
+constexpr const char *kMidiInPortName  = "Smaragd In";   // check_product_name: allow -- frozen identity key, plan 51 §2
+
+
 std::string cfToStd(CFStringRef s)
 {
     if (!s) return {};
@@ -68,7 +90,7 @@ CoreMidiOutput::~CoreMidiOutput()
 bool CoreMidiOutput::ensureClient()
 {
     if (client_) return true;
-    CFStringRef n = cfName("Smaragd");
+    CFStringRef n = cfName(kMidiClientName);
     const OSStatus r = MIDIClientCreate(n, nullptr, nullptr, &client_);
     CFRelease(n);
     if (r != noErr) {
@@ -104,7 +126,7 @@ int CoreMidiOutput::open(const std::string &portId)
         return -1;
     }
 
-    CFStringRef pn = cfName("Smaragd Out");
+    CFStringRef pn = cfName(kMidiOutPortName);
     const OSStatus r = MIDIOutputPortCreate(client_, pn, &port_);
     CFRelease(pn);
     if (r != noErr) {
@@ -143,7 +165,7 @@ bool CoreMidiOutput::createVirtualPort(const std::string &name)
     if (!ensureClient()) return false;
     if (virtualSrc_) return true;
 
-    CFStringRef n = cfName(name.empty() ? std::string("Smaragd") : name);
+    CFStringRef n = cfName(name.empty() ? std::string(kMidiClientName) : name);
     const OSStatus r = MIDISourceCreate(client_, n, &virtualSrc_);
     CFRelease(n);
     if (r != noErr) {
@@ -189,7 +211,7 @@ CoreMidiInput::~CoreMidiInput()
 bool CoreMidiInput::ensureClient()
 {
     if (client_) return true;
-    CFStringRef n = cfName("Smaragd");
+    CFStringRef n = cfName(kMidiClientName);
     const OSStatus r = MIDIClientCreate(n, nullptr, nullptr, &client_);
     CFRelease(n);
     if (r != noErr) {
@@ -225,7 +247,7 @@ int CoreMidiInput::open(const std::string &portId)
         return -1;
     }
 
-    CFStringRef pn = cfName("Smaragd In");
+    CFStringRef pn = cfName(kMidiInPortName);
     const OSStatus r = MIDIInputPortCreate(client_, pn, &CoreMidiInput::readProc, this,
                                            &port_);
     CFRelease(pn);
@@ -271,7 +293,7 @@ bool CoreMidiInput::createVirtualPort(const std::string &name)
     if (!ensureClient()) return false;
     if (virtualDest_) return true;
 
-    CFStringRef n = cfName(name.empty() ? std::string("Smaragd") : name);
+    CFStringRef n = cfName(name.empty() ? std::string(kMidiClientName) : name);
     const OSStatus r = MIDIDestinationCreate(client_, n, &CoreMidiInput::readProc, this,
                                              &virtualDest_);
     CFRelease(n);

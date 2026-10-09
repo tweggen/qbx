@@ -734,8 +734,14 @@ bool twClapPlugin::init( const std::string &path, const std::string &uid )
 
     host_.clap_version = CLAP_VERSION;
     host_.host_data    = this;
-    host_.name         = "Smaragd";
-    host_.vendor       = "Smaragd";
+    // The HOST identity a plugin sees. Kept as "Smaragd" rather than following
+    // the product name (QBX-137, plan 51 §7): third-party plugins occasionally
+    // key compatibility shims on the host name, so changing it is a
+    // compatibility change rather than a cosmetic one, and it would be
+    // invisible until some plugin misbehaved. Decide it deliberately or not at
+    // all.
+    host_.name         = "Smaragd";  // check_product_name: allow -- deliberate publisher/host string, plan 51 §7
+    host_.vendor       = "Smaragd";  // check_product_name: allow -- deliberate publisher/host string, plan 51 §7
     host_.url          = "https://github.com/tweggen/qbx";
     host_.version      = "1.0.0";
     host_.get_extension    = &twClapPlugin::hostGetExtension;

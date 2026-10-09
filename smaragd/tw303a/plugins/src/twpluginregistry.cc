@@ -300,7 +300,7 @@ void twPluginRegistry::appendBuiltins_nolock()
     passThrough.uid    = "tw.passthrough";
     passThrough.path   = "";  // linked-in, not a separate module
     passThrough.name   = "PassThrough";
-    passThrough.vendor = "Smaragd";
+    passThrough.vendor = "Smaragd";  // check_product_name: allow -- deliberate publisher/host string, plan 51 §7
     passThrough.io     = { 2, 2 };
     passThrough.isInstrument = false;
     passThrough.nOutBuses = 1;
@@ -317,8 +317,8 @@ void twPluginRegistry::appendBuiltins_nolock()
     native.format = "tw";
     native.uid    = "tw.native.303";
     native.path   = "";   // linked-in, not a separate module
-    native.name   = "Smaragd 303";
-    native.vendor = "Smaragd";
+    native.name   = "Smaragd 303";  // check_product_name: allow -- deliberate publisher/host string, plan 51 §7
+    native.vendor = "Smaragd";  // check_product_name: allow -- deliberate publisher/host string, plan 51 §7
     native.io     = { 0, 1 };   // a generator: no audio in, one mono out
     native.isInstrument   = true;
     native.acceptsNotes   = true;
