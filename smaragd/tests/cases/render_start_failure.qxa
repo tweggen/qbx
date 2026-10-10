@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-145: a render that cannot START says so, with the reason.
+
+  RenderSession::start() returns false when the writer cannot open its file
+  (the MP3 writer, before it was implemented, always did). That failure used
+  to stop at SApplication::startRender, which returned void: the GUI opened a
+  progress dialog that waited forever at "0%", and the <render> action only
+  noticed because no file appeared - without the reason.
+
+  The filename below is 300 characters: no '/', '' or '..', so the action's
+  sanitizer lets it through, and longer than any single path component the
+  file system accepts (255 on NTFS, ext4 and APFS), so the writer's open is
+  what fails.
+
+  expectReject ALONE is a lying gate here: the missing-file backstop in
+  SRenderAction rejected this before the fix too. The assert-log is the gate -
+  the start failure's own text, logged at warn level by the action, exists
+  only once startRender propagates it.
+-->
+<SActionScript version="1" name="render_start_failure">
+
+  <setup project="new"/>
+
+  <actions>
+    <render filename="render_start_failure_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.wav" format="wav" quality="10" expectReject="true"/>
+    <assert-log contains="SRenderAction: render did not start: Failed to open output file"
+                level="warn" minCount="1"/>
+  </actions>
+
+</SActionScript>
