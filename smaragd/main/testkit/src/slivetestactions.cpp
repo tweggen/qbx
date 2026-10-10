@@ -21,6 +21,7 @@
 #include "tw/devices/capture_backend.h"
 #include "tw/graph/tw_freeze_context.h"
 #include "tw/playback/twspeaker.h"
+#include "tw/schedule/capture_revalidator.h"
 
 using namespace strackpath;
 
@@ -268,15 +269,41 @@ QStringList SAssertRenderPolicyAction::knownAttributes() const
 {
     return { QStringLiteral( "liveThreadRefusals" ),
              QStringLiteral( "liveOwnedRefusals" ),
-             QStringLiteral( "minLiveOwnedRefusals" ) };
+             QStringLiteral( "minLiveOwnedRefusals" ),
+             QStringLiteral( "maxNodeRetries" ),
+             QStringLiteral( "maxMissPages" ) };
 }
 
-SApplyResult SAssertRenderPolicyAction::apply( SProject * )
+SApplyResult SAssertRenderPolicyAction::apply( SProject *project )
 {
     const qint64 liveThread = (qint64) twRtThreadGuard::liveThreadRefusals();
     const qint64 liveOwned  = (qint64) SLiveMonitor::liveOwnedRefusals();
 
     bool ok = true;
+    if( maxNodeRetries_ >= 0 || maxMissPages_ >= 0 ) {
+        CaptureRevalidator *sched = project ? project->getRevalidator() : nullptr;
+        if( !sched ) {
+            qWarning() << "assert-render-policy: maxNodeRetries/maxMissPages asked,"
+                          " but the project has no scheduler";
+            return { false, nullptr };
+        }
+        const CaptureRevalidator::GraphStats st = sched->graphStats();
+        qDebug() << "assert-render-policy: scheduler nodesExecuted" << st.nodesExecuted
+                 << "nodeRetries" << st.nodeRetries << "missPages" << st.missPages
+                 << "selfStale" << st.selfStale;
+        if( maxNodeRetries_ >= 0 && (qint64) st.nodeRetries > maxNodeRetries_ ) {
+            qWarning() << "assert-render-policy: nodeRetries" << (qint64) st.nodeRetries
+                       << "exceeds" << maxNodeRetries_
+                       << "- verify-at-publish re-rendered pages";
+            ok = false;
+        }
+        if( maxMissPages_ >= 0 && (qint64) st.missPages > maxMissPages_ ) {
+            qWarning() << "assert-render-policy: missPages" << (qint64) st.missPages
+                       << "exceeds" << maxMissPages_
+                       << "- a render read a page its plan did not declare";
+            ok = false;
+        }
+    }
     if( liveThread > maxLiveThreadRefusals_ ) {
         qWarning() << "assert-render-policy: liveThreadRefusals" << liveThread
                    << "exceeds" << maxLiveThreadRefusals_
@@ -311,6 +338,10 @@ void SAssertRenderPolicyAction::writeXml( QDomElement &elem ) const
     if( minLiveOwnedRefusals_ > 0 )
         elem.setAttribute( "minLiveOwnedRefusals",
                            QString::number( minLiveOwnedRefusals_ ) );
+    if( maxNodeRetries_ >= 0 )
+        elem.setAttribute( "maxNodeRetries", QString::number( maxNodeRetries_ ) );
+    if( maxMissPages_ >= 0 )
+        elem.setAttribute( "maxMissPages", QString::number( maxMissPages_ ) );
 }
 
 bool SAssertRenderPolicyAction::readXml( const QDomElement &elem, int )
@@ -318,6 +349,8 @@ bool SAssertRenderPolicyAction::readXml( const QDomElement &elem, int )
     maxLiveThreadRefusals_ = elem.attribute( "liveThreadRefusals", "0" ).toLongLong();
     maxLiveOwnedRefusals_  = elem.attribute( "liveOwnedRefusals", "0" ).toLongLong();
     minLiveOwnedRefusals_  = elem.attribute( "minLiveOwnedRefusals", "0" ).toLongLong();
+    maxNodeRetries_        = elem.attribute( "maxNodeRetries", "-1" ).toLongLong();
+    maxMissPages_          = elem.attribute( "maxMissPages", "-1" ).toLongLong();
     return true;
 }
 

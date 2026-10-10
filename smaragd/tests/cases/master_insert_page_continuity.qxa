@@ -74,6 +74,11 @@
     <assert-log contains="non-sequential page at 262144 (expected 327680)"
                 minCount="0" maxCount="0"/>
 
+    <!-- The scheduler's own account of the same thing: no page was retried
+         (a retry IS a second render), and every render read only what its
+         plan declared. Project-cumulative, so it covers the inserts above. -->
+    <assert-render-policy maxNodeRetries="0" maxMissPages="0"/>
+
     <!-- And the render is still the material, not silence. -->
     <assert-audio-energy filename="mipc.wav" channel="0"
                          startFrame="48000" frameCount="48000"
