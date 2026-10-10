@@ -94,6 +94,18 @@
     <!-- 3. A second of ordinary playback is the assert-log WINDOW: the window is
          the records since the PREVIOUS action started, and two assert-logs in a
          row share it. -->
+    <!-- 3a. THE RESET HAS TO BE PROVOKED. This case used to get its resets for
+         free: every page of an insert's chain was rendered twice (the
+         scheduler's verify-at-publish retry; fix/stateful-insert-retry), and
+         the second render was a reposition. With that gone, a contiguous
+         readahead resets nothing, the fixture never asks for a restart, and
+         the guard below has nothing to decline. A seek does not help either:
+         the pages it lands on are already frozen. A parameter edit does - it
+         stales the insert's pages, the readahead re-freezes from the
+         playhead's page, which is not the slot's lastEnd_, so the slot resets
+         and the fixture asks. The edit itself is not a restart: it changes
+         neither latency nor parameter count. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.9"/>
     <wait-ms ms="1000"/>
 
     <!-- Pre-fix this window held one of these per poll — about thirty per
