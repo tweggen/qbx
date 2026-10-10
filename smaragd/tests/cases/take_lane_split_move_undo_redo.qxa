@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-146. Split, move and delete on a track that carries a TAKE COLUMN, each
+  step undone AND redone, with a non-default take live throughout.
+
+  WHY THIS CASE EXISTS. The coverage was measured over smaragd/tests/cases
+  while root-causing QBX-146, and this combination was a hole:
+
+      verb           cases   with undo   with redo
+      split-clip        16           3           2
+      move-clip          7           1           0
+      select-take       18           6           0
+      add-take          18           8           0
+
+  delete_clip_undo_restores.qxa does cover undo and redo after a delete, but
+  on a lone file-backed clip. Nothing moved a clip and redid it, nothing redid
+  a take selection, and nothing did any of it with a take column on the same
+  track.
+
+  WHAT IT GUARDS, and the reason each step is undone IMMEDIATELY rather than
+  in one sweep at the end: a wrong inverse is then attributed to the operation
+  that produced it, instead of to whatever happened to run last.
+
+    1. The undo stack stays correct through a take-aware edit sequence.
+    2. The take column is not COLLATERAL. SCut and STakeStack share the
+       clip-window machinery and an edit to one clip has reached the other
+       before (the "one stack" sharing bug take_column_one_shape.qxa gates
+       from the other side), so shape, count and active take are re-checked
+       after every step.
+
+  DELIBERATELY NOT COVERED HERE: deleting the clip at index 0 and redoing.
+  That is QBX-149 — remove-sample is addressed by a POSITIONAL clip index,
+  undo re-adds by APPENDING, so the redo resolves index 0 to a different clip
+  and deletes the wrong one. Asserting the current behaviour would cement a
+  bug; asserting the right behaviour would land a red gate. QBX-149 carries
+  the failing case as its own acceptance criterion. Everything below deletes
+  the HIGHEST index, where no shift occurs.
+
+  Fixture: test_sawtooth.wav, 4 s, 192000 frames, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+-->
+<SActionScript version="1" name="take_lane_split_move_undo_redo">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- SPLIT at 2 s: head = clip 0 (source sec0+sec1), tail = clip 1
+         (source sec2+sec3, srcStart 96000). -->
+    <split-clip clip="0,0" splitTime="96000"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="96000"/>
+
+    <!-- Undo and redo the SPLIT itself, before anything depends on it. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <redo count="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="96000"/>
+
+    <!-- Make the HEAD a take column with a NON-DEFAULT take live. add-take
+         auto-activates what it appends, so take 1 is active. The head is the
+         column so that the delete below can target the highest index and stay
+         clear of QBX-149. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"
+                        activeTake="1"/>
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" activeTake="1"/>
+
+    <!-- MOVE the tail, which is file-backed and must stay undoable. -->
+    <move-clip clip="0,1" destTrack="0" startTime="120000"/>
+    <assert-clip-window clip="0,1" startTime="120000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+
+    <undo count="1"/>
+    <assert-clip-window clip="0,1" startTime="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+
+    <!-- REDO after a move: zero cases did this before. -->
+    <redo count="1"/>
+    <assert-clip-window clip="0,1" startTime="120000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+
+    <!-- Put it back, so the spans below are at known positions. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,1" startTime="96000"/>
+
+    <!-- Baseline. Head on take 1 reads source sec0 at timeline sec0; the tail
+         reads source sec2 at timeline sec2. -->
+    <render filename="tlsmur_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="tlsmur_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="tlsmur_pre.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- DELETE the tail: file-backed, highest index. This is the branch that
+         always worked, and the QBX-146 fix rewrote this function, so it has to
+         keep working. -->
+    <remove-sample trackIndex="0" clipIndex="1" timePos="96000"/>
+
+    <render filename="tlsmur_deleted.wav" format="wav" quality="10"/>
+    <!-- Gone, said by the LENGTH rather than by silence: a clip restored
+         empty would pass a silence assertion. -->
+    <assert-audio-length filename="tlsmur_deleted.wav"
+                         minFrames="96000" maxFrames="96000"/>
+    <!-- ...and the head, the take column, is untouched. -->
+    <assert-audio-energy filename="tlsmur_deleted.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+
+    <!-- UNDO restores the tail with its ORIGINAL window: source sec2 at
+         timeline sec2. A default whole-wave cut would put sec0 (~0.067) here
+         and fail. -->
+    <undo count="1"/>
+    <render filename="tlsmur_restored.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="tlsmur_restored.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="tlsmur_restored.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- REDO AFTER DELETE, asked for by name. Safe at the highest index. -->
+    <redo count="1"/>
+    <render filename="tlsmur_redeleted.wav" format="wav" quality="10"/>
+    <assert-audio-length filename="tlsmur_redeleted.wav"
+                         minFrames="96000" maxFrames="96000"/>
+
+    <!-- Through all of it the take column never moved. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"
+                        activeTake="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

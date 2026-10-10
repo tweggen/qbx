@@ -10,6 +10,7 @@
 #include "app/model/slink.h"
 #include "app/model/sexternfile.h"
 #include "tw/core/twfraction.h"
+#include "tw/core/twlog.h"
 #include <QDomElement>
 
 SRemoveSampleAction::SRemoveSampleAction(const QList<int> &trackPath, int clipIdx,
@@ -86,19 +87,54 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         }
     }
 
+    // DECIDE INVERTIBILITY BEFORE MUTATING (QBX-146). This used to delete the
+    // clip first and then discover it could build no inverse, returning
+    // {true, nullptr} -- a successful, silent, PERMANENT deletion.
+    //
+    // It is worse than merely losing undo. SActionHistory::onApplied_ pushes
+    // nothing for a null inverse, so the undo stack keeps its earlier entries
+    // and the next Ctrl+Z pops an UNRELATED command: undo appears to work
+    // while the content stays gone. That is how this reached the author --
+    // takes recorded on a track, deleted, "it did not come back".
+    //
+    // Only two shapes can be rebuilt: file-backed (SExternFile -> re-add the
+    // sample) and container-backed (a cut over a track -> rebuild the cut).
+    // isPathContainer() is true for exactly SLaneFragment, SStdMixer and
+    // STrack -- so a clip whose content is an STakeStack (a take column) or an
+    // SRecordingContent is NEITHER, and was silently destroyed.
+    const bool canRestoreContainer = !containerPath.isEmpty() && haveWindow;
+    const bool canRestoreFile      = !filePath.isEmpty();
+
+    if( !canRestoreContainer && !canRestoreFile ) {
+        // REFUSE, and say so. A refusal the user cannot see is the same bug
+        // wearing a different face, and this project's rule is that any
+        // refusal is announced rather than silent.
+        //
+        // This is deliberately the CONSERVATIVE half of the fix: nothing is
+        // lost, at the cost of a delete the user has to work around. Giving
+        // these shapes a real inverse -- a restore-take-column action
+        // carrying every take and the selected index -- is the follow-up.
+        const SObject *content = nullptr;
+        if( SClipWindow *w = SClipWindow::of( &clipLink->getSObject() ) ) {
+            content = &w->windowContent();
+        }
+        TW_LOGW( "cut",
+                 "remove-sample: refusing to delete clip %d on '%s' -- its "
+                 "content (%s) is neither file-backed nor a path container, so "
+                 "the deletion could not be undone. QBX-146.",
+                 clipIndex_,
+                 strackpath::qualifiedToString( pathRoot_, trackPath_ )
+                     .toUtf8().constData(),
+                 content ? content->metaObject()->className() : "unknown" );
+        return {false, nullptr};
+    }
+
     delete clipLink;  // Qt will remove from parent, SCut destructor handles cleanup
 
-    if( !containerPath.isEmpty() && haveWindow ) {
+    if( canRestoreContainer ) {
         return {true, new SRestoreContainerClipAction(
                           trackPath_, containerPath, timePos_,
                           srcStart, cutDuration, loopLength, grain )};
-    }
-
-    // Neither file-backed nor container-backed: removed, but nothing can
-    // rebuild it. Report no inverse so the step is marked non-undoable rather
-    // than failing loudly at undo time.
-    if( filePath.isEmpty() ) {
-        return {true, nullptr};
     }
 
     SAddSampleAction *inverse =
