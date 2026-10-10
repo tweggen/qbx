@@ -17,8 +17,8 @@
 //      must fire. On the unfixed dialog it never does: the dialog replaced it.
 //   2. THE DIALOG NOTICES COMPLETION BY ITSELF: once the session stops running
 //      and one more timer tick has passed, the button reads "Close".
-//   3. A FAILED render (cancelled) ends the dialog with "Error: ...", still
-//      with "Close".
+//   3. A FAILED render (cancelled) reports failure through lastSuccess() and
+//      the dialog says "Error: ...", still with "Close".
 //   4. A start() that cannot open its file returns false with the writer's
 //      reason — the text SAppContext::startRender now propagates.
 //
@@ -72,7 +72,7 @@ public:
     QList<QList<int>> getCurrentSelectionPaths() const override { return {}; }
     QString testOutputDir() const override { return QString(); }
     bool ensureOutputDirExists() const override { return false; }
-    void startRender( const audio::RenderParams & ) override {}
+    bool startRender( const audio::RenderParams &, QString * ) override { return false; }
     bool isRenderingActive() const override { return false; }
     void setPlaybackRunning( bool ) override {}
     offset_t getGlobalLocatorPos() const override { return 0; }
@@ -148,6 +148,7 @@ void testSuccessKeepsCallersOnComplete( const std::shared_ptr<twComponent> &root
     check( completed.load(),
            "QBX-145: the CALLER's onComplete ran (the dialog no longer replaces it)" );
     check( completedOk.load(), "...and reported success" );
+    check( session.lastSuccess(), "lastSuccess() is true after a good render" );
 
     QPushButton *b = closeButton( dlg );
     check( b && b->text() == QStringLiteral("Close"),
@@ -178,6 +179,7 @@ void testCancelledRenderReportsFailure( const std::shared_ptr<twComponent> &root
 
     check( pumpUntilDone( session, 60000 ), "the cancelled render ends" );
     check( completed.load(), "the caller's onComplete ran for the cancelled render" );
+    check( !session.lastSuccess(), "lastSuccess() is false after a cancel" );
 
     QPushButton *b = closeButton( dlg );
     check( b && b->text() == QStringLiteral("Close"),

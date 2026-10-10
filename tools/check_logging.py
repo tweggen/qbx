@@ -39,6 +39,7 @@ ALLOW_FILES = {
     os.path.join("smaragd", "main", "testkit", "src", "preview_container_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "preview_envelope_test.cpp"),
     os.path.join("smaragd", "main", "testkit", "src", "project_channels_test.cpp"),
+    os.path.join("smaragd", "main", "testkit", "src", "render_progress_dialog_test.cpp"),
 }
 
 # Directory fragments that are exempt wholesale: test drivers print results.

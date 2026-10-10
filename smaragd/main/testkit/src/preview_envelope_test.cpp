@@ -744,7 +744,7 @@ int main( int argc, char **argv )
             QList<QList<int>> getCurrentSelectionPaths() const override { return {}; }
             QString testOutputDir() const override { return QString(); }
             bool ensureOutputDirExists() const override { return false; }
-            void startRender( const audio::RenderParams & ) override {}
+            bool startRender( const audio::RenderParams &, QString * ) override { return false; }
             bool isRenderingActive() const override { return false; }
             void setPlaybackRunning( bool ) override {}
             offset_t getGlobalLocatorPos() const override { return 0; }
@@ -977,7 +977,7 @@ int main( int argc, char **argv )
             QList<QList<int>> getCurrentSelectionPaths() const override { return {}; }
             QString testOutputDir() const override { return QString(); }
             bool ensureOutputDirExists() const override { return false; }
-            void startRender( const audio::RenderParams & ) override {}
+            bool startRender( const audio::RenderParams &, QString * ) override { return false; }
             bool isRenderingActive() const override { return false; }
             void setPlaybackRunning( bool ) override {}
             offset_t getGlobalLocatorPos() const override { return 0; }

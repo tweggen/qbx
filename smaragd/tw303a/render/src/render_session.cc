@@ -64,7 +64,8 @@ bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const Render
     // valid, well-formed, zero-frame file — which is what falling through here
     // produces (the writer opens, writes its header, and closes with 0 frames).
     // Rejecting it instead used to make SRenderAction report SUCCESS with no
-    // file on disk at all, because startRender()'s failure is not propagated.
+    // file on disk at all, because startRender()'s failure was not propagated
+    // then (it is since QBX-145).
     if (params.endTimeSec < params.startTimeSec) {
         lastError_ = "Invalid time range";
         return false;
@@ -129,8 +130,12 @@ bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const Render
     }
 
     // Start render thread
+    // running_ goes true HERE, on the caller's thread and before the thread
+    // exists, so a poller that starts after start() returned true can never
+    // see "not running" before the render has even begun.
     samplesWritten_ = 0;
     cancelRequested_ = false;
+    lastSuccess_ = false;
     running_ = true;
 
     try {
@@ -164,6 +169,10 @@ std::size_t RenderSession::totalSamples() const {
 
 const char *RenderSession::errorMessage() const {
     return lastError_.c_str();
+}
+
+bool RenderSession::lastSuccess() const {
+    return lastSuccess_;
 }
 
 void RenderSession::renderThreadMain() {
@@ -393,6 +402,7 @@ void RenderSession::renderThreadMain() {
     }
 
     lastError_ = errorMsg;
+    lastSuccess_.store(success);
     running_ = false;
 }
 
