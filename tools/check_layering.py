@@ -439,9 +439,15 @@ APP_ENG = {
     # clip travels. Nothing else in testkit names tw/sources, and a VERB that
     # wanted to should be questioned: a verb reads the MODEL, and the model
     # already hands out its source through SObject::getRandomSource().
+    # testkit + render since QBX-145, and for ONE test only:
+    # render_progress_dialog_test drives a REAL audio::RenderSession under the
+    # REAL SRenderProgressDialog, because what it gates is the contract
+    # between those two (the dialog polls and leaves the caller's onComplete
+    # alone) and a stub session would assert the stub. actions and servicesui,
+    # which testkit already reaches, hold the same edge.
     'testkit':        _ENG_BASE | {'analysis', 'devices', 'events', 'metering',
-                                   'pages', 'playback', 'schedule', 'sidecar',
-                                   'sinks', 'sources'},
+                                   'pages', 'playback', 'render', 'schedule',
+                                   'sidecar', 'sinks', 'sources'},
 }
 
 # A file under <module>/tools/ is NOT part of that module's library.

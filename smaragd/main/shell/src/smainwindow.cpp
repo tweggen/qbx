@@ -1276,8 +1276,18 @@ void SMainWindow::onRenderTriggered()
     if (dialog.exec() == QDialog::Accepted) {
         audio::RenderParams params = dialog.getRenderParams();
 
-        // Start render first (creates/resets the RenderSession)
-        SApplication::app().startRender(params);
+        // Start render first (creates/resets the RenderSession). A render that
+        // did not start gets its reason shown and NO progress dialog: that
+        // dialog waits for a render to finish, and one that never ran never
+        // does -- an MP3 export used to sit at "0%" forever (QBX-145).
+        QString startError;
+        if (!SApplication::app().startRender(params, &startError)) {
+            QMessageBox::warning(this, QGuiApplication::applicationDisplayName(),
+                                 tr("The render could not be started.\n\n%1")
+                                     .arg(startError.isEmpty()
+                                              ? tr("Unknown error") : startError));
+            return;
+        }
 
         // Show progress dialog and start rendering
         SRenderProgressDialog *progressDialog = new SRenderProgressDialog(

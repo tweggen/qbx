@@ -24,9 +24,18 @@ Invariants:
    zero-length render opens the writer, writes its header and closes with 0
    frames — a valid, well-formed, empty file. That is the honest render of an
    empty arrangement, and it is why the caller cannot mistake "nothing to
-   render" for "the render failed" (it used to get neither a file nor an
-   error, because start()'s failure is not propagated through
-   SAppContext::startRender).
+   render" for "the render failed". A start() that DOES fail returns false
+   with errorMessage() set, and that failure is propagated:
+   SAppContext::startRender returns false and hands the text back (QBX-145),
+   the <render> action logs it at warn level and rejects, and the GUI shows it
+   instead of opening a progress dialog that would wait forever. (It used not
+   to be: an MP3 export whose writer failed to open stalled at "0%".)
+9. A finished render's outcome is lastSuccess(), stored BEFORE running_ is
+   cleared, so a poller that sees isRunning() turn false reads the outcome of
+   that render. running_ is set true in start() before the thread is spawned,
+   so a poller never sees "finished" before "started". UI dialogs POLL these
+   (THREADING.md rule 1) and never reassign onProgress/onComplete, which
+   belong to start()'s caller and are read by the render thread (QBX-145).
 6. The frame count is ROUNDED from the extent, not truncated: the extent is a
    frame count divided by the sample rate, and a ratio that is not exactly
    representable would otherwise land one frame short of the arrangement.

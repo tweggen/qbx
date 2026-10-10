@@ -104,6 +104,16 @@ public:
     std::size_t samplesWritten() const;
     std::size_t totalSamples() const;
     const char *errorMessage() const;
+    // The outcome of the LAST render that ran to the end of its thread. It is
+    // stored before running_ is cleared, so a poller that sees isRunning()
+    // turn false reads the outcome of that render, not a stale one -- the
+    // ordering is spelled out as an atomic rather than left implicit in the
+    // store order of a std::string and an atomic<bool> (QBX-145). A UI
+    // dialog POLLS this; it must not take over onComplete (THREADING.md
+    // rule 1), which belongs to whoever called start().
+    bool lastSuccess() const;
+    // The rate start() was given; valid once start() has returned true.
+    std::uint32_t sampleRate() const { return sampleRate_; }
 
     // Callbacks (called from render thread, must be thread-safe)
     std::function<void(std::size_t written, std::size_t total)> onProgress;
@@ -126,6 +136,7 @@ private:
     std::atomic<std::size_t> samplesWritten_{0};
     std::atomic<bool> running_{false};
     std::atomic<bool> cancelRequested_{false};
+    std::atomic<bool> lastSuccess_{false};
     std::unique_ptr<std::thread> renderThread_;
     std::string lastError_;
     std::unique_ptr<AudioFileWriter> writer_;
