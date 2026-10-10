@@ -38,6 +38,8 @@ private:
     void createExtentGroup();
     void createOutputGroup();
     void updateQualityUI();
+    // Whether THIS project can be rendered to MP3; `why` gets the reason if not.
+    bool mp3Available(QString *why) const;
     void syncPathExtension();
     QString extensionForSelectedFormat() const;
     bool validateInputs();

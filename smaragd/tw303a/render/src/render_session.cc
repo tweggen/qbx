@@ -12,15 +12,12 @@
 
 namespace audio {
 
-// Forwarders to the sinks-level queries declared in tw/sinks/audio_file_writer.h.
-// They exist so the APP can ask without including tw/sinks, which
+// Forwarder to the sinks-level probe declared in tw/sinks/audio_file_writer.h.
+// It exists so the APP can ask without including tw/sinks, which
 // check_layering.py does not permit it to do -- see render_session.h.
-bool mp3ExportAvailable() {
-    return mp3WriterAvailable();
-}
-
-std::string mp3LibraryCandidates() {
-    return mp3WriterCandidates();
+bool mp3ExportAvailable(std::uint32_t sampleRate, std::uint32_t channels,
+                        std::string *reason) {
+    return mp3EncoderAvailable(sampleRate, channels, reason);
 }
 
 RenderSession::RenderSession() {}
@@ -123,6 +120,11 @@ bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const Render
     config.sampleRate = sampleRate_;
     config.channels = renderChannels_;
     config.sampleType = twSampleType::Float32;
+
+    // Before open(): the writers configure their encoder from it there (MP3's
+    // bitrate cannot change once LAME has seen data). What the number means
+    // per format is on RenderParams::quality.
+    writer_->setQuality(params_.quality);
 
     if (!writer_->open(params_.outputPath, config)) {
         lastError_ = std::string("Failed to open output file: ") + writer_->errorMessage();
@@ -342,8 +344,13 @@ void RenderSession::renderThreadMain() {
                 }
             }
 
-            // Write to sink — one block, not one call per frame.
-            fileSink_->writeFrames(block.data(), toRender, renderChannels_);
+            // Write to sink — one block, not one call per frame. A false return
+            // means a write to the FILE has already failed (FileSink keeps the
+            // first failure, sticky): stop rendering pages nobody can write.
+            // The failure is reported after flush() below.
+            if (!fileSink_->writeFrames(block.data(), toRender, renderChannels_)) {
+                break;
+            }
             samplesWrittenVal += toRender;
 
             samplesWritten_.store(samplesWrittenVal);
@@ -373,7 +380,15 @@ void RenderSession::renderThreadMain() {
             fileSink_->flush();
         }
 
-        if (cancelRequested_) {
+        // QBX-145: a failed write fails the render. FileSink used to discard
+        // the writer's result, so a full disk left a truncated file behind a
+        // render reported as successful. Checked AFTER flush(), because the
+        // blocks still buffered are written there and can fail there too.
+        if (fileSink_ && fileSink_->hasWriteError()) {
+            success = false;
+            errorMsg = "Failed to write output file: " + fileSink_->writeError();
+            TW_LOGW( "render", "[RenderSession] %s", errorMsg.c_str() );
+        } else if (cancelRequested_) {
             success = false;
             errorMsg = "Render cancelled";
         }
@@ -384,9 +399,16 @@ void RenderSession::renderThreadMain() {
         TW_LOGD( "render", "[RenderSession] Exception: %s", errorMsg.c_str() );
     }
 
-    // Close file and clean up
+    // Close file and clean up. close() can fail too -- it is where libsndfile
+    // flushes LAME and writes the MP3 Info frame, and where a WAV's header
+    // gets its final sizes -- and a render whose file did not close is not a
+    // success. The first error wins: a write failure is the cause, not this.
     if (writer_) {
-        writer_->close();
+        if (!writer_->close() && success) {
+            success = false;
+            errorMsg = std::string("Failed to finish output file: ") + writer_->errorMessage();
+            TW_LOGW( "render", "[RenderSession] %s", errorMsg.c_str() );
+        }
     }
 
     TW_LOGD( "render", "[RenderSession] Render complete. Success: %s",
