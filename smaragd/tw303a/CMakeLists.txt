@@ -1318,3 +1318,10 @@ set_tests_properties(playback_test PROPERTIES RUN_SERIAL TRUE)
 # tw/plugins; it needs nothing from the engine itself.
 tw_module_test(scheduled_insert_continuity_test playback/tests/scheduled_insert_continuity_test.cc tw_schedule tw_pages tw_plugins)
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)
+# QBX-145: render_test reads its MP3 render back to check length and energy,
+# so it links libsndfile itself (a third-party link, not a module edge).
+if(SMARAGD_WINDOWS)
+    target_link_libraries(render_test PRIVATE SndFile::sndfile)
+else()
+    target_link_libraries(render_test PRIVATE PkgConfig::SNDFILE)
+endif()

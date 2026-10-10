@@ -96,6 +96,14 @@ public:
         pruneScope_ = std::move(scope);
     }
 
+    // Where start() gets its file writer. Unset (the default) is
+    // createAudioFileWriter(params.format), which is what every production
+    // caller wants. It exists so a test can hand the session a writer that
+    // FAILS mid-stream (QBX-145): there is no portable way to make a real disk
+    // fail on cue, and the failure path is exactly what was never exercised.
+    using WriterFactory = std::function<std::unique_ptr<AudioFileWriter>(AudioFormat)>;
+    void setWriterFactory(WriterFactory factory) { writerFactory_ = std::move(factory); }
+
     // Request cancellation. Safe to call from any thread.
     void requestCancel();
 
@@ -143,6 +151,7 @@ private:
     std::unique_ptr<FileSink> fileSink_;        // Buffered output with futures
     CaptureRevalidator *scheduler_ = nullptr;   // Stage 4: borrowed, optional
     std::vector<std::weak_ptr<twComponent>> pruneScope_;   // M1b bounce mode
+    WriterFactory writerFactory_;               // QBX-145: test seam, normally unset
 };
 
 }  // namespace audio
