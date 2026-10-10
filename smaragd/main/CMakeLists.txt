@@ -1147,6 +1147,21 @@ add_test(NAME project_channels_test COMMAND project_channels_test)
 set_tests_properties(project_channels_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# QBX-145: SRenderProgressDialog POLLS the RenderSession and leaves its
+# onComplete/onProgress alone. The old dialog overwrote the caller's onComplete
+# (SApplication::startRender's resume of the background lane and the live
+# monitor) after the render thread had started; this renders a real SProject's
+# root to a temp WAV under the dialog and checks the caller's callback still
+# fires and the dialog ends on "Close". Same shape as project_channels_test.
+add_executable(render_progress_dialog_test testkit/src/render_progress_dialog_test.cpp)
+target_link_libraries(render_progress_dialog_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME render_progress_dialog_test COMMAND render_progress_dialog_test)
+set_tests_properties(render_progress_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # SLaneFragment (proposal 41 M1): a path container with no track identity.
 # AC1.1 (isPathContainer()/isLane() split, unity-sum twTrackMix), AC1.2
 # (structural absence of fader/inserts/instrument/solo/arm/meters/automation),
