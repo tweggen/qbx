@@ -78,6 +78,14 @@ void SApplication::setCurrentProject( SProject *cp )
     // than the only one -- which is why this sits on the setter and not on a
     // close handler.
     if( currentProject_ != cp ) smediadrop::projectChanged();
+    // THE LIVE LANES COME DOWN BEFORE THE POINTER MOVES, not in
+    // projectChanged() below. Their teardown reaches the closure's tracks and
+    // the project's mixer through getCurrentProject(); once it answers for the
+    // next project (or for none) there is nothing left to hand back, and the
+    // pump and the demand tick go on reading tracks the caller is about to
+    // delete - the File -> Close SIGSEGV in appendTrackSignature. Guarded on a
+    // real change: a load calls this a second time with the same project.
+    if( currentProject_ != cp && liveMonitor_ ) liveMonitor_->projectAboutToChange();
     currentProject_ = cp;
     // Push the project's sample rate / candidate set into the engine. For a
     // loaded project this runs again after the loader has populated these from

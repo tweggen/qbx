@@ -527,6 +527,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertunsavedchangesaction.h
     testkit/include/app/testkit/ssavewindowlayoutaction.h
     testkit/include/app/testkit/sassertmasterinputsaction.h
+    testkit/include/app/testkit/scloseprojectaction.h
     testkit/include/app/testkit/sdrainpendingdeletesaction.h
     testkit/include/app/testkit/sassertsystemlaneaction.h
     testkit/include/app/testkit/sassertsendsaction.h
@@ -587,6 +588,7 @@ set(APP_UI_FILES
     testkit/src/sassertunsavedchangesaction.cpp
     testkit/src/ssavewindowlayoutaction.cpp
     testkit/src/sassertmasterinputsaction.cpp
+    testkit/src/scloseprojectaction.cpp
     testkit/src/sdrainpendingdeletesaction.cpp
     testkit/src/sassertsystemlaneaction.cpp
     testkit/src/sassertsendsaction.cpp

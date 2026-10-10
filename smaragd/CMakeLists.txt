@@ -533,7 +533,11 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               # frozen inputs (a folder's unarmed children; under Closure every
               # unarmed top-level track). Needs a real input so the lane stays
               # live across the stop at all.
-              live_stopped_folder_silent live_stopped_closure_silent)
+              live_stopped_folder_silent live_stopped_closure_silent
+              # Closing a project while a lane is live must take the lane down
+              # with it (the File -> Close SIGSEGV). Needs a real input so the
+              # lane is actually running when the project dies.
+              live_monitor_project_close)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE
