@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-146. Deleting a clip whose content is a TAKE COLUMN destroyed it
+  permanently and silently. This case is the gate on that never happening
+  again.
+
+  THE DEFECT, as it reached the author: "multiple takes on a track, then
+  split/delete operations, and after deleting too much, it did not come back."
+
+  SRemoveSampleAction could build an inverse for exactly two clip shapes —
+  file-backed (SExternFile -> re-add the sample) and container-backed
+  (isPathContainer() -> rebuild the cut). isPathContainer() is true for exactly
+  SLaneFragment, SStdMixer and STrack, so a clip holding an STakeStack is
+  NEITHER. It deleted the clip and then returned {true, nullptr}: success, no
+  inverse, nothing recoverable.
+
+  WHY IT PRESENTED AS A BROKEN UNDO RATHER THAN AN ERROR. With a null inverse
+  SActionHistory::onApplied_ pushes nothing, so the undo stack keeps its
+  EARLIER entries. Ctrl+Z then pops an unrelated command and something visibly
+  changes, while the takes stay gone — undo looks like it works and the
+  content never returns.
+
+  THE FIX GATED HERE is the conservative half: decide invertibility BEFORE
+  mutating, and refuse with an announcement rather than destroying. Giving
+  these shapes a real inverse is a separate change; until it lands, a user who
+  cannot delete a take column has lost nothing, and the log says why.
+
+  Fixture: test_sawtooth.wav, 4 s, 192000 frames, unique RMS per source second:
+    sec0 ~0.067, sec1 ~0.176, sec2 ~0.291, sec3 ~0.405
+
+  The added take reads from source 96000, so take 1 puts source sec2 (~0.291)
+  at timeline sec0, where take 0 would put sec0 (~0.067). The audio therefore
+  says WHICH take is active, not merely that something is audible — a fixture
+  on which the correct and the broken behaviour differ.
+-->
+<SActionScript version="1" name="take_delete_refused_not_silent">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Make the clip a TAKE COLUMN. One add-take gives two takes (the
+         original becomes take 0) and AUTO-ACTIVATES the one it appends, so
+         take 1 — the non-default take — is live from here on. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+
+    <!-- The precondition of the whole defect: the content really is an
+         STakeStack, direct shape. If this ever stops holding, the case below
+         is testing something else and must be re-read. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"
+                        activeTake="1"/>
+
+    <!-- Belt and braces: ask for take 1 explicitly, which is what the author
+         did by hand ("selection of non-default lane"). -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" activeTake="1"/>
+
+    <!-- Baseline. ~0.291 at timeline sec0 is source sec2, i.e. take 1. Take 0
+         would read ~0.067 here and fail this. -->
+    <render filename="tdr_pre.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="tdr_pre.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <!-- THE DEFECT. Before the fix this SUCCEEDED and the column was gone for
+         good. It must now be refused. -->
+    <remove-sample trackIndex="0" clipIndex="0" timePos="0"
+                   expectReject="true"/>
+
+    <!-- ...and the refusal must be ANNOUNCED. A silent refusal is the same
+         bug wearing a different face: the user would press Delete, see
+         nothing happen, and have no idea why. -->
+    <assert-log contains="remove-sample: refusing to delete" minCount="1"/>
+
+    <!-- The column is untouched: still two takes, still the direct shape,
+         still on take 1. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"
+                        activeTake="1"/>
+
+    <!-- And still AUDIBLE, with the same take live. Model state alone would
+         pass on a clip that survived but lost its content. -->
+    <render filename="tdr_post.wav" format="wav" quality="10"/>
+    <assert-audio-energy filename="tdr_post.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
