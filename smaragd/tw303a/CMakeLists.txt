@@ -1259,6 +1259,13 @@ tw_module_test(wide_graph_test              schedule/tests/wide_graph_test.cc   
 # include path that reaches it.
 target_include_directories(wide_graph_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/graph/tests)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
+
+# tw_sinks's first test. MP3 export dlopens libmp3lame rather than linking it,
+# so its candidate list is the whole feature's availability -- and the list had
+# silently omitted libmp3lame-0.dll, the name vcpkg and MSYS2 install, which is
+# the name this build deploys next to smaragd.exe. A string test, so it needs no
+# encoder present and runs in CI.
+tw_module_test(mp3_candidates_test          sinks/tests/test_mp3_candidates.cc          tw_sinks)
 tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
 tw_module_test(groove_test                  sidecar/tests/groove_test.cc                tw_sidecar)
 # The M0 fixture corpus (proposal 40) is read from the source tree, not

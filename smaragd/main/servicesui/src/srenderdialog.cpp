@@ -1,12 +1,14 @@
 #include "app/servicesui/srenderdialog.h"
 
-// Forward declare MP3Writer for checking availability
-namespace audio {
-class MP3Writer {
-public:
-    static bool isAvailable();
-};
-}
+// MP3 export availability is a RUNTIME question -- libmp3lame is dlopen'd, not
+// linked -- asked through tw/render, which is an edge app/servicesui is allowed
+// (check_layering.py). tw/sinks, where the writer actually lives, is NOT.
+//
+// This file used to hand-write its own
+// `class MP3Writer { static bool isAvailable(); }` to get round that: a
+// duplicate declaration that linked only because the member was static. The
+// workaround was wrong, but the constraint behind it was real.
+#include "tw/render/render_session.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -137,10 +139,12 @@ void SRenderDialog::createFormatGroup() {
     formatGroup_->addButton(mp3Radio_, 2);
 
     // Check if MP3 is available
-    if (!audio::MP3Writer::isAvailable()) {
+    if (!audio::mp3ExportAvailable()) {
         mp3Radio_->setEnabled(false);
         mp3Radio_->setToolTip(
-            "MP3 codec not found. Copy libmp3lame.dll/dylib/so to application directory.");
+            QString( "MP3 codec not found. Looked for: %1 \u2014 in the application "
+                     "directory, then the system library path." )
+                .arg( QString::fromStdString( audio::mp3LibraryCandidates() ) ) );
     }
 }
 
@@ -283,9 +287,11 @@ bool SRenderDialog::validateInputs() {
         return false;
     }
 
-    if (mp3Radio_->isChecked() && !audio::MP3Writer::isAvailable()) {
-        QMessageBox::warning(this, "Error",
-                             "MP3 codec not available. Copy libmp3lame to app directory.");
+    if (mp3Radio_->isChecked() && !audio::mp3ExportAvailable()) {
+        QMessageBox::warning(
+            this, "Error",
+            QString( "MP3 codec not available. Looked for: %1" )
+                .arg( QString::fromStdString( audio::mp3LibraryCandidates() ) ) );
         return false;
     }
 
