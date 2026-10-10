@@ -9,10 +9,11 @@
 SRestoreContainerClipAction::SRestoreContainerClipAction(
         const QList<int> &lanePath, const QList<int> &containerPath,
         offset_t timePos, const Fraction &srcStart, length_t cutDuration,
-        length_t loopLength, const twGrainParams &grain )
+        length_t loopLength, const twGrainParams &grain, int restoreAtIndex )
     : lanePath_( lanePath ), containerPath_( containerPath ),
       timePos_( timePos ), srcStart_( srcStart ), cutDuration_( cutDuration ),
-      loopLength_( loopLength ), grain_( grain )
+      loopLength_( loopLength ), grain_( grain ),
+      restoreAtIndex_( restoreAtIndex )
 {
 }
 
@@ -45,6 +46,17 @@ SApplyResult SRestoreContainerClipAction::apply( SProject *project )
     SLink *link = new SLink( *cut, nullptr );
     link->setStartTime( timePos_ );
     link->setParent( lane );
+
+    // QBX-149: put the clip back where it WAS, not merely back. Appending
+    // leaves every stored positional clip index meaning a different clip, so a
+    // redo of the delete this action inverts would destroy the wrong one.
+    // moveChildToIndex is a plain move of the explicit childOrder_ list --
+    // parentage and refcounts untouched, no childObject signals -- and it
+    // clamps, so a stale index cannot put the clip somewhere illegal.
+    if( restoreAtIndex_ >= 0 ) {
+        lane->moveChildToIndex( lane->childCount() - 1,
+                                      restoreAtIndex_ );
+    }
 
     if( lane->indexOfChild( link ) < 0 ) {
         return {false, nullptr};

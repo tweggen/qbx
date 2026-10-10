@@ -10,18 +10,20 @@
 #include <QDomElement>
 
 SAddSampleAction::SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
-                                   offset_t timePos)
-    : trackPath_(trackPath), filePath_(filePath), timePos_(timePos)
+                                   offset_t timePos, int restoreAtIndex)
+    : trackPath_(trackPath), filePath_(filePath), timePos_(timePos),
+      restoreAtIndex_(restoreAtIndex)
 {
 }
 
 SAddSampleAction::SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
                                    offset_t timePos,
                                    const Fraction &srcStart, length_t cutDuration,
-                                   length_t loopLength, const twGrainParams &grain)
+                                   length_t loopLength, const twGrainParams &grain,
+                                   int restoreAtIndex)
     : trackPath_(trackPath), filePath_(filePath), timePos_(timePos),
       hasWindow_(true), srcStart_(srcStart), cutDuration_(cutDuration),
-      loopLength_(loopLength), grain_(grain)
+      loopLength_(loopLength), grain_(grain), restoreAtIndex_(restoreAtIndex)
 {
 }
 
@@ -85,6 +87,17 @@ SApplyResult SAddSampleAction::apply(SProject *project)
     // Now parent the link to the track (safe: SLink is fully constructed).
     cutLink->setParent(track);
 
+    // QBX-149: put the clip back where it WAS, not merely back. Appending
+    // leaves every stored positional clip index meaning a different clip, so a
+    // redo of the delete this action inverts would destroy the wrong one.
+    // moveChildToIndex is a plain move of the explicit childOrder_ list --
+    // parentage and refcounts untouched, no childObject signals -- and it
+    // clamps, so a stale index cannot put the clip somewhere illegal.
+    if( restoreAtIndex_ >= 0 ) {
+        track->moveChildToIndex( track->childCount() - 1,
+                                      restoreAtIndex_ );
+    }
+
     // Find the newly created clip in the track's children to get its index.
     int clipIndex = track->indexOfChild(cutLink);
     if (clipIndex < 0) {
@@ -112,10 +125,20 @@ void SAddSampleAction::writeXml(QDomElement &elem) const
         elem.setAttribute("grainSize", QString::number((qulonglong)grain_.grainSize));
         elem.setAttribute("crossfade", QString::number((qulonglong)grain_.crossfade));
     }
+    // Written only when SET, so a plain add-sample and every existing .qxa and
+    // golden serialize byte-identically (QBX-149). It is only ever non-default
+    // on a live inverse, which is never read back from XML -- but a
+    // half-serialized action is a trap for the next reader, so it round-trips.
+    if (restoreAtIndex_ >= 0) {
+        elem.setAttribute("restoreAtIndex", restoreAtIndex_);
+    }
 }
 
 bool SAddSampleAction::readXml(const QDomElement &elem, int /*version*/)
 {
+    restoreAtIndex_ = elem.hasAttribute("restoreAtIndex")
+                          ? elem.attribute("restoreAtIndex").toInt()
+                          : -1;
     // Sniff the spelling rather than key off formatVersion(): pre-existing .qxa
     // scripts carry no version attribute, and `trackIndex` is exactly a
     // one-element path.
