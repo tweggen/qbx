@@ -90,7 +90,8 @@ bool RenderSession::start(std::shared_ptr<twComponent> synthOutput, const Render
         std::llround(params_.startTimeSec * static_cast<double>(sampleRate_)));
 
     // Create writer for the selected format
-    writer_ = createAudioFileWriter(params_.format);
+    writer_ = writerFactory_ ? writerFactory_(params_.format)
+                             : createAudioFileWriter(params_.format);
     if (!writer_) {
         lastError_ = "Unsupported audio format";
         return false;
