@@ -123,6 +123,12 @@ private:
     // wants the second must say so; defaulting to 0 keeps every existing case
     // meaning exactly what it meant.
     qint64 minLiveOwnedRefusals_  = 0;
+    // The dataflow scheduler's verify-at-publish counters, project-cumulative
+    // (CaptureRevalidator::graphStats()). -1 = not checked, so every existing
+    // case means what it meant. fix/stateful-insert-retry: a retry re-renders a
+    // page, which resets a stateful plugin; a miss is a planner bug.
+    qint64 maxNodeRetries_ = -1;
+    qint64 maxMissPages_   = -1;
 };
 
 /**
