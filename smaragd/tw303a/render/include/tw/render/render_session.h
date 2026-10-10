@@ -18,25 +18,24 @@ class CaptureRevalidator;
 
 namespace audio {
 
-// Whether a render with AudioFormat::MP3 can actually run. MP3 export dlopens
-// libmp3lame rather than linking it, so this is a RUNTIME question, and the UI
-// has to ask it before offering the format.
+// Whether a render with AudioFormat::MP3 can run at this sample rate and width,
+// and if not, why (`reason`, a sentence for a tooltip).
+//
+// QBX-145 (2026-10-10): MP3 is written by libsndfile now, not by a dlopen'd
+// libmp3lame, so this is no longer "is a DLL beside the executable". It is:
+// does the linked libsndfile have its MPEG encoder (asked by opening one on a
+// discard virtual file), does the project have one or two channels, and is its
+// rate an MPEG rate. The render neither resamples nor folds channels, so a
+// 96 kHz or a 6-channel project cannot be exported to MP3 as it stands.
 //
 // Declared HERE, in render, rather than only in tw/sinks, because the app may
 // include tw/render and may NOT include tw/sinks -- check_layering.py's edge
 // set gives app/servicesui {core, devices, graph, playback, plugins, record,
-// render}. srenderdialog.cpp used to hand-write its own
-// `class MP3Writer { static bool isAvailable(); }` to get round exactly that,
-// and the first attempt at this fix reached for tw/sinks directly and was
-// correctly rejected by the checker.
-//
+// render}. srenderdialog.cpp once hand-wrote its own
+// `class MP3Writer { static bool isAvailable(); }` to get round exactly that.
 // It also reads better: the dialog's business is a RENDER, not a file writer.
-bool mp3ExportAvailable();
-
-// The library names that were tried, comma-separated, so a failure can say what
-// it looked for rather than telling the user to copy a file the build may
-// already have deployed under another name.
-std::string mp3LibraryCandidates();
+bool mp3ExportAvailable(std::uint32_t sampleRate, std::uint32_t channels,
+                        std::string *reason = nullptr);
 
 struct RenderParams {
     enum class Extent { EntireProject, TimeSelection };
@@ -45,7 +44,15 @@ struct RenderParams {
     double startTimeSec = 0.0;
     double endTimeSec = 0.0;
     AudioFormat format = AudioFormat::WAV;
-    int quality = 6;  // 0-10 for OGG
+    // The format's quality knob (QBX-145; until then it reached no writer, so
+    // the dialog's OGG slider and MP3 bitrate box did nothing):
+    //   MP3  bitrate in kbps, 128..320 (clamped). Values <= 10 are OGG-scale
+    //        numbers -- this default, and SRenderAction's default of 10 -- and
+    //        mean "the default bitrate", 192 kbps, never 10 kbps.
+    //   OGG  Vorbis VBR quality 0..10 (clamped).
+    //   WAV  ignored. The file is 16-bit PCM whatever the dialog's bit-depth
+    //        box says; changing that is not part of QBX-145.
+    int quality = 6;
     std::string outputPath;
 
     // Channels in the OUTPUT FILE (proposal 36 B5). This was hard-coded 2 in

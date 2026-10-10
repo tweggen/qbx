@@ -588,12 +588,11 @@ tw_module(sinks
         sinks/src/audio_file_writer.cc
         sinks/src/file_sink.cc
         sinks/src/playback_sink.cc
-        sinks/src/wav_writer.cc
-        sinks/src/wav_writer.h
+        sinks/src/sndfile_writer.cc
+        sinks/src/sndfile_writer.h
         sinks/src/ogg_writer.cc
         sinks/src/ogg_writer.h
-        sinks/src/mp3_writer.cc
-        sinks/src/mp3_writer.h
+        sinks/src/utf8_path.h
     DEPS tw_core
 )
 
@@ -1260,12 +1259,21 @@ tw_module_test(wide_graph_test              schedule/tests/wide_graph_test.cc   
 target_include_directories(wide_graph_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/graph/tests)
 tw_module_test(sidecar_test                 sidecar/tests/sidecar_test.cc               tw_sidecar)
 
-# tw_sinks's first test. MP3 export dlopens libmp3lame rather than linking it,
-# so its candidate list is the whole feature's availability -- and the list had
-# silently omitted libmp3lame-0.dll, the name vcpkg and MSYS2 install, which is
-# the name this build deploys next to smaragd.exe. A string test, so it needs no
-# encoder present and runs in CI.
-tw_module_test(mp3_candidates_test          sinks/tests/test_mp3_candidates.cc          tw_sinks)
+# tw_sinks's test (QBX-145). It replaced mp3_candidates_test, a string test over
+# the dlopen candidate list of an MP3 writer whose open() always failed -- it
+# passed for as long as MP3 export was broken. MP3 now goes through libsndfile
+# (SF_FORMAT_MPEG), so this writes a sine, reads it back through libsndfile and
+# checks length and energy, the writer's refusals (>2 channels, non-MPEG rates),
+# that the availability probe agrees with them, that the bitrate reaches the
+# encoder, and (Windows) that every writer opens a non-ANSI UTF-8 path. It needs
+# a libsndfile built with MPEG support, which is the same libsndfile MP3 import
+# (mp3_sample_import.qxa) already requires on every platform.
+tw_module_test(mp3_writer_test              sinks/tests/test_mp3_writer.cc              tw_sinks)
+if(SMARAGD_WINDOWS)
+    target_link_libraries(mp3_writer_test PRIVATE SndFile::sndfile)
+else()
+    target_link_libraries(mp3_writer_test PRIVATE PkgConfig::SNDFILE)
+endif()
 tw_module_test(analyzers_test               sidecar/tests/analyzers_test.cc             tw_sidecar)
 tw_module_test(groove_test                  sidecar/tests/groove_test.cc                tw_sidecar)
 # The M0 fixture corpus (proposal 40) is read from the source tree, not

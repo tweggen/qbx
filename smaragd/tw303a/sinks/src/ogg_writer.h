@@ -24,7 +24,8 @@ public:
 
     const char *errorMessage() const override;
 
-    void setQuality(int quality);  // 0-10, default 6
+    // Vorbis VBR quality 0..10 (clamped), default 6. Read at open().
+    void setQuality(int quality) override;
 
 private:
     bool writePages();
