@@ -1311,4 +1311,10 @@ endif()
 # between the current pump and the fill-until-full pump it replaced, which
 # repositioned on every clock stamp.
 set_tests_properties(playback_test PROPERTIES RUN_SERIAL TRUE)
+# fix/stateful-insert-retry: a stateful insert in a twPluginChain, demanded
+# through CaptureRevalidator (the path every export and playback readahead
+# takes), must be rendered exactly once per page. Registered under playback/
+# only because check_layering lets a playback test see both tw/schedule and
+# tw/plugins; it needs nothing from the engine itself.
+tw_module_test(scheduled_insert_continuity_test playback/tests/scheduled_insert_continuity_test.cc tw_schedule tw_pages tw_plugins)
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)

@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A STATEFUL MASTER INSERT IS RENDERED EXACTLY ONCE PER PAGE (fix/stateful-insert-retry).
+
+  The defect, measured on a user project (master chain NassauEQ -> Castello
+  Reverb -> Mangrove -> NassauEQ): an export had a click and a ~4 dB dip at
+  nearly every 65536-frame page boundary, and the log showed, for every page P
+  and every master slot,
+
+      [slot] non-sequential page at P (expected P+65536); resetting plugin state
+
+  i.e. page P was rendered once, continuously, and then rendered AGAIN through
+  a processor that had already advanced past it. The second render is the
+  scheduler's verify-at-publish retry (capture_revalidator.cc, processGraphNode):
+  twPluginChain inherits the base planPage(), which declares its INPUT plug's
+  producer, while its freezePage() renders by asking its LAST INSERT for the
+  page. The insert is not in the plan, so every chain node records a bound-set
+  miss, retries, invalidates its range (which twPluginChain forwards to the
+  inserts) and re-renders P - a reposition to the processor, so it resets.
+
+  WHY THE ASSERTION IS ON THE LOG LINE AND NOT ON THE AUDIO. The in-repo CLAP
+  fixtures that can sit in an effect slot are stateless gains, so a reset is
+  inaudible through them; but the slot processor logs the reset whatever the
+  plugin is, and that line is exactly what the user's log showed. The strings
+  asserted absent are the EXACT signature of a re-render of a page the slot has
+  just finished ("at P (expected P+65536)"), not any reposition at all.
+
+  THE POSITIVE CONTROL. assert-log reads the in-process ring at the configured
+  threshold; if debug were filtered, every "absent" assertion below would pass
+  vacuously. RenderSession logs its range at DEBUG inside the same window, so
+  requiring that line first proves the window and the level are live.
+
+  Measured on unfixed main (2026-10-10): every page 0..262144 logged the line
+  twice (once per master slot), nodeRetries=10 missPages=25.
+-->
+<SActionScript version="1" name="master_insert_page_continuity">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <!-- Material on every page of the render (5 pages of 65536 in 6 s). -->
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="96000"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="192000"/>
+
+    <!-- Two inserts on the master, as a real master chain has several. path=
+         is spelled out: without it insert-plugin builds the transparent
+         placeholder and no slot processor is ever reached. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <insert-plugin trackPath="$master" slotIndex="1"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <assert-system-lane trackPath="$master" role="master" plugins="2"/>
+
+    <render filename="mipc.wav" format="wav" quality="10" durationSec="6.0"/>
+
+    <!-- The control: the render's window is live at debug level. -->
+    <assert-log level="debug" contains="[RenderSession] Range:" minCount="1"/>
+
+    <!-- No page was rendered twice through a master slot. -->
+    <assert-log contains="non-sequential page at 0 (expected 65536)"
+                minCount="0" maxCount="0"/>
+    <assert-log contains="non-sequential page at 65536 (expected 131072)"
+                minCount="0" maxCount="0"/>
+    <assert-log contains="non-sequential page at 131072 (expected 196608)"
+                minCount="0" maxCount="0"/>
+    <assert-log contains="non-sequential page at 196608 (expected 262144)"
+                minCount="0" maxCount="0"/>
+    <assert-log contains="non-sequential page at 262144 (expected 327680)"
+                minCount="0" maxCount="0"/>
+
+    <!-- And the render is still the material, not silence. -->
+    <assert-audio-energy filename="mipc.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.2300" maxRms="0.2320"/>
+  </actions>
+
+</SActionScript>
