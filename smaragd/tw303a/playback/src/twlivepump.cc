@@ -349,9 +349,19 @@ void LiveGraphPump::renderTrack( const twLivePlan &plan, int index, length_t fra
     }
 
     // A folder's UNARMED children, out of their FROZEN ROOT PAGES, by position.
-    for( std::size_t k = 0; k < t.frozenInputs.size(); ++k ) {
-        if( !sumFrozenInput( index, k, t.frozenInputs[k], sig, stride, nch, frames, pos ) )
-            frozenMisses_.fetch_add( 1, std::memory_order_relaxed );
+    //
+    // ONLY WHILE PLAYING (design D2: stopped => no root page, nothing sequenced
+    // sounds). Stopped, `pos` is the virtual counter from plan.stoppedAnchor and
+    // the RT outputs `out = ring`, so summing these here is the ARRANGEMENT
+    // PLAYING ON AFTER STOP - the folder's unarmed children, and under Closure
+    // every unarmed top-level track. The plan keeps the list either way: it is
+    // what SLiveMonitor::pumpDemands warms at the locator, so the start of play
+    // finds the pages already there.
+    if( plan.transport.playing ) {
+        for( std::size_t k = 0; k < t.frozenInputs.size(); ++k ) {
+            if( !sumFrozenInput( index, k, t.frozenInputs[k], sig, stride, nch, frames, pos ) )
+                frozenMisses_.fetch_add( 1, std::memory_order_relaxed );
+        }
     }
 
     // 2. THE INSERTS, block-wise, in slot order. Every call is `positional`, so

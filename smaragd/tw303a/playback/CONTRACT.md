@@ -152,7 +152,13 @@ Invariants:
       or, on the DISARM mirror, still < `flipEpochPrime` (a stale root still
       LACKS the track, so the ring keeps filling the hole).
     While STOPPED there is no root page and the ring is the only position
-    authority: out = ring, consumed sequentially from the head. A 2-3 ms
+    authority: out = ring, consumed sequentially from the head. The PRODUCER
+    keeps its half of that: stopped, `LiveGraphPump` does not sum any
+    `frozenInputs` into the ring (a folder's unarmed children, or under
+    Closure every unarmed top-level track), because "no root page" means
+    nothing sequenced sounds (design D2). Summing them was a bug: Stop stopped
+    the UI and the arrangement played on through the ring
+    (live_stopped_folder_silent, live_stopped_closure_silent). A 2-3 ms
     crossfade smooths both flips and carries across entries and callbacks.
     `AudioEngine::servedContentEpoch()` publishes the epoch: it is the page the
     RT is already holding, never a second lookup. `twlive::mixRing` survives as

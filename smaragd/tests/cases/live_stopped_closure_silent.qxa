@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  STOPPED MEANS NOTHING SEQUENCED SOUNDS, UNDER A CLOSURE MASTER TOO (proposal
+  21 design D2; the Closure twin of live_stopped_folder_silent).
+
+  Runs with SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav and
+  SMARAGD_CAPTURE_SPEED=1 (set on the CTest entry). RUN_SERIAL.
+
+  THE SHAPE. A 2.0 gain insert on the MASTER lane makes the master
+  non-linear, so monitoring goes to CLOSURE: the pump renders the master
+  itself, and its "master" node reads every UNARMED top-level track out of
+  that track's frozen root pages (sliveplanbuilder.cpp). Track 0 is armed and
+  monitored (ON) behind a 0.0 gain insert, so the input contributes nothing;
+  track 1 is unarmed with 8 s of a 100 Hz sawtooth at -12 dB, 0.1378 x 2.0 =
+  0.2756 out of the master.
+
+  THE BUG it gates: those frozen inputs were summed on every pump block,
+  stopped or not, and while stopped the RT outputs `out = ring` - so Stop
+  stopped the UI and not the arrangement.
+
+  Capture frame 0 is the arm (the device open); see
+  live_stopped_folder_silent for the timeline.
+
+  The stopped window is placed as in live_stopped_folder_silent, for the
+  reason given there.
+
+  MEASURED (Windows/MinGW, 3 runs each): playing window 0.275538 (closed
+  form 0.2756) both ways; stopped window 0.275538 UNFIXED (3/3 fail) and
+  0 with the fix (3/3 pass); render-policy refusals 0.
+-->
+<SActionScript version="1" name="live_stopped_closure_silent">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: armed and monitored, silenced by its own insert. -->
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.0"/>
+
+    <!-- Track 1: NEVER armed, 8 s of material. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="96000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="192000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="288000"/>
+    <set-track-volume trackPath="1" volume="-12"/>
+
+    <!-- The master lane's insert: the Closure. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2000"/>
+    <toggle-playback play="0"/>
+    <wait-ms ms="4000"/>
+
+    <dump-playback-capture filename="stopped_closure.wav" minFrames="264000"/>
+
+    <!-- PLAYING: track 1 through the pump's master node, 0.2756. -->
+    <assert-audio-energy filename="stopped_closure.wav" startFrame="60000" frameCount="36000"
+                         channel="0" minRms="0.04"/>
+
+    <!-- STOPPED: nothing sequenced. -->
+    <assert-audio-energy filename="stopped_closure.wav" startFrame="132000" frameCount="36000"
+                         channel="0" minRms="0.0" maxRms="0.005"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
