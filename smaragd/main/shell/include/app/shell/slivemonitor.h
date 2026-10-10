@@ -127,6 +127,19 @@ public:
     void suspendForRender();
     void resumeAfterRender();
 
+    /**
+     * The current project is ABOUT to be replaced or closed, and its tracks
+     * are still alive. Every live lane is torn down HERE, in the disarm order,
+     * while there is still something to hand back.
+     *
+     * projectChanged() cannot do it: it runs after the switch, when
+     * rootMixer() already answers for the NEXT project (or for none), and the
+     * closure it would have to undo names tracks that may already be freed.
+     * Leaving it to refresh() was the File -> Close SIGSEGV: refresh() saw no
+     * mixer and returned, the pump and the 40 ms demand tick survived, and
+     * pumpEdits() -> planSignature() read the dead tracks.
+     */
+    void projectAboutToChange();
     /// A project was loaded: every track that arrived armed is INERT until the
     /// user arms it in this session (design D9).
     void projectChanged();
@@ -359,6 +372,15 @@ private:
      * session that nobody is editing costs one vector compare every 40 ms.
      */
     std::vector<std::uintptr_t> planSignature() const;
+
+    /**
+     * Drop every piece of live state WITHOUT dereferencing a single STrack:
+     * the pump, both timers, the closures, the sources, the demands, the
+     * input and the output lane. The second half of projectAboutToChange(),
+     * and on its own the belt to its braces - refresh() calls it when there
+     * is no mixer, by which time the tracks the state names may be gone.
+     */
+    void forgetLiveState();
 
     SApplication *app_ = nullptr;
 

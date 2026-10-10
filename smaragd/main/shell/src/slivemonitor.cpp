@@ -838,7 +838,16 @@ void SLiveMonitor::refresh()
 {
     if( !app_ || suspendedForRender_ ) return;
     SStdMixer *mixer = rootMixer();
-    if( !mixer ) return;
+    if( !mixer ) {
+        // NO MIXER MEANS NO PROJECT, and whatever the live state still names
+        // belonged to the one that went away. projectAboutToChange() has
+        // normally emptied it already; if anything survived, it is FORGOTTEN
+        // here rather than torn down, because those tracks may be freed by now.
+        // A bare `return` was the File -> Close SIGSEGV: the pump and the
+        // demand tick lived on and read the dead tracks 40 ms later.
+        forgetLiveState();
+        return;
+    }
 
     const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
                                                   : app_->isPlaying();
@@ -1160,6 +1169,94 @@ void SLiveMonitor::resumeAfterRender()
     // A FRESH arm, never a resume: the closure is recomputed from the model as
     // it now stands, and the whole retire/own/wire/epoch sequence runs again.
     refresh();
+}
+
+void SLiveMonitor::projectAboutToChange()
+{
+    // THE SAME TEARDOWN AS suspendForRender(), IN THE SAME ORDER, and it has
+    // to happen NOW: this is the last moment the closure's tracks are alive
+    // and rootMixer() still answers for the project they belong to. Every
+    // step below that touches a track or the mixer is in this half; the rest
+    // is forgetLiveState(), which touches neither.
+    //
+    // THE COUNT-IN IS DROPPED, NOT ENDED. endCountIn() re-runs refresh(),
+    // which would recompute - and could re-arm, or start a fresh disarm tail
+    // for - a project that is about to stop existing.
+    countInActive_ = false;
+    countInTotal_  = 0;
+
+    // A tail in flight is finished while its tracks can still be handed back.
+    if( disarmTimer_->isActive() ) { disarmTimer_->stop(); finishDisarm(); }
+
+    // THE PUMP STOPS FIRST: it renders the closure's processors, and the
+    // playback contract requires it stopped before closeLive().
+    stopPump();
+    detachLiveEvents( current_ );
+    detachLiveEvents( departing_ );
+    // Any entry left over has a consumer outside both closures; it is still
+    // a live source on a processor of THIS project, so it goes too.
+    for( MidiLive &m : midiLive_ ) releaseLiveEntry( m );
+    midiLive_.clear();
+    setClosureOwned( current_, false );
+    setClosureOwned( departing_, false );
+    for( STrack *t : current_.ordered )   t->setLiveOwnedLane( false );
+    for( STrack *t : departing_.ordered ) t->setLiveOwnedLane( false );
+    SLiveClosure was = current_;
+    current_   = SLiveClosure();
+    departing_ = SLiveClosure();
+    // Only when something was WIRED - see suspendForRender() for why a
+    // metronome-only lane must not reach applyExclusion's empty-set fallback.
+    if( !was.ordered.empty() ) applyExclusion( was );
+
+    // endMasterClosure() inside still finds this project's mixer, so the
+    // master lane's processors are handed back as well, not merely forgotten.
+    forgetLiveState();
+}
+
+void SLiveMonitor::forgetLiveState()
+{
+    stopPump();
+    disarmTimer_->stop();
+    demandTimer_->stop();
+    demands_.clear();
+
+    // The MIDI half without the consumer: releaseLiveEntry() reaches the
+    // processor through the track, which is exactly what may not be read here.
+    // The fanout, the thru scheduler and the sink belong to the app, not the
+    // project, so they are released properly; the processor holding the
+    // source dies with its track.
+    for( MidiLive &m : midiLive_ ) {
+        if( m.fanout ) m.fanout->clearThru();
+        if( m.thru )   m.thru->panic();
+        if( m.fanout && m.sink ) m.fanout->release( m.sink );
+    }
+    midiLive_.clear();
+
+    current_   = SLiveClosure();
+    departing_ = SLiveClosure();
+    suspended_ = SLiveClosure();
+    inertlyArmed_.clear();
+    sources_.clear();
+    metronome_.reset();
+    publishedSignature_.clear();
+    countInActive_  = false;
+    countInTotal_   = 0;
+    pendingPlaying_ = -1;
+    lastRefusal_.clear();
+
+    // bridgeHolds_ is NOT zeroed: a hold belongs to a take, and the take
+    // releases it. With both closures empty this closes the input unless one
+    // is still running.
+    closeInputIfUnused();
+    if( liveOpened_ ) {
+        // Safe with no project: setMasterLaneOwned() returns on a null mixer,
+        // and the speaker's stale closure flag is cleared either way.
+        endMasterClosure();
+        if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker()
+                                                  : std::shared_ptr<twSpeaker>() )
+            spk->closeLive();
+        liveOpened_ = false;
+    }
 }
 
 void SLiveMonitor::projectChanged()

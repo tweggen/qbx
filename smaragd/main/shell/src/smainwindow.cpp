@@ -1299,6 +1299,17 @@ void SMainWindow::newProject()
 void SMainWindow::closeProject()
 {
     if( !currentProject_ ) return;
+    // A COUNT-IN and a TAKE are writing into this project as surely as the
+    // transport is, and nothing below stops them: the preamble's timer would
+    // start a take in a project that no longer exists, and a running take
+    // places its clips into it when it ends. Both are ended here, while the
+    // project is still whole (the record button's own stop, onRecordTriggered).
+    SApplication::app().cancelRecordPreamble();
+    if( SApplication::app().isRecordingActive() ) {
+        SApplication::app().stopRecording();
+        if( recordingProgressDialog_ ) recordingProgressDialog_->close();
+        actRecord_->setIcon( QIcon( QPixmap( (const char **)recoff_xpm ) ) );
+    }
     // Stop playback before destroying the project to prevent audio thread access
     if( SApplication::app().isPlaying() ) {
         stopPlaying();

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Closing a project while a track is MONITORED must take the live lane down
+  with it.
+
+  The bug: SApplication::setCurrentProject(nullptr) reassigned the current
+  project BEFORE telling the live monitor, so SLiveMonitor::refresh() found no
+  mixer and returned early - and current_, the pump, the demand timer and the
+  disarm tail all survived the project's deletion. The 40 ms demand tick then
+  ran pumpEdits() -> planSignature() over the freed tracks: SIGSEGV in
+  appendTrackSignature on File -> Close.
+
+  Shape: one track on the paced file input, monitor ON and armed, so a live
+  lane is really running (asserted, so the case cannot pass over a lane that
+  never opened). Then `close-project`, which is SMainWindow::closeProject()'s
+  sequence followed by a fresh empty project. The wait gives the 40 ms tick
+  several chances to reach the dead tracks. `add-track` both drives a refresh()
+  against the NEW project and gives the assertion a track to address; the
+  monitor must report nothing live and no members.
+
+  Without the fix this case crashes (or, if the freed memory happens to read
+  back sanely, reports `live=on tracks=1`). RUN_SERIAL with the paced input,
+  like every live case.
+-->
+<SActionScript version="1" name="live_monitor_project_close">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="500"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+
+    <close-project/>
+    <wait-ms ms="300"/>
+
+    <add-track index="-1"/>
+    <assert-input-meter trackPath="0" contains="live=off tracks=0"/>
+  </actions>
+
+</SActionScript>

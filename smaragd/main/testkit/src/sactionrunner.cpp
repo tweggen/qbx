@@ -64,6 +64,13 @@ SActionRunner::Result SActionRunner::run(SActionScript &script, SApplication &ap
         // Pump the event loop to drain Qt events and allow UI updates.
         QCoreApplication::processEvents();
 
+        // THE PROJECT IS RE-READ, not remembered: `close-project` deletes the
+        // one this run built and installs a fresh one (on the processEvents()
+        // just above). Every later use of `project` here - the assertions, the
+        // undo check, the teardown's delete - would otherwise be a freed
+        // pointer.
+        project = app.getCurrentProject();
+
         // Drain the engine queue (Phase 2 API).
         // Phase 1 note: This is a placeholder. In Phase 2, we'll have the actual
         // async draining mechanism. For now, assume synchronous.
@@ -155,6 +162,7 @@ SActionRunner::Result SActionRunner::run(SActionScript &script, SApplication &ap
     // SMainWindow's ordinary project-close path (closeEvent -> closeProject())
     // for its eventual, equally orderly teardown.
     if (teardownProject) {
+        project = app.getCurrentProject();
         app.setCurrentProject(nullptr);
         app.rewireSpeaker();
         QCoreApplication::processEvents();

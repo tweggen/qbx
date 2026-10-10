@@ -223,6 +223,17 @@ Phase 6 splits it into narrow context interfaces.
     thread. "Fresh" is the point: the closure is recomputed from the model as
     it then stands, never restored from a snapshot.
 
+17b. **A project change tears every live lane down BEFORE the pointer moves.**
+    `SApplication::setCurrentProject()` calls
+    `SLiveMonitor::projectAboutToChange()` ahead of `currentProject_ = cp`
+    (on a real change only): the same order as `suspendForRender()`, pump
+    first, while the closure's tracks and the project's mixer are still
+    reachable. After the switch `refresh()` sees no mixer and only FORGETS
+    what is left (`forgetLiveState()`, which dereferences no track), because
+    by then the tracks may be freed. A bare early return there let the pump
+    and the 40 ms demand tick outlive the project - the File -> Close SIGSEGV.
+    Gate: `live_monitor_project_close` (verb `close-project`).
+
 18a. **A LANE-caused Closure is RENDERED; a MIXER-caused one is still
     REFUSED** (proposal 45 M3). `twlive::checkMasterShape` is asked BEFORE
     anything is re-wired. A master lane doing something — an insert, a fader, a
