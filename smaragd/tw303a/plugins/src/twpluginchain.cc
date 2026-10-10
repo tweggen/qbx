@@ -2,6 +2,7 @@
 
 #include "tw/plugins/twplugininsert.h"
 #include "tw/pages/io_vector.h"
+#include "tw/graph/tw_frozen_inputs.h"
 
 #include <algorithm>
 #include <vector>
@@ -294,9 +295,23 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     if( snapshot.empty() ) {
         if( plug0 ) {
             std::shared_ptr<twComponent> comp = plug0->getParentLatch().getComponent();
-            if( comp )
+            if( comp ) {
+                // A planned render (the scheduler's node for THIS chain) has
+                // bound the producer's page: forward exactly that. requestPage()
+                // alone is not enough, because the producer is usually a
+                // twTrackMix, whose freezePage() override caches nothing and
+                // never consults the bound set -- so the forward rendered the
+                // whole track mix a SECOND time per page, and its clips'
+                // readers recorded misses under the chain's scope.
+                if( const twFrozenInputs *fi = twFrozenInputScope::active() ) {
+                    std::shared_ptr<twOutputPage> bound = fi->find( comp.get(), startPos );
+                    if( bound && bound->validAspects != 0 &&
+                        bound->startPosition == startPos )
+                        return bound;
+                }
                 return comp->requestPage( startPos, inputData, inputOffset,
                                           inputLength, sampleRate, previousPage );
+            }
         }
         auto silencePage =
             std::make_shared<twOutputPage>( (std::uint16_t) getOutputChannels() );
