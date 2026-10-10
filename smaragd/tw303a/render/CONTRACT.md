@@ -58,7 +58,7 @@ every render_*.qxa and grain_*.qxa case end-to-end.
    frame-at-a-time `writeFrame(AudioFrame&)` is retired along with `AudioFrame`
    itself, whose `MAX_CHANNELS == 2` was the hard stereo cap.
 
-9. A RENDER WHOSE FILE COULD NOT BE WRITTEN FAILS (QBX-145, 2026-10-10).
+10. A RENDER WHOSE FILE COULD NOT BE WRITTEN FAILS (QBX-145, 2026-10-10).
    The writer gets `RenderParams::quality` through `setQuality()` before
    `open()`. After `flush()` the session asks FileSink for its sticky write
    error and, if there is one, completes with success=false and "Failed to
@@ -66,7 +66,8 @@ every render_*.qxa and grain_*.qxa case end-to-end.
    LAME flush and Info frame happen) fails it too. The render loop stops at
    the first failed write instead of rendering pages nobody can store.
    `setWriterFactory()` exists only so render_test can inject a writer that
-   fails on cue.
+   fails on cue. The GUI sees the outcome through lastSuccess() (inv. 9) and
+   the message through errorMessage().
 
 Known debt: Extent enum in RenderParams is advisory (start/end seconds are what
 counts).
