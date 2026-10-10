@@ -145,6 +145,48 @@ private:
     offset_t pos_ = 0;
 };
 
+// A producer shaped like twTrackMix where it matters here: it overrides
+// freezePage(), mints a fresh page per call, caches nothing, and never consults
+// the bound input set. So every call is a render, and the count of calls is the
+// count of renders.
+class MintingSource : public twComponent {
+public:
+    explicit MintingSource( tw303aEnvironment &env ) : twComponent( env ) {}
+
+    idx_t getNInputs() const override  { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    idx_t getOutputChannels() const override { return 2; }
+    const char *getInputName( idx_t ) const override  { return nullptr; }
+    const char *getOutputName( idx_t ) const override { return nullptr; }
+
+    void createOutputLatches() override
+    {
+        pOutputLatches_.resize( 1 );
+        pOutputLatches_[0] =
+            std::make_shared<twStreamingLatch>( shared_from_this(), 0, 4096 );
+    }
+    void reset() override {}
+
+    std::shared_ptr<twOutputPage> freezePage( offset_t startPos, const sample_t *,
+                                              uint64_t, length_t, int,
+                                              std::shared_ptr<twOutputPage> ) override
+    {
+        renders.fetch_add( 1 );
+        auto page = std::make_shared<twOutputPage>( (std::uint16_t)2 );
+        page->setStartPosition( startPos );
+        const length_t n = (length_t)page->channelFrames();
+        for( idx_t c = 0; c < 2; ++c )
+            for( length_t i = 0; i < n; ++i )
+                page->channelPtr( c )[i] = (float)( c + 1 ) * 0.25f;
+        page->setValidFrames( (uint32_t)n );
+        page->contentEpoch.store( contentEpochNow() );
+        page->setValidAspects( twAspectAll );
+        return page;
+    }
+
+    std::atomic<int> renders{ 0 };
+};
+
 struct Slot {
     std::shared_ptr<twPluginSlotProcessor> proc;
     std::shared_ptr<twPluginInsert>        insert;
@@ -238,6 +280,37 @@ int main()
     }
 
     chain->teardown();
+
+    // ---- An INSERT-LESS chain forwards; its producer renders once per page --
+    // A default track: track mix -> chain (no inserts) -> ... The chain node
+    // binds the producer's page as its input; forwarding it must serve THAT
+    // page, not ask the producer to render again. twTrackMix's freezePage()
+    // ignores the bound set, so a forward through requestPage() rendered the
+    // whole track mix a second time per page (and its clips' readers recorded
+    // misses under the chain's scope).
+    std::cout << "=== scheduled insert-less chain: the producer renders each page once ===" << std::endl;
+    {
+        auto mint = std::make_shared<MintingSource>( env );
+        mint->init();
+        auto bare = std::make_shared<twPluginChain>( env, 2 );
+        bare->init();
+        bare->setInput( 0, mint->linkOutput( 0 ) );
+
+        CapturePagePool    pool( 16 );
+        CaptureRevalidator reval( &pool, 2 );
+        auto d = reval.requestGraphPages( bare, 0, nPages );
+        d->wait();
+
+        const auto st = reval.graphStats();
+        std::cout << "  info producer renders=" << mint->renders.load()
+                  << " for " << nPages << " pages; nodeRetries=" << st.nodeRetries
+                  << " missPages=" << st.missPages << std::endl;
+        check( mint->renders.load() == nPages,
+               "the forwarded producer rendered exactly once per page" );
+        check( st.nodeRetries == 0 && st.missPages == 0,
+               "with no misses and no retries" );
+        bare->teardown();
+    }
 
     if( gFailures ) {
         std::cerr << "=== " << gFailures << " check(s) failed ===" << std::endl;
