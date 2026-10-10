@@ -6,7 +6,9 @@
 #include "tw/graph/twcomponent.h"  // For twComponent::freezePage() and freezePreviewPage()
 #include "tw/graph/tw_frozen_inputs.h"  // Dataflow stage 3: bound input sets
 #include "tw/pages/tw_output_page.h"  // For twOutputPage and twAspectAll
+#include <atomic>
 #include <cassert>
+#include <typeinfo>
 #include <cstring>
 #include <vector>
 #include <algorithm>
@@ -456,10 +458,12 @@ CaptureRevalidator::requestGraphPages(std::shared_ptr<twComponent> root,
 std::shared_ptr<CaptureRevalidator::PageNode>
 CaptureRevalidator::expandNode_(std::shared_ptr<twComponent> comp,
                                 offset_t pageStart, int priority, int depth) {
-    if (!comp || depth > 32) return nullptr;   // depth guard (cyclic graphs
-                                               // are excluded by FreezeContext
-                                               // at render; this guards the
-                                               // structural walk)
+    // Depth guard (cyclic graphs are excluded by FreezeContext at render;
+    // this guards the structural walk). 64, not 32: since twPluginChain plans
+    // its last insert (fix/stateful-insert-retry) every insert on a path is a
+    // planner level of its own, so a nested folder with full chains on every
+    // level is deeper than it used to be. A real graph is far below either.
+    if (!comp || depth > 64) return nullptr;
 
     const NodeKey key{comp.get(), pageStart};
     {
@@ -549,10 +553,25 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
     std::shared_ptr<twOutputPage> page =
         node->component->freezePageWithInputs(node->pageStart, inputs, prev);
 
-    // Verify-at-publish, part 1: are the deps' pages still current, and was the
-    // plan complete? One bounded retry with freshly frozen deps; content
-    // correctness holds regardless (the stage-2 legacy fallback inside the
-    // render), the retry improves cache quality after a mid-render edit.
+    // Verify-at-publish, part 1: are the deps' pages still current? One bounded
+    // retry with freshly frozen deps; content correctness holds regardless
+    // (the stage-2 legacy fallback inside the render), the retry improves cache
+    // quality after a mid-render edit.
+    //
+    // ONLY A STALE DEP RETRIES — a MISS never does. A miss means the render
+    // read a producer page the plan did not declare; the legacy pull already
+    // rendered it, so the content is correct. A retry cannot do better: it
+    // re-binds node->deps and nothing else, so the undeclared producer is just
+    // as unbound the second time and the same misses recur. What the retry DID
+    // do is render this node's page a second time, and for a component whose
+    // render advances state that no page carries — a plugin slot processor,
+    // whose DSP memory lives in the plugin and whose continuity is its own
+    // lastEnd_ (plugins inv. 40) — rendering page P after P is a reposition:
+    // the slot resets the plugin. That was a click and a ~4 dB dip at every
+    // page boundary behind a stateful master insert (fix/stateful-insert-retry:
+    // twPluginChain planned its input instead of its last insert). A miss is a
+    // PLANNER bug: counted (graphStats().missPages) and logged once, never
+    // retried.
     //
     // The comparison is LIKE FOR LIKE, in the dep component's OWN counter:
     // `d->observedEpoch` is the epoch of `d->component` that the page d
@@ -576,11 +595,28 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
             break;
         }
     }
-    statMissPages_.fetch_add(inputs.misses.size(), std::memory_order_relaxed);
-    if ((staleDep || !inputs.misses.empty()) && node->attempts++ < 1) {
+    if (!inputs.misses.empty()) {
+        statMissPages_.fetch_add(inputs.misses.size(), std::memory_order_relaxed);
+        static std::atomic<bool> loggedMiss{false};
+        if (!loggedMiss.exchange(true, std::memory_order_relaxed)) {
+            const auto &m = inputs.misses.front();
+            TW_LOGW("schedule",
+                    "[SCHED] incomplete plan: a render of %s@%lld read %s@%lld, "
+                    "which its planPage() did not declare (%zu miss(es) on this "
+                    "node; not retried, logged once per process)",
+                    typeid(*node->component).name(), (long long)node->pageStart,
+                    m.first ? typeid(*m.first).name() : "(null)",
+                    (long long)m.second, inputs.misses.size());
+        }
+    }
+    if (staleDep && node->attempts++ < 1) {
         statNodeRetries_.fetch_add(1, std::memory_order_relaxed);
         twFrozenInputs fresh;
         for (auto &d : node->deps) {
+            // A dep with no result was retired (or produced nothing): there is
+            // nothing to refresh, and re-requesting a retired component from a
+            // worker is exactly what retirement exists to prevent.
+            if (!d->result) continue;
             auto p = d->component->requestPage(
                 d->pageStart, nullptr, 0,
                 (length_t)twOutputPage::FRAME_CAPACITY, 0, nullptr);
@@ -594,9 +630,23 @@ void CaptureRevalidator::processGraphNode(const std::shared_ptr<PageNode> &node)
         // content it had just diagnosed as wrong. Range-scoped, so only THIS
         // page goes stale; every other page of this component is re-blessed to
         // the new epoch by invalidatePagesInRange itself.
-        node->component->invalidatePagesInRange(
-            node->pageStart,
-            node->pageStart + (offset_t)twOutputPage::FRAME_CAPACITY);
+        //
+        // But only when there IS a cached page here — the same test, for the
+        // same reasons, as the self-stale invalidate below. A forwarding
+        // component (twPluginChain caches nothing of its own) has no page to
+        // drop, and its invalidatePagesInRange() is not a no-op: it forwards to
+        // every insert and bumps their epochs, so the other in-flight insert
+        // nodes read as self-stale and are re-demanded — re-renders through
+        // stateful processors. Its re-render re-reads the freshly bound dep.
+        const offset_t retryEnd =
+            node->pageStart + (offset_t)twOutputPage::FRAME_CAPACITY;
+        bool cachedHere = false;
+        for (const auto &cached :
+                 node->component->getPagesInRange(node->pageStart, retryEnd)) {
+            if (cached && cached->validAspects != 0) cachedHere = true;
+        }
+        if (cachedHere)
+            node->component->invalidatePagesInRange(node->pageStart, retryEnd);
         // That invalidate BUMPED this component's epoch. Re-observe before the
         // re-render, or the scheduler's own bump would read back as an edit:
         // the self-staleness test below would fire on every retrying node, and

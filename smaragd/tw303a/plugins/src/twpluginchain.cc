@@ -223,6 +223,36 @@ void twPluginChain::rebuildWiring_nolock()
 }
 
 
+twPagePlan twPluginChain::planPage( offset_t pageStart )
+{
+    // The epoch is read before anything is walked (the scheduler's
+    // verify-at-publish reference, see twComponent::planPage).
+    twPagePlan plan;
+    plan.component = shared_from_this();
+    plan.pageStart = pageStart;
+    plan.epoch     = contentEpochNow();
+
+    // The SAME snapshot freezePage() takes, so plan and render name the same
+    // insert. An insert added or removed between the two is followed by the
+    // app's invalidateRenderPath() (STrack), and verify-at-publish reads the
+    // chain's moved epoch as self-staleness and re-plans.
+    std::vector<std::shared_ptr<twComponent> > snapshot = snapshotPlugins();
+    if( !snapshot.empty() ) {
+        if( snapshot.back() )
+            plan.deps.push_back( twPageDep{ snapshot.back(), pageStart } );
+        return plan;
+    }
+
+    // No inserts: the chain forwards its producer's page.
+    std::lock_guard<std::mutex> lock( mutex() );
+    if( !pInputPlugs_.empty() && pInputPlugs_[0] ) {
+        std::shared_ptr<twComponent> producer =
+            pInputPlugs_[0]->getParentLatch().getComponent();
+        if( producer ) plan.deps.push_back( twPageDep{ std::move( producer ), pageStart } );
+    }
+    return plan;
+}
+
 std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     offset_t startPos,
     const sample_t *inputData,

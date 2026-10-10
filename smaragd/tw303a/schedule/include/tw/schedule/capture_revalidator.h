@@ -203,9 +203,12 @@ public:
     // never parked. Nodes own shared_ptrs to their components (no dangling —
     // the retireObject lesson; components are lifetime-safe by construction
     // here). Verify-at-publish: a node whose dep pages went stale mid-render
-    // or whose plan proved incomplete (misses) retries once with re-frozen
-    // deps; content correctness is guaranteed regardless by the stage-2
-    // legacy fallback inside the render — the retry improves cache quality.
+    // retries once with re-frozen deps; content correctness is guaranteed
+    // regardless by the stage-2 legacy fallback inside the render — the retry
+    // improves cache quality. A plan that proved incomplete (misses) is NOT
+    // retried: the retry re-binds the same deps, so it cannot bind what the
+    // plan left out, and re-rendering a page resets a stateful processor
+    // (schedule CONTRACT inv. 7). Misses are counted and logged once.
     class GraphDemand {
     public:
         // Block until every demanded root page is frozen, or the revalidator

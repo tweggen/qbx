@@ -206,6 +206,14 @@ Invariants:
    fetchInputPage() in the render, requestPage() where a whole page is wanted
    -- never raw freezePage(), so two drivers demanding the same producer page
    still collapse to one render (proposal 19 Phase 2a).
+   THE CHAIN, BY CONTRAST, OVERRIDES planPage() (fix/stateful-insert-retry):
+   its plan names what its freezePage() consumes — the LAST insert's page when
+   it holds inserts, its input producer's when it holds none. On the inherited
+   base plan it named its input in both cases, so with inserts every chain
+   node recorded misses, was retried, and the retry re-rendered page P through
+   processors already at P+65536: a plugin reset on every page. Each insert is
+   now a scheduler node of its own, which is why the app's live-ownership
+   retirement (SLiveMonitor) must name the chain's inserts too.
 15. Anything that changes what process() would produce must stale the insert's
    pages. twPluginSlotProcessor::bumpParamEpoch() does it (bypass, state-chunk
    changes and -- since proposal 37 P5 -- AUTOMATION CURVES route through it).
@@ -832,11 +840,12 @@ Known debt:
 - The Timeout record is written by a code path no automated test reaches: it
   needs a module that hangs inside clap_entry.init(), which no in-repo fixture
   provides.
-- The processor keeps only twPluginSlotProcessor::kCacheEntries (2) rendered
-  pages. That covers what it exists for -- every tap of the slot asking for the
-  SAME page -- plus one slot of slack. Two demands for DIFFERENT pages
-  alternating will thrash it and, because the plugin is stateful, reset the
-  plugin on every position discontinuity. Correct, just slow.
+- The processor keeps no rendered-page cache of its own (the kCacheEntries
+  cache went with proposal 36 B4's one-insert-per-slot shape): pages are cached
+  by the insert component. Two demands for DIFFERENT pages alternating through
+  one slot still reset the plugin on every position discontinuity (inv. 40).
+  Correct, just slow. The dataflow scheduler orders an insert's pages through
+  its predecessor edges, and renders each page once.
 - twPluginChain::calcOutputTo() holds pluginsMutex_ across the whole pull. Safe
   ONLY because the realtime audio callback never renders (twRtThreadGuard); if
   that ever changes it becomes a priority inversion on the audio thread. The

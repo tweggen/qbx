@@ -133,9 +133,18 @@ void SLiveMonitor::retireClosureNodes( const SLiveClosure &closure )
     if( !sched || closure.empty() ) return;
 
     std::vector<const twComponent *> comps;
+    // The chain's INSERTS have nodes of their own since the chain plans its
+    // last insert (fix/stateful-insert-retry): an insert node left queued here
+    // would run after setLiveOwned(true) and trip the slot's ownership guard.
+    // Held as shared_ptrs until the retire returns.
+    std::vector<std::shared_ptr<twComponent> > inserts;
     for( STrack *t : closure.ordered ) {
         if( t->trackMixComponent() )    comps.push_back( t->trackMixComponent().get() );
-        if( t->pluginChainComponent() ) comps.push_back( t->pluginChainComponent().get() );
+        if( t->pluginChainComponent() ) {
+            comps.push_back( t->pluginChainComponent().get() );
+            for( const auto &ins : t->pluginChainComponent()->snapshotPlugins() )
+                if( ins ) { comps.push_back( ins.get() ); inserts.push_back( ins ); }
+        }
         if( t->gainStageComponent() )   comps.push_back( t->gainStageComponent().get() );
         if( t->getRootComponent() )     comps.push_back( t->getRootComponent().get() );
     }
@@ -166,8 +175,16 @@ void SLiveMonitor::retireMasterLaneNodes( SStdMixer *mixer )
     if( !lane ) return;
 
     std::vector<const twComponent *> comps;
+    // The lane's inserts too, for the reason retireClosureNodes() gives: they
+    // are scheduler nodes of their own now, and they are exactly the
+    // components whose processors the flip makes live-owned.
+    std::vector<std::shared_ptr<twComponent> > inserts;
     if( lane->trackMixComponent() )    comps.push_back( lane->trackMixComponent().get() );
-    if( lane->pluginChainComponent() ) comps.push_back( lane->pluginChainComponent().get() );
+    if( lane->pluginChainComponent() ) {
+        comps.push_back( lane->pluginChainComponent().get() );
+        for( const auto &ins : lane->pluginChainComponent()->snapshotPlugins() )
+            if( ins ) { comps.push_back( ins.get() ); inserts.push_back( ins ); }
+    }
     if( lane->gainStageComponent() )   comps.push_back( lane->gainStageComponent().get() );
     if( lane->getRootComponent() )     comps.push_back( lane->getRootComponent().get() );
     if( mixer->masterRewireComponent() )

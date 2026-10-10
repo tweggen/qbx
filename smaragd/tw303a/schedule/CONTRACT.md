@@ -30,9 +30,19 @@ Invariants:
    Verify-at-publish therefore compares `PageNode::observedEpoch` (that
    component's own epoch, read by `planPage`) against that same component's
    `contentEpochNow()`.
-7. Verify-at-publish has TWO halves and they are not symmetric. Stale DEPS or
-   an incomplete bound set ⇒ ONE bounded retry with re-frozen deps. An
-   outdated own PLAN (`observedEpoch` moved: the dep set / clip resolutions
+7. Verify-at-publish has TWO halves and they are not symmetric. Stale DEPS ⇒
+   ONE bounded retry with re-frozen deps (a dep with no result — retired — is
+   not re-requested). An INCOMPLETE bound set (misses) ⇒ NO retry: the content
+   is already correct through the legacy pull, a retry re-binds the same deps
+   and so cannot bind what the plan left out, and re-rendering a page through a
+   component whose state is not carried in pages (a plugin slot processor,
+   plugins inv. 40) is a reposition that resets it — measured as a click and a
+   ~4 dB dip at every page boundary behind a stateful master insert
+   (fix/stateful-insert-retry). A miss is a planner bug: counted in
+   `graphStats().missPages`, logged once per process. A retry drops the node's
+   own cached page only when there IS one (a forwarding component such as
+   `twPluginChain` caches nothing, and its invalidate forwards to the inserts —
+   inv. 8's cascade). An outdated own PLAN (`observedEpoch` moved: the dep set / clip resolutions
    are the pre-edit ones) ⇒ NO retry — the same plan would rebuild the same
    wrong structure. Publish the page anyway (proposal 16's RT stale-page
    fallback needs something to serve) and re-stale the position so the
