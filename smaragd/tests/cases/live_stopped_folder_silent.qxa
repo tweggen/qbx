@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  STOPPED MEANS NOTHING SEQUENCED SOUNDS, EVEN THROUGH THE PUMP (proposal 21
+  design D2: stopped => no root page; only the monitored input is heard).
+
+  Runs with SMARAGD_AUDIO_INPUT_BACKEND=file:../test_autosaw.wav and
+  SMARAGD_CAPTURE_SPEED=1 (set on the CTest entry). RUN_SERIAL.
+
+  THE BUG. An armed lane keeps the device open and the pump running after
+  Stop, on a virtual counter from plan->stoppedAnchor, and the RT outputs
+  `out = ring`. LiveGraphPump::renderTrack() summed a folder's FROZEN INPUTS
+  (its unarmed children, read out of their own root pages by position) on
+  every block, stopped or not - so after Stop the arrangement went on playing
+  through the ring.
+
+  THE SHAPE. Track 0 is a folder; "0,0" is an unarmed sibling with 8 s of a
+  100 Hz sawtooth at -12 dB (0.548 x 0.2512 = 0.1378), "0,1" is armed and
+  monitored (ON) behind a 0.0 gain insert, so the input itself contributes
+  nothing and every sample in the capture is the sibling. Arming "0,1" puts
+  the folder in the live closure, so the sibling is ONLY heard as the folder's
+  frozen input - while playing as well as while stopped.
+
+  CAPTURE FRAME 0 IS THE DEVICE OPEN, i.e. the arm (capture_backend.cc,
+  openDevice), and the capture runs on across the stop because the armed lane
+  keeps the device open. Play starts right after the arm and lasts the
+  wait-playhead plus 2000 ms; the 4000 ms wait after the stop is the stopped
+  stretch the second window sits in.
+
+  THE DISCRIMINATOR is the PLAYING window: the sibling is audible there at its
+  closed form, which proves the capture measures the very path the stopped
+  window then asserts silent.
+
+  WHY THE STOPPED WINDOW SITS RIGHT AFTER THE STOP AND NOT AT THE END. Stop
+  lands at ~2.15 s (~103k frames) on the reference box. The unfixed pump does
+  not play on for ever: it reads the frozen inputs by position, read-only, and
+  goes quiet once it runs past the pages the readahead had already frozen -
+  measured ~2 s after the stop for the folder, ~3.4 s under Closure. A window
+  at 216k measured 0 on UNFIXED code for the folder and passed over the bug, so
+  the window is [132000, 168000): 0.6 s of margin after the stop for a slow
+  start, inside the bug's audible stretch for both shapes.
+
+  MEASURED (Windows/MinGW, 3 runs each): playing window 0.137769 (closed
+  form 0.1378) both ways; stopped window 0.137769 UNFIXED (3/3 fail) and
+  0 with the fix (3/3 pass); render-policy refusals 0.
+-->
+<SActionScript version="1" name="live_stopped_folder_silent">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>                <!-- 0: becomes the folder -->
+    <add-track index="-1"/>                <!-- 1: the unarmed sibling -->
+    <add-track index="-1"/>                <!-- 2: the armed child -->
+
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="96000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="192000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="288000"/>
+    <set-track-volume trackPath="1" volume="-12"/>
+
+    <reparent-track source="2" destParent="0" destIndex="-1"/>
+    <reparent-track source="1" destParent="0" destIndex="0"/>
+
+    <!-- The armed child is silenced by its own insert: only the sibling can
+         reach the capture. -->
+    <insert-plugin trackPath="0,1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0,1" slotIndex="0" paramId="0" value="0.0"/>
+
+    <set-track-input trackPath="0,1" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0,1" mode="on"/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0,1" armed="1"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2000"/>
+    <toggle-playback play="0"/>
+    <wait-ms ms="4000"/>
+
+    <dump-playback-capture filename="stopped_folder.wav" minFrames="264000"/>
+
+    <!-- PLAYING: the sibling through the pump, 0.1378. -->
+    <assert-audio-energy filename="stopped_folder.wav" startFrame="60000" frameCount="36000"
+                         channel="0" minRms="0.04"/>
+
+    <!-- STOPPED: nothing sequenced, and the input is gained to zero. -->
+    <assert-audio-energy filename="stopped_folder.wav" startFrame="132000" frameCount="36000"
+                         channel="0" minRms="0.0" maxRms="0.005"/>
+
+    <arm-track trackPath="0,1" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

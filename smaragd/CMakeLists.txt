@@ -528,7 +528,12 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               # proposal 49 M2 / AC2.5-2.6: a panned master sends monitoring to
               # the lane Closure, and the pump pans a monitored track per
               # channel. Both need a real input to have a live source at all.
-              master_pan_closure monitor_pan_live)
+              master_pan_closure monitor_pan_live
+              # proposal 21 D2: STOPPED, an armed lane's pump must not sum the
+              # frozen inputs (a folder's unarmed children; under Closure every
+              # unarmed top-level track). Needs a real input so the lane stays
+              # live across the stop at all.
+              live_stopped_folder_silent live_stopped_closure_silent)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE

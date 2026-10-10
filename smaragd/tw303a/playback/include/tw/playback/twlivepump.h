@@ -38,7 +38,11 @@
 //            renders while `nextPos_ < nextFrame + lead` and the ring has room,
 //            and idles otherwise.
 //   STOPPED  a virtual counter from plan->stoppedAnchor, paced by the ring
-//            drain (there is no clock to follow).
+//            drain (there is no clock to follow). Only the LIVE side is
+//            rendered: the inputs, the live children and their processors.
+//            `frozenInputs` are NOT summed - stopped means nothing sequenced
+//            sounds (D2), and the RT outputs `out = ring`, so a frozen input
+//            summed here would be the arrangement playing on after Stop.
 //
 // FILLING THE RING UNTIL IT IS FULL IS WRONG AND WAS THE ORIGINAL BUG. With a
 // depth-4 ring and a 2-block tolerance the pump ran 4 blocks ahead, so the very

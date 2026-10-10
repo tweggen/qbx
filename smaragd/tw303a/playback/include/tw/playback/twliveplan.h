@@ -89,7 +89,9 @@ struct twLiveTrackPlan {
     // A folder's UNARMED children, read BY POSITION out of their frozen root
     // pages (`getPageIfExists`, try-lock, miss = the previous page or silence).
     // The pump never demands them; the readahead re-roots demands for exactly
-    // this list (L1b).
+    // this list (L1b). Summed ONLY while `transport.playing` (design D2): the
+    // list stays populated while stopped because it is also what the page
+    // warming at the locator reads.
     std::vector<std::shared_ptr<twComponent> > frozenInputs;
 
     // A folder's LIVE children: indices into twLivePlan::tracks, all strictly
