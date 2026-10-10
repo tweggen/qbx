@@ -63,6 +63,16 @@ public:
         std::shared_ptr<twOutputPage> previousPage = nullptr
     ) override;
 
+    // Proposal 19 dataflow planner. The plan must name what freezePage()
+    // CONSUMES: with inserts that is the LAST insert's page (each insert keeps
+    // the base plan -- its own input -- so the scheduler gets one node per
+    // insert per page, chained in position order); with none it is the input
+    // plug's producer, the page the chain forwards. The base plan named the
+    // input in BOTH cases, so with inserts every chain node missed, was
+    // retried, and re-rendered page P through processors already at P+65536:
+    // a stateful plugin reset on every page (fix/stateful-insert-retry).
+    twPagePlan planPage( offset_t pageStart ) override;
+
     // Add a plugin insert to the chain
     void addPlugin( std::shared_ptr<audio::twPluginInsert> insert );
 

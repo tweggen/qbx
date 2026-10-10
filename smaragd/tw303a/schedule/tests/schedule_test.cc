@@ -581,16 +581,20 @@ int main()
         CHECK(waitDemand(d), "the consumer's demand still completes");
         CHECK(d->notProduced() == 0,
               "the consumer's OWN pages were produced (only its input was retired)");
-        CHECK(pass->renders.load() >= 2,
-              "the dependent ran rather than waiting on a node that will never come");
+        CHECK(pass->renders.load() == 2,
+              "the dependent ran (once per page) rather than waiting on a node "
+              "that will never come");
         // And it saw the retirement AS A MISS: its plan wanted the retired
         // component's page, the bound set did not have it, which is exactly the
-        // signal verify-at-publish already counts. (That also costs the node its
-        // ONE bounded retry, which is why the render count above is >= and not
-        // ==; content stays correct through the legacy fallback inside the
-        // render.)
+        // signal verify-at-publish counts. A miss is NOT retried (schedule
+        // CONTRACT inv. 7, fix/stateful-insert-retry): the retry re-binds the
+        // same deps, so it could not bind the retired one either, and before
+        // that change it re-requested the RETIRED component from a worker.
+        // Content stays correct through the legacy fallback inside the render.
         CHECK(reval.graphStats().missPages > 0,
               "the retired input shows up as a bound-set MISS, not as a wait");
+        CHECK(reval.graphStats().nodeRetries == 0,
+              "and a miss alone costs no retry");
     }
 
     // R-5: 100 randomized interleavings. The retirement lands at an arbitrary
