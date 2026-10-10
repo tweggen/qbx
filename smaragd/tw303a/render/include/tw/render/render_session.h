@@ -18,6 +18,26 @@ class CaptureRevalidator;
 
 namespace audio {
 
+// Whether a render with AudioFormat::MP3 can actually run. MP3 export dlopens
+// libmp3lame rather than linking it, so this is a RUNTIME question, and the UI
+// has to ask it before offering the format.
+//
+// Declared HERE, in render, rather than only in tw/sinks, because the app may
+// include tw/render and may NOT include tw/sinks -- check_layering.py's edge
+// set gives app/servicesui {core, devices, graph, playback, plugins, record,
+// render}. srenderdialog.cpp used to hand-write its own
+// `class MP3Writer { static bool isAvailable(); }` to get round exactly that,
+// and the first attempt at this fix reached for tw/sinks directly and was
+// correctly rejected by the checker.
+//
+// It also reads better: the dialog's business is a RENDER, not a file writer.
+bool mp3ExportAvailable();
+
+// The library names that were tried, comma-separated, so a failure can say what
+// it looked for rather than telling the user to copy a file the build may
+// already have deployed under another name.
+std::string mp3LibraryCandidates();
+
 struct RenderParams {
     enum class Extent { EntireProject, TimeSelection };
 

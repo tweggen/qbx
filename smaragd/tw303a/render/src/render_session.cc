@@ -12,6 +12,17 @@
 
 namespace audio {
 
+// Forwarders to the sinks-level queries declared in tw/sinks/audio_file_writer.h.
+// They exist so the APP can ask without including tw/sinks, which
+// check_layering.py does not permit it to do -- see render_session.h.
+bool mp3ExportAvailable() {
+    return mp3WriterAvailable();
+}
+
+std::string mp3LibraryCandidates() {
+    return mp3WriterCandidates();
+}
+
 RenderSession::RenderSession() {}
 
 RenderSession::~RenderSession() {

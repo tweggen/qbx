@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -14,6 +15,63 @@
 
 namespace audio {
 
+namespace {
+
+// The libmp3lame runtime, by every name it actually ships under. ONE list, used
+// by both loadLibrary() and isAvailable() -- they used to carry a copy each,
+// and the copies had already drifted (the loader had two Unix search paths the
+// probe lacked), so a library the encoder could open could still be reported
+// unavailable by the UI.
+//
+// libmp3lame-0.dll is the name vcpkg and MSYS2 install, and its absence here
+// was a real bug: smaragd's own build copies the whole vcpkg bin/ directory
+// next to smaragd.exe (main/CMakeLists.txt), so the DLL was sitting beside the
+// executable while every probe failed and the render dialog greyed MP3 out
+// with "copy libmp3lame.dll to application directory" -- advice for a file the
+// user already had, under a different name.
+//
+// The .0 / .so.0 forms matter for the same reason on the other platforms: a
+// RUNTIME package ships the versioned file, and only the -dev package adds the
+// unversioned symlink. A machine that can play MP3s need not be able to find
+// `libmp3lame.so`.
+const char *const kLameLibNames[] = {
+#ifdef _WIN32
+    "libmp3lame.dll",       // a hand-placed copy, and what older installs have
+    "libmp3lame-0.dll",     // vcpkg, MSYS2 -- what the build actually deploys
+    "mp3lame.dll",
+    "lame.dll",
+#elif defined(__APPLE__)
+    "./libmp3lame.dylib",
+    "libmp3lame.dylib",
+    "libmp3lame.0.dylib",
+    "/opt/homebrew/lib/libmp3lame.dylib",
+    "/opt/homebrew/lib/libmp3lame.0.dylib",
+    "/usr/local/lib/libmp3lame.dylib",
+    "/usr/local/lib/libmp3lame.0.dylib",
+#else  // Linux and the other ELF platforms
+    "./libmp3lame.so",
+    "libmp3lame.so",
+    "libmp3lame.so.0",
+    "/usr/lib/libmp3lame.so",
+    "/usr/local/lib/libmp3lame.so",
+#endif
+};
+
+// Every candidate, for an error message that says what was looked for rather
+// than what the reader should go and copy.
+std::string candidateList() {
+    std::string out;
+    for (const char *name : kLameLibNames) {
+        if (!out.empty()) {
+            out += ", ";
+        }
+        out += name;
+    }
+    return out;
+}
+
+}  // namespace
+
 MP3Writer::MP3Writer() {}
 
 MP3Writer::~MP3Writer() {
@@ -25,26 +83,7 @@ bool MP3Writer::loadLibrary() {
         return true;
     }
 
-    const char *libNames[] = {
-#ifdef _WIN32
-        "libmp3lame.dll",
-        "mp3lame.dll",
-        "lame.dll",
-#elif defined(__APPLE__)
-        "./libmp3lame.dylib",
-        "libmp3lame.dylib",
-        "/opt/homebrew/lib/libmp3lame.dylib",
-        "/usr/local/lib/libmp3lame.dylib",
-#else  // Linux
-        "./libmp3lame.so",
-        "libmp3lame.so",
-        "libmp3lame.so.0",
-        "/usr/lib/libmp3lame.so",
-        "/usr/local/lib/libmp3lame.so",
-#endif
-    };
-
-    for (const char *name : libNames) {
+    for (const char *name : kLameLibNames) {
         lameHandle = dlopen(name, RTLD_LAZY);
         if (lameHandle) {
             break;
@@ -52,7 +91,7 @@ bool MP3Writer::loadLibrary() {
     }
 
     if (!lameHandle) {
-        lastError = "libmp3lame not found. Copy the library to the application directory.";
+        lastError = "libmp3lame not found. Tried: " + candidateList();
         return false;
     }
 
@@ -163,25 +202,21 @@ const char *MP3Writer::errorMessage() const {
     return lastError.c_str();
 }
 
-bool MP3Writer::isAvailable() {
-    // Try to load the library without keeping it loaded
-    const char *libNames[] = {
-#ifdef _WIN32
-        "libmp3lame.dll",
-        "mp3lame.dll",
-        "lame.dll",
-#elif defined(__APPLE__)
-        "./libmp3lame.dylib",
-        "libmp3lame.dylib",
-        "/opt/homebrew/lib/libmp3lame.dylib",
-#else  // Linux
-        "./libmp3lame.so",
-        "libmp3lame.so",
-        "libmp3lame.so.0",
-#endif
-    };
+// The public API declared in tw/sinks/audio_file_writer.h. Thin on purpose: the
+// app asks these, never MP3Writer directly.
+bool mp3WriterAvailable() {
+    return MP3Writer::isAvailable();
+}
 
-    for (const char *name : libNames) {
+std::string mp3WriterCandidates() {
+    return candidateList();
+}
+
+bool MP3Writer::isAvailable() {
+    // Try to load the library without keeping it loaded. Same kLameLibNames as
+    // loadLibrary() -- deliberately, so the UI can never grey MP3 out over a
+    // library the encoder would have opened.
+    for (const char *name : kLameLibNames) {
         void *handle = dlopen(name, RTLD_LAZY);
         if (handle) {
             dlclose(handle);
