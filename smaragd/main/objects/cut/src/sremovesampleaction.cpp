@@ -131,17 +131,23 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
 
     delete clipLink;  // Qt will remove from parent, SCut destructor handles cleanup
 
+    // Hand the inverse the index the clip CAME FROM (QBX-149). Without it the
+    // restored clip is appended, so every later positional clip index means a
+    // different clip -- and a redo of this very delete destroys the wrong one.
     if( canRestoreContainer ) {
         return {true, new SRestoreContainerClipAction(
                           trackPath_, containerPath, timePos_,
-                          srcStart, cutDuration, loopLength, grain )};
+                          srcStart, cutDuration, loopLength, grain,
+                          clipIndex_ )};
     }
 
     SAddSampleAction *inverse =
         haveWindow
             ? new SAddSampleAction( trackPath_, filePath, timePos_,
-                                    srcStart, cutDuration, loopLength, grain )
-            : new SAddSampleAction( trackPath_, filePath, timePos_ );
+                                    srcStart, cutDuration, loopLength, grain,
+                                    clipIndex_ )
+            : new SAddSampleAction( trackPath_, filePath, timePos_,
+                                    clipIndex_ );
     return {true, inverse};
 }
 

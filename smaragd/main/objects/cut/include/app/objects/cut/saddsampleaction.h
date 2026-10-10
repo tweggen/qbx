@@ -30,11 +30,12 @@ class SAddSampleAction : public SAction {
 public:
     SAddSampleAction() = default;
     SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
-                     offset_t timePos);
+                     offset_t timePos, int restoreAtIndex = -1);
     SAddSampleAction(const QList<int> &trackPath, const QString &filePath,
                      offset_t timePos,
                      const Fraction &srcStart, length_t cutDuration,
-                     length_t loopLength, const twGrainParams &grain);
+                     length_t loopLength, const twGrainParams &grain,
+                     int restoreAtIndex = -1);
 
     QString name() const override { return QStringLiteral("add-sample"); }
     SApplyResult apply(SProject *project) override;
@@ -59,6 +60,20 @@ private:
     length_t cutDuration_ = 0;
     length_t loopLength_ = 0;
     twGrainParams grain_;
+
+    // Where in the lane's child order to put the restored clip, or -1 to
+    // append (QBX-149). A clip is addressed by its POSITIONAL index, so an
+    // inverse that appends leaves every stored index meaning a different clip:
+    // delete the clip at index 0, undo, and the restored clip lands last, so
+    // redoing `remove-sample(clipIndex=0)` deletes a DIFFERENT clip. Measured
+    // before the fix: delete head, undo, redo, and the head survived while the
+    // tail was destroyed.
+    //
+    // Position is the right thing to restore here rather than switching to
+    // identity addressing: childIndex is this project's sanctioned ordering
+    // key (an SObject's id is its memory address and must never order
+    // anything), so the order IS part of the state an inverse owes the user.
+    int restoreAtIndex_ = -1;
 };
 
 #endif // SADDSAMPLEACTION_H

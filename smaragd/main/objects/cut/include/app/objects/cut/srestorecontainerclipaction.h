@@ -34,7 +34,8 @@ public:
                                  const Fraction &srcStart,
                                  length_t cutDuration,
                                  length_t loopLength,
-                                 const twGrainParams &grain );
+                                 const twGrainParams &grain,
+                                 int restoreAtIndex = -1 );
 
     QString name() const override
         { return QStringLiteral("restore-container-clip"); }
@@ -50,6 +51,23 @@ private:
     length_t cutDuration_ = 0;
     length_t loopLength_ = 0;
     twGrainParams grain_;
+
+    // Where in the lane's child order to put the restored clip, or -1 to
+    // append (QBX-149; see saddsampleaction.h for the full reasoning). A clip is addressed by its POSITIONAL index, so an
+    // inverse that appends leaves every stored index meaning a different clip:
+    // delete the clip at index 0, undo, and the restored clip lands last, so
+    // redoing `remove-sample(clipIndex=0)` deletes a DIFFERENT clip. Measured
+    // before the fix: delete head, undo, redo, and the head survived while the
+    // tail was destroyed.
+    //
+    // Position is the right thing to restore here rather than switching to
+    // identity addressing: childIndex is this project's sanctioned ordering
+    // key (an SObject's id is its memory address and must never order
+    // anything), so the order IS part of the state an inverse owes the user.
+    // Not serialized, unlike SAddSampleAction's copy of this field: this
+    // action is live-only by design (writeXml is intentionally empty and
+    // readXml returns false), so there is no XML for it to round-trip through.
+    int restoreAtIndex_ = -1;
 };
 
 #endif // SRESTORECONTAINERCLIPACTION_H

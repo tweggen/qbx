@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-149. Delete a clip, undo, redo, and the clip that ends up deleted must be
+  THE ONE YOU DELETED. Before the fix a different clip was destroyed.
+
+  THE DEFECT. remove-sample addresses its target by a POSITIONAL clip index,
+  captured at construction and replayed verbatim on redo. Its inverse appended
+  the restored clip instead of putting it back where it was. So:
+
+      split           head = clip 0,  tail = clip 1
+      delete clip 0   tail shifts down to index 0
+      undo            head is APPENDED, so head = clip 1, tail = clip 0
+      redo            remove-sample(clipIndex=0) now means the TAIL
+
+  The user deletes one clip and, after an undo/redo, a different one is gone.
+  Read against the report that opened QBX-146 and this one, "after deleting too
+  much, it did not come back" describes it exactly: the wrong clip vanished and
+  the intended one was still there.
+
+  THE FIX. The inverse carries the index the clip came from and restores it
+  there, via SObject::moveChildToIndex. Position is the right thing to restore
+  rather than switching to identity addressing, because childIndex is this
+  project's sanctioned ordering key — an SObject's id is its memory address
+  and must never order anything — so child order is part of the state an
+  inverse owes back.
+
+  WHAT MAKES THIS CASE BITE. The two clips must be DISTINGUISHABLE in the
+  audio, or deleting either one looks the same. test_sawtooth.wav has a unique
+  RMS per source second:
+
+      sec0 ~0.067   sec1 ~0.176   sec2 ~0.291   sec3 ~0.405
+
+  Split at 2 s puts sec0+sec1 in the head and sec2+sec3 in the tail. After the
+  redo the HEAD must be gone and the TAIL must remain — so timeline 0..2 s is
+  silent and 2..4 s still carries ~0.291 then ~0.405. Before the fix it was the
+  other way round, and both assertions below fail.
+-->
+<SActionScript version="1" name="redo_after_delete_hits_same_clip">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <split-clip clip="0,0" splitTime="96000"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="96000"/>
+
+    <!-- Delete the HEAD, the index-shifting case. -->
+    <remove-sample trackIndex="0" clipIndex="0" timePos="0"/>
+
+    <undo count="1"/>
+
+    <!-- ACCEPTANCE 2: undo restores CHILD ORDER, not merely the audio. Before
+         the fix the restored head was appended and this failed to apply at all
+         (clip 0,0 was the tail, at startTime 96000). -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="96000"/>
+
+    <!-- ACCEPTANCE 1: the redo deletes the clip it deleted the first time. -->
+    <redo count="1"/>
+
+    <render filename="radhsc.wav" format="wav" quality="10"/>
+
+    <!-- The HEAD is gone: its span is silent. Before the fix the head SURVIVED
+         here and read ~0.067. -->
+    <assert-audio-energy filename="radhsc.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.01"/>
+
+    <!-- ...and the TAIL is still there, with its own material. Before the fix
+         the tail was the clip destroyed, leaving these spans silent. -->
+    <assert-audio-energy filename="radhsc.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="radhsc.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- One clip left, and it is the tail, still at its own index. -->
+    <assert-clip-window clip="0,0" startTime="96000" duration="96000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
