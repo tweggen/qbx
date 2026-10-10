@@ -1529,3 +1529,34 @@ survived. Both hooks are needed: `Polish` is the documented about-to-be-laid-out
 moment and the only one a parentless top-level gets, while `ChildAdded` catches
 a widget as it is parented, which covers the scratch widget trees the layout
 gates build and never show.
+
+## inv. 63 — the CENTRAL WIDGET is `centralHost_` for the window's whole life; projects swap INSIDE it
+
+`SMainWindow` installs one `QStackedWidget` as its central widget in the
+constructor, before any dock, and never replaces it. `installMasterEditor_()`
+adds the project's `SViewTabs` to it; `closeProject()` removes it, hides it and
+`deleteLater()`s it, which is what `setCentralWidget( nullptr )` used to do.
+Nothing calls `setCentralWidget()` again.
+
+**The bug this replaced: every project close/open wrecked the dock layout, and
+quitting saved it.** A `QMainWindow` without a central widget gives the dock
+areas all of its space, and a central widget installed afterwards gets back only
+its minimum. Measured with a standalone Qt 6.11.1 program shaped like this
+window (a left dock column at 187 px, maximized at 1920 px): after
+`setCentralWidget( nullptr )` and a new `setCentralWidget( tabs )` the column
+was **1610 px** and the centre **306 px**, its minimum. With the stacked host
+and the same swap, both stayed at 187/1729. File → Open, New, Close and Recent
+all went through `closeProject()`, so one project switch was enough.
+`closeEvent()` then saved that layout faithfully (inv. 59) and every later start
+restored it, which made it look as though the saved layout was being ignored.
+
+The order-independent property is the point. Dock sizes no longer depend on
+when, or whether, a project is open. A run with no project at all now also
+saves a layout that round-trips. Before, that layout had no central widget.
+
+On a first run, with nothing restored, `applyDefaultDockWidths()` sets the left
+column to 1/8 of the maximized width, 240 px at 1920. Before, it took the
+Track Detail panel's 400 px `sizeHint`.
+
+NOT gated: a `--test-case` run never shows the window, so no headless case can
+observe dock geometry. The standalone measurement above is the evidence.

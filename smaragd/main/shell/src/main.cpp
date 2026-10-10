@@ -4,6 +4,7 @@
 #include <QFont>
 #include <QCommandLineParser>
 #include <QEvent>
+#include <QTimer>
 #include "smaragd_version.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
@@ -523,6 +524,9 @@ int main( int argc, char *argv[] )
             win->move( 100, 100 );
             win->resize( 800, 600 );
             win->showMaximized();
+            // Once the window has its maximized size, which on Windows is
+            // only after the show has gone through the event loop.
+            QTimer::singleShot( 0, win, [win] { win->applyDefaultDockWidths(); } );
         }
 
         // The audio-interface-unavailable check (see SMainWindow::

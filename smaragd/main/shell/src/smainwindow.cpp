@@ -39,6 +39,7 @@
 #include <QSet>
 #include <QScrollArea>
 #include <QSlider>
+#include <QStackedWidget>
 
 #include <iostream>
 
@@ -812,7 +813,8 @@ void SMainWindow::fileClose()
 
     closeProject();             // deletes the project (auto-removes its connections)
     currentFilePath_.clear();
-    setCentralWidget( NULL );   // drop the (now-deleted) project widget
+    // No setCentralWidget( NULL ) here: closeProject() already detached the
+    // project's shell, and the central widget is centralHost_ for good.
     projectRootWidget_ = NULL;
     updateWindowTitle();
     syncPaletteToProject( NULL );
@@ -1171,6 +1173,14 @@ bool SMainWindow::restoreWindowLayout()
     return geoRestored;
 }
 
+void SMainWindow::applyDefaultDockWidths()
+{
+    // The two left docks share one column split vertically, so sizing one of
+    // them sizes the column. 1/8 is 240 px on a 1920 px screen; the extern
+    // file list's own 200 px minimum wins on anything narrower than ~1600.
+    resizeDocks( { qDockTrackDetail_ }, { width() / 8 }, Qt::Horizontal );
+}
+
 void SMainWindow::openMostRecent()
 {
     const QStringList recents = SSettings::instance().recentProjects();
@@ -1352,7 +1362,16 @@ void SMainWindow::closeProject()
     //
     // Clearing the member is what makes installMasterEditor_ build a fresh
     // shell and re-install it, which is the path a first project already takes.
-    setCentralWidget( nullptr );
+    //
+    // The shell now lives INSIDE centralHost_ rather than being the central
+    // widget itself (inv. 63), so it is detached from the host here with the
+    // same semantics setCentralWidget( nullptr ) had: out of the layout and
+    // hidden now, deleted on the next turn of the event loop.
+    if( viewTabs_ ) {
+        centralHost_->removeWidget( viewTabs_ );
+        viewTabs_->hide();
+        viewTabs_->deleteLater();
+    }
     viewTabs_ = nullptr;
     projectRootWidget_ = NULL;
     delete currentProject_;
@@ -1953,6 +1972,13 @@ SMainWindow::SMainWindow()
     menuBar()->addMenu( qTestMenu_ );
 
     buildStatusBar();
+
+    // The permanent central widget (see centralHost_ in the header). Installed
+    // BEFORE any dock, and never replaced: projects swap their view shell in
+    // and out of it, so the dock sizes never see a window without a centre.
+    centralHost_ = new QStackedWidget( this );
+    centralHost_->setSizePolicy( QSizePolicy::Expanding, QSizePolicy::Expanding );
+    setCentralWidget( centralHost_ );
 
     // Create the persistent extern file list dock. It outlives any single project;
     // its content is managed by setProject() called from createDocksToolbars.
@@ -3016,8 +3042,9 @@ void SMainWindow::installMasterEditor_()
                                      : SApplication::app().getCurrentProject();
     if( !proj || !proj->getRootComponent() ) return;
     if( !viewTabs_ ) {
-        viewTabs_ = new SViewTabs( this );
-        setCentralWidget( viewTabs_ );
+        viewTabs_ = new SViewTabs( centralHost_ );
+        centralHost_->addWidget( viewTabs_ );
+        centralHost_->setCurrentWidget( viewTabs_ );
     }
     QWidget *editor = proj->getRootComponent()->getDetailEditWidget( this );
     viewTabs_->setMasterEditor( proj->getRootComponent(), editor,

@@ -606,6 +606,11 @@ public:
     // arrives to re-fit it). Returns true if a saved geometry was applied.
     bool restoreWindowLayout();
 
+    // First run only (nothing to restore): give the left dock column 1/8 of
+    // the window width instead of the Track Detail panel's 400 px size hint.
+    // Call after the window has been shown maximized.
+    void applyDefaultDockWidths();
+
     // THE ONE PLACE `ui/windowGeometry` and `ui/windowState` are written.
     //
     // It used to be inlined in closeEvent() and called from nowhere else,
@@ -854,6 +859,14 @@ private:
     // kept under its old name because the repaint/focus reach-throughs in this
     // file do not care which widget it is, only the casts did.
     class SViewTabs *viewTabs_ = nullptr;
+    // THE central widget, for the window's whole life; viewTabs_ is swapped in
+    // and out of it. QMainWindow without a central widget hands ALL its space
+    // to the docks, and a central widget installed afterwards only gets its
+    // minimum back -- so every project close/open used to leave the left docks
+    // ~1600 px wide and the arranger at ~300, and closeEvent() then saved that.
+    // Never removing the central widget takes the dock sizes out of the swap
+    // entirely (shell CONTRACT inv. 63).
+    class QStackedWidget *centralHost_ = nullptr;
     QWidget *projectRootWidget_;
     QString currentFilePath_;   // empty = never saved/loaded (untitled)
 
