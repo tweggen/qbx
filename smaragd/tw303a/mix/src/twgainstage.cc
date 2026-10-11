@@ -515,7 +515,7 @@ void twGainStage::teardown()
         std::lock_guard<std::mutex> lock( mutex() );
         for( const std::shared_ptr<twLatchOutput> &plug : pInputPlugs_ ) {
             if( !plug ) continue;
-            std::shared_ptr<twComponent> comp = plug->getParentLatch().getComponent();
+            std::shared_ptr<twComponent> comp = twProducerOf( plug.get() );
             if( comp ) inputsCopy.push_back( comp );
         }
     }

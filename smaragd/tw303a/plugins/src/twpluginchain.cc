@@ -202,8 +202,10 @@ void twPluginChain::rebuildWiring_nolock()
             // insert was removed: the departing tap took the chain's input with
             // it. setInput() deletes the tap's previous plug, so re-running this
             // does not accumulate outputs.
-            twLatch &producer = pInputPlugs_[port]->getParentLatch();
-            if( twLatchOutput *ownPlug = producer.addOutput() ) {
+            // An ORPHANED plug has no latch to take a new output from, so
+            // there is nothing to re-point at (QBX-155).
+            twLatch *producer = pInputPlugs_[port]->latchOrNull();
+            if( twLatchOutput *ownPlug = producer ? producer->addOutput() : nullptr ) {
                 firstPlugin->setInput( port, ownPlug );
             }
         }
@@ -247,8 +249,7 @@ twPagePlan twPluginChain::planPage( offset_t pageStart )
     // No inserts: the chain forwards its producer's page.
     std::lock_guard<std::mutex> lock( mutex() );
     if( !pInputPlugs_.empty() && pInputPlugs_[0] ) {
-        std::shared_ptr<twComponent> producer =
-            pInputPlugs_[0]->getParentLatch().getComponent();
+        std::shared_ptr<twComponent> producer = twProducerOf( pInputPlugs_[0].get() );
         if( producer ) plan.deps.push_back( twPageDep{ std::move( producer ), pageStart } );
     }
     return plan;
@@ -294,7 +295,7 @@ std::shared_ptr<twOutputPage> twPluginChain::freezePage(
     // render (proposal 19 Phase 2a).
     if( snapshot.empty() ) {
         if( plug0 ) {
-            std::shared_ptr<twComponent> comp = plug0->getParentLatch().getComponent();
+            std::shared_ptr<twComponent> comp = twProducerOf( plug0.get() );
             if( comp ) {
                 // A planned render (the scheduler's node for THIS chain) has
                 // bound the producer's page: forward exactly that. requestPage()

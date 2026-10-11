@@ -33,9 +33,8 @@ int twRewire::seekTo_nolock( offset_t offset )
         if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
             // The input plug is a twLatchOutput which may be backed by a twComponent
             // We need to seek the parent latch's component
-            twLatch &latch = pInputPlugs_[i]->getParentLatch();
-            std::shared_ptr<twComponent> comp = latch.getComponent();
-            comp->seekTo(offset);
+            std::shared_ptr<twComponent> comp = twProducerOf( pInputPlugs_[i].get() );
+            if (comp) comp->seekTo(offset);
         }
     }
     return 0;
@@ -280,10 +279,9 @@ void twRewire::teardown()
         std::lock_guard<std::mutex> lock(mutex());
         for (idx_t i = 0; i < nInputs_; ++i) {
             if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
-                twLatch &latch = pInputPlugs_[i]->getParentLatch();
-                std::shared_ptr<twComponent> comp = latch.getComponent();
+                std::shared_ptr<twComponent> comp = twProducerOf( pInputPlugs_[i].get() );
                 // Use shared_ptr with no-op deleter to keep alive during recursion
-                inputsCopy.push_back(comp);
+                if (comp) inputsCopy.push_back(comp);
             }
         }
     }

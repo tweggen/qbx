@@ -1115,6 +1115,7 @@ tw_module_test(graph_test                   graph/tests/graph_test.cc           
 # in the tree today, a mistake and a correct conversion are the same instruction,
 # so neither the byte-exactness gate nor the grep can tell them apart.
 tw_module_test(page_channels_test           graph/tests/page_channels_test.cc           tw_graph)
+tw_module_test(latch_orphan_test            graph/tests/latch_orphan_test.cc            tw_graph)
 tw_module_test(metering_test                metering/tests/metering_test.cc             tw_metering)
 tw_module_test(body_measures_test           body/tests/body_measures_test.cc            tw_body)
 tw_module_test(body_joint_test              body/tests/body_joint_test.cc               tw_body)

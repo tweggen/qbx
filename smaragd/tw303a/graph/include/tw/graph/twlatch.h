@@ -66,7 +66,28 @@ public:
 class twLatchOutput
 {
 private:
-    twLatch & parentLatch;
+    // NON-OWNING and NULLABLE, and the nullability is the whole point.
+    //
+    // The latch owns its outputs, but a CONSUMER holds a shared_ptr to the plug
+    // it reads from (twComponent::pInputPlugs_), so a plug routinely OUTLIVES
+    // its latch: the latch dies with its component (twComponent::pOutputLatches_)
+    // and ~twComponent severs no consumer. This was a `twLatch &` until QBX-155,
+    // which is what made the hazard unobservable -- a reference is never null,
+    // so twComponent::setInput's own `parentLatch == nullptr` guard could never
+    // fire, and
+    //
+    //     oldPlug->getParentLatch().deleteOutput( oldPlug )
+    //
+    // wrote into a freed, reused latch. MEASURED at the crash: the plug itself
+    // was intact (valid vtable, use_count 1) while the latch's vptr read
+    // 0x55555618f420 against a real 0x555555c8d858, its memory holding file-path
+    // strings.
+    //
+    // ~twLatch now orphans every output it still owns, which is the FIXME its
+    // destructor carried. There is deliberately no accessor returning a
+    // reference: every caller has to face the null.
+    twLatch *parentLatch_;
+    friend class twLatch;
 protected:
     // This reader's position on the producer's timeline. Written by
     // seekStream() (from twComponent::seekInputStreams) and advanced by
@@ -79,9 +100,13 @@ protected:
     std::atomic<offset_t> offset;
 public:
     twLatchOutput (twLatch & latch)
-        : parentLatch(latch) { offset.store( latch.getOffset(), std::memory_order_relaxed ); }
+        : parentLatch_(&latch) { offset.store( latch.getOffset(), std::memory_order_relaxed ); }
     virtual ~twLatchOutput() = default;
-    inline twLatch & getParentLatch () { return parentLatch; }
+
+    // The producing latch, or nullptr once it has been destroyed. EVERY caller
+    // must handle the null -- see the note on parentLatch_ (QBX-155).
+    inline twLatch * latchOrNull () { return parentLatch_; }
+    inline bool isOrphaned () const { return parentLatch_ == nullptr; }
 
     // Re-position this reader on the producer's timeline. Must be called when
     // the consuming component seeks; readStreamingData() otherwise keeps
@@ -89,8 +114,11 @@ public:
     void seekStream( offset_t pos ) { offset.store( pos, std::memory_order_relaxed ); }
 
     // The consumer's single entry point for "what am I about to read?".
-    // Delegates to the producing latch.
-    twFormat getFormat() const { return parentLatch.getFormat(); }
+    // Delegates to the producing latch, and answers the CANONICAL format once
+    // orphaned rather than faulting: a consumer asking an orphaned plug what it
+    // produces is about to be rewired away from it, and the default is what
+    // every unmodified latch reports anyway (twLatch::getFormat).
+    twFormat getFormat() const;
 
     virtual length_t readData( sample_t *, length_t  ) {
         throw excStandard( "twLatchOutput(): Tried to read data from the Latch itselves." );
@@ -220,8 +248,22 @@ public:
     // readStreamingData — a producer storing another representation overrides it.
     length_t readRaw( void * dest, length_t maxFrames );
 
-    inline twStreamingLatch & getParentStreamingLatch()
-        { return (twStreamingLatch &) getParentLatch(); }
+    // The producing streaming latch, or nullptr once it has been destroyed
+    // (QBX-155). Same contract as latchOrNull(), narrowed to this subclass.
+    inline twStreamingLatch * streamingLatchOrNull()
+        { return (twStreamingLatch *) latchOrNull(); }
 };
+
+// The component producing into this plug, or nullptr when there is none to be
+// had -- a null plug, an ORPHANED plug whose latch has been destroyed, or a
+// latch whose component has already gone. ONE spelling for the whole engine,
+// because this question is asked from graph, mix and plugins alike and every
+// one of those sites used to dereference the latch unconditionally (QBX-155).
+inline std::shared_ptr<twComponent> twProducerOf( twLatchOutput *plug )
+{
+    if( !plug ) return nullptr;
+    twLatch *lat = plug->latchOrNull();
+    return lat ? lat->getComponent() : nullptr;
+}
 
 #endif

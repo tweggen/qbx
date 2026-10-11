@@ -301,15 +301,28 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
 
     if( pInputPlugs_[idx] ) {
         twLatchOutput* oldPlug = pInputPlugs_[idx].get();
-        auto parentLatch = &(oldPlug->getParentLatch());
-        if(parentLatch==nullptr)
-        {
-            TW_LOGD( "graph", "twComponent::setInput(): pInputPlugs_[idx]->getParentLatch() == null" );
-            return;
+        twLatch* parentLatch = oldPlug->latchOrNull();
+        if( parentLatch == nullptr ) {
+            // ORPHANED: the producing latch died with its component while we
+            // still held its plug (QBX-155). There is no list to erase from --
+            // ~twLatch already cleared it -- so drop our own reference and
+            // carry on with the rewire. Returning here instead would leave the
+            // dead plug installed, which is how a consumer kept reading a
+            // freed producer.
+            //
+            // This branch used to be unreachable: the back-reference was a
+            // `twLatch &`, so the null test could never fire and the call below
+            // wrote into freed memory.
+            TW_LOGD( "graph",
+                     "twComponent::setInput(): input %d held an ORPHANED plug "
+                     "(its latch is gone); dropping it. QBX-155.", (int)idx );
+            pInputPlugs_[idx] = nullptr;
+            if( !newOutput ) --inputsSet_;
+        } else {
+            parentLatch->deleteOutput( oldPlug );
+            pInputPlugs_[idx] = nullptr;
+            if( !newOutput ) --inputsSet_;
         }
-        oldPlug->getParentLatch().deleteOutput(oldPlug);
-        pInputPlugs_[idx] = nullptr;
-        if( !newOutput ) --inputsSet_;
     } else {
         if( newOutput ) ++inputsSet_;
     }
@@ -317,12 +330,24 @@ void twComponent::setInput( idx_t idx, twLatchOutput *newOutput )
     // shared_ptr (not a no-op wrapper) means an audio-thread snapshot of this
     // plug keeps it alive across a concurrent deleteOutput/disconnect.
     if( newOutput ) {
-        pInputPlugs_[idx] = newOutput->getParentLatch().sharedOutput( newOutput );
+        // A plug being INSTALLED must have a live latch: it came from a
+        // component that is wiring itself up. An orphaned one would be a bug
+        // in the caller, so refuse it rather than installing a dead input.
+        twLatch* producer = newOutput->latchOrNull();
+        if( !producer ) {
+            TW_LOGE( "graph",
+                     "twComponent::setInput(): refusing an ORPHANED plug for "
+                     "input %d -- its latch is gone. QBX-155.", (int)idx );
+            pInputPlugs_[idx] = nullptr;
+            parentComponent_.reset();
+            myInputIndex_ = -1;
+            return;
+        }
+        pInputPlugs_[idx] = producer->sharedOutput( newOutput );
 
         // Auto-detect and track parent component for safe teardown
         // Extract parent from the latch that owns this output
-        twLatch& parentLatch = newOutput->getParentLatch();
-        std::shared_ptr<twComponent> parentComp = parentLatch.getComponent();
+        std::shared_ptr<twComponent> parentComp = producer->getComponent();
 
         // Track the parent as a weak_ptr (non-owning): the parent owns us, so a
         // strong ref would form a cycle. .lock() in teardown lets child->teardown()
@@ -1139,8 +1164,7 @@ twPagePlan twComponent::planPage( offset_t pageStart )
     std::lock_guard<std::mutex> lock( mutex() );
     for (const std::shared_ptr<twLatchOutput> &plug : pInputPlugs_) {
         if (!plug) continue;
-        std::shared_ptr<twComponent> producer =
-            plug->getParentLatch().getComponent();
+        std::shared_ptr<twComponent> producer = twProducerOf( plug.get() );
         if (!producer) continue;
         plan.deps.push_back( twPageDep{ std::move(producer), pageStart } );
     }
