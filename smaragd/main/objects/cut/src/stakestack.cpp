@@ -1,4 +1,6 @@
 #include "app/objects/cut/stakestack.h"
+#include <utility>
+#include <vector>
 #include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
@@ -113,6 +115,35 @@ void STakeStack::removeTake( int index )
         emit activeTakeChanged( activeTake_ );
     } else if( activeTake_ > index ) {
         --activeTake_;
+    }
+    // THE COMP MAP NEEDS THE SAME RENUMBERING (plan 53 B10), and it had none:
+    // removing take 0 of a comped column left every segment pointing one take
+    // off, and a segment naming the removed take pointed at an index that no
+    // longer exists.
+    //
+    // Mirroring the activeTake_ arithmetic directly above, segment by segment:
+    // a segment naming the removed take is DROPPED -- the previous segment
+    // then extends over its range, which is the only sensible answer once the
+    // material it selected is gone -- and a segment above it is decremented.
+    //
+    // normalized() (inside setCompMap, and applied here through the same
+    // constructor) merges the adjacent same-take segments a drop can create,
+    // and re-zeroes a first segment's meaningless xfade. Dropping the FIRST
+    // segment leaves the map starting later, so positions before the new first
+    // one fall back to activeTake_ -- which has just been renumbered too.
+    if( !compMap_.empty() ) {
+        std::vector<twCompSegment> kept;
+        kept.reserve( compMap_.segments().size() );
+        for( const twCompSegment &sg : compMap_.segments() ) {
+            if( sg.take == index ) continue;
+            twCompSegment out = sg;
+            if( out.take > index ) --out.take;
+            kept.push_back( out );
+        }
+        // Assigned directly rather than through setCompMap(), which would emit
+        // its own durationChanged: the emit at the end of this function is the
+        // one that publishes this change, so the track resyncs once.
+        compMap_ = twCompMap( std::move( kept ) ).normalized();
     }
     // Track resync (updateClip resets the clip state chain; the render path
     // to the root is re-frozen, siblings keep their caches). Blocking read:

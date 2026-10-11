@@ -2,6 +2,7 @@
 #define SADDTAKEACTION_H
 
 #include "app/actions/saction.h"
+#include "tw/events/twcompmap.h"
 #include "tw/core/twfraction.h"
 #include "tw/graph/tw303aenv.h"
 #include <QList>
@@ -26,11 +27,28 @@ public:
                     double pitchCents = 0.0 );
 
     QString name() const override { return QStringLiteral("add-take"); }
+
+    /**
+     * RESTORE this comp map instead of clearing one (plan 53 B10).
+     *
+     * `add-take activate=1` normally CLEARS the map, because activating a take
+     * while a map decides every position would badge a take nobody can hear
+     * (QBX-159). But when this action is the INVERSE of a `remove-take`, the
+     * map it has to put back is the one that existed before the removal --
+     * complete, with the removed take's segments in it -- and that is not a
+     * cleared map and not a renumbered one either.
+     *
+     * Inverse-only and unserialized, like SRemoveTakeAction's twin of it.
+     */
+    void setRestoreCompMap( const twCompMap &map )
+    { restoreMap_ = map; hasRestoreMap_ = true; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
+    twCompMap  restoreMap_;
+    bool       hasRestoreMap_ = false;
     QList<int> clipPath_;
     QString    filePath_;
     offset_t   startOffset_ = 0;
