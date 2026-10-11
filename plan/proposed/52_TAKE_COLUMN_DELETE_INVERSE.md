@@ -324,6 +324,30 @@ for the track pin today; the gate must not add to it.
   first draft as a model; it is a precedent for the shape of the action, not
   for its fidelity.
 
+### Inside a composite: sound, with two limits to state plainly
+
+`SCompositeAction`'s normal undo/redo and its sibling-failure rollback both
+work with a pinned forward — the child inverses re-link and release, and a
+redo re-pins through `dropStalePin()`. Two edges are **not** rescued by the
+pin, and nobody should read "pinned" as "safe inside a composite":
+
+- **The rollback ignores the inverse's result.** If a restore fails during
+  rollback — possible only if a sibling in the same composite removed the lane
+  — the composite is destroyed immediately afterwards and the destructor's
+  `dropStalePin()` collects the content. "Keep the pin on failure" buys
+  nothing there, because the forward dies next. That is the existing
+  best-effort limit of the rollback, not something this change introduces.
+- **The `firstNull` branch still loses content.** When a sibling produces no
+  inverse the composite returns `{true, nullptr}`, `onApplied_` deletes the
+  forward, its destructor drops the pin, and the deleted column is collected.
+  (b) made that *announced*; it does not make it recoverable.
+
+Nothing composes `remove-sample` today — the two composite builders in
+`SStdMixerView` are split and pitch-nudge, and no `.qxa` contains
+`<composite` — so the path is reachable only by future code or a scripted
+composite. The gate covers it with one scripted composite of two deletes if
+that is cheap; otherwise this says it is untested.
+
 ## 9. Review history
 
 Reviewed 2026-10-11 (Fable). **Verdict RED**, on the premise rather than the
