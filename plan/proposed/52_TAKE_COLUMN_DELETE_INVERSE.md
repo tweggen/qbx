@@ -202,8 +202,14 @@ for free. What no amount of reading established is that *re-linking* a wrapped
 column leaves a stale plug in the audio graph and crashes at teardown about one
 run in four. The pin was never the problem; the graph was. Implementation
 therefore restricted the lift to the direct shape — §8, first bullet — and
-wrapped columns keep (b)'s refusal until QBX-155. Read this section as the
-argument for *why QBX-155 must be fixed*, not as a description of what shipped.
+wrapped columns kept (b)'s refusal until QBX-155.
+
+**QBX-155 has since landed, and this section now describes what ships.** The
+cause was never in this module: `twLatchOutput` held its latch by a
+non-nullable reference while `tw303a/graph`'s own design deliberately lets a
+plug outlive its latch, so a wrapper `SCut`'s component dying took its latch
+with it and left the track's consumer holding a plug into freed memory. The pin
+was innocent all along, which is why removing the disconnect made things worse.
 
 ## 6. Raised, not fixed here
 
@@ -319,28 +325,31 @@ for the track pin today; the gate must not add to it.
 
 ## 8. What this does not do
 
-- **It lifts the refusal for the DIRECT shape only** (`canPin =
-  stakes::isDirectColumn( clipLink )`). A wrapped column
-  (`SLink -> SCut -> STakeStack`) keeps (b)'s refusal, so §5's "the inverse owes
-  it in full" describes the design's reach, not this change's. The boundary was
-  measured, not chosen out of caution: an equivalent round-trip case crashed at
-  *teardown* 3 runs in 12, in
+- **It lifted the refusal for the DIRECT shape only**, and QBX-155 has since
+  extended it to the wrapped one. The boundary was measured rather than chosen
+  out of caution: an equivalent round-trip case crashed at *teardown* 3 runs in
+  12, in
 
   ```
   SApplication::rewireSpeaker -> twComponent::setInput( idx=0, newOutput=0 )
     -> oldPlug->getParentLatch().deleteOutput( oldPlug )   SIGSEGV
   ```
 
-  while the direct shape passed 12 of 12. **Removing the disconnect made the
-  wrapped shape worse** (9 failures in 12), which rules the disconnect out as the
-  cause and points instead at graph state an object keeps across wire → unwire →
-  re-link, state a freshly built one never has — which is why `SAddSampleAction`
-  needs no rewiring step: it never re-links a previously wired object. *Which*
-  plug goes stale is not established, and QBX-155 (Major) carries the backtrace,
-  requires the root cause be **named**, and demands **30 consecutive passes**,
-  because a 1-in-4 failure rate makes a single green run meaningless.
-  `take_column_wrapped_delete_refused.qxa` marks the boundary and its header says
-  it must be **replaced, not relaxed**, when QBX-155 lands.
+  while the direct shape passed 12 of 12, and **removing the disconnect made the
+  wrapped shape worse** (9 failures in 12) — which ruled the disconnect out and,
+  in hindsight, pointed straight at the real cause. That cause was **not in this
+  module**: `twLatchOutput` held its latch by a non-nullable `twLatch &` while
+  `tw303a/graph` deliberately lets a plug outlive its latch, and `~twLatch` was
+  empty but for `// FIXME: Empty the latch output list.` A wrapper `SCut` owns
+  its own component and therefore its own latch, so deleting the clip tore that
+  latch down; the direct shape's `STakeStack` has a shared content component
+  that survives. `~twLatch` now orphans its outputs, and
+  `take_column_wrapped_delete_undo_restores.qxa` replaced the boundary marker
+  at **30/30** consecutive passes.
+
+  What this plan got wrong is worth keeping: it treated the shape restriction as
+  a property of the PIN, and wrote the restriction into this module. It was a
+  property of the graph's lifetime rules, one layer down.
 - It does not lift the refusal for a live recording (§4), which keeps it
   deliberately.
 - **`take_delete_refused_not_silent.qxa` flips when this lands.** It asserts
