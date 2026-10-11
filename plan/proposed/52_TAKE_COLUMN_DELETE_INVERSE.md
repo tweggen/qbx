@@ -71,17 +71,36 @@ comp map and fades on every caller.
 
 `SRemoveSampleAction::apply`, for a clip it can pin:
 
+0. **`dropStalePin()` first**, before resolving anything. `remove-sample` is
+   itself the live inverse of `add-sample`, where *its* inverse is never
+   applied — so each redo of an `add-sample` re-applies this action against a
+   NEW clip, and only releasing the previous pin first stops it leaking one
+   pin per redo;
 1. resolve the column through `stakes::columnOfLink` — never a bare
-   `dynamic_cast`; it handles both shapes;
-2. `addRef()` the **link's own object** — the `STakeStack` on the direct shape,
-   the wrapper `SCut` on the wrapped one (whose content link holds the stack),
-   so the wrapper is preserved too;
-3. **`QObject::disconnect( obj, nullptr, lane, nullptr )`** before detaching.
-   `STrack::trackChildWasRemoved` does *not* undo the object-level
-   `durationChanged` connection that `trackChildWasAdded` made, and those
-   connects are not `Qt::UniqueConnection` — so re-linking without this
-   doubles the signal. `SRemoveTrackAction` and `stakes::wrapCutLinkIntoStack`
-   both already do it;
+   `dynamic_cast`; it handles both shapes. **`columnOfLink` is the PREDICATE
+   ("is this a column"), never the thing to pin:** it returns the `STakeStack`
+   on both shapes, so pinning its result would let the wrapper die with the
+   link on the wrapped shape — and the wrapper is what carries the audible
+   state (§2);
+2. `addRef()` **`&link->getSObject()`**, unconditionally. That is the
+   `STakeStack` on the direct shape and the wrapper `SCut` on the wrapped one.
+   The pin is **transitive**: `SCut` holds its content through
+   `content_ = new SLink( content, NULL )` (whose ctor `addRef()`s the stack)
+   and `~SCut` deletes it, and the stack holds its takes through child links
+   the same way. One `addRef()` therefore holds wrapper → stack → takes; no
+   second pin is needed;
+3. **`QObject::disconnect( obj, nullptr, lane, nullptr )`** before detaching,
+   in that BROAD form. `trackChildWasAdded` wires two object-level signals —
+   `durationChanged` and, for Event-kind content, `eventsChanged` — and
+   `trackChildWasRemoved` severs neither, nor are the connects
+   `Qt::UniqueConnection`, so re-linking without this doubles them. Copy
+   `SRemoveTrackAction`'s broad form and **not**
+   `stakes::wrapCutLinkIntoStack`'s narrow one, which names `durationChanged`
+   only and would miss `eventsChanged` on a MIDI take column. Re-linking
+   re-makes both, via `setParent` → `childEvent` → `childObjectAdded` →
+   `trackChildWasAdded`, which is why `SRestoreTrackAction` re-connects
+   nothing explicitly either. `SLaneFragment` wires the same two in its own
+   child-added slot, so a column on a fragment lane behaves identically;
 4. delete the link, keep the pin, and return the inverse holding a
    back-pointer to this action plus `restoreAtIndex` (QBX-149: an inverse owes
    child order back).
@@ -89,6 +108,21 @@ comp map and fades on every caller.
 The inverse re-links the held object at `restoreAtIndex` and releases the pin.
 The forward **re-pins on every apply**, so the pair survives
 undo → redo → undo.
+
+**Order inside `apply`, and it matters:** `dropStalePin()` → resolve → decide
+(a column? else the existing file/container branches, else the refusal) →
+`addRef()` → `disconnect` → `delete link`. The pin must precede the delete so
+the refcount never reaches 0 — then `deleteLater()`, `deletePending_` and
+`SObject::event()`'s resurrection path never enter the picture at all.
+
+**A failed inverse is silent, so keep the pin on failure.**
+`SActionHistory::undo()` calls `undoStack_->undo()`, and `QUndoCommand::undo()`
+returns void — so a `{false, …}` from the restore moves the stack index
+anyway. Hold the pin (the destructor releases it; the content is not lost) and
+refuse only when the lane is genuinely gone. Any other refusal means the next
+redo `dropStalePin()`s and then deletes whatever now sits at `clipIndex_`,
+which is the QBX-149 failure class. `SRestoreTrackAction` already has this
+property; this must not make it worse.
 
 ### Why "clone once and hold it" could not have worked at all
 
@@ -130,8 +164,10 @@ before any undo question arises. There is precedent for refusing it outright:
 growing under it".
 
 So no measuring case is needed, and the refusal from (b) is retained for this
-shape with a message naming the real reason — a live recording belongs to the
-recorder until stop.
+shape. Its message must name **`SRecordingContent`** and say that **a live
+recording belongs to the recorder until stop**, so the retargeted
+`take_delete_refused_not_silent.qxa` (§8) can `assert-log` on a string that
+will not drift.
 
 **Not confirmed:** whether the GUI already blocks a delete during recording.
 `SStdMixerView`'s remove path does not appear to check `isLiveRecording()`. If
@@ -182,36 +218,95 @@ which, pinning the wrapper object, it gets for nothing.
 ## 7. The gate
 
 The case must fail a takes-only inverse, and these are the assertions that make
-it bite rather than pass vacuously:
+it bite rather than pass vacuously.
 
-- a column of ≥3 takes, **a non-default active take**, and a **comp map with a
-  non-zero crossfade** on a boundary — a dropped xfade passes an
-  `xfade=0` assertion, so the fixture must carry one (`comp_crossfade.qxa`
-  shows both the spelling and an audibly different span);
+### The one that decides whether the gate works at all
+
+**`drain-pending-deletes` after the delete, and after the redo.** Without it
+this gate would pass an implementation with **no pin whatsoever**.
+`SObject::removeRef()` answers a refcount of zero with `deleteLater()`, and the
+action runner's `processEvents()` **does not deliver `DeferredDelete` at loop
+level 0** — so an object that should have died lingers for the whole scripted
+run, the undo re-links the still-live object, and `SObject::event()` swallows
+the queued delete as a resurrection. The verb's own header records that this
+already happened once: *"removing the `addRef()` that keeps a removed lane
+alive changed NOTHING in a headless run"*, which is what defeated the send-lane
+undo case.
+
+So: `drain-pending-deletes` between the `remove-sample` and the `undo`, and
+again between the `redo` and the second `undo` — the latter is what catches a
+forward that forgets to **re-pin**. Follow each with
+`assert-log contains="resurrected after a queued deletion" minCount="0"
+maxCount="0"`, since an announced absence is the only way to see that the
+resurrection path was *not* taken.
+
+This is the project's own rule: a case claiming anything about an object's
+LIFETIME must call `drain-pending-deletes`.
+
+### Fidelity — what a clone would have dropped
+
+- a column of ≥3 takes, **a non-default active take**, and a comp map with a
+  **non-zero crossfade** on a boundary: a dropped xfade passes an `xfade=0`
+  assertion, so the fixture has to carry one (`comp_crossfade.qxa` shows the
+  spelling and an audibly different span);
 - **takes that differ in the comped span.** Two identical takes make comp loss
   inaudible; use the `startOffset="96000"` sawtooth of
   `take_delete_refused_not_silent.qxa`, or `test_gapsaw.wav` as
   `comp_crossfade` does;
 - `set-clip-fade clip= take=`, `set-clip-name take=` and a take-level
-  `set-clip-pan` **before** the delete — each is state a clone drops and the
-  pin keeps, and without them the case cannot tell the designs apart;
-- on the wrapped configuration, the same for the **wrapper**;
-- `render` before, `render` after undo, and **`assert-file-identical`** between
-  them — byte-level, which is this project's exactness rule, and far stronger
-  than per-span energy;
-- `assert-take-column clip= shape= takes= activeTake= placements="1" comp=...`
-  after the undo. `activeTake` matters independently: with a comp map covering
-  the column, `takeFor` prefers the map, so a wrong `activeTake_` still renders
-  identically. `placements="1"` catches a leaked pin;
-- **undo → redo → undo → render → `assert-file-identical` again**, which is the
-  only thing that catches the one-shot-inverse failure in §3;
-- a `save-project` **while the delete is pending**, then a check on the file,
-  for the §3 serialisation consequence;
-- and the (b) refusal log **absent** for this shape
-  (`minCount="0" maxCount="0"`) — otherwise the delete is still refused and
-  every assertion above is vacuous.
+  `set-clip-pan` **before** the delete — each is state a clone drops and a pin
+  keeps, and without them the case cannot tell the two designs apart;
+- on the wrapped configuration, the same for the **wrapper**.
 
-Both shapes, direct and wrapped.
+### Identity and order
+
+- `render` before, `render` after undo, and **`assert-file-identical`** between
+  them. Byte-level is this project's exactness rule and is far stronger than
+  per-span energy;
+- `assert-take-column clip= shape= takes= activeTake= comp=…` after the undo.
+  **`activeTake` has to be asserted independently:** with a comp map covering
+  the column, `takeFor` prefers the map, so a wrong `activeTake_` still renders
+  identically;
+- `assert-clip-window` for child order, per QBX-149;
+- **undo → redo → undo → render → `assert-file-identical` again**, which is the
+  only thing that catches the reused-inverse failure in §3.
+
+### Leaked pins, and the one testkit extension this needs
+
+`assert-take-column placements=` compares against `column->refCount()` —
+**the STakeStack's** count. On the wrapped shape the wrapper's content link
+holds that at 1 whatever happens to a pin on the wrapper, so `placements="1"`
+catches a leaked pin **only on the direct shape**.
+
+**Decision: extend the testkit by one attribute**, `linkObjectRefs=`, reading
+`link->getSObject().refCount()`. That is the quantity the design is actually
+about, it works on both shapes, and it is a smaller change than the
+alternative. The fallback — `save-project` and `assert-file-contains` on a
+serialized `nRefs='1'` — is rejected as fragile.
+
+### The save-while-pending consequence
+
+§3 notes that a pinned object **is written on save**. Gate the **user-visible**
+property rather than the file text, since I could not confirm what the loader
+does with an element no link references: `save-project` while the delete is
+pending, then `load-project` that file and assert the column is **gone** from
+the lane (clip count / `assert-take-column` finding no clip). Asserting on the
+`.qxp` text would be asserting an implementation detail I have not verified.
+
+### Both shapes
+
+The wrapped configuration needs a column the migration **refuses** to fold, per
+§5 — load `takestack_wrap_wrapperpan.qxp` (panned wrapper) or
+`takestack_wrap_looping.qxp`, which are wrapped after a plain load with no knob.
+Do **not** reach for `SMARAGD_TAKE_MIGRATE=off` and an exact-fold fixture: that
+needs a `set_tests_properties` entry in `smaragd/CMakeLists.txt` and tests the
+knob as much as the code.
+
+Keep the case to **one project**, or `close-project` between: a scripted
+`load-project` does **not** clear the undo stack, so pinning and then loading
+another file hands `~SProject`'s survivor pass a pinned object and later runs
+`removeRef()` on freed memory from the command destructor. That exposure exists
+for the track pin today; the gate must not add to it.
 
 ## 8. What this does not do
 
@@ -260,3 +355,24 @@ details, and it was right.
 - Also found: `split-clip` drops the tail's comp in both branches, and
   `remove-take` repeats QBX-146's exact null-inverse pattern. Both recorded in
   §6 rather than absorbed here.
+
+### Second pass, same day
+
+Verdict YELLOW, one fix from GREEN, and the fix was the gate rather than the
+design: **§7 never drained pending deletes**, so it would have passed an
+implementation with no pin at all — `deleteLater()` is never delivered at loop
+level 0 in a scripted run, so the undo re-links an object that should have been
+collected. The verb that exists for this says it already defeated one case.
+That is now the first thing §7 asks for.
+
+Also from that pass: `columnOfLink` is the predicate and `&link->getSObject()`
+is what gets pinned (pinning the column would drop the wrapper on the wrapped
+shape); the pin is transitive through `SCut::content_`, so one `addRef()`
+suffices; the `disconnect` must take `SRemoveTrackAction`'s broad form, because
+`wrapCutLinkIntoStack`'s names `durationChanged` only and would miss
+`eventsChanged` on a MIDI column; `dropStalePin()` must come first in every
+apply, since `remove-sample` is also `add-sample`'s live inverse and would
+otherwise leak a pin per redo; a failed inverse is silent, so the pin is held
+on failure; and `placements=` reads the STakeStack's refcount, which makes a
+leaked pin invisible on the wrapped shape — hence the one named testkit
+extension, `linkObjectRefs=`.
