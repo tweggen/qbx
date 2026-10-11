@@ -66,6 +66,14 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     if( thenActivate_ >= -1 ) {
         stack->setActiveTake( thenActivate_ );
     }
+    // Hand the comp map back, when the action that built this one cleared it
+    // (plan 53 B4). AFTER setActiveTake, because a non-empty map is what
+    // decides what sounds and must not be overwritten by the activation's own
+    // bookkeeping; and before the collapse below, where the stack may be about
+    // to go away and a map on it stops meaning anything.
+    if( hasRestoreMap_ ) {
+        stack->setCompMap( restoreMap_ );
+    }
 
     // Invariant 3: a single remaining take collapses to a plain cut.
     SLink *resultLink = link;
