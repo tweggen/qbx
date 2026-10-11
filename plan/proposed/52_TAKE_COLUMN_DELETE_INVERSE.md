@@ -196,6 +196,15 @@ The shape is also reachable at runtime: `split-clip` and `duplicate-clip` both
 produce a wrapper over a column. So the inverse owes the wrapper's full state —
 which, pinning the wrapper object, it gets for nothing.
 
+**What this section got right and what it could not see.** The reasoning holds:
+the wrapped shape is real, it reaches the field, and the pin carries its state
+for free. What no amount of reading established is that *re-linking* a wrapped
+column leaves a stale plug in the audio graph and crashes at teardown about one
+run in four. The pin was never the problem; the graph was. Implementation
+therefore restricted the lift to the direct shape — §8, first bullet — and
+wrapped columns keep (b)'s refusal until QBX-155. Read this section as the
+argument for *why QBX-155 must be fixed*, not as a description of what shipped.
+
 ## 6. Raised, not fixed here
 
 - **`split-clip` drops the tail's comp map, in both branches.** The direct
@@ -310,12 +319,36 @@ for the track pin today; the gate must not add to it.
 
 ## 8. What this does not do
 
+- **It lifts the refusal for the DIRECT shape only** (`canPin =
+  stakes::isDirectColumn( clipLink )`). A wrapped column
+  (`SLink -> SCut -> STakeStack`) keeps (b)'s refusal, so §5's "the inverse owes
+  it in full" describes the design's reach, not this change's. The boundary was
+  measured, not chosen out of caution: an equivalent round-trip case crashed at
+  *teardown* 3 runs in 12, in
+
+  ```
+  SApplication::rewireSpeaker -> twComponent::setInput( idx=0, newOutput=0 )
+    -> oldPlug->getParentLatch().deleteOutput( oldPlug )   SIGSEGV
+  ```
+
+  while the direct shape passed 12 of 12. **Removing the disconnect made the
+  wrapped shape worse** (9 failures in 12), which rules the disconnect out as the
+  cause and points instead at graph state an object keeps across wire → unwire →
+  re-link, state a freshly built one never has — which is why `SAddSampleAction`
+  needs no rewiring step: it never re-links a previously wired object. *Which*
+  plug goes stale is not established, and QBX-155 (Major) carries the backtrace,
+  requires the root cause be **named**, and demands **30 consecutive passes**,
+  because a 1-in-4 failure rate makes a single green run meaningless.
+  `take_column_wrapped_delete_refused.qxa` marks the boundary and its header says
+  it must be **replaced, not relaxed**, when QBX-155 lands.
 - It does not lift the refusal for a live recording (§4), which keeps it
   deliberately.
 - **`take_delete_refused_not_silent.qxa` flips when this lands.** It asserts
   `expectReject="true"` and the refusal log on the direct shape. It must be
   retargeted to the recording shape or retired with a licence recorded beside
-  it — not quietly deleted.
+  it — not quietly deleted. *Resolved:* retired, and
+  `live_recording_delete_refused.qxa` supersedes it, carrying the licence in its
+  own header where a future reader of that file will find it.
 - It does not fix `split-clip`, `remove-take` or `duplicate-clip` (§6).
 - It does not give `SCompositeAction` the ability to roll back a partially
   applied batch; (b) made that announced, and the note there stands.
@@ -346,7 +379,10 @@ Nothing composes `remove-sample` today — the two composite builders in
 `SStdMixerView` are split and pitch-nudge, and no `.qxa` contains
 `<composite` — so the path is reachable only by future code or a scripted
 composite. The gate covers it with one scripted composite of two deletes if
-that is cheap; otherwise this says it is untested.
+that is cheap; otherwise this says it is untested. *Resolved:* **untested.** With
+no composite builder and no `.qxa` syntax reaching `remove-sample`, a scripted
+case would have had to be built before it could be run; the two edges above are
+stated instead.
 
 ## 9. Review history
 
@@ -400,3 +436,26 @@ otherwise leak a pin per redo; a failed inverse is silent, so the pin is held
 on failure; and `placements=` reads the STakeStack's refcount, which makes a
 leaked pin invisible on the wrapped shape — hence the one named testkit
 extension, `linkObjectRefs=`.
+
+### Third pass, and what implementation then found
+
+Verdict **GREEN**; the design shipped as written for the direct shape. Two
+things only the build could say:
+
+- **The wrapped shape crashes on re-link**, as §8's first bullet records. The
+  plan had reasoned correctly from the fixtures that wrapped columns reach the
+  field and that a pin carries their state; it could not have reasoned its way
+  to a stale plug in the audio graph. This is the one place where the
+  implementation contradicts a GREEN plan, and the plan is edited to say so
+  rather than left to read as if it described what landed.
+- **The second pass's prediction about the drain-less gate was half right.**
+  With the `addRef()` removed the gate does not merely fail, it **SEGFAULTs**
+  (139); with the drains removed as well it *fails* on `assert-take-column`
+  rather than crashing. So a drain-less gate would have caught a missing pin
+  after all — but only because `linkObjectRefs=` was added in the same pass. The
+  drain's real contribution is turning a quiet field mismatch into an unmissable
+  crash, which is worth more than the prediction it was justified by.
+
+One detail left unmeasured: in the drain-less sabotage, *which*
+`assert-take-column` field reported the mismatch. It goes to the log rather than
+stderr and a second build was not spent on it.
