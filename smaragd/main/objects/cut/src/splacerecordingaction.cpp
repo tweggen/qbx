@@ -82,6 +82,16 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
         SLink *lk = lane->childAt( i );
         if( !lk || lk->getSObject().isLane() ) continue;  // sub-track
         if( !lk->getSObject().hasDuration() ) continue;
+        // AN OTHER-KIND CHILD IS R0: untouched (plan 53 B2). This verb places
+        // AUDIO, so an event clip on the lane can never receive the pass as a
+        // take -- a take is an alternative for the same region, not a
+        // different instrument. Leaving it out of `columns` is exactly R0:
+        // `cursor` is not advanced past it, so the recording falls through to
+        // the trailing-gap branch and is placed as its own clip OVER it,
+        // which is what an empty lane does. Overlapping clips are what the
+        // lane already holds whenever two takes do not line up; losing
+        // recorded audio is not something a recorder may do.
+        if( lk->getSObject().contentKind() != SContentKind::Audio ) continue;
         const offset_t s = lk->getStartTime();
         const length_t d = lk->getSObject().getDurationBlocking();
         if( d == 0 || s + (offset_t)d <= recStart || s >= recEnd ) continue;
