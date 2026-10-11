@@ -2,6 +2,9 @@
 #include "app/model/splacements.h"
 #include "app/objects/cut/saddsampleaction.h"
 #include "app/objects/cut/srestorecontainerclipaction.h"
+#include "app/model/sobject.h"
+#include "app/objects/cut/srestoretakecolumnaction.h"
+#include "app/objects/cut/stakehelpers.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
@@ -19,8 +22,35 @@ SRemoveSampleAction::SRemoveSampleAction(const QList<int> &trackPath, int clipId
 {
 }
 
+SRemoveSampleAction::~SRemoveSampleAction()
+{
+    // The undo command deletes both halves when the stack discards them; this
+    // is where a pin that was never re-applied is finally released, and the
+    // content collected. Main-thread only, which addRef/removeRef assert --
+    // true here, because a QUndoStack is cleared from the GUI thread.
+    dropStalePin();
+}
+
+void SRemoveSampleAction::releaseHeld()
+{
+    if( holdsRef_ && heldObject_ ) {
+        heldObject_->removeRef();
+    }
+    heldObject_ = nullptr;
+    holdsRef_   = false;
+}
+
+void SRemoveSampleAction::dropStalePin()
+{
+    releaseHeld();
+}
+
 SApplyResult SRemoveSampleAction::apply(SProject *project)
 {
+    // FIRST, before anything can fail or return: release a pin from a previous
+    // apply. See the header -- this action is also add-sample's live inverse.
+    dropStalePin();
+
     if (!project) {
         return {false, nullptr};
     }
@@ -105,7 +135,35 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
     const bool canRestoreContainer = !containerPath.isEmpty() && haveWindow;
     const bool canRestoreFile      = !filePath.isEmpty();
 
-    if( !canRestoreContainer && !canRestoreFile ) {
+    // A TAKE COLUMN is restored by PINNING it rather than by rebuilding it
+    // (QBX-146 step a, plan 52). stakes::columnOfLink is the PREDICATE here --
+    // it answers "is this clip a column", on both the direct and the wrapped
+    // shape -- and is deliberately NOT what gets pinned: it returns the
+    // STakeStack either way, so pinning its result would let the WRAPPER die
+    // with the link on the wrapped shape, and the wrapper is what carries that
+    // clip's automation, volume, fade and pan.
+    //
+    // Pin the link's own object. The pin is transitive: SCut holds its content
+    // through `content_ = new SLink( content, NULL )` (whose ctor addRef()s)
+    // and ~SCut deletes it, and the stack holds its takes the same way -- so
+    // one addRef() holds wrapper -> stack -> takes.
+    //
+    // RESTRICTED TO THE DIRECT SHAPE for now, and this is a measured boundary
+    // rather than caution. Re-linking a WRAPPED column leaves a stale plug in
+    // the audio graph: the case crashes at TEARDOWN, 3 runs in 12, in
+    // SApplication::rewireSpeaker -> twComponent::setInput ->
+    // oldPlug->getParentLatch().deleteOutput(oldPlug). The direct shape is
+    // 12/12. Removing the disconnect above makes the wrapped shape WORSE
+    // (9 failures in 12), so the disconnect is not the cause -- an object that
+    // was wired, unwired and re-linked evidently keeps graph state that a
+    // freshly built one does not, and SAddSampleAction does nothing extra
+    // after parenting because it never has a previously-wired object.
+    //
+    // So a wrapped column keeps the step-(b) refusal: no data loss either way,
+    // and no intermittent crash. Tracked separately with the backtrace.
+    const bool canPin = stakes::isDirectColumn( clipLink );
+
+    if( !canRestoreContainer && !canRestoreFile && !canPin ) {
         // REFUSE, and say so. A refusal the user cannot see is the same bug
         // wearing a different face, and this project's rule is that any
         // refusal is announced rather than silent.
@@ -118,10 +176,16 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         if( SClipWindow *w = SClipWindow::of( &clipLink->getSObject() ) ) {
             content = &w->windowContent();
         }
+        // What reaches here now is a live SRecordingContent, and the reason is
+        // OWNERSHIP rather than fidelity: SAudioRecorder::Armed holds the
+        // growing SCut and its SLink as borrowed raw pointers, touches them
+        // every tick and deletes them at stop. Removing that clip is a
+        // use-after-free IN THE RECORDER, before undo enters the picture --
+        // which is why SExtractArrangementAction refuses a live recording too.
         TW_LOGW( "cut",
                  "remove-sample: refusing to delete clip %d on '%s' -- its "
-                 "content (%s) is neither file-backed nor a path container, so "
-                 "the deletion could not be undone. QBX-146.",
+                 "content (%s) cannot be restored. A live SRecordingContent "
+                 "belongs to the recorder until stop. QBX-146.",
                  clipIndex_,
                  strackpath::qualifiedToString( pathRoot_, trackPath_ )
                      .toUtf8().constData(),
@@ -129,7 +193,40 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         return {false, nullptr};
     }
 
+    // PIN BEFORE DELETING, so the refcount never reaches zero: then
+    // deleteLater(), deletePending_ and SObject::event()'s resurrection path
+    // never enter the picture at all.
+    if( canPin ) {
+        SObject *obj = &clipLink->getSObject();
+        obj->addRef();
+        heldObject_ = obj;
+        holdsRef_   = true;
+
+        // STrack::trackChildWasAdded wires TWO object-level signals --
+        // durationChanged, and eventsChanged for Event-kind content -- and
+        // trackChildWasRemoved severs neither, nor are those connects
+        // Qt::UniqueConnection. Re-linking without this doubles them.
+        //
+        // The BROAD form on purpose: stakes::wrapCutLinkIntoStack's narrow
+        // spelling names durationChanged only and would miss eventsChanged on
+        // a MIDI take column. Nothing connects lane -> object, so this severs
+        // exactly those two, and re-linking re-makes both through setParent ->
+        // childEvent -> childObjectAdded -> trackChildWasAdded. That is why
+        // SRestoreTrackAction re-connects nothing explicitly either.
+        QObject::disconnect( obj, nullptr, track, nullptr );
+    }
+
     delete clipLink;  // Qt will remove from parent, SCut destructor handles cleanup
+
+    // A pinned column is restored by re-linking the very object that was
+    // deleted, so every field survives by identity -- the comp map, each
+    // take's fade and name, the wrapper's parameters, the link's timebase.
+    // Checked before the two rebuild-from-parameters branches because it is
+    // strictly more faithful than either.
+    if( canPin ) {
+        return {true, new SRestoreTakeColumnAction( this, trackPath_, timePos_,
+                                                    clipIndex_ )};
+    }
 
     // Hand the inverse the index the clip CAME FROM (QBX-149). Without it the
     // restored clip is appended, so every later positional clip index means a

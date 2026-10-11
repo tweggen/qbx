@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-146. Deleting a LIVE RECORDING's clip is refused, and the refusal is
+  announced.
+
+  THIS CASE REPLACES take_delete_refused_not_silent.qxa, and the licence for
+  retiring that one is recorded here rather than left in a commit message.
+  That case asserted expectReject on a TAKE COLUMN, which was correct while
+  step (b) was all there was: a column could not be restored, so the only safe
+  answer was to refuse. Step (a) gave columns a real inverse, so the refusal no
+  longer fires for them and the old case would fail by design. Its successor
+  for the column shape is take_column_delete_undo_restores.qxa, which asserts
+  the delete now WORKS and round-trips byte-identically.
+
+  What is left behind the refusal is a live SRecordingContent, and the reason
+  it stays refused is OWNERSHIP rather than fidelity. SAudioRecorder::Armed
+  holds the growing SCut and its SLink as borrowed raw pointers, touches them
+  on every tick, and deletes them at stop. Removing that clip is a
+  use-after-free IN THE RECORDER, before any undo question arises - which is
+  why SExtractArrangementAction refuses a live recording for the same reason.
+
+  So this is not a placeholder for an unfinished inverse. A growing clip
+  belongs to the recorder until stop, and no inverse would make deleting it
+  safe.
+
+  Input comes from the qxa record input, as every record_* case does.
+-->
+<SActionScript version="1" name="live_recording_delete_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+
+    <record-start/>
+    <!-- Long enough that the growing clip certainly exists and the recorder is
+         holding its borrowed pointers. -->
+    <wait-ms ms="1200"/>
+
+    <!-- THE REFUSAL, while the clip is still growing under the recorder. -->
+    <remove-sample trackIndex="0" clipIndex="0" timePos="0"
+                   expectReject="true"/>
+
+    <!-- ...announced, and naming the real reason, so the message cannot drift
+         into something that no longer says why. -->
+    <assert-log contains="belongs to the recorder until stop" minCount="1"/>
+
+    <record-stop/>
+    <toggle-playback play="0"/>
+
+    <!-- The recording survived the attempt: it is still there, and still a
+         real clip with material in it. A refusal that lost the take would be
+         the very bug this guards. -->
+    <assert-recorded-clip trackPath="0" clips="1" passes="1"
+                          minDurationFrames="24000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

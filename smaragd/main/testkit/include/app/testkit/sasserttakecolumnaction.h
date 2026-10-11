@@ -58,6 +58,12 @@ private:
     int takes_ = -1;
     int activeTake_ = -2;      // -2 = not asserted (-1 IS a legal value)
     int placements_ = -1;
+    // The refcount of the PLACEMENT'S OWN OBJECT, which is what `placements`
+    // is not: that one reads the STakeStack's count, and on the WRAPPED shape
+    // the wrapper's content link holds the stack at 1 no matter what happens
+    // to a pin on the wrapper. So `placements` cannot see a leaked pin on a
+    // wrapped column, and this can (QBX-146 step a, plan 52 §7).
+    int linkObjectRefs_ = -1;
     QString comp_;
     bool hasComp_ = false;
     qint64 takeAtPos_ = -1;

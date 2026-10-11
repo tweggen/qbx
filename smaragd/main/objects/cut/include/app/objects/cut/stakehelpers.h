@@ -45,6 +45,17 @@ namespace stakes {
 STakeStack *columnOfLink( SLink *lk );
 
 /**
+ * Is this placement a DIRECT take column (SLink -> STakeStack), as opposed to
+ * a wrapped one (SLink -> SCut -> STakeStack)?
+ *
+ * A separate predicate rather than a comparison at the call site, because the
+ * comparison needs STakeStack's DEFINITION to upcast it, and the callers that
+ * want this question only have the forward declaration. Here the definition is
+ * available.
+ */
+bool isDirectColumn( SLink *lk );
+
+/**
  * PUBLISH a change of a take column's CONTENT IDENTITY through its placement.
  *
  * A take switch, or a slip of one take, changes which material the column
