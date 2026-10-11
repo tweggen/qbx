@@ -1,4 +1,6 @@
 #include "app/objects/cut/saddtakeaction.h"
+#include "tw/core/twlog.h"
+#include "app/model/sclipwindow.h"
 #include "app/objects/cut/sremovetakeaction.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/stakehelpers.h"
@@ -48,6 +50,42 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     // take became a sibling of the entire old column rather than of its takes.
     // Measured: a two-take column whose take 0 was itself a two-take column.
     STakeStack *stack = stakes::columnOfLink( link );
+
+    // THE KIND IS CHECKED BEFORE THE WRAP (plan 53 B2), and the order is the
+    // whole fix. add-take is an AUDIO verb by construction -- it addresses a
+    // FILE and seeds grain params -- so the take it builds is always Audio
+    // kind. STakeStack::insertTake refuses a take whose kind differs from the
+    // column's, but it only got the chance AFTER wrapCutLinkIntoStack had
+    // already replaced the lane's child with a one-take stack. apply() then
+    // returned {false, nullptr}, so:
+    //
+    //   * the wrap STOOD -- a one-take stack sat on the lane where a plain
+    //     clip had been, which invariant 3 says cannot exist;
+    //   * nothing was undoable, because a null inverse pushes no undo entry
+    //     (QBX-146's defect, one verb along);
+    //   * and SCompositeAction's rollback could not reach the wrap either, so
+    //     a recording's composite could not clean up after itself.
+    //
+    // Refusing here changes nothing and says so.
+    {
+        SContentKind targetKind = SContentKind::Audio;
+        if( stack ) {
+            targetKind = stack->contentKind();
+        } else if( SClipWindow *win =
+                       SClipWindow::of( &link->getSObject() ) ) {
+            targetKind = win->contentKind();
+        }
+        if( targetKind != SContentKind::Audio ) {
+            TW_LOGW( "cut",
+                     "add-take: refusing an audio take on %s content -- a take "
+                     "is an ALTERNATIVE for the same region, not a different "
+                     "instrument. Use add-midi-take for an event column. "
+                     "QBX-162.",
+                     targetKind == SContentKind::Event ? "EVENT" : "other" );
+            return {false, nullptr};
+        }
+    }
+
     if( !stack ) {
         // A plain cut becomes a single-take stack first (take 0 = the cut).
         link = stakes::wrapCutLinkIntoStack( project, lane, link );

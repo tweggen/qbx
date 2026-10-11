@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §7 B2 (was X4). A KIND MISMATCH IS REFUSED BEFORE ANYTHING IS
+  WRAPPED, and a recording leaves an event clip alone.
+
+  TWO FAULTS, ONE ORDERING. add-take is an AUDIO verb by construction: it
+  addresses a FILE and seeds grain params, so the take it builds is always
+  Audio kind. STakeStack::insertTake does refuse a take whose kind differs from
+  the column's, but it only got the chance AFTER wrapCutLinkIntoStack had
+  already replaced the lane's child with a one-take stack. apply() then returned
+  {false, nullptr}, so:
+
+    * the wrap STOOD, leaving a one-take stack where a plain clip had been,
+      which invariant 3 says cannot exist;
+    * nothing was undoable, because a null inverse pushes no undo entry (the
+      QBX-146 defect, one verb along);
+    * and SCompositeAction's rollback could not reach the wrap either, so a
+      recording's composite could not clean up after itself.
+
+  The guard now runs before the wrap, and place-recording treats an other-kind
+  child as R0 — untouched — so the pass is placed as its own clip over it.
+
+  WHAT IS MEASURED AND WHAT IS NOT, because the two differ and the difference
+  matters. The add-take half is DIRECTLY REACHABLE and is demonstrated below:
+  a .qxa can address a MIDI clip with add-take and on main that leaves the
+  broken stack. Whether a MIDI clip can reach an AUDIO-INPUT lane in the field
+  — the recorder path — is UNMEASURED, and this case does not claim it. The
+  R0 half is gated for the invariant it states, not for a user report.
+
+  THE ASSERTION THAT BITES IS shape="none". expectReject alone cannot tell
+  "refused" from "wrapped, then refused": both return false. Reading the shape
+  back afterwards is the only way to see the leak.
+-->
+<SActionScript version="1" name="place_recording_kind_guard">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- An EVENT clip, born timebase=beats, one bar long. -->
+    <insert-midi-clip trackPath="0" timePos="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" timebase="beats"/>
+
+    <!-- HALF ONE: add-take on an event clip is refused, and refused BEFORE it
+         wraps. On main this returns false having already left a one-take
+         stack on the lane, so shape reads "direct" here. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              expectReject="true"/>
+    <assert-log level="warn" minCount="1"
+                contains="add-take: refusing an audio take on EVENT content"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" timebase="beats"/>
+
+    <!-- HALF TWO: a recording over that clip treats it as R0 and lands as its
+         own clip beside it. The event clip is untouched, and the guard above
+         never even fires, because the planner no longer offers the clip to
+         add-take at all. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,1" startTime="0"/>
+    <assert-log contains="add-take: refusing an audio take"
+                minCount="0" maxCount="0"/>
+
+    <!-- AND IT UNDOES CLEANLY, which the broken version could not: its
+         composite had a wrap in it that no inverse reached. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" timebase="beats"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
