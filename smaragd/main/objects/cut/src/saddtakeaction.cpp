@@ -89,7 +89,23 @@ SApplyResult SAddTakeAction::apply( SProject *project )
         delete takeCut;
         return {false, nullptr};
     }
+    // ACTIVATING A TAKE CLEARS THE COMP MAP (plan 53 B4).
+    //
+    // Without this the activation is a lie the UI tells: twCompMap::takeAt
+    // answers -1 only BEFORE the first segment, so a map that starts at 0
+    // covers the whole column and decides every position itself. The newly
+    // activated take is then badged active and COMPLETELY INAUDIBLE -- the
+    // user records a take, sees it selected, and hears the old one.
+    //
+    // Clearing is the right semantic rather than mapping the new take over
+    // the comped span: an empty map MEANS "ask activeTake_", which is exactly
+    // what activating asked for. Take extents (plan 53 §4.1) will give the
+    // recorded span its own segment; that is A0a's job, not this one's.
+    const twCompMap prevMap = stack->compMap();
     if( activate_ ) {
+        if( !prevMap.empty() ) {
+            stack->setCompMap( twCompMap{} );
+        }
         stack->setActiveTake( at );
     }
 
@@ -97,8 +113,13 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     // changed it (removeTake's own bookkeeping handles the inactive case).
     QList<int> stackPath = lanePath;
     stackPath.append( lane->indexOfChild( link ) );
-    SAction *inverse = new SRemoveTakeAction(
+    SRemoveTakeAction *inverse = new SRemoveTakeAction(
         stackPath, at, activate_ ? prevActive : -2 );
+    // The map is NOT derivable from the surviving takes, so only this action
+    // can hand it back. Carried whenever we cleared one.
+    if( activate_ && !prevMap.empty() ) {
+        inverse->setRestoreCompMap( prevMap );
+    }
     return {true, inverse};
 }
 

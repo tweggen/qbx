@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §7 B4 (was X3/X15/X10). ACTIVATING A TAKE MUST CLEAR THE COMP MAP,
+  AND UNDO MUST PUT THE MAP BACK.
+
+  SAddTakeAction::apply activated the new take without touching the map, and
+  STakeStack::setActiveTake never cleared it either. twCompMap::takeAt answers
+  −1 only BEFORE the first segment, so a map that starts at 0 covers the whole
+  column and decides every position itself: the newly activated take was badged
+  active and COMPLETELY INAUDIBLE. The user records a take, sees it selected,
+  and hears the old one.
+
+  THE DISCRIMINATING WINDOW IS LOUD VERSUS SILENT, which is as far apart as
+  this fixture can put two takes. test_gapsaw.wav is a 0.1 → 0.8 ramp with
+  exact-zero regions at [0.6,0.9) and [2.5,3.0) s, and comp_map_audible.qxa
+  measured its per-second RMS: UNSLIPPED, the window [3,4) s reads 0.4125;
+  SLIPPED BY ONE SECOND it is the file's own silence, 0.0. Every number below
+  is taken from that case rather than invented here.
+
+  So the map pins take 0 (unslipped, LOUD tail) while the take added last is
+  slipped (SILENT tail). With the map wrongly left in force the tail is loud;
+  with it cleared the tail is silent. No tolerance band can confuse those.
+
+  WHY THE LAST TWO TAKES SHARE A SLIP. Take 2 repeats take 1's startOffset on
+  purpose: the case needs the newly activated take to have a profile it already
+  trusts, and two takes of one file at one slip is an ordinary thing to have.
+  Nothing below asserts take 1, which exists only so the column holds a second
+  take and the map means something.
+
+  ON main THIS FAILS at the render after the second add-take, reading the
+  unslipped tail where silence was asserted. That is the right reason.
+
+  THE PAINTER HALF IS NOT HERE. Plan 53 B4 says the painter must mark a column
+  whose map is non-trivial, and that whichever of B4 / QBX-157 lands first says
+  who owns it. THIS PR LEAVES IT TO QBX-157, which owns the laned-track
+  backdrop and cut marks: the mark belongs with that drawing, not bolted onto
+  stakestack.cpp's take strip. Recorded so it cannot fall between the two.
+-->
+<SActionScript version="1" name="add_take_clears_comp">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- Take 0: unslipped. Its [3,4) s window is the LOUD one, 0.4125. -->
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+
+    <!-- Take 1: slipped one second. Only here so the column has two takes. -->
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+
+    <!-- A map covering the whole column and pinning take 0. From here on the
+         map decides, not activeTake_. -->
+    <set-comp-segment clip="0,0" at="0" take="0"/>
+    <assert-take-column clip="0,0" comp="0:0" activeTake="1"/>
+
+    <!-- Baseline: the map IS in force, so the tail is take 0's loud ramp even
+         though take 1 is the active one. Without this the case could not tell
+         "the map was cleared" from "the map never worked". -->
+    <render filename="atcc_mapped.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="atcc_mapped.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.4100" maxRms="0.4150"/>
+
+    <!-- THE ACTION UNDER TEST. activate defaults to 1, so this must clear the
+         map and make take 2 audible. -->
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="2"
+                        comp=""/>
+
+    <!-- The new take is HEARD: its tail is the file's silence, not take 0's
+         ramp. FAILS ON main, which renders 0.4125 here. -->
+    <render filename="atcc_added.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="atcc_added.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+    <!-- and its head is the slipped take's 0.2115, not take 0's 0.0849 -->
+    <assert-audio-energy filename="atcc_added.wav" startFrame="0"
+                         frameCount="48000" minRms="0.2100" maxRms="0.2130"/>
+
+    <!-- UNDO restores the WHOLE previous map, not an approximation of it: the
+         map is not derivable from the surviving takes, so only the forward
+         action could hand it back. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        comp="0:0"/>
+    <render filename="atcc_undone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="atcc_undone.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.4100" maxRms="0.4150"/>
+
+    <!-- REDO clears it again, so the forward is not a one-shot. -->
+    <redo count="1"/>
+    <assert-take-column clip="0,0" takes="3" activeTake="2" comp=""/>
+    <render filename="atcc_redone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="atcc_redone.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- AND UNDO A SECOND TIME, which is what catches an inverse that consumed
+         its stored map on the first undo. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" takes="2" activeTake="1" comp="0:0"/>
+    <render filename="atcc_undone2.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="atcc_undone2.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.4100" maxRms="0.4150"/>
+  </actions>
+
+</SActionScript>
