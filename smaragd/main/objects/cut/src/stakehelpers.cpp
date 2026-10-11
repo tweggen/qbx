@@ -21,6 +21,12 @@ STakeStack *columnOfLink( SLink *lk )
     return nullptr;
 }
 
+bool isDirectColumn( SLink *lk )
+{
+    if( !lk ) return false;
+    return dynamic_cast<STakeStack *>( &lk->getSObject() ) != nullptr;
+}
+
 void publishColumnChange( SLink *link, STakeStack *column )
 {
     if( !link || !column ) return;

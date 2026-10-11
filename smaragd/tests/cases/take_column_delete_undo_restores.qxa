@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-146 step (a). Deleting a take column and undoing restores THAT column -
+  every take, its fades, names and pan, the active index, and the comp map.
+
+  Step (b) stopped the data loss by REFUSING such a delete. This is the real
+  inverse, so the refusal is lifted for this shape and the delete works.
+
+  HOW IT WORKS, because the design is what the assertions are shaped around:
+  SRemoveSampleAction PINS the clip's object with addRef() before detaching it,
+  the way SRemoveTrackAction pins a removed track, and the inverse re-links the
+  VERY SAME OBJECT and releases the pin. Identity preserves every field for
+  free. The alternative - rebuilding a column from a captured parameter list -
+  was rejected because it drops whatever the list forgot: measured against
+  cloneWindowOverContent, a copy loses the comp map, each take's clip FADE and
+  NAME, a MIDI take's volume and pan, and on the wrapped shape the wrapper's
+  own automation. That is the same failure SAddSampleAction once had, restoring
+  "a full-length unedited clip... silently, with no dialog to notice".
+
+  WHY drain-pending-deletes IS THE ASSERTION THAT MATTERS. Without it this case
+  would pass against an implementation with NO PIN AT ALL. SObject::removeRef()
+  answers a refcount of zero with deleteLater(), and the action runner's
+  processEvents() does not deliver DeferredDelete at loop level 0 - so the
+  object lingers for the whole scripted run, the undo re-links something that
+  should have been collected, and SObject::event() swallows the queued delete
+  as a resurrection. The verb's own header records that this already defeated
+  the send-lane undo case: "removing the addRef() that keeps a removed lane
+  alive changed NOTHING in a headless run". So it is called twice: after the
+  delete, and after the redo - the second being what catches a forward that
+  forgets to RE-PIN.
+
+  Fixture: test_sawtooth.wav, 4 s, 192000 frames, unique RMS per source second
+    sec0 ~0.067   sec1 ~0.176   sec2 ~0.291   sec3 ~0.405
+  Take 1 reads from source 96000, so the two takes DIFFER in the comped span -
+  without that, comp loss would be inaudible and the gate vacuous.
+-->
+<SActionScript version="1" name="take_column_delete_undo_restores">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- A column of three takes. add-take auto-activates what it appends. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="3" placements="1"/>
+
+    <!-- A NON-DEFAULT active take. -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" activeTake="1"/>
+
+    <!-- A comp map with a NON-ZERO crossfade. A dropped xfade passes an
+         xfade="0" assertion, so the fixture has to carry one. -->
+    <set-comp-segment clip="0,0" at="0" take="1"/>
+    <set-comp-segment clip="0,0" at="96000" take="2"/>
+    <set-comp-xfade   clip="0,0" at="96000" xfade="24000"/>
+
+    <!-- Per-take state a COPY would have dropped and the pin keeps. Without
+         these the case cannot tell the two designs apart. -->
+    <set-clip-fade clip="0,0" take="1" fadeIn="24000" fadeOut="0" shape="linear"/>
+    <set-clip-name clip="0,0" take="1" name="Comped Lead"/>
+
+    <!-- Baseline. -->
+    <render filename="tcdur_pre.wav" format="wav" quality="10"/>
+
+    <!-- THE DELETE. Under step (b) alone this was REFUSED; it must work now. -->
+    <remove-sample trackIndex="0" clipIndex="0" timePos="0"/>
+
+    <!-- ...and must NOT have been refused, or everything below is vacuous. -->
+    <assert-log contains="remove-sample: refusing to delete"
+                minCount="0" maxCount="0"/>
+
+    <!-- THE DRAIN. See the header: without this the case passes with no pin. -->
+    <drain-pending-deletes/>
+    <assert-log contains="resurrected after a queued deletion"
+                minCount="0" maxCount="0"/>
+
+    <!-- UNDO restores the column by identity. -->
+    <undo count="1"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="1"
+                        placements="1" linkObjectRefs="1"
+                        comp="0:1;96000:2:24000"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+
+    <!-- The audio must be IDENTICAL, byte for byte. Stronger than per-span
+         energy, and the project's own exactness rule. A restored column whose
+         comp, fade or active take moved reads differently here. -->
+    <render filename="tcdur_restored.wav" format="wav" quality="10"/>
+    <assert-file-identical actual="tcdur_restored.wav" expected="tcdur_pre.wav"/>
+
+    <!-- REDO deletes it again, and the forward must RE-PIN. -->
+    <redo count="1"/>
+    <drain-pending-deletes/>
+    <assert-log contains="resurrected after a queued deletion"
+                minCount="0" maxCount="0"/>
+
+    <!-- UNDO A SECOND TIME. This is the only thing that catches a one-shot
+         inverse: SActionUndoCommand reuses the SAME inverse object every time,
+         so an implementation that consumed its pin on the first undo
+         dereferences freed memory here. -->
+    <undo count="1"/>
+    <render filename="tcdur_restored2.wav" format="wav" quality="10"/>
+    <assert-file-identical actual="tcdur_restored2.wav" expected="tcdur_pre.wav"/>
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="1"
+                        placements="1" linkObjectRefs="1"
+                        comp="0:1;96000:2:24000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

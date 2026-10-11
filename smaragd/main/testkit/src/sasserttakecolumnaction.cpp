@@ -39,6 +39,8 @@ SApplyResult SAssertTakeColumnAction::apply( SProject *project )
     const int gotTakes  = column ? column->nTakes() : 0;
     const int gotActive = column ? column->activeTakeIndex() : -1;
     const int gotPlace  = column ? column->refCount() : 0;
+    // Deliberately the LINK'S object, not the column: see the header.
+    const int gotLinkRefs = link->getSObject().refCount();
 
     // The map as text, in the same spelling the attribute takes.
     QString gotComp;
@@ -81,8 +83,15 @@ SApplyResult SAssertTakeColumnAction::apply( SProject *project )
         { "takes",      takes_,      gotTakes },
         { "activeTake", activeTake_, gotActive },
         { "placements", placements_, gotPlace },
+        { "linkObjectRefs", linkObjectRefs_, gotLinkRefs },
     };
     for( const Check &c : checks ) {
+        // CAUTION, and the reason this is a comment rather than a refactor:
+        // the "is it asserted" test dispatches on the attribute name's FIRST
+        // LETTER, because activeTake is the one field whose -1 is a legal
+        // value and so needs -2 as its sentinel. A future field whose name
+        // starts with 'a' would silently inherit that sentinel and stop being
+        // checked at -1. linkObjectRefs starts with 'l', so it is fine.
         if( c.want == -1 && c.what[0] != 'a' ) continue;   // -1 = not asserted
         if( c.what[0] == 'a' && c.want == -2 ) continue;   // activeTake sentinel
         if( c.want != c.got ) {
@@ -102,6 +111,7 @@ void SAssertTakeColumnAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "takes", takes_ );
     elem.setAttribute( "activeTake", activeTake_ );
     elem.setAttribute( "placements", placements_ );
+    if( linkObjectRefs_ >= 0 ) elem.setAttribute( "linkObjectRefs", linkObjectRefs_ );
     if( hasComp_ ) elem.setAttribute( "comp", comp_ );
     if( takeAtPos_ >= 0 ) {
         elem.setAttribute( "takeAtPos", QString::number( takeAtPos_ ) );
@@ -116,6 +126,7 @@ bool SAssertTakeColumnAction::readXml( const QDomElement &elem, int )
     takes_      = elem.attribute( "takes", "-1" ).toInt();
     activeTake_ = elem.attribute( "activeTake", "-2" ).toInt();
     placements_ = elem.attribute( "placements", "-1" ).toInt();
+    linkObjectRefs_ = elem.attribute( "linkObjectRefs", "-1" ).toInt();
     hasComp_    = elem.hasAttribute( "comp" );
     comp_       = elem.attribute( "comp", "" );
     takeAtPos_  = elem.attribute( "takeAtPos", "-1" ).toLongLong();

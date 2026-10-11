@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-146. A WRAPPED take column still refuses deletion, and this case pins
+  that boundary so it cannot move by accident.
+
+  Step (a) gave take columns a real inverse: SRemoveSampleAction pins the
+  clip's object with addRef(), and the inverse re-links the very same object,
+  so every take, fade, name, pan, the active index and the comp map come back
+  by identity. take_column_delete_undo_restores.qxa gates that, and it is
+  12-for-12 reliable.
+
+  IT IS RESTRICTED TO THE DIRECT SHAPE (SLink -> STakeStack), and the reason is
+  measured. Re-linking a WRAPPED column (SLink -> SCut -> STakeStack) leaves a
+  stale plug in the audio graph: the equivalent case crashed at TEARDOWN, 3
+  runs in 12, in
+
+      SApplication::rewireSpeaker
+        -> twComponent::setInput( idx=0, newOutput=0 )
+          -> oldPlug->getParentLatch().deleteOutput( oldPlug )   SIGSEGV
+
+  while the direct shape passed 12 of 12. Removing the object-to-lane
+  disconnect made the wrapped shape WORSE (9 failures in 12), so the disconnect
+  is not the cause: an object that was wired, unwired and then re-linked keeps
+  graph state a freshly built one does not. SAddSampleAction needs no extra
+  rewiring step precisely because it never re-links a previously wired object.
+
+  So a wrapped column keeps step (b)'s refusal. No data loss either way, and no
+  intermittent crash. The restore for this shape is tracked separately, with
+  that backtrace.
+
+  THIS CASE IS THE BOUNDARY MARKER. When the wrapped restore lands it will
+  fail, deliberately, and must be replaced by the round-trip case rather than
+  relaxed — the same contract take_delete_refused_not_silent.qxa had before
+  step (a) superseded it.
+
+  takestack_wrap_wrapperpan.qxp loads WRAPPED with no environment knob,
+  because stakes::foldIsExact refuses to fold a panned wrapper — the refusal a
+  user hits in the field.
+-->
+<SActionScript version="1" name="take_column_wrapped_delete_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_wrapperpan.qxp"/>
+
+    <!-- Really the wrapped shape. If foldIsExact is ever widened this is what
+         stops the case silently becoming a second direct-shape test. -->
+    <assert-log level="warn" minCount="1"
+                contains="take column left WRAPPED: the wrapper is PANNED"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2" placements="1"/>
+
+    <!-- REFUSED, because the pin is restricted to the direct shape. -->
+    <remove-sample trackIndex="0" clipIndex="0" timePos="0"
+                   expectReject="true"/>
+    <assert-log contains="remove-sample: refusing to delete" minCount="1"/>
+
+    <!-- And the column is untouched: still wrapped, still two takes. -->
+    <assert-take-column clip="0,0" shape="wrapped" takes="2" placements="1"/>
+
+    <!-- Still audible, with the wrapper's hard-left pan intact: channel 1
+         silent. A refusal that damaged the clip would be the very bug this
+         whole ticket is about. -->
+    <render filename="tcwdr.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tcwdr.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+  </actions>
+
+</SActionScript>
