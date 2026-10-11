@@ -31,9 +31,17 @@ length_t twLatchStreamingOutput::readStreamingData( sample_t * pDest, length_t m
 	// Pass this reader's own page-chain hint; copyData reads and updates it
 	// atomically. Keeping it per-reader (not on the shared latch) means two
 	// readers of a fanned-out producer don't clobber each other's continuity.
-	len = getParentStreamingLatch().copyData( offset.load( std::memory_order_relaxed ),
-	                                          pDest, maxLength,
-	                                          previousPage_, previousPageEpoch_ );
+	// An ORPHANED plug reads as SILENCE -- 0 frames, nothing written (QBX-155).
+	// This is the ZOMBIE contract one level down: a component tearing down
+	// outputs silence and may still be referenced by the audio thread, and a
+	// plug whose latch has been destroyed is in exactly that position. Reading
+	// 0 is what every caller already handles for "no data this page".
+	twStreamingLatch *lat = streamingLatchOrNull();
+	if( !lat ) return 0;
+
+	len = lat->copyData( offset.load( std::memory_order_relaxed ),
+	                     pDest, maxLength,
+	                     previousPage_, previousPageEpoch_ );
 	if( len>0 ) {
 		offset.fetch_add( len, std::memory_order_relaxed );
 	}
@@ -45,7 +53,12 @@ length_t twLatchStreamingOutput::readStreamingData( sample_t * pDest, length_t m
 // advanced — see the declaration.
 std::shared_ptr<twOutputPage> twLatchStreamingOutput::fetchPage( offset_t pageStart )
 {
-	return getParentStreamingLatch().fetchPageForReader(
+	// nullptr already means "no page; render silence" to every caller, so an
+	// ORPHANED plug needs no new contract (QBX-155).
+	twStreamingLatch *lat = streamingLatchOrNull();
+	if( !lat ) return nullptr;
+
+	return lat->fetchPageForReader(
 		pageStart, previousPage_, previousPageEpoch_ );
 }
 
@@ -79,7 +92,27 @@ twLatch::twLatch( std::shared_ptr<twComponent> component0, idx_t idx0 )
 
 twLatch::~twLatch()
 {
-    // FIXME: Empty the latch output list.
+    // ORPHAN every output this latch still owns -- the FIXME this destructor
+    // used to carry, and QBX-155's root cause.
+    //
+    // Clearing outputList alone would NOT be enough, and that is the whole
+    // subtlety: a consumer holds its own shared_ptr to the plug it reads from
+    // (twComponent::pInputPlugs_), so dropping this list's reference leaves the
+    // plug ALIVE with a back-reference into a latch that is about to be freed.
+    // The plug has to be told. Afterwards latchOrNull() answers nullptr and
+    // every consumer can see what happened instead of writing into freed memory.
+    for( auto &out : outputList ) {
+        if( out ) out->parentLatch_ = nullptr;
+    }
+    outputList.clear();
+}
+
+twFormat twLatchOutput::getFormat() const
+{
+    // An ORPHANED plug reports the canonical format rather than faulting: the
+    // consumer asking is about to be rewired away from it, and the default is
+    // what every unmodified latch answers anyway (QBX-155).
+    return parentLatch_ ? parentLatch_->getFormat() : twFormat();
 }
 
 /**

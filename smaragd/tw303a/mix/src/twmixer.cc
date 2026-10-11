@@ -35,9 +35,11 @@ int twMixer::seekTo_nolock( offset_t offset )
     // Forward the seek to all input plugs
     for (idx_t i = 0; i < mixerInputs_; ++i) {
         if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
-            twLatch &latch = pInputPlugs_[i]->getParentLatch();
-            std::shared_ptr<twComponent> comp = latch.getComponent();
-            comp->seekTo(offset);
+            // twProducerOf absorbs the orphaned-plug case (QBX-155); the
+            // null check was missing entirely before it, so a gone producer
+            // was a null dereference here too.
+            std::shared_ptr<twComponent> comp = twProducerOf( pInputPlugs_[i].get() );
+            if (comp) comp->seekTo(offset);
         }
     }
     return 0;
@@ -357,9 +359,8 @@ void twMixer::teardown()
         std::lock_guard<std::mutex> lock(mutex());
         for (idx_t i = 0; i < mixerInputs_; ++i) {
             if (i < (idx_t)pInputPlugs_.size() && pInputPlugs_[i]) {
-                twLatch &latch = pInputPlugs_[i]->getParentLatch();
-                std::shared_ptr<twComponent> comp = latch.getComponent();
-                inputsCopy.push_back(comp);
+                std::shared_ptr<twComponent> comp = twProducerOf( pInputPlugs_[i].get() );
+                if (comp) inputsCopy.push_back(comp);
             }
         }
     }

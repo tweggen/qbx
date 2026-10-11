@@ -305,8 +305,7 @@ std::shared_ptr<twOutputPage> twPluginInsert::freezePage(
             std::lock_guard<std::mutex> lock( mutex() );
             if( !pInputPlugs_.empty() ) plug = pInputPlugs_[0];
         }
-        std::shared_ptr<twComponent> producer =
-            plug ? plug->getParentLatch().getComponent() : nullptr;
+        std::shared_ptr<twComponent> producer = twProducerOf( plug.get() );
         if( producer ) {
             std::shared_ptr<twOutputPage> up = producer->freezePage(
                 startPos, inputData, inputOffset, inputLength, sampleRate,

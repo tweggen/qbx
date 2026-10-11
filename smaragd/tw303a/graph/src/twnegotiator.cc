@@ -69,9 +69,11 @@ bool twNegotiator::negotiate( std::shared_ptr<twComponent> target,
         for( idx_t i = 0; i < c->getNInputs(); ++i ) {
             twLatchOutput *plug = c->getInputPlug( i );
             if( !plug ) continue;
-            twLatch     &lat = plug->getParentLatch();
-            std::shared_ptr<twComponent> p   = lat.getComponent();
-            wires.push_back( Wire{ p, lat.getIndex(), c, i } );
+            // An ORPHANED plug has no producer to wire (QBX-155).
+            twLatch *lat = plug->latchOrNull();
+            if( !lat ) continue;
+            std::shared_ptr<twComponent> p = lat->getComponent();
+            wires.push_back( Wire{ p, lat->getIndex(), c, i } );
             if( !seen.count( p ) ) {
                 seen.insert( p );
                 stack.push_back( p );
