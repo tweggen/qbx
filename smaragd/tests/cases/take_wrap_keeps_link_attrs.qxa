@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §7 B1 (was X5). WRAPPING A CLIP INTO A TAKE COLUMN MUST CARRY THE
+  PLACEMENT'S OWN ATTRIBUTES, and collapsing it back must too.
+
+  stakes::wrapCutLinkIntoStack and stakes::collapseSingleTakeStack build a new
+  SLink and copied `startTime` ONLY. A fresh SLink takes its timebase from
+  SLink::defaultTimebaseFor( object ), which keys off contentKind() — audio is
+  pinned to time, events follow the beat — so the new link over the STakeStack
+  was born `time` and an EXPLICIT `beats` choice on the clip was silently
+  dropped. eventChannelOverride_ went the same way, defaulting back to -1.
+
+  WHY THE FIXTURE IS AN AUDIO CLIP SWITCHED TO BEATS, which looks perverse
+  until you work out what else could fail. On a MIDI column the loss is
+  INVISIBLE: STakeStack::contentKind() reports Event, so defaultTimebaseFor
+  answers Beats and the attribute is preserved BY ACCIDENT. Only a link whose
+  timebase DIFFERS from its content's default can tell a carried attribute from
+  a defaulted one, and `set-link-timebase beats` on audio is exactly that
+  link. The same reasoning is why the case does not use a MIDI clip, which
+  would pass against the unfixed code.
+
+  WHAT THIS CASE DOES NOT PROVE. startTicks_ is also carried by the fix, but it
+  is NOT independently observable here: SLink::setStartTime() already calls
+  syncTicksFromTime_(), so the old code's new link had ticks in step with its
+  frame position at the current tempo. Carrying the ORIGINAL exact Fraction
+  matters to this project's exact-arithmetic rule — a tick value with no exact
+  frame representation is rounded by the round trip — but no .qxa can see that
+  through a frame-valued assertion. Stated rather than implied.
+
+  eventChannelOverride_ is likewise unobservable here (it needs an event feed
+  and an instrument to route to); the B1 PR says so.
+
+  ON `main` THIS FAILS at the first assert-clip-window after add-take, which
+  reads timebase `time` where `beats` was set. That is the right reason.
+-->
+<SActionScript version="1" name="take_wrap_keeps_link_attrs">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- 96000 frames at 48 kHz is 2.0 s, which at the default 120 BPM is
+         exactly 4 beats. Halving the tempo later doubles it to 192000 with no
+         rounding, so every number below is exact. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+
+    <!-- The EXPLICIT choice, against audio's own default. -->
+    <set-link-timebase clip="0,0" timebase="beats"/>
+    <assert-clip-window clip="0,0" startTime="96000" timebase="beats"/>
+
+    <!-- THE WRAP. add-take turns the plain cut into a direct take column. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2"/>
+
+    <!-- The attribute must have survived the new link. FAILS ON main. -->
+    <assert-clip-window clip="0,0" startTime="96000" timebase="beats"/>
+
+    <!-- And it must still BEHAVE as a beats link: 120 -> 60 BPM doubles it.
+         Asserting the enum alone would pass for a link that reports `beats`
+         and is not re-derived, so the behaviour is asserted too. -->
+    <set-tempo bpm="60"/>
+    <assert-clip-window clip="0,0" startTime="192000" timebase="beats"/>
+
+    <!-- UNDO the tempo, then the wrap. The collapse rebuilds the link a
+         second time, so it is the other half of the same defect. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" startTime="96000" timebase="beats"/>
+
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="96000" timebase="beats"/>
+
+    <!-- The collapsed link must behave, not merely report. -->
+    <set-tempo bpm="60"/>
+    <assert-clip-window clip="0,0" startTime="192000" timebase="beats"/>
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" startTime="96000" timebase="beats"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

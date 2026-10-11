@@ -11,6 +11,41 @@
 
 namespace stakes {
 
+
+// Carry a PLACEMENT's own attributes onto a replacement link (plan 53 B1).
+//
+// Wrapping and collapsing both destroy the clip's SLink and build a new one.
+// The old code copied `startTime` only, and a fresh SLink takes its timebase
+// from SLink::defaultTimebaseFor( object ), which keys off contentKind() --
+// audio is pinned to time, events follow the beat. So an EXPLICIT `beats`
+// choice on an audio clip was silently reset to `time` by the wrap, and the
+// clip then ignored every later set-tempo. eventChannelOverride_ went the same
+// way, back to -1.
+//
+// THE ORDER MATTERS, and not obviously:
+//
+//   startTime  first -- setStartTime() itself calls syncTicksFromTime_(), so
+//              this also leaves the ticks in step for a Time link.
+//   timebase   second -- switching TO beats calls syncTicksFromTime_() again,
+//              deriving ticks from the frame position just set. Were the ticks
+//              set before this, the switch would overwrite them.
+//   startTicks third -- the exact Fraction, authoritative for a Beats link,
+//              whose setter re-derives startTime from it. This is what keeps a
+//              tick value with no exact frame representation exact across the
+//              wrap; the frame round trip above would have rounded it.
+//
+// A Time link keeps its ticks in step too, deliberately: SLink documents them
+// as "meaningful only for a Beats link (a Time link keeps it in step so a
+// later switch has something to start from)".
+static void carryLinkAttrs( const SLink &from, SLink *to )
+{
+    if( !to ) return;
+    to->setStartTime( from.getStartTime() );
+    to->setTimebase( from.getTimebase() );
+    to->setStartTicks( from.getStartTicks() );
+    to->setEventChannelOverride( from.getEventChannelOverride() );
+}
+
 STakeStack *columnOfLink( SLink *lk )
 {
     if( !lk ) return nullptr;
@@ -130,13 +165,12 @@ int normalizeColumns( SProject &project )
         // wrapCutLinkIntoStack / collapseSingleTakeStack do: the new link takes
         // its ref on the column BEFORE the old link (and with it the wrapper,
         // and with that the wrapper's ref on the column) goes away.
-        const offset_t startTime = lk->getStartTime();
         const int origIndex = lane->indexOfChild( lk );
         SObject *wrapObj = &wrapper->asObject();
-        QObject::disconnect( wrapObj, SIGNAL( durationChanged( length_t ) ),
-                             lane, nullptr );
+        // The broad form, as in wrapCutLinkIntoStack -- see carryLinkAttrs.
+        QObject::disconnect( wrapObj, nullptr, lane, nullptr );
         SLink *direct = new SLink( *column, nullptr );
-        direct->setStartTime( startTime );
+        carryLinkAttrs( *lk, direct );
         delete lk;
         direct->setParent( lane );
         lane->moveChildToIndex( lane->indexOfChild( direct ), origIndex );
@@ -184,8 +218,6 @@ SLink *wrapCutLinkIntoStack( SProject *project, SObject *lane,
     if( !win ) return nullptr;
     SObject &winObj = win->asObject();
 
-    const offset_t startTime = cutLink->getStartTime();
-
     STakeStack *stack = new STakeStack( project );
     if( !stack->insertTake( *win ) ) {  // refs it BEFORE the old link dies
         delete stack;                   // cannot be refused into an empty stack
@@ -193,14 +225,21 @@ SLink *wrapCutLinkIntoStack( SProject *project, SObject *lane,
     }
     stack->setActiveTake( 0 );        // the wrapped material stays audible
 
-    // The lane connected the window's durationChanged when its link was added;
-    // deleting the link does not sever an object-level connection. From now
-    // on the window reports to the stack, the stack to the lane.
-    QObject::disconnect( &winObj, SIGNAL( durationChanged( length_t ) ),
-                         lane, nullptr );
+    // The lane connected the window's signals when its link was added; deleting
+    // the link does not sever an object-level connection. From now on the
+    // window reports to the stack, the stack to the lane.
+    //
+    // THE BROAD FORM on purpose (plan 53 B1): STrack::trackChildWasAdded wires
+    // TWO object-level signals -- durationChanged, and eventsChanged for
+    // Event-kind content -- and the narrow durationChanged spelling missed the
+    // second on an event column. Nothing connects lane -> object, so this
+    // severs exactly those, and re-linking re-makes them through setParent ->
+    // childEvent -> childObjectAdded -> trackChildWasAdded. SRemoveTrackAction
+    // and SRemoveSampleAction's pin use the same form for the same reason.
+    QObject::disconnect( &winObj, nullptr, lane, nullptr );
 
     SLink *stackLink = new SLink( *stack, nullptr );
-    stackLink->setStartTime( startTime );
+    carryLinkAttrs( *cutLink, stackLink );
     const int origIndex = lane->indexOfChild( cutLink );
     delete cutLink;                   // lane removeClip fires
     stackLink->setParent( lane );     // lane insertClip fires (keyed anew)
@@ -218,14 +257,14 @@ SLink *collapseSingleTakeStack( SObject *lane, SLink *stackLink )
     SObject *take = stack->takeObjectAt( 0 );
     if( !take ) return nullptr;
 
-    const offset_t startTime = stackLink->getStartTime();
-
-    // Sever the stack's per-take forwarding before it is orphaned.
-    QObject::disconnect( take, SIGNAL( durationChanged( length_t ) ),
-                         stack, nullptr );
+    // Sever the stack's per-take forwarding before it is orphaned. The broad
+    // form, as in wrapCutLinkIntoStack: the stack forwards durationChanged AND
+    // eventsChanged for an event column, and the narrow spelling missed the
+    // second (plan 53 B1).
+    QObject::disconnect( take, nullptr, stack, nullptr );
 
     SLink *cutLink = new SLink( *take, nullptr );  // ref before the stack dies
-    cutLink->setStartTime( startTime );
+    carryLinkAttrs( *stackLink, cutLink );
     const int origIndex = lane->indexOfChild( stackLink );
     delete stackLink;                 // stack unreferenced → deleteLater
     cutLink->setParent( lane );
