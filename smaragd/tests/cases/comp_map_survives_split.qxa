@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §7 B3 (was X11). SPLITTING A COMPED COLUMN KEEPS THE COMP ON BOTH
+  HALVES, AND UNSPLIT PUTS THE ORIGINAL MAP BACK.
+
+  ssplitclipaction.cpp's direct branch built the tail STakeStack without a map
+  at all, and left the head's segments beyond the split in place. So a split
+  threw the comp away on the tail and left the head describing frames it no
+  longer has.
+
+  THE ACTIVE TAKE IS DELIBERATELY NOT THE MAPPED TAKE. This is what stops the
+  case being vacuous: an empty map MEANS "ask activeTake_", so if the active
+  take were the one the map selects, a dropped map would render EXACTLY the
+  same audio and every assertion below would pass against the broken code.
+  Take 0 is active throughout; the map selects take 1 over most of the column.
+
+  THE NUMBERS ARE MEASURED, NOT INVENTED. They come from comp_map_audible.qxa,
+  which established them for this fixture: test_gapsaw.wav is a 0.1 → 0.8 ramp
+  with exact-zero regions, take 0 is unslipped and take 1 is slipped one
+  second, and their per-second RMS over the four windows is
+
+      window        take 0 (active)   take 1 (mapped)
+      [0,1) s       0.0849            0.2115
+      [3,4) s       0.4125            0.0  (the file's own silence)
+
+  so both windows separate the two takes completely, and windows 2 and 3 are
+  the ones where the ramp makes them agree — never asserted here.
+
+  WINDOW 4 ALSO GATES THE TAIL'S SHIFT ARITHMETIC, which is the part most
+  likely to be got wrong. The map is take 1 from 0, take 0 from 48000 and take
+  1 again from 144000; the split is at 96000, so the tail's segments must come
+  out as
+
+      { 0 → take 0 },  { 48000 → take 1 }        (144000 − 96000 = 48000)
+
+  the opening segment being whatever sounded AT the split. THREE distinct
+  failures are then audible in window 4, which asserts the file's own silence:
+
+    • the tail's map DROPPED → falls back to active take 0 → 0.4125, loud;
+    • the segment left UNSHIFTED at 144000 → the tail is only 96000 frames
+      long, never reaches it, plays take 0 throughout → 0.4125, loud;
+    • no opening segment synthesised → take 0 until 48000 anyway here, but on
+      the head's side window 1 catches the mirror of it.
+
+  WHAT IS STRUCTURAL ONLY, said plainly: the HEAD's truncation. A head that
+  keeps segments describing frames it no longer has still PLAYS the same audio,
+  because nothing reads a segment past the column's end. So window 1 proves the
+  head kept its map and the assert-take-column beside it proves the truncation;
+  no render can separate those two. The TAIL's map is the audible half, and
+  window 4 is where it bites.
+
+  AN EARLIER VERSION OF THIS CASE WAS VACUOUS ON THE TAIL, and it is worth
+  saying why. With the map selecting take 0 in window 4, a DROPPED map fell
+  back to active take 0 and rendered exactly the same audio, so only the
+  structural assertions bit. The map and the active-take fallback have to
+  disagree in every window the case asserts, or the render proves nothing.
+
+  ON main THIS FAILS at the first assertion after the split.
+-->
+<SActionScript version="1" name="comp_map_survives_split">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- Take 0: unslipped. Take 1: slipped one second. -->
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+
+    <!-- Make take 0 the ACTIVE one, so the map and the fallback disagree.
+         select-take clears the map, which is why it comes first. -->
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        comp=""/>
+
+    <!-- The comp ALTERNATES, and it has to. See the header: each half needs a
+         window where the MAP and the active-take fallback disagree, and only
+         windows 1 and 4 separate these two takes at all. So take 1 owns
+         window 1 (the head's discriminator) and take 1 owns window 4 (the
+         tail's), with take 0 in between. -->
+    <set-comp-segment clip="0,0" at="0" take="1"/>
+    <set-comp-segment clip="0,0" at="48000" take="0"/>
+    <set-comp-segment clip="0,0" at="144000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:1;48000:0;144000:1" activeTake="0"/>
+
+    <!-- BASELINE. Both windows show the MAP winning over the active take. -->
+    <render filename="cmss_pre.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cmss_pre.wav" startFrame="0"
+                         frameCount="48000" minRms="0.2100" maxRms="0.2130"/>
+    <assert-audio-energy filename="cmss_pre.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- THE SPLIT, at 2 s. -->
+    <split-clip clip="0,0" splitTime="96000"/>
+
+    <!-- Head keeps the segments before the split; tail re-bases to 0, opening
+         with whatever sounded AT the split and shifting the rest by -96000. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;48000:0"/>
+    <assert-take-column clip="0,1" shape="direct" takes="2" activeTake="0"
+                        comp="0:0;48000:1"/>
+
+    <!-- AND THE AUDIO IS UNCHANGED, which is what a split is supposed to be.
+         Window 1 is the head's, window 4 is the tail's. -->
+    <render filename="cmss_split.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cmss_split.wav" startFrame="0"
+                         frameCount="48000" minRms="0.2100" maxRms="0.2130"/>
+    <assert-audio-energy filename="cmss_split.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- UNSPLIT restores the ORIGINAL map, which neither half carries on its
+         own: the head's later segments were dropped and the tail's opening one
+         was synthesised, so only the splitting action could hand it back. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;48000:0;144000:1"/>
+    <render filename="cmss_undone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cmss_undone.wav" startFrame="0"
+                         frameCount="48000" minRms="0.2100" maxRms="0.2130"/>
+    <assert-audio-energy filename="cmss_undone.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- REDO splits again, so the forward is not a one-shot. -->
+    <redo count="1"/>
+    <assert-take-column clip="0,0" comp="0:1;48000:0"/>
+    <assert-take-column clip="0,1" comp="0:0;48000:1"/>
+  </actions>
+
+</SActionScript>
