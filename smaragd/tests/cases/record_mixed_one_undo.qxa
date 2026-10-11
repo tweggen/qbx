@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §7 B7 / §5.4. ONE RECORD PRESS IS ONE UNDO STEP, AND A PASS THAT
+  PLACES NOTHING IS NO STEP AT ALL.
+
+  SApplication::stopRecording called the two recorders' stop()s in sequence and
+  EACH opened its own macro, so a project with an armed audio track and an armed
+  MIDI track cost TWO undos. sapplication.h documented "one undo step per
+  recorder", which was both the intent and the bug: one press is one gesture.
+  Worse, the count VARIED with what was captured, because the audio recorder
+  returns before its macro when it has nothing placeable — so an empty audio
+  half plus a MIDI half was one step and a full pass was two.
+
+  WHY THE MACRO IS OPENED LAZILY, which is the part that is easy to get wrong.
+  A Qt macro that closes with no commands in it is still a command ON the stack.
+  So an outer beginMacro/endMacro around a pass that placed nothing would leave
+  an undo entry that undoes nothing, and QUndoStack::isClean() would report the
+  project dirty after a take that recorded nothing. SApplication therefore ARMS
+  a scope and the FIRST submitAction inside it opens the macro; the recorders
+  open none of their own, because nesting theirs inside would fix the count and
+  re-create the empty-macro problem one level down.
+
+  THE EMPTY PASS IS DETERMINISTIC, and getting there took two attempts. The
+  file input backend ALWAYS captures something, so an armed AUDIO track can
+  never give an empty pass. Plan 53 suggests a punch region behind the locator;
+  that does empty the window, but SAudioRecorder's punch-out calls its own
+  stop() on a TICK, so whether the take is still running when record-stop
+  arrives is timing — measured both ways across two runs of this case. What
+  IS deterministic: arm only the MIDI track and replay nothing. record-start
+  refuses only when NEITHER recorder could start, the MIDI recorder captures no
+  events, and its commit loop skips every empty pass, so it submits nothing.
+
+  AND THE SAVE BEFORE IT IS LOAD-BEARING. assert-unsaved-changes reads
+  QUndoStack::isClean(), which is only meaningful relative to a clean point —
+  without the save, the earlier take would still be on the stack and the
+  assertion would be about that, not about the empty pass.
+
+  THE EMPTY PASS ALSO COVERS A SECOND COMMIT PATH, which writing this case is
+  how I found. SAudioRecorder's PUNCH-OUT calls its own stop() DIRECTLY, never
+  going through SApplication::stopRecording() — so a fix that wrapped only
+  stopRecording would leave a punch-out's placements unwrapped, one undo step
+  per segment per track. Both recorders therefore open the press scope around
+  their own commit as well, and the scope is re-entrant so the two nest. The
+  refused record-stop below is what pins that the take ended on that path.
+
+  WHAT THIS CASE DELIBERATELY DOES NOT ASSERT: that a SECOND undo finds no
+  further step. undo does not distinguish step kinds, so it would pop the
+  arm-track or set-track-input above and the assertion would be about those.
+  "One undo removed BOTH halves" is the claim, and on main it fails because one
+  undo removes only one of them.
+-->
+<SActionScript version="1" name="record_mixed_one_undo">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0 audio, track 1 MIDI. Monitoring OFF on both: this case is
+         about what was RECORDED, not about what was heard. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+
+    <!-- ONE PRESS, both halves. -->
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="24000"/>
+    <wait-ms ms="1200"/>
+    <record-stop/>
+
+    <!-- Both halves landed. Floors, not equalities: how much a real-time pass
+         captures is load-dependent, and the structural claim here is "each
+         recorder placed something", not how much. -->
+    <assert-recorded-clip trackPath="0" minClips="1"/>
+    <assert-midi-recorded trackPath="1" minClips="1"/>
+
+    <!-- ...AND ONE UNDO TAKES BOTH AWAY. On main this leaves the MIDI half
+         behind, because each recorder had its own macro. -->
+    <undo count="1"/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+    <assert-midi-recorded trackPath="1" clips="0"/>
+
+    <!-- —— the empty pass ——————————————————————— -->
+
+    <!-- Set up the empty pass FIRST, then take the clean point. arm-track is
+         an UNDOABLE action, so disarming after the save would dirty the stack
+         and every assertion below would be about that rather than about the
+         empty pass. Measured: it failed 3 runs out of 3 that way round. -->
+    <arm-track trackPath="0" armed="0"/>
+    <set-locator position="96000"/>
+
+    <!-- Clean point, so isClean() below means something. -->
+    <save-project path="../../build/test-output/record_mixed_one_undo/rmou.qxp"/>
+    <assert-unsaved-changes expect="0"/>
+
+    <!-- AN EMPTY PASS, DETERMINISTICALLY. Disarm the audio track and replay
+         no MIDI: the MIDI recorder starts (which is all record-start needs,
+         since it refuses only when NEITHER recorder could start), captures no
+         events, and its commit loop skips every empty pass, so it submits
+         nothing at all.
+
+         THE PUNCH ROUTE PLAN 53 SUGGESTS DOES NOT WORK HERE, and the reason is
+         worth writing down. A punch region behind the locator does empty the
+         window, but SAudioRecorder's punch-out calls its own stop() on a TICK,
+         so whether the take is still running when record-stop arrives is
+         timing. Measured both ways on this box across two runs of this very
+         case: once refused, once accepted. A gate cannot rest on that. -->
+    <record-start/>
+    <wait-ms ms="400"/>
+    <record-stop/>
+
+    <!-- NOTHING was pushed. An empty Qt macro would make this fail, which is
+         exactly why the macro is opened lazily rather than around the stops. -->
+    <assert-unsaved-changes expect="0"/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+    <assert-midi-recorded trackPath="1" clips="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
