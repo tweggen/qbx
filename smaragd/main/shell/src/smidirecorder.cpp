@@ -443,15 +443,19 @@ void SMidiRecorder::commit_()
                    on.channel, on.velocity, 64.0 );
     }
 
-    // ONE UNDO STEP for the whole take: every track, every pass, plus the
-    // input quantise each placement folds in. Loop record is one
-    // place-midi-recording per pass, exactly as loop AUDIO record is one
-    // place-recording per pass.
-    QUndoStack *undo = app_->actionHistory() ? app_->actionHistory()->undoStack()
-                                             : nullptr;
+    // ONE UNDO STEP for the whole PRESS, opened by SApplication rather than
+    // here (plan 53 §5.4, QBX-165): the audio half and this one belong to the
+    // same gesture, and a press that places nothing must leave the undo stack
+    // untouched -- which an empty Qt macro does not.
+    //
+    // Loop record is still one place-midi-recording per pass, exactly as loop
+    // AUDIO record is one place-recording per pass; they now share the step.
     int placements = 0, notes = 0, others = 0, passes = 0;
     std::vector<qint64> seenPasses;
-    if( undo ) undo->beginMacro( QStringLiteral( "MIDI Recording" ) );
+    // As in the audio recorder: open the scope here as well, so a commit that
+    // did not come through SApplication::stopRecording() is still one step
+    // (QBX-165). Re-entrant, so the common path just nests.
+    app_->beginRecordCommit();
     for( std::size_t ai = 0; ai < armed_.size(); ++ai ) {
         auto it = byTrackPass.find( ai );
         if( it == byTrackPass.end() ) continue;
@@ -478,7 +482,7 @@ void SMidiRecorder::commit_()
             }
         }
     }
-    if( undo ) undo->endMacro();
+    app_->endRecordCommit();
 
     lastPlacements_ = placements;
     lastNotes_      = notes;

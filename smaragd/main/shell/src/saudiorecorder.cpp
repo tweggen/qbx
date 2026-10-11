@@ -564,13 +564,25 @@ void SAudioRecorder::commitPlacement_()
     }
     lastPassCount_ = (int) segs.size();
 
-    // ONE UNDO STEP for the whole pass. place-recording plans each segment
-    // against the lane it lands on -- a take on every covered column, plain
-    // cuts for the gaps -- so a second loop pass over the first one's clip
-    // becomes a take by the verb's own rules and needs no special case here.
-    QUndoStack *undo = app_->actionHistory() ? app_->actionHistory()->undoStack()
-                                             : nullptr;
-    if( undo ) undo->beginMacro( QStringLiteral( "Recording" ) );
+    // ONE UNDO STEP for the whole PRESS, and it is no longer opened here
+    // (plan 53 §5.4, QBX-165). SApplication::stopRecording arms the scope and
+    // the first submitAction inside it opens the macro, so this recorder and
+    // the MIDI one land in the SAME step and a pass that places nothing leaves
+    // the undo stack untouched. Opening a macro here as well would nest
+    // correctly for the count but would re-create the empty-macro problem one
+    // level down -- this function returns early, above, whenever placeable
+    // <= 0.
+    //
+    // place-recording still plans each segment against the lane it lands on --
+    // a take on every covered column, plain cuts for the gaps -- so a second
+    // loop pass over the first one's clip becomes a take by the verb's own
+    // rules and needs no special case here.
+    // Open the press scope from HERE too (QBX-165). stop() is reached without
+    // SApplication::stopRecording() on the punch-out path above, so relying on
+    // that function alone would leave a punch-out's placements unwrapped --
+    // one undo step per segment per track. The scope is re-entrant, so when
+    // stopRecording DID call us this just nests.
+    app_->beginRecordCommit();
     for( const Armed &a : armed_ ) {
         if( !QFileInfo( a.file ).exists() ) {
             TW_LOGW( "shell", "[REC] no file for track: %s",
@@ -581,7 +593,7 @@ void SAudioRecorder::commitPlacement_()
             app_->submitAction( new SPlaceRecordingAction(
                 a.path, a.file, s.at, s.srcOffset, s.len ) );
     }
-    if( undo ) undo->endMacro();
+    app_->endRecordCommit();
 
     // Arm state is deliberately untouched (item e): the armed track(s) stay
     // armed after a take is placed, ready for the next one. The

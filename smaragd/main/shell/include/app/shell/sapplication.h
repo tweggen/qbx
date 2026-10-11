@@ -215,9 +215,38 @@ public:
     /// stopped this returns true immediately and the take begins later, from
     /// `pumpRecordPreamble()`; `recordPreambleActive()` says so.
     bool startRecording();
-    /// End the take and commit the placement (one undo step per recorder). A
-    /// preamble still running is CANCELLED (nothing was recorded yet).
+    /// End the take and commit the placement as ONE undo step for the whole
+    /// PRESS, however many recorders contributed. A preamble still running is
+    /// CANCELLED (nothing was recorded yet).
+    ///
+    /// CONTRACT CHANGE (plan 53 §5.4, QBX-165). This said "one undo step per
+    /// recorder", and that was both the documented intent and a bug: an armed
+    /// audio track plus an armed MIDI track cost TWO undos, and the count
+    /// depended on what was captured, because the audio recorder returns
+    /// before its macro when it has nothing placeable. One press is one
+    /// gesture, so it is one step.
     void stopRecording();
+
+    /// --- the per-press recording macro (plan 53 §5.4) -------------------
+    ///
+    /// Opened LAZILY, which is the whole point. A Qt macro that closes with no
+    /// commands in it is still a command ON the stack, so an outer
+    /// beginMacro/endMacro around a pass that placed nothing would leave an
+    /// undo entry that undoes nothing -- and `isClean()` would report the
+    /// project dirty after a take that recorded nothing. So the scope is armed
+    /// here, the macro is opened by the first submitAction inside it, and
+    /// endRecordCommit() closes it only if it was ever opened.
+    ///
+    /// RE-ENTRANT, and that is not decoration. A punch-out ends a take by
+    /// calling SAudioRecorder::stop() DIRECTLY (saudiorecorder.cpp, "PUNCH-OUT
+    /// ... stop()"), so a commit can happen without stopRecording() ever
+    /// running. Each recorder therefore opens this scope around its own commit
+    /// too, and stopRecording() opens an OUTER one around both: a press is one
+    /// step, a self-stop is one step, and nothing is ever submitted outside a
+    /// scope. The depth counter is what makes the two nest without the inner
+    /// one closing the macro early.
+    void beginRecordCommit();
+    void endRecordCommit();
 
     // --- count-in / pre-roll (proposal 21 L5) ------------------------------
 
@@ -507,6 +536,9 @@ private:
     // the end, and it is a flag rather than a re-derivation because the armed
     // set is cleared by the commit before the stop finishes.
     bool midiOwnsTransport_ = false;
+    // The per-press recording macro (QBX-165); see beginRecordCommit().
+    int  recordCommitDepth_ = 0;
+    bool recordMacroOpen_   = false;
 
     SLink *currentSelectedSLink_;
 

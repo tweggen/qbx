@@ -27,6 +27,7 @@
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
 #include "app/shell/sapplication.h"
+#include <QUndoStack>
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
 #include "app/shell/ssettings.h"
@@ -946,8 +947,37 @@ SActionHistory *SApplication::actionHistory() const
     return actionHistory_;
 }
 
+void SApplication::beginRecordCommit()
+{
+    // Arms the scope and opens NOTHING. See the header: an empty Qt macro is
+    // still a command on the stack, so the macro waits for a first action.
+    ++recordCommitDepth_;
+}
+
+void SApplication::endRecordCommit()
+{
+    if( recordCommitDepth_ <= 0 ) return;
+    if( --recordCommitDepth_ > 0 ) return;      // an inner scope; keep it open
+    if( recordMacroOpen_ ) {
+        if( QUndoStack *undo = actionHistory_ ? actionHistory_->undoStack()
+                                              : nullptr )
+            undo->endMacro();
+        recordMacroOpen_ = false;
+    }
+}
+
 void SApplication::submitAction(SAction *action)
 {
+    // THE FIRST action of a record press opens the press's macro (QBX-165).
+    // Everything after it joins the same step, and a press that submits
+    // nothing leaves the stack untouched.
+    if( recordCommitDepth_ > 0 && !recordMacroOpen_ ) {
+        if( QUndoStack *undo = actionHistory_ ? actionHistory_->undoStack()
+                                              : nullptr ) {
+            undo->beginMacro( QStringLiteral( "Recording" ) );
+            recordMacroOpen_ = true;
+        }
+    }
     if (actionHistory_) {
         actionHistory_->submit(action);
     }
@@ -1435,8 +1465,15 @@ void SApplication::stopRecording()
     const bool wasMidiOnly = midiOwnsTransport_;
     const offset_t midiStart =
         midiRecorder_ ? midiRecorder_->recordStartFrame() : (offset_t) 0;
+    // ONE UNDO STEP FOR THE PRESS (plan 53 §5.4, QBX-165), around BOTH
+    // recorders. Each used to open its own macro, so a project with an armed
+    // audio track and an armed MIDI track cost two undos -- and the count
+    // varied with what was captured, because the audio recorder returns before
+    // its macro when it has nothing placeable.
+    beginRecordCommit();
     if( midiRecorder_ ) midiRecorder_->stop();
     if( audioRecorder_ ) audioRecorder_->stop();
+    endRecordCommit();
     if( wasMidiOnly ) {
         midiOwnsTransport_ = false;
         if( isPlaying_ ) setPlaybackRunning( false );
