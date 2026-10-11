@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-155. A WRAPPED take column (SLink -> SCut -> STakeStack) deleted and
+  undone comes back BY IDENTITY, wrapper and all.
+
+  THIS CASE REPLACES take_column_wrapped_delete_refused.qxa, which is the
+  licence that case asked for in as many words: "THIS CASE IS THE BOUNDARY
+  MARKER. When the wrapped restore lands it will fail, deliberately, and must be
+  replaced by the round-trip case rather than relaxed." It asserted
+  expectReject="true" on this very delete, so it could not be relaxed into
+  anything true — the refusal it pinned no longer exists for this shape. Its
+  subject now lives here.
+
+  WHY IT USED TO CRASH, which is why the fixture is this one. Step (a) measured
+  the wrapped re-link at about 1 failure in 4, a SIGSEGV at teardown in
+  rewireSpeaker -> setInput -> deleteOutput. The cause was not the re-link and
+  not this module: twLatchOutput held its latch by a NON-NULLABLE REFERENCE
+  while the design deliberately lets a plug outlive its latch, so the wrapper
+  SCut's component dying took its latch with it and left the track's consumer
+  holding a plug into freed memory. ~twLatch now orphans its outputs. The direct
+  shape never showed it because its placement object is the STakeStack, whose
+  content component is shared and survives.
+
+  THE WRAPPER'S OWN STATE IS THE POINT HERE, and it is audible.
+  takestack_wrap_wrapperpan.qxp loads WRAPPED with no environment knob because
+  stakes::foldIsExact REFUSES to fold a panned wrapper — the shape a user
+  actually hits in the field. That pan is hard left, so channel 1 is silent, and
+  it lives on the WRAPPER rather than on any take: a restore that rebuilt the
+  column from its takes would drop it and channel 1 would come back with signal.
+  A pin cannot drop it, because there is nothing to copy.
+
+  The byte-identical render is the real assertion; the channel-1 energy check
+  beside it says what those bytes MEAN, so a future reader does not have to
+  diff two WAVs to find out.
+-->
+<SActionScript version="1" name="take_column_wrapped_delete_undo_restores">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_wrapperpan.qxp"/>
+
+    <!-- Really the wrapped shape. If foldIsExact is ever widened, this is what
+         stops the case silently becoming a second direct-shape test. -->
+    <assert-log level="warn" minCount="1"
+                contains="take column left WRAPPED: the wrapper is PANNED"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2" placements="1"/>
+
+    <!-- Baseline, with the wrapper's hard-left pan in it. -->
+    <render filename="tcwdur_pre.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="tcwdur_pre.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+
+    <!-- THE DELETE. Refused for this shape until QBX-155; it must work now. -->
+    <remove-sample trackIndex="0" clipIndex="0" timePos="0"/>
+    <assert-log contains="remove-sample: refusing to delete"
+                minCount="0" maxCount="0"/>
+
+    <!-- THE DRAIN. Without it a scripted run never delivers DeferredDelete, so
+         the case would pass with no pin at all. -->
+    <drain-pending-deletes/>
+    <assert-log contains="resurrected after a queued deletion"
+                minCount="0" maxCount="0"/>
+
+    <!-- UNDO restores the wrapper, its stack and its takes by identity. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2"
+                        placements="1" linkObjectRefs="1"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+
+    <!-- Byte for byte, which is this project's exactness rule. A rebuilt column
+         loses the wrapper's pan and reads differently; so does one whose active
+         take or window moved. -->
+    <render filename="tcwdur_restored.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="tcwdur_restored.wav" expected="tcwdur_pre.wav"/>
+    <assert-audio-energy filename="tcwdur_restored.wav" channel="1"
+                         minRms="0.0" maxRms="0.0"/>
+
+    <!-- REDO deletes it again, and the forward must RE-PIN. -->
+    <redo count="1"/>
+    <drain-pending-deletes/>
+    <assert-log contains="resurrected after a queued deletion"
+                minCount="0" maxCount="0"/>
+
+    <!-- UNDO A SECOND TIME: the only thing that catches a one-shot inverse,
+         since SActionUndoCommand reuses the SAME inverse object every time. On
+         the wrapped shape this is also the second trip through the graph
+         re-wire that used to crash, so it is where an orphaned plug would bite
+         twice. -->
+    <undo count="1"/>
+    <render filename="tcwdur_restored2.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-file-identical actual="tcwdur_restored2.wav" expected="tcwdur_pre.wav"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2"
+                        placements="1" linkObjectRefs="1"/>
+  </actions>
+
+</SActionScript>

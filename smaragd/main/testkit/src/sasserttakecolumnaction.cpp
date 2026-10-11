@@ -30,9 +30,11 @@ SApplyResult SAssertTakeColumnAction::apply( SProject *project )
 
     STakeStack *column = stakes::columnOfLink( link );
     // The SHAPE is read from the placement itself, never from the resolver:
-    // that is the whole point of this verb.
-    const bool isDirect =
-        ( dynamic_cast<STakeStack *>( &link->getSObject() ) != nullptr );
+    // that is the whole point of this verb. stakes::isDirectColumn is that
+    // question, and asking it there rather than repeating the dynamic_cast here
+    // keeps ONE spelling of it -- which matters now that remove-sample no
+    // longer uses it to decide what it may pin (QBX-155).
+    const bool isDirect = stakes::isDirectColumn( link );
     const QString gotShape = !column ? QStringLiteral( "none" )
                            : isDirect ? QStringLiteral( "direct" )
                                       : QStringLiteral( "wrapped" );

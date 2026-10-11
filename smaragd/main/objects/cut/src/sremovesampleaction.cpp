@@ -148,20 +148,28 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
     // and ~SCut deletes it, and the stack holds its takes the same way -- so
     // one addRef() holds wrapper -> stack -> takes.
     //
-    // RESTRICTED TO THE DIRECT SHAPE for now, and this is a measured boundary
-    // rather than caution. Re-linking a WRAPPED column leaves a stale plug in
-    // the audio graph: the case crashes at TEARDOWN, 3 runs in 12, in
-    // SApplication::rewireSpeaker -> twComponent::setInput ->
-    // oldPlug->getParentLatch().deleteOutput(oldPlug). The direct shape is
-    // 12/12. Removing the disconnect above makes the wrapped shape WORSE
-    // (9 failures in 12), so the disconnect is not the cause -- an object that
-    // was wired, unwired and re-linked evidently keeps graph state that a
-    // freshly built one does not, and SAddSampleAction does nothing extra
-    // after parenting because it never has a previously-wired object.
+    // BOTH SHAPES, direct and wrapped, since QBX-155.
     //
-    // So a wrapped column keeps the step-(b) refusal: no data loss either way,
-    // and no intermittent crash. Tracked separately with the backtrace.
-    const bool canPin = stakes::isDirectColumn( clipLink );
+    // Step (a) restricted this to the direct shape because re-linking a WRAPPED
+    // column crashed at teardown about 1 run in 4, in
+    // SApplication::rewireSpeaker -> twComponent::setInput ->
+    // oldPlug->getParentLatch().deleteOutput(oldPlug). The cause was NOT in this
+    // module and not in the re-link: twLatchOutput held its latch by a
+    // non-nullable reference while the design deliberately lets a plug outlive
+    // its latch, so a wrapper SCut's component dying took its latch with it and
+    // left the track's consumer holding a plug into freed memory. ~twLatch now
+    // orphans its outputs and every consumer can see it (QBX-155).
+    //
+    // The asymmetry is explained by the same thing: on the wrapped shape the
+    // placement's object is the wrapper SCut, which owns its OWN component and
+    // therefore its own latch, so deleting the clip tears that latch down; on
+    // the direct shape the object is the STakeStack, whose content component is
+    // shared and survives. That is also why removing the disconnect above made
+    // the wrapped shape WORSE rather than better -- it was never the cause.
+    //
+    // So columnOfLink is both the predicate AND the reach now. What still
+    // refuses below is a live SRecordingContent, for ownership.
+    const bool canPin = stakes::columnOfLink( clipLink ) != nullptr;
 
     if( !canRestoreContainer && !canRestoreFile && !canPin ) {
         // REFUSE, and say so. A refusal the user cannot see is the same bug
