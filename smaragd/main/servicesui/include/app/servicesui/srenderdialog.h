@@ -26,6 +26,12 @@ public:
     int exec() override;
     audio::RenderParams getRenderParams() const;
 
+    // The output path as the render will use it, and as Browse... opens on:
+    // the line edit's text, absolute and cleaned. A relative entry resolves
+    // against the project's directory (Documents when untitled), never the
+    // process's working directory (QBX-144). Empty when the line edit is.
+    QString resolvedOutputPath() const;
+
 private slots:
     void onFormatChanged(int id);
     void onBrowseClicked();
@@ -42,6 +48,8 @@ private:
     bool mp3Available(QString *why) const;
     void syncPathExtension();
     QString extensionForSelectedFormat() const;
+    QString outputBaseDir() const;
+    QString defaultOutputPath() const;
     bool validateInputs();
 
     SProject *project_;

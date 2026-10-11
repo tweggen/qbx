@@ -195,10 +195,7 @@ bool SAudioRecorder::start()
     //    test can find them and where a -j run cannot collide (the test output
     //    dir when there is one, then the project's own directory).
     QString dir = app_->testOutputDir();
-    if( dir.isEmpty() ) {
-        const QString pf = project->projectFilePath();
-        if( !pf.isEmpty() ) dir = QFileInfo( pf ).absolutePath();
-    }
+    if( dir.isEmpty() ) dir = project->projectDir();
     if( dir.isEmpty() )
         dir = QStandardPaths::writableLocation( QStandardPaths::DocumentsLocation );
     QDir().mkpath( dir );

@@ -373,6 +373,12 @@ void SProject::setProjectFilePath( const QString &path )
         : QDir::cleanPath( QFileInfo( path ).absoluteFilePath() );
 }
 
+QString SProject::projectDir() const
+{
+    if( projectFilePath_.isEmpty() ) return QString();   // untitled
+    return QFileInfo( projectFilePath_ ).absolutePath();
+}
+
 void SProject::addExternObject( const SExternFile &extObject )
 {
     QString externFileName = extObject.getFileName();
