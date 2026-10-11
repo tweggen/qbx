@@ -285,6 +285,18 @@ if(TEST qxa.log_dock_scale)
     set_tests_properties(qxa.log_dock_scale PROPERTIES RUN_SERIAL TRUE)
 endif()
 
+# --- the record-mode INI seed (plan 53 M0) -----------------------------------
+#
+# record_mode_ini_seed OWNS the `midi/recordMode` key: set-option writes the
+# developer's real smaragd.ini, so the rule is one owning case per key. It
+# restores the key to its SOpt default at the end, and no other case may read
+# or write it -- midi_record_modes, which used to, no longer does.
+#
+# RUN_SERIAL for the shared INI and nothing else; it is not a wall-clock test.
+if(TEST qxa.record_mode_ini_seed)
+    set_tests_properties(qxa.record_mode_ini_seed PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # --- the media browser (proposal 38 gate 2) ----------------------------------
 #
 # These three drive the REAL SMediaBrowserPanel, and the panel PERSISTS its

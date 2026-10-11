@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §8 M0 / §5.2. THE RECORD MODE RESOLVES PER LANE: its own attribute,
+  else the nearest ancestor FOLDER track's, else the project's.
+
+  M0 IS PLUMBING ONLY. Every mode value still runs the old planners, so nothing
+  about how a recording LANDS changes in this case's PR. What is asserted here
+  is the resolution rule and nothing else.
+
+  WHY `own=` EXISTS BESIDE `resolved=`, and why a case needs both: `resolved`
+  alone cannot tell "this lane states takes" from "this lane inherits takes
+  from a project that states it", and inheritance is the entire subject. So
+  every lane below is asserted twice — what it STATES and what it RESOLVES to
+  — and the two deliberately disagree wherever inheritance is the point.
+
+  THE SHAPE. Track 0 becomes a FOLDER by reparenting track 1 under it:
+
+      project property         = takes-split
+      track 0 (folder)         = replace
+      track 0 > child (ex-1)   = inherit   -> resolves to replace, the FOLDER's
+      track 1 (now ex-2)       = overdub   -> resolves to overdub, its OWN
+      track 2 (now ex-3)       = inherit   -> resolves to takes-split, the
+                                              PROJECT's
+
+  so each of the three levels is the ANSWER for exactly one lane, and no two
+  levels hold the same value. A resolver that consulted the wrong level would
+  therefore give a wrong answer somewhere rather than coincidentally agreeing.
+
+  AND ONE NEGATIVE: a plain parent lane is NOT a group. Only a folder track
+  (hasChildTracks) contributes, which is plan 53's D2 decided as (a) — the
+  folder track, not the edit group. There is no way to state that negative
+  directly, so it is covered by the child lane resolving to the FOLDER's
+  `replace` rather than to anything a non-folder ancestor could have offered.
+
+  The JSON-ARRAY spelling of set-property's value is not optional:
+  `value='["takes-split"]'`, as rangeStart's `[0]` shows.
+-->
+<SActionScript version="1" name="record_mode_resolution">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Make track 0 a folder by moving track 1 under it. After this the
+         top-level lanes are 0 (folder), 1 (the old 2) and 2 (the old 3). -->
+    <reparent-track source="1" destParent="0" destIndex="-1"/>
+
+    <!-- THE PROJECT LEVEL. -->
+    <set-property key="recordMode" value='["takes-split"]'/>
+    <assert-record-mode project="takes-split"/>
+
+    <!-- THE FOLDER LEVEL. -->
+    <set-track-record-mode trackPath="0" mode="replace"/>
+    <assert-record-mode trackPath="0" own="replace" resolved="replace"/>
+
+    <!-- THE TRACK LEVEL, on a top-level lane. -->
+    <set-track-record-mode trackPath="1" mode="overdub"/>
+    <assert-record-mode trackPath="1" own="overdub" resolved="overdub"/>
+
+    <!-- INHERIT FROM THE FOLDER: the child states nothing and must resolve to
+         the folder's `replace`, NOT to the project's `takes-split`. This is
+         the assertion the whole case exists for. -->
+    <assert-record-mode trackPath="0,0" own="" resolved="replace"/>
+
+    <!-- INHERIT FROM THE PROJECT: a top-level lane with no folder above it. -->
+    <assert-record-mode trackPath="2" own="" resolved="takes-split"/>
+
+    <!-- INNERMOST WINS: pinning the child overrides the folder. -->
+    <set-track-record-mode trackPath="0,0" mode="takes"/>
+    <assert-record-mode trackPath="0,0" own="takes" resolved="takes"/>
+
+    <!-- CLEARING IT (empty = inherit) goes back to the folder's value, and
+         back to stating nothing — which is what keeps the project file
+         byte-identical to one that never set a mode. -->
+    <set-track-record-mode trackPath="0,0" mode=""/>
+    <assert-record-mode trackPath="0,0" own="" resolved="replace"/>
+
+    <!-- UNDO restores the previous value, and the one before that. -->
+    <undo count="1"/>
+    <assert-record-mode trackPath="0,0" own="takes" resolved="takes"/>
+    <undo count="1"/>
+    <assert-record-mode trackPath="0,0" own="" resolved="replace"/>
+
+    <!-- AN UNKNOWN MODE IS REFUSED, not coerced to the default: a typo that
+         silently meant `takes` would pin a lane to a mode nobody chose. -->
+    <set-track-record-mode trackPath="2" mode="nonsense" expectReject="true"/>
+    <assert-record-mode trackPath="2" own="" resolved="takes-split"/>
+
+    <!-- A PROJECT PROPERTY naming no mode reads as the default rather than
+         propagating a value no planner knows. -->
+    <set-property key="recordMode" value='["nonsense"]'/>
+    <assert-record-mode project="takes"/>
+    <assert-record-mode trackPath="2" own="" resolved="takes"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

@@ -151,6 +151,25 @@ inline constexpr const char *MidiInputPortIds  = "midi/inputPortIds";
 inline constexpr const char *MidiRecordMode     = "midi/recordMode";
 inline constexpr const char *MidiRecordQuantize = "midi/recordQuantize";
 
+// TAKE RECORDING (plan 53, QBX-156 M0). Per-user for the same reason the pair
+// above is: both are about how this person likes to work, not about the song.
+// The record MODE itself is the opposite -- it travels with the arrangement, as
+// SProjectProps::RecordMode -- and `midi/recordMode` above stays in the INI
+// purely as the SEED for a NEW project.
+//
+//   LocatorAfterRecord   return | stay (Q12, default `return`). Where the
+//                        locator goes when a take stops: back to where the
+//                        pass started, or wherever it ended.
+//   TakesExpandOnLanding never | landing | armed (Q11, default `landing`).
+//                        Whether the take lanes open themselves when a
+//                        recording lands, so the user can see what they just
+//                        got. `landing` expands only the lanes a pass actually
+//                        landed on, and only up to two tracks (plan 53 P6);
+//                        beyond that a badge and a status line say so instead
+//                        of rearranging the whole arranger.
+inline constexpr const char *LocatorAfterRecord   = "transport/locatorAfterRecord";
+inline constexpr const char *TakesExpandOnLanding = "takes/expandOnLanding";
+
 // TRANSPORT POLISH (proposal 21 L5). All three are GLOBAL and per-user rather
 // than per project, for the reason the MIDI-recording pair are: "how loud do I
 // want the click" and "how many bars do I want before a take" are properties of

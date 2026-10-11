@@ -246,7 +246,9 @@ set(APP_OBJECTS_FILES
     objects/track/include/app/objects/track/sliveinputactions.h
     objects/track/include/app/objects/track/ssettrackmidiroutingaction.h
     objects/track/include/app/objects/track/ssettrackmuteaction.h
+    objects/track/include/app/objects/track/srecordmode.h
     objects/track/include/app/objects/track/ssetlanehiddenaction.h
+    objects/track/include/app/objects/track/ssettrackrecordmodeaction.h
     objects/track/include/app/objects/track/ssettracknameaction.h
     objects/track/include/app/objects/track/ssettracksoloaction.h
     objects/track/include/app/objects/track/ssettrackvolumeaction.h
@@ -276,7 +278,9 @@ set(APP_OBJECTS_FILES
     objects/track/src/ssettrackmidioutputaction.cpp
     objects/track/src/ssettrackmidiroutingaction.cpp
     objects/track/src/ssettrackmuteaction.cpp
+    objects/track/src/srecordmode.cpp
     objects/track/src/ssetlanehiddenaction.cpp
+    objects/track/src/ssettrackrecordmodeaction.cpp
     objects/track/src/ssettracknameaction.cpp
     objects/track/src/ssettracksoloaction.cpp
     objects/track/src/ssettrackvolumeaction.cpp
@@ -462,6 +466,7 @@ set(APP_UI_FILES
     shell/include/app/shell/sviewtabs.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssecretstore.h
+    shell/include/app/shell/srecordmodeseed.h
     shell/include/app/shell/ssettings.h
     shell/src/sautomationrecorder.cpp
     shell/src/sapplication.cpp
@@ -477,6 +482,7 @@ set(APP_UI_FILES
     shell/src/smainwindow.cpp
     shell/src/ssecretstore.cpp
     shell/src/ssecretstorebackend.h
+    shell/src/srecordmodeseed.cpp
     shell/src/ssettings.cpp
     # --- app/testkit
     testkit/include/app/testkit/sactionrunner.h
@@ -496,6 +502,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sdetailpanetestactions.h
     testkit/include/app/testkit/suifonttestactions.h
     testkit/include/app/testkit/smixertestactions.h
+    testkit/include/app/testkit/sassertrecordmodeaction.h
     testkit/include/app/testkit/sasserttakecolumnaction.h
     testkit/include/app/testkit/sassertclipmixaction.h
     testkit/include/app/testkit/sassertenvelopeaction.h
@@ -552,6 +559,7 @@ set(APP_UI_FILES
     testkit/src/sdetailpanetestactions.cpp
     testkit/src/suifonttestactions.cpp
     testkit/src/smixertestactions.cpp
+    testkit/src/sassertrecordmodeaction.cpp
     testkit/src/sasserttakecolumnaction.cpp
     testkit/src/sassertclipmixaction.cpp
     testkit/src/sassertenvelopeaction.cpp

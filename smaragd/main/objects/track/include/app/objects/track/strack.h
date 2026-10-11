@@ -268,6 +268,20 @@ public:
     // Play. ON always monitors; OFF never does. Serialized only when it is not
     // the default.
     enum class MonitorMode { Auto = 0, On = 1, Off = 2 };
+    /**
+     * This lane's OWN record mode, or empty meaning INHERIT (plan 53 §5.2).
+     *
+     * Empty is the default and the common case, so it is serialized only when
+     * set -- monitorMode_'s rule below, and the reason a project written before
+     * plan 53 re-serializes byte-identically.
+     *
+     * Resolution (track, then the nearest ancestor folder track, then the
+     * project) is srecmode::resolveMode's job, not this accessor's: a lane
+     * cannot see the project from here.
+     */
+    const QString &getRecordMode() const { return recordMode_; }
+    void setRecordMode( const QString &m );
+
     MonitorMode getMonitorMode() const { return monitorMode_; }
     void setMonitorMode( MonitorMode );
     static MonitorMode monitorModeFromString( const QString &, bool *ok = nullptr );
@@ -872,6 +886,7 @@ private:
     // selector string; liveOwnedLane_ is session state and is never written.
     QString                         trackInput_;
     MonitorMode                     monitorMode_ = MonitorMode::Auto;
+    QString                         recordMode_;      // "" = inherit
     bool                            liveOwnedLane_ = false;
     // The invalidation owed to the root while live-owned (proposal 21 L3b).
     bool     haveDeferredDirty_  = false;

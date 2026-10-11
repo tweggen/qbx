@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 M0. SETTING A RECORD MODE ON A SYSTEM LANE IS REFUSED.
+
+  A record mode says how a RECORDING lands on a lane, and nothing records onto
+  the master, a send or the conductor: those lanes cannot even be armed
+  (proposal 45 AC5.2 refuses arm-track, set-monitor-mode and set-track-input on
+  them). Accepting a mode there would put a value in the model that no reader
+  may ever act on, which is the SStdMixer::volume_ defect those three verbs
+  were guarded against.
+
+  WHY THIS CASE EXISTS AT ALL rather than the refusal just being written:
+  action_roundtrip_test's AC5.6 audit is a BLACKLIST. A verb that addresses a
+  lane and has no row in its kLaneRows table silently ACCEPTS a system lane, so
+  the audit fails the build until the verb declares Refuse, Accept or
+  NotApplicable with a reason — and a Refuse has to be gated, or the
+  declaration is a comment rather than a fact. This is that gate.
+
+  The ASSERTION is the one that bites: expectReject alone cannot tell "refused"
+  from "wrote the field and then refused", so the mode is read back afterwards
+  and must still be inherit.
+-->
+<SActionScript version="1" name="record_mode_master_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- The master is addressed by the sentinel; no top-level index reaches a
+         system lane, which is the whole point of $master. -->
+    <set-track-record-mode trackPath="$master" mode="replace"
+                           expectReject="true"/>
+
+    <!-- AND NOTHING WAS WRITTEN. A verb that set its field and then returned
+         false would satisfy expectReject and still have changed the model. -->
+    <assert-record-mode trackPath="$master" own=""/>
+
+    <!-- An ordinary track is unaffected: the guard is scoped, not blanket. -->
+    <set-track-record-mode trackPath="0" mode="replace"/>
+    <assert-record-mode trackPath="0" own="replace" resolved="replace"/>
+  </actions>
+
+</SActionScript>

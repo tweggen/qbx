@@ -944,6 +944,12 @@ const LaneRow kLaneRows[] = {
     // thing that bites, because they already refused by the childAt(-1)
     // accident described in their own source.
     { "arm-track",             Refuse, "AC5.2 no live input on a system lane" },
+    // A record mode says how a RECORDING lands, and a system lane cannot be
+    // armed -- so it belongs with the three AC5.2 refusals, not beside the
+    // property setters that a master legitimately has (plan 53 M0).
+    { "set-track-record-mode", Refuse,
+      "AC5.2: a record mode is a recording property and nothing records onto a "
+      "system lane; gate record_mode_master_refused" },
     { "set-monitor-mode",      Refuse, "AC5.2, every mode, not only 'on'" },
     { "set-track-input",       Refuse, "AC5.2 no live input on a system lane" },
     { "set-track-solo",        Refuse, "AC5.2 unreadable: not in childLinks()" },
@@ -995,6 +1001,7 @@ const LaneRow kLaneRows[] = {
     // "assert-" is a naming convention and a convention is not a guarantee;
     // a row per verb is what makes the audit's coverage checkable.
     { "assert-automation-value",   Accept, "read-only" },
+    { "assert-record-mode",        Accept, "read-only" },
     { "assert-envelope",           Accept, "read-only" },
     { "assert-feel-flow-panel",    Accept, "read-only" },
     { "assert-feel-flow-pose",     Accept, "read-only" },

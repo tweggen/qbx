@@ -74,6 +74,12 @@ QVariant SOpt::def( const QString &key )
     // performance the user did not ask to have quantised must arrive as played.
     if( key == MidiRecordMode )     return QStringLiteral( "new-take" );
     if( key == MidiRecordQuantize ) return QStringLiteral( "off" );
+    // Take recording (plan 53 Q11/Q12). `return` because a take almost always
+    // wants another attempt from the same place; `landing` because seeing what
+    // you just recorded is the point of recording it, while expanding lanes
+    // nobody looked at would rearrange the arranger behind the user's back.
+    if( key == LocatorAfterRecord )   return QStringLiteral( "return" );
+    if( key == TakesExpandOnLanding ) return QStringLiteral( "landing" );
     // Transport polish (proposal 21 L5). Both bar counts are 0 because a
     // count-in or a pre-roll nobody asked for delays every take; the click
     // level is a comfortable -6 dBFS accent, with the ordinary beat at 0.7 of

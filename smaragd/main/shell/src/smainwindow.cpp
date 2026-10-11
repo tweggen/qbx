@@ -65,6 +65,7 @@
 #include "app/servicesui/srecordingprogress.h"
 #include "app/servicesui/slogview.h"
 #include "app/servicesui/soptions.h"
+#include "app/shell/srecordmodeseed.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
@@ -848,6 +849,12 @@ void SMainWindow::fileNew()
     closeProject();
 
     currentProject_ = new SProject();
+    // Seed the record mode from the user's INI (plan 53 §5.2). ONLY here and
+    // in the close-project verb's fresh project -- NEVER in fileOpen(), whose
+    // new SProject() is the shell the loader fills and whose property load
+    // MERGES over what is already there. A seed there would make every project
+    // saved before plan 53 read the user's INI value instead of "takes".
+    srecmodeseed::seedInto( currentProject_ );
 
     createDocksToolbars();    
     // (void) efl;

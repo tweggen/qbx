@@ -25,6 +25,7 @@
 #include "app/model/splacements.h"
 #include "app/model/ssolorules.h"
 #include "app/objects/track/strack.h"
+#include "app/model/sprojectprops.h"
 #include "app/model/sautomationlane.h"
 #include "app/model/sclipwindow.h"
 #include "app/objects/track/strackrndrinline.h"
@@ -121,6 +122,11 @@ int STrack::serializeSelfAttributes( QTextStream &o )
         o << " trackInput='" << trackInput_.toHtmlEscaped() << "'";
     if( monitorMode_ != MonitorMode::Auto )
         o << " monitorMode='" << monitorModeToString( monitorMode_ ) << "'";
+    // Record mode (plan 53 §5.2), same non-default-only rule: empty means
+    // INHERIT, which is what every project written before plan 53 means, so
+    // such a project re-serializes byte-identically.
+    if( !recordMode_.isEmpty() )
+        o << " recordMode='" << recordMode_.toHtmlEscaped() << "'";
     // Fold state (fix/track-list-polish m), written only when true — the
     // default (expanded) is what every project saved before this attribute
     // existed means, so an unfolded track re-serializes byte-identically.
@@ -313,6 +319,16 @@ int STrack::trackInputMidiChannel() const
     bool ok = false;
     const int v = ch.toInt( &ok );
     return ( ok && v >= 0 && v < 16 ) ? v : -1;
+}
+
+void STrack::setRecordMode( const QString &m )
+{
+    const QString next = SProjectProps::isRecordMode( m ) ? m : QString();
+    if( next == recordMode_ ) return;
+    recordMode_ = next;
+    // No render consequence: the mode decides how the NEXT recording lands, so
+    // nothing cached or frozen depends on it. Deliberately no
+    // invalidateRenderPath() and no epoch bump.
 }
 
 STrack::MonitorMode STrack::monitorModeFromString( const QString &s, bool *ok )
@@ -1617,6 +1633,13 @@ int STrack::readPreChildrenAttributes( QDomElement &element )
     setTrackInput( element.attribute( "trackInput", "" ) );
     setMonitorMode( monitorModeFromString(
         element.attribute( "monitorMode", "auto" ) ) );
+    // Absent = inherit. An UNKNOWN value is refused back to inherit rather
+    // than carried: a typo would otherwise silently pin a lane to a mode
+    // nothing can name.
+    {
+        const QString rm = element.attribute( "recordMode", "" );
+        setRecordMode( SProjectProps::isRecordMode( rm ) ? rm : QString() );
+    }
 
     // Fold state (fix/track-list-polish m). Absent = expanded, which is what
     // every project written before this attribute existed means.
