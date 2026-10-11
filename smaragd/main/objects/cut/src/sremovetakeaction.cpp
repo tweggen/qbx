@@ -61,6 +61,12 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     SCut *audioCut = dynamic_cast<SCut *>( &take->asObject() );
     const double pitchCents = audioCut ? audioCut->getPitchCents() : 0.0;
     const bool wasActive = ( stack->activeTakeIndex() == takeIndex_ );
+    // The WHOLE map as it stands BEFORE the removal (plan 53 B10). removeTake
+    // renumbers it and drops the removed take's segments, and neither step is
+    // reversible from the result: the dropped segments' positions and xfades
+    // are gone. So the inverse carries the original rather than trying to
+    // re-derive it.
+    const twCompMap mapBefore = stack->compMap();
 
     stack->removeTake( takeIndex_ );
     if( thenActivate_ >= -1 ) {
@@ -84,10 +90,13 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
 
     QList<int> invPath = lanePath;
     invPath.append( lane->indexOfChild( resultLink ) );
-    SAction *inverse = filePath.isEmpty()
+    SAddTakeAction *inverse = filePath.isEmpty()
         ? nullptr
         : new SAddTakeAction( invPath, filePath, off, takeIndex_,
                               wasActive, stretch, pitchCents );
+    if( inverse && !mapBefore.empty() ) {
+        inverse->setRestoreCompMap( mapBefore );
+    }
     return {true, inverse};
 }
 

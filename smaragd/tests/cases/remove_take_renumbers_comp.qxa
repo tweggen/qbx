@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §7 B10. REMOVING A TAKE MUST RENUMBER THE COMP MAP AND DROP THE
+  SEGMENTS THAT NAMED IT, AND UNDO MUST RESTORE THE WHOLE PREVIOUS MAP.
+
+  Neither STakeStack::removeTake nor SRemoveTakeAction::apply referenced
+  compMap_ at all. removeTake renumbers activeTake_ with exactly the arithmetic
+  the map needs, three lines above where the map was ignored. So removing take 0
+  of a comped column left every segment pointing ONE TAKE OFF, and a segment
+  naming the removed take pointed at an index that no longer exists.
+
+  WHY THREE TAKES AND NOT TWO. Plan 53 asks for a "comped two-take column", and
+  that cannot gate this: invariant 3 COLLAPSES a single-take stack back to a
+  plain cut, so removing one of two takes destroys the column and takes the map
+  with it — the renumbering is never reached. Three takes leave two behind, the
+  column survives, and the map has to be correct.
+
+  THE MAP AND THE ACTIVE TAKE DISAGREE IN EVERY ASSERTED WINDOW. That is the
+  rule comp_map_survives_split.qxa learned the hard way: an empty or ignored map
+  means "ask activeTake_", so if they agreed a broken map would render identical
+  audio and only the structural assertions would bite.
+
+  THE TAKES, and why take 2 repeats take 0's slip:
+
+      take 0  unslipped          window 4 = 0.4125   <- the one removed
+      take 1  slipped 1 s        window 4 = 0.0  (the file's own silence)
+      take 2  unslipped          window 4 = 0.4125
+
+  Take 2 has to SURVIVE the removal and be audibly distinguishable from take 1,
+  and two profiles are enough for that. Every number is from
+  comp_map_audible.qxa's measurements of test_gapsaw.wav, not invented here.
+
+  THE ARITHMETIC THE CASE PINS. Before: { 0 -> take 2 }, { 48000 -> take 0 },
+  { 144000 -> take 1 }. Removing take 0 must DROP the middle segment (it names
+  the departing take) and DECREMENT the others, giving
+
+      { 0 -> take 1 },  { 144000 -> take 0 }
+
+  Window 4 then reads take 0, which is the old take 1: the file's silence. With
+  the map left UNRENUMBERED it would read its old take 1, which is now take 2's
+  material: 0.4125, loud. So the audible half is silence-versus-loud, and the
+  structural half catches the dropped segment, which no render can see because
+  takes 0 and 1 agree over the span it covered.
+
+  ON main THIS FAILS at the comp assertion after the removal and at window 4.
+-->
+<SActionScript version="1" name="remove_take_renumbers_comp">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="3"/>
+
+    <!-- Active take 0, so the map and the fallback disagree. select-take
+         clears the map, hence it comes before the segments. -->
+    <select-take clip="0,0" take="0"/>
+    <set-comp-segment clip="0,0" at="0" take="2"/>
+    <set-comp-segment clip="0,0" at="48000" take="0"/>
+    <set-comp-segment clip="0,0" at="144000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:2;48000:0;144000:1" activeTake="0"/>
+
+    <!-- BASELINE: the map is in force. Window 4 is take 1's silence, not the
+         active take's 0.4125. -->
+    <render filename="rtrc_pre.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtrc_pre.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- THE REMOVAL of take 0, which is also the active one. -->
+    <remove-take clip="0,0" take="0"/>
+
+    <!-- Two takes left, the column survives, and the map is renumbered with
+         the departing take's own segment dropped. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2"
+                        comp="0:1;144000:0" activeTake="-1"/>
+
+    <!-- Window 4 is still silence: it now names take 0, which is the old take
+         1. Unrenumbered it would name the old take 1 as take 1, which is now
+         take 2's unslipped material at 0.4125. -->
+    <render filename="rtrc_removed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtrc_removed.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+    <!-- and window 1 is the surviving unslipped take, not silence -->
+    <assert-audio-energy filename="rtrc_removed.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0840" maxRms="0.0857"/>
+
+    <!-- UNDO restores the WHOLE previous map, including the dropped segment,
+         which is not re-derivable from the renumbered one: its position and
+         xfade are gone. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="3"
+                        comp="0:2;48000:0;144000:1" activeTake="0"/>
+    <render filename="rtrc_undone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtrc_undone.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- REDO removes it again, so neither direction is a one-shot. -->
+    <redo count="1"/>
+    <assert-take-column clip="0,0" takes="2" comp="0:1;144000:0"/>
+  </actions>
+
+</SActionScript>

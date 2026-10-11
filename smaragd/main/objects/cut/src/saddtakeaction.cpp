@@ -108,6 +108,17 @@ SApplyResult SAddTakeAction::apply( SProject *project )
         }
         stack->setActiveTake( at );
     }
+    // AS AN INVERSE, this action RESTORES a map rather than clearing one (plan
+    // 53 B10). A remove-take renumbered the map when it dropped the take; the
+    // map that has to come back is the PRE-REMOVAL one, complete, with the
+    // removed take's own segments in it. Neither a cleared map nor a
+    // renumbered one is that, so only the removing action could supply it.
+    //
+    // After setActiveTake for the same reason the clearing branch is: the map
+    // decides what sounds and must outlive the activation's bookkeeping.
+    if( hasRestoreMap_ ) {
+        stack->setCompMap( restoreMap_ );
+    }
 
     // Inverse: remove the take again; restore the previous selection when we
     // changed it (removeTake's own bookkeeping handles the inactive case).
