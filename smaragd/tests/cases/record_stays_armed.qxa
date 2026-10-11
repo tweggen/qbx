@@ -32,6 +32,15 @@
   assert-recorded-clip: that verb's placement-identity check always reads
   the lane's FIRST clip against the recorder's LATEST run, which is a
   mismatch by construction once the lane holds two independent takes.
+
+  THIS CASE IS NOT EVIDENCE FOR THE STRUCTURE RULE, and must not be read as
+  any (plan 53 B9). That two takes land as two separate clips here is a fact
+  about this harness's TIMING, as the paragraph above says — not a statement
+  about what recording over existing material is supposed to produce. Plan 53
+  makes that structural question a per-lane MODE: under `takes` both outcomes
+  become one column, under `takes-split` two clips. This case keeps asserting
+  EXISTENCE only, which is correct for it and stays true under every mode, so
+  it needs no change when the planner does.
 -->
 <SActionScript version="1" name="record_stays_armed">
 
