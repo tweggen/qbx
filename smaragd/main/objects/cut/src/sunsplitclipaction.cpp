@@ -1,4 +1,5 @@
 #include "app/objects/cut/sunsplitclipaction.h"
+#include "app/objects/cut/stakestack.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/objects/cut/ssplitclipaction.h"
@@ -51,6 +52,15 @@ SApplyResult SUnsplitClipAction::apply(SProject *project)
     // stack (STakeStack) forwards to every take (setDurationAll). Generic on
     // purpose — unsplit never needed to know the window TYPE.
     first->getSObject().setDuration(restoreDuration_);
+    // Put the pre-split comp map back (plan 53 B3), AFTER the duration: a map
+    // is read by position within the column, so the column must be its full
+    // length again before the map describes it.
+    if( hasRestoreMap_ ) {
+        if( STakeStack *col =
+                dynamic_cast<STakeStack *>( &first->getSObject() ) ) {
+            col->setCompMap( restoreMap_ );
+        }
+    }
 
     // Inverse: re-split at the same point.
     SAction *inverse = new SSplitClipAction(firstPath_, startTime + inObjOffset_);

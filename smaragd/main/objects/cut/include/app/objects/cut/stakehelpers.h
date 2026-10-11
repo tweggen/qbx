@@ -5,6 +5,7 @@ class SProject;
 class SObject;
 class SLink;
 class STakeStack;
+class twCompMap;   // splitCompMap takes it by reference only
 
 /**
  * Tree canonicalization for take stacks (proposal 17, invariant 3): a stack
@@ -127,6 +128,42 @@ int normalizeColumns( SProject &project );
  *
  * Null if `column` is null or holds no take.
  */
+/**
+ * Split a comp map at `at`, in the COLUMN's own frame domain (plan 53 B3).
+ *
+ * Only the DIRECT shape needs this. A wrapper windows the column without
+ * re-basing its coordinates -- twCompMap's own header says the map lives in
+ * "the COLUMN's own frame domain, which is NOT the placement's domain when a
+ * wrapper still windows the column" -- so the wrapped split copies the map
+ * VERBATIM and `cloneColumn` is all it needs. On the direct shape the column
+ * IS the placement, so the tail's coordinates re-base to 0 and the map has to
+ * follow.
+ *
+ * `head` keeps the segments strictly before `at`, unchanged.
+ *
+ * `tail` is NOT merely the remainder shifted. The take sounding AT the split
+ * has to become the tail's own opening segment, or the tail would fall back to
+ * `activeTake_` for everything up to its first inherited boundary and play the
+ * wrong take there. So:
+ *
+ *   - if `src.takeAt( at ) >= 0`, `tail` opens with `{ 0, that take, 0 }`;
+ *   - every segment after `at` follows, shifted by `-at`, keeping its xfade;
+ *   - a segment exactly AT `at` becomes that opening segment rather than a
+ *     duplicate of it.
+ *
+ * The opening segment's xfade is 0 because a column's first segment has no
+ * incoming boundary to fade across; `twCompMap::normalized()` enforces that
+ * anyway. A crossfade that STRADDLED the split is therefore cut back to a hard
+ * edge at the new column start, which is the honest answer -- the material it
+ * would have faded from is in the other clip now.
+ *
+ * `at` before the first segment leaves `head` EMPTY, which is correct: an
+ * empty map means "ask activeTake_", and that is what the head's region
+ * already did.
+ */
+void splitCompMap( const twCompMap &src, long long at,
+                   twCompMap *head, twCompMap *tail );
+
 STakeStack *cloneColumn( SProject *project, STakeStack &column );
 
 /**

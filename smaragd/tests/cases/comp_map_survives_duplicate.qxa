@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §7 B3, second half. DUPLICATING A COMPED COLUMN KEEPS THE COMP.
+
+  stakes::cloneColumn copied the takes and the active index and nothing else,
+  so every caller of it lost the comp map: duplicate-clip, split-clip's WRAPPED
+  branch, and the "Add link" menu command.
+
+  THE MAP IS COPIED VERBATIM HERE, AND THAT IS NOT AN OVERSIGHT. twCompMap's
+  own header says the map lives in "the COLUMN's own frame domain, which is NOT
+  the placement's domain when a wrapper still windows the column". A duplicate
+  is a fresh column whose domain starts at 0 exactly as the original's does, so
+  there is nothing to re-base. Only the DIRECT split re-bases, and it uses
+  stakes::splitCompMap instead — comp_map_survives_split.qxa gates that
+  arithmetic.
+
+  THE ACTIVE TAKE IS AGAIN NOT THE MAPPED TAKE, for the reason spelled out in
+  comp_map_survives_split.qxa's header: an empty map means "ask activeTake_",
+  so a dropped map renders identically unless the two disagree in every window
+  the case asserts. Take 0 is active; the map selects take 1 in both asserted
+  windows. The numbers come from comp_map_audible.qxa.
+
+  WHAT THIS CASE DOES NOT DRIVE: the "Add &link" context-menu command
+  (SStdMixerView::ctAddLink), the third caller of cloneColumn. It has NO
+  scripted driver — it is reachable only from the popup menu, and it builds
+  its link directly rather than submitting an action, so it is not on the undo
+  stack either. It is covered by construction, sharing the one cloneColumn this
+  case does gate, and that is the whole of the claim. Said here rather than
+  implied.
+
+  ON main THIS FAILS at the comp assertion on the duplicate, and at both of
+  the duplicate's audio windows.
+-->
+<SActionScript version="1" name="comp_map_survives_duplicate">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+
+    <select-take clip="0,0" take="0"/>
+    <set-comp-segment clip="0,0" at="0" take="1"/>
+    <set-comp-segment clip="0,0" at="48000" take="0"/>
+    <set-comp-segment clip="0,0" at="144000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:1;48000:0;144000:1" activeTake="0"/>
+
+    <!-- THE DUPLICATE, onto the same track directly after the original. -->
+    <duplicate-clip source="0,0" destTrack="0" startTime="192000"/>
+
+    <!-- A separate column, its own placement, carrying the SAME map. -->
+    <assert-take-column clip="0,1" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;48000:0;144000:1" placements="1"/>
+
+    <render filename="cmsd.wav" format="wav" quality="10" durationSec="8.0"/>
+
+    <!-- The ORIGINAL, unchanged: take 1 in both windows. -->
+    <assert-audio-energy filename="cmsd.wav" startFrame="0"
+                         frameCount="48000" minRms="0.2100" maxRms="0.2130"/>
+    <assert-audio-energy filename="cmsd.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- THE DUPLICATE, offset by 192000. Its first window must be take 1's
+         0.2115 and not the active take's 0.0849; its last must be take 1's
+         silence and not the active take's 0.4125. -->
+    <assert-audio-energy filename="cmsd.wav" startFrame="192000"
+                         frameCount="48000" minRms="0.2100" maxRms="0.2130"/>
+    <assert-audio-energy filename="cmsd.wav" startFrame="336000"
+                         frameCount="48000" minRms="0.0" maxRms="0.002"/>
+
+    <!-- UNDO removes the duplicate and leaves the original's map alone. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,1" expectReject="true"/>
+    <assert-take-column clip="0,0" comp="0:1;48000:0;144000:1" activeTake="0"/>
+  </actions>
+
+</SActionScript>

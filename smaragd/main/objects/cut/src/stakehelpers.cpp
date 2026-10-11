@@ -7,6 +7,8 @@
 #include "tw/core/twlog.h"
 #include <QVector>
 #include <QString>
+#include <utility>
+#include <vector>
 #include "app/model/sclipwindow.h"
 
 namespace stakes {
@@ -193,6 +195,33 @@ int normalizeColumns( SProject &project )
     return collapsed;
 }
 
+void splitCompMap( const twCompMap &src, long long at,
+                   twCompMap *head, twCompMap *tail )
+{
+    std::vector<twCompSegment> headSegs, tailSegs;
+    if( !src.empty() ) {
+        // The take sounding AT the split opens the tail. Without this the tail
+        // falls back to activeTake_ until its first inherited boundary and
+        // plays the wrong take there -- the defect this is half of.
+        const int atSplit = src.takeAt( at );
+        if( atSplit >= 0 ) {
+            tailSegs.push_back( twCompSegment{ 0, atSplit, 0 } );
+        }
+        for( const twCompSegment &sg : src.segments() ) {
+            if( sg.at < at ) {
+                headSegs.push_back( sg );
+            } else if( sg.at > at ) {
+                tailSegs.push_back( twCompSegment{ sg.at - at, sg.take,
+                                                   sg.xfade } );
+            }
+            // sg.at == at is already the opening segment above, so it is
+            // deliberately dropped here rather than duplicated at 0.
+        }
+    }
+    if( head ) *head = twCompMap( std::move( headSegs ) ).normalized();
+    if( tail ) *tail = twCompMap( std::move( tailSegs ) ).normalized();
+}
+
 STakeStack *cloneColumn( SProject *project, STakeStack &column )
 {
     if( !project || column.nTakes() <= 0 ) return nullptr;
@@ -207,6 +236,26 @@ STakeStack *cloneColumn( SProject *project, STakeStack &column )
     if( copy->nTakes() <= 0 ) { delete copy; return nullptr; }
     copy->setActiveTake( column.activeTakeIndex() < copy->nTakes()
                              ? column.activeTakeIndex() : 0 );
+    // THE COMP MAP COMES TOO (plan 53 B3). Verbatim, and that is right for
+    // every caller of this function: duplicate-clip, the view's Ctrl-drag and
+    // split-clip's WRAPPED branch all keep the column's own frame domain, which
+    // a window does not re-base. Only the DIRECT split re-bases, and it uses
+    // splitCompMap instead.
+    //
+    // ONLY when every take cloned. A skipped take shifts every index above it,
+    // which would silently re-point the map at the wrong material -- worse than
+    // losing it. Announced, never silent.
+    if( !column.compMap().empty() ) {
+        if( copy->nTakes() == column.nTakes() ) {
+            copy->setCompMap( column.compMap() );
+        } else {
+            TW_LOGW( "cut",
+                     "cloneColumn: dropping the comp map -- %d of %d takes "
+                     "cloned, so every segment above the missing one would "
+                     "name the wrong take.",
+                     copy->nTakes(), column.nTakes() );
+        }
+    }
     return copy;
 }
 

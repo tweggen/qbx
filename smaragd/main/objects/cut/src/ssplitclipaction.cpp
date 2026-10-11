@@ -68,6 +68,15 @@ SApplyResult SSplitClipAction::apply(SProject *project)
     // take as-is, whatever its stretch). Both columns keep the active-take
     // selection — this is what turns takes into per-region comping.
     if (STakeStack *stack = dynamic_cast<STakeStack*>(&obj0)) {
+        // THE COMP MAP IS SPLIT TOO (plan 53 B3). On the direct shape the
+        // column IS the placement, so the tail's frame domain re-bases to 0 and
+        // the map has to follow it; the original is kept for the inverse,
+        // because neither half can reconstruct it from the other.
+        const twCompMap origMap = stack->compMap();
+        twCompMap headMap, tailMap;
+        stakes::splitCompMap( origMap, (int64_t)inObjOffset,
+                              &headMap, &tailMap );
+
         STakeStack *stack2 = new STakeStack(project);
         for (int i = 0; i < stack->nTakes(); ++i) {
             SClipWindow *w1 = stack->takeAt(i);
@@ -86,7 +95,11 @@ SApplyResult SSplitClipAction::apply(SProject *project)
             stack2->insertTake(*w2);
         }
         stack2->setActiveTake(stack->activeTakeIndex());
+        stack2->setCompMap( tailMap );
         stack->setDurationAll(inObjOffset);
+        // AFTER setDurationAll: setCompMap emits durationChanged, and the head
+        // must already be its new length when that reaches the track.
+        stack->setCompMap( headMap );
         SLink *sl2 = new SLink(*stack2, NULL);
         sl2->setStartTime(startTime + inObjOffset);
         sl2->setParent(track);
@@ -95,8 +108,9 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         firstPath.append(track->indexOfChild(link));
         QList<int> secondPath = trackPath;
         secondPath.append(track->indexOfChild(sl2));
-        SAction *inverse = new SUnsplitClipAction(firstPath, secondPath,
-                                                  fullDur, inObjOffset);
+        SUnsplitClipAction *inverse = new SUnsplitClipAction(
+            firstPath, secondPath, fullDur, inObjOffset);
+        if( !origMap.empty() ) inverse->setRestoreCompMap( origMap );
         return {true, inverse};
     }
 
