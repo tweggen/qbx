@@ -47,6 +47,37 @@ inline constexpr char TrackDetailPluginsCollapsed[]  = "trackDetailPluginsCollap
 inline constexpr char TrackDetailFeelFlowCollapsed[] = "trackDetailFeelFlowCollapsed";  // bool, default TRUE
 inline constexpr char TrackDetailSlidersCollapsed[]  = "trackDetailSlidersCollapsed";   // bool, default false
 
+// How a recording lands on a lane that already has material (plan 53, QBX-156).
+// One of "takes" | "takes-split" | "overdub" | "replace". Resolved per lane:
+// the track's own attribute, else the nearest ancestor folder track's, else
+// this.
+//
+// DELIBERATELY NOT SEEDED BY defaults() BELOW, following the
+// TrackDetail*Collapsed keys above and against plan 53 §5.2's wording. The
+// reason is this project's own rule that a new serialized feature writes
+// NOTHING when unused: `properties_` is initialised from defaults() and
+// serialized WHOLESALE (QJsonObject::fromVariantMap), so a key added there
+// appears in every project anyone saves from now on. Read the default through
+// recordModeDefault() instead and a project nobody set a mode on writes no new
+// key and re-serializes exactly as before.
+//
+// It also makes plan 53 §5.2's fileOpen hazard structurally impossible rather
+// than merely avoided: there is no default to be merged over, so a loaded file
+// without the key reads "takes" whatever the user's INI says.
+inline constexpr char RecordMode[] = "recordMode";   // string
+
+/// What a project that has never had a record mode set means: new-take comping.
+inline const char *recordModeDefault() { return "takes"; }
+
+/// Is this one of the four modes? Anything else is refused rather than
+/// silently treated as the default -- a typo in a .qxp or a verb would
+/// otherwise be invisible.
+inline bool isRecordMode( const QString &m )
+{
+    return m == QLatin1String( "takes" )      || m == QLatin1String( "takes-split" )
+        || m == QLatin1String( "overdub" )    || m == QLatin1String( "replace" );
+}
+
 inline const char *trackDetailSectionKey( const QString &id )
 {
     if( id == QLatin1String( "plugins" ) )  return TrackDetailPluginsCollapsed;

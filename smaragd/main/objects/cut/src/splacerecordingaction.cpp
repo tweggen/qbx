@@ -4,6 +4,7 @@
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
+#include "app/model/sprojectprops.h"
 #include "app/model/slink.h"
 #include "app/actions/sactionregistry.h"
 #include "app/actions/scompositeaction.h"
@@ -170,12 +171,24 @@ void SPlaceRecordingAction::writeXml( QDomElement &elem ) const
     if( length_ != 0 )
         elem.setAttribute( "length", QString::fromStdString(
                                Fraction( length_, 1 ).toString() ) );
+    // Same non-default-only rule: an attribute a fixture did not declare must
+    // not appear, or the round-trip audit fails.
+    if( !mode_.isEmpty() )
+        elem.setAttribute( "mode", mode_ );
 }
 
 bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath" ) );
     filePath_ = elem.attribute( "filePath", "" );
+    // An UNKNOWN mode reads as EMPTY rather than being carried: empty means
+    // "whatever this build would do anyway", which is the safe answer for a
+    // value no planner can name. Validated here so a typo in a .qxa cannot
+    // reach a planner in P1.
+    {
+        const QString m = elem.attribute( "mode", "" );
+        mode_ = SProjectProps::isRecordMode( m ) ? m : QString();
+    }
     timePos_ = (offset_t)parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();
     srcOffset_ = (offset_t)parseFractionOrDouble(

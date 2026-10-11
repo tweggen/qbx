@@ -44,7 +44,24 @@ public:
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
+    /**
+     * The record mode this pass was planned under (plan 53 §5.2, QBX-156 M0).
+     *
+     * PARSED AND ROUND-TRIPPED ONLY IN M0 -- every value still runs the old
+     * planner, so this attribute changes nothing about how a recording lands
+     * yet. P1 is where it selects a planner.
+     *
+     * It arrives already RESOLVED: the recorder resolves per armed lane
+     * (srecmode::resolveMode) and submits the verb with the answer, because
+     * objects/cut may not depend on objects/track and so cannot resolve
+     * anything itself (tools/check_layering.py). Empty means "the planner this
+     * build would have used anyway", which is what every existing .qxa and
+     * every recording made before plan 53 means.
+     */
+    const QString &recordMode() const { return mode_; }
+
 private:
+    QString    mode_;        // "" = whatever this build would do anyway
     QList<int> trackPath_;
     QString    filePath_;
     offset_t   timePos_ = 0;

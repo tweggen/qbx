@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §8 M0 / §5.2. THE RECORD MODE OF A NEW PROJECT IS SEEDED FROM THE
+  USER'S INI, AND A LOADED PROJECT IS NOT.
+
+  THIS CASE OWNS THE `midi/recordMode` INI KEY from now on. set-option's rule
+  is one owning case per key (docs/ACTIONS.md), because set-option writes the
+  developer's real smaragd.ini. It is RUN_SERIAL, it restores the key to its
+  SOpt default at the end, and NO OTHER CASE MAY READ OR WRITE IT.
+  midi_record_modes.qxa, which used to drive that key, no longer touches it.
+
+  WHY THE KEY IS `midi/recordMode` AND NOT A NEW ONE. It predates plan 53 and
+  already means exactly this — "how should a recorded pass combine with what is
+  there" — in a three-value vocabulary (new-take | overdub | replace). Plan 53
+  keeps it as the SEED for a new project and maps it: new-take and anything
+  unknown land on `takes`, the other two on themselves. `takes-split` has no
+  INI spelling because no release has offered it.
+
+  WHAT THE LOAD HALF CAN AND CANNOT PROVE, measured rather than assumed.
+  SProject's property load MERGES over whatever the object already holds, so a
+  seed written in fileOpen's `new SProject()` would survive for every file that
+  LACKS the key — every project saved before plan 53 would then read the user's
+  INI value instead of `takes`. That is why the seed runs ONLY at fileNew() and
+  at close-project's fresh project.
+
+  The obvious gate for it — load a fixture with no recordMode key and assert
+  `takes` — DOES NOT WORK, and the reason is worth knowing:
+  SLoadProjectAction::apply( SProject *project ) loads INTO THE CURRENT
+  PROJECT. It clears arrangements and not properties, so the in-memory value
+  survives a load whatever the file says. fileOpen() does not behave that way
+  — it loads into a fresh SProject — so no .qxa can reach fileOpen's
+  semantics, and a case asserting `takes` there would be asserting the verb's
+  merge, not the seed's placement. Filed separately rather than papered over.
+
+  So this case gates the SUBSTANCE instead: a file that STATES a mode wins over
+  the seed. Save a project at `overdub`, close to a fresh one seeded `replace`,
+  load the file back, and the mode must be `overdub`. An implementation that
+  seeded over a load would read `replace` there and fail.
+
+  close-project is what makes any of this gateable without a GUI: it builds its
+  replacement through the REAL new-project path.
+-->
+<SActionScript version="1" name="record_mode_ini_seed">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The project the runner made was built before this case set anything,
+         so it carries whatever the ambient INI said. Nothing is asserted about
+         it; the case starts measuring after it has set the key itself. -->
+    <set-option key="midi/recordMode" value="replace"/>
+
+    <!-- A FRESH project through the real new-project path picks the seed up. -->
+    <close-project/>
+    <assert-record-mode project="replace"/>
+
+    <!-- ...and a lane with no attribute of its own resolves to it. -->
+    <add-track index="-1"/>
+    <assert-record-mode trackPath="0" own="" resolved="replace"/>
+
+    <!-- A FILE THAT STATES A MODE WINS OVER THE SEED. Saved at `overdub`,
+         reloaded into a project the INI seeded `replace`. -->
+    <set-property key="recordMode" value='["overdub"]'/>
+    <assert-record-mode project="overdub"/>
+    <save-project path="../../build/test-output/record_mode_ini_seed/rmis.qxp"/>
+
+    <close-project/>
+    <assert-record-mode project="replace"/>
+
+    <load-project path="../../build/test-output/record_mode_ini_seed/rmis.qxp"/>
+    <assert-record-mode project="overdub"/>
+
+    <!-- overdub maps to itself through the seed. -->
+    <set-option key="midi/recordMode" value="overdub"/>
+    <close-project/>
+    <assert-record-mode project="overdub"/>
+
+    <!-- new-take is the INI's own spelling for plan 53's `takes`, and because
+         that EQUALS the default the seed writes no property at all — which is
+         what keeps a new project byte-identical to a pre-plan-53 one. -->
+    <set-option key="midi/recordMode" value="new-take"/>
+    <close-project/>
+    <assert-record-mode project="takes"/>
+
+    <!-- An INI value no build understands lands on the default rather than
+         pinning the project to a mode no planner knows. -->
+    <set-option key="midi/recordMode" value="nonsense"/>
+    <close-project/>
+    <assert-record-mode project="takes"/>
+
+    <!-- RESTORE THE KEY to its SOpt default, so the INI comes back
+         byte-identical and the next case finds what it expects. -->
+    <set-option key="midi/recordMode" value="new-take"/>
+  </actions>
+
+</SActionScript>

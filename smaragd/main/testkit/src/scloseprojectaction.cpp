@@ -1,4 +1,5 @@
 #include "app/testkit/scloseprojectaction.h"
+#include "app/shell/srecordmodeseed.h"
 
 #include <QCoreApplication>
 #include <QDomElement>
@@ -40,6 +41,10 @@ SApplyResult SCloseProjectAction::apply( SProject *project )
 
         // A fresh project, exactly as SActionRunner::run() builds the first.
         SProject *fresh = new SProject();
+        // The same seed fileNew() applies, and the reason this verb can gate
+        // it: close-project builds its replacement through the REAL
+        // new-project path, with no GUI (plan 53 §5.2).
+        srecmodeseed::seedInto( fresh );
         fresh->setSampleBaseDir( baseDir );
         fresh->setRootComponent( new SStdMixer( fresh ) );
         app.setCurrentProject( fresh );
