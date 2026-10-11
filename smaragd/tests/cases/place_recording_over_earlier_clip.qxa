@@ -60,6 +60,21 @@
                      timePos="48000" length="96000"/>
     <assert-clip-window clip="0,1" startTime="48000" duration="96000"/>
     <assert-clip-window clip="0,3" expectReject="true"/>
+
+    <!-- ...AND THE RECORDING WENT TO EXACTLY ONE COLUMN (plan 53 B5, QBX-163).
+         This section already REACHED the defect and walked past it: clip 0,2
+         covers [96000, 288000), so it overlaps the column this pass just
+         became a take on, and the plan loop handed it the SAME recording as a
+         second take. Because add-take WRAPS a plain clip, 0,2 was silently
+         turned into a take column.
+
+         Asserting "no 0,3" could never see that - the wrap replaces a child in
+         place and adds no fourth clip. The shape is the observable, and it is
+         true both under the skip that fixes this and under P1's Q7 rule, so
+         this assertion does not have to be rewritten when the planner is
+         replaced. -->
+    <assert-take-column clip="0,2" shape="none"/>
+    <assert-clip-window clip="0,2" startTime="96000" duration="192000"/>
   </actions>
 
   <assertions>

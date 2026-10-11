@@ -145,6 +145,28 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
         // before recStart instead of carrying it into the plan. Kept as the
         // statement of what a column in here means.
         if( col.start >= recStart ) {
+            // ONE RECORDING, ONE COLUMN (plan 53 B5, was X6a).
+            //
+            // A column whose start is already BELOW the cursor has had its span
+            // covered by an earlier column in this same pass, and the loop used
+            // to hand it the SAME recording as a second take. Two columns then
+            // held the one pass as an alternative for two different regions,
+            // and -- worse -- add-take WRAPS a plain clip, so an ordinary clip
+            // overlapping the first column was silently turned into a take
+            // column it was never meant to be.
+            //
+            // Reachable from the existing gate: in
+            // place_recording_over_earlier_clip's third section the lane holds
+            // a column at [48000,144000) and a clip at [96000,288000), and the
+            // recording [48000,144000) was handed to both. That case asserted
+            // only that no FOURTH clip appeared, so it walked straight past
+            // this; it now asserts the clip's shape as well.
+            //
+            // Superseded by P1's Q7 rule, deliberately: the assertion the gate
+            // makes is true under this skip and under that rule, so it does not
+            // have to be rewritten when the planner is replaced.
+            if( col.start < cursor ) continue;
+
             if( col.start > cursor ) {
                 composite.append( new SPlaceClipAction(
                     trackPath_, filePath_, cursor,
