@@ -159,7 +159,7 @@ public:
     void submitAction(SAction *action);
 
     audio::RenderSession *renderSession() const;
-    void startRender(const audio::RenderParams &params) override;
+    bool startRender(const audio::RenderParams &params, QString *error = nullptr) override;
 
     // THE RUN BARRIER (proposal 37 D4 / 4.4). A "run" is one contiguous
     // traversal of the graph by a consumer: an offline render, or a playback

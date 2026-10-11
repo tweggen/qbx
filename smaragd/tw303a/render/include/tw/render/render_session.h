@@ -18,25 +18,24 @@ class CaptureRevalidator;
 
 namespace audio {
 
-// Whether a render with AudioFormat::MP3 can actually run. MP3 export dlopens
-// libmp3lame rather than linking it, so this is a RUNTIME question, and the UI
-// has to ask it before offering the format.
+// Whether a render with AudioFormat::MP3 can run at this sample rate and width,
+// and if not, why (`reason`, a sentence for a tooltip).
+//
+// QBX-145 (2026-10-10): MP3 is written by libsndfile now, not by a dlopen'd
+// libmp3lame, so this is no longer "is a DLL beside the executable". It is:
+// does the linked libsndfile have its MPEG encoder (asked by opening one on a
+// discard virtual file), does the project have one or two channels, and is its
+// rate an MPEG rate. The render neither resamples nor folds channels, so a
+// 96 kHz or a 6-channel project cannot be exported to MP3 as it stands.
 //
 // Declared HERE, in render, rather than only in tw/sinks, because the app may
 // include tw/render and may NOT include tw/sinks -- check_layering.py's edge
 // set gives app/servicesui {core, devices, graph, playback, plugins, record,
-// render}. srenderdialog.cpp used to hand-write its own
-// `class MP3Writer { static bool isAvailable(); }` to get round exactly that,
-// and the first attempt at this fix reached for tw/sinks directly and was
-// correctly rejected by the checker.
-//
+// render}. srenderdialog.cpp once hand-wrote its own
+// `class MP3Writer { static bool isAvailable(); }` to get round exactly that.
 // It also reads better: the dialog's business is a RENDER, not a file writer.
-bool mp3ExportAvailable();
-
-// The library names that were tried, comma-separated, so a failure can say what
-// it looked for rather than telling the user to copy a file the build may
-// already have deployed under another name.
-std::string mp3LibraryCandidates();
+bool mp3ExportAvailable(std::uint32_t sampleRate, std::uint32_t channels,
+                        std::string *reason = nullptr);
 
 struct RenderParams {
     enum class Extent { EntireProject, TimeSelection };
@@ -45,7 +44,15 @@ struct RenderParams {
     double startTimeSec = 0.0;
     double endTimeSec = 0.0;
     AudioFormat format = AudioFormat::WAV;
-    int quality = 6;  // 0-10 for OGG
+    // The format's quality knob (QBX-145; until then it reached no writer, so
+    // the dialog's OGG slider and MP3 bitrate box did nothing):
+    //   MP3  bitrate in kbps, 128..320 (clamped). Values <= 10 are OGG-scale
+    //        numbers -- this default, and SRenderAction's default of 10 -- and
+    //        mean "the default bitrate", 192 kbps, never 10 kbps.
+    //   OGG  Vorbis VBR quality 0..10 (clamped).
+    //   WAV  ignored. The file is 16-bit PCM whatever the dialog's bit-depth
+    //        box says; changing that is not part of QBX-145.
+    int quality = 6;
     std::string outputPath;
 
     // Channels in the OUTPUT FILE (proposal 36 B5). This was hard-coded 2 in
@@ -96,6 +103,14 @@ public:
         pruneScope_ = std::move(scope);
     }
 
+    // Where start() gets its file writer. Unset (the default) is
+    // createAudioFileWriter(params.format), which is what every production
+    // caller wants. It exists so a test can hand the session a writer that
+    // FAILS mid-stream (QBX-145): there is no portable way to make a real disk
+    // fail on cue, and the failure path is exactly what was never exercised.
+    using WriterFactory = std::function<std::unique_ptr<AudioFileWriter>(AudioFormat)>;
+    void setWriterFactory(WriterFactory factory) { writerFactory_ = std::move(factory); }
+
     // Request cancellation. Safe to call from any thread.
     void requestCancel();
 
@@ -104,6 +119,16 @@ public:
     std::size_t samplesWritten() const;
     std::size_t totalSamples() const;
     const char *errorMessage() const;
+    // The outcome of the LAST render that ran to the end of its thread. It is
+    // stored before running_ is cleared, so a poller that sees isRunning()
+    // turn false reads the outcome of that render, not a stale one -- the
+    // ordering is spelled out as an atomic rather than left implicit in the
+    // store order of a std::string and an atomic<bool> (QBX-145). A UI
+    // dialog POLLS this; it must not take over onComplete (THREADING.md
+    // rule 1), which belongs to whoever called start().
+    bool lastSuccess() const;
+    // The rate start() was given; valid once start() has returned true.
+    std::uint32_t sampleRate() const { return sampleRate_; }
 
     // Callbacks (called from render thread, must be thread-safe)
     std::function<void(std::size_t written, std::size_t total)> onProgress;
@@ -126,12 +151,14 @@ private:
     std::atomic<std::size_t> samplesWritten_{0};
     std::atomic<bool> running_{false};
     std::atomic<bool> cancelRequested_{false};
+    std::atomic<bool> lastSuccess_{false};
     std::unique_ptr<std::thread> renderThread_;
     std::string lastError_;
     std::unique_ptr<AudioFileWriter> writer_;
     std::unique_ptr<FileSink> fileSink_;        // Buffered output with futures
     CaptureRevalidator *scheduler_ = nullptr;   // Stage 4: borrowed, optional
     std::vector<std::weak_ptr<twComponent>> pruneScope_;   // M1b bounce mode
+    WriterFactory writerFactory_;               // QBX-145: test seam, normally unset
 };
 
 }  // namespace audio

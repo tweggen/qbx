@@ -997,7 +997,7 @@ void SApplication::beginRun( offset_t pos )
                     "invalidated to the end", (long long) pos, n );
 }
 
-void SApplication::startRender(const audio::RenderParams &params)
+bool SApplication::startRender(const audio::RenderParams &params, QString *error)
 {
     // Always recreate for reproducibility
     renderSession_ = std::make_unique<audio::RenderSession>();
@@ -1019,8 +1019,13 @@ void SApplication::startRender(const audio::RenderParams &params)
     // Get the synth output component
     std::shared_ptr<twComponent> synthOutput = rootComponent();
     if (!synthOutput) {
-        // TODO: Emit error signal to UI
-        return;
+        // Nothing has been paused yet (the scheduler's background lane is
+        // paused further down), but the live lane WAS suspended above: undo
+        // exactly that, or every live lane stays down until restart (QBX-145).
+        resumeLiveAfterRender();
+        if (error) *error = QStringLiteral("No synth output component");
+        TW_LOGW( "app", "startRender: no synth output component" );
+        return false;
     }
 
     // THE RUN BARRIER (proposal 37 D4), on the MAIN thread and BEFORE the
@@ -1089,7 +1094,15 @@ void SApplication::startRender(const audio::RenderParams &params)
         if (sched) sched->resumeBackground();
         else if (proj) proj->resumeRevalidation();
         resumeLiveAfterRender();
+        // ...and SAY so (QBX-145). This used to return void, and the GUI
+        // opened a progress dialog for a render that never ran, which sat at
+        // "0%" forever (an MP3 export whose writer failed to open).
+        const QString why = QString::fromUtf8(renderSession_->errorMessage());
+        TW_LOGW( "app", "startRender: render did not start: %s", qPrintable(why) );
+        if (error) *error = why;
+        return false;
     }
+    return true;
 }
 
 void SApplication::resumeLiveAfterRender()

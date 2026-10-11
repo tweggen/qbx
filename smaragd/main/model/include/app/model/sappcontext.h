@@ -64,7 +64,11 @@ public:
     virtual bool ensureOutputDirExists() const = 0;
 
     // Services (for generic actions)
-    virtual void startRender( const audio::RenderParams &params ) = 0;
+    // False when the render did not start (QBX-145): no thread runs, nothing
+    // stays suspended, and *error (when given) carries the reason. A caller
+    // must not wait on a render this returned false for.
+    virtual bool startRender( const audio::RenderParams &params,
+                              QString *error = nullptr ) = 0;
     virtual bool isRenderingActive() const = 0;
     // Start/stop transport playback (speaker output + playing flag).
     virtual void setPlaybackRunning( bool play ) = 0;

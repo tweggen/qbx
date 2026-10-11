@@ -1,4 +1,5 @@
 #include "ogg_writer.h"
+#include "utf8_path.h"
 
 #include <cstdio>
 #include <cstring>
@@ -23,7 +24,17 @@ bool OGGWriter::open(const std::string &path, const AudioFileConfig &config) {
         return false;
     }
 
+    // The path is UTF-8 (tw/sinks has no Qt; the app hands over
+    // QString::toStdString). std::fopen on Windows reads it in the ANSI code
+    // page and creates a mojibake name for anything outside it, so widen it.
+#ifdef _WIN32
+    {
+        const std::wstring wide = utf8ToWide(path);
+        outFile = wide.empty() ? nullptr : _wfopen(wide.c_str(), L"wb");
+    }
+#else
     outFile = std::fopen(path.c_str(), "wb");
+#endif
     if (!outFile) {
         lastError = "Failed to open file: " + path;
         return false;

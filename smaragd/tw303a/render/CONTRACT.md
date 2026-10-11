@@ -24,9 +24,18 @@ Invariants:
    zero-length render opens the writer, writes its header and closes with 0
    frames — a valid, well-formed, empty file. That is the honest render of an
    empty arrangement, and it is why the caller cannot mistake "nothing to
-   render" for "the render failed" (it used to get neither a file nor an
-   error, because start()'s failure is not propagated through
-   SAppContext::startRender).
+   render" for "the render failed". A start() that DOES fail returns false
+   with errorMessage() set, and that failure is propagated:
+   SAppContext::startRender returns false and hands the text back (QBX-145),
+   the <render> action logs it at warn level and rejects, and the GUI shows it
+   instead of opening a progress dialog that would wait forever. (It used not
+   to be: an MP3 export whose writer failed to open stalled at "0%".)
+9. A finished render's outcome is lastSuccess(), stored BEFORE running_ is
+   cleared, so a poller that sees isRunning() turn false reads the outcome of
+   that render. running_ is set true in start() before the thread is spawned,
+   so a poller never sees "finished" before "started". UI dialogs POLL these
+   (THREADING.md rule 1) and never reassign onProgress/onComplete, which
+   belong to start()'s caller and are read by the render thread (QBX-145).
 6. The frame count is ROUNDED from the extent, not truncated: the extent is a
    frame count divided by the sample rate, and a ratio that is not exactly
    representable would otherwise land one frame short of the arrangement.
@@ -48,6 +57,17 @@ every render_*.qxa and grain_*.qxa case end-to-end.
    `AudioSink::writeFrames(interleaved, nFrames, channels)`. The old
    frame-at-a-time `writeFrame(AudioFrame&)` is retired along with `AudioFrame`
    itself, whose `MAX_CHANNELS == 2` was the hard stereo cap.
+
+10. A RENDER WHOSE FILE COULD NOT BE WRITTEN FAILS (QBX-145, 2026-10-10).
+   The writer gets `RenderParams::quality` through `setQuality()` before
+   `open()`. After `flush()` the session asks FileSink for its sticky write
+   error and, if there is one, completes with success=false and "Failed to
+   write output file: <writer's message>"; a failing `close()` (where MP3's
+   LAME flush and Info frame happen) fails it too. The render loop stops at
+   the first failed write instead of rendering pages nobody can store.
+   `setWriterFactory()` exists only so render_test can inject a writer that
+   fails on cue. The GUI sees the outcome through lastSuccess() (inv. 9) and
+   the message through errorMessage().
 
 Known debt: Extent enum in RenderParams is advisory (start/end seconds are what
 counts).

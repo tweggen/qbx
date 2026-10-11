@@ -2,7 +2,9 @@
 #define _SRENDERPROGRESS_H
 
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QString>
+#include <cstdint>
 #include <memory>
 
 class QProgressBar;
@@ -22,21 +24,16 @@ public:
                          QWidget *parent = nullptr);
     ~SRenderProgressDialog() override;
 
-signals:
-    void renderProgressUpdated(std::size_t written, std::size_t total);
-    void renderCompleted(bool success, QString error);
-
 protected:
     void closeEvent(QCloseEvent *event) override;
 
 private slots:
-    void onRenderProgress(std::size_t written, std::size_t total);
-    void onRenderComplete(bool success, QString error);
     void onCancelClicked();
     void updateTimeDisplay();
 
 private:
     QString formatTime(double seconds) const;
+    void finish(bool success, const QString &error);
 
     audio::RenderSession *session_;
     QString filePath_;
@@ -50,6 +47,7 @@ private:
 
     std::uint32_t sampleRate_ = 48000;
     QTimer *updateTimer_ = nullptr;
+    QElapsedTimer elapsed_;     // wall clock since the dialog opened
 };
 
 #endif

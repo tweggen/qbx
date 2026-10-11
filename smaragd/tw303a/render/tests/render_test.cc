@@ -7,7 +7,10 @@
 #include "tw/graph/twcomponent.h"
 #include "tw/graph/tw303aenv.h"
 
+#include <sndfile.h>
+
 #include <atomic>
+#include <string>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -129,6 +132,70 @@ static bool readWavFloat(const char *path, std::vector<float> &out,
     return false;
 }
 
+// Render `c` over [t0, t1) to `path` and wait. Returns whether it completed
+// successfully; `error` gets the completion message.
+static bool renderTo(std::shared_ptr<twComponent> c, std::uint32_t rate,
+                     audio::AudioFormat fmt, int quality, const char *path,
+                     double t0, double t1, std::string *error = nullptr,
+                     audio::RenderSession::WriterFactory factory = nullptr)
+{
+    audio::RenderParams p;
+    p.outputPath = path;
+    p.format = fmt;
+    p.quality = quality;
+    p.startTimeSec = t0;
+    p.endTimeSec = t1;
+    std::atomic<bool> done{false}, ok{false};
+    std::string msg;
+    audio::RenderSession s;
+    if (factory) s.setWriterFactory(factory);
+    s.onComplete = [&](bool success, const char *e) {
+        msg = e ? e : "";
+        ok = success;
+        done = true;
+    };
+    if (!s.start(c, p, rate)) {
+        if (error) *error = s.errorMessage();
+        printf("     start: %s\n", s.errorMessage());
+        return false;
+    }
+    for (int i = 0; i < 600 && !done; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    if (error) *error = msg;
+    return done && ok;
+}
+
+static long fileSize(const char *path)
+{
+    std::FILE *f = std::fopen(path, "rb");
+    if (!f) return -1;
+    std::fseek(f, 0, SEEK_END);
+    const long n = std::ftell(f);
+    std::fclose(f);
+    return n;
+}
+
+// A writer whose write() starts failing after `okWrites` calls -- a disk that
+// fills up mid-render. Everything else succeeds, so the ONLY failure in the
+// render is the one FileSink used to throw away.
+class FailingWriter : public audio::AudioFileWriter {
+public:
+    FailingWriter(int okWrites, std::atomic<int> *calls)
+        : okWrites_(okWrites), calls_(calls) {}
+    bool open(const std::string &, const audio::AudioFileConfig &) override { return true; }
+    bool write(const float *, std::size_t) override {
+        const int n = ++*calls_;
+        if (n > okWrites_) { err_ = "disk full (FailingWriter)"; return false; }
+        return true;
+    }
+    bool close() override { return true; }
+    const char *errorMessage() const override { return err_.c_str(); }
+private:
+    int okWrites_;
+    std::atomic<int> *calls_;
+    std::string err_;
+};
+
 int main(int argc, char **argv)
 {
     const char *outPath =
@@ -249,6 +316,82 @@ int main(int argc, char **argv)
               "AC B5.3: file channel c is GRAPH channel c, at its own level");
 
         std::remove(widePath);
+    }
+
+    // ------------------------------------------------------------------
+    // QBX-145 - MP3 export writes a real MP3. It never had: the dlopen'd
+    // MP3Writer's open() always failed, so start() returned false here.
+    {
+        const char *mp3Path = "render_module_test.mp3";
+        std::string err;
+        const bool rendered = renderTo(comp, rate, audio::AudioFormat::MP3, 192,
+                                       mp3Path, t0, t1, &err);
+        CHECK(rendered, "QBX-145: an MP3 render starts and completes");
+
+        SF_INFO info = {};
+        SNDFILE *in = rendered ? sf_open(mp3Path, SFM_READ, &info) : nullptr;
+        CHECK(in != nullptr, "QBX-145: the MP3 reads back through libsndfile");
+        if (in) {
+            printf("     MP3: %lld frames (rendered %lld), %d ch, %d Hz\n",
+                   (long long)info.frames, total, info.channels, info.samplerate);
+            const long long d = (long long)info.frames - total;
+            CHECK(d >= -1152 && d <= 1152,
+                  "QBX-145: MP3 length within one frame of the render");
+            std::vector<float> back((size_t)info.frames * (size_t)info.channels);
+            const sf_count_t got = sf_readf_float(in, back.data(), info.frames);
+            sf_close(in);
+            double a = 0.0, b2 = 0.0;
+            long long n = 0;
+            for (long long i = 4096; i + 4096 < (long long)got && i < total; ++i) {
+                const double v = back[(size_t)(i * info.channels)];
+                const double w = val(first + i);
+                a += v * v; b2 += w * w; ++n;
+            }
+            const double rmsGot = n ? std::sqrt(a / n) : 0.0;
+            const double rmsWant = n ? std::sqrt(b2 / n) : 1.0;
+            printf("     MP3 RMS %.4f, source %.4f\n", rmsGot, rmsWant);
+            CHECK(std::fabs(rmsGot - rmsWant) < 0.1 * rmsWant,
+                  "QBX-145: MP3 RMS within 10% of the material's");
+        }
+        std::remove(mp3Path);
+    }
+
+    // ------------------------------------------------------------------
+    // QBX-145 - RenderParams::quality reaches the writer. It reached none:
+    // the OGG slider in the render dialog has been dead since it was added.
+    // Vorbis quality 0 vs 10 differs by several times in size.
+    {
+        const char *q0 = "render_module_q0.ogg";
+        const char *q10 = "render_module_q10.ogg";
+        const bool r0 = renderTo(comp, rate, audio::AudioFormat::OGG, 0, q0, t0, t1);
+        const bool r10 = renderTo(comp, rate, audio::AudioFormat::OGG, 10, q10, t0, t1);
+        const long s0 = fileSize(q0), s10 = fileSize(q10);
+        printf("     OGG q0 %ld bytes, q10 %ld bytes\n", s0, s10);
+        CHECK(r0 && r10 && s0 > 0 && s10 > s0 + s0 / 2,
+              "QBX-145: OGG quality 10 is much larger than quality 0");
+        std::remove(q0);
+        std::remove(q10);
+    }
+
+    // ------------------------------------------------------------------
+    // QBX-145 - a failing write FAILS THE RENDER. FileSink used to discard
+    // writer->write()'s result, so a full disk produced a truncated file and
+    // a render reported as successful.
+    {
+        std::atomic<int> calls{0};
+        std::string err;
+        const bool rendered = renderTo(
+            comp, rate, audio::AudioFormat::WAV, 10, "render_module_fail.wav", t0, t1, &err,
+            [&](audio::AudioFormat) {
+                return std::unique_ptr<audio::AudioFileWriter>(new FailingWriter(2, &calls));
+            });
+        printf("     writes attempted: %d, completion message: \"%s\"\n",
+               calls.load(), err.c_str());
+        CHECK(!rendered, "QBX-145: a render whose writes fail reports FAILURE");
+        CHECK(err.find("disk full (FailingWriter)") != std::string::npos,
+              "QBX-145: the failure carries the writer's own message");
+        CHECK(calls.load() == 3,
+              "QBX-145: the first failure is sticky (no write after it)");
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall render tests passed\n",

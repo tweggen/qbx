@@ -9,8 +9,6 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QCloseEvent>
-#include <QMetaObject>
-#include <QCoreApplication>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -64,28 +62,23 @@ SRenderProgressDialog::SRenderProgressDialog(audio::RenderSession *session,
     // Connect signals
     connect(cancelButton_, &QPushButton::clicked, this, &SRenderProgressDialog::onCancelClicked);
 
-    // Setup timer for time display updates
+    // THE DIALOG POLLS (QBX-145, THREADING.md rule 1, render/CONTRACT.md
+    // inv. 3 and 9). It used to assign session_->onProgress / onComplete and
+    // emit signals from the render thread, which (a) overwrote the onComplete
+    // SApplication::startRender had installed -- so after every GUI export the
+    // scheduler's background lane stayed paused and the live monitor stayed
+    // suspended until restart -- and (b) did it after the render thread was
+    // already running and reading those members, a data race. Everything the
+    // dialog shows is a query on the session; the callbacks belong to
+    // whoever called start().
+    if (session_) {
+        const std::uint32_t rate = session_->sampleRate();
+        if (rate > 0) sampleRate_ = rate;
+    }
+    elapsed_.start();
     updateTimer_ = new QTimer(this);
     connect(updateTimer_, &QTimer::timeout, this, &SRenderProgressDialog::updateTimeDisplay);
     updateTimer_->start(100);  // Update every 100ms
-
-    // Connect signals from this dialog (will be emitted from render thread)
-    connect(this, &SRenderProgressDialog::renderProgressUpdated,
-            this, &SRenderProgressDialog::onRenderProgress);
-    connect(this, &SRenderProgressDialog::renderCompleted,
-            this, &SRenderProgressDialog::onRenderComplete);
-
-    // Setup callbacks from rendering session - emit signals (thread-safe)
-    if (session_) {
-        session_->onProgress = [this](std::size_t written, std::size_t total) {
-            // Emit signal - will be delivered safely to main thread
-            emit renderProgressUpdated(written, total);
-        };
-        session_->onComplete = [this](bool success, const char *error) {
-            // Emit signal with QString - thread-safe
-            emit renderCompleted(success, QString::fromUtf8(error ? error : ""));
-        };
-    }
 }
 
 SRenderProgressDialog::~SRenderProgressDialog() {
@@ -94,32 +87,16 @@ SRenderProgressDialog::~SRenderProgressDialog() {
     }
 }
 
-void SRenderProgressDialog::onRenderProgress(std::size_t written, std::size_t total) {
-    if (total > 0) {
-        int percentage = static_cast<int>((written * 100) / total);
-        progressBar_->setValue(percentage);
-
-        QString progressText =
-            QString::asprintf("%d%% (%zu / %zu samples)", percentage, written, total);
-        progressTextLabel_->setText(progressText);
-    }
-
-    // Process pending events to allow other UI updates (like timer) to fire
-    QCoreApplication::processEvents();
-}
-
-void SRenderProgressDialog::onRenderComplete(bool success, QString error) {
+void SRenderProgressDialog::finish(bool success, const QString &error) {
     updateTimer_->stop();
+    cancelButton_->setText("Close");
+    cancelButton_->setEnabled(true);
 
     if (success) {
         progressBar_->setValue(100);
         progressTextLabel_->setText("100% - Render complete!");
-        cancelButton_->setText("Close");
-        cancelButton_->setEnabled(true);
     } else {
-        cancelButton_->setText("Close");
-        cancelButton_->setEnabled(true);
-        estimatedTimeLabel_->setText("Error: " + (error.isEmpty() ? "Unknown error" : error));
+        estimatedTimeLabel_->setText("Error: " + (error.isEmpty() ? QString("Unknown error") : error));
     }
 }
 
@@ -132,6 +109,15 @@ void SRenderProgressDialog::onCancelClicked() {
 
 void SRenderProgressDialog::updateTimeDisplay() {
     if (!session_) return;
+
+    // Completion is observed, not signalled. running_ is set before start()
+    // returns, so "not running" here means the render has ENDED, and
+    // lastSuccess()/errorMessage() were stored before running_ cleared.
+    if (!session_->isRunning()) {
+        const bool ok = session_->lastSuccess();
+        finish(ok, ok ? QString() : QString::fromUtf8(session_->errorMessage()));
+        return;
+    }
 
     std::size_t written = session_->samplesWritten();
     std::size_t total = session_->totalSamples();
@@ -146,14 +132,15 @@ void SRenderProgressDialog::updateTimeDisplay() {
                 .arg(written)
                 .arg(total));
 
-        // Calculate elapsed time and speed
-        double elapsedSeconds = static_cast<double>(written) / sampleRate_;
+        // Elapsed is WALL CLOCK. It used to be written / sampleRate_, i.e. the
+        // audio rendered so far, which made the speed below always 1.0x.
+        double elapsedSeconds = static_cast<double>(elapsed_.elapsed()) / 1000.0;
 
         if (elapsedSeconds > 0) {
             // Calculate rendering rate (samples per second)
             double rate = static_cast<double>(written) / elapsedSeconds;
 
-            if (rate > 0) {
+            if (rate > 0 && written <= total) {
                 // Calculate remaining time
                 double remainingSeconds = static_cast<double>(total - written) / rate;
 

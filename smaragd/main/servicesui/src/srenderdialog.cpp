@@ -1,13 +1,17 @@
 #include "app/servicesui/srenderdialog.h"
 
-// MP3 export availability is a RUNTIME question -- libmp3lame is dlopen'd, not
-// linked -- asked through tw/render, which is an edge app/servicesui is allowed
-// (check_layering.py). tw/sinks, where the writer actually lives, is NOT.
+// MP3 export availability is asked through tw/render, which is an edge
+// app/servicesui is allowed (check_layering.py). tw/sinks, where the writer
+// actually lives, is NOT. (This file once hand-wrote its own
+// `class MP3Writer { static bool isAvailable(); }` to get round that.)
 //
-// This file used to hand-write its own
-// `class MP3Writer { static bool isAvailable(); }` to get round that: a
-// duplicate declaration that linked only because the member was static. The
-// workaround was wrong, but the constraint behind it was real.
+// QBX-145 (2026-10-10): the question changed. MP3 used to be a dlopen'd
+// libmp3lame, so availability meant "is the DLL beside the executable" -- and
+// the writer's open() failed regardless, so MP3 never worked. It is written by
+// libsndfile now, and availability is a property of the PROJECT: one or two
+// channels and an MPEG sample rate (the render neither folds nor resamples),
+// plus a libsndfile built with its MPEG encoder. mp3ExportAvailable() answers
+// all three and says which one failed.
 #include "tw/render/render_session.h"
 
 #include <QVBoxLayout>
@@ -21,8 +25,10 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QFileDialog>
+#include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QStandardPaths>
 
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
@@ -115,7 +121,9 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
     // Set defaults
     wavRadio_->setChecked(true);
     timeSelectionRadio_->setChecked(true);
-    outputPathLineEdit_->setText("render.wav");
+    // QBX-144: beside the project, named after it -- not the bare "render.wav"
+    // this used to be, which resolved against the process's working directory.
+    outputPathLineEdit_->setText(defaultOutputPath());
     onFormatChanged(0);
 
     // Time selection is available if project exists
@@ -138,14 +146,31 @@ void SRenderDialog::createFormatGroup() {
     formatGroup_->addButton(oggRadio_, 1);
     formatGroup_->addButton(mp3Radio_, 2);
 
-    // Check if MP3 is available
-    if (!audio::mp3ExportAvailable()) {
+    // MP3 is only offered when THIS project can be written as MP3; the
+    // tooltip says why not (QBX-145).
+    QString why;
+    if (!mp3Available(&why)) {
         mp3Radio_->setEnabled(false);
-        mp3Radio_->setToolTip(
-            QString( "MP3 codec not found. Looked for: %1 \u2014 in the application "
-                     "directory, then the system library path." )
-                .arg( QString::fromStdString( audio::mp3LibraryCandidates() ) ) );
+        mp3Radio_->setToolTip(why);
     }
+}
+
+// The project's rate and width, as the render will use them. The width is the
+// project's own (B8 decision 3, see getRenderParams()): a project wider than
+// two channels is not MP3-exportable, and the dialog does NOT offer to fold it
+// to stereo to make it so -- that is the override decision 3 declines.
+bool SRenderDialog::mp3Available(QString *why) const {
+    const std::uint32_t rate = project_ ? (std::uint32_t) project_->getSRate() : 48000u;
+    const std::uint32_t channels = project_ ? (std::uint32_t) project_->channels() : 2u;
+    std::string reason;
+    if (audio::mp3ExportAvailable(rate, channels, &reason)) {
+        return true;
+    }
+    if (why) {
+        *why = QString( "MP3 is not available for this project: %1" )
+                   .arg( QString::fromStdString( reason ) );
+    }
+    return false;
 }
 
 void SRenderDialog::createQualityGroup() {
@@ -254,7 +279,7 @@ void SRenderDialog::syncPathExtension() {
     QString newPath = info.completeBaseName() + "." + ext;
     const QString dir = info.path();
     if (!dir.isEmpty() && dir != ".") {
-        newPath = dir + "/" + newPath;
+        newPath = QDir(dir).filePath(newPath);
     }
     outputPathLineEdit_->setText(newPath);
 }
@@ -270,11 +295,44 @@ void SRenderDialog::onBrowseClicked() {
     const QString filter =
         QString("%1 Files (*.%2);;All Files (*)").arg(ext.toUpper(), ext);
 
-    QString fileName =
-        QFileDialog::getSaveFileName(this, "Save Audio File", "", filter);
+    // QBX-144: open where the line edit points, with its name preselected.
+    QString fileName = QFileDialog::getSaveFileName(
+        this, "Save Audio File", resolvedOutputPath(), filter);
     if (!fileName.isEmpty()) {
         outputPathLineEdit_->setText(fileName);
     }
+}
+
+// The directory a relative output path is relative to, and the default
+// output's directory: the project's own, or -- untitled, or no project --
+// Documents, the fallback SAudioRecorder and SMainWindow::defaultProjectDir()
+// use. Never the process's working directory.
+QString SRenderDialog::outputBaseDir() const {
+    const QString dir = project_ ? project_->projectDir() : QString();
+    if (!dir.isEmpty()) {
+        return dir;
+    }
+    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+}
+
+QString SRenderDialog::defaultOutputPath() const {
+    const QString pf = project_ ? project_->projectFilePath() : QString();
+    QString base = pf.isEmpty() ? QString() : QFileInfo(pf).completeBaseName();
+    if (base.isEmpty()) {
+        base = QStringLiteral("render");
+    }
+    return QDir(outputBaseDir()).filePath(base + "." + extensionForSelectedFormat());
+}
+
+QString SRenderDialog::resolvedOutputPath() const {
+    const QString text = outputPathLineEdit_->text();
+    if (text.isEmpty()) {
+        return QString();  // the empty-path guard applies at render time
+    }
+    if (QDir::isAbsolutePath(text)) {
+        return QDir::cleanPath(text);
+    }
+    return QDir::cleanPath(QDir(outputBaseDir()).absoluteFilePath(text));
 }
 
 void SRenderDialog::onOutputPathChanged() {
@@ -287,11 +345,9 @@ bool SRenderDialog::validateInputs() {
         return false;
     }
 
-    if (mp3Radio_->isChecked() && !audio::mp3ExportAvailable()) {
-        QMessageBox::warning(
-            this, "Error",
-            QString( "MP3 codec not available. Looked for: %1" )
-                .arg( QString::fromStdString( audio::mp3LibraryCandidates() ) ) );
+    QString why;
+    if (mp3Radio_->isChecked() && !mp3Available(&why)) {
+        QMessageBox::warning(this, "Error", why);
         return false;
     }
 
@@ -361,7 +417,12 @@ audio::RenderParams SRenderDialog::getRenderParams() const {
     }
 
     // Output path
-    params.outputPath = outputPathLineEdit_->text().toStdString();
+    // Output path: always absolute (QBX-144). A relative entry is relative to
+    // the project's directory, never to the process's working directory. UTF-8;
+    // the writers widen it on Windows.
+    const QString resolved = resolvedOutputPath();
+    params.outputPath = resolved.toStdString();
+    TW_LOGD( "ui.services", "[SRenderDialog] outputPath=%s", params.outputPath.c_str() );
 
     return params;
 }

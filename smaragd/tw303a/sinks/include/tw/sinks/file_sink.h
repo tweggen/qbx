@@ -7,6 +7,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "tw/sinks/audio_sink.h"
@@ -61,7 +62,8 @@ public:
      * \param interleaved  nFrames * channels floats, channel-minor
      * \param nFrames      Frames in the block
      * \param channels     Channels per frame
-     * \return             True if the block was buffered; false on error
+     * \return             True if the block was buffered; false once a
+     *                     write has failed (see hasWriteError())
      */
     bool writeFrames(const float *interleaved, std::size_t nFrames,
                      unsigned channels) override;
@@ -95,6 +97,19 @@ public:
      */
     size_t occupancy() const;
 
+    /**
+     * Whether a write to the file has failed (QBX-145). STICKY: the first
+     * failing AudioFileWriter::write() sets it, nothing clears it, and no
+     * block reaches the writer after it. RenderSession checks it after
+     * flush() and fails the render with writeError().
+     */
+    bool hasWriteError() const;
+
+    /**
+     * The writer's message for the first failed write; empty if none.
+     */
+    std::string writeError() const;
+
 private:
     struct BlockEntry {
         std::vector<float> samples;   // interleaved, frames * channels
@@ -113,6 +128,8 @@ private:
     mutable std::mutex bufferMutex_;
     std::deque<BlockEntry> buffer_;
     size_t bufferedFrames_ = 0;
+    bool writeFailed_ = false;      // sticky; guarded by bufferMutex_
+    std::string writeError_;        // the writer's message for the first failure
 
     // Helpers
     int64_t getCurrentTimeMs() const;

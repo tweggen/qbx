@@ -74,6 +74,12 @@ public:
     void setProjectFilePath( const QString &path );
     const QString &projectFilePath() const { return projectFilePath_; }
 
+    // The directory the project file is in (absolute, '/'-separated), or an
+    // empty string for an untitled project. Derived from projectFilePath(), so
+    // it follows load, save and Save As. Where the render dialog defaults its
+    // output to (QBX-144) and where the recorder writes its takes.
+    QString projectDir() const;
+
     SObject *getRootComponent() const;
     void setRootComponent( SObject * );
 

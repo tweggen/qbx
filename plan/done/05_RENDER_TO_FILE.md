@@ -13,6 +13,15 @@ Implement a "Render..." dialog allowing export to WAV, OGG Vorbis, and optional 
 | OGG Vorbis | libvorbis/libvorbisenc | Required | Patent-free, high quality |
 | MP3 | libmp3lame | Optional | User must copy binary to app dir |
 
+> **Correction (2026-10-10, QBX-145):** the MP3 row did not hold. The
+> dlopen'd libmp3lame writer was never finished -- its `open()` returned
+> false unconditionally -- so MP3 export never worked, binary or no binary.
+> MP3 is now written by **libsndfile** (`SF_FORMAT_MPEG | SF_FORMAT_MPEG_LAYER_III`,
+> CBR), the library the WAV writer uses; LAME comes in through libsndfile's
+> `mpeg` feature, so there is no binary for the user to provide. MP3 is
+> limited to 1–2 channels and the nine MPEG sample rates, and the dialog says
+> so when a project falls outside them.
+
 ### Render Extent
 - **Entire project**: Start=0, end=`SProject::getDurationSeconds()`
 - **Time Selection**: `SProject::getTimeSelection()` (only enabled if selection exists)
@@ -67,6 +76,10 @@ Implement a "Render..." dialog allowing export to WAV, OGG Vorbis, and optional 
   - Add runtime library search (app dir, system paths)
   - Add `isAvailable()` method to check if libmp3lame found
   - Graceful failure with user message if not found
+  - *Correction 2026-10-10 (QBX-145): this writer was checked off but never
+    wrote a byte (`open()` always failed). It is deleted; MP3 goes through
+    libsndfile in `sinks/src/sndfile_writer.cc`, with an `sf_open_virtual`
+    availability probe instead of a library search.*
 
 - [ ] Update `src/audio/CMakeLists.txt` to link libsndfile and libvorbis
 
@@ -146,6 +159,8 @@ Implement a "Render..." dialog allowing export to WAV, OGG Vorbis, and optional 
 - [ ] Implement `main/src/srenderdialog.cc`
   - **Format group**: Radio buttons for WAV, OGG Vorbis, MP3
     - MP3 radio disabled + tooltip if libmp3lame not found
+      *(2026-10-10, QBX-145: disabled + tooltip when the project is wider than
+      2 channels, is not at an MPEG rate, or libsndfile lacks MPEG.)*
   - **Quality group**: 
     - WAV: bit depth dropdown (16/24/32-bit float)
     - OGG: quality slider 0-10 (default 6)
@@ -247,6 +262,8 @@ Implement a "Render..." dialog allowing export to WAV, OGG Vorbis, and optional 
 - [ ] Add section to CLAUDE.md: "Rendering Audio"
   - Explain supported formats, extent options, modal behavior
   - Note: MP3 requires user-provided binary
+    *(2026-10-10, QBX-145: no longer true -- MP3 is libsndfile's, nothing to
+    provide.)*
 
 - [ ] Manual testing checklist:
   - [ ] Open SRenderDialog, verify format/extent/output options
@@ -297,6 +314,11 @@ Implement a "Render..." dialog allowing export to WAV, OGG Vorbis, and optional 
 - ✅ Progress dialog shows smooth feedback, cancellable
 - ✅ Output file is valid, playable in external player
 - ✅ MP3 option present but gracefully fails with helpful message if library missing
+  - *Correction 2026-10-10 (QBX-145): this tick hid that MP3 failed even WITH
+    the library -- the writer's `open()` always returned false. Fixed by moving
+    MP3 onto libsndfile; gated by `qxa.render_mp3_export`, `mp3_writer_test`
+    and `render_test`. The quality slider/bitrate box also reached no writer
+    until then.*
 - ✅ Main window is non-interactive during render
 - ✅ Device playback blocked while rendering (and vice versa)
 - ✅ No crashes, resource leaks, or file corruption on cancel

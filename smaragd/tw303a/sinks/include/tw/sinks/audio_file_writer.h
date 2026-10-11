@@ -18,21 +18,25 @@ struct AudioFileConfig {
 
 enum class AudioFormat { WAV, OGG, MP3 };
 
-// MP3 export loads libmp3lame AT RUNTIME rather than linking it, so whether it
-// works is a deployment question answered at run time, not a build flag.
+// Whether an MP3 of this sample rate and width can be written (QBX-145).
 //
-// These two are declared HERE, in the public header, because the app has to ask
-// and MP3Writer lives in sinks/src/ where the app layer cannot include it.
-// srenderdialog.cpp previously hand-wrote its own `class MP3Writer { static
-// bool isAvailable(); }` to get at it -- a duplicate declaration that linked
-// only because the member was static, and that would silently rot the moment
-// the real class changed.
-bool mp3WriterAvailable();
-
-// The library names that were tried, comma-separated, so a failure can say what
-// it looked for instead of telling the user to copy a file the build may
-// already have deployed under a different name.
-std::string mp3WriterCandidates();
+// MP3 is written by libsndfile (SF_FORMAT_MPEG | SF_FORMAT_MPEG_LAYER_III, LAME
+// inside), the library the WAV writer uses. It used to be a separate writer
+// that dlopen'd libmp3lame at run time and whose open() always failed, so MP3
+// export had never worked. Whether it works is now a question about the
+// libsndfile this build links -- its `mpeg` feature, the same one MP3 IMPORT
+// needs -- plus two facts about the format itself: one or two channels, and one
+// of the nine MPEG sample rates. The writer does not resample or fold channels.
+//
+// The probe opens a real encoder on a discard virtual file; sf_format_check()
+// cannot answer, because it accepts MPEG whether or not the encoder was built.
+// On false, `reason` (when given) says why, in a sentence for a tooltip.
+//
+// Declared here, in the public header, because the app has to ask and the
+// writer lives in sinks/src/ where the app layer cannot include it; the app
+// reaches it through tw/render's mp3ExportAvailable().
+bool mp3EncoderAvailable(std::uint32_t sampleRate, std::uint32_t channels,
+                         std::string *reason = nullptr);
 
 class AudioFileWriter {
 public:
@@ -43,6 +47,11 @@ public:
     virtual bool close() = 0;
 
     virtual const char *errorMessage() const = 0;
+
+    // The format's quality knob, as RenderParams::quality documents it: kbps
+    // for MP3, 0..10 for OGG, nothing for WAV (the default no-op). Call it
+    // BEFORE open(); writers read it when they configure the encoder.
+    virtual void setQuality(int /*quality*/) {}
 };
 
 std::unique_ptr<AudioFileWriter> createAudioFileWriter(AudioFormat format);

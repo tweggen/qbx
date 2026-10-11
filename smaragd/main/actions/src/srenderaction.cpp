@@ -93,10 +93,15 @@ SApplyResult SRenderAction::apply(SProject *project)
     params.endTimeSec = ( durationSec_ > 0.0 ) ? durationSec_
                                                : project->getDurationSeconds();
 
-    // Start rendering
-    // Note: RenderSession is asynchronous. For test mode, we should wait for completion.
-    // For now, start and hope it completes before the test ends (ideally sync would be better).
-    app.startRender(params);
+    // Start rendering. RenderSession is asynchronous; the loop below waits.
+    // A render that did not START is rejected here with its reason, at warn
+    // level so a case can assert-log it (QBX-145) -- it used to be swallowed,
+    // and only the missing-file check below caught it, without the reason.
+    QString startError;
+    if (!app.startRender(params, &startError)) {
+        qWarning().noquote() << "SRenderAction: render did not start:" << startError;
+        return {false, nullptr};
+    }
 
     // Poll until rendering completes, under a watchdog.
     //
@@ -145,10 +150,11 @@ SApplyResult SRenderAction::apply(SProject *project)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    // A render that never started leaves no file behind, and startRender() does
-    // not report that back — the action would otherwise report SUCCESS for a
-    // case whose output does not exist, and the failure would surface much later
-    // as a confusing assert against a missing WAV.
+    // A render that never started is rejected above, with its reason. This is
+    // the backstop for one that started and still left no file behind -- the
+    // action would otherwise report SUCCESS for a case whose output does not
+    // exist, and the failure would surface much later as a confusing assert
+    // against a missing WAV.
     if (!QFileInfo::exists(fullPath)) {
         qWarning() << "SRenderAction: no output file was produced:" << fullPath;
         return {false, nullptr};

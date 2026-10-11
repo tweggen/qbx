@@ -141,7 +141,7 @@ The **macOS Keychain backend is still in that state** — written, never built.
 | `pkg-config` | How `tw303a/CMakeLists.txt` finds sndfile/ogg/vorbis on Linux (`pkg_check_modules(... REQUIRED ...)`). Configure fails without it even when the libraries are installed. |
 | `git` | Fetches the CLAP/VST3 submodules under `smaragd/third_party/`. Without them the build succeeds but **silently drops plugin hosting**, which disables the `plugin_*` qxa cases. |
 | `qt6-base-dev` | Qt 6 `Core` `Gui` `Widgets` `Xml` `Network` `Concurrent`. It also depends on the `qmake6` package, which puts `qmake6`/`qtpaths6` on PATH — that is how the scripts locate Qt with no `QT_PATH` argument (see below). |
-| `libsndfile1-dev` | Audio file I/O: WAV export, and general sample import (MP3/FLAC/AIFF/Ogg/Opus). |
+| `libsndfile1-dev` | Audio file I/O: WAV and MP3 export, and general sample import (MP3/FLAC/AIFF/Ogg/Opus). MP3 in either direction needs a libsndfile built with its MPEG support (LAME + mpg123), which Debian/Ubuntu's is. |
 | `libogg-dev`, `libvorbis-dev` | Ogg Vorbis export. Both are separate `find_package`/`pkg_check_modules` calls; `libvorbis-dev` does not pull `libogg-dev`'s headers in on every release. |
 | `libasound2-dev` | ALSA — `ENABLE_ALSA` defaults **ON** on Linux, and it carries the MIDI half too (the ALSA sequencer, proposal 37 P7a). |
 
@@ -358,10 +358,20 @@ After building successfully, test the render feature:
    - Adjust quality slider (0-10)
    - Render and verify playback
 
-5. **Test MP3 (if binary provided):**
-   - If `libmp3lame.dll/.dylib/.so` is in app directory, File → Render shows MP3 enabled
-   - Otherwise, MP3 option is disabled with helpful tooltip
-   - If enabled, test bitrate selection and rendering
+5. **Test MP3 export:**
+   - *Rewritten 2026-10-10 (QBX-145).* This step used to say MP3 was enabled
+     only when `libmp3lame.dll/.dylib/.so` sat in the app directory. That was
+     never true in practice: the dlopen'd writer's `open()` always failed, so
+     MP3 export did not work with or without the library. MP3 is now written
+     by libsndfile (its `mpeg` feature, the same one MP3 import uses); there
+     is no user-provided binary. On Windows the build already deploys
+     `libmp3lame-0.dll` beside the executable with the rest of vcpkg's `bin/`.
+   - File → Render shows MP3 enabled for a 1- or 2-channel project at an MPEG
+     rate (8000–48000 Hz, the nine MPEG rates). For a wider project, a 96 kHz
+     project, or a libsndfile without MPEG, it is disabled and the tooltip
+     says which.
+   - Render at two bitrates (e.g. 128 and 320 kbps) and check the files play,
+     have the arrangement's length, and differ in size about 2.5×.
 
 6. **Stress tests:**
    - Cancel mid-render → verify file cleanup and UI recovery

@@ -3299,6 +3299,13 @@ In priority order:
 3. **Sync render wait:** Async render with polling; blocks test until complete (simpler than event-driven)
 4. **Format enums → strings:** Serialize as "100%", "50%", "800x600" and "wav"/"ogg"/"mp3" (readable XML)
 5. **Quality range:** 0–10 for OGG (libvorbis), 0–320 for MP3 (unified parameter; validation on readXml)
+   - *Correction (2026-10-10, QBX-145):* the parameter was validated and then
+     dropped -- `RenderParams::quality` reached no writer, so OGG quality and
+     MP3 bitrate did nothing (and MP3 export itself always failed). It now
+     reaches the writer via `AudioFileWriter::setQuality()`. MP3 reads it as
+     kbps, but values ≤ 10 -- this action's default of 10 is one -- mean the
+     default 192 kbps, and anything else is clamped to 128..320. OGG reads
+     0..10; WAV ignores it.
 
 ### Platform-specific notes
 

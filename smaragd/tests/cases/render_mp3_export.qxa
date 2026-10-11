@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MP3 EXPORT (QBX-145). Renders the sawtooth arrangement twice, once to WAV as
+  the reference and once to MP3 at 192 kbps, and asserts the MP3 has the
+  render's length and the material's energy.
+
+  MP3 export had never worked: the dlopen'd MP3Writer's open() returned false
+  unconditionally, so this render produced no file at all and the first assert
+  below failed reading it. MP3 now goes through libsndfile (SF_FORMAT_MPEG,
+  LAME inside), the library the WAV writer already uses.
+
+  LENGTH. 4.5 s at the project's 48 kHz is 216000 frames. sf_close writes the
+  LAME/Xing Info frame, so mpg123 reads back gapless: exact or within a frame;
+  the band is plus or minus 2 MPEG-1 Layer III frames (2 x 1152), so a decoder that pads one
+  frame either side still passes, and a missing second (or a 60 s pad) does not.
+
+  ENERGY. Same window and band as mp3_sample_import.qxa: the 0 dB sawtooth
+  renders around ~0.25 RMS, MP3 is lossy and mpg123 is not byte-reproducible
+  across versions, so this is an RMS discriminator and never a byte-cmp. The
+  WAV reference is asserted in the SAME band, so a failure on the MP3 alone is
+  the codec's, not the arrangement's.
+-->
+<SActionScript version="1" name="render_mp3_export">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <render filename="render_mp3_export_ref.wav" format="wav" quality="10" durationSec="4.5"/>
+    <assert-audio-length filename="render_mp3_export_ref.wav"
+                         minFrames="216000" maxFrames="216000"/>
+    <assert-audio-energy filename="render_mp3_export_ref.wav"
+                         startFrame="2000" frameCount="180000"
+                         minRms="0.12" maxRms="0.40"/>
+
+    <render filename="render_mp3_export.mp3" format="mp3" quality="192" durationSec="4.5"/>
+    <assert-audio-length filename="render_mp3_export.mp3"
+                         minFrames="213696" maxFrames="218304"/>
+    <assert-audio-energy filename="render_mp3_export.mp3"
+                         startFrame="2000" frameCount="180000"
+                         minRms="0.12" maxRms="0.40"/>
+    <assert-audio-peak filename="render_mp3_export.mp3" maxPeak="1.2"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
