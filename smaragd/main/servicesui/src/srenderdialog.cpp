@@ -25,8 +25,10 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QFileDialog>
+#include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QStandardPaths>
 
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
@@ -119,7 +121,9 @@ SRenderDialog::SRenderDialog(SProject *project, QWidget *parent)
     // Set defaults
     wavRadio_->setChecked(true);
     timeSelectionRadio_->setChecked(true);
-    outputPathLineEdit_->setText("render.wav");
+    // QBX-144: beside the project, named after it -- not the bare "render.wav"
+    // this used to be, which resolved against the process's working directory.
+    outputPathLineEdit_->setText(defaultOutputPath());
     onFormatChanged(0);
 
     // Time selection is available if project exists
@@ -275,7 +279,7 @@ void SRenderDialog::syncPathExtension() {
     QString newPath = info.completeBaseName() + "." + ext;
     const QString dir = info.path();
     if (!dir.isEmpty() && dir != ".") {
-        newPath = dir + "/" + newPath;
+        newPath = QDir(dir).filePath(newPath);
     }
     outputPathLineEdit_->setText(newPath);
 }
@@ -291,11 +295,44 @@ void SRenderDialog::onBrowseClicked() {
     const QString filter =
         QString("%1 Files (*.%2);;All Files (*)").arg(ext.toUpper(), ext);
 
-    QString fileName =
-        QFileDialog::getSaveFileName(this, "Save Audio File", "", filter);
+    // QBX-144: open where the line edit points, with its name preselected.
+    QString fileName = QFileDialog::getSaveFileName(
+        this, "Save Audio File", resolvedOutputPath(), filter);
     if (!fileName.isEmpty()) {
         outputPathLineEdit_->setText(fileName);
     }
+}
+
+// The directory a relative output path is relative to, and the default
+// output's directory: the project's own, or -- untitled, or no project --
+// Documents, the fallback SAudioRecorder and SMainWindow::defaultProjectDir()
+// use. Never the process's working directory.
+QString SRenderDialog::outputBaseDir() const {
+    const QString dir = project_ ? project_->projectDir() : QString();
+    if (!dir.isEmpty()) {
+        return dir;
+    }
+    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+}
+
+QString SRenderDialog::defaultOutputPath() const {
+    const QString pf = project_ ? project_->projectFilePath() : QString();
+    QString base = pf.isEmpty() ? QString() : QFileInfo(pf).completeBaseName();
+    if (base.isEmpty()) {
+        base = QStringLiteral("render");
+    }
+    return QDir(outputBaseDir()).filePath(base + "." + extensionForSelectedFormat());
+}
+
+QString SRenderDialog::resolvedOutputPath() const {
+    const QString text = outputPathLineEdit_->text();
+    if (text.isEmpty()) {
+        return QString();  // the empty-path guard applies at render time
+    }
+    if (QDir::isAbsolutePath(text)) {
+        return QDir::cleanPath(text);
+    }
+    return QDir::cleanPath(QDir(outputBaseDir()).absoluteFilePath(text));
 }
 
 void SRenderDialog::onOutputPathChanged() {
@@ -380,7 +417,12 @@ audio::RenderParams SRenderDialog::getRenderParams() const {
     }
 
     // Output path
-    params.outputPath = outputPathLineEdit_->text().toStdString();
+    // Output path: always absolute (QBX-144). A relative entry is relative to
+    // the project's directory, never to the process's working directory. UTF-8;
+    // the writers widen it on Windows.
+    const QString resolved = resolvedOutputPath();
+    params.outputPath = resolved.toStdString();
+    TW_LOGD( "ui.services", "[SRenderDialog] outputPath=%s", params.outputPath.c_str() );
 
     return params;
 }

@@ -1162,6 +1162,19 @@ add_test(NAME render_progress_dialog_test COMMAND render_progress_dialog_test)
 set_tests_properties(render_progress_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# QBX-144: SRenderDialog defaults its output to <projectdir>/<projectname>.wav
+# and resolves a relative entry against the project's directory, never the
+# process's working directory; resolvedOutputPath() is what Browse... opens on.
+# Same shape as render_progress_dialog_test.
+add_executable(render_dialog_test testkit/src/render_dialog_test.cpp)
+target_link_libraries(render_dialog_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME render_dialog_test COMMAND render_dialog_test)
+set_tests_properties(render_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # SLaneFragment (proposal 41 M1): a path container with no track identity.
 # AC1.1 (isPathContainer()/isLane() split, unity-sum twTrackMix), AC1.2
 # (structural absence of fader/inserts/instrument/solo/arm/meters/automation),
