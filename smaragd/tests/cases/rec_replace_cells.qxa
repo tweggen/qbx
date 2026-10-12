@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §3.3's `replace` (tape) mode, all four cells at once, one per track
+  of one project (QBX-172). Driven through `place-recording mode="replace"`
+  directly, so the whole case is arithmetic.
+
+  `replace` means: every touched child LOSES the pass's span, then the pass is
+  laid down as a plain cut. Never wraps, never stacks, and the span the pass
+  covers holds exactly one thing afterwards.
+
+  THE FOUR CELLS, with R = [96000, 144000) on every track:
+
+      track 0   R1   O = [48000, 120000)   trimmed to  [48000, 96000)
+      track 1   R2   O = [48000, 192000)   split into  [48000, 96000)
+                                                   and [144000, 192000)
+      track 2   R3   O = [96000, 144000)   REMOVED outright (a COLUMN here)
+      track 3   R4   O = [96000, 192000)   left-trimmed to [144000, 192000)
+      track 4   R3+R3  TWO children inside the pass, both removed
+
+  IT IS EXPRESSED AS `split-clip` + `remove-sample`, NOT as the left-edge
+  `resize-clip` plan 53 §3.3 and §12 name, and that is a deliberate deviation
+  recorded in the plan. A left-edge trim has to name the piece's new SOURCE
+  anchor, and the exact one is `SClipWindow::timelineToSourceExact( b - s )`,
+  which runs through the clip's warp map — so `srcStart + (b - s) * stretch`
+  is wrong for any warp-anchored clip, and a planner may not read the live
+  lane to ask (rule 2 of `srecplan`). `split-clip` already computes that
+  anchor exactly, inside itself; cutting at `b` and removing the head gives
+  the identical window with no new arithmetic anywhere.
+
+  WHICH MAKES TRACK 3 THE LOAD-BEARING ASSERTION OF THIS CASE. "The source
+  anchor advanced" is the only part of the left-edge trim a wrong
+  implementation gets wrong silently: the surviving piece sits at timeline
+  144000 and must source the file from 48000, because O started at 96000 with
+  `startOffset=0`. A piece left at `startOffset=0` would be visually
+  identical, the same length, in the same place — and 48000 frames out of sync
+  with itself. test_sawtooth.wav has a distinct RMS per second, so this is a
+  real discriminator and not a formality.
+
+  INDEX ORDER IS INSERTION ORDER AND THE REMOVALS MOVE IT, which is the other
+  half of what this case gates and the reason `ChildList` exists. On track 1
+  the planner cuts twice (appending twice), removes the middle piece (shifting
+  the last append DOWN by one) and then appends the pass, so the result reads
+
+      child 0   [48000,  96000)    O's head
+      child 1   [144000, 192000)   O's tail, srcOffset 96000
+      child 2   [96000,  144000)   the pass
+
+  — time order 0, 2, 1. A planner computing its paths from the snapshot would
+  have addressed child 1 for the removal and silently deleted O's tail
+  instead of its middle.
+
+  TRACK 2 IS A COLUMN ON PURPOSE. `remove-sample` cannot rebuild a take column
+  from parameters, so it PINS the content and its inverse re-links the very
+  same object (plan 52 / QBX-146 step a); a plain clip takes the
+  reconstruct-from-file path instead. Both have to come back, so the case
+  exercises both, and track 2's comp map is what proves the column came back
+  BY IDENTITY rather than being rebuilt: a rebuild would restore takes and
+  lose the map, exactly as `SAddSampleAction` once restored "a full-length
+  unedited clip... silently".
+
+  WHY IT FAILS ON main: `replace` REFUSES there (QBX-171 shipped it as
+  `NotYetImplemented`, loud rather than falling back), so every
+  `place-recording` is rejected. It would also fail against a silent fallback
+  to `takes`: `LegacyTakes` never removes anything, so every track would keep
+  its original child and track 2's single child would have become a take
+  column with three takes instead of one plain clip.
+-->
+<SActionScript version="1" name="rec_replace_cells">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- R1 -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="72000"/>
+    <!-- R2 -->
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="144000"/>
+    <!-- R3, as a COLUMN with a comp map, so undo has to restore by identity -->
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav"
+                timePos="96000" startOffset="0" duration="48000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <select-take clip="2,0" take="0"/>
+    <set-comp-segment clip="2,0" at="0" take="1"/>
+    <set-comp-segment clip="2,0" at="24000" take="0"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;24000:0"/>
+    <!-- R4 -->
+    <place-clip trackPath="3" filePath="../test_sawtooth.wav"
+                timePos="96000" startOffset="0" duration="96000"/>
+
+    <!-- TWO TOUCHED CHILDREN, both wholly inside the pass (R3 twice). This is
+         the only cell on which the index SHIFT a removal causes can be
+         observed, and so the only one that gates `ChildList::removeAt`:
+         removing child 0 moves child 1 down to index 0, and the second
+         remove-sample has to name 0, not 1. A planner computing its paths
+         from the snapshot would pass 1 and delete whatever had shifted into
+         that slot — successfully, which is silent corruption rather than a
+         failed action. TakesSplit can never reach this path because it only
+         ever APPENDS. -->
+    <place-clip trackPath="4" filePath="../test_sawtooth.wav"
+                timePos="96000" startOffset="0" duration="24000"/>
+    <place-clip trackPath="4" filePath="../test_sawtooth.wav"
+                timePos="120000" startOffset="24000" duration="24000"/>
+    <assert-clip-window clip="4,0" startTime="96000" duration="24000"/>
+    <assert-clip-window clip="4,1" startTime="120000" duration="24000"/>
+
+    <!-- ===================== THE PASS ===================== -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     mode="replace" timePos="96000" length="48000"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     mode="replace" timePos="96000" length="48000"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     mode="replace" timePos="96000" length="48000"/>
+    <place-recording trackPath="3" filePath="../test_sawtooth.wav"
+                     mode="replace" timePos="96000" length="48000"/>
+    <place-recording trackPath="4" filePath="../test_sawtooth.wav"
+                     mode="replace" timePos="96000" length="48000"/>
+
+    <!-- ===== R1: trimmed, and the pass beside it. NOTHING WRAPPED. ===== -->
+    <assert-clip-window clip="0,0" startTime="48000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,1" shape="none"/>
+    <assert-clip-window clip="0,2" expectReject="true"/>
+
+    <!-- ===== R2: split in two, the pass in the hole, index order 0,2,1 ===== -->
+    <assert-clip-window clip="1,0" startTime="48000" duration="48000"
+                        startOffset="0"/>
+    <assert-clip-window clip="1,1" startTime="144000" duration="48000"
+                        startOffset="96000"/>
+    <assert-clip-window clip="1,2" startTime="96000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="1,0" shape="none"/>
+    <assert-take-column clip="1,1" shape="none"/>
+    <assert-take-column clip="1,2" shape="none"/>
+    <assert-clip-window clip="1,3" expectReject="true"/>
+
+    <!-- ===== R3: the column is GONE and the pass is the only child ===== -->
+    <assert-clip-window clip="2,0" startTime="96000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="2,0" shape="none"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <!-- ===== R4: left-trimmed, THE SOURCE ANCHOR ADVANCED ===== -->
+    <assert-clip-window clip="3,0" startTime="144000" duration="48000"
+                        startOffset="48000"/>
+    <assert-take-column clip="3,0" shape="none"/>
+    <!-- The anchor is the whole point, so the wrong value is rejected too:
+         0 is what a trim that moved the window and forgot the source would
+         have left, and it is indistinguishable by every other assertion. -->
+    <assert-clip-window clip="3,0" startOffset="0" expectReject="true"/>
+    <assert-clip-window clip="3,1" startTime="96000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="3,1" shape="none"/>
+    <assert-clip-window clip="3,2" expectReject="true"/>
+
+    <!-- ===== TWO CHILDREN: BOTH gone, the pass is the only child ===== -->
+    <assert-clip-window clip="4,0" startTime="96000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="4,0" shape="none"/>
+    <assert-clip-window clip="4,1" expectReject="true"/>
+
+    <!-- ===== UNDO: one entry per pass, and everything comes back ===== -->
+    <undo count="5"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="72000"
+                        startOffset="0"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,0" startTime="48000" duration="144000"
+                        startOffset="0"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+    <!-- BY IDENTITY: the takes AND the comp map are back, which a rebuild
+         from parameters could not have managed. -->
+    <assert-clip-window clip="2,0" startTime="96000" duration="48000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;24000:0"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+    <assert-clip-window clip="3,0" startTime="96000" duration="96000"
+                        startOffset="0"/>
+    <assert-clip-window clip="3,1" expectReject="true"/>
+    <!-- BOTH children back, at their own windows: the second remove-sample
+         addressed the right clip, so its inverse restores the right one. -->
+    <assert-clip-window clip="4,0" startTime="96000" duration="24000"
+                        startOffset="0"/>
+    <assert-clip-window clip="4,1" startTime="120000" duration="24000"
+                        startOffset="24000"/>
+    <assert-clip-window clip="4,2" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="5"/>
+  </assertions>
+
+</SActionScript>

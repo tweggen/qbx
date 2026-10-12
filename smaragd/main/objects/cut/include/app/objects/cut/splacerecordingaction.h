@@ -6,6 +6,8 @@
 #include <QList>
 #include <QString>
 
+class SCompositeAction;
+
 // Action: place a finished recording onto a track — the multi-take verb
 // (proposal 17 phase 2, decision 1). Plans the recording's span against the
 // lane's existing columns and applies the plan as one atomic composite:
@@ -31,6 +33,13 @@
 class SPlaceRecordingAction : public SAction {
 public:
     SPlaceRecordingAction() = default;
+    ~SPlaceRecordingAction() override;
+
+    // The plan is HELD, so a child's inverse may borrow the child. See the
+    // note on plan_ below; the copy a QList<SAction*> member would need is
+    // not meaningful for an action that owns heap children.
+    SPlaceRecordingAction( const SPlaceRecordingAction & ) = delete;
+    SPlaceRecordingAction &operator=( const SPlaceRecordingAction & ) = delete;
     /**
      * `mode` arrives ALREADY RESOLVED, from the recorder (plan 53 §5.3). Empty
      * means "whatever this build would do anyway", which is what every call
@@ -82,6 +91,33 @@ public:
     bool armed() const { return armed_; }
 
 private:
+    /**
+     * THE PLAN THE PLANNER BUILT, kept alive for as long as this action is.
+     *
+     * It used to be a stack local in `apply()`, and that is a crash with
+     * `replace` (QBX-172). `SRemoveSampleAction` cannot rebuild a take column
+     * from parameters, so it PINS the content and hands back an
+     * `SRestoreTakeColumnAction` that BORROWS it -- `owner_`, documented in
+     * that header as "holds the pin; borrowed". A stack composite is destroyed
+     * when `apply()` returns, which deletes the `remove-sample` child, drops
+     * the pin, and leaves the inverse on the undo stack pointing at freed
+     * memory; the first undo then reads it. Measured as a SIGBUS in
+     * `rec_replace_cells`.
+     *
+     * Holding it here makes the lifetimes right by construction, because
+     * `SActionUndoCommand` owns the FORWARD action and the inverse together
+     * ("ownership: kept for redo" / "kept for undo") and destroys them
+     * together, so no inverse can outlive the child it borrows from.
+     *
+     * It is NOT a second source of truth: nothing reads it back, it is
+     * rebuilt from scratch on every apply (a redo re-plans against the lane
+     * as the undo left it), and the previous one is deleted there.
+     *
+     * The alternative -- giving `SRestoreTakeColumnAction` its own pin -- is
+     * the better long-term shape and is a change to two public contracts in
+     * this module, so it is deliberately NOT folded into this ticket.
+     */
+    SCompositeAction *plan_ = nullptr;
     QString    mode_;        // "" = whatever this build would do anyway
     bool       armed_ = true;
     QList<int> trackPath_;

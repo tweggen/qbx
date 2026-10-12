@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §3.2 / §3.3's matrix, CELL R1, under mode `takes-split` (QBX-172).
+  Kp, Kc and Km on three tracks of one project, driven through
+  `place-recording mode="takes-split"` directly, so the whole case is
+  arithmetic: no capture device, no transport, no wall-clock jitter anywhere.
+
+  R1 means the existing child STARTS BEFORE the pass and ENDS INSIDE it
+  (`s < a < e <= b`). The rule: cut the child at `a`; the head keeps its own
+  span untouched; the piece inside `[a, b)` becomes a column with the old piece
+  as take 0 and the pass as take 1, active; the part of the pass no child
+  covers becomes a plain cut. A take is then an alternative for exactly the
+  span it covers, which is why this mode needs none of §4's take-extent model
+  change.
+
+  GEOMETRY, one line, the same on all three lanes. test_sawtooth.wav is 192000
+  frames (4 s at 48 kHz), so every number below is a closed form:
+
+      O = [48000, 120000)      the existing child, 72000 frames
+      R = [96000, 144000)      the pass, 48000 frames
+
+  so s=48000 < a=96000 < e=120000 < b=144000, and the expected result is
+
+      child 0   plain  [48000,  96000)   the head, srcOffset 0, UNTOUCHED
+      child 1   column [96000, 120000)   take 0 = the old piece, take 1 = R
+      child 2   plain  [120000,144000)   the tail of the pass, srcOffset 24000
+      child 3   does not exist
+
+  INDEX ORDER IS INSERTION ORDER, NOT TIME ORDER, and here they coincide only
+  by luck: `split-clip` keeps the HEAD at the operand's index and APPENDS the
+  tail, then the trailing plain cut appends after that. The cases for R5 and R6
+  are where the two orders genuinely diverge.
+
+  WHY THIS FAILS ON main, and it is worth being exact because the plan
+  predicted a different reason. Plan 53's P1 section says `rec_split_r*` fails
+  on `main` because "`mode=` is ignored by `readXml`, so the old planner runs
+  and the shape is wrong". That was true before M0; since QBX-171 `mode=` is
+  read, validated, and `takes-split` is a planner that REFUSES loudly, so on
+  `main` the `place-recording` action is REJECTED and the case fails there.
+  Both are failures, but only one of them is the one the plan named.
+
+  THE ASSERTIONS STILL DISCRIMINATE THE MODE, which is the part that matters
+  and the reason they are not weakened to "the verb succeeded". Were the verb
+  ever to fall back to `takes` (`LegacyTakes`), this lane would hold TWO
+  children, not three: that planner DROPS a column starting before the pass
+  from its plan entirely and places the pass as one plain cut [96000,144000)
+  over it, so `0,2` would not resolve and `0,1` would be a plain clip rather
+  than a column. A silent fallback is exactly the clean, repeatable false
+  finding this project has paid for before, so the shape is what gets checked.
+
+  Km's map is chosen so that BOTH halves of the split say something:
+
+      the map on O is   0:1 ; 24000:0 ; 60000:1        (column frames)
+      the split is at column frame 48000 (= a - s)
+
+  so the head must keep `0:1;24000:0` — the two segments below the cut, with
+  the one at 60000 TRUNCATED away — and the inside piece's own map, which
+  `split-clip` shifts to `0:0;12000:1`, must then be CLEARED by activating the
+  pass as a take (QBX-159/B4: a map decides every position, so badging a new
+  take without clearing it would badge a take nobody can hear). Those two
+  assertions are the whole of "the inside column's map cleared, the tail
+  column's map shifted" for this cell; R2, R4 and R6 are where a piece AFTER
+  `b` exists and carries a shifted map of its own.
+
+  THE ACTIVE TAKE IS NOT THE MAPPED TAKE on Km, deliberately, for the reason
+  comp_map_survives_split.qxa gives at length: an empty map MEANS "ask
+  activeTake_", so a case whose active take is the one its map selects passes
+  identically against a dropped map.
+-->
+<SActionScript version="1" name="rec_split_r1">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- ============ Kp: a plain clip ============ -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="72000"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="72000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+
+    <!-- ============ Kc: a direct column, no comp map ============ -->
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="72000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <select-take clip="1,0" take="0"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"
+                        comp=""/>
+
+    <!-- ============ Km: a direct column WITH a comp map ============ -->
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="72000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <!-- select-take CLEARS the map, so it has to come before the segments. -->
+    <select-take clip="2,0" take="0"/>
+    <set-comp-segment clip="2,0" at="0" take="1"/>
+    <set-comp-segment clip="2,0" at="24000" take="0"/>
+    <set-comp-segment clip="2,0" at="60000" take="1"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;24000:0;60000:1"/>
+
+    <!-- ============ THE PASS, same span on every lane ============ -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+
+    <!-- ============ Kp ============ -->
+    <assert-clip-window clip="0,0" startTime="48000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="0,1" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="24000"/>
+    <assert-clip-window clip="0,2" startTime="120000" duration="24000"
+                        startOffset="24000"/>
+    <assert-take-column clip="0,2" shape="none"/>
+    <assert-clip-window clip="0,3" expectReject="true"/>
+
+    <!-- ============ Kc: the head keeps its two takes, the inside piece
+                     gets a third ============ -->
+    <assert-clip-window clip="1,0" startTime="48000" duration="48000"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"
+                        comp=""/>
+    <assert-take-column clip="1,1" shape="direct" takes="3" activeTake="2"
+                        comp=""/>
+    <assert-clip-window clip="1,1" startTime="96000" duration="24000"/>
+    <assert-clip-window clip="1,2" startTime="120000" duration="24000"
+                        startOffset="24000"/>
+    <assert-clip-window clip="1,3" expectReject="true"/>
+
+    <!-- ============ Km: the head's map TRUNCATED, the inside piece's
+                     map CLEARED by the activation ============ -->
+    <assert-clip-window clip="2,0" startTime="48000" duration="48000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;24000:0"/>
+    <assert-take-column clip="2,1" shape="direct" takes="3" activeTake="2"
+                        comp=""/>
+    <assert-clip-window clip="2,1" startTime="96000" duration="24000"/>
+    <assert-clip-window clip="2,2" startTime="120000" duration="24000"
+                        startOffset="24000"/>
+    <assert-clip-window clip="2,3" expectReject="true"/>
+
+    <!-- ONE UNDO PER PASS puts each lane back exactly as it was: the whole
+         plan is one composite, so one entry per `place-recording`. -->
+    <undo count="3"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="72000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"
+                        comp=""/>
+    <assert-clip-window clip="1,0" startTime="48000" duration="72000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;24000:0;60000:1"/>
+    <assert-clip-window clip="2,0" startTime="48000" duration="72000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

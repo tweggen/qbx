@@ -1,6 +1,8 @@
 #include "app/objects/cut/srecordplanner.h"
 #include "app/objects/cut/saddtakeaction.h"
 #include "app/objects/cut/splaceclipaction.h"
+#include "app/objects/cut/sremovesampleaction.h"
+#include "app/objects/cut/ssplitclipaction.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/actions/scompositeaction.h"
@@ -306,29 +308,334 @@ public:
 };
 
 /**
- * `takes-split` and `replace` are QBX-172's (plan 53 P1b).
+ * CAN `split-clip` ACTUALLY CUT THIS PIECE AT `t`?
  *
- * They REFUSE loudly rather than falling back to `LegacyTakes`. A fallback
- * would give a `.qxa` driving `mode="takes-split"` the legacy shape and no
- * indication that the mode did nothing -- precisely the clean, repeatable
- * false finding an unknown attribute produces, which is the failure mode this
- * project has already paid for once.
+ * `SSplitClipAction::apply` refuses `inObjOffset <= 1` and
+ * `inObjOffset >= fullDur - 1`, so a cut needs TWO frames of material on each
+ * side -- not merely a position strictly inside the piece, which is how plan
+ * 53 §3.2 words it ("split at `a` and at `b` where those fall strictly
+ * inside").
+ *
+ * The difference is not cosmetic. A planner that emits a split one frame
+ * inside a clip gets `{false, nullptr}` back from the sub-action, and
+ * `SCompositeAction::apply` then rolls the WHOLE pass back and returns false
+ * -- so the take is lost, which is the one thing a recorder may not do. A cut
+ * that close is therefore not attempted: the cell degrades to the no-split
+ * one, which always has an answer (the piece keeps its own edge, and the
+ * recording's take anchor carries the ≤ 2-frame difference as the leading
+ * silence a negative `srcOffset` already expresses, proposal 23).
+ *
+ * The pass-wide snap (§3.5) removes almost every occurrence of this before a
+ * planner ever sees it -- a landing within `N` of a clip edge is moved ONTO
+ * the edge -- but only when every armed lane agrees. With lanes disagreeing
+ * there is no snap, and a landing one frame inside a clip is reachable.
  */
-class NotYetImplemented : public Planner
+bool pieceCanSplitAt( offset_t pieceStart, length_t pieceDur, offset_t t )
+{
+    const offset_t o = t - pieceStart;
+    return o >= 2 && o <= (offset_t) pieceDur - 2;
+}
+
+/**
+ * THE PIECE OF ONE TOUCHED CHILD THAT LIES INSIDE THE PASS, isolated by
+ * `split-clip` so that nothing outside `[a, b)` is touched.
+ *
+ * This is the half of plan 53 §3.2 and §3.3 that both new planners share:
+ * `takes-split` then hands the piece the pass as a TAKE, `replace` REMOVES it.
+ * The splitting itself is identical, and so is the index bookkeeping it needs.
+ *
+ * `id` is how the caller addresses the piece afterwards: < 0 means "still the
+ * original child, by its snapshot index", >= 0 means "the child `append()`
+ * returned this id for".
+ */
+struct InsidePiece {
+    offset_t start = 0;
+    length_t dur   = 0;
+    int      id    = -1;
+};
+
+/**
+ * Emit the splits that isolate `c`'s inside piece, and model them.
+ *
+ * SPLIT-CLIP'S INDEX CONTRACT, which this depends on: the HEAD keeps the
+ * operand's index and the TAIL is APPENDED. True on both shapes a lane
+ * placement can have -- the direct-column branch keeps `link` and appends
+ * `sl2`, and the general branch keeps `cutLink` (which IS `link` whenever the
+ * object is already a clip window) and appends `sl2`.
+ *
+ * `ssplitclipaction.cpp` has a THIRD path, for a link whose object is raw
+ * content with no window: it deletes the link and appends a wrapped
+ * replacement, so the head's index MOVES. No lane placement reaches it --
+ * `place-clip`, `add-sample` and `place-recording` all create `SCut` windows,
+ * a direct take column is an `STakeStack` handled by the first branch, and
+ * `place-asset`'s body link is either an `SCut` or a container that
+ * `snapshot()` reports as `Child::Lane` and no planner places on. Stated here
+ * rather than guarded, because a guard would need a `hasWindow` flag on
+ * `Child` that nothing could make true, and the assumption is one grep from
+ * being re-checked.
+ *
+ * EVERY SPLIT GOES OUT WITH `broadcast=0` (plan 53 §5.1). An edit group would
+ * otherwise fan the cut out to the members' corresponding clips, and a
+ * recording pass decides the edit for the lanes the RECORDER armed -- which it
+ * plans one by one, each against its own snapshot. Letting `split-clip`
+ * broadcast as well would cut lanes this pass never looked at, and cut an
+ * armed member twice.
+ */
+InsidePiece isolateInside( const Child &c, const Span &span,
+                           ChildList &live, SCompositeAction &out )
+{
+    InsidePiece p;
+    p.start = c.start;
+    p.dur   = c.dur;
+    p.id    = -1;
+
+    auto path = [&]() {
+        return p.id < 0 ? live.pathOfOriginal( c.index )
+                        : live.pathOfAppended( p.id );
+    };
+
+    // The pass STARTS inside this child: cut at `a`, keep the head as it was,
+    // and the appended TAIL is the piece the pass covers.
+    if( c.start < span.a && pieceCanSplitAt( p.start, p.dur, span.a ) ) {
+        out.append( new SSplitClipAction( path(), span.a, false ) );
+        p.id    = live.append();
+        p.dur   = (length_t)( p.start + (offset_t) p.dur - span.a );
+        p.start = span.a;
+    }
+    // The pass ENDS inside what is left: cut at `b`. The piece keeps its own
+    // index this time and the TAIL AFTER `b` is the appended one.
+    if( p.start + (offset_t) p.dur > span.b
+        && pieceCanSplitAt( p.start, p.dur, span.b ) ) {
+        out.append( new SSplitClipAction( path(), span.b, false ) );
+        live.append();
+        p.dur = (length_t)( span.b - p.start );
+    }
+    return p;
+}
+
+/**
+ * A WRAPPED COLUMN REFUSES THE WHOLE LANE for this pass (plan 53 G11, the
+ * matrix's "any R · Kw" row, §7 B6's report).
+ *
+ * It is a POLICY now and no longer a forced hand, which is worth saying
+ * because the plan's reason has expired. §3.3 and §12 said `replace` must
+ * refuse a Kw lane because `remove-sample` could restore only the direct
+ * shape; QBX-155 landed (#241, #244) and it now pins BOTH shapes, so that
+ * particular obstacle is gone. What keeps the refusal is the rule itself: a
+ * surviving wrapper is non-foldable (`stakes::normalizeColumns` ran at load
+ * and left it), both new modes would have to split or delete it, and neither
+ * mode has a gate that has ever exercised one. Refusing is announced, costs
+ * the pass nothing but this lane, and is what `record_lane_skipped_reported`
+ * (QBX-164) is waiting for.
+ */
+bool refusedForWrappedColumn( const QList<Child> &touched, Mode mode,
+                              QString *why )
+{
+    for( const Child &c : touched ) {
+        if( c.kind != Child::WrappedColumn ) continue;
+        if( why )
+            *why = QStringLiteral( "the lane holds a wrapped take column at "
+                                   "%1, which mode '%2' refuses (plan 53 G11)" )
+                       .arg( (long long) c.start )
+                       .arg( modeToString( mode ) );
+        return true;
+    }
+    return false;
+}
+
+/**
+ * MODE `takes-split` (B): the pass is an ALTERNATIVE FOR EXACTLY THE SPAN IT
+ * COVERS, so nothing is stacked outside it (plan 53 §3.2).
+ *
+ * Every touched child is cut at `a` and at `b` where those fall inside it; the
+ * piece inside `[a, b)` becomes a column with the old piece as take 0 and the
+ * pass as take 1, active; the pieces outside are untouched; the sub-spans of
+ * `[a, b)` that no child covers become plain cuts. Invariant 1 therefore holds
+ * as written today -- a take is an alternative for the column's whole extent,
+ * which is why this mode needs none of §4's take-extent model change and can
+ * land before it.
+ *
+ * TWO THINGS HAPPEN BY THEMSELVES, both because the prerequisites landed
+ * first, and both deliberately NOT re-implemented here:
+ *
+ *  - the inside piece's comp map is CLEARED when the pass is activated
+ *    (`add-take activate=1`, QBX-159/B4), which is what §3.2's "the inside
+ *    piece's map is cleared when R is activated" asks for;
+ *  - a split column CARRIES its map, head and tail (QBX-160/B3,
+ *    `stakes::splitCompMap` on the direct shape and `cloneColumn` on the
+ *    wrapped one).
+ *
+ * OVERLAPPING CHILDREN GO LEFT TO RIGHT, which is a DEVIATION from §3.4 and is
+ * recorded there. §3.4's mode-B bullet says the TOPMOST inside piece receives
+ * the pass; that is well defined only when one piece contains another, and for
+ * a partial overlap it names no answer for the part the topmost piece does not
+ * cover -- which would lose recorded audio. The cursor rule below gives the
+ * pass to the FIRST piece that covers each position and places it exactly
+ * once, which agrees with §3.4 wherever §3.4 is precise (W1's adjacent
+ * children) and never loses audio where it is not. "Topmost" depends on
+ * decision D1, which P2 owns.
+ */
+class TakesSplit : public Planner
 {
 public:
-    explicit NotYetImplemented( Mode mode ) : mode_( mode ) {}
-    bool plan( const LaneSnapshot &, const Span &, const Context &,
-               SCompositeAction &, QString *why ) const override
+    bool plan( const LaneSnapshot &snap, const Span &span, const Context &ctx,
+               SCompositeAction &out, QString *why ) const override
     {
-        if( why )
-            *why = QStringLiteral( "record mode '%1' is not implemented in "
-                                   "this build (QBX-172)" )
-                       .arg( modeToString( mode_ ) );
-        return false;
+        if( !ctx.armed ) return true;          // nothing to do (review 2 M5)
+        if( span.length() == 0 ) {
+            if( why ) *why = QStringLiteral( "empty span" );
+            return false;
+        }
+
+        const QList<Child> touched = columnsFor( snap, span, ctx );
+        if( refusedForWrappedColumn( touched, Mode::TakesSplit, why ) )
+            return false;
+
+        ChildList live( snap );
+        offset_t cursor = span.a;
+
+        for( const Child &c : touched ) {
+            if( c.kind == Child::Lane ) continue;
+            // AN OTHER-KIND CHILD IS R0 and keeps everything, span included
+            // (plan 53 B2): a take is an alternative for the same region, not
+            // a different instrument. The pass is not clipped around it
+            // either -- it falls through to a plain cut laid OVER it, which is
+            // what an empty lane does and what never loses audio.
+            if( c.kind == Child::OtherKind ) continue;
+
+            const offset_t os = std::max( c.start, span.a );
+            const offset_t oe = std::min( c.end(), span.b );
+            if( oe <= os ) continue;
+            // Already covered by an earlier child in this same pass: the
+            // overlap rule above, and the same "one recording, one column"
+            // reason as B5 -- handing the pass to a second piece would make it
+            // sound twice.
+            if( os < cursor ) continue;
+
+            // The sub-span no child covers becomes a plain cut.
+            if( os > cursor ) {
+                out.append( new SPlaceClipAction(
+                    snap.lanePath, span.filePath, cursor,
+                    span.srcOffset + cursor - span.a,
+                    (length_t)( os - cursor ) ) );
+                live.append();
+            }
+
+            const InsidePiece p = isolateInside( c, span, live, out );
+            const QList<int> piecePath =
+                p.id < 0 ? live.pathOfOriginal( c.index )
+                         : live.pathOfAppended( p.id );
+
+            // The pass becomes take 1 of the inside piece, active. Its anchor
+            // is where the PIECE starts, not where the pass does: when a cut
+            // at `a` was refused as too close to the child's own start the
+            // piece begins up to two frames EARLY, and the anchor then goes
+            // slightly negative -- leading silence, legal since proposal 23.
+            out.append( new SAddTakeAction( piecePath, span.filePath,
+                                            span.srcOffset + p.start
+                                                - span.a ) );
+            // add-take PRESERVES its operand's index (it replaces the lane
+            // child's link in place), so the simulation needs no change --
+            // stated rather than silent, because it is the one verb in either
+            // plan that neither appends nor removes.
+
+            cursor = std::max( cursor,
+                               std::min( p.start + (offset_t) p.dur, span.b ) );
+        }
+
+        if( cursor < span.b ) {
+            // The trailing sub-span, and on an empty lane this is the whole
+            // pass at `a` -- the same plain placement every other mode makes.
+            out.append( new SPlaceClipAction(
+                snap.lanePath, span.filePath, cursor,
+                span.srcOffset + cursor - span.a,
+                (length_t)( span.b - cursor ) ) );
+            live.append();
+        }
+        return true;
     }
-private:
-    Mode mode_;
+};
+
+/**
+ * MODE `replace` (tape): every touched child LOSES `[a, b)`, then the pass is
+ * laid down as a plain cut (plan 53 §3.3). Never wraps, never stacks.
+ *
+ * EXPRESSED AS `split-clip` + `remove-sample`, NOT as the left-edge
+ * `resize-clip` §3.3 and §12 name -- and the reason is the planner contract
+ * rather than taste. A left-edge trim has to name the piece's new SOURCE
+ * anchor, and the exact one is `SClipWindow::timelineToSourceExact( b - s )`,
+ * which is a question only the LIVE window can answer: it runs through the
+ * clip's warp map, so `srcStart + (b - s) * stretch` is wrong for any
+ * warp-anchored clip. Rule 2 forbids a planner from reading the lane again,
+ * and widening `Child` to carry `srcStart` plus `stretch` would carry exactly
+ * the arithmetic that is wrong. `split-clip` already computes that anchor,
+ * exactly, inside itself -- and `comp_map_survives_split` already gates it --
+ * so cutting at `b` and removing the head produces the identical window with
+ * no new arithmetic anywhere. The cells read:
+ *
+ *   R1 (`s < a`, `e <= b`)  cut at `a`, remove the TAIL      -> `[s, a)` left
+ *   R2 (`s < a`, `e > b`)   cut at `a` and `b`, remove middle -> `[s,a)`+`[b,e)`
+ *   R3/R5 (`a <= s`, `e <= b`)  remove the child outright
+ *   R4/R6 (`a <= s`, `e > b`)   cut at `b`, remove the HEAD   -> `[b, e)` left
+ *
+ * which is one code path: isolate the inside piece exactly as `takes-split`
+ * does, then remove that piece instead of adding a take to it.
+ *
+ * `remove-sample` IS THE RIGHT VERB and not merely an available one: it is the
+ * arranger's own Delete, its inverse is pinned rather than rebuilt for a take
+ * column (plan 52 / QBX-146 step a) and it decides invertibility BEFORE
+ * mutating, so a shape it cannot restore refuses instead of deleting
+ * silently. The planner passes an EMPTY file path on purpose -- the action
+ * reads the real one off the clip, and its own comment says the caller's value
+ * is "only a hint" -- but it must pass the piece's START, because that is the
+ * position the inverse restores to.
+ */
+class Replace : public Planner
+{
+public:
+    bool plan( const LaneSnapshot &snap, const Span &span, const Context &ctx,
+               SCompositeAction &out, QString *why ) const override
+    {
+        if( !ctx.armed ) return true;
+        if( span.length() == 0 ) {
+            if( why ) *why = QStringLiteral( "empty span" );
+            return false;
+        }
+
+        const QList<Child> touched = columnsFor( snap, span, ctx );
+        if( refusedForWrappedColumn( touched, Mode::Replace, why ) )
+            return false;
+
+        ChildList live( snap );
+
+        for( const Child &c : touched ) {
+            if( c.kind == Child::Lane ) continue;
+            // R0, and under `replace` this is the one place the mode is NOT
+            // destructive: an event clip keeps its notes while an audio pass
+            // replaces the audio around it. Same rule as every other mode
+            // (plan 53 B2), with more at stake.
+            if( c.kind == Child::OtherKind ) continue;
+
+            const offset_t os = std::max( c.start, span.a );
+            const offset_t oe = std::min( c.end(), span.b );
+            if( oe <= os ) continue;
+
+            const InsidePiece p = isolateInside( c, span, live, out );
+            const int idx = p.id < 0 ? live.indexOfOriginal( c.index )
+                                     : live.indexOfAppended( p.id );
+            if( idx < 0 ) continue;          // cannot happen; not worth a crash
+
+            out.append( new SRemoveSampleAction( snap.lanePath, idx,
+                                                 QString(), p.start ) );
+            live.removeAt( idx );
+        }
+
+        // The pass itself, over the hole every touched child just made.
+        out.append( new SPlaceClipAction( snap.lanePath, span.filePath, span.a,
+                                          span.srcOffset, span.length() ) );
+        live.append();
+        return true;
+    }
 };
 
 }  // namespace
@@ -339,10 +646,10 @@ const Planner &plannerFor( Mode mode )
     // one instance can serve every armed lane of every pass, but a file-scope
     // object would be constructed in an order this file does not control and
     // `plannerFor` is callable from anywhere.
-    static const LegacyTakes       takes;
-    static const Overdub          overdub;
-    static const NotYetImplemented takesSplit( Mode::TakesSplit );
-    static const NotYetImplemented replace( Mode::Replace );
+    static const LegacyTakes takes;
+    static const Overdub     overdub;
+    static const TakesSplit  takesSplit;
+    static const Replace     replace;
 
     switch( mode ) {
         case Mode::Overdub:    return overdub;

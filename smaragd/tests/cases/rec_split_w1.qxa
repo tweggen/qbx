@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §3.4's W1 — THE USER'S OWN SCENARIO — under mode `takes-split`
+  (QBX-172). Driven through `place-recording mode="takes-split"` directly, so
+  the whole case is arithmetic.
+
+  W1 is TWO ADJACENT CHILDREN and one pass that covers the first entirely and
+  the second only partway. §3.4's mode-B bullet: "independent per child, left
+  to right; the recording is windowed to each piece it covers", giving
+  `{A/R}`, `{B1/R'}` and a plain `B2`.
+
+  GEOMETRY. test_sawtooth.wav is 192000 frames (4 s at 48 kHz):
+
+      A = [0,     48000)      the first child
+      B = [48000, 144000)     the second, abutting it exactly
+      R = [0,     96000)      the pass, covering A whole and B halfway
+
+  and the expected result is
+
+      child 0   [0,     48000)   A, now a column: take 0 = A, take 1 = R
+      child 1   [48000, 96000)   B's head, a column: take 0 = B1, take 1 = R'
+      child 2   [96000, 144000)  B's tail, a plain clip, srcOffset 48000
+      child 3   does not exist
+
+  THE TAKE ANCHORS ARE THE WHOLE POINT, and they are what no other case in
+  this set checks. "The recording is windowed to each piece it covers" means
+  each piece gets the part of the pass that lies over IT, so
+
+      child 0's take 1   srcOffset 0       (the pass from its own start)
+      child 1's take 1   srcOffset 48000   (the pass from 48000 frames in)
+
+  A planner that handed the whole pass to every piece would give both takes
+  srcOffset 0, and every structural assertion above would still pass: two
+  columns, the right edges, the right take counts. So `take="1" startOffset=`
+  on each column is the assertion that separates a correct implementation from
+  a plausible one, and the reason `assert-clip-window`'s `take=` attribute
+  exists at all.
+
+  WHY IT FAILS ON main: `takes-split` REFUSES there (QBX-171 shipped it as
+  `NotYetImplemented`, loud on purpose rather than falling back), so
+  `place-recording` is rejected and every assertion after it fails. It would
+  also fail against a silent fallback to `takes`: `LegacyTakes` would make A a
+  take column and then SKIP B entirely, because B starts at 48000 which is
+  below the cursor A left behind, so child 1 would be B unchanged at
+  [48000,144000) and child 2 would not exist.
+
+  NOTHING IS SNAPPED HERE. The children abut exactly and the pass starts on
+  A's own start, so §3.5's sliver rule would have nothing to move even if it
+  ran — and it does not, because this case drives the verb and never the
+  recorder.
+-->
+<SActionScript version="1" name="rec_split_w1">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- A and B, abutting at 48000. Different source offsets so a mix-up
+         between the two children is visible in the windows below. -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav"
+                timePos="0" startOffset="0" duration="48000"/>
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="96000"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"
+                        startOffset="0"/>
+    <assert-clip-window clip="0,1" startTime="48000" duration="96000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="0,1" shape="none"/>
+
+    <!-- The pass: A whole, B halfway. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="0" length="96000"/>
+
+    <!-- A became a column, at its own extent. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <assert-clip-window clip="0,0" take="1" startOffset="0"/>
+
+    <!-- B's head became its own column, and its take carries the pass from
+         48000 frames in. -->
+    <assert-clip-window clip="0,1" startTime="48000" duration="48000"/>
+    <assert-take-column clip="0,1" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <assert-clip-window clip="0,1" take="1" startOffset="48000"/>
+    <!-- AND THE ANCHOR ASSERTION IS NOT VACUOUS. `assert-clip-window`'s
+         `take=` is silently ignored on the WRAPPED shape, so a case that only
+         ever asserts the right value cannot tell "read take 1 and it matched"
+         from "ignored the attribute and read the column". Asserting the WRONG
+         anchor and requiring a REJECTION is what pins it: 0 is what a planner
+         handing the whole pass to every piece would leave here, which is the
+         mistake this case exists to catch. -->
+    <assert-clip-window clip="0,1" take="1" startOffset="0"
+                        expectReject="true"/>
+
+    <!-- B's tail is untouched material, and its own source anchor advanced
+         with the cut. -->
+    <assert-clip-window clip="0,2" startTime="96000" duration="48000"
+                        startOffset="48000"/>
+    <assert-take-column clip="0,2" shape="none"/>
+
+    <assert-clip-window clip="0,3" expectReject="true"/>
+
+    <!-- One composite, one undo. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,1" startTime="48000" duration="96000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,1" shape="none"/>
+    <assert-clip-window clip="0,2" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

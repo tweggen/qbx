@@ -171,7 +171,22 @@ Every member of `T` is split at `a` and at `b` where those fall strictly
 inside it (`split-clip broadcast=0`); the pieces inside `[a, b)` become
 columns with the old piece as take 0 and `R` (windowed to that piece) as take
 1, active; pieces outside are untouched; uncovered sub-spans of `[a, b)` get
-plain cuts. A column that is split carries its map with it (§7 B3); the
+plain cuts.
+
+> **"STRICTLY INSIDE" IS NOT `split-clip`'s PREDICATE, and the difference costs
+> the whole take.** Found while building P1b (QBX-172).
+> `SSplitClipAction::apply` refuses `inObjOffset <= 1` and
+> `inObjOffset >= fullDur - 1`, so a cut needs TWO frames of material on each
+> side; and `SCompositeAction::apply` rolls back every earlier child and
+> returns false on the first one that fails. So a planner that emits a cut one
+> frame inside a clip does not get a slightly wrong shape — it loses the
+> recording, which is the one thing a recorder may not do. The planners guard
+> with `pieceCanSplitAt()` and degrade to the no-split cell, whose take anchor
+> then carries the ≤ 2-frame difference as leading silence (a negative
+> `srcOffset`, legal since proposal 23). §3.5's snap removes almost every
+> occurrence before a planner sees it — a landing within `N` of an edge is
+> moved ONTO the edge — but only when every armed lane agrees, so with lanes
+> disagreeing a one-frame landing is reachable. A column that is split carries its map with it (§7 B3); the
 inside piece's map is cleared when `R` is activated (§7 B4). Takes are
 alternatives for exactly the span they cover, so invariant 1 holds as written
 today.
@@ -212,7 +227,35 @@ active take of the first touched event column (`smidirecordactions.cpp:379-406`)
 `remove-sample`'s pinned inverse, plan 52, direct shape only — a wrapped
 column refuses, so the lane is refused); R4/R6 trimmed to `[b, e)` (left-edge
 `resize-clip`, source anchor advanced) — then a plain cut `[a, b)`. Never
-wraps. For MIDI it keeps its existing meaning: notes inside the pass window
+wraps.
+
+> **TWO CORRECTIONS from building it (QBX-172).**
+>
+> **(a) "direct shape only" HAS EXPIRED.** `remove-sample` has pinned BOTH
+> shapes since QBX-155 landed (#241 `3ace4ba4`, #244 `19e75974`);
+> `sremovesampleaction.cpp` says so in as many words. §12's QBX-155 row —
+> "blocks `replace` and `cleanup-takes` on Kw lanes only; both refuse those
+> lanes until it lands" — is satisfied. Both new planners still refuse a Kw
+> lane, but that is now the G11 POLICY rather than this limitation: a surviving
+> wrapper is non-foldable, both modes would have to split or delete it, and no
+> gate has ever exercised one. Saying which reason applies matters, because the
+> expired one would have been removed by QBX-155 and the real one will not be.
+>
+> **(b) IT IS BUILT AS `split-clip` + `remove-sample`, NOT as the left-edge
+> `resize-clip` this paragraph and §12 prescribe.** A left trim has to name the
+> piece's new SOURCE anchor, and the exact one is
+> `SClipWindow::timelineToSourceExact( b - s )`, which runs through the clip's
+> warp map — so `srcStart + (b - s) * stretch` is wrong for any warp-anchored
+> clip. §5.1's rule 2 forbids a planner from reading the lane again to ask, and
+> widening `Child` to carry `srcStart` plus `stretch` would carry exactly the
+> arithmetic that is wrong. `split-clip` computes that anchor exactly, inside
+> itself, and `comp_map_survives_split` already gates it — so cutting at `b`
+> and removing the head yields the identical window with no new arithmetic
+> anywhere. All four cells then reduce to ONE code path shared with
+> `takes-split`: isolate the inside piece by cutting, then remove it instead of
+> adding a take to it. `rec_replace_cells` asserts the surviving piece's
+> advanced anchor, with the wrong value rejected beside it, because that is the
+> only part a wrong implementation gets wrong silently. For MIDI it keeps its existing meaning: notes inside the pass window
 are deleted from the active take, CCs survive (`:393-403`).
 
 ### 3.4 Composition rules
@@ -232,6 +275,18 @@ are deleted from the active take, CCs survive (`:393-403`).
   B — each is split; the topmost inside piece is the column that receives R;
   the other inside pieces are left as they were (they summed before, they sum
   after; `takes-split` never deletes).
+
+  > **"THE TOPMOST INSIDE PIECE" IS UNDERSPECIFIED FOR A PARTIAL OVERLAP, and
+  > P1b does something else (QBX-172).** It is well defined only when one piece
+  > contains another. Where two pieces overlap PARTIALLY, the rule names no
+  > answer for the part of `[a, b)` the topmost piece does not cover — and
+  > leaving that part unplaced loses recorded audio. `TakesSplit` therefore
+  > walks the touched children LEFT TO RIGHT with a cursor and gives the pass to
+  > the FIRST piece covering each position, placing it exactly once. That
+  > agrees with this bullet wherever it is precise (W1's adjacent children,
+  > gated by `rec_split_w1`) and never loses audio where it is not. Which piece
+  > *should* win depends on decision D1, which P2 owns — so this is deliberately
+  > left as a deviation to be settled with mode A rather than guessed at now.
 - **Cycle record (Q8):** every pass is one span `[cycleIn, cycleOut)` against
   the lane as the previous pass left it. A — pass 1 forms the union column;
   pass 2+ touch that column (R3 or R4) and join it: ONE column per cycle, as
@@ -285,6 +340,23 @@ are planned), for `a` and for `b` separately:
    later: `length += Δ` (runs past the source by ≤ N: silence, which
    `place-clip` already tolerates).
 3. Punch and cycle spans are the markers; the rule does not run.
+   > **AND G12 — "the transport shows 'cycle overrides punch' while both are
+   > set" — NAMES A STATE THE MODEL CANNOT REPRESENT (QBX-172).** The project
+   > has ONE range (`RangeStart`/`RangeEnd`/`RangeValid`) plus a `Cycle` bool,
+   > and `SAudioRecorder::punchRegion_()` returns false whenever
+   > `cycleRegion_()` succeeds — punch IS "a range, with cycle off".
+   > `SProjectProps` has no Punch property, so there is no second flag to set
+   > and nothing for the transport to report as overridden. What CAN be gated
+   > is the precedence itself, which the recorder already reports: with a range
+   > set and cycle on it logs `[cycle]` and must never log `[punch]`.
+   > `record_loop_takes` now asserts both halves, the absence with
+   > `minCount="0" maxCount="0"`, and the assertion was verified by SABOTAGE —
+   > removing `punchRegion_()`'s yield makes it fail — because a
+   > characterization gate over behaviour that already works is otherwise
+   > indistinguishable from a vacuous one. The UI half of G12 has nothing to
+   > show; what the transport genuinely lacks is any indication of WHICH
+   > reading of the range is in force, and that belongs with the transport
+   > selector (QBX-170).
 4. Logged at info: `[REC] snap a by -144 to 388800 (3 lanes agree)` or
    `[REC] no snap for a: candidates 388800, 388944`.
 5. **It breaks an identity the suite relies on, and the recorder has to report
@@ -563,6 +635,21 @@ Rules the interface carries:
   `merge-columns` §6.1) into one `SCompositeAction`. It never mutates the
   model itself, so every planner's undo is the composite's inverse chain and
   every planner is testable by the verbs it emits.
+  > **AND THAT COMPOSITE MUST BE HELD BY THE ACTION, not built on the stack
+  > (QBX-172).** Not foreseen here; found as a SIGBUS the first time `replace`
+  > removed a take column. A child's inverse may BORROW the child:
+  > `remove-sample` cannot rebuild a column from parameters, so it PINS the
+  > content and returns an `SRestoreTakeColumnAction` whose only link back is
+  > `owner_`, its own header calling it "holds the pin; borrowed". A stack
+  > composite dies when `apply()` returns, deleting the child and dropping the
+  > pin while the inverse sits on the undo stack pointing at freed memory.
+  > `SPlaceRecordingAction::plan_` holds it instead, which is right by
+  > construction because `SActionUndoCommand` owns the forward action and the
+  > inverse together and destroys them together. It was LATENT on `main`, not
+  > live: `remove-sample`'s only two call sites are the arranger's Delete and
+  > `add-sample`'s inverse, both owned by the action history, so P1b is simply
+  > the first caller to put one in a composite. Any later planner emitting a
+  > verb with a pinned inverse inherits the same requirement.
 - **Index bookkeeping is the planner's, in apply order (G10).** Lane child
   indices are INSERTION order, not time order (`SObject::childLinks()`;
   `wrapCutLinkIntoStack` needs `moveChildToIndex` for exactly that reason).
@@ -967,6 +1054,17 @@ negative `startOffset` through `place-clip` gets its own arithmetic case,
 state that on `main` `mode=` is ignored by `readXml`, so the old planner runs
 and the shape is wrong — the right reason to fail.
 
+> **THAT PREDICTION EXPIRED WITH M0, and the headers say so instead (QBX-172).**
+> Since QBX-171 `mode=` IS read and validated, and `takes-split`/`replace` were
+> shipped as planners that REFUSE loudly — so on `main` the `place-recording`
+> action is REJECTED and the case fails there, not on a wrong shape. Both are
+> failures but only one is the one named here, and a case header that claims
+> the wrong mechanism is a case nobody can re-verify. The assertions were kept
+> strong enough to discriminate the MODE rather than weakened to "the verb
+> succeeded": `LegacyTakes` gives every one of these lanes a different child
+> count and a different shape, so a silent fallback to `takes` would be caught
+> by the assertions and not merely by the refusal.
+
 **Un-armed members: P1 does NOT enumerate them** (review 2 M5). Every P1
 planner, `LegacyTakes` included, treats `armed="0"` as nothing to do; the
 recorder submits for armed lanes only. The member enumeration and both takes
@@ -1317,7 +1415,7 @@ existing tickets. Order within a group is landing order.
 | B9 | `record_stays_armed.qxa` header: not evidence for the structure rule | B5 | XS |
 | M0 | record-mode property: project / folder / track, `set-track-record-mode`, INI seed at the new-project seams, `mode=` plumbing, transport selector, two per-user prefs; `midi_record_modes.qxa` rewritten; `record_mode_ini_seed.qxa` owns the INI key | D2 (default: folder) | M |
 | P1a (**QBX-171**) | planner framework with the simulated child list (`srecplan`); `LegacyTakes` behind `takes` (no flip); `overdub`; `place-recording` as the thin verb with `mode=`/`armed=`; the recorder's pass-wide snap and hand-over | B1–B5, M0, QBX-146 step a (landed) | M |
-| P1b (**QBX-172**) | `takes-split` (§3.2, appended-index bookkeeping) and `replace` (§3.3) over `resize-clip`/`split-clip`/`remove-sample`; G12 "cycle overrides punch" shown | P1a | M |
+| P1b (**QBX-172**) | `takes-split` (§3.2, appended-index bookkeeping) and `replace` (§3.3) over `split-clip`/`remove-sample` — NOT `resize-clip`, see §3.3; the held-plan lifetime fix §5.1 needed; G12 recorded as unrepresentable and gated as the PRECEDENCE in `record_loop_takes` | P1a | M |
 | A0a | take extents, model only: `duration_`, extents in `insertTake`/loader, resolution rule, `twCompColumn` extents + xfade clamp, invalidation, split per-half/re-index/identity inverse, `remove-take` extent inverse, `add-take at=/length=`, `FORMAT_VERSION 3` + its flip | B1, B3, B4, B10 | L |
 | A0b | take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters | A0a | M |
 | A1 | `merge-columns` / `unmerge-columns` with the link-move protocol | A0a, B1 | M |
@@ -1327,7 +1425,7 @@ existing tickets. Order within a group is landing order.
 | P5 | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; selection fade dialog | A0a, B8 | M |
 | P6 | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse | P2, A0b, B10 | M |
 | QBX-157 | laned-track backdrop = comp result, cut marks | A0b, B4 | M |
-| QBX-155 | wrapped column re-link crash (already filed) | — | blocks `replace` and `cleanup-takes` on Kw lanes only; both refuse those lanes until it lands |
+| QBX-155 | wrapped column re-link crash (already filed) | — | **LANDED** (#241, #244), so this no longer blocks anything: `remove-sample` pins both shapes. `replace` still refuses a Kw lane, by G11 policy rather than by this limitation — see §3.3 |
 
 ## 13. Review 1 dispositions
 
