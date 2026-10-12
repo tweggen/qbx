@@ -41,6 +41,16 @@
   become one column, under `takes-split` two clips. This case keeps asserting
   EXISTENCE only, which is correct for it and stays true under every mode, so
   it needs no change when the planner does.
+
+  IT DID NEED ONE CHANGE, AND NOT FROM THE PLANNER (QBX-171). The sentence
+  above is about the planner and is still true; the PASS-WIDE SNAP
+  (plan 53 §3.5) is a separate mechanism and it moved this case. Both takes
+  started from locator 0, which put the second landing within
+  N = max( one device buffer, 10 ms ) of the first pass's clip - so the snap
+  rounded take 2 onto take 1's clip start, the planner duly made it a TAKE on
+  that clip, and the lane held ONE child: the existence assertion for 0,1
+  stopped resolving, 3/3. The second locator is 480000 now, out of snap range,
+  which is what keeps the EXISTENCE claim the claim this case makes.
 -->
 <SActionScript version="1" name="record_stays_armed">
 
@@ -65,8 +75,26 @@
     <assert-recorded-clip trackPath="0" clips="1" passes="1"
                           minDurationFrames="24000"/>
 
-    <!-- Take 2. NO arm-track call here - that absence is the whole point. -->
-    <set-locator position="0"/>
+    <!-- Take 2. NO arm-track call here - that absence is the whole point.
+
+         THE LOCATOR IS 10 s AWAY, NOT 0 (QBX-171). It used to be 0 as well,
+         which put take 2's landing within a few thousand frames of take 1's
+         clip - and the pass-wide snap (plan 53 §3.5) rounds a landing to a
+         clip edge the armed lanes agree on when one is within
+         N = max( one device buffer, 10 ms ). With both takes at 0 the snap
+         fires, take 2 begins exactly where take 1's clip does, and the legacy
+         planner duly makes it a TAKE on it: the lane then holds ONE child, a
+         two-take column, and 0,1 does not resolve. Measured 3/3.
+
+         That is the comping this plan WANTS, but it is not what this case is
+         about, and asserting it here would make the case depend on the jitter
+         staying under N - the header above says the jitter is a few thousand
+         frames and N is about 1024, so the outcome would be a coin toss on a
+         busier box. Moving take 2 out of range keeps this case about its own
+         claim (the track is still armed) and removes a flake it would
+         otherwise have acquired. Comping two passes onto one column is gated
+         where it belongs: record_loop_takes and midi_record_modes. -->
+    <set-locator position="480000"/>
     <toggle-playback play="1"/>
     <wait-playhead minAdvance="4096" timeoutMs="30000"/>
     <wait-ms ms="500"/>

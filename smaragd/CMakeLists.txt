@@ -614,6 +614,25 @@ foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_
     endif()
 endforeach()
 
+# THE PASS-WIDE SNAP (plan 53 §3.5, QBX-171). Same real-time shape as the
+# block above and the same reasons -- RUN_SERIAL, SMARAGD_CAPTURE_SPEED=1
+# spelled out -- but a DIFFERENT input fixture: test_sawtooth.wav is stereo,
+# and these two arm TWO lanes at once on channels 1 and 2 so that "every armed
+# lane agrees" is a claim with more than one lane behind it. test_position.wav
+# is mono and cannot host channel 2.
+#
+# They are also the only record cases that begin from a STOPPED transport, on
+# purpose: that is what pins the landing to the locator exactly, which is the
+# only way a few-hundred-frame snap can be told from a few-thousand-frame
+# wall-clock jitter. Each case's header says so at length.
+foreach(_snap record_snap_pass_wide record_snap_disagree)
+    if(TEST qxa.${_snap})
+        set_tests_properties(qxa.${_snap} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_sawtooth.wav;SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800")
+    endif()
+endforeach()
+
 # --- transport polish (proposal 21 L5) ---------------------------------------
 #
 # THE METRONOME CASES have no audio input at all: the click is a live source

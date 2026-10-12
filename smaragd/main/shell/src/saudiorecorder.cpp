@@ -1,6 +1,9 @@
 #include "app/shell/saudiorecorder.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <string>
+#include <vector>
 
 #include <QDateTime>
 #include <QDir>
@@ -16,6 +19,7 @@
 #include "app/model/sprojectprops.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/splacerecordingaction.h"
+#include "app/objects/track/srecordmode.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/wave/srecordingcontent.h"
 #include "app/shell/sapplication.h"
@@ -475,6 +479,115 @@ void SAudioRecorder::stop()
     app_->setGlobalLocatorPos( recordStart_ );
 }
 
+// -------------------------------------------------------- the pass-wide snap --
+
+std::int64_t SAudioRecorder::snapWindowFrames_() const
+{
+    // 10 ms is the floor, and one device buffer the other candidate: a take
+    // cannot be placed more accurately than the buffer the device hands over
+    // in one go, so anything inside it is quantisation noise rather than
+    // intent. Never a setting (plan 53 §3.5) -- a user who could widen it
+    // could make the snap swallow real material.
+    const double rate = projectRate_();
+    std::int64_t n = (std::int64_t)( rate * 0.010 + 0.5 );
+    if( std::shared_ptr<twSpeaker> spk = app_ ? app_->getSpeaker() : nullptr ) {
+        if( audio::AudioBackend *b = spk->getBackend() ) {
+            const std::uint32_t devBuf  = b->getConfig().bufferFrames;
+            const std::uint32_t devRate = b->getConfig().sampleRate;
+            // Scaled to PROJECT frames, exactly as the output-latency term is.
+            const std::int64_t buf =
+                ( devRate > 0 )
+                    ? (std::int64_t)( (double) devBuf * rate / (double) devRate
+                                      + 0.5 )
+                    : (std::int64_t) devBuf;
+            n = std::max( n, buf );
+        }
+    }
+    return n;
+}
+
+void SAudioRecorder::snapPassWide_( std::int64_t *a, std::int64_t *b ) const
+{
+    if( !a || !b ) return;
+    const std::int64_t n = snapWindowFrames_();
+    if( n <= 0 ) return;
+
+    SProject *project = app_ ? app_->getCurrentProject() : nullptr;
+    SObject *mixer = splacements::rootContainer( project );
+    if( !mixer ) return;
+
+    // Every child edge on every ARMED lane. In takes modes this set also
+    // covers the un-armed members of an armed lane's edit group -- that is
+    // P4's (plan 53 §8 M5), and until the recorder enumerates them there is
+    // nothing to add here.
+    std::vector<std::int64_t> edges;
+    for( const Armed &arm : armed_ ) {
+        SObject *lane = splacements::laneAt( mixer, arm.path );
+        if( !lane ) continue;
+        for( int i = 0; i < lane->childCount(); ++i ) {
+            SLink *lk = lane->childAt( i );
+            if( !lk ) continue;
+            SObject &obj = lk->getSObject();
+            if( obj.isLane() ) continue;
+            // A GROWING CLIP IS NOT AN EDGE, whichever recorder owns it. Ours
+            // are gone by now (removeGrowingClips_ runs first); another
+            // recorder's are not.
+            if( obj.isLiveRecording() ) continue;
+            if( !obj.hasDuration() ) continue;
+            const std::int64_t s = (std::int64_t) lk->getStartTime();
+            const std::int64_t d = (std::int64_t) obj.getDurationBlocking();
+            if( d == 0 ) continue;
+            edges.push_back( s );
+            edges.push_back( s + d );
+        }
+    }
+    if( edges.empty() ) return;
+
+    // One pass per endpoint, and the two are decided SEPARATELY: a pass whose
+    // head agrees and whose tail does not gets its head snapped.
+    const char *names[2] = { "a", "b" };
+    std::int64_t *vals[2] = { a, b };
+    for( int k = 0; k < 2; ++k ) {
+        std::vector<std::int64_t> near;
+        for( std::int64_t e : edges )
+            if( std::llabs( e - *vals[k] ) <= n ) near.push_back( e );
+        if( near.empty() ) continue;
+        const std::int64_t first = near.front();
+        bool unanimous = true;
+        for( std::int64_t e : near ) if( e != first ) { unanimous = false; break; }
+        if( !unanimous ) {
+            // Logged with the candidates, because "no snap" and "nothing was
+            // near" are different answers and only one of them is a lane
+            // disagreeing with another.
+            std::string list;
+            for( size_t i = 0; i < near.size(); ++i ) {
+                if( i ) list += ", ";
+                list += std::to_string( (long long) near[i] );
+            }
+            TW_LOGI( "shell", "[REC] no snap for %s: candidates %s",
+                     names[k], list.c_str() );
+            continue;
+        }
+        if( first == *vals[k] ) continue;      // already there; nothing to say
+        // A SNAP MAY NEVER EMPTY THE PASS. `a` and `b` are decided
+        // independently, and on a pass shorter than N an edge near `b` can sit
+        // at or below `a` -- the segment would then be dropped for having no
+        // length and the recorded audio would be GONE, which is not something
+        // a recorder may do. Refusing the snap leaves a sliver; applying it
+        // loses the take.
+        if( k == 1 && first <= *vals[0] ) {
+            TW_LOGI( "shell", "[REC] no snap for b: %lld would not leave a "
+                              "pass after a=%lld",
+                     (long long) first, (long long) *vals[0] );
+            continue;
+        }
+        TW_LOGI( "shell", "[REC] snap %s by %+lld to %lld (%u candidate(s) agree)",
+                 names[k], (long long)( first - *vals[k] ), (long long) first,
+                 (unsigned) near.size() );
+        *vals[k] = first;
+    }
+}
+
 void SAudioRecorder::commitPlacement_()
 {
     SProject *project = app_ ? app_->getCurrentProject() : nullptr;
@@ -490,6 +603,9 @@ void SAudioRecorder::commitPlacement_()
 
     lastFiles_.clear();
     for( const Armed &a : armed_ ) lastFiles_.append( a.file );
+    // Reset per pass: a cycle or punch pass is never snapped and must report
+    // 0 rather than the previous plain pass's delta.
+    snapDeltaA_ = 0;
 
     if( !project || placeable <= 0 ) {
         lastPassCount_ = 0;
@@ -559,8 +675,25 @@ void SAudioRecorder::commitPlacement_()
                               (offset_t) ( trimmed_ + ( a - firstPlace ) ),
                               (length_t) ( b - a ) } );
     } else {
-        segs.push_back( { (offset_t) std::max<std::int64_t>( firstPlace, 0 ),
-                          (offset_t) trimmed_, (length_t) placeable } );
+        // THE PLAIN PASS IS THE ONLY ONE THAT IS SNAPPED (plan 53 §3.5 rule
+        // 3): a punch or cycle span is the markers, and those are exact.
+        //
+        // The snap moves the WINDOW, so both terms follow from the moved
+        // endpoints and nothing re-reads the capture: `a` later by d means d
+        // more frames of the file stay hidden in the head handle
+        // (srcOffset += d), `a` earlier means d fewer (srcOffset -= d, into
+        // the pre-roll handle the trim left, or -- when the handle is shorter
+        // than d -- into at most N frames of leading silence, which is a
+        // negative source offset and legal since proposal 23).
+        std::int64_t a = std::max<std::int64_t>( firstPlace, 0 );
+        const std::int64_t unsnappedA = a;
+        std::int64_t b = a + placeable;
+        snapPassWide_( &a, &b );
+        snapDeltaA_ = a - unsnappedA;
+        if( b > a )
+            segs.push_back( { (offset_t) a,
+                              (offset_t) ( trimmed_ + ( a - firstPlace ) ),
+                              (length_t) ( b - a ) } );
     }
     lastPassCount_ = (int) segs.size();
 
@@ -589,9 +722,16 @@ void SAudioRecorder::commitPlacement_()
                      a.file.toStdString().c_str() );
             continue;
         }
+        // THE RECORDER RESOLVES THE MODE, per armed lane, and submits the
+        // verb with the answer (plan 53 §5.3). `place-recording` cannot
+        // resolve one: `objects/cut` may not depend on `objects/track`, where
+        // the folder walk lives (srecordmode.h says so at length).
+        const QString mode = srecmode::resolveMode(
+            splacements::rootContainer( project ),
+            a.track, project );
         for( const Seg &s : segs )
             app_->submitAction( new SPlaceRecordingAction(
-                a.path, a.file, s.at, s.srcOffset, s.len ) );
+                a.path, a.file, s.at, s.srcOffset, s.len, mode ) );
     }
     app_->endRecordCommit();
 
@@ -612,7 +752,8 @@ void SAudioRecorder::commitPlacement_()
 QString SAudioRecorder::describe() const
 {
     return QStringLiteral( "rec=%1 start=%2 p0=%3 anchored=%4 inLat=%5 outLat=%6 "
-                           "userOff=%7 comp=%8 trim=%9 passes=%10 dev=%11" )
+                           "userOff=%7 comp=%8 trim=%9 passes=%10 dev=%11 "
+                           "snapA=%12" )
         .arg( active_ ? "on" : "off" )
         .arg( (qlonglong) recordStart_ )
         .arg( (qlonglong) placement_.p0 )
@@ -623,5 +764,6 @@ QString SAudioRecorder::describe() const
         .arg( (qlonglong) placement_.compensationFrames() )
         .arg( (qlonglong) trimmed_ )
         .arg( lastPassCount_ )
-        .arg( deviceName_.isEmpty() ? QStringLiteral( "-" ) : deviceName_ );
+        .arg( deviceName_.isEmpty() ? QStringLiteral( "-" ) : deviceName_ )
+        .arg( (qlonglong) snapDeltaA_ );
 }

@@ -1,6 +1,5 @@
 #include "app/objects/cut/splacerecordingaction.h"
-#include "app/objects/cut/splaceclipaction.h"
-#include "app/objects/cut/saddtakeaction.h"
+#include "app/objects/cut/srecordplanner.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
@@ -10,7 +9,6 @@
 #include "app/actions/scompositeaction.h"
 #include "tw/core/twfraction.h"
 #include <QDomElement>
-#include <algorithm>
 
 using namespace strackpath;
 
@@ -18,8 +16,10 @@ SPlaceRecordingAction::SPlaceRecordingAction( const QList<int> &trackPath,
                                               const QString &filePath,
                                               offset_t timePos,
                                               offset_t srcOffset,
-                                              length_t length )
-    : trackPath_( trackPath ), filePath_( filePath ), timePos_( timePos ),
+                                              length_t length,
+                                              const QString &mode )
+    : mode_( SProjectProps::isRecordMode( mode ) ? mode : QString() ),
+      trackPath_( trackPath ), filePath_( filePath ), timePos_( timePos ),
       srcOffset_( srcOffset ), length_( length )
 {
 }
@@ -64,128 +64,53 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     // data starts later"). The machinery already handled a pass that ENDED
     // early, because running past the end of a sample is silence too; the
     // asymmetry was this one line.
-    offset_t srcOff = srcOffset_;
+    const offset_t srcOff = srcOffset_;
     if( srcOff >= (offset_t) waveDur ) return {false, nullptr};
     length_t span = (length_t)( (offset_t) waveDur - srcOff );
     if( length_ > 0 && length_ < span ) span = length_;
 
-    const offset_t recStart = timePos_;
-    const offset_t recEnd = recStart + (offset_t)span;
+    // FROM HERE THIS VERB DECIDES NOTHING (plan 53 §5.1, QBX-171). It reads the
+    // lane ONCE, picks the planner for the mode it was HANDED -- it cannot
+    // resolve one, see srecordmode.h -- and applies what the planner appended.
+    srecplan::Span sp;
+    sp.filePath  = filePath_;
+    sp.a         = timePos_;
+    sp.b         = timePos_ + (offset_t) span;
+    sp.srcOffset = srcOff;
+    // `fromCycle` is the recorder's knowledge and does not survive a .qxa
+    // (nothing in the XML says a pass came from a cycle), so it stays false
+    // here. The planner that needs it -- X8's "no take beyond the cycle" --
+    // is TakesSplit, in QBX-172, which is where the attribute to carry it
+    // belongs with the case that needs it.
+    sp.fromCycle = false;
 
-    // The lane's columns overlapping the recording span. Paths are computed
-    // NOW and stay valid through the plan: place-clip appends new links and
-    // add-take wraps in place (index-preserving) — existing indices never
-    // shift.
-    struct Column { offset_t start; length_t dur; QList<int> path; };
-    QList<Column> columns;
-    for( int i = 0; i < lane->childCount(); ++i ) {
-        SLink *lk = lane->childAt( i );
-        if( !lk || lk->getSObject().isLane() ) continue;  // sub-track
-        if( !lk->getSObject().hasDuration() ) continue;
-        // AN OTHER-KIND CHILD IS R0: untouched (plan 53 B2). This verb places
-        // AUDIO, so an event clip on the lane can never receive the pass as a
-        // take -- a take is an alternative for the same region, not a
-        // different instrument. Leaving it out of `columns` is exactly R0:
-        // `cursor` is not advanced past it, so the recording falls through to
-        // the trailing-gap branch and is placed as its own clip OVER it,
-        // which is what an empty lane does. Overlapping clips are what the
-        // lane already holds whenever two takes do not line up; losing
-        // recorded audio is not something a recorder may do.
-        if( lk->getSObject().contentKind() != SContentKind::Audio ) continue;
-        const offset_t s = lk->getStartTime();
-        const length_t d = lk->getSObject().getDurationBlocking();
-        if( d == 0 || s + (offset_t)d <= recStart || s >= recEnd ) continue;
-        if( s < recStart ) {
-            // A column ALREADY RUNNING at the recording start is left alone,
-            // and is dropped from the plan entirely rather than kept in it.
-            //
-            // IT USED TO BE KEPT, AND THAT SILENTLY THREW THE TAKE AWAY. A
-            // column can only receive the recording as a TAKE when it starts
-            // WITH it (a take is an alternative for the same window, so an
-            // earlier-starting column would need source material from before
-            // the recording began), and the plan loop below duly skips it --
-            // but it still advanced `cursor` past the column's end, so the
-            // column CONSUMED the recording material it covered. When such a
-            // column covers the whole recording, cursor reached recEnd, the
-            // trailing-gap branch did not fire, and the composite came out
-            // EMPTY. An empty composite applies as SUCCESS, so the take was
-            // discarded with nothing but this warning to show for it.
-            //
-            // That is not a corner: two takes recorded from the same locator
-            // land a few thousand frames apart (each record-start re-anchors
-            // its own placement conversion), so whether take 2 begins just
-            // before or just after take 1 is wall-clock jitter -- and only the
-            // second spelling lost the audio. qxa.record_stays_armed failed
-            // that way in roughly 1 run in 15.
-            //
-            // Dropping it makes the recording fall through to the SAME
-            // trailing-gap branch an empty lane uses, so the take is placed as
-            // its own clip, overlapping the older one. Overlapping clips are
-            // what the lane already holds whenever two takes do not line up;
-            // losing recorded audio is not something a recorder may do.
-            qWarning( "place-recording: column at %lld predates the recording "
-                      "start; it keeps its span and the take is placed over it",
-                      (long long)s );
-            continue;
-        }
-        columns.append( { s, d, QList<int>() } );
-        columns.last().path = trackPath_;
-        columns.last().path.append( i );
-    }
-    std::sort( columns.begin(), columns.end(),
-               []( const Column &a, const Column &b )
-               { return a.start < b.start; } );
+    srecplan::Context ctx;
+    ctx.mode  = srecplan::modeFromString( mode_ );
+    ctx.armed = armed_;
+    // This verb places AUDIO. `place-midi-recording` is the event sibling and
+    // passes Event; the planners branch on nothing else.
+    ctx.kind  = SContentKind::Audio;
 
-    // Plan: takes for covered columns, plain cuts for the gaps.
+    const srecplan::LaneSnapshot snap = srecplan::snapshot( lane, trackPath_ );
+
     SCompositeAction composite;
-    offset_t cursor = recStart;
-    for( const Column &col : columns ) {
-        const offset_t colEnd = col.start + (offset_t)col.dur;
-        // Always true now: the collection loop drops a column that starts
-        // before recStart instead of carrying it into the plan. Kept as the
-        // statement of what a column in here means.
-        if( col.start >= recStart ) {
-            // ONE RECORDING, ONE COLUMN (plan 53 B5, was X6a).
-            //
-            // A column whose start is already BELOW the cursor has had its span
-            // covered by an earlier column in this same pass, and the loop used
-            // to hand it the SAME recording as a second take. Two columns then
-            // held the one pass as an alternative for two different regions,
-            // and -- worse -- add-take WRAPS a plain clip, so an ordinary clip
-            // overlapping the first column was silently turned into a take
-            // column it was never meant to be.
-            //
-            // Reachable from the existing gate: in
-            // place_recording_over_earlier_clip's third section the lane holds
-            // a column at [48000,144000) and a clip at [96000,288000), and the
-            // recording [48000,144000) was handed to both. That case asserted
-            // only that no FOURTH clip appeared, so it walked straight past
-            // this; it now asserts the clip's shape as well.
-            //
-            // Superseded by P1's Q7 rule, deliberately: the assertion the gate
-            // makes is true under this skip and under that rule, so it does not
-            // have to be rewritten when the planner is replaced.
-            if( col.start < cursor ) continue;
-
-            if( col.start > cursor ) {
-                composite.append( new SPlaceClipAction(
-                    trackPath_, filePath_, cursor,
-                    srcOff + cursor - recStart,
-                    (length_t)( col.start - cursor ) ) );
-            }
-            composite.append( new SAddTakeAction(
-                col.path, filePath_, srcOff + col.start - recStart ) );
-        }
-        cursor = std::max( cursor, std::min( colEnd, recEnd ) );
+    QString why;
+    if( !srecplan::plannerFor( ctx.mode ).plan( snap, sp, ctx, composite,
+                                                &why ) ) {
+        // REFUSED BEFORE APPLY: nothing was appended, so there is nothing to
+        // roll back. Announced, because a refusal that is merely a false
+        // return is indistinguishable from the pass having landed (plan 53 B6
+        // routes this through the UI as well; that is QBX-164's).
+        qWarning( "place-recording: lane refused the pass in mode '%s': %s",
+                  srecplan::modeToString( ctx.mode ).toStdString().c_str(),
+                  why.toStdString().c_str() );
+        return {false, nullptr};
     }
-    if( cursor < recEnd ) {
-        // Trailing gap; when nothing overlapped at all this is the whole
-        // file at timePos — today's plain placement.
-        composite.append( new SPlaceClipAction(
-            trackPath_, filePath_, cursor, srcOff + cursor - recStart,
-            (length_t)( recEnd - cursor ) ) );
-    }
-
+    // AN UN-ARMED MEMBER PLANS NOTHING in P1 (plan 53 review 2 M5), and an
+    // empty composite applies as SUCCESS -- which is right here and was a bug
+    // in the old planner: there, emptiness meant the take had been thrown
+    // away. The planners now refuse an empty span rather than returning an
+    // empty plan, so the only way to get here with nothing is armed="0".
     return composite.apply( project );
 }
 
@@ -207,6 +132,9 @@ void SPlaceRecordingAction::writeXml( QDomElement &elem ) const
     // not appear, or the round-trip audit fails.
     if( !mode_.isEmpty() )
         elem.setAttribute( "mode", mode_ );
+    // Same rule: armed="1" is the default, so only the un-armed case writes.
+    if( !armed_ )
+        elem.setAttribute( "armed", "0" );
 }
 
 bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -221,6 +149,11 @@ bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
         const QString m = elem.attribute( "mode", "" );
         mode_ = SProjectProps::isRecordMode( m ) ? m : QString();
     }
+    // An UN-ARMED edit-group member (plan 53 Q5). In P1 every planner treats
+    // it as nothing to do; P4 is where the takes planners grow the
+    // structure-only plan. Anything but "0" is armed, which keeps every
+    // existing call and every existing script armed.
+    armed_ = elem.attribute( "armed", "1" ) != QLatin1String( "0" );
     timePos_ = (offset_t)parseFractionOrDouble(
         elem.attribute( "timePos", "0" ).toStdString() ).toDouble();
     srcOffset_ = (offset_t)parseFractionOrDouble(

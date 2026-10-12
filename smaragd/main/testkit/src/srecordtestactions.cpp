@@ -257,7 +257,16 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
         // decomposition above worth asserting -- a term could otherwise be
         // reported correctly and never applied.
         if( pl.anchored && !rec->isActive() && !clips.empty() && passes_ != 0 ) {
-            const qint64 expect = (qint64) pl.placementFrame( rec->trimmedFrames() );
+            // + the PASS-WIDE SNAP (plan 53 §3.5, QBX-171): a plain pass is
+            // deliberately rounded to an edge the armed lanes agree on, so the
+            // conversion's own frame is no longer where the clip lands. The
+            // snap is part of what this identity asserts rather than an
+            // exemption from it -- without the term, every snapped take would
+            // fail here, and a case whose landing happens to come within N of
+            // a neighbour's edge would fail INTERMITTENTLY.
+            const qint64 expect =
+                (qint64) pl.placementFrame( rec->trimmedFrames() )
+                + (qint64) rec->snapDeltaA();
             const qint64 first  = (qint64) clips.front()->getStartTime();
             // Cycling and punching place at the region, not at the mapping's
             // own frame, so the identity is only claimed for a plain take.

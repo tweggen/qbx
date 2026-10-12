@@ -51,15 +51,29 @@ SApplyResult SAssertClipWindowAction::apply( SProject *project )
             .arg( clip_ ).arg( gotStart ).arg( gotDur ).arg( gotLoop )
             .arg( gotSlip ).arg( gotTb );
 
-    struct Check { const char *what; qint64 want, got; };
+    // A NEGATIVE startOffset IS A REAL VALUE, not the sentinel. A clip may
+    // legitimately open with LEADING SILENCE and have its data start later
+    // (proposal 23), which is a negative slip -- and it is what a pass snapped
+    // EARLIER than its capture's pre-roll handle produces (plan 53 §3.5). So
+    // this verb, the only one that reads the slip at all, could not assert the
+    // one value that most needs asserting: every negative expectation was
+    // silently dropped by the `want < 0` sentinel below.
+    //
+    // `-1` STAYS unset, so every existing spelling and the round-trip fixture
+    // are unchanged; any OTHER negative value is an expectation. -1 is a
+    // meaningless slip, and keeping it as the sentinel is what makes this
+    // widening cost nothing.
+    const bool checkSlip = startOffset_ != -1;
+
+    struct Check { const char *what; qint64 want, got; bool force; };
     const Check checks[] = {
-        { "startTime",   startTime_,   gotStart },
-        { "duration",    duration_,    gotDur },
-        { "loopLength",  loopLength_,  gotLoop },
-        { "startOffset", startOffset_, gotSlip },
+        { "startTime",   startTime_,   gotStart, false },
+        { "duration",    duration_,    gotDur,   false },
+        { "loopLength",  loopLength_,  gotLoop,  false },
+        { "startOffset", startOffset_, gotSlip,  checkSlip },
     };
     for( const Check &c : checks ) {
-        if( c.want < 0 ) continue;
+        if( c.want < 0 && !c.force ) continue;
         if( c.want != c.got ) {
             qWarning() << "assert-clip-window FAILED:" << c.what << "expected"
                        << c.want << "got" << c.got << "-" << detail;

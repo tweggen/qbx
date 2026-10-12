@@ -862,3 +862,99 @@ derives from `waveDur - srcOff`, which grows by the leading silence, and is
 still capped by an explicit `length`.
 
 Gate: `record_loop_late_start.qxa`.
+
+### `place-recording` is a THIN VERB; one `srecplan::Planner` per record mode
+
+`srecordplanner.{h,cpp}` (plan 53 §5.1, QBX-171). The verb resolves the lane,
+reads the file's duration, computes the pass's span — and then decides nothing.
+It builds an `srecplan::LaneSnapshot`, asks `plannerFor( mode )`, and applies
+whatever the planner appended to one `SCompositeAction`.
+
+Three rules carry it, and every planner is held to them:
+
+1. **A PLANNER EMITS EXISTING VERBS AND NEVER MUTATES THE MODEL.** Its undo is
+   therefore the composite's inverse chain — there is no per-mode undo to get
+   wrong — and a planner is testable by the verbs it emits rather than only
+   through the model it leaves behind.
+
+2. **`snapshot()` IS THE ONE READER OF LANE STATE, AND IT CLASSIFIES WITHOUT
+   MUTATING.** No planner may look at the lane again: halfway through its own
+   plan it would be reading a tree its own earlier verbs have not been applied
+   to. A child whose object `isLiveRecording()` is skipped outright (a growing
+   clip of this or any other recorder). A wrapped column is reported as
+   `WrappedColumn` and **`snapshot()` does NOT call
+   `stakes::normalizeColumns`**: that takes the whole `SProject&`, relinks and
+   deletes wrappers outside any action, and is a post-load pass — running it
+   from inside an `apply()` would put a non-undoable mutation in the middle of
+   an undo step. After the post-load pass a surviving wrapper is non-foldable
+   anyway, so classifying it loses nothing.
+
+   `OtherKind` is decided by the PLAN, not by `snapshot()`, because it is not a
+   property of the child: an event clip is other-kind to an audio recording and
+   is the whole point of a MIDI one. So `Child` records what the child IS
+   (`contentKind`) and the plan compares it against `Context::kind`.
+
+3. **INDEX BOOKKEEPING IS THE PLANNER'S, IN APPLY ORDER** (plan 53 G10). Lane
+   child indices are INSERTION order, not time order, and the emitted verbs
+   change them: `place-clip` and `split-clip` APPEND, `add-take` preserves its
+   operand's index (it replaces the lane child link in place),
+   `merge-columns` keeps its FIRST operand's index and REMOVES the others, so
+   every later index shifts down. `srecplan::ChildList` is the planner's
+   simulation of the list and the only place a path is computed from once
+   anything structural has been emitted. The old planner's comment "paths are
+   computed NOW and stay valid through the plan" was true only because it
+   emitted nothing but appends; it is false from the first split or merge, and
+   a plan that got it wrong would address a WRONG child SUCCESSFULLY — silent
+   corruption rather than a failed action.
+
+**`mode` arrives already resolved** and the verb cannot resolve one:
+`tools/check_layering.py` gives `objects/cut` the edges
+`{actions, model, objects/wave, persistence}` and not `objects/track`, where
+`srecmode::resolveMode`'s folder walk lives. `SAudioRecorder` resolves per
+armed lane and submits the answer (`main/objects/track/srecordmode.h` says so
+at length). Empty, and any value this build does not know, mean "whatever this
+build would do anyway" — which is `LegacyTakes`.
+
+**NOTHING HAS FLIPPED YET.** `Mode::Takes` is `LegacyTakes`, today's planner
+moved with its behaviour intact, and it is the resolved default everywhere.
+`Overdub` is one `place-clip` over whatever the lane holds. `TakesSplit` and
+`Replace` REFUSE loudly (QBX-172) instead of falling back to the legacy shape,
+because a silent fallback is exactly the clean, repeatable false finding an
+unknown attribute produces.
+
+**One deliberate deviation from plan 53 §5.1, recorded there too:** a wrapped
+column is handed to `LegacyTakes` as an ordinary column. §5.1 says every
+planner refuses one (G11) and P1 says "Flips: none"; both cannot hold for this
+planner, because today's planner hands a wrapped column to `add-take` like any
+other. The refusal is the NEW planners' rule; `LegacyTakes` keeps the old
+behaviour until P2 retires it.
+
+**NOT GATED, and why.** `ChildList` is built from `LaneSnapshot::laneChildCount`
+— the lane's REAL child count — and not from `children.size()`, because
+`snapshot()` leaves out a live recording and a child with no duration, so a
+`Child`'s `index` may have gaps below it. A simulation built from the
+classified subset would map every index above a gap one too low and address a
+real child, just the wrong one.
+
+No `.qxa` can reach that today, and a case claiming to would be theatre. The
+two sources of a gap are a child with `hasDuration()` false, which nothing in
+the model produces on a placement lane, and a child whose object
+`isLiveRecording()` — which exists only DURING a take and which
+`removeGrowingClips_()` removes before the plan runs
+(`main/shell/CONTRACT.md` inv. 26). A sub-track is not a gap: it is reported as
+`Child::Lane` and keeps its index. The guard is therefore correctness against
+the next producer of either, not a fix for a reachable defect, and it is
+recorded here rather than asserted.
+
+**`snapshot()` takes the lane path as well as the lane**, where §5.1 wrote
+`snapshot( SObject *lane )`. An `SObject` cannot name its own path: the tree is
+`SObject -> SLink -> SObject` and only the links point down, which is the same
+fact that makes `srecmode::resolveMode` and `ssolo::underSoloedAncestorRec`
+walk downward from the root. The caller already holds the path — it is how it
+found the lane.
+
+Gates: `record_mode_overdub_audio` (the shape AND the summed level, in closed
+form, on a fixture where `overdub` and the legacy planner cannot agree by
+accident), plus the whole `place_recording_*` / `takes_recording_*` /
+`record_*` families unchanged, which is what makes `LegacyTakes` a move rather
+than a rewrite.

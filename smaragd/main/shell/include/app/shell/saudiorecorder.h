@@ -105,6 +105,24 @@ public:
     offset_t recordStartFrame() const { return recordStart_; }
     /// Loop passes committed by the last stop (1 when not cycling).
     int lastPassCount() const { return lastPassCount_; }
+
+    /**
+     * HOW FAR THE PASS-WIDE SNAP MOVED THE LAST PLAIN PASS'S START
+     * (plan 53 §3.5, QBX-171). 0 when nothing snapped, and always 0 for a
+     * cycle or punch pass, which are not snapped.
+     *
+     * It exists because the snap BREAKS an identity the suite relies on.
+     * `assert-recorded-clip` checks, on every plain single-pass take, that the
+     * clip's link start equals `placementFrame( trimmedFrames() )` -- the one
+     * assertion that catches a placement term reported correctly and never
+     * applied. A snapped pass lands deliberately somewhere else, so without
+     * this term that check would fail on every snapped take, and would fail
+     * INTERMITTENTLY on existing cases whose landing happens to come within
+     * N of a neighbouring clip's edge. With it the identity becomes
+     * `placementFrame( trimmed ) + snapDeltaA()`, which still catches exactly
+     * what it caught before and now covers the snap as well.
+     */
+    std::int64_t snapDeltaA() const { return snapDeltaA_; }
     /// The files the last take wrote, in armed-track order.
     const QList<QString> &lastFiles() const { return lastFiles_; }
     /// THE INPUT DEVICE THE LAST/CURRENT TAKE RESOLVED TO, and therefore the
@@ -137,6 +155,39 @@ private:
     void tryAnchor_();
     void reseatClips_();
     void commitPlacement_();
+    /**
+     * THE PASS-WIDE SNAP (plan 53 §3.5, QBX-171).
+     *
+     * Rounds the pass's placed span to an edge the armed lanes AGREE on, when
+     * there is one within `N = max( one device buffer, 10 ms )` of it.
+     *
+     * Why a pass has to be snapped at all: a take begun or ended by hand next
+     * to existing material lands a few hundred frames off, and the sliver that
+     * leaves behind is audible as a click and invisible at any sane zoom. The
+     * snap moves the clip WINDOW only -- the file is untouched, so the material
+     * the window no longer shows is still there and Alt-slip reveals it. That
+     * is plan 53 G2's answer in the user's words: the head is trimmed from the
+     * window, not from the source.
+     *
+     * UNANIMITY, not nearest. A candidate set that disagrees means the lanes
+     * have different material at that moment, and snapping to one lane's edge
+     * would move the recording relative to the others. So: every candidate
+     * within `N` must be the SAME frame, or there is no snap.
+     *
+     * Only for the PLAIN pass. A punch or cycle span IS the markers, which are
+     * exact already (§3.5 rule 3).
+     *
+     * Called from `commitPlacement_()` AFTER `removeGrowingClips_()`: a growing
+     * clip is an ordinary lane child with a duration whose end trails the
+     * capture by up to one 100 ms tick, so a snap that could see one would find
+     * an agreeing candidate for `b` on EVERY armed lane and snap to it,
+     * silently and non-deterministically. `snapshot()` skips them as well; this
+     * is the ordering that makes that belt-and-braces rather than load-bearing.
+     */
+    void snapPassWide_( std::int64_t *a, std::int64_t *b ) const;
+    /** N in project frames: one device buffer, or 10 ms, whichever is more. */
+    std::int64_t snapWindowFrames_() const;
+
     bool punchRegion_( offset_t &in, offset_t &out ) const;
     bool cycleRegion_( offset_t &in, offset_t &out ) const;
     double projectRate_() const;
@@ -162,6 +213,7 @@ private:
     std::uint64_t    startPublishSeq_ = 0;
     std::int64_t     trimmed_ = 0;
     int              lastPassCount_ = 0;
+    std::int64_t     snapDeltaA_ = 0;
     QList<QString>   lastFiles_;
 
     SRecordingContent                 *content_ = nullptr;  // owned by the cuts
