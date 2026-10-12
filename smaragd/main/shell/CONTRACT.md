@@ -363,10 +363,13 @@ start and a record stop MEAN in the app.
 26. **THE GROWING CLIPS ARE NOT ACTIONS; THE PLACEMENT IS ONE.** The clip that
     appears at record start is a direct model mutation, like auto-disarm: it is
     transient UI state that the one undoable step at stop replaces. At stop the
-    growing clips are removed FIRST (else `place-recording` would see them as
-    covering columns and stack a take on them) and then one macro of
-    `place-recording` calls — one per armed track, one per LOOP PASS — is
-    submitted, so a whole take is ONE undo.
+    growing clips are removed BEFORE THE PLAN AND THE SNAP (not merely "first"):
+    `place-recording` would otherwise see them as covering columns and stack a
+    take on them, and — since QBX-171 — the pass-wide snap of inv. 32 would see
+    a growing clip's end, which trails the capture by up to one 100 ms tick, as
+    an agreeing candidate on EVERY armed lane and snap to it, silently and
+    non-deterministically. Then one macro of `place-recording` calls — one per
+    armed track, one per LOOP PASS — is submitted, so a whole take is ONE undo.
 
 27. **LOOP PASSES ARE ARITHMETIC, NOT WRAP DETECTION -- AND THE CYCLE REGION
     IS THE TAKE REGION.** The conversion is linear in capture frame, so the
@@ -478,6 +481,56 @@ start and a record stop MEAN in the app.
     `syncCyclePlayback()` reads and calling `t3Speaker_->setCycle()`
     immediately before `beginRun()`/`startOutput()`, so every programmatic
     start now gets the same guarantee the GUI path already had.
+
+32. **THE PASS IS SNAPPED TO AN EDGE THE ARMED LANES AGREE ON, OR NOT AT ALL**
+    (plan 53 §3.5, QBX-171). `snapPassWide_()`, called from
+    `commitPlacement_()` after `removeGrowingClips_()` and before the segment
+    plan, rounds a PLAIN pass's `a` and `b` — separately — to a child edge
+    within `N = max( one device buffer, 10 ms )` in project frames, and only
+    when EVERY candidate within `N` is the same frame. `N` is a constant in
+    `SAudioRecorder` and never a setting: a user who could widen it could make
+    the snap swallow real material.
+
+    Three things this is, and is not:
+
+    - **UNANIMITY, NOT NEAREST.** A candidate set that disagrees means the
+      armed lanes hold different material there, and snapping to one lane's
+      edge would move the recording relative to the others — a multi-track
+      pass was played together and must stay sample-aligned with itself.
+      Better a 144-frame sliver on every lane than a 144-frame SKEW between
+      them. Both answers are logged, and they are different answers:
+      `[REC] snap a by -144 to 388800 (2 candidate(s) agree)` versus
+      `[REC] no snap for a: candidates 388800, 389088`.
+    - **IT MOVES THE WINDOW, NEVER THE FILE.** `a` later by Δ is
+      `srcOffset += Δ`, `a` earlier is `srcOffset -= Δ` — into the pre-roll
+      handle the trim left, or, when the handle is shorter than Δ, into at
+      most `N` frames of leading silence, which is a negative source offset
+      and legal since proposal 23. The material the window no longer shows is
+      still in the file and Alt-slip reveals it.
+    - **PUNCH AND CYCLE ARE NOT SNAPPED.** Those spans ARE the markers, which
+      are exact already, so `snapDeltaA()` reports 0 for them.
+    - **A SNAP MAY NEVER EMPTY THE PASS.** `a` and `b` are decided
+      independently, so on a pass shorter than `N` an agreeing edge near `b`
+      can sit at or below the snapped `a` — the segment would be dropped for
+      having no length and the recorded audio would be gone. The `b` snap is
+      refused in that case and logged; a sliver is the lesser answer, losing a
+      take is not an answer at all.
+
+    **It breaks an identity the suite relied on, which is why `snapDeltaA()`
+    exists.** `assert-recorded-clip` checks, on every plain single-pass take,
+    that the clip's link start equals `placementFrame( trimmedFrames() )` —
+    the one assertion that catches a placement term reported correctly and
+    never applied. A snapped pass lands deliberately elsewhere, so the check
+    now expects `placementFrame( trimmed ) + snapDeltaA()`. Without that term
+    every snapped take would fail there, and a case whose landing happens to
+    come within `N` of a neighbouring clip's edge would fail INTERMITTENTLY.
+
+    Gated by `record_snap_pass_wide` (snap earlier to a shared clip END, snap
+    later to a shared clip START) and `record_snap_disagree` (288 frames apart,
+    no snap, announced). Both begin from a STOPPED transport, which is what
+    pins the landing to the locator exactly: from a running one the landing
+    jitter is thousands of frames, far more than `N`, so no running-transport
+    case can tell a snap from the jitter.
 
 ### Known limitation: a record stop STOPS the transport
 

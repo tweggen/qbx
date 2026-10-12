@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE SNAP IS UNANIMOUS OR IT DOES NOT HAPPEN (plan 53 §3.5 rule 1, QBX-171).
+
+  The companion of record_snap_pass_wide, and deliberately the SAME distance:
+  the locator is 144 frames from an edge there and 144 frames from an edge
+  here. The only difference is that the two armed lanes' edges are 288 frames
+  APART, so they do not agree on one frame — and the pass is then left exactly
+  where it landed.
+
+  WHY UNANIMITY AND NOT NEAREST. A candidate set that disagrees means the armed
+  lanes hold different material at that moment. Snapping to one lane's edge
+  would move the recording relative to the others, which is the one thing a
+  multi-track pass may never do: the lanes were played together and must stay
+  sample-aligned with each other. Better a 144-frame sliver on both than a
+  144-frame SKEW between them.
+
+  WHAT IS ASSERTED, and why it is not the landing. The landing is 388944 both
+  with this rule and on a build with no snap at all, so the position proves
+  nothing by itself — it is asserted here as the consequence, but the gate is
+  the ANNOUNCEMENT: "no snap" and "nothing was near" are different answers, and
+  only one of them is two lanes disagreeing. A refusal that is merely a
+  non-event cannot be told from the feature being absent.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_sawtooth.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+  The transport is STOPPED before record-start for the reason
+  record_snap_pass_wide's header gives at length: only then is the landing the
+  locator exactly, so 144 and 288 mean anything at all.
+
+  ON `main` THIS FAILS on the two assert-log lines: there is no snap decision
+  there to announce, unanimous or otherwise.
+-->
+<SActionScript version="1" name="record_snap_disagree">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:2"/>
+
+    <!-- Lane 0's clip ends at 388800; lane 1's at 389088. 288 frames apart,
+         and the locator sits halfway between them, 144 from each — both well
+         inside N, and no two candidates equal. -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="196800"
+                duration="192000"/>
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="197088"
+                duration="192000"/>
+    <assert-clip-window clip="0,0" startTime="196800" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="197088" duration="192000"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+
+    <set-locator position="388944"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <!-- THE GATE: the disagreement was seen, named and acted on. -->
+    <assert-log contains="[REC] no snap for a: candidates" minCount="1"/>
+    <assert-log contains="[REC] snap a" minCount="0" maxCount="0"/>
+
+    <!-- ...and the consequence: the pass stayed where it landed, on BOTH
+         lanes, so they are still aligned with each other. -->
+    <assert-clip-window clip="0,1" startTime="388944"/>
+    <assert-clip-window clip="1,1" startTime="388944"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -193,6 +193,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/ssetformantshiftaction.cpp
     objects/cut/src/splaceclipaction.cpp
     objects/cut/src/splacerecordingaction.cpp
+    objects/cut/src/srecordplanner.cpp
     objects/cut/src/ssplitclipaction.cpp
     objects/cut/src/stakehelpers.cpp
     objects/cut/src/stakestack.cpp

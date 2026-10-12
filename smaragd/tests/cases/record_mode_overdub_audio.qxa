@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MODE `overdub` (plan 53 §3.3, QBX-171): a recording lands as a PLAIN CLIP
+  over whatever the lane already holds, and BOTH sound.
+
+  Driven through `place-recording mode="overdub"` directly, so the whole case
+  is arithmetic: no capture device, no transport, no wall-clock jitter. That is
+  what lets it assert a summed level in closed form.
+
+  WHY THIS FIXTURE SHAPE. The pre-existing clip starts at EXACTLY the frame the
+  recording does, which is the one arrangement in which `overdub` and the
+  legacy planner disagree. Anywhere else they agree by accident: a column that
+  starts EARLIER than the recording is dropped from the legacy plan and the
+  take is placed over it, which is a plain overlapping clip — i.e. the overdub
+  answer, reached for an unrelated reason. A fixture where the two agree makes
+  a vacuous gate, so this one is built where they cannot.
+
+  ON `main` THIS FAILS TWICE, which is the right reason: `mode=` is parsed and
+  round-tripped there but selects no planner (QBX-167 is plumbing only), so the
+  legacy planner runs, `add-take` WRAPS clip 0,0 into a two-take column, and
+  (a) `assert-take-column clip="0,0" shape="none"` fails, (b) clip 0,1 does not
+  exist, and (c) only ONE take is audible, so the overlap window carries one
+  copy's level instead of two.
+
+  THE ARITHMETIC. test_sawtooth.wav is 4 s at 48 kHz = 192000 frames with a
+  DISTINCT RMS per second, measured off a render of it:
+
+      second 1 [0,48000)       rms 0.06665   peak 0.19919
+      second 2 [48000,96000)   rms 0.17636   peak 0.39886
+      second 3 [96000,144000)  rms 0.29057   peak 0.59851
+      second 4 [144000,192000) rms 0.40549   peak 0.79819
+
+  The lane holds the file's seconds 2-3 at project [48000,144000). The overdub
+  places the file's second 2 at project [48000,96000) — the SAME material at
+  the SAME project frames — so the sum of two identical signals is exactly
+  2x one, and the overlap window's rms must be 2 * 0.17636 = 0.35272 while the
+  window just past it, which only ONE clip covers, must stay at 0.29057.
+
+  Second 2 is the window on purpose: its peak doubles to 0.79772, inside full
+  scale. Doubling second 3 or 4 would CLIP, and a clipped sum is no longer 2x
+  anything.
+
+  The second window is what makes this more than "it got louder": it pins the
+  sum to the overlap. A planner that summed the whole lane, or placed the
+  overdub at the wrong offset, moves one of the two numbers.
+-->
+<SActionScript version="1" name="record_mode_overdub_audio">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- The pre-existing material: the file's seconds 2-3 at [48000, 144000). -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="48000"
+                startOffset="48000" duration="96000"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="96000"/>
+
+    <!-- The pass: the file's second 2 at [48000, 96000), aligned exactly with
+         the head of the clip above. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     mode="overdub" timePos="48000" srcOffset="48000"
+                     length="48000"/>
+
+    <!-- SHAPE: nothing was wrapped, and the pass is its own child. Under the
+         legacy planner 0,0 would be a direct two-take column and 0,1 would not
+         resolve at all. -->
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="96000"/>
+    <assert-take-column clip="0,1" shape="none"/>
+    <assert-clip-window clip="0,1" startTime="48000" duration="48000"/>
+    <assert-clip-window clip="0,2" expectReject="true"/>
+
+    <!-- AUDIBLE: both clips sound, and the sum is confined to the overlap.
+         Bounds are +-4% of the closed forms above. -->
+    <render filename="overdub.wav" durationSec="4"/>
+    <assert-audio-energy filename="overdub.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.339" maxRms="0.367"/>
+    <assert-audio-energy filename="overdub.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.279" maxRms="0.302"/>
+    <!-- ...and the sum did not clip, so "2x" is the honest description of it. -->
+    <assert-audio-peak filename="overdub.wav" startFrame="48000"
+                       frameCount="48000" maxPeak="0.82"/>
+
+    <!-- UNDO is the composite's inverse: the overdub leaves, the lane's own
+         clip is untouched and is NOT left wrapped. -->
+    <undo/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="96000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

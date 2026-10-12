@@ -287,9 +287,39 @@ are planned), for `a` and for `b` separately:
 3. Punch and cycle spans are the markers; the rule does not run.
 4. Logged at info: `[REC] snap a by -144 to 388800 (3 lanes agree)` or
    `[REC] no snap for a: candidates 388800, 388944`.
+5. **It breaks an identity the suite relies on, and the recorder has to report
+   the delta.** Not foreseen here; found while building P1a (QBX-171).
+   `assert-recorded-clip` checks, on every plain single-pass take, that the
+   clip's link start equals `placementFrame( trimmedFrames() )` — the one
+   assertion in the suite that catches a placement term reported correctly and
+   never applied. A snapped pass lands deliberately somewhere else. So
+   `SAudioRecorder` exposes `snapDeltaA()` and the check expects
+   `placementFrame( trimmed ) + snapDeltaA()`, which still catches exactly what
+   it caught before and now covers the snap as well. Without the term every
+   snapped take would fail there — and, worse, an EXISTING case whose landing
+   happens to come within `N` of a neighbouring clip's edge would fail
+   intermittently, which is the shape this project has twice spent a session
+   chasing.
 
 This is G2's answer in the user's words: the recording's head is trimmed from
 the WINDOW, not from the source.
+
+**The snap IS a flip, and §8's "P1 — Flips: none" does not cover it.** That
+sentence is true of the PLANNER — `takes` still runs `LegacyTakes` — but §3.5
+deliberately changes where a pass LANDS next to existing material, so any
+recording whose landing comes within `N` of a clip edge changes outcome.
+Measured while building P1a: `record_stays_armed` took both its passes from
+locator 0, which puts the second landing a few thousand frames from the first
+pass's clip while `N` is about 1024 frames here. The snap fires 3/3, the second
+pass begins exactly where the first pass's clip does, `LegacyTakes` duly makes
+it a TAKE on that clip, and the lane holds ONE child instead of two.
+
+That is the comping this plan wants. It is not what that case is about, and
+asserting it there would tie the case to the jitter staying under `N` — so the
+case's second locator moved out of range instead, which also removes a flake it
+already had. The lesson generalises: **a case whose claim is about arm or
+transport state must keep its passes out of snap range of each other**, and
+§9's flip list should be read as covering the comping semantics only.
 
 ## 4. Model changes mode A needs
 
@@ -507,6 +537,25 @@ LaneSnapshot   snapshot( SObject *lane );  // the ONE reader of lane state
 }  // namespace srecplan
 ```
 
+**What P1a (QBX-171) built instead, in three places.**
+
+- `snapshot()` takes **the lane path as well as the lane**. An `SObject`
+  cannot name its own path: the tree is `SObject -> SLink -> SObject` and only
+  the links point down, which is the same fact that makes `resolveMode` below
+  and `ssolo::underSoloedAncestorRec` walk DOWNWARD from the root. The caller
+  already holds the path — it is how it found the lane — so asking for it
+  costs nothing, where deriving it would cost a walk of the whole tree per
+  recording.
+- `Child` carries a **`contentKind`** and `OtherKind` is decided by the PLAN,
+  not by `snapshot()`. Which kind is "other" is not a property of the child but
+  of the pass: an event clip is other-kind to an audio recording and is the
+  whole point of a MIDI one.
+- **A wrapped column is not refused by `LegacyTakes`.** G11 below says "refused
+  by every planner" and §8's P1 row says "Flips: none"; both cannot hold, because
+  today's planner hands a wrapped column to `add-take` like any other, so
+  refusing it would BE a flip. The refusal is the new planners' rule;
+  `LegacyTakes` keeps the old behaviour until P2 retires it.
+
 Rules the interface carries:
 
 - **A planner emits existing verbs** (`place-clip`, `add-take`, `split-clip
@@ -607,6 +656,29 @@ structure-only plan of §3.4 (A: the `C_g` merge; B: the split at `a`/`b`) and
 `LegacyTakes`, treats `armed="0"` as nothing to do.
 
 ### 5.4 Undo atomicity (B7, a contract change)
+
+> **WHAT B7 ACTUALLY SHIPPED (QBX-165), and why the rest of this section is
+> history.** The two-phase stop below — a per-recorder phase-1 plan, a
+> `willCommit()` that reports its emptiness, and a conditional outer
+> `beginMacro` — was not built. It is not needed: `SApplication` grew a
+> **re-entrant record-commit scope** (`beginRecordCommit()` /
+> `endRecordCommit()`, `recordCommitDepth_`) that opens the macro **lazily**,
+> on the first `submitAction` inside it, so a pass that places nothing leaves
+> the undo stack untouched without anyone having to predict in advance whether
+> it will. That is strictly stronger than a conditional macro: it needs no
+> `willCommit()`, so it cannot be wrong about its own emptiness, and it closed
+> a hole the design had — `SAudioRecorder`'s punch-out calls its own `stop()`
+> from a tick, never reaching `SApplication::stopRecording()`, so a macro
+> opened only there would have left every punch-out placement unwrapped, one
+> undo step per segment per track. The scope is re-entrant precisely so both
+> recorders may open it.
+>
+> What survives from this section and is load-bearing for P1: **the growing
+> clips leave in phase 1, before the plan and before the snap** (§3.5), which
+> is where `removeGrowingClips_()` already sat; the accepted limit that a pass
+> whose every `place-recording` is refused at apply leaves an empty macro; and
+> the rollback rules in the last paragraph. The `willCommit()` design below is
+> kept because it records the reasoning that the lazy scope replaced.
 
 One press is one undo step, and **the stop becomes TWO-PHASE** so the macro
 can be conditional without planning against a half-closed capture.
@@ -834,6 +906,19 @@ lands, the `Takes` slot is served by the LEGACY planner (today's
 keeps today's behaviour and nothing in §9 flips before the mode-A PR.
 
 ### P1 — planner framework; `takes-split`, `overdub`, `replace` — depends on B1–B6, M0
+
+> **Filed as TWO tickets**, because this row is the only L in the B/M group and
+> splits cleanly at the point where a planner first needs the simulated child
+> list for anything but appends: **QBX-171** is the framework, `LegacyTakes`,
+> `overdub`, the thin verb and the recorder's snap; **QBX-172** is
+> `takes-split`, `replace` and G12. Everything below is split between them in
+> that order, and neither flips anything.
+>
+> QBX-171 also had to widen `assert-clip-window`: it dropped every NEGATIVE
+> `startOffset` expectation as if it were the "not checked" sentinel, so the
+> one verb that reads a clip's slip could not assert the one slip value this
+> plan needs (`place_clip_negative_offset` below passed vacuously without it).
+> `-1` stays unset; any other negative value is now an expectation.
 
 Build: `srecplan` (§5.1) with the simulated lane child list; `place-recording`
 as the thin verb with `mode=` and `armed=`; the recorder's pass-wide snap
@@ -1231,7 +1316,8 @@ existing tickets. Order within a group is landing order.
 | B8 | `ACTIONS.md:312` stale crossfade note | — | XS |
 | B9 | `record_stays_armed.qxa` header: not evidence for the structure rule | B5 | XS |
 | M0 | record-mode property: project / folder / track, `set-track-record-mode`, INI seed at the new-project seams, `mode=` plumbing, transport selector, two per-user prefs; `midi_record_modes.qxa` rewritten; `record_mode_ini_seed.qxa` owns the INI key | D2 (default: folder) | M |
-| P1 | planner framework with the simulated child list; `takes-split`, `overdub`, `replace`; `LegacyTakes` behind `takes`; recorder snap and hand-over; "cycle overrides punch" shown | B1–B5, M0, QBX-146 step a (landed) | L |
+| P1a (**QBX-171**) | planner framework with the simulated child list (`srecplan`); `LegacyTakes` behind `takes` (no flip); `overdub`; `place-recording` as the thin verb with `mode=`/`armed=`; the recorder's pass-wide snap and hand-over | B1–B5, M0, QBX-146 step a (landed) | M |
+| P1b (**QBX-172**) | `takes-split` (§3.2, appended-index bookkeeping) and `replace` (§3.3) over `resize-clip`/`split-clip`/`remove-sample`; G12 "cycle overrides punch" shown | P1a | M |
 | A0a | take extents, model only: `duration_`, extents in `insertTake`/loader, resolution rule, `twCompColumn` extents + xfade clamp, invalidation, split per-half/re-index/identity inverse, `remove-take` extent inverse, `add-take at=/length=`, `FORMAT_VERSION 3` + its flip | B1, B3, B4, B10 | L |
 | A0b | take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters | A0a | M |
 | A1 | `merge-columns` / `unmerge-columns` with the link-move protocol | A0a, B1 | M |

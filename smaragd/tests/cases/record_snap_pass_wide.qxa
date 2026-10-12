@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE PASS-WIDE SNAP (plan 53 §3.5, QBX-171): when every armed lane has a child
+  edge at the SAME frame within N of where a pass lands, the pass is rounded to
+  it. N = max( one device buffer, 10 ms ) in project frames, a constant inside
+  SAudioRecorder and never a setting.
+
+  WHY IT EXISTS. A take begun by hand next to existing material lands a few
+  hundred frames off, and the sliver that leaves behind is audible as a click
+  and invisible at any sane zoom. The snap moves the clip WINDOW only — the
+  file is untouched, so the material the window no longer shows is still there
+  and Alt-slip reveals it. That is G2's answer in the user's words: the head is
+  trimmed from the window, not from the source.
+
+  WHY THE TRANSPORT IS STOPPED. This is the one gate in the suite that needs
+  the landing to be EXACT. A take begun from a RUNNING transport lands with
+  thousands of frames of real wall-clock jitter (readahead priming, capture
+  thread scheduling), which is far more than N — so a running transport cannot
+  tell a snap from the jitter, and `record_stays_armed`'s header says the same
+  about its own two takes. From a STOPPED transport the trim floor is the
+  record start (`wasPlaying_` false, saudiorecorder.cpp tryAnchor_), so
+  `placementFrame( trimmed_ )` is the locator EXACTLY and every number below is
+  a closed form. Hence NO toggle-playback before record-start, deliberately.
+
+  ONE KNOWN WAY FOR THIS CASE TO FAIL HONESTLY: the trim floor only pins the
+  landing while the capture's first frame lands BEFORE the record start, i.e.
+  `trimmed_ > 0`. From a stopped transport the device is opened as part of
+  starting, so the pre-roll is normally tens of thousands of frames; a case
+  cannot force it small. If it ever were zero the landing would be jittery, the
+  edge would fall outside N and the snap would not fire — and this case fails
+  LOUDLY rather than passing on a different mechanism, which is the right way
+  round.
+
+  WHAT IS NOT ASSERTED WITH `assert-recorded-clip`, on purpose: that verb
+  checks `clips.front()` — the lane's FIRST child with a duration — against
+  the recorder's latest file, and on this fixture the first child is the
+  PRE-EXISTING clip. It would fail for the wrong reason or pass vacuously, so
+  the recording is addressed by its own path instead. (The verb's placement
+  identity does know about the snap now: it expects
+  `placementFrame( trimmed ) + snapDeltaA()`.)
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_sawtooth.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  ON `main` BOTH SECTIONS FAIL: there is no snap there at all, so the pass
+  lands at the locator and section 1's clip starts 144 frames late, while
+  section 2's pass leaves a 144-frame sliver clip the assertion forbids.
+-->
+<SActionScript version="1" name="record_snap_pass_wide">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ============ SECTION 1: SNAP EARLIER, to a shared clip END ========= -->
+    <!--
+      Two armed lanes, each holding a clip that ENDS at 388800. The locator is
+      144 frames AFTER that edge, so the pass lands at 388944 and must be
+      pulled back to 388800.
+
+      The edge is a clip END and not a clip START on purpose. Were it a START,
+      the snapped pass would begin exactly with an existing column and the
+      legacy planner would turn it into a TAKE on it — a different shape, and
+      one that would make this case about the planner rather than about the
+      snap. Ending there, the snapped pass merely TOUCHES the clip
+      (`end <= a` excludes it), so it is appended as its own child at 0,1 and
+      the assertion is the one number this case is about.
+    -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:2"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="196800"
+                duration="192000"/>
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="196800"
+                duration="192000"/>
+    <assert-clip-window clip="0,0" startTime="196800" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="196800" duration="192000"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+
+    <set-locator position="388944"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <!-- ANNOUNCED. A snap that happened silently would be indistinguishable
+         from a landing that was already there. -->
+    <assert-log contains="[REC] snap a" minCount="1"/>
+    <!-- ...and the TAIL was not snapped: nothing is near it, which is a
+         different answer from "the candidates disagreed". -->
+    <assert-log contains="[REC] snap b" minCount="0" maxCount="0"/>
+
+    <!-- THE NUMBER. 388800, not 388944. -->
+    <assert-clip-window clip="0,1" startTime="388800"/>
+    <assert-clip-window clip="1,1" startTime="388800"/>
+    <!-- Nothing else was placed: the snap moves a window, it does not split. -->
+    <assert-clip-window clip="0,2" expectReject="true"/>
+    <assert-clip-window clip="1,2" expectReject="true"/>
+
+    <!-- REAL MATERIAL, not silence: a non-silence FLOOR over the head of the
+         snapped clip. Deliberately a floor and not a level — what the capture
+         holds depends on where the file input had got to when the device
+         opened, which no case can pin, so an exact RMS here would be a
+         wall-clock assertion dressed up as arithmetic. -->
+    <render filename="snap.wav" durationSec="10"/>
+    <assert-audio-energy filename="snap.wav" startFrame="388800"
+                         frameCount="48000" minRms="0.005" maxRms="0.95"/>
+
+    <!-- ============ SECTION 2: SNAP LATER, to a shared clip START ========= -->
+    <!--
+      Fresh lanes, so the snap's candidate set is only theirs: it reads the
+      ARMED lanes, and 0 and 1 are disarmed below. Each holds a clip STARTING
+      at 388800 and the locator is 144 frames BEFORE it, so the pass lands at
+      388656 and must be pushed forward to 388800.
+
+      Here the shared edge IS a clip start, which is what makes the assertion
+      sharp: snapped, the pass begins exactly with the column and the legacy
+      planner makes it a TAKE on it and places nothing else. Unsnapped, the
+      144 frames in front become their own sliver clip — exactly the sliver
+      the snap exists to prevent — and 2,1 resolves.
+    -->
+    <arm-track trackPath="0" armed="0"/>
+    <arm-track trackPath="1" armed="0"/>
+
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="2" mode="off"/>
+    <set-monitor-mode trackPath="3" mode="off"/>
+    <set-track-input trackPath="2" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="3" input="audio:qxa-record-input:2"/>
+
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav" timePos="388800"
+                duration="192000"/>
+    <place-clip trackPath="3" filePath="../test_sawtooth.wav" timePos="388800"
+                duration="192000"/>
+
+    <arm-track trackPath="2" armed="1"/>
+    <arm-track trackPath="3" armed="1"/>
+
+    <set-locator position="388656"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <assert-log contains="[REC] snap a" minCount="1"/>
+
+    <!-- NO SLIVER. The pass became a take on the column it now starts with,
+         and the lane has exactly one child. -->
+    <assert-take-column clip="2,0" shape="direct" takes="2"/>
+    <assert-take-column clip="3,0" shape="direct" takes="2"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+    <assert-clip-window clip="3,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="4"/>
+  </assertions>
+
+</SActionScript>

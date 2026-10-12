@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A NEGATIVE SOURCE OFFSET IS LEADING SILENCE (proposal 23; plan 53 §3.5 rule
+  2), driven through `place-clip` directly so the whole case is arithmetic.
+
+  WHY IT IS ITS OWN CASE AND NOT PART OF A RECORDING ONE. The pass-wide snap
+  can move a pass's start EARLIER, and when the capture's pre-roll handle is
+  shorter than the move the slip goes negative. plan 53 §3.5 names that as the
+  mechanism, but NO recording case can force it: from a stopped transport
+  everything before the transport start is trimmed, so the handle is normally
+  hundreds of times longer than the snap distance, and a case cannot make
+  `trimmed_` small on purpose. So the arithmetic is gated here, where it is
+  deterministic, and the recorder's snap is gated for the snap.
+
+  WHAT IT ALSO GATES. `assert-clip-window` dropped every NEGATIVE expectation
+  as if it were the "not checked" sentinel, so the one verb that reads a clip's
+  slip could not assert the one slip value that needs asserting. `-1` is still
+  the sentinel; any other negative value is now an expectation (QBX-171).
+
+  THE ARITHMETIC. test_sawtooth.wav is 4 s at 48 kHz, a sawtooth whose
+  amplitude ramps linearly, so its level is a closed form per window (measured
+  off a render): [0, 24000) rms 0.03332. The clip below covers project
+  [48000, 96000) with a slip of -24000, so:
+
+      project [48000, 72000)  the 24000 frames BEFORE the file begins: SILENCE
+      project [72000, 96000)  file [0, 24000): rms 0.03332
+
+  The two windows differ by three orders of magnitude, so no plausible
+  mis-implementation passes both: a clamp of the slip to 0 (which is what this
+  code did before proposal 23) puts the file's own head at 48000 and makes the
+  FIRST window loud, and a slip applied with the wrong sign makes the second
+  one silent.
+-->
+<SActionScript version="1" name="place_clip_negative_offset">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="48000"
+                startOffset="-24000" duration="48000"/>
+
+    <!-- The model carries the negative slip verbatim. -->
+    <assert-clip-window clip="0,0" startTime="48000" duration="48000"
+                        startOffset="-24000"/>
+
+    <!-- ...AND THAT ASSERTION IS NOT VACUOUS, which it was until this ticket
+         and would be again if the sentinel were widened back. On `main` the
+         line above PASSES on a build with no negative-slip support at all,
+         because `want < 0` dropped the expectation before comparing it. So
+         the case also asserts that a WRONG negative value is REJECTED: that
+         fails on `main` (where it is dropped and the assertion succeeds) and
+         holds here. Without this line the one above is decoration. -->
+    <assert-clip-window clip="0,0" startOffset="-12000" expectReject="true"/>
+
+    <render filename="negoff.wav" durationSec="3"/>
+    <!-- The leading silence. -->
+    <assert-audio-energy filename="negoff.wav" startFrame="48000"
+                         frameCount="24000" minRms="0" maxRms="0.0005"/>
+    <!-- ...and the material, starting exactly where the slip says. -->
+    <assert-audio-energy filename="negoff.wav" startFrame="72000"
+                         frameCount="24000" minRms="0.032" maxRms="0.035"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

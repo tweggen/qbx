@@ -31,15 +31,22 @@
 class SPlaceRecordingAction : public SAction {
 public:
     SPlaceRecordingAction() = default;
+    /**
+     * `mode` arrives ALREADY RESOLVED, from the recorder (plan 53 §5.3). Empty
+     * means "whatever this build would do anyway", which is what every call
+     * written before plan 53 means and what every `.qxa` without `mode=` means.
+     */
     SPlaceRecordingAction( const QList<int> &trackPath,
                            const QString &filePath, offset_t timePos,
-                           offset_t srcOffset = 0, length_t length = 0 );
+                           offset_t srcOffset = 0, length_t length = 0,
+                           const QString &mode = QString() );
 
     QString name() const override { return QStringLiteral("place-recording"); }
     QStringList knownAttributes() const override
     { return { QStringLiteral("trackPath"), QStringLiteral("filePath"),
                QStringLiteral("timePos"), QStringLiteral("srcOffset"),
-               QStringLiteral("length") }; }
+               QStringLiteral("length"), QStringLiteral("mode"),
+               QStringLiteral("armed") }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -60,8 +67,23 @@ public:
      */
     const QString &recordMode() const { return mode_; }
 
+    /**
+     * Is this lane ARMED for the pass (plan 53 Q5)?
+     *
+     * `armed="0"` marks an UN-ARMED member of an armed lane's edit group: the
+     * pass is submitted for it so that the takes modes can keep the group's
+     * structure in step, without placing the file on it.
+     *
+     * **P1 does not enumerate them** (plan 53 §8, review 2 M5): the recorder
+     * submits for armed lanes only, and every planner treats `armed="0"` as
+     * nothing to do. P4 is what gives it meaning; the attribute exists from
+     * here so that the verb's shape does not change when it does.
+     */
+    bool armed() const { return armed_; }
+
 private:
     QString    mode_;        // "" = whatever this build would do anyway
+    bool       armed_ = true;
     QList<int> trackPath_;
     QString    filePath_;
     offset_t   timePos_ = 0;
