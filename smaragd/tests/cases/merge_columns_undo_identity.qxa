@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  merge-columns: THE UNDO RESTORES THE OBJECTS, NOT COPIES OF THEM
+  (plan 53 §6.1 / A1, QBX-179).
+
+  Plan 52's identity rule: an undo gives back the very object the edit moved. A
+  take carries its own window, fades, name, volume, pan and automation, and
+  rebuilding one from a captured parameter list drops whatever the list forgot
+  — the exact failure `SAddSampleAction` once had, restoring "a full-length
+  unedited clip... silently, with no dialog to notice". So `merge-columns`
+  MOVES windows and `unmerge-columns` moves them back.
+
+  HOW IDENTITY IS ASSERTED HERE, and why that way. The suite has no
+  `assert-clip-volume` / `assert-clip-pan` / `assert-clip-name` verb, and
+  string-matching a saved file would only prove a number appears SOMEWHERE in
+  it. So the assertion is THE RENDER: a render taken before the merge and a
+  render taken after the undo, compared with `assert-file-identical`. That
+  covers volume, pan, fade, gain curve, slip and every other audible property
+  AT ONCE, and it cannot be satisfied by a rebuilt clip that lost one of them.
+  The non-audible properties — the child INDEX and the link TIMEBASE — are
+  asserted directly, because those are what a render cannot see.
+
+  WHAT IS NOT ASSERTED, and it is worth saying: object IDENTITY itself. No verb
+  in the suite can compare pointers, so a perfect clone would pass every
+  assertion below. What the case does prove is that every OBSERVABLE
+  consequence of identity holds, plus `drain-pending-deletes` after the merge
+  and after the redo — which is the real hazard, because the operand columns
+  are orphaned by the merge and only a refcount pin keeps them alive for the
+  undo. A drain with a broken pin takes them away, and then the undo has
+  nothing to re-link.
+
+  EQUAL VOLUME AND PAN ON EVERY OPERAND, NOT DIFFERENT ONES. Plan 53's gate
+  sketch asked for "fades, names, volume, pan and link timebase on the inputs",
+  but `merge-columns` REFUSES operands whose mix parameters disagree, and
+  refuses any fade at all — because a merged column has ONE set of clip
+  parameters, read from its active take, and the mix applies them across the
+  whole column (see the verb's header, and QBX-185). So the fixture gives every
+  operand the SAME non-default volume and pan, which the verb accepts and which
+  still proves they travel and come back. The refusals themselves are
+  `merge_columns_refused.qxa`'s.
+
+  THE LINK TIMEBASE is the sharpest of the direct assertions: clip 1 is on
+  `beats`, and `SLink::defaultTimebaseFor` keys off `contentKind()`, so an
+  audio clip's default is `time`. A restore that rebuilt the link rather than
+  carrying its attributes would come back as `time`, and the assertion bites.
+
+  ON `main` the verb does not exist, so the case fails at the merge.
+-->
+<SActionScript version="1" name="merge_columns_undo_identity">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="0,0" startTime="0" duration="48000" srcStart="0"/>
+    <set-clip-name clip="0,0" name="mcui-first"/>
+    <set-clip-volume clip="0,0" volumeDb="-6"/>
+    <set-clip-pan clip="0,0" pan="-0.25"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+    <resize-clip clip="0,1" startTime="96000" duration="48000" srcStart="48000"/>
+    <set-clip-name clip="0,1" name="mcui-second"/>
+    <set-clip-volume clip="0,1" volumeDb="-6"/>
+    <set-clip-pan clip="0,1" pan="-0.25"/>
+    <!-- ...and this one is on the BEATS timebase, which no default would
+         restore for an audio clip. -->
+    <set-link-timebase clip="0,1" timebase="beats"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="144000"/>
+    <resize-clip clip="0,2" startTime="144000" duration="48000" srcStart="96000"/>
+    <add-take clip="0,2" filePath="../test_sawtooth.wav" startOffset="144000"
+              index="-1" activate="1"/>
+    <set-clip-volume clip="0,2" volumeDb="-6"/>
+    <set-clip-pan clip="0,2" pan="-0.25"/>
+
+    <!-- A SURVIVOR, AFTER all three operands, and it is what makes the
+         child-INDEX claim below bite. Without it the restore order (ascending
+         original index) already produces the original order, so an inverse
+         that simply APPENDED would be indistinguishable from one that restored
+         indices — measured by sabotage. With a survivor, appending leaves it
+         at index 0 instead of 3. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="240000"/>
+    <resize-clip clip="0,3" startTime="240000" duration="48000" srcStart="0"/>
+
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="48000"
+                        timebase="beats"/>
+    <assert-take-column clip="0,2" shape="direct" takes="2" activeTake="1"/>
+    <assert-clip-window clip="0,3" startTime="240000" duration="48000"/>
+
+    <!-- THE RENDER BEFORE. Everything audible about all three clips. -->
+    <render filename="mcui_before.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+
+    <merge-columns clips="0,0;0,1;0,2"/>
+    <assert-take-column clip="0,0" shape="direct" takes="4"
+                        extents="0-48000;96000-144000;144000-192000;144000-192000"
+                        duration="192000"/>
+    <!-- ...and the survivor shifted down to index 1, because the merge removed
+         two children below it and kept the first one's slot. -->
+    <assert-clip-window clip="0,1" startTime="240000" duration="48000"/>
+
+    <!-- THE DRAIN. Without it a scripted run never delivers deleteLater(), so
+         the case would pass with no pin at all. The operand COLUMN was
+         orphaned by the merge — its takes moved out and its lane link died —
+         and only the action's refcount pin keeps it alive for the undo. -->
+    <drain-pending-deletes/>
+
+    <undo/>
+
+    <!-- EVERY CHILD BACK AT ITS ORIGINAL INDEX, with its own geometry. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="48000"
+                        timebase="beats"/>
+    <assert-clip-window clip="0,2" startTime="144000" duration="48000"/>
+    <!-- THE SURVIVOR IS BACK AT INDEX 3, not shuffled to the front. -->
+    <assert-clip-window clip="0,3" startTime="240000" duration="48000"/>
+    <!-- ...and the column operand is a COLUMN again, with its own takes, its
+         own active take and its own length — not a plain clip, and not a
+         column whose takes came back in the wrong order. -->
+    <assert-take-column clip="0,2" shape="direct" takes="2" activeTake="1"
+                        extents="0-48000;0-48000" duration="48000"/>
+
+    <!-- THE IDENTITY ASSERTION: every audible property of all three clips, at
+         once, without naming one of them. -->
+    <render filename="mcui_undone.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="mcui_undone.wav" expected="mcui_before.wav"/>
+
+    <!-- REDO, and drain again: the redo re-pins, and a stale pin released
+         twice would have crashed here. -->
+    <redo/>
+    <assert-take-column clip="0,0" shape="direct" takes="4"
+                        extents="0-48000;96000-144000;144000-192000;144000-192000"
+                        duration="192000"/>
+    <drain-pending-deletes/>
+    <render filename="mcui_redone.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="mcui_redone.wav" expected="mcui_before.wav"/>
+
+    <!-- The names survived the whole round trip. No verb reads a clip name, so
+         this goes through the saved document. -->
+    <undo/>
+    <save-project path="../../build/merge_columns_undo_identity.qxp"/>
+    <assert-file-contains path="../../build/merge_columns_undo_identity.qxp"
+                          text="mcui-first"/>
+    <assert-file-contains path="../../build/merge_columns_undo_identity.qxp"
+                          text="mcui-second"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -952,7 +952,7 @@ through `SMainWindow::postHint` and the recording dialog, not only `TW_LOGW`
 
 ## 6. New commands
 
-### 6.1 `merge-columns` (Q14)
+### 6.1 `merge-columns` (Q14) — **SHIPPED as A1 (QBX-179)**
 
 `merge-columns clips="0,1;0,2;0,4"` — one lane at a time; a selection
 spanning lanes is run once per lane by the UI. Result: one column at the
@@ -995,6 +995,48 @@ removed operands are deleted in DESCENDING index order (§5.1).
 
 `merge-columns` is also the primitive mode A's planner uses (§3.1 step 2), so
 it is gated twice: once alone, once through a recording.
+
+**Correction (m), from the build: "the forward pins nothing extra" is wrong,
+and in the way plan 52 exists to catch.** The TAKES need no pin — that part is
+right. But an operand COLUMN is orphaned by the merge (its takes move out, its
+lane link dies), and an `STakeStack` is an `SObject`: it carries its own
+`volume`, `pan`, `muted`, `solo` and `recordingChannels`
+(`SObject::serializeSelfAttributes`), none of which lives on a take or on a
+link. Rebuilding it from the recipe would silently drop them. So the forward
+`addRef()`s each operand column and the inverse re-links the very same object.
+
+**Correction (n): "fades, names, volume, pan ... are properties of the window
+or its link" is true of a TAKE and not true of the PLACEMENT.** The mix reads
+a placement's parameters through `SClipWindow::parametersOf`, which resolves a
+DIRECT column to its ACTIVE TAKE — so a merged column has exactly ONE set of
+clip parameters (gain curve, static volume, fade, pan) and
+`STrack::refreshClipGainCurves` applies them to the WHOLE column. N operands
+at different levels therefore CANNOT all be honoured, and §6.1's "no audio is
+rendered or rewritten" does not by itself make the merge playback-preserving.
+
+Since this row's acceptance criterion is that the render is IDENTICAL before
+and after, A1 adds a REFUSAL §6.1 does not list: every operand must agree on
+`getVolume()` and `getPan()`, and none may carry a `cut:Gain` envelope or a
+clip fade — a curve and a fade are POSITIONAL (`twClipFade::gainAt` measures a
+fade against the clip's own end), so even identical ones would mean something
+different once the clip is longer. The alternative was to merge anyway and let
+the lane re-mix itself silently, which is what the criterion forbids. A
+non-default value is fine as long as every operand AGREES on it, which is what
+the gate asserts by merging the same pair twice.
+
+This is **QBX-185 in a second place**: per-take gain is applied ABOVE the
+column, so it cannot vary per take. When QBX-185 is fixed this refusal can
+narrow to what genuinely cannot be carried, and merging two clips at different
+levels becomes expressible.
+
+**Correction (o): the combined map needs the previous answer to RE-ENTER at
+each operand's end**, which "the LATER clip in the list winning where two
+overlap" does not say. Without it a later operand's answer runs on past its
+own material and the earlier operand's span falls silent. The painting shape
+is exactly §4.3's — "this, here, and what was there before everywhere else" —
+and a column operand also needs its own `activeTake_` written down as a
+segment at its extent start, because the merged column's `activeTake_` is a
+different number.
 
 ### 6.2 Per-selection fade edit (Q9)
 
@@ -1347,7 +1389,7 @@ envelope read on a take column) was caught only by a non-empty IDENTITY
 assertion beside them — `snapshot`/`compareTo` against the take that does carry
 the span.
 
-### A1 — `merge-columns` / `unmerge-columns` (§6.1) — depends on A0a, B1
+### A1 — `merge-columns` / `unmerge-columns` (§6.1) — **SHIPPED (QBX-179)**
 
 Gates: `merge_columns.qxa` (two plain clips with a gap + one comped column →
 one column, extents and combined map asserted, render identical before and
@@ -1358,6 +1400,64 @@ timebase on the inputs; `undo` → every one back at its original child index,
 `drain-pending-deletes` after the merge and after the redo, as plan 52's gate
 does); `merge_columns_refused.qxa` (mixed kinds, a live recording, a wrapped
 column: each refused and announced).
+
+**Correction (p): the three prescribed gates all fail on a baseline for the
+WEAKEST possible reason** — `merge-columns` is not a registered action name
+there, so the runner refuses to LOAD the script at all. That proves only that
+the verb is new; it proves nothing about whether any fixture or assertion
+bites, and it is the same trap as A0b's correction (j). So A1's verification
+is SABOTAGE on the built tree, one broken piece at a time, recorded in the PR
+— the baseline comparison is kept only as evidence that the verb is new.
+
+The five sabotages, measured, and TWO OF THEM FOUND THE GATES VACUOUS at first:
+
+| broken piece | case | first run | after the fixture was fixed |
+|---|---|---|---|
+| the extent shift `(colStart − newStart)` | `merge_columns` | fails | fails |
+| the previous answer's RE-ENTRY at an operand's end | `merge_columns` | **PASSED** | fails |
+| `moveChildToIndex` in the inverse | `..._undo_identity` | **PASSED** | fails |
+| the operand column's `addRef()` pin | `..._undo_identity` | SEGFAULT | SEGFAULT |
+| the mix-parameter refusal | `..._refused` | fails | fails |
+
+The two that passed were both fixture holes, and each is worth recording
+because the shape is general:
+
+- **The re-entry rule only bites on OVERLAPPING operands.** The first fixture
+  was disjoint (A, gap, B, C), and there every operand is immediately followed
+  by the next one's own segment, which overwrites the re-entry anyway. A gate
+  for "the previous answer resumes" needs an operand that ENDS INSIDE another
+  one. Note that half cannot assert `assert-file-identical`: two overlapping
+  clips SUM on a lane and a column plays one take per position, so the render
+  legitimately changes there — D1 (a) and §3.4's "the SUM they produce is NOT
+  preserved". Identity belongs to the disjoint half.
+- **The child-index restore only bites with a SURVIVOR after the operands.**
+  Restoring in ascending original index already reproduces the original order
+  when the operands are the lane's only children, so an inverse that simply
+  APPENDED was indistinguishable. With a survivor at a higher index, appending
+  leaves it at index 0.
+- The pin's sabotage SEGFAULTS rather than failing an assertion: the drain
+  deletes the orphaned column and the inverse then touches freed memory. That
+  is a gate (ctest fails on a crash) and it is the strongest evidence the pin
+  is load-bearing, but it is worth knowing that no assertion names it.
+
+**Correction (q): the undo-identity gate cannot use the properties §6.1 names.**
+It asked for "fades, names, volume, pan and link timebase on the inputs", but
+correction (n)'s refusal rejects a fade outright and rejects DIFFERING volume
+or pan. The gate therefore gives every operand the SAME non-default volume and
+pan, which the verb accepts and which still proves they travel and come back;
+the refusals are `merge_columns_refused.qxa`'s. And identity is asserted
+through THE RENDER — `assert-file-identical` between a render before the merge
+and one after the undo — because the suite has no `assert-clip-volume` /
+`assert-clip-pan` / `assert-clip-name` verb, and one render covers every
+audible property at once rather than the few a verb list would name.
+
+**Correction (r): the live-recording refusal needs its own case.** A growing
+clip exists only while a pass runs, so it needs a file input backend, a
+capture speed and `RUN_SERIAL` on the CTest entry — which the structural
+refusals case has no other use for. It is `merge_columns_refused_live.qxa`,
+with its own CMake entry beside the other record cases. `assert-recorded-clip`
+cannot be used there: it inspects the lane's FIRST clip, which in that fixture
+is the static one the recording is merged WITH.
 
 ### P2 — mode A (`takes`, the default) — depends on P1, A0b, A1
 
@@ -1639,7 +1739,7 @@ existing tickets. Order within a group is landing order.
 | P1b (**QBX-172**) | `takes-split` (§3.2, appended-index bookkeeping) and `replace` (§3.3) over `split-clip`/`remove-sample` — NOT `resize-clip`, see §3.3; the held-plan lifetime fix §5.1 needed; G12 recorded as unrepresentable and gated as the PRECEDENCE in `record_loop_takes` | P1a | M |
 | A0a **(SHIPPED, QBX-177)** | take extents, model only: `duration_`, extents in `insertTake`/loader, resolution rule, `twCompColumn` extents + xfade clamp, invalidation, split per-half/re-index/identity inverse, `remove-take` extent inverse, `add-take at=/length=`, `FORMAT_VERSION 3` + its flip | B1, B3, B4, B10 | L |
 | A0b | **SHIPPED (QBX-178).** Take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters, **plus two items A0a handed over by name**: `hasPreview`/`getPreview`' extent window (it moves with the painters, or the picture is half-windowed) and `resize-clip`'s LEFT-EDGE loop, which still writes the column's duration onto every take — unreachable today, noted at the site. Added `assert-envelope take=` (a script had no way to read the per-take collect) and `STakeStack::nextCompEdgeAfter`, the one comp-edge walk the model, the compact painter and the take lane all answer with. **The HATCH's pixels stay QBX-157's**; A0b gates the silence and the envelope beneath them | A0a | M |
-| A1 | `merge-columns` / `unmerge-columns` with the link-move protocol | A0a, B1 | M |
+| A1 | **SHIPPED (QBX-179).** `merge-columns` / `unmerge-columns` with the link-move protocol. Added a refusal §6.1 does not list — operands must agree on volume and pan and carry no gain curve or fade — because a merged column has ONE set of clip parameters and the row's criterion is that the render does not change (QBX-185 in a second place). The forward also PINS each operand column, which §6.1 says is unnecessary and `SObject`'s own serialized fields say otherwise | A0a, B1 | M |
 | P2 | mode A (`takes`) replaces `LegacyTakes`; the §9 flips | P1, A0b, A1, D1 (default (a)) | L |
 | P3 | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind | P2 | M |
 | P4 | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names | P2 | M |

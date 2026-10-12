@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  merge-columns — FOLDING A LANE INTO ONE UNION COLUMN (plan 53 §6.1 / A1,
+  QBX-179).
+
+  THE RENDER MUST NOT MOVE ONE BYTE. That is this case's centre and plan 53's
+  own acceptance criterion for the row: merging is a STRUCTURAL edit, so if the
+  audio changes, the verb is wrong. `assert-file-identical` over a render taken
+  before and a render taken after is the whole assertion — it needs no expected
+  RMS at all, so it survives any change to the fixture or the quantisation.
+
+  THE SHAPE, on one lane, deliberately including a GAP:
+    A  plain clip   [0, 48000)        source from 0
+       — GAP —    [48000, 96000)    nothing on the lane
+    B  plain clip   [96000, 144000)   source from 0
+    C  take column  [144000, 192000)  two takes, a comp map, active take 1
+
+  THE GAP IS WHY THIS VERB DEPENDS ON A0a. After the merge it is a span of the
+  column that NO TAKE COVERS, which under invariant 1′ plays silence (§3.1
+  step 5) — exactly what the lane played there before. Without extents a merge
+  would have to stretch some take across the gap, and the render would change.
+
+  WHAT THE MERGE OWES, asserted in full below:
+    extents  0-48000;96000-144000;144000-192000;144000-192000
+             A, B, then C's two takes at C's offset — every take at its own
+             position, which is what "one union column" means.
+    comp     0:0;96000:1;144000:3;168000:2
+             each operand's PREVIOUS ANSWER over its own extent. Note 144000:3
+             rather than :2 — C's own map says nothing before its 24000, so C
+             answered its OWN activeTake_ there, and the merged column's
+             activeTake_ is a different number, so that answer has to be
+             written down explicitly or it would be lost.
+    active   3 — the LAST operand's active take (§6.1).
+    duration 192000 — [min start, max end) over the OPERANDS.
+
+  AND THE LANE'S REMAINING CHILDREN KEEP THEIR ORDER (QBX-149): the column
+  lands at the FIRST operand's child index, and the clip that was after all
+  three is still after the one column. `merge-columns` is the one verb in the
+  set that REMOVES, so every later child index shifts down — asserted here by
+  reading the survivor at its new index.
+
+  ON `main` the verb does not exist: `merge-columns` is not a registered action
+  name, so the runner rejects the action outright and the case fails at the
+  merge. Every assertion after it is therefore new ground, and the two renders
+  before it are what prove the fixture itself is sound on main.
+-->
+<SActionScript version="1" name="merge_columns">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- A: one second at the lane's start. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="0,0" startTime="0" duration="48000" srcStart="0"/>
+
+    <!-- B: one second, after a one-second GAP. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
+    <resize-clip clip="0,1" startTime="96000" duration="48000" srcStart="0"/>
+
+    <!-- C: a COMPED column, one second, at 3 s. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="144000"/>
+    <resize-clip clip="0,2" startTime="144000" duration="48000" srcStart="0"/>
+    <add-take clip="0,2" filePath="../test_sawtooth.wav" startOffset="48000"
+              index="-1" activate="1"/>
+    <set-comp-segment clip="0,2" at="24000" take="0"/>
+    <assert-take-column clip="0,2" shape="direct" takes="2" activeTake="1"
+                        comp="24000:0" extents="0-48000;0-48000"
+                        duration="48000"/>
+
+    <!-- A SURVIVOR, so the child-order claim below is about something. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="240000"/>
+    <resize-clip clip="0,3" startTime="240000" duration="48000" srcStart="0"/>
+
+    <!-- THE RENDER BEFORE. -->
+    <render filename="mc_before.wav" format="wav" quality="10"
+            durationSec="6.5"/>
+
+    <!-- THE MERGE. -->
+    <merge-columns clips="0,0;0,1;0,2"/>
+
+    <!-- ONE column, at the FIRST operand's index, over the whole span. -->
+    <assert-take-column clip="0,0" shape="direct" takes="4" activeTake="3"
+                        extents="0-48000;96000-144000;144000-192000;144000-192000"
+                        comp="0:0;96000:1;144000:3;168000:2"
+                        duration="192000"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+
+    <!-- THE GAP IS A SPAN NO TAKE COVERS. -->
+    <assert-take-column clip="0,0" takeAtPos="0" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="48000" expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="95999" expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="3"/>
+    <assert-take-column clip="0,0" takeAtPos="168000" expectTake="2"/>
+
+    <!-- CHILD ORDER: the survivor moved from index 3 to index 1, because the
+         merge removed two children below it and kept the first one's slot. -->
+    <assert-clip-window clip="0,1" startTime="240000" duration="48000"/>
+    <!-- The suite has no "how many children" verb, so the COUNT is pinned the
+         way QBX-149's own gate pins order: by reading which clip sits at which
+         INDEX. Index 0 is the column and index 1 is the survivor, which only
+         holds if the two other operands are gone. -->
+
+    <!-- ...AND THE AUDIO IS THE SAME BYTES. -->
+    <render filename="mc_after.wav" format="wav" quality="10"
+            durationSec="6.5"/>
+    <assert-file-identical actual="mc_after.wav" expected="mc_before.wav"/>
+
+    <!-- ===== OVERLAPPING OPERANDS, on a lane of their own =================
+
+         The half above is DISJOINT, and disjoint is the case where the render
+         cannot move. §6.1's "the LATER clip in the list winning where two
+         overlap" is about this one, and here the render DOES move — by design:
+         two overlapping clips on a lane SUM, a column plays ONE take per
+         position, and D1 default (a) accepts exactly that loss (§3.4: "the SUM
+         they produce is NOT preserved"). So this half asserts the MAP and what
+         becomes audible, and the identity assertion stays on the disjoint half
+         where it belongs.
+
+         WHY IT IS HERE AT ALL: it is the only shape that needs the previous
+         answer to RE-ENTER at an operand's end. P runs to 3 s and Q sits
+         inside it, so after Q's extent P must sound again — and a merge that
+         simply let Q's answer run on would leave [2 s, 3 s) selecting a take
+         with no material there, i.e. SILENCE. Measured by sabotage: with the
+         re-entry segment removed the disjoint half above still passes, because
+         every operand there is immediately followed by the next one's own
+         segment. This half is what makes that rule gated. -->
+    <add-track index="-1"/>
+    <!-- P: three seconds from the source's start. -->
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="1,0" startTime="0" duration="144000" srcStart="0"/>
+    <!-- Q: one second INSIDE P, reading a different source second so the two
+         can be told apart wherever both could sound. -->
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="48000"/>
+    <resize-clip clip="1,1" startTime="48000" duration="48000"
+                 srcStart="144000"/>
+
+    <!-- TRACK 0 IS MUTED FOR THIS HALF. `render` renders the MASTER, and the
+         merged column above still sounds over the same seconds, so without
+         this the energies below read the coherent SUM of both lanes (measured:
+         0.1333 where 0.0667 is expected, which is exactly twice it — the two
+         lanes carry the same sawtooth). -->
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <merge-columns clips="1,0;1,1"/>
+    <!-- 96000:0 IS THE RE-ENTRY. Without it the span after Q selects Q, which
+         has no material there, and plays silence. -->
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-144000;48000-96000"
+                        comp="0:0;48000:1;96000:0"
+                        duration="144000"/>
+    <assert-take-column clip="1,0" takeAtPos="0" expectTake="0"/>
+    <assert-take-column clip="1,0" takeAtPos="48000" expectTake="1"/>
+    <assert-take-column clip="1,0" takeAtPos="96000" expectTake="0"/>
+
+    <!-- ...and in audio: P, then Q (the LATER operand wins the overlap), then
+         P again. Per-source-second RMS of the fixture is
+         0.0667 / 0.1764 / 0.2906 / 0.4055. -->
+    <render filename="mc_overlap.wav" format="wav" quality="10"
+            durationSec="3.5"/>
+    <assert-audio-energy filename="mc_overlap.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <!-- Q's own second, not P's: the later operand wins. -->
+    <assert-audio-energy filename="mc_overlap.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <!-- ...and P SOUNDS AGAIN after Q's extent ends. -->
+    <assert-audio-energy filename="mc_overlap.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

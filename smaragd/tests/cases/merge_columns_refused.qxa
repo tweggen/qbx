@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  merge-columns REFUSES, AND SAYS SO (plan 53 §6.1 / A1, QBX-179).
+
+  Every refusal is gated on the ANNOUNCEMENT, not on the action failing: a
+  merge can fail for several reasons, so a case that asserted only failure
+  would pass on an accident. `assert-log` is placed directly after the action
+  that produces the line, which is where its window opens.
+
+  THE SHAPES §6.1 NAMES, and two more the build added.
+
+  1. A WRAPPED COLUMN (`SLink -> SCut -> STakeStack`). Folding it would either
+     drop the wrapper's own window — its slip, stretch, loop and pan, which is
+     exactly why `normalizeColumns` refuses to fold it — or nest a column
+     inside a column, which proposal 42 M3 forbids. The fixture is the one the
+     suite already keeps for this shape: `takestack_wrap_wrapperpan.qxp`, a
+     wrapper carrying its own pan, which is non-foldable BY that pan.
+
+  2. MIXED CONTENT KINDS. A column is a set of alternatives for ONE region, so
+     audio and events cannot share one — the same rule `insertTake` enforces
+     per take, applied to the whole operand list before anything moves.
+
+  3. DIFFERING MIX PARAMETERS (not in §6.1 — see the verb header). A merged
+     column has ONE set of clip parameters, read from its active take, and the
+     mix applies them across the WHOLE column: `SClipWindow::parametersOf`
+     resolves a DIRECT column to its active take, which is what
+     `STrack::refreshClipGainCurves` consults. So N operands at different
+     levels cannot all be honoured, and merging them would change what plays.
+     Plan 53's acceptance criterion for this row is that the render does NOT
+     change, so the verb refuses instead of quietly re-mixing the lane. This is
+     QBX-185 in a second place.
+
+  4. A CLIP FADE, for the same reason plus one more: a fade's length is
+     measured against the clip's OWN end (`twClipFade::gainAt`), so even
+     identical fades on every operand would mean something different once the
+     clip is four times longer.
+
+  5. OPERANDS ON DIFFERENT LANES, and 6. FEWER THAN TWO OPERANDS — the two
+     degenerate calls the UI can make by accident.
+
+  NOT GATED HERE: a LIVE RECORDING, which §6.1 also names. Staging a growing
+  clip needs a real recorder pass — a file input backend, a capture speed and
+  RUN_SERIAL on the CTest entry — which this structural case has no other use
+  for, so it is `merge_columns_refused_live.qxa`'s own subject.
+
+  ON `main` the verb does not exist, so the FIRST merge attempt is rejected by
+  the runner as an unknown action rather than refused by the verb, and every
+  `assert-log` below finds nothing. The case fails there for the wrong reason,
+  which is all a case can do about a verb that is not there.
+-->
+<SActionScript version="1" name="merge_columns_refused">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 1. THE WRAPPED COLUMN. -->
+    <load-project path="../takestack_wrap_wrapperpan.qxp"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="288000"/>
+    <merge-columns clips="0,0;0,1" expectReject="true"/>
+    <assert-log contains="merge-columns: REFUSED" minCount="1"/>
+    <!-- Nothing moved: the wrapped column is still wrapped and still there. -->
+    <assert-take-column clip="0,0" shape="wrapped" takes="2"/>
+    <assert-clip-window clip="0,1" startTime="288000"/>
+
+    <!-- 5. DIFFERENT LANES. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <merge-columns clips="0,1;1,0" expectReject="true"/>
+    <assert-log contains="different lanes" minCount="1"/>
+
+    <!-- 6. ONE OPERAND. -->
+    <merge-columns clips="0,1" expectReject="true"/>
+    <assert-log contains="operand" minCount="1"/>
+
+    <!-- 2. MIXED CONTENT KINDS: an audio clip and a MIDI clip on one lane. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="2,0" startTime="0" duration="48000" srcStart="0"/>
+    <insert-midi-clip trackPath="2" timePos="96000"/>
+    <merge-columns clips="2,0;2,1" expectReject="true"/>
+    <assert-log contains="mixed content kinds" minCount="1"/>
+    <assert-clip-window clip="2,0" startTime="0" duration="48000"/>
+    <assert-clip-window clip="2,1" startTime="96000"/>
+
+    <!-- 3. DIFFERING VOLUME. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="3" filePath="../test_sawtooth.wav" timePos="0"/>
+    <resize-clip clip="3,0" startTime="0" duration="48000" srcStart="0"/>
+    <add-sample trackIndex="3" filePath="../test_sawtooth.wav" timePos="96000"/>
+    <resize-clip clip="3,1" startTime="96000" duration="48000" srcStart="0"/>
+    <set-clip-volume clip="3,1" volumeDb="-6"/>
+    <merge-columns clips="3,0;3,1" expectReject="true"/>
+    <assert-log contains="A merged column has ONE level" minCount="1"/>
+    <!-- ...and with the levels EQUAL the very same call is accepted, so the
+         refusal is about the disagreement and not about a non-default value. -->
+    <set-clip-volume clip="3,0" volumeDb="-6"/>
+    <merge-columns clips="3,0;3,1"/>
+    <assert-take-column clip="3,0" shape="direct" takes="2"
+                        extents="0-48000;96000-144000" duration="144000"/>
+    <undo/>
+
+    <!-- 4. A CLIP FADE. -->
+    <set-clip-fade clip="3,1" fadeIn="1200" fadeOut="0" shape="linear"/>
+    <merge-columns clips="3,0;3,1" expectReject="true"/>
+    <assert-log contains="carries a clip fade" minCount="1"/>
+    <assert-clip-window clip="3,0" startTime="0" duration="48000"/>
+    <assert-clip-window clip="3,1" startTime="96000" duration="48000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="5"/>
+  </assertions>
+
+</SActionScript>
