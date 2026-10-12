@@ -69,7 +69,8 @@ QStringList SAssertRecordedClipAction::knownAttributes() const
              QStringLiteral( "growing" ),          QStringLiteral( "previewNonEmpty" ),
              QStringLiteral( "sourceAtStartFrame" ),
              QStringLiteral( "sourceTolerance" ),
-             QStringLiteral( "inputDevice" ) };
+             QStringLiteral( "inputDevice" ),
+             QStringLiteral( "contains" ) };
 }
 
 SApplyResult SAssertRecordedClipAction::apply( SProject *project )
@@ -80,6 +81,25 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
     if( !lane ) {
         qWarning() << "assert-recorded-clip: no lane at" << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
+    }
+
+    // THE RECORDER'S OWN REPORT, CHECKED FIRST (plan 53 B6, QBX-164) -- and
+    // first on purpose: `clips="0"` returns successfully a few lines below, so
+    // a check placed after it would be skipped by exactly the cases that need
+    // it. A lane that REFUSED the pass has no clip, and the only thing left to
+    // assert about it is what the recorder reported.
+    //
+    // Same spelling and the same meaning as `assert-midi-recorded contains=`,
+    // which has had it since proposal 21 L4. The audio verb not having one is
+    // why `skipped=` / `unused=` would otherwise be unassertable.
+    if( !contains_.isEmpty() ) {
+        SAudioRecorder *r = SApplication::app().audioRecorder();
+        const QString got = r ? r->describe() : QString();
+        if( !got.contains( contains_ ) ) {
+            qWarning() << "assert-recorded-clip: describe()" << got
+                       << "does not contain" << contains_;
+            return { false, nullptr };
+        }
     }
 
     // Every non-container child with a duration is a clip on this lane.
@@ -363,6 +383,10 @@ void SAssertRecordedClipAction::writeXml( QDomElement &elem ) const
         elem.setAttribute( "sourceTolerance", QString::number( sourceTolerance_ ) );
     if( !inputDevice_.isEmpty() )
         elem.setAttribute( "inputDevice", inputDevice_ );
+    // Non-default only, like every other attribute here: the round-trip audit
+    // requires that an attribute a fixture did not declare must not appear.
+    if( !contains_.isEmpty() )
+        elem.setAttribute( "contains", contains_ );
 }
 
 bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
@@ -389,6 +413,7 @@ bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
     sourceAtStart_     = elem.attribute( "sourceAtStartFrame", "-1" ).toLongLong();
     sourceTolerance_   = elem.attribute( "sourceTolerance", "4096" ).toLongLong();
     inputDevice_       = elem.attribute( "inputDevice", "" );
+    contains_          = elem.attribute( "contains", "" );
     return true;
 }
 

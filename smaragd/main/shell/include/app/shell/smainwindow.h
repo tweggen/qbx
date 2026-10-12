@@ -761,6 +761,8 @@ protected slots:
 
     // Reflect the app-wide status/mode (slip, time-stretch, …) in the status bar.
     void onStatusModeChanged( const QString &mode );
+    // Plan 53 B6 (QBX-164): armed lanes that did not take the pass.
+    void onRecordingLanesSkipped( int count, const QString &firstWhy );
 
 private:
     // Where the project dialogs start on a machine that has never saved one.

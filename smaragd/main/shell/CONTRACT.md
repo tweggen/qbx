@@ -1613,3 +1613,80 @@ Track Detail panel's 400 px `sizeHint`.
 
 NOT gated: a `--test-case` run never shows the window, so no headless case can
 observe dock geometry. The standalone measurement above is the evidence.
+
+## inv. 64 — an armed lane the recorder could NOT place on is REPORTED, and the rest of the pass still lands (plan 53 B6, QBX-164)
+
+A skipped lane used to be a `TW_LOGW` and a `continue`. From the user's side
+that is indistinguishable from the take never having been recorded: they armed
+a lane, watched the meters move, pressed stop, and got nothing — the only
+explanation in a log nobody reads. The capture FILE is on disk in every case,
+so the two things worth saying are which lane missed out and that its audio was
+kept.
+
+`SAudioRecorder::commitPlacement_()` collects `SkippedLane{ path, file, why }`
+into `skipped_`, cleared at the top of every commit so the report always
+describes the pass that just ended — a punch-out reaches the same function by
+its own path and gets its own report. `skippedLanes()` exposes the list and
+`unusedRecordings()` the distinct capture files no lane took (plan 53 Q13). The
+LIST is this invariant's; the Unused recordings dock that presents it is P6's,
+and `scleanupdialog` is a different thing again — it sweeps the recordings
+DIRECTORY for files no project references, which is housekeeping rather than
+"the take you just made went nowhere".
+
+**TWO CAUSES REACH IT.** The capture file was never written, and the lane's
+PLANNER REFUSED the pass. The second only became reachable when QBX-172 gave
+`takes-split` and `replace` the wrapped-column rule (plan 53 G11), which is why
+the plan made this row wait for P1.
+
+**HOW THE RECORDER LEARNS OF A REFUSAL.** `SApplication::submitAction` returns
+void, and the planner's refusal travels no further than a `qWarning`, so the
+recorder samples `SActionHistory::rejectedCount()` around each lane's submits.
+That is not an invention: `SActionHistory`'s own header documents the pattern
+("the test runner samples this around each submit to detect rejected actions
+... which previously vanished silently"), so this adds no second mechanism to
+keep in step with the first. Finishing `SActionHistory::onRejected_`'s
+"TODO: Log error and notify UI" is the general answer and is QBX-176 — an
+app-wide change in another module, which is why this lane-level report does not
+wait for it.
+
+**ONE REPORT PER PASS, NEVER ONE PER LANE.**
+`SApplication::notifyRecordingLanesSkipped()` is called once, after the loop,
+and logs always before emitting `recordingLanesSkipped( count, firstWhy )`. A
+band punch across eight lanes that all refuse must not produce eight notices.
+Unlike `notifyAudioOutputUnavailable()` it is **not** interactive-only, and the
+difference is the surface rather than the severity: that one opens a MODAL,
+which a headless `--test-case` run could never dismiss, so it checks
+`isTestCaseMode()` first. This one is a status-bar line — nothing blocks,
+nothing has to be dismissed — and suppressing it under test would mean the
+signal is exercised by nothing at all. `SMainWindow::onRecordingLanesSkipped`
+writes it to the transient message area, the same one `"Saved %1"` uses, and
+**not** to `modeLabel_`, which is the mixer view's hover/drag mode line and
+would fight with it.
+
+**A REFUSAL COSTS ONLY ITS OWN LANE.** `commitPlacement_` places per lane
+inside one macro, so an early return or a discarded composite would take the
+good lanes with it. `record_lane_skipped_reported` arms TWO lanes for exactly
+this: track 0 holds a wrapped column under mode `replace` and refuses, track 1
+is empty under `takes` and takes the pass, and the case asserts both together.
+
+**`placeGrowingClips_` USES `placementLaneAt`, NOT `laneAt`**, for symmetry with
+the verb: `place-recording` already refuses a lane that does not accept clips
+and announces it, and the growing clip is the same question asked half a second
+earlier, so asking it the same way means the preview and the placement can
+never disagree about where a pass may land.
+
+**Gated** by `record_lane_skipped_reported.qxa`, which reads the report off
+`describe()` (`skipped=1 unused=1`) through `assert-recorded-clip contains=` —
+an attribute the audio verb did not have until this change, though its MIDI
+sibling has had it since proposal 21 L4, and whose absence is why the report
+would otherwise have been unassertable. The two `assert-log` lines pin the
+planner's announcement and the app's.
+
+NOT gated: the status-bar line itself. No verb reads the transient status
+message, and adding one for a single string is a worse trade than saying
+plainly that the surface is hand-verified while the CONTENT it shows — the
+count and the reason — is gated. `placeGrowingClips_`'s guard has no reachable
+case either: `arm-track` already refuses a system lane
+(`splacements::refuseSystemLane`, proposal 45 AC5.2), so `armed_` cannot hold
+one, and `acceptsClips()` is true for every other lane. It is correctness
+against the next lane kind, not a fix for something a case can reach today.

@@ -270,7 +270,20 @@ void SAudioRecorder::placeGrowingClips_()
     SProject *project = app_->getCurrentProject();
     SObject *mixer = splacements::rootContainer( project );
     for( Armed &a : armed_ ) {
-        SObject *lane = splacements::laneAt( mixer, a.path );
+        // `placementLaneAt`, not `laneAt`, FOR SYMMETRY WITH THE VERB (plan 53
+        // B6). `place-recording` already refuses a lane that does not accept
+        // clips, and announces it; the growing clip is the same question asked
+        // half a second earlier, so asking it the same way means the preview
+        // and the placement can never disagree about where a pass may land.
+        //
+        // NO REACHABLE GATE, and it is worth saying rather than inventing one:
+        // `arm-track` already refuses a system lane
+        // (`splacements::refuseSystemLane`, proposal 45 AC5.2), so `armed_`
+        // cannot hold one, and `acceptsClips()` is true for every other lane.
+        // This is correctness against the next lane kind, not a fix for
+        // something a case can reach today.
+        SObject *lane = splacements::placementLaneAt( mixer, a.path,
+                                                      "place-recording" );
         if( !lane ) continue;
         SCut *cut = new SCut( project, *content_ );
         cut->setSName( QStringLiteral( "Recording" ) );
@@ -590,6 +603,11 @@ void SAudioRecorder::snapPassWide_( std::int64_t *a, std::int64_t *b ) const
 
 void SAudioRecorder::commitPlacement_()
 {
+    // PER PASS, like snapDeltaA_: the report describes the pass that just
+    // ended, never an accumulation over the session. A punch-out reaches here
+    // through its own path and gets its own report.
+    skipped_.clear();
+
     SProject *project = app_ ? app_->getCurrentProject() : nullptr;
     const std::int64_t total =
         content_ ? (std::int64_t) content_->availableFrames() : 0;
@@ -718,8 +736,15 @@ void SAudioRecorder::commitPlacement_()
     app_->beginRecordCommit();
     for( const Armed &a : armed_ ) {
         if( !QFileInfo( a.file ).exists() ) {
+            // The capture file never arrived. The lane gets nothing, and
+            // saying so is the whole of plan 53 B6 (QBX-164): this used to be
+            // this log line and nothing else, which from the user's side is
+            // identical to the take never having been recorded.
             TW_LOGW( "shell", "[REC] no file for track: %s",
                      a.file.toStdString().c_str() );
+            skipped_.append( { a.path, a.file,
+                               QStringLiteral( "its capture file was never "
+                                               "written" ) } );
             continue;
         }
         // THE RECORDER RESOLVES THE MODE, per armed lane, and submits the
@@ -729,11 +754,58 @@ void SAudioRecorder::commitPlacement_()
         const QString mode = srecmode::resolveMode(
             splacements::rootContainer( project ),
             a.track, project );
+
+        // DID THE LANE TAKE THE PASS? `submitAction` returns void and the
+        // planner's refusal (plan 53 §5.1, reachable since QBX-172 gave
+        // `takes-split` and `replace` the wrapped-column rule) travels no
+        // further than a `qWarning`, so the recorder cannot be told directly.
+        //
+        // Sampling `rejectedCount()` around the submit is how this codebase
+        // already answers that question: `SActionHistory`'s own header says
+        // "the test runner samples this around each submit to detect rejected
+        // actions ... which previously vanished silently". Doing the same here
+        // needs no new seam in `actions/` and no second mechanism to keep in
+        // step with the first.
+        //
+        // Finishing `SActionHistory::onRejected_`'s "TODO: Log error and
+        // notify UI" is the general answer, and it is QBX-176 -- an app-wide
+        // change in another module, which is why this lane-level report does
+        // not wait for it.
+        SActionHistory *hist = app_->actionHistory();
+        const int rejectedBefore = hist ? hist->rejectedCount() : 0;
         for( const Seg &s : segs )
             app_->submitAction( new SPlaceRecordingAction(
                 a.path, a.file, s.at, s.srcOffset, s.len, mode ) );
+        const int rejectedAfter = hist ? hist->rejectedCount() : rejectedBefore;
+        if( rejectedAfter > rejectedBefore ) {
+            // The mode is named because it is the actionable half: the same
+            // lane under `takes` would have taken the pass, and the user's way
+            // out is `set-track-record-mode`.
+            const QString why =
+                QStringLiteral( "the lane refused the pass in record mode "
+                                "'%1'" ).arg( mode.isEmpty()
+                                                  ? QStringLiteral( "takes" )
+                                                  : mode );
+            TW_LOGW( "shell", "[REC] lane refused the pass: %s (mode '%s')",
+                     a.file.toStdString().c_str(),
+                     mode.toStdString().c_str() );
+            skipped_.append( { a.path, a.file, why } );
+        }
     }
     app_->endRecordCommit();
+
+    // ONE REPORT PER PASS, never one per lane: a band punch across eight lanes
+    // that all refuse must not produce eight of anything. Logged always, and
+    // handed to the UI through the app, which is where the one-dialog-per-
+    // session precedent for this shape lives (notifyAudioOutputUnavailable).
+    if( !skipped_.isEmpty() ) {
+        TW_LOGW( "shell", "[REC] %d of %d armed lane(s) did not take the pass; "
+                          "%d capture file(s) unused",
+                 (int) skipped_.size(), (int) armed_.size(),
+                 (int) unusedRecordings().size() );
+        app_->notifyRecordingLanesSkipped( (int) skipped_.size(),
+                                           skipped_.first().why );
+    }
 
     // Arm state is deliberately untouched (item e): the armed track(s) stay
     // armed after a take is placed, ready for the next one. The
@@ -749,11 +821,29 @@ void SAudioRecorder::commitPlacement_()
     armed_.clear();
 }
 
+QStringList SAudioRecorder::unusedRecordings() const
+{
+    // DISTINCT, in pass order. Two lanes of one pass can share a capture file
+    // (a mono source armed on both), and reporting it twice would overstate
+    // what the user has to deal with.
+    QStringList out;
+    for( const SkippedLane &sl : skipped_ )
+        if( !sl.file.isEmpty() && !out.contains( sl.file ) )
+            out.append( sl.file );
+    return out;
+}
+
 QString SAudioRecorder::describe() const
 {
+    // `skipped`/`unused` are here because `describe()` is the only surface a
+    // .qxa can read the recorder through (`assert-recorded-clip contains=`),
+    // and a report nothing can assert is a report that will quietly stop
+    // working. The UI half -- the dialog -- is interactive-only by the same
+    // rule that governs notifyAudioOutputUnavailable, so it is NOT gated, and
+    // the PR says so.
     return QStringLiteral( "rec=%1 start=%2 p0=%3 anchored=%4 inLat=%5 outLat=%6 "
                            "userOff=%7 comp=%8 trim=%9 passes=%10 dev=%11 "
-                           "snapA=%12" )
+                           "snapA=%12 skipped=%13 unused=%14" )
         .arg( active_ ? "on" : "off" )
         .arg( (qlonglong) recordStart_ )
         .arg( (qlonglong) placement_.p0 )
@@ -765,5 +855,7 @@ QString SAudioRecorder::describe() const
         .arg( (qlonglong) trimmed_ )
         .arg( lastPassCount_ )
         .arg( deviceName_.isEmpty() ? QStringLiteral( "-" ) : deviceName_ )
-        .arg( (qlonglong) snapDeltaA_ );
+        .arg( (qlonglong) snapDeltaA_ )
+        .arg( (int) skipped_.size() )
+        .arg( (int) unusedRecordings().size() );
 }

@@ -1230,6 +1230,19 @@ void SApplication::notifyAudioOutputUnavailable()
     emit audioOutputDeviceFailed();
 }
 
+void SApplication::notifyRecordingLanesSkipped( int laneCount,
+                                                const QString &firstWhy )
+{
+    if( laneCount <= 0 ) return;
+    TW_LOGW( "ui.shell",
+             "%d armed lane(s) did not take the recorded pass: %s",
+             laneCount, qPrintable( firstWhy ) );
+    // Emitted even under --test-case: the listener writes a status-bar line
+    // and blocks nothing. See the header for why this differs from
+    // notifyAudioOutputUnavailable.
+    emit recordingLanesSkipped( laneCount, firstWhy );
+}
+
 bool SApplication::isRecordingActive() const
 {
     return ( audioRecorder_ && audioRecorder_->isActive() )

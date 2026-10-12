@@ -2340,6 +2340,28 @@ void SMainWindow::buildStatusBar()
     QObject::connect( &SApplication::app(), SIGNAL( statusModeChanged( const QString & ) ),
                       this, SLOT( onStatusModeChanged( const QString & ) ) );
     onStatusModeChanged( SApplication::app().getStatusMode() );
+
+    // A SKIPPED RECORDING LANE IS SAID OUT LOUD (plan 53 B6, QBX-164). The
+    // status bar and not a dialog: there is one notice per pass but a pass can
+    // skip several lanes for the same reason, and a modal would also be a
+    // headless hang. `modeLabel_` is NOT the place -- that is the mixer view's
+    // hover/drag mode line and would fight with it -- so this goes to the
+    // transient message area, the same one "Saved %1" uses.
+    QObject::connect( &SApplication::app(),
+                      SIGNAL( recordingLanesSkipped( int, const QString & ) ),
+                      this,
+                      SLOT( onRecordingLanesSkipped( int, const QString & ) ) );
+}
+
+void SMainWindow::onRecordingLanesSkipped( int count, const QString &firstWhy )
+{
+    // The capture files are still on disk in every case, and saying so is half
+    // the point: the user's take is not gone, it just did not land. Where to
+    // find them is the Unused recordings dock's job (P6).
+    statusBar()->showMessage(
+        tr( "%n armed track(s) did not take the recording: %1. "
+            "The captured audio is kept.", "", count ).arg( firstWhy ),
+        15000 );
 }
 
 void SMainWindow::onStatusModeChanged( const QString &mode )

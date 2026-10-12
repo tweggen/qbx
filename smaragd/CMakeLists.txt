@@ -625,7 +625,12 @@ endforeach()
 # purpose: that is what pins the landing to the locator exactly, which is the
 # only way a few-hundred-frame snap can be told from a few-thousand-frame
 # wall-clock jitter. Each case's header says so at length.
-foreach(_snap record_snap_pass_wide record_snap_disagree)
+# record_lane_skipped_reported joins them for the same reason: it arms TWO
+# lanes on channels 1 and 2 so that one lane refusing can be shown to cost
+# the other nothing (plan 53 B6, QBX-164). It runs from a RUNNING transport,
+# unlike the two snap cases, because it asserts no exact landing.
+foreach(_snap record_snap_pass_wide record_snap_disagree
+              record_lane_skipped_reported)
     if(TEST qxa.${_snap})
         set_tests_properties(qxa.${_snap} PROPERTIES
             RUN_SERIAL TRUE

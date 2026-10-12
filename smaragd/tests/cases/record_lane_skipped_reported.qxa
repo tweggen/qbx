@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 B6 (QBX-164): A LANE THE RECORDER COULD NOT PLACE ON IS SAID OUT
+  LOUD, and the pass still lands everywhere else.
+
+  Until now a skipped lane was a TW_LOGW and a `continue`. From the user's
+  side that is indistinguishable from the take never having been recorded:
+  they armed the lane, watched the meters move, pressed stop, and got nothing,
+  with the only explanation in a log nobody reads. The capture file is still on
+  disk in every case, so the two things worth reporting are which lane missed
+  out and that its audio was kept.
+
+  WHY THIS CASE COULD NOT BE WRITTEN BEFORE. The refusal it needs did not
+  exist: `LegacyTakes` hands a wrapped take column to `add-take` like any
+  other, so nothing refused a lane at all. QBX-172 gave `takes-split` and
+  `replace` the G11 rule - a wrapped column refuses the whole lane for the pass
+  - which is why plan 53 made B6 wait for P1.
+
+  THE FIXTURE. takestack_wrap_wrapperpan.qxp holds the WRAPPED shape (Kw):
+  track 0's placement is an SCut over an STakeStack of two takes, covering
+  [0, 96000). Track 1 is empty. The wrapped shape is the one every planner
+  refuses, and it is a real project file rather than something assembled here,
+  because no verb builds that shape on purpose any more.
+
+  TWO ARMED LANES, ONE REFUSAL, which is the whole design of the case:
+
+    track 0   record mode `replace`   holds a WRAPPED column   -> REFUSED
+    track 1   record mode `takes`     empty                    -> takes the pass
+
+  so it asserts the two things that matter together. The refusal is REPORTED,
+  and it costs the OTHER lane nothing - a band punch where one lane refuses
+  must not throw away the lanes that were fine. That second half is why this
+  is not simply a one-track case: `commitPlacement_` places per lane inside one
+  macro, and an early return or a thrown-away composite would take the good
+  lane with it.
+
+  ONE REPORT PER PASS, NOT ONE PER LANE. `skipped=1` is read off the
+  recorder's own `describe()` through `assert-recorded-clip contains=`, which
+  the audio verb did not have until this change - its MIDI sibling has had it
+  since proposal 21 L4. That asymmetry is why the recorder's report would
+  otherwise have been unassertable, and it is fixed here.
+
+  `unused=1` is the other half: the capture file that no lane took is listed
+  (plan 53 Q13). The LIST is this ticket's; the Unused recordings dock that
+  presents it is P6's.
+
+  WHAT IS DELIBERATELY NOT ASSERTED. The status-bar line
+  `SMainWindow::onRecordingLanesSkipped` writes. No verb reads the transient
+  status message, and adding one for a single string would be a worse trade
+  than saying plainly that the surface is hand-verified while the CONTENT it
+  shows - the count and the reason - is gated here and in the two assert-log
+  lines below. The PR says the same.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_sawtooth.wav
+  (STEREO - test_position.wav is mono and cannot host channel 2),
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  ON main THIS FAILS at the first assert-log: the lane is skipped silently,
+  `describe()` has no `skipped=` field at all, and `assert-recorded-clip` has
+  no `contains=` to read it with.
+-->
+<SActionScript version="1" name="record_lane_skipped_reported">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../takestack_wrap_wrapperpan.qxp"/>
+
+    <!-- The fixture's shape, asserted before anything is recorded: a WRAPPED
+         column on track 0, which is what gets refused. -->
+    <assert-take-column clip="0,0" shape="wrapped" takes="2"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+
+    <!-- Track 0 refuses: `replace` will not touch a wrapped column. -->
+    <set-track-record-mode trackPath="0" mode="replace"/>
+    <assert-record-mode trackPath="0" resolved="replace"/>
+    <!-- Track 1 is left at the project default, which is `takes`. -->
+    <assert-record-mode trackPath="1" resolved="takes"/>
+
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:2"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+
+    <!-- The pass starts at 0 and runs about a second, so it overlaps track 0's
+         [0, 96000) column however the wall clock jitters - two seconds of
+         material against a pass of one leaves thousands of frames of room on
+         both sides, which is why no exact landing is asserted anywhere here. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1200"/>
+    <!-- nestedRejects="1": the ONE refusal inside this action's window is the
+         planner refusing track 0, which is the point of the case. The runner
+         decides whether an action failed by sampling the history's rejection
+         counter around its submit and cannot tell this action's own outcome
+         from that of anything it submitted while applying — so without this
+         the deliberate refusal would read as `record-stop` being broken. It is
+         an EXACT count, so record-stop genuinely failing would make it 2 and
+         still fail the case. -->
+    <record-stop nestedRejects="1"/>
+
+    <!-- THE REFUSAL IS ANNOUNCED, by the planner and then by the recorder. -->
+    <assert-log contains="[REC] lane refused the pass" minCount="1"/>
+    <assert-log contains="did not take the recorded pass" minCount="1"/>
+
+    <!-- THE OTHER LANE STILL GOT ITS TAKE, and the recorder reports exactly
+         one skipped lane and one unused capture file. `contains=` reads
+         SAudioRecorder::describe(), which is global to the pass, so asserting
+         it on this lane's call is deliberate and not a mix-up. -->
+    <assert-recorded-clip trackPath="1" clips="1" passes="1"
+                          minDurationFrames="24000"
+                          contains="skipped=1 unused=1"/>
+
+    <!-- TRACK 0 IS EXACTLY AS IT WAS: the wrapped column untouched, and no
+         second child - the pass was not placed over it either. -->
+    <assert-take-column clip="0,0" shape="wrapped" takes="2"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
