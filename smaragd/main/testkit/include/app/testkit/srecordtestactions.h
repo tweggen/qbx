@@ -133,7 +133,11 @@ private:
     bool   previewNonEmpty_   = false;
     qint64 sourceAtStart_     = kUnset;
     qint64 sourceTolerance_   = 4096;
-    QString inputDevice_;                        // empty == unchecked
+    QString inputDevice_;
+    // Substring of SAudioRecorder::describe() (plan 53 B6, QBX-164). The MIDI
+    // sibling has had this since proposal 21 L4; the audio one did not, which
+    // is why nothing could assert the recorder's own report of a pass.
+    QString  contains_;                        // empty == unchecked
 };
 
 #endif // _SRECORDTESTACTIONS_H_

@@ -965,14 +965,51 @@ is not evidence. Order is dependency order.
 | **B2** (X4) | `add-take` wraps first (`:50-58`), `insertTake` refuses a different kind (`stakestack.cpp:79-88`), `add-take` returns `{false}` deleting only `takeCut` (`:85-91`); the composite's rollback cannot reach the wrap (`scompositeaction.cpp:16-28`) → a one-take stack on the lane, nothing undoable, take lost | confirmed; reachability of a MIDI clip on an audio-input lane still unmeasured | `place_recording_kind_guard.qxa`: `insert-midi-clip`, `place-recording` over it → recording placed, `assert-take-column clip="0,0" shape="none"`, `verify-undo`. Fix in two places: `add-take` checks `win->contentKind()` BEFORE the wrap; `snapshot()` reports the child as `OtherKind` |
 | **B5** (X6a) | the plan loop hands the same recording to a second column whose `start < cursor` (`splacerecordingaction.cpp:131-147`); gate (3) of `place_recording_over_earlier_clip.qxa:53-62` reaches the cell (0,2 = `[96000,288000)` also gets a take) and asserts only "no 0,3" | confirmed | fix gate (3): add `assert-take-column clip="0,2" shape="none"`. Interim fix: skip a column already consumed. Superseded by P1's Q7 rule; the assertion stays true under both |
 | **B10** (new, review 1 #3b) | `STakeStack::removeTake` and `SRemoveTakeAction::apply` never touch `compMap_`: removing take 0 of a comped column leaves every segment pointing one take off; a segment naming the removed take is not dropped | confirmed (no `compMap` reference in either) | `remove_take_renumbers_comp.qxa`: comped two-take column (`comp_map_audible`'s fixture), `remove-take take="0"` → render is the surviving take, not silence or the wrong take; `assert-take-column comp=` shows the renumbered map; `undo` → the WHOLE previous map back. Fails on `main` today. Prerequisite of A0a and P6 |
-| **B6** (X7, re-scoped) | a missing file at stop is `TW_LOGW` + `continue` (`saudiorecorder.cpp:574-578`); a lane whose plan is refused (§5.1) would be the same. **X17 is NOT reachable through `arm-track`**: `sliveinputactions.cpp` `resolveTrack()` calls `splacements::refuseSystemLane` for `arm-track`, `set-monitor-mode` and `set-track-input` (proposal 45 AC5.2; `docs/ACTIONS.md:58`), and `acceptsClips()` is true for every other lane. Review 1's gate-side note that "a system lane CAN be armed today" is wrong — see §13 | confirmed | the REPORTING half only: `record_lane_skipped_reported.qxa` drives `place-recording` on a lane with a Kw column (`takestack_wrap_wrapperpan.qxp`) once P1's refusal exists, and asserts the hint text and the unused-recordings entry; until P1 the case cannot be written and B6 ships the report path with the file-missing branch exercised manually, saying so. `placeGrowingClips_` switches to `placementLaneAt` for symmetry — a one-line guard with no reachable gate |
+| **B6** (X7, re-scoped) — **SHIPPED as QBX-164**, with two corrections below | a missing file at stop is `TW_LOGW` + `continue` (`saudiorecorder.cpp:574-578`); a lane whose plan is refused (§5.1) would be the same. **X17 is NOT reachable through `arm-track`**: `sliveinputactions.cpp` `resolveTrack()` calls `splacements::refuseSystemLane` for `arm-track`, `set-monitor-mode` and `set-track-input` (proposal 45 AC5.2; `docs/ACTIONS.md:58`), and `acceptsClips()` is true for every other lane. Review 1's gate-side note that "a system lane CAN be armed today" is wrong — see §13 | confirmed | the REPORTING half only: `record_lane_skipped_reported.qxa` drives `place-recording` on a lane with a Kw column (`takestack_wrap_wrapperpan.qxp`) once P1's refusal exists, and asserts the hint text and the unused-recordings entry; until P1 the case cannot be written and B6 ships the report path with the file-missing branch exercised manually, saying so. `placeGrowingClips_` switches to `placementLaneAt` for symmetry — a one-line guard with no reachable gate |
 | **B7** (X9) | `stopRecording` calls the two `stop()`s in sequence (`sapplication.cpp:1438-1439`); each opens its own macro (`saudiorecorder.cpp:573`, `smidirecorder.cpp:454`); `sapplication.h` documents "one undo step per recorder"; the audio recorder returns before its macro when `placeable <= 0` | confirmed — a documented decision, so §5.4 is a contract edit | `record_mixed_one_undo.qxa`: arm one audio and one MIDI track, record, ONE `undo` → `assert-recorded-clip clips="0"` and `assert-midi-recorded clips="0"`; then a DETERMINISTIC empty pass — a punch region lying entirely behind the locator, so `b <= a` and the segment list is empty (`record-start` is REJECTED without an input, and the file backend always captures something, so "no input" is not a usable empty pass) — pushes NO undo entry: `save-project`, the empty pass, `assert-unsaved-changes expect="0"` (it reads `QUndoStack::isClean()`, so the save first is what makes the assertion mean anything) |
 | **B8** | `docs/ACTIONS.md:312` says `set-comp-xfade` is "Model only until proposal 43 N3"; `twCompColumn` renders the equal-power crossfade and `comp_crossfade.qxa` gates it | confirmed stale | none; one line |
 | **B9** | `record_stays_armed.qxa` is a running-transport case whose two takes land by jitter and deliberately asserts existence only (its header says so, lines 21-34) | confirmed | add one sentence to its header: it must not be read as evidence for the structure rule; under A both outcomes become one column, under B two clips — the case keeps asserting existence only |
 
 Order: B1 → B4 → B3 → B10 → B2 → B5 → B6 → B7 → B8/B9. B4 and B3 moved up
 because mode A plays through the map everywhere; the old order had them as
-tidy-up. B10 sits after B4 because both edit the same two functions' map
+tidy-up.
+
+> **B6 LANDED LAST, not sixth, and two of its row's claims were wrong
+> (QBX-164).**
+>
+> The order above was followed except for B6, which needs a REFUSAL to report
+> and no planner refused anything until P1 shipped one — the row says so itself
+> ("until P1 the case cannot be written"). So the real order was
+> B1 → B4 → B3 → B10 → B2 → B5 → B7 → B8/B9 → P1a → P1b → B6.
+>
+> **"depends on QBX-145's report path" was a misreading.** QBX-145 built a bool
+> plus a `QString *error` out-param on `SApplication::startRender`, for one
+> call site. It is not a reusable mechanism and there is no other: the one place
+> that could turn any refusal into something a person sees is
+> `SActionHistory::onRejected_`, whose entire body is still
+> `// TODO: Log error and notify UI. // For Phase 1, just clean up.` — so
+> **no refused action reaches the user anywhere in the app**, which is a far
+> larger gap than this row and is now **QBX-176**. B6 therefore built a
+> recording-specific report in `shell` rather than waiting, and samples
+> `SActionHistory::rejectedCount()` around each lane's submit to learn of a
+> refusal — the pattern that class's own header already documents for the test
+> runner.
+>
+> **The gate goes through the RECORDER, not through `place-recording`.** The
+> row says it "drives `place-recording` on a lane with a Kw column", and that
+> cannot work: driving the verb directly never populates a recorder-side
+> report, and routing the report through the action layer instead is QBX-176.
+> `record_lane_skipped_reported` loads the same fixture, sets the lane's record
+> mode to one that refuses a wrapped column, arms it, and records — and arms a
+> SECOND, empty lane besides, because "a refusal costs only its own lane" is
+> the half of this that a one-track case cannot state.
+>
+> It also needed two testkit additions the row did not foresee:
+> `assert-recorded-clip contains=` (its MIDI sibling has had it since proposal
+> 21 L4; the audio verb had none, so the recorder's own report of a pass was
+> unassertable) and `nestedRejects=` (the runner infers an action's outcome from
+> a global rejection counter, so a verb whose internals refuse on purpose reads
+> as broken). B10 sits after B4 because both edit the same two functions' map
 handling and the second PR should see the first's shape.
 
 ## 8. Phases

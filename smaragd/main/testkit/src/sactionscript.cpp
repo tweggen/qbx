@@ -76,7 +76,8 @@ bool SActionScript::checkAttributes_(const QDomElement &elem,
     const QDomNamedNodeMap attrs = elem.attributes();
     for (int i = 0; i < attrs.length(); ++i) {
         const QString name = attrs.item(i).toAttr().name();
-        if (name == QLatin1String("expectReject") || name == QLatin1String("version")) {
+        if (name == QLatin1String("expectReject") || name == QLatin1String("version")
+            || name == QLatin1String("nestedRejects")) {
             continue;
         }
         if (!known.contains(name)) {
@@ -147,6 +148,7 @@ bool SActionScript::readXml(const QDomDocument &doc)
             ActionMeta meta;
             meta.action = action;
             meta.expectReject = child.attribute("expectReject", "false") == "true";
+            meta.nestedRejects = child.attribute("nestedRejects", "0").toInt();
 
             actions_.append(action);
             actionsMeta_.append(meta);

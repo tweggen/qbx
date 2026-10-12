@@ -24,6 +24,30 @@ public:
     struct ActionMeta {
         SAction *action = nullptr;
         bool expectReject = false;  // phase 4: negative tests
+        /**
+         * HOW MANY ACTIONS THIS ONE'S INTERNALS ARE EXPECTED TO SUBMIT AND
+         * HAVE REFUSED (plan 53 B6, QBX-164).
+         *
+         * The runner decides whether an action failed by sampling
+         * `SActionHistory::rejectedCount()` around its submit, which cannot
+         * tell the action's OWN outcome from that of anything it submitted
+         * while applying. A verb whose internals legitimately refuse is
+         * therefore reported as having failed: `record-stop` commits a pass,
+         * and a lane whose planner refuses it (plan 53 G11) makes the enclosing
+         * `record-stop` look broken.
+         *
+         * `nestedRejects="1"` says "exactly one refusal is expected inside this
+         * action's window, and the action itself must still apply". It is
+         * deliberately an EXACT count and not a flag: `expectReject` would
+         * accept any number of refusals including a genuine failure of the
+         * action itself, which is the thing this case most needs to keep
+         * catching.
+         *
+         * It is a narrow instrument. Attributing a refusal to the action that
+         * actually caused it needs the history to say WHICH action it refused,
+         * which is a change in `actions/` -- see the ticket this one filed.
+         */
+        int nestedRejects = 0;
     };
 
     SActionScript();

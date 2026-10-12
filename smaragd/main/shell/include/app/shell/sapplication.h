@@ -388,6 +388,27 @@ public:
     // clearAudioOutputFailureNotice below), giving the new choice its own
     // first chance.
     void notifyAudioOutputUnavailable();
+
+    /**
+     * ARMED LANES THAT DID NOT TAKE THE PASS (plan 53 B6, QBX-164).
+     *
+     * Logs always and emits `recordingLanesSkipped()`. Called ONCE per pass by
+     * `SAudioRecorder::commitPlacement_()`, never once per lane: a band punch
+     * across eight lanes that all refuse must not produce eight notices.
+     *
+     * UNLIKE notifyAudioOutputUnavailable THIS IS NOT INTERACTIVE-ONLY, and
+     * the difference is the surface rather than the severity. That one opens a
+     * MODAL, which a headless `--test-case` run could never dismiss, so it
+     * checks isTestCaseMode() before emitting. This one is a status-bar line:
+     * nothing blocks, nothing has to be dismissed, and suppressing it under
+     * test would mean the signal is never exercised by anything at all.
+     *
+     * `firstWhy` is the first lane's reason, which is the one worth showing:
+     * within one pass the lanes almost always skip for the same cause, and the
+     * full list is on the recorder (`skippedLanes()`) for whatever presents it
+     * properly -- the Unused recordings dock, which is P6's.
+     */
+    void notifyRecordingLanesSkipped( int laneCount, const QString &firstWhy );
     // Give the next audio-output failure its own chance to notify (called
     // when the user changes the output device selection in Options).
     void clearAudioOutputFailureNotice() { audioDeviceFailureNotified_ = false; }
@@ -451,6 +472,12 @@ signals:
     // --test-case ever reaches a listener. SMainWindow is the one listener,
     // showing a dialog that offers Options → Audio.
     void audioOutputDeviceFailed();
+
+    // ARMED LANES DID NOT TAKE THE PASS -- see notifyRecordingLanesSkipped().
+    // `count` lanes were skipped and `firstWhy` is the first one's reason.
+    // NOT interactive-only: the listener shows a status-bar line, which
+    // blocks nothing, so this is emitted under --test-case as well.
+    void recordingLanesSkipped( int count, const QString &firstWhy );
 
 public slots:
     // Set the status/mode line. Emits statusModeChanged only when it changes.

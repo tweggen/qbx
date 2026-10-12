@@ -123,6 +123,41 @@ public:
      * what it caught before and now covers the snap as well.
      */
     std::int64_t snapDeltaA() const { return snapDeltaA_; }
+
+    /**
+     * A LANE THIS PASS COULD NOT PLACE ON, and why (plan 53 B6, QBX-164).
+     *
+     * A skipped lane used to be a `TW_LOGW` and a `continue`, which is
+     * indistinguishable from the take never having been recorded: the user
+     * armed a lane, watched the meters move, pressed stop, and got nothing,
+     * with the only explanation in a log nobody reads. The capture FILE is
+     * still on disk in every case -- nothing is lost -- so the two things worth
+     * reporting are which lane missed out and where its audio went.
+     *
+     * Two causes reach here. The capture file is missing (the backend never
+     * wrote it), and the lane's PLANNER REFUSED the pass -- which only became
+     * reachable when QBX-172 gave `takes-split` and `replace` the wrapped-column
+     * refusal, and is why plan 53 made this row wait for P1.
+     */
+    struct SkippedLane {
+        QList<int> path;    ///< the lane, as a path from the root mixer
+        QString    file;    ///< its capture file; still on disk
+        QString    why;     ///< one line, already user-facing
+    };
+
+    /** The lanes the LAST pass skipped. Reset at the start of every pass. */
+    const QList<SkippedLane> &skippedLanes() const { return skipped_; }
+
+    /**
+     * The capture files of this pass that no lane took (plan 53 Q13).
+     *
+     * Distinct, in pass order. This is the LIST only; the Unused recordings
+     * dock that presents it is P6's, and `scleanupdialog` is a different thing
+     * again -- it sweeps the recordings DIRECTORY for files no project
+     * references, which is housekeeping rather than "the take you just made
+     * went nowhere".
+     */
+    QStringList unusedRecordings() const;
     /// The files the last take wrote, in armed-track order.
     const QList<QString> &lastFiles() const { return lastFiles_; }
     /// THE INPUT DEVICE THE LAST/CURRENT TAKE RESOLVED TO, and therefore the
@@ -214,6 +249,9 @@ private:
     std::int64_t     trimmed_ = 0;
     int              lastPassCount_ = 0;
     std::int64_t     snapDeltaA_ = 0;
+    // Reset per pass, like snapDeltaA_: the report is about the pass that just
+    // ended, never an accumulation over the session.
+    QList<SkippedLane> skipped_;
     QList<QString>   lastFiles_;
 
     SRecordingContent                 *content_ = nullptr;  // owned by the cuts

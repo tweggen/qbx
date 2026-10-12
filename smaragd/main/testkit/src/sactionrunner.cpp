@@ -47,6 +47,7 @@ SActionRunner::Result SActionRunner::run(SActionScript &script, SApplication &ap
     for (int i = 0; i < actions.size(); ++i) {
         SAction *action = actions[i];
         bool expectReject = (i < actionsMeta.size()) ? actionsMeta[i].expectReject : false;
+        int nestedRejects = (i < actionsMeta.size()) ? actionsMeta[i].nestedRejects : 0;
         QString actionName = action->name();
 
         // Submit via the normal action history path.
@@ -81,8 +82,36 @@ SActionRunner::Result SActionRunner::run(SActionScript &script, SApplication &ap
         // A failed action (e.g. assert-audio-energy out of range) fails the
         // test unless the script marked it expectReject; an expectReject
         // action that unexpectedly succeeds fails the test too.
-        bool wasRejected = app.actionHistory()
-            && app.actionHistory()->rejectedCount() > rejectedBefore;
+        const int rejectedNow = app.actionHistory()
+            ? app.actionHistory()->rejectedCount() : rejectedBefore;
+        const int rejectedHere = rejectedNow - rejectedBefore;
+
+        // AN ACTION WHOSE INTERNALS REFUSE ON PURPOSE (plan 53 B6, QBX-164).
+        // The counter cannot tell this action's own outcome from that of
+        // anything it submitted while applying, so a verb with a legitimate
+        // internal refusal reads as broken -- `record-stop` commits a pass, and
+        // a lane whose planner refuses it makes `record-stop` look failed.
+        //
+        // `nestedRejects="N"` declares exactly how many refusals belong to the
+        // internals. EXACT, not a flag: the action itself failing would make
+        // the count N+1 and still fail the case, which `expectReject` would
+        // not. See ActionMeta::nestedRejects for why this is a narrow
+        // instrument rather than the real fix.
+        if (nestedRejects > 0 && !expectReject) {
+            if (rejectedHere == nestedRejects) {
+                result.actionsApplied++;
+            } else {
+                result.passed = false;
+                result.failures.append(
+                    QString("Action %1 (#%2) expected %3 nested rejection(s) "
+                            "but saw %4")
+                        .arg(actionName).arg(i + 1)
+                        .arg(nestedRejects).arg(rejectedHere));
+            }
+            continue;   // the loop body ends here; nothing to unwind
+        }
+
+        bool wasRejected = rejectedHere > 0;
         if (wasRejected) {
             result.actionsRejected++;
             if (!expectReject) {
