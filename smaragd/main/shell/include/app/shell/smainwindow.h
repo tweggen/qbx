@@ -275,9 +275,18 @@ public:
     bool viewPlayheadFor( const QString &rootName, offset_t &pos,
                           bool &sounding ) const;
 
+    // `takeIndex >= 0` reads ONE TAKE of a take column through
+    // `SObjectRenderer::collectTakeEnvelope` — the exact call a TAKE LANE
+    // makes — instead of the clip's own comp result. -1 keeps meaning "the
+    // audible one", which for a column is the comp result and for every other
+    // clip is simply the clip. It is how a script can tell the two pictures
+    // apart: since plan 53 A0b the compact clip draws the COMP RESULT while a
+    // take lane draws one take over ITS EXTENT, and a verb that could only
+    // read the first could not gate the second.
     bool collectClipEnvelope( const QString &clipPath, offset_t start,
                               length_t length, int width,
-                              std::vector<preview_t> &out );
+                              std::vector<preview_t> &out,
+                              int takeIndex = -1 );
 
     // TEST ENTRY POINT (proposal 39 M3): the FOLDER-SUM twin of the above -
     // the summed envelope of every descendant of the track at `trackPath`,

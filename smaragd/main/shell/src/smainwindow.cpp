@@ -4309,7 +4309,8 @@ bool SMainWindow::viewPlayheadFor( const QString &rootName, offset_t &pos,
 
 bool SMainWindow::collectClipEnvelope( const QString &clipPath, offset_t start,
                                        length_t length, int width,
-                                       std::vector<preview_t> &out )
+                                       std::vector<preview_t> &out,
+                                       int takeIndex )
 {
     out.clear();
     if( width < 1 ) return false;
@@ -4338,7 +4339,10 @@ bool SMainWindow::collectClipEnvelope( const QString &clipPath, offset_t start,
     win.width     = width;
 
     out.assign( (size_t) width, preview_t{ 0, 0 } );
-    if( !rndr->collectEnvelope( *link, win, out.data() ) ) {
+    // `collectTakeEnvelope` with takeIndex < 0 forwards to `collectEnvelope`
+    // on EVERY renderer (the base class does it), so one call serves both and
+    // the -1 path is not a second implementation.
+    if( !rndr->collectTakeEnvelope( *link, win, out.data(), takeIndex ) ) {
         out.clear();
         return false;
     }

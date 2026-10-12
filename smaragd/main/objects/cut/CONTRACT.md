@@ -207,7 +207,15 @@ that ended earlier was not, and must stay where the user put it). For a
 full-extent column every take is in the second case, so this is exactly the old
 "set every take's duration" — which is why no existing column gate moves. A
 trim that would EMPTY a take is clamped to one frame and logged here; REFUSING
-it needs a verb that can reject, so it is `resize-clip`'s (plan 53 A0b).
+it needs a verb that can reject, and since A0b `resize-clip` does, before
+anything is mutated and with a `resize-clip: REFUSED` warning. The two are not
+alternatives: the clamp is the MODEL's floor, which keeps 1′ true whatever a
+caller does, and the refusal is the EDIT SURFACE's answer. `resize-clip` also
+stopped writing the column's length onto a take in either of the two branches
+that used to — the named-take slip and the left-edge move — because
+`applyWindowAll` has already clamped every extent correctly by the time they
+run, so writing `duration_` there was invariant 1 still speaking and would
+silently stretch every partial take back over the whole column.
 
 **Invariant 3 became 3′**: a one-take column collapses to a plain cut only when
 that take is FULL-EXTENT (`collapseSingleTakeStack` returns null otherwise,
@@ -242,12 +250,44 @@ the column does NOT shrink: removing the take that reached furthest leaves a
 span nothing covers, which plays silence rather than moving the clip's right
 edge under the user.
 
-Still unwindowed by the extent, deliberately and each for a named reason:
-`resolveEventClip` (plan 53 P3, MIDI parity — an event column needs the RECORD
-cut, not just its position moved), and `hasPreview`/`getPreview` with both
-painters (A0b — a preview is what the painter reads, so windowing it while the
-painters still draw across the whole column would produce a half-windowed
-picture).
+**THE PICTURE HONOURS EXTENTS SINCE A0b** (plan 53 §4.3–4.4, QBX-178), and the
+whole of it moved together for the reason A0a recorded: a preview is what a
+painter reads, so windowing one alone would have produced a half-windowed
+picture — an envelope that stops at the extent inside a waveform that does not.
+
+- `hasPreview`/`getPreview` are the active take's, WINDOWED to its extent;
+  outside it the probes are ZERO, which is how every consumer of that seam
+  already spells "no material". `hasPreview` itself needs no extent test — an
+  extent is at least one frame, so a take that exists always has some material.
+- The COMPACT painter draws the COMP RESULT, run by run, instead of the active
+  take across the whole column (plan 53's X10: the picture showed material the
+  column does not play and hid material it does). A run whose take has no
+  material is HATCHED, in the same brush the "no take" column uses, because the
+  statement is the same one. The HATCH's pixels are QBX-157's gate; what A0b
+  gates is that the span is silent and its envelope empty.
+- The TAKE-LANE terminals (`drawTake`/`collectTakeEnvelope`) draw one take over
+  ITS EXTENT only, and the lane's own region walk breaks at EXTENT edges as
+  well as map boundaries (`nextCompEdgeAfter`), or a region would straddle the
+  end of its own take's material.
+- **A DEGENERATE COLUMN KEEPS THE ORIGINAL PATH** — no map, every take
+  full-extent — exactly as the audio resolution does (`resolvesThroughComp`)
+  and for the same reason: every project that has never been comped must look
+  exactly as it did.
+- Positions come from the FORWARD map only (`SRenderContext::getTimeOf`), per
+  column, NEVER from inverting it. The pixel→frame map is affine for a plain or
+  stretched clip but PIECEWISE for a warped one and per-tile for a looped one,
+  so inverting it to find a segment's pixel would be wrong on exactly the clips
+  comping is used on. The shift into a take's own domain goes in the CONTEXT
+  (`TakeShiftContext`), not in a temporary `SLink`: the link is shared, and the
+  take renderers read its loop, stretch and colours from it.
+- `nextCompEdgeAfter` ignores CROSSFADES, deliberately. A crossfade is a BLEND
+  that a per-column envelope cannot express; `twCompColumn` splits runs at its
+  two ends because it has to MIX them, and the cut marks that would draw a
+  boundary are QBX-157's.
+
+Still unwindowed by the extent, deliberately: `resolveEventClip` (plan 53 P3,
+MIDI parity — an event column needs the RECORD cut, not just its position
+moved).
 
 Notes:
 - A stack of EVENT takes forwards `resolveEventClip()` to its active take,

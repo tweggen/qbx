@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A SELECTED SPAN WITH NO MATERIAL (plan 53 §4.4 / A0b, QBX-178).
+
+  THIS CASE GATES THE AUDIBLE AND THE NUMERIC HALF, NOT THE PICTURE. §4.4 says
+  the span whose selected take has no material is drawn HATCHED, and a paint
+  behaviour needs a PIXEL gate — that one is QBX-157's, which owns the compact
+  column's backdrop and cut marks. What is gated here is everything beneath the
+  pixels: the span plays SILENCE, and the ENVELOPE a painter would read over it
+  is empty. A hatch drawn over a span whose envelope said "material" would be
+  the real defect, and this is the assertion that forbids it.
+
+  THE SHAPE, built out of two documented verbs rather than a fixture file. A 4 s
+  sample is trimmed to 2 s — which CLAMPS take 0 to [0, 96000) — and then a
+  second take is added at 96000, which GROWS the column back to 4 s without
+  touching take 0. The result is a column NEITHER of whose takes covers it:
+    take 0 — [0, 96000)
+    take 1 — [96000, 192000)
+  That matters: a column with one FULL take could not produce this case at all,
+  because removing a take would simply fall back to a take that covers the
+  span, which is correct and is not what §4.4 is about.
+
+  THE MAP sends the second half to take 1, so before the removal both halves
+  sound, each take reading the source from ITS OWN zero: 0.0667, 0.1764 twice.
+
+  THE REMOVAL. `remove-take` takes take 1 away and the column does NOT shrink
+  (A0a: a column keeps its length when a take leaves, which is what
+  `duration_` is for). The map still names take 1 at 96000, so:
+    - the stale index is out of range, so `activeTake_` is consulted — take 0
+    - take 0 has NO MATERIAL at 96000
+    - the answer is -1: SILENCE, with NO FALL-BACK (§3.1 step 5)
+  and the one remaining take being PARTIAL is also invariant 3′: the column
+  must NOT collapse to a plain cut, so `shape` stays "direct".
+
+  WHAT BITES ON THE BASELINE, AND WHAT DOES NOT. Measured on main at a3aa1472
+  — A0a's model, without A0b:
+
+    - THE AUDIO ASSERTIONS ALL PASS THERE. The silence over the uncovered span
+      is A0a's resolution rule, already green, and this case keeps them as
+      REGRESSION COVER for it rather than as its own gate. Saying so matters:
+      a reader who assumed the renders were what A0b added would think this
+      case proves more than it does.
+    - THE ENVELOPE ASSERTIONS FAIL, and they are A0b's. Both reads over
+      [96000, 192000) come back with a full waveform — `[0]-50/50 [1]-50/51
+      [2]-51/51 …` — where an empty envelope is expected, because the compact
+      collect still delegates to the active take across the WHOLE column and
+      so describes material the column does not play. That is plan 53's X10
+      measured as numbers.
+
+  `take=` IS NOT REJECTED ON THE BASELINE, IT IS IGNORED. `assert-envelope`
+  declares its known attributes, so the runner WARNS ("unknown attribute(s)
+  take … ignored") and carries on unless `SMARAGD_STRICT_ATTRS=1` — which
+  means the `take=` assertion silently degrades into a second clip-mode read
+  there. That is precisely why this case asserts the clip-mode envelope in its
+  own right as well, instead of resting on `take=` alone: an attribute a
+  baseline ignores proves nothing by itself.
+-->
+<SActionScript version="1" name="take_extents_hatch">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Trim to 2 s. `add-sample` places a PLAIN clip, not a column — the
+         column comes into existence with the first `add-take` below — so the
+         trim is asserted through the clip's own window, which is all a plain
+         clip can answer. -->
+    <resize-clip clip="0,0" startTime="0" duration="96000" srcStart="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+
+    <!-- ...and the new take grows the column back out without touching take 0. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-96000;96000-192000" duration="192000"/>
+
+    <set-comp-segment clip="0,0" at="96000" take="1"/>
+    <assert-take-column clip="0,0" comp="96000:1"
+                        takeAtPos="0" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="1"/>
+
+    <!-- BOTH halves sound, each take from its own zero. -->
+    <render filename="teh_before.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="teh_before.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="teh_before.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="teh_before.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- THE TWO PICTURES, OVER THE SAME SPAN, WHILE BOTH TAKES EXIST. This is
+         §4.4's subject stated as sharply as the suite can state it: over
+         [96000, 192000) the COMP RESULT has material (take 1 carries it) while
+         TAKE 0's own lane row has NONE (its extent ended at 96000) — and over
+         [0, 96000) it is the other way round. A build that drew a take across
+         the whole column cannot produce either answer.
+
+         THESE are what `take=` exists for. The post-removal reads below are
+         both empty, so they could not tell the per-take collect from the
+         clip's; these can. -->
+    <assert-envelope clip="0,0" take="0" start="96000" length="96000"
+                     width="64" expectEmpty="true"/>
+    <assert-envelope clip="0,0" take="1" start="0" length="96000"
+                     width="64" expectEmpty="true"/>
+    <!-- ...and the comp result over each of those spans is NOT empty, asserted
+         as an identity against the take that does carry it, so neither read
+         can be satisfied by an all-zero array. -->
+    <assert-envelope clip="0,0" take="1" start="96000" length="96000"
+                     width="64" snapshot="teh_t1_second"/>
+    <assert-envelope clip="0,0" start="96000" length="96000" width="64"
+                     compareTo="teh_t1_second"/>
+
+    <!-- THE REMOVAL. -->
+    <remove-take clip="0,0" take="1"/>
+    <!-- Invariant 3′: one take, PARTIAL, so the column does not collapse. -->
+    <assert-take-column clip="0,0" shape="direct" takes="1" activeTake="0"
+                        extents="0-96000" duration="192000"/>
+    <!-- The selected span has no material. THE -1 IS THE WHOLE CASE. -->
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="0" expectTake="0"/>
+
+    <render filename="teh_after.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- The first half is untouched... -->
+    <assert-audio-energy filename="teh_after.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="teh_after.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- ...and the span with no material is SILENT, in one assertion: there is
+         nothing to tell apart inside it. -->
+    <assert-audio-energy filename="teh_after.wav"
+                         startFrame="96000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- THE ENVELOPE A PAINTER READS over that span, through the clip's own
+         inline renderer — the same walk the arranger paints. The COMP RESULT
+         has no material there... -->
+    <assert-envelope clip="0,0" start="96000" length="96000" width="64"
+                     expectEmpty="true"/>
+    <!-- ...and neither does the TAKE LANE's row for take 0, whose extent ends
+         at 96000. `take=` reads collectTakeEnvelope, the exact call a take
+         lane makes, which is the only way to tell the two pictures apart. -->
+    <assert-envelope clip="0,0" take="0" start="96000" length="96000"
+                     width="64" expectEmpty="true"/>
+
+    <!-- AND THE COVERED HALF IS NOT EMPTY, asserted as an IDENTITY rather than
+         against hard-coded probes: over [0, 96000) the comp result IS take 0,
+         so the clip's envelope and take 0's own must agree byte for byte. A
+         windowing bug that zeroed too much would break this pair, and it
+         cannot be satisfied by an all-zero array because the span is also
+         asserted audible above. -->
+    <assert-envelope clip="0,0" take="0" start="0" length="96000" width="64"
+                     snapshot="teh_take0"/>
+    <assert-envelope clip="0,0" start="0" length="96000" width="64"
+                     compareTo="teh_take0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
