@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPLITTING A COLUMN WHOSE TAKES HAVE EXTENTS (plan 53 §4.1 / A0a, QBX-177).
+
+  Before invariant 1' the split was ONE rule: clone every take into the tail
+  and trim every take in the head. Under 1' MEMBERSHIP is the first question
+  and there are three answers — and this case is the W1 shape, where all three
+  occur at once.
+
+  THE SHAPE (plan 53 §3.4's W1, at this suite's scale). One 4 s column over
+  test_sawtooth.wav holding three takes:
+
+    take 0  R  FULL      [0, 192000)   source from 0        the "recording"
+    take 1  A  PARTIAL   [0,  96000)   source from  48000   the first clip
+    take 2  B  PARTIAL   [96000,192000) source from 144000  the second clip
+
+  Index order is R, A, B rather than §3.4's A, B, R, because a column is BUILT
+  by wrapping a plain clip (which becomes take 0) and adding takes beside it.
+  The plan's letters name the material, not the indices.
+
+  SPLIT AT 2 s, and each take takes a different route:
+    A ends exactly at the cut  -> HEAD ONLY, untouched
+    B starts exactly at the cut -> TAIL ONLY, MOVED there, tStart re-based 0
+    R crosses the cut          -> trimmed in the head, CLONED into the tail
+
+  so the head holds {R', A} and the tail {R'', B} — the plan's "head {A, R},
+  tail {B, R}" with this column's index order. Nothing empty, nothing refused.
+
+  §4.1's "split at 4 s" IS A NUMBER THAT DOES NOT FIT ITS OWN EXAMPLE, and
+  this case records the correction rather than copying it: §3.4's W1 has
+  A = [0, 8.1), so a cut at 4 s falls INSIDE A and yields head {A, R} /
+  tail {A, B, R}. The outcome §4.1 states — head {A, R}, tail {B, R} — needs
+  the cut AT A's end, which is what a split between two adjacent children is.
+  The outcome is the specification; the 4 s is a slip of the pen.
+
+  INDICES ARE RENUMBERED PER HALF AND THE MAP IS RE-INDEXED WITH THEM, which
+  is the half of this that fails silently rather than loudly. The map is
+  `0 -> A, 96000 -> B`; A is take 1 and B is take 2, and after the split A is
+  take 1 of the head while B is take 1 of the TAIL. A split that carried the
+  numbers through unchanged would leave the tail's segment naming take 1 =
+  R'' — comping that sounds like comping gone wrong, not like a crash.
+
+  THE RENDER IS THE SAME BEFORE AND AFTER, byte for byte, and that is the
+  whole claim a split has to meet: splitting a clip is not an edit to what
+  plays. With the map above the timeline reads
+      0.1764 / 0.2906 (A, source 1..3 s) then 0.4055 / silence (B, source
+      3..5 s — B runs past the 4 s source, which is itself a span no take
+      covers and so is silent)
+  and every one of those four numbers depends on a different part of the
+  change: A's extent, A's slip, B's re-based extent, B's slip, and the
+  re-indexed maps on both halves.
+
+  THEN UNDO, and the column comes back whole: three takes in their original
+  ORDER, at their original EXTENTS, with the original map, and the same render
+  again. The two renders after it select A and then B explicitly, which is
+  what proves each came back with ITS OWN extent and ITS OWN slip rather than
+  with a plausible one.
+
+  WHAT THIS CANNOT ASSERT, said plainly: that the MOVED take B is the same
+  OBJECT it was. No verb in this suite can see object identity — `placements`
+  and `linkObjectRefs` read the column and the placement, not a take — and a
+  clone carries the window, the slip, the fades, the volume and the envelope
+  faithfully, so no render can separate a move from a clone either. What is
+  gated here is every observable consequence of the move, plus
+  `drain-pending-deletes`: an implementation that rebuilt B instead of moving
+  it would leave the original orphaned, and a dangling one would not survive
+  the drain and the render that follows it.
+
+  Per-source-second RMS of the fixture: 0.0667 / 0.1764 / 0.2906 / 0.4055.
+-->
+<SActionScript version="1" name="take_extents_split">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- take 0 = R, the full-extent 4 s clip. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1 = A, the column's first half, source from 1 s. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="48000"
+              index="-1" activate="0" at="0" length="96000"/>
+    <!-- take 2 = B, the column's second half, source from 3 s. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="144000"
+              index="-1" activate="0" at="96000" length="96000"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="0"
+                        extents="0-192000;0-96000;96000-192000"
+                        duration="192000"/>
+
+    <!-- The map: A over the first half, B over the second. R stays the ACTIVE
+         take, so a cleared map would be audibly different (it would play R's
+         own four seconds) rather than merely wrong. -->
+    <set-comp-segment clip="0,0" at="0" take="1"/>
+    <set-comp-segment clip="0,0" at="96000" take="2"/>
+    <assert-take-column clip="0,0" comp="0:1;96000:2" activeTake="0"/>
+
+    <render filename="tes_before.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tes_before.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="tes_before.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="tes_before.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <!-- B reads past the end of a 4 s source: a span no take covers. -->
+    <assert-audio-energy filename="tes_before.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- THE SPLIT. -->
+    <split-clip clip="0,0" splitTime="96000"/>
+
+    <!-- HEAD: R trimmed to the first half, A untouched beside it. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-96000;0-96000" duration="96000"
+                        comp="0:1"/>
+    <!-- A kept its own slip; R's head piece kept the column's. -->
+    <assert-clip-window clip="0,0" take="0" duration="96000" startOffset="0"/>
+    <assert-clip-window clip="0,0" take="1" duration="96000"
+                        startOffset="48000"/>
+
+    <!-- TAIL: R's clone, and B MOVED here with its tStart re-based to 0.
+         The map names take 1 — which is B here and was A before, which is
+         exactly what re-indexing means. -->
+    <assert-take-column clip="0,1" shape="direct" takes="2" activeTake="0"
+                        extents="0-96000;0-96000" duration="96000"
+                        comp="0:1"/>
+    <!-- R's clone reads the source from 2 s: the content position the cut
+         mapped to, computed exactly through the take's own map. -->
+    <assert-clip-window clip="0,1" take="0" duration="96000"
+                        startOffset="96000"/>
+    <assert-clip-window clip="0,1" take="1" duration="96000"
+                        startOffset="144000"/>
+    <assert-clip-window clip="0,1" startTime="96000"/>
+
+    <render filename="tes_after.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tes_after.wav" expected="tes_before.wav"/>
+
+    <!-- UNDO: one column again, in the original order and at the original
+         extents, with the original map. -->
+    <undo count="1"/>
+    <drain-pending-deletes/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="0"
+                        extents="0-192000;0-96000;96000-192000"
+                        duration="192000" comp="0:1;96000:2"/>
+    <assert-clip-window clip="0,0" take="0" duration="192000" startOffset="0"/>
+    <assert-clip-window clip="0,0" take="1" duration="96000"
+                        startOffset="48000"/>
+    <assert-clip-window clip="0,0" take="2" duration="96000"
+                        startOffset="144000"/>
+
+    <render filename="tes_undone.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tes_undone.wav" expected="tes_before.wav"/>
+
+    <!-- ...and each restored take still carries its OWN extent and slip,
+         asserted one at a time so a half-right restore cannot hide behind
+         the map. select-take clears the map, so these come last. -->
+    <select-take clip="0,0" take="1"/>
+    <render filename="tes_a_only.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tes_a_only.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="tes_a_only.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="tes_a_only.wav"
+                         startFrame="96000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <select-take clip="0,0" take="2"/>
+    <render filename="tes_b_only.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tes_b_only.wav"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="tes_b_only.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="tes_b_only.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

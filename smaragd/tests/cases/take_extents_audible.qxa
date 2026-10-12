@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TAKE EXTENTS, AUDIBLE — THE RESOLUTION RULE (plan 53 §4.1 / A0a, QBX-177).
+
+  take_extents_model gates the model; this gates the one thing the model
+  cannot say, which is what comes out of the speaker. Both halves below ARE
+  the resolution rule: a column with ANY partial take resolves through
+  `twCompColumn` even when its map is EMPTY, because that is the only object
+  that knows how to shift a take's position by its tStart and contribute
+  NOTHING outside its extent.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav:
+    take 0 — FULL extent [0, 192000), source from 0
+    take 1 — PARTIAL [96000, 192000), source from 0 as well
+
+  Take 1 is the interesting one: it sits in the column's SECOND half and reads
+  the source from its START. So the same source second arrives at two
+  different places depending on which take carries it, and the two takes
+  disagree in every window where both have material. Per-source-second RMS of
+  the fixture: 0.0667 / 0.1764 / 0.2906 / 0.4055.
+
+  HALF ONE — a MAP over a partial take. Active take 0, map `96000 -> 1`:
+    column [0, 2 s)  -> take 0 at 0..2 s  -> 0.0667, 0.1764
+    column [2 s, 4 s) -> take 1 AT ITS OWN POSITION 0..2 s -> 0.0667, 0.1764
+  so the timeline reads 0.0667 / 0.1764 / 0.0667 / 0.1764 — the first two
+  seconds REPEATED, which no build that ignores the extent can produce.
+
+  ON `main` the second half reads 0.2906 / 0.4055 instead: `at`/`length` are
+  unknown attributes there, so take 1 is built FULL-extent and the map hands
+  it the column position unshifted — the same source second the column is at.
+  Measured: window 3 reads 0.29 against an expectation of 0.067.
+
+  HALF TWO — an EMPTY map over a partial ACTIVE take. `select-take take="1"`
+  clears the map and activates take 1, and an empty map means "the active take
+  everywhere":
+    column [0, 2 s)  -> take 1 has NO MATERIAL -> SILENCE
+    column [2 s, 4 s) -> take 1 at 0..2 s -> 0.0667, 0.1764
+
+  THE SILENCE IS THE POINT, and it is plan 53 §3.1 step 5 stated as audio:
+  there is NO FALL-BACK to another take where the selected one has no
+  material, even though take 0 covers that span perfectly well. A build that
+  fell back would play 0.0667 / 0.1764 there and look entirely reasonable
+  doing it. (Review 2 M2 caught an earlier draft of this very case encoding
+  the fall-back as the expectation.)
+
+  ON `main` half two reads take 1 full-extent everywhere: 0.0667 / 0.1764 /
+  0.2906 / 0.4055, so the first window fails against silence.
+
+  Both renders are in ONE process, the second over pages and a capture the
+  first has already warmed — a column that resolved correctly only from cold
+  would pass a case that rendered once.
+-->
+<SActionScript version="1" name="take_extents_audible">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1: the column's second half, reading the source from 0.
+         activate="0" keeps take 0 active for half one. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+
+    <!-- HALF ONE: the map sends the second half to the partial take. -->
+    <set-comp-segment clip="0,0" at="96000" take="1"/>
+    <assert-take-column clip="0,0" comp="96000:1" activeTake="0"/>
+
+    <render filename="tex_mapped.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tex_mapped.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="tex_mapped.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- The two that only an extent-shifted read can produce: the source's
+         FIRST two seconds, arriving in the column's SECOND half. -->
+    <assert-audio-energy filename="tex_mapped.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="tex_mapped.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- HALF TWO: the map is cleared and the PARTIAL take is the active one.
+         select-take is still A0a's — "this take everywhere, map cleared" —
+         and that is precisely what makes the uncovered span silent. -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" comp="" activeTake="1"
+                        takeAtPos="0" expectTake="-1"/>
+
+    <render filename="tex_partial_active.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- SILENCE over the whole uncovered half, in one assertion rather than
+         two: there is nothing to tell apart inside it. -->
+    <assert-audio-energy filename="tex_partial_active.wav"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="tex_partial_active.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="tex_partial_active.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- The column did NOT move or shrink: it still owns its whole 4 s even
+         though its active take covers half of it. That is what duration_
+         exists for — before it, getDuration() answered the active take and
+         the clip's right edge would have jumped to 2 s on that click. -->
+    <assert-take-column clip="0,0" duration="192000"
+                        extents="0-192000;96000-192000"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

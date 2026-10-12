@@ -6,13 +6,22 @@
 #include <QList>
 
 // Action: remove one take from a take stack (proposal 17). When a single
-// take remains afterwards, the stack collapses back to a plain cut
-// placement (invariant 3). Removing the active take leaves no take audible
-// unless `thenActivate` (>= -1) explicitly selects one afterwards — the
-// add-take inverse uses this to restore the pre-add selection exactly.
+// FULL-EXTENT take remains afterwards, the stack collapses back to a plain cut
+// placement (invariant 3′; a surviving PARTIAL take stays a column, plan 53
+// §4.2). Removing the active take leaves no take audible unless `thenActivate`
+// (>= -1) explicitly selects one afterwards — the add-take inverse uses this
+// to restore the pre-add selection exactly.
 //
-// Inverse: add-take with the removed take's file/window at the same index
-// (null — not undoable — when the take's content has no file path).
+// THE COLUMN DOES NOT SHRINK. Since invariant 1′ the column has a length of
+// its own, so removing the take that reached furthest leaves a span nothing
+// covers — which plays SILENCE rather than moving the clip's right edge under
+// the user.
+//
+// Inverse: add-take with the removed take's file/window AND ITS EXTENT at the
+// same index (null — not undoable — when the take's content has no file
+// path). The extent is carried rather than re-derived: an `add-take` with no
+// `at`/`length` means the whole column, so an inverse without them would hand
+// back a take covering more than the one it replaced.
 class SRemoveTakeAction : public SAction {
 public:
     SRemoveTakeAction() = default;

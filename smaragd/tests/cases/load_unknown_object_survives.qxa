@@ -29,7 +29,20 @@
 
   It also carries proposal 37's formatVersion contract, because this is the
   natural fixture for it: the project declares no version at all (= 1, every
-  file written before P0a), and re-saving it must stamp formatVersion='2'.
+  file written before P0a), and re-saving it must stamp the CURRENT version.
+
+  THE VERSION IS 3 SINCE PLAN 53 A0a (QBX-177), and this line is the whole of
+  that change's flip list — it was 2, and the plan said so in advance (§9).
+  Take extents made the bump necessary: a version-2 reader parses a column
+  with a partial take without complaint and then reports the ACTIVE take's
+  length as the COLUMN's, so the clip shrinks and grows as the user clicks
+  between takes. The loader only WARNS on a newer version and reads anyway, so
+  the bump is what makes that build say so.
+
+  NOTHING ELSE ABOUT THIS CASE MOVES, and that is the point of asserting it
+  here: this fixture has no take column at all, so its bytes are otherwise
+  identical to what version 2 wrote. A fixture whose CONTENT changed would
+  have hidden the version change among real ones.
 -->
 <SActionScript version="1" name="load_unknown_object_survives">
 
@@ -41,10 +54,11 @@
     <!-- The recovery announced itself, naming the element it dropped. -->
     <assert-log contains="SFutureThing" minCount="1"/>
 
-    <!-- A legacy file (no formatVersion) re-saves as version 2. -->
+    <!-- A legacy file (no formatVersion) re-saves as the CURRENT version,
+         which is 3 since plan 53 A0a — see the header. -->
     <save-project path="../../build/load_unknown_object_resave.qxp"/>
     <assert-file-contains path="../../build/load_unknown_object_resave.qxp"
-                          text="formatVersion='2'"/>
+                          text="formatVersion='3'"/>
 
     <render filename="load_unknown_object_survives.wav" format="wav" quality="10"/>
 

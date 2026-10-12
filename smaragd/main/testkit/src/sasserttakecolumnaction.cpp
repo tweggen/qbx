@@ -54,11 +54,25 @@ SApplyResult SAssertTakeColumnAction::apply( SProject *project )
         }
     }
 
+    // EVERY TAKE'S EXTENT, in the same spelling the attribute takes
+    // (plan 53 §4.1).
+    QString gotExtents;
+    if( column ) {
+        for( int i = 0; i < column->nTakes(); ++i ) {
+            if( !gotExtents.isEmpty() ) gotExtents += ";";
+            gotExtents += QString::number( column->takeExtentStart( i ) ) + "-"
+                        + QString::number( column->takeExtentEnd( i ) );
+        }
+    }
+    const qint64 gotDuration =
+        column ? (qint64) column->getDurationBlocking() : -1;
+
     const QString detail =
         QString( "clip %1: shape=%2 takes=%3 activeTake=%4 placements=%5" )
             .arg( clip_ ).arg( gotShape ).arg( gotTakes ).arg( gotActive )
             .arg( gotPlace )
-        + QString( " comp=[%1]" ).arg( gotComp );
+        + QString( " comp=[%1] extents=[%2] duration=%3" )
+              .arg( gotComp ).arg( gotExtents ).arg( gotDuration );
 
     if( !shape_.isEmpty()
         && shape_.compare( gotShape, Qt::CaseInsensitive ) != 0 ) {
@@ -69,6 +83,16 @@ SApplyResult SAssertTakeColumnAction::apply( SProject *project )
     if( hasComp_ && comp_ != gotComp ) {
         qWarning() << "assert-take-column FAILED: comp expected" << comp_
                    << "-" << detail;
+        return { false, nullptr };
+    }
+    if( hasExtents_ && extents_ != gotExtents ) {
+        qWarning() << "assert-take-column FAILED: extents expected" << extents_
+                   << "-" << detail;
+        return { false, nullptr };
+    }
+    if( duration_ >= 0 && duration_ != gotDuration ) {
+        qWarning() << "assert-take-column FAILED: duration expected"
+                   << duration_ << "-" << detail;
         return { false, nullptr };
     }
     if( takeAtPos_ >= 0 && column ) {
@@ -115,6 +139,9 @@ void SAssertTakeColumnAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "placements", placements_ );
     if( linkObjectRefs_ >= 0 ) elem.setAttribute( "linkObjectRefs", linkObjectRefs_ );
     if( hasComp_ ) elem.setAttribute( "comp", comp_ );
+    if( hasExtents_ ) elem.setAttribute( "extents", extents_ );
+    if( duration_ >= 0 ) elem.setAttribute( "duration",
+                                            QString::number( duration_ ) );
     if( takeAtPos_ >= 0 ) {
         elem.setAttribute( "takeAtPos", QString::number( takeAtPos_ ) );
         elem.setAttribute( "expectTake", expectTake_ );
@@ -131,6 +158,9 @@ bool SAssertTakeColumnAction::readXml( const QDomElement &elem, int )
     linkObjectRefs_ = elem.attribute( "linkObjectRefs", "-1" ).toInt();
     hasComp_    = elem.hasAttribute( "comp" );
     comp_       = elem.attribute( "comp", "" );
+    hasExtents_ = elem.hasAttribute( "extents" );
+    extents_    = elem.attribute( "extents", "" );
+    duration_   = elem.attribute( "duration", "-1" ).toLongLong();
     takeAtPos_  = elem.attribute( "takeAtPos", "-1" ).toLongLong();
     expectTake_ = elem.attribute( "expectTake", "-2" ).toInt();
     return true;

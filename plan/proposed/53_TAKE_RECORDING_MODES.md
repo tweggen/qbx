@@ -400,7 +400,78 @@ found that the first draft relaxed invariant 1 and left five load-bearing
 consequences to the implementer; they are spelled out here, each with the
 code fact that forces it.
 
-### 4.1 Take extents (invariant 1 → 1′)
+### 4.1 Take extents (invariant 1 → 1′) — **SHIPPED as A0a (QBX-177)**
+
+> **SIX CORRECTIONS FROM BUILDING IT.** The rules below are what landed; these
+> are where the section was wrong, underspecified, or right about a defect and
+> wrong about how to gate it.
+>
+> **(a) `normalizeColumns` IS A TAKE-GEOMETRY CONSUMER AND THE SECTION DOES NOT
+> LIST IT.** The post-load fold (proposal 42 M4) writes the WRAPPER's window
+> onto every take — so under 1′ it must also set the column's new
+> `duration_`, or the folded column keeps the length it LOADED with and reports
+> every take as partial. Measured: `takestack_wrap_takeslip.qxp` loads a 192000
+> column behind a 96000 wrapper, and without the fix the folded column read
+> `extents=[0-96000;0-96000] duration=192000`, routed a plain legacy column
+> through `twCompColumn`, and `take_lane_click_wrapped`'s render came back half
+> take 0. The fold now also REFUSES a column that already has a partial take,
+> like every other inexact fold. This is the one place where 1′ could have
+> changed what a years-old project sounds like.
+>
+> **(b) THE INVALIDATION GATE CANNOT BE BUILT FROM `resize-clip take=`.** The
+> bullet is right that three verbs are affected; it is wrong that a slip can
+> show it. `resize-clip` on a direct column calls `applyWindowAll` FIRST, and
+> that publishes `durationChanged` for the whole column before the named take
+> is touched — `slip-clip`'s own documentation already said so ("`resize-clip`
+> and a released `drag-clip-edge` both commit through `setWindow`, whose
+> `durationChanged` reaches `twTrackMix::updateClip` and stales the extent
+> regardless"). And `set-clip-volume take=` / `set-clip-fade take=` go only
+> through the dirty-range walk, as the bullet says, but their value is applied
+> ABOVE the column: `STrack::refreshClipGainCurves()` reads the clip's gain,
+> which for a column is the ACTIVE take's. MEASURED: −20 dB on a comped
+> INACTIVE take left the render bit-identical even with 1′ in place. That is a
+> real hole — per-take gain is inaudible on a comped column — and it is NOT
+> A0a's; it belongs with per-region gain (P5). The gate is built on
+> `slip-clip`, which gained `take=` for it.
+>
+> **(c) NO `bumpRenderChainEpochRange` OVERRIDE ON THE COLUMN, measured.** It
+> looks obviously required — the column owns a `twCompColumn` whose per-take
+> `twView`s hold page caches, and the base default does nothing — and it is
+> redundant: `STrack::bumpRenderChainEpochRange` already invalidates
+> `cpTrackMix_` over the same range. Added on a wrong diagnosis, then
+> SABOTAGED: with the push removed all five A0a gates still pass, including the
+> invalidation one. What made the wrong diagnosis look right was the SLIP
+> THROTTLE (`SCut::SLIP_INVALIDATE_MS`, 333 ms, one immediate shot per process
+> which `add-take startOffset=` had already spent): the model moved and the
+> render did not, which reads exactly like a missing invalidation.
+>
+> **(d) §4.1's "W1's column split at 4 s" IS A NUMBER THAT DOES NOT FIT ITS OWN
+> EXAMPLE.** §3.4's W1 has A = `[0, 8.1)`, so a cut at 4 s falls INSIDE A and
+> yields head `{A, R}` / tail `{A, B, R}`. The outcome this bullet states —
+> head `{A, R}`, tail `{B, R}` — needs the cut AT A's end, which is what a
+> split between two adjacent children is. The outcome is the specification;
+> `take_extents_split` gates it at this suite's scale.
+>
+> **(e) "THE INVERSE RESTORES THE MOVED TAKES BY IDENTITY" IS NOT ASSERTABLE.**
+> No verb in the suite can see object identity — `placements` and
+> `linkObjectRefs` read the column and the placement, never a take — and a
+> clone carries the window, slip, fades, volume and envelope faithfully, so no
+> render separates a move from a clone either. The gate asserts every
+> observable consequence (order, extents, duration, per-take slip, both maps,
+> a byte-identical render) plus `drain-pending-deletes`. The move is still the
+> right implementation, for plan 52's reason; it is simply not what the gate
+> proves.
+>
+> **(f) `assert-file-contains` WAS UNDOCUMENTED ENTIRELY**, not just its
+> `absent=` attribute (§8's parenthesis and review 2 m4 both say the
+> attribute). A0a adds the whole `docs/ACTIONS.md` row.
+>
+> Two scope calls recorded rather than assumed: `hasPreview`/`getPreview` move
+> with the PAINTERS in A0b (a preview is what a painter reads; windowing one
+> while the painters still draw across the whole column makes a half-windowed
+> picture), and `resize-clip`'s left-edge loop still overwrites a partial
+> take's extent — unreachable today, noted in the code, and A0b's to fix
+> together with the EMPTY-refusal.
 
 Today (`stakestack.h` invariants): every take shares the column's duration;
 take-link `startTime` is always 0; and **the column has no length of its
@@ -1128,7 +1199,9 @@ then `set-option` back; this case is the ONE owner of the `midi/recordMode`
 INI key from now on); `midi_record_modes.qxa` rewritten to drive the project
 property and to touch no INI key.
 
-### A0a — take extents, model only (§4.1) — depends on B1, B3, B4, B10
+### A0a — take extents, model only (§4.1) — depends on B1, B3, B4, B10 — **SHIPPED (QBX-177)**
+
+The six corrections from building it are in §4.1. Gated clean; the five gates below exist and were each watched failing on a `main` baseline built at `1bd252e7`, and `take_extents_invalidate` additionally bites under sabotage of the per-take forwarding alone.
 
 Build: `STakeStack::duration_` (stored, derived on load, written only when it
 carries information); extents in `insertTake` and the loader;
@@ -1174,6 +1247,20 @@ is broken and the PR stops.
 Build: extent-aware `select-take` (§4.3); `resize-clip`'s clamp and
 EMPTY-refusal; the take-lane slip and `resize-clip take=` reading extents;
 both painters' extent windows and the hatched no-material span.
+
+Plus TWO ITEMS A0a HANDED OVER BY NAME, both recorded at their own sites:
+
+  * `STakeStack::hasPreview`/`getPreview` are still the active take's,
+    UNWINDOWED. A preview is what a painter reads, so windowing it while both
+    painters still draw across the whole column produces a half-windowed
+    picture: an envelope that stops at the extent inside a waveform that does
+    not. The pair moves together, here.
+  * `SResizeClipAction`'s LEFT-EDGE branch (no take named) writes `duration_`
+    onto every take, which is invariant 1 speaking after `applyWindowAll` has
+    already clamped correctly under 1′. Unreachable today — the only producers
+    of a partial take are `add-take at=/length=` from a script and
+    `split-clip`, which preserves them — and the edit surface that would reach
+    it is this row's own subject.
 
 Gates: `select_take_extent_aware.qxa` (`select-take take="1"` on a partial
 take 1 leaves take 0 audible over `[0, 96000)`; on a full-extent take it is
@@ -1330,7 +1417,7 @@ behaviour change, and each is edited in the PR that causes it.
 
 | gate | today pins | after | in |
 |---|---|---|---|
-| `load_unknown_object_survives.qxa:44-47` | a legacy file re-saves as `formatVersion='2'` | `'3'` | A0a |
+| `load_unknown_object_survives.qxa:44-47` | a legacy file re-saves as `formatVersion='2'` | `'3'` | A0a — **DONE**, and it was the whole flip list: nothing else in the suite moved |
 | `takes_recording_placement.qxa:40-51` | silence over 192000–288000 | old material's source sec 2–3 (RMS 0.26–0.33, 0.37–0.44); one lane child | P2 |
 | `place_recording_over_earlier_clip.qxa` (1),(2) | the earlier clip is overlapped, recording is a plain cut at `0,1`/`0,2` | one union column at `0,0`; audibility asserted instead of child count | P2 |
 | `place_recording_over_earlier_clip.qxa` (3), line 61 | `assert-clip-window clip="0,1" startTime="48000"` | cannot hold once (1),(2) made one column: rewritten to `assert-take-column clip="0,0"`; B5's `clip="0,2" shape="none"` assertion is replaced by `takes=` on the one column | P2 (B5's own edit is to the gate as it stands on `main`) |
@@ -1453,8 +1540,8 @@ existing tickets. Order within a group is landing order.
 | M0 | record-mode property: project / folder / track, `set-track-record-mode`, INI seed at the new-project seams, `mode=` plumbing, transport selector, two per-user prefs; `midi_record_modes.qxa` rewritten; `record_mode_ini_seed.qxa` owns the INI key | D2 (default: folder) | M |
 | P1a (**QBX-171**) | planner framework with the simulated child list (`srecplan`); `LegacyTakes` behind `takes` (no flip); `overdub`; `place-recording` as the thin verb with `mode=`/`armed=`; the recorder's pass-wide snap and hand-over | B1–B5, M0, QBX-146 step a (landed) | M |
 | P1b (**QBX-172**) | `takes-split` (§3.2, appended-index bookkeeping) and `replace` (§3.3) over `split-clip`/`remove-sample` — NOT `resize-clip`, see §3.3; the held-plan lifetime fix §5.1 needed; G12 recorded as unrepresentable and gated as the PRECEDENCE in `record_loop_takes` | P1a | M |
-| A0a | take extents, model only: `duration_`, extents in `insertTake`/loader, resolution rule, `twCompColumn` extents + xfade clamp, invalidation, split per-half/re-index/identity inverse, `remove-take` extent inverse, `add-take at=/length=`, `FORMAT_VERSION 3` + its flip | B1, B3, B4, B10 | L |
-| A0b | take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters | A0a | M |
+| A0a **(SHIPPED, QBX-177)** | take extents, model only: `duration_`, extents in `insertTake`/loader, resolution rule, `twCompColumn` extents + xfade clamp, invalidation, split per-half/re-index/identity inverse, `remove-take` extent inverse, `add-take at=/length=`, `FORMAT_VERSION 3` + its flip | B1, B3, B4, B10 | L |
+| A0b | take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters, **plus two items A0a handed over by name**: `hasPreview`/`getPreview`' extent window (it moves with the painters, or the picture is half-windowed) and `resize-clip`'s LEFT-EDGE loop, which still writes the column's duration onto every take — unreachable today, noted at the site | A0a | M |
 | A1 | `merge-columns` / `unmerge-columns` with the link-move protocol | A0a, B1 | M |
 | P2 | mode A (`takes`) replaces `LegacyTakes`; the §9 flips | P1, A0b, A1, D1 (default (a)) | L |
 | P3 | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind | P2 | M |

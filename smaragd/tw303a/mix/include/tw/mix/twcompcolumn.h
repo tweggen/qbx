@@ -59,6 +59,28 @@ public:
     /** The map, and the fallback the empty parts of it mean. */
     void setCompMap( const twCompMap &map, int activeTake );
 
+    /**
+     * ONE TAKE'S EXTENT: it occupies column positions [tStart, tStart + len)
+     * and its OWN domain starts at 0 there (plan 53 §4.1, invariant 1′).
+     *
+     * So a position `p` inside the extent reads the take at `p - tStart`, and
+     * a position OUTSIDE it reads NOTHING: the take contributes silence, and
+     * — the load-bearing half — the page plan DECLARES NO DEPENDENCY on it
+     * there. A plan that declared one would have the scheduler build a lazy
+     * reader for a window the take does not have, which is both a wasted
+     * freeze and, for a stretched take, a DSP state chain advanced over
+     * material nobody is listening to.
+     *
+     * `len < 0` means UNBOUNDED — the default, and what every caller written
+     * before extents gets: the take covers wherever the map sends it, which is
+     * exactly the old behaviour. `setTakes` resets every entry to it, so the
+     * extents are set AFTER the take list (STakeStack::ensureCompColumn).
+     *
+     * A take index outside the current list is ignored rather than stored: the
+     * list is authoritative and is rebuilt whenever the column's takes change.
+     */
+    void setInputExtent( int takeIndex, offset_t tStart, length_t len );
+
     idx_t getOutputChannels() const override { return channels_; }
 
     twPagePlan planPage( offset_t pageStart ) override;
@@ -119,12 +141,32 @@ private:
      * boundaries. Overlapping crossfades would need three takes live at once,
      * and a rule that silently produced that is a rule that produces audio
      * nobody asked for.
+     *
+     * AND CLAMPED TO BOTH TAKES' EXTENTS (plan 53 §4.1): a crossfade is
+     * centred on the boundary, so it needs the OUTGOING take to have material
+     * after it and the INCOMING one to have material before it. W1's boundary
+     * at T is the case — the outgoing take ends exactly there — and a fade
+     * that ignored the extent would fade out of silence, i.e. fade DOWN the
+     * incoming take over material that is all there is.
      */
     int64_t clampedXfade_nolock( size_t segIndex ) const;
+
+    /** Does take `t` have material at column position `pos`? */
+    bool takeLiveAt_nolock( int t, offset_t pos ) const;
+    /**
+     * The first extent edge of take `t` strictly after `pos`, or -1 when none.
+     * What keeps a CompRun from straddling an extent boundary, so that every
+     * run is wholly inside or wholly outside each contributing take — which
+     * is what "a span over which the set of contributing takes does not
+     * change" has to mean once takes have extents.
+     */
+    offset_t nextTakeEdgeAfter_nolock( int t, offset_t pos ) const;
 
     struct TakeEntry {
         std::shared_ptr<twView>       view;
         std::shared_ptr<twOutputPage> previousPage;   // per-take state chain
+        offset_t                      exStart = 0;    // extent start, column frames
+        length_t                      exLen   = -1;   // < 0 = unbounded
     };
 
     tw303aEnvironment       &env_;

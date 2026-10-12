@@ -11,6 +11,7 @@
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
 #include "tw/core/twfraction.h"
+#include "tw/core/twlog.h"
 #include <QDomElement>
 
 using namespace strackpath;
@@ -62,44 +63,188 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         return {false, nullptr};        // split point outside the clip
     }
 
-    // A take stack splits into two stacks: every take is split with the
-    // plain-window arithmetic below (offsets and durations live in the
-    // stretched OUTPUT domain, so the timeline split offset applies to each
-    // take as-is, whatever its stretch). Both columns keep the active-take
-    // selection — this is what turns takes into per-region comping.
+    // A TAKE STACK SPLITS INTO TWO STACKS, PER TAKE EXTENT (plan 53 §4.1).
+    //
+    // Before invariant 1′ every take spanned the whole column, so the split
+    // was one rule: clone every take into the tail and trim every take in the
+    // head. Under 1′ a take covers only its own span, so MEMBERSHIP is the
+    // first question and there are three answers:
+    //
+    //   * a take WHOLLY IN THE HEAD belongs to the head only, untouched;
+    //   * a take WHOLLY IN THE TAIL belongs to the tail only, and is MOVED
+    //     there -- the same object, its tStart shifted by -inObjOffset
+    //     (plan 52's identity rule: an undo must give back the object the
+    //     edit moved, not a rebuild of it);
+    //   * a take CROSSING the split is windowed into BOTH: trimmed in the head
+    //     and CLONED into the tail, which is what this code always did.
+    //
+    // Take indices are then renumbered PER HALF and each half's comp map is
+    // RE-INDEXED onto its own numbering -- B3's "head keeps < split, tail
+    // shifted" becomes "... and re-indexed", because a segment's take number
+    // means a different take once a take has gone missing from that half.
+    //
+    // FOR A FULL-EXTENT COLUMN EVERY TAKE CROSSES, so this reduces exactly to
+    // the old clone-and-trim with identity index maps and unremapped maps,
+    // which is why no existing split gate moves.
     if (STakeStack *stack = dynamic_cast<STakeStack*>(&obj0)) {
+        const int nT = stack->nTakes();
+        const length_t colDur = fullDur;          // the COLUMN's own length
+
+        enum Where { HeadOnly, TailOnly, Crossing };
+        struct Rec {
+            offset_t s = 0;
+            length_t len = 0;
+            Where    where = Crossing;
+            Fraction tailAnchor;     // crossing takes only
+            Fraction stretch;
+        };
+        QList<Rec> recs;
+        int nHead = 0, nTail = 0;
+        for (int i = 0; i < nT; ++i) {
+            SClipWindow *w = stack->takeAt(i);
+            Rec r;
+            r.s   = stack->takeExtentStart(i);
+            r.len = stack->takeExtentLength(i);
+            const offset_t e = r.s + (offset_t)r.len;
+            r.where = (e <= inObjOffset)   ? HeadOnly
+                    : (r.s >= inObjOffset) ? TailOnly
+                                           : Crossing;
+            if (w) {
+                r.stretch = w->stretchOrRate();
+                if (r.where == Crossing) {
+                    // The content position the split maps to, computed from the
+                    // take's OWN window while it is still intact: exact
+                    // rational, no floor (proposal 18 Phase 3; W1 makes it
+                    // piecewise through the warp map, identical to the old
+                    // /stretch when there are no anchors). The split offset is
+                    // relative to the TAKE, which begins at its tStart.
+                    r.tailAnchor = w->timelineToSourceExact(
+                        Fraction( (int64_t)( inObjOffset - r.s ) ) );
+                }
+            }
+            if (r.where != TailOnly) ++nHead;
+            if (r.where != HeadOnly) ++nTail;
+            recs.append(r);
+        }
+        // A HALF WITH NO TAKES IS REFUSED, not built (invariant 3′ says a
+        // column never has zero takes). It is unreachable for a full-extent
+        // column -- every take crosses -- and becomes reachable only with the
+        // §4.2 placeholder, a column longer than any take reaches. Refusing
+        // keeps the alternative, an empty column, out of the model entirely.
+        if (nHead == 0 || nTail == 0) {
+            TW_LOGW( "cut", "split-clip: refusing to split a take column at "
+                            "%lld -- %s half would hold no take at all "
+                            "(plan 53 invariant 3′).",
+                     (long long)inObjOffset, nHead == 0 ? "the head" : "the tail" );
+            return {false, nullptr};
+        }
+
+        // Per-half numbering, and the index maps the comp maps are remapped
+        // through. Original order is preserved within each half.
+        QList<int> headIdxOf, tailIdxOf;
+        int hn = 0, tn = 0;
+        for (int i = 0; i < nT; ++i) {
+            headIdxOf.append( recs[i].where != TailOnly ? hn++ : -1 );
+            tailIdxOf.append( recs[i].where != HeadOnly ? tn++ : -1 );
+        }
+
         // THE COMP MAP IS SPLIT TOO (plan 53 B3). On the direct shape the
         // column IS the placement, so the tail's frame domain re-bases to 0 and
         // the map has to follow it; the original is kept for the inverse,
         // because neither half can reconstruct it from the other.
         const twCompMap origMap = stack->compMap();
+        const int origActive = stack->activeTakeIndex();
         twCompMap headMap, tailMap;
         stakes::splitCompMap( origMap, (int64_t)inObjOffset,
                               &headMap, &tailMap );
+        headMap = stakes::remapCompMap( headMap, headIdxOf );
+        tailMap = stakes::remapCompMap( tailMap, tailIdxOf );
 
+        // BUILD THE TAIL IN ORIGINAL TAKE ORDER, so its indices are the
+        // original order restricted to the takes that have material there --
+        // which is exactly what tailIdxOf says, and what the inverse walks
+        // back. `liveOrig` tracks what is still in the head as takes are moved
+        // out of it, because a removal shifts every later index down.
         STakeStack *stack2 = new STakeStack(project);
-        for (int i = 0; i < stack->nTakes(); ++i) {
-            SClipWindow *w1 = stack->takeAt(i);
-            if (!w1) continue;
-            SClipWindow *w2 = w1->cloneWindowOver(project);
-            if (!w2) continue;
-            // Tail anchor = the content position the split offset maps to:
-            // exact rational, no floor (proposal 18 Phase 3; W1 makes it
-            // piecewise through the warp map, identical to the old /stretch
-            // when there are no anchors). The tail carries no loop — a loop
-            // is a property of the region that was cut in two.
-            w2->setWindowExact( w1->timelineToSourceExact(
-                                    Fraction( (int64_t)inObjOffset ) ),
-                                fullDur - inObjOffset, 0,
-                                w1->stretchOrRate() );
-            stack2->insertTake(*w2);
+        QList<int> liveOrig;
+        for (int i = 0; i < nT; ++i) liveOrig.append(i);
+        // The inverse's per-take record, filled as the halves are built.
+        QList<SUnsplitClipAction::TakeRestore> restores;
+        for (int i = 0; i < nT; ++i) {
+            const Rec &r = recs[i];
+            if (r.where == HeadOnly) continue;
+            const int curIn = liveOrig.indexOf(i);
+            if (curIn < 0) continue;
+            if (r.where == Crossing) {
+                SClipWindow *w1 = stack->takeAt(curIn);
+                if (!w1) continue;
+                SClipWindow *w2 = w1->cloneWindowOver(project);
+                if (!w2) continue;
+                // The tail piece starts at the tail column's own 0 and runs to
+                // the take's original end. No loop -- a loop is a property of
+                // the region that was cut in two.
+                const length_t tailLen =
+                    (length_t)( r.s + (offset_t)r.len - inObjOffset );
+                w2->setWindowExact( r.tailAnchor, tailLen, 0, r.stretch );
+                stack2->insertTake( *w2, -1, 0, tailLen );
+            } else {
+                // WHOLLY IN THE TAIL: moved, same object, tStart re-based.
+                stakes::moveTakeBetweenColumns(
+                    *stack, curIn, *stack2, -1,
+                    r.s - inObjOffset, r.len );
+                liveOrig.removeAt(curIn);
+            }
         }
-        stack2->setActiveTake(stack->activeTakeIndex());
+        // TRIM THE HEAD'S CROSSING TAKES, after the clones have read them.
+        // A take wholly in the head is NOT touched: it already ends before the
+        // split, and trimming it would be the old all-takes rule reasserting
+        // itself over an extent the user chose.
+        for (int i = 0; i < nT; ++i) {
+            if (recs[i].where != Crossing) continue;
+            const int curIn = liveOrig.indexOf(i);
+            if (curIn >= 0)
+                stack->setTakeExtent( curIn, recs[i].s,
+                                      (length_t)( inObjOffset - recs[i].s ) );
+        }
+
+        // Each half's own length, written DIRECTLY: both halves' takes have
+        // just been placed deliberately, and setDurationAll's clamp would be a
+        // second opinion about geometry this code already settled.
+        stack2->setColumnDuration( colDur - (length_t)inObjOffset );
+        stack->setColumnDuration( (length_t)inObjOffset );
+
+        // EACH HALF'S ACTIVE TAKE (plan 53 §4.1): the original one when it has
+        // material in that half (re-indexed), else the lowest-index take with
+        // material at the half's START -- a half may not come out with an
+        // active take that is silent everywhere in it, which under the old
+        // "both halves keep the selection" rule is exactly what a take wholly
+        // on the other side would have left behind.
+        auto pickActive = []( STakeStack *col, int preferred ) {
+            if( preferred >= 0 && preferred < col->nTakes() ) return preferred;
+            for( int i = 0; i < col->nTakes(); ++i )
+                if( col->takeCoversPos( i, 0 ) ) return i;
+            for( int i = 0; i < col->nTakes(); ++i )
+                if( col->takeExtentLength( i ) > 0 ) return i;
+            return -1;
+        };
+        const int headPref = ( origActive >= 0 && origActive < nT )
+                                 ? headIdxOf.at( origActive ) : -1;
+        const int tailPref = ( origActive >= 0 && origActive < nT )
+                                 ? tailIdxOf.at( origActive ) : -1;
+        stack2->setActiveTake( pickActive( stack2, tailPref ) );
         stack2->setCompMap( tailMap );
-        stack->setDurationAll(inObjOffset);
-        // AFTER setDurationAll: setCompMap emits durationChanged, and the head
-        // must already be its new length when that reaches the track.
+        stack->setActiveTake( pickActive( stack, headPref ) );
+        // AFTER the head's own length: setCompMap emits durationChanged, and
+        // the head must already be its new length when that reaches the track.
         stack->setCompMap( headMap );
+        // ...and one publish for the head whatever happened above, because
+        // setColumnDuration writes a field and emits nothing, setActiveTake
+        // returns early when the index did not change, and an empty map is no
+        // change to setCompMap. setDurationAll at the length it already has is
+        // a geometric NO-OP (every take is inside it) whose only effect is the
+        // durationChanged the track's resync needs.
+        stack->setDurationAll( (length_t)inObjOffset );
+
         SLink *sl2 = new SLink(*stack2, NULL);
         sl2->setStartTime(startTime + inObjOffset);
         sl2->setParent(track);
@@ -111,6 +256,22 @@ SApplyResult SSplitClipAction::apply(SProject *project)
         SUnsplitClipAction *inverse = new SUnsplitClipAction(
             firstPath, secondPath, fullDur, inObjOffset);
         if( !origMap.empty() ) inverse->setRestoreCompMap( origMap );
+        // THE PER-TAKE RECORD, which is what makes this inverse MIXED (plan 53
+        // §4.1): a moved take comes back by identity at its original index and
+        // extent, a crossing take is re-grown in the head, and the tail's
+        // clones die with the tail. None of that is derivable from the two
+        // halves afterwards -- which half a take came from is exactly the
+        // information the split consumed.
+        for (int i = 0; i < nT; ++i) {
+            SUnsplitClipAction::TakeRestore tr;
+            tr.origIndex = i;
+            tr.tStart    = recs[i].s;
+            tr.tLen      = recs[i].len;
+            tr.fromTail  = ( recs[i].where == TailOnly );
+            tr.halfIndex = tr.fromTail ? tailIdxOf.at(i) : headIdxOf.at(i);
+            restores.append(tr);
+        }
+        inverse->setTakeRestore( restores, origActive );
         return {true, inverse};
     }
 

@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  REMOVING A TAKE FROM A COLUMN WITH EXTENTS (plan 53 §4.1, §4.2 / A0a,
+  QBX-177). Two claims, in the order they come up.
+
+  CLAIM 1 — `remove-take`'s INVERSE CARRIES THE EXTENT. The inverse is an
+  `add-take`, whose extent defaults mean "the whole column", so before this
+  change undoing the removal of a PARTIAL take handed back a FULL-EXTENT one:
+  the same take count, the same file, the same slip, and a different column.
+  Review 1 item 3c named it; `add-take at=`/`length=` is what carries it.
+
+  CLAIM 2 — INVARIANT 3 BECAME 3'. A one-take column collapses to a plain cut
+  only when that take is FULL-EXTENT. A one-take column with a PARTIAL take is
+  a clip with a HOLE in it, not a plain clip at all (plan 53 §4.2's union
+  placeholder), and collapsing it would silently move the clip's edges onto
+  the take's and lose the column's own length. So the two removals below go
+  opposite ways on purpose:
+
+    remove the PARTIAL take  -> one full-extent take left -> COLLAPSES
+    remove the FULL take     -> one partial take left     -> STAYS A COLUMN
+
+  ON `main` the second one collapses too, because nothing there asks whether
+  the survivor is full-extent — `shape="direct"` is the line that fails, and
+  it fails on an attribute `main` can read, which matters: `extents=` and
+  `duration=` are NEW attributes of `assert-take-column`, and an unknown
+  attribute is SILENTLY IGNORED by the runner. Every claim in this case is
+  therefore also expressed through something `main` understands —
+  `assert-clip-window take= duration=`, `shape=`, and the renders.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav:
+    take 0 — FULL     [0, 192000), source from 0
+    take 1 — PARTIAL  [96000, 192000), source from 96000
+
+  Take 1's slip is what makes the removals audible: it reads the source's
+  THIRD and FOURTH seconds into the column's second half, so when it is the
+  active take the timeline reads silence, silence, 0.2906, 0.4055 — which is
+  not something a full-extent take 1 could produce anywhere.
+
+  Per-source-second RMS of the fixture: 0.0667 / 0.1764 / 0.2906 / 0.4055.
+-->
+<SActionScript version="1" name="take_extents_remove_undo">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+    <assert-clip-window clip="0,0" take="1" duration="96000"
+                        startOffset="96000"/>
+
+    <!-- =============== CLAIM 1: the inverse carries the extent =========== -->
+
+    <!-- Remove the PARTIAL take. One FULL-extent take is left, so invariant
+         3' collapses the column back to a plain cut — exactly as invariant 3
+         always did, because this is the case 3' does not change. -->
+    <remove-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" shape="none" takes="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"
+                        startOffset="0"/>
+
+    <!-- UNDO. The column comes back, and take 1 comes back PARTIAL. On
+         `main` it comes back covering the whole 4 s: the duration below reads
+         192000 there, which is the failing line for claim 1. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+    <assert-clip-window clip="0,0" take="1" duration="96000"
+                        startOffset="96000"/>
+
+    <!-- ...and it is the restored take's own extent that decides what plays.
+         Selecting it leaves the column's first half SILENT, because a take
+         has no material outside its extent and there is no fall-back
+         (§3.1 step 5). A full-extent restore would play 0.2906 / 0.4055 /
+         silence / silence here — loud where this expects silence. -->
+    <select-take clip="0,0" take="1"/>
+    <render filename="teru_partial.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="teru_partial.wav"
+                         startFrame="0" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="teru_partial.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="teru_partial.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- =============== CLAIM 2: invariant 3' ============================= -->
+
+    <!-- Remove the FULL take instead. The survivor is PARTIAL, so the column
+         must STAY a column — `shape="direct"` with one take, keeping its own
+         4 s length even though its only take covers half of it. -->
+    <remove-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="1"
+                        extents="96000-192000" duration="192000"/>
+    <!-- The placement did not move or shrink: the column's length is its own
+         (duration_), not its takes' reach. -->
+    <assert-clip-window clip="0,0" startTime="0"/>
+
+    <!-- The surviving take was the active one, so it is still audible over
+         its own half and the column's first half is silent. Byte-identical to
+         the render above: removing a take that nothing selected cannot change
+         what plays. -->
+    <render filename="teru_one_partial.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="teru_one_partial.wav"
+                          expected="teru_partial.wav"/>
+
+    <!-- And undo brings the full take back at index 0, in order. -->
+    <undo count="1"/>
+    <drain-pending-deletes/>
+    <assert-take-column clip="0,0" shape="direct" takes="2"
+                        extents="0-192000;96000-192000" duration="192000"/>
+    <assert-clip-window clip="0,0" take="0" duration="192000"
+                        startOffset="0"/>
+    <assert-clip-window clip="0,0" take="1" duration="96000"
+                        startOffset="96000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

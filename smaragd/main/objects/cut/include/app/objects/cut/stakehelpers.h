@@ -1,6 +1,9 @@
 #ifndef _STAKEHELPERS_H_
 #define _STAKEHELPERS_H_
 
+#include "tw/graph/tw303aenv.h"   // offset_t / length_t
+#include <QList>
+
 class SProject;
 class SObject;
 class SLink;
@@ -164,7 +167,45 @@ int normalizeColumns( SProject &project );
 void splitCompMap( const twCompMap &src, long long at,
                    twCompMap *head, twCompMap *tail );
 
+/**
+ * RE-INDEX a comp map onto a new take numbering (plan 53 §4.1).
+ *
+ * `newIndexOf[ oldTake ]` is that take's index in the result, or -1 when the
+ * take is NOT PRESENT there -- which is what a split produces, because a take
+ * wholly on one side of the cut belongs to that half only. A segment naming an
+ * absent take is DROPPED, and the previous segment then extends over its
+ * range; that is the same rule `STakeStack::removeTake` applies for the same
+ * reason (the material the segment selected is simply not here), and
+ * `normalized()` merges the adjacent same-take segments a drop can create.
+ *
+ * Without this, splitting a comped column with partial takes leaves each half
+ * with segments pointing at indices that mean a DIFFERENT take, which sounds
+ * like comping at random rather than like a failure.
+ */
+twCompMap remapCompMap( const twCompMap &src, const QList<int> &newIndexOf );
+
 STakeStack *cloneColumn( SProject *project, STakeStack &column );
+
+/**
+ * MOVE one take from one column to another, SAME OBJECT (plan 53 §4.1).
+ *
+ * What `split-clip`'s inverse needs and a clone cannot give: plan 52's
+ * identity rule says an undo restores the very object the edit moved, so a
+ * take that was moved wholly into the tail must come BACK, not be rebuilt from
+ * its file (which would lose its fades, name, volume, pan and automation --
+ * everything `cloneWindowOver` does not reach).
+ *
+ * The take is pinned by a temporary SLink across the removal, exactly as
+ * SRemoveSampleAction pins the object it is about to orphan: `removeTake`
+ * releases the only reference, and `removeRef()`'s deleteLater() cannot be
+ * rescinded once it is posted.
+ *
+ * `toIndex` is the index in the destination (-1 appends); the extent is given
+ * explicitly because it is a property of the LINK, which does not travel.
+ */
+bool moveTakeBetweenColumns( STakeStack &from, int fromIndex,
+                             STakeStack &to, int toIndex,
+                             offset_t tStart, length_t tLen );
 
 /**
  * Wrap a plain-cut placement into a single-take stack (take 0 = the cut,
