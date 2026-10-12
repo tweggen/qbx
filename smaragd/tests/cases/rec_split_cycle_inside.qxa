@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §3.4's cycle-record bullet for mode B, and its G3: under
+  `takes-split`, a clip that STARTS INSIDE the cycle gives TWO COLUMNS PER
+  CYCLE, and no take reaches beyond the cycle. "B — two columns per cycle when
+  a clip starts inside it (G3), accepted."
+
+  Driven through `place-recording mode="takes-split"` directly, once per pass,
+  which is exactly how the recorder submits a cycle: §3.4 says "every pass is
+  one span [cycleIn, cycleOut) against the lane as the previous pass left it",
+  and this case is that sentence with the transport taken out of it. So every
+  number is arithmetic and the two passes are identical by construction rather
+  than by luck — a real cycle's passes differ by capture jitter, which is what
+  makes `record_loop_takes` a floor-assertion case and this one an exact one.
+
+  GEOMETRY. test_sawtooth.wav is 192000 frames (4 s at 48 kHz):
+
+      cycle = [96000, 144000)      the span of every pass
+      O     = [120000, 192000)     a clip STARTING INSIDE the cycle
+
+  PASS 1 cuts O at the cycle end and fills the part of the cycle O does not
+  cover, leaving
+
+      child 0   [120000, 144000)   column: take 0 = O's head, take 1 = pass 1
+      child 1   [96000,  120000)   the plain cut for the uncovered part
+      child 2   [144000, 192000)   O's tail, OUTSIDE the cycle, srcOffset 24000
+
+  PASS 2 then touches children 0 and 1 — both lie inside the cycle, neither
+  needs cutting — and adds a take to each:
+
+      child 0   3 takes, pass 2 active
+      child 1   2 takes, pass 2 active
+      child 2   untouched
+
+  TWO COLUMNS, ONE CYCLE. That is G3, and it is the accepted cost of mode B:
+  mode A would have made ONE union column per cycle instead. Index order is
+  insertion order, so the column that sounds SECOND is child 0 and the one
+  that sounds first is child 1.
+
+  NO TAKE BEYOND THE CYCLE, which is X8 narrowed (§3.1 step 5), and child 2 is
+  where it is checked: it keeps its own extent [144000,192000) and never
+  becomes a take of anything. A planner that let a pass spill past `b` would
+  have swallowed it.
+
+  THE TAKE ANCHORS ARE ASSERTED, and with a deliberate wrong value rejected
+  beside each, because they are what distinguishes "the pass was windowed to
+  each piece" from "the whole pass went to every piece" — the structural
+  assertions cannot see the difference. Child 1 covers the cycle from its
+  start, so its take anchor is 0; child 0 starts 24000 frames into the cycle,
+  so its anchors are 24000.
+
+  WHY IT FAILS ON main: `takes-split` REFUSES there, so pass 1 is already
+  rejected. It would also fail against a silent fallback to `takes`:
+  `LegacyTakes` DROPS a column starting before the pass and would never cut O
+  at the cycle end, so child 2 would not exist at all and child 0 would still
+  be O at its full [120000,192000) — a take extending 48000 frames beyond the
+  cycle, which is the very thing X8 forbids.
+-->
+<SActionScript version="1" name="rec_split_cycle_inside">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav"
+                timePos="120000" startOffset="0" duration="72000"/>
+    <assert-clip-window clip="0,0" startTime="120000" duration="72000"
+                        startOffset="0"/>
+
+    <!-- ===================== PASS 1 ===================== -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+
+    <assert-clip-window clip="0,0" startTime="120000" duration="24000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <assert-clip-window clip="0,0" take="1" startOffset="24000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="24000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,1" shape="none"/>
+    <assert-clip-window clip="0,2" startTime="144000" duration="48000"
+                        startOffset="24000"/>
+    <assert-take-column clip="0,2" shape="none"/>
+    <assert-clip-window clip="0,3" expectReject="true"/>
+
+    <!-- ===================== PASS 2 ===================== -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+
+    <!-- TWO COLUMNS, and the pass went onto BOTH of them at their own
+         extents. No new child: everything inside the cycle was already
+         covered, so nothing was cut and nothing was placed. -->
+    <assert-clip-window clip="0,0" startTime="120000" duration="24000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="2"
+                        comp=""/>
+    <assert-clip-window clip="0,0" take="2" startOffset="24000"/>
+    <assert-clip-window clip="0,0" take="2" startOffset="0"
+                        expectReject="true"/>
+
+    <assert-clip-window clip="0,1" startTime="96000" duration="24000"/>
+    <assert-take-column clip="0,1" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <assert-clip-window clip="0,1" take="1" startOffset="0"/>
+    <assert-clip-window clip="0,1" take="1" startOffset="24000"
+                        expectReject="true"/>
+
+    <!-- NO TAKE BEYOND THE CYCLE: O's tail is still a plain clip at its own
+         extent, two passes later. -->
+    <assert-clip-window clip="0,2" startTime="144000" duration="48000"
+                        startOffset="24000"/>
+    <assert-take-column clip="0,2" shape="none"/>
+    <assert-clip-window clip="0,3" expectReject="true"/>
+
+    <!-- ONE UNDO PER PASS, back to one plain clip. -->
+    <undo count="2"/>
+    <assert-clip-window clip="0,0" startTime="120000" duration="72000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

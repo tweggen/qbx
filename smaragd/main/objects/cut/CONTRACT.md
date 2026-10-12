@@ -916,11 +916,83 @@ at length). Empty, and any value this build does not know, mean "whatever this
 build would do anyway" — which is `LegacyTakes`.
 
 **NOTHING HAS FLIPPED YET.** `Mode::Takes` is `LegacyTakes`, today's planner
-moved with its behaviour intact, and it is the resolved default everywhere.
+moved with its behaviour intact, and it is the resolved default everywhere, so
+no recording made by the recorder lands differently than it did before plan 53.
 `Overdub` is one `place-clip` over whatever the lane holds. `TakesSplit` and
-`Replace` REFUSE loudly (QBX-172) instead of falling back to the legacy shape,
-because a silent fallback is exactly the clean, repeatable false finding an
-unknown attribute produces.
+`Replace` are implemented (QBX-172) and are reachable only by asking for them.
+
+**`TakesSplit` (mode `takes-split`, plan 53 §3.2).** Every touched child is cut
+at `a` and at `b` where those fall inside it; the piece inside `[a, b)` becomes
+a column with the old piece as take 0 and the pass as take 1, active; the pieces
+outside are untouched; the sub-spans of `[a, b)` no child covers become plain
+cuts. A take is therefore an alternative for exactly the span it covers, which
+is why this mode needs none of §4's take-extent model change and could land
+before it. Two things happen by themselves and are deliberately not
+re-implemented: `add-take activate=1` CLEARS the inside piece's comp map
+(QBX-159), and a split column CARRIES its map to both halves (QBX-160).
+
+**`Replace` (mode `replace`, plan 53 §3.3).** Every touched child LOSES
+`[a, b)`, then the pass is laid down as one plain cut. Never wraps, never
+stacks. All four cells reduce to ONE code path shared with `TakesSplit`:
+isolate the inside piece by cutting, then REMOVE that piece instead of adding
+a take to it — R1 cut at `a` and remove the tail, R2 cut at `a` and `b` and
+remove the middle, R3/R5 remove the child outright, R4/R6 cut at `b` and
+remove the head.
+
+It is expressed as `split-clip` + `remove-sample` and NOT as the left-edge
+`resize-clip` plan 53 §3.3 and §12 name. A left trim has to name the piece's
+new SOURCE anchor, and the exact one is
+`SClipWindow::timelineToSourceExact( b - s )`, which runs through the clip's
+warp map — so `srcStart + (b - s) * stretch` is wrong for any warp-anchored
+clip, and rule 2 forbids a planner from reading the lane again to ask.
+`split-clip` computes that anchor exactly, inside itself, and
+`comp_map_survives_split` already gates it, so cutting at `b` and removing the
+head yields the identical window with no new arithmetic anywhere.
+
+**A CUT MUST CLEAR BOTH EDGES BY TWO FRAMES, not merely fall inside.**
+`SSplitClipAction::apply` refuses `inObjOffset <= 1` and
+`inObjOffset >= fullDur - 1`, and `SCompositeAction::apply` rolls the WHOLE
+composite back on the first child that fails — so a planner emitting a cut one
+frame inside a clip loses the entire take, which is the one thing a recorder
+may not do. Plan 53 §3.2's "where those fall strictly inside" is NOT that
+predicate. `pieceCanSplitAt()` is the guard, and a cut that close degrades to
+the no-split cell, whose take anchor then carries the ≤ 2-frame difference as
+leading silence (a negative `srcOffset`, legal since proposal 23). §3.5's
+pass-wide snap removes almost every occurrence before a planner sees it, but
+only when every armed lane agrees.
+
+**BOTH NEW PLANNERS REFUSE A LANE HOLDING A WRAPPED COLUMN** (G11, the matrix's
+"any R · Kw" row). That is a POLICY now and no longer a forced hand, which is
+worth saying because the plan's stated reason has expired: §3.3 and §12 said
+`replace` must refuse a Kw lane because `remove-sample` could restore only the
+direct shape, and QBX-155 landed and it now pins BOTH. What keeps the refusal
+is the rule itself — a surviving wrapper is non-foldable, both modes would have
+to split or delete it, and no gate has ever exercised one. The refusal is
+announced, costs the pass only that lane, and is what
+`record_lane_skipped_reported` (QBX-164) is waiting for.
+
+**THE PLAN IS HELD BY THE ACTION, never built on the stack.** A child's inverse
+may BORROW the child: `remove-sample` pins a take column and hands back an
+`SRestoreTakeColumnAction` whose only link back is `owner_`, documented in that
+header as "holds the pin; borrowed". A stack composite is destroyed when
+`apply()` returns, which deletes the child, drops the pin, and leaves the
+inverse on the undo stack pointing at freed memory — measured as a SIGBUS in
+`rec_replace_cells` before `SPlaceRecordingAction::plan_` existed. Holding it
+makes the lifetimes right by construction, because `SActionUndoCommand` owns
+the forward action and the inverse together and destroys them together.
+`plan_` is not a second source of truth: nothing reads it back, and it is
+rebuilt from scratch on every apply, a redo re-planning against the lane as
+the undo left it.
+
+**Overlapping children go LEFT TO RIGHT under `takes-split`, which deviates
+from plan 53 §3.4 and is recorded there.** §3.4's mode-B bullet says the
+TOPMOST inside piece receives the pass. That is well defined only when one
+piece contains another; for a PARTIAL overlap it names no answer for the part
+the topmost piece does not cover, which would lose recorded audio. The cursor
+rule gives the pass to the FIRST piece covering each position and places it
+exactly once — agreeing with §3.4 wherever §3.4 is precise (W1's adjacent
+children) and never losing audio where it is not. "Topmost" depends on decision
+D1, which P2 owns.
 
 **One deliberate deviation from plan 53 §5.1, recorded there too:** a wrapped
 column is handed to `LegacyTakes` as an ordinary column. §5.1 says every
@@ -929,7 +1001,18 @@ planner, because today's planner hands a wrapped column to `add-take` like any
 other. The refusal is the NEW planners' rule; `LegacyTakes` keeps the old
 behaviour until P2 retires it.
 
-**NOT GATED, and why.** `ChildList` is built from `LaneSnapshot::laneChildCount`
+**`ChildList`'s REMOVAL SHIFT IS GATED since QBX-172**, by
+`rec_replace_cells`' fifth track: two children both inside the pass, so
+`replace` removes the first and the second's index moves DOWN to the slot the
+first vacated. The second `remove-sample` must name the shifted index, and a
+planner computing its paths from the snapshot would name the original one and
+delete whatever had moved into it — successfully, which is silent corruption
+rather than a failed action. Verified by SABOTAGE: replacing
+`live.indexOfOriginal( c.index )` with `c.index` fails the case.
+`takes-split` can never reach that path, because it only ever APPENDS, which is
+why the gate had to wait for a mode that removes.
+
+**WHAT IS STILL NOT GATED, and why.** `ChildList` is built from `LaneSnapshot::laneChildCount`
 — the lane's REAL child count — and not from `children.size()`, because
 `snapshot()` leaves out a live recording and a child with no duration, so a
 `Child`'s `index` may have gaps below it. A simulation built from the

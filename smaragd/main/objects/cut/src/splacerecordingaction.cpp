@@ -24,6 +24,11 @@ SPlaceRecordingAction::SPlaceRecordingAction( const QList<int> &trackPath,
 {
 }
 
+SPlaceRecordingAction::~SPlaceRecordingAction()
+{
+    delete plan_;      // and with it every child action, and any pin one holds
+}
+
 SApplyResult SPlaceRecordingAction::apply( SProject *project )
 {
     if( !project || filePath_.isEmpty() ) {
@@ -78,10 +83,18 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     sp.b         = timePos_ + (offset_t) span;
     sp.srcOffset = srcOff;
     // `fromCycle` is the recorder's knowledge and does not survive a .qxa
-    // (nothing in the XML says a pass came from a cycle), so it stays false
-    // here. The planner that needs it -- X8's "no take beyond the cycle" --
-    // is TakesSplit, in QBX-172, which is where the attribute to carry it
-    // belongs with the case that needs it.
+    // (nothing in the XML says a pass came from a cycle), so it stays false.
+    //
+    // QBX-171 PREDICTED TakesSplit WOULD NEED IT, AND IT DOES NOT. X8's "no
+    // take beyond the cycle" falls out of mode B for free: the pass span IS
+    // the cycle, and `TakesSplit` never places or stacks anything outside
+    // `[a, b)` -- it cuts AT `b` precisely so that what lies beyond stays its
+    // own child (`rec_split_cycle_inside` asserts exactly that, two passes in).
+    // What actually reads this flag is plan 53 §3.1 step 5, which is about
+    // mode A's TAKE EXTENTS -- "for a cycle span the take extent is the WHOLE
+    // cycle" -- and take extents are A0a's model change. So the field stays,
+    // unread, until the planner that needs it exists; the attribute to carry
+    // it belongs with that planner's own case, not here.
     sp.fromCycle = false;
 
     srecplan::Context ctx;
@@ -93,7 +106,14 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
 
     const srecplan::LaneSnapshot snap = srecplan::snapshot( lane, trackPath_ );
 
-    SCompositeAction composite;
+    // HELD, NOT STACK-LOCAL -- see the note on `plan_`. A child's inverse may
+    // BORROW the child (`remove-sample` pins a take column and its
+    // `restore-take-column` reads the pin back through the child), so the
+    // children have to outlive the inverse this returns, and
+    // `SActionUndoCommand` keeps this action for exactly that long.
+    delete plan_;                       // a redo re-plans from scratch
+    plan_ = new SCompositeAction();
+    SCompositeAction &composite = *plan_;
     QString why;
     if( !srecplan::plannerFor( ctx.mode ).plan( snap, sp, ctx, composite,
                                                 &why ) ) {

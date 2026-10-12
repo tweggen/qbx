@@ -156,7 +156,17 @@ struct Span {
     offset_t a = 0;
     offset_t b = 0;
     offset_t srcOffset = 0;
-    bool     fromCycle = false;   ///< X8: a cycle take must not run past [a,b)
+    /**
+     * X8: a cycle take must not run past `[a, b)`.
+     *
+     * STILL UNREAD BY EVERY PLANNER, and that is correct rather than an
+     * oversight. `TakesSplit` keeps X8 for free -- the pass span IS the
+     * cycle and it never places anything outside it. The rule that needs
+     * the flag is plan 53 §3.1 step 5, "for a cycle span the take extent
+     * is the WHOLE cycle", which is about mode A's TAKE EXTENTS and so
+     * belongs to A0a.
+     */
+    bool     fromCycle = false;
 
     length_t length() const { return b > a ? (length_t)( b - a ) : (length_t) 0; }
 };
@@ -243,10 +253,10 @@ public:
  * holds nothing between passes, which is what makes it safe to hand the same
  * one to every armed lane of a pass.
  *
- * In P1a `Takes` is `LegacyTakes` (today's planner, moved verbatim) and
- * `TakesSplit`/`Replace` are not implemented yet — they return false with a
- * `why` naming the ticket, so a `.qxa` that reaches them fails LOUDLY rather
- * than silently getting the legacy shape.
+ * `Takes` is `LegacyTakes` (today's planner, moved verbatim) until P2 replaces
+ * it with mode A (QBX-156). `TakesSplit` and `Replace` are QBX-172's; both
+ * REFUSE a lane holding a wrapped take column (G11) rather than splitting or
+ * deleting a shape no gate has ever exercised.
  */
 const Planner &plannerFor( Mode mode );
 

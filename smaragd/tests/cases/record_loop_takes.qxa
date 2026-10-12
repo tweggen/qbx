@@ -60,6 +60,28 @@
     <arm-track trackPath="0" armed="1"/>
 
     <record-start/>
+    <!-- CYCLE OVERRIDES PUNCH, and this is the only state in which that
+         sentence can be observed (plan 53 G12, QBX-172). assert-log's window
+         opens at the preceding non-assert-log action, so it goes here, right
+         after the press that writes the line.
+
+         G12 asks for "the transport shows 'cycle overrides punch' while both
+         are set", and that state does NOT EXIST: the project has ONE range
+         (rangeStart / rangeEnd / rangeValid) and a cycle flag, and
+         SAudioRecorder::punchRegion_() returns false whenever cycleRegion_()
+         succeeds, so punch IS "a range, with cycle off". SProjectProps has no
+         Punch property to set. What can be gated is the precedence itself,
+         which the recorder already reports: with a range set AND cycle on it
+         logs [cycle] and must never log [punch]. The absence is the half that
+         bites, which is why it is spelled with minCount=0 maxCount=0 rather
+         than left implied.
+
+         The UI half of G12 has nothing to show while there is no punch state
+         to contradict; what the transport genuinely lacks is any indication of
+         WHICH reading of the range is in force, and that belongs with the
+         transport selector (QBX-170). Recorded in plan 53 §3.5. -->
+    <assert-log contains="[cycle]" minCount="1"/>
+    <assert-log contains="[punch]" minCount="0" maxCount="0"/>
     <wait-ms ms="7000"/>
     <record-stop/>
 

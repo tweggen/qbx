@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Plan 53 §3.3's matrix, CELL R2, under mode `takes-split` (QBX-172).
+  Kp, Kc and Km on three tracks of one project, driven through
+  `place-recording mode="takes-split"` directly, so the whole case is
+  arithmetic: no capture device, no transport, no wall-clock jitter anywhere.
+
+  R2 means the pass lies STRICTLY INSIDE the child (`s < a`, `b < e`).
+
+  Cut the child at `a` AND at `b`: the head and the piece after `b`
+  keep their own spans, and the piece between them becomes the column.
+  This is the one cell where a plan emits TWO splits on one child, so it
+  is where the appended-index bookkeeping first has to be right: the
+  second cut operates on the APPENDED tail of the first, not on the
+  original child.
+
+  GEOMETRY, the same on all three lanes. test_sawtooth.wav is 192000 frames
+  (4 s at 48 kHz), so every number below is a closed form:
+
+      O = [48000, 192000)
+      R = [96000, 144000)      the pass, 48000 frames
+
+  and the expected result is
+
+      child 0   [48000    96000)   a surviving PIECE of O, srcOffset 0 (a column still, on Kc and Km)
+      child 1   [96000   144000)   the column: take 0 = the old piece, the pass active on top
+      child 2   [144000  192000)   a surviving PIECE of O, srcOffset 96000 (a column still, on Kc and Km)
+      child 3   does not exist
+
+  Km's map says something on ALL THREE children, which is what makes this
+  the cell that proves the shift arithmetic in both directions:
+
+      O's map          0:1 ; 24000:0 ; 72000:1 ; 120000:0
+      cut at 48000     head  -> 0:1 ; 24000:0            (truncated)
+                       tail  -> 0:0 ; 24000:1 ; 72000:0  (opening segment
+                                synthesised from whatever sounded AT the
+                                cut, then every later `at` shifted down)
+      cut that tail at its own frame 48000 (= b - a)
+                       inside -> 0:0 ; 24000:1   then CLEARED by the take
+                       after  -> 0:1 ; 24000:0
+
+  WHY THIS FAILS ON main: `takes-split` is a planner that REFUSES in that
+  build (QBX-171 shipped it as `NotYetImplemented`, deliberately loud rather
+  than falling back to the legacy shape), so `place-recording` is REJECTED and
+  every assertion after it fails. Plan 53's P1 section predicted a different
+  reason — "`mode=` is ignored by `readXml`, so the old planner runs" — which
+  was true before M0 and is not any more.
+
+  THE ASSERTIONS STILL DISCRIMINATE THE MODE, which is why they are not
+  weakened to "the verb succeeded": `LegacyTakes` gives this lane a different
+  child count and a different shape, so a silent fallback to `takes` would be
+  caught here and not merely by the refusal.
+
+  THE ACTIVE TAKE IS NOT THE MAPPED TAKE on Km, deliberately: an empty map
+  MEANS "ask activeTake_", so a case whose active take is the one its map
+  selects passes identically against a dropped map
+  (comp_map_survives_split.qxa makes the same point at length).
+-->
+<SActionScript version="1" name="rec_split_r2">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- ===== Kp: a plain clip ===== -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="144000"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="144000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+
+    <!-- ===== Kc: a direct column, no comp map ===== -->
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="144000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <select-take clip="1,0" take="0"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"
+                        comp=""/>
+
+    <!-- ===== Km: a direct column WITH a comp map ===== -->
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav"
+                timePos="48000" startOffset="0" duration="144000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <!-- select-take CLEARS the map, so it comes before the segments. -->
+    <select-take clip="2,0" take="0"/>
+    <set-comp-segment clip="2,0" at="0" take="1"/>
+    <set-comp-segment clip="2,0" at="24000" take="0"/>
+    <set-comp-segment clip="2,0" at="72000" take="1"/>
+    <set-comp-segment clip="2,0" at="120000" take="0"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;24000:0;72000:1;120000:0"/>
+
+    <!-- ===== THE PASS, same span on every lane ===== -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     mode="takes-split" timePos="96000" length="48000"/>
+
+    <!-- ===== Kp ===== -->
+    <assert-clip-window clip="0,0" startTime="48000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="48000"/>
+    <assert-take-column clip="0,1" shape="direct" takes="2"
+                        activeTake="1" comp=""/>
+    <assert-clip-window clip="0,2" startTime="144000" duration="48000"
+                        startOffset="96000"/>
+    <assert-take-column clip="0,2" shape="none"/>
+    <assert-clip-window clip="0,3" expectReject="true"/>
+
+    <!-- ===== Kc ===== -->
+    <assert-clip-window clip="1,0" startTime="48000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2"
+                        activeTake="0" comp=""/>
+    <assert-clip-window clip="1,1" startTime="96000" duration="48000"/>
+    <assert-take-column clip="1,1" shape="direct" takes="3"
+                        activeTake="2" comp=""/>
+    <assert-clip-window clip="1,2" startTime="144000" duration="48000"
+                        startOffset="96000"/>
+    <assert-take-column clip="1,2" shape="direct" takes="2"
+                        activeTake="0" comp=""/>
+    <assert-clip-window clip="1,3" expectReject="true"/>
+
+    <!-- ===== Km ===== -->
+    <assert-clip-window clip="2,0" startTime="48000" duration="48000"
+                        startOffset="0"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2"
+                        activeTake="0" comp="0:1;24000:0"/>
+    <assert-clip-window clip="2,1" startTime="96000" duration="48000"/>
+    <assert-take-column clip="2,1" shape="direct" takes="3"
+                        activeTake="2" comp=""/>
+    <assert-clip-window clip="2,2" startTime="144000" duration="48000"
+                        startOffset="96000"/>
+    <assert-take-column clip="2,2" shape="direct" takes="2"
+                        activeTake="0" comp="0:1;24000:0"/>
+    <assert-clip-window clip="2,3" expectReject="true"/>
+
+    <!-- ONE UNDO PER PASS puts each lane back exactly as it was: the whole
+         plan of one pass is one composite, so one undo entry per lane. -->
+    <undo count="3"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="144000"
+                        startOffset="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,0" startTime="48000" duration="144000"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"
+                        comp=""/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+    <assert-clip-window clip="2,0" startTime="48000" duration="144000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"
+                        comp="0:1;24000:0;72000:1;120000:0"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
