@@ -472,6 +472,7 @@ code fact that forces it.
 > picture), and `resize-clip`'s left-edge loop still overwrites a partial
 > take's extent — unreachable today, noted in the code, and A0b's to fix
 > together with the EMPTY-refusal.
+> **BOTH DONE IN A0b (QBX-178)**, together as the note required.
 
 Today (`stakestack.h` invariants): every take shares the column's duration;
 take-link `startTime` is always 0; and **the column has no length of its
@@ -605,7 +606,7 @@ column becomes when the user removes all but one partial take. The painter
 shows the uncovered part hatched (§4.4). Its length is `duration_` (§4.1), so
 it is representable.
 
-### 4.3 `select-take` becomes extent-aware
+### 4.3 `select-take` becomes extent-aware — **SHIPPED as A0b (QBX-178)**
 
 Today: "this take for the WHOLE column", map cleared, inverse restores
 (`sselecttakeaction.cpp:68-80`, `docs/ACTIONS.md:291`). Under 1′ a take may
@@ -614,20 +615,57 @@ material** — segments inside `[tStart, tEnd)` are replaced by `tStart→take`
 (and the previous answer re-enters at `tEnd`), segments outside are kept,
 `activeTake_ := take`. For a take whose extent is the whole column this
 reduces to exactly today's clear. One undo of a click still restores the whole
-previous map. The take-lane click (`sstdmixerview.cpp:2095-2098`) needs no
-change.
+previous map. The take-lane click (`SMVActualView::mousePressEvent`'s take-lane
+branch) needs no change.
 
-### 4.4 The painter and QBX-157
+**Correction (g), from the build.** Two things this section does not say, both
+load-bearing:
+
+- The full-extent clear is **not an optimisation and must stay a branch**. A
+  one-segment map `{0→take}` answers exactly what an empty map plus
+  `activeTake_` answers, but it SERIALIZES — so a click on an ordinary
+  un-comped column would start writing a `<comp>` element into project files
+  that never had one, against the standing rule that a new serialized feature
+  writes nothing when unused.
+- "One undo of a click still restores the whole previous map" needed a NEW
+  FLAG to stay true. An inverse names the PREVIOUSLY active take, which may
+  itself be partial, so under this section's rule an inverse can no longer be
+  told from a forward pass by the take it names: it would recompute the map
+  above instead of restoring the one it was handed.
+  `SSelectTakeAction::setPreviousCompMap()` now also marks the action as an
+  inverse, and that mark — not the take's extent — is the discriminator.
+
+### 4.4 The painter and QBX-157 — **SHIPPED as A0b (QBX-178)**, except the pixels
 
 - Compact: the column draws the COMP RESULT — per segment, the selected
   take's envelope over that span; a span whose selected take has no material
   is hatched, as `no take` is drawn today. This closes X10 and is QBX-157's
   part 1; whichever PR lands first owns `STakeStackRendererInline::draw` and
-  `collectEnvelope`.
-- Expanded: each take row draws its material over its extent only (the
-  comp-aware per-region paint at `sstdmixerview.cpp:2459` already exists;
-  it learns the extent).
+  `collectEnvelope`. **A0b landed first and owns both**, plus
+  `drawTake`/`collectTakeEnvelope`.
+- Expanded: each take row draws its material over its extent only.
 - Cut marks at comp boundaries and column edges: QBX-157 part 2.
+
+**Correction (h), from the build.** The expanded row's parenthesis — "the
+comp-aware per-region paint already exists; it learns the extent" — understates
+it twice:
+
+- The per-region walk knew only the MAP's segment boundaries, so it had to
+  learn to break at EXTENT EDGES as well, or a region straddles the end of its
+  own take's material and gets dimmed or ringed on the strength of its other
+  half. That walk is now one shared call (`STakeStack::nextCompEdgeAfter`),
+  which is also what the compact painter and the model answer with, so the
+  three cannot disagree about where a take begins.
+- It cited the paint by LINE NUMBER (`sstdmixerview.cpp:2459`), which this
+  repository's own rule forbids precisely because the numbers rot; the function
+  is `SMVActualView::drawTakeLane`.
+
+**And a note this section needs:** `nextCompEdgeAfter` deliberately ignores
+CROSSFADES. A crossfade is a BLEND of two takes that a per-column envelope
+cannot express and a waveform cannot show; `twCompColumn` splits runs at its
+two ends because it has to MIX them, and the boundary a picture would draw is
+QBX-157's cut mark. A painter that split there as well would claim a visible
+edge the picture does not have.
 
 ## 5. Architecture
 
@@ -1242,7 +1280,7 @@ Flips: `load_unknown_object_survives.qxa:44-47` (`formatVersion='2'` →
 full-extent takes are the degenerate case; if one moves, the degenerate path
 is broken and the PR stops.
 
-### A0b — take extents, edit surface and view (§4.1–4.4) — depends on A0a
+### A0b — take extents, edit surface and view (§4.1–4.4) — **SHIPPED (QBX-178)**
 
 Build: extent-aware `select-take` (§4.3); `resize-clip`'s clamp and
 EMPTY-refusal; the take-lane slip and `resize-clip take=` reading extents;
@@ -1270,6 +1308,44 @@ clamped take, a trim past a take's start is REFUSED with `assert-log`);
 `take_extents_hatch.qxa` (a `remove-take` that leaves a selected span
 without material renders silence there — the picture half is QBX-157's pixel
 gate).
+
+**Correction (i), measured: the third gate as prescribed would not have failed
+on the baseline at all.** "A `remove-take` that leaves a selected span without
+material renders silence there" is **A0a's resolution rule**, and it is already
+green on a baseline built at A0a's own merge. The renders in
+`take_extents_hatch.qxa` are therefore REGRESSION COVER for A0a, not a gate on
+this row; what bites is the **ENVELOPE** half — the comp result and one take's
+lane row over the same span, which disagree exactly where a take is partial.
+A0b accordingly added `assert-envelope take=` (there was no way for a script to
+read the per-take collect at all) and the case asserts both pictures.
+
+**Correction (j):** a gate may not rest on a newly added ATTRIBUTE to fail on a
+baseline. A0a recorded that `slip-clip take=` was "rejected outright" on main;
+measured here, an unknown attribute on a verb that DOES declare
+`knownAttributes()` is **warned about and IGNORED** — the runner fails on it
+only under `SMARAGD_STRICT_ATTRS=1`. So the attribute silently degrades to its
+default and the assertion runs in its old mode, which can PASS. Every gate must
+also assert through something the baseline understands.
+
+**Correction (l), measured by sabotage: A0b gates NO PIXELS, and the suite
+cannot.** With the compact painter's comp-result branch reverted to the old
+active-take-only draw AND the take lane's extent-edge walk reverted to the
+map-only loop, the WHOLE suite passes — 449/449. Both are pure paint, and no
+verb in the suite can read either surface (`assert-lane-overlay` reads a TRACK
+lane's folder-sum overlay, not a take lane). So §4.4's picture is gated by
+QBX-157 alone, as §4.4 itself allocates, and A0b gates the ENVELOPE both
+painters read plus the AUDIO. `draw` and `collectEnvelope` share one run walk
+so they cannot drift while only one is gated — an argument, not a gate, and
+recorded at both sites for whoever lands QBX-157.
+
+**Correction (k):** emptiness is not enough. Two `expectEmpty="true"` envelope
+assertions passed throughout while the collect was taking an entirely wrong
+path, because an all-zero array cannot tell a windowing bug from a correct
+answer. The bug (a `takeIndex < 0` resolved to the active take rather than
+passed through to the comp result, which silently rerouted EVERY ordinary clip
+envelope read on a take column) was caught only by a non-empty IDENTITY
+assertion beside them — `snapshot`/`compareTo` against the take that does carry
+the span.
 
 ### A1 — `merge-columns` / `unmerge-columns` (§6.1) — depends on A0a, B1
 
@@ -1427,6 +1503,8 @@ behaviour change, and each is edited in the PR that causes it.
 | `midi_record_modes.qxa` | three modes through the INI | rewritten in M0 (project property), extended in P3 | M0, P3 |
 | `takes_group_broadcast.qxa` | positional fan-out | unchanged; extended in P4 | P4 |
 | `comp_map_model.qxa`, `comp_map_audible.qxa`, `comp_crossfade.qxa`, `clip_fade*.qxa` | the map and the fades | unchanged through A0a/A0b (full-extent takes are the degenerate case) | — |
+| `take_extents_audible.qxa`, `take_extents_model.qxa`, `take_extents_remove_undo.qxa`, `take_extents_split.qxa` | A0a's resolution rule and its restores | **ALL FOUR FLIPPED BY A0b** — one cause, and A0a's own headers predicted it. Each reached "an empty map over a partial ACTIVE take" (or isolated one take to listen to it) by CLICKING the take, because `select-take` then meant "this take everywhere, map cleared". §4.3 made the click extent-aware, so it now keeps the other takes audible where the selected one has nothing — which is the opposite of isolating one, and means the click can no longer REACH that state at all. Each case now states its premise directly with `set-comp-map` (no segments); the rules they gate are unchanged word for word. **This is the cost of §4.3 that the plan did not price: a side effect four gates were built on.** | A0b (done) |
+| `load_unknown_object_survives.qxa` | `formatVersion` | flipped 2 → 3 by A0a; unchanged by A0b, which adds no serialized field | — |
 
 ## 10. Risks and open points
 
@@ -1448,6 +1526,25 @@ pointed to here.
    nothing to fan out to. 3′ is also what `cleanup-takes` and `remove-take`
    leave behind. Flagged because it widens what a column can be; D4 governs
    the geometry.
+3a. **§4.3 REMOVED THE ONLY "HEAR ONE TAKE ALONE" GESTURE, and under mode A
+   that will be every take.** Found while building A0b (QBX-178): four A0a
+   gates were built on `select-take`'s map-CLEARING side effect, because
+   clicking a take was the only way to make one take the whole column. §4.3 is
+   right to change it — clearing the map on a PARTIAL take silences every span
+   that take does not cover — but it leaves nothing in its place. For a
+   full-extent take the click still clears, so today's projects are unaffected;
+   under mode A (§3.1) takes are PARTIAL BY CONSTRUCTION, so from P2 on a
+   take-lane click will NEVER isolate a take, and the gesture a comping user
+   reaches for first — "let me just hear that one" — has no spelling at all.
+   The suite's own workaround is `set-comp-map` with no segments, which is a
+   scripting verb and not a gesture.
+
+   This is NOT A0b's to fix: §4.3 is what the plan specifies and it shipped as
+   specified. It is **P2's or QBX-157's**, and it needs a decision rather than
+   code — a modifier-click, a separate "solo take" control, or an explicit
+   "this take for the whole column" command distinct from `select-take`.
+   Filed as **QBX-186** so P2 cannot land without an answer.
+
 4. **Kw (a wrapped column `normalizeColumns` refuses to fold) is refused in
    every mode.** The alternative — treating the wrapper as an opaque take —
    nests a column in a column, which proposal 42 M3 forbids. A refused lane's
@@ -1541,7 +1638,7 @@ existing tickets. Order within a group is landing order.
 | P1a (**QBX-171**) | planner framework with the simulated child list (`srecplan`); `LegacyTakes` behind `takes` (no flip); `overdub`; `place-recording` as the thin verb with `mode=`/`armed=`; the recorder's pass-wide snap and hand-over | B1–B5, M0, QBX-146 step a (landed) | M |
 | P1b (**QBX-172**) | `takes-split` (§3.2, appended-index bookkeeping) and `replace` (§3.3) over `split-clip`/`remove-sample` — NOT `resize-clip`, see §3.3; the held-plan lifetime fix §5.1 needed; G12 recorded as unrepresentable and gated as the PRECEDENCE in `record_loop_takes` | P1a | M |
 | A0a **(SHIPPED, QBX-177)** | take extents, model only: `duration_`, extents in `insertTake`/loader, resolution rule, `twCompColumn` extents + xfade clamp, invalidation, split per-half/re-index/identity inverse, `remove-take` extent inverse, `add-take at=/length=`, `FORMAT_VERSION 3` + its flip | B1, B3, B4, B10 | L |
-| A0b | take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters, **plus two items A0a handed over by name**: `hasPreview`/`getPreview`' extent window (it moves with the painters, or the picture is half-windowed) and `resize-clip`'s LEFT-EDGE loop, which still writes the column's duration onto every take — unreachable today, noted at the site | A0a | M |
+| A0b | **SHIPPED (QBX-178).** Take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters, **plus two items A0a handed over by name**: `hasPreview`/`getPreview`' extent window (it moves with the painters, or the picture is half-windowed) and `resize-clip`'s LEFT-EDGE loop, which still writes the column's duration onto every take — unreachable today, noted at the site. Added `assert-envelope take=` (a script had no way to read the per-take collect) and `STakeStack::nextCompEdgeAfter`, the one comp-edge walk the model, the compact painter and the take lane all answer with. **The HATCH's pixels stay QBX-157's**; A0b gates the silence and the envelope beneath them | A0a | M |
 | A1 | `merge-columns` / `unmerge-columns` with the link-move protocol | A0a, B1 | M |
 | P2 | mode A (`takes`) replaces `LegacyTakes`; the §9 flips | P1, A0b, A1, D1 (default (a)) | L |
 | P3 | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind | P2 | M |

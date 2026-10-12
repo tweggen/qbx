@@ -83,6 +83,41 @@ SApplyResult SResizeClipAction::apply( SProject *project )
     STakeStack *column = directStack ? directStack
                        : ( take_ >= 0 ? stakes::columnOfLink( link ) : nullptr );
     if( column ) {
+        // THE EMPTY-REFUSAL (plan 53 §4.1 / A0b). A trim that would leave a
+        // take with NO MATERIAL AT ALL is refused outright, before anything is
+        // mutated, so the refusal costs no rollback.
+        //
+        // A0a's write-through clamps such a take to ONE FRAME and says so,
+        // because the model must keep invariant 1' true whatever a caller
+        // does; refusing needs a verb that can REJECT, which is this one. The
+        // two are not alternatives: the clamp is the model's floor, this is
+        // the edit surface's answer, and a direct model write still gets the
+        // clamp.
+        //
+        // IT IS ANNOUNCED. A resize can fail for other reasons, so a case that
+        // asserted only "the action failed" would pass on an accident; the
+        // log line is what `assert-log` gates (take_extents_resize.qxa).
+        // ONLY ON THE DIRECT SHAPE, because only there does `duration_` become
+        // the COLUMN's length (`applyWindowAll` below). On the wrapped shape it
+        // is the WRAPPER's window — a window INTO the column, which leaves
+        // every take's extent untouched, so there is nothing to refuse.
+        if( directStack ) {
+            // The length the column will actually get: `applyColumnLength_`
+            // floors it at one frame, and refusing against a different number
+            // than the model will use is how a refusal and a clamp come to
+            // disagree about the same edit.
+            const offset_t newDur = duration_ < 1 ? 1 : (offset_t) duration_;
+            for( int i = 0; i < column->nTakes(); ++i ) {
+                if( column->takeExtentStart( i ) < newDur ) continue;
+                qWarning( "resize-clip: REFUSED — the new length %lld would "
+                          "leave take %d (extent %lld..%lld) with no material. "
+                          "Trim the take or remove it first (plan 53 A0b).",
+                          (long long) newDur, i,
+                          (long long) column->takeExtentStart( i ),
+                          (long long) column->takeExtentEnd( i ) );
+                return {false, nullptr};
+            }
+        }
         int t = ( take_ >= 0 ) ? take_ : column->activeTakeIndex();
         SClipWindow *takeWin = column->takeAt( t );  // may be null (no active take)
         // Warp anchors are audio-only (cut/CONTRACT invariant 4), so this is
@@ -141,8 +176,16 @@ SApplyResult SResizeClipAction::apply( SProject *project )
                 // A NAMED take: the anchor is that take's alone. This is the
                 // take-lane slip, and moving the others would be the opposite
                 // of what it means.
-                takeWin->setWindowExact( srcStart_, duration_, loopLength_,
-                                         stretch_ );
+                //
+                // ITS OWN EXTENT LENGTH, NOT THE COLUMN'S (plan 53 §4.1 /
+                // A0b). `applyWindowAll` above has just clamped every take's
+                // extent correctly under 1', so writing `duration_` here would
+                // undo that clamp for the one take this edit names — a
+                // take-lane slip would silently stretch a partial take to the
+                // full column. A slip moves the ANCHOR; the extent is not its
+                // business.
+                takeWin->setWindowExact( srcStart_, takeWin->durationBlocking(),
+                                         loopLength_, stretch_ );
             } else if( takeWin ) {
                 // NO take named — an edit to the COLUMN, i.e. a left-edge trim
                 // from the arranger. Every take shifts by the SAME delta, so
@@ -158,21 +201,29 @@ SApplyResult SResizeClipAction::apply( SProject *project )
                 // same instant. That is exactly the operation comping needs
                 // when a boundary is moved.
                 //
-                // IT OVERWRITES A PARTIAL TAKE'S EXTENT, AND THAT IS A0b's ROW
-                // (plan 53 §4.1 / A0b, measured while building A0a). The loop
-                // writes `duration_` onto EVERY take, which is invariant 1
-                // speaking after `applyWindowAll` has just clamped correctly
-                // under 1'. It is UNREACHABLE today: nothing a user can touch
-                // makes a partial take — the only producers are `add-take
-                // at=/length=` from a script and `split-clip`, which preserves
-                // them — and the edit surface that would is A0b's own
-                // subject. A0b owns the left-edge rule for extents together
-                // with the EMPTY-refusal; whoever lands it must come here.
+                // EACH TAKE KEEPS ITS OWN EXTENT LENGTH (plan 53 §4.1 / A0b,
+                // the second item A0a handed over by name).
+                //
+                // This loop used to write `duration_` onto EVERY take, which
+                // was invariant 1 still speaking after `applyWindowAll` had
+                // already clamped every extent correctly under 1' — so a
+                // left-edge trim of a comped column would silently stretch
+                // every partial take back over the whole of it, undoing the
+                // comp. It was unreachable while nothing a user could touch
+                // made a partial take; A0b is the row that makes them
+                // reachable, so it is also the row that fixes it.
+                //
+                // What a left-edge move actually is: every take shifts by the
+                // SAME anchor delta, so they stay ALIGNED WITH EACH OTHER
+                // (proposal 42 M3). The LENGTH is `applyWindowAll`'s business
+                // and has already happened; reading it back per take is what
+                // makes this a pure anchor write.
                 const Fraction delta = srcStart_ - oldAnchor;
                 for( int i = 0; i < column->nTakes(); ++i )
                     if( SClipWindow *tw = column->takeAt( i ) )
                         tw->setWindowExact( tw->contentAnchorExact() + delta,
-                                            duration_, loopLength_, stretch_ );
+                                            tw->durationBlocking(),
+                                            loopLength_, stretch_ );
             }
         }
         if( setAnchors_ && takeCut ) takeCut->setWarpAnchors( anchors_ );

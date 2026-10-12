@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EXTENT-AWARE select-take (plan 53 §4.3 / A0b, QBX-178).
+
+  Before extents, `select-take` meant "this take for the WHOLE column" and
+  CLEARED the comp map. Under invariant 1′ a take may cover less than its
+  column, and clearing the map there makes every position outside the take's
+  extent fall back to it — and so play SILENCE. Selecting a take would delete
+  the other takes' audio without touching a single one of them.
+
+  So §4.3: select the take WHEREVER IT HAS MATERIAL. Segments inside
+  [tStart, tEnd) are replaced by one `tStart → take`, the previous answer
+  RE-ENTERS at tEnd, and segments outside are kept.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav:
+    take 0 — FULL extent [0, 192000), source from 0
+    take 1 — PARTIAL [96000, 192000), source from 0 as well
+  Per-source-second RMS of the fixture: 0.0667 / 0.1764 / 0.2906 / 0.4055.
+
+  HALF ONE — selecting the PARTIAL take. `select-take take="1"` leaves take 0
+  audible over [0, 96000) and take 1 over [96000, 192000), so the map becomes
+  `0:0;96000:1` rather than empty:
+    column [0, 2 s)   → take 0 at 0..2 s        → 0.0667, 0.1764
+    column [2 s, 4 s) → take 1 AT ITS OWN 0..2 s → 0.0667, 0.1764
+  the first two seconds REPEATED.
+
+  MEASURED ON THE BASELINE (main at a3aa1472, i.e. with A0a's model but not
+  A0b): the click still clears the map, so the first half has no material at
+  all and renders SILENCE — windows 0 and 1 read RMS 0 against expectations of
+  0.067 and 0.176 — and `comp` reads "" for "0:0;96000:1". `comp` is an
+  attribute the baseline already understands, so that half of the gate rests on
+  nothing this branch added.
+
+  HALF TWO — selecting a FULL-EXTENT take is STILL TODAY'S CLEAR, and not
+  merely as an optimisation. A one-segment map `{0 → 0}` answers exactly what
+  an empty map plus `activeTake_ = 0` answers, but it SERIALIZES: a click on
+  an ordinary un-comped column would start writing a <comp> element into
+  project files that never had one. `comp=""` is what pins that.
+
+  Half three fails there too, reading "" for "0:0;48000:1;96000:1".
+
+  HALF THREE — ONE UNDO RESTORES THE WHOLE PREVIOUS MAP. This is the hazard
+  the `restoreMap_` flag exists for: an inverse names the PREVIOUSLY active
+  take, which here is the PARTIAL take 1, so an inverse that re-derived §4.3's
+  map instead of restoring the one it was handed would not be an undo at all.
+  It would recompute `0:0;96000:1` — which happens to be right here — so the
+  assertion that bites is the one after the SECOND undo, where the map it must
+  restore is the hand-built `48000:1` that §4.3 would never produce.
+-->
+<SActionScript version="1" name="select_take_extent_aware">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"
+                        comp=""/>
+
+    <!-- HALF ONE: the partial take. -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" activeTake="1" comp="0:0;96000:1"
+                        takeAtPos="0" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="1"/>
+    <!-- The column did not move or shrink on the click. -->
+    <assert-take-column clip="0,0" duration="192000"
+                        extents="0-192000;96000-192000"/>
+
+    <render filename="stea_partial.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- Take 0 is STILL AUDIBLE over the first half. On main this is silence. -->
+    <assert-audio-energy filename="stea_partial.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="stea_partial.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- ...and take 1 carries the second half from ITS OWN zero. -->
+    <assert-audio-energy filename="stea_partial.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="stea_partial.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- HALF TWO: a full-extent take still clears. -->
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" activeTake="0" comp=""/>
+    <render filename="stea_full.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="stea_full.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="stea_full.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- HALF THREE: the inverse restores the map VERBATIM.
+         A hand-built map §4.3 would never compute, so an inverse that
+         recomputed instead of restoring cannot pass. -->
+    <select-take clip="0,0" take="0"/>
+    <set-comp-segment clip="0,0" at="48000" take="1"/>
+    <assert-take-column clip="0,0" activeTake="0" comp="48000:1"/>
+    <select-take clip="0,0" take="1"/>
+    <!-- THE SEGMENT AT 48000 SURVIVES: it lies OUTSIDE take 1's extent, and
+         §4.3 keeps what it does not cover. Its answer there was already take 1
+         and already SILENT (take 1 has no material at 48000), so keeping it
+         preserves the previous answer exactly — including where that answer
+         was silence. §4.3 would never COMPUTE this map, which is what makes
+         it the right thing for the undo below to have to restore. -->
+    <assert-take-column clip="0,0" activeTake="1"
+                        comp="0:0;48000:1;96000:1"/>
+    <assert-take-column clip="0,0" takeAtPos="48000" expectTake="-1"/>
+    <undo/>
+    <assert-take-column clip="0,0" activeTake="0" comp="48000:1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

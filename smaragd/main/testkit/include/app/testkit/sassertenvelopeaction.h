@@ -47,6 +47,18 @@
  *               own [-128,127] units
  * - tolerance:  allowed |difference| per edge (default 0 - the probes are
  *               integers, so exactness is the normal expectation)
+ * - take:       read ONE TAKE of a take column instead of the clip's own
+ *               envelope - `SObjectRenderer::collectTakeEnvelope`, the exact
+ *               call a TAKE LANE makes. -1 (the default) keeps meaning "the
+ *               audible one", which on a column is the COMP RESULT.
+ *
+ *               IT IS WHAT TELLS THE TWO PICTURES APART (plan 53 §4.4). Since
+ *               A0b the compact clip draws the comp result while a take lane
+ *               draws one take over ITS EXTENT, so a verb that could only read
+ *               the first could not gate the second - and the two disagree
+ *               exactly where a take is partial, which is the whole subject.
+ *               Clip mode is unaffected: on every renderer that is not a take
+ *               column, and for -1, the call forwards to `collectEnvelope`.
  * - expectEmpty: "true" asserts the collect produced NOTHING - it returned
  *               false, or every probe is zero. An event clip is the intended
  *               case; a folder with no material is M3's.
@@ -78,7 +90,7 @@ public:
                  QStringLiteral( "min" ),       QStringLiteral( "max" ),
                  QStringLiteral( "tolerance" ), QStringLiteral( "expectEmpty" ),
                  QStringLiteral( "snapshot" ),  QStringLiteral( "compareTo" ),
-                 QStringLiteral( "trackPath" ) };
+                 QStringLiteral( "trackPath" ), QStringLiteral( "take" ) };
     }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -98,6 +110,7 @@ private:
     bool     expectEmpty_ = false;
     QString  snapshot_;
     QString  compareTo_;
+    int      take_        = -1;
 };
 
 /**

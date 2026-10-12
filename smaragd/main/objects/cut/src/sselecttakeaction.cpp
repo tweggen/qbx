@@ -9,6 +9,8 @@
 #include "app/model/slink.h"
 #include "app/actions/sactionregistry.h"
 #include <QDomElement>
+#include <utility>
+#include <vector>
 
 using namespace strackpath;
 
@@ -67,13 +69,79 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
 
     const int oldActive = stack->activeTakeIndex();
     const twCompMap oldMap = stack->compMap();
+
+    // THE MAP `select-take` LEAVES BEHIND (plan 53 §4.3).
+    //
+    // Before extents, `select-take` meant "this take for the WHOLE column", so
+    // the comp map -- which says which take sounds WHERE -- was simply cleared.
+    // Under invariant 1' a take may not COVER the whole column, and clearing
+    // the map there would make every position outside its extent fall back to
+    // it and so play SILENCE: selecting a take would delete the others'
+    // audio without touching them.
+    //
+    // So: select the take WHEREVER IT HAS MATERIAL. Segments inside
+    // [tStart, tEnd) are replaced by one `tStart -> take`, the previous answer
+    // RE-ENTERS at tEnd, and segments outside are kept.
+    //
+    // THE FULL-EXTENT CASE IS STILL THE CLEAR, and not merely as an
+    // optimisation. A one-segment map `{0 -> take}` answers exactly what an
+    // empty map plus `activeTake_ = take` answers, but it SERIALIZES: a
+    // `select-take` on an ordinary un-comped column would start writing a
+    // <comp> element into project files that never had one, which is the rule
+    // that a new feature writes nothing when unused. The clear is the
+    // canonical spelling of the same map.
+    twCompMap newMap;
+    const bool fullExtent = stack->takeIsFullExtent( takeIndex_ );
+    if( restoreMap_ ) {
+        // AN INVERSE. It restores the map it was handed, verbatim, whatever
+        // the take it names covers -- see setPreviousCompMap.
+        newMap = prevMap_;
+    } else if( takeIndex_ >= 0 && !fullExtent ) {
+        const offset_t exStart = stack->takeExtentStart( takeIndex_ );
+        const offset_t exEnd   = stack->takeExtentEnd( takeIndex_ );
+        const length_t colDur  = stack->getDurationBlocking();
+        // What the column answered before this click, with the empty map's
+        // meaning ("activeTake_ everywhere") spelled out -- the answer that has
+        // to survive outside the new take's extent.
+        const auto oldAnswerAt = [&oldMap, oldActive]( offset_t pos ) -> int {
+            const int t = oldMap.takeAt( (int64_t) pos );
+            return t >= 0 ? t : oldActive;
+        };
+
+        std::vector<twCompSegment> segs;
+        bool hadAtStart = false, hadAtEnd = false;
+        for( const twCompSegment &cs : oldMap.segments() ) {
+            const offset_t at = (offset_t) cs.at;
+            if( at == exStart ) hadAtStart = true;
+            if( at == exEnd )   hadAtEnd   = true;
+            if( at >= exStart && at < exEnd ) continue;   // inside: replaced
+            segs.push_back( cs );                         // outside: kept
+        }
+        // The region BEFORE the extent kept its answer only because nothing
+        // governed it and `activeTake_` was the fall-back. `activeTake_` is
+        // about to change, so that answer has to be written down.
+        if( exStart > 0 && oldMap.takeAt( 0 ) < 0 )
+            segs.push_back( twCompSegment{ 0, oldActive, 0 } );
+        // The take itself. An xfade already AT this boundary is kept: the
+        // boundary survives the click, only the take it introduces changes.
+        twCompSegment mine{ (int64_t) exStart, takeIndex_, 0 };
+        for( const twCompSegment &cs : oldMap.segments() )
+            if( (offset_t) cs.at == exStart ) mine.xfade = cs.xfade;
+        segs.push_back( mine );
+        // ...and the previous answer re-enters where the take's material ends,
+        // unless an old segment already says so there, or the extent runs to
+        // the column's end.
+        if( exEnd < (offset_t) colDur && !hadAtEnd )
+            segs.push_back( twCompSegment{ (int64_t) exEnd,
+                                           oldAnswerAt( exEnd ), 0 } );
+        (void) hadAtStart;
+        newMap = twCompMap( std::move( segs ) ).normalized();
+    }
+    // else: TODAY'S CLEAR. A full-extent take sounds everywhere, so the empty
+    // map says exactly what a one-segment map would and writes nothing.
+
     stack->setActiveTake( takeIndex_ );
-    // `select-take` is "this take for the WHOLE column", so the comp map --
-    // which says which take sounds WHERE -- is cleared; the inverse below
-    // carries it back, or one undo of a click would destroy a comp silently.
-    // Restoring it is what `prevMap_` is for, and on the forward pass that is
-    // an empty map, i.e. the clear.
-    stack->setCompMap( prevMap_ );
+    stack->setCompMap( newMap );
     stakes::publishColumnChange( link, stack );
 
     SSelectTakeAction *inverse = new SSelectTakeAction( clipPath_, oldActive );

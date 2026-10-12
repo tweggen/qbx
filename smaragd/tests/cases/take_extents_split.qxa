@@ -162,8 +162,13 @@
 
     <!-- ...and each restored take still carries its OWN extent and slip,
          asserted one at a time so a half-right restore cannot hide behind
-         the map. select-take clears the map, so these come last. -->
+         the map. Each take is isolated by selecting it AND emptying the map;
+         `select-take` used to do the second as a side effect, and since A0b
+         (plan 53 §4.3) it is extent-aware and deliberately does not — it keeps
+         the other takes audible where the selected one has nothing, which is
+         the opposite of isolating one. These still come last. -->
     <select-take clip="0,0" take="1"/>
+    <set-comp-map clip="0,0"/>
     <render filename="tes_a_only.wav" format="wav" quality="10"
             durationSec="4.5"/>
     <assert-audio-energy filename="tes_a_only.wav"
@@ -177,6 +182,7 @@
                          minRms="0.0" maxRms="0.005"/>
 
     <select-take clip="0,0" take="2"/>
+    <set-comp-map clip="0,0"/>
     <render filename="tes_b_only.wav" format="wav" quality="10"
             durationSec="4.5"/>
     <assert-audio-energy filename="tes_b_only.wav"

@@ -154,6 +154,37 @@ void STakeStack::setTakeExtent( int index, offset_t tStart, length_t len )
     refreshPartial_();
 }
 
+offset_t STakeStack::nextCompEdgeAfter( offset_t columnPos ) const
+{
+    offset_t edge = -1;
+    const auto nearer = [&edge, columnPos]( offset_t cand ) {
+        if( cand <= columnPos ) return;
+        if( edge < 0 || cand < edge ) edge = cand;
+    };
+
+    // The map's boundaries. Segments are sorted, so the first one past
+    // `columnPos` is the nearest and no later one can beat it.
+    for( const twCompSegment &cs : compMap_.segments() )
+        if( (offset_t) cs.at > columnPos ) { nearer( (offset_t) cs.at ); break; }
+
+    // ...and the chosen take's own extent edges. `takeIndexAt` gives -1 where
+    // the chosen take has no material, and the run of -1 ends where that
+    // take's material BEGINS — so the edge to find is the extent's start when
+    // we are before it and its end when we are inside it, which is exactly
+    // `twCompColumn::nextTakeEdgeAfter_nolock`.
+    const int t = compMap_.takeAt( (int64_t) columnPos );
+    const int chosen = ( t >= 0 && t < childCount() ) ? t : activeTake_;
+    if( chosen >= 0 && chosen < childCount() ) {
+        const offset_t exStart = takeExtentStart( chosen );
+        const offset_t exEnd   = takeExtentEnd( chosen );
+        if( columnPos < exStart )     nearer( exStart );
+        else if( columnPos < exEnd )  nearer( exEnd );
+    }
+
+    if( edge >= (offset_t) duration_ ) return -1;   // holds to the column's end
+    return edge;
+}
+
 length_t STakeStack::derivedDuration() const
 {
     length_t d = 0;
@@ -560,6 +591,11 @@ length_t STakeStack::getDurationBlocking() const
 
 bool STakeStack::hasPreview() const
 {
+    // NO EXTENT TEST HERE, deliberately. An extent is at least one frame
+    // (`setTakeExtent` and the write-through both clamp to 1), so a take that
+    // exists always has SOME material and the honest answer to "is there a
+    // preview" is still its own. What 1' changes is WHERE that material is,
+    // which is getPreview's business below.
     SObject *take = activeTakeObject();
     return take ? take->hasPreview() : false;
 }
@@ -567,9 +603,57 @@ bool STakeStack::hasPreview() const
 int STakeStack::getPreview( preview_t *dest, offset_t start, length_t length,
                             offset_t nProbes )
 {
-    if( SObject *take = activeTakeObject() )
+    SObject *take = activeTakeObject();
+    if( !take ) return -1;
+    if( !dest || nProbes < 1 || length < 1 ) return -1;
+
+    // THE DEGENERATE COLUMN TAKES THE ORIGINAL PATH, byte for byte: the active
+    // take covers [0, duration_), so every probe is its own and there is
+    // nothing to window. Same rule as the audio resolution (see
+    // resolvesThroughComp) and the painters below, for the same reason.
+    if( takeIsFullExtent( activeTake_ ) )
         return take->getPreview( dest, start, length, nProbes );
-    return -1;
+
+    // WINDOWED TO THE ACTIVE TAKE'S EXTENT (plan 53 §4.1, handed over by A0a).
+    // Outside it the column has NO MATERIAL, and a preview that answered the
+    // take's samples there would claim a waveform where silence plays. Zero is
+    // how this seam spells "no material" — `fillBodyByMaterial` and the
+    // folder-sum overlay already read `min == 0 && max == 0` as a gap.
+    for( offset_t i = 0; i < nProbes; ++i ) { dest[ i ].min = 0; dest[ i ].max = 0; }
+
+    const offset_t exStart = takeExtentStart( activeTake_ );
+    const offset_t exEnd   = takeExtentEnd( activeTake_ );
+
+    // Probe i spans column positions starting at `start + (i*length)/nProbes`.
+    // Inverting that grid with CEILING division keeps a probe out of the range
+    // unless its own start is inside the extent, so no probe is ever filled
+    // from material the take does not have there. A probe STRADDLING an extent
+    // edge is resolved by its start, which is the same half-open convention
+    // `takeCoversPos` uses; at preview resolution that is at most one column.
+    const auto probeStart = [start, length, nProbes]( offset_t i ) -> offset_t {
+        return start + (offset_t) ( ( (int64_t) i * (int64_t) length )
+                                    / (int64_t) nProbes );
+    };
+    const auto ceilProbe = [length, nProbes]( int64_t d ) -> offset_t {
+        if( d <= 0 ) return 0;
+        if( d >= (int64_t) length ) return (offset_t) nProbes;
+        return (offset_t) ( ( d * (int64_t) nProbes + (int64_t) length - 1 )
+                            / (int64_t) length );
+    };
+
+    offset_t i0 = ceilProbe( (int64_t) ( exStart - start ) );
+    offset_t i1 = ceilProbe( (int64_t) ( exEnd   - start ) );
+    if( i0 < 0 ) i0 = 0;
+    if( i1 > nProbes ) i1 = nProbes;
+    if( i1 <= i0 ) return 0;        // the window misses the extent entirely
+
+    const offset_t subStart = probeStart( i0 ) - exStart;   // TAKE-relative
+    const length_t subLen   = (length_t) ( probeStart( i1 ) - probeStart( i0 ) );
+    if( subLen < 1 ) return 0;
+    const int rc = take->getPreview( dest + i0, subStart, subLen, i1 - i0 );
+    // A failing sub-collect leaves the zeros, which is the right answer for
+    // "no material known" on this seam and keeps the caller's array valid.
+    return rc < 0 ? rc : 0;
 }
 
 QWidget *STakeStack::getDetailEditWidget( QWidget * )
@@ -729,6 +813,90 @@ static const bool s_reg_stakestack = (
 // STakeStackRendererInline
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/**
+ * A render context SHIFTED INTO ONE TAKE'S OWN DOMAIN (plan 53 §4.1 / A0b).
+ *
+ * A take's material starts at column frame `tStart`, but the take's own
+ * renderer indexes from its own zero — every content renderer spells its
+ * position as `ctx.getTimeOf( x ) - lk.getStartTime()`, which yields the
+ * COLUMN position. Subtracting `tStart` from the time the context reports
+ * therefore hands the take exactly its own offset, through the one seam the
+ * whole delegation already goes through. For `tStart == 0` it is the identity,
+ * which is why a full-extent take is drawn by literally the old code path.
+ *
+ * THE SHIFT GOES IN THE CONTEXT RATHER THAN IN A TEMPORARY SLink because the
+ * link is SHARED: it is the placement every other reader sees, and the take
+ * renderers also read its loop, stretch and colours from it. Shifting the
+ * clock is local to this draw; re-pointing the link would not be.
+ */
+class TakeShiftContext : public SRenderContext
+{
+public:
+    TakeShiftContext( SRenderContext &base, offset_t shift )
+        : SRenderContext( base.getPainter() ), base_( base ), shift_( shift )
+    {
+        setVisibRect( base.getVisibRect() );
+        setClipColors( base.clipColors() );
+    }
+    offset_t getTimeOf( int x ) const override
+    { return base_.getTimeOf( x ) - shift_; }
+private:
+    SRenderContext &base_;
+    offset_t        shift_;
+};
+
+/**
+ * ONE RUN of consecutive columns over which the SAME take sounds.
+ *
+ * `take` is `STakeStack::takeIndexAt`'s answer, so -1 means NO MATERIAL — the
+ * hatched span of §4.4, not a take index to look up.
+ */
+struct CompRun {
+    int      c0    = 0;    // first column (pixel or probe) of the run
+    int      c1    = 0;    // one PAST the last
+    int      take  = -1;
+    offset_t tStart = 0;   // that take's extent start; the shift to draw it by
+};
+
+/**
+ * Group `[0, n)` columns into runs by WHICH TAKE SOUNDS at each one.
+ *
+ * `columnPosOf( i )` gives column `i`'s position in the STACK's own frame
+ * domain. The walk is PER COLUMN and uses only that FORWARD map, which is the
+ * whole reason it is shaped this way: the map from a pixel to a column frame
+ * is affine for a plain or stretched clip but PIECEWISE for a warped one
+ * (`cutSourceTimeOf`'s anchor path) and per-tile for a looped one, so
+ * inverting it to find a segment's pixel would be wrong on exactly the clips
+ * comping is used on. Asking forward, column by column, cannot be wrong — and
+ * it is the same per-column cost `drawGainEnvelope` and `fillBodyByMaterial`
+ * already pay.
+ *
+ * ONE walk for the paint and the collect, so the envelope a script reads and
+ * the picture on screen cannot disagree about where a take begins.
+ */
+template <typename PosFn>
+std::vector<CompRun> compRuns( const STakeStack &st, int n, PosFn columnPosOf )
+{
+    std::vector<CompRun> runs;
+    if( n < 1 ) return runs;
+    for( int i = 0; i < n; ++i ) {
+        const offset_t pos = columnPosOf( i );
+        const int t = st.takeIndexAt( (int64_t) pos );
+        if( !runs.empty() && runs.back().take == t ) { runs.back().c1 = i + 1; continue; }
+        CompRun r;
+        r.c0 = i;
+        r.c1 = i + 1;
+        r.take = t;
+        r.tStart = ( t >= 0 ) ? st.takeExtentStart( t ) : 0;
+        runs.push_back( r );
+    }
+    return runs;
+}
+
+}  // namespace
+
 STakeStackRendererInline::STakeStackRendererInline( STakeStack &stack )
     : SObjectRenderer( (SObject &)stack )
 {
@@ -754,9 +922,53 @@ void STakeStackRendererInline::drawTake( SLink &lk, SRenderContext &ctx,
     // "this stack has fewer takes" continue). Same link, same context, so the
     // domain map the caller already folded — a wrapping cut's slip, stretch and
     // loop tiling — is the one this take is drawn in.
-    if( SObject *take = takeFor( takeIndex ) )
-        if( SObjectRenderer *rndr = take->getInlineRenderer() )
-            rndr->draw( lk, ctx );          // my link but his object (CLIP_MODEL)
+    // `takeIndex < 0` MEANS "THE AUDIBLE ONE", AND FOR A COLUMN THE AUDIBLE
+    // ONE IS THE COMP RESULT — so it is draw(), exactly as the base class
+    // default would have done. Reading it as "the active take, windowed"
+    // instead is a mistake that silently reroutes every ORDINARY clip paint
+    // through the per-take path: measured here, it made a comped column's
+    // envelope come back as the active take's extent rather than the comp,
+    // which an all-zero span can hide.
+    if( takeIndex < 0 ) { draw( lk, ctx ); return; }
+
+    SObject *take = takeFor( takeIndex );
+    if( !take ) return;
+    SObjectRenderer *rndr = take->getInlineRenderer();
+    if( !rndr ) return;
+
+    STakeStack &st = stack();
+    const int t = takeIndex;
+    // ...AND ONLY OVER ITS OWN EXTENT, since 1' (plan 53 §4.4: "each take row
+    // draws its material over its extent only"). A full-extent take is the
+    // original call, unshifted and unclipped.
+    if( st.takeIsFullExtent( t ) ) {
+        rndr->draw( lk, ctx );              // my link but his object (CLIP_MODEL)
+        return;
+    }
+
+    QPainter &p = ctx.getPainter();
+    const QRect vr = ctx.getVisibRect();
+    const offset_t base = lk.getStartTime();
+    const offset_t exStart = st.takeExtentStart( t );
+    const offset_t exEnd   = st.takeExtentEnd( t );
+
+    // The extent's PIXEL span, found by asking the forward map per column
+    // (see compRuns for why it is never inverted). Clipping is what keeps the
+    // waveform inside the extent while the take's own renderer still lays its
+    // material out across the whole rect — so a take drawn on a take lane and
+    // the same take drawn in a comp segment line up to the pixel.
+    int x0 = -1, x1 = -1;
+    for( int x = vr.left(); x <= vr.right(); ++x ) {
+        const offset_t pos = ctx.getTimeOf( x ) - base;
+        if( pos >= exStart && pos < exEnd ) { if( x0 < 0 ) x0 = x; x1 = x + 1; }
+    }
+    if( x0 < 0 ) return;                    // the extent is off screen
+
+    TakeShiftContext shifted( ctx, exStart );
+    p.save();
+    p.setClipRect( QRect( x0, vr.y(), x1 - x0, vr.height() ), Qt::IntersectClip );
+    rndr->draw( lk, shifted );
+    p.restore();
 }
 
 bool STakeStackRendererInline::collectTakeEnvelope( SLink &lk,
@@ -764,11 +976,64 @@ bool STakeStackRendererInline::collectTakeEnvelope( SLink &lk,
                                                     preview_t *out,
                                                     int takeIndex )
 {
+    // See drawTake: -1 is the COMP RESULT, not the active take windowed.
+    if( takeIndex < 0 ) return collectEnvelope( lk, win, out );
+
     SObject *take = takeFor( takeIndex );
     if( !take ) return false;
     SObjectRenderer *rndr = take->getInlineRenderer();
     if( !rndr ) return false;
-    return rndr->collectEnvelope( lk, win, out );
+
+    STakeStack &st = stack();
+    const int t = takeIndex;
+    if( st.takeIsFullExtent( t ) )
+        return rndr->collectEnvelope( lk, win, out );
+
+    // WINDOWED, like drawTake above. Outside the extent the probes stay ZERO,
+    // which is how this seam spells "no material" — `fillBodyByMaterial` leaves
+    // such a column unpainted, so the take-lane fill shows through exactly
+    // where the take has nothing.
+    const int w = win.width < 1 ? 1 : win.width;
+    for( int i = 0; i < w; ++i ) { out[ i ].min = 0; out[ i ].max = 0; }
+
+    const offset_t base = lk.getStartTime();
+    const offset_t exStart = st.takeExtentStart( t );
+    const offset_t exEnd   = st.takeExtentEnd( t );
+    // An SEnvelopeWindow is linear BY CONTRACT (sobjectrenderer.h), so the
+    // probe grid is interpolated rather than asked per column here.
+    const auto posOf = [&win, w, base]( int i ) -> offset_t {
+        const int64_t span = (int64_t) win.rightTime - (int64_t) win.leftTime;
+        return (offset_t) ( (int64_t) win.leftTime
+                            + ( span * (int64_t) i ) / (int64_t) w ) - base;
+    };
+
+    int i0 = -1, i1 = -1;
+    for( int i = 0; i < w; ++i ) {
+        const offset_t pos = posOf( i );
+        if( pos >= exStart && pos < exEnd ) { if( i0 < 0 ) i0 = i; i1 = i + 1; }
+    }
+    if( i0 < 0 ) return true;               // nothing of this take is in view
+
+    SEnvelopeWindow sub;
+    sub.leftTime  = posOf( i0 ) + base - exStart;
+    sub.rightTime = ( i1 < w ? posOf( i1 ) : (offset_t) ( win.rightTime - base ) )
+                    + base - exStart;
+    sub.width     = i1 - i0;
+    if( sub.width < 1 ) return true;
+    // A declining sub-collect leaves the zeros: an event take has no waveform
+    // and its extent is still an extent, so TRUE is the honest answer — the
+    // caller must not fall back to a solid fill over a windowed take.
+    rndr->collectEnvelope( lk, sub, out + i0 );
+    return true;
+}
+
+// The brush a span with NO MATERIAL is drawn in: the SAME hatch the "no take"
+// column has always used. §4.4 says the uncovered span is "hatched, as `no
+// take` is drawn today", and one brush is what makes the two read as the same
+// statement — "there is nothing here" — rather than as two different ones.
+static QBrush noMaterialBrush()
+{
+    return QBrush( QColor( 70, 70, 70 ), Qt::BDiagPattern );
 }
 
 void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
@@ -777,13 +1042,59 @@ void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
     const QRect vr = ctx.getVisibRect();
     STakeStack &st = stack();
 
-    if( SObject *take = st.activeTakeObject() ) {
-        if( SObjectRenderer *rndr = take->getInlineRenderer() )
-            rndr->draw( lk, ctx );    // my link but his object (CLIP_MODEL)
-    } else {
-        p.fillRect( vr, QBrush( QColor( 70, 70, 70 ), Qt::BDiagPattern ) );
+    if( !st.activeTakeObject() && st.nTakes() == 0 ) {
+        p.fillRect( vr, noMaterialBrush() );
         p.setPen( QColor( 150, 150, 150 ) );
         p.drawText( vr, Qt::AlignCenter, QStringLiteral( "no take" ) );
+    } else if( !st.resolvesThroughComp() ) {
+        // THE DEGENERATE COLUMN KEEPS THE ORIGINAL PATH, byte for byte: no
+        // map, every take full-extent, so the comp result IS the active take
+        // across the whole clip. Same rule as the audio resolution
+        // (resolvesThroughComp) and for the same reason — every project that
+        // has never been comped must look exactly as it did, which is what
+        // the screenshot gates assert.
+        if( SObject *take = st.activeTakeObject() )
+            if( SObjectRenderer *rndr = take->getInlineRenderer() )
+                rndr->draw( lk, ctx );    // my link but his object (CLIP_MODEL)
+    } else {
+        // THE COMP RESULT, SEGMENT BY SEGMENT (plan 53 §4.4). Per run the take
+        // that SOUNDS there, drawn in its own domain and clipped to the run; a
+        // run whose take has no material is hatched. This is what closes X10:
+        // before it, a comped column drew the ACTIVE take across the whole
+        // clip, so the picture showed material the column does not play and
+        // hid material it does.
+        //
+        // NOT GATED, AND MEASURED TO BE SO. Reverting this branch to the old
+        // active-take-only draw passes the WHOLE suite, 449/449 — because this
+        // is pure PAINT, and a paint behaviour needs a PIXEL gate, which plan
+        // 53 §4.4 allocates to QBX-157's part 1. What IS gated is
+        // `collectEnvelope` below, through `assert-envelope` (clip and
+        // `take=`). The two share ONE run walk (`compRuns`) precisely so they
+        // cannot drift while only one of them is gated — but that is an
+        // argument, not a gate, and whoever lands QBX-157 should know that the
+        // pixels here have never been asserted.
+        const offset_t base = lk.getStartTime();
+        const std::vector<CompRun> runs =
+            compRuns( st, vr.width(),
+                      [&ctx, &vr, base]( int i ) -> offset_t {
+                          return ctx.getTimeOf( vr.left() + i ) - base;
+                      } );
+        for( const CompRun &r : runs ) {
+            const QRect rr( vr.left() + r.c0, vr.y(), r.c1 - r.c0, vr.height() );
+            if( rr.width() < 1 ) continue;
+            if( r.take < 0 ) {
+                p.fillRect( rr, noMaterialBrush() );
+                continue;
+            }
+            SObject *take = st.takeObjectAt( r.take );
+            SObjectRenderer *rndr = take ? take->getInlineRenderer() : nullptr;
+            if( !rndr ) continue;
+            TakeShiftContext shifted( ctx, r.tStart );
+            p.save();
+            p.setClipRect( rr, Qt::IntersectClip );
+            rndr->draw( lk, shifted );
+            p.restore();
+        }
     }
 
     if( st.nTakes() > 1 ) {
@@ -796,16 +1107,57 @@ void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
     }
 }
 
-// The COLLECT terminal (proposal 39 M1). Identical delegation to draw()'s: the
-// active take's renderer over MY link but HIS object (CLIP_MODEL). No take, no
-// envelope — the "no take" hatch has no waveform to describe.
+// The COLLECT terminal (proposal 39 M1), and since 1' the COMP RESULT's — the
+// same run walk draw() makes, with a collect terminal instead of a draw one, so
+// the envelope a script reads is the envelope on screen. No take, no envelope:
+// the "no take" hatch has no waveform to describe.
 bool STakeStackRendererInline::collectEnvelope( SLink &lk,
                                                 const SEnvelopeWindow &win,
                                                 preview_t *out )
 {
-    SObject *take = stack().activeTakeObject();
-    if( !take ) return false;
-    SObjectRenderer *rndr = take->getInlineRenderer();
-    if( !rndr ) return false;
-    return rndr->collectEnvelope( lk, win, out );
+    STakeStack &st = stack();
+    if( !st.resolvesThroughComp() ) {
+        // The degenerate column: the active take's own envelope, unchanged.
+        SObject *take = st.activeTakeObject();
+        if( !take ) return false;
+        SObjectRenderer *rndr = take->getInlineRenderer();
+        if( !rndr ) return false;
+        return rndr->collectEnvelope( lk, win, out );
+    }
+    if( st.nTakes() == 0 ) return false;
+
+    const int w = win.width < 1 ? 1 : win.width;
+    for( int i = 0; i < w; ++i ) { out[ i ].min = 0; out[ i ].max = 0; }
+
+    const offset_t base = lk.getStartTime();
+    // Linear BY CONTRACT (sobjectrenderer.h), the same grid collectTakeEnvelope
+    // interpolates.
+    const auto posOf = [&win, w]( int i ) -> offset_t {
+        const int64_t span = (int64_t) win.rightTime - (int64_t) win.leftTime;
+        return (offset_t) ( (int64_t) win.leftTime
+                            + ( span * (int64_t) i ) / (int64_t) w );
+    };
+    const std::vector<CompRun> runs =
+        compRuns( st, w, [&posOf, base]( int i ) -> offset_t
+                         { return posOf( i ) - base; } );
+
+    bool any = false;
+    for( const CompRun &r : runs ) {
+        if( r.take < 0 ) continue;          // no material: the zeros stand
+        SObject *take = st.takeObjectAt( r.take );
+        SObjectRenderer *rndr = take ? take->getInlineRenderer() : nullptr;
+        if( !rndr ) continue;
+        SEnvelopeWindow sub;
+        sub.leftTime  = posOf( r.c0 ) - r.tStart;
+        sub.rightTime = ( r.c1 < w ? posOf( r.c1 ) : (offset_t) win.rightTime )
+                        - r.tStart;
+        sub.width     = r.c1 - r.c0;
+        if( sub.width < 1 ) continue;
+        if( rndr->collectEnvelope( lk, sub, out + r.c0 ) ) any = true;
+    }
+    // TRUE once ANY run had an envelope: the array describes the comp result,
+    // zeros and all. False only when nothing in view could describe itself,
+    // which is the "unknown material" case the caller must not read as "no
+    // material" (an all-event column).
+    return any;
 }

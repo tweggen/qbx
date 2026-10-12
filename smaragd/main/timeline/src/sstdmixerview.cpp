@@ -2456,18 +2456,31 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
         // reduces to the old two-branch paint on every project that has no
         // comp. With a map it is per REGION, which is the only honest way to
         // draw a lane whose take sounds in some places and not others.
-        const twCompMap &cmap = stack->compMap();
         const offset_t clipEndPos = start + (offset_t) dur;
         offset_t segPos = start;
         while( segPos < clipEndPos ) {
-            // The run this take's state holds for: the next boundary, or the
+            // The run this take's state holds for: the next COMP EDGE, or the
             // clip's end. Positions are COLUMN-relative for the map and
             // TIMELINE for the paint, and `start` is the difference.
+            //
+            // `nextCompEdgeAfter` rather than a loop over the map's segments:
+            // since invariant 1' an EXTENT edge ends a run too (plan 53 §4.1),
+            // and a walk that knew only about segments would straddle the end
+            // of a take's material — dimming or ringing half a region on the
+            // strength of its other half. It is the same walk the model and
+            // the compact painter make, which is what keeps the take lane
+            // agreeing with the clip above it.
+            //
+            // NOT GATED, AND MEASURED TO BE SO: reverting this to the old
+            // map-only loop passes the whole suite, 449/449. The walk decides
+            // only the yellow ring and the black dim wash per region — pure
+            // paint, with no verb in the suite that can read a take lane's
+            // pixels (`assert-lane-overlay` reads a TRACK lane's folder-sum
+            // overlay, not this). The take lane's picture is QBX-157's.
             offset_t nextPos = clipEndPos;
-            for( const twCompSegment &cs : cmap.segments() ) {
-                const offset_t at = start + (offset_t) cs.at;
-                if( at > segPos ) { nextPos = std::min( nextPos, at ); break; }
-            }
+            const offset_t edge = stack->nextCompEdgeAfter( segPos - start );
+            if( edge >= 0 )
+                nextPos = std::min( nextPos, start + edge );
             const bool on =
                 ( stack->takeIndexAt( (int64_t) ( segPos - start ) )
                   == row.takeRow );

@@ -72,10 +72,17 @@
     <assert-take-column clip="0,0" takeAtPos="0" expectTake="0"/>
     <assert-take-column clip="0,0" takeAtPos="144000" expectTake="0"/>
 
-    <!-- Now ask the same question with take 1 selected. An empty map means
-         "the active take everywhere", and take 1 has NO material before
-         96000 — so the answer is -1, SILENCE, not take 0 (§3.1 step 5). -->
+    <!-- Now ask the same question with take 1 selected AND NO MAP. An empty
+         map means "the active take everywhere", and take 1 has NO material
+         before 96000 — so the answer is -1, SILENCE, not take 0 (§3.1 step 5). -->
     <select-take clip="0,0" take="1"/>
+    <!-- `set-comp-map` WITH NO SEGMENTS is what empties the map since A0b
+         (QBX-178, plan 53 §4.3). `select-take` used to clear it as a side
+         effect, which is how this case reached the state below; now the click
+         is EXTENT-AWARE and keeps the other takes audible where the selected
+         one has nothing, so the premise is stated directly. The RULE asserted
+         below has not changed. -->
+    <set-comp-map clip="0,0"/>
     <assert-take-column clip="0,0" activeTake="1" takeAtPos="0"
                         expectTake="-1"/>
     <assert-take-column clip="0,0" takeAtPos="95999" expectTake="-1"/>

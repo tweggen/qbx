@@ -23,18 +23,29 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 
     /**
-     * The COMP MAP to restore (proposal 43 N1). `select-take` means "this take
-     * for the WHOLE column", so it CLEARS the map — and its inverse has to put
-     * it back, or one undo of a click would silently destroy a comp.
+     * The COMP MAP to restore (proposal 43 N1), and the mark that THIS ACTION
+     * IS AN INVERSE.
+     *
+     * `select-take` used to mean "this take for the WHOLE column", so it
+     * cleared the map and its inverse had to put the map back, or one undo of
+     * a click would silently destroy a comp. Since invariant 1' the forward
+     * pass no longer always clears -- on a PARTIAL take it computes a map
+     * (§4.3) -- so an inverse must be told apart from a forward pass rather
+     * than inferred from the take it names. An inverse whose take happens to
+     * be partial would otherwise recompute §4.3's map instead of restoring the
+     * one it was handed, and undo would not be undo.
      *
      * Exactly one caller, the inverse this action builds, and it must keep
      * exactly one — the same discipline `SSetPluginParamAction::
      * setPreviousValue()` carries and for the same reason.
      */
-    void setPreviousCompMap( const twCompMap &m ) { prevMap_ = m; }
+    void setPreviousCompMap( const twCompMap &m )
+    { prevMap_ = m; restoreMap_ = true; }
 
 private:
     twCompMap prevMap_;
+    /** Set only by setPreviousCompMap: restore `prevMap_` VERBATIM. */
+    bool       restoreMap_ = false;
     QList<int> clipPath_;
     int        takeIndex_ = -1;
     // Edit groups: comp the SAME take index on every member's corresponding

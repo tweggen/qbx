@@ -83,7 +83,8 @@ SApplyResult SAssertEnvelopeAction::apply( SProject * )
             ? win->collectTrackChildSumEnvelope( trackPath_, (offset_t) start_,
                                                  (length_t) length_, width_, raw )
             : win->collectClipEnvelope( clipPath_, (offset_t) start_,
-                                        (length_t) length_, width_, raw );
+                                        (length_t) length_, width_, raw,
+                                        take_ );
 
     QVector<preview_t> pv;
     pv.reserve( width_ );
@@ -94,10 +95,11 @@ SApplyResult SAssertEnvelopeAction::apply( SProject * )
         if( pv[i].min != 0 || pv[i].max != 0 ) { allZero = false; break; }
 
     const QString where =
-        QString( "%1 %2 [%3, %4) over %5 columns" )
+        QString( "%1 %2%6 [%3, %4) over %5 columns" )
             .arg( childSum ? "childSum of track" : "clip" )
             .arg( childSum ? trackPath_ : clipPath_ ).arg( (qlonglong) start_ )
-            .arg( (qlonglong)( start_ + length_ ) ).arg( width_ );
+            .arg( (qlonglong)( start_ + length_ ) ).arg( width_ )
+            .arg( take_ >= 0 ? QString( " take %1" ).arg( take_ ) : QString() );
 
     // --- expectEmpty: the collect produced nothing at all -------------------
     if( expectEmpty_ ) {
@@ -194,6 +196,10 @@ void SAssertEnvelopeAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "expectEmpty", expectEmpty_ ? "true" : "false" );
     if( !snapshot_.isEmpty() )  elem.setAttribute( "snapshot", snapshot_ );
     if( !compareTo_.isEmpty() ) elem.setAttribute( "compareTo", compareTo_ );
+    // Written only when it SAYS something: -1 is "the audible one", which is
+    // what every case written before take columns had extents means, so a
+    // default instance round-trips to exactly the XML it did before.
+    if( take_ >= 0 ) elem.setAttribute( "take", take_ );
 }
 
 bool SAssertEnvelopeAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -214,6 +220,7 @@ bool SAssertEnvelopeAction::readXml( const QDomElement &elem, int /*version*/ )
     expectEmpty_ = elem.attribute( "expectEmpty", "false" ) == "true";
     snapshot_    = elem.attribute( "snapshot" );
     compareTo_   = elem.attribute( "compareTo" );
+    take_        = elem.attribute( "take", "-1" ).toInt();
     return true;
 }
 

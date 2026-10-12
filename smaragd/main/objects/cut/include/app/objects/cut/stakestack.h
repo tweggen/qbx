@@ -15,11 +15,27 @@ class STakeStack;
 class QDomElement;
 
 /**
- * Inline renderer for a take stack: compact mode draws the ACTIVE take
- * exactly like a plain cut ("my link but his object" — the cut renderer
- * reads its window from its own window object, the passed link only supplies the
- * timeline start). No active take renders a dimmed hatch. A small
- * "active/count" badge marks multi-take clips.
+ * Inline renderer for a take stack.
+ *
+ * COMPACT MODE DRAWS THE COMP RESULT (plan 53 §4.4, A0b): run by run, the take
+ * that SOUNDS there, in its own domain; a run whose take has no material is
+ * HATCHED, in the same brush the "no take" column uses, because the statement
+ * is the same one. A DEGENERATE column — no comp map, every take full-extent —
+ * takes the original path untouched and draws the ACTIVE take exactly like a
+ * plain cut ("my link but his object" — the cut renderer reads its window from
+ * its own window object, the passed link only supplies the timeline start), so
+ * every project that has never been comped looks exactly as it did.
+ *
+ * Before A0b the compact mode drew the active take across the WHOLE column
+ * whatever the map said, which is plan 53's X10: the picture showed material
+ * the column does not play and hid material it does.
+ *
+ * THE TAKE-LANE TERMINALS (drawTake / collectTakeEnvelope) draw ONE take over
+ * ITS EXTENT ONLY. A small "active/count" badge marks multi-take clips.
+ *
+ * Positions come from the FORWARD map only (SRenderContext::getTimeOf), never
+ * from inverting it — see compRuns in the .cpp for why that is not an
+ * implementation detail.
  */
 class STakeStackRendererInline : public SObjectRenderer
 {
@@ -209,6 +225,29 @@ public:
           && columnPos <  takeExtentEnd( index ); }
 
     /**
+     * ONE PAST THE LAST COLUMN FRAME over which `takeIndexAt()` keeps its
+     * answer — the next COMP EDGE after `columnPos`, or -1 when the answer
+     * holds to the end of the column.
+     *
+     * The edges are the map's segment boundaries AND the chosen take's two
+     * extent edges, which is the model-side twin of
+     * `twCompColumn::runAt_nolock`'s run clipping (plan 53 §4.1): without the
+     * extent edges a run could straddle the end of its own take's material
+     * and be drawn half from the take and half from nothing.
+     *
+     * IT DELIBERATELY IGNORES CROSSFADES. A crossfade is a BLEND of two takes
+     * over a span, which a per-column envelope cannot express and a waveform
+     * cannot show; `twCompColumn` splits runs at a crossfade's two ends
+     * because it has to mix them, and the cut marks that would draw a
+     * boundary are QBX-157's (§4.4). A painter that split here as well would
+     * claim a visible edge the picture does not have.
+     *
+     * The painters walk WITH it rather than with their own loop, so what is
+     * drawn and what sounds cannot disagree about where a take begins.
+     */
+    offset_t nextCompEdgeAfter( offset_t columnPos ) const;
+
+    /**
      * Move a take's extent. The ONE writer, so the partial-take cache and the
      * column's own length cannot drift from the links they are derived from.
      * `len < 0` keeps the take's current length.
@@ -349,12 +388,13 @@ public:
     length_t getDurationBlocking() const override;
     /** The column's kind is its takes' kind (Audio while it is empty). */
     SContentKind contentKind() const override;
-    // STILL THE ACTIVE TAKE'S, UNWINDOWED, and that is A0b's row rather than
-    // an oversight (plan 53 §4.1 lists it beside collectEnvelope/drawTake).
-    // A preview is what the PAINTER reads, so windowing it here while both
-    // painters still draw a take across the whole column would produce a
-    // half-windowed picture: an envelope that stops at the extent inside a
-    // waveform that does not. The pair moves together, in A0b.
+    // THE ACTIVE TAKE'S, WINDOWED TO ITS EXTENT since A0b (plan 53 §4.1 lists
+    // this pair beside collectEnvelope/drawTake, and they landed together for
+    // the reason A0a recorded: a preview is what the PAINTER reads, so
+    // windowing one alone would have produced a half-windowed picture — an
+    // envelope that stops at the extent inside a waveform that does not).
+    // Outside the extent the probes are ZERO, which is how every consumer of
+    // this seam already spells "no material".
     bool hasPreview() const override;
     int getPreview( preview_t *dest, offset_t start, length_t length,
                     offset_t nProbes ) override;

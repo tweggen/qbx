@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TAKE EXTENTS AND resize-clip — THE CLAMP AND THE EMPTY-REFUSAL
+  (plan 53 §4.1 / A0b, QBX-178).
+
+  A0a made the write-through CLAMP extents rather than overwrite them, and
+  clamped a would-be-empty take to one frame with a log, because the MODEL must
+  keep invariant 1′ true whatever a caller does. Refusing needs a verb that can
+  REJECT, and that is `resize-clip` — this row's. The two are not alternatives:
+  the clamp is the model's floor, the refusal is the edit surface's answer, and
+  a direct model write still gets the clamp.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav:
+    take 0 — FULL extent [0, 192000)
+    take 1 — PARTIAL [48000, 96000), ENDING EARLY on purpose
+  Take 1 ending before the column does is the whole fixture: it is what tells
+  "clamp the takes that reach the end" apart from "set every take's length",
+  which agree on every column whose takes all reach the end.
+
+  ONE — A RIGHT-EDGE TRIM CLAMPS, AND ONLY WHAT IT MUST. Trimming the column
+  to 3 s pulls take 0 back to [0, 144000) — it reached the old end, so it
+  follows — and leaves take 1 at [48000, 96000) untouched, because the user put
+  that edge there and a trim it does not reach has no business moving it.
+
+  TWO — AN EXTEND GROWS ONLY THE CLAMPED TAKE. Back out to 4 s, take 0 grows
+  again (it ended at the new-old end) and take 1 STAYS at [48000, 96000). An
+  extend that grew every take would silently undo a comp: take 1's edge is a
+  comp decision, not a consequence of the column's length.
+
+  THREE — A TRIM PAST A TAKE'S START IS REFUSED, AND SAID OUT LOUD. Trimming
+  to 24000 would leave take 1 (starting at 48000) with no material at all.
+  `assert-log` is what gates it rather than the action merely failing: a resize
+  can fail for several reasons, so a case that asserted only failure would pass
+  on an accident. The column must be EXACTLY as it was afterwards — a refusal
+  that half-applied would be worse than one that did not refuse.
+
+  MEASURED ON THE BASELINE (main at a3aa1472, i.e. with A0a's model but not
+  A0b):
+    - step ONE reads take 1 as `48000-192000` and `assert-clip-window take="1"
+      duration=` reads 144000 for 48000 — `applyWindowAll` clamped the extent
+      correctly and then the LEFT-EDGE LOOP wrote the column's length straight
+      back over it, which is the hand-off A0a recorded at that line;
+    - step TWO reads `48000-240000`, a take reaching 48000 frames PAST the end
+      of its own column;
+    - step THREE is NOT REFUSED at all. It applies: `assert-log` finds 0
+      records containing "resize-clip: REFUSED", the column becomes 24000, and
+      take 1 comes out at `23999-47999` — clamped to ONE FRAME by A0a's model
+      floor, which is exactly the floor doing its job in the absence of the
+      refusal this row adds. The render then reads 0.0236 and 0 where 0.067 and
+      0.405 are expected.
+-->
+<SActionScript version="1" name="take_extents_resize">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1 deliberately ends before the column does. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="48000" length="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;48000-96000" duration="192000"/>
+
+    <!-- ONE: trim the column's right edge to 3 s. -->
+    <resize-clip clip="0,0" startTime="0" duration="144000" srcStart="0"/>
+    <assert-take-column clip="0,0" duration="144000"
+                        extents="0-144000;48000-96000"/>
+    <!-- ...and through an attribute `main` also understands: the ACTIVE take's
+         window is what assert-clip-window's duration reads. -->
+    <assert-clip-window clip="0,0" take="0" duration="144000"/>
+    <assert-clip-window clip="0,0" take="1" duration="48000"/>
+
+    <!-- TWO: extend back out to 4 s. Only take 0 grows. -->
+    <resize-clip clip="0,0" startTime="0" duration="192000" srcStart="0"/>
+    <assert-take-column clip="0,0" duration="192000"
+                        extents="0-192000;48000-96000"/>
+    <assert-clip-window clip="0,0" take="1" duration="48000"/>
+
+    <!-- THREE: a trim that would empty take 1 is REFUSED and ANNOUNCED. -->
+    <resize-clip clip="0,0" startTime="0" duration="24000" srcStart="0"
+                 expectReject="true"/>
+    <assert-log contains="resize-clip: REFUSED" minCount="1"/>
+    <!-- Nothing moved. -->
+    <assert-take-column clip="0,0" duration="192000"
+                        extents="0-192000;48000-96000"/>
+    <assert-clip-window clip="0,0" take="0" duration="192000"/>
+    <assert-clip-window clip="0,0" take="1" duration="48000"/>
+
+    <!-- The column still plays what it did: take 0 across the whole 4 s. -->
+    <render filename="ter_after.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="ter_after.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ter_after.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
