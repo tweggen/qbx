@@ -1,4 +1,4 @@
-# Proposal 51 — Cross-platform plugin identity, with graded confidence
+# Proposal 54 — Cross-platform plugin identity, with graded confidence
 
 Status: proposed. Owner: unassigned. Touches `tw303a/plugins/`,
 `main/objects/track/` (SPluginSlot), `main/pluginui/`, `main/shell/`.
