@@ -16,15 +16,28 @@
 // `index` = -1 appends; `activate` = 1 (default) makes the new take audible
 // (decision 1: newest take auto-activated).
 //
+// THE TAKE'S EXTENT (plan 53 §4.1, invariant 1′): `at` is where the take's
+// material starts in COLUMN frames and `length` how far it reaches, so a take
+// may cover LESS than its column. The defaults are the whole column -- `at` 0
+// and `length` -1, meaning "the column's duration" -- which is what every
+// caller and every .qxa written before extents means, and what keeps them all
+// correct unchanged.
+//
+// They also carry a REMOVED take's extent back on undo. Without them the
+// inverse of a `remove-take` on a partial take restored a FULL-extent one,
+// which is a different column wearing the same take count.
+//
 // Inverse: remove-take at the inserted index (which collapses a stack back
-// to a plain cut when one take remains — undoing the wrap).
+// to a plain cut when one FULL-EXTENT take remains — undoing the wrap;
+// invariant 3′ keeps a partial one as a column).
 class SAddTakeAction : public SAction {
 public:
     SAddTakeAction() = default;
     SAddTakeAction( const QList<int> &clipPath, const QString &filePath,
                     offset_t startOffset = 0, int index = -1,
                     bool activate = true, const Fraction &stretch = Fraction(1),
-                    double pitchCents = 0.0 );
+                    double pitchCents = 0.0,
+                    offset_t at = 0, length_t length = -1 );
 
     QString name() const override { return QStringLiteral("add-take"); }
 
@@ -56,6 +69,8 @@ private:
     bool       activate_ = true;
     Fraction   stretch_ = Fraction(1);
     double     pitchCents_ = 0.0;
+    offset_t   at_ = 0;          // extent start, column frames
+    length_t   length_ = -1;     // extent length; < 0 = the whole column
 };
 
 #endif // SADDTAKEACTION_H

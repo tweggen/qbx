@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TAKE EXTENTS, THE MODEL (plan 53 §4.1 / A0a, QBX-177).
+
+  Invariant 1 became 1': every take has an extent [tStart, tEnd) inside the
+  COLUMN's own length, so a take may cover LESS than its column. Before 1' a
+  take always spanned the whole column and a take link's startTime was always
+  0 — written, but thrown away by the loader, which forced setStartTime( 0 ).
+
+  WHAT THIS CASE GATES, in one pass through the model:
+
+    1. `add-take at= length=` builds a PARTIAL take. The two attributes are
+       new here; on a build without them they are UNKNOWN and so silently
+       ignored (the classic qxa trap), which is exactly why the extents
+       assertion below is the one that fails on `main` rather than the verb.
+    2. The extent SURVIVES A SAVE AND LOAD. It travels in the take SLink's
+       startTime and the take's own duration — no new element, no new
+       per-take attribute.
+    3. `duration=` ON `<STakeStack>` IS WRITTEN ONLY WHEN IT CARRIES
+       INFORMATION. A column whose length equals max_i( tStart_i + len_i ) is
+       fully described by its takes, and the loader derives exactly that
+       maximum when the attribute is absent. That is what keeps every project
+       file written before FORMAT_VERSION 3 — and every golden — serializing
+       byte-identically, so it is asserted as an ABSENCE with
+       `assert-file-contains absent="true"` rather than hoped for.
+    4. `takeIndexAt` answers -1 where the selected take HAS NO MATERIAL
+       (§3.1 step 5). THERE IS NO FALL-BACK to another take that happens to
+       cover the position: it is silence, and `takeAtPos`/`expectTake` is how
+       a script reads that without rendering.
+
+  THE COLUMN HERE IS FULL-LENGTH-BY-ITS-TAKES on purpose (take 0 reaches
+  192000, so duration_ == derivedDuration()), because that is the case in
+  which `duration=` must be ABSENT. A column LONGER than its takes reach is
+  the state that needs the attribute, and it is unreachable from any verb
+  A0a ships — it is §4.2's union placeholder, which P4/P2 produce. Gating the
+  absence is therefore the whole of what this case can say about the
+  attribute, and it is the half that every existing project file depends on.
+
+  Fixture: test_sawtooth.wav, 4 s / 192000 frames, per-source-second RMS
+  0.0667 / 0.1764 / 0.2906 / 0.4055.
+-->
+<SActionScript version="1" name="take_extents_model">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- take 0: the whole 4 s, a plain cut for now. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1: PARTIAL — the second half of the column only, reading the
+         source from its start. This wraps the plain cut into a column
+         (take 0) and adds the partial take beside it.
+
+         activate="0" deliberately: activating would clear nothing (there is
+         no map yet) but it would make take 1 the active take, and a column
+         whose ACTIVE take is partial is take_extents_audible's subject. Here
+         the subject is the model, and take 0 stays active so the column still
+         sounds like itself. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+
+    <!-- The two extents, in take-index order. Take 0 full, take 1 the second
+         half. ON `main` THIS IS THE FAILING LINE: `at`/`length` do not exist
+         there, so take 1 is built full-extent and reads 0-192000. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+
+    <!-- The resolution rule's model half, with no map at all: the ACTIVE take
+         is take 0, which covers everything, so every position answers 0. -->
+    <assert-take-column clip="0,0" takeAtPos="0" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="0"/>
+
+    <!-- Now ask the same question with take 1 selected. An empty map means
+         "the active take everywhere", and take 1 has NO material before
+         96000 — so the answer is -1, SILENCE, not take 0 (§3.1 step 5). -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" activeTake="1" takeAtPos="0"
+                        expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="95999" expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="191999" expectTake="1"/>
+
+    <!-- Back to take 0, so the saved document is the one described above. -->
+    <select-take clip="0,0" take="0"/>
+
+    <!-- SAVE AND LOAD. The extent must come back, which is the loader half:
+         insertTake reads the take SLink's startTime instead of forcing 0. -->
+    <save-project path="../../build/take_extents_model.qxp"/>
+
+    <!-- ...and the column, whose length its takes already imply, carries NO
+         duration= attribute. This is the byte-compatibility claim: a column
+         with no partial take writes exactly what version 2 wrote. -->
+    <assert-file-contains path="../../build/take_extents_model.qxp"
+                          text="duration=" absent="true"/>
+
+    <!-- The take's extent start IS a take SLink startTime, and that is what
+         must be in the file for the loader to find. -->
+    <assert-file-contains path="../../build/take_extents_model.qxp"
+                          text="startTime='96000'"/>
+
+    <load-project path="../../build/take_extents_model.qxp"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+    <!-- The partial take's own window, read through the one verb that can
+         address a take: 2 s long, reading the source from 0. -->
+    <assert-clip-window clip="0,0" take="1" duration="96000" startOffset="0"/>
+    <assert-clip-window clip="0,0" take="0" duration="192000" startOffset="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

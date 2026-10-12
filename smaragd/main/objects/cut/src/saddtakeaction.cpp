@@ -19,10 +19,11 @@ using namespace strackpath;
 SAddTakeAction::SAddTakeAction( const QList<int> &clipPath,
                                 const QString &filePath, offset_t startOffset,
                                 int index, bool activate, const Fraction &stretch,
-                                double pitchCents )
+                                double pitchCents, offset_t at, length_t length )
     : clipPath_( clipPath ), filePath_( filePath ),
       startOffset_( startOffset ), index_( index ), activate_( activate ),
-      stretch_( stretch ), pitchCents_( pitchCents )
+      stretch_( stretch ), pitchCents_( pitchCents ), at_( at ),
+      length_( length )
 {
 }
 
@@ -114,13 +115,18 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     gp.pitchCents = pitchCents_;
     takeCut->setGrainParamsRaw( gp );
     takeCut->setStartOffset( startOffset_ );
-    // Blocking (P19): the new take must adopt the column's CURRENT duration,
-    // never the stale try-lock fallback (edit path, bounded block).
-    takeCut->setDuration( stack->getDurationBlocking() );
+    // THE TAKE'S EXTENT (plan 53 §4.1). length_ < 0 means the whole column,
+    // which is what every caller written before extents means -- and a blocking
+    // read of the column's duration, never the stale try-lock fallback (P19;
+    // edit path, bounded block).
+    const length_t takeLen = ( length_ >= 0 ) ? length_
+                                              : stack->getDurationBlocking();
+    takeCut->setDuration( takeLen );
 
     const int at = ( index_ >= 0 && index_ <= stack->nTakes() )
                        ? index_ : stack->nTakes();
-    if( !stack->insertTake( *takeCut, at == stack->nTakes() ? -1 : at ) ) {
+    if( !stack->insertTake( *takeCut, at == stack->nTakes() ? -1 : at,
+                            at_, takeLen ) ) {
         // Homogeneity (proposal 37 D8b): the column already holds a different
         // kind of material. Reject rather than build a column that plays
         // audio or notes depending on which lane is active.
@@ -182,6 +188,12 @@ void SAddTakeAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "activate", activate_ ? 1 : 0 );
     elem.setAttribute( "stretch", QString::fromStdString( stretch_.toString() ) );
     elem.setAttribute( "pitchCents", QString::number( pitchCents_ ) );
+    // Written only when they say something (plan 53 §4.1): `at` 0 and no
+    // `length` IS "the whole column", so a full-extent take serializes exactly
+    // as it did before extents existed.
+    if( at_ != 0 ) elem.setAttribute( "at", QString::number( (qlonglong) at_ ) );
+    if( length_ >= 0 )
+        elem.setAttribute( "length", QString::number( (qlonglong) length_ ) );
 }
 
 bool SAddTakeAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -194,6 +206,8 @@ bool SAddTakeAction::readXml( const QDomElement &elem, int /*version*/ )
     activate_ = elem.attribute( "activate", "1" ).toInt() != 0;
     stretch_ = parseFractionOrDouble( elem.attribute( "stretch", "1" ).toStdString() );
     pitchCents_ = elem.attribute( "pitchCents", "0" ).toDouble();
+    at_ = (offset_t) elem.attribute( "at", "0" ).toLongLong();
+    length_ = (length_t) elem.attribute( "length", "-1" ).toLongLong();
     return true;
 }
 

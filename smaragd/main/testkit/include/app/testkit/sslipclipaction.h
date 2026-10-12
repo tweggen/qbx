@@ -42,6 +42,7 @@ public:
 
 private:
     QList<int> clipPath_;
+    int        take_ = -1;   // -1 = the placement itself; else that take
     bool     hasStartOffset_ = false;
     offset_t startOffset_    = 0;
     bool     hasSrcStart_    = false;

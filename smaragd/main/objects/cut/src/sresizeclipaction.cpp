@@ -132,8 +132,10 @@ SApplyResult SResizeClipAction::apply( SProject *project )
                                          takeWin->loopLength(),
                                          takeWin->stretchOrRate() );
         } else {
-            // DIRECT: length / loop / stretch write through to every take
-            // (invariant 1).
+            // DIRECT: length / loop / stretch write through to every take.
+            // Since invariant 1' (plan 53 §4.1) the write-through CLAMPS
+            // extents rather than overwriting them, and for a full-extent
+            // column that is exactly what it always did.
             column->applyWindowAll( duration_, loopLength_, stretch_ );
             if( takeWin && take_ >= 0 ) {
                 // A NAMED take: the anchor is that take's alone. This is the
@@ -155,6 +157,17 @@ SApplyResult SResizeClipAction::apply( SProject *project )
                 // switching takes afterwards gave different material at the
                 // same instant. That is exactly the operation comping needs
                 // when a boundary is moved.
+                //
+                // IT OVERWRITES A PARTIAL TAKE'S EXTENT, AND THAT IS A0b's ROW
+                // (plan 53 §4.1 / A0b, measured while building A0a). The loop
+                // writes `duration_` onto EVERY take, which is invariant 1
+                // speaking after `applyWindowAll` has just clamped correctly
+                // under 1'. It is UNREACHABLE today: nothing a user can touch
+                // makes a partial take — the only producers are `add-take
+                // at=/length=` from a script and `split-clip`, which preserves
+                // them — and the edit surface that would is A0b's own
+                // subject. A0b owns the left-edge rule for extents together
+                // with the EMPTY-refusal; whoever lands it must come here.
                 const Fraction delta = srcStart_ - oldAnchor;
                 for( int i = 0; i < column->nTakes(); ++i )
                     if( SClipWindow *tw = column->takeAt( i ) )

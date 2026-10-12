@@ -47,6 +47,22 @@ public:
      * 2 = the loader's prune-and-retry recovery per element kind (D8a): a
      *     document written by this build may rely on a reader that keeps a
      *     container whose child is missing.
+     * 3 = TAKE EXTENTS (plan 53 §4.1, invariant 1′): a take covers only the
+     *     span its material occupies, carried by the take link's `startTime`
+     *     and the take's own duration, plus `duration=` on `<STakeStack>`
+     *     when the column is longer than its takes reach.
+     *
+     *     THE BUMP IS WHAT MAKES AN OLDER BUILD SAY SO. A version-2 reader
+     *     parses such a file without complaint and then sets the COLUMN's
+     *     length to the ACTIVE take's (its getDuration() answered the active
+     *     take, else take 0's) -- so the clip would shrink and grow as the
+     *     user clicked between takes, which is wrong in a way nothing on
+     *     screen explains. The loader only WARNS on a newer version and reads
+     *     anyway, so the bump buys exactly that warning.
+     *
+     *     It costs nothing for a file with no partial take: every take is at
+     *     startTime 0 with the column's length, `duration=` is omitted, and
+     *     the document is byte-identical to what version 2 wrote.
      *
      * A reader NEVER refuses a higher version. Refusing would make a project
      * unopenable by the very builds a user is most likely to have, and every
@@ -54,7 +70,7 @@ public:
      * and dropped); it warns instead, so a load that then looks odd has a
      * printed reason.
      */
-    static constexpr int FORMAT_VERSION = 2;
+    static constexpr int FORMAT_VERSION = 3;
 
     /** The version this document declared (1 when the attribute was absent). */
     int formatVersion() const { return formatVersion_; }

@@ -40,6 +40,11 @@ void twCompColumn::setTakes( std::vector<ResolveFn> takes )
             },
             [resolve]( offset_t p ) { return resolve( p ); } );
         e.view->init();
+        // UNBOUNDED by default, so a caller that sets no extent behaves
+        // exactly as every caller did before plan 53 §4.1. The model sets
+        // them right after this call (STakeStack::ensureCompColumn).
+        e.exStart = 0;
+        e.exLen   = -1;
         takes_.push_back( std::move( e ) );
     }
 }
@@ -49,6 +54,34 @@ void twCompColumn::setCompMap( const twCompMap &map, int activeTake )
     std::lock_guard<std::mutex> lock( mutex() );
     map_ = map;
     activeTake_ = activeTake;
+}
+
+void twCompColumn::setInputExtent( int takeIndex, offset_t tStart,
+                                   length_t len )
+{
+    std::lock_guard<std::mutex> lock( mutex() );
+    if( takeIndex < 0 || (size_t) takeIndex >= takes_.size() ) return;
+    TakeEntry &e = takes_[ (size_t) takeIndex ];
+    e.exStart = tStart < 0 ? 0 : tStart;
+    e.exLen   = len;
+}
+
+bool twCompColumn::takeLiveAt_nolock( int t, offset_t pos ) const
+{
+    if( t < 0 || (size_t) t >= takes_.size() ) return false;
+    const TakeEntry &e = takes_[ (size_t) t ];
+    if( e.exLen < 0 ) return true;                  // unbounded: as before
+    return pos >= e.exStart && pos < e.exStart + (offset_t) e.exLen;
+}
+
+offset_t twCompColumn::nextTakeEdgeAfter_nolock( int t, offset_t pos ) const
+{
+    if( t < 0 || (size_t) t >= takes_.size() ) return -1;
+    const TakeEntry &e = takes_[ (size_t) t ];
+    if( e.exLen < 0 ) return -1;
+    if( pos < e.exStart ) return e.exStart;
+    const offset_t end = e.exStart + (offset_t) e.exLen;
+    return ( pos < end ) ? end : -1;
 }
 
 int twCompColumn::takeAt_nolock( offset_t pos ) const
@@ -71,6 +104,28 @@ int64_t twCompColumn::clampedXfade_nolock( size_t segIndex ) const
     if( segIndex + 1 < segs.size() ) {
         const int64_t nextGap = segs[ segIndex + 1 ].at - segs[ segIndex ].at;
         if( x > nextGap ) x = nextGap;
+    }
+    // AND TO BOTH TAKES' EXTENTS (plan 53 §4.1). The fade is centred on `at`,
+    // so it spans [at - x/2, at + x/2): the OUTGOING take must have material
+    // up to the right end and the INCOMING one from the left end. Each bound
+    // is therefore twice the material that take has on its own side.
+    const offset_t at = (offset_t) segs[ segIndex ].at;
+    const int takeOut = takeAt_nolock( at - 1 );
+    const int takeIn  = segs[ segIndex ].take;
+    if( takeOut >= 0 && (size_t) takeOut < takes_.size() ) {
+        const TakeEntry &e = takes_[ (size_t) takeOut ];
+        if( e.exLen >= 0 ) {
+            const int64_t room = 2 * (int64_t) ( e.exStart
+                                                 + (offset_t) e.exLen - at );
+            if( x > room ) x = room;
+        }
+    }
+    if( takeIn >= 0 && (size_t) takeIn < takes_.size() ) {
+        const TakeEntry &e = takes_[ (size_t) takeIn ];
+        if( e.exLen >= 0 ) {
+            const int64_t room = 2 * (int64_t) ( at - e.exStart );
+            if( x > room ) x = room;
+        }
     }
     return x < 0 ? 0 : x;
 }
@@ -107,6 +162,18 @@ twCompColumn::CompRun twCompColumn::runAt_nolock( offset_t pos,
             break;      // segments are sorted; no later one can be nearer
         }
     }
+    // AN EXTENT EDGE ENDS A RUN TOO (plan 53 §4.1). Without this a run could
+    // straddle the end of its own take's material: half of it would be read
+    // from the take and half would be silence, while the page plan declared
+    // one dependency for the whole span. Clipping here keeps every run wholly
+    // inside or wholly outside each contributing take, which is what "a span
+    // over which the set of contributing takes does not change" has to mean
+    // once takes have extents — and it keeps planPage's walk and freezePage's
+    // identical, which is proposal 19 Inv-1 extended to the plan.
+    for( int t : { r.takeA, r.takeB } ) {
+        const offset_t edge = nextTakeEdgeAfter_nolock( t, pos );
+        if( edge > pos ) r.len = std::min( r.len, (length_t) ( edge - pos ) );
+    }
     if( r.len < 0 ) r.len = 0;
     return r;
 }
@@ -138,7 +205,17 @@ twPagePlan twCompColumn::planPage( offset_t pageStart )
         for( int t : { run.takeA, run.takeB } ) {
             if( t < 0 || (size_t) t >= takes_.size() ) continue;
             if( !takes_[ (size_t) t ].view ) continue;
-            twResolvedClip r = takes_[ (size_t) t ].view->resolve( pos );
+            // NO DEPENDENCY OUTSIDE THE EXTENT (plan 53 §4.1). A take with no
+            // material here contributes silence, and declaring it would have
+            // the scheduler build a lazy reader for a window the take does not
+            // have. The run never straddles an edge (runAt_nolock clips at
+            // one), so one test at `pos` answers for the whole run.
+            if( !takeLiveAt_nolock( t, pos ) ) continue;
+            // ...and the take is addressed in ITS OWN domain, which starts at
+            // its tStart in the column's. Zero for a full-extent take, so this
+            // is the old `resolve( pos )` wherever extents are not in use.
+            const offset_t inTake = pos - takes_[ (size_t) t ].exStart;
+            twResolvedClip r = takes_[ (size_t) t ].view->resolve( inTake );
             if( r.component )
                 plan.deps.push_back( twPageDep{ r.component, r.mappedPos } );
         }
@@ -170,14 +247,21 @@ std::shared_ptr<twOutputPage> twCompColumn::freezePage(
         const CompRun run = runAt_nolock( pos, (length_t) ( end - pos ) );
         if( run.len <= 0 ) break;
 
-        // Freeze each contributing take AT THE SAME POSITION: a take is a
-        // window addressed in the COLUMN's own domain, so there is no offset.
+        // Freeze each contributing take AT ITS OWN POSITION: a take is a
+        // window addressed in its own domain, which begins at its tStart in
+        // the column's (plan 53 §4.1). tStart is 0 for a full-extent take, so
+        // this is the offset-free freeze it has always been wherever extents
+        // are not in use.
+        //
+        // A TAKE WITH NO MATERIAL HERE FREEZES NOTHING and the span fills with
+        // silence below — §3.1 step 5: there is no fall-back to another take.
         auto freezeTake = [&]( int t ) -> std::shared_ptr<twOutputPage> {
             if( t < 0 || (size_t) t >= takes_.size() ) return nullptr;
             TakeEntry &e = takes_[ (size_t) t ];
             if( !e.view ) return nullptr;
-            auto sp = e.view->freezePage( pos, nullptr, 0, run.len, sampleRate,
-                                          e.previousPage );
+            if( !takeLiveAt_nolock( t, pos ) ) return nullptr;
+            auto sp = e.view->freezePage( pos - e.exStart, nullptr, 0, run.len,
+                                          sampleRate, e.previousPage );
             // The per-take DSP state chain. A take renders only where its
             // regions are, so its chain has GAPS -- inherent to cutting
             // between sources, and the same situation twTrackMix's
@@ -239,8 +323,25 @@ void twCompColumn::invalidatePagesInRange( offset_t start, offset_t end )
     // Our takes' own caches, and the state predecessors we hand them: an edit
     // inside the range must not resume from a page rendered before it. Same
     // duty twTrackMix has for its clip entries.
+    //
+    // IN EACH TAKE'S OWN DOMAIN (plan 53 §4.1): the range arrives in the
+    // COLUMN's frames, and a take's cache is keyed in its own, which begins at
+    // its tStart in ours. A range entirely outside a take's extent reaches
+    // nothing of that take and must not drop its state chain either — that
+    // would re-render material the edit cannot have touched. Both reduce to
+    // the old unconditional call for a full-extent take, where tStart is 0 and
+    // every range intersects.
     for( TakeEntry &e : takes_ ) {
-        if( e.view ) e.view->invalidatePagesInRange( start, end );
+        offset_t a = start, b = end;
+        if( e.exLen >= 0 ) {
+            const offset_t s = e.exStart;
+            const offset_t t = e.exStart + (offset_t) e.exLen;
+            if( a < s ) a = s;
+            if( b > t ) b = t;
+            if( b <= a ) continue;              // windowed away: nothing to do
+        }
+        if( e.view ) e.view->invalidatePagesInRange( a - e.exStart,
+                                                    b - e.exStart );
         e.previousPage = nullptr;
     }
 }
@@ -248,8 +349,9 @@ void twCompColumn::invalidatePagesInRange( offset_t start, offset_t end )
 int twCompColumn::seekTo( offset_t off )
 {
     std::lock_guard<std::mutex> lock( mutex() );
+    // Each take is seeked in ITS OWN domain (see invalidatePagesInRange).
     for( TakeEntry &e : takes_ )
-        if( e.view ) e.view->seekTo( off );
+        if( e.view ) e.view->seekTo( off - e.exStart );
     return 0;
 }
 

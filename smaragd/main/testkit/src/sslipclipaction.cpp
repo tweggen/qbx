@@ -4,6 +4,7 @@
 #include "app/model/splacements.h"
 #include "app/model/sobjectpath.h"
 #include "app/objects/cut/scut.h"
+#include "app/model/sclipwindow.h"
 
 #include <QDomElement>
 #include <QDebug>
@@ -27,10 +28,30 @@ SApplyResult SSlipClipAction::apply(SProject *project)
         qWarning() << "slip-clip: no clip at path" << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
-    SCut *cut = dynamic_cast<SCut *>(&link->getSObject());
+    // WHICH OBJECT, with `take=` resolved through the GENERIC take seam, the
+    // same one `assert-clip-window take=` uses (plan 53 A0a, QBX-177).
+    //
+    // Without it this verb could only reach a PLAIN clip: on a direct column
+    // the placement's object is the `STakeStack`, which is not an `SCut`, so
+    // the cast below refused and said so. And a take is exactly where this
+    // verb is needed most — it is the only way to test the slip setters' OWN
+    // invalidation (see the header), and a take column's per-take forwarding
+    // is the one invalidation path that has nothing else standing in for it.
+    SObject *target = &link->getSObject();
+    if( take_ >= 0 ) {
+        SClipWindow *w = target->windowTakeAt( take_ );
+        if( !w ) {
+            qWarning() << "slip-clip: no take" << take_ << "at path"
+                       << qualifiedToString( pathRoot_, clipPath_ );
+            return {false, nullptr};
+        }
+        target = &w->asObject();
+    }
+    SCut *cut = dynamic_cast<SCut *>( target );
     if (!cut) {
         qWarning() << "slip-clip: target is not an SCut at path"
-                   << qualifiedToString( pathRoot_, clipPath_ );
+                   << qualifiedToString( pathRoot_, clipPath_ )
+                   << "take" << take_;
         return {false, nullptr};
     }
 
@@ -46,6 +67,7 @@ SApplyResult SSlipClipAction::apply(SProject *project)
 void SSlipClipAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("clip", qualifiedToString( pathRoot_, clipPath_ ));
+    if (take_ >= 0) elem.setAttribute("take", take_);
     if (hasStartOffset_)
         elem.setAttribute("startOffset", QString::fromStdString(
                               Fraction(startOffset_, 1).toString()));
@@ -64,6 +86,7 @@ bool SSlipClipAction::readXml(const QDomElement &elem, int /*version*/)
         qWarning() << "slip-clip::readXml: missing or empty clip path";
         return false;
     }
+    take_ = elem.attribute("take", "-1").toInt();
     hasStartOffset_ = elem.hasAttribute("startOffset");
     if (hasStartOffset_)
         startOffset_ = (offset_t)parseFractionOrDouble(

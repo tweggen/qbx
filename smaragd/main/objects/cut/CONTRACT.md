@@ -136,6 +136,119 @@ stacks" section of CLIP_MODEL.md for the model rules. Verbs: add-take
 select-take; split-clip/resize-clip/unsplit are stack-aware (length ops
 write through to every take, slip and pitch target one take via `take`).
 
+### Take extents: invariant 1 became 1′ (plan 53 §4.1, QBX-177)
+
+EVERY TAKE HAS AN EXTENT `[tStart, tEnd) ⊆ [0, duration_)`. A take covers only
+the span its material actually occupies, and **there is no silent take body
+anywhere**: a position no take covers plays SILENCE, and there is no fall-back
+to another take that happens to cover it (plan 53 §3.1 step 5).
+
+Before 1′ every take spanned the whole column and take-link `startTime` was
+always 0. Mode A needs less than that: when several existing children are
+folded into one union column, each becomes a take AT ITS OWN EXTENT, and the
+alternative — inventing silent take bodies to fill the gaps — is what §3.1
+forbids outright.
+
+**Where it is stored.** `tStart` is the take `SLink`'s `startTime` and
+`tEnd - tStart` is the take window's own duration. No new per-take field and no
+new element: both were already written (`SLink::hasStartTime()` is
+unconditionally true), the loader simply DISCARDED the start time by forcing
+`setStartTime( 0 )` in `insertTake`. `STakeStack::insertTake( window, atIndex,
+tStart, tLen )` takes them now, with defaults that mean "the whole column", so
+every caller written before extents is correct unchanged.
+
+**The column has a length of its own**: `STakeStack::duration_`. It did not
+before — `getDuration()` answered the ACTIVE take's duration, else take 0's —
+and that is exactly what a partial take makes untenable: W1's column, whose
+active take covers only its first half, would report half its length and the
+clip's right edge would move as the user clicked between takes. Both getters
+return `duration_`, which also removes the stale-try-lock hazard that made
+`getDurationBlocking()` necessary for a column at all. Serialized as
+`duration=` on `<STakeStack>` **only when it differs from
+`max_i( tStart_i + len_i )`** and derived as that maximum when absent — which
+is every file written before `FORMAT_VERSION` 3, so they all re-serialize
+byte-identically.
+
+**THE RESOLUTION RULE — ONE PLACE HONOURS EXTENTS.** A column with ANY partial
+take (`hasPartialTake()`, cached) resolves through `twCompColumn` even when its
+map is EMPTY. The original path hands the column position straight to the
+active take, which is correct only while that take is full-extent;
+`twCompColumn` is the one object that knows how to shift a take's position by
+its `tStart` and contribute nothing outside its extent. The DEGENERATE column
+— no map, every take full — still takes the original path, byte for byte, for
+proposal 43 N2's unchanged reason: an extra page copy is bit-exact, but routing
+a stretched take's DSP state through a second component's chaining is not.
+
+In the engine, `twCompColumn::setInputExtent( i, tStart, len )` carries it, and
+three things follow from it: a run never straddles an extent edge (so plan and
+freeze ask the same question in the same order, proposal 19 Inv-1), a take with
+no material at a position **declares no page dependency** there (declaring one
+would have the scheduler build a lazy reader for a window the take does not
+have), and `clampedXfade_nolock` clamps a crossfade to BOTH takes' extents —
+W1's boundary at `T` has no outgoing material past it, and a fade that ignored
+that would fade down the only material there is.
+
+**Invalidation forwards for EVERY take**, not only the active one.
+`onTakeCutChanged` and `mapChildRangesToSelf` used to drop everything but the
+active take, on the reasoning that only it reaches the mix. Under a comp map
+that was already false (pre-existing since 43 N2, for hand-made comps), and
+under 1′ it is false for every recording over existing material: a later slip,
+volume or fade edit on an audible INACTIVE take would bump no epoch and
+invalidate no range. The ranges are shifted by `tStart` — the base's ShiftMap
+already does that, because `tStart` IS the take link's start time — and
+intersected with the extent, so an edit outside a take's own span still bumps
+nothing.
+
+**The write-through CLAMPS rather than overwrites.** `setDurationAll` /
+`applyWindowAll` move the column and then clamp each take into it: a trim
+shortens every take that reaches past the new end, an extend grows only the
+takes whose extent ENDED at the old end (they were clamped BY the column; one
+that ended earlier was not, and must stay where the user put it). For a
+full-extent column every take is in the second case, so this is exactly the old
+"set every take's duration" — which is why no existing column gate moves. A
+trim that would EMPTY a take is clamped to one frame and logged here; REFUSING
+it needs a verb that can reject, so it is `resize-clip`'s (plan 53 A0b).
+
+**Invariant 3 became 3′**: a one-take column collapses to a plain cut only when
+that take is FULL-EXTENT (`collapseSingleTakeStack` returns null otherwise,
+which every caller already handles as "did not collapse"). A one-take column
+with a PARTIAL take is legal — it is a clip with a hole in it, the union
+placeholder of §4.2 — and its length is `duration_`, so it is representable.
+
+**`split-clip` asks MEMBERSHIP first.** A take wholly on one side belongs to
+that half only; a take wholly in the TAIL is MOVED there, same object, its
+`tStart` shifted by `-inObjOffset` (plan 52's identity rule — a clone is not
+the object the user's fades are on); a take CROSSING the split is trimmed in
+the head and cloned into the tail, which is what the code always did. Indices
+are renumbered per half and each half's map is RE-INDEXED onto its own
+numbering (`stakes::remapCompMap`; a segment naming an absent take is dropped
+and the previous one extends, the rule `removeTake` already applies). Each
+half's active take is the original one when it has material there, else the
+lowest-index take with material at the half's start — a half may not come out
+with an active take that is silent everywhere in it. A half that would hold NO
+take is REFUSED (3′), which is unreachable for a full-extent column because
+every take crosses.
+
+Its inverse is therefore MIXED: `SUnsplitClipAction` carries a `TakeRestore`
+per pre-split take and walks them in ascending original index, moving the
+tail-resident ones back by identity and restoring the rest by extent, before
+the tail link (and with it the clones) dies. Which half a take came from is
+precisely the information the split consumed, so only the splitting action can
+hand it back — the same reason its comp map is an inverse-only payload.
+
+**`remove-take` carries the extent in its inverse** (`add-take at=`/`length=`),
+or undoing the removal of a partial take would give back a full-extent one. And
+the column does NOT shrink: removing the take that reached furthest leaves a
+span nothing covers, which plays silence rather than moving the clip's right
+edge under the user.
+
+Still unwindowed by the extent, deliberately and each for a named reason:
+`resolveEventClip` (plan 53 P3, MIDI parity — an event column needs the RECORD
+cut, not just its position moved), and `hasPreview`/`getPreview` with both
+painters (A0b — a preview is what the painter reads, so windowing it while the
+painters still draw across the whole column would produce a half-windowed
+picture).
+
 Notes:
 - A stack of EVENT takes forwards `resolveEventClip()` to its active take,
   exactly as the audio delegation forwards the component and the position map.

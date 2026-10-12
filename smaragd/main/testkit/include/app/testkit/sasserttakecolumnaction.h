@@ -32,9 +32,21 @@
  *                 effect, so model state is all there is to assert.
  *   `takeAtPos`   a column position, paired with `expectTake`: what
  *                 `takeIndexAt()` answers there, WITH the degenerate case
- *                 folded in. That is the query every future consumer makes,
- *                 so it is the one worth gating rather than the raw map.
+ *                 folded in, and -1 where the selected take HAS NO MATERIAL
+ *                 (plan 53 §3.1 step 5 — silence, never a fall-back). That is
+ *                 the query every future consumer makes, so it is the one
+ *                 worth gating rather than the raw map.
  *   `expectTake`  see above
+ *   `extents`     EVERY TAKE'S EXTENT, in column frames, as
+ *                 `tStart-tEnd` per take joined by `;`:
+ *                 `"0-192000;96000-192000"` (plan 53 §4.1, invariant 1′).
+ *                 One take per segment, in take-index order, so this also
+ *                 asserts the ORDER a split or an undo has to restore.
+ *   `duration`    the COLUMN's own length. Separate from every clip-level
+ *                 duration assertion on purpose: since invariant 1′ the
+ *                 column has a length of its own, and the whole point of the
+ *                 field is that it is NOT max_i( tEnd_i ) — a column longer
+ *                 than its takes reach is exactly the state that needs it.
  *   `placements`  expected refcount of the COLUMN object. A column belongs to
  *                 exactly ONE placement (proposal 42); two placements share one
  *                 `activeTake_`, so comping either comps both — which is
@@ -68,6 +80,9 @@ private:
     bool hasComp_ = false;
     qint64 takeAtPos_ = -1;
     int expectTake_ = -2;
+    QString extents_;
+    bool hasExtents_ = false;
+    qint64 duration_ = -1;
 };
 
 #endif // _SASSERTTAKECOLUMNACTION_H_

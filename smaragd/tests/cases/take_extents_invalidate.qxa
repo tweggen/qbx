@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AN EDIT TO A COMPED **INACTIVE** TAKE MUST BE HEARD (plan 53 §4.1 / A0a,
+  QBX-177).
+
+  `STakeStack` used to forward a take's change ONLY for the ACTIVE take:
+  `onTakeCutChanged` dropped every other sender, and `mapChildRangesToSelf`
+  returned {} for every inactive take, both on the reasoning that only the
+  active take reaches the mix. THAT REASONING HAS BEEN FALSE SINCE PROPOSAL 43
+  N2 — a comp map makes several takes audible at once — and under invariant 1'
+  it is false for every recording over existing material. So an edit to an
+  audible inactive take bumped NO epoch and invalidated NO range: the page
+  already in the cache kept playing, and the user's edit simply did not
+  happen until something else re-froze that page.
+
+  THE EDIT IS `slip-clip take=`, AND NEITHER OF THE VERBS §4.1 AND §8 NAME
+  COULD GATE THIS. That is a correction about what ISOLATES the defect, not
+  about the defect:
+
+    * `resize-clip take=` on a direct column calls the column's own
+      `applyWindowAll` FIRST (the write-through, invariant 1'), and that
+      publishes `durationChanged` for the whole column before the named take's
+      window is touched. `slip-clip`'s own documentation already says so in as
+      many words: it exists because "`resize-clip` and a released
+      `drag-clip-edge` both commit through `setWindow`, whose
+      `durationChanged` reaches `twTrackMix::updateClip` and stales the extent
+      regardless". A case built on a slip through `resize-clip` passes on a
+      build with no per-take forwarding at all.
+    * `set-clip-volume take=` and `set-clip-fade take=` DO go only through the
+      dirty-range walk — so §4.1 is right that they bump nothing — but their
+      value is applied ABOVE the column: `STrack::refreshClipGainCurves()`
+      reads the clip's gain, and for a column that is the ACTIVE take's. So a
+      per-take trim on a comped column is inaudible whatever the invalidation
+      does. MEASURED: with this change in place, -20 dB on the inactive comped
+      take left the render bit-identical. That is a real hole and it is NOT
+      A0a's — it belongs with per-region gain (plan 53 P5) — but it does mean
+      no volume or fade edit can gate an invalidation path.
+
+  `slip-clip` calls the `SCut` setter DIRECTLY, submits no action and pushes no
+  undo step: the slip setters' own throttled `invalidateRenderPathRange` is the
+  only thing that can publish it, and that walk is where
+  `mapChildRangesToSelf` sits. It gained `take=` for this case, resolved
+  through the same generic take seam `assert-clip-window take=` uses — without
+  it the verb could not address a take at all (on a direct column the
+  placement's object is the `STakeStack`, not an `SCut`).
+
+  EVERY SLIP HERE IS PRECEDED BY A 400 ms WAIT, AND THAT IS NOT PADDING.
+  The slip setters' invalidation is THROTTLED to one in 333 ms
+  (`SCut::SLIP_INVALIDATE_MS`, cut/CONTRACT inv. 6 — a live drag writes per
+  mouse move). Only the FIRST slip in a process is immediate; a later one
+  inside the window is COALESCED onto a trailing QTimer, which a scripted run
+  has no reason to pump.
+
+  AND `add-take startOffset=` SPENDS THAT FIRST SLOT: it calls
+  `setStartOffset` on the new take's cut before inserting it into the column,
+  so by the time this case reaches its own slip the throttle is already armed.
+  Measured, chasing exactly that: the slip changed the model (`startOffset`
+  read back as asked) and the render did not move one byte, which reads
+  precisely like a missing invalidation. It is not one. Waiting past the
+  window is what makes these assertions about the forwarding rather than
+  about the throttle.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav, two takes with IDENTICAL
+  content (both reading the source from 0) and a map that splits the column
+  between them: `0 -> 0, 96000 -> 1`. Identical content is deliberate — the
+  baseline render is then the plain sawtooth, and the ONLY thing that can make
+  the second half differ is the edit under test.
+
+    baseline        0.0667 / 0.1764 / 0.2906 / 0.4055  (the source, straight)
+    after the slip  0.0667 / 0.1764 / SILENCE / SILENCE
+
+  Take 1 is slipped 2 s further into a 4 s source, so its window runs off the
+  end and the column's second half — the half the map gives it — goes silent.
+  Silence is the strongest signal available here and it cannot be produced by
+  accident: nothing else in this column is silent anywhere.
+
+  The first two windows must NOT move: the edit belongs to take 1's region
+  only, and a blanket invalidation that changed them as well would be a
+  different bug wearing this fix's clothes.
+
+  Both renders are in ONE process, and the first is what puts the page in the
+  cache that the second has to get past. A case that rendered only after the
+  edit would find a cold cache and pass on `main`.
+
+  Per-source-second RMS of the fixture: 0.0667 / 0.1764 / 0.2906 / 0.4055.
+-->
+<SActionScript version="1" name="take_extents_invalidate">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1: the same material as take 0, so the baseline render is the
+         source itself and only the edit can change it. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"/>
+
+    <!-- The map: take 0 over the first half, take 1 — which is NOT the
+         active take — over the second. -->
+    <set-comp-segment clip="0,0" at="0" take="0"/>
+    <set-comp-segment clip="0,0" at="96000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1" activeTake="0"/>
+
+    <render filename="texi_before.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="texi_before.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="texi_before.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="texi_before.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="texi_before.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
+
+    <!-- THE EDIT: slip the INACTIVE but audible take 2 s further into the
+         source, which runs its window off the end. No action, no undo step,
+         no column write-through — only the slip setter and its own
+         invalidation. The wait clears the slip throttle; see the header. -->
+    <wait-ms ms="400"/>
+    <slip-clip clip="0,0" take="1" startOffset="96000"/>
+    <!-- The MODEL moved, asserted separately from the audio: when these two
+         disagree the answer is the invalidation, and saying which one failed
+         is the difference between a diagnosis and a guess. -->
+    <assert-clip-window clip="0,0" take="1" startOffset="96000"
+                        duration="192000"/>
+
+    <render filename="texi_after.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- Take 0's half is untouched... -->
+    <assert-audio-energy filename="texi_after.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="texi_after.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- ...and take 1's half has gone SILENT. THE line that fails on `main`,
+         where it still reads 0.2906 / 0.4055 because the slip's dirty range
+         reaches the column through an inactive take, which answers {}. -->
+    <assert-audio-energy filename="texi_after.wav"
+                         startFrame="96000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+
+    <!-- SLIP IT BACK, in the same process and over the pages the render above
+         has just re-frozen. There is no undo step to use here — `slip-clip`
+         pushes none, deliberately, because a live drag does not either — so
+         the second slip is the symmetry test: the invalidation has to work in
+         both directions, and a one-way bump would leave the silence behind. -->
+    <wait-ms ms="400"/>
+    <slip-clip clip="0,0" take="1" startOffset="0"/>
+    <render filename="texi_back.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="texi_back.wav" expected="texi_before.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

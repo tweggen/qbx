@@ -61,6 +61,13 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     SCut *audioCut = dynamic_cast<SCut *>( &take->asObject() );
     const double pitchCents = audioCut ? audioCut->getPitchCents() : 0.0;
     const bool wasActive = ( stack->activeTakeIndex() == takeIndex_ );
+    // THE REMOVED TAKE'S EXTENT, for the inverse (plan 53 §4.1; review 1 3c).
+    // The inverse is an `add-take`, whose extent defaults are "the whole
+    // column" -- so without these two numbers undoing the removal of a PARTIAL
+    // take gave back a FULL-extent one. Read BEFORE removeTake, which takes
+    // the take's link (and with it its tStart) away.
+    const offset_t takeAt  = stack->takeExtentStart( takeIndex_ );
+    const length_t takeLen = stack->takeExtentLength( takeIndex_ );
     // The WHOLE map as it stands BEFORE the removal (plan 53 B10). removeTake
     // renumbers it and drops the removed take's segments, and neither step is
     // reversible from the result: the dropped segments' positions and xfades
@@ -93,7 +100,8 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     SAddTakeAction *inverse = filePath.isEmpty()
         ? nullptr
         : new SAddTakeAction( invPath, filePath, off, takeIndex_,
-                              wasActive, stretch, pitchCents );
+                              wasActive, stretch, pitchCents,
+                              takeAt, takeLen );
     if( inverse && !mapBefore.empty() ) {
         inverse->setRestoreCompMap( mapBefore );
     }

@@ -110,6 +110,15 @@ bool foldIsExact( SClipWindow &wrapper, STakeStack &column, QString &why )
         if( !t ) { why = "a take is missing"; return false; }
         if( t->loopLength() != 0 ) { why = "a TAKE loops"; return false; }
     }
+    // A PARTIAL TAKE CANNOT BE FOLDED INTO (plan 53 §4.1, invariant 1′). The
+    // fold below writes the WRAPPER's window onto EVERY take, which is exactly
+    // what an extent is not: a take that covers only part of the column would
+    // come out covering all of the wrapper, i.e. claiming material it does not
+    // have. Left wrapped and announced, like every other inexact fold.
+    if( column.hasPartialTake() ) {
+        why = "a TAKE IS PARTIAL (plan 53 invariant 1′)";
+        return false;
+    }
     return column.nTakes() > 0;
 }
 
@@ -162,6 +171,22 @@ int normalizeColumns( SProject &project )
             if( wrapVolDb != 0.0 )
                 t->asObject().setVolume( t->asObject().getVolume() + wrapVolDb );
         }
+        // AND THE COLUMN'S OWN LENGTH (plan 53 §4.1). Since invariant 1′ the
+        // column has one, and the fold has just made every take the WRAPPER's
+        // length: without this the column would keep the length it loaded with
+        // -- the takes' pre-fold length -- and so report every take as PARTIAL,
+        // which routes a plain legacy column through twCompColumn and changes
+        // what a project written years ago sounds like.
+        //
+        // MEASURED, not reasoned: takestack_wrap_takeslip.qxp loads a 192000
+        // column behind a 96000 wrapper, and with duration_ left alone the
+        // folded column read `extents=[0-96000;0-96000] duration=192000` and
+        // take_lane_click_wrapped's render came back half take 0.
+        //
+        // setColumnDuration rather than setDurationAll: the takes have just
+        // been written, deliberately and exactly, and the clamp would be a
+        // second opinion about geometry this loop already settled.
+        column->setColumnDuration( wrapDur );
 
         // Replace the placement, reference-safe and index-stable, exactly as
         // wrapCutLinkIntoStack / collapseSingleTakeStack do: the new link takes
@@ -222,6 +247,39 @@ void splitCompMap( const twCompMap &src, long long at,
     if( tail ) *tail = twCompMap( std::move( tailSegs ) ).normalized();
 }
 
+twCompMap remapCompMap( const twCompMap &src, const QList<int> &newIndexOf )
+{
+    if( src.empty() ) return twCompMap{};
+    std::vector<twCompSegment> kept;
+    kept.reserve( src.segments().size() );
+    for( const twCompSegment &sg : src.segments() ) {
+        if( sg.take < 0 || sg.take >= newIndexOf.size() ) continue;
+        const int ni = newIndexOf.at( sg.take );
+        if( ni < 0 ) continue;          // not in this half: the segment goes
+        twCompSegment out = sg;
+        out.take = ni;
+        kept.push_back( out );
+    }
+    return twCompMap( std::move( kept ) ).normalized();
+}
+
+bool moveTakeBetweenColumns( STakeStack &from, int fromIndex,
+                             STakeStack &to, int toIndex,
+                             offset_t tStart, length_t tLen )
+{
+    SClipWindow *w = from.takeAt( fromIndex );
+    if( !w ) return false;
+    // THE PIN. `removeTake` deletes the take's link, which is the only
+    // reference the source column held; removeRef()'s deleteLater() cannot be
+    // rescinded once posted, so the object has to be referenced BEFORE it is
+    // orphaned and released only after its new holder has it.
+    SLink *pin = new SLink( w->asObject(), nullptr );
+    from.removeTake( fromIndex );
+    SLink *lk = to.insertTake( *w, toIndex, tStart, tLen );
+    delete pin;
+    return lk != nullptr;
+}
+
 STakeStack *cloneColumn( SProject *project, STakeStack &column )
 {
     if( !project || column.nTakes() <= 0 ) return nullptr;
@@ -231,9 +289,19 @@ STakeStack *cloneColumn( SProject *project, STakeStack &column )
         if( !take ) continue;
         SClipWindow *dup = take->cloneWindowOver( project );
         if( !dup ) continue;
-        if( !copy->insertTake( *dup ) ) delete &dup->asObject();
+        // THE EXTENT COMES WITH THE TAKE (plan 53 §4.1). cloneWindowOver
+        // copies the take's own window -- and so its extent LENGTH -- but
+        // nothing carries its tStart, which lives on the LINK the copy does
+        // not have yet. A clone whose takes all started at 0 would be a
+        // different column, silently.
+        if( !copy->insertTake( *dup, -1, column.takeExtentStart( i ),
+                               column.takeExtentLength( i ) ) )
+            delete &dup->asObject();
     }
     if( copy->nTakes() <= 0 ) { delete copy; return nullptr; }
+    // ...and the column's own length, which is NOT max_i( tEnd_i ) when the
+    // original is longer than its takes reach (§4.2's one-take placeholder).
+    copy->setColumnDuration( column.getDurationBlocking() );
     copy->setActiveTake( column.activeTakeIndex() < copy->nTakes()
                              ? column.activeTakeIndex() : 0 );
     // THE COMP MAP COMES TOO (plan 53 B3). Verbatim, and that is right for
@@ -303,6 +371,15 @@ SLink *collapseSingleTakeStack( SObject *lane, SLink *stackLink )
     if( !lane || !stackLink ) return nullptr;
     STakeStack *stack = dynamic_cast<STakeStack *>( &stackLink->getSObject() );
     if( !stack || stack->nTakes() != 1 ) return nullptr;
+    // INVARIANT 3′ (plan 53 §4.2): a one-take column collapses to a plain cut
+    // only when that take is FULL-EXTENT. A one-take column with a PARTIAL
+    // take is legal and is not a plain clip at all -- it is the union
+    // placeholder, a clip with a hole in it -- so collapsing it would silently
+    // move the clip's edges onto the take's and lose the column's own length.
+    //
+    // Returning null is already the "did not collapse" answer every caller
+    // handles (sremovetakeaction keeps the column when it gets one).
+    if( !stack->takeIsFullExtent( 0 ) ) return nullptr;
     SObject *take = stack->takeObjectAt( 0 );
     if( !take ) return nullptr;
 
