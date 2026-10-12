@@ -606,7 +606,10 @@ endforeach()
 foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_punch
               record_while_monitoring record_stays_armed
               record_loop_overshoot record_loop_overshoot_late_start
-              record_mixed_one_undo)
+              record_mixed_one_undo
+              # The ONE merge-columns refusal that needs a recorder: a growing
+              # clip exists only while a pass runs (plan 53 §6.1 / A1).
+              merge_columns_refused_live)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE

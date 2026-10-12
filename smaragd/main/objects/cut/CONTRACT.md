@@ -244,6 +244,50 @@ the tail link (and with it the clones) dies. Which half a take came from is
 precisely the information the split consumed, so only the splitting action can
 hand it back — the same reason its comp map is an inverse-only payload.
 
+**`merge-columns` FOLDS A LANE INTO ONE UNION COLUMN, and is the only verb
+here that REMOVES** (plan 53 §6.1, A1). It keeps its first operand's child
+index and removes the others, so every later index shifts DOWN — the reason
+`srecplan::ChildList` models an index SPACE rather than a list. Removals are
+issued in DESCENDING index order, so none invalidates an index still to be
+used.
+
+Plain clips become takes at their own extents; a column's takes transfer at
+their extents shifted by `(colStart − newStart)`, and its map with them. The
+combined map is each operand's PREVIOUS ANSWER over its own extent, the later
+operand winning an overlap, with the previous answer re-entering at each
+operand's end — the same shape `select-take` uses for an extent (§4.3). A GAP
+between operands becomes a span no take covers, which plays silence, which is
+what the lane played there before; that is the whole reason this verb needs
+A0a.
+
+THE WINDOWS ARE MOVED, NOT COPIED, so every per-clip property travels for
+free. Its inverse `unmerge-columns` is LIVE-ONLY and re-links the SAME
+objects, finding each take by its window OBJECT rather than by an index —
+every move shifts the indices above it. It restores child ORDER as well as
+existence (QBX-149).
+
+**THE FORWARD PINS EACH OPERAND COLUMN, which §6.1 says is unnecessary.** It
+is not: an `STakeStack` is an `SObject`, so it carries its own `volume`, `pan`,
+`muted`, `solo` and `recordingChannels` (`SObject::serializeSelfAttributes`),
+none of which lives on a take or on a link. Rebuilding the column from a
+recipe would silently drop them, which is the precise failure plan 52 exists
+to prevent. The TAKES need no pin — they are children of the merged column
+until the inverse moves them back.
+
+**AND IT REFUSES ANYTHING IT CANNOT MERGE WITHOUT CHANGING WHAT PLAYS.** Over
+and above §6.1's list (mixed kinds, a wrapped column, a live recording, a
+lane), every operand must agree on `getVolume()` and `getPan()` and none may
+carry a `cut:Gain` envelope or a clip fade. The mix reads a placement's
+parameters through `SClipWindow::parametersOf`, which resolves a DIRECT column
+to its ACTIVE TAKE — so a merged column has exactly ONE set of clip parameters
+and the mix applies them across the WHOLE column. N operands at different
+levels cannot all be honoured, and a curve or a fade is measured against the
+clip's own length, so even identical ones would mean something else in a
+longer clip. Plan 53's criterion for the row is that the render does not
+change, so the verb refuses rather than re-mixing the lane silently. This is
+QBX-185 in a second place (per-take gain is applied ABOVE the column); when
+that is fixed the refusal can narrow to what genuinely cannot be carried.
+
 **`remove-take` carries the extent in its inverse** (`add-take at=`/`length=`),
 or undoing the removal of a partial take would give back a full-extent one. And
 the column does NOT shrink: removing the take that reached furthest leaves a

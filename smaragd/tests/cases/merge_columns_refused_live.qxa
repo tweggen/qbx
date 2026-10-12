@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  merge-columns REFUSES A LIVE RECORDING (plan 53 §6.1 / A1, QBX-179).
+
+  The sixth refusal §6.1 names, in its own case because it is the only one that
+  needs a RECORDER: a growing clip exists only while a pass is running, so
+  staging it needs a file input backend, a capture speed and RUN_SERIAL on the
+  CTest entry, which `merge_columns_refused.qxa` has no other use for.
+
+  WHY IT MATTERS more than the other refusals. A growing clip's window is still
+  being extended by the capture thread, so folding it into a column would move
+  an object whose duration is changing underneath the fold — and the merged
+  column's extent, computed once from `[min start, max end)`, would be wrong
+  the instant the next buffer arrived. Every other refusal here is about a
+  shape; this one is about a RACE.
+
+  It is also why the guard is at the TOP of apply(), with the other
+  classification: a merge must be refused before it moves anything, so the
+  refusal costs no rollback.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+
+  ON `main` the verb does not exist, so the merge is rejected by the runner as
+  an unknown action and the `assert-log` finds nothing.
+-->
+<SActionScript version="1" name="merge_columns_refused_live">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+
+    <!-- A STATIC clip to merge the growing one WITH, parked well clear of the
+         pass so the pass-wide snap (§3.5) cannot fold the recording onto it as
+         a take: that would leave one child and nothing to merge. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="480000"/>
+    <resize-clip clip="0,0" startTime="480000" duration="48000" srcStart="0"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="800"/>
+
+    <!-- THE GROWING CLIP IS NOW ON THE LANE, and it is the one at index 1:
+         the static clip was placed first. -->
+    <merge-columns clips="0,0;0,1" expectReject="true"/>
+    <assert-log contains="is still recording" minCount="1"/>
+
+    <record-stop/>
+
+    <!-- THE REFUSAL TOUCHED NOTHING, and the pass still landed.
+
+         NOT through `assert-recorded-clip`: that verb inspects the lane's
+         FIRST clip, and here the first clip is the STATIC one, so it reports
+         the static clip's position against the pass's conversion and fails on
+         a placement claim this case never made. The two assertions below say
+         what this case actually needs, and neither depends on how much audio
+         the capture happened to deliver.
+         `assert-clip-window` with no expectation checks only that the path
+         RESOLVES, which is exactly "the recording landed as its own child". -->
+    <assert-clip-window clip="0,0" startTime="480000" duration="48000"/>
+    <assert-clip-window clip="0,1"/>
+    <!-- ...and the static clip was not folded into a column by the refused
+         merge: it is still a plain clip. -->
+    <assert-take-column clip="0,0" shape="none"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
