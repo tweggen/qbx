@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P3 (QBX-181). MODE B OVER AN EVENT CLIP: `takes-split` cuts the part
+  at the pass's edges, stacks the pass on the piece inside, and leaves the
+  pieces outside alone.
+
+  Cell R2 (s < a, e > b) with Kp, the same cell midi_rec_union_r2 takes under
+  mode A, so the two cases read as the pair they are: A folds everything into
+  one column that spans the part, B leaves three children and only the middle
+  one is a column.
+
+  WHY IT IS THE SAME PLANNER AS THE AUDIO SIDE. `rec_split_r2` asserts this
+  geometry over a WAV; this asserts it over notes. Nothing in
+  `objects/recplan`'s `TakesSplit` knows which: it emits `splitClip`,
+  `placePass` and `addTakeFromPass` through `srecplan::PassVerbs`, and
+  `SEventPassVerbs` says those in `insert-midi-clip` / `add-midi-take` /
+  `split-clip` while `SAudioPassVerbs` says them in `place-clip` / `add-take` /
+  `split-clip`. One copy of the geometry, two vocabularies (QBX-188).
+
+  THE NUMBERS. PPQ 960, 4/4 at 120 BPM on 48 kHz, so one tick is 25 frames and
+  a bar is 3840 ticks = 96000 frames:
+
+    the part   bars 0 to 32  = 122880 ticks = [0, 3072000)
+    the pass   bars 8 to 16  =  30720 ticks = [768000, 1536000)
+
+  and the four notes are at bars 0, 4, 10 and 20, i.e. ticks 0, 15360, 38400
+  and 76800 = frames 0, 384000, 960000 and 1920000. ONE NOTE IS INSIDE THE
+  PASS (bar 10) and one is in each outside piece, which is what makes the three
+  children distinguishable by their contents and not only by their spans.
+
+  NO NOTE SITS ON A CUT, deliberately. A note exactly at a split boundary
+  belongs to the tail (events/CONTRACT inv. 9: a boundary falling on a window
+  edge belongs to the window that starts there), so a fixture with one there
+  would gate the boundary rule rather than the split geometry, and it would
+  pass under either reading of "strictly inside".
+-->
+<SActionScript version="1" name="midi_rec_split_r2">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="122880" name="Part"/>
+    <add-note clip="0,0" tick="0"     dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="15360" dur="480" key="62" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="38400" dur="480" key="64" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="76800" dur="480" key="65" velocity="100" channel="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="3072000"/>
+
+    <place-midi-recording trackPath="0" timePos="768000" durationTicks="30720"
+                          mode="takes-split" name="R">
+      <n tick="0"   dur="480" key="72" velocity="100" channel="0"/>
+      <n tick="960" dur="480" key="74" velocity="100" channel="0"/>
+    </place-midi-recording>
+
+    <!-- THREE CHILDREN, and the index order is the one `split-clip` promises:
+         the HEAD keeps the operand's index and each TAIL is appended, so the
+         first cut (at `a`) leaves the head at 0 and appends the rest, and the
+         second cut (at `b`) keeps that piece and appends the final tail. Child
+         index order therefore happens to agree with time order here. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="768000"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,2" startTime="1536000" duration="1536000"/>
+    <assert-take-column clip="0,2" shape="none"/>
+    <!-- ...AND THE TAIL'S SOURCE ANCHOR ADVANCED. This is the number a wrong
+         implementation gets wrong SILENTLY: the span is right either way, and
+         only the anchor says the piece shows the part's bars 16 to 32 rather
+         than replaying bars 0 to 16. `split-clip` computes it exactly, through
+         the clip's own window, which is why `replace` and `takes-split` cut
+         rather than trim (plan 53 §3.3 correction (b)). -->
+    <assert-clip-window clip="0,2" startOffset="1536000"/>
+
+    <!-- THE MIDDLE PIECE IS THE COLUMN: the part's own piece is take 0, the
+         pass is take 1 and active. BOTH TAKES ARE FULL EXTENT, which is mode
+         B's whole point: the pass is an alternative for exactly the bars it
+         covers, so invariant 1 holds as written and no comp map is needed.
+         Mode A's column over the same pass has a two-segment map and two
+         different extents. -->
+    <assert-take-column clip="0,1" shape="direct" takes="2" activeTake="1"
+                        extents="0-768000;0-768000" comp="" duration="768000"/>
+    <assert-clip-window clip="0,1" startTime="768000"/>
+    <assert-clip-window clip="0,3" expectReject="true"/>
+
+    <!-- EACH CHILD KEPT ITS OWN NOTES. The part's bar-10 note is take 0 of the
+         column, at its own frame inside the piece (960000 on the timeline is
+         192000 into a piece that starts at 768000). -->
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" contains="key=60"/>
+    <assert-midi-events scope="clip" clip="0,0" contains="key=62"/>
+    <assert-midi-events scope="clip" clip="0,1" take="0" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="0,1" take="0" contains="key=64"/>
+    <assert-midi-events scope="clip" clip="0,1" take="1" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,1" take="1" contains="key=72"/>
+    <assert-midi-events scope="clip" clip="0,2" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="0,2" contains="key=65"/>
+
+    <!-- WHAT THE INSTRUMENT HEARS, and the reason mode B needs no QBX-189:
+         every take in sight is full extent, so resolving through the ACTIVE
+         take loses nothing. Five note-ons across the lane: the part outside
+         the pass, the pass inside it, and NOT the part's bar-10 note, which
+         the pass is the alternative to. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" count="5"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="0"
+                        key="60"
+                        count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="384000"
+                        key="62"
+                        count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="768000"
+                        key="72"
+                        count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="792000"
+                        key="74"
+                        count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="1920000"
+                        key="65"
+                        count="1"/>
+
+    <!-- SELECT THE PART'S OWN PIECE and its note comes back while the pass
+         goes: one column, two alternatives for the same bars. Nothing outside
+         the piece moves, which is what distinguishes mode B from mode A here. -->
+    <select-take clip="0,1" take="0"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" count="4"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="960000"
+                        key="64"
+                        count="1"/>
+
+    <!-- UNDO BOTH: the part is ONE clip again, its four notes intact and its
+         window back at its own length. Three children folding back into one is
+         the half that `split-clip`'s own undo has to get right. -->
+    <undo/>
+    <undo/>
+    <assert-clip-window clip="0,0" startTime="0" duration="3072000"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="4"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

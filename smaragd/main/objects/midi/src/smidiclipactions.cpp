@@ -233,6 +233,15 @@ int rederiveBeatsLinks( SProject *project )
         if( !obj ) continue;
         for( SLink *lk : obj->childLinks() )
             if( lk && lk->rederiveStartTime() ) ++moved;
+        // ...AND WHATEVER THE OBJECT ITSELF POSITIONS MUSICALLY (plan 53 P3).
+        // A link's `startTicks_` is not the only stored musical position: an
+        // EVENT take column's comp map says which take sounds over which BARS,
+        // in frames, and before this it stayed where the old tempo had put it
+        // while every take's extent moved -- so a recording ended up sounding
+        // over the bars before its own and over none of them. Same loop, same
+        // reason, and `SObject::rederiveMusicalPositions` answers false for
+        // everything that holds nothing musical.
+        if( obj->rederiveMusicalPositions() ) ++moved;
     }
     return moved;
 }

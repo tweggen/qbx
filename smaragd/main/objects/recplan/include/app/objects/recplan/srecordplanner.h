@@ -269,6 +269,29 @@ struct Context {
      * silently (the defect `place_recording_over_earlier_clip` gates).
      */
     const PassVerbs *verbs = nullptr;
+    /**
+     * WHERE THE PASS LANDED, if the caller wants to know: the lane children
+     * that now carry it, in apply order, as paths valid once the whole plan
+     * has been applied. Optional — null asks nothing and costs nothing.
+     *
+     * ONLY THE PLAN CAN ANSWER THIS, which is why it is here rather than
+     * re-derived by the caller. The answer is "the first operand's index after
+     * a merge, the appended index otherwise, and both of those AFTER every
+     * split this plan emitted" — which is precisely `ChildList`, rule 3's
+     * whole point. A caller recomputing it would be keeping a second copy of
+     * the index bookkeeping in step with this one by hand, and the failure
+     * mode of getting that wrong is addressing the WRONG child SUCCESSFULLY.
+     *
+     * `place-midi-recording` is the caller (plan 53 P3): its input quantise is
+     * a step of the same composite — one undo entry for one recording, not
+     * two — so it has to name the clips the pass is on BEFORE any of the plan
+     * has been applied. The audio verb passes null; P6's "N tracks gained a
+     * take" will want it.
+     *
+     * A pointer into the CALLER's list: appended to by the plan, never read by
+     * it.
+     */
+    QList<QList<int>> *landed = nullptr;
 };
 
 /**

@@ -676,6 +676,43 @@ than guessed at. The trim floor already distinguishes the two cases
     At the stop the MIDI recorder commits FIRST, while the transport is still
     running: its anchor is only valid while the RT thread is publishing.
 
+    **THE MODE COMES FROM THE PROJECT, resolved per armed lane** (plan 53 P3,
+    QBX-181): `srecmode::resolveMode` — the lane's own attribute, else its
+    nearest ancestor folder's, else the project's — which is the same resolver
+    `SAudioRecorder` asks, and the recorder submits `place-midi-recording` with
+    the answer because `objects/midi` may not reach `objects/track`. It used to
+    read `SOpt::MidiRecordMode` directly, in proposal 21 L4's own three-value
+    vocabulary (`new-take | overdub | replace`), so the MIDI half of a press
+    could disagree with the audio half about the mode of the same gesture and
+    `takes-split` was unreachable for MIDI. The INI key keeps its old job,
+    seeding a BRAND-NEW project (`srecmodeseed.cpp`); `SMidiRecorder::mode()`
+    reports the PROJECT-level answer, which is what `describe()` and
+    `assert-midi-recorded mode=` are about.
+
+    **AND THE MIDI RECORDER PUNCHES OUT ON ITS OWN TICK** (plan 53 P3), as the
+    audio one does, reading the project's one range with Cycle OFF through its
+    own `punchRegion_` — the same two readings of one marker pair, and
+    necessarily the same, because one press drives both. It had no punch at all
+    before, and the cost was not a missing feature but a LOST TAKE: the audio
+    half's punch-out stops the TRANSPORT while this recorder kept running to the
+    `record-stop`, so its final poll re-anchored `SPlayheadClock` from a dead
+    clock, every captured host time mapped to a NEGATIVE frame and `stopFrame_`
+    read 0 — `passEnd` was then 0, every note was outside its own pass, and the
+    whole take was dropped (measured: `msgs=8 placements=0 passes=0 notes=0
+    clamped=4`, on every run). Under a punch the pass window is the MARKERS
+    exactly, not `stopFrame_`, which is what punch means and what makes the two
+    halves of one press agree on the bars. `stopping_` guards the out point
+    against re-entering `stop()`, which runs `pollFinal_()`, which calls
+    `poll()`, which is where the test lives.
+
+    A PUNCHED mixed press therefore costs TWO undo steps, not one: each
+    recorder ends on its own clock — the MIDI one when the PLAYHEAD passes the
+    out point, the audio one when its recorded MATERIAL does, one input latency
+    later — so the two commits fall in two re-entrant scopes that never
+    overlap. B7's one-step claim holds for a press that ends at a `record-stop`
+    (`record_mixed_one_undo`); the punch case is **QBX-190**, and
+    `record_mixed_band_punch` asserts the 2 and says why.
+
 28. **The recorder's ring is a SECOND consumer of the fan-out, and the live
     lane's is untouched.** `SMidiInputHub::recorderSink(port)` mints one sink
     per PORT and keeps it for the process (design D8: the device thread writes

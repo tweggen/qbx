@@ -607,6 +607,10 @@ foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_
               record_while_monitoring record_stays_armed
               record_loop_overshoot record_loop_overshoot_late_start
               record_mixed_one_undo
+              # One press over two content kinds, under a punch: the P3 cell
+              # where the audio and the event planner must agree number for
+              # number (plan 53 P3 / QBX-181).
+              record_mixed_band_punch
               # The ONE merge-columns refusal that needs a recorder: a growing
               # clip exists only while a pass runs (plan 53 §6.1 / A1).
               merge_columns_refused_live

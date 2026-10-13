@@ -517,6 +517,23 @@ public:
      * `insertWindowTake` returns the new take's link, or null when the column
      * REFUSED it (homogeneity: a stack of audio takes will not accept an event
      * window). Main thread only, like every other model mutation.
+     *
+     * ITS LAST TWO ARGUMENTS ARE THE TAKE'S EXTENT (plan 53 §4.1 / P3), and
+     * they carry the defaults the concrete column already uses: `0` and `-1`
+     * mean "at the start, the window's own duration", so every call written
+     * before this widening keeps meaning exactly what it meant. They are the
+     * ONLY route by which a caller that may not name the column type can give
+     * a take an extent — `setTakeExtent` is not on this seam, and an event
+     * take's extent has to be set AS IT IS INSERTED (`add-midi-take
+     * atTicks=`/`extentTicks=`, D6 (a)), not patched afterwards.
+     *
+     * COLUMN FRAMES, like everything else on this seam. D6 (a) asks for the
+     * event take's extent to live in TICKS, and it does — but not here: the
+     * take's link is born `timebase=beats` for event content
+     * (`SLink::defaultTimebaseFor`), so `set-tempo`'s `rederiveBeatsLinks`
+     * moves the extent start with the bar and `SMidiCut`'s duration follows
+     * `lengthTicks_`. The conversion happens once, in the verb, through THE
+     * tempo map (POSITION_DOMAINS rule 7); the storage is already musical.
      */
     virtual int windowTakeCount() const { return 0; }
     virtual int activeWindowTakeIndex() const { return -1; }
@@ -533,8 +550,43 @@ public:
      * for the column it windows.
      */
     virtual bool hasCompMap() const { return false; }
-    virtual SLink *insertWindowTake( SClipWindow &window, int atIndex )
-    { (void) window; (void) atIndex; return nullptr; }
+    /**
+     * Take `index`'s EXTENT START, in the column's own frames.
+     *
+     * The extent LENGTH needs no accessor of its own — it is
+     * `windowTakeAt(index)->duration()`, which this seam already reaches — but
+     * the start lives on the take's LINK, and a caller that may not name the
+     * column type cannot get at a link it does not own. `remove-midi-take` is
+     * that caller: as `add-midi-take`'s inverse it has to hand the take's
+     * extent back, and `add-take`/`remove-take` learned the same lesson on the
+     * audio side ("they also carry a REMOVED take's extent back on undo;
+     * without them the inverse of a `remove-take` on a partial take restored a
+     * FULL-extent one").
+     */
+    virtual offset_t windowTakeExtentStart( int index ) const
+    { (void) index; return 0; }
+
+    /**
+     * RE-DERIVE WHATEVER THIS OBJECT POSITIONS MUSICALLY, after a tempo edit.
+     * Returns true when something moved.
+     *
+     * `SLink::rederiveStartTime()` is this for a placement, and the two are
+     * called from the same loop (`set-tempo`'s `rederiveBeatsLinks`): a link
+     * stores its position in ticks and re-derives its frames, and so, from
+     * plan 53 P3, does an EVENT take column's comp map.
+     *
+     * It is on `SObject` for the reason `windowTakeAt` and `resolveEventClip`
+     * are: `set-tempo` lives in `objects/midi` and may not name `STakeStack`
+     * (`objects/cut`), and the question is generic anyway — "do you hold
+     * anything whose frame position follows the bar?". The base answers no,
+     * which is the right answer for everything that is not an event column.
+     */
+    virtual bool rederiveMusicalPositions() { return false; }
+    virtual SLink *insertWindowTake( SClipWindow &window, int atIndex,
+                                     offset_t extentStart = 0,
+                                     length_t extentLen = -1 )
+    { (void) window; (void) atIndex; (void) extentStart; (void) extentLen;
+      return nullptr; }
     virtual void removeWindowTake( int index ) { (void) index; }
     virtual void setActiveWindowTake( int index ) { (void) index; }
 

@@ -1,32 +1,62 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 21 L4 (= 37 P8b). THE THREE INPUT-RECORD MODES, each against the
-  SAME pre-existing clip, each undone before the next one so all three see
-  identical starting conditions.
+  Proposal 21 L4 (= 37 P8b), EXTENDED BY PLAN 53 P3 (QBX-181). THE FOUR
+  RECORD MODES, each against the SAME pre-existing clip, each undone before the
+  next one so all four see identical starting conditions.
 
   Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL.
 
-  NOTE this case OWNS the midi/recordMode and midi/recordQuantize settings:
-  `set-option` writes the real per-user smaragd.ini, so no other case may touch
-  those keys, and this one puts both back at the end.
+  THE MODE COMES FROM THE PROJECT NOW, not from the INI (plan 53 P3). This case
+  used to drive `set-option key="midi/recordMode"`, because the MIDI recorder
+  read that key directly, in proposal 21 L4's own three-value vocabulary
+  (`new-take | overdub | replace`). It had two consequences worth naming: the
+  MIDI half of a press could disagree with the AUDIO half about the mode of the
+  same gesture, and `takes-split` was unreachable for MIDI, because the INI had
+  no spelling for it. The recorder resolves through `srecmode::resolveMode` now
+  - the lane's own mode, else its nearest ancestor folder's, else the
+  project's - which is the one the audio recorder has always asked, so the mode
+  is set here with `set-property key="recordMode"`. The INI key keeps its old
+  job, seeding a BRAND-NEW project, and `record_mode_ini_seed` owns it.
+
+  `new-take` IS STILL ACCEPTED, as the historical spelling of `takes`, and
+  section 1 asserts it through `assert-midi-recorded mode="new-take"` so a
+  `.qxa` or a saved action written before plan 53 keeps meaning what it meant.
+
+  NOTE this case OWNS the midi/recordQuantize setting: `set-option` writes the
+  real per-user smaragd.ini, so no other case may touch that key, and this one
+  puts it back at the end.
 
   THE FIXTURE. A two-second event clip at 24000 (0.5 s) holding two notes -
   key 72 at tick 0 and key 74 at tick 960. At the default 120 BPM / PPQ 960 at
   48 kHz one tick is exactly 25 frames, so a quarter note is 24000 frames and
   every number below is an integer.
 
-  WHAT EACH MODE MEANS (design D8), and what would go wrong under the others:
+  WHAT EACH MODE MEANS (design D8, plan 53 §3.3), and what would go wrong
+  under the others:
 
-    new-take  the pass becomes a NEW take on the column. The performance that
-              was there is still take 0 and can be gone back to. This is the
-              default because it is the only one of the three that cannot
-              destroy what was already played.
-    overdub   the pass is MERGED into the active take: 2 + 4 = 6 notes in ONE
-              take, no column. The hi-hat-onto-a-kick-and-snare case.
-    replace   the notes inside the RECORDED WINDOW go and the pass takes their
-              place: 4 notes, no column. Events OUTSIDE the window and every
-              non-note event anywhere survive - which is what makes it a
-              replace rather than a clear.
+    takes       the pass and everything it touches become takes of ONE column.
+    (new-take)  The performance that was there is still take 0 and can be gone
+                back to. This is the default because it is the only mode that
+                cannot destroy what was already played. Here the pass lies
+                inside the one clip, so the column spans the clip and the pass
+                answers over its own bars.
+    takes-split the pass is an alternative for EXACTLY the bars it covers: the
+                clip is cut at the pass's end and only the inside piece becomes
+                a column, so the bars after the pass are left as a plain clip.
+                TWO children, where `takes` leaves one. Both takes are full
+                extent and the column needs no comp map, which is what makes
+                this mode's column structurally different from mode A's.
+    overdub     the pass is MERGED into the active take: 2 + 4 = 6 notes in ONE
+                take, no column. The hi-hat-onto-a-kick-and-snare case.
+    replace     the notes inside the RECORDED WINDOW go and the pass takes
+                their place: 4 notes, no column. Events OUTSIDE the window and
+                every non-note event anywhere survive - which is what makes it
+                a replace rather than a clear.
+
+  The first two go through `objects/recplan`'s planner, the SAME one the audio
+  recorder uses; the last two keep their own event meanings, which §3.3 states
+  for both. Each is asserted here through the SHAPE it leaves and the NOTES
+  that end up where, so no two of the four can pass each other's section.
 
   THE PERFORMANCE IS REPLAYED WITHOUT `startFrame`, so it begins the instant
   the take does - i.e. while the readahead is still priming and the RT thread
@@ -54,7 +84,7 @@
     <set-option key="midi/recordQuantize" value="off"/>
 
     <!-- ================== 1. new take ================================== -->
-    <set-option key="midi/recordMode" value="new-take"/>
+    <set-property key="recordMode" value='["takes"]'/>
     <set-locator position="24000"/>
     <arm-track trackPath="0" armed="1"/>
     <record-start/>
@@ -77,8 +107,52 @@
     <assert-midi-recorded trackPath="0" clips="1" takes="1"/>
     <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
 
-    <!-- ================== 2. overdub =================================== -->
-    <set-option key="midi/recordMode" value="overdub"/>
+    <!-- ================== 2. takes-split =============================== -->
+    <set-property key="recordMode" value='["takes-split"]'/>
+    <set-locator position="24000"/>
+    <arm-track trackPath="0" armed="1"/>
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt"/>
+    <wait-ms ms="500"/>
+    <record-stop/>
+
+    <!-- TWO children: the inside piece as a column, the bars after the pass
+         as a plain clip. Under `takes` there is ONE child, and that is the
+         whole difference between the modes.
+
+         THE SPANS ARE NOT ASSERTED, and deliberately: where the cut falls is
+         the recorder's stop frame, which is wall-clock-dependent (the pass
+         here ran to about 92600). What is load-INSENSITIVE is the structure,
+         and that is asserted exactly - the convention this suite holds for
+         every live record case. -->
+    <assert-midi-recorded trackPath="0" clips="2" takes="2" passes="1"
+                          notes="4" mode="takes-split"/>
+    <!-- Both takes FULL EXTENT and NO comp map: mode B's column is an
+         alternative for its own span, so invariant 1 holds as written. Mode
+         A's column over the same pass carries a two-segment map and two
+         different extents, so this one assertion separates the two modes
+         without naming a single frame. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <assert-take-column clip="0,1" shape="none"/>
+    <assert-clip-window clip="0,2" expectReject="true"/>
+    <!-- The pass is take 1 of the piece; the piece's own notes are take 0.
+         Both of the clip's notes fall inside the pass window, so take 0 has
+         two and the tail has none. -->
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" count="4"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" key="60"
+                        count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,1" kind="noteon" count="0"/>
+    <!-- ONE undo folds the cut AND the stack back into the clip it started
+         as. -->
+    <undo/>
+    <assert-midi-recorded trackPath="0" clips="1" takes="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- ================== 3. overdub =================================== -->
+    <set-property key="recordMode" value='["overdub"]'/>
     <set-locator position="24000"/>
     <arm-track trackPath="0" armed="1"/>
     <record-start/>
@@ -97,7 +171,7 @@
     <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
 
     <!-- ================== 3. replace ================================== -->
-    <set-option key="midi/recordMode" value="replace"/>
+    <set-property key="recordMode" value='["replace"]'/>
     <set-locator position="24000"/>
     <arm-track trackPath="0" armed="1"/>
     <record-start/>
@@ -139,7 +213,7 @@
     <set-monitor-mode trackPath="1" mode="off"/>
     <set-track-input trackPath="1" input="midi:capture:any"/>
 
-    <set-option key="midi/recordMode" value="new-take"/>
+    <set-property key="recordMode" value='["takes"]'/>
     <set-option key="midi/recordQuantize" value="1/16"/>
 
     <set-locator position="24000"/>
@@ -165,8 +239,7 @@
     <undo/>
     <assert-midi-recorded trackPath="1" clips="0"/>
 
-    <!-- Put the settings back: this case owns them (see the header). -->
-    <set-option key="midi/recordMode" value="new-take"/>
+    <!-- Put the setting back: this case owns it (see the header). -->
     <set-option key="midi/recordQuantize" value="off"/>
 
     <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>

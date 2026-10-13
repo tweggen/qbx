@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P3 / D6 (a) (QBX-181). `add-midi-take atTicks=`/`extentTicks=`: AN
+  EVENT TAKE THAT ANSWERS FOR PART OF ITS COLUMN, with its extent given in
+  TICKS.
+
+  `add-take at=`/`length=` is this for audio and takes FRAMES. Events take
+  ticks, and that is decision D6 (a), chosen as "the only answer under which
+  set-tempo keeps the take over the same notes".
+
+  IT IS DELIBERATELY NOT THE EXISTING `lengthTicks=`, which is a different
+  number and was the one thing §8's P3 row warned about by name: `lengthTicks`
+  is how long the SEQUENCE is, `extentTicks` is how much of the COLUMN this
+  take answers for. Before extents those two were forced to agree, because a
+  take had to cover its column (invariant 1); under 1' they are independent,
+  which is the whole of what a recording landing on a lane that already has
+  material needs.
+
+  THE NUMBERS. PPQ 960, 4/4 at 120 BPM on 48 kHz: one tick is 25 frames, one
+  bar is 3840 ticks = 96000 frames. The part is TWO bars, [0, 192000), and the
+  take covers the SECOND bar only: atTicks 3840, extentTicks 3840, which is
+  [96000, 192000) in column frames.
+
+  WHY THE STORAGE IS MUSICAL WITHOUT A SECOND FIELD. D6 asked for ticks on the
+  take and the model already had them: a take's link inside a column is born
+  `timebase=beats` for event content (SLink::defaultTimebaseFor), so
+  `set-tempo` re-derives its extent START, and its window's length is
+  `lengthTicks_` on the SMidiCut itself, so the extent LENGTH follows. The
+  conversion in the verb happens ONCE, through the tempo map, and through
+  `setWindowTicks` rather than the frame-valued `setDurationFromTimeline` - a
+  ticks to frames and back round trip is exact only where a tick divides a
+  frame, and 3840 ticks must stay 3840 ticks at 143 BPM too.
+
+  WHAT IS NOT GATED HERE, and why. `remove-midi-take` carries the take's extent
+  back into the `add-midi-take` it builds as ITS inverse - the same thing
+  `remove-take` does on the audio side, and for the same reason: without it,
+  undoing the removal of a PARTIAL take hands back a FULL-extent one. There is
+  no `.qxa` route to it today, because unlike `remove-take` it is not a
+  registered verb (it is created live, since its own inverse carries a whole
+  event table) and `SActionUndoCommand::redo()` re-applies the FORWARD action,
+  so the captured value is never read back on the undo/redo path. It is
+  defensive until P6's `cleanup-takes` reaches it, which plan 53 P6 names in as
+  many words ("a MIDI take goes through the same and comes back").
+-->
+<SActionScript version="1" name="midi_take_extent">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- Two bars, a note in each, so the two takes are distinguishable by
+         contents and not only by their spans. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Part"/>
+    <add-note clip="0,0" tick="0"    dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="480" key="62" velocity="100" channel="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-take-column clip="0,0" shape="none"/>
+
+    <!-- A take over the SECOND BAR ONLY. The plain clip is wrapped into a
+         column first and becomes take 0, at its own full extent. -->
+    <add-midi-take clip="0,0" atTicks="3840" extentTicks="3840" name="Half">
+      <n tick="0" dur="480" key="72" velocity="100" channel="0"/>
+    </add-midi-take>
+
+    <!-- THE EXTENT, in column frames. Without `atTicks`/`extentTicks` the new
+         take would be 0-192000 like take 0 - the pre-extent behaviour, and
+         what every `add-midi-take` written before P3 still gets. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;96000-192000" comp=""
+                        duration="192000"/>
+    <!-- NO comp map, and that is not an omission: `activate` means "ask
+         activeTake_", and an empty map says exactly that. What makes the
+         second bar sound rather than the whole column is the EXTENT. -->
+
+    <!-- ...AND THE FIRST BAR IS SILENCE, not take 0. A position outside every
+         extent of the SELECTED take has no fall-back (plan 53 §3.1 step 5), so
+         `takeAtPos` answers -1 there. An implementation that ignored the
+         extent answers 1 in both bars. -->
+    <assert-take-column clip="0,0" takeAtPos="48000"  expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="1"/>
+
+    <!-- Each take kept its own notes, at its own ticks: the take's sequence
+         starts where ITS window does, so its note is at tick 0 and not at
+         3840. -->
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=72"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="t=0"/>
+
+    <!-- WHAT THE INSTRUMENT HEARS: the take's note at the SECOND bar, 96000,
+         and nothing in the first. Unshifted - resolving the active take in the
+         column's own frames - this note sounded at 0. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="96000"
+                        key="72"
+                        count="1"/>
+
+    <!-- D6 (a), THE POINT OF THE TICKS: halve the tempo and the take still
+         covers THE SECOND BAR. Every frame doubles; the ticks did not move.
+         A frame-stored extent would leave the take over [96000, 192000) while
+         bar 2 became [192000, 384000) - i.e. over the first bar's second half
+         and nothing else. -->
+    <set-tempo bpm="60"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-384000;192000-384000" comp=""
+                        duration="384000"/>
+    <assert-take-column clip="0,0" takeAtPos="96000"  expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="288000" expectTake="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="192000"
+                        key="72"
+                        count="1"/>
+
+    <!-- UNDO THE TEMPO EDIT and every frame comes back EXACTLY, including the
+         COLUMN's own length. This is the assertion that caught the ordering
+         defect: a tempo move changes each take's extent in two independent
+         steps - the link's start and the window's length - and only one of
+         them is announced, so `duration_` was left reading 288000 here, which
+         is the OLD length added to the NEW start. The column's length is
+         re-derived once the whole move is done, from the same loop. -->
+    <undo/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;96000-192000" comp=""
+                        duration="192000"/>
+
+    <!-- UNDO THE TAKE: invariant 3 collapses the one remaining take back to a
+         plain placement, so the part is exactly the clip it started as. -->
+    <undo/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+
+    <!-- ...AND REDO BRINGS THE EXTENT BACK, which is the half an `undo` alone
+         cannot show: a re-applied `add-midi-take` has to convert its own
+         `atTicks`/`extentTicks` again rather than inherit a frame value from
+         anywhere. Then the tempo edit, so the undo stack is balanced for
+         `verify-undo` below. -->
+    <redo/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;96000-192000" comp=""
+                        duration="192000"/>
+    <redo/>
+    <assert-take-column clip="0,0" extents="0-384000;192000-384000"
+                        duration="384000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

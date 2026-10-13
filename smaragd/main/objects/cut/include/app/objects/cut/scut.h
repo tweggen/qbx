@@ -383,8 +383,13 @@ public:
     { return windowContent().activeWindowTakeIndex(); }
     bool hasCompMap() const override
     { return windowContent().hasCompMap(); }
-    SLink *insertWindowTake( SClipWindow &window, int atIndex ) override
-    { return windowContent().insertWindowTake( window, atIndex ); }
+    offset_t windowTakeExtentStart( int index ) const override
+    { return windowContent().windowTakeExtentStart( index ); }
+    SLink *insertWindowTake( SClipWindow &window, int atIndex,
+                             offset_t extentStart = 0,
+                             length_t extentLen = -1 ) override
+    { return windowContent().insertWindowTake( window, atIndex, extentStart,
+                                               extentLen ); }
     void removeWindowTake( int index ) override
     { windowContent().removeWindowTake( index ); }
     void setActiveWindowTake( int index ) override

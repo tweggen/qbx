@@ -157,8 +157,24 @@ public:
     { return windowContent().windowTakeCount(); }
     int activeWindowTakeIndex() const override
     { return windowContent().activeWindowTakeIndex(); }
-    SLink *insertWindowTake( SClipWindow &window, int atIndex ) override
-    { return windowContent().insertWindowTake( window, atIndex ); }
+    // `hasCompMap` and `windowTakeExtentStart` complete the set on THIS shape
+    // too (plan 53 P3). `SCut` had both and this did not, so a WRAPPED EVENT
+    // column answered "no comp map" and "extent start 0" however it was
+    // comped -- which `srecplan::snapshot()` reads into `Child::hasCompMap`
+    // and `remove-midi-take` reads to carry a take's extent back. Neither is
+    // reachable today (a wrapper refuses every planner by G11, and
+    // `add-midi-take` wraps through the model factory, which builds the direct
+    // shape), so this is the forwarder being complete rather than a fix with a
+    // gate behind it.
+    bool hasCompMap() const override
+    { return windowContent().hasCompMap(); }
+    offset_t windowTakeExtentStart( int index ) const override
+    { return windowContent().windowTakeExtentStart( index ); }
+    SLink *insertWindowTake( SClipWindow &window, int atIndex,
+                             offset_t extentStart = 0,
+                             length_t extentLen = -1 ) override
+    { return windowContent().insertWindowTake( window, atIndex, extentStart,
+                                               extentLen ); }
     void removeWindowTake( int index ) override
     { windowContent().removeWindowTake( index ); }
     void setActiveWindowTake( int index ) override

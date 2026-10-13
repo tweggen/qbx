@@ -138,12 +138,19 @@ SApplyResult SAssertMidiRecordedAction::apply( SProject *project )
                    << "non-note event(s), expected" << events_;
         return { false, nullptr };
     }
-    if( !mode_.isEmpty()
-        && SMidiRecorder::modeToString( rec->mode() ) != mode_ ) {
-        qWarning() << "assert-midi-recorded: mode is"
-                   << SMidiRecorder::modeToString( rec->mode() )
-                   << "expected" << mode_;
-        return { false, nullptr };
+    // `mode` IS NOW PLAN 53's VOCABULARY (`takes` | `takes-split` | `overdub`
+    // | `replace`), because that is what the recorder resolves and what the
+    // project stores. `new-take` is accepted as the historical spelling of
+    // `takes`, so a `.qxa` written against proposal 21 L4 keeps asserting what
+    // it meant.
+    if( !mode_.isEmpty() ) {
+        const QString want = ( mode_ == QStringLiteral( "new-take" ) )
+                                 ? QStringLiteral( "takes" ) : mode_;
+        if( rec->mode() != want ) {
+            qWarning() << "assert-midi-recorded: mode is" << rec->mode()
+                       << "expected" << want;
+            return { false, nullptr };
+        }
     }
     if( !quantize_.isEmpty() && rec->quantizeGrid() != quantize_ ) {
         qWarning() << "assert-midi-recorded: quantize is" << rec->quantizeGrid()
