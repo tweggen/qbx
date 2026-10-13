@@ -119,14 +119,27 @@ APP_DEPS = {
     # The object slices form a DAG since the placement service:
     #   wave < cut < track < mixer (only downward edges below).
     'objects/wave':   {'model', 'persistence'},
-    'objects/cut':    {'actions', 'model', 'objects/wave', 'persistence'},
+    'objects/cut':    {'actions', 'model', 'objects/recplan', 'objects/wave',
+                       'persistence'},
+    # objects/recplan (QBX-188) is the RECORD PLANNER, and it sits at the rank
+    # of objects/cut and objects/midi rather than inside either. It used to
+    # live in objects/cut, beside the verbs it emits — which put it out of the
+    # EVENT side's reach for good, because objects/midi may not depend on
+    # objects/cut (proposal 37 3.5: "a second window/content pair, not a layer
+    # above one ... it must stay independent of the audio window"). So
+    # place-midi-recording could name neither srecplan::snapshot() nor
+    # merge-columns, and plan 53 P3 could not be the wiring it was scoped as.
+    # Its own deps are the floor: it names NO concrete clip, column or verb —
+    # everything it emits goes through srecplan::PassVerbs, which each side
+    # implements in its own module.
+    'objects/recplan': {'actions', 'model', 'persistence'},
     # objects/midi sits at the RANK of objects/cut (proposal 37 3.5): it is a
     # second window/content pair, not a layer above one, and it must stay
     # independent of the audio window. Deliberately absent from every other
     # slice's deps except the ones that genuinely need a concrete MIDI type:
     # objects/track must NOT depend on it - the track consults MIDI-ness only
     # through SObject::contentKind() and SObject::resolveEventClip().
-    'objects/midi':   {'actions', 'model', 'persistence'},
+    'objects/midi':   {'actions', 'model', 'objects/recplan', 'persistence'},
     'objects/track':  {'actions', 'model', 'persistence'},
     # objects/fragment (proposal 41 M1) sits at the RANK of objects/track, not
     # inside it: a fragment is content an SCut windows (D1), not a track, and
@@ -330,6 +343,11 @@ APP_ENG = {
     # here, not a new one; everything else stays out (no plugins, no render).
     'objects/cut':    _ENG_BASE | {'events', 'mix', 'pages', 'schedule',
                                    'sources'},
+    # objects/recplan: NOTHING beyond the base. The planner is arithmetic over
+    # a snapshot plus a verb seam; `Child` carries a BOOLEAN for "has a comp
+    # map" rather than the twCompMap it used to, which is what costs this
+    # module its last engine dependency (nothing ever read the map itself).
+    'objects/recplan': _ENG_BASE,
     # objects/wave + sidecar since proposal 27 M0: SPlainWave persists its
     # straight preview through the derived-data sidecar store.
     'objects/wave':   _ENG_BASE | {'pages', 'schedule', 'sources', 'sidecar'},

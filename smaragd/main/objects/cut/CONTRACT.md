@@ -1062,10 +1062,26 @@ Gate: `record_loop_late_start.qxa`.
 
 ### `place-recording` is a THIN VERB; one `srecplan::Planner` per record mode
 
-`srecordplanner.{h,cpp}` (plan 53 §5.1, QBX-171). The verb resolves the lane,
+> **THE PLANNER NO LONGER LIVES HERE (QBX-188).** It moved to
+> **`app/objects/recplan`**, whose `CONTRACT.md` is now the authority on the
+> planners themselves — the rules they are held to, `PassVerbs`, and what
+> `snapshot()` may ask. It had to move: it sat beside the verbs it emits, which
+> put it out of the EVENT side's reach for good (`objects/midi` may not depend
+> on `objects/cut`, proposal 37 §3.5), so plan 53 P3 could not be the wiring it
+> was scoped as. The new module sits at the RANK of both and neither depends on
+> the other.
+>
+> What stays THIS module's business is the half below plus
+> **`SAudioPassVerbs`** — the audio implementation of the seam, and the one
+> place the pass's SOURCE arithmetic lives (`srcOffset + (at − a)`). The
+> sections after it that describe a planner's own behaviour are kept here for
+> the measurements in them and point forward where they describe the move.
+
+`place-recording` (plan 53 §5.1, QBX-171). The verb resolves the lane,
 reads the file's duration, computes the pass's span — and then decides nothing.
-It builds an `srecplan::LaneSnapshot`, asks `plannerFor( mode )`, and applies
-whatever the planner appended to one `SCompositeAction`.
+It builds an `srecplan::LaneSnapshot`, asks `plannerFor( mode )`, supplies
+`SAudioPassVerbs` as the `Context`'s verb set, and applies whatever the planner
+appended to one `SCompositeAction`.
 
 Three rules carry it, and every planner is held to them:
 

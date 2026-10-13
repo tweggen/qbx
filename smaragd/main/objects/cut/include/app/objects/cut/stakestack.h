@@ -172,6 +172,7 @@ public:
      */
     int windowTakeCount() const override { return nTakes(); }
     int activeWindowTakeIndex() const override { return activeTake_; }
+    bool hasCompMap() const override { return !compMap_.empty(); }
     SLink *insertWindowTake( SClipWindow &window, int atIndex ) override
     { return insertTake( window, atIndex ); }
     void removeWindowTake( int index ) override { removeTake( index ); }

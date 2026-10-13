@@ -381,6 +381,8 @@ public:
     { return windowContent().windowTakeCount(); }
     int activeWindowTakeIndex() const override
     { return windowContent().activeWindowTakeIndex(); }
+    bool hasCompMap() const override
+    { return windowContent().hasCompMap(); }
     SLink *insertWindowTake( SClipWindow &window, int atIndex ) override
     { return windowContent().insertWindowTake( window, atIndex ); }
     void removeWindowTake( int index ) override
