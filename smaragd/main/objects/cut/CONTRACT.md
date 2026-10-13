@@ -1110,13 +1110,73 @@ Three rules carry it, and every planner is held to them:
 `srecmode::resolveMode`'s folder walk lives. `SAudioRecorder` resolves per
 armed lane and submits the answer (`main/objects/track/srecordmode.h` says so
 at length). Empty, and any value this build does not know, mean "whatever this
-build would do anyway" — which is `LegacyTakes`.
+build would do anyway" — which since P2 is **mode A**.
 
-**NOTHING HAS FLIPPED YET.** `Mode::Takes` is `LegacyTakes`, today's planner
-moved with its behaviour intact, and it is the resolved default everywhere, so
-no recording made by the recorder lands differently than it did before plan 53.
-`Overdub` is one `place-clip` over whatever the lane holds. `TakesSplit` and
-`Replace` are implemented (QBX-172) and are reachable only by asking for them.
+**`Mode::Takes` IS MODE A (plan 53 §3.1, QBX-180 / P2), and this is the one
+row of plan 53 that changes what recording DOES by default.** A pass over a
+lane that already holds material no longer lands beside it: the touched
+children and the pass become ONE union column over
+`C = [ min(a, min sᵢ), max(b, max eᵢ) )`, every touched child a take at its
+own extent, the pass the active take, and the comp map the pass inside
+`[a, b)` with what was there before everywhere else. `LegacyTakes` is gone —
+removed, not left unreachable. `Overdub` is still one `place-clip` over
+whatever the lane holds; `TakesSplit` and `Replace` (QBX-172) are still
+reachable only by asking for them.
+
+**MODE A'S PLAN IS TWO VERBS**, which is why A1 (`merge-columns`, QBX-179) had
+to land first:
+
+```
+place-clip     the pass, at `a`, over its EXTENT
+merge-columns  every touched child IN ASCENDING CHILD INDEX, then the pass
+```
+
+`merge-columns` already is §3.1 steps 1, 2 and 4; naming the pass LAST gives
+step 3 for free. Four things follow, each measured rather than assumed:
+
+1. **NO GAP FILLING.** Every member of `T` intersects `[a, b)`, so the one
+   child that can start before `a` must also end after it and therefore covers
+   `[C.start, a)` entirely; the same holds at the other end, and the pass
+   covers `[a, b)`. `C` is contiguous AND fully covered, so unlike the other
+   two planners this one has no uncovered sub-span to place a cut over.
+2. **ASCENDING CHILD INDEX IS D1's TOPMOST RULE.** Where two touched children
+   overlap, the previous answer is the one with the HIGHER child index, and
+   `merge-columns` gives an overlap to the LATER operand — so the operand list
+   is in index order, not the time order `columnsFor` returns. D1 (a) also
+   means the SUM those two children produced is GONE; `rec_union_overlap_legacy`
+   asserts the halving, so the decision is visible in the suite.
+3. **THE PASS IS PLACED OVER ITS EXTENT, NOT ITS MATERIAL** (§3.1 step 5).
+   `Span::extent` carries the cycle region, because `b` cannot: the verb clamps
+   the span to the material, so the last pass of nearly every cycle recording
+   is short, and its take must still be an alternative for the same bars.
+4. **A WRAPPED COLUMN REFUSES THE LANE** (G11), as under the other two new
+   modes — and since `takes` is the default, that refusal is now reachable
+   without asking for it. It is a FLIP: the planner before mode A handed a
+   wrapper to `add-take` like any other column.
+
+**MODE A PRE-FLIGHTS `merge-columns`' PARAMETER REFUSAL AND DEGRADES.** The
+verb refuses operands that disagree on volume or pan, or that carry anything
+POSITIONAL — a `cut:Gain` envelope or a clip fade — because a merged column has
+ONE set of clip parameters (QBX-185). That is right for a user gesture and
+fatal for a recording: `SCompositeAction::apply` rolls back every earlier child
+on the first failure, so the pass's own `place-clip` would go with it and the
+take would be LOST. The planner therefore asks the same questions of
+`LaneSnapshot` (`Child::mixVolume`, `mixPan`, `hasGainCurve`, `hasFade`,
+`hasWindow`, `nTakes`) and, when any of them says no, places the pass as a
+plain clip over the lane and ANNOUNCES it. That degrade is chosen because it
+changes no existing child: a LegacyTakes-shaped one would wrap the user's faded
+clip into a column, where `parametersOf` resolves to the ACTIVE take and the
+clip's own fade stops applying — the degrade would itself change what plays,
+which is what the refusal exists to prevent.
+
+**`merge-columns` NO LONGER WRITES A DEGENERATE MAP**, and mode A is why. One
+segment at 0 naming the take that becomes active, where that take covers the
+whole column, answers exactly what no map plus `activeTake_` answers — but it
+SERIALIZES. As a user gesture that case is rare; as the recording planner it is
+§3.3's R3 and R5 cells, which is every cycle pass after the first and every
+pass over a clip lying wholly inside it, so writing it would put a `<comp>`
+element into essentially every project that records twice. §3.3 writes those
+cells' map as "`0→R` (= empty, active R)"; this is what makes that true.
 
 **`TakesSplit` (mode `takes-split`, plan 53 §3.2).** Every touched child is cut
 at `a` and at `b` where those fall inside it; the piece inside `[a, b)` becomes
@@ -1188,15 +1248,10 @@ piece contains another; for a PARTIAL overlap it names no answer for the part
 the topmost piece does not cover, which would lose recorded audio. The cursor
 rule gives the pass to the FIRST piece covering each position and places it
 exactly once — agreeing with §3.4 wherever §3.4 is precise (W1's adjacent
-children) and never losing audio where it is not. "Topmost" depends on decision
-D1, which P2 owns.
-
-**One deliberate deviation from plan 53 §5.1, recorded there too:** a wrapped
-column is handed to `LegacyTakes` as an ordinary column. §5.1 says every
-planner refuses one (G11) and P1 says "Flips: none"; both cannot hold for this
-planner, because today's planner hands a wrapped column to `add-take` like any
-other. The refusal is the NEW planners' rule; `LegacyTakes` keeps the old
-behaviour until P2 retires it.
+children) and never losing audio where it is not. "Topmost" was decision D1,
+and P2 took option (a): mode A merges such a lane and gives an overlap to the
+HIGHEST child index. Mode B keeps the cursor rule, which is its own answer to a
+question mode A does not have — B never makes one column out of two children.
 
 **`ChildList`'s REMOVAL SHIFT IS GATED since QBX-172**, by
 `rec_replace_cells`' fifth track: two children both inside the pass, so
@@ -1236,5 +1291,18 @@ found the lane.
 Gates: `record_mode_overdub_audio` (the shape AND the summed level, in closed
 form, on a fixture where `overdub` and the legacy planner cannot agree by
 accident), plus the whole `place_recording_*` / `takes_recording_*` /
-`record_*` families unchanged, which is what makes `LegacyTakes` a move rather
-than a rewrite.
+`record_*` families, plus mode A's own `rec_union_r1`…`rec_union_r6` (one per
+R value, Kp/Kc/Km on three tracks), `rec_union_w1` (the case plan 53 was
+written for, with the undo gated by render identity),
+`rec_union_overlap_legacy` (D1 (a) made visible), `rec_union_cycle_extent` (the
+whole-cycle extent, exactly) and `rec_union_cycle_inside` (the same cell live).
+
+**THREE EXISTING GATES MOVED WITH MODE A**, each edited with its reason in its
+own header: `takes_recording_placement` (the silence it pinned over
+`[192000, 288000)` WAS X2 and is now the old material), `place_recording_over_earlier_clip`
+(its claim is unchanged — a take must never be discarded — but a surviving take
+is now observed as a take with an extent rather than as a new lane child) and
+`record_snap_disagree`, which plan 53 §9 did not predict: one of its two lanes
+is R0 and the other R1, so only the second folds. `record_stays_armed`, which
+§9 DID predict, does not move: QBX-171 moved its second pass 10 s away, so both
+passes are R0.

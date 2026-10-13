@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  §3.1 STEP 5: FOR A CYCLE SPAN THE TAKE EXTENT IS THE WHOLE CYCLE, even when
+  the performer stopped partway through it (QBX-180 / P2).
+
+  THIS CASE IS SCRIPTED, AND DELIBERATELY SO. The rule is about the LAST pass
+  of a cycle recording, whose index depends on how many passes the box got
+  through - so a recorder-backed case can only assert it as a floor, and an
+  exact extent cannot be asserted at a take index nobody can name. The live
+  half of the cycle story is `rec_union_cycle_inside`; this half drives
+  `place-recording` directly and is exact.
+
+  WHY THE ATTRIBUTE EXISTS. `length` bounds the MATERIAL and `extent` bounds
+  the TAKE, and the two differ precisely here: the recorder places a cycle
+  pass at the cycle start and asks for the whole cycle length, but
+  `place-recording` clamps the span to what was actually captured
+  (min(length, waveDur - srcOffset)), so the last pass is short. Without
+  `extent` that pass becomes a PARTIAL take, and A0b's extent-aware
+  `select-take` then keeps the other passes audible where it has nothing -
+  i.e. clicking the last take would play the one before it. With `extent` the
+  take covers the cycle and clicking it gives that pass alone, silence
+  included, which is what a take being an alternative for the same bars means.
+
+  A two-second "cycle" at [0, 96000):
+
+    pass 1  timePos 0, srcOffset 144000, length 48000, extent 96000
+            -> one second of material (sec3) in a take covering the cycle
+    pass 2  timePos 0, srcOffset 0, length 96000
+            -> a whole pass (sec0, sec1); extent is the span already
+
+  PASS 1'S SLICE ENDS AT THE END OF THE FILE, which is not incidental: a
+  lengthened window reads whatever FOLLOWS its own material, and for a real
+  last cycle pass what follows is the end of the capture - so it is silence.
+  A fixture whose file continues past the pass would have the window read on
+  and the case could not tell `extent` from a longer window.
+
+  Both takes are then FULL-EXTENT over a 96000-long column, so selecting
+  either one CLEARS the map (§4.3) and plays that pass alone.
+
+  THE DISCRIMINATING ASSERTION is the pair `extents="0-96000;0-96000"` plus
+  comp="" after selecting take 0. Drop `extent` from pass 1 and take 0 becomes
+  0-48000: the extents assertion moves, and the `select-take` map becomes
+  "0:0;48000:1" with pass 2's second second audible (0.1764) in place of the
+  silence the performer actually left. Measured both ways.
+-->
+<SActionScript version="1" name="rec_union_cycle_extent">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- Pass 1: a pass that stopped halfway through the cycle. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="0" srcOffset="144000" length="48000"
+                     extent="96000" mode="takes"/>
+    <!-- The lane is empty, so this is a plain cut - and it is the CYCLE long,
+         not the material long. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-take-column clip="0,0" shape="none"/>
+
+    <!-- Pass 2: a whole pass over the same cycle. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="0" srcOffset="0" length="96000"
+                     mode="takes"/>
+
+    <!-- ONE column, both takes covering the whole cycle, and no comp map:
+         the pass answers everywhere, so a degenerate map is not written. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-96000;0-96000" comp="" duration="96000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- Pass 2 alone: two seconds of material. -->
+    <render filename="ru_ce_p2.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="ru_ce_p2.wav" startFrame="0"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_ce_p2.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+
+    <!-- PASS 1 ALONE, which is the point: its own second, then the silence it
+         left. Not pass 2 leaking back in, which is what a partial extent
+         would give. -->
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" comp="" activeTake="0"/>
+    <render filename="ru_ce_p1.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="ru_ce_p1.wav" startFrame="0"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="ru_ce_p1.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

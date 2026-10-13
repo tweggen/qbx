@@ -15,6 +15,26 @@
       2 s -> source sec2, sec3), auto-activated (decision 1),
   and the original take must remain selectable. Undo removes the whole
   placement and unwraps the column (composite inverse).
+
+  FLIPPED BY MODE A (plan 53 §9, QBX-180), in one place and for one reason.
+
+  The paragraph above describes the planner this build no longer has. Under
+  mode A there is no gap to fill and no column to stack onto separately: the
+  clip and the pass become ONE union column over
+  `C = [min(a,s), max(b,e)) = [0, 288000)`, with the clip a take at
+  96000-288000, the pass a take at 0-192000, the pass active, and the map
+  `0 -> pass, 192000 -> clip`.
+
+  THE ONE ASSERTION THAT MOVED is the last second-and-a-half of the first
+  render. It used to read SILENCE over [192000, 288000) with the comment
+  "recording ended but the column window continues" - that is X2, the defect
+  plan 53 §1 part 2 names, and this gate PINNED it. Under mode A the pass's
+  take ends where its material does and the map hands the rest back to the
+  clip, so the old material plays there: its source seconds 2 and 3.
+
+  Everything else in the case is unchanged, which is the useful part: the gap
+  cut, the comped-back original and the undo all read exactly as they did.
+  The structural assertions are new, because the structure is what changed.
 -->
 <SActionScript version="1" name="takes_recording_placement">
 
@@ -24,8 +44,15 @@
     <add-track index="-1"/>
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="96000"/>
 
-    <!-- "record" 4 s starting at 0: gap [0,2s) + take on the column at 2s -->
+    <!-- "record" 4 s starting at 0. Under mode A this is cell R5: the clip
+         lies wholly inside the pass, so one column takes both. -->
     <place-recording trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- ONE lane child now, where the old planner left two. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="96000-288000;0-192000"
+                        comp="0:1;192000:0" duration="288000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
 
     <render filename="takes_rec.wav" format="wav" quality="10" durationSec="6.5"/>
 
@@ -37,21 +64,30 @@
                          startFrame="48000" frameCount="48000"
                          minRms="0.15" maxRms="0.21"/>
 
-    <!-- column now plays the NEW take: recording slipped 2 s = source
-         sec2, sec3 at timeline 2-4 s, then silence (recording ended but
-         the column window continues) -->
+    <!-- the recording, which under mode A is simply the whole of its own
+         span: source sec2 and sec3 at timeline 2-4 s -->
     <assert-audio-energy filename="takes_rec.wav"
                          startFrame="96000" frameCount="48000"
                          minRms="0.26" maxRms="0.33"/>
     <assert-audio-energy filename="takes_rec.wav"
                          startFrame="144000" frameCount="48000"
                          minRms="0.37" maxRms="0.44"/>
+    <!-- THE FLIP. This used to assert SILENCE here, and the silence was X2:
+         the pass's take had been sized to the whole column and ran past the
+         end of its own material. The pass's take now ends at 192000 and the
+         map hands the rest back to the clip, so the OLD MATERIAL plays - its
+         source seconds 2 and 3, which is what it played before the pass. -->
     <assert-audio-energy filename="takes_rec.wav"
-                         startFrame="192000" frameCount="96000"
-                         minRms="0.0" maxRms="0.005"/>
+                         startFrame="192000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="takes_rec.wav"
+                         startFrame="240000" frameCount="48000"
+                         minRms="0.37" maxRms="0.44"/>
 
-    <!-- the pre-recording take is still there: comp back to it -->
+    <!-- the pre-recording take is still there: comp back to it. Its extent
+         is 96000-288000, so the pass keeps answering before it. -->
     <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" comp="0:1;96000:0" activeTake="0"/>
     <render filename="takes_rec_orig.wav" format="wav" quality="10" durationSec="6.5"/>
     <!-- original clip content restored on the column (source sec0 at 2 s) -->
     <assert-audio-energy filename="takes_rec_orig.wav"

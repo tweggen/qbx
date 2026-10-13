@@ -17,10 +17,11 @@ SPlaceRecordingAction::SPlaceRecordingAction( const QList<int> &trackPath,
                                               offset_t timePos,
                                               offset_t srcOffset,
                                               length_t length,
-                                              const QString &mode )
+                                              const QString &mode,
+                                              length_t extent )
     : mode_( SProjectProps::isRecordMode( mode ) ? mode : QString() ),
       trackPath_( trackPath ), filePath_( filePath ), timePos_( timePos ),
-      srcOffset_( srcOffset ), length_( length )
+      srcOffset_( srcOffset ), length_( length ), extent_( extent )
 {
 }
 
@@ -82,20 +83,18 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     sp.a         = timePos_;
     sp.b         = timePos_ + (offset_t) span;
     sp.srcOffset = srcOff;
-    // `fromCycle` is the recorder's knowledge and does not survive a .qxa
-    // (nothing in the XML says a pass came from a cycle), so it stays false.
+    // THE TAKE'S EXTENT (plan 53 §3.1 step 5, QBX-180), which the recorder
+    // knows and the span cannot: `span` above is clamped to the MATERIAL, so a
+    // cycle pass that stopped early has `b` short of the cycle end while its
+    // take must still cover the whole cycle. QBX-171 left a `fromCycle`
+    // boolean here for this and a boolean cannot carry it -- see the header.
     //
-    // QBX-171 PREDICTED TakesSplit WOULD NEED IT, AND IT DOES NOT. X8's "no
-    // take beyond the cycle" falls out of mode B for free: the pass span IS
-    // the cycle, and `TakesSplit` never places or stacks anything outside
-    // `[a, b)` -- it cuts AT `b` precisely so that what lies beyond stays its
-    // own child (`rec_split_cycle_inside` asserts exactly that, two passes in).
-    // What actually reads this flag is plan 53 §3.1 step 5, which is about
-    // mode A's TAKE EXTENTS -- "for a cycle span the take extent is the WHOLE
-    // cycle" -- and take extents are A0a's model change. So the field stays,
-    // unread, until the planner that needs it exists; the attribute to carry
-    // it belongs with that planner's own case, not here.
-    sp.fromCycle = false;
+    // Only mode A reads it. Mode B keeps X8 ("no take beyond the cycle") for
+    // free: the pass span IS the cycle and `TakesSplit` never places or stacks
+    // anything outside `[a, b)` -- it cuts AT `b` precisely so that what lies
+    // beyond stays its own child (`rec_split_cycle_inside` asserts that, two
+    // passes in).
+    sp.extent = extent_;
 
     srecplan::Context ctx;
     ctx.mode  = srecplan::modeFromString( mode_ );
@@ -148,6 +147,9 @@ void SPlaceRecordingAction::writeXml( QDomElement &elem ) const
     if( length_ != 0 )
         elem.setAttribute( "length", QString::fromStdString(
                                Fraction( length_, 1 ).toString() ) );
+    if( extent_ != 0 )
+        elem.setAttribute( "extent", QString::fromStdString(
+                               Fraction( extent_, 1 ).toString() ) );
     // Same non-default-only rule: an attribute a fixture did not declare must
     // not appear, or the round-trip audit fails.
     if( !mode_.isEmpty() )
@@ -180,6 +182,10 @@ bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
         elem.attribute( "srcOffset", "0" ).toStdString() ).toDouble();
     length_ = (length_t)parseFractionOrDouble(
         elem.attribute( "length", "0" ).toStdString() ).toDouble();
+    // The TAKE's extent, not the material's (see the header). 0 = the placed
+    // span, which is what every call written before QBX-180 means.
+    extent_ = (length_t)parseFractionOrDouble(
+        elem.attribute( "extent", "0" ).toStdString() ).toDouble();
     return true;
 }
 

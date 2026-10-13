@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MODE A, CELL R1: a recording that STARTS INSIDE existing material and ends
+  past its end (plan 53 §3.1 and §3.3's R1 row, QBX-180 / P2).
+
+  Three lanes, one per KIND of existing child, all with the same geometry:
+    track 0  Kp  a plain clip
+    track 1  Kc  a direct take column with TWO takes and no comp map
+    track 2  Km  the same column WITH a comp map
+
+  THE GEOMETRY, chosen so every second of the render is a different number.
+  test_sawtooth.wav is 4 s at 48 kHz (192000 frames) and its per-second RMS
+  rises: sec0 0.0667, sec1 0.1764, sec2 0.2906, sec3 0.4055.
+
+    O  = [0, 144000)      three seconds of lane
+    R  = [96000, 192000)  the pass, two seconds, srcOffset 0 (sec0, sec1)
+
+  so s=0 < a=96000 < e=144000 <= b=192000, which is R1.
+
+  THE CLOSED FORM, derived from §3.1 rather than read off a run:
+    C          = [ min(a,s), max(b,e) )     = [0, 192000)
+    takes      = O at [0, e-s) = 0-144000, R at [a, b) = 96000-192000
+    comp       = 0 -> O, 96000 -> R         (M0 outside [a,b), R inside)
+    activeTake = R
+
+  §3.3's R1 row says exactly this: "takes O[0,e-s), R[a-s,b-s) * 0->O,
+  a-s->R * O to a, R to b".
+
+  O's own material stops after two seconds (startOffset 96000, so sec2 and
+  sec3 then nothing), which is what makes the SECOND render below prove the
+  extent is honoured: selecting O gives silence over [96000, 144000), the part
+  of its extent where it has no material, rather than falling back to R.
+
+  ON `main` THIS FAILS at the first assert-take-column: the planner there
+  leaves the lane holding TWO children - the pass is a plain cut laid over a
+  column that predates it - so `0,0` is still the old clip with no takes at
+  all, and nothing in the suite can see a union column because none is made.
+-->
+<SActionScript version="1" name="rec_union_r1">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Kp: a plain clip, sec2 and sec3 then past its own material. -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="96000" duration="144000"/>
+
+    <!-- Kc: the same window as a column. add-take WRAPS the clip, activates
+         the new take and clears the map, so take 1 is the audible one and
+         carries the same material Kp's clip does. -->
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="0" duration="144000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+
+    <!-- Km: the same column, plus a map that answers take 0 for the first
+         second and take 1 after it. The first boundary lies OUTSIDE [a,b), so
+         it is the half of O's map that has to survive the merge. -->
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="0" duration="144000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <set-comp-map clip="2,0">
+      <seg at="0" take="0"/>
+      <seg at="48000" take="1"/>
+    </set-comp-map>
+
+    <!-- The premise, stated so a fixture change cannot pass silently. -->
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        comp="" duration="144000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="1"
+                        comp="0:0;48000:1" duration="144000"/>
+
+    <!-- THE PASS, on each lane. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="96000" length="96000" mode="takes"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     timePos="96000" length="96000" mode="takes"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     timePos="96000" length="96000" mode="takes"/>
+
+    <!-- ONE child per lane now, and it is the union column. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-144000;96000-192000"
+                        comp="0:0;96000:1" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <assert-take-column clip="1,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-144000;0-144000;96000-192000"
+                        comp="0:1;96000:2" duration="192000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- Km: O's map came across, shifted and re-indexed, for the part of the
+         column the pass does not govern - and the pass governs from 96000. -->
+    <assert-take-column clip="2,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-144000;0-144000;96000-192000"
+                        comp="0:0;48000:1;96000:2" duration="192000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <!-- THE AUDIBLE HALF, Kp. render renders the MASTER, so the other two
+         lanes are muted for it or their material would sum into this one. -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <render filename="ru_r1_kp.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r1_kp.wav" startFrame="0"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="ru_r1_kp.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="ru_r1_kp.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_r1_kp.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+
+    <!-- ...and Km, whose first second comes from the TRANSFERRED map (take 0,
+         sec0) rather than from the column's active take. This is the one
+         render in the family that can tell a map that travelled from one that
+         was thrown away. -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <set-track-mute trackPath="2" muted="0"/>
+    <render filename="ru_r1_km.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r1_km.wav" startFrame="0"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_r1_km.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="ru_r1_km.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_r1_km.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+
+    <!-- COMPING BACK TO THE OLD MATERIAL, over exactly its extent (A0b's
+         extent-aware select-take). O reaches 144000, so the pass re-enters
+         there rather than being silenced for the whole column. -->
+    <select-take clip="0,0" take="0"/>
+    <select-take clip="1,0" take="1"/>
+    <select-take clip="2,0" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;144000:1" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="0:1;144000:2" activeTake="1"/>
+    <assert-take-column clip="2,0" comp="0:1;144000:2" activeTake="1"/>
+
+    <set-track-mute trackPath="0" muted="0"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <render filename="ru_r1_kp_old.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r1_kp_old.wav" startFrame="0"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="ru_r1_kp_old.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <!-- THE EXTENT, HEARD: O is selected here and has no material, so this is
+         silence. A fall-back to the pass would read 0.0667 and an unwindowed
+         take would read sec0 of the file. -->
+    <assert-audio-energy filename="ru_r1_kp_old.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="ru_r1_kp_old.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

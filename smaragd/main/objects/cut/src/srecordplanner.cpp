@@ -1,11 +1,14 @@
 #include "app/objects/cut/srecordplanner.h"
 #include "app/objects/cut/saddtakeaction.h"
+#include "app/objects/cut/smergecolumnsactions.h"
 #include "app/objects/cut/splaceclipaction.h"
 #include "app/objects/cut/sremovesampleaction.h"
 #include "app/objects/cut/ssplitclipaction.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/actions/scompositeaction.h"
+#include "app/model/sautomationlane.h"
+#include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
 #include "app/model/sobject.h"
 #include <QtGlobal>
@@ -21,7 +24,7 @@ Mode modeFromString( const QString &mode )
     if( mode == QLatin1String( "overdub" ) )     return Mode::Overdub;
     if( mode == QLatin1String( "replace" ) )     return Mode::Replace;
     // "takes", "" and anything unknown. See the header: empty means "whatever
-    // this build would do anyway", and that is the legacy planner.
+    // this build would do anyway", and since P2 that is mode A.
     return Mode::Takes;
 }
 
@@ -132,6 +135,20 @@ LaneSnapshot snapshot( SObject *lane, const QList<int> &lanePath )
         // mis-plans it.
         c.dur = obj.getDurationBlocking();
 
+        // THE MIX PARAMETERS, through the question `merge-columns` asks: on a
+        // DIRECT column `parametersOf` resolves to the ACTIVE take, which is
+        // the set the mix actually applies. See `Child::mixVolume`.
+        c.hasWindow = SClipWindow::of( &obj ) != nullptr;
+        if( SClipWindow *par = SClipWindow::parametersOf( obj ) ) {
+            SObject &po = par->asObject();
+            c.mixVolume = po.getVolume();
+            c.mixPan    = po.getPan();
+            SAutomationLane *gain =
+                po.automationLane( QStringLiteral( "cut:Gain" ) );
+            c.hasGainCurve = gain && !gain->isEmpty();
+            c.hasFade      = !po.clipFade().none();
+        }
+
         if( STakeStack *col = stakes::columnOfLink( lk ) ) {
             c.nTakes     = col->childCount();
             c.activeTake = col->activeTakeIndex();
@@ -184,111 +201,14 @@ QList<Child> columnsFor( const LaneSnapshot &snap, const Span &span,
 }
 
 /**
- * TODAY'S PLANNER, moved here verbatim in behaviour (plan 53 P1: `LegacyTakes`
- * behind the `takes` value, FLIPS NONE).
- *
- * The rule, unchanged: a column that starts WITH the recording takes the
- * matching segment as a new take; the gaps between them become plain windowed
- * cuts; a column that was already running at the recording start is dropped
- * from the plan entirely and the take is placed OVER it.
- *
- * TWO CLASSIFICATIONS ARE READ AS R0 HERE, both for the reason the old
- * planner gave: an OTHER-KIND child (plan 53 B2) and a child this build does
- * not recognise. They are left out of the column list, so the recording falls
- * through to the gap branch and is placed as its own clip over them. Losing
- * recorded audio is not something a recorder may do.
- *
- * A WRAPPED COLUMN (Kw) IS TREATED AS A COLUMN, which plan 53 §5.1 says every
- * planner refuses (G11). That sentence and P1's "Flips: none" cannot both hold
- * for this planner: today's planner hands a wrapped column to `add-take` like
- * any other, so refusing it here WOULD be a flip. The refusal is the new
- * planners' rule; `LegacyTakes` keeps the old behaviour until P2 retires it.
- */
-class LegacyTakes : public Planner
-{
-public:
-    bool plan( const LaneSnapshot &snap, const Span &span, const Context &ctx,
-               SCompositeAction &out, QString *why ) const override
-    {
-        if( !ctx.armed ) return true;          // nothing to do (review 2 M5)
-        if( span.length() == 0 ) {
-            if( why ) *why = QStringLiteral( "empty span" );
-            return false;
-        }
-
-        ChildList live( snap );
-        const QList<int> lanePath = snap.lanePath;
-
-        QList<Child> cols;
-        for( const Child &c : columnsFor( snap, span, ctx ) ) {
-            if( c.kind == Child::OtherKind ) continue;     // R0
-            if( !c.isColumn() && c.kind != Child::Plain ) continue;
-            if( c.start < span.a ) {
-                // A column ALREADY RUNNING at the recording start is dropped
-                // from the plan rather than kept in it. Keeping it is what
-                // silently threw the take away: the plan skipped it but still
-                // advanced the cursor past its end, so the column CONSUMED the
-                // material it covered, and when it covered the whole recording
-                // the composite came out EMPTY -- which applies as success.
-                // qxa.record_stays_armed failed that way in roughly 1 run in 15.
-                qWarning( "place-recording: column at %lld predates the "
-                          "recording start; it keeps its span and the take is "
-                          "placed over it", (long long) c.start );
-                continue;
-            }
-            cols.append( c );
-        }
-
-        offset_t cursor = span.a;
-        for( const Child &col : cols ) {
-            // ONE RECORDING, ONE COLUMN (plan 53 B5, QBX-163). A column whose
-            // start is already below the cursor has had its span covered by an
-            // earlier column in this same pass; handing it the same recording
-            // would make two columns hold one pass as an alternative for two
-            // different regions, and `add-take` WRAPS a plain clip, so an
-            // ordinary clip overlapping the first column would be silently
-            // turned into a take column it was never meant to be.
-            if( col.start < cursor ) continue;
-
-            if( col.start > cursor ) {
-                out.append( new SPlaceClipAction(
-                    lanePath, span.filePath, cursor,
-                    span.srcOffset + cursor - span.a,
-                    (length_t)( col.start - cursor ) ) );
-                live.append();
-            }
-            out.append( new SAddTakeAction(
-                live.pathOfOriginal( col.index ), span.filePath,
-                span.srcOffset + col.start - span.a ) );
-            // add-take PRESERVES its operand's index (it replaces the lane
-            // child link in place), so the simulation needs no change here --
-            // stated rather than silent, because it is the one verb in the
-            // plan that does not append.
-
-            cursor = std::max( cursor, std::min( col.end(), span.b ) );
-        }
-        if( cursor < span.b ) {
-            // The trailing gap; when nothing overlapped at all this is the
-            // whole pass at `a` -- today's plain placement.
-            out.append( new SPlaceClipAction(
-                lanePath, span.filePath, cursor,
-                span.srcOffset + cursor - span.a,
-                (length_t)( span.b - cursor ) ) );
-            live.append();
-        }
-        return true;
-    }
-};
-
-/**
  * MODE `overdub`: the pass is a plain clip over whatever the lane holds, and
  * both sound (plan 53 §3.3).
  *
- * The whole planner is one `place-clip`. That is the point of it in P1a: it is
- * the proof that the framework can express a mode the legacy planner cannot,
- * with no model change and no new verb, and it is the one mode for which "what
- * the lane already holds" is genuinely irrelevant -- so it reads the snapshot
- * for nothing but the lane path.
+ * The whole planner is one `place-clip`. That was the point of it in P1a: the
+ * proof that the framework could express a mode the planner of the day could
+ * not, with no model change and no new verb, and it is the one mode for which
+ * "what the lane already holds" is genuinely irrelevant -- so it reads the
+ * snapshot for nothing but the lane path.
  */
 class Overdub : public Planner
 {
@@ -423,10 +343,12 @@ InsidePiece isolateInside( const Child &c, const Span &span,
  * shape; QBX-155 landed (#241, #244) and it now pins BOTH shapes, so that
  * particular obstacle is gone. What keeps the refusal is the rule itself: a
  * surviving wrapper is non-foldable (`stakes::normalizeColumns` ran at load
- * and left it), both new modes would have to split or delete it, and neither
- * mode has a gate that has ever exercised one. Refusing is announced, costs
- * the pass nothing but this lane, and is what `record_lane_skipped_reported`
- * (QBX-164) is waiting for.
+ * and left it), every mode would have to split, fold or delete it, and none
+ * has a gate that has ever exercised one. Refusing is announced, costs the
+ * pass nothing but this lane, and is what `record_lane_skipped_reported`
+ * (QBX-164) is waiting for. **Since P2 this reaches the DEFAULT mode**, which
+ * is a flip: the planner before it handed a wrapper to `add-take` like any
+ * other column.
  */
 bool refusedForWrappedColumn( const QList<Child> &touched, Mode mode,
                               QString *why )
@@ -442,6 +364,217 @@ bool refusedForWrappedColumn( const QList<Child> &touched, Mode mode,
     }
     return false;
 }
+
+/**
+ * CAN `merge-columns` TAKE THIS SET OF OPERANDS? Asked from the SNAPSHOT,
+ * before a single verb is emitted.
+ *
+ * WHY MODE A PRE-FLIGHTS A REFUSAL IT COULD SIMPLY RUN INTO. `merge-columns`
+ * decides before mutating and announces its reason, which is exactly right for
+ * a user gesture: nothing happens and the user is told why. For a recording it
+ * is fatal. `SCompositeAction::apply` rolls back every earlier child on the
+ * first one that fails, so the pass's own `place-clip` goes with it and the
+ * take is LOST -- the one thing a recorder may not do (the same rule that made
+ * `takes-split` guard `split-clip` with `pieceCanSplitAt`).
+ *
+ * The rules mirrored here are the verb's own, in its order. Everything else it
+ * refuses needs the live tree (a path that does not resolve, a lane, a live
+ * recording) and `place-clip` would have failed on it first, or is impossible
+ * by construction (fewer than two operands, a clip named twice, mixed content
+ * kinds -- `columnsFor` has already sent the other kind to R0).
+ *
+ * THE PARAMETER RULE IS THE ONE THAT ACTUALLY BITES. A merged column has ONE
+ * set of clip parameters, read from its active take, so the verb refuses
+ * operands that disagree on volume or pan, or that carry anything POSITIONAL
+ * (a `cut:Gain` envelope, a clip fade) -- QBX-185. The pass is a FRESH
+ * `place-clip`, which means volume 0, pan 0, no fade and no envelope, so
+ * "the operands agree with each other and with the pass" is simply "every
+ * operand is at the defaults".
+ */
+bool mergeableOperands( const QList<Child> &ops, const Span &span,
+                        QString *why )
+{
+    for( const Child &c : ops ) {
+        if( !c.isColumn() && !c.hasWindow ) {
+            if( why )
+                *why = QStringLiteral( "the child at %1 is neither a windowed "
+                                       "clip nor a take column" )
+                           .arg( (long long) c.start );
+            return false;
+        }
+        if( c.isColumn() && c.nTakes <= 0 ) {
+            if( why )
+                *why = QStringLiteral( "the take column at %1 is empty" )
+                           .arg( (long long) c.start );
+            return false;
+        }
+        if( c.hasGainCurve ) {
+            if( why )
+                *why = QStringLiteral( "the child at %1 carries a cut:Gain "
+                                       "envelope, which is POSITIONAL and "
+                                       "would mean something else in a longer "
+                                       "column (QBX-185)" )
+                           .arg( (long long) c.start );
+            return false;
+        }
+        if( c.hasFade ) {
+            if( why )
+                *why = QStringLiteral( "the child at %1 carries a clip fade, "
+                                       "whose length is measured against its "
+                                       "own end" )
+                           .arg( (long long) c.start );
+            return false;
+        }
+        if( c.mixVolume != 0.0 || c.mixPan != 0.0 ) {
+            if( why )
+                *why = QStringLiteral( "the child at %1 plays at %2 dB / pan "
+                                       "%3 and the pass at 0 / 0; a merged "
+                                       "column has ONE level for every take "
+                                       "(QBX-185)" )
+                           .arg( (long long) c.start )
+                           .arg( c.mixVolume ).arg( c.mixPan );
+            return false;
+        }
+    }
+    (void) span;
+    return true;
+}
+
+/**
+ * MODE `takes` (A): ONE UNION COLUMN PER PASS PER LANE (plan 53 §3.1).
+ *
+ * This is the row the whole plan was built for, and it REPLACES the planner
+ * every build before it had (`LegacyTakes`, QBX-180 / P2). Under it a
+ * recording never lands beside the material it was played against: the touched
+ * children and the pass become takes of one column spanning
+ * `C = [ min(a, min s_i), max(b, max e_i) )`, the pass is the active take and
+ * the comp map answers with the pass inside `[a, b)` and with what was there
+ * before everywhere else.
+ *
+ * THE PLAN IS TWO VERBS, and that is the point of A1 having landed first:
+ *
+ *   place-clip   the pass, at `a`, over its extent
+ *   merge-columns  every touched child IN ASCENDING CHILD INDEX, then the pass
+ *
+ * `merge-columns` (§6.1, QBX-179) already IS §3.1 steps 1, 2 and 4: the result
+ * sits at the first operand's index with extent `[min start, max end)`, every
+ * plain clip becomes a take at its own extent, a column's takes and comp map
+ * transfer shifted, and the combined map is each operand's PREVIOUS ANSWER
+ * over its own extent with the LATER operand winning an overlap and the
+ * previous answer re-entering at each operand's end. Naming the pass LAST
+ * therefore gives step 3 for free -- it wins inside `[a, b)` and becomes the
+ * active take -- and the rest of the map is `M0` by construction.
+ *
+ * NO GAP FILLING, AND NOT BY OVERSIGHT. Every member of `T` intersects
+ * `[a, b)`, so the one child that can start before `a` must also end after it
+ * and therefore covers `[C.start, a)` entirely; the same holds at the other
+ * end, and the pass covers `[a, b)` itself. `C` is contiguous AND fully
+ * covered -- §3.1's "contiguous by construction" -- so unlike `LegacyTakes`
+ * and `TakesSplit` this planner has no uncovered sub-span to place a cut over.
+ *
+ * ASCENDING CHILD INDEX IS D1's TOPMOST RULE (§3.1 step 4): where two touched
+ * children overlap, the previous answer is the one with the HIGHER child
+ * index, and `merge-columns` gives an overlap to the LATER operand -- so the
+ * list has to be in index order, not the time order `columnsFor` returns.
+ * D1 (a) also means the SUM those two children used to produce is GONE: a
+ * column plays one take per position. `rec_union_overlap_legacy` asserts that,
+ * so the decision is visible in the suite rather than silent.
+ *
+ * THE PASS IS PLACED OVER ITS EXTENT, NOT ITS MATERIAL (§3.1 step 5): for a
+ * cycle pass `Span::extent` is the whole cycle, so the clip -- and hence the
+ * take -- spans it even when the performer stopped early, and the take is an
+ * alternative for the same bars as the full passes beside it.
+ *
+ * > **A DEVIATION FROM §3.1 STEP 4, where `extent` reaches past `b`.** Step 4
+ * > says the map is `M0` outside `[a, b)`, but `merge-columns` paints an
+ * > operand's answer over its whole EXTENT, so the pass answers over
+ * > `[a, extentEnd)` and renders silence from `b` on instead of falling back
+ * > to the old material. Separating the two would need a verb that sets a
+ * > take's extent independently of the span it answers for, and none exists --
+ * > `add-take at=/length=` is the only writer of an extent and it creates a
+ * > take. The combination is reachable only by a live CYCLE pass that stops
+ * > mid-cycle over pre-existing material, and the behaviour it produces is
+ * > defensible on its own: the user asked for a pass over those bars, that
+ * > pass is the answer for all of them, silence included -- which is what a
+ * > tape machine does -- and the previous answer is one `select-take` away.
+ * > Recorded as a plan 53 correction rather than coded around.
+ *
+ * A WRAPPED COLUMN REFUSES THE LANE, as under the other two new modes (G11):
+ * `merge-columns` cannot fold one without dropping the wrapper's own window.
+ * This is a FLIP -- `LegacyTakes` handed a wrapper to `add-take` like any
+ * other column -- and it is the plan's decision (§3.3's "any R · Kw" row);
+ * the refusal is announced and the file is reported unused (B6/Q13).
+ */
+class Takes : public Planner
+{
+public:
+    bool plan( const LaneSnapshot &snap, const Span &span, const Context &ctx,
+               SCompositeAction &out, QString *why ) const override
+    {
+        if( !ctx.armed ) return true;          // nothing to do (review 2 M5)
+        if( span.length() == 0 ) {
+            if( why ) *why = QStringLiteral( "empty span" );
+            return false;
+        }
+
+        const QList<Child> touched = columnsFor( snap, span, ctx );
+        if( refusedForWrappedColumn( touched, Mode::Takes, why ) )
+            return false;
+
+        QList<Child> ops;
+        for( const Child &c : touched ) {
+            if( c.kind == Child::Lane ) continue;
+            // AN OTHER-KIND CHILD IS R0 and keeps everything (plan 53 B2): a
+            // take is an alternative for the same region, not a different
+            // instrument. The pass is laid OVER it, which is what an empty
+            // lane does and what never loses audio.
+            if( c.kind == Child::OtherKind ) continue;
+            if( !c.isColumn() && c.kind != Child::Plain ) continue;
+            ops.append( c );
+        }
+        std::stable_sort( ops.begin(), ops.end(),
+                          []( const Child &x, const Child &y )
+                          { return x.index < y.index; } );
+
+        QString no;
+        const bool merging = !ops.isEmpty()
+                             && mergeableOperands( ops, span, &no );
+        if( !ops.isEmpty() && !merging ) {
+            // DEGRADED, NOT REFUSED, and this is the one plan that changes no
+            // existing child: the user's faded or re-levelled clip keeps its
+            // fade and its level, and the pass is audible over it. A
+            // LegacyTakes-shaped degrade would instead WRAP that clip into a
+            // column, where `parametersOf` resolves to the ACTIVE take and the
+            // clip's own parameters stop applying -- the degrade would itself
+            // change what plays, which is what the refusal exists to prevent.
+            // Flattening the fade and running `merge-columns` by hand is the
+            // way back, and QBX-185 is the way out.
+            qWarning( "place-recording: mode 'takes' placed the pass as a "
+                      "plain clip rather than a union column: %s",
+                      qPrintable( no ) );
+        }
+
+        ChildList live( snap );
+        out.append( new SPlaceClipAction(
+            snap.lanePath, span.filePath, span.a, span.srcOffset,
+            (length_t)( span.extentEnd() - span.a ) ) );
+        const int passId = live.append();
+
+        // An empty lane region is today's plain placement, exactly (§3.1's
+        // "for a lane whose touched set is empty"), and so is a degrade.
+        if( !merging ) return true;
+
+        QList<QList<int>> paths;
+        for( const Child &c : ops )
+            paths.append( live.pathOfOriginal( c.index ) );
+        paths.append( live.pathOfAppended( passId ) );
+        out.append( new SMergeColumnsAction( paths ) );
+        // NOTHING FOLLOWS, so the merge's removals need no modelling: it is
+        // the last verb in the plan, and `place-recording` re-snapshots for
+        // every segment of every pass.
+        return true;
+    }
+};
 
 /**
  * MODE `takes-split` (B): the pass is an ALTERNATIVE FOR EXACTLY THE SPAN IT
@@ -472,8 +605,11 @@ bool refusedForWrappedColumn( const QList<Child> &touched, Mode mode,
  * cover -- which would lose recorded audio. The cursor rule below gives the
  * pass to the FIRST piece that covers each position and places it exactly
  * once, which agrees with §3.4 wherever §3.4 is precise (W1's adjacent
- * children) and never loses audio where it is not. "Topmost" depends on
- * decision D1, which P2 owns.
+ * children) and never loses audio where it is not. "Topmost" was decision D1,
+ * and P2 took option (a): mode A merges such a lane and gives an overlap to
+ * the HIGHEST child index. Mode B keeps the cursor rule, which is its own
+ * answer to a question mode A does not have -- B never makes one column out
+ * of two children.
  */
 class TakesSplit : public Planner
 {
@@ -646,7 +782,7 @@ const Planner &plannerFor( Mode mode )
     // one instance can serve every armed lane of every pass, but a file-scope
     // object would be constructed in an order this file does not control and
     // `plannerFor` is callable from anywhere.
-    static const LegacyTakes takes;
+    static const Takes      takes;
     static const Overdub     overdub;
     static const TakesSplit  takesSplit;
     static const Replace     replace;

@@ -609,7 +609,10 @@ foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_
               record_mixed_one_undo
               # The ONE merge-columns refusal that needs a recorder: a growing
               # clip exists only while a pass runs (plan 53 §6.1 / A1).
-              merge_columns_refused_live)
+              merge_columns_refused_live
+              # Mode A's live cycle cell: C8, a cycle recorded over a clip
+              # that reaches past the cycle (plan 53 §3.1 step 5 / P2).
+              rec_union_cycle_inside)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE

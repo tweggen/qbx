@@ -129,6 +129,12 @@ private:
     qint64 compensation_      = kUnsetS;
     qint64 trimmed_           = kUnset;
     qint64 passes_            = kUnset;
+    // HOW MANY OF THE COLUMN'S TAKES DID NOT COME FROM A PASS (QBX-180). The
+    // unasked "one take per pass" equality assumes they all did, which holds
+    // only on a lane that was empty; under plan 53's mode A a pass over
+    // existing material folds that material in as a take as well. Default 0,
+    // so every case written before mode A means what it always meant.
+    qint64 extraTakes_        = 0;
     bool   growing_           = false;
     bool   previewNonEmpty_   = false;
     qint64 sourceAtStart_     = kUnset;

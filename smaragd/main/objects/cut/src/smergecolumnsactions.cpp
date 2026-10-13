@@ -421,8 +421,34 @@ SApplyResult SMergeColumnsAction::apply( SProject *project )
         return { false, nullptr };
     }
 
-    merged->setCompMap( twCompMap( std::move( segs ) ) );
-    merged->setActiveTake( activeOut >= 0 ? activeOut : 0 );
+    // A DEGENERATE MAP IS NOT WRITTEN (plan 53 §3.3's "`0→R` (= empty, active
+    // R)", and §4.3's rule for `select-take`). One segment at 0 naming the
+    // take that becomes active, where that take covers the whole column,
+    // answers exactly what an empty map plus `activeTake_` answers -- but it
+    // SERIALIZES, so writing it would put a `<comp>` element into project
+    // files that have no comp in them.
+    //
+    // IT IS MODE A THAT MADE THIS MATTER (QBX-180). As a user gesture a merge
+    // of two whole clips is rare; as the recording planner it is the COMMON
+    // cell -- every §3.3 R3 and R5 cell, which is every cycle pass after the
+    // first and every pass over a clip that lies wholly inside it. Without
+    // this, recording twice would start writing a comp map into essentially
+    // every project.
+    const int activeFinal = activeOut >= 0 ? activeOut : 0;
+    bool degenerate = segs.size() == 1 && segs[ 0 ].at == 0
+                      && segs[ 0 ].take == activeFinal
+                      && segs[ 0 ].xfade == 0;
+    if( degenerate ) {
+        // ...only when the named take really does cover the whole column; a
+        // partial one is a comp decision even when it is the only segment.
+        const offset_t es = merged->takeExtentStart( activeFinal );
+        const length_t el = merged->takeExtentLength( activeFinal );
+        degenerate = es == 0
+                     && (offset_t) el >= (offset_t) ( maxEnd - newStart );
+    }
+    merged->setCompMap( degenerate ? twCompMap()
+                                   : twCompMap( std::move( segs ) ) );
+    merged->setActiveTake( activeFinal );
     // THE COLUMN'S OWN LENGTH, not max_i( tEnd_i ): an operand may have been
     // LONGER than its takes reach (§4.2's one-take placeholder), and the merged
     // extent is [min start, max end) over the OPERANDS, not over their takes.

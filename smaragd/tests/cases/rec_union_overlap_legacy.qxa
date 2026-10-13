@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DECISION D1 MADE VISIBLE (plan 53 §3.4's Q7 bullet and §0a's D1, QBX-180).
+
+  Two PRE-EXISTING OVERLAPPING clips on one lane. They SUM today, because a
+  lane sums its children; mode A folds them into one column, and a column
+  plays ONE take per position - so the sum is GONE. D1 took option (a) with
+  that consequence stated, and this case asserts the consequence so the choice
+  is a decision recorded in the suite rather than a silent side effect.
+
+  THE CHILD ORDER IS DELIBERATELY NOT THE TIME ORDER, and that is the whole
+  reason this fixture looks odd. "Topmost" means the HIGHEST CHILD INDEX, and
+  mode A implements it by listing the merge's operands in child-index order -
+  because `merge-columns` gives an overlap to the LATER operand in its list.
+  On any fixture where the clips were placed left to right the two orders
+  AGREE, so nothing can tell them apart. Here the later-STARTING clip is
+  placed FIRST:
+
+    child 0  Q = [96000, 288000)  startOffset 48000   (starts later in time)
+    child 1  P = [48000, 192000)  startOffset 0       (the TOPMOST)
+             R = [144000, 240000) srcOffset 0         (the pass)
+
+  Both clips satisfy `start - startOffset == 48000`, so wherever both play
+  they play the SAME sample and their sum is exactly twice one of them.
+
+    C          = [48000, 288000), duration 240000
+    takes      = Q 48000-240000, P 0-144000, R 96000-192000
+    comp       = 0 -> P, 96000 -> R, 192000 -> Q
+    activeTake = R
+
+  THE TWO CLAIMS, each in the register that can carry it:
+
+   1. OUTSIDE [a, b) THE TOPMOST PLAYS. Carried by `extents=` and by
+      takeAtPos: the overlap outside the pass answers take 1, which is P.
+      NOT carried by the render - the clips are the same signal where they
+      overlap, which is what claim 2 needs, so no level can tell which won.
+      Sorting the operands by start time instead of by index moves `extents`,
+      `comp` and two takeAtPos answers; it moves no sample. Measured.
+   2. THE SUM IS NOT PRESERVED. Carried by the render, before and after: over
+      the overlapped second the level HALVES, from two copies to one. Source
+      second 1 (RMS 0.1764, peak about 0.31) is used because doubling second 2
+      would peak near full scale and clip.
+
+  ON `main` THIS FAILS at the first assert-take-column: no column is made at
+  all, the lane still holds three children, and the sum is still there.
+-->
+<SActionScript version="1" name="rec_union_overlap_legacy">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- Q first, so it is child 0 although it starts later. -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="48000" duration="192000"/>
+    <!-- P second: the topmost, and the earlier of the two. -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="48000"
+                startOffset="0" duration="144000"/>
+    <assert-clip-window clip="0,0" startTime="96000" duration="192000"/>
+    <assert-clip-window clip="0,1" startTime="48000" duration="144000"/>
+
+    <!-- THE SUM, AS IT IS TODAY. Two copies of source second 1 over
+         [96000, 144000): twice the amplitude of one. -->
+    <render filename="ru_ol_before.wav" format="wav" quality="10"
+            durationSec="6.0"/>
+    <assert-audio-energy filename="ru_ol_before.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.33" maxRms="0.38"/>
+    <!-- and one clip alone, for scale, over the second only P covers -->
+    <assert-audio-energy filename="ru_ol_before.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="144000" length="96000" mode="takes"/>
+
+    <!-- D1 (a), CLAIM 1. Take 1 is P, the topmost: the operands were merged
+         in CHILD-INDEX order, so P's answer painted over Q's. -->
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="2"
+                        extents="48000-240000;0-144000;96000-192000"
+                        comp="0:1;96000:2;192000:0"
+                        duration="240000"/>
+    <assert-clip-window clip="0,0" startTime="48000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- ...and the same claim frame by frame. The column starts at 48000, so
+         column frame 48000 is project 96000 - the first frame both clips
+         covered. P answers there and before it; Q only comes back where P's
+         extent ends and the pass's has too. -->
+    <assert-take-column clip="0,0" takeAtPos="0" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="47999" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="48000" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="95999" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="2"/>
+    <assert-take-column clip="0,0" takeAtPos="192000" expectTake="0"/>
+
+    <render filename="ru_ol_after.wav" format="wav" quality="10"
+            durationSec="6.0"/>
+    <!-- D1 (a), CLAIM 2: the same second now carries ONE copy. This is the
+         halving, and it is the cost the decision accepted. -->
+    <assert-audio-energy filename="ru_ol_after.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <!-- P still answers before the overlap begins... -->
+    <assert-audio-energy filename="ru_ol_after.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <!-- ...the pass over its own span (source sec0 then sec1)... -->
+    <assert-audio-energy filename="ru_ol_after.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_ol_after.wav" startFrame="192000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <!-- ...and Q, which answers from the pass's end, has run out of material
+         there: its window reaches 288000 but its source does not. -->
+    <assert-audio-energy filename="ru_ol_after.wav" startFrame="240000"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

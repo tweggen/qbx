@@ -30,6 +30,22 @@
 
   ON `main` THIS FAILS on the two assert-log lines: there is no snap decision
   there to announce, unanimous or otherwise.
+
+  FLIPPED BY MODE A, AND PLAN 53 §9 DID NOT PREDICT IT (QBX-180). The CLAIM is
+  unchanged - the pass stayed where it landed on BOTH lanes, so the lanes are
+  still sample-aligned - but one of the two consequences is no longer a lane
+  child. The landing at 388944 is AFTER lane 0's clip ends (388800), so lane 0
+  is R0: untouched, and the pass is still a plain clip at `0,1`. It is INSIDE
+  lane 1's clip (which runs to 389088), so lane 1 is R1: under mode A that
+  folds into one union column and `1,1` no longer resolves.
+
+  The alignment claim is now made on lane 1 through the COMP MAP, and more
+  sharply than before. The column starts at lane 1's clip start, 197088, so
+  the pass's take begins at column frame 388944 - 197088 = 191856; the map
+  answers the old clip below that frame and the pass from it. Two takeAtPos
+  assertions therefore pin the landing to the exact frame, where the old
+  `startTime` assertion pinned it to a clip's start. Both lanes still agree on
+  388944, which is the whole point.
 -->
 <SActionScript version="1" name="record_snap_disagree">
 
@@ -66,9 +82,21 @@
     <assert-log contains="[REC] snap a" minCount="0" maxCount="0"/>
 
     <!-- ...and the consequence: the pass stayed where it landed, on BOTH
-         lanes, so they are still aligned with each other. -->
+         lanes, so they are still aligned with each other.
+
+         Lane 0 is R0 - the landing is past its clip's end - so the pass is
+         still a plain child there, at the frame it landed on. -->
     <assert-clip-window clip="0,1" startTime="388944"/>
-    <assert-clip-window clip="1,1" startTime="388944"/>
+
+    <!-- Lane 1's landing is INSIDE its clip, so mode A made one column of the
+         two and there is no `1,1` to look at. The column starts at the clip's
+         own start and the pass's take begins at 388944 - 197088 = 191856,
+         which the map says to the frame. -->
+    <assert-clip-window clip="1,1" expectReject="true"/>
+    <assert-clip-window clip="1,0" startTime="197088"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        takeAtPos="191855" expectTake="0"/>
+    <assert-take-column clip="1,0" takeAtPos="191856" expectTake="1"/>
   </actions>
 
   <assertions>

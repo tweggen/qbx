@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MODE A DEGRADES RATHER THAN LOSING THE TAKE (plan 53 §3.1 correction (u),
+  QBX-180; the refusal it pre-flights is §6.1's, QBX-185).
+
+  THE HAZARD. Mode A's plan is `place-clip` the pass, then `merge-columns` over
+  the touched children and the pass. `merge-columns` REFUSES operands that
+  disagree on volume or pan, or that carry anything POSITIONAL - a `cut:Gain`
+  envelope or a clip fade - because a merged column has ONE set of clip
+  parameters for its whole length, read from its active take. That refusal is
+  right for a user gesture: nothing happens and the user is told why. For a
+  RECORDING it is fatal, because `SCompositeAction::apply` rolls back every
+  earlier child on the first one that fails - so the pass's own `place-clip`
+  would go with it and the take would be LOST, which is the one thing a
+  recorder may not do.
+
+  WHAT MODE A DOES INSTEAD. It asks the snapshot the same questions before
+  emitting anything, and where the answer is no it places the pass as a plain
+  clip over the lane and says so. That degrade is chosen because it changes NO
+  existing child: the user's faded or re-levelled clip keeps its fade and its
+  level. An add-take-shaped degrade would wrap that clip into a column, where
+  `parametersOf` resolves to the ACTIVE take and the clip's own parameters stop
+  applying - so the degrade would itself change what plays, which is exactly
+  what the refusal exists to prevent. Both clips sound, which is the cost; the
+  way out is to flatten the fade and run `merge-columns` by hand, and the way
+  out for good is QBX-185.
+
+  THREE LANES, SAME GEOMETRY, ONE DIFFERENCE EACH:
+
+    track 0   a clip carrying a FADE-IN          -> degrades
+    track 1   a clip at -6 dB                    -> degrades
+    track 2   a clip at the defaults (control)   -> MERGES
+
+  Track 2 is what makes the case about the parameters and not about the
+  geometry: all three have the identical clip and the identical pass.
+
+  THE REFUSAL IS GATED ON ITS ANNOUNCEMENT, not on the structure alone - a
+  lane holding two children is also what every build before mode A produced,
+  so the structure by itself cannot tell a degrade from the old planner. The
+  absence assertion is the other half: `merge-columns` must never be EMITTED,
+  because a refusal from inside the composite is the rollback this exists to
+  avoid.
+-->
+<SActionScript version="1" name="rec_union_params_degrade">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="0" duration="192000"/>
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="0" duration="192000"/>
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="0" duration="192000"/>
+
+    <set-clip-fade clip="0,0" fadeIn="24000"/>
+    <set-clip-volume clip="1,0" volumeDb="-6"/>
+
+    <!-- TRACK 0: a fade. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"/>
+    <assert-log contains="placed the pass as a plain clip rather than a union column"
+                minCount="1"/>
+    <assert-log contains="carries a clip fade" minCount="1"/>
+    <!-- ...and the verb was never emitted, so nothing was rolled back. -->
+    <assert-log contains="merge-columns: REFUSED" minCount="0" maxCount="0"/>
+
+    <!-- TRACK 1: a level the pass cannot agree with. -->
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"/>
+    <assert-log contains="placed the pass as a plain clip rather than a union column"
+                minCount="1"/>
+    <assert-log contains="merge-columns: REFUSED" minCount="0" maxCount="0"/>
+
+    <!-- TRACK 2, THE CONTROL: identical clip, identical pass, no parameter -
+         and it merges. -->
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"/>
+    <assert-log contains="placed the pass as a plain clip rather than a union column"
+                minCount="0" maxCount="0"/>
+
+    <!-- The two degraded lanes kept their clip AS IT WAS and took the pass as
+         a second child; neither clip was wrapped into a column. -->
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" startTime="48000" duration="96000"/>
+    <assert-take-column clip="0,1" shape="none"/>
+
+    <assert-take-column clip="1,0" shape="none"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,1" startTime="48000" duration="96000"/>
+
+    <!-- ...while the control lane is the union column mode A makes. -->
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-144000"
+                        comp="0:0;48000:1;144000:0" duration="192000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

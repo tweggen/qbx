@@ -647,7 +647,12 @@ void SAudioRecorder::commitPlacement_()
     // segment normally; one per LOOP PASS when cycling (design D7: "loop record
     // = one take per pass ... proposal 17's phase 5 falls out"); the intersection
     // with the punch region when punching.
-    struct Seg { offset_t at; offset_t srcOffset; length_t len; };
+    // `extent` is the TAKE's extent where the recorder knows it is wider than
+    // the material (plan 53 §3.1 step 5, QBX-180): the cycle length, so a pass
+    // that stopped mid-cycle still covers the same bars as the full passes
+    // beside it. 0 everywhere else, which is "the placed span".
+    struct Seg { offset_t at; offset_t srcOffset; length_t len;
+                 length_t extent = 0; };
     std::vector<Seg> segs;
 
     if( cycle_ ) {
@@ -681,7 +686,7 @@ void SAudioRecorder::commitPlacement_()
             const std::int64_t inLoop = rel % loopLen;
             segs.push_back( { (offset_t) cycleIn_,
                               (offset_t) ( trimmed_ + consumed - inLoop ),
-                              (length_t) loopLen } );
+                              (length_t) loopLen, (length_t) loopLen } );
             consumed += loopLen - inLoop;       // this pass runs to the wrap
         }
     } else if( punch_ ) {
@@ -775,7 +780,7 @@ void SAudioRecorder::commitPlacement_()
         const int rejectedBefore = hist ? hist->rejectedCount() : 0;
         for( const Seg &s : segs )
             app_->submitAction( new SPlaceRecordingAction(
-                a.path, a.file, s.at, s.srcOffset, s.len, mode ) );
+                a.path, a.file, s.at, s.srcOffset, s.len, mode, s.extent ) );
         const int rejectedAfter = hist ? hist->rejectedCount() : rejectedBefore;
         if( rejectedAfter > rejectedBefore ) {
             // The mode is named because it is the actionable half: the same

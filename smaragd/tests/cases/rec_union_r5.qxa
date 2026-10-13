@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MODE A, CELL R5: the existing material lies WHOLLY INSIDE the recording
+  (plan 53 §3.1 and §3.3's R5 row, QBX-180 / P2).
+
+  THE CELL THAT USED TO COST A CHILD. The planner before mode A filled the
+  uncovered sub-span before O with a plain cut and stacked the rest onto O, so
+  the lane came out of it with two children for one pass. Mode A makes one
+  column: nothing of O lies outside `[a, b)`, so the pass answers everywhere,
+  the map is EMPTY (see rec_union_r3's header for why a degenerate map is not
+  written), and O is a take at ITS OWN EXTENT in the middle of the column -
+  which is the state invariant 1' exists for.
+
+    O = [96000, 144000)   startOffset 0, one second, sec0
+    R = [48000, 192000)   srcOffset 48000, so sec1, sec2, sec3
+
+  a=48000 < s=96000 and e=144000 <= b=192000, which is R5. C = [48000,
+  192000), and O's take sits at 48000-96000 inside it.
+
+  Renders are of the Kp lane only; see rec_union_r3's header.
+-->
+<SActionScript version="1" name="rec_union_r5">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="0" duration="48000"/>
+
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="96000" duration="48000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="96000" duration="48000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+    <set-comp-map clip="2,0">
+      <seg at="0" take="0"/>
+      <seg at="24000" take="1"/>
+    </set-comp-map>
+
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        comp="" duration="48000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="1"
+                        comp="0:0;24000:1" duration="48000"/>
+
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="48000" length="144000"
+                     mode="takes"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="48000" length="144000"
+                     mode="takes"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="48000" length="144000"
+                     mode="takes"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="48000-96000;0-144000" comp=""
+                        duration="144000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <assert-take-column clip="1,0" shape="direct" takes="3" activeTake="2"
+                        extents="48000-96000;48000-96000;0-144000" comp=""
+                        duration="144000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <assert-take-column clip="2,0" shape="direct" takes="3" activeTake="2"
+                        extents="48000-96000;48000-96000;0-144000" comp=""
+                        duration="144000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <!-- THE TAKE THE MAP DOES NOT SELECT IS STILL SILENT, not audible: a
+         column plays ONE take per position. Pinned without a render, because
+         it is a statement about the map and not about the mix. -->
+    <assert-take-column clip="0,0" takeAtPos="47999" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="48000" expectTake="1"/>
+
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <render filename="ru_r5_kp.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r5_kp.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="ru_r5_kp.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_r5_kp.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="ru_r5_kp.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+
+    <!-- Comping back to O, whose extent is in the MIDDLE of the column: the
+         pass has to answer on BOTH sides of it. §4.3's map writes the old
+         answer at 0 as well, because `activeTake_` is about to change. -->
+    <select-take clip="0,0" take="0"/>
+    <select-take clip="1,0" take="1"/>
+    <select-take clip="2,0" take="1"/>
+    <assert-take-column clip="0,0" comp="0:1;48000:0;96000:1" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="0:2;48000:1;96000:2" activeTake="1"/>
+    <assert-take-column clip="2,0" comp="0:2;48000:1;96000:2" activeTake="1"/>
+
+    <render filename="ru_r5_kp_old.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r5_kp_old.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+    <!-- the pass, before O's extent -->
+    <assert-audio-energy filename="ru_r5_kp_old.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <!-- O's own second, which the pass used to cover -->
+    <assert-audio-energy filename="ru_r5_kp_old.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <!-- ...and the pass again after it -->
+    <assert-audio-energy filename="ru_r5_kp_old.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>
