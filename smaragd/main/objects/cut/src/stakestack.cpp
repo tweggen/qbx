@@ -8,6 +8,7 @@
 #include "app/persistence/sprojectloader.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/core/twfraction.h"
+#include "tw/events/twtempomap.h"
 
 #include <QDomElement>
 #include <QPainter>
@@ -254,6 +255,7 @@ void STakeStack::removeTake( int index )
         // its own durationChanged: the emit at the end of this function is the
         // one that publishes this change, so the track resyncs once.
         compMap_ = twCompMap( std::move( kept ) ).normalized();
+        syncCompTicks_();
     }
     // THE COLUMN KEEPS ITS LENGTH (invariant 1′). Removing a take does not
     // shrink the column: duration_ is the column's own property now, and a
@@ -285,6 +287,7 @@ void STakeStack::setCompMap( const twCompMap &map )
     const twCompMap next = map.normalized();
     if( next == compMap_ ) return;
     compMap_ = next;                           // the mutation ...
+    syncCompTicks_();
     // ... then the notification, in the SAME order and by the SAME route
     // `setActiveTake` uses (proposal 15 ordering): the track's slot runs
     // updateClip -- a content-epoch bump and a state-chain reset, because our
@@ -292,6 +295,80 @@ void STakeStack::setCompMap( const twCompMap &map )
     // consumer, so this publishes a change nothing hears yet; wiring it now is
     // what means N2 adds a component and no plumbing.
     emit durationChanged( getDurationBlocking() );
+}
+
+// --- the comp map's musical anchor (plan 53 P3) -----------------------------
+
+void STakeStack::syncCompTicks_()
+{
+    compTicks_.clear();
+    if( contentKind() != SContentKind::Event || compMap_.empty() ) return;
+    const twTempoMap &tmap = getProject().tempoMap();
+    const int         rate = getProject().getSRate();
+    compTicks_.reserve( compMap_.segments().size() );
+    for( const twCompSegment &sg : compMap_.segments() )
+        compTicks_.push_back(
+            tmap.framesToTickLen( (int64_t) sg.at, rate ).ticks() );
+}
+
+bool STakeStack::rederiveMusicalPositions()
+{
+    // An AUDIO column's comp boundary is a position in a recording and must
+    // not move when the tempo does -- the same asymmetry `onTakeCutChanged`
+    // explains for `duration_`. So: event columns only, and only when
+    // `syncCompTicks_` had something to record.
+    if( contentKind() != SContentKind::Event ) return false;
+
+    // THE COLUMN'S LENGTH, AGAIN, AND THE ORDER IS THE WHOLE REASON.
+    // `onTakeCutChanged` already follows `derivedDuration()` for an event
+    // column, but it only fires on a TAKE's duration change -- and a tempo
+    // edit moves each take's extent in two independent steps, the LINK's start
+    // (`rederiveStartTime`) and the WINDOW's length. Whichever runs second is
+    // not announced, so `duration_` could be left mid-move: measured on an
+    // undo of `set-tempo` over a two-bar column, `extents=[0-192000;
+    // 96000-192000] duration=288000`, which is 192000 + 96000 -- the OLD
+    // length added to the NEW start, and a column longer than its takes reach
+    // with no reason to be.
+    //
+    // This is called from the same loop, AFTER every one of this object's
+    // links has been re-derived, so here the move is complete.
+    bool moved = false;
+    {
+        const length_t derived = derivedDuration();
+        if( derived > 0 && derived != duration_ ) {
+            duration_ = derived;
+            refreshPartial_();
+            moved = true;
+        }
+    }
+
+    if( compMap_.empty() || compTicks_.size() != compMap_.segments().size() )
+        return moved;
+
+    const twTempoMap &tmap = getProject().tempoMap();
+    const int         rate = getProject().getSRate();
+    std::vector<twCompSegment> segs = compMap_.segments();
+    bool mapMoved = false;
+    for( std::size_t i = 0; i < segs.size(); ++i ) {
+        const int64_t at =
+            tmap.ticksToFrames( TickLen( compTicks_[i] ), rate ).floorToInt();
+        if( at != segs[i].at ) { segs[i].at = at; mapMoved = true; }
+        // `xfade` IS LEFT ALONE, deliberately. It is a crossfade LENGTH in
+        // frames, and on an event column it means nothing to begin with:
+        // notes do not crossfade, so `twCompColumn`'s equal-power ramp has no
+        // event-path counterpart and no gate sets one here. Moving a number
+        // nothing reads would be invention, not parity.
+    }
+    if( !mapMoved ) return moved;
+    // Through `setCompMap`: it normalizes and it publishes the change the
+    // track needs in order to re-collect the clip. It also re-syncs the ticks
+    // from these frames, which would feed the conversion's own rounding back
+    // into the anchor, so the anchors are put back verbatim afterwards -- they
+    // are what produced these frames and they have not changed.
+    const std::vector<Fraction> anchors = compTicks_;
+    setCompMap( twCompMap( std::move( segs ) ) );
+    compTicks_ = anchors;
+    return true;
 }
 
 void STakeStack::applyColumnLength_( length_t duration, bool wholeWindow,
@@ -400,6 +477,37 @@ void STakeStack::onTakeCutChanged( length_t )
     // would have to re-derive what the map says.
     SObject *obj = dynamic_cast<SObject *>( sender() );
     if( !obj ) return;
+
+    // AN EVENT COLUMN'S OWN LENGTH FOLLOWS ITS TAKES (plan 53 P3, QBX-181).
+    //
+    // `duration_` is a stored FRAME value and nothing re-derived it, which is
+    // a defect the moment the takes are MUSICAL. An event take's window
+    // derives its length from `lengthTicks_` and its link is born
+    // `timebase=beats`, so `set-tempo` moves both ends of every extent — and
+    // left the column at the length it happened to have when it was built.
+    // Measured on `main`, one union column over one bar after
+    // `set-tempo bpm="60"`: `extents=[0-192000;0-192000] duration=96000`. The
+    // takes reach 192000, the column says 96000, and invariant 1′ ("every take
+    // has an extent ⊆ [0, duration_)") is false on every tempo change over an
+    // event column. What the user sees is the clip's tail cut off.
+    //
+    // ONLY FOR EVENT CONTENT, and the asymmetry is the design rather than
+    // caution. A0a deliberately lets an AUDIO column be longer than its takes
+    // reach — a span no take covers plays silence, which is what
+    // `merge-columns` relies on for a gap between operands — and an audio
+    // take's length changes only through the edit paths that already clamp it
+    // (`setDurationAll` / `applyWindowAll` / `setTakeExtent`), all of which
+    // keep `duration_` right themselves. Nothing re-derives an EVENT take's
+    // length; the tempo map does, behind everyone's back.
+    //
+    // `derivedDuration()` already exists and is exactly max(tStart + len), so
+    // this is one assignment, before `refreshPartial_()` reads `duration_`
+    // through `takeIsFullExtent`.
+    if( contentKind() == SContentKind::Event ) {
+        const length_t derived = derivedDuration();
+        if( derived > 0 ) duration_ = derived;
+    }
+
     // A take's own duration IS its extent length, so this is also where a
     // column learns it has become (or stopped being) partial.
     refreshPartial_();
@@ -514,14 +622,55 @@ bool STakeStack::windowStep( offset_t clipRel, SWindowStep &out ) const
 
 twEventClipResolved STakeStack::resolveEventClip( offset_t clipPos )
 {
-    // STILL UNSHIFTED BY THE EXTENT, and that is P3's row rather than an
-    // oversight: plan 53 §4.1 says so outright ("resolveEventClip is P3's and
-    // is extent-shifted there"). An EVENT column with a partial take needs the
-    // record itself cut to the extent, not just its position moved, and the
-    // event path has no twCompColumn to do that in — which is the whole of
-    // what MIDI parity (§8 P3, X16) is about.
-    SObject *take = activeTakeObject();
-    return take ? take->resolveEventClip( clipPos ) : twEventClipResolved{};
+    // SHIFTED BY THE ACTIVE TAKE'S EXTENT (plan 53 §4.1's P3 row, QBX-181).
+    //
+    // The track inserts a column as ONE clip spanning the column, and hands
+    // this `clipPos` in the COLUMN's frames. The take answers in its OWN
+    // frames, where zero is where ITS window starts -- which under invariant
+    // 1' is the extent start, not the column's origin. Unshifted, a recording
+    // over bars 8-16 of a 32-bar part sounded at bar 0: measured before this,
+    // the feed over the union column gave the pass's notes at frames 0 and
+    // 24000 where they were played at 768000 and 792000.
+    //
+    // The whole fix is composing the two maps, which is the event twin of
+    // `mapTimelineToComponentPos` on the audio side.
+    const int active = activeTake_;
+    SObject *take = takeObjectAt( active );
+    if( !take ) return twEventClipResolved{};
+    const offset_t tStart = takeExtentStart( active );
+
+    twEventClipResolved out =
+        take->resolveEventClip( clipPos - tStart );
+    if( tStart == 0 ) return out;          // nothing to compose
+
+    // COMPOSE, never replace: the take's own map carries its slip and its loop
+    // (`SMidiCut::resolveEventClip` picks `twEventSlipMap` or
+    // `twEventLoopMap`), and a column position has to go through BOTH. A
+    // single slip map built here would silently drop a looped take's wraps --
+    // and with them `runFrames`, which is what tells the enumeration where the
+    // mapping breaks.
+    const twEventMapPosFn inner = out.map;
+    const int64_t shift = (int64_t) tStart;
+    out.map = [inner, shift]( int64_t columnPos ) -> twEventMapping {
+        const int64_t takePos = columnPos - shift;
+        if( !inner ) return twEventMapping{ takePos, INT64_MAX };
+        return inner( takePos );
+    };
+    return out;
+
+    // WHAT THIS STILL DOES NOT DO, and why it is not done here. The COMP MAP
+    // is not consulted: wherever the active take has no material the column
+    // plays SILENCE rather than the take the map names, so a mode A recording
+    // over the middle of a part leaves the part's own bars silent. That needs
+    // what the audio side has and the event side does not -- a `twCompColumn`
+    // equivalent -- and this seam cannot express it: `resolveEventClip`
+    // returns ONE sequence per clip, and two takes are two sequences. The fix
+    // is for the column to SYNTHESISE one sequence from its takes (each
+    // take's events shifted into column frames and masked by the map and the
+    // extents, which an internal `twEventClipSet` can collect), and that is
+    // its own change with its own gates. Filed as QBX-189 rather than
+    // half-built; plan 53 §4.1 already said "the event path has no
+    // twCompColumn to do that in".
 }
 
 offset_t STakeStack::mapTimelineToComponentPos( offset_t off )
@@ -730,6 +879,7 @@ int STakeStack::readPostChildrenAttributes( QDomElement &element )
             segs.push_back( s );
         }
         compMap_ = twCompMap( std::move( segs ) ).normalized();
+        syncCompTicks_();
     }
 
     int at = element.attribute( "activeTake", "-1" ).toInt();

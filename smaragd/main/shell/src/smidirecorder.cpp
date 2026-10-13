@@ -14,6 +14,7 @@
 #include "app/objects/midi/smidirecordactions.h"
 #include "app/objects/midi/smidisequence.h"
 #include "app/objects/track/strack.h"
+#include "app/objects/track/srecordmode.h"
 #include "app/servicesui/soptions.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/smidiinputhub.h"
@@ -76,27 +77,19 @@ double SMidiRecorder::projectRate_() const
     return r > 0 ? (double) r : 48000.0;
 }
 
-SMidiRecorder::Mode SMidiRecorder::modeFromString( const QString &s, bool *ok )
+bool SMidiRecorder::punchRegion_( offset_t &in, offset_t &out ) const
 {
-    if( ok ) *ok = true;
-    if( s.compare( QStringLiteral( "overdub" ), Qt::CaseInsensitive ) == 0 )
-        return Mode::Overdub;
-    if( s.compare( QStringLiteral( "replace" ), Qt::CaseInsensitive ) == 0 )
-        return Mode::Replace;
-    if( s.compare( QStringLiteral( "new-take" ), Qt::CaseInsensitive ) == 0 )
-        return Mode::NewTake;
-    if( ok ) *ok = false;
-    return Mode::NewTake;
-}
-
-QString SMidiRecorder::modeToString( Mode m )
-{
-    switch( m ) {
-    case Mode::Overdub: return QStringLiteral( "overdub" );
-    case Mode::Replace: return QStringLiteral( "replace" );
-    case Mode::NewTake: break;
-    }
-    return QStringLiteral( "new-take" );
+    // ONE RANGE, TWO READINGS, and the cycle flag decides which -- word for
+    // word `SAudioRecorder::punchRegion_`, because one press drives both
+    // recorders and they may not disagree about what the markers mean.
+    offset_t a = 0, b = 0;
+    if( cycleRegion_( a, b ) ) return false;
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    if( !p ) return false;
+    if( !p->prop( SProjectProps::RangeValid, false ).toBool() ) return false;
+    in  = (offset_t) p->prop( SProjectProps::RangeStart, (qulonglong) 0 ).toULongLong();
+    out = (offset_t) p->prop( SProjectProps::RangeEnd,   (qulonglong) 0 ).toULongLong();
+    return out > in;
 }
 
 bool SMidiRecorder::cycleRegion_( offset_t &in, offset_t &out ) const
@@ -170,6 +163,8 @@ bool SMidiRecorder::start()
 
     recordStart_ = app_->getGlobalLocatorPos();
     cycle_       = cycleRegion_( cycleIn_, cycleOut_ );
+    punch_       = punchRegion_( punchIn_, punchOut_ );
+    stopping_    = false;
 
     // The rings are DRAINED, never cleared: `MidiInRing::clear()` is only safe
     // while the producer is known to be idle, and a performer's finger is not.
@@ -188,9 +183,16 @@ bool SMidiRecorder::start()
 
     // Read ONCE: a settings change mid-take must not make the commit
     // inconsistent with what was captured.
-    mode_ = modeFromString(
-        SSettings::instance().value( SOpt::MidiRecordMode,
-                                     SOpt::def( SOpt::MidiRecordMode ) ).toString() );
+    //
+    // THE PROJECT IS THE AUTHORITY, not `SOpt::MidiRecordMode` (plan 53 P3).
+    // This read the INI directly, in proposal 21 L4's own three-value
+    // vocabulary, which made the MIDI half of a press able to disagree with
+    // the audio half about the mode of the same gesture and left
+    // `takes-split` unreachable for MIDI. `srecmode` is the one resolver now,
+    // the same one `SAudioRecorder` asks; the INI key still seeds a brand-new
+    // project (`srecmodeseed.cpp`), which is how a user's preference reaches a
+    // project at all.
+    mode_ = srecmode::projectMode( app_->getCurrentProject() );
     quantize_ = SSettings::instance().value(
         SOpt::MidiRecordQuantize,
         SOpt::def( SOpt::MidiRecordQuantize ) ).toString();
@@ -205,7 +207,7 @@ bool SMidiRecorder::start()
                       "mode=%s quantize=%s%s",
              (long long) recordStart_, (unsigned) armed_.size(),
              (unsigned) ports_.size(),
-             modeToString( mode_ ).toStdString().c_str(),
+             mode_.toStdString().c_str(),
              quantize_.toStdString().c_str(), cycle_ ? " [cycle]" : "" );
     return true;
 }
@@ -263,13 +265,26 @@ void SMidiRecorder::poll()
 
     stopFrame_ = (offset_t) std::max<qint64>(
         (qint64) recordStart_, pos + (qint64) playIter_ * cycleLen );
+
+    // PUNCH-OUT, LAST, and on this class's own tick: the take ends by itself
+    // once the playhead passes the out point, exactly as
+    // SAudioRecorder::poll() ends its own. It has to happen HERE rather than
+    // at the `record-stop`, because the audio half's punch-out stops the
+    // TRANSPORT and this recorder's clock is only valid while the RT is
+    // publishing -- see the note on punchRegion_ for what the take looked like
+    // before: nothing placed at all.
+    if( punch_ && !stopping_ && pos >= (qint64) punchOut_ ) {
+        TW_LOGI( "shell", "[MREC] punch-out at %lld", (long long) punchOut_ );
+        stop();
+    }
 }
 
 // -------------------------------------------------------------------- stop --
 
 void SMidiRecorder::stop()
 {
-    if( !active_ ) return;
+    if( !active_ || stopping_ ) return;
+    stopping_ = true;           // pollFinal_ re-enters poll(), which punches out
     active_ = false;
     timer_->stop();
 
@@ -282,6 +297,7 @@ void SMidiRecorder::stop()
     TW_LOGI( "shell", "[MREC] stopped: %s", describe().toStdString().c_str() );
     armed_.clear();
     for( PortIn &p : ports_ ) p.msgs.clear();
+    stopping_ = false;
 }
 
 void SMidiRecorder::pollFinal_()
@@ -326,13 +342,23 @@ void SMidiRecorder::commit_()
         if( f < (qint64) cycleIn_ ) return 0;
         return ( f - (qint64) cycleIn_ ) / loopLen;
     };
+    // UNDER A PUNCH THE WINDOW IS THE MARKERS, exactly (plan 53 P3). Not
+    // `stopAbs`: the take ends at the out point however late this tick is, and
+    // the in point is where it began if the locator was before it. That is
+    // what `record_punch` already pins for audio, and the two halves of one
+    // press must agree on the window or the band's take and the keyboard's
+    // take are over different bars.
+    const qint64 punchA = punch_
+        ? std::max<qint64>( (qint64) recordStart_, (qint64) punchIn_ )
+        : 0;
     auto passStart = [&]( qint64 pass ) -> qint64 {
-        if( !cycle_ || loopLen <= 0 ) return (qint64) recordStart_;
-        return (qint64) cycleIn_ + pass * loopLen;
+        if( cycle_ && loopLen > 0 ) return (qint64) cycleIn_ + pass * loopLen;
+        return punch_ ? punchA : (qint64) recordStart_;
     };
     auto passEnd = [&]( qint64 pass ) -> qint64 {
-        if( !cycle_ || loopLen <= 0 ) return std::max( stopAbs, (qint64) recordStart_ );
-        return passStart( pass ) + loopLen;
+        if( cycle_ && loopLen > 0 ) return passStart( pass ) + loopLen;
+        if( punch_ ) return (qint64) punchOut_;
+        return std::max( stopAbs, (qint64) recordStart_ );
     };
     // WHERE THE PASS IS PLACED, which is NOT where it started. `passStart` is
     // wrap-counted and therefore unbounded (pass 2 of a 2 s cycle starts at
@@ -342,8 +368,8 @@ void SMidiRecorder::commit_()
     // applies with its modulo - the split here is already at the boundaries,
     // so the modulo is a constant.
     auto passPlacement = [&]( qint64 ) -> qint64 {
-        return ( cycle_ && loopLen > 0 ) ? (qint64) cycleIn_
-                                         : (qint64) recordStart_;
+        if( cycle_ && loopLen > 0 ) return (qint64) cycleIn_;
+        return punch_ ? punchA : (qint64) recordStart_;
     };
 
     for( std::size_t ai = 0; ai < armed_.size(); ++ai ) {
@@ -470,9 +496,18 @@ void SMidiRecorder::commit_()
                                                     (int) rate ).ticks().floorToInt();
             for( const SEvent &e : ev )
                 ( e.kind == twEventKind::NoteOn ? notes : others ) += 1;
+            // PER ARMED LANE (plan 53 §5.3, P3), exactly as the audio
+            // recorder does it: the lane's own mode, else its nearest ancestor
+            // folder's, else the project's. `place-midi-recording` cannot
+            // resolve one itself -- `objects/midi` may not depend on
+            // `objects/track`, where the folder walk lives -- so the recorder
+            // submits the verb with the answer already in it.
+            const QString laneMode = srecmode::resolveMode(
+                splacements::rootContainer( project ), armed_[ai].track,
+                project );
             app_->submitAction( new SPlaceMidiRecordingAction(
                 armed_[ai].path, (offset_t) passPlacement( pass ), len, ev,
-                modeToString( mode_ ), quantize_,
+                laneMode, quantize_,
                 QStringLiteral( "MIDI Recording" ) ) );
             ++placements;
             if( std::find( seenPasses.begin(), seenPasses.end(), pass )
@@ -507,7 +542,7 @@ QString SMidiRecorder::describe() const
         .arg( (qlonglong) stopFrame_ )
         .arg( active_ ? (int) armed_.size() : lastTracks_ )
         .arg( (int) ports_.size() )
-        .arg( modeToString( mode_ ) )
+        .arg( mode_ )
         .arg( quantize_ )
         .arg( captured_ )
         .arg( lastPlacements_ )

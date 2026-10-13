@@ -173,8 +173,13 @@ public:
     int windowTakeCount() const override { return nTakes(); }
     int activeWindowTakeIndex() const override { return activeTake_; }
     bool hasCompMap() const override { return !compMap_.empty(); }
-    SLink *insertWindowTake( SClipWindow &window, int atIndex ) override
-    { return insertTake( window, atIndex ); }
+    offset_t windowTakeExtentStart( int index ) const override
+    { return takeExtentStart( index ); }
+    bool rederiveMusicalPositions() override;
+    SLink *insertWindowTake( SClipWindow &window, int atIndex,
+                             offset_t extentStart = 0,
+                             length_t extentLen = -1 ) override
+    { return insertTake( window, atIndex, extentStart, extentLen ); }
     void removeWindowTake( int index ) override { removeTake( index ); }
     void setActiveWindowTake( int index ) override { setActiveTake( index ); }
     /** The take at index as the model OBJECT it also is (delegation target). */
@@ -425,6 +430,31 @@ private:
 
     int activeTake_ = -1;
     twCompMap compMap_;
+    /**
+     * THE COMP MAP'S SEGMENT POSITIONS IN TICKS, for an EVENT column only
+     * (plan 53 P3, QBX-181). One entry per segment, parallel to
+     * `compMap_.segments()`, or empty when there is nothing musical to track.
+     *
+     * The map says WHICH TAKE SOUNDS WHERE and its positions are column
+     * FRAMES. For an audio column that is exactly right. For an event column
+     * every position in sight is musical -- the takes' extents follow the bar
+     * because their links are `timebase=beats` and their windows are
+     * tick-native -- and the map did not follow, so a tempo edit left it
+     * pointing at bars the takes no longer occupy. Measured on `main`, one
+     * union column after `set-tempo bpm="60"`: the extents became
+     * `[0-6144000; 1536000-3072000]` and the map still said
+     * `0:0; 768000:1; 1536000:0`, i.e. the recording sounded over the bars
+     * BEFORE the ones it was played over, and over none of its own.
+     *
+     * This is `SLink::startTicks_` for a comp map, and it works the same way:
+     * written whenever the map is (`syncCompTicks_`), read back when the tempo
+     * moves (`rederiveMusicalPositions`). NOT SERIALIZED, and it does not need
+     * to be -- a project file carries one tempo, so re-deriving the ticks from
+     * the loaded frames gives the same answer the writer had.
+     */
+    std::vector<Fraction> compTicks_;
+    /** Capture `compMap_`'s positions as ticks; an event column only. */
+    void syncCompTicks_();
 
     /**
      * THE COLUMN'S OWN LENGTH (invariant 1′). Not derivable from the takes

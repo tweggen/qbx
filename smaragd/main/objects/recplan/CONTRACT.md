@@ -49,8 +49,9 @@ clip, no concrete column and no concrete verb.
 ## `PassVerbs` — the seam
 
 `objects/cut` implements it as `SAudioPassVerbs` (`place-clip`, `add-take`,
-`split-clip`, `remove-sample`, `merge-columns`); the event side implements it
-in `objects/midi`. It follows the precedent
+`split-clip`, `remove-sample`, `merge-columns`); `objects/midi` implements it
+as `SEventPassVerbs` (`insert-midi-clip`, `add-midi-take`, `split-clip`,
+`merge-columns`) since plan 53 P3. It follows the precedent
 `SClipWindow::registerTakeColumnFactory` already set for this exact layering
 problem — `smidirecordactions.cpp` wraps a clip into a take column through the
 model's registered factory precisely so that *"`objects/midi` never names
@@ -91,9 +92,56 @@ used to, because nothing ever read the map itself — only the
 `Column` / `MappedColumn` distinction, which no planner branches on. That is
 what costs this module its last engine dependency.
 
+## Two of the five verbs come through `SActionRegistry` on the event side
+
+`split-clip` and `merge-columns` are kind-agnostic already — the first is gated
+on an event clip by `midi_clip_edit_verbs`, the second folds `insert-midi-clip`s
+into a column of event takes — but they live in `objects/cut`, which
+`objects/midi` may not see. `SEventPassVerbs` therefore builds them through the
+registry, by name, configured from their own XML form. That is the precedent
+`makeAddTrack()` in `smidifileactions.cpp` already set in that module, for this
+same reason: *"a verb, not a type"*.
+
+`SEventPassVerbs::removeChild` is **unreachable by construction** and says so
+loudly rather than guessing. Only `takes` and `takes-split` reach a planner on
+the event side; plan 53 §3.3 says in as many words that for MIDI `overdub` and
+`replace` keep their existing meanings, which are not the audio planners'
+meanings, so `place-midi-recording` keeps its own two bodies for them —
+and `Replace` is the only planner that removes.
+
+## `Context::landed` — where the pass ended up
+
+Optional, and only the plan can answer it: "the first operand's index after a
+merge, the appended index otherwise, and both AFTER every split and removal this
+plan emitted" is precisely `ChildList`, rule 3's whole point. A caller
+recomputing it would keep a second copy of the index bookkeeping in step by
+hand, and getting that wrong addresses the WRONG child SUCCESSFULLY.
+
+`place-midi-recording` is the caller: its input quantise is a step of the same
+composite — one undo entry for one recording, not two — so it has to name the
+clips the pass is on before any of the plan has been applied. The audio verb
+passes null; P6's "N tracks gained a take" will want it.
+
+## A caller must HOLD the composite it plans into
+
+`merge-columns`' inverse (`unmerge-columns`) reads its operand recipe back out
+of the merge ACTION, so the children have to outlive the inverse the verb
+returns — which `SActionUndoCommand` guarantees for the ACTION, since it owns
+the forward and the inverse together. Both `place-recording` and
+`place-midi-recording` therefore keep the plan in a member and delete the
+previous one on each apply. A stack-local composite was correct for
+`place-midi-recording` until P3 and is not any more: the first `undo` of a MIDI
+recording segfaulted in `SUnmergeColumnsAction::apply` reading a destroyed
+action.
+
 ## Known debt
 
-- **The modes' MIDI meanings are not implemented here yet** (QBX-181 / plan 53
-  P3). This module is the move that makes them possible; the event
-  `PassVerbs` and `place-midi-recording`'s switch to the planner split are
-  P3's.
+- **`removeChild` has no event implementation** (see above). If `replace` ever
+  routes through the planner for events it needs a removal verb that captures
+  an event clip's whole state in its own `apply()`: `remove-sample` cannot
+  restore one (not file-backed, not container-backed) and
+  `SRemoveMidiClipAction` wants that state at construction time.
+- **An event column resolves through its ACTIVE take only**, so a mode A
+  recording over the middle of a part leaves the part's own bars silent
+  (QBX-189). The planner is right; the column's `resolveEventClip` cannot
+  express two takes at once, and the event path has no `twCompColumn`.

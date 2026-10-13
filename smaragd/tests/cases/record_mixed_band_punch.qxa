@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P3 (QBX-181). ONE PRESS, TWO CONTENT KINDS, ONE PLANNER: a punch over
+  a guitar lane carrying audio and a keys lane carrying MIDI leaves ONE UNION
+  COLUMN on each, with the SAME extents and the SAME comp map, because the two
+  are planned by the same code.
+
+  This is the case plan 53's P3 row asks for, and what makes it worth having is
+  that the two lanes' assertions below are IDENTICAL, number for number:
+
+    comp=[0:0;48000:1;96000:0]  extents=[0-192000;48000-96000]  duration=192000
+
+  One is a WAV behind a window, the other is a note table behind a tick-native
+  window. `objects/recplan`'s mode A planner decided both; `SAudioPassVerbs`
+  said the plan in `place-clip`/`merge-columns` and `SEventPassVerbs` said it in
+  `insert-midi-clip`/`merge-columns`. Before P3 the MIDI half could not reach
+  that planner at all - `objects/midi` has no edge to `objects/cut`, where the
+  planner used to live (QBX-188) - so this cell had two implementations on the
+  audio side and none on the event side.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL, the file
+  input backend, 4800 frames of input latency.
+
+  THE PUNCH IS WHAT MAKES THE NUMBERS EXACT. A take ends at the out point
+  however late the tick, so the pass is the MARKERS and not the stop frame:
+  [48000, 96000), 1 s to 2 s. Both pre-existing clips are [0, 192000) - 4 s of
+  test_sawtooth.wav on the guitar lane and a 2-bar event clip on the keys lane
+  (7680 ticks at PPQ 960, which at 120 BPM / 4/4 / 48 kHz is exactly 192000
+  frames) - so the pass lies strictly inside both and the cell is R2 · Kp on
+  each. Nothing here is a measurement.
+
+  THE MIDI RECORDER HAD NO PUNCH, AND THAT COST THE WHOLE TAKE. Writing this
+  case is how it was found. The audio half ends itself at the out point, which
+  stops the TRANSPORT, while the MIDI half kept running until the `record-stop`
+  - and this recorder's clock is only valid while the RT is publishing, so its
+  final poll re-anchored from a dead clock, every captured host time mapped to
+  a NEGATIVE frame and `stopFrame_` read 0. `passEnd` was then 0, every note
+  was outside its own pass and the take was dropped: measured as
+  "msgs=8 placements=0 passes=0 notes=0 clamped=4". Not a race - it reproduced
+  on every run. The fix is the audio recorder's, mirrored: punch out on this
+  class's own tick, while the clock is still live, and read the pass window off
+  the markers.
+
+  WHAT THIS CASE DOES NOT CLAIM. It does not assert the recorded audio's level:
+  that is `rec_union_r1`..`rec_union_r6`'s job on the audio side, with a fixture
+  built for it. Nor does it assert that the KEYS lane plays its own notes
+  outside the pass - an event column resolves through its ACTIVE take only, so
+  everything outside that take's extent is silent until QBX-189 lands, and
+  `midi_rec_union_r2` is where that limitation is written down.
+-->
+<SActionScript version="1" name="record_mixed_band_punch">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0 the guitar (audio), track 1 the keys (MIDI). Monitoring OFF on
+         both: this case is about what was RECORDED, not what was heard. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+
+    <!-- What the band already played, [0, 192000) on each lane. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="7680" name="Keys"/>
+    <add-note clip="1,0" tick="0"    dur="480" key="48" velocity="100" channel="0"/>
+    <add-note clip="1,0" tick="3840" dur="480" key="50" velocity="100" channel="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+
+    <!-- THE PUNCH: 1 s to 2 s, Cycle OFF. One marker pair, and with Cycle off
+         both recorders read it as the punch region. -->
+    <set-property key="rangeStart" value="[48000]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+
+    <!-- The default mode is `takes`, i.e. mode A, which is what this case is
+         about; stated rather than assumed, because a stale INI could have
+         seeded this project with another one. -->
+    <set-property key="recordMode" value='["takes"]'/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+
+    <!-- ONE PRESS. The performance is replayed from 54000, so all four notes
+         fall strictly inside the punch window with 6000 frames (125 ms) of
+         margin at each end - far more than the mapping's own jitter, which is
+         what keeps the note COUNT a closed form while the frames are not. -->
+    <record-start/>
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="54000"/>
+    <!-- BOTH TAKES END BY THEMSELVES at the out point; there is no
+         `record-stop` here, as in `record_punch`. Issuing one would be
+         REFUSED - measured - because by then neither recorder is active. -->
+    <wait-ms ms="3000"/>
+
+    <!-- Both halves landed, one pass each. `minNotes` rather than `notes`: how
+         much a real-time pass captures is load-dependent, and the structural
+         claim is the column below. -->
+    <assert-recorded-clip trackPath="0" minClips="1"/>
+    <assert-midi-recorded trackPath="1" minClips="1" passes="1" minNotes="4"
+                          mode="takes"/>
+
+    <!-- AND HERE IS THE CLAIM: the same column on both lanes. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-96000"
+                        comp="0:0;48000:1;96000:0" duration="192000"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-96000"
+                        comp="0:0;48000:1;96000:0" duration="192000"/>
+    <!-- ...and no second child on either lane: one recording, one column
+         (plan 53 B5). -->
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- The map answers the same way on both: what was there, the pass, what
+         was there again. -->
+    <assert-take-column clip="0,0" takeAtPos="24000"  expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="72000"  expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="0"/>
+    <assert-take-column clip="1,0" takeAtPos="24000"  expectTake="0"/>
+    <assert-take-column clip="1,0" takeAtPos="72000"  expectTake="1"/>
+    <assert-take-column clip="1,0" takeAtPos="144000" expectTake="0"/>
+
+    <!-- THE KEYS KEPT THEIR PART, on take 0, and the pass is take 1 with the
+         four notes that were played. This is the event side's X16: the material
+         the recording was played AGAINST is still there to go back to. -->
+    <assert-midi-events scope="clip" clip="1,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="1,0" take="0" contains="key=48"/>
+    <assert-midi-events scope="clip" clip="1,0" take="0" contains="key=50"/>
+    <assert-midi-events scope="clip" clip="1,0" take="1" kind="noteon" count="4"/>
+    <assert-midi-events scope="clip" clip="1,0" take="1" contains="key=60"/>
+    <assert-midi-events scope="clip" clip="1,0" take="1" contains="key=65"/>
+
+    <!-- UNDO TAKES BOTH AWAY, and under a PUNCH it is TWO steps, not one.
+         Plan 53 B7's "one press is one undo step" holds for a press that ends
+         at a `record-stop`, where `SApplication::stopRecording()` opens one
+         scope around both commits, and `record_mixed_one_undo` gates exactly
+         that. A PUNCH ends each recorder on its own clock - the keys when the
+         PLAYHEAD passes the out point, the guitar when its recorded MATERIAL
+         does, about 200 ms later across the input latency - so the two commits
+         fall in two re-entrant scopes that never overlap, and each is its own
+         step. Measured; filed as QBX-190 rather than asserted away.
+
+         It is still strictly better than what was here before: the MIDI half
+         placed NOTHING under a punch, so there was one step only because half
+         the take was lost. -->
+    <undo count="2"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="1,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <assert-midi-events scope="clip" clip="1,0" kind="noteon" count="2"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

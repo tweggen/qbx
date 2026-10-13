@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P3 / X16 (QBX-181). MODE A OVER AN EVENT COLUMN: a pass over the
+  MIDDLE of a long MIDI part folds the part and the pass into ONE union
+  column, and the part's own notes are still there.
+
+  The verb is driven directly, so the whole case is arithmetic: no capture
+  device, no transport, no wall-clock jitter anywhere in it.
+
+  WHY X16 IS THE CELL. The ticket's own words: "an event clip [0, 32 bars), a
+  pass over bars 8-16 -> one column". That is R2 (s < a and e > b) with Kp
+  (the touched child is a plain clip), the one cell where the pass lies
+  strictly inside the existing material, and the one the EVENT path could not
+  express at all before P3:
+
+    * `eventColumns` returned `cols.front()` and the planner used that ONE
+      column, so a pass spanning several event clips landed on the earliest
+      and left the rest alone - the performance over their bars was simply not
+      there;
+    * there was NO PREDATES RULE. A column starting BEFORE the pass cannot
+      receive it as a take (a take is an alternative for the same window, so
+      it would need material from before the recording began), and nothing
+      said so: the pass became a take at the COLUMN's origin, i.e. EARLIER
+      THAN IT WAS PLAYED. Here that is 8 bars early. The audio side fixed this
+      in B5 (`place_recording_over_earlier_clip`); the event side never had it.
+
+  Mode A answers both at once, with the SAME planner the audio side uses
+  (`objects/recplan`, QBX-188): the part and the pass become takes of one
+  column, the pass active over its own bars, the part answering everywhere
+  else.
+
+  THE NUMBERS ARE CLOSED FORMS. PPQ is 960 and the project is 4/4 at 120 BPM
+  on 48 kHz, so one tick is 25 frames and one bar is 3840 ticks = 96000
+  frames:
+
+    the part    bars 0-32   = 122880 ticks = [0, 3072000)
+    the pass    bars 8-16   =  30720 ticks = [768000, 1536000)
+
+  so C = [0, 3072000), takes O [0, 3072000) and R [768000, 1536000), and the
+  map is 0 -> O, 768000 -> R, 1536000 -> O. That is §3.3's "R2 · Kp" row
+  verbatim, which is the point: ONE matrix, two content kinds.
+
+  WHAT IS NOT GATED HERE, and is filed rather than hidden. The FEED holds the
+  PASS's notes only: `STakeStack::resolveEventClip` resolves through the
+  ACTIVE take, so wherever that take has no material the column plays SILENCE
+  instead of the take the comp map names. P3 extent-shifts that resolve - which
+  is why the pass sounds at 768000 below and not at 0, where it sounded before
+  - and the comp half needs what the event path has no equivalent of, a
+  `twCompColumn` (plan 53 §4.1 said so). FILED AS QBX-189, with the fix
+  sketched; it is asserted below as what it IS, so the day it changes this case
+  says so.
+-->
+<SActionScript version="1" name="midi_rec_union_r2">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- The part: 32 bars, a note at bar 0 and a note at bar 8. The second
+         one sits exactly where the pass begins, which is deliberate - it is
+         the note a planner that placed the pass at the column's origin would
+         have landed on top of. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="122880" name="Part"/>
+    <add-note clip="0,0" tick="0"     dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="30720" dur="480" key="62" velocity="100" channel="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="3072000"/>
+    <assert-take-column clip="0,0" shape="none"/>
+
+    <place-midi-recording trackPath="0" timePos="768000" durationTicks="30720"
+                          mode="takes" name="R">
+      <n tick="0"   dur="480" key="72" velocity="100" channel="0"/>
+      <n tick="960" dur="480" key="74" velocity="100" channel="0"/>
+    </place-midi-recording>
+
+    <!-- ONE column, at the part's own child index, spanning the part. Under
+         the old planner this was a column too - but one whose new take covered
+         the WHOLE part, so the part was inaudible everywhere and `extents`
+         read "0-3072000;0-3072000". -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-3072000;768000-1536000"
+                        comp="0:0;768000:1;1536000:0" duration="3072000"/>
+    <!-- ...and no second child appeared beside it. -->
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- X16's own assertion: THE PART'S NOTES ARE STILL THERE, on take 0, at
+         their own ticks. `scope="column"` does not exist and is not added -
+         `scope="clip" take=` is the question, because a take IS a clip. -->
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" contains="key=60"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" contains="key=62"/>
+    <!-- ...and the pass is take 1, carrying its own two notes at ITS ticks
+         (tick 0 of the pass, not tick 30720 of the part). -->
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=72"/>
+
+    <!-- WHAT THE INSTRUMENT HEARS, which no structural assertion can give.
+         The pass sounds AT BAR 8 - 768000, and 792000 for its second note, one
+         quarter later. Before P3's extent shift it sounded at 0 and 24000: the
+         take was asked for its material in the COLUMN's frames and answered in
+         its own, so a recording over bars 8-16 played at bar 0.
+
+         The part's notes are NOT in this list, and that is the filed
+         limitation above, not this case's claim. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="768000"
+                        key="72"
+                        count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="792000"
+                        key="74"
+                        count="1"/>
+
+    <!-- ONE UNDO for the whole pass: the part is a plain clip again, at its
+         own length, with its own two notes and nothing else. A merge that
+         could not be undone would leave the user's part inside a column.
+
+         THIS IS WHERE THE PASS USED TO SEGFAULT (QBX-181). `merge-columns`'
+         inverse reads its operand recipe back out of the merge ACTION, so a
+         stack-local composite — which is what this verb had, correctly, while
+         every child it emitted built a self-contained inverse — left
+         `unmerge-columns` pointing at a destroyed action. The plan is held
+         now, exactly as `place-recording` holds its own.
+
+         The log line "`unmerge-columns` produced no inverse, so the WHOLE step
+         is not undoable" fires here and is FALSE; it is pre-existing and filed
+         as QBX-187. The step is undoable — which is what these four
+         assertions say, and what the redo below says from the other side. -->
+    <undo/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="3072000"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- ...AND REDO PUTS IT BACK, identically. That is the other half of
+         QBX-187's claim: the step is undoable through
+         `SActionUndoCommand::redo()` re-applying the forward, and a re-applied
+         forward RE-PLANS against the lane the undo left — so this also gates
+         that the undo left the lane in a state the plan can be made on again.
+         The redo also restores the undo/redo balance that `verify-undo` below
+         checks. -->
+    <redo/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-3072000;768000-1536000"
+                        comp="0:0;768000:1;1536000:0" duration="3072000"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=72"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

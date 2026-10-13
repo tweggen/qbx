@@ -16,6 +16,8 @@
 #include "app/objects/midi/smidiclipactions.h"
 #include "app/objects/midi/smidicut.h"
 #include "app/objects/midi/smidieventactions.h"
+#include "app/objects/midi/seventpassverbs.h"
+#include "app/objects/recplan/srecordplanner.h"
 
 #include "tw/events/twtempomap.h"
 
@@ -95,10 +97,11 @@ SClipWindow *windowOf( SLink *link, int take )
 SAddMidiTakeAction::SAddMidiTakeAction( const QList<int> &clipPath,
                                         std::vector<SEvent> events,
                                         qint64 lengthTicks, const QString &name,
-                                        int index, bool activate )
+                                        int index, bool activate,
+                                        qint64 atTicks, qint64 extentTicks )
     : clipPath_( clipPath ), events_( std::move( events ) ),
       lengthTicks_( lengthTicks ), takeName_( name ), index_( index ),
-      activate_( activate )
+      activate_( activate ), atTicks_( atTicks ), extentTicks_( extentTicks )
 {
 }
 
@@ -142,13 +145,42 @@ SApplyResult SAddMidiTakeAction::apply( SProject *project )
     // duration, never the stale try-lock fallback - it is an edit path.
     const length_t colDur = column.getDurationBlocking();
 
+    // THE EXTENT, ticks -> frames, ONCE (plan 53 §4.1 / D6 (a)). The frames
+    // are what the column's own bookkeeping wants - a take's extent start IS
+    // its link's startTime - and `insertWindowTake`'s defaults (0, -1) are
+    // "the whole column", so an absent extent reaches `insertTake` as the
+    // pre-extent call it always was.
+    //
+    // LENGTH CONVERSION, not position conversion, exactly as the derivation
+    // below already does for the column's duration: a take's link is placed
+    // relative to the COLUMN, and a column does not know where it sits on the
+    // timeline, so there is no absolute position to look a tempo up at. A
+    // tempo change INSIDE one column is therefore not modelled here - the same
+    // approximation this verb has always made.
+    const twTempoMap &tmap = project->tempoMap();
+    const int         srate = project->getSRate();
+    const offset_t extentStart =
+        atTicks_ > 0
+            ? (offset_t) tmap.ticksToFrames(
+                  TickLen( Fraction( atTicks_, 1 ) ), srate ).floorToInt()
+            : (offset_t) 0;
+    const length_t extentLen =
+        extentTicks_ > 0
+            ? (length_t) tmap.ticksToFrames(
+                  TickLen( Fraction( extentTicks_, 1 ) ), srate ).floorToInt()
+            : (length_t) -1;
+
     qint64 lengthTicks = lengthTicks_;
     if( lengthTicks <= 0 ) {
-        // Derive the sequence's musical length from the column's frames, once,
-        // through THE tempo map (POSITION_DOMAINS rule 7).
-        lengthTicks = project->tempoMap()
-                          .framesToTickLen( (int64_t) colDur, project->getSRate() )
-                          .ticks().floorToInt();
+        // Derive the sequence's musical length from the take's own extent when
+        // it has one, and only otherwise from the column's frames - once,
+        // through THE tempo map (POSITION_DOMAINS rule 7). A partial take whose
+        // sequence ran the whole column's length would hold notes its window
+        // can never show.
+        lengthTicks = extentTicks_ > 0
+            ? extentTicks_
+            : tmap.framesToTickLen( (int64_t) colDur, srate )
+                  .ticks().floorToInt();
     }
 
     SMidiSequence *seq = new SMidiSequence( project );
@@ -160,11 +192,39 @@ SApplyResult SAddMidiTakeAction::apply( SProject *project )
     SClipWindow *win = SClipWindow::wrapContent( project, *seq );
     if( !win ) { delete seq; return { false, nullptr }; }
     if( !takeName_.isEmpty() ) win->asObject().setSName( takeName_ );
-    win->setDurationFromTimeline( colDur );   // take-stack invariant 1
+    // THE WINDOW'S LENGTH IS THE TAKE'S EXTENT (invariant 1'), and with no
+    // extent it is the column's duration - invariant 1 as this verb always
+    // read it.
+    //
+    // SET IN TICKS WHERE WE HAVE TICKS. `setDurationFromTimeline` takes frames
+    // and converts back, so an extent given as ticks would make the round trip
+    // ticks -> frames -> ticks and come back off by one at any tempo where a
+    // tick does not divide a frame. The window is freshly wrapped, so its
+    // source anchor, loop and rate are at their identity values and naming
+    // them here changes nothing.
+    SMidiCut *mcut = dynamic_cast<SMidiCut *>( &win->asObject() );
+    // ...AND THE EXTENT LENGTH IS THEN HANDED TO THE COLUMN AS -1, which means
+    // "the window's own duration" -- the ONE spelling that leaves the exact
+    // tick length alone. `insertTake` does `setDurationFromTimeline( tLen )`
+    // for any tLen >= 0, so passing the converted frames would immediately
+    // overwrite `lengthTicks_` with the frame value's own round trip.
+    // Measured: a take added at 143 BPM with `extentTicks="3840"` came back at
+    // 120 BPM 95999 frames long instead of 96000, one frame short, because
+    // 3840 ticks is 80559.44 frames there and the trip back rounds to 3839.
+    length_t insertLen = extentLen;
+    if( extentTicks_ > 0 && mcut ) {
+        mcut->setWindowTicks( Fraction( 0, 1 ),
+                              Fraction( extentTicks_, 1 ),
+                              Fraction( 0, 1 ), Fraction( 1, 1 ) );
+        insertLen = -1;
+    } else {
+        win->setDurationFromTimeline( extentLen >= 0 ? extentLen : colDur );
+    }
 
     const int at = ( index_ >= 0 && index_ <= column.windowTakeCount() )
                        ? index_ : column.windowTakeCount();
-    if( !column.insertWindowTake( *win, at == column.windowTakeCount() ? -1 : at ) ) {
+    if( !column.insertWindowTake( *win, at == column.windowTakeCount() ? -1 : at,
+                                  extentStart, insertLen ) ) {
         // Homogeneity (proposal 37 D8b): the column holds audio takes. Reject
         // rather than build a column that plays notes or audio depending on
         // which lane is active.
@@ -186,6 +246,13 @@ void SAddMidiTakeAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "activate", activate_ ? 1 : 0 );
     elem.setAttribute( "name", takeName_ );
     elem.setAttribute( "lengthTicks", QString::number( lengthTicks_ ) );
+    // Written only when they say something (plan 53 §4.1, as `add-take at=`
+    // does): `atTicks` 0 and no `extentTicks` IS "the whole column", so a
+    // full-extent take serializes exactly as it did before extents existed.
+    if( atTicks_ != 0 )
+        elem.setAttribute( "atTicks", QString::number( atTicks_ ) );
+    if( extentTicks_ >= 0 )
+        elem.setAttribute( "extentTicks", QString::number( extentTicks_ ) );
     writeEvents( elem, events_ );
 }
 
@@ -196,6 +263,8 @@ bool SAddMidiTakeAction::readXml( const QDomElement &elem, int )
     activate_    = elem.attribute( "activate", "1" ).toInt() != 0;
     takeName_    = elem.attribute( "name", "" );
     lengthTicks_ = elem.attribute( "lengthTicks", "0" ).toLongLong();
+    atTicks_     = elem.attribute( "atTicks", "0" ).toLongLong();
+    extentTicks_ = elem.attribute( "extentTicks", "-1" ).toLongLong();
     events_      = readEvents( elem );
     return true;
 }
@@ -237,9 +306,30 @@ SApplyResult SRemoveMidiTakeAction::apply( SProject *project )
     std::vector<SEvent> events;
     qint64  lengthTicks = 0;
     QString takeName;
+    // ...AND ITS EXTENT, for the reason `remove-take` carries one on the audio
+    // side: `add-midi-take`'s defaults mean "the whole column", so without
+    // these two numbers undoing the removal of a PARTIAL take would give back
+    // a FULL-extent one - a take that suddenly answers for bars it never
+    // played. Read BEFORE the removal, which takes the take's link (and with
+    // it its extent start) away.
+    //
+    // Both are read in TICKS wherever ticks exist: the window's length IS a
+    // Fraction of ticks on the `SMidiCut`, so it needs no conversion at all.
+    // Only the extent START has to come through the tempo map, because it
+    // lives on the take's link as frames.
+    qint64 atTicks = 0, extentTicks = -1;
+    {
+        const offset_t exStart = column.windowTakeExtentStart( takeIndex_ );
+        if( exStart > 0 )
+            atTicks = project->tempoMap()
+                          .framesToTickLen( (int64_t) exStart,
+                                            project->getSRate() )
+                          .ticks().floorToInt();
+    }
     if( take ) {
         takeName = take->asObject().getSName();
         if( SMidiCut *cut = dynamic_cast<SMidiCut *>( &take->asObject() ) ) {
+            extentTicks = cut->getLengthTicks().floorToInt();
             if( SMidiSequence *seq = cut->sequence() ) {
                 events      = seq->events();
                 lengthTicks = seq->lengthTicks();
@@ -263,7 +353,7 @@ SApplyResult SRemoveMidiTakeAction::apply( SProject *project )
     invPath.append( lane->indexOfChild( result ) );
     return { true, new SAddMidiTakeAction( invPath, std::move( events ),
                                            lengthTicks, takeName, takeIndex_,
-                                           wasActive ) };
+                                           wasActive, atTicks, extentTicks ) };
 }
 
 void SRemoveMidiTakeAction::writeXml( QDomElement &elem ) const
@@ -292,11 +382,39 @@ SPlaceMidiRecordingAction::SPlaceMidiRecordingAction(
 {
 }
 
+SPlaceMidiRecordingAction::~SPlaceMidiRecordingAction()
+{
+    delete plan_;
+}
+
 bool SPlaceMidiRecordingAction::isKnownMode( const QString &mode )
 {
     return mode == QStringLiteral( "new-take" )
+        || mode == QStringLiteral( "takes" )
+        || mode == QStringLiteral( "takes-split" )
         || mode == QStringLiteral( "overdub" )
         || mode == QStringLiteral( "replace" );
+}
+
+QString SPlaceMidiRecordingAction::canonicalMode( const QString &mode )
+{
+    // `new-take` IS `takes`, and that is the whole mode reconciliation (plan
+    // 53 P3). This verb was written against proposal 21 L4's three-value
+    // vocabulary (`new-take | overdub | replace`); plan 53's is
+    // `takes | takes-split | overdub | replace`, which is what
+    // `SProjectProps::RecordMode` stores, what `srecmode::resolveMode`
+    // answers and what `srecplan::Mode` parses. The two agreed on `overdub`
+    // and `replace` already and disagreed on nothing else -- `new-take` named
+    // the same intention `takes` names.
+    //
+    // THE OLD SPELLING KEEPS WORKING, as the INI's does
+    // (`srecmodeseed.cpp`): a `.qxa`, a saved action and a user's settings
+    // written before plan 53 must keep meaning what they meant. What CHANGED
+    // under it is not the name but the behaviour: `takes` is now the union
+    // column of §3.1, not "a new take on the first touched column".
+    if( mode == QStringLiteral( "new-take" ) ) return QStringLiteral( "takes" );
+    if( isKnownMode( mode ) ) return mode;
+    return QStringLiteral( "takes" );
 }
 
 SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
@@ -309,8 +427,7 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
                    << qualifiedToString( pathRoot_, trackPath_ );
         return { false, nullptr };
     }
-    const QString mode = isKnownMode( mode_ ) ? mode_
-                                              : QStringLiteral( "new-take" );
+    const QString mode = canonicalMode( mode_ );
 
     const twTempoMap &map  = project->tempoMap();
     const int         rate = project->getSRate();
@@ -322,8 +439,91 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
         map.ticksToFrames( TickLen( Fraction( durationTicks, 1 ) ), rate )
            .floorToInt();
 
-    SCompositeAction composite;
+    // HELD, NOT STACK-LOCAL -- see the note on `plan_`. `merge-columns`'
+    // inverse borrows the merge action itself, so the children must outlive
+    // the inverse this returns.
+    delete plan_;                       // a redo re-plans from scratch
+    plan_ = new SCompositeAction();
+    SCompositeAction &composite = *plan_;
     QList<int>       clipPath;      // what `quantize` will address
+
+    // ----------------------------------------------------------------------
+    // `takes` AND `takes-split` GO THROUGH THE SHARED PLANNER (plan 53 P3).
+    //
+    // One planner, two content kinds: `objects/recplan` decides the union
+    // geometry, the operand order, the pre-flight and the index bookkeeping,
+    // and `SEventPassVerbs` says the result in this module's verbs. What dies
+    // with this branch is everything below it that only ever half-worked for a
+    // recording:
+    //
+    //   * `eventColumns`' "FIRST COLUMN ONLY" rule (`cols.front()`). A pass
+    //     spanning two event clips used to land on the earlier one and leave
+    //     the later one alone, so the performance over its bars was simply not
+    //     there. Mode A folds every touched child into ONE column.
+    //   * THE MISSING PREDATES RULE. A column starting BEFORE the pass cannot
+    //     receive it as a take -- a take is an alternative for the same
+    //     window, so it would need material from before the recording began --
+    //     and nothing here said so: the pass went on as a take anyway, at the
+    //     column's own origin, i.e. EARLIER THAN IT WAS PLAYED. The audio side
+    //     fixed this in B5 (`place_recording_over_earlier_clip`); the event
+    //     side never had it.
+    //   * X16, the ticket's own case: a pass over bars 8-16 of a 32-bar clip.
+    //
+    // `overdub` and `replace` do NOT come here, and that is the plan rather
+    // than an omission: §3.3 says for MIDI they keep their existing meanings
+    // ("MERGED into the active take", "notes inside the pass window are
+    // deleted ... CCs survive"), which are not the audio planners' meanings.
+    // Their bodies are below, unchanged.
+    // ----------------------------------------------------------------------
+    if( mode == QStringLiteral( "takes" )
+        || mode == QStringLiteral( "takes-split" ) ) {
+        SEventPassVerbs verbs( project, pathRoot_, durationTicks, events_,
+                               clipName_.isEmpty()
+                                   ? QStringLiteral( "MIDI Recording" )
+                                   : clipName_ );
+
+        srecplan::Span span;
+        span.a = timePos_;
+        span.b = timePos_ + (offset_t) durationFrames;
+        // `Span::extent` stays 0 (= `[a, b)`). It exists for a CYCLE pass the
+        // AUDIO recorder clamped to the material it captured; the MIDI
+        // recorder places each pass over the whole pass window already, so
+        // there is nothing wider to say.
+
+        QList<QList<int>> landed;
+        srecplan::Context ctx;
+        ctx.mode   = srecplan::modeFromString( mode );
+        ctx.armed  = true;
+        ctx.kind   = SContentKind::Event;
+        ctx.verbs  = &verbs;
+        ctx.landed = &landed;
+
+        QString why;
+        if( !srecplan::plannerFor( ctx.mode )
+                 .plan( srecplan::snapshot( lane, trackPath_ ), span, ctx,
+                        composite, &why ) ) {
+            qWarning( "place-midi-recording: mode '%s' refused this lane: %s",
+                      qPrintable( mode ), qPrintable( why ) );
+            return { false, nullptr };
+        }
+
+        // INPUT QUANTISE, inside this verb's own composite -- one undo entry
+        // for one recording. EVERY clip the pass landed on gets one: under
+        // `takes-split` the pass is spread over the pieces it covers and the
+        // gaps between them, and quantising only one of them would leave the
+        // rest of the same performance unquantised. `take = -1` is the ACTIVE
+        // take, which after the plan is the pass on a column and the clip
+        // itself on a plain placement -- i.e. exactly the notes just recorded.
+        if( !quantize_.isEmpty() && quantize_ != QStringLiteral( "off" )
+            && SQuantizeNotesAction::gridTicks( quantize_,
+                                                project->tempoMap().ppq() ) > 0 ) {
+            for( const QList<int> &target : landed )
+                composite.append( new SQuantizeNotesAction( target, quantize_,
+                                                            1.0, 0.0, -1,
+                                                            false ) );
+        }
+        return composite.apply( project );
+    }
 
     const std::vector<Column> cols =
         eventColumns( lane, timePos_, timePos_ + (offset_t) durationFrames );
@@ -370,12 +570,7 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
                 e.dur = std::max<qint64>( 0, rebase( endT ) - e.t );
         }
 
-        if( mode == QStringLiteral( "new-take" ) ) {
-            composite.append( new SAddMidiTakeAction(
-                clipPath, pass,
-                win ? (qint64) 0 : durationTicks,   // 0 = derive from the column
-                clipName_, -1, true ) );
-        } else {
+        {
             // Overdub / replace both END as one absolute `set-events` on the
             // column's ACTIVE take, which is the universal inverse every event
             // edit already uses (37 3.4) - so undo is the previous table,

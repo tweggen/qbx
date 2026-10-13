@@ -181,6 +181,12 @@ namespace {
  * is "other" is the PASS's question, not the lane's: an event clip is other
  * kind to an audio recording and the same clip is the point of a MIDI one.
  */
+/** Record where the pass landed, when the caller asked (`Context::landed`). */
+void noteLanded( const Context &ctx, const QList<int> &path )
+{
+    if( ctx.landed && !path.isEmpty() ) ctx.landed->append( path );
+}
+
 QList<Child> columnsFor( const LaneSnapshot &snap, const Span &span,
                          const Context &ctx )
 {
@@ -236,8 +242,10 @@ public:
                                              "kind" );
             return false;
         }
+        ChildList live( snap );
         out.append( ctx.verbs->placePass( snap.lanePath, span, span.a,
                                           span.length() ) );
+        noteLanded( ctx, live.pathOfAppended( live.append() ) );
         return true;
     }
 };
@@ -585,13 +593,19 @@ public:
 
         // An empty lane region is today's plain placement, exactly (§3.1's
         // "for a lane whose touched set is empty"), and so is a degrade.
-        if( !merging ) return true;
+        if( !merging ) {
+            noteLanded( ctx, live.pathOfAppended( passId ) );
+            return true;
+        }
 
         QList<QList<int>> paths;
         for( const Child &c : ops )
             paths.append( live.pathOfOriginal( c.index ) );
         paths.append( live.pathOfAppended( passId ) );
         out.append( ctx.verbs->mergeColumns( paths ) );
+        // ONE column, at the FIRST operand's index -- the verb keeps it and
+        // removes the others, so the pass is on that child and nowhere else.
+        noteLanded( ctx, paths.first() );
         // NOTHING FOLLOWS, so the merge's removals need no modelling: it is
         // the last verb in the plan, and `place-recording` re-snapshots for
         // every segment of every pass.
@@ -683,7 +697,7 @@ public:
                 out.append( ctx.verbs->placePass(
                     snap.lanePath, span, cursor,
                     (length_t)( os - cursor ) ) );
-                live.append();
+                noteLanded( ctx, live.pathOfAppended( live.append() ) );
             }
 
             const InsidePiece p = isolateInside( c, span, *ctx.verbs, live,
@@ -699,6 +713,7 @@ public:
             // slightly negative -- leading silence, legal since proposal 23.
             out.append( ctx.verbs->addTakeFromPass( piecePath, span,
                                                     p.start ) );
+            noteLanded( ctx, piecePath );
             // add-take PRESERVES its operand's index (it replaces the lane
             // child's link in place), so the simulation needs no change --
             // stated rather than silent, because it is the one verb in either
@@ -714,7 +729,7 @@ public:
             out.append( ctx.verbs->placePass(
                 snap.lanePath, span, cursor,
                 (length_t)( span.b - cursor ) ) );
-            live.append();
+            noteLanded( ctx, live.pathOfAppended( live.append() ) );
         }
         return true;
     }
@@ -805,7 +820,7 @@ public:
         // The pass itself, over the hole every touched child just made.
         out.append( ctx.verbs->placePass( snap.lanePath, span, span.a,
                                           span.length() ) );
-        live.append();
+        noteLanded( ctx, live.pathOfAppended( live.append() ) );
         return true;
     }
 };

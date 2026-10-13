@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P3 / D6 (QBX-181). A UNION COLUMN OF EVENT TAKES SURVIVES A TEMPO
+  EDIT: after `set-tempo` every take still covers the same NOTES, the column is
+  still as long as its takes reach, and the comp map still names each take over
+  the bars it was recorded over.
+
+  D6 asked whether an event take's extent should be stored in TICKS or in
+  FRAMES and answered (a), ticks, as "the only answer under which set-tempo
+  keeps the take over the same notes". The model already delivers that and no
+  new per-take field was needed: a take's link inside a column is born
+  `timebase=beats` for event content (SLink::defaultTimebaseFor), so
+  `set-tempo`'s re-derivation moves its extent START, and its window length is
+  `lengthTicks_` on the SMidiCut itself, so the extent LENGTH follows too.
+
+  WHAT DID NOT FOLLOW, and is what this case is really for. TWO stored frame
+  values had no musical anchor at all:
+
+    the column's own `duration_`   nothing re-derived it. Measured on main
+                                   (one bar, 120 -> 60 BPM):
+                                   extents=[0-192000;0-192000] duration=96000
+                                   - the takes reach 192000 and the column says
+                                   96000, so invariant 1' is false and the
+                                   clip's tail is cut off.
+    the COMP MAP's positions       the map says which take sounds WHERE, in
+                                   frames. Measured on the P3 branch before the
+                                   fix: extents doubled to
+                                   [0-6144000;1536000-3072000] while the map
+                                   still read 0:0;768000:1;1536000:0, i.e. the
+                                   recording sounded over the bars BEFORE its
+                                   own and over none of them.
+
+  Both are EVENT-ONLY fixes, and the asymmetry is the design: A0a deliberately
+  lets an AUDIO column outlast its takes (a span no take covers plays silence,
+  which is what a gap between merge operands relies on), an audio take's length
+  only changes through paths that already keep `duration_` right, and an audio
+  comp boundary is a position in a recording that must NOT move when the tempo
+  does.
+
+  THE NUMBERS. PPQ 960, 4/4, 48 kHz. At 120 BPM one tick is 25 frames and a bar
+  is 96000 frames; at 60 BPM one tick is 50 frames and a bar is 192000. So
+  every frame number below simply doubles, which is what makes the case a
+  closed form rather than a measurement.
+-->
+<SActionScript version="1" name="midi_rec_union_tempo">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- 32 bars, a note at bar 0 and a note at bar 8; a pass over bars 8 to
+         16. The same fixture as midi_rec_union_r2, so this case is about the
+         tempo and nothing else. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="122880" name="Part"/>
+    <add-note clip="0,0" tick="0"     dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="30720" dur="480" key="62" velocity="100" channel="0"/>
+    <place-midi-recording trackPath="0" timePos="768000" durationTicks="30720"
+                          mode="takes" name="R">
+      <n tick="0"   dur="480" key="72" velocity="100" channel="0"/>
+      <n tick="960" dur="480" key="74" velocity="100" channel="0"/>
+    </place-midi-recording>
+
+    <!-- AT 120 BPM. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-3072000;768000-1536000"
+                        comp="0:0;768000:1;1536000:0" duration="3072000"/>
+    <assert-take-column clip="0,0" takeAtPos="384000"  expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="960000"  expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="2000000" expectTake="0"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="768000"
+                        key="72"
+                        count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="792000"
+                        key="74"
+                        count="1"/>
+
+    <!-- HALVE THE TEMPO. Every musical position doubles in frames; nothing
+         about the NOTES changes. -->
+    <set-tempo bpm="60"/>
+
+    <!-- ...and the column doubled WITH the takes. `duration` is the assertion
+         the stored-frame defect fails: it stayed at 3072000 while the extents
+         grew, and `comp` is the one the un-anchored map fails. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-6144000;1536000-3072000"
+                        comp="0:0;1536000:1;3072000:0" duration="6144000"/>
+    <!-- THE SAME MUSICAL POSITIONS, now at twice the frame: bar 4, bar 10 and
+         bar 20 still resolve to the same takes they did before. A map left
+         behind answers take 1 at bar 4 (which is 768000 now) and take 0 at
+         bar 10. -->
+    <assert-take-column clip="0,0" takeAtPos="768000"  expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="1920000" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="4000000" expectTake="0"/>
+
+    <!-- EVERY TAKE STILL COVERS THE SAME NOTES, which is D6's own wording.
+         The tables are in TICKS and so cannot have moved; what is being
+         asserted is that the WINDOWS still show them. -->
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" contains="key=60"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" contains="key=62"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=72"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=74"/>
+
+    <!-- ...AND THE INSTRUMENT STILL HEARS THE PASS AT BAR 8, which is 1536000
+         frames now. 960 ticks later is 48000 frames at this tempo, not 24000.
+         Under the unshifted resolve this list was at 0 and 48000; under the
+         un-anchored map it was silent here. -->
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="1536000"
+                        key="72"
+                        count="1"/>
+    <assert-midi-events scope="feed" trackPath="0" kind="noteon" at="1584000"
+                        key="74"
+                        count="1"/>
+
+    <!-- AND BACK. The tempo is one stored value and the re-derivation is a
+         function of it, so returning to 120 has to return every frame number
+         exactly - not approximately. This is the assertion that a re-derivation
+         built on a RATIO rather than on a stored musical position would drift
+         through. -->
+    <set-tempo bpm="120"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-3072000;768000-1536000"
+                        comp="0:0;768000:1;1536000:0" duration="3072000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

@@ -229,6 +229,7 @@ set(APP_OBJECTS_FILES
     objects/midi/src/smidiactionsupport.cpp
     objects/midi/src/smidiclipactions.cpp
     objects/midi/src/smidirecordactions.cpp
+    objects/midi/src/seventpassverbs.cpp
     objects/midi/src/smidicut.cpp
     objects/midi/src/smidieventactions.cpp
     objects/midi/src/smidifileactions.cpp

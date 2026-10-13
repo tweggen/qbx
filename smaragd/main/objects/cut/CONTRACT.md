@@ -994,6 +994,49 @@ the very thing `move-comp-boundary` changes.
 Gate: `comp_map_model.qxa`, whose last assertion is that a render is UNCHANGED
 by the map — the one N2 will flip.
 
+## An EVENT column follows the BAR; an audio column does not (plan 53 P3, QBX-181)
+
+A take stack is window-typed, so one class serves both content kinds — and
+three of its stored FRAME values have no musical anchor, which is correct for
+audio and wrong for events the moment the tempo moves. An event take's window
+derives its length from `lengthTicks_` and its link is born `timebase=beats`,
+so `set-tempo` moves both ends of every extent behind the column's back.
+
+| what | audio | event |
+|---|---|---|
+| `duration_` (the column's own length) | stays as set — A0a deliberately lets a column outlast its takes, and a span no take covers plays silence, which is what a gap between `merge-columns` operands relies on | follows `derivedDuration()` on any take-duration change (`onTakeCutChanged`) |
+| the COMP MAP's segment positions | frames in a recording; must NOT move | tick-anchored in `compTicks_` and re-derived by `rederiveMusicalPositions()` |
+| a comp `xfade` | an equal-power crossfade length | left alone: notes do not crossfade, so an event comp boundary is a hard switch |
+
+Measured on a one-bar union column at `set-tempo bpm="60"` before the fix:
+`extents=[0-192000;0-192000] duration=96000` — the takes reach 192000 and the
+column says 96000, so invariant 1′ is false and the clip's tail is cut off. And
+on a 32-bar one: the extents doubled while the map still named the OLD frames,
+so the recording sounded over the bars before its own and over none of them.
+
+`compTicks_` is `SLink::startTicks_` for a comp map, written whenever the map is
+and read back when the tempo moves. It is NOT serialized and does not need to
+be: a project file carries one tempo, so re-deriving the ticks from the loaded
+frames gives the writer's own answer. `set-tempo`'s `rederiveBeatsLinks` calls
+`SObject::rederiveMusicalPositions()` on every object in the same loop that
+re-derives the links, and the base answers false.
+
+## `resolveEventClip` on a column is EXTENT-SHIFTED, and resolves the ACTIVE take only
+
+The track inserts a column as ONE clip and hands positions in the COLUMN's
+frames; a take answers in its own, where zero is its extent start. Unshifted, a
+recording over bars 8–16 of a 32-bar part SOUNDED AT BAR 0 — measured, the feed
+gave the pass's notes at frames 0 and 24000 where they were played at 768000 and
+792000. The shift composes the take's own map (its slip, its loop, and the
+`runFrames` an enumeration needs) rather than replacing it.
+
+What it still does not do is consult the COMP MAP, so everywhere the active take
+has no material the column plays SILENCE instead of the take the map names.
+That needs the event equivalent of `twCompColumn` and this seam cannot express
+it — `twEventClipResolved` is one sequence per clip, and two takes are two
+sequences. **QBX-189**, with the fix sketched (the column synthesises one
+sequence from its takes through an internal `twEventClipSet`).
+
 ## A clip FADE is audio-only, and it is a third factor in the mix's product
 
 `twClipFade` (`tw/events/twfade.h`, beside `twCompMap` and

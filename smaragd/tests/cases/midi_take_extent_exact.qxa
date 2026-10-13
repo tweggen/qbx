@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P3 / D6 (a) (QBX-181). AN EVENT TAKE'S EXTENT LENGTH IS TICK-EXACT
+  ACROSS A TEMPO EXCURSION - and its extent START is not. Both halves are the
+  claim, because only saying the first would promise something the model does
+  not give.
+
+  WHY A CASE OF ITS OWN. `midi_take_extent` gates the feature at 120 BPM, and
+  at 120 BPM NO case can see the difference this one is about: PPQ 960 at 4/4
+  on 48 kHz makes one tick exactly 25 frames, so ticks and frames convert in
+  both directions without loss and a frame-valued implementation is
+  indistinguishable from a tick-valued one. 143 BPM is where they part: one
+  tick is 2880000/137280 = 20.9790... frames, and 3840 ticks is 80559.44.
+
+  WHAT IT CATCHES. `add-midi-take` sets the take's window length through
+  `SMidiCut::setWindowTicks`, in ticks, and then hands the COLUMN -1 for the
+  extent length - which means "the window's own duration" and is the one
+  spelling that leaves those ticks alone. `STakeStack::insertTake` does
+  `setDurationFromTimeline( tLen )` for any tLen >= 0, so passing the converted
+  frames instead overwrites `lengthTicks_` with the frame value's own round
+  trip. Measured exactly that way while building this: a take added at 143 BPM
+  with `extentTicks="3840"` came back at 120 BPM 95999 frames long instead of
+  96000. One frame, every tempo change, compounding.
+
+  AND WHAT IT DOES NOT PROMISE. The extent START goes through the take's LINK,
+  whose position is frames with an exact-rational tick anchor derived FROM those
+  frames (`SLink::syncTicksFromTime_`), so a start set at 143 BPM comes back at
+  120 BPM one frame early: 95999 rather than 96000. That is the LINKS' storage
+  and not this verb's, it is the same for an audio take and for any
+  `timebase=beats` clip, and it is asserted below as what it IS. D6 (a)'s "the
+  take stays over the same notes" is therefore exact in LENGTH and within a
+  frame in POSITION - which is inaudible for events, where a note's own tick is
+  what decides when it sounds.
+-->
+<SActionScript version="1" name="midi_take_extent_exact">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Part"/>
+
+    <!-- A TEMPO WHERE A TICK DOES NOT DIVIDE A FRAME. -->
+    <set-tempo bpm="143"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="161118"/>
+
+    <!-- The second bar only: 3840 ticks in, 3840 ticks long. At this tempo
+         that is 80559.44 frames, so every conversion here loses something -
+         which is the point. -->
+    <add-midi-take clip="0,0" atTicks="3840" extentTicks="3840" name="Half">
+      <n tick="0" dur="480" key="72" velocity="100" channel="0"/>
+    </add-midi-take>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-161118;80559-161118" duration="161118"/>
+
+    <!-- BACK TO 120, where one tick is 25 frames exactly. The take's LENGTH is
+         191999 - 95999 = 96000, exactly 3840 ticks: the ticks were never
+         converted to frames and back. A frame-valued implementation reads
+         95999 here, one frame short, because 80559 frames at 143 BPM is 3839
+         ticks and change.
+
+         The START reads 95999 rather than 96000, and that is the LINK's frame
+         storage, not this verb's - see the header. -->
+    <set-tempo bpm="120"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;95999-191999" duration="192000"/>
+    <!-- The column is as long as its takes reach, to the frame, after the
+         move: invariant 1' over a tempo edit. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+
+    <!-- The take still answers for the second bar and the first is still
+         silence, which is what the extent is FOR. -->
+    <assert-take-column clip="0,0" takeAtPos="48000"  expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

@@ -178,6 +178,17 @@ so nothing about a column of takes is audio-specific — but the class lives in
 Same rule, same reason, as `objects/track` consulting MIDI-ness only through
 `contentKind()` and `resolveEventClip()`.
 
+**`add-midi-take` carries the TAKE EXTENT in TICKS** (`atTicks` /
+`extentTicks`, plan 53 §4.1 / D6 (a)), and deliberately not in the existing
+`lengthTicks`, which is a different number: `lengthTicks` is how long the
+SEQUENCE is, `extentTicks` is how much of the COLUMN this take answers for. The
+conversion happens once, in the verb, through THE tempo map; the STORAGE is
+musical from then on without anyone maintaining it, because a take's link inside
+a column is born `timebase=beats` for event content and its window's length is
+`lengthTicks_` on the `SMidiCut`. The extent is written through `setWindowTicks`
+rather than the frame-valued `setDurationFromTimeline`, because a ticks → frames
+→ ticks round trip is exact only where a tick divides a frame.
+
 **`add-take` could not have been widened.** It addresses a FILE and seeds grain
 params; an event take has neither. `SRemoveTakeAction` is the same story from
 the other end: it builds its inverse from an `SExternFile` path, so removing an
@@ -185,10 +196,43 @@ event take through it would be a NON-UNDOABLE removal — a lost take, not an
 undo. Hence `remove-midi-take`, which captures the take's whole event table when
 it runs so its own inverse restores the notes.
 
-**`place-midi-recording` is `place-recording`'s planner shape**, and the two
-stay parallel deliberately: one call per track per pass, the verb decides by
-itself whether the pass is a take, a merge, a replace or a new clip. Three
-things about it are worth knowing:
+**`place-midi-recording` IS `place-recording`'s planner, not merely its shape**,
+since plan 53 P3 (QBX-181). `takes` and `takes-split` go through
+`srecplan::snapshot()` / `plannerFor()` with `Context::kind = Event` and
+`SEventPassVerbs` — the event half of `srecplan::PassVerbs`, in this slice —
+so the union geometry, the operand order, the pre-flight and the index
+bookkeeping have ONE implementation for both content kinds. That is what
+`objects/recplan` was moved out of `objects/cut` for: this slice has no edge to
+`objects/cut` and could name neither the planner nor `merge-columns`.
+
+What the switch retired, both of them defects the audio side had already fixed:
+
+- **"FIRST COLUMN ONLY"** (`eventColumns` returning `cols.front()`). A pass
+  spanning several event clips landed on the earliest and left the rest alone,
+  so the performance over their bars was simply not there.
+- **NO PREDATES RULE.** A column starting BEFORE the pass cannot receive it as
+  a take — a take is an alternative for the same window, so it would need
+  material from before the recording began — and nothing said so: the pass
+  became a take at the COLUMN's origin, i.e. earlier than it was played. This
+  is the audio side's B5 (`place_recording_over_earlier_clip`).
+
+**`overdub` and `replace` keep their own EVENT meanings** and do not go through
+a planner, which plan 53 §3.3 states for both. The audio planners mean
+something else by those words — `overdub` lays a plain clip on top and lets both
+sound, `replace` is tape — and for notes those are not the useful operations:
+notes SUM by nature, so "both sound" needs no second clip, and a note-level
+replace that keeps the CCs is finer than deleting the clip. So two of the four
+modes are planner modes here and two are this file's own, and `canonicalMode`
+is where the vocabularies meet (`new-take` is `takes`; the INI's old three
+values keep working).
+
+Four more things about it are worth knowing:
+
+- **The plan is HELD on the action**, not stack-local. `merge-columns`' inverse
+  reads its operand recipe back out of the merge ACTION, so the children must
+  outlive the inverse the verb returns. A stack-local composite was correct
+  until P3 and is not any more: the first `undo` of a MIDI recording segfaulted
+  in `SUnmergeColumnsAction::apply` reading a destroyed action.
 
 - The `<n>` / `<e>` children are in the PASS WINDOW's ticks (zero = `timePos`),
   not the target sequence's, which is what lets a recorder emit one identical
@@ -202,9 +246,11 @@ things about it are worth knowing:
   Replace drops only NOTES inside the window; CCs, and everything outside it,
   survive — that is what makes it a replace rather than a clear.
 - The input quantise is a `quantize-notes` INSIDE this verb's own composite, so
-  one undo entry covers the placement and its grid together. Its clip path is
-  computed at PLAN time (the column's index, or `lane->childCount()` for the
-  fresh insert, which appends) — the same discipline `place-recording` uses.
+  one undo entry covers the placement and its grid together. On the planner
+  path there is one per clip the pass landed on, named by `Context::landed`,
+  because `takes-split` spreads one performance over the pieces it covers and
+  the gaps between them — quantising only one of them would leave the rest of
+  the same performance off the grid.
 
 Events written by both verbs are `<e .../>` children, never `<n .../>`: a
 recorded pass carries CCs, bends and pressure as well as notes, and the note

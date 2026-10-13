@@ -50,7 +50,7 @@ else in this plan is decided.
 | **D3b** | Auto-fade at a BUTT JOIN of one continuous source (every `split-clip`, every mode-B seam, every `replace` R2 split) is a 3 ms dip, not a crossfade — an audible notch in sustained material | (a) exempt SEAMLESS edges: two abutting clips over the same content whose source positions are continuous get no auto-fade; (b) apply everywhere (Cubase's Auto Fade does, which is why it ships OFF there); (c) ship the feature OFF by default (seed 0) | **(a)**. P5 implements the seamless test (same `windowContent()`, `srcEnd(left) == srcStart(right)` exactly, same stretch); the dialog shows which edges are exempt |
 | **D4** | Q5 when an un-armed edit-group member's clip crosses the armed lane's column extent `C`, or two armed lanes in one group have different `C`s (group twins need exact `startTime` + `getDuration()` equality, `seditgroups.h` `correspondingClip`) | (a) member column extent := the group's C (union of the armed lanes' C); member children crossing its edges are split there first (reversible); (b) skip the member with a hint when its clips do not fit; (c) ask | **(a)**. It is what the group is for; the split is the mode-B primitive and undoes cleanly. P4 implements (a) |
 | **D5** | `cleanup-takes` "unused take": after W1 the ORIGINAL clip A is an inactive take no segment selects → "unused" → removed (undoable, file kept — but it is the user's arrangement, not a recording) | (a) takes that came from pre-existing clips (not from a recording) are EXEMPT by default; a checkbox includes them; (b) treat every unused take alike | **(a)**. The confirmation lists takes by origin ("3 recordings, 1 original clip"). Origin = the take's name stamp from the recorder (§8 P4) or, before P4 lands, "file in the project directory matching the recorder's pattern" |
-| **D6** | MIDI take extents (P3): ticks or frames? The column is frame-anchored; the event take window is TICK-native (`smidicut.h`, "THE WINDOW IS TICK-NATIVE") | (a) ticks on the take, converted through the tempo map at the column; (b) frames for parity with audio | **(a)**: the only answer under which `set-tempo` keeps the take over the same notes. P3 implements ticks and writes the `set-tempo`-over-a-union-column gate |
+| **D6** — **DECIDED AND SHIPPED (P3, QBX-181)** | MIDI take extents (P3): ticks or frames? The column is frame-anchored; the event take window is TICK-native (`smidicut.h`, "THE WINDOW IS TICK-NATIVE") | (a) ticks on the take, converted through the tempo map at the column; (b) frames for parity with audio | **(a)**, taken, and the MODEL ALREADY DELIVERED IT: no new per-take field was needed. A take's link inside a column is born `timebase=beats` for event content (`SLink::defaultTimebaseFor`) so `set-tempo`'s re-derivation moves its extent START, and the window's length is `lengthTicks_` on the `SMidiCut` so the extent LENGTH follows — measured, halving the tempo moved a take extent 0-96000 → 0-192000. `add-midi-take atTicks=`/`extentTicks=` therefore take TICKS and convert once, through the tempo map and through `setWindowTicks` rather than the frame-valued `setDurationFromTimeline` (a ticks → frames → ticks round trip is exact only where a tick divides a frame). **What did NOT follow the bar was two stored frame values the decision did not name**: the column's own `duration_` and the COMP MAP's positions — see §8's P3 row |
 
 ## 1. Why
 
@@ -603,7 +603,12 @@ through `STrack::trackChildDurationChanged`. New:
   `hasPreview`/`getPreview` and `collectEnvelope`/`drawTake` are
   extent-windowed (nothing outside); `seekTo` and
   `mapTimelineToComponentPos` go through the comp column; `resolveEventClip`
-  is P3's (§8) and is extent-shifted there. `twCompColumn::clampedXfade_nolock`
+  is P3's (§8) and **was** extent-shifted there — and only shifted: it still
+  resolves through the ACTIVE take alone, so an event column plays silence
+  wherever that take has no material instead of the take its comp map names
+  (QBX-189; this seam returns one sequence per clip and two takes are two
+  sequences, which is this bullet's own "the event path has no `twCompColumn`
+  to do that in"). `twCompColumn::clampedXfade_nolock`
   additionally clamps a crossfade to BOTH takes' extents (W1's boundary at
   `T` has no outgoing material past it).
 - **Invalidation and resync.** `STakeStack::onTakeCutChanged` forwards
@@ -1629,6 +1634,85 @@ still covers the same notes); `midi_rec_split_r2.qxa`; `midi_record_modes.qxa`
 extended with `takes-split`; `record_mixed_band_punch.qxa` (guitar audio +
 keys MIDI, `[8,16)` punch under `takes`: one union column on each lane).
 
+> **SHIPPED as P3 (QBX-181). FIVE CORRECTIONS from building it**, two of them
+> defects without which the row's own gates could not be written.
+>
+> **(a) `overdub` and `replace` DO NOT go through the planner for events**, and
+> this paragraph's "`place-midi-recording` goes through the same
+> `snapshot()`/planner split" is true of `takes` and `takes-split` only. §3.3
+> already said so twice — "For MIDI it keeps its existing meaning" under each
+> of those two modes — and the two readings are genuinely different operations,
+> not two spellings of one: audio `overdub` lays a plain clip on top and lets
+> both sound, which notes need no second clip for because they SUM; audio
+> `replace` is tape, where a note-level replace that keeps the CCs is finer.
+> `SEventPassVerbs::removeChild` is therefore unreachable by construction
+> (`Replace` is the only planner that removes) and refuses loudly rather than
+> guessing at a removal nobody asked for.
+>
+> **(b) TWO STORED FRAME VALUES ON AN EVENT COLUMN HAD NO MUSICAL ANCHOR**, and
+> D6 named neither. The take extents follow the bar for free; the COLUMN's own
+> `duration_` and the COMP MAP's segment positions did not. Measured on `main`
+> at `set-tempo bpm="60"` over a one-bar union column:
+> `extents=[0-192000;0-192000] duration=96000` — the takes reach 192000, the
+> column says 96000, and invariant 1′ is false on every tempo change over an
+> event column. And on a 32-bar one the extents doubled while the map still
+> named the old frames, so the recording sounded over the bars BEFORE its own
+> and over none of them. Both fixed, EVENT-ONLY: `duration_` follows
+> `derivedDuration()` in `onTakeCutChanged`, and the map gains `compTicks_` —
+> `SLink::startTicks_` for a comp map — re-derived by a new
+> `SObject::rederiveMusicalPositions()` that `set-tempo` calls in the same loop
+> that re-derives the links. The asymmetry is the design: A0a deliberately lets
+> an AUDIO column outlast its takes, and an audio comp boundary is a position
+> in a recording that must not move when the tempo does.
+>
+> **(c) THE MIDI RECORDER HAD NO PUNCH, and that lost the whole take** —
+> which is why `record_mixed_band_punch` could not be written without fixing
+> it. The audio half ends itself at the out point, stopping the TRANSPORT, while
+> the MIDI half ran on to the `record-stop`; its final poll then re-anchored
+> `SPlayheadClock` from a dead clock, every captured host time mapped to a
+> NEGATIVE frame and `stopFrame_` read 0, so `passEnd` was 0, every note was
+> outside its own pass and nothing was placed (`msgs=8 placements=0 passes=0
+> notes=0 clamped=4`, on every run). It now punches out on its own tick,
+> through its own `punchRegion_` — the same two readings of one marker pair the
+> audio recorder gives them — and under a punch the pass window is the MARKERS
+> exactly, not `stopFrame_`. **A punched MIXED press costs TWO undo steps**,
+> because each recorder ends on its own clock and the two commits never share a
+> scope; B7's one-step claim holds for a `record-stop` press and the punch case
+> is QBX-190.
+>
+> **(d) THE MODE VOCABULARIES ARE RECONCILED, and the recorder's authority
+> moved.** `SMidiRecorder` read `SOpt::MidiRecordMode` raw, in proposal 21 L4's
+> three values, so the MIDI half of a press could disagree with the audio half
+> about the mode of the same gesture and `takes-split` was unreachable for MIDI
+> altogether. It resolves through `srecmode::resolveMode` now, per armed lane,
+> like the audio recorder; `new-take` survives as a synonym of `takes` in
+> `place-midi-recording`, in `assert-midi-recorded` and in the INI seed, so
+> nothing written before plan 53 changes meaning. `midi_record_modes.qxa`
+> therefore drives `set-property recordMode` and no longer owns the INI key.
+>
+> **(e) THE SHARED PLANNER IS ITS OWN LANDED PREREQUISITE (QBX-188).** This row
+> was scoped as "wiring rather than a second planner set", and it could not
+> have been: `objects/midi` may name nothing in `objects/cut` (proposal 37
+> §3.5), where the planner and `merge-columns` lived. The planner moved to
+> `app/objects/recplan` at the rank of both window/content pairs, with
+> `srecplan::PassVerbs` as the seam; `split-clip` and `merge-columns`, which are
+> kind-agnostic already, come through `SActionRegistry` by name on the event
+> side — the precedent `makeAddTrack()` set in that same module. One more
+> lifetime fix came with it: the plan must be HELD on the action, because
+> `merge-columns`' inverse reads its operand recipe back out of the merge
+> action. A stack-local composite was correct for `place-midi-recording` until
+> this row and segfaulted on the first `undo` after it.
+>
+> **WHAT P3 DOES NOT DELIVER, and X16's own gate says so.** An event column
+> resolves through its ACTIVE take only, so everywhere that take has no
+> material the column plays SILENCE rather than the take the comp map names —
+> a mode A recording over the middle of a part leaves the part's own bars quiet.
+> `resolveEventClip` is extent-SHIFTED here, which is this row's text and is
+> what makes the pass sound at bar 8 instead of bar 0, but the comp half cannot
+> go through that seam at all: `twEventClipResolved` is one sequence per clip
+> and two takes are two sequences. §4.1 already said "the event path has no
+> `twCompColumn` to do that in". **QBX-189**, with the fix sketched.
+
 ### P4 — groups — depends on P2
 
 Build: Q5 un-armed members with D4 default (a): the recorder's member
@@ -1865,7 +1949,7 @@ existing tickets. Order within a group is landing order.
 | A0b | **SHIPPED (QBX-178).** Take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters, **plus two items A0a handed over by name**: `hasPreview`/`getPreview`' extent window (it moves with the painters, or the picture is half-windowed) and `resize-clip`'s LEFT-EDGE loop, which still writes the column's duration onto every take — unreachable today, noted at the site. Added `assert-envelope take=` (a script had no way to read the per-take collect) and `STakeStack::nextCompEdgeAfter`, the one comp-edge walk the model, the compact painter and the take lane all answer with. **The HATCH's pixels stay QBX-157's**; A0b gates the silence and the envelope beneath them | A0a | M |
 | A1 | **SHIPPED (QBX-179).** `merge-columns` / `unmerge-columns` with the link-move protocol. Added a refusal §6.1 does not list — operands must agree on volume and pan and carry no gain curve or fade — because a merged column has ONE set of clip parameters and the row's criterion is that the render does not change (QBX-185 in a second place). The forward also PINS each operand column, which §6.1 says is unnecessary and `SObject`'s own serialized fields say otherwise | A0a, B1 | M |
 | P2 (**QBX-180**) | mode A (`takes`) replaces `LegacyTakes`; the §9 flips — **SHIPPED** | P1, A0b, A1, D1 (default (a)) | L |
-| P3 | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind | P2 | M |
+| P3 (**QBX-181**) | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind — **SHIPPED**, on QBX-188's shared planner module. Five corrections in §8's P3 row, of which two are defects it had to fix to be writable at all: an event column's `duration_` and comp map had no musical anchor, and the MIDI recorder had no punch (which silently dropped the whole take of a punched press) | P2, QBX-188 | M |
 | P4 | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names | P2 | M |
 | P5 | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; selection fade dialog | A0a, B8 | M |
 | P6 | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse | P2, A0b, B10 | M |

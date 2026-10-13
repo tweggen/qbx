@@ -88,8 +88,6 @@ class SMidiRecorder : public QObject
 {
     Q_OBJECT
 public:
-    /** Design D8's three input-record modes; a GLOBAL setting, not per track. */
-    enum class Mode { NewTake = 0, Overdub = 1, Replace = 2 };
 
     // The tick. Same 20 ms as SMidiOutPump: fast enough that a 1024-slot ring
     // cannot fill from a human performance, cheap enough to run beside the
@@ -125,13 +123,30 @@ public:
     int lastTrackCount() const { return lastTracks_; }
     /// Notes whose mapped start fell before their pass and were CLAMPED to it.
     int clampedNotes() const { return clamped_; }
-    Mode mode() const { return mode_; }
+    /**
+     * THE PROJECT-LEVEL record mode this take started under, as plan 53 spells
+     * it (`takes` | `takes-split` | `overdub` | `replace`).
+     *
+     * IT IS NOT NECESSARILY WHAT EVERY LANE GOT. The mode is resolved PER
+     * ARMED LANE at the commit (`srecmode::resolveMode`: the lane's own
+     * attribute, else the nearest ancestor folder's, else the project's), so a
+     * track pinned to `overdub` inside a project on `takes` records
+     * `overdub`. This is the project's answer, which is what `describe()` and
+     * `assert-midi-recorded mode=` are about.
+     *
+     * WHAT CHANGED IN P3 (QBX-181). This used to be an enum of proposal 21
+     * L4's own three values, read straight from `SOpt::MidiRecordMode` with no
+     * notion of a per-track mode at all -- so the MIDI recorder and the AUDIO
+     * recorder could disagree about the mode of the same press, and no MIDI
+     * recording could ever be `takes-split`. There is one authority now, the
+     * same one the audio recorder asks, and the INI key keeps its old job:
+     * seeding a BRAND-NEW project (`srecmodeseed.cpp`).
+     */
+    QString mode() const { return mode_; }
     QString quantizeGrid() const { return quantize_; }
 
     QString describe() const;
 
-    static Mode    modeFromString( const QString &s, bool *ok = nullptr );
-    static QString modeToString( Mode m );
 
 private slots:
     void poll();
@@ -164,6 +179,30 @@ private:
     };
 
     bool   collectArmed_();
+    /**
+     * THE PUNCH REGION, if one is in force: the project's one range with Cycle
+     * OFF (plan 53 P3, QBX-181). The same reading `SAudioRecorder` gives it,
+     * and necessarily the same, because one press drives both: "the project
+     * has ONE range, and what it means to a take depends on the cycle flag".
+     *
+     * THE MIDI RECORDER HAD NO PUNCH AT ALL, and the consequence was not a
+     * missing feature but LOST NOTES. Under a punch the audio recorder stops
+     * itself at the out point, which stops the transport, while this recorder
+     * kept running to the `record-stop`; its final poll then re-anchored
+     * `SPlayheadClock` from a dead clock, every host time mapped to a negative
+     * frame, and `stopFrame_` read 0 -- so `passEnd` was 0, every note was
+     * outside its own pass, and the whole take was dropped with
+     * `placements=0`. Measured exactly that way on a mixed press with a
+     * [48000, 96000) punch: 8 messages captured, 4 notes clamped, nothing
+     * placed.
+     *
+     * So the fix is the audio recorder's, mirrored: END THE TAKE AT THE OUT
+     * POINT, on this class's own tick, while the clock is still live. The pass
+     * window is then the MARKERS, exactly, which is what punch means ("the
+     * take is clipped to [in, out) exactly however late the tick") and makes
+     * it independent of when the stop arrives.
+     */
+    bool   punchRegion_( offset_t &in, offset_t &out ) const;
     /// One last tick at the stop, before the transport is stopped by whoever
     /// owns it: the anchor is only valid while the RT is publishing.
     void   pollFinal_();
@@ -189,10 +228,19 @@ private:
     std::vector<Armed>  armed_;
 
     // Read ONCE at start (see the class comment).
-    Mode    mode_     = Mode::NewTake;
+    QString mode_     = QStringLiteral( "takes" );
     QString quantize_ = QStringLiteral( "off" );
     bool    cycle_    = false;
     offset_t cycleIn_ = 0, cycleOut_ = 0;
+    bool    punch_    = false;
+    offset_t punchIn_ = 0, punchOut_ = 0;
+    /**
+     * Guards the punch-out against re-entering `stop()`. `stop()` runs
+     * `pollFinal_()`, which sets `active_` and calls `poll()` -- the very
+     * place the punch-out test lives -- so without this the out point would
+     * recurse.
+     */
+    bool    stopping_ = false;
 
     int lastPassCount_  = 0;
     int lastPlacements_ = 0;
