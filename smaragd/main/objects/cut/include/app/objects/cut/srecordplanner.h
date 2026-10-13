@@ -52,8 +52,9 @@ namespace srecplan {
  * The four modes of plan 53 §3. The strings are `SProjectProps`' spelling,
  * which is what travels in a project file and in `place-recording mode=`.
  *
- * `Takes` is the mode every build before plan 53 implemented and is still the
- * default; it runs `LegacyTakes` until P2 (QBX-156) replaces it with mode A.
+ * `Takes` is the default, and since P2 (QBX-180) it is MODE A -- the union
+ * column of plan 53 §3.1, not the planner every build before plan 53 had.
+ * `LegacyTakes` is gone; this is the row the whole plan was for.
  */
 enum class Mode { Takes, TakesSplit, Overdub, Replace };
 
@@ -106,6 +107,41 @@ struct Child {
     int      activeTake = -1;  ///< columns only
     twCompMap map;             ///< columns only; empty = "ask activeTake"
 
+    /**
+     * Does the placement carry a clip WINDOW at all?
+     *
+     * Literally "the placement object is itself a window", which is false for
+     * a DIRECT take column -- so what `merge-columns` accepts is
+     * `isColumn() || hasWindow`, exactly its own
+     * `if( !col && !SClipWindow::of( &obj ) )`. Mode A must know that BEFORE
+     * it emits the verb: see `mixVolume` below for why a refusal from inside
+     * the composite is not an option. No verb in the suite places raw content
+     * on a lane, so this is true of everything a lane actually holds; it is
+     * read rather than assumed because the cost of being wrong is a lost take.
+     */
+    bool     hasWindow = false;
+
+    /**
+     * THE PLACEMENT'S MIX PARAMETERS, read through the same
+     * `SClipWindow::parametersOf` that `merge-columns` reads (so a DIRECT
+     * column reports its ACTIVE take's, which is what the mix uses).
+     *
+     * WHY A PLANNER NEEDS THEM. `merge-columns` REFUSES operands that
+     * disagree on volume or pan, or that carry anything POSITIONAL -- a
+     * `cut:Gain` envelope or a clip fade -- because a merged column has ONE
+     * set of clip parameters for its whole length (QBX-185, plan 53 §6.1).
+     * That refusal is right for a user gesture and fatal for a recording:
+     * `SCompositeAction::apply` rolls back every earlier child on the first
+     * one that fails, so a mode A plan whose `merge-columns` refuses loses
+     * the pass -- the one thing a recorder may not do. Mode A therefore
+     * PRE-CHECKS the rule from the snapshot and degrades to a plain
+     * placement, announced, instead of emitting a verb that will refuse.
+     */
+    double   mixVolume = 0.0;
+    double   mixPan    = 0.0;
+    bool     hasGainCurve = false;   ///< a non-empty `cut:Gain` lane
+    bool     hasFade      = false;   ///< a clip fade (in or out)
+
     bool isColumn() const
     { return kind == Column || kind == MappedColumn || kind == WrappedColumn; }
     offset_t end() const { return start + (offset_t) dur; }
@@ -157,26 +193,40 @@ struct Span {
     offset_t b = 0;
     offset_t srcOffset = 0;
     /**
-     * X8: a cycle take must not run past `[a, b)`.
+     * THE TAKE'S EXTENT, when the recorder knows it is WIDER than the
+     * material. `0` = `[a, b)`, the material's own span.
      *
-     * STILL UNREAD BY EVERY PLANNER, and that is correct rather than an
-     * oversight. `TakesSplit` keeps X8 for free -- the pass span IS the
-     * cycle and it never places anything outside it. The rule that needs
-     * the flag is plan 53 §3.1 step 5, "for a cycle span the take extent
-     * is the WHOLE cycle", which is about mode A's TAKE EXTENTS and so
-     * belongs to A0a.
+     * THIS REPLACES THE `fromCycle` FLAG QBX-171 LEFT HERE UNREAD, and the
+     * reason is plan 53 §3.1 step 5: "for a cycle span the take extent is the
+     * WHOLE cycle". A boolean cannot say where the cycle ENDS, and `b` does
+     * not: `place-recording` clamps the span to the material
+     * (`min( length, waveDur - srcOffset )`) while the recorder's cycle branch
+     * always asks for the whole `loopLen`, so the LAST pass of essentially
+     * every cycle recording has `b < cycleEnd`. Giving that pass the
+     * whole-cycle extent is what makes it an ALTERNATIVE FOR THE SAME BARS as
+     * the full passes beside it -- and what lets `select-take` isolate it,
+     * since A0b made the click extent-aware. Recorded as a plan correction.
+     *
+     * X8 ("no recorded take beyond the cycle") is the other direction and is
+     * free: the extent is a maximum, never a minimum.
      */
-    bool     fromCycle = false;
+    length_t extent = 0;
 
     length_t length() const { return b > a ? (length_t)( b - a ) : (length_t) 0; }
+    /** Where the take's extent ends: `b`, or further when `extent` says so. */
+    offset_t extentEnd() const
+    {
+        const offset_t e = a + (offset_t) extent;
+        return e > b ? e : b;
+    }
 };
 
 /**
  * Per-lane context for one pass.
  *
  * `armed` is false for an un-armed member of an armed lane's edit group.
- * **P1 does not enumerate them** (plan 53 §8, review 2 M5): every planner,
- * `LegacyTakes` included, treats `armed == false` as nothing to do. P4 is
+ * **Nothing enumerates them before P4** (plan 53 §8, review 2 M5): every
+ * planner, mode A included, treats `armed == false` as nothing to do. P4 is
  * where the takes planners grow the structure-only plan of §3.4.
  */
 struct Context {
@@ -253,10 +303,10 @@ public:
  * holds nothing between passes, which is what makes it safe to hand the same
  * one to every armed lane of a pass.
  *
- * `Takes` is `LegacyTakes` (today's planner, moved verbatim) until P2 replaces
- * it with mode A (QBX-156). `TakesSplit` and `Replace` are QBX-172's; both
- * REFUSE a lane holding a wrapped take column (G11) rather than splitting or
- * deleting a shape no gate has ever exercised.
+ * `Takes` is MODE A since P2 (QBX-180). `TakesSplit` and `Replace` are
+ * QBX-172's. All three REFUSE a lane holding a wrapped take column (G11)
+ * rather than splitting, folding or deleting a shape no gate has ever
+ * exercised.
  */
 const Planner &plannerFor( Mode mode );
 
@@ -268,6 +318,11 @@ const Planner &plannerFor( Mode mode );
  * (plan 53 §5.4), and skipping them here as well means a press that coincides
  * with another recorder's live clip cannot have that clip mistaken for an
  * edge or a column.
+ *
+ * IT READS THE MIX PARAMETERS TOO (`Child::mixVolume`), through
+ * `SClipWindow::parametersOf` -- the same question `merge-columns` asks, so
+ * that mode A can pre-check the merge's refusal rather than discover it from
+ * inside a composite that then rolls the pass back.
  *
  * It does NOT call `stakes::normalizeColumns`: that takes the whole
  * `SProject&`, relinks and deletes wrappers OUTSIDE any action, and is a

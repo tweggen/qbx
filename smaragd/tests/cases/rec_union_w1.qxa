@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE CASE PLAN 53 WAS WRITTEN FOR (§1 and §3.4's W1, QBX-180 / P2).
+
+  One vocal track, one clip split in two: A = [0, 8.1), B = [8.1, end).
+  Record from a stopped transport at 0 and stop at T with 8.1 < T < end. On
+  every build before mode A "the part from 8.1 vanishes": the planner judged A
+  and B separately, made a two-take column of each, sized the new take to the
+  WHOLE column and activated it - so B's recording take ran past the end of
+  the file and the rest of B played silence. §1 names that X2 and
+  `takes_recording_placement.qxa` used to assert the silence as correct.
+
+  Under mode A the pass and both clips become ONE column:
+
+    A = [0, 96000)       startOffset 0   (sec0, sec1)
+    B = [96000, 240000)  startOffset 0   (sec0, sec1, sec2)
+    R = [0, 144000)      srcOffset 48000 (sec1, sec2, sec3)
+
+  so T = 144000 and 96000 < T < 240000, which is W1 at 1/.. scale.
+
+    C          = [0, 240000)
+    takes      = A 0-96000, B 96000-240000, R 0-144000
+    comp       = 0 -> R, 144000 -> B
+    activeTake = R, takes = 3  ->  the compact view's badge reads 3/3
+
+  §3.4's W1 bullet says exactly this: "takes A[0,8.1), B[8.1,end), R[0,T); map
+  0->R, T->B; heard R then old B".
+
+  TWO THINGS THIS GATES THAT NO R-CELL CASE CAN:
+
+   - THE OLD B IS STILL AUDIBLE AFTER THE PASS ENDS. That is the whole
+     complaint, and it is the first assertion after the render.
+   - A IS A TAKE NO SEGMENT SELECTS. The map answers R then B, so A is
+     reachable only by comping to it - which is D5's "unused take" question
+     and is why that decision exempts takes that came from a pre-existing
+     clip. Pinned here with takeAtPos rather than left implicit.
+
+  The undo is gated by RENDER IDENTITY rather than by verify-undo: the pass
+  and the comp are undone and the result must be byte-identical to the
+  arrangement before the pass, which is the strongest statement available and
+  the one plan 52's identity rule earns.
+-->
+<SActionScript version="1" name="rec_union_w1">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="0" duration="96000"/>
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="0" duration="144000"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="144000"/>
+
+    <!-- The arrangement as it stands, for the identity check after the undo. -->
+    <render filename="ru_w1_before.wav" format="wav" quality="10"
+            durationSec="5.0"/>
+
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="0" srcOffset="48000" length="144000"
+                     mode="takes"/>
+
+    <!-- ONE column where there were two clips, and the badge is 3/3. -->
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-96000;96000-240000;0-144000"
+                        comp="0:2;144000:1" duration="240000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- A is selected NOWHERE: the pass answers to T and B after it. -->
+    <assert-take-column clip="0,0" takeAtPos="0" expectTake="2"/>
+    <assert-take-column clip="0,0" takeAtPos="95999" expectTake="2"/>
+    <assert-take-column clip="0,0" takeAtPos="143999" expectTake="2"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="1"/>
+
+    <render filename="ru_w1_after.wav" format="wav" quality="10"
+            durationSec="5.0"/>
+    <!-- R, three seconds of it: sec1, sec2, sec3. -->
+    <assert-audio-energy filename="ru_w1_after.wav" startFrame="0"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_w1_after.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="ru_w1_after.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <!-- ...AND THEN THE OLD B, which is what used to vanish. B's own second 1
+         and second 2, from its own source position - not silence, and not the
+         recording running on past its material. -->
+    <assert-audio-energy filename="ru_w1_after.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_w1_after.wav" startFrame="192000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+
+    <!-- A IS RECOVERABLE although no segment selected it: comping to it gives
+         its own two seconds back, and the pass re-enters at its extent end
+         rather than the column going silent from 96000 on. -->
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:2;144000:1" activeTake="0"/>
+    <render filename="ru_w1_a.wav" format="wav" quality="10" durationSec="5.0"/>
+    <assert-audio-energy filename="ru_w1_a.wav" startFrame="0"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_w1_a.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <!-- the pass again, over the part of itself A does not cover -->
+    <assert-audio-energy filename="ru_w1_a.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <!-- ...and B after T, unchanged by any of it -->
+    <assert-audio-energy filename="ru_w1_a.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+
+    <!-- UNDO THE COMP AND THE PASS. The two clips must come back as they
+         were, byte for byte through the render. -->
+    <undo/>
+    <undo/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="144000"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="0,1" shape="none"/>
+    <render filename="ru_w1_undone.wav" format="wav" quality="10"
+            durationSec="5.0"/>
+    <assert-file-identical actual="ru_w1_undone.wav"
+                           expected="ru_w1_before.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

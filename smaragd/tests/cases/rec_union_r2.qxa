@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MODE A, CELL R2: the existing material CONTAINS the recording (plan 53 §3.1
+  and §3.3's R2 row, QBX-180 / P2). The cell that needs the RE-ENTRY segment:
+  the previous answer has to come back at `b`, or the pass would silence the
+  rest of a clip it only played over the middle of.
+
+  Three lanes, one per kind - Kp plain, Kc a column with no map, Km the same
+  column with one. rec_union_r1's header states the family's conventions and
+  the fixture's per-second RMS; this file states only its own numbers.
+
+    O = [0, 192000)       startOffset 48000, so sec1, sec2, sec3 then nothing
+    R = [48000, 144000)   srcOffset 0, so sec0 then sec1
+
+  s=0 < a=48000 and e=192000 > b=144000, which is R2.
+
+  THE CLOSED FORM, from §3.1: C = [0, 192000); takes O at 0-192000 and R at
+  48000-144000; comp = 0 -> O, 48000 -> R, 144000 -> O. §3.3's R2 row says
+  "0->O, a-s->R, b-s->O * O, R, O", and its Kc/Km row says "as R1 plus the
+  re-entry segment b-s->prev".
+
+  WHAT THE RENDER CAN AND CANNOT SHOW. O's material runs out at 144000
+  (startOffset 48000 + 144000 = the end of the file), so the re-entry at
+  144000 is heard as SILENCE rather than as a change of material. That makes
+  the `comp=` assertion the exact statement of the re-entry and the render its
+  corroboration - and it is deliberate: the alternative offsets that give O
+  material there make O and the pass agree second for second, so the
+  select-take render below could no longer tell them apart. The second render
+  is where O's own material is heard.
+-->
+<SActionScript version="1" name="rec_union_r2">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="48000" duration="192000"/>
+
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="144000" duration="192000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="48000"/>
+
+    <!-- Km's map boundary is at 144000, i.e. AFTER the pass ends: in this
+         cell that is the only part of O's map the pass does not govern. -->
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav" timePos="0"
+                startOffset="144000" duration="192000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="48000"/>
+    <set-comp-map clip="2,0">
+      <seg at="0" take="0"/>
+      <seg at="144000" take="1"/>
+    </set-comp-map>
+
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        comp="" duration="192000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="1"
+                        comp="0:0;144000:1" duration="192000"/>
+
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-144000"
+                        comp="0:0;48000:1;144000:0" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <assert-take-column clip="1,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-192000;0-192000;48000-144000"
+                        comp="0:1;48000:2;144000:1" duration="192000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- Km: BOTH halves of O's map survive - take 0 before the pass and the
+         re-entry at 144000 naming take 1, which is what the map said there. -->
+    <assert-take-column clip="2,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-192000;0-192000;48000-144000"
+                        comp="0:0;48000:2;144000:1" duration="192000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <render filename="ru_r2_kp.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r2_kp.wav" startFrame="0"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_r2_kp.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_r2_kp.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_r2_kp.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+
+    <!-- Comping back. O is FULL-EXTENT here, so §4.3's rule clears the map
+         rather than writing a one-segment one, and the whole column plays O. -->
+    <select-take clip="0,0" take="0"/>
+    <select-take clip="1,0" take="1"/>
+    <select-take clip="2,0" take="1"/>
+    <assert-take-column clip="0,0" comp="" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="" activeTake="1"/>
+    <assert-take-column clip="2,0" comp="" activeTake="1"/>
+
+    <render filename="ru_r2_kp_old.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r2_kp_old.wav" startFrame="0"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_r2_kp_old.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="ru_r2_kp_old.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <assert-audio-energy filename="ru_r2_kp_old.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

@@ -44,7 +44,7 @@ else in this plan is decided.
 
 | # | question | options | recommendation (= the default the phases implement) |
 |---|---|---|---|
-| **D1** | Q7 under mode A: two legacy OVERLAPPING plain clips SUMMED; merged into one column, only one take plays per position outside `[a,b)` | (a) accept — merge, topmost plays, the other is a selectable take; (b) refuse the pass on such a lane; (c) leave the lower clip outside the column, so it keeps summing with the column (X6 survives there) | **(a)**. (b) blocks the commonest legacy lane (C13). (c) keeps a doubled signal the user never asked for. Asserted in `rec_union_overlap_legacy.qxa` so the choice is visible |
+| **D1** — **DECIDED AND SHIPPED (P2, QBX-180)** | Q7 under mode A: two legacy OVERLAPPING plain clips SUMMED; merged into one column, only one take plays per position outside `[a,b)` | (a) accept — merge, topmost plays, the other is a selectable take; (b) refuse the pass on such a lane; (c) leave the lower clip outside the column, so it keeps summing with the column (X6 survives there) | **(a)**, taken. (b) blocks the commonest legacy lane (C13). (c) keeps a doubled signal the user never asked for. `rec_union_overlap_legacy.qxa` asserts BOTH halves: `takeAtPos` names the topmost as the previous answer outside `[a,b)`, and a render before and after measures the level HALVING over the overlapped second — the fixture is built so the two clips play the same sample where they overlap, so the sum is exactly twice one of them |
 | **D2** | Q2 "per TRACK GROUP": folder track or edit group? | (a) the FOLDER track (`STrack::hasChildTracks()`), an object that already serializes attributes; (b) the EDIT group, which is an int id on members and needs a per-project `editGroupId → mode` map and a UI home | **(a)**. M0 implements the folder reading; (b) is one more `SProjectProps` table and can be added later without changing the resolver's shape |
 | **D3a** | Q9 default 3 ms: the auto-fade is SEEDED into new projects only; a file without `autoFadeMs` reads 0 | (a) seed only (existing projects stay as they render today); (b) read 3 ms as the default (every existing render and dozens of gates move) | **(a)**. (b) flips byte-identity goldens and per-second RMS gates project-wide |
 | **D3b** | Auto-fade at a BUTT JOIN of one continuous source (every `split-clip`, every mode-B seam, every `replace` R2 split) is a 3 ms dip, not a crossfade — an audible notch in sustained material | (a) exempt SEAMLESS edges: two abutting clips over the same content whose source positions are continuous get no auto-fade; (b) apply everywhere (Cubase's Auto Fade does, which is why it ships OFF there); (c) ship the feature OFF by default (seed 0) | **(a)**. P5 implements the seamless test (same `windowContent()`, `srcEnd(left) == srcStart(right)` exactly, same stretch); the dialog shows which edges are exempt |
@@ -165,6 +165,74 @@ Mode A is deterministic under every transport state WITHOUT the sliver rule
 without it, a recording landing 3 ms before 8.1 would pull all of A into the
 column.
 
+> **SHIPPED as P2 (QBX-180). FIVE CORRECTIONS from building it.**
+>
+> **(s) STEP 5 NEEDS A NUMBER, NOT A FLAG, and `Span::fromCycle` is gone.**
+> QBX-171 left a boolean here for exactly this rule and a boolean cannot carry
+> it: `place-recording` clamps the span to the MATERIAL
+> (`min(length, waveDur - srcOffset)`) while the recorder's cycle branch always
+> asks for the whole `loopLen`, so the LAST pass of essentially every cycle
+> recording has `b < cycleEnd` and nothing in `Span` says where the cycle ends.
+> It is now `Span::extent` (0 = the placed span), carried by a new
+> `place-recording extent=` attribute and passed by the recorder as the cycle
+> length. Gated exactly by `rec_union_cycle_extent`, which is SCRIPTED: the
+> rule is about the last pass, whose take index depends on how many passes the
+> box got through, so a recorder-backed case can only assert it as a floor.
+>
+> **(t) A DEVIATION FROM STEP 4 WHERE THE EXTENT REACHES PAST `b`.** Step 4
+> says the map is `M0` outside `[a, b)`. `merge-columns` paints an operand's
+> answer over its whole EXTENT, so a cycle pass placed `extent` long answers
+> over `[a, extentEnd)` and renders silence from `b` on instead of falling back
+> to the old material. Separating the two would need a verb that sets a take's
+> extent independently of the span it answers for, and none exists —
+> `add-take at=/length=` is the only writer of an extent and it creates a take.
+> The combination is reachable only by a live cycle pass that STOPS MID-CYCLE
+> over pre-existing material, and the behaviour is defensible on its own: the
+> user asked for a pass over those bars, that pass is the answer for all of
+> them, silence included, which is what a tape machine does — and the previous
+> answer is one `select-take` away. Recorded rather than coded around.
+>
+> **(u) MODE A IS TWO VERBS, and it has to PRE-FLIGHT A1's REFUSAL.**
+> `place-clip` the pass, then `merge-columns` over the touched children in
+> ASCENDING CHILD INDEX with the pass LAST — §6.1 is already steps 1, 2 and 4,
+> and the pass being last gives step 3. But §6.1's parameter refusal
+> (correction (n)) is fatal for a recording: `SCompositeAction::apply` rolls
+> back every earlier child on the first failure, so a `merge-columns` that
+> refuses takes the pass's own `place-clip` with it and LOSES THE TAKE. The
+> planner therefore asks the same questions of the snapshot — volume, pan, a
+> `cut:Gain` envelope, a clip fade, and whether an operand is something the
+> verb can take at all — and DEGRADES to a plain placement, announced. That
+> degrade changes no existing child, which is the reason to prefer it: a
+> `LegacyTakes`-shaped one would wrap the user's faded clip into a column where
+> `parametersOf` resolves to the ACTIVE take, so the fade would stop applying
+> and the degrade would itself change what plays.
+>
+> **(v) NO GAP IS FILLED, and the plan never says so explicitly.** Every member
+> of `T` intersects `[a, b)`, so the one child that can start before `a` must
+> also end after it and therefore covers `[C.start, a)` entirely; the same
+> holds at the other end, and the pass covers `[a, b)`. `C` is contiguous AND
+> FULLY COVERED. That is what "contiguous by construction" above is worth: mode
+> A, unlike `LegacyTakes` and `TakesSplit`, has no uncovered sub-span to place
+> a cut over.
+>
+> **(w) ASCENDING CHILD INDEX IS LOAD-BEARING, and the obvious fixture cannot
+> see it.** Step 4's "the TOPMOST (highest child index) one is the previous
+> answer" is implemented by the ORDER of the merge's operand list, because §6.1
+> gives an overlap to the LATER operand — not by the time order `columnsFor`
+> returns. The two orders agree on every fixture whose clips were placed LEFT
+> TO RIGHT, which is every natural one: `rec_union_overlap_legacy` was first
+> written that way and the sabotage (sorting by start time) PASSED. It now
+> places the later-STARTING clip FIRST, so child order and time order disagree,
+> and the sabotage moves `extents`, `comp` and two `takeAtPos` answers.
+>
+> It moves no SAMPLE, and that is not a weakness of the gate but a property of
+> the claim: the same fixture has to make the two clips COHERENT where they
+> overlap for the "the sum is gone" half to be measurable as an exact halving,
+> and coherent means indistinguishable. The topmost half is therefore carried
+> by the structural assertions and the sum half by the render. One fixture
+> cannot do both audibly, because without a stretch two clips' source positions
+> either coincide everywhere they overlap or nowhere.
+
 ### 3.2 Mode `takes-split` (B) — the rule
 
 Every member of `T` is split at `a` and at `b` where those fall strictly
@@ -216,6 +284,19 @@ active take.
 | any R · Kw | the lane is REFUSED for this pass with a visible report (§7 B6); file listed as unused (Q13) | same |
 | any R · Ko | treated as R0 with a warning (§7 B2); the recording lands as a plain cut or column over it, and the two never share a column | same |
 | R0 · any | untouched | untouched |
+
+> **"(= empty, active R)" IS NOW LITERALLY TRUE (P2, QBX-180).** R3's and R5's
+> cells write the map as `0→R` and add "(= empty, active R)" as if the two
+> spellings were interchangeable. They answer the same thing but only one
+> SERIALIZES, and §4.3 already forbids writing the other on a `select-take`
+> click for that reason. As a user gesture a merge whose last operand covers
+> the whole result is rare; as the recording planner it is these two cells —
+> every cycle pass after the first, and every pass over a clip lying wholly
+> inside it — so mode A would have put a `<comp>` element into essentially
+> every project that records twice. `merge-columns` therefore declines to write
+> a degenerate map (one segment at 0 naming the take that becomes active, where
+> that take covers the whole column). A small refinement to A1, required by P2,
+> and asserted as `comp=""` in `rec_union_r3` and `rec_union_r5`.
 
 **`overdub`**: one plain cut `[a, b)` on top of whatever is there; nothing is
 split, wrapped or trimmed; everything sums. (Today's R1/R2 result made
@@ -952,7 +1033,7 @@ through `SMainWindow::postHint` and the recording dialog, not only `TW_LOGW`
 
 ## 6. New commands
 
-### 6.1 `merge-columns` (Q14) — **SHIPPED as A1 (QBX-179)**
+### 6.1 `merge-columns` (Q14) — **SHIPPED as A1 (QBX-179)**, refined by P2
 
 `merge-columns clips="0,1;0,2;0,4"` — one lane at a time; a selection
 spanning lanes is run once per lane by the UI. Result: one column at the
@@ -1459,7 +1540,7 @@ with its own CMake entry beside the other record cases. `assert-recorded-clip`
 cannot be used there: it inspects the lane's FIRST clip, which in that fixture
 is the static one the recording is merged WITH.
 
-### P2 — mode A (`takes`, the default) — depends on P1, A0b, A1
+### P2 — mode A (`takes`, the default) — depends on P1, A0b, A1 — **SHIPPED (QBX-180)**
 
 Build: the `Takes` planner (§3.1) replaces `LegacyTakes`; the `fromCycle`
 whole-cycle extent (§3.1 step 5); D1 default (a).
@@ -1482,6 +1563,48 @@ and the lane holds two children — the right reason to fail.
 Flips, edited in this PR with the reason in each header (the full list is §9):
 `takes_recording_placement.qxa:40-51`; `place_recording_over_earlier_clip.qxa`
 (1), (2) and (3)'s `clip="0,1"` assertion; `record_stays_armed.qxa:73`.
+
+> **SHIPPED (QBX-180). What this section got wrong, beyond §3.1's (s)–(w).**
+>
+> **(x) THE FLIP LIST WAS WRONG IN BOTH DIRECTIONS, and both are corrected in
+> §9.** `record_stays_armed` does NOT flip — QBX-171 had already moved its
+> second pass out of reach — and `record_snap_disagree` DOES, which no section
+> predicted. Measured: the whole suite on the mode A build has exactly three
+> failures, and those three are the whole flip list. Every other §9 row that
+> says "unchanged" was verified unchanged by that run rather than by reasoning.
+>
+> **(y) TWO GATES MORE THAN PRESCRIBED.** The first is the cycle extent,
+> because the prescribed set cannot reach it. `rec_union_cycle_inside` is live, so the LAST pass's take
+> index depends on how many passes the box got through and its extent cannot be
+> asserted at all — only floors can. `rec_union_cycle_extent` is a scripted
+> sibling that drives `place-recording extent=` directly and pins the rule
+> exactly; the sabotage (dropping `extent=`) was measured and moves four
+> assertions, including the audible one.
+>
+> The second is `rec_union_params_degrade`, for correction (u): nothing in the
+> prescribed set has a clip carrying a fade or a non-default level, so the
+> degrade path had no gate at all. Three lanes with the identical clip and the
+> identical pass, differing only in a fade, a −6 dB trim and nothing — the
+> first two degrade and the third merges. It is gated on the ANNOUNCEMENT and
+> not on the structure, because a lane left holding two children is also what
+> every build before mode A produced; and on the ABSENCE of
+> `merge-columns: REFUSED`, because the point is that the verb is never
+> emitted and so nothing is rolled back.
+>
+> **(z) `assert-recorded-clip`'s UNASKED "one take per pass" CHECK DOES NOT
+> SURVIVE MODE A unaided**, and that is a testkit change this section did not
+> foresee. The equality assumes every take on the column came from a pass,
+> which is only true on a lane that was EMPTY; under mode A the material the
+> pass was played over is a take as well. Relaxing it to `takes >= passes`
+> would give up the very bug it was written for ("one time from the beginning
+> plus the tail" produced MORE takes than passes), so the verb gained
+> `extraTakes` (default 0) and the case declares how many takes did not come
+> from a pass. Every case written before mode A means what it always meant.
+>
+> **(aa) THE DEGENERATE-MAP RULE belongs to `merge-columns`, not to the
+> planner** — see the note under §3.3. A planner can only emit verbs, and
+> predicting the merged map well enough to clear it with `set-comp-map` would
+> mean re-implementing §6.1's map painter in the caller.
 
 ### P3 — MIDI parity and X16 — depends on P2
 
@@ -1597,7 +1720,8 @@ behaviour change, and each is edited in the PR that causes it.
 | `takes_recording_placement.qxa:40-51` | silence over 192000–288000 | old material's source sec 2–3 (RMS 0.26–0.33, 0.37–0.44); one lane child | P2 |
 | `place_recording_over_earlier_clip.qxa` (1),(2) | the earlier clip is overlapped, recording is a plain cut at `0,1`/`0,2` | one union column at `0,0`; audibility asserted instead of child count | P2 |
 | `place_recording_over_earlier_clip.qxa` (3), line 61 | `assert-clip-window clip="0,1" startTime="48000"` | cannot hold once (1),(2) made one column: rewritten to `assert-take-column clip="0,0"`; B5's `clip="0,2" shape="none"` assertion is replaced by `takes=` on the one column | P2 (B5's own edit is to the gate as it stands on `main`) |
-| `record_stays_armed.qxa:73` | `assert-clip-window clip="0,1"` exists | the two jittered takes overlap whatever the jitter and form ONE column: `assert-take-column clip="0,0" takes="2"` — deterministic under A, which the old assertion never was | P2 (B9 edits the header only) |
+| `record_stays_armed.qxa:73` | `assert-clip-window clip="0,1"` exists | ~~the two jittered takes overlap whatever the jitter and form ONE column~~ — **THIS ROW IS WRONG and P2 measured it so (QBX-180).** It was written when both takes started from locator 0; QBX-171 moved the second to 480000 to get it out of the pass-wide snap's range, which is 10 s from the first pass's clip and disjoint from it under any jitter. Both passes are R0, each is its own plain child, and the existence assertion holds exactly as written. The case gained a header paragraph saying so; nothing else | P2 — **DOES NOT FLIP** |
+| `record_snap_disagree.qxa:71` | `assert-clip-window clip="1,1" startTime="388944"` | **A FLIP THIS SECTION DID NOT PREDICT (QBX-180).** The landing at 388944 is past lane 0's clip end (388800) but INSIDE lane 1's clip (which runs to 389088), so lane 0 is R0 and lane 1 is R1: only lane 1 folds, and `1,1` stops resolving. The alignment claim — both lanes stayed on the same frame — is remade on lane 1 through the comp map, and more sharply: the column starts at 197088, so two `takeAtPos` assertions at 191855 / 191856 pin the landing to the exact frame where `startTime=` pinned it to a clip's start | P2 |
 | `record_loop_takes.qxa`, `record_loop_late_start.qxa`, `record_loop_overshoot*.qxa` | one column at `cycleIn`, one take per pass, late start = leading silence | unchanged: an empty lane under cycle is R0 then R3 on every pass, the union IS the cycle, and §3.1 step 5 keeps the whole-cycle extent for `fromCycle` | — |
 | `record_punch.qxa` | exact `[in, out)` on an empty lane, `undo` → 0 clips | unchanged; the B7 outer macro is opened only when a recorder commits, so an empty pass pushes no undo entry (`record_mixed_one_undo.qxa` asserts that too) | — |
 | `midi_record_modes.qxa` | three modes through the INI | rewritten in M0 (project property), extended in P3 | M0, P3 |
@@ -1740,7 +1864,7 @@ existing tickets. Order within a group is landing order.
 | A0a **(SHIPPED, QBX-177)** | take extents, model only: `duration_`, extents in `insertTake`/loader, resolution rule, `twCompColumn` extents + xfade clamp, invalidation, split per-half/re-index/identity inverse, `remove-take` extent inverse, `add-take at=/length=`, `FORMAT_VERSION 3` + its flip | B1, B3, B4, B10 | L |
 | A0b | **SHIPPED (QBX-178).** Take extents, edit surface and view: extent-aware `select-take`, `resize-clip` clamp/refusal, take-lane slip, hatch in both painters, **plus two items A0a handed over by name**: `hasPreview`/`getPreview`' extent window (it moves with the painters, or the picture is half-windowed) and `resize-clip`'s LEFT-EDGE loop, which still writes the column's duration onto every take — unreachable today, noted at the site. Added `assert-envelope take=` (a script had no way to read the per-take collect) and `STakeStack::nextCompEdgeAfter`, the one comp-edge walk the model, the compact painter and the take lane all answer with. **The HATCH's pixels stay QBX-157's**; A0b gates the silence and the envelope beneath them | A0a | M |
 | A1 | **SHIPPED (QBX-179).** `merge-columns` / `unmerge-columns` with the link-move protocol. Added a refusal §6.1 does not list — operands must agree on volume and pan and carry no gain curve or fade — because a merged column has ONE set of clip parameters and the row's criterion is that the render does not change (QBX-185 in a second place). The forward also PINS each operand column, which §6.1 says is unnecessary and `SObject`'s own serialized fields say otherwise | A0a, B1 | M |
-| P2 | mode A (`takes`) replaces `LegacyTakes`; the §9 flips | P1, A0b, A1, D1 (default (a)) | L |
+| P2 (**QBX-180**) | mode A (`takes`) replaces `LegacyTakes`; the §9 flips — **SHIPPED** | P1, A0b, A1, D1 (default (a)) | L |
 | P3 | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind | P2 | M |
 | P4 | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names | P2 | M |
 | P5 | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; selection fade dialog | A0a, B8 | M |

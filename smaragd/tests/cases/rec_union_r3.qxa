@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MODE A, CELL R3: the recording STARTS WITH the existing material and runs
+  past its end (plan 53 §3.1 and §3.3's R3 row, QBX-180 / P2). The cell where
+  nothing of O lies outside `[a, b)`, so the pass is the answer EVERYWHERE and
+  the comp map is EMPTY - §3.3 writes that cell's map as "0->R (= empty,
+  active R)".
+
+  THE EMPTY MAP IS A RULE, NOT AN ACCIDENT. A one-segment map naming the
+  active take over the whole column answers exactly what no map plus
+  `activeTake_` answers, but it SERIALIZES - and this cell is the common one
+  under mode A (every cycle pass after the first, every pass over a clip that
+  lies wholly inside it), so writing it would put a `<comp>` element into
+  essentially every project that records twice. `merge-columns` therefore
+  declines to write a degenerate map, which is §4.3's rule for `select-take`
+  applied to the merge. Asserted below as comp="".
+
+    O = [48000, 144000)   startOffset 0, so sec0 then sec1
+    R = [48000, 192000)   srcOffset 48000, so sec1, sec2, sec3
+
+  s=a=48000 and e=144000 <= b=192000, which is R3. C = [48000, 192000), i.e.
+  the pass's own span; O becomes a take at 0-96000 and R one at 0-144000.
+
+  Renders are of the Kp lane only (the other two are muted); the kind
+  dimension is carried by the model assertions and is rendered in
+  rec_union_r1.
+-->
+<SActionScript version="1" name="rec_union_r3">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="48000"
+                startOffset="0" duration="96000"/>
+
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="48000"
+                startOffset="96000" duration="96000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav" timePos="48000"
+                startOffset="96000" duration="96000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+    <set-comp-map clip="2,0">
+      <seg at="0" take="0"/>
+      <seg at="48000" take="1"/>
+    </set-comp-map>
+
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        comp="" duration="96000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="1"
+                        comp="0:0;48000:1" duration="96000"/>
+
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="48000" length="144000"
+                     mode="takes"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="48000" length="144000"
+                     mode="takes"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="48000" length="144000"
+                     mode="takes"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-96000;0-144000" comp="" duration="144000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <assert-take-column clip="1,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-96000;0-96000;0-144000" comp=""
+                        duration="144000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- Km: NOTHING of O's map survives, because the pass governs the whole
+         column - and §3.3's R3 Kc/Km row says exactly that ("none of it
+         survives (it comes back with undo)"). The map is not merely
+         overwritten segment by segment: the result is degenerate and so is
+         not written at all. -->
+    <assert-take-column clip="2,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-96000;0-96000;0-144000" comp=""
+                        duration="144000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <render filename="ru_r3_kp.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r3_kp.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="ru_r3_kp.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_r3_kp.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="ru_r3_kp.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+
+    <!-- Comping back to O, which is PARTIAL here (0-96000 of a 144000-long
+         column), so the pass re-enters at 96000 instead of being silenced. -->
+    <select-take clip="0,0" take="0"/>
+    <select-take clip="1,0" take="1"/>
+    <select-take clip="2,0" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="0:1;96000:2" activeTake="1"/>
+    <assert-take-column clip="2,0" comp="0:1;96000:2" activeTake="1"/>
+
+    <render filename="ru_r3_kp_old.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <assert-audio-energy filename="ru_r3_kp_old.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="ru_r3_kp_old.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_r3_kp_old.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <!-- ...and the pass is still there after O's extent ends. -->
+    <assert-audio-energy filename="ru_r3_kp_old.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

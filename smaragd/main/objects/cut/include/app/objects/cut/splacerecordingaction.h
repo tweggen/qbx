@@ -9,19 +9,16 @@
 class SCompositeAction;
 
 // Action: place a finished recording onto a track — the multi-take verb
-// (proposal 17 phase 2, decision 1). Plans the recording's span against the
-// lane's existing columns and applies the plan as one atomic composite:
+// (proposal 17 phase 2, decision 1).
 //
-//   - a column (take stack or plain cut) the recording covers gets the
-//     matching segment as a NEW take (slip = columnStart - recording start),
-//     auto-activated; plain cuts are wrapped into stacks by add-take,
-//   - uncovered spans become plain windowed cuts (place-clip),
-//   - columns that begin BEFORE the recording start are left untouched
-//     ("as applicable").
-//
-// An empty lane region therefore degenerates to today's behavior: one plain
-// cut over the whole file. Undo removes everything the recording placed and
-// unwraps any wrapped columns (composite of the children's inverses).
+// A THIN VERB since QBX-171 (plan 53 §5.1): it reads the lane ONCE into an
+// `srecplan::LaneSnapshot`, picks the `srecplan::Planner` for the mode it was
+// HANDED, and applies whatever that planner appended to one atomic composite.
+// It decides nothing itself, and a planner emits only existing verbs, so every
+// mode's undo is the composite's inverse chain. What each mode does is in
+// `srecordplanner.h`; the default `takes` is plan 53's MODE A since QBX-180 —
+// one union column per pass per lane — and an empty lane region still
+// degenerates to one plain cut over the file, as every build has done.
 //
 // `srcOffset` / `length` (proposal 21 L3b) place a SUB-RANGE of the file
 // instead of all of it: `srcOffset` frames into the recording, `length` frames
@@ -48,14 +45,15 @@ public:
     SPlaceRecordingAction( const QList<int> &trackPath,
                            const QString &filePath, offset_t timePos,
                            offset_t srcOffset = 0, length_t length = 0,
-                           const QString &mode = QString() );
+                           const QString &mode = QString(),
+                           length_t extent = 0 );
 
     QString name() const override { return QStringLiteral("place-recording"); }
     QStringList knownAttributes() const override
     { return { QStringLiteral("trackPath"), QStringLiteral("filePath"),
                QStringLiteral("timePos"), QStringLiteral("srcOffset"),
                QStringLiteral("length"), QStringLiteral("mode"),
-               QStringLiteral("armed") }; }
+               QStringLiteral("armed"), QStringLiteral("extent") }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -89,6 +87,24 @@ public:
      * here so that the verb's shape does not change when it does.
      */
     bool armed() const { return armed_; }
+
+    /**
+     * THE TAKE'S EXTENT, when the recorder knows it is WIDER than the material
+     * (plan 53 §3.1 step 5, QBX-180). `0` = the placed span.
+     *
+     * It exists because `length` cannot say this: `length` bounds the MATERIAL
+     * and this bounds the TAKE. A cycle pass is placed at the cycle start and
+     * asked for the whole cycle length, but the span is clamped to what was
+     * actually captured (`min( length, waveDur - srcOffset )`), so the last
+     * pass of essentially every cycle recording is SHORT -- and under mode A
+     * its take must still be an alternative for the same bars as the full
+     * passes beside it, or `select-take` cannot isolate it (A0b made the click
+     * extent-aware). The recorder passes the cycle length and 0 otherwise.
+     *
+     * It replaces the `srecplan::Span::fromCycle` flag QBX-171 left unread: a
+     * boolean cannot say where the cycle ENDS.
+     */
+    length_t extent() const { return extent_; }
 
 private:
     /**
@@ -125,6 +141,7 @@ private:
     offset_t   timePos_ = 0;
     offset_t   srcOffset_ = 0;
     length_t   length_ = 0;      // 0 == to the end of the file
+    length_t   extent_ = 0;      // 0 == the placed span
 };
 
 #endif // SPLACERECORDINGACTION_H

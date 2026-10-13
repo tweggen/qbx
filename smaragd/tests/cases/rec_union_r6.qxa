@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MODE A, CELL R6: the recording starts BEFORE the existing material and ends
+  INSIDE it (plan 53 §3.1 and §3.3's R6 row, QBX-180 / P2). Both edges of the
+  union are interesting here: `C` starts at the pass and ends at O, so the
+  column is longer than either operand.
+
+    O = [96000, 240000)   startOffset 0, so sec0..sec2 across three seconds
+    R = [48000, 144000)   srcOffset 96000, so sec2 then sec3
+
+  a=48000 < s=96000 < b=144000 < e=240000, which is R6. C = [48000, 240000),
+  O's take sits at 48000-192000 and the pass's at 0-96000.
+
+  Renders are of the Kp lane only; see rec_union_r3's header.
+-->
+<SActionScript version="1" name="rec_union_r6">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="0" duration="144000"/>
+
+    <place-clip trackPath="1" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="144000" duration="144000"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+
+    <place-clip trackPath="2" filePath="../test_sawtooth.wav" timePos="96000"
+                startOffset="144000" duration="144000"/>
+    <add-take clip="2,0" filePath="../test_sawtooth.wav" startOffset="0"/>
+    <set-comp-map clip="2,0">
+      <seg at="0" take="0"/>
+      <seg at="48000" take="1"/>
+    </set-comp-map>
+
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        comp="" duration="144000"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="1"
+                        comp="0:0;48000:1" duration="144000"/>
+
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="96000" length="96000"
+                     mode="takes"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="96000" length="96000"
+                     mode="takes"/>
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     timePos="48000" srcOffset="96000" length="96000"
+                     mode="takes"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="48000-192000;0-96000" comp="0:1;96000:0"
+                        duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <assert-take-column clip="1,0" shape="direct" takes="3" activeTake="2"
+                        extents="48000-192000;48000-192000;0-96000"
+                        comp="0:2;96000:1" duration="192000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <assert-take-column clip="2,0" shape="direct" takes="3" activeTake="2"
+                        extents="48000-192000;48000-192000;0-96000"
+                        comp="0:2;96000:1" duration="192000"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+
+    <!-- THE COLUMN STARTS WHERE THE PASS DID, not where O did, which is the
+         half of `C = [min(a,s), max(b,e))` the extents above cannot show.
+
+         `startTime` ONLY, deliberately: assert-clip-window reads the LINK's
+         own object, and on a direct column that resolves to the ACTIVE TAKE -
+         so `duration` there is the take's window (96000), not the column's.
+         The column's own length is the assert-take-column duration= above. -->
+    <assert-clip-window clip="0,0" startTime="48000"/>
+
+    <set-track-mute trackPath="1" muted="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <render filename="ru_r6_kp.wav" format="wav" quality="10" durationSec="5.0"/>
+    <assert-audio-energy filename="ru_r6_kp.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="ru_r6_kp.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="ru_r6_kp.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.37" maxRms="0.44"/>
+    <!-- the re-entry at 144000: O's own material, second 1 of its window -->
+    <assert-audio-energy filename="ru_r6_kp.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_r6_kp.wav" startFrame="192000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+
+    <select-take clip="0,0" take="0"/>
+    <select-take clip="1,0" take="1"/>
+    <select-take clip="2,0" take="1"/>
+    <assert-take-column clip="0,0" comp="0:1;48000:0" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="0:2;48000:1" activeTake="1"/>
+    <assert-take-column clip="2,0" comp="0:2;48000:1" activeTake="1"/>
+
+    <render filename="ru_r6_kp_old.wav" format="wav" quality="10"
+            durationSec="5.0"/>
+    <assert-audio-energy filename="ru_r6_kp_old.wav" startFrame="0"
+                         frameCount="48000" minRms="0.0" maxRms="0.005"/>
+    <!-- the pass still answers before O's extent begins -->
+    <assert-audio-energy filename="ru_r6_kp_old.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+    <!-- ...and from O's extent start it is O all the way -->
+    <assert-audio-energy filename="ru_r6_kp_old.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="ru_r6_kp_old.wav" startFrame="144000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="ru_r6_kp_old.wav" startFrame="192000"
+                         frameCount="48000" minRms="0.26" maxRms="0.33"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

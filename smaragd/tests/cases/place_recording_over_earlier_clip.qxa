@@ -22,6 +22,33 @@
 
   test_sawtooth.wav is 4 s at 48 kHz = 192000 frames, which is what makes every
   number below a closed form.
+
+  FLIPPED BY MODE A (plan 53 §9, QBX-180). The CLAIM is unchanged and is the
+  reason the case exists: place-recording must never discard a take. What
+  changed is how a surviving take is observed. The defect this gates was an
+  EMPTY COMPOSITE - the pass was planned away and nothing was placed at all -
+  and the old observable was "a new lane child appeared". Under mode A there
+  is never a new lane child: every pass folds into ONE union column, so the
+  observable is the column's TAKES and their EXTENTS, which say where each
+  pass's material is, and a render that hears it.
+
+  Three passes, each a closed form (the clip starts at 0 and the file is
+  192000 frames, so take 0's extent is 0-192000 throughout):
+
+    (1) [48000, 144000)   -> takes 2, extents 0-192000;48000-144000,
+                             comp 0 -> clip, 48000 -> pass1, 144000 -> clip
+    (2) [96000, 288000)   -> takes 3, the column grows to [0, 288000),
+                             comp 0 -> clip, 48000 -> pass1, 96000 -> pass2
+    (3) [48000, 144000)   -> takes 4, comp 0 -> clip, 48000 -> pass3,
+                             144000 -> pass2
+
+  THE OLD B5 ASSERTION IS STILL HERE in its own register. "The recording went
+  to exactly ONE column" was asserted as `assert-take-column clip="0,2"
+  shape="none"` - that a second overlapping child had NOT been wrapped into a
+  column by accident. There is no second child to check any more; what the
+  rule now means is that each pass appears as exactly ONE take, which is
+  `takes=` on the one column: four takes for one clip and three passes, never
+  five.
 -->
 <SActionScript version="1" name="place_recording_over_earlier_clip">
 
@@ -40,7 +67,13 @@
          full length. -->
     <place-recording trackPath="0" filePath="../test_sawtooth.wav"
                      timePos="48000" length="96000"/>
-    <assert-clip-window clip="0,1" startTime="48000" duration="96000"/>
+    <!-- The pass survived, as a take over exactly its own span. Under the
+         defect NOTHING was placed: the composite came out empty and applied
+         as success, so there was no second take to find. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-144000"
+                        comp="0:0;48000:1;144000:0" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
 
     <!-- (2) PARTIAL cover. The recording [96000, 288000) runs off the end of
          the column. The buggy planner placed only the uncovered tail, at
@@ -48,7 +81,13 @@
          whole take must be placed, from where it actually started. -->
     <place-recording trackPath="0" filePath="../test_sawtooth.wav"
                      timePos="96000"/>
-    <assert-clip-window clip="0,2" startTime="96000" duration="192000"/>
+    <!-- The whole pass is there, from where it actually started: a take at
+         96000-288000, and the column has grown to hold it. The buggy planner
+         placed only the uncovered tail and dropped the first half. -->
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-192000;48000-144000;96000-288000"
+                        comp="0:0;48000:1;96000:2" duration="288000"/>
+    <assert-clip-window clip="0,2" expectReject="true"/>
 
     <!-- (3) THE TAKE-STACKING PATH IS UNTOUCHED, which is the half of this
          that a "just place it as a clip" fix would break. A recording starting
@@ -58,7 +97,10 @@
          become a clip, 0,3 would resolve. -->
     <place-recording trackPath="0" filePath="../test_sawtooth.wav"
                      timePos="48000" length="96000"/>
-    <assert-clip-window clip="0,1" startTime="48000" duration="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="4" activeTake="3"
+                        extents="0-192000;48000-144000;96000-288000;48000-144000"
+                        comp="0:0;48000:3;144000:2" duration="288000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
     <assert-clip-window clip="0,3" expectReject="true"/>
 
     <!-- ...AND THE RECORDING WENT TO EXACTLY ONE COLUMN (plan 53 B5, QBX-163).
@@ -73,8 +115,21 @@
          true both under the skip that fixes this and under P1's Q7 rule, so
          this assertion does not have to be rewritten when the planner is
          replaced. -->
-    <assert-take-column clip="0,2" shape="none"/>
-    <assert-clip-window clip="0,2" startTime="96000" duration="192000"/>
+    <assert-take-column clip="0,0" takes="4"/>
+
+    <!-- ...AND PASS (1) IS STILL AUDIBLE, which is the half no structural
+         assertion can give. Comping to it gives its own material over its
+         own span: source sec0 then sec1. Under the defect this span played
+         the CLIP's material there (source sec1 then sec2), because nothing
+         had been placed over it. -->
+    <select-take clip="0,0" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;48000:1;144000:2" activeTake="1"/>
+    <render filename="prec_pass1.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <assert-audio-energy filename="prec_pass1.wav" startFrame="48000"
+                         frameCount="48000" minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="prec_pass1.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
   </actions>
 
   <assertions>

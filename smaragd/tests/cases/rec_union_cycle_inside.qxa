@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CASE C8, LIVE: CYCLE RECORDING OVER A CLIP THAT REACHES PAST THE CYCLE
+  (plan 53 §3.1 step 5, §3.4's cycle bullet and §8's P2 row, QBX-180).
+
+  Every pass of a cycle recording is one span [cycleIn, cycleOut), so the
+  passes are alternatives for the same bars. Here the lane already holds a
+  clip that STARTS inside the cycle and ENDS past it, which is what makes the
+  cell interesting: the union column has to reach the clip's end, every
+  recorded take has to stay inside the cycle, and the clip has to keep playing
+  after the cycle region ends.
+
+  At 1/8 of the plan's scale, so the case costs five seconds rather than forty:
+
+    cycle     [0, 96000)          two seconds
+    old clip  [48000, 144000)     startOffset 0, so sec0 then sec1
+    recording about 5 s = two and a half passes
+
+  WHAT IS ASSERTED, and in which register (this follows the project's rule
+  that load-sensitive quantities are FLOORS and the load-insensitive structure
+  is exact):
+
+   - ONE child on the lane, whatever the pass count: `0,1` must not resolve.
+     On `main` it does - the legacy planner leaves the pass beside a clip that
+     predates it - and that is this case's reason to fail there.
+   - the column spans [0, 144000): the cycle start to the clip's own end,
+     which is `C = [min(a, s), max(b, e))`.
+   - take 0 is the OLD CLIP and it is what the map answers from 96000 on, so
+     no recorded take governs the region beyond the cycle. Exact, because
+     operands are merged in child-index order and the clip was there first.
+   - the pass count as a floor, through `assert-recorded-clip`.
+   - the render: recorded material inside the cycle (a loose band - the
+     capture is a file-backed input and the case is not about its level), and
+     the OLD CLIP'S OWN second after it, at the tight band its source
+     position gives. That last band is the "plays after the cycle" claim.
+
+  WHAT IS NOT ASSERTED HERE. The exact extent of the LAST pass - the one
+  §3.1 step 5 is about - cannot be: its take index depends on how many passes
+  the box got through. `rec_union_cycle_extent` is the scripted half that
+  pins it exactly.
+
+  Env, set on the CTest entry: SMARAGD_AUDIO_INPUT_BACKEND=file:../test_position.wav,
+  SMARAGD_AUDIO_INPUT_LATENCY_FRAMES=4800, SMARAGD_CAPTURE_SPEED=1; RUN_SERIAL.
+-->
+<SActionScript version="1" name="rec_union_cycle_inside">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+
+    <!-- The clip the cycle will be recorded over: it starts inside the cycle
+         and ends a second past it. -->
+    <place-clip trackPath="0" filePath="../test_sawtooth.wav" timePos="48000"
+                startOffset="0" duration="96000"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="96000"/>
+
+    <!-- The cycle region: 0 .. 2 s. set-property takes a JSON ARRAY. -->
+    <set-property key="rangeStart" value="[0]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <cycle-enable/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+    <wait-ms ms="5000"/>
+    <record-stop/>
+
+    <!-- ONE child, and it is a column that spans the cycle AND the clip. -->
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+    <assert-take-column clip="0,0" shape="direct" duration="144000"/>
+
+    <!-- The passes, as a floor: the old clip is take 0, so two passes make
+         three takes. -->
+    <!-- `extraTakes="1"` is the OLD CLIP: the verb checks "one take per pass"
+         unasked, and that equality only holds on a lane that was empty.
+         Under mode A the material the pass was played over is a take too. -->
+    <assert-recorded-clip trackPath="0" clips="1" minTakes="3" minPasses="2"
+                          extraTakes="1"
+                          startFrame="0" startTolerance="0"
+                          inputLatencyFrames="4800"/>
+
+    <!-- THE OLD CLIP KEEPS ITS OWN EXTENT, and the map hands the region past
+         the cycle back to it. No recorded take reaches here - that is X8. -->
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="143999" expectTake="0"/>
+
+    <render filename="ru_ci.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- recorded material inside the cycle -->
+    <assert-audio-energy filename="ru_ci.wav" startFrame="4000"
+                         frameCount="40000" minRms="0.02" maxRms="0.95"/>
+    <!-- ...and the OLD CLIP after it: its own source second 1, which only the
+         clip can produce. -->
+    <assert-audio-energy filename="ru_ci.wav" startFrame="96000"
+                         frameCount="48000" minRms="0.15" maxRms="0.21"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

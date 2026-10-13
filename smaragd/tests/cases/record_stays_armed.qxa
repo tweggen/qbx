@@ -93,7 +93,17 @@
          busier box. Moving take 2 out of range keeps this case about its own
          claim (the track is still armed) and removes a flake it would
          otherwise have acquired. Comping two passes onto one column is gated
-         where it belongs: record_loop_takes and midi_record_modes. -->
+         where it belongs: record_loop_takes and midi_record_modes.
+
+         AND THAT IS WHY MODE A DOES NOT MOVE THIS CASE (QBX-180). Plan 53 §9
+         listed line 73's `assert-clip-window clip="0,1"` as a P2 flip - "the
+         two jittered takes overlap whatever the jitter and form ONE column".
+         That row was written when BOTH takes started from locator 0; QBX-171
+         moved the second to 480000 for the reason above, which is 10 s from
+         the first pass's clip and so disjoint from it under any jitter. Both
+         passes are therefore R0, each is its own plain child, and the
+         existence assertion holds exactly as written. Measured on the mode A
+         build; the §9 row is corrected there. -->
     <set-locator position="480000"/>
     <toggle-playback play="1"/>
     <wait-playhead minAdvance="4096" timeoutMs="30000"/>

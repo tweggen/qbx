@@ -66,6 +66,7 @@ QStringList SAssertRecordedClipAction::knownAttributes() const
              QStringLiteral( "outputLatencyFrames" ),
              QStringLiteral( "userOffsetFrames" ), QStringLiteral( "compensationFrames" ),
              QStringLiteral( "trimmedFrames" ),    QStringLiteral( "passes" ),
+             QStringLiteral( "extraTakes" ),
              QStringLiteral( "growing" ),          QStringLiteral( "previewNonEmpty" ),
              QStringLiteral( "sourceAtStartFrame" ),
              QStringLiteral( "sourceTolerance" ),
@@ -141,11 +142,22 @@ SApplyResult SAssertRecordedClipAction::apply( SProject *project )
         // ONE TAKE PER PASS -- the whole claim of loop recording, and the half
         // of it that is NOT wall-clock-dependent. Asserted whenever more than
         // one pass was committed, without being asked.
+        //
+        // `extraTakes` IS WHAT MAKES THE CHECK SURVIVE MODE A (QBX-180). The
+        // equality assumes every take on the column came from a pass, which
+        // is true only on a lane that was EMPTY -- and under mode A a pass
+        // over existing material folds that material in as a take too. The
+        // alternative, relaxing the check to `n >= passes`, would give up the
+        // very bug it was written for ("one time from the beginning plus the
+        // tail" produced MORE takes than passes), so the case says how many
+        // takes did not come from a pass instead and the equality stands.
         SAudioRecorder *r = SApplication::app().audioRecorder();
         if( r && !r->isActive() && r->lastPassCount() > 1
-            && n != (qint64) r->lastPassCount() ) {
+            && n != (qint64) r->lastPassCount() + extraTakes_ ) {
             qWarning() << "assert-recorded-clip: " << r->lastPassCount()
-                       << "pass(es) committed but the column holds" << n
+                       << "pass(es) committed and" << extraTakes_
+                       << "take(s) declared not to come from one, but the"
+                       << "column holds" << n
                        << "take(s) -- loop recording must be one take per pass";
             return { false, nullptr };
         }
@@ -375,6 +387,8 @@ void SAssertRecordedClipAction::writeXml( QDomElement &elem ) const
         elem.setAttribute( "trimmedFrames", QString::number( trimmed_ ) );
     if( passes_ != kUnset )
         elem.setAttribute( "passes", QString::number( passes_ ) );
+    if( extraTakes_ != 0 )
+        elem.setAttribute( "extraTakes", QString::number( extraTakes_ ) );
     if( growing_ )         elem.setAttribute( "growing", "true" );
     if( previewNonEmpty_ ) elem.setAttribute( "previewNonEmpty", "true" );
     if( sourceAtStart_ != kUnset )
@@ -408,6 +422,7 @@ bool SAssertRecordedClipAction::readXml( const QDomElement &elem, int )
     compensation_      = elem.attribute( "compensationFrames", "-999999" ).toLongLong();
     trimmed_           = elem.attribute( "trimmedFrames", "-1" ).toLongLong();
     passes_            = elem.attribute( "passes", "-1" ).toLongLong();
+    extraTakes_        = elem.attribute( "extraTakes", "0" ).toLongLong();
     growing_           = elem.attribute( "growing", "false" ) == "true";
     previewNonEmpty_   = elem.attribute( "previewNonEmpty", "false" ) == "true";
     sourceAtStart_     = elem.attribute( "sourceAtStartFrame", "-1" ).toLongLong();
