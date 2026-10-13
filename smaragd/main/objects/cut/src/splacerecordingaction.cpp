@@ -1,5 +1,6 @@
 #include "app/objects/cut/splacerecordingaction.h"
-#include "app/objects/cut/srecordplanner.h"
+#include "app/objects/cut/saudiopassverbs.h"
+#include "app/objects/recplan/srecordplanner.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
@@ -102,6 +103,11 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     // This verb places AUDIO. `place-midi-recording` is the event sibling and
     // passes Event; the planners branch on nothing else.
     ctx.kind  = SContentKind::Audio;
+    // HOW the planner's decisions are spelled: in this module's verbs
+    // (QBX-188). The planner itself may not name them — it serves the event
+    // side too, which may not depend on `objects/cut`.
+    const SAudioPassVerbs audioVerbs;
+    ctx.verbs = &audioVerbs;
 
     const srecplan::LaneSnapshot snap = srecplan::snapshot( lane, trackPath_ );
 

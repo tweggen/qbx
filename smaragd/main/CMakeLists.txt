@@ -156,6 +156,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/scompmapactions.h
     objects/cut/include/app/objects/cut/ssetclipfadeaction.h
     objects/cut/include/app/objects/cut/smergecolumnsactions.h
+    objects/cut/include/app/objects/cut/saudiopassverbs.h
     objects/cut/include/app/objects/cut/sselecttakeaction.h
     objects/cut/include/app/objects/cut/ssetclipeventchannelaction.h
     objects/cut/include/app/objects/cut/ssetclipnameaction.h
@@ -185,6 +186,11 @@ set(APP_OBJECTS_FILES
     objects/cut/src/scompmapactions.cpp
     objects/cut/src/ssetclipfadeaction.cpp
     objects/cut/src/smergecolumnsactions.cpp
+    objects/cut/src/saudiopassverbs.cpp
+    # --- app/objects/recplan (QBX-188): the record planner, at the RANK
+    # of objects/cut and objects/midi so BOTH can use it.
+    objects/recplan/include/app/objects/recplan/srecordplanner.h
+    objects/recplan/src/srecordplanner.cpp
     objects/cut/src/sselecttakeaction.cpp
     objects/cut/src/ssetclipeventchannelaction.cpp
     objects/cut/src/ssetclipnameaction.cpp
@@ -195,7 +201,6 @@ set(APP_OBJECTS_FILES
     objects/cut/src/ssetformantshiftaction.cpp
     objects/cut/src/splaceclipaction.cpp
     objects/cut/src/splacerecordingaction.cpp
-    objects/cut/src/srecordplanner.cpp
     objects/cut/src/ssplitclipaction.cpp
     objects/cut/src/stakehelpers.cpp
     objects/cut/src/stakestack.cpp
@@ -653,6 +658,7 @@ target_link_libraries(app_core PUBLIC
 add_library(app_objects OBJECT ${APP_OBJECTS_FILES})
 target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/cut/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/objects/recplan/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/midi/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/wave/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include

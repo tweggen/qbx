@@ -2,12 +2,12 @@
 #define _SRECORDPLANNER_H_
 
 #include "app/model/sobject.h"
-#include "tw/events/twcompmap.h"
 #include "tw/graph/tw303aenv.h"
 #include <QList>
 #include <QString>
 
 class SObject;
+class SAction;
 class SCompositeAction;
 
 /**
@@ -39,14 +39,30 @@ class SCompositeAction;
  *     valid through the plan" was true only because it emitted nothing but
  *     appends; it is false the moment a split or a merge is in the plan.
  *
- * WHY HERE. `objects/cut` is where `place-recording`, `add-take`,
- * `split-clip`, `resize-clip`, `remove-sample` and the column helpers live,
- * and `tools/check_layering.py` gives it the edges it needs for all of them.
- * It deliberately does NOT reach `objects/track`, which is why a planner is
- * handed its mode already resolved (`srecmode::resolveMode`, called by the
- * recorder) rather than resolving one itself.
+ * WHY ITS OWN MODULE, at the RANK of `objects/cut` and `objects/midi` rather
+ * than inside either (QBX-188). It used to live in `objects/cut`, beside the
+ * verbs it emits — and that put it out of the EVENT side's reach for good.
+ * `tools/check_layering.py` gives `objects/midi` the edges
+ * `{actions, model, persistence}`, deliberately: proposal 37 §3.5 says
+ * "objects/midi sits at the RANK of objects/cut ... it is a second
+ * window/content pair, not a layer above one, and it must stay independent of
+ * the audio window". So `place-midi-recording` could name neither
+ * `srecplan::snapshot()` nor `merge-columns` — the verb mode A is built on —
+ * and plan 53 P3 could not be the wiring it was scoped as.
+ *
+ * Moving the planner here keeps ONE copy of the union rule and breaks no
+ * existing edge: `objects/cut` and `objects/midi` both depend on this module,
+ * and neither depends on the other. What a planner may not name is everything
+ * concrete it emits, which is what `PassVerbs` is for.
+ *
+ * It deliberately does NOT reach `objects/track` either, which is why a
+ * planner is handed its mode already resolved (`srecmode::resolveMode`, called
+ * by the recorder) rather than resolving one itself.
  */
 namespace srecplan {
+
+// Defined below; `Context` only borrows a pointer to one.
+class PassVerbs;
 
 /**
  * The four modes of plan 53 §3. The strings are `SProjectProps`' spelling,
@@ -105,7 +121,17 @@ struct Child {
     SContentKind contentKind = SContentKind::Audio;
     int      nTakes = 0;       ///< columns only
     int      activeTake = -1;  ///< columns only
-    twCompMap map;             ///< columns only; empty = "ask activeTake"
+    /**
+     * Does the column carry a comp map? Columns only.
+     *
+     * A BOOLEAN AND NOT THE MAP ITSELF (QBX-188). It used to be a `twCompMap`,
+     * and nothing ever read it but the `Column` / `MappedColumn` line below —
+     * no planner branches on the distinction. Narrowing it to the one bit that
+     * is used costs this module its whole dependency on `tw/events`, and the
+     * map a plan actually needs is the one `merge-columns` PAINTS, which no
+     * caller here has to predict.
+     */
+    bool     hasCompMap = false;
 
     /**
      * Does the placement carry a clip WINDOW at all?
@@ -233,6 +259,16 @@ struct Context {
     Mode         mode  = Mode::Takes;
     bool         armed = true;
     SContentKind kind  = SContentKind::Audio;
+    /**
+     * HOW to emit what the planner decides (see `PassVerbs`). Borrowed, not
+     * owned: the caller builds one per pass — an event implementation carries
+     * that pass's own events — and it outlives the `plan()` call.
+     *
+     * A plan with no verbs REFUSES rather than emitting nothing, because an
+     * empty composite applies as SUCCESS and that is how a recording is lost
+     * silently (the defect `place_recording_over_earlier_clip` gates).
+     */
+    const PassVerbs *verbs = nullptr;
 };
 
 /**
@@ -279,6 +315,65 @@ private:
     int         nextAppendId_ = 0;
 
     int indexOf_( bool original, int key ) const;
+};
+
+/**
+ * THE VERBS A PLANNER EMITS, supplied by whichever module owns them.
+ *
+ * This is the seam that lets ONE planner serve both content kinds (QBX-188).
+ * A planner decides WHAT must happen and in what order — the union geometry,
+ * the operand order, the pre-flight, the index bookkeeping — and this says
+ * HOW, in the vocabulary of the caller's own module:
+ *
+ *   audio (`objects/cut`)   place-clip, add-take, split-clip, remove-sample,
+ *                           merge-columns
+ *   events (`objects/midi`) insert-midi-clip, add-midi-take, …
+ *
+ * It follows the precedent `SClipWindow::registerTakeColumnFactory` already
+ * set for this exact layering problem: `smidirecordactions.cpp` wraps a clip
+ * into a take column through the model's registered factory precisely so that
+ * "`objects/midi` never names STakeStack".
+ *
+ * EVERY POSITION HERE IS A TIMELINE POSITION, and the SOURCE arithmetic
+ * belongs to the implementation. The planner knows where the pass's material
+ * has to start on the timeline; only the audio side knows that this means
+ * `srcOffset + (takeStart - a)` frames into a WAV, and only the event side
+ * knows it means a tick rebased through the clip's own window. A planner that
+ * did that arithmetic itself would be doing it in one domain for both.
+ *
+ * `Span::filePath` and `Span::srcOffset` are the AUDIO payload and are read
+ * only by the audio implementation; an event implementation carries its own
+ * events and ticks, handed to it by its verb for that one pass.
+ *
+ * Returning nullptr from any of these makes the plan fail — the caller's
+ * composite is never given a null child.
+ */
+class PassVerbs {
+public:
+    virtual ~PassVerbs() = default;
+
+    /** Place the pass as a plain lane child over `[at, at + len)`. */
+    virtual SAction *placePass( const QList<int> &lanePath, const Span &span,
+                                offset_t at, length_t len ) const = 0;
+    /**
+     * Add the pass to the placement at `clipPath` as a TAKE whose material
+     * begins at timeline position `takeStart` (which may be before `span.a`
+     * by up to two frames — see `pieceCanSplitAt` — so the implementation's
+     * anchor may legitimately go negative: leading silence, legal since
+     * proposal 23).
+     */
+    virtual SAction *addTakeFromPass( const QList<int> &clipPath,
+                                      const Span &span,
+                                      offset_t takeStart ) const = 0;
+    /** Cut the placement at `clipPath` at timeline position `at`, no broadcast. */
+    virtual SAction *splitClip( const QList<int> &clipPath,
+                                offset_t at ) const = 0;
+    /** Remove the lane child at `index`, which the inverse restores to `at`. */
+    virtual SAction *removeChild( const QList<int> &lanePath, int index,
+                                  offset_t at ) const = 0;
+    /** Fold `clipPaths` into one union column at the first operand's index. */
+    virtual SAction *mergeColumns(
+        const QList<QList<int>> &clipPaths ) const = 0;
 };
 
 /**

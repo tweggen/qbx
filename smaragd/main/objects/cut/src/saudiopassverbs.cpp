@@ -1,0 +1,57 @@
+#include "app/objects/cut/saudiopassverbs.h"
+
+#include "app/objects/cut/saddtakeaction.h"
+#include "app/objects/cut/smergecolumnsactions.h"
+#include "app/objects/cut/splaceclipaction.h"
+#include "app/objects/cut/sremovesampleaction.h"
+#include "app/objects/cut/ssplitclipaction.h"
+
+SAction *SAudioPassVerbs::placePass( const QList<int> &lanePath,
+                                     const srecplan::Span &span,
+                                     offset_t at, length_t len ) const
+{
+    // THE ONE PIECE OF SOURCE ARITHMETIC in the audio plan: `at` frames into
+    // the timeline is `at - a` frames into the pass, which is
+    // `srcOffset + (at - a)` frames into the file. A negative result is legal
+    // and means leading silence (proposal 23).
+    return new SPlaceClipAction( lanePath, span.filePath, at,
+                                 span.srcOffset + at - span.a, len );
+}
+
+SAction *SAudioPassVerbs::addTakeFromPass( const QList<int> &clipPath,
+                                           const srecplan::Span &span,
+                                           offset_t takeStart ) const
+{
+    // Same conversion, for a take anchor. `takeStart` may sit up to two frames
+    // BEFORE the pass began, when a cut that close to a child's own edge was
+    // refused (`pieceCanSplitAt`), so this anchor legitimately goes slightly
+    // negative — leading silence again, and the reason the planner may hand
+    // over a position outside `[a, b)` at all.
+    return new SAddTakeAction( clipPath, span.filePath,
+                               span.srcOffset + takeStart - span.a );
+}
+
+SAction *SAudioPassVerbs::splitClip( const QList<int> &clipPath,
+                                     offset_t at ) const
+{
+    // broadcast=0 (plan 53 §5.1): a recording pass decides the edit for the
+    // lanes the RECORDER armed, which it plans one by one against each lane's
+    // own snapshot. Letting the cut fan out through the edit group would cut
+    // lanes this pass never looked at, and cut an armed member twice.
+    return new SSplitClipAction( clipPath, at, false );
+}
+
+SAction *SAudioPassVerbs::removeChild( const QList<int> &lanePath, int index,
+                                       offset_t at ) const
+{
+    // The EMPTY file path is deliberate: `remove-sample` reads the real one
+    // off the clip and its own comment calls the caller's value "only a hint".
+    // The START is not optional — it is the position the inverse restores to.
+    return new SRemoveSampleAction( lanePath, index, QString(), at );
+}
+
+SAction *SAudioPassVerbs::mergeColumns(
+    const QList<QList<int>> &clipPaths ) const
+{
+    return new SMergeColumnsAction( clipPaths );
+}

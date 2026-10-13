@@ -1,11 +1,5 @@
-#include "app/objects/cut/srecordplanner.h"
-#include "app/objects/cut/saddtakeaction.h"
-#include "app/objects/cut/smergecolumnsactions.h"
-#include "app/objects/cut/splaceclipaction.h"
-#include "app/objects/cut/sremovesampleaction.h"
-#include "app/objects/cut/ssplitclipaction.h"
-#include "app/objects/cut/stakehelpers.h"
-#include "app/objects/cut/stakestack.h"
+#include "app/objects/recplan/srecordplanner.h"
+#include "app/actions/saction.h"
 #include "app/actions/scompositeaction.h"
 #include "app/model/sautomationlane.h"
 #include "app/model/sclipwindow.h"
@@ -149,13 +143,27 @@ LaneSnapshot snapshot( SObject *lane, const QList<int> &lanePath )
             c.hasFade      = !po.clipFade().none();
         }
 
-        if( STakeStack *col = stakes::columnOfLink( lk ) ) {
-            c.nTakes     = col->childCount();
-            c.activeTake = col->activeTakeIndex();
-            c.map        = col->compMap();
-            c.kind = !stakes::isDirectColumn( lk ) ? Child::WrappedColumn
-                   : c.map.empty()                 ? Child::Column
-                                                   : Child::MappedColumn;
+        // THE COLUMN CLASSIFICATION, IN MODEL TERMS ONLY (QBX-188). It used
+        // to ask `stakes::columnOfLink` / `isDirectColumn`, which name
+        // `STakeStack` — out of this module's reach now that it sits at the
+        // rank of `objects/cut` rather than inside it. The three questions are
+        // exactly equivalent through the kind-agnostic accessors:
+        //
+        //   a column        obj.windowTakeCount() > 0
+        //   DIRECT          ...and the link's own object is not a window
+        //   WRAPPED         ...and it is  (SLink -> SCut -> column)
+        //
+        // because `SCut` FORWARDS windowTakeCount/windowTakeAt/
+        // activeWindowTakeIndex/hasCompMap to its content, which is what makes
+        // the wrapped shape answer for the column it windows.
+        if( obj.windowTakeCount() > 0 ) {
+            c.nTakes      = obj.windowTakeCount();
+            c.activeTake  = obj.activeWindowTakeIndex();
+            c.hasCompMap  = obj.hasCompMap();
+            const bool wrapped = SClipWindow::of( &obj ) != nullptr;
+            c.kind = wrapped          ? Child::WrappedColumn
+                   : !c.hasCompMap    ? Child::Column
+                                      : Child::MappedColumn;
         } else {
             c.kind = Child::Plain;
         }
@@ -221,8 +229,15 @@ public:
             if( why ) *why = QStringLiteral( "empty span" );
             return false;
         }
-        out.append( new SPlaceClipAction( snap.lanePath, span.filePath, span.a,
-                                          span.srcOffset, span.length() ) );
+        // NO VERB SET IS A REFUSAL, not an empty plan: an empty composite
+        // applies as SUCCESS, which is how a recording goes missing silently.
+        if( !ctx.verbs ) {
+            if( why ) *why = QStringLiteral( "no verb set for this content "
+                                             "kind" );
+            return false;
+        }
+        out.append( ctx.verbs->placePass( snap.lanePath, span, span.a,
+                                          span.length() ) );
         return true;
     }
 };
@@ -302,6 +317,7 @@ struct InsidePiece {
  * armed member twice.
  */
 InsidePiece isolateInside( const Child &c, const Span &span,
+                           const PassVerbs &verbs,
                            ChildList &live, SCompositeAction &out )
 {
     InsidePiece p;
@@ -317,7 +333,7 @@ InsidePiece isolateInside( const Child &c, const Span &span,
     // The pass STARTS inside this child: cut at `a`, keep the head as it was,
     // and the appended TAIL is the piece the pass covers.
     if( c.start < span.a && pieceCanSplitAt( p.start, p.dur, span.a ) ) {
-        out.append( new SSplitClipAction( path(), span.a, false ) );
+        out.append( verbs.splitClip( path(), span.a ) );
         p.id    = live.append();
         p.dur   = (length_t)( p.start + (offset_t) p.dur - span.a );
         p.start = span.a;
@@ -326,7 +342,7 @@ InsidePiece isolateInside( const Child &c, const Span &span,
     // index this time and the TAIL AFTER `b` is the appended one.
     if( p.start + (offset_t) p.dur > span.b
         && pieceCanSplitAt( p.start, p.dur, span.b ) ) {
-        out.append( new SSplitClipAction( path(), span.b, false ) );
+        out.append( verbs.splitClip( path(), span.b ) );
         live.append();
         p.dur = (length_t)( span.b - p.start );
     }
@@ -516,6 +532,13 @@ public:
             if( why ) *why = QStringLiteral( "empty span" );
             return false;
         }
+        // NO VERB SET IS A REFUSAL, not an empty plan: an empty composite
+        // applies as SUCCESS, which is how a recording goes missing silently.
+        if( !ctx.verbs ) {
+            if( why ) *why = QStringLiteral( "no verb set for this content "
+                                             "kind" );
+            return false;
+        }
 
         const QList<Child> touched = columnsFor( snap, span, ctx );
         if( refusedForWrappedColumn( touched, Mode::Takes, why ) )
@@ -555,8 +578,8 @@ public:
         }
 
         ChildList live( snap );
-        out.append( new SPlaceClipAction(
-            snap.lanePath, span.filePath, span.a, span.srcOffset,
+        out.append( ctx.verbs->placePass(
+            snap.lanePath, span, span.a,
             (length_t)( span.extentEnd() - span.a ) ) );
         const int passId = live.append();
 
@@ -568,7 +591,7 @@ public:
         for( const Child &c : ops )
             paths.append( live.pathOfOriginal( c.index ) );
         paths.append( live.pathOfAppended( passId ) );
-        out.append( new SMergeColumnsAction( paths ) );
+        out.append( ctx.verbs->mergeColumns( paths ) );
         // NOTHING FOLLOWS, so the merge's removals need no modelling: it is
         // the last verb in the plan, and `place-recording` re-snapshots for
         // every segment of every pass.
@@ -622,6 +645,13 @@ public:
             if( why ) *why = QStringLiteral( "empty span" );
             return false;
         }
+        // NO VERB SET IS A REFUSAL, not an empty plan: an empty composite
+        // applies as SUCCESS, which is how a recording goes missing silently.
+        if( !ctx.verbs ) {
+            if( why ) *why = QStringLiteral( "no verb set for this content "
+                                             "kind" );
+            return false;
+        }
 
         const QList<Child> touched = columnsFor( snap, span, ctx );
         if( refusedForWrappedColumn( touched, Mode::TakesSplit, why ) )
@@ -650,14 +680,14 @@ public:
 
             // The sub-span no child covers becomes a plain cut.
             if( os > cursor ) {
-                out.append( new SPlaceClipAction(
-                    snap.lanePath, span.filePath, cursor,
-                    span.srcOffset + cursor - span.a,
+                out.append( ctx.verbs->placePass(
+                    snap.lanePath, span, cursor,
                     (length_t)( os - cursor ) ) );
                 live.append();
             }
 
-            const InsidePiece p = isolateInside( c, span, live, out );
+            const InsidePiece p = isolateInside( c, span, *ctx.verbs, live,
+                                                out );
             const QList<int> piecePath =
                 p.id < 0 ? live.pathOfOriginal( c.index )
                          : live.pathOfAppended( p.id );
@@ -667,9 +697,8 @@ public:
             // at `a` was refused as too close to the child's own start the
             // piece begins up to two frames EARLY, and the anchor then goes
             // slightly negative -- leading silence, legal since proposal 23.
-            out.append( new SAddTakeAction( piecePath, span.filePath,
-                                            span.srcOffset + p.start
-                                                - span.a ) );
+            out.append( ctx.verbs->addTakeFromPass( piecePath, span,
+                                                    p.start ) );
             // add-take PRESERVES its operand's index (it replaces the lane
             // child's link in place), so the simulation needs no change --
             // stated rather than silent, because it is the one verb in either
@@ -682,9 +711,8 @@ public:
         if( cursor < span.b ) {
             // The trailing sub-span, and on an empty lane this is the whole
             // pass at `a` -- the same plain placement every other mode makes.
-            out.append( new SPlaceClipAction(
-                snap.lanePath, span.filePath, cursor,
-                span.srcOffset + cursor - span.a,
+            out.append( ctx.verbs->placePass(
+                snap.lanePath, span, cursor,
                 (length_t)( span.b - cursor ) ) );
             live.append();
         }
@@ -737,6 +765,13 @@ public:
             if( why ) *why = QStringLiteral( "empty span" );
             return false;
         }
+        // NO VERB SET IS A REFUSAL, not an empty plan: an empty composite
+        // applies as SUCCESS, which is how a recording goes missing silently.
+        if( !ctx.verbs ) {
+            if( why ) *why = QStringLiteral( "no verb set for this content "
+                                             "kind" );
+            return false;
+        }
 
         const QList<Child> touched = columnsFor( snap, span, ctx );
         if( refusedForWrappedColumn( touched, Mode::Replace, why ) )
@@ -756,19 +791,20 @@ public:
             const offset_t oe = std::min( c.end(), span.b );
             if( oe <= os ) continue;
 
-            const InsidePiece p = isolateInside( c, span, live, out );
+            const InsidePiece p = isolateInside( c, span, *ctx.verbs, live,
+                                                out );
             const int idx = p.id < 0 ? live.indexOfOriginal( c.index )
                                      : live.indexOfAppended( p.id );
             if( idx < 0 ) continue;          // cannot happen; not worth a crash
 
-            out.append( new SRemoveSampleAction( snap.lanePath, idx,
-                                                 QString(), p.start ) );
+            out.append( ctx.verbs->removeChild( snap.lanePath, idx,
+                                               p.start ) );
             live.removeAt( idx );
         }
 
         // The pass itself, over the hole every touched child just made.
-        out.append( new SPlaceClipAction( snap.lanePath, span.filePath, span.a,
-                                          span.srcOffset, span.length() ) );
+        out.append( ctx.verbs->placePass( snap.lanePath, span, span.a,
+                                          span.length() ) );
         live.append();
         return true;
     }

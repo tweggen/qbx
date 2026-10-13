@@ -520,6 +520,19 @@ public:
      */
     virtual int windowTakeCount() const { return 0; }
     virtual int activeWindowTakeIndex() const { return -1; }
+    /**
+     * Does this take column carry a COMP MAP (proposal 43 N2)?
+     *
+     * The kind-agnostic companion of the three above, and here for the same
+     * reason they are: a caller that may not name `STakeStack` still has to
+     * tell a plain column from a comped one. `objects/recplan`'s `snapshot()`
+     * is that caller (QBX-188) — it classifies a lane for a recording plan and
+     * sits at the rank of `objects/cut` rather than above it, so the concrete
+     * column type is out of its reach. `SCut` forwards this to its content,
+     * exactly as it forwards the take accessors, so the WRAPPED shape answers
+     * for the column it windows.
+     */
+    virtual bool hasCompMap() const { return false; }
     virtual SLink *insertWindowTake( SClipWindow &window, int atIndex )
     { (void) window; (void) atIndex; return nullptr; }
     virtual void removeWindowTake( int index ) { (void) index; }
