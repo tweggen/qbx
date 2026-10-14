@@ -630,7 +630,11 @@ foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_
               # header says which -- so neither may run beside another that
               # touches it, which RUN_SERIAL here already guarantees.
               record_locator_stay
-              takes_auto_expand)
+              takes_auto_expand
+              # P6's Unused recordings list (plan 53 §6.3 / QBX-184): it needs
+              # a real press, because what it gates is what the project holds
+              # after a take has been UNDONE.
+              unused_recordings_list)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE

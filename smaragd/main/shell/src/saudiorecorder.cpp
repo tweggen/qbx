@@ -20,6 +20,7 @@
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
+#include "app/model/srecordingfiles.h"
 #include "app/model/sprojectprops.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/splacerecordingaction.h"
@@ -214,8 +215,12 @@ bool SAudioRecorder::start()
         QDateTime::currentDateTime().toString( QStringLiteral( "yyyyMMdd_HHmmss_zzz" ) );
     std::vector<audio::CaptureWavSink> sinks;
     for( std::size_t i = 0; i < armed_.size(); ++i ) {
-        armed_[i].file = QStringLiteral( "%1/%2_track%3.wav" )
-                             .arg( dir ).arg( stamp ).arg( (int) i );
+        // THE NAME CONVENTION IS srecfiles' (plan 53 §6.3): the Unused
+        // recordings scan has to RECOGNISE what this line WRITES, and two
+        // copies of one format string would drift silently -- orphan files
+        // simply not reported.
+        armed_[i].file = QStringLiteral( "%1/%2" ).arg( dir ).arg(
+            srecfiles::captureName( stamp, (int) i ) );
         audio::CaptureWavSink s;
         s.path        = armed_[i].file.toStdString();
         s.channelMask = armed_[i].mask;

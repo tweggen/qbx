@@ -1864,3 +1864,62 @@ reach `SMainWindow::fileNew`, only `close-project`'s copy of it, which
 says so; a seed added to one and not the other would show up as a new project
 from the File menu behaving differently from one after File → Close, which no
 gate in this repo can see.
+
+## inv. 67 — a landing OPENS the take lanes or SAYS it did not, and the Unused recordings dock holds no project pointer (plan 53 §8 P6, Q11/Q12, §6.3, QBX-184)
+
+Three things in `shell`, all of them about what the user can see after a take.
+
+**Q11, THE LANDING.** A recorded take goes onto a take COLUMN, and a collapsed
+track draws a column as one clip: the pass is there and it plays, and nothing
+on screen says a second take arrived. So `applyLandingFeedback_` either
+expands the take lanes or posts a line saying what happened. The cut-off is
+`kMaxAutoExpandTracks` = 2, and it is about the ARRANGER rather than taste —
+expanding a track adds one row per take, so a band pass across eight lanes
+would rearrange the whole arranger at the moment the user is reaching for stop.
+
+WHICH LANES GAINED A TAKE comes from the SAME `rejectedCount()` sampling the
+skipped-lane report already uses. A lane that refused is exactly a lane that
+gained nothing, so the two answers come from one measurement rather than two
+that could disagree.
+
+IT RUNS AFTER `endRecordCommit()`, so the expansion is NOT part of the undo
+step: the take is the edit, how the arranger is folded is not, and an undo that
+re-collapsed the lanes would hide the thing being undone. It announces itself
+with `SProject::notifyArrangementChanged()` because `setTakesExpanded` is a
+plain model write with no signal of its own, and
+`SStdMixerView::onArrangementChangedRows` is already the slot for exactly this
+class of change (its own comment names add-take / remove-take / stack split).
+
+**Q12, THE LOCATOR.** `transport/locatorAfterRecord` is read at the END of
+`stop()`, and the lateness is deliberate. The record mode and the quantise
+setting are read at START because they must not move under a running take or
+the commit would disagree with the capture; this one is consumed once, after
+everything is committed, so reading it late is both harmless and what lets a
+user change their mind during a take. `stay` leaves the locator where the take
+stopped; the transport still stops either way and the standing limitation above
+is unchanged.
+
+**THE UNUSED RECORDINGS DOCK HOLDS ONLY STRINGS.** It is created in the
+constructor like every other dock (inv. 4), bottom area, hidden on a first run,
+placed thereafter by `ui/windowState` with no settings key of its own — and it
+is deliberately **NOT on `destroyDocksToolbars()`'s detach list**. That is a
+property, not an omission: with no pointer into the project there is nothing to
+dereference after `closeProject()` deletes it. The obvious implementation —
+keep the `SExternFile *` you found so the row can act on it — would have
+exactly the crash inv. 61 records for the mixer pane, and stating the absence
+here is what stops someone adding one.
+
+It accumulates the SESSION's skipped lanes rather than the last pass's, because
+`SAudioRecorder::skippedLanes()` is reset at the start of every press and what
+a user wants is everything this session lost. The accumulation is in the VIEW,
+not the recorder: "what have I been told so far" is view state, and the
+recorder has no business growing a session-lifetime list for a dock to read. It
+pulls the full list off the recorder when the signal fires, because the signal
+carries a count and the first reason — all a status-bar line needs, less than
+this dock wants.
+
+**NOT GATED.** The dock's widgets have no bespoke gate: a scripted run has no
+dock, and what matters is the SCAN, which `assert-unused-recordings` holds
+directly. `files="1"` — moving a recording to the OS trash — is exercised by
+nothing and is hand-verified; the PR says so. `SMainWindow::fileNew`'s own
+seed call site is still unreachable from a .qxa (inv. 66).

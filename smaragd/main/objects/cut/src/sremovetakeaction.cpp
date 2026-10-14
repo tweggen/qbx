@@ -75,6 +75,13 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     // are gone. So the inverse carries the original rather than trying to
     // re-derive it.
     const twCompMap mapBefore = stack->compMap();
+    // THE TAKE'S NAME, for the inverse. It is the ORIGIN MARKER
+    // (`stakenames::isRecorded`), so an inverse that dropped it turned a
+    // restored recording into an "original clip": exempt from `cleanup-takes`
+    // for good, and invisible to `select-take take="newest"`. Measured in
+    // cleanup_takes.qxa, where a restored take read `(untitled)` and the next
+    // sweep kept what the first had removed.
+    const QString takeNameBefore = take->asObject().getSName();
 
     // PIN A TAKE THAT NO FILE COULD REBUILD (plan 53 P6, QBX-184). `removeTake`
     // does `delete lk`, whose refcount release would deleteLater the window; an
@@ -129,7 +136,7 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     SAddTakeAction *inverse =
         new SAddTakeAction( invPath, filePath, off, takeIndex_,
                             wasActive, stretch, pitchCents,
-                            takeAt, takeLen );
+                            takeAt, takeLen, takeNameBefore );
     if( !mapBefore.empty() ) {
         inverse->setRestoreCompMap( mapBefore );
     }

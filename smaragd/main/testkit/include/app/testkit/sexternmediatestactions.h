@@ -42,6 +42,42 @@ private:
     int external_ = -1;
 };
 
+/**
+ * `assert-unused-recordings` — what the Unused recordings dock would list
+ * (plan 53 §6.3, P6).
+ *
+ * It reads `srecfiles::scanUnused`, THE SAME function the dock renders and
+ * `cleanup-takes files="1"` would act on. Deliberately not the widget: a
+ * scripted run has no dock, and asserting the SCAN is the stronger claim
+ * anyway — the dock is a list view over it, and a second implementation of
+ * the question is what would let the display and the sweep disagree about
+ * which files are orphans.
+ *
+ *   count    how many entries the scan returns   (-1 = not checked)
+ *   contains a substring of some entry's path or reason
+ *   absent   a substring NO entry may carry
+ *
+ * THE DELETION IS NOT REACHABLE FROM HERE, on purpose: `files="1"` moves
+ * files to the OS trash, and doing that inside a `-j4` suite is not something
+ * a case may do. This verb gates the LIST; the deletion is hand-verified and
+ * the PR says so.
+ */
+class SAssertUnusedRecordingsAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "assert-unused-recordings" ); }
+    QStringList knownAttributes() const override
+    { return { "count", "contains", "absent" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    int     count_ = -1;
+    QString contains_;
+    QString absent_;
+};
+
 // collect-external-media — run the SAME pass the resources dock's button runs
 // (smediadrop::collectExternalMedia), with the confirmation dialog and the
 // report replaced by attribute assertions.

@@ -19,11 +19,12 @@ using namespace strackpath;
 SAddTakeAction::SAddTakeAction( const QList<int> &clipPath,
                                 const QString &filePath, offset_t startOffset,
                                 int index, bool activate, const Fraction &stretch,
-                                double pitchCents, offset_t at, length_t length )
+                                double pitchCents, offset_t at, length_t length,
+                                const QString &takeName )
     : clipPath_( clipPath ), filePath_( filePath ),
       startOffset_( startOffset ), index_( index ), activate_( activate ),
       stretch_( stretch ), pitchCents_( pitchCents ), at_( at ),
-      length_( length )
+      length_( length ), takeName_( takeName )
 {
 }
 
@@ -122,6 +123,12 @@ SApplyResult SAddTakeAction::apply( SProject *project )
     const length_t takeLen = ( length_ >= 0 ) ? length_
                                               : stack->getDurationBlocking();
     takeCut->setDuration( takeLen );
+    // THE NAME, BEFORE THE INSERT. It is the take's ORIGIN MARKER (see the
+    // member's comment): without it the `remove-take` inverse handed back an
+    // unnamed take, so undoing a removal silently turned a recording into an
+    // "original clip" -- permanently exempt from `cleanup-takes` and no longer
+    // reachable by `select-take take="newest"`.
+    if( !takeName_.isEmpty() ) takeCut->setSName( takeName_ );
 
     const int at = ( index_ >= 0 && index_ <= stack->nTakes() )
                        ? index_ : stack->nTakes();
@@ -194,6 +201,9 @@ void SAddTakeAction::writeXml( QDomElement &elem ) const
     if( at_ != 0 ) elem.setAttribute( "at", QString::number( (qlonglong) at_ ) );
     if( length_ >= 0 )
         elem.setAttribute( "length", QString::number( (qlonglong) length_ ) );
+    // Same rule: written only when it says something, so every add-take ever
+    // scripted serializes exactly as it did.
+    if( !takeName_.isEmpty() ) elem.setAttribute( "name", takeName_ );
 }
 
 bool SAddTakeAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -208,6 +218,7 @@ bool SAddTakeAction::readXml( const QDomElement &elem, int /*version*/ )
     pitchCents_ = elem.attribute( "pitchCents", "0" ).toDouble();
     at_ = (offset_t) elem.attribute( "at", "0" ).toLongLong();
     length_ = (length_t) elem.attribute( "length", "-1" ).toLongLong();
+    takeName_ = elem.attribute( "name", "" );
     return true;
 }
 

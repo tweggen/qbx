@@ -37,7 +37,8 @@ public:
                     offset_t startOffset = 0, int index = -1,
                     bool activate = true, const Fraction &stretch = Fraction(1),
                     double pitchCents = 0.0,
-                    offset_t at = 0, length_t length = -1 );
+                    offset_t at = 0, length_t length = -1,
+                    const QString &takeName = QString() );
 
     QString name() const override { return QStringLiteral("add-take"); }
 
@@ -71,6 +72,24 @@ private:
     double     pitchCents_ = 0.0;
     offset_t   at_ = 0;          // extent start, column frames
     length_t   length_ = -1;     // extent length; < 0 = the whole column
+    /**
+     * THE TAKE'S NAME, and it is not cosmetic (plan 53 P6, QBX-184).
+     *
+     * A take's name is the ORIGIN MARKER: `stakenames::isRecorded` reads it to
+     * decide whether a take came from the recorder, which is what
+     * `cleanup-takes` exempts an original clip by (decision D5 (a)), and what
+     * `select-take take="newest"` resolves through.
+     *
+     * Without it the `remove-take` inverse gave back an UNNAMED take, so
+     * undoing a removal silently turned a recording into an "original clip" --
+     * permanently exempt from clean-up, and no longer reachable by `newest`.
+     * Measured in cleanup_takes.qxa: a restored take read `(untitled)`, and a
+     * second sweep then kept what the first had removed.
+     *
+     * Written to XML only when non-empty, so every `add-take` ever scripted
+     * means exactly what it meant.
+     */
+    QString    takeName_;
 };
 
 #endif // SADDTAKEACTION_H
