@@ -1727,3 +1727,76 @@ case either: `arm-track` already refuses a system lane
 (`splacements::refuseSystemLane`, proposal 45 AC5.2), so `armed_` cannot hold
 one, and `acceptsClips()` is true for every other lane. It is correctness
 against the next lane kind, not a fix for something a case can reach today.
+
+## inv. 65 — the recorder enumerates an armed lane's UN-ARMED edit-group members, and computes the group extent (plan 53 §3.4/§5.3, D4 (a), QBX-182)
+
+In a takes mode a recording pass does not belong to the armed lanes alone. The
+members of an armed lane's EDIT GROUP are edited by it too, and the reason is
+that correspondence inside a group is POSITIONAL:
+`seditgroups::correspondingClip` matches `startTime` AND `getDuration()`,
+exactly. The moment a pass folds an armed lane's child into a union column, a
+member left at its own shape stops being that lane's twin — and every later
+grouped edit (comping, splitting, slipping a take) silently applies to one lane
+only. So the pass gives every member the same column, and the un-armed ones get
+it with no new take: plan 53 §4.2's union placeholder.
+
+**`SAudioRecorder::commitPlacement_()` owns `C_g`, because it is the only party
+that sees every armed lane of the pass.** Per armed lane with a non-zero
+`getEditGroup()` and a resolved mode of `takes` or `takes-split`, it snapshots
+the lane and unites `srecplan::columnExtentFor()` over the pass's segments; the
+union is the group extent. It computes that extent with the PLANNER's
+arithmetic rather than its own, which is why `shell` gained an edge to
+`objects/recplan` — what `C` means is plan 53 §3.1's rule, and a second copy of
+it here would be a second thing to keep in step. It is computed BEFORE anything
+is submitted, because the first thing the plan does is change the lanes it was
+computed from.
+
+Then `seditgroups::membersOf` minus the lanes already in `armed_` gives the
+members, and each gets one `place-recording ... armed="0" groupStart=
+groupLength=` per segment, inside the SAME commit scope — so a press that
+restructured four lanes is one Ctrl-Z (B7). The armed lanes receive the same
+group extent, which is §3.4's "ONE rule for EVERY member, armed or not": an
+armed lane whose own `C` is smaller than the group's folds in children that
+were R0 for its own span, and its column comes out as long as the group's.
+
+**A MEMBER'S SUBMISSION CARRIES AN ARMED MEMBER'S CAPTURE PATH**, which looks
+wrong and is not: `place-recording` reads the file for the pass's LENGTH — the
+span the plan is about — and an un-armed plan places nothing from it. Passing no
+file would make the verb refuse before it could plan anything.
+
+**TAKES MODES ONLY.** `overdub` and `replace` never touch an un-armed lane
+(G9), so the recorder does not even enumerate a group under them. That is
+belt-and-braces with the planners' own `!ctx.armed` lines, deliberately: an
+un-armed lane losing material it was never recorded over is the one failure in
+this area a user does not notice until far too late.
+
+**TWO ARMED MEMBERS OF ONE GROUP IN DIFFERENT MODES** each plan their own lane
+under their own mode, and the un-armed members follow the FIRST armed member's,
+logged when they disagree. The group's structure is then not symmetric; saying
+so out loud is better than picking silently.
+
+**THE PASS-WIDE SNAP (§3.5) SEES THE MEMBERS TOO.** `snapPassWide_` collects
+child edges from the armed lanes AND, in a takes mode, from their groups'
+members, because P4 makes the pass edit those members: a landing a few frames
+inside a member's clip edge is the same quantisation noise there as on the armed
+lane.
+
+**THE TAKE'S NAME** is `stakenames::recorded( n, "HH:MM" )`, with the minute
+taken ONCE per press so that every lane of a band take agrees, and both
+recorders take it so that a mixed press stamps the same minute. It travels as
+`place-recording takeStamp=` / `place-midi-recording takeStamp=` and the
+PLANNER composes the name, because only the plan knows `n`. It is decision D5's
+origin marker as much as a label.
+
+**Gated** by `takes_group_record_unarmed.qxa` (a punched press on one armed lane
+of a group of two: both lanes end with a column of the same extent, the
+broadcast reaches the member, `select-take take="newest"` answers differently on
+each, one undo restores both) and `record_mode_replace_group.qxa` (the same
+fixture under `replace`: the member is untouched down to its single child).
+`takes_group_record_crossing.qxa` drives the verb directly for the arithmetic a
+recorder cannot make exact.
+
+**NOT gated**: the MIDI recorder does none of this — `place-midi-recording` has
+no `armed=` and no group extent, so a MIDI pass on a grouped lane leaves its
+members out of step. That is QBX-191, and the `takeStamp` half of P4 did land
+for both kinds.

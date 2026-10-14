@@ -1,5 +1,7 @@
 #include "app/shell/smidirecorder.h"
 
+#include <QTime>
+
 #include <algorithm>
 #include <map>
 
@@ -478,6 +480,14 @@ void SMidiRecorder::commit_()
     // AUDIO record is one place-recording per pass; they now share the step.
     int placements = 0, notes = 0, others = 0, passes = 0;
     std::vector<qint64> seenPasses;
+    // THE TAKE'S NAME CARRIES THE WALL-CLOCK MINUTE (plan 53 §8 P4, QBX-182),
+    // taken ONCE for the whole press, exactly as the audio recorder does -- so
+    // the two halves of a mixed press stamp the same minute. It is decision
+    // D5's origin marker, which `cleanup-takes` (P6) reads to tell a recorded
+    // take from one that came from the user's arrangement; an audio-only
+    // marker would make every recorded MIDI take look like arrangement.
+    const QString stamp =
+        QTime::currentTime().toString( QStringLiteral( "HH:mm" ) );
     // As in the audio recorder: open the scope here as well, so a commit that
     // did not come through SApplication::stopRecording() is still one step
     // (QBX-165). Re-entrant, so the common path just nests.
@@ -508,7 +518,7 @@ void SMidiRecorder::commit_()
             app_->submitAction( new SPlaceMidiRecordingAction(
                 armed_[ai].path, (offset_t) passPlacement( pass ), len, ev,
                 laneMode, quantize_,
-                QStringLiteral( "MIDI Recording" ) ) );
+                QStringLiteral( "MIDI Recording" ), stamp ) );
             ++placements;
             if( std::find( seenPasses.begin(), seenPasses.end(), pass )
                 == seenPasses.end() ) {

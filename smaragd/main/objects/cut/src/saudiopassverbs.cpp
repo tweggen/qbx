@@ -4,6 +4,7 @@
 #include "app/objects/cut/smergecolumnsactions.h"
 #include "app/objects/cut/splaceclipaction.h"
 #include "app/objects/cut/sremovesampleaction.h"
+#include "app/objects/cut/ssetclipnameaction.h"
 #include "app/objects/cut/ssplitclipaction.h"
 
 SAction *SAudioPassVerbs::placePass( const QList<int> &lanePath,
@@ -50,8 +51,26 @@ SAction *SAudioPassVerbs::removeChild( const QList<int> &lanePath, int index,
     return new SRemoveSampleAction( lanePath, index, QString(), at );
 }
 
-SAction *SAudioPassVerbs::mergeColumns(
-    const QList<QList<int>> &clipPaths ) const
+SAction *SAudioPassVerbs::nameTake( const QList<int> &clipPath,
+                                    const QString &name ) const
 {
-    return new SMergeColumnsAction( clipPaths );
+    // take = -1 is "the ACTIVE take, resolved at apply time", which is the
+    // pass in every plan that stacks one and the placement's own window where
+    // the pass is a plain clip -- so the plan needs no index of its own.
+    //
+    // broadcast=0, for the same reason every split in a recording plan carries
+    // it (plan 53 §5.1): the pass is planned one lane at a time, and letting
+    // the name fan out through the edit group would rename a lane this pass
+    // never looked at.
+    return new SSetClipNameAction( clipPath, name, -1, false );
+}
+
+SAction *SAudioPassVerbs::mergeColumns(
+    const QList<QList<int>> &clipPaths, offset_t extentStart,
+    length_t extentLen ) const
+{
+    // `extentLen < 0` is "the operands' union" on both sides of this seam, so
+    // the group case (plan 53 D4 (a), QBX-182) is the only one that says
+    // anything here and every pre-P4 plan reads identically.
+    return new SMergeColumnsAction( clipPaths, extentStart, extentLen );
 }

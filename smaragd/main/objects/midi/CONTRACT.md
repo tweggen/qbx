@@ -262,3 +262,20 @@ An `add-midi-take` whose target column holds AUDIO takes is REJECTED
 placement is not an event clip at all — checked BEFORE the wrap, because
 wrapping an audio cut into a column the insert is then bound to refuse would
 have moved the user's clip for nothing.
+
+`place-midi-recording takeStamp=` (plan 53 §8 P4, QBX-182) names the pass's
+take `stakenames::recorded( n, "HH:MM" )` through a `set-clip-name` the PLANNER
+appends — one per placement the pass landed on, since `takes-split` spreads one
+performance over several. The format lives in `app/model/stakenames.h` and not
+in `objects/cut` for the usual reason: a recorded EVENT take needs the same
+name, and this module may not depend on that one. The name is decision D5's
+origin marker, so an audio-only version of it would make every recorded MIDI
+take look to P6's `cleanup-takes` like part of the user's arrangement.
+
+**THE GROUP HALF OF P4 IS NOT HERE.** This verb has no `armed=` and no
+`groupStart=`/`groupLength=`, and `SMidiRecorder` enumerates no edit-group
+members, so a MIDI pass on a grouped lane leaves its members out of step with
+the armed one (`seditgroups::correspondingClip` matches `startTime` AND
+duration, exactly). The planner itself handles a group extent for either kind —
+nothing in it branches on `Context::kind` for this — so what is missing is the
+verb's attributes and the recorder's enumeration. QBX-191.

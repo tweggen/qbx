@@ -1,4 +1,6 @@
 #include "app/objects/recplan/srecordplanner.h"
+
+#include "app/model/stakenames.h"
 #include "app/actions/saction.h"
 #include "app/actions/scompositeaction.h"
 #include "app/model/sautomationlane.h"
@@ -187,6 +189,31 @@ void noteLanded( const Context &ctx, const QList<int> &path )
     if( ctx.landed && !path.isEmpty() ) ctx.landed->append( path );
 }
 
+/**
+ * NAME THE PASS'S TAKE, when the recorder gave us a stamp (plan 53 §8 P4).
+ *
+ * `takeNumber` is 1-based, as the take lane numbers them, and it is the
+ * plan's to know: `nameTake` resolves "the active take" at apply time but
+ * cannot count what the plan is about to put beside it.
+ */
+void nameThePass( const Context &ctx, const QList<int> &path, int takeNumber,
+                  SCompositeAction &out )
+{
+    if( ctx.takeStamp.isEmpty() || path.isEmpty() || !ctx.verbs ) return;
+    if( SAction *a = ctx.verbs->nameTake(
+            path, stakenames::recorded( takeNumber, ctx.takeStamp ) ) )
+        out.append( a );
+}
+
+/** How many takes `ops` contribute to a merged column (a column brings all). */
+int takesContributedBy( const QList<Child> &ops )
+{
+    int n = 0;
+    for( const Child &c : ops )
+        n += ( c.isColumn() && c.nTakes > 0 ) ? c.nTakes : 1;
+    return n;
+}
+
 QList<Child> columnsFor( const LaneSnapshot &snap, const Span &span,
                          const Context &ctx )
 {
@@ -245,7 +272,9 @@ public:
         ChildList live( snap );
         out.append( ctx.verbs->placePass( snap.lanePath, span, span.a,
                                           span.length() ) );
-        noteLanded( ctx, live.pathOfAppended( live.append() ) );
+        const QList<int> where = live.pathOfAppended( live.append() );
+        noteLanded( ctx, where );
+        nameThePass( ctx, where, 1, out );      // a plain clip: take 1 of 1
         return true;
     }
 };
@@ -535,7 +564,12 @@ public:
     bool plan( const LaneSnapshot &snap, const Span &span, const Context &ctx,
                SCompositeAction &out, QString *why ) const override
     {
-        if( !ctx.armed ) return true;          // nothing to do (review 2 M5)
+        // AN UN-ARMED MEMBER PLANS THE STRUCTURE AND NOTHING ELSE, and only
+        // inside a group (plan 53 §3.4, D4 (a), QBX-182). Without a group
+        // extent there is no column for it to match, so there is still nothing
+        // to do -- which is every call written before P4.
+        const bool grouped = ctx.group.present();
+        if( !ctx.armed && !grouped ) return true;
         if( span.length() == 0 ) {
             if( why ) *why = QStringLiteral( "empty span" );
             return false;
@@ -548,7 +582,22 @@ public:
             return false;
         }
 
-        const QList<Child> touched = columnsFor( snap, span, ctx );
+        // THE TOUCHED SET REACHES `C_g`, NOT `[a, b)`, under a group (§3.4's
+        // "ONE rule for EVERY member, armed or not"): an armed lane whose own
+        // `C` is smaller than the group's also folds in children that were R0
+        // for its own span but lie inside `C_g`. United with the pass's own
+        // extent so that a `C_g` the recorder computed from a DIFFERENT
+        // segment of the same press can never exclude this segment's material.
+        Span reach = span;
+        if( grouped ) {
+            reach.a = ctx.group.a;
+            reach.b = ctx.group.b;
+            if( ctx.armed ) {
+                if( span.a < reach.a )            reach.a = span.a;
+                if( span.extentEnd() > reach.b )  reach.b = span.extentEnd();
+            }
+        }
+        const QList<Child> touched = columnsFor( snap, reach, ctx );
         if( refusedForWrappedColumn( touched, Mode::Takes, why ) )
             return false;
 
@@ -570,6 +619,69 @@ public:
         QString no;
         const bool merging = !ops.isEmpty()
                              && mergeableOperands( ops, span, &no );
+
+        // ---- THE GROUPED PLAN (plan 53 §3.4's un-armed-members bullet) ----
+        //
+        // Each touched child is SPLIT AT `C_g`'s EDGES where it crosses them
+        // -- the reversible mode-B primitive D4 (a) names -- so what lies
+        // outside the group's bars stays its own plain child, and the pieces
+        // inside become takes of ONE column that is exactly `C_g`. An un-armed
+        // member runs the same plan WITHOUT the pass, which is what leaves it
+        // the §4.2 placeholder: a column whose takes may cover less than it
+        // does.
+        if( grouped ) {
+            if( ops.isEmpty() ) {
+                // NOTHING OF THIS LANE'S OWN LIES IN `C_g`. An un-armed member
+                // has no column to build and no twin to match (a member with
+                // no material has no corresponding clip either, which is what
+                // `seditgroups::correspondingClip` already means by "skipped").
+                // An armed one falls through to the plain placement every
+                // empty lane gets -- §3.4's band-punch bullet, "a plain cut
+                // where it had none".
+                if( !ctx.armed ) return true;
+            } else if( !merging ) {
+                // The same DEGRADE as below, and for an un-armed member that
+                // means doing nothing at all: there is no pass to place, so
+                // the only thing the plan could still do is leave the lane
+                // alone. Announced, because a member silently out of step
+                // with its twins is the failure this bullet exists to prevent.
+                // An ARMED lane falls through to the degrade below, which
+                // announces it in its own words.
+                if( !ctx.armed ) {
+                    qWarning( "place-recording: mode 'takes' left an edit-"
+                              "group member out of the union column: %s",
+                              qPrintable( no ) );
+                    return true;
+                }
+            } else {
+                ChildList glive( snap );
+                QList<QList<int>> gpaths;
+                for( const Child &c : ops ) {
+                    const InsidePiece p = isolateInside( c, reach, *ctx.verbs,
+                                                         glive, out );
+                    gpaths.append( p.id < 0 ? glive.pathOfOriginal( c.index )
+                                            : glive.pathOfAppended( p.id ) );
+                }
+                if( ctx.armed ) {
+                    out.append( ctx.verbs->placePass(
+                        snap.lanePath, span, span.a,
+                        (length_t)( span.extentEnd() - span.a ) ) );
+                    gpaths.append( glive.pathOfAppended( glive.append() ) );
+                }
+                // ONE operand is legal here and is the COMMON case -- a member
+                // holding the one clip the armed lane was played against. The
+                // explicit extent is what makes the column `C_g` rather than
+                // that clip's own span, and what every member then agrees on.
+                out.append( ctx.verbs->mergeColumns( gpaths, reach.a,
+                                                     reach.length() ) );
+                noteLanded( ctx, gpaths.first() );
+                if( ctx.armed )
+                    nameThePass( ctx, gpaths.first(),
+                                 takesContributedBy( ops ) + 1, out );
+                return true;
+            }
+        }
+
         if( !ops.isEmpty() && !merging ) {
             // DEGRADED, NOT REFUSED, and this is the one plan that changes no
             // existing child: the user's faded or re-levelled clip keeps its
@@ -594,7 +706,9 @@ public:
         // An empty lane region is today's plain placement, exactly (§3.1's
         // "for a lane whose touched set is empty"), and so is a degrade.
         if( !merging ) {
-            noteLanded( ctx, live.pathOfAppended( passId ) );
+            const QList<int> where = live.pathOfAppended( passId );
+            noteLanded( ctx, where );
+            nameThePass( ctx, where, 1, out );  // a plain clip: take 1 of 1
             return true;
         }
 
@@ -606,6 +720,10 @@ public:
         // ONE column, at the FIRST operand's index -- the verb keeps it and
         // removes the others, so the pass is on that child and nowhere else.
         noteLanded( ctx, paths.first() );
+        // The pass is the LAST operand, so its take number is one past
+        // everything the operands brought -- and a column operand brings all
+        // of its own takes, not one.
+        nameThePass( ctx, paths.first(), takesContributedBy( ops ) + 1, out );
         // NOTHING FOLLOWS, so the merge's removals need no modelling: it is
         // the last verb in the plan, and `place-recording` re-snapshots for
         // every segment of every pass.
@@ -654,7 +772,17 @@ public:
     bool plan( const LaneSnapshot &snap, const Span &span, const Context &ctx,
                SCompositeAction &out, QString *why ) const override
     {
-        if( !ctx.armed ) return true;          // nothing to do (review 2 M5)
+        // AN UN-ARMED MEMBER GETS THE SPLIT AND NOTHING STACKED (plan 53
+        // §3.4's "B -- split at `a`/`b`, nothing stacked"), and only inside a
+        // group: without one there is no group edit to be part of, which is
+        // every call written before P4 (QBX-182).
+        //
+        // IT IS `[a, b)` AND NOT `C_g`, which is the one place the two takes
+        // modes genuinely differ here. Mode B never makes one column out of
+        // two children, so it has no extent to agree on across the group: what
+        // the members share is the EDGES, and the edges are the pass's.
+        const bool structureOnly = !ctx.armed;
+        if( structureOnly && !ctx.group.present() ) return true;
         if( span.length() == 0 ) {
             if( why ) *why = QStringLiteral( "empty span" );
             return false;
@@ -673,6 +801,22 @@ public:
 
         ChildList live( snap );
         offset_t cursor = span.a;
+
+        if( structureOnly ) {
+            // The splits alone, left to right. No take is added, no uncovered
+            // sub-span is filled: a member that was not armed recorded
+            // nothing, so the only thing this pass owes it is the EDGES the
+            // armed lanes now have.
+            for( const Child &c : touched ) {
+                if( c.kind == Child::Lane ) continue;
+                if( c.kind == Child::OtherKind ) continue;
+                const offset_t os = std::max( c.start, span.a );
+                const offset_t oe = std::min( c.end(), span.b );
+                if( oe <= os ) continue;
+                (void) isolateInside( c, span, *ctx.verbs, live, out );
+            }
+            return true;
+        }
 
         for( const Child &c : touched ) {
             if( c.kind == Child::Lane ) continue;
@@ -697,7 +841,9 @@ public:
                 out.append( ctx.verbs->placePass(
                     snap.lanePath, span, cursor,
                     (length_t)( os - cursor ) ) );
-                noteLanded( ctx, live.pathOfAppended( live.append() ) );
+                const QList<int> gap = live.pathOfAppended( live.append() );
+                noteLanded( ctx, gap );
+                nameThePass( ctx, gap, 1, out );   // a plain cut: take 1 of 1
             }
 
             const InsidePiece p = isolateInside( c, span, *ctx.verbs, live,
@@ -714,6 +860,11 @@ public:
             out.append( ctx.verbs->addTakeFromPass( piecePath, span,
                                                     p.start ) );
             noteLanded( ctx, piecePath );
+            // The piece keeps what it held and the pass goes on top: take 2 of
+            // a plain piece, one past a column's own takes.
+            nameThePass( ctx, piecePath,
+                         ( ( c.isColumn() && c.nTakes > 0 ) ? c.nTakes : 1 ) + 1,
+                         out );
             // add-take PRESERVES its operand's index (it replaces the lane
             // child's link in place), so the simulation needs no change --
             // stated rather than silent, because it is the one verb in either
@@ -729,7 +880,9 @@ public:
             out.append( ctx.verbs->placePass(
                 snap.lanePath, span, cursor,
                 (length_t)( span.b - cursor ) ) );
-            noteLanded( ctx, live.pathOfAppended( live.append() ) );
+            const QList<int> tail = live.pathOfAppended( live.append() );
+            noteLanded( ctx, tail );
+            nameThePass( ctx, tail, 1, out );      // a plain cut: take 1 of 1
         }
         return true;
     }
@@ -820,12 +973,36 @@ public:
         // The pass itself, over the hole every touched child just made.
         out.append( ctx.verbs->placePass( snap.lanePath, span, span.a,
                                           span.length() ) );
-        noteLanded( ctx, live.pathOfAppended( live.append() ) );
+        const QList<int> where = live.pathOfAppended( live.append() );
+        noteLanded( ctx, where );
+        nameThePass( ctx, where, 1, out );      // a plain clip: take 1 of 1
         return true;
     }
 };
 
 }  // namespace
+
+GroupExtent columnExtentFor( const LaneSnapshot &snap, const Span &span,
+                             const Context &ctx )
+{
+    GroupExtent g;
+    // ONLY THE TAKES MODES STACK, so only they have a `C` (plan 53 §3.4's
+    // bullet is "takes modes only"). `overdub` lays a clip over the lane and
+    // `replace` cuts a hole in it; neither produces a column, so neither
+    // contributes bars to a group extent.
+    if( ctx.mode != Mode::Takes && ctx.mode != Mode::TakesSplit ) return g;
+    if( span.length() == 0 ) return g;
+
+    // §3.1's own definition, from the planner's own touched set -- which is
+    // why this lives here and not in the recorder.
+    g.unite( span.a, span.extentEnd() );
+    for( const Child &c : columnsFor( snap, span, ctx ) ) {
+        if( c.kind == Child::Lane || c.kind == Child::OtherKind ) continue;
+        if( !c.isColumn() && c.kind != Child::Plain ) continue;
+        g.unite( c.start, c.end() );
+    }
+    return g;
+}
 
 const Planner &plannerFor( Mode mode )
 {

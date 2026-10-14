@@ -287,10 +287,16 @@ APP_DEPS = {
     # with the `pluginui -> shell` edge below, and that is a shortening of the
     # existing `shell -> timeline -> pluginui -> shell` cycle rather than a new
     # class of problem -- see the UI+shell note at the top of this file.
+    # shell + objects/recplan since plan 53 P4 (QBX-182): the GROUP EXTENT
+    # `C_g` is the union of the armed members' own column extents, and only the
+    # recorder sees every armed lane of a pass -- so the recorder computes it,
+    # with `srecplan::columnExtentFor` rather than with a second copy of
+    # §3.1's rule living in `shell`.
     'shell':          {'actions', 'eventui', 'media', 'mediabrowser',
                        'mixerui', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
-                       'objects/track', 'objects/wave', 'persistence',
+                       'objects/recplan', 'objects/track', 'objects/wave',
+                       'persistence',
                        'pluginui', 'selection', 'servicesui', 'testkit', 'theme',
                        'timeline'},
     # testkit + objects/cut + objects/wave since proposal 27 M1 test verbs:

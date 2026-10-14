@@ -6,6 +6,8 @@
 #include <vector>
 
 #include <QDateTime>
+#include <QHash>
+#include <QTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -14,11 +16,14 @@
 
 #include "app/actions/sactionhistory.h"
 #include "app/model/slink.h"
+#include "app/model/seditgroups.h"
+#include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/splacerecordingaction.h"
+#include "app/objects/recplan/srecordplanner.h"
 #include "app/objects/track/srecordmode.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/wave/srecordingcontent.h"
@@ -529,14 +534,34 @@ void SAudioRecorder::snapPassWide_( std::int64_t *a, std::int64_t *b ) const
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return;
 
-    // Every child edge on every ARMED lane. In takes modes this set also
-    // covers the un-armed members of an armed lane's edit group -- that is
-    // P4's (plan 53 §8 M5), and until the recorder enumerates them there is
-    // nothing to add here.
-    std::vector<std::int64_t> edges;
+    // Every child edge on every ARMED lane -- AND, in a takes mode, on the
+    // un-armed members of an armed lane's edit group (plan 53 §3.5, §8 M5,
+    // QBX-182). A member's edges count because P4 makes the pass EDIT that
+    // member: its children are split at `C_g`'s edges and folded into the
+    // same column, so a landing a few frames inside a member's clip edge is
+    // the same quantisation noise there as on the armed lane.
+    //
+    // `overdub` and `replace` never touch an un-armed lane (G9), so their
+    // members contribute nothing.
+    QList<SObject *> lanes;
     for( const Armed &arm : armed_ ) {
         SObject *lane = splacements::laneAt( mixer, arm.path );
         if( !lane ) continue;
+        if( !lanes.contains( lane ) ) lanes.append( lane );
+        const int gid = lane->getEditGroup();
+        if( gid == 0 ) continue;
+        const srecplan::Mode m = srecplan::modeFromString(
+            srecmode::resolveMode( mixer, arm.track, project ) );
+        if( m != srecplan::Mode::Takes && m != srecplan::Mode::TakesSplit )
+            continue;
+        QList<SObject *> members;
+        seditgroups::membersOf( mixer, gid, members );
+        for( SObject *mem : members )
+            if( mem && !lanes.contains( mem ) ) lanes.append( mem );
+    }
+
+    std::vector<std::int64_t> edges;
+    for( SObject *lane : lanes ) {
         for( int i = 0; i < lane->childCount(); ++i ) {
             SLink *lk = lane->childAt( i );
             if( !lk ) continue;
@@ -738,6 +763,89 @@ void SAudioRecorder::commitPlacement_()
     // that function alone would leave a punch-out's placements unwrapped --
     // one undo step per segment per track. The scope is re-entrant, so when
     // stopRecording DID call us this just nests.
+    SObject *mixer = splacements::rootContainer( project );
+
+    // THE TAKE'S NAME CARRIES THE WALL-CLOCK MINUTE (plan 53 §8 P4, QBX-182),
+    // taken ONCE for the whole press so that every lane of a band take agrees.
+    // It is also decision D5's origin marker: it is what tells `cleanup-takes`
+    // a take came from a recording, and what `select-take take="newest"` reads
+    // to decide which takes are candidates at all.
+    const QString stamp =
+        QTime::currentTime().toString( QStringLiteral( "HH:mm" ) );
+
+    // ---- EDIT GROUPS: `C_g`, and the members this press did NOT arm -------
+    //
+    // Plan 53 §3.4's un-armed-members bullet with decision D4 (a), and §5.3's
+    // "from P4 on": the recorder is the only party that sees every armed lane
+    // of the pass, so the GROUP EXTENT is its to compute -- the union of the
+    // armed members' own column extents `C`, from `srecplan::columnExtentFor`
+    // rather than from a second copy of §3.1's rule living here.
+    //
+    // COMPUTED BEFORE ANYTHING IS SUBMITTED, because the first thing the plan
+    // does is change the lanes it was computed from.
+    struct GroupPlan {
+        srecplan::GroupExtent ext;
+        QString               mode;     ///< the armed lanes' mode (see below)
+        QString               file;     ///< an armed member's capture
+        QList<QList<int>>     unarmed;
+    };
+    QHash<int, GroupPlan> groups;
+    for( const Armed &a : armed_ ) {
+        if( !QFileInfo( a.file ).exists() ) continue;
+        SObject *lane = splacements::laneAt( mixer, a.path );
+        const int gid = lane ? lane->getEditGroup() : 0;
+        if( gid == 0 ) continue;
+        const QString mode = srecmode::resolveMode( mixer, a.track, project );
+        const srecplan::Mode m = srecplan::modeFromString( mode );
+        // TAKES MODES ONLY (§3.4). `overdub` and `replace` never touch an
+        // un-armed lane (G9) and produce no column, so they contribute no bars
+        // to a group extent and enumerate no members --
+        // `record_mode_replace_group` is the gate for exactly that.
+        if( m != srecplan::Mode::Takes && m != srecplan::Mode::TakesSplit )
+            continue;
+        GroupPlan &gp = groups[ gid ];
+        if( gp.mode.isEmpty() ) { gp.mode = mode; gp.file = a.file; }
+        else if( gp.mode != mode ) {
+            // TWO ARMED MEMBERS OF ONE GROUP IN DIFFERENT MODES. Each plans
+            // its own lane under its own mode -- that is unchanged -- but the
+            // un-armed members can only be given one, and giving them the
+            // first armed member's keeps the group's structure defined. Said
+            // out loud because the result is then not symmetric in the group.
+            TW_LOGW( "shell", "[REC] edit group %d has armed lanes in modes "
+                              "'%s' and '%s'; its un-armed members follow "
+                              "'%s'", gid,
+                     gp.mode.toStdString().c_str(), mode.toStdString().c_str(),
+                     gp.mode.toStdString().c_str() );
+        }
+        srecplan::Context ctx;
+        ctx.mode = m;
+        ctx.kind = SContentKind::Audio;
+        const srecplan::LaneSnapshot snap = srecplan::snapshot( lane, a.path );
+        for( const Seg &sg : segs ) {
+            srecplan::Span sp;
+            sp.a      = sg.at;
+            sp.b      = sg.at + (offset_t) sg.len;
+            sp.extent = sg.extent;
+            const srecplan::GroupExtent c =
+                srecplan::columnExtentFor( snap, sp, ctx );
+            if( c.present() ) gp.ext.unite( c.a, c.b );
+        }
+    }
+    for( auto it = groups.begin(); it != groups.end(); ++it ) {
+        if( !it.value().ext.present() ) continue;
+        QList<SObject *> members;
+        seditgroups::membersOf( mixer, it.key(), members );
+        for( SObject *m : members ) {
+            const QList<int> mp = strackpath::pathOf( mixer, m );
+            if( mp.isEmpty() ) continue;
+            bool isArmed = false;
+            for( const Armed &a : armed_ )
+                if( a.path == mp ) { isArmed = true; break; }
+            if( isArmed ) continue;        // it submits for itself, below
+            it.value().unarmed.append( mp );
+        }
+    }
+
     app_->beginRecordCommit();
     for( const Armed &a : armed_ ) {
         if( !QFileInfo( a.file ).exists() ) {
@@ -756,9 +864,19 @@ void SAudioRecorder::commitPlacement_()
         // verb with the answer (plan 53 §5.3). `place-recording` cannot
         // resolve one: `objects/cut` may not depend on `objects/track`, where
         // the folder walk lives (srecordmode.h says so at length).
-        const QString mode = srecmode::resolveMode(
-            splacements::rootContainer( project ),
-            a.track, project );
+        const QString mode = srecmode::resolveMode( mixer, a.track, project );
+
+        // THE GROUP EXTENT GOVERNS THE ARMED LANES TOO (plan 53 §3.4's "ONE
+        // rule for EVERY member, armed or not"): an armed lane whose own `C`
+        // is smaller than the group's folds in children that were R0 for its
+        // own span but lie inside `C_g`, and every member then holds a column
+        // of the SAME extent -- which is what `correspondingClip` matches on.
+        SObject *lane = splacements::laneAt( mixer, a.path );
+        const int gid = lane ? lane->getEditGroup() : 0;
+        const GroupPlan *gp = ( gid != 0 && groups.contains( gid ) )
+                                  ? &groups[ gid ] : nullptr;
+        const offset_t gStart = gp ? gp->ext.a : 0;
+        const length_t gLen   = gp ? gp->ext.length() : 0;
 
         // DID THE LANE TAKE THE PASS? `submitAction` returns void and the
         // planner's refusal (plan 53 §5.1, reachable since QBX-172 gave
@@ -780,7 +898,8 @@ void SAudioRecorder::commitPlacement_()
         const int rejectedBefore = hist ? hist->rejectedCount() : 0;
         for( const Seg &s : segs )
             app_->submitAction( new SPlaceRecordingAction(
-                a.path, a.file, s.at, s.srcOffset, s.len, mode, s.extent ) );
+                a.path, a.file, s.at, s.srcOffset, s.len, mode, s.extent,
+                true, gStart, gLen, stamp ) );
         const int rejectedAfter = hist ? hist->rejectedCount() : rejectedBefore;
         if( rejectedAfter > rejectedBefore ) {
             // The mode is named because it is the actionable half: the same
@@ -797,6 +916,41 @@ void SAudioRecorder::commitPlacement_()
             skipped_.append( { a.path, a.file, why } );
         }
     }
+    // ---- THE UN-ARMED EDIT-GROUP MEMBERS (plan 53 §3.4, D4 (a)) ----------
+    //
+    // SAME SPAN, SAME GROUP EXTENT, `armed="0"`: the takes planners turn that
+    // into the structure-only plan -- mode A gives the member the same column
+    // `C_g` with no new take on it (§4.2's union placeholder), mode B gives it
+    // the same EDGES. Inside the same commit scope, so the whole press is one
+    // undo step.
+    //
+    // IT CARRIES AN ARMED MEMBER'S CAPTURE PATH, which looks odd and is right:
+    // `place-recording` reads the file for the pass's LENGTH -- the span the
+    // plan is about -- and the un-armed plan places nothing from it. Passing
+    // no file would make the verb refuse before it could plan anything.
+    //
+    // NO STAMP: a member gained no take, so there is nothing to name.
+    for( auto it = groups.cbegin(); it != groups.cend(); ++it ) {
+        const GroupPlan &gp = it.value();
+        if( !gp.ext.present() || gp.unarmed.isEmpty() ) continue;
+        SActionHistory *hist = app_->actionHistory();
+        const int before = hist ? hist->rejectedCount() : 0;
+        for( const QList<int> &mp : gp.unarmed )
+            for( const Seg &s : segs )
+                app_->submitAction( new SPlaceRecordingAction(
+                    mp, gp.file, s.at, s.srcOffset, s.len, gp.mode, s.extent,
+                    false, gp.ext.a, gp.ext.length(), QString() ) );
+        const int after = hist ? hist->rejectedCount() : before;
+        if( after > before )
+            // NOT in `skipped_`: that list is about capture files nobody used,
+            // and this press's file IS used -- by the armed lane. A member out
+            // of step with its twins is a structural surprise, so it is logged
+            // rather than reported as an unused recording.
+            TW_LOGW( "shell", "[REC] %d un-armed edit-group member(s) of group "
+                              "%d did not take the structure (mode '%s')",
+                     after - before, it.key(), gp.mode.toStdString().c_str() );
+    }
+
     app_->endRecordCommit();
 
     // ONE REPORT PER PASS, never one per lane: a band punch across eight lanes

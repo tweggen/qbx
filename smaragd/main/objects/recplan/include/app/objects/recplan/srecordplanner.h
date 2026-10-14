@@ -248,17 +248,68 @@ struct Span {
 };
 
 /**
+ * THE GROUP EXTENT `C_g` (plan 53 §3.4's un-armed-members bullet, D4 (a),
+ * QBX-182).
+ *
+ * The union of the ARMED members' own column extents `C` for this pass. It is
+ * the recorder's to compute -- it is the only party that sees every armed lane
+ * of the pass -- and `columnExtentFor()` below is the arithmetic, so the
+ * recorder does not re-derive what the planner means by `C`.
+ *
+ * ABSENT (`b <= a`) MEANS "NO GROUP", and that is the whole compatibility
+ * story: every call written before P4 leaves it absent and every planner then
+ * behaves exactly as it did, so no existing gate moves.
+ */
+struct GroupExtent {
+    offset_t a = 0;
+    offset_t b = 0;
+
+    bool     present() const { return b > a; }
+    length_t length() const { return b > a ? (length_t)( b - a ) : (length_t) 0; }
+
+    /** Widen to cover `[s, e)`. The recorder's union, one armed lane at a time. */
+    void unite( offset_t s, offset_t e )
+    {
+        if( e <= s ) return;
+        if( !present() ) { a = s; b = e; return; }
+        if( s < a ) a = s;
+        if( e > b ) b = e;
+    }
+};
+
+/**
  * Per-lane context for one pass.
  *
  * `armed` is false for an un-armed member of an armed lane's edit group.
- * **Nothing enumerates them before P4** (plan 53 §8, review 2 M5): every
- * planner, mode A included, treats `armed == false` as nothing to do. P4 is
- * where the takes planners grow the structure-only plan of §3.4.
+ * SINCE P4 (QBX-182) THAT MEANS SOMETHING: in a takes mode the planner emits
+ * the STRUCTURE-ONLY plan of plan 53 §3.4 -- the same column the armed lanes
+ * get, with no new take on it -- so every member of the group holds a column
+ * with the same `startTime` and duration and `seditgroups::correspondingClip`
+ * finds the twins. `overdub` and `replace` still treat it as nothing to do
+ * (§3.4's G9: "overdub/replace never touch an un-armed lane"), which is what
+ * `record_mode_replace_group` gates.
+ *
+ * `group` is `C_g`, and it governs the ARMED lanes too -- §3.4's "ONE rule for
+ * EVERY member, armed or not". An armed lane whose own `C` is smaller than
+ * `C_g` therefore also pulls in children that were R0 for its own span but lie
+ * inside `C_g`.
  */
 struct Context {
     Mode         mode  = Mode::Takes;
     bool         armed = true;
+    GroupExtent  group;
     SContentKind kind  = SContentKind::Audio;
+    /**
+     * THE RECORDER'S WALL-CLOCK STAMP for this pass, `"HH:MM"` (plan 53 §8 P4,
+     * QBX-182). EMPTY = do not name anything, which is every call that is not
+     * a live recording -- a `.qxa` placing a pass by hand gets no name unless
+     * it asks for one, so no existing fixture grows an attribute.
+     *
+     * The planner turns it into `stakenames::recorded( n, stamp )` and emits
+     * one `nameTake` per placement the pass landed on. An un-armed member is
+     * never named: it gained no take.
+     */
+    QString      takeStamp;
     /**
      * HOW to emit what the planner decides (see `PassVerbs`). Borrowed, not
      * owned: the caller builds one per pass — an event implementation carries
@@ -394,9 +445,36 @@ public:
     /** Remove the lane child at `index`, which the inverse restores to `at`. */
     virtual SAction *removeChild( const QList<int> &lanePath, int index,
                                   offset_t at ) const = 0;
-    /** Fold `clipPaths` into one union column at the first operand's index. */
+    /**
+     * Name the pass's take on the placement at `clipPath` (plan 53 §8 P4,
+     * QBX-182) -- the ACTIVE take, which is the pass in every plan that stacks
+     * one, and the placement's own window where the pass is a plain clip.
+     *
+     * THE NAME IS COMPOSED BY THE PLANNER because only the plan knows the
+     * take's NUMBER: it is one past what the operands contribute, and an
+     * operand that is already a column contributes all of its takes. Resolving
+     * "the active take" is left to apply time, so this verb needs no index.
+     */
+    virtual SAction *nameTake( const QList<int> &clipPath,
+                               const QString &name ) const = 0;
+    /**
+     * Fold `clipPaths` into one union column at the first operand's index.
+     *
+     * `extentStart`/`extentLen` are the GROUP EXTENT `C_g` when there is one
+     * (plan 53 D4 (a), QBX-182): the column is then exactly that span rather
+     * than `[min start, max end)` over the operands, which is what makes every
+     * member of an edit group hold a column of the SAME extent. `len < 0`
+     * means "the operands' own union", which is every call written before P4
+     * and is why none of them had to change.
+     *
+     * With an explicit extent a SINGLE operand is legal -- that is the union
+     * placeholder of §4.2, a one-take column whose take is smaller than the
+     * column -- and the extent must CONTAIN the operands' union, which the
+     * verb refuses rather than clipping material to fit.
+     */
     virtual SAction *mergeColumns(
-        const QList<QList<int>> &clipPaths ) const = 0;
+        const QList<QList<int>> &clipPaths,
+        offset_t extentStart = 0, length_t extentLen = -1 ) const = 0;
 };
 
 /**
@@ -427,6 +505,28 @@ public:
  * exercised.
  */
 const Planner &plannerFor( Mode mode );
+
+/**
+ * THE COLUMN EXTENT `C` MODE A WOULD GIVE THIS LANE for this pass -- the
+ * recorder's half of the group extent (plan 53 §3.4, QBX-182).
+ *
+ * `C = [ min(a, min s_i), max(extentEnd, max e_i) )` over the touched set,
+ * which is §3.1's own definition. The recorder unites one of these per armed
+ * member of an edit group and hands the result back as `Context::group`, so
+ * `C_g` is computed from the planner's own notion of `C` rather than from a
+ * second copy of the rule in `shell`.
+ *
+ * IT DOES NOT ASK WHETHER THE MERGE WOULD SUCCEED. A lane whose operands
+ * disagree on their mix parameters DEGRADES to a plain placement
+ * (`mergeableOperands`), and its `C` is still what the group should span: the
+ * group extent describes the BARS the pass covers on this group, and that does
+ * not change because one lane cannot fold its own material.
+ *
+ * Absent (`present() == false`) when the mode stacks nothing (`overdub`,
+ * `replace`) or the span is empty.
+ */
+GroupExtent columnExtentFor( const LaneSnapshot &snap, const Span &span,
+                             const Context &ctx );
 
 /**
  * Read `lane` once, classifying every child. The ONE reader of lane state.

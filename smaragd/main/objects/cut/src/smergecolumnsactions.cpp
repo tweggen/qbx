@@ -52,8 +52,11 @@ int takeIndexOfObject( STakeStack &col, SObject *obj )
 
 }  // namespace
 
-SMergeColumnsAction::SMergeColumnsAction( const QList<QList<int>> &clipPaths )
-    : clipPaths_( clipPaths )
+SMergeColumnsAction::SMergeColumnsAction( const QList<QList<int>> &clipPaths,
+                                          offset_t extentStart,
+                                          length_t extentLen )
+    : clipPaths_( clipPaths ), extentStart_( extentStart ),
+      extentLen_( extentLen )
 {
 }
 
@@ -84,10 +87,17 @@ SApplyResult SMergeColumnsAction::apply( SProject *project )
     // re-applies this against NEW objects).
     dropStalePins();
 
-    if( !project || clipPaths_.size() < 2 ) {
+    // ONE OPERAND IS LEGAL WITH AN EXPLICIT EXTENT and only then (plan 53
+    // D4 (a), QBX-182): that call is building the §4.2 union placeholder on an
+    // edit-group member, where the column's extent comes from the GROUP and
+    // not from the one clip the member happens to hold. Without an extent a
+    // single operand would produce a column identical to the clip it wraps,
+    // which is the shape invariant 3 says must not exist.
+    const int minOperands = hasExtent() ? 1 : 2;
+    if( !project || clipPaths_.size() < minOperands ) {
         qWarning( "merge-columns: REFUSED — %lld operand(s); merging needs at "
-                  "least two clips on one lane.",
-                  (long long) clipPaths_.size() );
+                  "least %d clip(s) on one lane.",
+                  (long long) clipPaths_.size(), minOperands );
         return { false, nullptr };
     }
 
@@ -246,6 +256,25 @@ SApplyResult SMergeColumnsAction::apply( SProject *project )
         const offset_t e = s + (offset_t) lk->getSObject().getDurationBlocking();
         if( s < newStart ) newStart = s;
         if( e > maxEnd )   maxEnd   = e;
+    }
+    if( hasExtent() ) {
+        // THE CALLER'S EXTENT WINS, and it must CONTAIN the operands: a
+        // narrower one would need a take's material clipped to fit, which is
+        // not a merge and is not reversible by `unmerge-columns` (the recipe
+        // records each take's extent, not a truncated copy of it).
+        const offset_t exA = extentStart_;
+        const offset_t exB = extentStart_ + (offset_t) extentLen_;
+        if( exA > newStart || exB < maxEnd ) {
+            qWarning( "merge-columns: REFUSED — the extent [%lld, %lld) does "
+                      "not contain the operands' span [%lld, %lld); merging "
+                      "would have to clip a take's material.",
+                      (long long) exA, (long long) exB,
+                      (long long) newStart, (long long) maxEnd );
+            operands_.clear();
+            return { false, nullptr };
+        }
+        newStart = exA;
+        maxEnd   = exB;
     }
 
     // ---- capture the recipe, THEN move ------------------------------------
@@ -491,6 +520,14 @@ void SMergeColumnsAction::writeXml( QDomElement &elem ) const
     for( const QList<int> &p : clipPaths_ )
         parts << qualifiedToString( pathRoot_, p );
     elem.setAttribute( "clips", parts.join( ';' ) );
+    // Only when the caller named one: an attribute a fixture does not declare
+    // must not appear, or the round-trip audit fails.
+    if( hasExtent() ) {
+        elem.setAttribute( "start", QString::fromStdString(
+                               Fraction( extentStart_, 1 ).toString() ) );
+        elem.setAttribute( "length", QString::fromStdString(
+                               Fraction( extentLen_, 1 ).toString() ) );
+    }
 }
 
 bool SMergeColumnsAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -502,6 +539,12 @@ bool SMergeColumnsAction::readXml( const QDomElement &elem, int /*version*/ )
     // feeds every verb a DEFAULT instance through write->read->write.
     for( const QString &one : all.split( ';', Qt::SkipEmptyParts ) )
         clipPaths_.append( parseInto( pathRoot_, one.trimmed() ) );
+    // `length` ABSENT (or negative) is "the operands' union", the pre-P4
+    // meaning every existing script and every existing call carries.
+    extentStart_ = (offset_t) parseFractionOrDouble(
+        elem.attribute( "start", "0" ).toStdString() ).toDouble();
+    extentLen_ = (length_t) parseFractionOrDouble(
+        elem.attribute( "length", "-1" ).toStdString() ).toDouble();
     return true;
 }
 

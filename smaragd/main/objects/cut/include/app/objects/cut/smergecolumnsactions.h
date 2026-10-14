@@ -46,9 +46,28 @@ class SUnmergeColumnsAction;
  * (`objects/cut/CONTRACT.md`). Removals inside one merge are issued in
  * DESCENDING index order, so no removal invalidates an index still to be used.
  *
+ * ## THE EXPLICIT EXTENT (`start=`/`length=`, plan 53 D4 (a), QBX-182)
+ *
+ * `length` defaults to `-1` = "the operands' union", which is what every call
+ * written before P4 means and why none of them changed. A non-negative one
+ * names THE COLUMN'S EXTENT OUTRIGHT, and it exists for exactly one caller:
+ * mode A planning an EDIT GROUP, where every member's column must be the same
+ * `[startTime, duration)` or `seditgroups::correspondingClip` cannot find the
+ * twins. `C_g` is the union of the ARMED members' own `C`s, so on a member
+ * holding less material than the armed lane it is WIDER than that member's
+ * operands -- and the result is §4.2's union placeholder, a column whose takes
+ * cover less than it does, which invariant 3′ exists to make legal.
+ *
+ * With an explicit extent ONE operand is accepted, because one is the common
+ * case: a member holding the single clip the armed lane was played against.
+ * The extent must CONTAIN every operand -- a narrower one is REFUSED rather
+ * than clipped, since clipping would silently drop a take's material, and the
+ * caller that wants the shorter column wants `resize-clip` on the result.
+ *
  * REFUSED, AND ANNOUNCED IN EVERY CASE (a refusal that can also happen by
  * accident has to be gated on the announcement, not on the action failing):
- * fewer than two operands; operands on different lanes; a clip that is a lane;
+ * fewer than two operands AND no explicit extent; an explicit extent that does
+ * not contain the operands; operands on different lanes; a clip that is a lane;
  * a WRAPPED column (`SLink -> SCut -> STakeStack`, which proposal 42 M3's "no
  * column inside a column" forbids folding); a live recording; mixed content
  * kinds; and — see below — operands whose mix parameters disagree.
@@ -78,7 +97,14 @@ class SUnmergeColumnsAction;
 class SMergeColumnsAction : public SAction {
 public:
     SMergeColumnsAction() = default;
-    explicit SMergeColumnsAction( const QList<QList<int>> &clipPaths );
+    /**
+     * `extentLen < 0` means "the operands' own union", which is every call
+     * written before plan 53 P4 (QBX-182) and every hand-written `.qxa`.
+     * A non-negative one is THE GROUP EXTENT `C_g` -- see the header.
+     */
+    explicit SMergeColumnsAction( const QList<QList<int>> &clipPaths,
+                                  offset_t extentStart = 0,
+                                  length_t extentLen = -1 );
     ~SMergeColumnsAction() override;
 
     // Holding refcount pins makes this action non-copyable: a copy would
@@ -141,8 +167,16 @@ public:
     void dropStalePins();
 
 private:
+    bool hasExtent() const { return extentLen_ >= 0; }
+
     QString          pathRoot_;
     QList<QList<int>> clipPaths_;
+    /**
+     * THE COLUMN'S EXTENT WHEN THE CALLER NAMES ONE (plan 53 D4 (a)): `C_g`,
+     * the group extent. `-1` = the operands' union, the pre-P4 meaning.
+     */
+    offset_t         extentStart_ = 0;
+    length_t         extentLen_   = -1;
     QList<int>       lanePath_;
     QList<Operand>   operands_;
 };

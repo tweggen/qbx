@@ -225,14 +225,16 @@ public:
     SPlaceMidiRecordingAction( const QList<int> &trackPath, offset_t timePos,
                                qint64 durationTicks, std::vector<SEvent> events,
                                const QString &mode, const QString &quantize,
-                               const QString &name );
+                               const QString &name,
+                               const QString &takeStamp = QString() );
 
     QString name() const override
     { return QStringLiteral( "place-midi-recording" ); }
     QStringList knownAttributes() const override
     { return { QStringLiteral( "trackPath" ), QStringLiteral( "timePos" ),
                QStringLiteral( "durationTicks" ), QStringLiteral( "mode" ),
-               QStringLiteral( "quantize" ), QStringLiteral( "name" ) }; }
+               QStringLiteral( "quantize" ), QStringLiteral( "name" ),
+               QStringLiteral( "takeStamp" ) }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -258,6 +260,21 @@ private:
     QString             mode_ = QStringLiteral( "new-take" );
     QString             quantize_ = QStringLiteral( "off" );
     QString             clipName_;
+    /**
+     * THE RECORDER'S WALL-CLOCK STAMP, `"HH:MM"` (plan 53 §8 P4, QBX-182).
+     *
+     * EMPTY = name nothing, which is every `.qxa` that places a pass by hand.
+     * The event half of `place-recording`'s `takeStamp`, and it exists at the
+     * same time for the same reason: the name is decision D5's ORIGIN MARKER,
+     * and an origin marker that only audio takes carry would make P6's
+     * `cleanup-takes` treat every recorded MIDI take as part of the user's
+     * arrangement.
+     *
+     * THE GROUP HALF OF P4 IS NOT HERE. `place-midi-recording` has no
+     * `armed=` and no `groupStart=`/`groupLength=`: the MIDI recorder does not
+     * enumerate the un-armed members of an edit group, which is QBX-191.
+     */
+    QString             takeStamp_;
     /**
      * THE PLAN, HELD, for the reason `SPlaceRecordingAction::plan_` is held: a
      * child's inverse may BORROW the child. `merge-columns`' inverse is an
