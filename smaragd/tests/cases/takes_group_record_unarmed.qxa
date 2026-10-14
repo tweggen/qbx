@@ -84,7 +84,7 @@
     <record-start/>
     <wait-ms ms="3000"/>
 
-    <assert-recorded-clip trackPath="0" minClips="1"/>
+    <assert-recorded-clip trackPath="0" clips="1"/>
 
     <!-- THE ARMED LANE: today's mode-A union column, unchanged by the group -
          its own `C` already WAS `C_g`. -->

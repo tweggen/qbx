@@ -2358,6 +2358,25 @@ void SMainWindow::buildStatusBar()
                       SIGNAL( recordingLanesSkipped( int, const QString & ) ),
                       this,
                       SLOT( onRecordingLanesSkipped( int, const QString & ) ) );
+
+    // Q11's landing feedback, through the same transient message area and for
+    // the same reasons.
+    QObject::connect( &SApplication::app(),
+                      SIGNAL( takesLanded( int, int, bool ) ),
+                      this, SLOT( onTakesLanded( int, int, bool ) ) );
+}
+
+void SMainWindow::onTakesLanded( int takeCount, int trackCount, bool expanded )
+{
+    // SAY NOTHING WHEN THE LANES OPENED. The user can see what happened --
+    // that is the whole point of opening them -- and a status line repeating
+    // it would be noise on every single take. The message exists for the case
+    // the lanes did NOT open, which is the case where the take is invisible.
+    if( expanded ) return;
+    statusBar()->showMessage(
+        tr( "Recorded %n take(s) on %1 track(s). Press T on a track to show "
+            "its take lanes.", "", takeCount ).arg( trackCount ),
+        15000 );
 }
 
 void SMainWindow::onRecordingLanesSkipped( int count, const QString &firstWhy )

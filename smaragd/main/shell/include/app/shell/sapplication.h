@@ -409,6 +409,25 @@ public:
      * properly -- the Unused recordings dock, which is P6's.
      */
     void notifyRecordingLanesSkipped( int laneCount, const QString &firstWhy );
+
+    /**
+     * A TAKE LANDED, AND HERE IS WHAT THE ARRANGER DID ABOUT IT (plan 53 Q11,
+     * P6).
+     *
+     * A recorded take goes onto a take COLUMN, and a collapsed track draws a
+     * column as one clip: the pass is there and it plays, but nothing on
+     * screen says a second take arrived. So a landing either opens the take
+     * lanes or says that it did not -- `expanded` is which.
+     *
+     * Logged always and emitted always, the `recordingLanesSkipped` rule and
+     * for its reason: this is a status-bar line, nothing blocks and nothing
+     * has to be dismissed, so suppressing it under `--test-case` would mean
+     * the signal is exercised by nothing at all. `takes_auto_expand.qxa`
+     * gates the hint through the log line.
+     *
+     * ONCE PER PASS, never once per lane.
+     */
+    void notifyTakesLanded( int takeCount, int trackCount, bool expanded );
     // Give the next audio-output failure its own chance to notify (called
     // when the user changes the output device selection in Options).
     void clearAudioOutputFailureNotice() { audioDeviceFailureNotified_ = false; }
@@ -478,6 +497,7 @@ signals:
     // NOT interactive-only: the listener shows a status-bar line, which
     // blocks nothing, so this is emitted under --test-case as well.
     void recordingLanesSkipped( int count, const QString &firstWhy );
+    void takesLanded( int takeCount, int trackCount, bool expanded );
 
 public slots:
     // Set the status/mode line. Emits statusModeChanged only when it changes.

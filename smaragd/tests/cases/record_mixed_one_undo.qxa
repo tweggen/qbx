@@ -76,7 +76,7 @@
     <!-- Both halves landed. Floors, not equalities: how much a real-time pass
          captures is load-dependent, and the structural claim here is "each
          recorder placed something", not how much. -->
-    <assert-recorded-clip trackPath="0" minClips="1"/>
+    <assert-recorded-clip trackPath="0" clips="1"/>
     <assert-midi-recorded trackPath="1" minClips="1"/>
 
     <!-- ...AND ONE UNDO TAKES BOTH AWAY. On main this leaves the MIDI half

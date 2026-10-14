@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A TAKE THAT LANDS EITHER OPENS THE TAKE LANES OR SAYS THAT IT DID NOT.
+
+  Plan 53 P6, Q11. A recorded take goes onto a take COLUMN, and a collapsed
+  track draws a column as ONE CLIP: the pass is there, it plays, and nothing
+  on screen says a second take arrived. The take lanes are one keystroke away,
+  but only if you know they exist — so a landing has to do one of two things,
+  and this case is both of them.
+
+  THE CUT-OFF IS TWO TRACKS, and it is about the arranger rather than about
+  taste: expanding a track adds one ROW PER TAKE, so a band pass across eight
+  lanes would rearrange the whole arranger at the moment the user is reaching
+  for stop. Beyond two, the lanes stay as they were and a status line says
+  what happened and which key shows it.
+
+  THIS CASE OWNS THE `takes/expandOnLanding` INI KEY and covers all three of
+  its values in one run, because each one costs a live press and the key may
+  have only one owning case (`set-option` writes the developer's real
+  smaragd.ini). RUN_SERIAL, restored to its SOpt default at the end, and NO
+  OTHER CASE MAY READ OR WRITE IT.
+
+  WHAT IS ASSERTED, AND WHERE FROM. `assert-lane-view takesExpanded=` reads
+  the TRACK's own flag (`STrack::takesExpanded`), not the arranger — which is
+  the right instrument twice over: it needs no arranger, so it works headless,
+  and the flag IS what the arranger renders from. The HINT is asserted through
+  `assert-log`, because `SApplication::notifyTakesLanded` logs always and
+  emits always (the `recordingLanesSkipped` rule — a status-bar line blocks
+  nothing, so suppressing it under —test-case would leave the signal
+  exercised by nothing at all).
+
+  ASSERT-LOG'S WINDOW IS THE PRECEDING NON-ASSERT-LOG ACTION, so every
+  `assert-log` below sits DIRECTLY after the `record-stop` whose commit
+  produced the line. One action later and it would read an empty window and
+  report OK over a line the run really did log — the commonest way to write a
+  vacuous assertion with this verb.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL, the file
+  input backend, 4800 frames of input latency.
+-->
+<SActionScript version="1" name="takes_auto_expand">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Three tracks, all on the same test input. Only the ARM state changes
+         between the sections below. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-monitor-mode trackPath="2" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="2" input="audio:qxa-record-input:1"/>
+
+    <!-- Nothing is expanded to begin with: a new track starts collapsed, and
+         the assertions below are about a CHANGE. -->
+    <assert-lane-view trackPath="0" takesExpanded="0"/>
+    <assert-lane-view trackPath="1" takesExpanded="0"/>
+    <assert-lane-view trackPath="2" takesExpanded="0"/>
+
+    <!-- EACH SECTION BELOW USES A FRESH TRACK, in an order that never needs a
+         fold-back: the over-the-cut-off pass comes FIRST, while nothing is
+         expanded, and each later section arms a track no earlier section
+         expanded. Folding one back by hand would have meant
+         `set-lane-view toggleTakesRow=`, which addresses a ROW and needs an
+         arranger a headless run does not have.
+
+         The locators are 10 s apart because a landing within the pass-wide
+         snap window of an existing clip edge is rounded onto it (plan 53
+         §3.5) — record_stays_armed's own note. Nothing here depends on the
+         structure, but a snapped landing would make two passes share a lane's
+         first clip and confuse the per-track assertions. -->
+
+    <!-- ========== `landing`: THREE tracks, OVER the cut-off ============= -->
+    <set-option key="takes/expandOnLanding" value="landing"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+    <arm-track trackPath="2" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <!-- THE HINT, and the counts in it. -->
+    <assert-log contains="3 take(s) landed on 3 track(s)"/>
+    <assert-log contains="left collapsed"/>
+
+    <!-- All three still collapsed... -->
+    <assert-lane-view trackPath="0" takesExpanded="0"/>
+    <assert-lane-view trackPath="1" takesExpanded="0"/>
+    <assert-lane-view trackPath="2" takesExpanded="0"/>
+    <!-- ...and all three really did record, so the collapse is the cut-off
+         and not a pass that failed. -->
+    <assert-recorded-clip trackPath="0" clips="1"/>
+    <assert-recorded-clip trackPath="1" clips="1"/>
+    <assert-recorded-clip trackPath="2" clips="1"/>
+
+    <!-- ========== `landing`: ONE track, UNDER the cut-off =============== -->
+    <arm-track trackPath="1" armed="0"/>
+    <arm-track trackPath="2" armed="0"/>
+    <set-locator position="480000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <assert-log contains="take lanes expanded"/>
+
+    <assert-lane-view trackPath="0" takesExpanded="1"/>
+    <!-- ...and NOWHERE ELSE: the lanes that gained nothing this pass are
+         untouched, which is what makes this the LANDING rule rather than
+         "expand everything". -->
+    <assert-lane-view trackPath="1" takesExpanded="0"/>
+    <assert-lane-view trackPath="2" takesExpanded="0"/>
+
+    <!-- ========== `never`: not even one track =========================== -->
+    <set-option key="takes/expandOnLanding" value="never"/>
+    <arm-track trackPath="0" armed="0"/>
+    <arm-track trackPath="1" armed="1"/>
+
+    <set-locator position="960000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <!-- `never` is SILENT as well as closed: a user who turned this off is
+         not asking to be told about it in other words. An ABSENCE-shaped
+         assertion, so the sabotage pass has to confirm it fires (see the
+         PR). -->
+    <assert-log contains="landed on" minCount="0" maxCount="0"/>
+    <assert-lane-view trackPath="1" takesExpanded="0"/>
+    <!-- Track 0 keeps the expansion the earlier pass gave it: `never` means
+         "do not open lanes", not "close the ones that are open". -->
+    <assert-lane-view trackPath="0" takesExpanded="1"/>
+
+    <!-- ========== `armed`: the armed lane ============================== -->
+    <set-option key="takes/expandOnLanding" value="armed"/>
+    <arm-track trackPath="1" armed="0"/>
+    <arm-track trackPath="2" armed="1"/>
+
+    <set-locator position="1440000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <assert-log contains="take lanes expanded"/>
+    <!-- Track 2 is the only armed lane, so `armed` and `landing` agree here.
+         What this section pins is that the value is READ at all and does not
+         fall through to `never` — the two values diverge only for a lane that
+         was armed and did NOT land, which needs a refusing planner and is
+         record_mode_replace_group's territory rather than a feedback case's. -->
+    <assert-lane-view trackPath="2" takesExpanded="1"/>
+
+    <!-- —— RESTORE THE KEY. This case owns it. —— -->
+    <set-option key="takes/expandOnLanding" value="landing"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

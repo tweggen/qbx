@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WHERE THE PLAYHEAD ENDS UP AFTER A TAKE IS THE USER'S CHOICE.
+
+  Plan 53 P6, Q12. `transport/locatorAfterRecord` is one of three per-user
+  settings plan 53 added and left unread; this is the one P6 wires.
+
+  `return` (the default) lines the playhead up with what was just placed: the
+  take advanced it, and the thing a user almost always wants next is to hear
+  back what they just played, from where it starts.
+
+  `stay` leaves it where the take STOPPED, which is what someone punching one
+  phrase after another wants — stop, arm the next spot, go again, with no
+  travel back to the top each time. The TRANSPORT still stops either way;
+  `stay` is about the locator and nothing else, and the standing limitation in
+  shell/CONTRACT.md is unchanged by it.
+
+  THIS CASE OWNS THE `transport/locatorAfterRecord` INI KEY. `set-option`'s
+  rule is one owning case per key, because it writes the developer's real
+  smaragd.ini: this case is RUN_SERIAL, it restores the key to its SOpt
+  default at the end, and NO OTHER CASE MAY READ OR WRITE IT.
+
+  THE TRANSPORT IS STOPPED WHEN record-start RUNS, and that is what makes
+  `return` assertable EXACTLY. `recordStart_` is where the transport WAS when
+  the capture began, not where the locator was last set: with a running
+  transport the playhead advances through the pre-roll, so `return` lands on a
+  wall-clock number (measured 507648 for a locator of 480000 — and that is the
+  behaviour working, not failing). From a STOPPED transport the two coincide,
+  which is the same reason record_snap_pass_wide and record_snap_disagree are
+  the only other record cases that start stopped: it is what pins a landing to
+  the locator.
+
+  So `return` is asserted as the exact locator, and `stay` as NOT it — the
+  second needs no predicted number, because where a take STOPS is wall-clock
+  whatever the transport did before it. The pair is mutually exclusive, so
+  neither weakens to "some position", which a lone floor would have.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL, the file
+  input backend, 4800 frames of input latency.
+-->
+<SActionScript version="1" name="record_locator_stay">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <!-- —— `return`: the DEFAULT, stated rather than assumed. A stale INI
+         from an interrupted earlier run of this very case could otherwise
+         leave the key at `stay` and make this half pass for no reason. —— -->
+    <set-option key="transport/locatorAfterRecord" value="return"/>
+
+    <set-locator position="480000"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <assert-recorded-clip trackPath="0" clips="1"/>
+    <!-- Back to where the take began. -->
+    <assert-locator position="480000"/>
+
+    <!-- —— `stay`: the locator is left where the take stopped. —— -->
+    <set-option key="transport/locatorAfterRecord" value="stay"/>
+
+    <set-locator position="960000"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+
+    <!-- NOT the record start. The take ran for about 1.5 s, so the playhead
+         is something over 960000 + 72000 — but how far over is wall-clock,
+         and this assertion deliberately does not guess. -->
+    <assert-locator position="960000" expectReject="true"/>
+
+    <!-- ...and the take really did land, so the assertion above is about the
+         locator rule and not about a press that never happened. -->
+    <assert-clip-window clip="0,1"/>
+
+    <!-- —— RESTORE THE KEY. This case owns it. —— -->
+    <set-option key="transport/locatorAfterRecord" value="return"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

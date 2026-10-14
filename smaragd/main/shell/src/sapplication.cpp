@@ -1252,6 +1252,19 @@ void SApplication::notifyRecordingLanesSkipped( int laneCount,
     emit recordingLanesSkipped( laneCount, firstWhy );
 }
 
+void SApplication::notifyTakesLanded( int takeCount, int trackCount,
+                                      bool expanded )
+{
+    if( takeCount <= 0 || trackCount <= 0 ) return;
+    // THE LOG LINE IS THE GATE, so its shape is load-bearing: the counts and
+    // the word `expanded` / `collapsed` are what takes_auto_expand.qxa matches
+    // on, and the status-bar text below is free to be phrased for a human.
+    TW_LOGI( "ui.shell",
+             "[REC] %d take(s) landed on %d track(s); take lanes %s",
+             takeCount, trackCount, expanded ? "expanded" : "left collapsed" );
+    emit takesLanded( takeCount, trackCount, expanded );
+}
+
 bool SApplication::isRecordingActive() const
 {
     return ( audioRecorder_ && audioRecorder_->isActive() )
