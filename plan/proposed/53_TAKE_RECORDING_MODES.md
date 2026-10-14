@@ -1882,9 +1882,19 @@ Flips: none — existing files have no `autoFadeMs` key and read 0 (D3a).
 > One thing the row asks for that is NOT in this change: nothing was done about
 > the auto-fade in the Options UI. The property is reachable from a script
 > (`set-property key="autoFadeMs"`) and from a project file, and a new project
-> gets 3 ms, but there is no control anywhere that sets it. §6.2 does not ask
-> for one and the row does not either; it is named here so the gap is on the
-> record rather than discovered later.
+> gets 3 ms, but there is no control anywhere that sets it, and the 3 ms is a
+> hard-coded literal rather than an INI key — so a user cannot change what new
+> projects get either. §6.2 does not ask for a control and this row does not
+> either.
+>
+> **FILED AS QBX-192**, and the gap turned out to be wider than the auto-fade:
+> `SOpt::MidiRecordMode` (P2's seed), `SOpt::LocatorAfterRecord` (Q12) and
+> `SOpt::TakesExpandOnLanding` (Q11) are all in the same position — an INI key
+> with a documented default and no control on any Options page — and the last
+> two are what **P6** consumes. So the ticket builds ONE "Recording" page for
+> all four rather than letting three changes touch the same page in turn. The
+> per-PROJECT value is left as a decision there, because this app has no
+> project-settings surface at all and P5 was not the place to invent one.
 
 ### P6 — landing feedback, locator, unused recordings, clean-up — depends on P2, A0b, B10
 
