@@ -174,10 +174,53 @@
     <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
     <assert-midi-events scope="clip" clip="1,0" take="1" kind="noteon" count="1"/>
     <assert-midi-events scope="clip" clip="1,0" take="1" contains="key=72"/>
+
+    <!-- ============ THE ACTIVE TAKE, WITH NO COMP MAP TO SAVE IT ======
+         MEASURED HOLE, CLOSED HERE. Everything above has the active take
+         ALSO SELECTED by a comp segment, so two independent defences keep it:
+         the `t == active` test and the comp-map test. Deleting the active
+         test changed nothing and no case noticed — a destructive verb whose
+         protection of the audible take was not actually gated.
+
+         A column with NO COMP MAP is where the active test is the only
+         defence: with an empty map nothing is "selected by a segment", so
+         every take except the active one is unused, and the active one
+         survives for one reason only. Which is also the commonest shape in a
+         real project — W1 leaves exactly this, a column nobody has comped. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="2,0" filePath="../test_gapsaw.wav" startOffset="0"/>
+    <set-clip-name clip="2,0" take="1" name="Take 1 · 12:05" broadcast="0"/>
+    <add-take clip="2,0" filePath="../test_autosaw.wav" startOffset="0"/>
+    <set-clip-name clip="2,0" take="2" name="Take 2 · 12:05" broadcast="0"/>
+    <!-- No set-comp-segment anywhere: the map is EMPTY. -->
+    <assert-take-column clip="2,0" shape="direct" takes="3" activeTake="2"
+                        comp=""/>
+
+    <render filename="ct_nocomp_before.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <cleanup-takes clips="2,0"/>
+
+    <!-- Take 1 went: a recording, not active, and no map to select it. Take 0
+         stayed because it is the user's clip, and TAKE 2 STAYED BECAUSE IT IS
+         ACTIVE AND NOTHING ELSE. -->
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="1"
+                        comp=""/>
+    <!-- ...and the sound is unchanged, which is the assertion that fails if
+         the active take is swept: the column would fall back to a take that
+         was never audible. -->
+    <render filename="ct_nocomp_after.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+    <assert-file-identical actual="ct_nocomp_after.wav"
+                           expected="ct_nocomp_before.wav"/>
+
+    <undo count="1"/>
+    <assert-take-column clip="2,0" shape="direct" takes="3" activeTake="2"/>
+
   </actions>
 
   <assertions>
-    <assert-track-count equals="2"/>
+    <assert-track-count equals="3"/>
   </assertions>
 
 </SActionScript>

@@ -162,12 +162,82 @@
          record_mode_replace_group's territory rather than a feedback case's. -->
     <assert-lane-view trackPath="2" takesExpanded="1"/>
 
+    <!-- ====== `armed` vs `landing`: A LANE THAT WAS ARMED AND DID NOT LAND
+         MEASURED GAP, CLOSED HERE. Everywhere above, the armed lane also
+         LANDS, so `armed` and `landing` agree and deleting the `armed` branch
+         changed nothing a case could see. The two values differ for exactly
+         one lane: one that was armed and gained nothing.
+
+         A WRAPPED COLUMN UNDER `replace` IS THAT LANE (G11, QBX-172): the
+         planner refuses the whole lane for the pass. The fixture is
+         record_lane_skipped_reported's, which is a real project file rather
+         than something assembled here.
+
+         IT IS LAST IN THE CASE because `load-project` replaces the project
+         the sections above built up. Both lanes are armed on CHANNEL 1: a
+         mono source armed on two lanes is explicitly supported (two lanes of
+         one pass can share a capture file), and this case's input fixture is
+         mono. -->
+    <load-project path="../takestack_wrap_wrapperpan.qxp"/>
+    <assert-take-column clip="0,0" shape="wrapped" takes="2"/>
+
+    <set-track-record-mode trackPath="0" mode="replace"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:1"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+    <assert-lane-view trackPath="0" takesExpanded="0"/>
+    <assert-lane-view trackPath="1" takesExpanded="0"/>
+
+    <!-- `landing`: only what GAINED a take opens. -->
+    <set-option key="takes/expandOnLanding" value="landing"/>
+    <!-- THE FIXTURE'S OWN RECIPE, mirrored from record_lane_skipped_reported:
+         a RUNNING transport, and `nestedRejects="1"` on the stop. The runner
+         decides whether an action failed by sampling the history's rejection
+         counter around its submit, and cannot tell this action's outcome from
+         that of anything it submitted while applying — so the deliberate
+         refusal of track 0 would otherwise read as `record-stop` being
+         broken. It is an EXACT count, so a genuinely failing stop makes it 2
+         and still fails the case. Measured: without it, both presses here
+         reported `record-stop` failing. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1200"/>
+    <record-stop nestedRejects="1"/>
+    <!-- The refusal really happened, or this section is about nothing. -->
+    <assert-log contains="lane refused the pass"/>
+    <assert-lane-view trackPath="1" takesExpanded="1"/>
+    <assert-lane-view trackPath="0" takesExpanded="0"/>
+
+    <!-- `armed`: the lane that refused opens too, because the user armed it
+         and wants it open for the next attempt. THE ONE ASSERTION THE TWO
+         VALUES DISAGREE ON. -->
+    <set-option key="takes/expandOnLanding" value="armed"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1200"/>
+    <record-stop nestedRejects="1"/>
+    <assert-lane-view trackPath="0" takesExpanded="1"/>
+
     <!-- —— RESTORE THE KEY. This case owns it. —— -->
     <set-option key="takes/expandOnLanding" value="landing"/>
   </actions>
 
   <assertions>
-    <assert-track-count equals="3"/>
+    <!-- TWO, not the three this case built: the last section `load-project`s
+         record_lane_skipped_reported's fixture, which replaces the project
+         with its own two tracks. The three-track project the earlier sections
+         needed is gone by here, and that is the price of putting the
+         armed-vs-landing divergence in the case that owns the INI key. -->
+    <assert-track-count equals="2"/>
   </assertions>
 
 </SActionScript>
