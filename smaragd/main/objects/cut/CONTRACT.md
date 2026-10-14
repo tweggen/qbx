@@ -1470,3 +1470,53 @@ the active take's own component and no `twCompColumn` is built at all (the
 degenerate case, proposal 43 N2). The auto-fade reaches exactly the joins that
 exist. Nothing about the exemption D3b makes applies at a boundary either: two
 takes are two performances, so the waveform steps there however tight the comp.
+
+## `cleanup-takes`, and why a REMOVAL has to be undoable first (plan 53 §8 P6, §6.3, D5 (a), QBX-184)
+
+Comping leaves rubbish: every pass that was not used is still a take on its
+column. `cleanup-takes` sweeps the ones nothing selects — not the active take,
+not a take any comp segment selects over a position where it has material, and
+not the user's own pre-existing clip.
+
+**"CAME FROM A RECORDING" IS A NAME TEST**, and that is decision D5 (a) rather
+than an implementation shortcut: `stakenames::isRecorded` asks whether the
+take's name carries the recorder's stamp. A take that was the user's clip —
+W1's original A, which recording turns into an inactive take without them
+doing anything — is EXEMPT unless `includeOriginals` says otherwise. The sweep
+reports both numbers so the confirmation can say "3 recordings, 1 original clip
+(kept)".
+
+**THE PLAN IS COMPUTED BEFORE ANYTHING MOVES, AND APPLIED HIGHEST INDEX
+FIRST.** `removeTake` shifts every take above the one it drops, and renumbers
+the comp map with it, so deciding and removing in one pass would read indices
+the previous removal had already changed.
+
+**WHICH MADE `remove-take`'s NULL INVERSE A BLOCKER, not a wart.** A sweep over
+an event take could not be undone at all, and the one thing a destructive sweep
+must be is undoable — so the pin pattern (QBX-184) landed first, as its own
+change. The macro's children are `remove-take`s, and ONE non-undoable child
+makes the whole composite non-undoable (`SCompositeAction`'s own contract), so
+a single MIDI take in scope would have cost the entire sweep its undo.
+
+**THE MACRO LIVES ON THE FORWARD ACTION.** `SActionUndoCommand` keeps the
+forward action for redo, and each `SRemoveTakeAction` child holds the pin its
+inverse reads back through a raw pointer. Deleting the macro after applying it
+would drop every pin and leave each `restore-take` with a dangling owner: the
+undo would refuse, and the sweep would silently stop being undoable for exactly
+the takes the pin was added for.
+
+**A TAKE'S NAME IS DATA, NOT DECORATION.** It is the origin marker, so
+`add-take` had to start carrying one: without it the `remove-take` inverse gave
+back an unnamed take, and undoing a removal turned a recording into an
+"original clip" — permanently exempt from clean-up and invisible to
+`select-take take="newest"`. Measured, not predicted: a restored take read
+`(untitled)` and a second sweep kept what the first had removed.
+
+### Known debt
+
+`scope="selection"` is not available, and §6.3 specifies it. This slice cannot
+see a selection (`objects/cut` has no edge to `shell` or `selection`), so the
+verb takes `clips=` and the caller translates — the split `split-selection`
+already makes against `split-clip`. The shell menu command that resolves a
+selection into `clips=` is not built; nothing but a script reaches the verb
+today.

@@ -67,6 +67,7 @@
 #include "app/servicesui/soptions.h"
 #include "app/model/sautofade.h"
 #include "app/shell/srecordmodeseed.h"
+#include "app/shell/sunusedrecordingsview.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
 #include "app/model/slink.h"
@@ -2093,6 +2094,30 @@ SMainWindow::SMainWindow()
     qDockClipProps_->setWidget( clipPropsPanel_ );
     addDockWidget( Qt::RightDockWidgetArea, qDockClipProps_ );
     qDockClipProps_->hide();
+
+    // THE UNUSED RECORDINGS DOCK (plan 53 §6.3, P6 / QBX-184). Created in the
+    // ctor like every other one (inv. 4: restoreState() can only place docks
+    // that already exist), bottom area, hidden on a first run, placed
+    // thereafter entirely by `ui/windowState` -- so no settings key of its own.
+    //
+    // IT IS NOT ON destroyDocksToolbars()'s DETACH LIST, and that is a property
+    // rather than an omission: it holds only strings, never a pointer into the
+    // project, so there is nothing to dereference after closeProject() deletes
+    // it. The mixer pane needs the detach precisely because it does hold
+    // tracks (inv. 61).
+    qDockUnusedRecordings_ = new QDockWidget( tr( "Unused recordings" ), this );
+    qDockUnusedRecordings_->setObjectName( "dock_unused_recordings" );
+    unusedRecordingsView_ = new SUnusedRecordingsView( qDockUnusedRecordings_ );
+    qDockUnusedRecordings_->setWidget( unusedRecordingsView_ );
+    addDockWidget( Qt::BottomDockWidgetArea, qDockUnusedRecordings_ );
+    qDockUnusedRecordings_->hide();
+    // The dock accumulates the SESSION's skipped lanes, so it listens to the
+    // same signal the status-bar line does -- it just asks the recorder for
+    // more detail than that line needs.
+    QObject::connect( &SApplication::app(),
+                      SIGNAL( recordingLanesSkipped( int, const QString & ) ),
+                      unusedRecordingsView_,
+                      SLOT( onRecordingLanesSkipped( int, const QString & ) ) );
 
     // The event editor dock (proposal 37 P4) — the fifth dock, BOTTOM, tabified
     // with the Log so the two share the strip under the arranger. Created here

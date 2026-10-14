@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  `cleanup-takes` REMOVES THE PASSES NOTHING USES, AND NOTHING ELSE.
+
+  Plan 53 P6, §6.3, Q13, decision D5 default (a).
+
+  Comping leaves rubbish: every pass that was not used is still a take on its
+  column, and after an afternoon of punching a column can hold a dozen with
+  two in the comp. This sweeps them. Which makes it a DESTRUCTIVE verb over
+  the user's recordings, so what it must never do matters more than what it
+  does, and that is most of what this case asserts.
+
+  THE FIXTURE IS THE TICKET'S, four take kinds on one column so that one sweep
+  has to tell them apart:
+
+    take 0  the user's ORIGINAL clip      — exempt by D5 (a), and INACTIVE
+    take 1  a RECORDED take the comp USES — used, so it stays
+    take 2  a RECORDED take nothing uses  — THE ONE THAT GOES
+    take 3  the ACTIVE take               — what sounds, so it stays
+
+  "CAME FROM A RECORDING" IS A NAME TEST and that is D5 (a) rather than a
+  shortcut: `stakenames::isRecorded` asks whether the name carries the
+  recorder's stamp ("Take 3 · 14:27", plan 53 §8 P4). So this case NAMES its
+  takes, exactly as the recorder would, and take 0 keeps a name that is not a
+  recording's. A sweep that ignored the origin test would take take 0 as well
+  — it is inactive and uncomped, so it meets every other condition — and the
+  assertion that catches that is the one that matters most here.
+
+  WHICH TAKE SURVIVED IS ASSERTED BY ITS EXTENT, because there is no verb that
+  reads a take's NAME back (`assert-take-column` reports shape, counts, the
+  comp map, the extents and the duration; nothing reports names). So every
+  take here is given a DISTINCT extent, and the extent list after the sweep
+  names the survivors exactly — identity, not a count. A case that asserted
+  only `takes=3` would pass having removed the wrong one.
+
+  RENDER IDENTITY IS THE ORACLE, not the take count. The acceptance criterion
+  is that clean-up never removes a take that is used or that pre-existed, and
+  a count cannot show that: removing the wrong take and keeping the right
+  number would pass. So the column is rendered BEFORE and AFTER and the two
+  files must be byte-identical — the comp result cannot change, because
+  nothing the comp selects was touched. The count is asserted too, as the
+  other half.
+
+  WHAT IS NOT EXERCISED HERE: `files="1"`. Moving files to the OS trash inside
+  a `-j4` suite is not something a case may do, so the deletion is
+  hand-verified and the PR says so. The COUNT it would act on is gated in
+  `unused_recordings_list.qxa` through the same `srecfiles::scanUnused`.
+-->
+<SActionScript version="1" name="cleanup_takes">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- take 0: THE USER'S OWN CLIP, 4 s of sawtooth. It becomes take 0 when
+         the first add-take wraps it. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-clip-name clip="0,0" name="Guitar comp"/>
+
+    <!-- takes 1..3, each a "recording": the NAME is what says so, and it is
+         the recorder's own format. Each gets a DISTINCT EXTENT, which is what
+         the assertions below identify it by. -->
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="0"
+              at="0" length="96000"/>
+    <set-clip-name clip="0,0" take="1" name="Take 1 · 12:00" broadcast="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"
+              at="96000" length="48000"/>
+    <set-clip-name clip="0,0" take="2" name="Take 2 · 12:00" broadcast="0"/>
+    <add-take clip="0,0" filePath="../test_autosaw.wav" startOffset="0"
+              at="144000" length="48000"/>
+    <set-clip-name clip="0,0" take="3" name="Take 3 · 12:01" broadcast="0"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="4" activeTake="3"
+                        extents="0-192000;0-96000;96000-144000;144000-192000"
+                        duration="192000"/>
+
+    <!-- THE COMP: take 1 over its own material, take 3 (the active one) over
+         its own. Take 2 is selected by nothing, and take 0 is selected by
+         nothing — the two differ only in ORIGIN, which is the whole point. -->
+    <set-comp-segment clip="0,0" at="0" take="1"/>
+    <set-comp-segment clip="0,0" at="144000" take="3"/>
+    <assert-take-column clip="0,0" comp="0:1;144000:3"/>
+
+    <render filename="ct_before.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- ===================== THE SWEEP ============================== -->
+    <cleanup-takes scope="project"/>
+
+    <!-- ONE TAKE WENT, AND IT IS THE RIGHT ONE. The extent list says which:
+         96000-144000 is gone and the other three are exactly as they were.
+         The ORIGINAL (0-192000) survived although it is inactive and uncomped
+         — it met every condition except the origin test, and that assertion
+         is the one that matters most here. The USED recording (0-96000)
+         survived because the comp selects it. The active take survived
+         because it sounds, and its INDEX moved down by one because a lower
+         take was removed, which is `removeTake`'s own renumbering. -->
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-192000;0-96000;144000-192000"
+                        duration="192000"/>
+    <!-- ...and the comp map was renumbered with it, so it still selects the
+         same two takes. -->
+    <assert-take-column clip="0,0" comp="0:1;144000:2"/>
+
+    <!-- AND THE SOUND DID NOT CHANGE. This is the acceptance criterion: a
+         sweep that removed a take the comp uses, or the original, would move
+         these bytes. A count could not tell. -->
+    <render filename="ct_after.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ct_after.wav" expected="ct_before.wav"/>
+
+    <!-- ===================== ONE UNDO STEP ========================== -->
+    <!-- §6.3's "as ONE undoable macro": the whole sweep comes back together,
+         whatever it removed. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="4" activeTake="3"
+                        extents="0-192000;0-96000;96000-144000;144000-192000"
+                        duration="192000"/>
+    <assert-take-column clip="0,0" comp="0:1;144000:3"/>
+    <render filename="ct_undone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ct_undone.wav" expected="ct_before.wav"/>
+
+    <!-- ===================== includeOriginals ======================= -->
+    <!-- The dialog's "include original clips" box. With it, take 0 goes too —
+         which is what makes the exemption above a DECISION and not an
+         inability to see take 0 at all. -->
+    <cleanup-takes scope="project" includeOriginals="1"/>
+    <!-- Take 0 (0-192000) went too, so what is left is the used recording and
+         the active one. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-96000;144000-192000" duration="192000"/>
+    <!-- Still the same sound: both removed takes were unselected. -->
+    <render filename="ct_inc.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ct_inc.wav" expected="ct_before.wav"/>
+
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="4" activeTake="3"/>
+
+    <!-- ===================== A TIDY PROJECT IS NOT AN ERROR ========= -->
+    <!-- Running it twice must not refuse the second time: a user who sweeps a
+         clean project has not made a mistake. The first call here removes
+         take 2 again; the second finds nothing and still succeeds. -->
+    <cleanup-takes scope="project"/>
+    <cleanup-takes scope="project"/>
+    <assert-take-column clip="0,0" shape="direct" takes="3" activeTake="2"
+                        extents="0-192000;0-96000;144000-192000"/>
+
+    <!-- ===================== AND A MIDI TAKE ======================== -->
+    <!-- §6.3's own requirement, and what plan 52 §6's hole made impossible:
+         an EVENT take has no file, so before QBX-184's real inverse a sweep
+         that removed one could not give it back. -->
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="7680" name="Keys comp"/>
+    <add-note clip="1,0" tick="0" dur="480" key="48" velocity="100" channel="0"/>
+    <add-midi-take clip="1,0" atTicks="0" extentTicks="7680" name="Take 1 · 12:02">
+      <n tick="960" dur="480" key="72" velocity="100" channel="0"/>
+    </add-midi-take>
+    <!-- Take 1 is active, so take 0 (the user's part) is the inactive one —
+         and it is NOT a recording, so the sweep must leave it. Activate take
+         0 instead, which makes the RECORDED take 1 the unused one. -->
+    <select-take clip="1,0" take="0" broadcast="0"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
+
+    <cleanup-takes clips="1,0"/>
+    <!-- The recorded event take went, and the column collapsed back to a
+         plain clip because one full-extent take was left (invariant 3'). -->
+    <assert-take-column clip="1,0" shape="none"/>
+    <assert-midi-events scope="clip" clip="1,0" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="1,0" contains="key=48"/>
+
+    <!-- ...AND IT COMES BACK, with its note. The assertion plan 52 §6's hole
+         made impossible. -->
+    <undo count="1"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
+    <assert-midi-events scope="clip" clip="1,0" take="1" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="1,0" take="1" contains="key=72"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

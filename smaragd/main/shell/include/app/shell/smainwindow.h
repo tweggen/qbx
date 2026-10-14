@@ -24,6 +24,7 @@ class SLogView;
 class SLevelMeter;
 class STrackDetailPanel;
 class SClipPropertiesPanel;
+class SUnusedRecordingsView;
 class SEventEditorDock;
 class SVirtualKeyboardDock;
 class SMediaBrowserPanel;
@@ -967,7 +968,9 @@ private:
     // through the existing saveState/restoreState round trip, so it needs no
     // settings key of its own either.
     QDockWidget          *qDockClipProps_ = nullptr;
+    QDockWidget    *qDockUnusedRecordings_ = nullptr;  // plan 53 P6
     SClipPropertiesPanel *clipPropsPanel_ = nullptr;
+    SUnusedRecordingsView  *unusedRecordingsView_ = nullptr;
     QMetaObject::Connection clipPropsConn_;
     QDockWidget          *qDockEventEditor_ = nullptr;
     SEventEditorDock     *eventEditor_      = nullptr;

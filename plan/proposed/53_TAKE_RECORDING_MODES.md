@@ -49,7 +49,7 @@ else in this plan is decided.
 | **D3a** — **DECIDED AND SHIPPED (P5, QBX-183)** | Q9 default 3 ms: the auto-fade is SEEDED into new projects only; a file without `autoFadeMs` reads 0 | (a) seed only (existing projects stay as they render today); (b) read 3 ms as the default (every existing render and dozens of gates move) | **(a)**. (b) flips byte-identity goldens and per-second RMS gates project-wide |
 | **D3b** — **DECIDED AND SHIPPED (P5, QBX-183)** | Auto-fade at a BUTT JOIN of one continuous source (every `split-clip`, every mode-B seam, every `replace` R2 split) is a 3 ms dip, not a crossfade — an audible notch in sustained material | (a) exempt SEAMLESS edges: two abutting clips over the same content whose source positions are continuous get no auto-fade; (b) apply everywhere (Cubase's Auto Fade does, which is why it ships OFF there); (c) ship the feature OFF by default (seed 0) | **(a)**. P5 implements the seamless test (same `windowContent()`, `srcEnd(left) == srcStart(right)` exactly, same stretch); the dialog shows which edges are exempt |
 | **D4** — **DECIDED AND SHIPPED (P4, QBX-182)** | Q5 when an un-armed edit-group member's clip crosses the armed lane's column extent `C`, or two armed lanes in one group have different `C`s (group twins need exact `startTime` + `getDuration()` equality, `seditgroups.h` `correspondingClip`) | (a) member column extent := the group's C (union of the armed lanes' C); member children crossing its edges are split there first (reversible); (b) skip the member with a hint when its clips do not fit; (c) ask | **(a)**, taken. It is what the group is for; the split is the mode-B primitive and undoes cleanly. **What (a) did not say is that `C_g` governs the ARMED lanes too** — §3.4 does say it ("ONE rule for EVERY member") and it is the half that is easy to miss: two armed lanes with different `C`s are not each other's twins either, so BOTH of their columns come out `C_g` long. And a member's column being `C_g` rather than its operands' union needed a verb that could say so: `merge-columns` gained `start=`/`length=`, with ONE operand accepted only when an extent is given. `takes_group_record_crossing` is the gate |
-| **D5** | `cleanup-takes` "unused take": after W1 the ORIGINAL clip A is an inactive take no segment selects → "unused" → removed (undoable, file kept — but it is the user's arrangement, not a recording) | (a) takes that came from pre-existing clips (not from a recording) are EXEMPT by default; a checkbox includes them; (b) treat every unused take alike | **(a)**. The confirmation lists takes by origin ("3 recordings, 1 original clip"). Origin = the take's name stamp from the recorder (§8 P4) or, before P4 lands, "file in the project directory matching the recorder's pattern" |
+| **D5** — **DECIDED AND SHIPPED (P6, QBX-184)** | `cleanup-takes` "unused take": after W1 the ORIGINAL clip A is an inactive take no segment selects → "unused" → removed (undoable, file kept — but it is the user's arrangement, not a recording) | (a) takes that came from pre-existing clips (not from a recording) are EXEMPT by default; a checkbox includes them; (b) treat every unused take alike | **(a)**. The confirmation lists takes by origin ("3 recordings, 1 original clip"). Origin = the take's name stamp from the recorder (§8 P4) or, before P4 lands, "file in the project directory matching the recorder's pattern" |
 | **D6** — **DECIDED AND SHIPPED (P3, QBX-181)** | MIDI take extents (P3): ticks or frames? The column is frame-anchored; the event take window is TICK-native (`smidicut.h`, "THE WINDOW IS TICK-NATIVE") | (a) ticks on the take, converted through the tempo map at the column; (b) frames for parity with audio | **(a)**, taken, and the MODEL ALREADY DELIVERED IT: no new per-take field was needed. A take's link inside a column is born `timebase=beats` for event content (`SLink::defaultTimebaseFor`) so `set-tempo`'s re-derivation moves its extent START, and the window's length is `lengthTicks_` on the `SMidiCut` so the extent LENGTH follows — measured, halving the tempo moved a take extent 0-96000 → 0-192000. `add-midi-take atTicks=`/`extentTicks=` therefore take TICKS and convert once, through the tempo map and through `setWindowTicks` rather than the frame-valued `setDurationFromTimeline` (a ticks → frames → ticks round trip is exact only where a tick divides a frame). **What did NOT follow the bar was two stored frame values the decision did not name**: the column's own `duration_` and the COMP MAP's positions — see §8's P3 row |
 
 ## 1. Why
@@ -1921,6 +1921,55 @@ through a new `assert-unused-recordings count=`; `files="1"` is NOT
 exercised headlessly — moving to the OS trash in a `-j4` suite is not
 something a case may do, and the PR says so).
 
+> **SHIPPED as P6 (QBX-184). FOUR CORRECTIONS**, two of which are defects
+> outside this row's own subject.
+>
+> **(a) `scope="selection"` IS NOT AVAILABLE ON THE VERB**, for a layering
+> reason rather than a design one. `objects/cut` may depend on `actions`,
+> `model`, `objects/recplan`, `objects/wave` and `persistence` — not on
+> `shell` or `selection` — so an action there cannot see what is selected.
+> `scope="project"` IS resolvable there (walk the arrangement) and the
+> selection form became `clips=`, with the caller translating. That is the
+> same split `split-selection` already makes against `split-clip`, and the
+> shell menu command that does the translating is NOT built: nothing but a
+> script reaches the verb today.
+>
+> **(b) THE HINT COUNTS TAKES AND TRACKS, NOT "COLUMNS".** The row asks for
+> "Recorded into N columns on M tracks". How many COLUMNS a pass produced is
+> not cheaply knowable where the message is composed — under mode B a lane can
+> gain several children from one pass, and under mode A a cycle's passes all
+> land on one column — so the message reports takes and tracks, which are
+> exact in every mode and name the actionable thing. The wording is "Recorded
+> N take(s) on M track(s). Press T on a track to show its take lanes."
+>
+> **(c) `add-take` CARRIED NO NAME, and that was a real defect.** A take's
+> name is its ORIGIN MARKER (`stakenames::isRecorded`, §8 P4), which is what
+> D5 (a) exempts an original clip by. `remove-take`'s file-backed inverse is
+> an `add-take`, so undoing a removal handed back an UNNAMED take: a restored
+> recording silently became an "original clip", permanently exempt from
+> clean-up and invisible to `select-take take="newest"`. Measured while
+> writing `cleanup_takes.qxa` — a restored take read `(untitled)` and the next
+> sweep kept what the first had removed. `add-take` now carries `name=`,
+> written only when non-empty.
+>
+> **(d) `assert-recorded-clip` HAS NO `minClips` ATTRIBUTE**, and four
+> committed cases passed one — `record_mixed_band_punch`,
+> `record_mode_replace_group`, `record_mixed_one_undo` and
+> `takes_group_record_unarmed`. An unknown attribute is silently ignored, so
+> the clip COUNT those cases appeared to assert was never checked (the verb's
+> placement-identity check still ran, so they were not vacuous). Changed to
+> the exact `clips`, and one was hiding a real number:
+> `record_mode_replace_group`'s armed lane holds THREE children, which is what
+> `replace`'s R2 split leaves and what that case's own later assertions
+> already spelled out.
+>
+> **ONE THING THE ROW ASKS FOR THAT IS NOT BUILT:** no UI command invokes
+> `cleanup-takes`. The verb, its undo and its confirmation numbers are there,
+> the dock that shows what it would remove is there, but the menu item and its
+> confirmation dialog are not — so a user can see the list and not act on it.
+> Named here rather than discovered later; it needs the selection translation
+> of (a) as well.
+
 ### P7 — QBX-157 backdrop and cut marks — depends on A0b, B4
 
 Its own ticket; its acceptance is written there. It depends on A0 because the
@@ -2086,7 +2135,7 @@ existing tickets. Order within a group is landing order.
 | P3 (**QBX-181**) | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind — **SHIPPED**, on QBX-188's shared planner module. Five corrections in §8's P3 row, of which two are defects it had to fix to be writable at all: an event column's `duration_` and comp map had no musical anchor, and the MIDI recorder had no punch (which silently dropped the whole take of a punched press) | P2, QBX-188 | M |
 | P4 (**QBX-182**) | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names — **SHIPPED** for AUDIO. `armed="0"` gained meaning and a gate on the same day; `merge-columns` gained an explicit extent, which is what lets a member's column be the GROUP's and not its own clip's. The MIDI recorder does not enumerate members (QBX-191); the take NAME landed for both kinds. Three corrections in §8's P4 row | P2 | M |
 | P5 (**QBX-183**) | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; the selection fade surface — **SHIPPED**. The whole policy is one new module, `app/model/sautofade.h`, because the feature has two consumers in slices that may not see each other (`objects/track` at clip edges, `objects/cut` at comp boundaries) and a third READER in the panel. At a boundary it is a LENGTH handed to the crossfade that was already there, in `clampedXfade_nolock` — so a 3 ms auto-fade renders byte-identically to an explicit `xfade=144`. Three corrections in §8's P5 row, one of which is a plain error in this plan's own text | A0a, B8 | M |
-| P6 | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse | P2, A0b, B10 | M |
+| P6 (**QBX-184**) | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse — **SHIPPED**. The real inverse landed FIRST, as its own change, because one non-undoable child makes a whole composite non-undoable and a sweep that could not be undone is not shippable. Four corrections in §8's P6 row, two of them defects outside this row's subject: `add-take` carried no NAME, so undoing a removal turned a recording into an "original clip"; and four committed assertions used a `minClips` attribute `assert-recorded-clip` does not have | P2, A0b, B10 | M |
 | QBX-157 | laned-track backdrop = comp result, cut marks | A0b, B4 | M |
 | QBX-155 | wrapped column re-link crash (already filed) | — | **LANDED** (#241, #244), so this no longer blocks anything: `remove-sample` pins both shapes. `replace` still refuses a Kw lane, by G11 policy rather than by this limitation — see §3.3 |
 

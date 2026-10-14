@@ -2,6 +2,7 @@
 
 #include "app/actions/sactionregistry.h"
 #include "app/media/smediadrop.h"
+#include "app/model/srecordingfiles.h"
 #include "app/model/sexternfile.h"
 #include "app/model/sproject.h"
 
@@ -51,6 +52,61 @@ SApplyResult SAssertExternFilesAction::apply( SProject *project )
              << "missing" << missing << "external" << external.size();
     return { true, nullptr };   // assertions are not undoable
 }
+
+SApplyResult SAssertUnusedRecordingsAction::apply( SProject *project )
+{
+    if( !project ) {
+        qWarning() << "assert-unused-recordings FAILED: no project";
+        return { false, nullptr };
+    }
+    const QList<srecfiles::Orphan> list = srecfiles::scanUnused( project );
+
+    QStringList report;
+    for( const srecfiles::Orphan &o : list )
+        report << QStringLiteral( "%1 (%2)" ).arg( o.path ).arg( o.why );
+    const QString joined = report.join( QStringLiteral( "; " ) );
+
+    bool ok = true;
+    if( count_ >= 0 && list.size() != count_ ) {
+        qWarning() << "assert-unused-recordings FAILED: count is"
+                   << list.size() << "expected" << count_ << "—" << joined;
+        ok = false;
+    }
+    if( !contains_.isEmpty() && !joined.contains( contains_ ) ) {
+        qWarning() << "assert-unused-recordings FAILED: no entry contains"
+                   << contains_ << "—" << joined;
+        ok = false;
+    }
+    if( !absent_.isEmpty() && joined.contains( absent_ ) ) {
+        qWarning() << "assert-unused-recordings FAILED: an entry contains"
+                   << absent_ << "which must be absent —" << joined;
+        ok = false;
+    }
+    if( ok )
+        qDebug() << "assert-unused-recordings: OK —" << list.size()
+                 << "entry(ies):" << joined;
+    return { ok, nullptr };
+}
+
+void SAssertUnusedRecordingsAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "count", count_ );
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( !absent_.isEmpty() )   elem.setAttribute( "absent", absent_ );
+}
+
+bool SAssertUnusedRecordingsAction::readXml( const QDomElement &elem, int )
+{
+    count_    = elem.attribute( "count", "-1" ).toInt();
+    contains_ = elem.attribute( "contains", "" );
+    absent_   = elem.attribute( "absent", "" );
+    return true;
+}
+
+static const bool s_reg_assert_unused_recordings = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "assert-unused-recordings" ),
+        []{ return new SAssertUnusedRecordingsAction; } ), true );
 
 void SAssertExternFilesAction::writeXml( QDomElement &elem ) const
 {

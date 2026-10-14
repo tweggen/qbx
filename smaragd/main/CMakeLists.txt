@@ -38,6 +38,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sproject.h
     model/include/app/model/seditgroups.h
     model/include/app/model/sautofade.h
+    model/include/app/model/srecordingfiles.h
     model/include/app/model/sprojectprops.h
     model/include/app/model/ssolorules.h
     model/include/app/model/ssortedobjlist.h
@@ -58,6 +59,7 @@ set(APP_MODEL_FILES
     model/src/sobjectrenderer.cpp
     model/src/splacements.cpp
     model/src/sproject.cpp
+    model/src/srecordingfiles.cpp
 )
 
 set(APP_CORE_FILES
@@ -155,6 +157,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/sresizeclipaction.h
     objects/cut/include/app/objects/cut/saddtakeaction.h
     objects/cut/include/app/objects/cut/sremovetakeaction.h
+    objects/cut/include/app/objects/cut/scleanuptakesaction.h
     objects/cut/include/app/objects/cut/srestoretakeaction.h
     objects/cut/include/app/objects/cut/scompmapactions.h
     objects/cut/include/app/objects/cut/ssetclipfadeaction.h
@@ -185,6 +188,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/srestorecontainerclipaction.cpp
     objects/cut/src/srestoretakecolumnaction.cpp
     objects/cut/src/sremovetakeaction.cpp
+    objects/cut/src/scleanuptakesaction.cpp
     objects/cut/src/srestoretakeaction.cpp
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/scompmapactions.cpp
@@ -467,6 +471,7 @@ set(APP_UI_FILES
     shell/include/app/shell/sapplication.h
     shell/include/app/shell/sautomationrecorder.h
     shell/include/app/shell/saudiorecorder.h
+    shell/include/app/shell/sunusedrecordingsview.h
     shell/include/app/shell/srecordplacement.h
     shell/include/app/shell/sliveinputsource.h
     shell/include/app/shell/slivemonitor.h
@@ -484,6 +489,7 @@ set(APP_UI_FILES
     shell/src/sautomationrecorder.cpp
     shell/src/sapplication.cpp
     shell/src/saudiorecorder.cpp
+    shell/src/sunusedrecordingsview.cpp
     shell/src/sliveinputsource.cpp
     shell/src/slivemonitor.cpp
     shell/src/sliveplanbuilder.cpp

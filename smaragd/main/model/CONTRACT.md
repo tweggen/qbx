@@ -818,3 +818,46 @@ is the same cost profile the function already had for the gain curves, and the
 sort is the only new part of it; a lane with thousands of clips would want the
 answer cached against the lane's child-order epoch. Not done, because nothing
 measured says it matters yet.
+
+## The recorder's capture-file NAME CONVENTION, and the unused-recordings scan (plan 53 §8 P6, §6.3, QBX-184)
+
+`app/model/srecordingfiles.h` owns two things: the shape of a capture file's
+name (`<stamp>_track<n>.wav`), and the scan that decides which recordings a
+project does not use.
+
+**THE NAME IS DEFINED ONCE BECAUSE TWO PLACES MUST AGREE ABOUT IT.** The
+recorder WRITES those names and the scan RECOGNISES them; before this the
+pattern was a `QStringLiteral` inside `SAudioRecorder::start()` and nothing
+else knew it. A scan with its own copy of the format string would be a second
+definition of one fact, and the failure when they drifted would be silent —
+orphan files simply not reported. `SAudioRecorder` composes through
+`srecfiles::captureName` now.
+
+The recogniser is ANCHORED AND STRICT, every field's width fixed. Offering to
+bin a file the user named themselves is the one mistake this feature may not
+make, so `guitar.wav`, `mix_track1.wav` and `…track0.wav.bak` are all not
+captures.
+
+**"UNUSED" HAS TWO SOURCES and they are different questions.** An extern file
+the project holds that NO CLIP PLACES is the model side; a capture file in the
+project's directory that no extern file references is the same thing seen from
+disk. A scripted run has no project directory, so only the model half answers
+there — the disk half is for a project saved and reopened, which no headless
+case reaches.
+
+**`SObject::refCount()` IS NOT "HAS PLACEMENTS", and the obvious reading of it
+is wrong.** The project's own `linkToFile` bookkeeping holds a reference, so an
+extern file whose every clip has been undone away still reports a positive
+count. Measured: a recording undone left the count at 1 and the first draft of
+the scan reported nothing at all. "Placed" is answered by WALKING the
+arrangement and collecting every object a link points at plus every window's
+content — which also finds a take three levels inside a wrapped column.
+
+A registered ASSET is exempt whatever the walk finds: an asset body is
+something the user named and can place later, so "nothing places it right now"
+is not a reason to offer to bin it.
+
+**READ-ONLY, and that is what lets it be shared.** The Unused recordings dock
+renders it, `cleanup-takes files="1"` acts on it, and
+`assert-unused-recordings` asserts it — one function, so the display and the
+sweep cannot disagree about which files are orphans.

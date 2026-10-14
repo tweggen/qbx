@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A RECORDING THAT WENT NOWHERE IS STILL FINDABLE.
+
+  Plan 53 P6, §6.3. This is where X7 — "lost with a qWarning" — ends.
+
+  Three things can leave a capture file with nothing playing it: a lane
+  REFUSED the pass (plan 53 §5.4, and QBX-164 made that reportable), the
+  backend never wrote the file, or the user simply UNDID the take. In every
+  case the audio is on disk and the user has no way to know. The Unused
+  recordings dock is the list; this case gates the SCAN behind it.
+
+  IT ASSERTS THE SCAN AND NOT THE WIDGET, deliberately. A scripted run has no
+  dock, and `srecfiles::scanUnused` is the stronger thing to hold: it is the
+  one function the dock renders AND the one `cleanup-takes files="1"` would
+  act on, so a second implementation of "which files are orphans" is exactly
+  what would let the display and the sweep disagree.
+
+  THE SCAN HAS TWO SOURCES and this case exercises the MODEL one. An extern
+  file the project still holds with no placements is an orphan seen from the
+  model side; a capture file in the project's own directory that no extern
+  file references is the same thing seen from disk. A scripted run has no
+  project directory (the project is untitled, and the recorder writes into the
+  test output dir instead), so the disk half has nothing to scan here and the
+  model half is what answers. That is not a gap in the scan — it is what the
+  disk half is FOR, a project saved and reopened, which no headless case
+  reaches.
+
+  WHAT IS NOT EXERCISED: `files="1"`, i.e. actually moving a file to the OS
+  trash. Doing that inside a parallel suite is not something a case may do. The
+  COUNT is gated here; the deletion is hand-verified and the PR says so.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL, the file
+  input backend, 4800 frames of input latency.
+-->
+<SActionScript version="1" name="unused_recordings_list">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <!-- NOTHING IS UNUSED YET, which is the control: a count of 1 below means
+         the take's undo put it there, not that the scan reports anything it
+         finds lying about. -->
+    <assert-unused-recordings count="0"/>
+
+    <!-- A take. From a STOPPED transport, so nothing about this case depends
+         on wall-clock. -->
+    <set-locator position="480000"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <assert-recorded-clip trackPath="0" clips="1"/>
+
+    <!-- ...and while it is PLACED it is not unused. The clip holds the extern
+         file, so the file has a placement. -->
+    <assert-unused-recordings count="0"/>
+
+    <!-- UNDO THE TAKE. The clip goes; the extern file the project registered
+         for the capture stays, now with nothing placing it. That is the shape
+         the dock exists to show, and the one a user hits by pressing Ctrl+Z
+         after a pass they did not like. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <assert-unused-recordings count="1" contains="no clip places it"/>
+    <!-- The entry names the FILE, so the dock can offer it. -->
+    <assert-unused-recordings contains="_track0.wav"/>
+
+    <!-- AND REDO TAKES IT OFF THE LIST AGAIN: the scan is a question about the
+         model right now, not a log of things that once happened. -->
+    <redo count="1"/>
+    <assert-clip-window clip="0,0"/>
+    <assert-unused-recordings count="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
