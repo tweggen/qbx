@@ -1796,7 +1796,29 @@ fixture under `replace`: the member is untouched down to its single child).
 `takes_group_record_crossing.qxa` drives the verb directly for the arithmetic a
 recorder cannot make exact.
 
-**NOT gated**: the MIDI recorder does none of this — `place-midi-recording` has
-no `armed=` and no group extent, so a MIDI pass on a grouped lane leaves its
-members out of step. That is QBX-191, and the `takeStamp` half of P4 did land
-for both kinds.
+**NOT gated**, three things, measured rather than assumed:
+
+- The MIDI recorder does none of this — `place-midi-recording` has no `armed=`
+  and no group extent, so a MIDI pass on a grouped lane leaves its members out
+  of step. QBX-191; the `takeStamp` half of P4 did land for both kinds.
+- **The pass-wide snap's MEMBER edges.** Both new live cases are PUNCHED, and a
+  punch span is the markers exactly — §3.5 rule 3 — so neither reaches the snap
+  at all. A case that did would have to land a non-punched press within one
+  snap window (10 ms or one device buffer) of a MEMBER's clip edge and not of
+  any armed lane's, which is a wall-clock race rather than a fixture.
+- **That the takes modes' `takeStamp` does not BROADCAST.** `nameTake` passes
+  `broadcast="0"` for the same reason every split in a recording plan does, but
+  with it on there is no observable: on a twin the name would land on that
+  lane's own pass take (harmless), and on a member `set-clip-name` resolves the
+  take index to one the member's column does not have and is skipped. It is
+  correctness against the next change here, not something a case can reach
+  today.
+
+**THREE DEFENCES KEEP AN UN-ARMED MEMBER SAFE UNDER `replace`, and each alone is
+sufficient**: this recorder's takes-mode filter, `Replace::plan`'s `!ctx.armed`
+line, and `srecplan::columnExtentFor` answering "no extent" for a mode that
+stacks nothing (so `C_g` is absent and the member loop finds nothing to
+enumerate). Measured by sabotage: `record_mode_replace_group` stays green until
+all three are removed. It is therefore a regression gate on the conjunction, and
+the planner's half is isolated instead by `takes_group_record_crossing`, which
+hands `armed="0"` to `replace` and `overdub` by hand.
