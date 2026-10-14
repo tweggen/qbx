@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P4 (QBX-182). AN UN-ARMED EDIT-GROUP MEMBER GETS THE GROUP'S COLUMN.
+
+  Two tracks in edit group 1, holding identical clips. ONE of them is armed and
+  one punch is recorded. Afterwards both lanes hold a column with the SAME
+  startTime and the SAME duration - the armed one with the recording as a
+  second take, the member with only what it already had.
+
+  WHY THAT MATTERS AND IS NOT COSMETIC: correspondence inside an edit group is
+  POSITIONAL (`seditgroups::correspondingClip` matches on startTime AND
+  duration, exactly), so a member whose clip stayed its own shape would stop
+  being the armed lane's twin the moment the pass widened the armed lane's
+  child into a column. Every later grouped edit - comping, splitting, slipping
+  a take - would then silently apply to one lane only. This case asserts the
+  twins by USING them: `select-take` on the armed lane with the broadcast on
+  has to reach the member, and it can only reach it through that match.
+
+  `armed="0"` IS EXERCISED BY A GATE HERE FOR THE FIRST TIME. The attribute has
+  been plumbed through `place-recording` since QBX-171 and no planner did
+  anything with it (plan 53 review 2 M5 put the member enumeration in P4 on
+  purpose); this is the ticket that gives it meaning, and this is the case that
+  reaches it through the RECORDER, which is the half no hand-written
+  `place-recording` can gate. `takes_group_record_crossing` drives the verb
+  directly and covers the arithmetic the recorder cannot make exact.
+
+  THE MEMBER'S COLUMN IS A ONE-TAKE COLUMN, which is invariant 3' from A0a
+  (plan 53 §4.2): a column with one take collapses to a plain cut only when the
+  take is FULL-EXTENT. Here it is - the member's clip is exactly `C_g` - so the
+  column plays BYTE-IDENTICALLY to the clip it wrapped: no partial take means
+  `resolvesThroughComp()` is false and the original resolution path is taken
+  (`stakestack.h`). That is why this case asserts no audio: there is nothing
+  about the member's SOUND that the structure has changed.
+  `takes_group_record_crossing` is where a take smaller than its column
+  appears.
+
+  THE PUNCH IS WHAT MAKES THE NUMBERS EXACT, as in `record_mixed_band_punch`: a
+  take ends at the out point however late the tick, so the pass is the MARKERS
+  and not the stop frame - [48000, 96000), 1 s to 2 s - and `C_g` is then the
+  closed form [0, 192000): the union of the armed lane's own column extent
+  (its clip [0, 192000) with the pass inside it) over the one armed member.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL, the file
+  input backend, 4800 frames of input latency.
+-->
+<SActionScript version="1" name="takes_group_record_unarmed">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Two mics on one source: track 0 armed, track 1 not. Monitoring off on
+         both - this case is about what was RECORDED. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:2"/>
+
+    <!-- What was already played, IDENTICAL on both lanes. -->
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+
+    <set-edit-group trackPath="0" group="1"/>
+    <set-edit-group trackPath="1" group="1"/>
+
+    <!-- THE PUNCH: 1 s to 2 s, Cycle OFF. -->
+    <set-property key="rangeStart" value="[48000]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <!-- Mode A, stated rather than assumed: a stale INI could have seeded this
+         project with another mode, and only the takes modes touch a member. -->
+    <set-property key="recordMode" value='["takes"]'/>
+
+    <set-locator position="0"/>
+    <!-- ONE lane armed. The other is pulled in by the GROUP, which is the
+         whole point. -->
+    <arm-track trackPath="0" armed="1"/>
+
+    <!-- The take ends by itself at the out point; a `record-stop` here would
+         be refused, as in `record_punch`. -->
+    <record-start/>
+    <wait-ms ms="3000"/>
+
+    <assert-recorded-clip trackPath="0" minClips="1"/>
+
+    <!-- THE ARMED LANE: today's mode-A union column, unchanged by the group -
+         its own `C` already WAS `C_g`. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-96000"
+                        comp="0:0;48000:1;96000:0" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- ...AND THE MEMBER, WHICH RECORDED NOTHING: the same column, at the
+         same place, for the same length, holding only what it already had. No
+         new take, no comp map (one full-extent take answers everywhere, so the
+         degenerate map is not written - plan 53 §3.3, §4.3). -->
+    <assert-take-column clip="1,0" shape="direct" takes="1" activeTake="0"
+                        extents="0-192000" comp="" duration="192000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+    <!-- THE TWINS, as `correspondingClip` sees them: startTime AND the
+         OBJECT's duration. The two halves come from two verbs:
+         `assert-clip-window startTime=` reads the LINK, and the length is the
+         `duration=` on each `assert-take-column` above - the COLUMN's own
+         length, both 192000. `assert-clip-window duration=` would report the
+         ACTIVE TAKE's window instead, which on the armed lane is the 48000
+         pass and is not what the match is made on. -->
+    <assert-clip-window clip="0,0" startTime="0"/>
+    <assert-clip-window clip="1,0" startTime="0"/>
+
+    <!-- THE BROADCAST REACHES THE MEMBER, which is the twins asserted by use.
+         `take="-1"` is "nothing audible": it is the one take index both
+         columns can answer, and it CHANGES something on the member, so a
+         member that was not a twin would be visible here as an activeTake that
+         did not move. -->
+    <select-take clip="0,0" take="-1"/>
+    <assert-take-column clip="0,0" activeTake="-1"/>
+    <assert-take-column clip="1,0" activeTake="-1"/>
+
+    <!-- Back to the material both lanes were played against. -->
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" activeTake="0"/>
+    <assert-take-column clip="1,0" activeTake="0"/>
+
+    <!-- `take="newest"` (plan 53 §6.5, Q10) RESOLVED PER MEMBER: the armed
+         lane lands on the pass just recorded, the member has no recorded take
+         at all and stays where it was. ONE gesture, two different answers -
+         which is what "resolved per member" means and what an index could not
+         express.
+
+         IT FAILS ON `main` FOR THE RIGHT REASON. There, `readXml` parses
+         `take` with `toInt()`, and `toInt()` returns 0 for anything it cannot
+         parse - so `take="newest"` silently selected take 0 on both lanes and
+         the assertion below read activeTake 0 where it wants 1. That is the
+         general trap this project has a rule about: an unparseable attribute
+         value yields a clean, repeatable, wrong answer rather than an error.
+
+         The member's answer is 0 by the FALL-BACK ("no take carries the
+         recorder's stamp, so the newest is the last one added"), not by the
+         stamp rule; `takes_group_broadcast` is where a stamped take that is
+         NOT the last index pins the stamp rule itself. -->
+    <select-take clip="0,0" take="newest"/>
+    <assert-take-column clip="0,0" activeTake="1"
+                        comp="0:0;48000:1;96000:0"/>
+    <assert-take-column clip="1,0" activeTake="0" comp=""/>
+
+    <!-- UNDO, three comping gestures deep, back to the state the press left.
+         Each broadcast `select-take` is ONE composite and so one step. -->
+    <undo count="3"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-96000"
+                        comp="0:0;48000:1;96000:0" duration="192000"/>
+    <assert-take-column clip="1,0" shape="direct" takes="1" activeTake="0"
+                        extents="0-192000" comp="" duration="192000"/>
+
+    <!-- ...AND ONE MORE UNDOES THE PRESS, ON BOTH LANES AT ONCE. The member's
+         column is part of the same undo step: the recorder submits for every
+         member inside one commit scope (plan 53 §5.4 B7), so a press that
+         restructured two lanes is one Ctrl-Z. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="1,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

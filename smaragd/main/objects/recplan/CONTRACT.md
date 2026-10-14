@@ -49,9 +49,10 @@ clip, no concrete column and no concrete verb.
 ## `PassVerbs` — the seam
 
 `objects/cut` implements it as `SAudioPassVerbs` (`place-clip`, `add-take`,
-`split-clip`, `remove-sample`, `merge-columns`); `objects/midi` implements it
-as `SEventPassVerbs` (`insert-midi-clip`, `add-midi-take`, `split-clip`,
-`merge-columns`) since plan 53 P3. It follows the precedent
+`split-clip`, `remove-sample`, `merge-columns`, `set-clip-name`);
+`objects/midi` implements it as `SEventPassVerbs` (`insert-midi-clip`,
+`add-midi-take`, `split-clip`, `merge-columns`, `set-clip-name`) since
+plan 53 P3. It follows the precedent
 `SClipWindow::registerTakeColumnFactory` already set for this exact layering
 problem — `smidirecordactions.cpp` wraps a clip into a take column through the
 model's registered factory precisely so that *"`objects/midi` never names
@@ -71,6 +72,56 @@ events and ticks, handed to it by its verb for that one pass.
 **A plan with no verbs REFUSES** rather than emitting nothing: an empty
 composite applies as SUCCESS, which is exactly how a recording goes missing
 silently (the defect `place_recording_over_earlier_clip` gates).
+
+## The group extent `C_g`, and what `armed == false` means (plan 53 P4)
+
+`Context::armed` is false for an un-armed member of an armed lane's edit group,
+and `Context::group` is the GROUP EXTENT `C_g` — the union of the ARMED
+members' own column extents `C` for this pass. Both default to "no group", and
+that default is the whole compatibility story: every call written before P4
+leaves `group` absent and every planner then behaves exactly as it did.
+
+**THE RECORDER COMPUTES `C_g`, WITH THIS MODULE'S OWN ARITHMETIC.** Only the
+recorder sees every armed lane of a pass, so the union is its to take; but what
+`C` *is* is §3.1's rule, so `columnExtentFor()` is exported rather than
+re-derived in `shell`. It deliberately does not ask whether the merge would
+SUCCEED: a lane whose operands disagree on their mix parameters degrades to a
+plain placement, and its `C` is still what the group should span, because the
+group extent describes the BARS the pass covers and that does not change
+because one lane cannot fold its own material.
+
+With a group extent, mode A's touched set reaches `C_g` and not `[a, b)`, each
+touched child is split at `C_g`'s edges where it crosses them, and the merged
+column is exactly `C_g` — which is what `merge-columns`' explicit
+`start`/`length` is for. That governs the ARMED lanes too (§3.4's "ONE rule for
+EVERY member, armed or not"), because correspondence inside an edit group is
+POSITIONAL: `seditgroups::correspondingClip` matches `startTime` AND
+`getDuration()` exactly, so a member left at its own shape stops being the
+armed lane's twin the moment the pass widens the armed lane's child into a
+column, and every later grouped edit silently applies to one lane only.
+
+An un-armed member runs the same plan WITHOUT the pass, which leaves §4.2's
+union placeholder. Mode B gets the split at `a`/`b` and nothing stacked: it
+never makes one column out of two children, so it has no extent to agree on and
+what its members share is the EDGES. `overdub` and `replace` treat
+`armed == false` as nothing to do (G9) — an un-armed lane losing material it was
+never recorded over is the one failure here a user does not notice in time.
+
+## `Context::takeStamp` — the recorder's name for the pass's take
+
+`"HH:MM"`, or empty for "name nothing", which is every call that is not a live
+recording. The planner composes `stakenames::recorded( n, stamp )` and emits
+one `nameTake` per placement the pass landed on, because **only the plan knows
+`n`**: it is one past what the operands contributed, and a column operand
+contributes all of its own takes, not one. Resolving *which* take is left to
+apply time (`set-clip-name take="-1"` is the active take), so the verb needs no
+index.
+
+The name is decision D5's origin marker as well as a label — `cleanup-takes`
+(P6) reads it to tell a recorded take from one that came from the user's
+arrangement, and `select-take take="newest"` reads it to decide which takes are
+candidates. `stakenames.h` is in `app/model` for that reason: `objects/midi`
+needs the same format and may not depend on `objects/cut`.
 
 ## What `snapshot()` may ask
 
@@ -145,3 +196,9 @@ action.
   recording over the middle of a part leaves the part's own bars silent
   (QBX-189). The planner is right; the column's `resolveEventClip` cannot
   express two takes at once, and the event path has no `twCompColumn`.
+- **No caller passes `Context::group` on the EVENT side** (QBX-191). The
+  planner handles a group extent for either kind — nothing in it branches on
+  `Context::kind` for this — but `place-midi-recording` carries no `armed=` or
+  `groupStart=`/`groupLength=` and `SMidiRecorder` enumerates no members, so a
+  MIDI pass on a grouped lane leaves its members out of step. The `takeStamp`
+  half of P4 did land for both kinds.

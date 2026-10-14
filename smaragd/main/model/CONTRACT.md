@@ -727,3 +727,30 @@ mirrors `SObject::serialize` body-for-body rather than hooking into it, so an
 inline child that is not repeated there is silently dropped on save with no
 error anywhere — gated by `qxa.send_tap_model`'s round trip, and watched
 failing by deleting exactly that one call.
+
+## The recorder's TAKE NAME, and the one test for "this take came from a recording" (plan 53 §8 P4, D5, QBX-182)
+
+`app/model/stakenames.h` — `recorded( n, stamp )` builds `"Take 3 · 14:27"` and
+`isRecorded( name )` answers whether a name carries that stamp. Header-only, two
+functions, and it is in `model` although every consumer so far is a `cut` verb:
+`place-midi-recording` names an EVENT take through the same format and
+`objects/midi` may not depend on `objects/cut`. A take name is a model-level
+string convention, not an audio one.
+
+Three things read it. The USER, on the clip body and in the take lane.
+`select-take take="newest"` (§6.5), which needs to tell a recorded take from one
+that came from the user's arrangement because "a take without a stamp is older
+than any with one". And `cleanup-takes` (§6.3, decision D5 (a)), which exempts
+takes that did NOT come from a recording — `isRecorded()` is that origin marker.
+
+**IT IS A HEURISTIC AND IS MEANT TO BE ONE.** A user may type
+`"Take 2 · 14:27"` by hand and it will read as a recording. The alternative is a
+serialized per-take origin flag, which is a file-format change D5 did not ask
+for, and the cost of a false positive is that `cleanup-takes` offers to remove
+one clip the user would have kept — which its confirmation lists by name.
+
+**ORDER IS NOT READ OFF THE STAMP.** `HH:MM` has no date and two passes in one
+minute tie, so `newest` orders by the take's INDEX in its column, which is
+recording order because a recorded take is always appended (`merge-columns`
+names the pass as its final operand, `add-take` appends). The stamp says
+WHETHER, the index says WHICH.

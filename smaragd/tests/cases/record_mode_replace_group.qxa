@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P4 (QBX-182), G9. `replace` NEVER TOUCHES AN UN-ARMED LANE.
+
+  The same fixture as `takes_group_record_unarmed` - two tracks in edit group 1
+  holding identical clips, one armed, one punch - with the record mode set to
+  `replace` instead of `takes`. The armed lane loses the punched span and gains
+  the pass, exactly as `rec_replace_cells` asserts cell R2 off a recorder. The
+  MEMBER is left alone, down to its single child and its own duration.
+
+  WHY THIS CASE LIVES IN P4 AND NOT IN P1. Plan 53 §12 asked for it with the
+  other `replace` cells, and there it would have asserted nothing: before P4
+  the recorder submitted for ARMED lanes only, so every planner saw `armed="1"`
+  always and "`replace` does nothing to a member" was true because nothing was
+  ever submitted for a member. P4 is the ticket that makes the recorder
+  enumerate them, so this is the first build in which the claim has a mechanism
+  that could get it WRONG - two of them, in fact, and the case is sensitive to
+  both:
+
+    - the RECORDER must not enumerate a group's members at all when the armed
+      lane's mode is not a takes mode (plan 53 §3.4's "takes modes only"), and
+    - the PLANNER must treat `armed="0"` as nothing to do, which is what
+      `Replace::plan`'s first line says.
+
+  Either one alone keeps the member safe, which is deliberate: an un-armed lane
+  losing material it was never recorded over is the one failure in this area a
+  user cannot undo their way out of without noticing far too late. The
+  `takes_group_record_crossing` case drives `place-recording armed="0"` by hand
+  in `replace` mode as well, so the planner's half is pinned without the
+  recorder's.
+
+  THE PUNCH MAKES THE NUMBERS EXACT, as in `record_mixed_band_punch`: the pass
+  is the MARKERS, [48000, 96000), so the armed lane's three resulting children
+  are a closed form and nothing below is a measurement.
+
+  Env, set on the CTest entry: SMARAGD_CAPTURE_SPEED=1, RUN_SERIAL, the file
+  input backend, 4800 frames of input latency.
+-->
+<SActionScript version="1" name="record_mode_replace_group">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="audio:qxa-record-input:2"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <set-edit-group trackPath="0" group="1"/>
+    <set-edit-group trackPath="1" group="1"/>
+
+    <set-property key="rangeStart" value="[48000]"/>
+    <set-property key="rangeEnd" value="[96000]"/>
+    <set-property key="rangeValid" value="[true]"/>
+    <!-- THE MODE UNDER TEST. This case OWNS no INI key: `recordMode` is a
+         project property (plan 53 M0 / §5.2), set on this project only. -->
+    <set-property key="recordMode" value='["replace"]'/>
+
+    <set-locator position="0"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <record-start/>
+    <wait-ms ms="3000"/>
+
+    <assert-recorded-clip trackPath="0" minClips="1"/>
+
+    <!-- THE ARMED LANE, cell R2 (`s < a`, `e > b`): cut at `a` and at `b`,
+         the middle removed, the pass laid down as a PLAIN clip. Three
+         children, and the index order is the plan's apply order - `split-clip`
+         keeps the head's index and appends the tail, `remove-sample` shifts
+         everything above it down, and `place-clip` appends. -->
+    <assert-clip-window clip="0,0" startTime="0"     duration="48000"/>
+    <assert-clip-window clip="0,1" startTime="96000" duration="96000"/>
+    <assert-clip-window clip="0,2" startTime="48000" duration="48000"/>
+    <assert-clip-window clip="0,3" expectReject="true"/>
+    <!-- ...and `replace` never wraps: no column anywhere on the lane. -->
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="0,1" shape="none"/>
+    <assert-take-column clip="0,2" shape="none"/>
+
+    <!-- AND HERE IS THE CLAIM: THE MEMBER IS UNTOUCHED. One child, its own
+         full length, not a column, nothing added and nothing cut. -->
+    <assert-take-column clip="1,0" shape="none"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- One press, one undo step, and it restores the armed lane only because
+         the member was never in it. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -2,6 +2,7 @@
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "app/model/seditgroups.h"
+#include "app/model/stakenames.h"
 #include "app/actions/scompositeaction.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
@@ -15,10 +16,33 @@
 using namespace strackpath;
 
 SSelectTakeAction::SSelectTakeAction( const QList<int> &clipPath,
-                                      int takeIndex, bool broadcast )
-    : clipPath_( clipPath ), takeIndex_( takeIndex ), broadcast_( broadcast )
+                                      int takeIndex, bool broadcast,
+                                      bool newest )
+    : clipPath_( clipPath ), takeIndex_( takeIndex ), broadcast_( broadcast ),
+      newest_( newest )
 {
 }
+
+namespace {
+
+/**
+ * `take="newest"`: THE LAST RECORDED TAKE of this column (plan 53 §6.5).
+ *
+ * Among the takes whose name carries the recorder's stamp, the highest index;
+ * if none carries one, the highest index of all. See the header for why the
+ * ORDER is the index rather than the stamp's own value.
+ */
+int newestTakeOf( STakeStack &stack )
+{
+    for( int i = stack.nTakes() - 1; i >= 0; --i ) {
+        SClipWindow *t = stack.takeAt( i );
+        if( t && stakenames::isRecorded( t->asObject().getSName() ) )
+            return i;
+    }
+    return stack.nTakes() - 1;
+}
+
+}  // namespace
 
 SApplyResult SSelectTakeAction::apply( SProject *project )
 {
@@ -38,9 +62,15 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
             for( const QList<int> &p : targets ) {
                 SLink *lk = splacements::placementAt( root, p );
                 STakeStack *st = stakes::columnOfLink( lk );
-                if( !st || takeIndex_ >= st->nTakes() ) continue;
+                if( !st ) continue;
+                // `newest` IS RESOLVED PER MEMBER (plan 53 §6.5), which is the
+                // whole point of it: "a lane with k+1 takes and one with 2
+                // both land on the pass just recorded". So the child carries
+                // the RULE, not an index -- and the member needs no take of
+                // that number for the rule to have an answer.
+                if( !newest_ && takeIndex_ >= st->nTakes() ) continue;
                 composite.append(
-                    new SSelectTakeAction( p, takeIndex_, false ) );
+                    new SSelectTakeAction( p, takeIndex_, false, newest_ ) );
             }
             if( composite.count() > 0 )
                 return composite.apply( project );
@@ -63,6 +93,9 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
     if( !stack ) {
         return {false, nullptr};       // not a take stack
     }
+    // `newest` resolves HERE, against this column, before the range check --
+    // and a column with no takes has no answer, which the check then catches.
+    if( newest_ ) takeIndex_ = newestTakeOf( *stack );
     if( takeIndex_ < -1 || takeIndex_ >= stack->nTakes() ) {
         return {false, nullptr};       // take index out of range
     }
@@ -152,14 +185,26 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
 void SSelectTakeAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "clip", qualifiedToString( pathRoot_, clipPath_ ) );
-    elem.setAttribute( "take", takeIndex_ );
+    // THE RULE ROUND-TRIPS AS THE RULE, not as the index it last resolved to:
+    // a re-read action must still mean "the newest take", and `apply()`
+    // overwrites `takeIndex_` when it resolves one.
+    if( newest_ ) elem.setAttribute( "take", QStringLiteral( "newest" ) );
+    else          elem.setAttribute( "take", takeIndex_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
 }
 
 bool SSelectTakeAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     clipPath_ = parseInto( pathRoot_, elem.attribute( "clip" ) );
-    takeIndex_ = elem.attribute( "take", "-1" ).toInt();
+    // `newest` (plan 53 §6.5) is the one non-numeric value, and it is read
+    // EXPLICITLY rather than left to `toInt()`: `toInt()` returns 0 for
+    // anything it cannot parse, so before this a `take="newest"` selected
+    // take 0 silently -- a clean, repeatable false pass of exactly the shape
+    // the project's "check the attribute's own spelling" rule is about.
+    const QString take = elem.attribute( "take", "-1" );
+    newest_ = take.compare( QLatin1String( "newest" ),
+                            Qt::CaseInsensitive ) == 0;
+    takeIndex_ = newest_ ? -1 : take.toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;
     return true;
 }

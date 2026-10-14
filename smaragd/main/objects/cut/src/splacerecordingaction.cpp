@@ -19,10 +19,16 @@ SPlaceRecordingAction::SPlaceRecordingAction( const QList<int> &trackPath,
                                               offset_t srcOffset,
                                               length_t length,
                                               const QString &mode,
-                                              length_t extent )
+                                              length_t extent, bool armed,
+                                              offset_t groupStart,
+                                              length_t groupLength,
+                                              const QString &takeStamp )
     : mode_( SProjectProps::isRecordMode( mode ) ? mode : QString() ),
+      armed_( armed ),
       trackPath_( trackPath ), filePath_( filePath ), timePos_( timePos ),
-      srcOffset_( srcOffset ), length_( length ), extent_( extent )
+      srcOffset_( srcOffset ), length_( length ), extent_( extent ),
+      groupStart_( groupStart ), groupLength_( groupLength ),
+      takeStamp_( takeStamp )
 {
 }
 
@@ -100,6 +106,14 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
     srecplan::Context ctx;
     ctx.mode  = srecplan::modeFromString( mode_ );
     ctx.armed = armed_;
+    // THE GROUP EXTENT, absent unless the recorder named one (plan 53 D4 (a),
+    // QBX-182). Absent is every call written before P4, and every planner then
+    // behaves exactly as it did.
+    if( groupLength_ > 0 ) {
+        ctx.group.a = groupStart_;
+        ctx.group.b = groupStart_ + (offset_t) groupLength_;
+    }
+    ctx.takeStamp = takeStamp_;
     // This verb places AUDIO. `place-midi-recording` is the event sibling and
     // passes Event; the planners branch on nothing else.
     ctx.kind  = SContentKind::Audio;
@@ -131,11 +145,13 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
                   why.toStdString().c_str() );
         return {false, nullptr};
     }
-    // AN UN-ARMED MEMBER PLANS NOTHING in P1 (plan 53 review 2 M5), and an
-    // empty composite applies as SUCCESS -- which is right here and was a bug
-    // in the old planner: there, emptiness meant the take had been thrown
-    // away. The planners now refuse an empty span rather than returning an
-    // empty plan, so the only way to get here with nothing is armed="0".
+    // AN EMPTY PLAN APPLIES AS SUCCESS, which is right here and was a bug in
+    // the old planner: there, emptiness meant the take had been thrown away.
+    // The planners refuse an empty span rather than returning an empty plan,
+    // so the only way to get here with nothing is `armed="0"` -- either with
+    // no group extent (the pre-P4 "nothing to do"), or with one over a member
+    // that holds no material of this kind inside `C_g` and so has no column to
+    // keep in step (plan 53 §3.4, QBX-182).
     return composite.apply( project );
 }
 
@@ -163,6 +179,15 @@ void SPlaceRecordingAction::writeXml( QDomElement &elem ) const
     // Same rule: armed="1" is the default, so only the un-armed case writes.
     if( !armed_ )
         elem.setAttribute( "armed", "0" );
+    // The group extent and the stamp, non-default only (same rule).
+    if( groupLength_ > 0 ) {
+        elem.setAttribute( "groupStart", QString::fromStdString(
+                               Fraction( groupStart_, 1 ).toString() ) );
+        elem.setAttribute( "groupLength", QString::fromStdString(
+                               Fraction( groupLength_, 1 ).toString() ) );
+    }
+    if( !takeStamp_.isEmpty() )
+        elem.setAttribute( "takeStamp", takeStamp_ );
 }
 
 bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -192,6 +217,13 @@ bool SPlaceRecordingAction::readXml( const QDomElement &elem, int /*version*/ )
     // span, which is what every call written before QBX-180 means.
     extent_ = (length_t)parseFractionOrDouble(
         elem.attribute( "extent", "0" ).toStdString() ).toDouble();
+    // THE GROUP EXTENT (plan 53 D4 (a)). `groupLength` 0 or absent = no edit
+    // group for this pass, which is every script written before P4.
+    groupStart_ = (offset_t)parseFractionOrDouble(
+        elem.attribute( "groupStart", "0" ).toStdString() ).toDouble();
+    groupLength_ = (length_t)parseFractionOrDouble(
+        elem.attribute( "groupLength", "0" ).toStdString() ).toDouble();
+    takeStamp_ = elem.attribute( "takeStamp", "" );
     return true;
 }
 

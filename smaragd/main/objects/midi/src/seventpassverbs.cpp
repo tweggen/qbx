@@ -160,13 +160,44 @@ SAction *SEventPassVerbs::removeChild( const QList<int> &lanePath, int index,
     return nullptr;
 }
 
+SAction *SEventPassVerbs::nameTake( const QList<int> &clipPath,
+                                    const QString &name ) const
+{
+    // Through the registry and the verb's own XML form, for the same reason
+    // `split-clip` and `merge-columns` are: `set-clip-name` lives in
+    // `objects/cut`, which this module may not name (plan 53 P3, QBX-181).
+    //
+    // take=-1 is "the active take at apply time"; broadcast=0 because a
+    // recording plans one lane at a time (plan 53 §5.1).
+    return makeByName( QStringLiteral( "set-clip-name" ), pathRoot_,
+                       { { QStringLiteral( "clip" ),
+                           qualifiedToString( pathRoot_, clipPath ) },
+                         { QStringLiteral( "name" ), name },
+                         { QStringLiteral( "take" ), QStringLiteral( "-1" ) },
+                         { QStringLiteral( "broadcast" ),
+                           QStringLiteral( "0" ) } } );
+}
+
 SAction *SEventPassVerbs::mergeColumns(
-    const QList<QList<int>> &clipPaths ) const
+    const QList<QList<int>> &clipPaths, offset_t extentStart,
+    length_t extentLen ) const
 {
     QStringList parts;
     for( const QList<int> &p : clipPaths )
         parts << qualifiedToString( pathRoot_, p );
-    return makeByName( QStringLiteral( "merge-columns" ), pathRoot_,
-                       { { QStringLiteral( "clips" ),
-                           parts.join( QLatin1Char( ';' ) ) } } );
+    QList<QPair<QString, QString>> attrs{
+        { QStringLiteral( "clips" ), parts.join( QLatin1Char( ';' ) ) } };
+    // THE GROUP EXTENT, and only when there is one (plan 53 D4 (a), QBX-182).
+    // Written exactly as `merge-columns`' own `writeXml` writes it, because
+    // this goes in through that verb's `readXml` -- `objects/midi` may not name
+    // `SMergeColumnsAction`, so the XML form IS the call.
+    if( extentLen >= 0 ) {
+        attrs.append( { QStringLiteral( "start" ),
+                        QString::fromStdString(
+                            Fraction( extentStart, 1 ).toString() ) } );
+        attrs.append( { QStringLiteral( "length" ),
+                        QString::fromStdString(
+                            Fraction( extentLen, 1 ).toString() ) } );
+    }
+    return makeByName( QStringLiteral( "merge-columns" ), pathRoot_, attrs );
 }

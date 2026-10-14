@@ -11,11 +11,17 @@
 // clip is not a take stack or the index is out of range.
 //
 // Inverse: select-take with the previously active index.
+//
+// `take="newest"` (plan 53 §6.5, Q10, QBX-182) is the one non-numeric value:
+// the take that was RECORDED LAST, resolved PER COLUMN, so an edit-group
+// broadcast lands on the pass just recorded on every member even where the
+// members hold different numbers of takes. The inverse is always a plain
+// index — undo restores a take, not a rule.
 class SSelectTakeAction : public SAction {
 public:
     SSelectTakeAction() = default;
     SSelectTakeAction( const QList<int> &clipPath, int takeIndex,
-                       bool broadcast = true );
+                       bool broadcast = true, bool newest = false );
 
     QString name() const override { return QStringLiteral("select-take"); }
     SApplyResult apply( SProject *project ) override;
@@ -48,6 +54,24 @@ private:
     bool       restoreMap_ = false;
     QList<int> clipPath_;
     int        takeIndex_ = -1;
+    /**
+     * `take="newest"`: resolve the index from the COLUMN at apply time
+     * (plan 53 §6.5).
+     *
+     * THE RULE IS "THE LAST RECORDED TAKE", and it is two steps: among the
+     * takes whose name carries the recorder's stamp (`stakenames::isRecorded`)
+     * take the HIGHEST INDEX; if no take carries one, the highest index of
+     * all. §6.5's "a take without a stamp is older than any with one" is the
+     * first step; the second is the fall-back for a column nobody recorded
+     * into, where "newest" can only mean the last one added.
+     *
+     * THE ORDER COMES FROM THE INDEX, NOT FROM THE STAMP, and `stakenames.h`
+     * says why: `HH:MM` has no date and two passes in one minute tie, while a
+     * recorded take is always APPENDED (`merge-columns` names the pass as its
+     * final operand, `add-take` appends), so the column's own take order IS
+     * recording order.
+     */
+    bool       newest_ = false;
     // Edit groups: comp the SAME take index on every member's corresponding
     // stack (drum-kit comping); members without that take are skipped.
     bool       broadcast_ = true;

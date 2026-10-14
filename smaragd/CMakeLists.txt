@@ -616,7 +616,13 @@ foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_
               merge_columns_refused_live
               # Mode A's live cycle cell: C8, a cycle recorded over a clip
               # that reaches past the cycle (plan 53 §3.1 step 5 / P2).
-              rec_union_cycle_inside)
+              rec_union_cycle_inside
+              # The two P4 cells that need a RECORDER, because what they gate
+              # is the recorder's own member enumeration (plan 53 §5.3, §3.4 /
+              # QBX-182): an un-armed group member gains the group's column
+              # under `takes`, and gains NOTHING under `replace` (G9).
+              takes_group_record_unarmed
+              record_mode_replace_group)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE

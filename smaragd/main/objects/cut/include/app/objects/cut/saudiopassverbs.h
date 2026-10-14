@@ -37,8 +37,12 @@ public:
                         offset_t at ) const override;
     SAction *removeChild( const QList<int> &lanePath, int index,
                           offset_t at ) const override;
+    SAction *nameTake( const QList<int> &clipPath,
+                       const QString &name ) const override;
     SAction *mergeColumns(
-        const QList<QList<int>> &clipPaths ) const override;
+        const QList<QList<int>> &clipPaths,
+        offset_t extentStart = 0,
+        length_t extentLen = -1 ) const override;
 };
 
 #endif // _SAUDIOPASSVERBS_H_

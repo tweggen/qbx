@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN 53 P4, DECISION D4 (a) (QBX-182). THE GROUP EXTENT `C_g`, AND WHAT IT
+  DOES TO A MEMBER WHOSE CLIPS DO NOT FIT IT.
+
+  D4 asked what an un-armed member's column should be when its clips cross the
+  armed lane's column extent, or when two armed lanes in one group disagree
+  about theirs; (a) is "the member's column extent IS the group's `C`, and
+  member children crossing its edges are split there first". This case drives
+  `place-recording` directly - no capture device, no transport, no wall-clock
+  jitter - so every number below is a closed form, and it reaches the
+  `armed="0"` path of BOTH takes planners plus the `armed="0"` no-op of the
+  other two modes.
+
+  test_sawtooth.wav is 4 s at 48 kHz = 192000 frames, which is what makes the
+  arithmetic closed. Four lanes in edit group 1:
+
+    lane 0  ARMED   clip [0, 192000)        -> its own C = [0, 192000)
+    lane 1  ARMED   clip [96000, 288000)    -> its own C = [48000, 288000)
+    lane 2  member  clip [0, 192000)
+    lane 3  member  clip [240000, 432000)
+
+  and ONE pass, [48000, 144000), on both armed lanes. So
+
+    C_g = C0 u C1 = [0, 288000)
+
+  which is wider than EITHER armed lane's own extent. That is the second half
+  of D4 and the half that is easy to miss: §3.4's rule is "ONE rule for EVERY
+  member, armed or not", so the group extent widens the ARMED lanes' columns
+  too, and lane 0's column comes out 288000 long although nothing it holds
+  reaches past 192000. Without that, lanes 0 and 1 would not be each other's
+  twins either (`seditgroups::correspondingClip` matches startTime AND duration
+  exactly), and a band's multi-mic take would fall out of the group on the
+  first pass.
+
+  WHAT EACH LANE ENDS UP WITH, and why:
+
+    lane 0  column [0, 288000), takes [0-192000] and the pass [48000-144000),
+            map 0 -> clip, 48000 -> pass, 144000 -> clip. The span
+            [192000, 288000) is inside the COLUMN and outside every take, which
+            under invariant 1' plays SILENCE - exactly what the lane played
+            there before (plan 53 §3.1 step 5), so the widening is audible
+            nowhere.
+    lane 1  column [0, 288000), takes [96000-288000] and the pass
+            [48000-144000), map 48000 -> pass, 144000 -> clip. Nothing answers
+            before 48000, which is again what the lane played there before.
+    lane 2  THE UNION PLACEHOLDER (§4.2, invariant 3'): a ONE-take column whose
+            take covers [0, 192000) of a 288000-long column. This is the shape
+            that made invariant 3 -> 3' necessary: a one-take column collapses
+            to a plain cut only when its take is FULL-extent, and collapsing
+            this one would move the clip's edges onto the take's and lose the
+            column's own length - and with it the twin match.
+    lane 3  THE CROSSING, which is what this case is named for: its clip runs
+            from 240000 to 432000 and `C_g` ends at 288000, so it is SPLIT
+            there first. The inside piece [240000, 288000) becomes the
+            placeholder column (extent `C_g`, one take at 240000-288000) and
+            the OUTSIDE piece [288000, 432000) stays a plain clip, untouched
+            and un-wrapped. The split is the mode-B primitive and undoes
+            cleanly, which is why D4 (a) chose it over refusing the member.
+
+  THE TWIN KEY IS `startTime` PLUS THE OBJECT'S DURATION, and the two are
+  asserted by different verbs here: `assert-clip-window startTime=` reads the
+  LINK, while the length comes from `assert-take-column duration=` - the
+  COLUMN's own length. `assert-clip-window duration=` on a direct column
+  reports the ACTIVE TAKE's window instead, which is a different number and
+  not the one `correspondingClip` matches on.
+
+  AND THE TWO MODES THAT NEVER TOUCH A MEMBER (G9): lane 4, in its own group,
+  is handed `armed="0"` under `replace` and under `overdub` and keeps its one
+  plain clip - the planner's half of what `record_mode_replace_group` gates
+  through the recorder. It is also handed `armed="0"` under `takes` with NO
+  group extent, which is the pre-P4 meaning of the attribute and must still be
+  nothing to do: that is what keeps every `place-recording` call written before
+  this ticket behaving as it did.
+-->
+<SActionScript version="1" name="takes_group_record_crossing">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="96000"/>
+    <add-sample trackIndex="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="3" filePath="../test_sawtooth.wav" timePos="240000"/>
+    <add-sample trackIndex="4" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <set-edit-group trackPath="0" group="1"/>
+    <set-edit-group trackPath="1" group="1"/>
+    <set-edit-group trackPath="2" group="1"/>
+    <set-edit-group trackPath="3" group="1"/>
+    <set-edit-group trackPath="4" group="2"/>
+
+    <!-- THE PASS, on the two ARMED lanes, with the group extent the recorder
+         would have computed: C_g = [0, 288000). `takeStamp` is what the
+         recorder puts on the take it just made; a fixed value here, because a
+         wall-clock one cannot be asserted. -->
+    <place-recording trackPath="0" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"
+                     groupStart="0" groupLength="288000" takeStamp="12:00"/>
+    <place-recording trackPath="1" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes"
+                     groupStart="0" groupLength="288000" takeStamp="12:00"/>
+    <!-- ...AND THE SAME PASS FOR THE MEMBERS, `armed="0"`: the structure and
+         nothing else. The file path is the armed lanes' capture, which is what
+         the recorder passes too - the verb reads it for the pass's LENGTH and
+         an un-armed plan places nothing from it. -->
+    <place-recording trackPath="2" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes" armed="0"
+                     groupStart="0" groupLength="288000"/>
+    <place-recording trackPath="3" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes" armed="0"
+                     groupStart="0" groupLength="288000"/>
+
+    <!-- LANE 0: the armed lane whose own C was SMALLER than the group's. Its
+         column is 288000 long, not 192000. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;48000-144000"
+                        comp="0:0;48000:1;144000:0" duration="288000"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-take-column clip="0,0" takeAtPos="24000"  expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="72000"  expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="160000" expectTake="0"/>
+    <!-- ...and the widened tail is SILENCE, not some take that happens to be
+         nearby: the map answers take 0 there and take 0 has no material. -->
+    <assert-take-column clip="0,0" takeAtPos="250000" expectTake="-1"/>
+
+    <!-- LANE 1: the other armed lane. Same extent, different takes - a group
+         keeps the geometry in step, not the content. -->
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="1"
+                        extents="96000-288000;48000-144000"
+                        comp="48000:1;144000:0" duration="288000"/>
+    <assert-clip-window clip="1,0" startTime="0"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+    <assert-take-column clip="1,0" takeAtPos="24000"  expectTake="-1"/>
+    <assert-take-column clip="1,0" takeAtPos="72000"  expectTake="1"/>
+    <assert-take-column clip="1,0" takeAtPos="200000" expectTake="0"/>
+
+    <!-- LANE 2: THE UNION PLACEHOLDER. One take, covering two thirds of its
+         own column - the shape invariant 3' exists for. -->
+    <assert-take-column clip="2,0" shape="direct" takes="1" activeTake="0"
+                        extents="0-192000" comp="0:0" duration="288000"/>
+    <assert-clip-window clip="2,0" startTime="0"/>
+    <assert-clip-window clip="2,1" expectReject="true"/>
+    <assert-take-column clip="2,0" takeAtPos="24000"  expectTake="0"/>
+    <assert-take-column clip="2,0" takeAtPos="250000" expectTake="-1"/>
+
+    <!-- LANE 3: THE CROSSING. The inside piece became the placeholder column
+         at `C_g`; the outside piece is still a plain clip at its own place. -->
+    <assert-take-column clip="3,0" shape="direct" takes="1" activeTake="0"
+                        extents="240000-288000" comp="240000:0"
+                        duration="288000"/>
+    <assert-clip-window clip="3,0" startTime="0"/>
+    <assert-take-column clip="3,1" shape="none"/>
+    <assert-clip-window clip="3,1" startTime="288000" duration="144000"/>
+    <assert-clip-window clip="3,2" expectReject="true"/>
+    <assert-take-column clip="3,0" takeAtPos="100000" expectTake="-1"/>
+    <assert-take-column clip="3,0" takeAtPos="260000" expectTake="0"/>
+
+    <!-- G9, THE PLANNER'S HALF: `replace` and `overdub` do nothing at all to
+         an un-armed lane, group extent or no group extent. -->
+    <place-recording trackPath="4" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="replace" armed="0"
+                     groupStart="0" groupLength="288000"/>
+    <place-recording trackPath="4" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="overdub" armed="0"
+                     groupStart="0" groupLength="288000"/>
+    <!-- ...and `armed="0"` with NO group extent is the PRE-P4 meaning,
+         "nothing to do", which every call written before this ticket relies
+         on. -->
+    <place-recording trackPath="4" filePath="../test_sawtooth.wav"
+                     timePos="48000" length="96000" mode="takes" armed="0"/>
+    <assert-take-column clip="4,0" shape="none"/>
+    <assert-clip-window clip="4,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="4,1" expectReject="true"/>
+
+    <!-- UNDO: four passes, four steps (a `.qxa` submits each on its own; a
+         real press wraps them in one commit scope, which
+         `takes_group_record_unarmed` asserts). The three no-ops above each
+         cost a step too - an empty plan applies as SUCCESS. -->
+    <undo count="7"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="1,0" shape="none"/>
+    <assert-take-column clip="2,0" shape="none"/>
+    <assert-take-column clip="3,0" shape="none"/>
+    <assert-clip-window clip="0,0" startTime="0"      duration="192000"/>
+    <assert-clip-window clip="1,0" startTime="96000"  duration="192000"/>
+    <assert-clip-window clip="2,0" startTime="0"      duration="192000"/>
+    <!-- THE CROSSING SPLIT IS UNDONE TOO, which is why D4 (a) could choose a
+         split: lane 3 is ONE clip again, at its own place. -->
+    <assert-clip-window clip="3,0" startTime="240000" duration="192000"/>
+    <assert-clip-window clip="3,1" expectReject="true"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- Rebalanced for `verify-undo`, which compares undo and redo COUNTS. -->
+    <redo count="7"/>
+    <assert-take-column clip="0,0" takes="2" duration="288000"/>
+    <assert-take-column clip="3,0" takes="1" extents="240000-288000"/>
+
+    <!-- ===== THE STAMP REACHED THE TAKE (plan 53 §8 P4, §6.5) =========== -->
+    <!--
+      `takeStamp="12:00"` above is what the recorder passes, and the plan turns
+      it into a `set-clip-name` on the take it just made. Nothing can read a
+      take's name back - there is no `assert-clip-name` verb - so it is
+      asserted through the one thing that depends on it: a take added AFTER the
+      pass, carrying no stamp, must NOT be what `newest` picks.
+
+      Lane 0 then holds take 0 (the clip it was played against), take 1 (the
+      pass, stamped) and take 2 (just added, unstamped and ACTIVE, since
+      `add-take` activates). `newest` must answer 1. Both ways of getting this
+      wrong land on 2: a stamp that never reached the take leaves nothing
+      stamped at all and falls back to the last index, and a `newest` that
+      ordered by index rather than by stamp picks the last index directly.
+
+      broadcast="0": lanes 1-3 are this lane's twins and would each resolve
+      `newest` against their own column, which `takes_group_broadcast` is where
+      to assert. Here the claim is about one column's names.
+    -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav"/>
+    <assert-take-column clip="0,0" takes="3" activeTake="2"/>
+    <select-take clip="0,0" take="newest" broadcast="0"/>
+    <assert-take-column clip="0,0" takes="3" activeTake="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="5"/>
+  </assertions>
+
+  <verify-undo/>
+
+</SActionScript>

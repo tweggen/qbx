@@ -46,14 +46,18 @@ public:
                            const QString &filePath, offset_t timePos,
                            offset_t srcOffset = 0, length_t length = 0,
                            const QString &mode = QString(),
-                           length_t extent = 0 );
+                           length_t extent = 0, bool armed = true,
+                           offset_t groupStart = 0, length_t groupLength = 0,
+                           const QString &takeStamp = QString() );
 
     QString name() const override { return QStringLiteral("place-recording"); }
     QStringList knownAttributes() const override
     { return { QStringLiteral("trackPath"), QStringLiteral("filePath"),
                QStringLiteral("timePos"), QStringLiteral("srcOffset"),
                QStringLiteral("length"), QStringLiteral("mode"),
-               QStringLiteral("armed"), QStringLiteral("extent") }; }
+               QStringLiteral("armed"), QStringLiteral("extent"),
+               QStringLiteral("groupStart"), QStringLiteral("groupLength"),
+               QStringLiteral("takeStamp") }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -81,12 +85,45 @@ public:
      * pass is submitted for it so that the takes modes can keep the group's
      * structure in step, without placing the file on it.
      *
-     * **P1 does not enumerate them** (plan 53 §8, review 2 M5): the recorder
-     * submits for armed lanes only, and every planner treats `armed="0"` as
-     * nothing to do. P4 is what gives it meaning; the attribute exists from
-     * here so that the verb's shape does not change when it does.
+     * **SINCE P4 (QBX-182) IT MEANS SOMETHING.** The recorder enumerates the
+     * un-armed members of an armed lane's edit group and submits the pass for
+     * each with `armed="0"` and the group extent below; the takes planners
+     * turn that into the structure-only plan of §3.4 (A: the `C_g` merge with
+     * no new take; B: the split at `a`/`b`), and `overdub`/`replace` still
+     * treat it as nothing to do (G9).
      */
     bool armed() const { return armed_; }
+
+    /**
+     * THE GROUP EXTENT `C_g` (plan 53 §3.4, decision D4 (a), QBX-182).
+     *
+     * `groupLength = 0` is ABSENT and is what every call and every `.qxa`
+     * written before P4 means: no group, and every planner then behaves
+     * exactly as it did.
+     *
+     * When present it is the union of the ARMED members' own column extents
+     * `C` for this pass, computed by the recorder with
+     * `srecplan::columnExtentFor` -- the only party that sees every armed lane
+     * of the pass. It governs the ARMED lanes too (§3.4's "ONE rule for EVERY
+     * member, armed or not"), because the point of it is that every member
+     * ends up holding a column with the SAME `startTime` and duration, which
+     * is what `seditgroups::correspondingClip` matches on.
+     */
+    offset_t groupStart()  const { return groupStart_; }
+    length_t groupLength() const { return groupLength_; }
+
+    /**
+     * THE RECORDER'S WALL-CLOCK STAMP, `"HH:MM"` (plan 53 §8 P4, QBX-182).
+     *
+     * EMPTY = name nothing, which is every `.qxa` that places a pass by hand.
+     * When set, the plan appends one `set-clip-name` per placement the pass
+     * landed on, naming the pass's take `stakenames::recorded( n, stamp )` --
+     * `"Take <n> · HH:MM"`. That name is also decision D5's ORIGIN MARKER: it
+     * is how `cleanup-takes` (P6) tells a recorded take from one that came
+     * from the user's arrangement, and how `select-take take="newest"` tells
+     * which takes are candidates at all.
+     */
+    const QString &takeStamp() const { return takeStamp_; }
 
     /**
      * THE TAKE'S EXTENT, when the recorder knows it is WIDER than the material
@@ -142,6 +179,9 @@ private:
     offset_t   srcOffset_ = 0;
     length_t   length_ = 0;      // 0 == to the end of the file
     length_t   extent_ = 0;      // 0 == the placed span
+    offset_t   groupStart_  = 0;
+    length_t   groupLength_ = 0; // 0 == no edit group for this pass
+    QString    takeStamp_;       // "" == name nothing
 };
 
 #endif // SPLACERECORDINGACTION_H

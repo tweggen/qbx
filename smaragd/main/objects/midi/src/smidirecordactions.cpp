@@ -375,10 +375,11 @@ bool SRemoveMidiTakeAction::readXml( const QDomElement &, int )
 SPlaceMidiRecordingAction::SPlaceMidiRecordingAction(
     const QList<int> &trackPath, offset_t timePos, qint64 durationTicks,
     std::vector<SEvent> events, const QString &mode, const QString &quantize,
-    const QString &name )
+    const QString &name, const QString &takeStamp )
     : trackPath_( trackPath ), timePos_( timePos ),
       durationTicks_( durationTicks ), events_( std::move( events ) ),
-      mode_( mode ), quantize_( quantize ), clipName_( name )
+      mode_( mode ), quantize_( quantize ), clipName_( name ),
+      takeStamp_( takeStamp )
 {
 }
 
@@ -495,6 +496,9 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
         ctx.mode   = srecplan::modeFromString( mode );
         ctx.armed  = true;
         ctx.kind   = SContentKind::Event;
+        // THE RECORDER'S STAMP (plan 53 §8 P4, QBX-182). Empty for every
+        // hand-written pass, so no existing fixture gains a take name.
+        ctx.takeStamp = takeStamp_;
         ctx.verbs  = &verbs;
         ctx.landed = &landed;
 
@@ -623,6 +627,10 @@ void SPlaceMidiRecordingAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "mode", mode_ );
     elem.setAttribute( "quantize", quantize_ );
     elem.setAttribute( "name", clipName_ );
+    // Non-default only: an attribute a fixture does not declare must not
+    // appear, or the round-trip audit fails.
+    if( !takeStamp_.isEmpty() )
+        elem.setAttribute( "takeStamp", takeStamp_ );
     writeEvents( elem, events_ );
 }
 
@@ -635,6 +643,7 @@ bool SPlaceMidiRecordingAction::readXml( const QDomElement &elem, int )
     mode_          = elem.attribute( "mode", "new-take" );
     quantize_      = elem.attribute( "quantize", "off" );
     clipName_      = elem.attribute( "name", "" );
+    takeStamp_     = elem.attribute( "takeStamp", "" );
     events_        = readEvents( elem );
     return true;
 }

@@ -981,6 +981,18 @@ a boundary you already made is the commonest comping gesture there is.
 invalidation. N1 has no consumer, so that publishes a change nothing hears yet;
 wiring it now is what means N2 adds a component and no plumbing.
 
+**`select-take take="newest"` (plan 53 §6.5, QBX-182) is the one non-numeric
+take value**, and it is resolved PER COLUMN at apply time: among the takes whose
+name carries the recorder's stamp (`stakenames::isRecorded`) the highest index,
+else the highest index of all. Under an edit-group broadcast the RULE travels
+and each member resolves it — which is the point, since the pass just recorded
+is take 7 on one lane of a band take and take 2 on the next, and no single index
+could say that. The ORDER is the index and not the stamp's value: `HH:MM` has no
+date and two passes in one minute tie, while a recorded take is always APPENDED
+(`merge-columns` names the pass as its final operand, `add-take` appends), so
+the column's own take order IS recording order. The INVERSE is always a plain
+index — undo restores a take, not a rule.
+
 **`select-take` CLEARS the map**, because it means "this take for the WHOLE
 column", and its inverse carries the previous map back — one undo of a click
 must not silently destroy a comp. `SSelectTakeAction::setPreviousCompMap()` has
@@ -993,6 +1005,43 @@ the very thing `move-comp-boundary` changes.
 
 Gate: `comp_map_model.qxa`, whose last assertion is that a render is UNCHANGED
 by the map — the one N2 will flip.
+
+## `merge-columns` may be handed its EXTENT, and then ONE operand is enough (plan 53 P4, QBX-182)
+
+`merge-columns start= length=` names the merged column's extent outright
+instead of taking `[min start, max end)` over the operands. `length < 0` is
+"the operands' union", which is what every call written before P4 means and why
+none of them changed.
+
+It has exactly one caller: **mode A planning an EDIT GROUP.** Correspondence
+inside a group is POSITIONAL — `seditgroups::correspondingClip` matches
+`startTime` AND `getDuration()`, exactly — so every member's column has to be
+the same `[startTime, duration)` or the lanes of one band take stop being each
+other's twins and every later grouped edit applies to one lane only. That
+shared extent is the group extent `C_g`, the union of the ARMED members' own
+extents, so on a member holding less material it is WIDER than that member's
+operands.
+
+Two consequences follow from that and are the reason the parameter is not just
+a convenience:
+
+- **ONE operand is accepted with an explicit extent and refused without one.**
+  One is the common case here — a member holding the single clip the armed lane
+  was played against — and the result is §4.2's UNION PLACEHOLDER, a one-take
+  column whose take covers less than the column. Without an extent, one
+  operand would produce a column identical to the clip it wraps, which is the
+  shape invariant 3 says must not exist; with one, invariant 3′ makes it legal
+  and `collapseSingleTakeStack` already refuses to collapse it
+  (`takeIsFullExtent`).
+- **The extent must CONTAIN every operand, and a narrower one is REFUSED.**
+  Clipping to fit would silently drop a take's material, and
+  `unmerge-columns`' recipe records each take's extent rather than a truncated
+  copy of it, so the clip could not be undone either. A caller that wants the
+  shorter column wants `resize-clip` on the result.
+
+The existing "a gap between operands plays SILENCE" rule is what makes the
+widening inaudible: the part of `C_g` no take covers played silence before the
+merge too.
 
 ## An EVENT column follows the BAR; an audio column does not (plan 53 P3, QBX-181)
 

@@ -48,7 +48,7 @@ else in this plan is decided.
 | **D2** | Q2 "per TRACK GROUP": folder track or edit group? | (a) the FOLDER track (`STrack::hasChildTracks()`), an object that already serializes attributes; (b) the EDIT group, which is an int id on members and needs a per-project `editGroupId → mode` map and a UI home | **(a)**. M0 implements the folder reading; (b) is one more `SProjectProps` table and can be added later without changing the resolver's shape |
 | **D3a** | Q9 default 3 ms: the auto-fade is SEEDED into new projects only; a file without `autoFadeMs` reads 0 | (a) seed only (existing projects stay as they render today); (b) read 3 ms as the default (every existing render and dozens of gates move) | **(a)**. (b) flips byte-identity goldens and per-second RMS gates project-wide |
 | **D3b** | Auto-fade at a BUTT JOIN of one continuous source (every `split-clip`, every mode-B seam, every `replace` R2 split) is a 3 ms dip, not a crossfade — an audible notch in sustained material | (a) exempt SEAMLESS edges: two abutting clips over the same content whose source positions are continuous get no auto-fade; (b) apply everywhere (Cubase's Auto Fade does, which is why it ships OFF there); (c) ship the feature OFF by default (seed 0) | **(a)**. P5 implements the seamless test (same `windowContent()`, `srcEnd(left) == srcStart(right)` exactly, same stretch); the dialog shows which edges are exempt |
-| **D4** | Q5 when an un-armed edit-group member's clip crosses the armed lane's column extent `C`, or two armed lanes in one group have different `C`s (group twins need exact `startTime` + `getDuration()` equality, `seditgroups.h` `correspondingClip`) | (a) member column extent := the group's C (union of the armed lanes' C); member children crossing its edges are split there first (reversible); (b) skip the member with a hint when its clips do not fit; (c) ask | **(a)**. It is what the group is for; the split is the mode-B primitive and undoes cleanly. P4 implements (a) |
+| **D4** — **DECIDED AND SHIPPED (P4, QBX-182)** | Q5 when an un-armed edit-group member's clip crosses the armed lane's column extent `C`, or two armed lanes in one group have different `C`s (group twins need exact `startTime` + `getDuration()` equality, `seditgroups.h` `correspondingClip`) | (a) member column extent := the group's C (union of the armed lanes' C); member children crossing its edges are split there first (reversible); (b) skip the member with a hint when its clips do not fit; (c) ask | **(a)**, taken. It is what the group is for; the split is the mode-B primitive and undoes cleanly. **What (a) did not say is that `C_g` governs the ARMED lanes too** — §3.4 does say it ("ONE rule for EVERY member") and it is the half that is easy to miss: two armed lanes with different `C`s are not each other's twins either, so BOTH of their columns come out `C_g` long. And a member's column being `C_g` rather than its operands' union needed a verb that could say so: `merge-columns` gained `start=`/`length=`, with ONE operand accepted only when an extent is given. `takes_group_record_crossing` is the gate |
 | **D5** | `cleanup-takes` "unused take": after W1 the ORIGINAL clip A is an inactive take no segment selects → "unused" → removed (undoable, file kept — but it is the user's arrangement, not a recording) | (a) takes that came from pre-existing clips (not from a recording) are EXEMPT by default; a checkbox includes them; (b) treat every unused take alike | **(a)**. The confirmation lists takes by origin ("3 recordings, 1 original clip"). Origin = the take's name stamp from the recorder (§8 P4) or, before P4 lands, "file in the project directory matching the recorder's pattern" |
 | **D6** — **DECIDED AND SHIPPED (P3, QBX-181)** | MIDI take extents (P3): ticks or frames? The column is frame-anchored; the event take window is TICK-native (`smidicut.h`, "THE WINDOW IS TICK-NATIVE") | (a) ticks on the take, converted through the tempo map at the column; (b) frames for parity with audio | **(a)**, taken, and the MODEL ALREADY DELIVERED IT: no new per-take field was needed. A take's link inside a column is born `timebase=beats` for event content (`SLink::defaultTimebaseFor`) so `set-tempo`'s re-derivation moves its extent START, and the window's length is `lengthTicks_` on the `SMidiCut` so the extent LENGTH follows — measured, halving the tempo moved a take extent 0-96000 → 0-192000. `add-midi-take atTicks=`/`extentTicks=` therefore take TICKS and convert once, through the tempo map and through `setWindowTicks` rather than the frame-valued `setDurationFromTimeline` (a ticks → frames → ticks round trip is exact only where a tick divides a frame). **What did NOT follow the bar was two stored frame values the decision did not name**: the column's own `duration_` and the COMP MAP's positions — see §8's P3 row |
 
@@ -1736,6 +1736,59 @@ extended with `newest` on columns of different take counts (T2c). The
 `newest` gate header says that on `main` `readXml` parses `take` with
 `toInt()`, so `"newest"` silently selects take 0 — the right reason to fail.
 
+> **SHIPPED as P4 (QBX-182), for AUDIO. THREE CORRECTIONS.**
+>
+> **(a) `C_g` NEEDED A VERB THAT COULD SAY "THIS IS THE COLUMN'S EXTENT".**
+> §3.4 asks for a member's column to be exactly `C_g`, and on a member holding
+> less material than the armed lane that is WIDER than anything the merge has
+> to fold. `merge-columns` computed `[min start, max end)` over its operands
+> and refused fewer than two of them, so neither half of the un-armed plan was
+> expressible: not the extent, and not the one-operand case that is the common
+> one (a member holding the single clip the armed lane was played against). It
+> gained `start=`/`length=`, with `length < 0` keeping the operands' union —
+> every pre-P4 call unchanged — and ONE operand accepted only when an extent is
+> given, because one operand with no extent produces a column identical to the
+> clip it wraps, which is the shape invariant 3 forbids. An extent that does
+> not CONTAIN the operands is refused rather than clipped: clipping would drop
+> a take's material and `unmerge-columns`' recipe records extents, not
+> truncated copies of them.
+>
+> **(b) THE PLANNER COMPOSES THE TAKE'S NAME, because only the plan knows the
+> take's NUMBER.** §8's P4 row says "the recorder sets `"Take <n> · HH:MM"` on
+> the new take", and the recorder cannot: it does not know where the pass
+> landed (`merge-columns` keeps the first operand's index), nor which take
+> index the pass became, nor — the part that is genuinely the plan's — that
+> `n` is one past what the operands contributed, counting a column operand's
+> takes individually. So the recorder passes `takeStamp="HH:MM"` and the
+> planner emits one `nameTake` per placement, as a `set-clip-name take="-1"`
+> inside the same composite: it resolves "the active take" at apply time, so no
+> index travels and the name is undone with the pass. The FORMAT lives in
+> `app/model/stakenames.h`, because `place-midi-recording` names an event take
+> the same way and `objects/midi` may not depend on `objects/cut`.
+>
+> **(c) `newest` ORDERS BY THE TAKE'S INDEX, NOT BY THE STAMP IT READS.** §6.5
+> says "the take with the latest recording stamp", and `HH:MM` cannot carry
+> that order: it has no date, and two passes in one minute tie. What the stamp
+> can say is WHETHER a take came from a recording, which is §6.5's own second
+> sentence and is also decision D5's origin marker — so `newest` is "the
+> highest-index take whose name carries the stamp, else the highest index of
+> all". That is exact rather than approximate, because a recorded take is
+> always APPENDED (`merge-columns` names the pass as its final operand,
+> `add-take` appends), so a column's take order IS its recording order. The
+> stamp says whether, the index says which.
+>
+> **NOT SHIPPED: the MIDI recorder's member enumeration (QBX-191).**
+> `place-midi-recording` has no `armed=` and no group extent, so a MIDI pass on
+> a grouped lane leaves its members out of step. The planner needs nothing for
+> it — none of the group handling branches on `Context::kind` — so what is
+> missing is the verb's attributes and a copy of the recorder's block. The
+> `takeStamp` half did land for both kinds, so a recorded MIDI take carries
+> D5's origin marker and `select-take take="newest"` works on an event column.
+>
+> **Also shipped, and §3.5 had already asked for it:** the pass-wide snap now
+> collects child edges from an armed lane's group MEMBERS as well, in a takes
+> mode, because P4 is what makes the pass edit them.
+
 ### P5 — seam auto-fade (Q9, D3) — depends on A0a (the xfade clamp), B8
 
 Build: `SProjectProps::AutoFadeMs` default 3.0, seeded at creation (D3a (a));
@@ -1950,7 +2003,7 @@ existing tickets. Order within a group is landing order.
 | A1 | **SHIPPED (QBX-179).** `merge-columns` / `unmerge-columns` with the link-move protocol. Added a refusal §6.1 does not list — operands must agree on volume and pan and carry no gain curve or fade — because a merged column has ONE set of clip parameters and the row's criterion is that the render does not change (QBX-185 in a second place). The forward also PINS each operand column, which §6.1 says is unnecessary and `SObject`'s own serialized fields say otherwise | A0a, B1 | M |
 | P2 (**QBX-180**) | mode A (`takes`) replaces `LegacyTakes`; the §9 flips — **SHIPPED** | P1, A0b, A1, D1 (default (a)) | L |
 | P3 (**QBX-181**) | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind — **SHIPPED**, on QBX-188's shared planner module. Five corrections in §8's P3 row, of which two are defects it had to fix to be writable at all: an event column's `duration_` and comp map had no musical anchor, and the MIDI recorder had no punch (which silently dropped the whole take of a punched press) | P2, QBX-188 | M |
-| P4 | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names | P2 | M |
+| P4 (**QBX-182**) | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names — **SHIPPED** for AUDIO. `armed="0"` gained meaning and a gate on the same day; `merge-columns` gained an explicit extent, which is what lets a member's column be the GROUP's and not its own clip's. The MIDI recorder does not enumerate members (QBX-191); the take NAME landed for both kinds. Three corrections in §8's P4 row | P2 | M |
 | P5 | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; selection fade dialog | A0a, B8 | M |
 | P6 | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse | P2, A0b, B10 | M |
 | QBX-157 | laned-track backdrop = comp result, cut marks | A0b, B4 | M |

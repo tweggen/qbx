@@ -13,6 +13,27 @@
   (both columns split), resize-clip slip on an EXPLICIT take (decision 3:
   synced to the corresponding take, drum-timing fix). verify-undo covers
   the composite inverses and set-edit-group.
+
+  EXTENDED BY PLAN 53 P4 (QBX-182, T2c) with `select-take take="newest"`
+  (§6.5, Q10) — the one broadcast whose ANSWER differs per member. Every
+  other broadcast carries the same take INDEX to every lane, which is right
+  for a comping gesture over twins but wrong for "go back to what we just
+  recorded": the lanes of a band take have accumulated different numbers of
+  takes, so the pass just recorded is take 7 on one lane and take 2 on the
+  next. `newest` therefore travels as the RULE and each member resolves it
+  against its own column.
+
+  The last section gives the two head columns DIFFERENT take counts (3 and 2)
+  and stamps a recorder-style name on a DIFFERENT take index in each, then
+  broadcasts `newest` once and asserts the two lanes land on different takes.
+  That pins three things at once: that the rule is resolved per member, that
+  the stamp is what identifies a recorded take (lane 0's newest is take 1,
+  NOT the take 2 that was added last and carries no stamp), and that
+  `take="newest"` is parsed at all — on `main` `readXml` parses `take` with
+  `toInt()`, which returns 0 for anything it cannot parse, so `"newest"`
+  silently selected take 0 on both lanes. A clean, repeatable, wrong answer:
+  the exact shape of trap this project's "check the attribute's own spelling"
+  rule exists for.
 -->
 <SActionScript version="1" name="takes_group_broadcast">
 
@@ -77,6 +98,34 @@
     <assert-audio-energy filename="group_slipped.wav"
                          startFrame="48000" frameCount="48000"
                          minRms="0.52" maxRms="0.66"/>
+
+    <!-- ===== plan 53 §6.5 / T2c: `select-take take="newest"` ============ -->
+
+    <!-- DIFFERENT TAKE COUNTS. A third take on lane 0's head column only
+         (`add-take` does not broadcast), at the column's own length since
+         `length` defaults to "the whole column". It is ACTIVATED, as
+         `add-take` always does, so lane 0's head sits on take 2 and lane 1's
+         on take 0 — and neither of those is the answer `newest` must give. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="96000"/>
+    <assert-take-column clip="0,0" takes="3" activeTake="2"/>
+    <assert-take-column clip="1,0" takes="2" activeTake="0"/>
+
+    <!-- THE RECORDER'S STAMP, on a DIFFERENT index in each column — which is
+         what a band's lanes look like after a few passes. The format is
+         `stakenames::recorded()`'s, the one the recorder writes
+         (`place-recording takeStamp=`); here it is written by hand because a
+         wall-clock stamp cannot be asserted. broadcast="0", or the group would
+         carry the name to the other member's take of the same index and both
+         lanes would answer alike. -->
+    <set-clip-name clip="0,0" take="1" name="Take 2 · 12:00" broadcast="0"/>
+    <set-clip-name clip="1,0" take="0" name="Take 1 · 12:00" broadcast="0"/>
+
+    <!-- ONE GESTURE, TWO DIFFERENT ANSWERS. Lane 0 lands on take 1, not on
+         the unstamped take 2 it was sitting on and not on take 0; lane 1 lands
+         on take 0. Neither answer is reachable by broadcasting an index. -->
+    <select-take clip="0,0" take="newest"/>
+    <assert-take-column clip="0,0" takes="3" activeTake="1"/>
+    <assert-take-column clip="1,0" takes="2" activeTake="0"/>
   </actions>
 
   <assertions>
