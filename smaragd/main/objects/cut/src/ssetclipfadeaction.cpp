@@ -15,9 +15,9 @@ using namespace strackpath;
 
 SSetClipFadeAction::SSetClipFadeAction( const QString &clip, qint64 fadeIn,
                                         qint64 fadeOut, twFadeShape shape,
-                                        int take )
+                                        int take, bool autoIn, bool autoOut )
     : clip_( clip ), fadeIn_( fadeIn ), fadeOut_( fadeOut ), shape_( shape ),
-      take_( take )
+      take_( take ), autoIn_( autoIn ), autoOut_( autoOut )
 {
 }
 
@@ -52,10 +52,13 @@ SApplyResult SSetClipFadeAction::apply( SProject *project )
     next.inLen  = fadeIn_  < 0 ? 0 : fadeIn_;
     next.outLen = fadeOut_ < 0 ? 0 : fadeOut_;
     next.shape  = shape_;
+    next.autoIn  = autoIn_;
+    next.autoOut = autoOut_;
     cut->setFade( next );
 
     SSetClipFadeAction *inverse = new SSetClipFadeAction(
-        clip_, before.inLen, before.outLen, before.shape, take_ );
+        clip_, before.inLen, before.outLen, before.shape, take_,
+        before.autoIn, before.autoOut );
     return { true, inverse };
 }
 
@@ -67,6 +70,11 @@ void SSetClipFadeAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "shape", shape_ == twFadeShape::EqualPower
                                     ? "equalPower" : "linear" );
     elem.setAttribute( "take", take_ );
+    // Written only when a veto is actually in force (the SCut serializer's
+    // rule), so a .qxa or an undo entry that never touched the tri-state reads
+    // back exactly as it was written.
+    if( !autoIn_ )  elem.setAttribute( "autoIn",  "0" );
+    if( !autoOut_ ) elem.setAttribute( "autoOut", "0" );
 }
 
 bool SSetClipFadeAction::readXml( const QDomElement &elem, int )
@@ -77,6 +85,14 @@ bool SSetClipFadeAction::readXml( const QDomElement &elem, int )
     shape_   = ( elem.attribute( "shape", "linear" ) == "equalPower" )
                    ? twFadeShape::EqualPower : twFadeShape::Linear;
     take_    = elem.attribute( "take", "-1" ).toInt();
+    // THE TRI-STATE. `auto` sets both edges; `autoIn`/`autoOut` override it
+    // per edge. Absent everywhere means TRUE — the auto-fade is allowed —
+    // which is both the stored default and what every existing script means.
+    const bool both = elem.attribute( "auto", "1" ) != QLatin1String( "0" );
+    autoIn_  = elem.attribute( "autoIn",
+                               both ? "1" : "0" ) != QLatin1String( "0" );
+    autoOut_ = elem.attribute( "autoOut",
+                               both ? "1" : "0" ) != QLatin1String( "0" );
     return true;
 }
 

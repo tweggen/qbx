@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <vector>
+#include <algorithm>
 #include <cmath>
 
 #include <qobject.h>
@@ -26,6 +27,7 @@
 #include "app/model/ssolorules.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sprojectprops.h"
+#include "app/model/sautofade.h"
 #include "app/model/sautomationlane.h"
 #include "app/model/sclipwindow.h"
 #include "app/objects/track/strackrndrinline.h"
@@ -2148,10 +2150,27 @@ void STrack::onAutomationChanged( SAutomationLane &lane, offset_t start, offset_
 void STrack::refreshClipGainCurves()
 {
     if( !cpTrackMix_ ) return;
+
+    // THE PLAYBACK AUTO-FADE (plan 53 P5, decisions D3a and D3b). The policy,
+    // the ms-to-frames conversion and the seamless test are all in `sautofade`
+    // (model) and none of it is here, for two reasons. The comp-boundary half
+    // of the same feature is applied in `objects/cut`, which this slice may not
+    // see and which may not see this one; and the Clip Properties panel shows
+    // the user which edges the auto-fade skips, so the mix and the edit surface
+    // have to read ONE answer to that question rather than two.
+    const length_t autoFrames = sautofade::framesOf( getProjectSafe() );
+    const QHash<SLink *, sautofade::Seams> seams =
+        autoFrames > 0 ? sautofade::laneSeams( *this )
+                       : QHash<SLink *, sautofade::Seams>();
+
     for( SLink *lk : childLinks() ) {
         if( !lk || !lk->hasStartTime() ) continue;
         SObject *obj = &lk->getSObject();
         if( obj->isLane() ) continue;          // a nested lane, not a clip
+        // The BLOCKING duration, for the reason `sautofade::laneSeams` states
+        // at its own call: this is an edit path, and the try-lock form can
+        // answer with a pre-edit length under worker contention.
+        const length_t placedLen = obj->getDurationBlocking();
         // The window whose PARAMETERS this placement carries — the placement's
         // own window when it has one, the active take when it does not. NOT
         // `windowTakeAt(-1)`, which since proposal 42 M2 forwards through a
@@ -2174,7 +2193,37 @@ void STrack::refreshClipGainCurves()
         // THE CLIP FADE (proposal 43 N5), through the same funnel and read
         // from the same window: it is a third factor in the mix's per-frame
         // product, beside the gain curve and the static volume.
-        cpTrackMix_->setClipFade( lk, obj->clipFade() );
+        //
+        // ...WITH THE PROJECT'S AUTO-FADE FILLED INTO THE EDGES THAT HAVE NO
+        // FADE OF THEIR OWN AND DO NOT REFUSE ONE. It travels as part of the
+        // same value and through the same setter, deliberately: the mix stays
+        // a function of the fade it is handed and learns nothing about where
+        // the lengths came from, so there is exactly one place that can be
+        // asked why an edge does or does not fade.
+        //
+        // AN EVENT CLIP GETS NO AUTO-FADE, and this guard is the whole reason
+        // the kind is asked for here. A fade is AUDIO-only (cut/CONTRACT
+        // inv. 4) -- `set-clip-fade` REFUSES an event clip rather than
+        // ignoring it -- and the auto-fade is a fade. The reason is not
+        // bookkeeping: an event clip's edges are note-offs, not steps in a
+        // waveform, so there is no click to remove, and the audio at those
+        // edges is an instrument's ATTACK and RELEASE. A 3 ms ramp over them
+        // would clip the attack and cut the release of every note at a clip
+        // boundary in the project -- an auto-fade doing damage in exactly the
+        // place it was added to prevent it.
+        //
+        // It is a real hazard and not a hypothetical: the mix applies
+        // `ClipEntry::fade` to whatever a clip entry resolves to, and an
+        // event clip IS one of this lane's `childLinks()` with a start time,
+        // which is why it already travels three lines above for the gain
+        // curve, the volume and the pan.
+        twClipFade eff = obj->clipFade();
+        if( autoFrames > 0 && obj->contentKind() == SContentKind::Audio ) {
+            const sautofade::Seams sm = seams.value( lk );
+            eff = sautofade::effectiveFade( eff, placedLen, autoFrames,
+                                            sm.in, sm.out );
+        }
+        cpTrackMix_->setClipFade( lk, eff );
         // THE CLIP'S PAN (proposal 49 D2, M1), the fourth factor, from the
         // same window: a wrapped column pans by the WRAPPER's value and a
         // direct one by the active take's -- exactly the object set-clip-pan

@@ -1,4 +1,5 @@
 #include "app/testkit/scloseprojectaction.h"
+#include "app/model/sautofade.h"
 #include "app/shell/srecordmodeseed.h"
 
 #include <QCoreApplication>
@@ -45,6 +46,10 @@ SApplyResult SCloseProjectAction::apply( SProject *project )
         // it: close-project builds its replacement through the REAL
         // new-project path, with no GUI (plan 53 §5.2).
         srecmodeseed::seedInto( fresh );
+        // ...and the auto-fade seed, for the same reason: this verb's whole
+        // point is that it builds its replacement through the REAL new-project
+        // path (plan 53 §5.2), so every seed fileNew applies has to be here.
+        sautofade::seedInto( fresh );
         fresh->setSampleBaseDir( baseDir );
         fresh->setRootComponent( new SStdMixer( fresh ) );
         app.setCurrentProject( fresh );

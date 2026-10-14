@@ -37,10 +37,12 @@ set(APP_MODEL_FILES
     model/include/app/model/splacements.h
     model/include/app/model/sproject.h
     model/include/app/model/seditgroups.h
+    model/include/app/model/sautofade.h
     model/include/app/model/sprojectprops.h
     model/include/app/model/ssolorules.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
+    model/src/sautofade.cpp
     model/src/sautomationlane.cpp
     model/src/sclipcolors.cpp
     model/src/sclipwindow.cpp

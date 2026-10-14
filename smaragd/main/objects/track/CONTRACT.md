@@ -852,3 +852,37 @@ redirect the knob moves, the render does not, and undo carries a step nobody can
 hear. Only a check on the STORED value can see the difference, which is what
 `assert-track-pan` exists for: `qxa.automation_pan_trim_read` asserts the point was
 written AND that `getPan()` still reads what it read before.
+
+### `refreshClipGainCurves` DECIDES NOTHING ABOUT THE AUTO-FADE (plan 53 §8 P5, QBX-183)
+
+The playback auto-fade is applied at clip edges here, and none of it is
+*decided* here. The policy, the ms-to-frames conversion, the seamless test and
+the per-lane walk that answers which joins are seamless are all in
+`sautofade` (`app/model/sautofade.h`); this function reads two of its answers
+and hands the result to `twTrackMix::setClipFade` as part of the same value a
+hand-drawn fade travels in.
+
+The reason is that the SAME FEATURE is applied at comp boundaries in
+`objects/cut` (`STakeStack::ensureCompColumn`), and this slice may not see that
+one — the rule that put `clipFade()` and `contentKind()` on `SObject` as
+base-class seams. The Clip Properties panel is a third reader, of `laneSeams`,
+for the exempt-edge status line it shows the user.
+
+**THE MIX LEARNS NOTHING ABOUT WHERE A LENGTH CAME FROM**, deliberately:
+`twTrackMix` stays a function of the fade it is handed, so there is exactly one
+place that can be asked why an edge does or does not fade.
+
+**AND THE CLIPS ARE SORTED BY START TIME.** `childLinks()` is the container's
+own order and is NOT sorted by time — `SObject::windowStep`'s contract says so
+in as many words ("the caller then walks childLinks() by start time"). Plan 53
+§P5's claim that this function "already walks the lane's links in order" is
+wrong; `sautofade::laneSeams` does the sort, and without it the seamless
+exemption would depend on the order the clips happened to be added in, which
+would reproduce on a reload and not on the edit.
+
+**AND THE DURATIONS ARE READ WITH THE BLOCKING FORM** -- here and inside
+`laneSeams`. This is an edit path, and `getDuration()`'s try-lock fallback can
+answer with a pre-edit length under worker contention; see
+main/model/CONTRACT.md's section on `sautofade` for why that is the
+`takes_group_broadcast` flake in the audio, and why blocking is safe on this
+thread.

@@ -1653,6 +1653,12 @@ int SCut::serializeSelfAttributes( QTextStream &o )
     if( fade_.outLen > 0 ) o << " fadeOut='" << (qlonglong) fade_.outLen << "'";
     if( !fade_.none() && fade_.shape != twFadeShape::Linear )
         o << " fadeShape='equalPower'";
+    // THE AUTO-FADE VETO (plan 53 P5, §6.2), written only when it is FALSE —
+    // i.e. only when the user asked for a hard edge. True is the default and
+    // the overwhelmingly common case, so writing it would put two attributes
+    // on every clip in every project and move every golden for nothing.
+    if( !fade_.autoIn  ) o << " autoFadeIn='0'";
+    if( !fade_.autoOut ) o << " autoFadeOut='0'";
 
     SObject::serializeSelfAttributes( o );
     return 0;
@@ -1670,6 +1676,13 @@ int SCut::readPostChildrenAttributes( QDomElement &element )
     fade_.shape  =
         ( element.attribute( "fadeShape", "linear" ) == "equalPower" )
             ? twFadeShape::EqualPower : twFadeShape::Linear;
+    // The auto-fade veto (plan 53 P5). ABSENT MEANS TRUE: a clip that says
+    // nothing takes whatever the project's auto-fade says, which is what makes
+    // the feature reach every clip of a new project without touching one of
+    // them, and what makes a project written before plan 53 — where the
+    // property reads 0 — render exactly as it did.
+    fade_.autoIn  = element.attribute( "autoFadeIn",  "1" ) != QLatin1String( "0" );
+    fade_.autoOut = element.attribute( "autoFadeOut", "1" ) != QLatin1String( "0" );
 
     // A registered ASSET re-registers itself here (proposal 09 M1). The gap
     // this closes predates tabs: SProject::registerAsset() had exactly ONE

@@ -78,6 +78,12 @@ private slots:
     void onFormantClicked( bool checked );
     void commitVolume();
     void commitPan();
+    // THE FADE, including the auto-fade tri-state (plan 53 P5, §6.2). One
+    // commit for all five widgets, because `set-clip-fade` is ABSOLUTE over
+    // the whole fade: two of them in a row would have the second overwrite the
+    // first's other fields with whatever the panel happened to show.
+    void commitFade();
+    void onAutoFadeClicked();
     void commitMidiName();
     void commitMidiStartTime();
     void commitMidiDuration();
@@ -114,6 +120,21 @@ private:
     void refreshMidi( const QList<MidiClipRef> &clips );
 
     void buildUi();
+
+    /**
+     * Fill the auto-fade status line (plan 53 P5, §6.2's "showing exempt
+     * edges"). It states the PROJECT's length and then which of the
+     * selection's edges the auto-fade will actually reach, which is a
+     * different question from what the two checkboxes say: an edge whose box
+     * is CHECKED still does not fade when the join is SEAMLESS (D3b) or when
+     * an explicit fade already covers it.
+     *
+     * It reads `sautofade::laneSeams`, the same computation
+     * `STrack::refreshClipGainCurves` hands to the mix. Deliberately not a
+     * second implementation: a status line that disagreed with the mix would
+     * look exactly like one that was right.
+     */
+    void refreshAutoFadeStatus( const QList<ClipRef> &clips );
 
     // Display helpers: write one value per selected clip into a widget, showing
     // the shared value when they agree and a BLANK field when they do not.
@@ -186,6 +207,34 @@ private:
     QSlider        *panSlider_   = nullptr;
     /// QBX-84: the volume twin of panSlider_, on THE fader curve (sfadercurve.h).
     QSlider        *volumeSlider_ = nullptr;
+
+    // THE FADE GROUP (plan 53 P5, §6.2). This is the "Set fade for selection"
+    // surface the plan asks for, and it is HERE rather than in a new modal
+    // dialog on purpose. Proposal 31 moved the per-clip properties out of the
+    // clip context menu into this panel precisely so there would be one place
+    // that edits the SELECTION, with the absolute-set multi-select semantics,
+    // the mixed-value blanking and the one-composite-per-edit undo already
+    // worked out; a dialog would be a second copy of all of it. A modal
+    // exec() reachable from a scripted run also has to be made to return
+    // immediately under --test-case, which is a hazard this panel does not
+    // have.
+    QGroupBox      *fadeGroup_        = nullptr;
+    QSpinBox       *fadeInSpin_       = nullptr;
+    QSpinBox       *fadeOutSpin_      = nullptr;
+    QComboBox      *fadeShapeCombo_   = nullptr;
+    /// The tri-state VETO, per edge: checked = the project's auto-fade may
+    /// apply here, unchecked = a hard edge. Two boxes because the exemption
+    /// D3b makes is decided per edge.
+    QCheckBox      *autoFadeInCheck_  = nullptr;
+    QCheckBox      *autoFadeOutCheck_ = nullptr;
+    /// WHAT THE AUTO-FADE IS ACTUALLY DOING at this clip's two edges, in
+    /// words: the project's length, and which edges are EXEMPT because the
+    /// join is seamless. §6.2 asks for the exempt edges to be shown, and
+    /// without this the two checkboxes are a lie by omission -- an edge whose
+    /// box is CHECKED may still not fade, and a user who cannot see why will
+    /// conclude the feature is broken. It reads `sautofade::laneSeams`, the
+    /// same computation the mix reads, never a second implementation of it.
+    QLabel         *autoFadeLabel_    = nullptr;
 
     // The MIDI page (proposal 37 6.1): the per-clip modifiers plus the one
     // placement property that is not shared with audio, the timebase.

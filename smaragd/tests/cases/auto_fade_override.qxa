@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AN EDGE HAS THREE STATES, AND `set-clip-fade` CAN SAY ALL THREE.
+
+  Plan 53 P5 (QBX-183), §6.2. Before the auto-fade an edge had two states — a
+  fade or no fade — and no length meant no fade. With a project auto-fade "no
+  length" means "whatever the project says", so the third state has to become
+  sayable: a HARD edge the user asked for. That is the tri-state `auto` on
+  `set-clip-fade`, stored as `twClipFade::autoIn` / `autoOut` and serialized
+  only when FALSE.
+
+  PER EDGE, NOT PER CLIP. Plan 53 §P5 words the rule as "every clip edge whose
+  `twClipFade` is `none()`", which read one way says that drawing a fade-IN
+  silently turns the auto-fade off at the clip's OUT edge too. It is applied
+  per edge instead — a user who drew one fade did not ask for a click at the
+  other end — and both halves of that are pinned below: `autoOut="0"` leaves
+  the IN edge fading, and an explicit `fadeIn` leaves the OUT edge fading.
+
+  THE FIXTURE is `auto_fade_seam.qxa`'s: `test_stereo.wav` over [0, 144000)
+  butt-joined to `test_autosaw.wav` over [144000, 336000), two different
+  content objects, so no edge here is exempt under D3b and all four of them
+  fade until something says otherwise. The four windows are [0,144),
+  [143856,144000), [144000,144144) and [335856,336000).
+
+  AND THE ASSERTIONS ARE BYTE RANGES AGAINST TWO REFERENCE RENDERS: `ov_off`
+  (auto-fade 0, so every edge hard) and `ov_auto` (auto-fade 3 ms, so every
+  edge faded). Every claim below is then of the form "this window is the hard
+  one" or "this window is the faded one", exactly, with no tolerance — which
+  is the only way to state "there, and only there".
+
+  THE CLOSED FORMS, for the explicit fade that replaces an auto-fade and for
+  the auto-fade it replaces, both over [0,4800). test_stereo's pooled RMS there
+  is 0.395274, and a linear fade-in of L frames inside a window of W scales a
+  stationary RMS by sqrt( 1 - (L/W)(1 - m) ), where m is the ramp's own mean
+  square, (1/L) * sum_{i=0..L-1} (i/L)^2:
+
+      explicit, L = W = 4800   m = 0.333287   ->  0.395274 * 0.577260 = 0.228209
+      auto,     L = 144        m = 0.329882   ->  0.395274 * 0.989896 = 0.391282
+
+  The two are 42 % apart, so no tolerance question arises. The auto number is
+  worth stating rather than waving at: 144 frames of ramp inside 4800 move the
+  RMS by 1.0 %, which is ten times a 16-bit quantisation floor and would hide
+  nothing, but is also not the 0 % that "3 ms is negligible" would suggest.
+-->
+<SActionScript version="1" name="auto_fade_override">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav"  timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="144000"/>
+
+    <!-- THE TWO REFERENCES. -->
+    <render filename="ov_off.wav" format="wav" quality="10" durationSec="7.0"/>
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="ov_auto.wav" format="wav" quality="10" durationSec="7.0"/>
+
+    <!-- `auto="0"` ON ONE CLIP: a hard edge at BOTH of its ends, and nowhere
+         else. No fade is declared — this is the state that did not exist. -->
+    <set-clip-fade clip="0,0" auto="0"/>
+    <render filename="ov_hard.wav" format="wav" quality="10" durationSec="7.0"/>
+    <!-- clip A's two edges are back to the hard bytes... -->
+    <assert-file-identical actual="ov_hard.wav" expected="ov_off.wav"
+                           startFrame="0" frameCount="144"/>
+    <assert-file-identical actual="ov_hard.wav" expected="ov_off.wav"
+                           startFrame="143856" frameCount="144"/>
+    <!-- ...and clip B's two edges are untouched: THERE ONLY. -->
+    <assert-file-identical actual="ov_hard.wav" expected="ov_auto.wav"
+                           startFrame="144000" frameCount="144"/>
+    <assert-file-identical actual="ov_hard.wav" expected="ov_auto.wav"
+                           startFrame="335856" frameCount="144"/>
+    <!-- The whole of clip B, in fact, including everything between. -->
+    <assert-file-identical actual="ov_hard.wav" expected="ov_auto.wav"
+                           startFrame="144000" frameCount="192000"/>
+
+    <!-- PER EDGE: only the OUT edge refuses now. The in edge fades again. -->
+    <set-clip-fade clip="0,0" autoOut="0"/>
+    <render filename="ov_outonly.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="ov_outonly.wav" expected="ov_auto.wav"
+                           startFrame="0" frameCount="144"/>
+    <assert-file-identical actual="ov_outonly.wav" expected="ov_off.wav"
+                           startFrame="143856" frameCount="144"/>
+
+    <!-- ...and the mirror image, so neither flag can be standing in for the
+         other. -->
+    <set-clip-fade clip="0,0" autoIn="0"/>
+    <render filename="ov_inonly.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="ov_inonly.wav" expected="ov_off.wav"
+                           startFrame="0" frameCount="144"/>
+    <assert-file-identical actual="ov_inonly.wav" expected="ov_auto.wav"
+                           startFrame="143856" frameCount="144"/>
+
+    <!-- AN EXPLICIT FADE REPLACES THE AUTO-FADE AT ITS OWN EDGE. 0.1 s of
+         linear fade-in, the closed form in the header. Note `auto` is not
+         named here, so both flags go back to true — which is why the OUT edge
+         below is the FADED one: the explicit length wins at the in edge and
+         says nothing about the other. -->
+    <set-clip-fade clip="0,0" fadeIn="4800" fadeOut="0" shape="linear"/>
+    <render filename="ov_expl.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-audio-energy filename="ov_expl.wav" startFrame="0"
+                         frameCount="4800" minRms="0.2273" maxRms="0.2292"/>
+    <!-- Not the auto-fade's own reading over the same window, which is what
+         that number has to differ from. -->
+    <assert-audio-energy filename="ov_auto.wav" startFrame="0"
+                         frameCount="4800" minRms="0.3905" maxRms="0.3921"/>
+    <assert-file-identical actual="ov_expl.wav" expected="ov_auto.wav"
+                           startFrame="143856" frameCount="144"/>
+
+    <!-- UNDO IS EXACT over the whole tri-state: the action is absolute and
+         carries the previous flags in its inverse, so one step restores
+         `autoIn="0"`, two restore `autoOut="0"`, three the `auto="0"` pair. -->
+    <undo count="1"/>
+    <render filename="ov_u1.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="ov_u1.wav" expected="ov_inonly.wav"/>
+    <undo count="1"/>
+    <render filename="ov_u2.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="ov_u2.wav" expected="ov_outonly.wav"/>
+    <undo count="1"/>
+    <render filename="ov_u3.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="ov_u3.wav" expected="ov_hard.wav"/>
+    <undo count="1"/>
+    <render filename="ov_u4.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="ov_u4.wav" expected="ov_auto.wav"/>
+
+    <!-- IT SURVIVES A SAVE AND A LOAD, and this is LAST on purpose: a
+         load-project replaces the project the undo stack above was built
+         against, so the round trip cannot sit inside that chain.
+
+         `autoFadeIn`/`autoFadeOut` are written only when FALSE, so a project
+         in which nobody asked for a hard edge gains no attributes at all and
+         re-serializes byte-unchanged. This one did ask. -->
+    <set-clip-fade clip="0,0" auto="0"/>
+    <save-project path="../../build/auto_fade_override.qxp"/>
+    <load-project path="../../build/auto_fade_override.qxp"/>
+    <!-- WHAT THIS ROUND TRIP GATES IS THE CLIP'S VETO, not the project
+         property. `load-project` loads into the CURRENT project and clears
+         the arrangements but NOT the properties, so the 3 ms in memory
+         survives it whatever the file holds; the property's own placement is
+         `auto_fade_seed.qxa`'s business. What has to come back off disk here
+         is `autoFadeIn='0' autoFadeOut='0'` on the clip — and if it does not,
+         this render is the fully faded one. -->
+    <render filename="ov_reload.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="ov_reload.wav" expected="ov_hard.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

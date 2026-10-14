@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE PROJECT'S AUTO-FADE IS AUDIBLE AT A CLIP EDGE, AND NOWHERE ELSE.
+
+  Plan 53 P5 (QBX-183), decision D3a (a). A hard clip edge is a step in the
+  waveform and a step is a click; before this the only cure was to draw a fade
+  by hand at every edge, which nobody does. The auto-fade is a PROJECT property
+  (`autoFadeMs`, 3 ms in a new project), applied in the mix at every clip edge
+  that has no fade of its own and does not refuse one.
+
+  THE FIXTURE IS TWO BUTT-JOINED CLIPS OF DIFFERENT SOURCES, which is the one
+  join the exemption D3b makes can never reach: `test_stereo.wav` over
+  [0, 144000) and `test_autosaw.wav` over [144000, 336000). Different content
+  objects, so `sautofade::isSeamless` answers no at the very first test and the
+  seam is an ordinary pair of edges. `auto_fade_seamless_exempt.qxa` is the
+  other half of this pair and uses ONE source read continuously.
+
+  WHY BOTH FIXTURES ARE STATIONARY. Each is constant in amplitude over any
+  window this case measures, so the ramp's effect on an RMS is a closed form
+  rather than a property of where the window happens to fall.
+
+  THE NUMBERS. A 3 ms fade at 48 kHz is 144 frames, and `twClipFade::gainAt`
+  places the ramp ONE FRAME OFF CENTRE at each end — a fade-in's gain is i/144
+  for i = 0..143 (so it starts at exactly 0) and a fade-out's is (144-i)/144
+  (so it ends at exactly 1/144, not 0). The two RMS factors therefore differ,
+  and asserting both pins that definition:
+
+      fade-out:  sqrt( (1/144) * sum_{k=1..144} (k/144)^2 )  =  0.580356
+      fade-in:   sqrt( (1/144) * sum_{i=0..143} (i/144)^2 )  =  0.574342
+
+  Applied to the fixtures' own pooled RMS over each window:
+
+      A's tail [143856,144000)   0.402854  ->  0.239580
+      A's head [0,144)           0.402488  ->  0.238966
+      B's head [144000,+144)     0.236809  ->  0.135987
+      B's tail [335856,336000)   0.234485  ->  0.136045
+
+  BUT THE LOAD-BEARING ASSERTIONS HERE ARE THE BYTE COMPARISONS, not the RMS
+  bands. `assert-file-identical` takes a frame RANGE (proposal 37 P0a), so this
+  case renders the same project twice — once with the auto-fade off, once with
+  it at 3 ms — and then says exactly which frames moved and which did not,
+  with no tolerance anywhere. Four ranges differ (the two outer edges and the
+  two sides of the seam) and everything between them is identical byte for
+  byte. That is a far stronger statement than any energy band, and it is what
+  makes a wrong fade LENGTH fail: a 288-frame auto-fade would move frames
+  inside a range this case requires to be untouched.
+
+  THE PROJECT STARTS WITH NO AUTO-FADE, deliberately. `setup project="new"`
+  goes through `SActionRunner`, which does NOT seed — the 3 ms seed of D3a (a)
+  lives on the real fileNew path (`sautofade::seedInto`), so a scripted project
+  reads the property's own default of 0 and every case in this suite that
+  predates plan 53 renders exactly as it always did. That is the whole safety
+  property of D3a, and `auto_fade_seed.qxa` is where the seed's own placement
+  is asserted from the other side.
+-->
+<SActionScript version="1" name="auto_fade_seam">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 144000 frames is 1.5 bars at 120 BPM, which is not on the grid. -->
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav"  timePos="0"/>
+    <add-sample trackIndex="0" filePath="../test_autosaw.wav" timePos="144000"/>
+    <assert-clip-window clip="0,0" startTime="0"      duration="144000"/>
+    <assert-clip-window clip="0,1" startTime="144000" duration="192000"/>
+
+    <!-- BEFORE: no auto-fade. The project has never had the property set. -->
+    <render filename="af_off.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-audio-energy filename="af_off.wav" startFrame="143856"
+                         frameCount="144" minRms="0.4008" maxRms="0.4049"/>
+    <assert-audio-energy filename="af_off.wav" startFrame="144000"
+                         frameCount="144" minRms="0.2356" maxRms="0.2380"/>
+
+    <!-- 3 ms. A project property, so this is a `set-property` and not an
+         undoable verb (it is the same route the Options page takes). -->
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="af_on.wav" format="wav" quality="10" durationSec="7.0"/>
+
+    <!-- THE SEAM FADED, on BOTH sides, by the closed forms above. -->
+    <assert-audio-energy filename="af_on.wav" startFrame="143856"
+                         frameCount="144" minRms="0.2384" maxRms="0.2408"/>
+    <assert-audio-energy filename="af_on.wav" startFrame="144000"
+                         frameCount="144" minRms="0.1353" maxRms="0.1367"/>
+    <!-- ...and so did the two OUTER edges: the project's start and its end are
+         clip edges like any other, which is the point of an AUTO fade. -->
+    <assert-audio-energy filename="af_on.wav" startFrame="0"
+                         frameCount="144" minRms="0.2378" maxRms="0.2402"/>
+    <assert-audio-energy filename="af_on.wav" startFrame="335856"
+                         frameCount="144" minRms="0.1353" maxRms="0.1368"/>
+
+    <!-- AND NOW THE EXACT STATEMENT, with no tolerance in it. Everything
+         between the four fades is IDENTICAL byte for byte. -->
+    <assert-file-identical actual="af_on.wav" expected="af_off.wav"
+                           startFrame="144" frameCount="143712"/>
+    <assert-file-identical actual="af_on.wav" expected="af_off.wav"
+                           startFrame="144144" frameCount="191712"/>
+
+    <!-- ...and exactly the four fade windows DIFFER. `expectReject` on
+         assert-file-identical is how this suite says "these must not be the
+         same" (file_identical_gate.qxa). Without these four the two
+         assertions above would also pass with the feature deleted. -->
+    <assert-file-identical actual="af_on.wav" expected="af_off.wav"
+                           startFrame="0" frameCount="144"
+                           expectReject="true"/>
+    <assert-file-identical actual="af_on.wav" expected="af_off.wav"
+                           startFrame="143856" frameCount="144"
+                           expectReject="true"/>
+    <assert-file-identical actual="af_on.wav" expected="af_off.wav"
+                           startFrame="144000" frameCount="144"
+                           expectReject="true"/>
+    <assert-file-identical actual="af_on.wav" expected="af_off.wav"
+                           startFrame="335856" frameCount="144"
+                           expectReject="true"/>
+
+    <!-- CHANGING THE PROPERTY IS AUDIBLE ON ITS OWN. Nothing else notices an
+         auto-fade change — no clip changed and no arrangement changed, and
+         the lengths live in the mix's per-clip entries — so
+         `sautofade::reapplyAll` is wired to SProject::propertyChanged, exactly
+         as the metronome property is wired to a plan rebuild. Setting the
+         property back to 0 must return the ORIGINAL file, byte for byte,
+         WITHOUT any other edit in between. -->
+    <set-property key="autoFadeMs" value="[0.0]"/>
+    <render filename="af_back.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="af_back.wav" expected="af_off.wav"/>
+
+    <!-- A LONGER AUTO-FADE REACHES FURTHER, which is what makes the LENGTH and
+         not merely the presence of a fade gated: 6 ms = 288 frames, so the
+         window [143712,143856) that af_on left untouched now moves. -->
+    <set-property key="autoFadeMs" value="[6.0]"/>
+    <render filename="af_6ms.wav" format="wav" quality="10" durationSec="7.0"/>
+    <assert-file-identical actual="af_6ms.wav" expected="af_off.wav"
+                           startFrame="143712" frameCount="144"
+                           expectReject="true"/>
+    <assert-file-identical actual="af_6ms.wav" expected="af_on.wav"
+                           startFrame="143712" frameCount="288"
+                           expectReject="true"/>
+    <!-- ...and still nothing outside IT: [143424,143712) is untouched. -->
+    <assert-file-identical actual="af_6ms.wav" expected="af_off.wav"
+                           startFrame="143424" frameCount="288"/>
+
+    <!-- AND THE CLAMP: min( autoFade, clipLen / 2 ). A clip shorter than two
+         auto-fades gets half its own length at each edge instead, so it still
+         reaches unity in the middle rather than becoming a triangle.
+
+         A SECOND LANE, so none of the arithmetic above moves, and the clip
+         sits at 400000 — PAST the end of lane 0's material at 336000 — so the
+         window measured below carries that clip and nothing else. A first
+         draft put it at 0 and the comparison read lane 0's own head fade
+         instead, which differs at 3 ms and 6 ms exactly as it should: the
+         measurement was of the wrong lane, not of a broken clamp.
+
+         One 200-frame clip, where 3 ms (144 frames) and 6 ms (288) BOTH clamp
+         to 100. That equality is the clamp's own signature — past clipLen/2
+         the length stops growing — and it is a byte comparison, not a band. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_autosaw.wav" timePos="400000"/>
+    <resize-clip clip="1,0" startTime="400000" startOffset="0" duration="200"
+                 stretch="1.0"/>
+    <assert-clip-window clip="1,0" startTime="400000" duration="200"/>
+
+    <set-property key="autoFadeMs" value="[0.0]"/>
+    <render filename="af_tiny0.wav" format="wav" quality="10" durationSec="9.0"/>
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="af_tiny3.wav" format="wav" quality="10" durationSec="9.0"/>
+    <set-property key="autoFadeMs" value="[6.0]"/>
+    <render filename="af_tiny6.wav" format="wav" quality="10" durationSec="9.0"/>
+
+    <!-- The tiny clip DID fade... -->
+    <assert-file-identical actual="af_tiny3.wav" expected="af_tiny0.wav"
+                           startFrame="400000" frameCount="200"
+                           expectReject="true"/>
+    <!-- ...and 6 ms fades it IDENTICALLY, because both clamp to 100 frames.
+         Without the clamp, 288 frames of ramp in a 200-frame clip would be a
+         different shape from 144 and these two files would differ. -->
+    <assert-file-identical actual="af_tiny6.wav" expected="af_tiny3.wav"
+                           startFrame="400000" frameCount="200"/>
+    <!-- The LONG lane, on the other hand, really is different at 6 ms — so
+         the equality above is the clamp and not the property being ignored. -->
+    <assert-file-identical actual="af_tiny6.wav" expected="af_tiny3.wav"
+                           startFrame="143712" frameCount="288"
+                           expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

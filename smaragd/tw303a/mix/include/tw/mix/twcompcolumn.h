@@ -81,6 +81,35 @@ public:
      */
     void setInputExtent( int takeIndex, offset_t tStart, length_t len );
 
+    /**
+     * THE PROJECT'S AUTO-FADE, in frames, as the length a boundary WITH NO
+     * CROSSFADE OF ITS OWN gets (plan 53 P5, decision D3a).
+     *
+     * A comp boundary is a butt join between two different performances, which
+     * is the one join that is NEVER continuous: the two takes were played at
+     * different moments, so the waveform steps and the step clicks. That is
+     * why the auto-fade reaches here at all, and why nothing in the seamless
+     * exemption (D3b, which is about one source read continuously) applies to
+     * a boundary.
+     *
+     * IT IS A FALLBACK AND NOTHING ELSE. A boundary with `xfade > 0` keeps its
+     * own length — `set-comp-xfade` is the override and an explicit crossfade
+     * always wins — and the value set here is then not read at all. It is
+     * applied in `clampedXfade_nolock`, the ONE place both `planPage` and
+     * `freezePage` ask what a boundary's crossfade is, so an auto-fade can
+     * never make the plan and the render disagree (proposal 19 Inv-1).
+     *
+     * EVERY CLAMP STILL APPLIES to it: half the distance to each neighbouring
+     * boundary, and both takes' extents. So an auto-fade at a boundary where
+     * one take has no material to fade across shortens, or vanishes, exactly
+     * as an explicit crossfade there would.
+     *
+     * 0 (the default) is "no auto-fade", which is what every project written
+     * before plan 53 reads and therefore what keeps them rendering byte for
+     * byte as before.
+     */
+    void setAutoXfade( int64_t frames );
+
     idx_t getOutputChannels() const override { return channels_; }
 
     twPagePlan planPage( offset_t pageStart ) override;
@@ -174,6 +203,7 @@ private:
     std::vector<TakeEntry>   takes_;
     twCompMap                map_;
     int                      activeTake_ = -1;
+    int64_t                  autoXfade_ = 0;   // plan 53 P5; 0 = none
 };
 
 #endif // _TW_COMPCOLUMN_H_

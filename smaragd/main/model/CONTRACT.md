@@ -754,3 +754,67 @@ minute tie, so `newest` orders by the take's INDEX in its column, which is
 recording order because a recorded take is always appended (`merge-columns`
 names the pass as its final operand, `add-take` appends). The stamp says
 WHETHER, the index says WHICH.
+
+## The PLAYBACK AUTO-FADE: where its policy lives, and why here (plan 53 §8 P5, D3a/D3b, QBX-183)
+
+`app/model/sautofade.h` is the whole policy of the project auto-fade: the
+ms-to-frames conversion, the per-edge rule, the SEAMLESS test, the per-lane
+walk that decides which joins are seamless, and the re-apply that makes a
+change to the property audible. Nothing about it is in either consumer.
+
+**IT HAS TWO CONSUMERS AND THEY CANNOT SEE EACH OTHER.** `objects/track`
+applies it at CLIP edges, in `STrack::refreshClipGainCurves`; `objects/cut`
+applies it at COMP boundaries, in `STakeStack::ensureCompColumn`. There is no
+edge between those slices and there will not be — it is the same rule that put
+`clipFade()` and `contentKind()` on `SObject` as base-class seams. So the one
+place both can reach is here, which is also the lowest place that can hold it.
+
+**AND IT HAS A THIRD READER THAT IS NOT A CONSUMER.** The Clip Properties
+panel shows the user which of a clip's edges the auto-fade skips (§6.2's
+"showing exempt edges"), and it reads `laneSeams`, the same function
+`refreshClipGainCurves` hands to the mix. A second implementation of that
+question would be wrong SILENTLY: a status line that disagreed with the audio
+looks exactly like one that is right.
+
+**THE SEAMLESS TEST NEEDS NOTHING AUDIO-SPECIFIC**, which is what makes this
+possible at all. It compares the content object, the loop state, the time
+scaling and the source position at the join — and `SClipWindow` publishes all
+four, because they are the arithmetic every windowed verb needs. The warp
+anchors are NOT compared: the window interface deliberately does not publish
+them, and it costs nothing that matters, because `timelineToSourceExact` is
+map-aware on both sides so the POSITION test is exact under any warp, and
+every edit that makes a seam copies the anchor list wholesale.
+
+**THE READ DEFAULT IS 0 AND THE SEED IS 3 ms, AND THAT IS NOT A DETAIL.**
+`SProject::properties_` is initialised from `SProjectProps::defaults()` and a
+load MERGES the file's keys over it, so a value in `defaults()` is what EVERY
+PROJECT EVER SAVED reads — no file written before plan 53 carries the key.
+Putting 3 ms there (D3a option (b)) would move every byte-identity golden and
+every per-second RMS gate in the suite. So `autoFadeMsDefault()` is 0,
+`autoFadeMsSeed()` is 3.0, and `seedInto` is called ONLY where a project is
+created with no file behind it: `SMainWindow`'s fileNew path and
+`close-project`'s fresh project. Never after a load — the rule
+`app/shell/srecordmodeseed.h` states at length for the record mode, for the
+same reason and with the same consequence if broken.
+
+**IT READS DURATIONS WITH THE BLOCKING FORM**, and so does its caller for the
+placement length. `getDuration()` / `duration()` take the try-lock snapshot and
+fall back to `lastGoodSnapshot_`, which under background-worker mutex
+contention answers with a PRE-EDIT duration (proposal 19 Phase 2b). That is the
+`takes_group_broadcast` flake exactly: a stale duration propagated into
+`twTrackMix::updateClip` and left clip windows wrong. Here it would make the
+abutment test and the clamp answer about a length the clip no longer has, so a
+fade would appear or vanish for one refresh -- the same shape, in the audio.
+Blocking is safe because `refreshClipGainCurves` runs on the MAIN thread by
+contract (it is the one main-thread funnel a clip's gain travels) and never on
+the RT thread; the full suite, whose race-hunting cases run eight revalidation
+workers, was re-run after the switch with no hang and no change in wall time.
+
+### Known debt
+
+`laneSeams` is O(n log n) in a lane's clips and is recomputed on every
+`refreshClipGainCurves`, which runs on every edit that reaches the track. That
+is the same cost profile the function already had for the gain curves, and the
+sort is the only new part of it; a lane with thousands of clips would want the
+answer cached against the lane's child-order epoch. Not done, because nothing
+measured says it matters yet.

@@ -24,6 +24,7 @@
 #include "tw/dsp/twwhitenoise.h"
 #include "tw/dsp/twconstant.h"
 
+#include "app/model/sautofade.h"
 #include "app/model/sobject.h"
 #include "app/model/slink.h"
 #include "app/shell/sapplication.h"
@@ -126,6 +127,14 @@ void SApplication::onProjectPropertyChangedForLive( const QString &key,
 {
     if( key == QLatin1String( SProjectProps::Metronome ) )
         liveLanesChanged();
+    // THE PLAYBACK AUTO-FADE IS A PLAN-REBUILD TRIGGER TOO (plan 53 P5).
+    // Nothing else would notice it: it is a project property, so no clip
+    // changed and no arrangement changed, and the fade lengths live in the
+    // mix's per-clip entries where only STrack::refreshClipGainCurves writes
+    // them. Without this, changing the auto-fade was inaudible until some
+    // unrelated edit happened to bump the chain.
+    if( key == QLatin1String( SProjectProps::AutoFadeMs ) )
+        sautofade::reapplyAll( currentProject_ );
 }
 
 void SApplication::rewireSpeaker()

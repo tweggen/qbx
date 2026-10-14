@@ -30,6 +30,7 @@
 
 #include "app/shell/sapplication.h"
 
+#include "app/model/sautofade.h"
 #include "app/model/sdefaultreset.h"
 #include "app/model/sexternfile.h"
 #include "app/model/slink.h"
@@ -40,6 +41,7 @@
 
 #include "app/objects/cut/scut.h"
 #include "app/objects/cut/sresizeclipaction.h"
+#include "app/objects/cut/ssetclipfadeaction.h"
 #include "app/objects/cut/ssetclipnameaction.h"
 #include "app/objects/cut/ssetclippanaction.h"
 #include "app/objects/cut/ssetclipvolumeaction.h"
@@ -345,6 +347,90 @@ void SClipPropertiesPanel::buildUi()
 
     formLayout->addWidget( mixGroup );
 
+    // --- Fade (plan 53 P5, §6.2) -------------------------------------------
+    // The per-clip fade, and the auto-fade VETO beside it. The two live in one
+    // group because they are one question with three answers: an explicit
+    // length, the project's auto-fade, or a hard edge.
+    QGroupBox *fadeGroup = fadeGroup_ = new QGroupBox( tr( "Fade" ), form );
+    QFormLayout *fadeForm = new QFormLayout( fadeGroup );
+
+    fadeInSpin_ = new QSpinBox( fadeGroup );
+    fadeInSpin_->setObjectName( QStringLiteral( "clipFadeInSpin" ) );
+    fadeInSpin_->setRange( 0, 100000000 );
+    fadeInSpin_->setSingleStep( 480 );
+    fadeInSpin_->setSuffix( tr( " frames" ) );
+    fadeInSpin_->setGroupSeparatorShown( false );
+    fadeInSpin_->setToolTip(
+        tr( "Fade-in length, in frames, from the clip's start. 0 means the "
+            "project's auto-fade applies here instead (see below)." ) );
+    fadeForm->addRow( tr( "Fade in:" ), fadeInSpin_ );
+
+    fadeOutSpin_ = new QSpinBox( fadeGroup );
+    fadeOutSpin_->setObjectName( QStringLiteral( "clipFadeOutSpin" ) );
+    fadeOutSpin_->setRange( 0, 100000000 );
+    fadeOutSpin_->setSingleStep( 480 );
+    fadeOutSpin_->setSuffix( tr( " frames" ) );
+    fadeOutSpin_->setGroupSeparatorShown( false );
+    fadeOutSpin_->setToolTip(
+        tr( "Fade-out length, in frames, ending at the clip's end. It follows "
+            "the clip's length under a trim." ) );
+    fadeForm->addRow( tr( "Fade out:" ), fadeOutSpin_ );
+
+    fadeShapeCombo_ = new QComboBox( fadeGroup );
+    fadeShapeCombo_->setObjectName( QStringLiteral( "clipFadeShapeCombo" ) );
+    fadeShapeCombo_->addItem( tr( "Linear" ) );
+    fadeShapeCombo_->addItem( tr( "Equal power" ) );
+    fadeShapeCombo_->setToolTip(
+        tr( "The curve both fades use. Two equal-power fades sum to constant "
+            "power across a join, which is what a crossfade wants." ) );
+    fadeForm->addRow( tr( "Shape:" ), fadeShapeCombo_ );
+
+    autoFadeInCheck_ = new QCheckBox( tr( "Auto-fade the start" ), fadeGroup );
+    autoFadeInCheck_->setObjectName( QStringLiteral( "clipAutoFadeInCheck" ) );
+    autoFadeInCheck_->setTristate( true );
+    autoFadeInCheck_->setToolTip(
+        tr( "Let the project's auto-fade apply at this clip's start. Clear it "
+            "for a hard edge. An explicit fade-in above wins either way." ) );
+    fadeForm->addRow( QString(), autoFadeInCheck_ );
+
+    autoFadeOutCheck_ = new QCheckBox( tr( "Auto-fade the end" ), fadeGroup );
+    autoFadeOutCheck_->setObjectName( QStringLiteral( "clipAutoFadeOutCheck" ) );
+    autoFadeOutCheck_->setTristate( true );
+    autoFadeOutCheck_->setToolTip( autoFadeInCheck_->toolTip() );
+    fadeForm->addRow( QString(), autoFadeOutCheck_ );
+
+    autoFadeLabel_ = new QLabel( fadeGroup );
+    autoFadeLabel_->setObjectName( QStringLiteral( "clipAutoFadeStatus" ) );
+    autoFadeLabel_->setWordWrap( true );
+    autoFadeLabel_->setToolTip(
+        tr( "A join between two clips over the same material, continuous in "
+            "the source, is EXEMPT: an auto-fade there would be an audible "
+            "dip in the middle of material that was never interrupted." ) );
+    fadeForm->addRow( tr( "Auto-fade:" ), autoFadeLabel_ );
+
+    // Commits on editingFinished / activated / clicked only, never on
+    // valueChanged -- the panel's own rule, so a refresh can never look like
+    // an edit. `textChanged` records only that the user TOUCHED the field,
+    // which is what stops a blanked (mixed) spin box from committing the text
+    // QAbstractSpinBox restores on focus-out.
+    connect( fadeInSpin_, &QSpinBox::textChanged,
+             this, [this]{ markEdited( fadeInSpin_ ); } );
+    connect( fadeInSpin_, &QSpinBox::editingFinished,
+             this, &SClipPropertiesPanel::commitFade );
+    connect( fadeOutSpin_, &QSpinBox::textChanged,
+             this, [this]{ markEdited( fadeOutSpin_ ); } );
+    connect( fadeOutSpin_, &QSpinBox::editingFinished,
+             this, &SClipPropertiesPanel::commitFade );
+    connect( fadeShapeCombo_, &QComboBox::activated,
+             this, [this]( int ) { markEdited( fadeShapeCombo_ );
+                                   commitFade(); } );
+    connect( autoFadeInCheck_, &QCheckBox::clicked,
+             this, &SClipPropertiesPanel::onAutoFadeClicked );
+    connect( autoFadeOutCheck_, &QCheckBox::clicked,
+             this, &SClipPropertiesPanel::onAutoFadeClicked );
+
+    formLayout->addWidget( fadeGroup );
+
     // --- MIDI clip (proposal 37 P1) ----------------------------------------
     // Shown INSTEAD of the four audio groups when the selection is event
     // material. The window itself (length, slip, loop, rate) is edited through
@@ -550,6 +636,15 @@ void SClipPropertiesPanel::buildUi()
     } );
     resetOnDblClick( volumeSpin_,       0.0, &SClipPropertiesPanel::commitVolume,
                      tr( "0 dB" ) );
+    // THE FADE LENGTHS RESET TO 0 (plan 53 P5), which is not "no fade at all"
+    // any more but "hand this edge back to the project's auto-fade" -- the
+    // field's own default, and the state every clip is in until someone draws
+    // a fade. The window GEOMETRY fields are absent from this list because a
+    // start time has no default to revert to; a fade length does.
+    resetOnDblClick( fadeInSpin_,       0.0, &SClipPropertiesPanel::commitFade,
+                     tr( "no fade-in" ) );
+    resetOnDblClick( fadeOutSpin_,      0.0, &SClipPropertiesPanel::commitFade,
+                     tr( "no fade-out" ) );
     // The slider is reset by the same gesture on EITHER control: a
     // double-click on the number and a double-click on the slider both centre
     // the pair and commit exactly SPAN_DEFAULT.
@@ -731,6 +826,10 @@ void SClipPropertiesPanel::refresh()
     windowGroup_->setVisible( true );
     playGroup_->setVisible( true );
     mixGroup_->setVisible( true );
+    // A fade is AUDIO-only (cut/CONTRACT invariant 4): an event clip's
+    // equivalent is velocity, a different thing in a different domain, and
+    // `set-clip-fade` REFUSES one rather than ignoring it.
+    fadeGroup_->setVisible( true );
     midiGroup_->setVisible( false );
 
     const bool single = ( clips.size() == 1 );
@@ -788,6 +887,8 @@ void SClipPropertiesPanel::refresh()
     QList<bool>   formants;
     QList<double> formantShifts;
     QList<double> volumes, pans;
+    QList<qint64> fadeIns, fadeOuts, fadeShapes;
+    QList<bool>   autoIns, autoOuts;
     bool anyLoop = false;
     for( const ClipRef &c : clips ) {
         names      << c.cut->getSName();
@@ -803,6 +904,12 @@ void SClipPropertiesPanel::refresh()
         formantShifts << c.cut->getFormantShiftCents() / 100.0;   // cents -> semitones
         volumes    << c.cut->getVolume();
         pans       << c.cut->getPan();
+        const twClipFade f = c.cut->getFade();
+        fadeIns    << (qint64) f.inLen;
+        fadeOuts   << (qint64) f.outLen;
+        fadeShapes << ( f.shape == twFadeShape::EqualPower ? 1 : 0 );
+        autoIns    << f.autoIn;
+        autoOuts   << f.autoOut;
     }
 
     // Name and start time are IDENTITY, not shared quantities: setting them
@@ -822,6 +929,22 @@ void SClipPropertiesPanel::refresh()
     showValues( formantShiftSpin_, formantShifts );
     showValues( volumeSpin_,   volumes );
     showValues( panSpin_,      pans );
+    showValues( fadeInSpin_,   fadeIns );
+    showValues( fadeOutSpin_,  fadeOuts );
+    showValues( autoFadeInCheck_,  autoIns );
+    showValues( autoFadeOutCheck_, autoOuts );
+    // The combo has no blank state, so a MIXED shape parks it at index -1 --
+    // which is the same statement a blank spin box makes, and is what
+    // commitFade() reads as "leave this alone".
+    {
+        QSignalBlocker block( fadeShapeCombo_ );
+        bool sameShape = !fadeShapes.isEmpty();
+        for( const qint64 v : fadeShapes )
+            if( v != fadeShapes.first() ) { sameShape = false; break; }
+        fadeShapeCombo_->setCurrentIndex(
+            sameShape ? (int) fadeShapes.first() : -1 );
+    }
+    refreshAutoFadeStatus( clips );
     // The slider follows the spin box (proposal 49 M4). A MIXED selection
     // leaves the spin box blank; the slider has no blank state, so it goes to
     // centre and the number beside it stays empty rather than the pair
@@ -1146,6 +1269,141 @@ void SClipPropertiesPanel::commitPan()
     submitComposite( composite );
 }
 
+void SClipPropertiesPanel::refreshAutoFadeStatus( const QList<ClipRef> &clips )
+{
+    if( !autoFadeLabel_ ) return;
+
+    SProject *project = SApplication::app().getCurrentProject();
+    const double ms = sautofade::msOf( project );
+    if( ms <= 0.0 ) {
+        autoFadeLabel_->setText(
+            tr( "off for this project (Project auto-fade is 0 ms)" ) );
+        return;
+    }
+
+    const length_t frames = sautofade::framesOf( project );
+    if( clips.isEmpty() ) {
+        autoFadeLabel_->setText( tr( "%1 ms (%2 frames)" )
+                                     .arg( ms, 0, 'g', 3 )
+                                     .arg( (qlonglong) frames ) );
+        return;
+    }
+
+    // One `laneSeams` per LANE, not per clip: the answer is a property of the
+    // whole lane's ordering, and a multi-lane selection would otherwise
+    // re-sort one lane once per clip on it.
+    SObject *mixer = splacements::rootContainer( project );
+    QHash<SObject *, QHash<SLink *, sautofade::Seams>> byLane;
+    int exemptIn = 0, exemptOut = 0, explicitIn = 0, explicitOut = 0, n = 0;
+    for( const ClipRef &c : clips ) {
+        if( !c.link || c.path.isEmpty() || !mixer ) continue;
+        QList<int> lanePath = c.path;
+        lanePath.removeLast();
+        SObject *lane = splacements::containerAt( mixer, lanePath );
+        if( !lane ) continue;
+        if( !byLane.contains( lane ) )
+            byLane.insert( lane, sautofade::laneSeams( *lane ) );
+        const sautofade::Seams sm = byLane.value( lane ).value( c.link );
+        const twClipFade f = c.cut->getFade();
+        ++n;
+        if( sm.in )        ++exemptIn;
+        if( sm.out )       ++exemptOut;
+        if( f.inLen  > 0 ) ++explicitIn;
+        if( f.outLen > 0 ) ++explicitOut;
+    }
+
+    QStringList notes;
+    const auto note = [&notes, n]( int count, const QString &what ) {
+        if( count <= 0 ) return;
+        notes << ( count == n ? what
+                              : QStringLiteral( "%1 (%2 of %3)" )
+                                    .arg( what ).arg( count ).arg( n ) );
+    };
+    note( exemptIn,     tr( "start exempt: seamless join" ) );
+    note( exemptOut,    tr( "end exempt: seamless join" ) );
+    note( explicitIn,   tr( "start has its own fade" ) );
+    note( explicitOut,  tr( "end has its own fade" ) );
+
+    QString text = tr( "%1 ms (%2 frames)" ).arg( ms, 0, 'g', 3 )
+                                            .arg( (qlonglong) frames );
+    if( !notes.isEmpty() )
+        text += QStringLiteral( " — " ) + notes.join( QStringLiteral( "; " ) );
+    autoFadeLabel_->setText( text );
+}
+
+// --- THE FADE, AND THE AUTO-FADE VETO (plan 53 P5, §6.2) --------------------
+//
+// TWO SLOTS AND NOT ONE, although `set-clip-fade` is absolute over the whole
+// fade. Each reads its own half from the widgets and the OTHER half from the
+// model, so editing a length never disturbs a veto and clearing a veto never
+// disturbs a length. One slot would have to decide what the widgets mean when
+// the user touched only one of them, and the honest answer -- "leave the rest
+// as the clip has it" -- is what these two already do.
+
+void SClipPropertiesPanel::commitFade()
+{
+    if( updating_ ) return;
+    // Consume EVERY mark, not just the one that fired: a commit covers all
+    // three length/shape widgets, and a mark left behind would make the next
+    // unrelated commit look like an edit of this field.
+    const bool inEdited    = consumeEdited( fadeInSpin_ );
+    const bool outEdited   = consumeEdited( fadeOutSpin_ );
+    const bool shapeEdited = consumeEdited( fadeShapeCombo_ );
+    if( !inEdited && !outEdited && !shapeEdited ) return;
+
+    // A BLANK field is a MIXED selection and means "leave this alone" (the
+    // panel's absolute-set rule). The combo has no blank state, so a mixed
+    // shape parks it at index -1, which is the same statement.
+    const bool haveIn    = !fadeInSpin_->text().trimmed().isEmpty();
+    const bool haveOut   = !fadeOutSpin_->text().trimmed().isEmpty();
+    const bool haveShape = fadeShapeCombo_->currentIndex() >= 0;
+
+    SCompositeAction *composite = new SCompositeAction;
+    for( const ClipRef &c : collectClips() ) {
+        const twClipFade before = c.cut->getFade();
+        twClipFade next = before;
+        if( haveIn )    next.inLen  = (qint64) fadeInSpin_->value();
+        if( haveOut )   next.outLen = (qint64) fadeOutSpin_->value();
+        if( haveShape ) next.shape  = fadeShapeCombo_->currentIndex() == 1
+                                          ? twFadeShape::EqualPower
+                                          : twFadeShape::Linear;
+        if( next == before ) continue;
+        composite->append( new SSetClipFadeAction(
+            strackpath::pathToString( c.path ), next.inLen, next.outLen,
+            next.shape, -1, next.autoIn, next.autoOut ) );
+    }
+    submitComposite( composite );
+}
+
+void SClipPropertiesPanel::onAutoFadeClicked()
+{
+    if( updating_ ) return;
+
+    // Leaving the mixed state, exactly as the formant box does it: the
+    // tri-state CYCLE would let the user land back on PartiallyChecked, which
+    // is not a value that can be committed. A click on a mixed box therefore
+    // means "turn it on for all", and the box goes binary.
+    for( QCheckBox *cb : { autoFadeInCheck_, autoFadeOutCheck_ } ) {
+        if( cb->checkState() == Qt::PartiallyChecked ) {
+            QSignalBlocker block( cb );
+            cb->setCheckState( Qt::Checked );
+        }
+        cb->setTristate( false );
+    }
+    const bool wantIn  = autoFadeInCheck_->isChecked();
+    const bool wantOut = autoFadeOutCheck_->isChecked();
+
+    SCompositeAction *composite = new SCompositeAction;
+    for( const ClipRef &c : collectClips() ) {
+        const twClipFade before = c.cut->getFade();
+        if( before.autoIn == wantIn && before.autoOut == wantOut ) continue;
+        composite->append( new SSetClipFadeAction(
+            strackpath::pathToString( c.path ), before.inLen, before.outLen,
+            before.shape, -1, wantIn, wantOut ) );
+    }
+    submitComposite( composite );
+}
+
 // ---------------------------------------------------------------------------
 // The MIDI page (proposal 37 P1)
 // ---------------------------------------------------------------------------
@@ -1190,6 +1448,7 @@ void SClipPropertiesPanel::refreshMidi( const QList<MidiClipRef> &clips )
     windowGroup_->setVisible( false );
     playGroup_->setVisible( false );
     mixGroup_->setVisible( false );
+    fadeGroup_->setVisible( false );
     midiGroup_->setVisible( true );
 
     const bool single = ( clips.size() == 1 );

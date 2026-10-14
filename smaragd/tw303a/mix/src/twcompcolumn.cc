@@ -49,6 +49,12 @@ void twCompColumn::setTakes( std::vector<ResolveFn> takes )
     }
 }
 
+void twCompColumn::setAutoXfade( int64_t frames )
+{
+    std::lock_guard<std::mutex> lock( mutex() );
+    autoXfade_ = frames > 0 ? frames : 0;
+}
+
 void twCompColumn::setCompMap( const twCompMap &map, int activeTake )
 {
     std::lock_guard<std::mutex> lock( mutex() );
@@ -96,6 +102,12 @@ int64_t twCompColumn::clampedXfade_nolock( size_t segIndex ) const
     const std::vector<twCompSegment> &segs = map_.segments();
     if( segIndex == 0 || segIndex >= segs.size() ) return 0;
     int64_t x = segs[ segIndex ].xfade;
+    // THE PROJECT'S AUTO-FADE IS THE FALLBACK (plan 53 P5): a boundary that
+    // declares no crossfade of its own gets the auto-fade's length, and one
+    // that declares a crossfade keeps it. Here and nowhere else, because this
+    // is the single function planPage and freezePage both ask — so the plan
+    // and the render cannot disagree about whether a boundary fades.
+    if( x <= 0 ) x = autoXfade_;
     if( x <= 0 ) return 0;
     // Half the distance to each neighbouring boundary: two crossfades may
     // TOUCH and can never overlap, so at most two takes are ever live.

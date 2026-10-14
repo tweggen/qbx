@@ -1709,3 +1709,51 @@ notch and had been wrong since it was written** — the fix makes the comment
 true rather than deleting it. The stall guard in that function is load-bearing:
 −96 dB and −95 dB round to the same slider value, so a pure dB round trip would
 leave a notch at the bottom of the range moving nothing at all.
+
+### inv. 67 — THE FADE GROUP EDITS THE SELECTION, AND IT SHOWS WHAT THE AUTO-FADE WILL ACTUALLY DO (plan 53 §8 P5, §6.2, QBX-183)
+
+Plan 53 §6.2 asks for a "Set fade for selection…" DIALOG that submits one
+`set-clip-fade` per selected clip inside one macro. It is the Clip Properties
+panel's new **Fade** group instead, and the deviation is deliberate: proposal
+31 moved the per-clip properties out of the clip context menu into this panel
+precisely so there would be ONE place that edits the selection, with the
+absolute-set multi-select semantics, the mixed-value blanking and the
+one-composite-per-edit undo already worked out. A dialog would be a second copy
+of all of it, and a modal `exec()` reachable from a scripted run must be made
+to return immediately under `--test-case` (inv. 1's neighbourhood) — a hazard
+this panel does not have. The plan's §6.2 has been edited to point here.
+
+**TWO COMMIT SLOTS, NOT ONE**, although `set-clip-fade` is absolute over the
+whole fade. `commitFade` owns the two lengths and the shape;
+`onAutoFadeClicked` owns the two `auto` flags. Each reads its own half from the
+widgets and the OTHER half from the model, so editing a length can never
+disturb a veto and clearing a veto can never disturb a length. One slot would
+have to decide what the widgets mean when the user touched only one of them,
+and the honest answer — "leave the rest as the clip has it" — is what these two
+already do. `commitFade` consumes EVERY length/shape mark rather than only the
+one that fired, or a mark left behind would make the next unrelated commit look
+like an edit of this field.
+
+**THE STATUS LINE IS NOT DECORATION.** With the two checkboxes alone the panel
+lies by omission: an edge whose box is CHECKED still does not fade when the
+join is SEAMLESS (decision D3b) or when an explicit fade already covers it, and
+a user who cannot see why will conclude the feature is broken. So
+`refreshAutoFadeStatus` names the project's length and then which of the
+selection's edges are exempt and why — reading `sautofade::laneSeams`, THE SAME
+computation `STrack::refreshClipGainCurves` hands to the mix, one `laneSeams`
+per lane rather than per clip. Never a second implementation of that question: a
+status line that disagreed with the audio looks exactly like one that is right.
+
+**A FADE IS AUDIO-ONLY** (cut/CONTRACT inv. 4), so the group is hidden with the
+other audio groups when the selection is event material, exactly as the Mix
+group is. `set-clip-fade` REFUSES an event clip rather than ignoring it.
+
+**WHAT IS NOT GATED.** Nothing in the testkit can type into a panel field, so
+the two spin boxes are reached through `double-click-control`'s reset gesture
+instead (`clip-fade-in` / `clip-fade-out`, `auto_fade_panel_reset.qxa`), which
+proves the widgets exist under the names the seam addresses, are enabled for an
+audio selection, and that the restore reaches the model. The shape combo and
+the two checkboxes have no bespoke gate; the checkboxes' effect on the model is
+covered end-to-end through the VERB in `auto_fade_override.qxa`, which is the
+same code path `onAutoFadeClicked` submits into. The status line's TEXT is not
+gated at all, and `laneSeams` being shared is what makes that acceptable.

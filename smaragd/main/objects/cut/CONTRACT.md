@@ -1414,3 +1414,59 @@ is now observed as a take with an extent rather than as a new lane child) and
 is R0 and the other R1, so only the second folds. `record_stays_armed`, which
 §9 DID predict, does not move: QBX-171 moved its second pass 10 s away, so both
 passes are R0.
+
+## A clip fade carries a VETO as well as two lengths (plan 53 §8 P5, §6.2, QBX-183)
+
+`twClipFade` gained `autoIn` and `autoOut`, both default true. They are not
+lengths and are not read by the mix: they say whether the PROJECT's auto-fade
+(`SProjectProps::AutoFadeMs`) may apply at that edge. Since the project has an
+auto-fade, a length of 0 no longer means "no fade" — it means "whatever the
+project says here" — so the state the user needs and could not express is a
+HARD edge, and that is what a false flag is.
+
+**PER EDGE, AND THE PLAN SAYS PER CLIP.** Plan 53 §P5 words the rule as "every
+clip edge whose `twClipFade` is `none()`", which read literally says that
+declaring a fade-IN turns the auto-fade off at the clip's OUT edge as well. It
+is applied per edge instead: a user who drew one fade did not ask for a click
+at the other end, and the exemption D3b makes is already per edge (a clip split
+in two has one seamless join and one ordinary end, and "not at the join, yes at
+the outer end" has to be sayable). Per edge is a superset of the plan's
+reading, and `auto_fade_override.qxa` pins both halves of it.
+
+Serialized as `autoFadeIn` / `autoFadeOut` on the `<cut>` element and ONLY when
+false, the rule `fadeIn`/`fadeOut` and `<automation>` already follow: a project
+in which nobody asked for a hard edge gains no attributes and re-serializes
+byte-unchanged. Absent means TRUE on read, which is what lets the feature reach
+every clip of a new project without touching one of them.
+
+**EVERY SUBMITTER OF `set-clip-fade` MUST CARRY THE FLAGS THROUGH.** The action
+is absolute over the WHOLE fade, so an edit that passes the ctor defaults
+CLEARS a veto the user set at the other edge — drag the fade-in handle and the
+hard fade-out silently becomes an auto-fade. The arranger's fade drag
+(`SStdMixerView`) and the Clip Properties panel both read the current fade and
+pass its flags back; the panel goes further and splits the commit in two
+(`commitFade` for the lengths and the shape, `onAutoFadeClicked` for the
+flags), each reading its own half from the widgets and the other half from the
+model.
+
+## `merge-columns`, `select-take` and the comp column's AUTO CROSSFADE (plan 53 §8 P5)
+
+`twCompColumn::setAutoXfade( frames )` is the length a boundary with
+`xfade == 0` gets. `STakeStack::ensureCompColumn` sets it from
+`sautofade::framesOf( project )` on every ask, beside the takes, the extents
+and the map — so a change to the project property is picked up by the next
+resolve and there is no stale copy of the length anywhere.
+
+It is applied in `clampedXfade_nolock`, which is the ONE function both
+`planPage` and `freezePage` ask what a boundary's crossfade is. That placement
+is the design: two frames of disagreement between the plan and the render is
+proposal 19 Inv-1's failure, and a fallback written anywhere else could produce
+it. Every clamp therefore applies to the auto-fade unchanged — half the
+distance to each neighbouring boundary, and both takes' extents (§4.1).
+
+**A COLUMN WITH NO BOUNDARIES CANNOT FADE, AND THAT IS WHAT KEEPS OLD PROJECTS
+BYTE-IDENTICAL.** With no map and every take full, `getRootComponent` hands out
+the active take's own component and no `twCompColumn` is built at all (the
+degenerate case, proposal 43 N2). The auto-fade reaches exactly the joins that
+exist. Nothing about the exemption D3b makes applies at a boundary either: two
+takes are two performances, so the waveform steps there however tight the comp.
