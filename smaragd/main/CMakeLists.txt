@@ -1091,6 +1091,22 @@ add_test(NAME panscale_test COMMAND panscale_test)
 set_tests_properties(panscale_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# THE CAPTURE-NAME TEST (plan 53 §6.3, P6 / QBX-184). A pure function over a
+# string, and the one part of the unused-recordings scan NO .qxa can reach: the
+# DISK half needs a project DIRECTORY with captures in it, and a scripted run
+# has an untitled project whose captures go to the test output dir instead.
+# Measured -- with the regex replaced by the substring "track", every case in
+# the suite still passed. A loose test offers to bin a file the user named, so
+# the cases are mostly negative.
+add_executable(recordingfiles_test model/tests/recordingfiles_test.cpp)
+target_link_libraries(recordingfiles_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME recordingfiles_test COMMAND recordingfiles_test)
+set_tests_properties(recordingfiles_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The stale-INI plugin search-path merge (fix/mac-vst3-loading). A pure
 # function over two string lists, so it needs no QSettings and no platform --
 # the test states the macOS/Windows default shapes itself.
