@@ -155,6 +155,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/sresizeclipaction.h
     objects/cut/include/app/objects/cut/saddtakeaction.h
     objects/cut/include/app/objects/cut/sremovetakeaction.h
+    objects/cut/include/app/objects/cut/srestoretakeaction.h
     objects/cut/include/app/objects/cut/scompmapactions.h
     objects/cut/include/app/objects/cut/ssetclipfadeaction.h
     objects/cut/include/app/objects/cut/smergecolumnsactions.h
@@ -184,6 +185,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/srestorecontainerclipaction.cpp
     objects/cut/src/srestoretakecolumnaction.cpp
     objects/cut/src/sremovetakeaction.cpp
+    objects/cut/src/srestoretakeaction.cpp
     objects/cut/src/sresizeclipaction.cpp
     objects/cut/src/scompmapactions.cpp
     objects/cut/src/ssetclipfadeaction.cpp

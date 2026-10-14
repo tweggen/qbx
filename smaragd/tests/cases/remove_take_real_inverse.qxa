@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  REMOVING A TAKE WITH NO FILE BEHIND IT IS UNDOABLE, AND THE NOTES COME BACK.
+
+  Plan 53 P6 (QBX-184), closing the hole plan 52 §6 names.
+
+  `remove-take`'s ordinary inverse is an `add-take` carrying the removed take's
+  FILE PATH, and for a take whose content is not a file there is no path to
+  give it — so the inverse was `nullptr`, which means the removal simply could
+  not be undone. An EVENT take is exactly that case: its notes are its own
+  children and nothing could rebuild them from a path.
+
+  IT STOPPED BEING THEORETICAL WHEN `cleanup-takes` ARRIVED. A sweep that
+  removes unused recorded takes will remove event ones, and the one thing a
+  destructive sweep must be is undoable. So this lands before the sweep that
+  needs it, which is also this repo's rule for a behaviour change the dependent
+  work relies on.
+
+  THE FIX IS THE PIN PATTERN, `SRemoveTrackAction` / `SRestoreTrackAction`'s:
+  the removal `addRef()`s the window so the refcount release inside
+  `STakeStack::removeTake` cannot delete it, holds it on the PERSISTENT forward
+  action, and `SRestoreTakeAction` puts THAT VERY OBJECT back at its index with
+  its extent. Object identity survives, which is the only thing that can work
+  for content with children.
+
+  WHAT MAKES THIS CASE MORE THAN "undo did not crash": the NOTES. A take
+  restored from a recipe would be an empty event clip of the right length, and
+  every structural assertion — takes, extents, activeTake — would pass over
+  it. `assert-midi-events` over the restored take is what separates the two,
+  and the restored take's note is key 72, which take 0 does not have.
+
+  A FILE-BACKED TAKE KEEPS THE OLD INVERSE and this case does not change it:
+  an `add-take` with a path SERIALIZES and reads back in a .qxa, while a pin
+  exists only in this process. `take_extents_remove_undo.qxa` is that half,
+  and it is unchanged.
+-->
+<SActionScript version="1" name="remove_take_real_inverse">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+
+    <!-- Two bars of events, two notes. 7680 ticks at ppq 960 / 120 BPM is
+         192000 frames. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Part"/>
+    <add-note clip="0,0" tick="0"    dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="3840" dur="480" key="62" velocity="100" channel="0"/>
+    <assert-take-column clip="0,0" shape="none"/>
+
+    <!-- A SECOND EVENT TAKE, over the second bar only, with a note of its own.
+         The plain clip is wrapped into a column and becomes take 0. -->
+    <add-midi-take clip="0,0" atTicks="3840" extentTicks="3840" name="Overdub">
+      <n tick="0" dur="480" key="72" velocity="100" channel="0"/>
+    </add-midi-take>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;96000-192000" duration="192000"/>
+    <!-- The two takes are distinguishable BY CONTENT, which is what the
+         restore has to reproduce. -->
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" contains="key=60"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=72"/>
+
+    <!-- A COMP MAP, so the restore has something to hand back besides the
+         take: `removeTake` renumbers the map and DROPS the removed take's
+         segments, and neither step is reversible from the result. -->
+    <set-comp-segment clip="0,0" at="0" take="0"/>
+    <set-comp-segment clip="0,0" at="96000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1"/>
+
+    <!-- ================== REMOVE THE EVENT TAKE ======================== -->
+    <remove-take clip="0,0" take="1"/>
+    <!-- One take left, at full extent, so the column collapses back to a
+         plain clip (invariant 3'). -->
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+
+    <!-- ================== AND UNDO BRINGS IT BACK ====================== -->
+    <!-- THIS IS THE ASSERTION THE WHOLE CASE EXISTS FOR. Before the pin, the
+         inverse was null: the undo stack had nothing to run, so the column
+         stayed collapsed and the overdub was gone for good. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"
+                        extents="0-192000;96000-192000" duration="192000"/>
+    <!-- ...with its EXTENT, which a restore that forgot it would widen to the
+         whole column... -->
+    <assert-take-column clip="0,0" takeAtPos="48000"  expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="144000" expectTake="1"/>
+    <!-- ...and its COMP MAP, which the removal had renumbered away... -->
+    <assert-take-column clip="0,0" comp="0:0;96000:1"/>
+    <!-- ...and ITS NOTES. A take rebuilt from a recipe would be empty here and
+         every assertion above would still pass. -->
+    <assert-midi-events scope="clip" clip="0,0" take="1" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=72"/>
+    <!-- Take 0 is untouched and did not acquire the restored note. -->
+    <assert-midi-events scope="clip" clip="0,0" take="0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" take="0" contains="key=62"/>
+
+    <!-- ================== REDO RE-REMOVES IT ========================== -->
+    <!-- The pin lives on the PERSISTENT forward action, so a redo takes its
+         own pin again rather than reusing a consumed one. -->
+    <redo count="1"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+
+    <!-- ...and a second undo still works, which is what would break if the
+         pin were taken once and never re-taken. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+    <assert-midi-events scope="clip" clip="0,0" take="1" contains="key=72"/>
+
+    <!-- BALANCE THE STACK before `verify-undo`, which compares the DEPTH it
+         can undo against the depth it can then redo. The hand-driven
+         undo/redo above is the point of this case, but leaving one action
+         undone makes those two numbers differ for a reason that is about this
+         script's bookkeeping and not about the code (measured: 7 against 8).
+         So the last manual step is a redo, and the stack is fully applied
+         when the whole-stack check runs. -->
+    <redo count="1"/>
+    <assert-take-column clip="0,0" shape="none"/>
+  </actions>
+
+  <!-- THE HOUSE CHECK that no step in this chain is silently non-undoable,
+       which is exactly what `remove-take` on an event take used to be. -->
+
+  <verify-undo/>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

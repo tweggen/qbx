@@ -1,5 +1,6 @@
 #include "app/objects/cut/sremovetakeaction.h"
 #include "app/objects/cut/saddtakeaction.h"
+#include "app/objects/cut/srestoretakeaction.h"
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "app/model/sclipwindow.h"
@@ -75,6 +76,24 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
     // re-derive it.
     const twCompMap mapBefore = stack->compMap();
 
+    // PIN A TAKE THAT NO FILE COULD REBUILD (plan 53 P6, QBX-184). `removeTake`
+    // does `delete lk`, whose refcount release would deleteLater the window; an
+    // extra reference held HERE -- on the persistent forward action, the way
+    // SRemoveTrackAction holds a track -- keeps it and its children alive and
+    // detached, so SRestoreTakeAction can put that very object back. An event
+    // take's notes are its own children and nothing could rebuild them from a
+    // path, which is why the file-less case needs identity rather than a recipe.
+    //
+    // Taken only when there is no file to rebuild from: where an `add-take`
+    // inverse works it is the better one, because it SERIALIZES.
+    dropStalePin();
+    heldActive_ = stack->activeTakeIndex();
+    if( filePath.isEmpty() ) {
+        take->asObject().addRef();
+        heldTake_ = take;
+        holdsRef_ = true;
+    }
+
     stack->removeTake( takeIndex_ );
     if( thenActivate_ >= -1 ) {
         stack->setActiveTake( thenActivate_ );
@@ -97,15 +116,43 @@ SApplyResult SRemoveTakeAction::apply( SProject *project )
 
     QList<int> invPath = lanePath;
     invPath.append( lane->indexOfChild( resultLink ) );
-    SAddTakeAction *inverse = filePath.isEmpty()
-        ? nullptr
-        : new SAddTakeAction( invPath, filePath, off, takeIndex_,
-                              wasActive, stretch, pitchCents,
-                              takeAt, takeLen );
-    if( inverse && !mapBefore.empty() ) {
+    if( filePath.isEmpty() ) {
+        // THE REAL INVERSE for a take with no file behind it. It reads the
+        // pinned window off this action, so it carries no copy of anything and
+        // cannot go stale.
+        if( !mapBefore.empty() ) setRestoreCompMap( mapBefore );
+        return {true, heldTake_ ? new SRestoreTakeAction( this, invPath,
+                                                          takeIndex_, wasActive,
+                                                          takeAt, takeLen )
+                                : nullptr};
+    }
+    SAddTakeAction *inverse =
+        new SAddTakeAction( invPath, filePath, off, takeIndex_,
+                            wasActive, stretch, pitchCents,
+                            takeAt, takeLen );
+    if( !mapBefore.empty() ) {
         inverse->setRestoreCompMap( mapBefore );
     }
     return {true, inverse};
+}
+
+SRemoveTakeAction::~SRemoveTakeAction()
+{
+    dropStalePin();
+}
+
+void SRemoveTakeAction::releaseHeld()
+{
+    dropStalePin();
+}
+
+void SRemoveTakeAction::dropStalePin()
+{
+    if( holdsRef_ && heldTake_ ) {
+        heldTake_->asObject().removeRef();
+    }
+    heldTake_ = nullptr;
+    holdsRef_ = false;
 }
 
 void SRemoveTakeAction::writeXml( QDomElement &elem ) const
