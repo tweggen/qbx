@@ -65,6 +65,7 @@
 #include "app/servicesui/srecordingprogress.h"
 #include "app/servicesui/slogview.h"
 #include "app/servicesui/soptions.h"
+#include "app/model/sautofade.h"
 #include "app/shell/srecordmodeseed.h"
 #include "app/objects/cut/scut.h"
 #include "app/objects/wave/splainwave.h"
@@ -855,6 +856,12 @@ void SMainWindow::fileNew()
     // MERGES over what is already there. A seed there would make every project
     // saved before plan 53 read the user's INI value instead of "takes".
     srecmodeseed::seedInto( currentProject_ );
+    // ...and the 3 ms PLAYBACK AUTO-FADE (plan 53 P5, decision D3a (a)). The
+    // same rule and the same reason: a seed on the fileOpen path would make
+    // every project saved before plan 53 read 3 ms — the property load merges
+    // over whatever is already there — and every one of them would render
+    // differently than it does today.
+    sautofade::seedInto( currentProject_ );
 
     createDocksToolbars();    
     // (void) efl;
@@ -4116,6 +4123,12 @@ bool SMainWindow::doubleClickDetailControl( const QString &which,
         { QStringLiteral( "clip-pitch" ),     QStringLiteral( "clipPitchSpin" ) },
         { QStringLiteral( "clip-stretch" ),   QStringLiteral( "clipStretchSpin" ) },
         { QStringLiteral( "clip-formant" ),   QStringLiteral( "clipFormantShiftSpin" ) },
+        // The two FADE lengths (plan 53 P5). Their reset means "hand this edge
+        // back to the project's auto-fade", which is a different statement
+        // from the others' "put this value back to neutral" and is why they
+        // are worth addressing by name.
+        { QStringLiteral( "clip-fade-in" ),   QStringLiteral( "clipFadeInSpin" ) },
+        { QStringLiteral( "clip-fade-out" ),  QStringLiteral( "clipFadeOutSpin" ) },
         { QStringLiteral( "clip-transpose" ), QStringLiteral( "clipTransposeSpin" ) },
         { QStringLiteral( "clip-velocity" ),  QStringLiteral( "clipVelScaleSpin" ) },
     };

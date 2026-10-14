@@ -2153,9 +2153,15 @@ void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
             QList<int> clipPath =
                 strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
             clipPath.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+            // THE AUTO-FADE VETO TRAVELS UNCHANGED (plan 53 P5). The action
+            // is absolute over the WHOLE fade, veto included, so passing the
+            // defaults here would clear a hard edge the user had asked for at
+            // the OTHER end of this clip — drag the fade-in and the hard
+            // fade-out silently becomes an auto-fade.
             stimeline::submitActive( new SSetClipFadeAction(
                 strackpath::pathToString( clipPath ),
-                (qint64) next.inLen, (qint64) next.outLen, next.shape, -1 ) );
+                (qint64) next.inLen, (qint64) next.outLen, next.shape, -1,
+                next.autoIn, next.autoOut ) );
             update();
         }
         clipDragArmed_ = false;

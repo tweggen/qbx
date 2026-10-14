@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A NEW PROJECT FADES AT 3 ms; A FILE THAT STATES OTHERWISE WINS.
+
+  Plan 53 P5 (QBX-183), decision D3a (a). The auto-fade is SEEDED into a
+  project at the moment it is created and is NOT a read-default. Those are two
+  different things and the difference is the whole reason D3a was a decision:
+
+    - 3 ms as a READ-DEFAULT (option (b)) would be what every project ever
+      saved reads, because no file written before plan 53 carries the key and
+      `SProject`'s property load MERGES the file's keys over the seeded
+      defaults. Every one of those projects would render differently than it
+      does today, which moves every byte-identity golden and every per-second
+      RMS gate in the suite.
+    - 3 ms as a SEED is written once, into a project that has no file behind it
+      yet. An old project is untouched because the file says so, and nothing
+      has to remember which kind it is holding.
+
+  So `SProjectProps::autoFadeMsDefault()` is ZERO and `autoFadeMsSeed()` is
+  3.0, and the seed has exactly two call sites: `SMainWindow`'s fileNew path
+  and `close-project`'s fresh project. Never `fileOpen`. It is the rule
+  `srecordmodeseed.h` states at length for the record mode, and this case is
+  `record_mode_ini_seed.qxa`'s shape for the auto-fade.
+
+  WHY `close-project` IS THE INSTRUMENT. The runner's own `setup project="new"`
+  does NOT seed — it builds an `SProject` directly — so a scripted project
+  starts at 0, which is what keeps every case in this suite that predates plan
+  53 rendering exactly as it always did (and is itself asserted, from the other
+  side, by `auto_fade_seam.qxa`: its first render is of a fresh scripted
+  project and must be the UNFADED one). `close-project` instead builds its
+  replacement through the REAL new-project path, so it is the only way a .qxa
+  can reach the seed at all.
+
+  WHAT THIS CASE CANNOT PROVE, measured and not assumed, exactly as
+  `record_mode_ini_seed.qxa` records for its own key:
+  `SLoadProjectAction::apply` loads INTO THE CURRENT PROJECT. It clears the
+  arrangements and NOT the properties, so an in-memory `autoFadeMs` survives a
+  `load-project` whatever the file holds. `fileOpen()` does not behave that way
+  — it loads into a fresh `SProject` — so no .qxa can reach fileOpen's
+  semantics, and a case that loaded a file with NO key and asserted 0 would be
+  asserting the verb's merge rather than the seed's placement.
+
+  So this case gates the SUBSTANCE, the way that one does: a file that STATES a
+  value wins over the seed. An implementation that seeded after the merge, on
+  the load path, would read 3 ms below and fail.
+-->
+<SActionScript version="1" name="auto_fade_seed">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+
+    <!-- A FRESH PROJECT THROUGH THE REAL NEW-PROJECT PATH. This is where the
+         seed runs, and the clips below are placed into the seeded project. -->
+    <close-project/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="144000"/>
+
+    <render filename="sd_seeded.wav" format="wav" quality="10" durationSec="3.5"/>
+
+    <!-- ...and the same project with the auto-fade explicitly off, which is
+         the comparison that says the seed is 3 ms and not 0. -->
+    <set-property key="autoFadeMs" value="[0.0]"/>
+    <render filename="sd_zero.wav" format="wav" quality="10" durationSec="3.5"/>
+
+    <!-- THE SEEDED PROJECT FADED AT BOTH EDGES, 144 frames each... -->
+    <assert-file-identical actual="sd_seeded.wav" expected="sd_zero.wav"
+                           startFrame="0" frameCount="144"
+                           expectReject="true"/>
+    <assert-file-identical actual="sd_seeded.wav" expected="sd_zero.wav"
+                           startFrame="143856" frameCount="144"
+                           expectReject="true"/>
+    <!-- ...and NOWHERE ELSE, which is what pins the seeded LENGTH: a seed of
+         6 ms would move frames inside this range. -->
+    <assert-file-identical actual="sd_seeded.wav" expected="sd_zero.wav"
+                           startFrame="144" frameCount="143712"/>
+
+    <!-- A FILE THAT STATES A VALUE WINS OVER THE SEED. The project is at 0
+         now, so the file states 0. -->
+    <save-project path="../../build/test-output/auto_fade_seed/afs.qxp"/>
+
+    <close-project/>
+    <load-project path="../../build/test-output/auto_fade_seed/afs.qxp"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="144000"/>
+    <render filename="sd_reload.wav" format="wav" quality="10" durationSec="3.5"/>
+
+    <!-- The loaded project renders the UNFADED file, byte for byte, although
+         the project it was loaded into had just been seeded at 3 ms. -->
+    <assert-file-identical actual="sd_reload.wav" expected="sd_zero.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

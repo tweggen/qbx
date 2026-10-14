@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A COMP BOUNDARY WITH NO CROSSFADE GETS THE AUTO-FADE, AND IT IS THE SAME
+  CROSSFADE AN EXPLICIT ONE WOULD BE.
+
+  Plan 53 P5 (QBX-183). A comp boundary is a butt join between two different
+  PERFORMANCES, which is the one join that can never be continuous: the two
+  takes were played at different moments, so the waveform steps there however
+  tight the comp. It is also the join a user makes most often and thinks about
+  least — swiping a comp makes one per swipe — so a hard cut by default is a
+  click by default. Proposal 43 N2 rendered every boundary as a hard cut and N3
+  gave `xfade` a meaning; what was missing is a DEFAULT, and the project's
+  auto-fade is it.
+
+  THE CLAIM IS AN EQUALITY, NOT A MEASUREMENT. The auto-fade is not a new kind
+  of fade at a boundary: it is a LENGTH handed to the crossfade that was
+  already there. So a boundary with `xfade=0` under a 3 ms auto-fade must
+  render EXACTLY what the same boundary renders with `xfade=144` and no
+  auto-fade — byte for byte, equal-power curve and all. That is asserted below
+  with `assert-file-identical` over the boundary's own window, and it is a far
+  stronger statement than any energy band: it pins the length, the centring,
+  the curve family and the clamps all at once, against code (`comp_crossfade`'s
+  own) that was gated before this feature existed.
+
+  WHERE IT IS IMPLEMENTED, and why that is the whole design: in
+  `clampedXfade_nolock`, the ONE function both `planPage` and `freezePage` ask
+  what a boundary's crossfade is. Two frames of that answer disagreeing between
+  the plan and the render is proposal 19 Inv-1's failure, and a fallback
+  written anywhere else could produce it. Every clamp therefore applies to the
+  auto-fade unchanged — half the distance to each neighbouring boundary, and
+  both takes' extents (plan 53 §4.1).
+
+  THE FIXTURE IS `comp_crossfade.qxa`'s, deliberately, so the two cases can be
+  read against each other. test_gapsaw.wav has an EXACT-ZERO region at
+  [2.5,3.0) s: take A is unslipped and therefore SILENT across all of it, take
+  B is slipped one second and is the ramp's loud tail there. The boundary sits
+  at 2.75 s = frame 132000, inside that region, so the two takes' readings are
+  completely separated and a fade across the boundary is visible in the
+  arithmetic rather than inferred from it.
+
+  A 3 ms crossfade is 144 frames, centred, so it spans [131928, 132072).
+  A HARD CUT is silent over the first half of that and full over the second;
+  the crossfade is audible over BOTH halves, and the first half is the
+  assertion a hard cut cannot pass — silence against a measured level is not a
+  tolerance question. Take A is EXACTLY zero over those 72 frames, so the
+  reading is take B alone through the equal-power ramp, and it is a closed form
+  over B's own pooled RMS of 0.374790 there:
+
+      [131928,132000)   sum over i=0..71  of sin(i*pi/288)^2, rms-weighted
+                        = 0.577 of B      ->  0.216644
+      [132000,132072)   the same with the ramp past the half-way point
+                                          ->  0.309845
+
+  The second number is the one that says the ramp is EQUAL-POWER and not
+  linear: a linear ramp over the same window would read lower, because
+  sin(t*pi/2) exceeds t everywhere strictly inside the join.
+
+  WHAT THIS CASE DOES NOT CLAIM: that a column with NO comp map fades. It
+  cannot, and must not. With no map and every take full `STakeStack` hands out
+  the active take's own component and no `twCompColumn` is built at all (the
+  degenerate case, proposal 43 N2) — which is exactly what keeps every project
+  written before plan 53 rendering byte for byte. There are no boundaries there
+  to fade.
+-->
+<SActionScript version="1" name="auto_fade_comp_boundary">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_gapsaw.wav" timePos="0"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="48000"/>
+
+    <!-- take A up to 2.75 s, take B after, NO crossfade. -->
+    <set-comp-segment clip="0,0" at="0" take="0"/>
+    <set-comp-segment clip="0,0" at="132000" take="1"/>
+    <assert-take-column clip="0,0" comp="0:0;132000:1"/>
+
+    <!-- THE REFERENCE: an EXPLICIT 144-frame crossfade, auto-fade off. This is
+         `comp_crossfade.qxa`'s verb doing `comp_crossfade.qxa`'s job, at 3 ms
+         instead of 0.5 s. -->
+    <set-comp-xfade clip="0,0" at="132000" xfade="144"/>
+    <assert-take-column clip="0,0" comp="0:0;132000:1:144"/>
+    <render filename="cb_expl.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- ...and the HARD CUT it has to differ from. -->
+    <set-comp-xfade clip="0,0" at="132000" xfade="0"/>
+    <render filename="cb_hard.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cb_hard.wav" startFrame="131928"
+                         frameCount="72" minRms="0.0" maxRms="0.002"/>
+
+    <!-- NOW THE AUTO-FADE, with the boundary still declaring nothing. -->
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="cb_auto.wav" format="wav" quality="10" durationSec="4.0"/>
+
+    <!-- THE EQUALITY. The boundary's own window is byte-identical to the
+         explicit crossfade's. -->
+    <assert-file-identical actual="cb_auto.wav" expected="cb_expl.wav"
+                           startFrame="131928" frameCount="144"/>
+    <!-- ...and so is a generous span around it, so nothing leaked sideways:
+         the clamps did not widen it and the run splitting did not move a
+         frame either side. -->
+    <assert-file-identical actual="cb_auto.wav" expected="cb_expl.wav"
+                           startFrame="100000" frameCount="40000"/>
+
+    <!-- AND IT IS NOT THE HARD CUT. Without this the equality above would also
+         hold with the feature deleted, if the explicit crossfade were broken
+         in the same way. -->
+    <assert-file-identical actual="cb_auto.wav" expected="cb_hard.wav"
+                           startFrame="131928" frameCount="144"
+                           expectReject="true"/>
+    <!-- The first half of the window is no longer SILENT: take B is ramping in
+         across the boundary, over material where take A has none. -->
+    <assert-audio-energy filename="cb_auto.wav" startFrame="131928"
+                         frameCount="72" minRms="0.2160" maxRms="0.2172"/>
+    <assert-audio-energy filename="cb_auto.wav" startFrame="132000"
+                         frameCount="72" minRms="0.3092" maxRms="0.3105"/>
+
+    <!-- AN EXPLICIT CROSSFADE STILL WINS. `set-comp-xfade` is the override
+         (§6.2) and the auto-fade yields to any xfade > 0, so a 0.5 s
+         crossfade under a live 3 ms auto-fade renders the 0.5 s one. -->
+    <set-comp-xfade clip="0,0" at="132000" xfade="24000"/>
+    <render filename="cb_long.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="cb_long.wav" startFrame="120000"
+                         frameCount="12000" minRms="0.1810" maxRms="0.1855"/>
+    <assert-file-identical actual="cb_long.wav" expected="cb_auto.wav"
+                           startFrame="120000" frameCount="24000"
+                           expectReject="true"/>
+
+    <!-- ...and taking it off again returns to the AUTO-FADE and not to the
+         hard cut, which is the state the project is actually in. One undo. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" comp="0:0;132000:1"/>
+    <render filename="cb_back.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="cb_back.wav" expected="cb_auto.wav"
+                           startFrame="131928" frameCount="144"/>
+
+    <!-- THE PROPERTY REACHES AN ALREADY-BUILT COLUMN. Setting it to 0 must
+         give the hard cut back with no other edit in between: the column is
+         rebuilt from the current takes, the current map AND the current
+         auto-fade on every resolve, so there is no stale copy of the length
+         anywhere. -->
+    <set-property key="autoFadeMs" value="[0.0]"/>
+    <render filename="cb_off.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="cb_off.wav" expected="cb_hard.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -46,8 +46,8 @@ else in this plan is decided.
 |---|---|---|---|
 | **D1** — **DECIDED AND SHIPPED (P2, QBX-180)** | Q7 under mode A: two legacy OVERLAPPING plain clips SUMMED; merged into one column, only one take plays per position outside `[a,b)` | (a) accept — merge, topmost plays, the other is a selectable take; (b) refuse the pass on such a lane; (c) leave the lower clip outside the column, so it keeps summing with the column (X6 survives there) | **(a)**, taken. (b) blocks the commonest legacy lane (C13). (c) keeps a doubled signal the user never asked for. `rec_union_overlap_legacy.qxa` asserts BOTH halves: `takeAtPos` names the topmost as the previous answer outside `[a,b)`, and a render before and after measures the level HALVING over the overlapped second — the fixture is built so the two clips play the same sample where they overlap, so the sum is exactly twice one of them |
 | **D2** | Q2 "per TRACK GROUP": folder track or edit group? | (a) the FOLDER track (`STrack::hasChildTracks()`), an object that already serializes attributes; (b) the EDIT group, which is an int id on members and needs a per-project `editGroupId → mode` map and a UI home | **(a)**. M0 implements the folder reading; (b) is one more `SProjectProps` table and can be added later without changing the resolver's shape |
-| **D3a** | Q9 default 3 ms: the auto-fade is SEEDED into new projects only; a file without `autoFadeMs` reads 0 | (a) seed only (existing projects stay as they render today); (b) read 3 ms as the default (every existing render and dozens of gates move) | **(a)**. (b) flips byte-identity goldens and per-second RMS gates project-wide |
-| **D3b** | Auto-fade at a BUTT JOIN of one continuous source (every `split-clip`, every mode-B seam, every `replace` R2 split) is a 3 ms dip, not a crossfade — an audible notch in sustained material | (a) exempt SEAMLESS edges: two abutting clips over the same content whose source positions are continuous get no auto-fade; (b) apply everywhere (Cubase's Auto Fade does, which is why it ships OFF there); (c) ship the feature OFF by default (seed 0) | **(a)**. P5 implements the seamless test (same `windowContent()`, `srcEnd(left) == srcStart(right)` exactly, same stretch); the dialog shows which edges are exempt |
+| **D3a** — **DECIDED AND SHIPPED (P5, QBX-183)** | Q9 default 3 ms: the auto-fade is SEEDED into new projects only; a file without `autoFadeMs` reads 0 | (a) seed only (existing projects stay as they render today); (b) read 3 ms as the default (every existing render and dozens of gates move) | **(a)**. (b) flips byte-identity goldens and per-second RMS gates project-wide |
+| **D3b** — **DECIDED AND SHIPPED (P5, QBX-183)** | Auto-fade at a BUTT JOIN of one continuous source (every `split-clip`, every mode-B seam, every `replace` R2 split) is a 3 ms dip, not a crossfade — an audible notch in sustained material | (a) exempt SEAMLESS edges: two abutting clips over the same content whose source positions are continuous get no auto-fade; (b) apply everywhere (Cubase's Auto Fade does, which is why it ships OFF there); (c) ship the feature OFF by default (seed 0) | **(a)**. P5 implements the seamless test (same `windowContent()`, `srcEnd(left) == srcStart(right)` exactly, same stretch); the dialog shows which edges are exempt |
 | **D4** — **DECIDED AND SHIPPED (P4, QBX-182)** | Q5 when an un-armed edit-group member's clip crosses the armed lane's column extent `C`, or two armed lanes in one group have different `C`s (group twins need exact `startTime` + `getDuration()` equality, `seditgroups.h` `correspondingClip`) | (a) member column extent := the group's C (union of the armed lanes' C); member children crossing its edges are split there first (reversible); (b) skip the member with a hint when its clips do not fit; (c) ask | **(a)**, taken. It is what the group is for; the split is the mode-B primitive and undoes cleanly. **What (a) did not say is that `C_g` governs the ARMED lanes too** — §3.4 does say it ("ONE rule for EVERY member") and it is the half that is easy to miss: two armed lanes with different `C`s are not each other's twins either, so BOTH of their columns come out `C_g` long. And a member's column being `C_g` rather than its operands' union needed a verb that could say so: `merge-columns` gained `start=`/`length=`, with ONE operand accepted only when an extent is given. `takes_group_record_crossing` is the gate |
 | **D5** | `cleanup-takes` "unused take": after W1 the ORIGINAL clip A is an inactive take no segment selects → "unused" → removed (undoable, file kept — but it is the user's arrangement, not a recording) | (a) takes that came from pre-existing clips (not from a recording) are EXEMPT by default; a checkbox includes them; (b) treat every unused take alike | **(a)**. The confirmation lists takes by origin ("3 recordings, 1 original clip"). Origin = the take's name stamp from the recorder (§8 P4) or, before P4 lands, "file in the project directory matching the recorder's pattern" |
 | **D6** — **DECIDED AND SHIPPED (P3, QBX-181)** | MIDI take extents (P3): ticks or frames? The column is frame-anchored; the event take window is TICK-native (`smidicut.h`, "THE WINDOW IS TICK-NATIVE") | (a) ticks on the take, converted through the tempo map at the column; (b) frames for parity with audio | **(a)**, taken, and the MODEL ALREADY DELIVERED IT: no new per-take field was needed. A take's link inside a column is born `timebase=beats` for event content (`SLink::defaultTimebaseFor`) so `set-tempo`'s re-derivation moves its extent START, and the window's length is `lengthTicks_` on the `SMidiCut` so the extent LENGTH follows — measured, halving the tempo moved a take extent 0-96000 → 0-192000. `add-midi-take atTicks=`/`extentTicks=` therefore take TICKS and convert once, through the tempo map and through `setWindowTicks` rather than the frame-valued `setDurationFromTimeline` (a ticks → frames → ticks round trip is exact only where a tick divides a frame). **What did NOT follow the bar was two stored frame values the decision did not name**: the column's own `duration_` and the COMP MAP's positions — see §8's P3 row |
@@ -1137,7 +1137,13 @@ tri-state: `twClipFade` gains `autoIn`/`autoOut` (default true, serialized
 only when false), and `set-clip-fade auto="0"` turns the auto-fade off at an
 edge without declaring a fade. The UI command "Set fade for selection…" is a
 dialog that submits one `set-clip-fade` per selected clip (per selected take
-in expanded lanes) inside one macro. For a comp boundary the existing
+in expanded lanes) inside one macro. **SHIPPED (P5, QBX-183) as the Clip
+Properties panel's FADE GROUP rather than a dialog** — that panel already edits
+the selection and already submits one `SCompositeAction` per edit (proposal
+31), so a dialog would have been a second copy of its multi-select semantics;
+see §8's P5 row, correction (c), and main/timeline/CONTRACT.md inv. 67. The
+group shows the exempt edges this section asks for, which is what the two
+checkboxes cannot say on their own. For a comp boundary the existing
 `set-comp-xfade` is the override and the auto-fade yields to any `xfade > 0`.
 
 ### 6.3 `cleanup-takes` (Q13)
@@ -1815,6 +1821,71 @@ replaces the auto-fade); `auto_fade_comp_boundary.qxa` (a comp boundary with
 
 Flips: none — existing files have no `autoFadeMs` key and read 0 (D3a).
 
+> **SHIPPED as P5 (QBX-183). THREE CORRECTIONS**, in increasing order of how
+> much they change what the row above says.
+>
+> **(a) "EVERY CLIP EDGE WHOSE `twClipFade` IS `none()`" IS APPLIED PER EDGE.**
+> `none()` is a property of the whole fade — it is true only when BOTH lengths
+> are 0 — so read literally the row says that drawing a fade-IN turns the
+> auto-fade off at the clip's OUT edge as well. That is not what a user who
+> drew one fade asked for; they asked for a fade at one end, not for a click at
+> the other. The rule as built is per edge: an edge is left alone when it has
+> an explicit length, when its `auto` flag is false, or when the join is
+> seamless. Per edge is a SUPERSET of this row's reading, and
+> `auto_fade_override.qxa` pins both halves (`autoOut="0"` leaves the in edge
+> fading; an explicit `fadeIn` leaves the out edge fading).
+>
+> **(b) `STrack::refreshClipGainCurves` DOES NOT "ALREADY WALK THE LANE'S
+> LINKS IN ORDER".** This is simply wrong, and it is the one claim here that
+> would have produced a bug rather than a difference of reading.
+> `SObject::childLinks()` is the container's own child order;
+> `SObject::windowStep`'s contract says in as many words that "the caller then
+> walks childLinks() by start time". Relying on the row's claim would have made
+> the seamless exemption depend on the order clips happened to be ADDED in —
+> which reproduces on a reload and not on the edit, the worst shape a bug of
+> this kind can have. `sautofade::laneSeams` sorts, and
+> `auto_fade_seamless_exempt.qxa`'s third control is what makes the sort
+> load-bearing: `split-clip` APPENDS, so splitting the head of an
+> already-split clip leaves the newest piece LAST in child order while it sits
+> in the MIDDLE in time, and unsorted NEITHER neighbour pair abuts. Measured:
+> with the sort deleted that case fails and nothing else does, because every
+> other arrangement in these gates was built in time order and the two orders
+> coincide.
+>
+> Two smaller things followed from where the walk had to go. The seamless
+> question needs the LANE (which clip abuts which) and the window test needs
+> only `SClipWindow` (content, loop state, stretch, source position), so the
+> whole of it moved to a new `model` module, `app/model/sautofade.h`: this
+> feature has two consumers that may not see each other — `objects/track` at
+> clip edges and `objects/cut` at comp boundaries — and the panel is a third
+> reader of the same answer. And two placement-level preconditions had to be
+> added that this row does not mention: the clips must abut EXACTLY (a gap is
+> a gap and an overlap is not a continuation), and the window must span the
+> whole placement, because since A0a `SClipWindow::parametersOf` may answer
+> with a take that covers LESS than its column and its source position at its
+> own end is then not the placement's. Refusing there means the edge gets its
+> fade, which is the safe direction.
+>
+> **(c) THE "SET FADE FOR SELECTION…" DIALOG IS THE CLIP PROPERTIES PANEL'S
+> NEW FADE GROUP.** §6.2 is edited to match. Proposal 31 had already moved the
+> per-clip properties out of the clip context menu into that panel, precisely
+> so that one place would edit the SELECTION with the absolute-set multi-select
+> semantics, the mixed-value blanking and the one-composite-per-edit undo
+> worked out; a dialog would be a second copy of all of it, and a modal
+> `exec()` reachable from a scripted run has to be made to return immediately
+> under `--test-case`. The group also carries the thing §6.2 asks for and a
+> dialog would have had to invent: a status line naming which of the
+> selection's edges are EXEMPT, read from `sautofade::laneSeams` — the same
+> function the mix reads, never a second implementation, because a status line
+> that disagreed with the audio looks exactly like one that is right.
+>
+> One thing the row asks for that is NOT in this change: nothing was done about
+> the auto-fade in the Options UI. The property is reachable from a script
+> (`set-property key="autoFadeMs"`) and from a project file, and a new project
+> gets 3 ms, but there is no control anywhere that sets it. §6.2 does not ask
+> for one and the row does not either; it is named here so the gap is on the
+> record rather than discovered later.
+
 ### P6 — landing feedback, locator, unused recordings, clean-up — depends on P2, A0b, B10
 
 Build: auto-expand on landing (Q11: when ≤ 2 tracks gained a take,
@@ -2004,7 +2075,7 @@ existing tickets. Order within a group is landing order.
 | P2 (**QBX-180**) | mode A (`takes`) replaces `LegacyTakes`; the §9 flips — **SHIPPED** | P1, A0b, A1, D1 (default (a)) | L |
 | P3 (**QBX-181**) | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind — **SHIPPED**, on QBX-188's shared planner module. Five corrections in §8's P3 row, of which two are defects it had to fix to be writable at all: an event column's `duration_` and comp map had no musical anchor, and the MIDI recorder had no punch (which silently dropped the whole take of a punched press) | P2, QBX-188 | M |
 | P4 (**QBX-182**) | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names — **SHIPPED** for AUDIO. `armed="0"` gained meaning and a gate on the same day; `merge-columns` gained an explicit extent, which is what lets a member's column be the GROUP's and not its own clip's. The MIDI recorder does not enumerate members (QBX-191); the take NAME landed for both kinds. Three corrections in §8's P4 row | P2 | M |
-| P5 | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; selection fade dialog | A0a, B8 | M |
+| P5 (**QBX-183**) | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; the selection fade surface — **SHIPPED**. The whole policy is one new module, `app/model/sautofade.h`, because the feature has two consumers in slices that may not see each other (`objects/track` at clip edges, `objects/cut` at comp boundaries) and a third READER in the panel. At a boundary it is a LENGTH handed to the crossfade that was already there, in `clampedXfade_nolock` — so a 3 ms auto-fade renders byte-identically to an explicit `xfade=144`. Three corrections in §8's P5 row, one of which is a plain error in this plan's own text | A0a, B8 | M |
 | P6 | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse | P2, A0b, B10 | M |
 | QBX-157 | laned-track backdrop = comp result, cut marks | A0b, B4 | M |
 | QBX-155 | wrapped column re-link crash (already filed) | — | **LANDED** (#241, #244), so this no longer blocks anything: `remove-sample` pins both shapes. `replace` still refuses a Kw lane, by G11 policy rather than by this limitation — see §3.3 |

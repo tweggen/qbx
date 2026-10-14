@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE FADE FIELDS ON THE CLIP PROPERTIES PANEL ARE REAL AND THEY REACH THE
+  MODEL.
+
+  Plan 53 P5 (QBX-183), §6.2. The plan asks for a "Set fade for selection…"
+  dialog. It is the Clip Properties panel's new Fade group instead, and
+  deliberately: proposal 31 moved the per-clip properties out of the clip
+  context menu into that panel precisely so there would be ONE place that edits
+  the SELECTION, with the absolute-set multi-select semantics, the mixed-value
+  blanking and the one-composite-per-edit undo already worked out. A dialog
+  would be a second copy of all of it, and a modal `exec()` reachable from a
+  scripted run is a hazard this panel does not have.
+
+  WHAT THIS CASE CAN REACH, AND WHAT IT CANNOT. There is no verb that types
+  into a panel field — the panel publishes no setters, by design (it reads the
+  live selection and commits through the same actions the gestures use). What
+  there IS is `double-click-control`, the default-reset gesture, which
+  `SMainWindow::doubleClickDetailControl` routes by OBJECT NAME into a
+  throwaway panel bound to the current selection. Driving the two new fade
+  fields through it proves four things at once, and they are the four that
+  would break first:
+
+    (a) the widgets EXIST under the names the seam addresses
+        (`clipFadeInSpin`, `clipFadeOutSpin`) — the verb returns false and the
+        action is REJECTED otherwise, which fails the run;
+    (b) they are ENABLED for an ordinary audio selection, i.e. the Fade group
+        is shown and not hidden with the MIDI page;
+    (c) the gesture's restore reaches `commitFade`, which reaches
+        `set-clip-fade`, which reaches the MODEL — asserted through the
+        RENDER, because a panel that showed 0 and left the clip alone is
+        exactly the lie this panel's own reset notes warn about;
+    (d) `commitFade` consumes BOTH length marks rather than one, so resetting
+        the fade-in does not carry the fade-out's field along with it.
+
+  WHAT IS NOT GATED HERE: typing a value into either field, the shape combo,
+  and the two auto-fade checkboxes. Nothing in the testkit can type into a
+  panel field, and the two checkboxes' effect on the model is gated
+  end-to-end through the VERB instead, in `auto_fade_override.qxa` — which is
+  the same code path `onAutoFadeClicked` submits into. The status line that
+  names the exempt edges is not gated at all; it reads
+  `sautofade::laneSeams`, the same computation the mix reads, which is what
+  keeps it from being able to disagree with the audio.
+
+  THE FIXTURE is one clip with an explicit fade at each end and the project's
+  auto-fade OFF, so "the fade went away" is the file going back to the
+  untouched bytes — no tolerance anywhere.
+-->
+<SActionScript version="1" name="auto_fade_panel_reset">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+
+    <!-- The reference: no fade of any kind. -->
+    <render filename="pr_none.wav" format="wav" quality="10" durationSec="3.5"/>
+
+    <!-- A fade at each end, 0.1 s, and the panel has to be looking at this
+         clip for the gesture to reach it. -->
+    <set-clip-fade clip="0,0" fadeIn="4800" fadeOut="4800" shape="linear"/>
+    <set-selection paths="0,0"/>
+    <render filename="pr_both.wav" format="wav" quality="10" durationSec="3.5"/>
+    <assert-file-identical actual="pr_both.wav" expected="pr_none.wav"
+                           startFrame="0" frameCount="4800"
+                           expectReject="true"/>
+    <assert-file-identical actual="pr_both.wav" expected="pr_none.wav"
+                           startFrame="139200" frameCount="4800"
+                           expectReject="true"/>
+
+    <!-- DOUBLE-CLICK THE FADE-IN FIELD. The reset writes 0 and calls the
+         commit itself, so the model must change. -->
+    <double-click-control control="clip-fade-in"/>
+    <render filename="pr_outonly.wav" format="wav" quality="10" durationSec="3.5"/>
+    <!-- The head is back to the untouched bytes... -->
+    <assert-file-identical actual="pr_outonly.wav" expected="pr_none.wav"
+                           startFrame="0" frameCount="4800"/>
+    <!-- ...and the fade-OUT is still exactly where it was, which is (d). -->
+    <assert-file-identical actual="pr_outonly.wav" expected="pr_both.wav"
+                           startFrame="139200" frameCount="4800"/>
+
+    <!-- ...and now the other one. -->
+    <double-click-control control="clip-fade-out"/>
+    <render filename="pr_cleared.wav" format="wav" quality="10" durationSec="3.5"/>
+    <assert-file-identical actual="pr_cleared.wav" expected="pr_none.wav"/>
+
+    <!-- IT IS ONE UNDO STEP PER GESTURE, because the panel commits through one
+         SCompositeAction. Two undos bring both fades back. -->
+    <undo count="2"/>
+    <render filename="pr_undo.wav" format="wav" quality="10" durationSec="3.5"/>
+    <assert-file-identical actual="pr_undo.wav" expected="pr_both.wav"/>
+
+    <!-- AND THE RESET HANDS THE EDGE BACK TO THE AUTO-FADE, which is what the
+         field's 0 MEANS now and did not mean before plan 53. With the project
+         at 3 ms, clearing the explicit fade-in leaves a 144-frame one. -->
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <double-click-control control="clip-fade-in"/>
+    <render filename="pr_handback.wav" format="wav" quality="10" durationSec="3.5"/>
+    <!-- Not the hard edge... -->
+    <assert-file-identical actual="pr_handback.wav" expected="pr_none.wav"
+                           startFrame="0" frameCount="144"
+                           expectReject="true"/>
+    <!-- ...and not the 0.1 s fade either: everything past 144 frames is the
+         untouched material. -->
+    <assert-file-identical actual="pr_handback.wav" expected="pr_none.wav"
+                           startFrame="144" frameCount="4656"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

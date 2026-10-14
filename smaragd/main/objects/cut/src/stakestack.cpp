@@ -1,6 +1,7 @@
 #include "app/objects/cut/stakestack.h"
 #include <utility>
 #include <vector>
+#include "app/model/sautofade.h"
 #include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
@@ -554,6 +555,19 @@ std::shared_ptr<twCompColumn> STakeStack::ensureCompColumn()
     for( int i = 0; i < nTakes(); ++i )
         cpComp_->setInputExtent( i, takeExtentStart( i ),
                                  takeExtentLength( i ) );
+    // THE PROJECT'S AUTO-FADE (plan 53 P5, D3a): the length a boundary with no
+    // crossfade of its own gets. Set before the map, with the extents, because
+    // the column clamps it against both — and set on EVERY ask, like the takes
+    // and the map, so a change to the project property is picked up by the next
+    // resolve rather than needing the column torn down.
+    //
+    // A column that resolves through this path always HAS boundaries: with no
+    // map and every take full, `getRootComponent` hands out the active take's
+    // own component and never builds a column at all (the degenerate case,
+    // proposal 43 N2). So the auto-fade reaches exactly the joins that exist,
+    // and a project written before plan 53 — whose property reads 0 — renders
+    // through here byte for byte as it did.
+    cpComp_->setAutoXfade( (int64_t) sautofade::framesOf( getProjectSafe() ) );
     cpComp_->setCompMap( compMap_, activeTake_ );
     return cpComp_;
 }

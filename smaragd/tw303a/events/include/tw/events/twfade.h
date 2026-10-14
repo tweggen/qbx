@@ -38,10 +38,35 @@ struct twClipFade {
     int64_t     outLen = 0;                     // frames ending at the clip END
     twFadeShape shape  = twFadeShape::Linear;
 
+    /**
+     * MAY THE PROJECT'S AUTO-FADE APPLY AT THIS EDGE? (plan 53 P5, §6.2.)
+     *
+     * The auto-fade is a project property, not a per-clip value, so what a
+     * clip stores about it is a VETO and nothing else: true (the default)
+     * means "whatever the project says here", false means "a hard edge, and
+     * I mean it". Which is why they are not lengths — a clip that wanted a
+     * length of its own would set `inLen`/`outLen`, and an explicit length
+     * already wins at its own edge.
+     *
+     * TWO FLAGS AND NOT ONE, because the exemption that the auto-fade's own
+     * rule makes (a SEAMLESS join, D3b) is decided per EDGE: a clip split in
+     * two has one seamless edge and one ordinary one, and so does every
+     * mode-B seam. A single flag could not say "not at the join, yes at the
+     * outer end", which is the commonest thing a user wants.
+     *
+     * THEY ARE NOT READ BY THE MIX. `twTrackMix` applies the lengths it is
+     * handed; whether the auto-fade reached them is decided once, on the main
+     * thread, in `STrack::refreshClipGainCurves` — the same funnel the gain
+     * curve, the static volume and the pan travel.
+     */
+    bool        autoIn  = true;
+    bool        autoOut = true;
+
     bool none() const { return inLen <= 0 && outLen <= 0; }
 
     bool operator==( const twClipFade &o ) const {
-        return inLen == o.inLen && outLen == o.outLen && shape == o.shape;
+        return inLen == o.inLen && outLen == o.outLen && shape == o.shape
+            && autoIn == o.autoIn && autoOut == o.autoOut;
     }
     bool operator!=( const twClipFade &o ) const { return !( *this == o ); }
 

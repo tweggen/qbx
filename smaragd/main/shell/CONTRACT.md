@@ -1822,3 +1822,45 @@ enumerate). Measured by sabotage: `record_mode_replace_group` stays green until
 all three are removed. It is therefore a regression gate on the conjunction, and
 the planner's half is isolated instead by `takes_group_record_crossing`, which
 hands `armed="0"` to `replace` and `overdub` by hand.
+
+## inv. 66 — the 3 ms auto-fade is SEEDED where a project is BORN, and a change to it is a plan-rebuild trigger (plan 53 §8 P5, D3a (a), QBX-183)
+
+Two things in `shell` and nothing else: the seed's call sites, and the one
+connection that makes a change to the property audible.
+
+**THE SEED.** `sautofade::seedInto( project )` runs beside
+`srecmodeseed::seedInto` at exactly the places a project is CREATED with no
+file behind it — `SMainWindow`'s fileNew path, and `close-project`'s fresh
+project, which exists so the real new-project path is reachable without a GUI.
+**NEVER after `fileOpen()`**, and this is not a style preference: `fileOpen`'s
+`new SProject()` is the empty shell the loader fills, and
+`SProject::readPreChildrenAttributes` MERGES the file's keys over whatever is
+already there. A seed written on that path would survive for every file that
+LACKS the key — i.e. for every project saved before plan 53 — and all of them
+would start rendering with a 3 ms fade at every clip edge. `srecordmodeseed.h`
+states the same rule for the record mode at length; the auto-fade's version of
+getting it wrong is louder, because it changes the AUDIO rather than a mode.
+
+For the same reason `SProjectProps::AutoFadeMs` is deliberately absent from
+`SProjectProps::defaults()` and its read default is 0. There is then no default
+to be merged over, which makes the hazard structurally impossible rather than
+merely avoided.
+
+**THE PLAN-REBUILD TRIGGER.** The auto-fade is a project PROPERTY, so the only
+signal it raises is `SProject::propertyChanged`: no clip changed, no
+arrangement changed, and the fade lengths live in `twTrackMix`'s per-clip
+entries where only `STrack::refreshClipGainCurves` writes them. So
+`onProjectPropertyChangedForLive` turns the key into
+`sautofade::reapplyAll( currentProject_ )`, exactly as it turns the metronome
+key into `liveLanesChanged()` (inv. 58's neighbourhood, proposal 21 L5).
+Without it, changing the auto-fade was INAUDIBLE until some unrelated edit
+happened to bump the chain — the silent-failure shape proposal 45 D3a names,
+and `auto_fade_seam.qxa` asserts the negative directly: the property set back
+to 0 must return the original file byte for byte with no other edit in between.
+
+**NOT GATED HERE.** The fileNew call site itself has no gate — a .qxa cannot
+reach `SMainWindow::fileNew`, only `close-project`'s copy of it, which
+`auto_fade_seed.qxa` drives. The two are one line apart and the comment at each
+says so; a seed added to one and not the other would show up as a new project
+from the File menu behaving differently from one after File → Close, which no
+gate in this repo can see.

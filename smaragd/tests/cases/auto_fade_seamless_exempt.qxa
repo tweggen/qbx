@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A SEAMLESS JOIN GETS NO AUTO-FADE, AND THAT IS WHY THE FEATURE CAN SHIP ON.
+
+  Plan 53 P5 (QBX-183), decision D3b (a). This is the case the decision exists
+  for. An auto-fade at a BUTT JOIN of one continuous source is not a crossfade
+  and not a de-click: it is a 3 ms DIP in the middle of material that was never
+  interrupted, i.e. an audible notch in anything sustained. And such joins are
+  not rare — every `split-clip`, every mode-B recording seam and every
+  `replace` R2 split makes one. Apply the auto-fade everywhere (D3b option (b),
+  which is what Cubase's Auto Fade does, and the reason it ships OFF there) and
+  splitting a clip would audibly damage the audio you split.
+
+  THE HEADLINE ASSERTION IS A WHOLE-FILE BYTE COMPARISON: a clip split in two
+  under a 3 ms auto-fade renders EXACTLY the file the unsplit clip renders. Not
+  "to within a tolerance" — the same bytes. A split is a model operation and
+  must be inaudible, which it was before plan 53 and has to stay.
+
+  AND IT IS AN EXEMPTION, NOT A FEATURE THAT DOES NOTHING. That is what the
+  first pair below establishes: on this very project, with this very clip, the
+  auto-fade DOES move the outer edges. So the identity above is `isSeamless`
+  answering yes at the join while answering no at the project's start and end,
+  and not the auto-fade being inert.
+
+  THE THREE CONTROLS ARE WHAT MAKE THE TEST LOAD-BEARING. The first two
+  isolate one each of the things `sautofade::isSeamless` compares; both break
+  the join while leaving the join's POSITION alone, and each is measured as a
+  pair — the same arrangement rendered at 3 ms and at 0 ms — so what the
+  comparison sees is the fade and never the material:
+
+    - SLIP THE TAIL. Same content, same stretch, neither looping, but the
+      source positions no longer meet: the tail now starts a second earlier in
+      the file than the head ended. Delete the `srcEnd == srcStart` test and
+      this join reads seamless, and the case fails here.
+    - STRETCH THE TAIL. Same content, positions still meeting exactly at the
+      join, but read at 3/2 the rate. The material steps in pitch and in phase
+      across the join, which is a discontinuity whatever the positions say.
+      Delete the `stretchOrRate` test and the case fails here.
+
+  The third control is about the LANE rather than the window: it makes the
+  lane's child order disagree with its time order, which is what the sort in
+  `laneSeams` is for. Delete the sort and the case fails there — and nowhere
+  else, because in every other arrangement here the clips were added in time
+  order and the two orders coincide.
+
+  WHY THE COMPARISON IS AT [71856, 72144). The join is at 72000 and 3 ms is 144
+  frames, so a fade on the left clip's out edge covers [71856, 72000) and one
+  on the right clip's in edge covers [72000, 72144). Those 288 frames are
+  exactly where a notch would be and nowhere else.
+-->
+<SActionScript version="1" name="auto_fade_seamless_exempt">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 72000 frames is 0.75 of a bar at 120 BPM, which is not on the grid. -->
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_stereo.wav" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="144000"/>
+
+    <!-- ONE CLIP, rendered with the auto-fade off and then on. The pair is
+         what proves the feature is live in this project at all. -->
+    <render filename="ex_whole0.wav" format="wav" quality="10" durationSec="3.5"/>
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="ex_whole3.wav" format="wav" quality="10" durationSec="3.5"/>
+    <assert-file-identical actual="ex_whole3.wav" expected="ex_whole0.wav"
+                           startFrame="0" frameCount="144"
+                           expectReject="true"/>
+    <assert-file-identical actual="ex_whole3.wav" expected="ex_whole0.wav"
+                           startFrame="143856" frameCount="144"
+                           expectReject="true"/>
+    <!-- ...and the middle, where there is no edge, did not move. -->
+    <assert-file-identical actual="ex_whole3.wav" expected="ex_whole0.wav"
+                           startFrame="144" frameCount="143712"/>
+
+    <!-- NOW SPLIT IT. Two clips, one content object, source positions
+         continuous, same stretch, neither looping: the join is SEAMLESS. -->
+    <split-clip clip="0,0" splitTime="72000"/>
+    <assert-clip-window clip="0,0" startTime="0"     duration="72000"/>
+    <assert-clip-window clip="0,1" startTime="72000" duration="72000"/>
+    <render filename="ex_split3.wav" format="wav" quality="10" durationSec="3.5"/>
+
+    <!-- THE CLAIM: the split is INAUDIBLE under a live auto-fade. Whole file,
+         byte for byte. -->
+    <assert-file-identical actual="ex_split3.wav" expected="ex_whole3.wav"/>
+
+    <!-- CONTROL 1: SLIP THE TAIL so the source positions no longer meet. The
+         join is at the same frame and the clips still abut; only the material
+         on the right of it changed. Rendered at 0 ms and at 3 ms, so the
+         comparison below sees the FADE and not the slip. -->
+    <resize-clip clip="0,1" startTime="72000" startOffset="24000"
+                 duration="72000" stretch="1.0"/>
+    <set-property key="autoFadeMs" value="[0.0]"/>
+    <render filename="ex_slip0.wav" format="wav" quality="10" durationSec="3.5"/>
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="ex_slip3.wav" format="wav" quality="10" durationSec="3.5"/>
+    <!-- THE JOIN NOW FADES: 288 frames moved that the seamless join left
+         alone. -->
+    <assert-file-identical actual="ex_slip3.wav" expected="ex_slip0.wav"
+                           startFrame="71856" frameCount="288"
+                           expectReject="true"/>
+
+    <!-- ...and the same window of the SEAMLESS pair did not move at all. Both
+         halves of D3b in one place: this is the assertion a sabotage of the
+         source-continuity test has to break, and the one above is what a
+         sabotage of the exemption itself breaks. -->
+    <assert-file-identical actual="ex_split3.wav" expected="ex_whole0.wav"
+                           startFrame="71856" frameCount="288"/>
+
+    <!-- CONTROL 2: SAME POSITIONS, DIFFERENT STRETCH. Put the tail's anchor
+         back where the split left it, so `srcEnd(left) == srcStart(right)`
+         holds exactly again, and read it at 3/2 the rate.
+
+         `startOffset` IS WARPED-DOMAIN, WHICH IS WHY IT SAYS 108000 AND NOT
+         72000. The stored anchor is the SOURCE one and the warped value is
+         derived from it (`srcStart_ = warpedToSrc( o )`), so at stretch 3/2 a
+         source anchor of 72000 is a warped offset of 108000. The first draft
+         of this control passed 72000 and therefore set srcStart to 48000 —
+         which broke the SOURCE-CONTINUITY test as well, so the join faded for
+         that reason and this control isolated nothing. Measured: with the
+         stretch comparison deleted from `isSeamless`, that draft still passed.
+         At 108000 the positions meet exactly and the stretch is the only
+         reason left. -->
+    <resize-clip clip="0,1" startTime="72000" startOffset="108000"
+                 duration="72000" stretch="1.5"/>
+    <set-property key="autoFadeMs" value="[0.0]"/>
+    <render filename="ex_str0.wav" format="wav" quality="10" durationSec="3.5"/>
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="ex_str3.wav" format="wav" quality="10" durationSec="3.5"/>
+    <assert-file-identical actual="ex_str3.wav" expected="ex_str0.wav"
+                           startFrame="71856" frameCount="288"
+                           expectReject="true"/>
+
+    <!-- AND UNDO PUTS THE EXEMPTION BACK. Two undos take the two resizes off;
+         the clip is the plain split again and the join goes quiet once more.
+         Which also says the exemption is computed from the model on every
+         refresh and is not cached anywhere. -->
+    <undo count="2"/>
+    <assert-clip-window clip="0,1" startTime="72000" duration="72000"/>
+    <render filename="ex_undo3.wav" format="wav" quality="10" durationSec="3.5"/>
+    <assert-file-identical actual="ex_undo3.wav" expected="ex_whole3.wav"/>
+
+    <!-- CONTROL 3: THE LANE'S CHILD ORDER DISAGREES WITH ITS TIME ORDER.
+         `childLinks()` is the container's own child order and is NOT sorted by
+         start time; `SObject::windowStep`'s contract says so in as many words.
+         Plan 53 §P5 claims `STrack::refreshClipGainCurves` "already walks the
+         lane's links in order", and that claim is simply wrong — this section
+         is what makes the sort in `sautofade::laneSeams` load-bearing rather
+         than merely tidy.
+
+         `split-clip` APPENDS its new tail, so splitting the HEAD of an
+         already-split clip puts the newest piece LAST in child order while it
+         sits in the MIDDLE in time:
+
+             child order   0,0 [0,36000)   0,1 [72000,144000)  0,2 [36000,72000)
+             time order    0,0             0,2                 0,1
+
+         Unsorted, the neighbour pairs are (0,0 | 0,1) and (0,1 | 0,2), and
+         NEITHER abuts: 36000 is not 72000 and 144000 is not 36000. So no join
+         would be exempt and both of them would notch. Sorted, the pairs are
+         (0,0 | 0,2) at 36000 and (0,2 | 0,1) at 72000, both seamless, and the
+         render is the unsplit one again — byte for byte, with two joins in it
+         now instead of one. -->
+    <split-clip clip="0,0" splitTime="36000"/>
+    <assert-clip-window clip="0,0" startTime="0"     duration="36000"/>
+    <assert-clip-window clip="0,1" startTime="72000" duration="72000"/>
+    <assert-clip-window clip="0,2" startTime="36000" duration="36000"/>
+    <render filename="ex_twice3.wav" format="wav" quality="10" durationSec="3.5"/>
+    <assert-file-identical actual="ex_twice3.wav" expected="ex_whole3.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

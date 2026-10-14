@@ -78,6 +78,34 @@ inline bool isRecordMode( const QString &m )
         || m == QLatin1String( "overdub" )    || m == QLatin1String( "replace" );
 }
 
+// PLAYBACK AUTO-FADE at clip edges and comp boundaries, in MILLISECONDS
+// (plan 53 Q9/P5, decision D3a (a)).
+//
+// DELIBERATELY NOT SEEDED BY defaults() BELOW, for a reason stronger than the
+// RecordMode key's above: this one is AUDIBLE. `properties_` is initialised
+// from defaults() and a load MERGES the file's keys over it
+// (SProject::readPreChildrenAttributes), so a default of 3 ms here would be
+// what EVERY PROJECT EVER SAVED reads -- no file written before plan 53 has
+// the key -- and every one of them would render differently than it does
+// today. That is D3a option (b), which the plan rejected precisely because it
+// moves every byte-identity golden and every per-second RMS gate in the suite.
+//
+// So: the READ default is autoFadeMsDefault(), which is ZERO, and the 3 ms the
+// feature promises is autoFadeMsSeed(), written once into a project at the
+// moment it is CREATED (sautofade::seedInto, called only from the fresh-project
+// paths -- never after a load, the srecordmodeseed.h rule). A new project
+// fades; an old project is untouched; and nothing has to remember which,
+// because the file says.
+inline constexpr char AutoFadeMs[] = "autoFadeMs";   // double, milliseconds
+
+/// What a project that has never had an auto-fade set means: NO auto-fade.
+/// Every project file written before plan 53 is one of these.
+inline double autoFadeMsDefault() { return 0.0; }
+
+/// What a BRAND-NEW project is created with (D3a (a)): 3 ms, long enough to
+/// kill the click of a hard edge and short enough to be inaudible as a fade.
+inline double autoFadeMsSeed() { return 3.0; }
+
 inline const char *trackDetailSectionKey( const QString &id )
 {
     if( id == QLatin1String( "plugins" ) )  return TrackDetailPluginsCollapsed;

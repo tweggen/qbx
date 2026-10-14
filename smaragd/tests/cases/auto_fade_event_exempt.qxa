@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AN EVENT CLIP GETS NO AUTO-FADE.
+
+  Plan 53 P5 (QBX-183). A fade is AUDIO-only — cut/CONTRACT inv. 4, the same
+  rule pitch, formant preservation and the warp anchors follow, and
+  `set-clip-fade` REFUSES an event clip rather than ignoring it. The auto-fade
+  is a fade, so it stops at the same line.
+
+  AND THE REASON IS MUSICAL, NOT BOOKKEEPING. An audio clip's edge is a step in
+  a waveform and a step is a click; that is the whole problem the auto-fade
+  exists to solve. An event clip's edge is a note-off. The audio at a MIDI
+  clip's boundaries is an instrument's ATTACK at one end and its RELEASE at the
+  other, and a 3 ms ramp over those would clip the attack and cut the release
+  of every note at a clip boundary in the project — the auto-fade doing damage
+  in exactly the place it was added to prevent it.
+
+  THIS WAS A REAL DEFECT IN THE FIRST DRAFT OF P5, found by reading rather than
+  by failing: the mix applies `twTrackMix::ClipEntry::fade` to whatever a clip
+  entry resolves to, and an event clip IS one of a lane's `childLinks()` with a
+  start time. It already travels through `refreshClipGainCurves` for its gain
+  curve, its volume and its pan, so the auto-fade reached it by default and had
+  to be stopped on purpose. The guard is one `contentKind()` test; this case is
+  what makes it a claim.
+
+  THE FIXTURE is the instrument-render shape (`instrument_edit_reaches_render`
+  and its neighbours): the in-repo test CLAP sine as slot-0 instrument, so the
+  MIDI actually sounds. The note starts at tick 0, which puts audio at frame 0
+  — i.e. at the clip's IN edge, where an auto-fade would be audible — and runs
+  to the clip's end, where its OUT edge is.
+
+  THE CONTROL IS ON THE SAME PROJECT, because "the auto-fade did nothing" and
+  "the auto-fade is off" are two different statements and only the first is
+  being made: an AUDIO clip sits on track 1, clear of the MIDI lane's material,
+  and that one must fade in the very same pair of renders.
+-->
+<SActionScript version="1" name="auto_fade_event_exempt">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+
+    <!-- Track 0: the event lane, with an instrument so it sounds. -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <!-- 7680 ticks = 4 s at 120 BPM / ppq 960 = 192000 frames. The note
+         starts at tick 0, so there is audio AT the clip's in edge. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Held"/>
+    <add-note clip="0,0" tick="0" dur="7680" key="60" velocity="100" channel="0"/>
+
+    <!-- Track 1: the audio control, past the MIDI lane's material so the two
+         never sum in a window this case measures. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_stereo.wav" timePos="240000"/>
+
+    <!-- The note really is audible at frame 0, or the claim below is about
+         silence. -->
+    <render filename="ev_off.wav" format="wav" quality="10" durationSec="9.0"/>
+    <assert-audio-energy filename="ev_off.wav" startFrame="0" frameCount="144"
+                         channel="0" minRms="0.05" maxRms="0.95"/>
+
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <render filename="ev_on.wav" format="wav" quality="10" durationSec="9.0"/>
+
+    <!-- THE CLAIM: the event clip's two edges did not move. Byte for byte. -->
+    <assert-file-identical actual="ev_on.wav" expected="ev_off.wav"
+                           startFrame="0" frameCount="144"/>
+    <assert-file-identical actual="ev_on.wav" expected="ev_off.wav"
+                           startFrame="191856" frameCount="144"/>
+    <!-- ...nor did anything in between, which is the whole event lane. -->
+    <assert-file-identical actual="ev_on.wav" expected="ev_off.wav"
+                           startFrame="0" frameCount="192000"/>
+
+    <!-- AND THE CONTROL: the AUDIO clip on track 1 faded, in the same pair of
+         renders. So the three identities above are the event clip being
+         exempt, not the auto-fade being off. -->
+    <assert-file-identical actual="ev_on.wav" expected="ev_off.wav"
+                           startFrame="240000" frameCount="144"
+                           expectReject="true"/>
+    <assert-file-identical actual="ev_on.wav" expected="ev_off.wav"
+                           startFrame="383856" frameCount="144"
+                           expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
