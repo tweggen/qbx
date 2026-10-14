@@ -22,12 +22,27 @@
     - the PLANNER must treat `armed="0"` as nothing to do, which is what
       `Replace::plan`'s first line says.
 
-  Either one alone keeps the member safe, which is deliberate: an un-armed lane
-  losing material it was never recorded over is the one failure in this area a
-  user cannot undo their way out of without noticing far too late. The
-  `takes_group_record_crossing` case drives `place-recording armed="0"` by hand
-  in `replace` mode as well, so the planner's half is pinned without the
-  recorder's.
+  ...and there is a THIRD, found by sabotaging the first two and watching this
+  case keep passing: `srecplan::columnExtentFor` answers "no extent" for a mode
+  that stacks nothing, so even a recorder that enumerated the group would find
+  `C_g` absent and submit for nobody.
+
+  SO NO SINGLE-POINT SABOTAGE CAN MAKE THIS CASE FAIL, and that is measured
+  rather than assumed: removing `Replace::plan`'s guard alone, or that guard
+  together with the recorder's mode filter, leaves it green; all three had to go
+  before the member lost its middle second. The redundancy is deliberate - an
+  un-armed lane losing material it was never recorded over is the one failure in
+  this area a user cannot undo their way out of without noticing far too late -
+  so this case is a regression gate on the CONJUNCTION, not an isolation of any
+  one mechanism. What it does isolate is the other half of its fixture: the
+  armed lane's own `replace` cells under a LIVE punch, which no other case
+  covers (`rec_replace_cells` drives the verb by hand and `record_punch` records
+  in mode `takes`).
+
+  The planner's half is pinned on its own by `takes_group_record_crossing`,
+  which hands `place-recording armed="0"` to `replace` and to `overdub`
+  directly and so needs neither the recorder nor `columnExtentFor` to be
+  involved.
 
   THE PUNCH MAKES THE NUMBERS EXACT, as in `record_mixed_band_punch`: the pass
   is the MARKERS, [48000, 96000), so the armed lane's three resulting children
