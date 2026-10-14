@@ -99,7 +99,7 @@
     <!-- Both halves landed, one pass each. `minNotes` rather than `notes`: how
          much a real-time pass captures is load-dependent, and the structural
          claim is the column below. -->
-    <assert-recorded-clip trackPath="0" minClips="1"/>
+    <assert-recorded-clip trackPath="0" clips="1"/>
     <assert-midi-recorded trackPath="1" minClips="1" passes="1" minNotes="4"
                           mode="takes"/>
 

@@ -220,6 +220,36 @@ private:
      * is the ordering that makes that belt-and-braces rather than load-bearing.
      */
     void snapPassWide_( std::int64_t *a, std::int64_t *b ) const;
+
+    /**
+     * WHAT THE USER SEES WHEN A TAKE LANDS (plan 53 Q11, P6).
+     *
+     * `landed` is the lanes this pass actually placed on, as paths from the
+     * root mixer. Either their take lanes are OPENED, or -- when a pass
+     * touched more than two tracks -- a one-line hint says what happened and
+     * how to see it, because expanding eight lanes adds a row per take and
+     * would rearrange the arranger under the user's hands.
+     *
+     * Called AFTER `endRecordCommit()` so the expand is not part of the undo
+     * step: the take is the edit, how the arranger is folded is not, and an
+     * undo that re-collapsed the lanes would hide the thing the user is
+     * undoing. It announces itself with `SProject::notifyArrangementChanged()`
+     * because `setTakesExpanded` is a plain model write with no signal of its
+     * own, and `SStdMixerView::onArrangementChangedRows` is already the slot
+     * that rebuilds take rows for exactly this class of change.
+     */
+    void applyLandingFeedback_( const QList<QList<int>> &landed,
+                                int takesPerLane );
+
+    /**
+     * HOW MANY TRACKS MAY OPEN THEMSELVES (plan 53 Q11's "<= 2 tracks").
+     *
+     * The bound is about the ARRANGER, not about taste: expanding a track adds
+     * one row per take, so a band pass across eight lanes would rearrange the
+     * whole arranger at the moment the user is reaching for stop. Two is what
+     * still fits beside what they were looking at.
+     */
+    static constexpr int kMaxAutoExpandTracks = 2;
     /** N in project frames: one device buffer, or 10 ms, whichever is more. */
     std::int64_t snapWindowFrames_() const;
 

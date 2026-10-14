@@ -29,6 +29,7 @@
 #include "app/objects/wave/srecordingcontent.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/slivemonitor.h"
+#include "app/servicesui/soptions.h"
 #include "app/shell/ssettings.h"
 
 #include "tw/core/twlog.h"
@@ -492,9 +493,30 @@ void SAudioRecorder::stop()
     bridge_ = nullptr;
 
     if( app_->isPlaying() ) app_->setPlaybackRunning( false );
-    // Line the playhead up with what was just placed (it advanced during the
-    // take).
-    app_->setGlobalLocatorPos( recordStart_ );
+
+    // WHERE THE PLAYHEAD ENDS UP (plan 53 Q12, decision: the user's, per-user).
+    //
+    // `return` (the default) lines the playhead up with what was just placed:
+    // the take advanced it, and the thing a user almost always wants next is to
+    // hear back what they just played, from where it starts.
+    //
+    // `stay` leaves it where the take STOPPED, which is what a user punching in
+    // one phrase after another wants: stop, arm the next spot, go again, with
+    // no travel back. The TRANSPORT still stops either way -- `stay` is about
+    // the locator and nothing else, and the standing limitation recorded in
+    // shell/CONTRACT.md is unchanged by it.
+    //
+    // Read HERE and not at start(), unlike the record mode and the quantise
+    // setting: those two must not change under a running take, because the
+    // commit would then disagree with the capture. This one is consumed once,
+    // after everything is committed, so reading it late is both harmless and
+    // what lets a user change their mind during a take.
+    const QString after =
+        SSettings::instance().value( SOpt::LocatorAfterRecord,
+                                     SOpt::def( SOpt::LocatorAfterRecord ) )
+            .toString();
+    if( after != QLatin1String( "stay" ) )
+        app_->setGlobalLocatorPos( recordStart_ );
 }
 
 // -------------------------------------------------------- the pass-wide snap --
@@ -646,6 +668,9 @@ void SAudioRecorder::commitPlacement_()
 
     lastFiles_.clear();
     for( const Armed &a : armed_ ) lastFiles_.append( a.file );
+    // The lanes this pass actually placed on; Q11's auto-expand reads it after
+    // the commit scope closes.
+    QList<QList<int>> landed;
     // Reset per pass: a cycle or punch pass is never snapped and must report
     // 0 rather than the previous plain pass's delta.
     snapDeltaA_ = 0;
@@ -901,6 +926,12 @@ void SAudioRecorder::commitPlacement_()
                 a.path, a.file, s.at, s.srcOffset, s.len, mode, s.extent,
                 true, gStart, gLen, stamp ) );
         const int rejectedAfter = hist ? hist->rejectedCount() : rejectedBefore;
+        // WHICH LANES GAINED A TAKE (plan 53 Q11). Same sampling, same reason
+        // as the refusal below it reads -- a lane that refused is exactly a
+        // lane that gained nothing, so the two answers come from one
+        // measurement rather than from two that could disagree.
+        if( rejectedAfter == rejectedBefore && lane )
+            landed.append( a.path );
         if( rejectedAfter > rejectedBefore ) {
             // The mode is named because it is the actionable half: the same
             // lane under `takes` would have taken the pass, and the user's way
@@ -953,6 +984,27 @@ void SAudioRecorder::commitPlacement_()
 
     app_->endRecordCommit();
 
+    // ---- WHAT THE USER SEES WHEN A TAKE LANDS (plan 53 Q11) -------------
+    //
+    // A recorded take goes onto a COLUMN, and a collapsed track shows a column
+    // as one clip: the pass is there, it plays, and nothing on screen says a
+    // second take arrived. The take lanes are one keystroke away, but only if
+    // you know they exist. So a landing either OPENS them or SAYS what it did.
+    //
+    // THE CUT-OFF IS TWO TRACKS, and it is about the arranger rather than
+    // about taste: expanding a track adds one row per take, so a band pass
+    // across eight lanes would rearrange the whole arranger under the user at
+    // the moment they are reaching for stop. Two is what fits beside what you
+    // were just looking at.
+    //
+    // `never` | `landing` | `armed` is the user's (SOpt::TakesExpandOnLanding).
+    // `armed` expands every lane that was armed, landed or not, which is what
+    // someone punching the same phrase repeatedly wants: the lanes stay open
+    // across passes. `landing` -- the default -- expands only what actually
+    // gained a take, so an armed lane that refused does not open to show
+    // nothing.
+    applyLandingFeedback_( landed, (int) segs.size() );
+
     // ONE REPORT PER PASS, never one per lane: a band punch across eight lanes
     // that all refuse must not produce eight of anything. Logged always, and
     // handed to the UI through the app, which is where the one-dialog-per-
@@ -978,6 +1030,62 @@ void SAudioRecorder::commitPlacement_()
              (unsigned) segs.size(), (unsigned) armed_.size(),
              (long long) firstPlace, (long long) total, (long long) trimmed_ );
     armed_.clear();
+}
+
+void SAudioRecorder::applyLandingFeedback_( const QList<QList<int>> &landed,
+                                            int takesPerLane )
+{
+    SProject *project = app_ ? app_->getCurrentProject() : nullptr;
+    if( !project ) return;
+
+    const QString how =
+        SSettings::instance().value( SOpt::TakesExpandOnLanding,
+                                     SOpt::def( SOpt::TakesExpandOnLanding ) )
+            .toString();
+    // `never` means NOTHING, hint included. A user who turned this off is not
+    // asking to be told about it in other words.
+    if( how == QLatin1String( "never" ) ) return;
+
+    // `armed` keeps the lanes the user armed open across passes, landed or
+    // not, which is what punching one phrase repeatedly wants. `landing` --
+    // the default -- opens only what gained a take, so a lane that refused the
+    // pass does not open to show nothing.
+    QList<QList<int>> want;
+    if( how == QLatin1String( "armed" ) ) {
+        for( const Armed &a : armed_ )
+            if( !want.contains( a.path ) ) want.append( a.path );
+    } else {
+        for( const QList<int> &p : landed )
+            if( !want.contains( p ) ) want.append( p );
+    }
+    if( want.isEmpty() ) return;
+
+    const int tracks = (int) want.size();
+    const int takes  = tracks * ( takesPerLane > 0 ? takesPerLane : 1 );
+
+    SObject *mixer = splacements::rootContainer( project );
+    if( !mixer ) return;
+
+    if( tracks <= kMaxAutoExpandTracks ) {
+        int opened = 0;
+        for( const QList<int> &p : want ) {
+            STrack *t =
+                dynamic_cast<STrack *>( splacements::laneAt( mixer, p ) );
+            if( !t || t->takesExpanded() ) continue;
+            t->setTakesExpanded( true );
+            ++opened;
+        }
+        // `setTakesExpanded` is a plain model write with NO signal of its own,
+        // so nothing would rebuild the take rows. This is the signal
+        // `SStdMixerView::onArrangementChangedRows` already exists for -- its
+        // own comment names "add-take / remove-take / stack split" as the
+        // class of change that moves a row count with no track-structure
+        // signal, and this is one more of them.
+        if( opened > 0 ) project->notifyArrangementChanged();
+        app_->notifyTakesLanded( takes, tracks, opened > 0 );
+    } else {
+        app_->notifyTakesLanded( takes, tracks, false );
+    }
 }
 
 QStringList SAudioRecorder::unusedRecordings() const

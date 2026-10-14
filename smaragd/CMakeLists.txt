@@ -622,7 +622,15 @@ foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_
               # QBX-182): an un-armed group member gains the group's column
               # under `takes`, and gains NOTHING under `replace` (G9).
               takes_group_record_unarmed
-              record_mode_replace_group)
+              record_mode_replace_group
+              # P6's two FEEDBACK cells (plan 53 Q11/Q12 / QBX-184). Both need
+              # a real press: where the locator ends up and whether the take
+              # lanes opened are properties of what stop() did, and neither is
+              # reachable by driving a verb. Each OWNS one INI key -- a case
+              # header says which -- so neither may run beside another that
+              # touches it, which RUN_SERIAL here already guarantees.
+              record_locator_stay
+              takes_auto_expand)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE

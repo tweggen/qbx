@@ -82,7 +82,12 @@
     <record-start/>
     <wait-ms ms="3000"/>
 
-    <assert-recorded-clip trackPath="0" minClips="1"/>
+    <!-- THREE children, which is what `replace`'s R2 split leaves and what this
+         case's own assertions below spell out: the head, the tail, and the
+         pass between them. It read `minClips="1"` until QBX-184 noticed that
+         `assert-recorded-clip` HAS NO `minClips` ATTRIBUTE — it was silently
+         ignored, so the count was never checked at all. -->
+    <assert-recorded-clip trackPath="0" clips="3"/>
 
     <!-- THE ARMED LANE, cell R2 (`s < a`, `e > b`): cut at `a` and at `b`,
          the middle removed, the pass laid down as a PLAIN clip. Three
